@@ -13,7 +13,8 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SCHEMA_DIR="$REPO_ROOT/cocode-rs/app-server-protocol/schema/json"
-OUT_FILE="$REPO_ROOT/cocode-sdk/python/src/cocode_sdk/generated/protocol_gen.py"
+SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"
+RAW_FILE="$REPO_ROOT/cocode-sdk/python/src/cocode_sdk/generated/protocol_gen.py"
 
 if ! command -v datamodel-codegen &>/dev/null; then
     echo "datamodel-code-generator not found."
@@ -30,14 +31,29 @@ if [ ! -f "$BUNDLE" ]; then
     exit 1
 fi
 
-echo "==> Generating Python types from $BUNDLE..."
+echo "==> Generating raw Python types from $BUNDLE..."
 datamodel-codegen \
     --input "$BUNDLE" \
-    --output "$OUT_FILE" \
+    --output "$RAW_FILE" \
     --input-file-type jsonschema \
     --output-model-type pydantic_v2.BaseModel \
     --use-annotated \
     --field-constraints \
     --target-python-version 3.10
 
-echo "==> Generated: $OUT_FILE"
+echo "==> Generated: $RAW_FILE"
+
+# Post-process to add ergonomic accessors
+if [ -f "$SCRIPTS_DIR/postprocess_python.py" ]; then
+    echo "==> Post-processing..."
+    python3 "$SCRIPTS_DIR/postprocess_python.py" "$RAW_FILE" "$RAW_FILE"
+fi
+
+# Format with ruff if available
+if command -v ruff &>/dev/null; then
+    echo "==> Formatting with ruff..."
+    ruff format "$RAW_FILE" 2>/dev/null || true
+fi
+
+echo "==> Done. Auto-generated types in: $RAW_FILE"
+echo "    Hand-written protocol.py remains the canonical import."

@@ -540,6 +540,7 @@ fn test_overlay_queue_agent_driven_queued() {
         risks: vec![],
         allow_remember: true,
         proposed_prefix_pattern: None,
+        input: None,
     };
     ui.set_overlay(Overlay::Permission(PermissionOverlay::new(request1)));
     assert!(matches!(ui.overlay, Some(Overlay::Permission(_))));
@@ -552,6 +553,7 @@ fn test_overlay_queue_agent_driven_queued() {
         risks: vec![],
         allow_remember: true,
         proposed_prefix_pattern: None,
+        input: None,
     };
     ui.set_overlay(Overlay::Permission(PermissionOverlay::new(request2)));
     assert_eq!(ui.queued_overlay_count(), 1);
@@ -578,6 +580,7 @@ fn test_overlay_user_displaces_agent() {
         risks: vec![],
         allow_remember: true,
         proposed_prefix_pattern: None,
+        input: None,
     };
     ui.set_overlay(Overlay::Permission(PermissionOverlay::new(request)));
 
@@ -663,6 +666,7 @@ fn test_higher_priority_agent_queues_displaced() {
         risks: vec![],
         allow_remember: true,
         proposed_prefix_pattern: None,
+        input: None,
     };
     ui.set_overlay(Overlay::Permission(PermissionOverlay::new(request)));
 
@@ -677,12 +681,12 @@ fn test_higher_priority_agent_queues_displaced() {
 
 #[test]
 fn test_promoted_permission_re_pauses_timing() {
-    // Bug 2: When Permission B is promoted from queue after Permission A
+    // When Permission B is promoted from queue after Permission A
     // is cleared, the timing should re-pause (user is still blocked).
     let mut ui = UiState::default();
     ui.query_timing.start();
 
-    // Permission A arrives, pauses timing
+    // Permission A arrives — set_overlay pauses timing automatically
     let request_a = cocode_protocol::ApprovalRequest {
         request_id: "req-a".to_string(),
         tool_name: "Bash".to_string(),
@@ -690,9 +694,10 @@ fn test_promoted_permission_re_pauses_timing() {
         risks: vec![],
         allow_remember: true,
         proposed_prefix_pattern: None,
+        input: None,
     };
-    ui.query_timing.on_permission_dialog_open();
     ui.set_overlay(Overlay::Permission(PermissionOverlay::new(request_a)));
+    assert!(ui.query_timing.is_paused());
 
     // Permission B arrives while A is active, gets queued
     let request_b = cocode_protocol::ApprovalRequest {
@@ -702,6 +707,7 @@ fn test_promoted_permission_re_pauses_timing() {
         risks: vec![],
         allow_remember: true,
         proposed_prefix_pattern: None,
+        input: None,
     };
     ui.set_overlay(Overlay::Permission(PermissionOverlay::new(request_b)));
     assert_eq!(ui.queued_overlay_count(), 1);
@@ -709,10 +715,54 @@ fn test_promoted_permission_re_pauses_timing() {
     // Clear A → closes pause, promotes B → re-opens pause
     ui.clear_overlay();
     assert!(matches!(ui.overlay, Some(Overlay::Permission(_))));
-
-    // Timing should still be paused (pause_start should be Some)
+    assert!(ui.query_timing.is_paused());
     assert!(ui.query_timing.is_active());
-    // The total_paused should have accumulated from Permission A
+}
+
+#[test]
+fn test_timing_not_paused_when_overlay_queued_by_gate() {
+    let mut ui = UiState::default();
+    ui.query_timing.start();
+
+    // Open a user-triggered overlay (sets transition gate)
+    ui.set_overlay(Overlay::Help);
+    assert!(ui.overlay_transition_until.is_some());
+    assert!(!ui.query_timing.is_paused());
+
+    // Agent-driven permission arrives during gate — should be queued
+    let request = cocode_protocol::ApprovalRequest {
+        request_id: "req-1".to_string(),
+        tool_name: "Bash".to_string(),
+        description: "Run command".to_string(),
+        risks: vec![],
+        allow_remember: true,
+        proposed_prefix_pattern: None,
+        input: None,
+    };
+    ui.set_overlay(Overlay::Permission(PermissionOverlay::new(request)));
+    assert_eq!(ui.queued_overlay_count(), 1);
+
+    // Timing should NOT be paused (overlay was queued, not shown)
+    assert!(!ui.query_timing.is_paused());
+
+    // Close Help → promotes Permission → timing now paused
+    ui.clear_overlay();
+    assert!(matches!(ui.overlay, Some(Overlay::Permission(_))));
+    assert!(ui.query_timing.is_paused());
+}
+
+#[test]
+fn test_clear_overlay_clears_transition_gate() {
+    let mut ui = UiState::default();
+
+    // Open user overlay (sets transition gate)
+    ui.set_overlay(Overlay::Help);
+    assert!(ui.overlay_transition_until.is_some());
+
+    // Clear overlay should also clear the gate
+    ui.clear_overlay();
+    assert!(ui.overlay.is_none());
+    assert!(ui.overlay_transition_until.is_none());
 }
 
 // ========== Kill Buffer (Ctrl+K / Ctrl+Y) ==========

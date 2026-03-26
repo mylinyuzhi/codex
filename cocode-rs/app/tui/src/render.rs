@@ -340,7 +340,9 @@ fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState, theme: &Th
     .output_style(state.session.output_style.as_deref())
     .spinner_text(state.ui.spinner_text.as_deref())
     .spinner_frame(state.ui.spinner_frame())
-    .fast_mode(state.session.fast_mode);
+    .fast_mode(state.session.fast_mode)
+    .sandbox_active(state.session.sandbox_active)
+    .sandbox_violation_count(state.session.sandbox_violation_count);
     frame.render_widget(status_bar, area);
 }
 

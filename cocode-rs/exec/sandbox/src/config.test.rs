@@ -1,61 +1,170 @@
+use std::path::PathBuf;
+
 use super::*;
 
+// ==========================================================================
+// SandboxBypass tests
+// ==========================================================================
+
 #[test]
-fn test_sandbox_mode_default() {
-    assert_eq!(SandboxMode::default(), SandboxMode::None);
+fn test_sandbox_bypass_from_flag() {
+    assert_eq!(SandboxBypass::from_flag(false), SandboxBypass::No);
+    assert_eq!(SandboxBypass::from_flag(true), SandboxBypass::Requested);
+}
+
+// ==========================================================================
+// EnforcementLevel tests
+// ==========================================================================
+
+#[test]
+fn test_enforcement_level_default() {
+    assert_eq!(EnforcementLevel::default(), EnforcementLevel::Disabled);
 }
 
 #[test]
-fn test_sandbox_config_default() {
-    let config = SandboxConfig::default();
-    assert_eq!(config.mode, SandboxMode::None);
-    assert!(config.allowed_paths.is_empty());
-    assert!(config.denied_paths.is_empty());
-    assert!(!config.allow_network);
-}
-
-#[test]
-fn test_sandbox_mode_serde_roundtrip() {
-    for mode in [
-        SandboxMode::None,
-        SandboxMode::ReadOnly,
-        SandboxMode::Strict,
+fn test_enforcement_level_serde_roundtrip() {
+    for level in [
+        EnforcementLevel::Disabled,
+        EnforcementLevel::ReadOnly,
+        EnforcementLevel::WorkspaceWrite,
+        EnforcementLevel::Strict,
     ] {
-        let json = serde_json::to_string(&mode).expect("serialize");
-        let parsed: SandboxMode = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(parsed, mode);
+        let json = serde_json::to_string(&level).expect("serialize");
+        let parsed: EnforcementLevel = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed, level);
     }
 }
 
 #[test]
-fn test_sandbox_mode_kebab_case() {
+fn test_enforcement_level_kebab_case() {
     assert_eq!(
-        serde_json::to_string(&SandboxMode::None).expect("serialize"),
-        "\"none\""
+        serde_json::to_string(&EnforcementLevel::Disabled).expect("serialize"),
+        "\"disabled\""
     );
     assert_eq!(
-        serde_json::to_string(&SandboxMode::ReadOnly).expect("serialize"),
+        serde_json::to_string(&EnforcementLevel::ReadOnly).expect("serialize"),
         "\"read-only\""
     );
     assert_eq!(
-        serde_json::to_string(&SandboxMode::Strict).expect("serialize"),
+        serde_json::to_string(&EnforcementLevel::WorkspaceWrite).expect("serialize"),
+        "\"workspace-write\""
+    );
+    assert_eq!(
+        serde_json::to_string(&EnforcementLevel::Strict).expect("serialize"),
         "\"strict\""
     );
 }
 
 #[test]
+fn test_enforcement_level_from_protocol() {
+    assert_eq!(
+        EnforcementLevel::from(cocode_protocol::SandboxMode::ReadOnly),
+        EnforcementLevel::ReadOnly
+    );
+    assert_eq!(
+        EnforcementLevel::from(cocode_protocol::SandboxMode::WorkspaceWrite),
+        EnforcementLevel::WorkspaceWrite
+    );
+    assert_eq!(
+        EnforcementLevel::from(cocode_protocol::SandboxMode::FullAccess),
+        EnforcementLevel::Disabled
+    );
+}
+
+// ==========================================================================
+// WritableRoot tests
+// ==========================================================================
+
+#[test]
+fn test_writable_root_default_subpaths() {
+    let root = WritableRoot::new("/home/user/project");
+    assert_eq!(root.readonly_subpaths, vec![".git", ".cocode", ".agents"]);
+}
+
+#[test]
+fn test_writable_root_is_writable() {
+    let root = WritableRoot::new("/home/user/project");
+    // Normal files under root are writable
+    assert!(root.is_writable(Path::new("/home/user/project/src/main.rs")));
+    // .git subpath is read-only
+    assert!(!root.is_writable(Path::new("/home/user/project/.git/config")));
+    assert!(!root.is_writable(Path::new("/home/user/project/.git")));
+    // .cocode subpath is read-only
+    assert!(!root.is_writable(Path::new("/home/user/project/.cocode/config.json")));
+    // .agents subpath is read-only
+    assert!(!root.is_writable(Path::new("/home/user/project/.agents/skills")));
+    // Paths outside root are not writable
+    assert!(!root.is_writable(Path::new("/etc/passwd")));
+}
+
+#[test]
+fn test_writable_root_resolved_readonly_subpaths() {
+    let root = WritableRoot::new("/home/user/project");
+    let resolved = root.resolved_readonly_subpaths();
+    assert_eq!(resolved.len(), 3);
+    assert_eq!(resolved[0], Path::new("/home/user/project/.git"));
+    assert_eq!(resolved[1], Path::new("/home/user/project/.cocode"));
+    assert_eq!(resolved[2], Path::new("/home/user/project/.agents"));
+}
+
+#[test]
+fn test_writable_root_unprotected() {
+    let root = WritableRoot::unprotected("/tmp/work");
+    assert!(root.is_writable(Path::new("/tmp/work/.git/config")));
+    assert!(root.is_writable(Path::new("/tmp/work/file.txt")));
+}
+
+#[test]
+fn test_writable_root_contains() {
+    let root = WritableRoot::new("/home/user/project");
+    assert!(root.contains(Path::new("/home/user/project/src")));
+    assert!(root.contains(Path::new("/home/user/project/.git")));
+    assert!(!root.contains(Path::new("/home/user/other")));
+}
+
+#[test]
+fn test_writable_root_serde_roundtrip() {
+    let root = WritableRoot::new("/home/user/project");
+    let json = serde_json::to_string(&root).expect("serialize");
+    let parsed: WritableRoot = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(parsed, root);
+}
+
+#[test]
+fn test_writable_root_serde_default_subpaths() {
+    // JSON without readonly_subpaths should use defaults
+    let json = r#"{"path":"/tmp/work"}"#;
+    let parsed: WritableRoot = serde_json::from_str(json).expect("parse");
+    assert_eq!(parsed.readonly_subpaths, vec![".git", ".cocode", ".agents"]);
+}
+
+// ==========================================================================
+// SandboxConfig tests
+// ==========================================================================
+
+#[test]
+fn test_sandbox_config_default() {
+    let config = SandboxConfig::default();
+    assert_eq!(config.enforcement, EnforcementLevel::Disabled);
+    assert!(config.writable_roots.is_empty());
+    assert!(config.denied_paths.is_empty());
+    assert!(!config.allow_network);
+}
+
+#[test]
 fn test_sandbox_config_serde_roundtrip() {
     let config = SandboxConfig {
-        mode: SandboxMode::Strict,
-        allowed_paths: vec![PathBuf::from("/home/user/project")],
+        enforcement: EnforcementLevel::Strict,
+        writable_roots: vec![WritableRoot::new("/home/user/project")],
         denied_paths: vec![PathBuf::from("/etc/passwd")],
         allow_network: true,
+        ..Default::default()
     };
 
     let json = serde_json::to_string(&config).expect("serialize");
     let parsed: SandboxConfig = serde_json::from_str(&json).expect("deserialize");
-    assert_eq!(parsed.mode, SandboxMode::Strict);
-    assert_eq!(parsed.allowed_paths.len(), 1);
+    assert_eq!(parsed.enforcement, EnforcementLevel::Strict);
+    assert_eq!(parsed.writable_roots.len(), 1);
     assert_eq!(parsed.denied_paths.len(), 1);
     assert!(parsed.allow_network);
 }
@@ -63,17 +172,17 @@ fn test_sandbox_config_serde_roundtrip() {
 #[test]
 fn test_sandbox_config_from_empty_json() {
     let config: SandboxConfig = serde_json::from_str("{}").expect("parse");
-    assert_eq!(config.mode, SandboxMode::None);
-    assert!(config.allowed_paths.is_empty());
+    assert_eq!(config.enforcement, EnforcementLevel::Disabled);
+    assert!(config.writable_roots.is_empty());
     assert!(config.denied_paths.is_empty());
     assert!(!config.allow_network);
 }
 
 #[test]
 fn test_sandbox_config_partial_json() {
-    let config: SandboxConfig = serde_json::from_str(r#"{"mode":"strict"}"#).expect("parse");
-    assert_eq!(config.mode, SandboxMode::Strict);
-    assert!(config.allowed_paths.is_empty());
+    let config: SandboxConfig = serde_json::from_str(r#"{"enforcement":"strict"}"#).expect("parse");
+    assert_eq!(config.enforcement, EnforcementLevel::Strict);
+    assert!(config.writable_roots.is_empty());
     assert!(!config.allow_network);
 }
 
@@ -87,6 +196,20 @@ fn test_sandbox_settings_default_disabled() {
     assert!(!settings.enabled);
     assert!(settings.auto_allow_bash_if_sandboxed);
     assert!(settings.allow_unsandboxed_commands);
+    assert_eq!(settings.enabled_platforms, vec!["macos", "linux"]);
+    assert!(settings.excluded_commands.is_empty());
+    assert!(settings.network.allowed_domains.is_empty());
+    assert!(settings.network.denied_domains.is_empty());
+    assert!(settings.filesystem.allow_write.is_empty());
+    assert!(settings.filesystem.deny_write.is_empty());
+    assert!(settings.filesystem.deny_read.is_empty());
+    assert!(!settings.filesystem.allow_git_config);
+    assert!(settings.ignore_violations.is_empty());
+    assert!(!settings.enable_weaker_nested_sandbox);
+    assert!(!settings.enable_weaker_network_isolation);
+    assert!(settings.seccomp.bpf_path.is_none());
+    assert!(!settings.allow_pty);
+    assert_eq!(settings.mandatory_deny_search_depth, 3);
 }
 
 #[test]
@@ -106,42 +229,139 @@ fn test_sandbox_settings_disabled_constructor() {
 #[test]
 fn test_is_sandboxed_disabled_by_default() {
     let settings = SandboxSettings::default();
-    // When sandbox is disabled, all commands return false
-    assert!(!settings.is_sandboxed("echo hello", false));
-    assert!(!settings.is_sandboxed("rm -rf /", false));
-    assert!(!settings.is_sandboxed("echo hello", true));
+    assert!(!settings.is_sandboxed("echo hello", SandboxBypass::No));
+    assert!(!settings.is_sandboxed("rm -rf /", SandboxBypass::No));
+    assert!(!settings.is_sandboxed("echo hello", SandboxBypass::Requested));
 }
 
 #[test]
 fn test_is_sandboxed_enabled() {
     let settings = SandboxSettings::enabled();
-    // When sandbox is enabled, normal commands return true
-    assert!(settings.is_sandboxed("echo hello", false));
-    assert!(settings.is_sandboxed("rm -rf /", false));
+    assert!(settings.is_sandboxed("echo hello", SandboxBypass::No));
+    assert!(settings.is_sandboxed("rm -rf /", SandboxBypass::No));
 }
 
 #[test]
 fn test_is_sandboxed_bypass_allowed() {
     let settings = SandboxSettings::enabled();
-    // When bypass is requested and allowed, returns false
-    assert!(!settings.is_sandboxed("echo hello", true));
+    assert!(!settings.is_sandboxed("echo hello", SandboxBypass::Requested));
 }
 
 #[test]
 fn test_is_sandboxed_bypass_disallowed() {
     let mut settings = SandboxSettings::enabled();
     settings.allow_unsandboxed_commands = false;
-    // When bypass is requested but not allowed, returns true
-    assert!(settings.is_sandboxed("echo hello", true));
+    assert!(settings.is_sandboxed("echo hello", SandboxBypass::Requested));
 }
 
 #[test]
 fn test_is_sandboxed_empty_command() {
     let settings = SandboxSettings::enabled();
-    // Empty commands are never sandboxed
-    assert!(!settings.is_sandboxed("", false));
-    assert!(!settings.is_sandboxed("   ", false));
-    assert!(!settings.is_sandboxed("\t\n", false));
+    assert!(!settings.is_sandboxed("", SandboxBypass::No));
+    assert!(!settings.is_sandboxed("   ", SandboxBypass::No));
+    assert!(!settings.is_sandboxed("\t\n", SandboxBypass::No));
+}
+
+#[test]
+fn test_is_sandboxed_excluded_exact() {
+    let mut settings = SandboxSettings::enabled();
+    settings.excluded_commands = vec!["docker".to_string()];
+    // "docker" alone matches
+    assert!(!settings.is_sandboxed("docker", SandboxBypass::No));
+    // "docker ps" matches (prefix + space)
+    assert!(!settings.is_sandboxed("docker ps", SandboxBypass::No));
+    // "dockerize" does NOT match (no space separator)
+    assert!(settings.is_sandboxed("dockerize", SandboxBypass::No));
+}
+
+#[test]
+fn test_is_sandboxed_excluded_wildcard() {
+    let mut settings = SandboxSettings::enabled();
+    settings.excluded_commands = vec!["git*".to_string()];
+    assert!(!settings.is_sandboxed("git status", SandboxBypass::No));
+    assert!(!settings.is_sandboxed("git", SandboxBypass::No));
+    assert!(!settings.is_sandboxed("gitk", SandboxBypass::No));
+}
+
+#[test]
+fn test_is_sandboxed_excluded_phrase() {
+    let mut settings = SandboxSettings::enabled();
+    settings.excluded_commands = vec!["git push".to_string()];
+    assert!(!settings.is_sandboxed("git push origin main", SandboxBypass::No));
+    assert!(settings.is_sandboxed("git status", SandboxBypass::No));
+}
+
+// ==========================================================================
+// BFS Command Exclusion tests
+// ==========================================================================
+
+#[test]
+fn test_excluded_env_stripped() {
+    let mut settings = SandboxSettings::enabled();
+    settings.excluded_commands = vec!["npm".to_string()];
+    // FOO=bar npm install -> strips env -> "npm install" matches "npm"
+    assert!(!settings.is_sandboxed("FOO=bar npm install", SandboxBypass::No));
+    assert!(!settings.is_sandboxed("A=1 B=2 npm run build", SandboxBypass::No));
+    // Not a match when the base command differs
+    assert!(settings.is_sandboxed("FOO=bar yarn install", SandboxBypass::No));
+}
+
+#[test]
+fn test_excluded_basename_extraction() {
+    let mut settings = SandboxSettings::enabled();
+    settings.excluded_commands = vec!["npm".to_string()];
+    // /usr/bin/npm -> basename "npm" matches
+    assert!(!settings.is_sandboxed("/usr/bin/npm install", SandboxBypass::No));
+    assert!(!settings.is_sandboxed("./node_modules/.bin/npm run test", SandboxBypass::No));
+}
+
+#[test]
+fn test_excluded_env_and_basename_combined() {
+    let mut settings = SandboxSettings::enabled();
+    settings.excluded_commands = vec!["npm".to_string()];
+    // FOO=bar /usr/bin/npm install -> strip env -> /usr/bin/npm install -> basename -> npm install
+    assert!(!settings.is_sandboxed("FOO=bar /usr/bin/npm install", SandboxBypass::No));
+}
+
+#[test]
+fn test_excluded_colon_prefix_pattern() {
+    let mut settings = SandboxSettings::enabled();
+    settings.excluded_commands = vec!["npm:*".to_string()];
+    assert!(!settings.is_sandboxed("npm", SandboxBypass::No));
+    assert!(!settings.is_sandboxed("npm install", SandboxBypass::No));
+    assert!(!settings.is_sandboxed("npm run build", SandboxBypass::No));
+    // "npmx" should not match (colon-prefix requires exact first word)
+    assert!(settings.is_sandboxed("npmx", SandboxBypass::No));
+}
+
+#[test]
+fn test_excluded_empty_list() {
+    let settings = SandboxSettings::enabled();
+    // No excluded commands -> everything sandboxed
+    assert!(settings.is_sandboxed("npm install", SandboxBypass::No));
+}
+
+#[test]
+fn test_excluded_does_not_match_unrelated_env_command() {
+    let mut settings = SandboxSettings::enabled();
+    settings.excluded_commands = vec!["yarn".to_string()];
+    // "FOO=bar npm install" strips env to "npm install" which doesn't match "yarn"
+    assert!(settings.is_sandboxed("FOO=bar npm install", SandboxBypass::No));
+    // But "FOO=bar yarn install" strips to "yarn install" which matches
+    assert!(!settings.is_sandboxed("FOO=bar yarn install", SandboxBypass::No));
+}
+
+#[test]
+fn test_is_platform_enabled() {
+    let settings = SandboxSettings::default();
+    // On any supported platform (macos or linux), this should be true
+    if cfg!(target_os = "macos") || cfg!(target_os = "linux") {
+        assert!(settings.is_platform_enabled());
+    }
+
+    let mut empty = SandboxSettings::default();
+    empty.enabled_platforms = vec![];
+    assert!(!empty.is_platform_enabled());
 }
 
 #[test]
@@ -150,6 +370,19 @@ fn test_sandbox_settings_serde_roundtrip() {
         enabled: true,
         auto_allow_bash_if_sandboxed: false,
         allow_unsandboxed_commands: false,
+        enabled_platforms: vec!["linux".to_string()],
+        excluded_commands: vec!["docker".to_string()],
+        network: NetworkConfig {
+            allowed_domains: vec!["github.com".to_string()],
+            denied_domains: vec!["evil.com".to_string()],
+            ..Default::default()
+        },
+        filesystem: FilesystemConfig {
+            deny_read: vec![PathBuf::from("/etc/shadow")],
+            allow_git_config: true,
+            ..Default::default()
+        },
+        ..Default::default()
     };
 
     let json = serde_json::to_string(&settings).expect("serialize");
@@ -163,22 +396,206 @@ fn test_sandbox_settings_serde_roundtrip() {
         parsed.allow_unsandboxed_commands,
         settings.allow_unsandboxed_commands
     );
+    assert_eq!(parsed.enabled_platforms, settings.enabled_platforms);
+    assert_eq!(parsed.excluded_commands, settings.excluded_commands);
+    assert_eq!(
+        parsed.network.allowed_domains,
+        settings.network.allowed_domains
+    );
+    assert_eq!(
+        parsed.network.denied_domains,
+        settings.network.denied_domains
+    );
+    assert_eq!(parsed.filesystem.deny_read, settings.filesystem.deny_read);
+    assert!(parsed.filesystem.allow_git_config);
 }
 
 #[test]
 fn test_sandbox_settings_from_empty_json() {
-    // Empty JSON should use defaults
     let settings: SandboxSettings = serde_json::from_str("{}").expect("parse");
     assert!(!settings.enabled);
     assert!(settings.auto_allow_bash_if_sandboxed);
     assert!(settings.allow_unsandboxed_commands);
+    assert_eq!(settings.enabled_platforms, vec!["macos", "linux"]);
+    assert!(settings.network.allowed_domains.is_empty());
+    assert!(settings.filesystem.deny_read.is_empty());
+    assert_eq!(settings.mandatory_deny_search_depth, 3);
 }
 
 #[test]
 fn test_sandbox_settings_partial_json() {
-    // Only enabled=true, rest should default
     let settings: SandboxSettings = serde_json::from_str(r#"{"enabled":true}"#).expect("parse");
     assert!(settings.enabled);
     assert!(settings.auto_allow_bash_if_sandboxed);
     assert!(settings.allow_unsandboxed_commands);
+}
+
+// ==========================================================================
+// FilesystemConfig tests
+// ==========================================================================
+
+#[test]
+fn test_filesystem_config_default() {
+    let config = FilesystemConfig::default();
+    assert!(config.allow_write.is_empty());
+    assert!(config.deny_write.is_empty());
+    assert!(config.deny_read.is_empty());
+    assert!(!config.allow_git_config);
+}
+
+#[test]
+fn test_filesystem_config_serde_roundtrip() {
+    let config = FilesystemConfig {
+        allow_write: vec![PathBuf::from("/home/user/project")],
+        deny_write: vec![PathBuf::from("/etc")],
+        deny_read: vec![PathBuf::from("/etc/shadow")],
+        allow_git_config: true,
+    };
+    let json = serde_json::to_string(&config).expect("serialize");
+    let parsed: FilesystemConfig = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(parsed, config);
+}
+
+#[test]
+fn test_filesystem_config_from_empty_json() {
+    let config: FilesystemConfig = serde_json::from_str("{}").expect("parse");
+    assert!(config.allow_write.is_empty());
+    assert!(!config.allow_git_config);
+}
+
+// ==========================================================================
+// NetworkConfig tests
+// ==========================================================================
+
+#[test]
+fn test_network_config_default() {
+    let config = NetworkConfig::default();
+    assert!(config.allowed_domains.is_empty());
+    assert!(config.denied_domains.is_empty());
+    assert!(config.allow_unix_sockets.is_empty());
+    assert!(!config.allow_all_unix_sockets);
+    assert!(!config.allow_local_binding);
+    assert!(config.http_proxy_port.is_none());
+    assert!(config.socks_proxy_port.is_none());
+    assert!(config.mitm_proxy.is_none());
+}
+
+#[test]
+fn test_network_config_serde_roundtrip() {
+    let config = NetworkConfig {
+        allowed_domains: vec!["github.com".to_string()],
+        denied_domains: vec!["evil.com".to_string()],
+        allow_unix_sockets: vec![PathBuf::from("/var/run/docker.sock")],
+        allow_all_unix_sockets: false,
+        allow_local_binding: true,
+        http_proxy_port: Some(3128),
+        socks_proxy_port: Some(1080),
+        mitm_proxy: Some(MitmProxyConfig {
+            socket_path: PathBuf::from("/tmp/mitm.sock"),
+            domains: vec!["api.example.com".to_string()],
+        }),
+    };
+    let json = serde_json::to_string(&config).expect("serialize");
+    let parsed: NetworkConfig = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(parsed, config);
+}
+
+#[test]
+fn test_network_config_from_empty_json() {
+    let config: NetworkConfig = serde_json::from_str("{}").expect("parse");
+    assert!(config.allowed_domains.is_empty());
+    assert!(config.http_proxy_port.is_none());
+}
+
+// ==========================================================================
+// SeccompConfig tests
+// ==========================================================================
+
+#[test]
+fn test_seccomp_config_default() {
+    let config = SeccompConfig::default();
+    assert!(config.bpf_path.is_none());
+    assert!(config.apply_path.is_none());
+}
+
+#[test]
+fn test_seccomp_config_serde_roundtrip() {
+    let config = SeccompConfig {
+        bpf_path: Some(PathBuf::from("/usr/share/seccomp/unix-block.bpf")),
+        apply_path: Some(PathBuf::from("/usr/bin/apply-seccomp")),
+    };
+    let json = serde_json::to_string(&config).expect("serialize");
+    let parsed: SeccompConfig = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(parsed, config);
+}
+
+// ==========================================================================
+// Nested config in SandboxSettings tests
+// ==========================================================================
+
+#[test]
+fn test_sandbox_settings_nested_json() {
+    let json = r#"{
+        "enabled": true,
+        "filesystem": {
+            "allow_write": ["/home/user/project"],
+            "deny_read": ["/etc/shadow"],
+            "allow_git_config": true
+        },
+        "network": {
+            "allowed_domains": ["github.com"],
+            "allow_local_binding": true,
+            "http_proxy_port": 3128
+        },
+        "seccomp": {
+            "bpf_path": "/usr/share/seccomp/filter.bpf"
+        },
+        "allow_pty": true,
+        "mandatory_deny_search_depth": 5
+    }"#;
+
+    let settings: SandboxSettings = serde_json::from_str(json).expect("parse");
+    assert!(settings.enabled);
+    assert_eq!(
+        settings.filesystem.allow_write,
+        vec![PathBuf::from("/home/user/project")]
+    );
+    assert_eq!(
+        settings.filesystem.deny_read,
+        vec![PathBuf::from("/etc/shadow")]
+    );
+    assert!(settings.filesystem.allow_git_config);
+    assert_eq!(
+        settings.network.allowed_domains,
+        vec!["github.com".to_string()]
+    );
+    assert!(settings.network.allow_local_binding);
+    assert_eq!(settings.network.http_proxy_port, Some(3128));
+    assert_eq!(
+        settings.seccomp.bpf_path,
+        Some(PathBuf::from("/usr/share/seccomp/filter.bpf"))
+    );
+    assert!(settings.allow_pty);
+    assert_eq!(settings.mandatory_deny_search_depth, 5);
+}
+
+#[test]
+fn test_sandbox_settings_ignore_violations() {
+    let json = r#"{
+        "ignore_violations": {
+            "*": ["mach-lookup"],
+            "npm install": ["file-write-data", "network-outbound"]
+        }
+    }"#;
+
+    let settings: SandboxSettings = serde_json::from_str(json).expect("parse");
+    assert_eq!(settings.ignore_violations.len(), 2);
+    assert_eq!(
+        settings.ignore_violations.get("*").unwrap(),
+        &vec!["mach-lookup".to_string()]
+    );
+    assert_eq!(
+        settings.ignore_violations.get("npm install").unwrap().len(),
+        2
+    );
 }

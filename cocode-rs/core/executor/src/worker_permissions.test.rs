@@ -9,6 +9,7 @@ fn create_test_request(id: &str, tool: &str) -> ApprovalRequest {
         risks: vec![],
         allow_remember: false,
         proposed_prefix_pattern: None,
+        input: None,
     }
 }
 

@@ -3,19 +3,42 @@
 from __future__ import annotations
 
 import json
-from typing import AsyncIterator
+from typing import Any, AsyncIterator, Callable, Awaitable
 
 from cocode_sdk._internal.transport import Transport
 from cocode_sdk._internal.transport.subprocess_cli import SubprocessCLITransport
 from cocode_sdk.generated.protocol import (
+    AgentDefinitionConfig,
+    ApprovalDecision,
+    ApprovalResolveRequest,
+    HookCallbackConfig,
+    HookCallbackResponseRequest,
+    McpServerConfig,
+    RewindFilesRequest,
     ServerNotification,
+    ServerRequest,
+    SessionResumeRequest,
     SessionStartRequest,
+    SetModelRequest,
+    SetPermissionModeRequest,
+    SetThinkingRequest,
+    StopTaskRequest,
+    TurnCompletedParams,
+    TurnInterruptRequest,
     TurnStartRequest,
+    UpdateEnvRequest,
+    UserInputResolveRequest,
 )
+
+# Callback type for permission decisions
+CanUseTool = Callable[[str, dict[str, Any]], Awaitable[ApprovalDecision]]
+
+# Hook handler: (callback_id, event_type, input) -> output
+HookHandler = Callable[[str, str, dict[str, Any]], Awaitable[dict[str, Any]]]
 
 
 class CocodeClient:
-    """Multi-turn client for cocode sessions.
+    """Multi-turn client for cocode sessions with bidirectional control.
 
     Example::
 
@@ -26,6 +49,17 @@ class CocodeClient:
             # Send follow-up
             async for event in client.send("Now add tests"):
                 print(event.method, event.params)
+
+    With approval callback::
+
+        async def on_approval(tool_name: str, input: dict) -> ApprovalDecision:
+            if tool_name in ("Read", "Glob", "Grep"):
+                return ApprovalDecision.approve
+            return ApprovalDecision.deny
+
+        async with CocodeClient(prompt="...", can_use_tool=on_approval) as client:
+            async for event in client.events():
+                print(event.method)
     """
 
     def __init__(
@@ -40,6 +74,12 @@ class CocodeClient:
         env: dict[str, str] | None = None,
         binary_path: str | None = None,
         transport: Transport | None = None,
+        can_use_tool: CanUseTool | None = None,
+        agents: dict[str, AgentDefinitionConfig] | None = None,
+        hooks: list[HookCallbackConfig] | None = None,
+        mcp_servers: dict[str, McpServerConfig] | None = None,
+        max_budget_cents: int | None = None,
+        disable_builtin_agents: bool | None = None,
     ):
         self._initial_prompt = prompt
         self._model = model
@@ -48,11 +88,18 @@ class CocodeClient:
         self._system_prompt_suffix = system_prompt_suffix
         self._permission_mode = permission_mode
         self._env = env
+        self._agents = agents
+        self._hooks = hooks
+        self._mcp_servers = mcp_servers
+        self._max_budget_cents = max_budget_cents
+        self._disable_builtin_agents = disable_builtin_agents
         self._transport = transport or SubprocessCLITransport(
             binary_path=binary_path,
             cwd=cwd,
             env=env,
         )
+        self._can_use_tool = can_use_tool
+        self._hook_handlers: dict[str, HookHandler] = {}
         self._started = False
 
     async def __aenter__(self) -> CocodeClient:
@@ -77,16 +124,82 @@ class CocodeClient:
                 system_prompt_suffix=self._system_prompt_suffix,
                 permission_mode=self._permission_mode,
                 env=self._env,
+                agents={
+                    k: v.model_dump(exclude_none=True)
+                    for k, v in self._agents.items()
+                } if self._agents else None,
+                mcp_servers={
+                    k: v.model_dump(exclude_none=True)
+                    for k, v in self._mcp_servers.items()
+                } if self._mcp_servers else None,
+                hooks=[h.model_dump(exclude_none=True) for h in self._hooks]
+                if self._hooks else None,
+                max_budget_cents=self._max_budget_cents,
+                disable_builtin_agents=self._disable_builtin_agents,
             )
         )
         await self._transport.send_line(request.model_dump_json())
 
     async def events(self) -> AsyncIterator[ServerNotification]:
-        """Yield events from the current turn."""
-        async for event in self._transport.read_events():
+        """Yield events from the current turn.
+
+        Automatically handles approval requests if a ``can_use_tool``
+        callback was provided. Otherwise, ``ServerRequest`` messages
+        (approval/askForApproval, input/requestUserInput) are yielded
+        as-is for manual handling.
+        """
+        async for line_data in self._transport.read_lines():
+            method = line_data.get("method", "")
+
+            # Detect ServerRequest (approval/question) vs ServerNotification
+            if method == "approval/askForApproval":
+                if self._can_use_tool:
+                    params = line_data.get("params", {})
+                    decision = await self._can_use_tool(
+                        params.get("tool_name", ""),
+                        params.get("input", {}),
+                    )
+                    await self.approve(params.get("request_id", ""), decision)
+                    continue
+                # No callback — yield as notification for manual handling
+                yield ServerNotification.model_validate(line_data)
+                continue
+
+            if method == "hook/callback":
+                params = line_data.get("params", {})
+                cb_id = params.get("callback_id", "")
+                handler = self._hook_handlers.get(cb_id)
+                if handler:
+                    try:
+                        output = await handler(
+                            cb_id,
+                            params.get("event_type", ""),
+                            params.get("input", {}),
+                        )
+                    except Exception as exc:
+                        await self.respond_to_hook(
+                            params.get("request_id", ""), error=str(exc)
+                        )
+                    else:
+                        await self.respond_to_hook(
+                            params.get("request_id", ""), output=output
+                        )
+                    continue
+                # No handler — yield for manual handling
+                yield ServerNotification.model_validate(line_data)
+                continue
+
+            if method == "input/requestUserInput":
+                # Always yield for manual handling (no auto-response)
+                yield ServerNotification.model_validate(line_data)
+                continue
+
+            # Regular notification
+            event = ServerNotification.model_validate(line_data)
             yield event
+
             # Stop after turn completion or failure
-            if event.method in ("turn/completed", "turn/failed"):
+            if method in ("turn/completed", "turn/failed"):
                 break
 
     async def send(self, text: str) -> AsyncIterator[ServerNotification]:
@@ -97,6 +210,157 @@ class CocodeClient:
         await self._transport.send_line(request.model_dump_json())
         async for event in self.events():
             yield event
+
+    # ── Bidirectional control methods ────────────────────────────────
+
+    async def approve(
+        self, request_id: str, decision: ApprovalDecision
+    ) -> None:
+        """Resolve a pending approval request."""
+        request = ApprovalResolveRequest(
+            params=ApprovalResolveRequest.ApprovalResolveRequestParams(
+                request_id=request_id,
+                decision=decision,
+            )
+        )
+        await self._transport.send_line(request.model_dump_json())
+
+    async def respond_to_question(
+        self, request_id: str, response: Any
+    ) -> None:
+        """Respond to a user input request (AskUserQuestion tool)."""
+        request = UserInputResolveRequest(
+            params=UserInputResolveRequest.UserInputResolveRequestParams(
+                request_id=request_id,
+                response=response,
+            )
+        )
+        await self._transport.send_line(request.model_dump_json())
+
+    async def interrupt(self) -> None:
+        """Interrupt the current turn."""
+        request = TurnInterruptRequest(
+            params=TurnInterruptRequest.TurnInterruptRequestParams()
+        )
+        await self._transport.send_line(request.model_dump_json())
+
+    async def set_model(self, model: str) -> None:
+        """Change the model for subsequent turns."""
+        request = SetModelRequest(
+            params=SetModelRequest.SetModelRequestParams(model=model)
+        )
+        await self._transport.send_line(request.model_dump_json())
+
+    async def set_permission_mode(self, mode: str) -> None:
+        """Change the permission mode."""
+        request = SetPermissionModeRequest(
+            params=SetPermissionModeRequest.SetPermissionModeRequestParams(
+                mode=mode
+            )
+        )
+        await self._transport.send_line(request.model_dump_json())
+
+    async def stop_task(self, task_id: str) -> None:
+        """Stop a running background task."""
+        request = StopTaskRequest(
+            params=StopTaskRequest.StopTaskRequestParams(task_id=task_id)
+        )
+        await self._transport.send_line(request.model_dump_json())
+
+    async def update_env(self, env: dict[str, str]) -> None:
+        """Update environment variables for the session."""
+        request = UpdateEnvRequest(
+            params=UpdateEnvRequest.UpdateEnvRequestParams(env=env)
+        )
+        await self._transport.send_line(request.model_dump_json())
+
+    async def set_thinking(
+        self, mode: str = "adaptive", max_tokens: int | None = None
+    ) -> None:
+        """Change thinking configuration for subsequent turns.
+
+        Args:
+            mode: "adaptive", "enabled", or "disabled"
+            max_tokens: Maximum thinking tokens (for "enabled" mode)
+        """
+        thinking = {"mode": mode}
+        if max_tokens is not None:
+            thinking["max_tokens"] = max_tokens
+        request = SetThinkingRequest(
+            params=SetThinkingRequest.SetThinkingRequestParams(thinking=thinking)
+        )
+        await self._transport.send_line(request.model_dump_json())
+
+    async def rewind_files(self, turn_id: str) -> None:
+        """Rewind file changes to a previous turn's state."""
+        request = RewindFilesRequest(
+            params=RewindFilesRequest.RewindFilesRequestParams(turn_id=turn_id)
+        )
+        await self._transport.send_line(request.model_dump_json())
+
+    async def respond_to_hook(
+        self, request_id: str, output: Any = None, error: str | None = None
+    ) -> None:
+        """Respond to an SDK hook callback."""
+        request = HookCallbackResponseRequest(
+            params=HookCallbackResponseRequest.HookCallbackResponseRequestParams(
+                request_id=request_id,
+                output=output,
+                error=error,
+            )
+        )
+        await self._transport.send_line(request.model_dump_json())
+
+    async def resume(
+        self, session_id: str, prompt: str | None = None
+    ) -> AsyncIterator[ServerNotification]:
+        """Resume an existing session by ID and yield events."""
+        request = SessionResumeRequest(
+            params=SessionResumeRequest.SessionResumeRequestParams(
+                session_id=session_id,
+                prompt=prompt,
+            )
+        )
+        await self._transport.send_line(request.model_dump_json())
+        async for event in self.events():
+            yield event
+
+    # ── Hook handler registration ──────────────────────────────────
+
+    def on_hook(self, callback_id: str, handler: HookHandler) -> None:
+        """Register a hook callback handler.
+
+        When a ``hook/callback`` server request arrives with a matching
+        ``callback_id``, the handler is called and the result is sent
+        back automatically.
+        """
+        self._hook_handlers[callback_id] = handler
+
+    # ── Convenience helpers ──────────────────────────────────────
+
+    async def stream_text(self) -> AsyncIterator[str]:
+        """Yield only text deltas from the current turn."""
+        async for event in self.events():
+            if event.method == "agentMessage/delta":
+                delta = event.as_agent_message_delta()
+                if delta:
+                    yield delta.delta
+
+    async def wait_for_turn_completed(self) -> TurnCompletedParams | None:
+        """Consume all events and return the turn completion params."""
+        async for event in self.events():
+            tc = event.as_turn_completed()
+            if tc:
+                return tc
+        return None
+
+    async def get_final_text(self) -> str:
+        """Consume all events and return the accumulated assistant text."""
+        parts: list[str] = []
+        async for event in self.events():
+            if event.method == "agentMessage/delta":
+                parts.append(event.params.get("delta", ""))
+        return "".join(parts)
 
     async def close(self) -> None:
         """Close the session."""

@@ -116,6 +116,7 @@ impl Tool for ReadManyFilesTool {
                         }],
                         allow_remember: true,
                         proposed_prefix_pattern: None,
+                        input: Some(input.clone()),
                     },
                 };
             }
@@ -133,6 +134,7 @@ impl Tool for ReadManyFilesTool {
                         risks: vec![],
                         allow_remember: true,
                         proposed_prefix_pattern: None,
+                        input: Some(input.clone()),
                     },
                 };
             }

@@ -9,6 +9,7 @@ cocode-protocol.workspace = true
 cocode-policy.workspace = true
 cocode-api.workspace = true
 cocode-tools.workspace = true
+cocode-sandbox.workspace = true
 cocode-shell.workspace = true
 cocode-plan-mode.workspace = true
 cocode-auto-memory.workspace = true

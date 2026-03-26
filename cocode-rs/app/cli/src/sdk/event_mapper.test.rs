@@ -359,8 +359,6 @@ fn test_ui_only_events_dropped() {
 
     let dropped_events = vec![
         LoopEvent::StreamRequestStart,
-        LoopEvent::Interrupted,
-        LoopEvent::MaxTurnsReached,
         LoopEvent::CompactionStarted,
         LoopEvent::PromptCacheMiss,
         LoopEvent::ModelFallbackCompleted,
@@ -373,6 +371,80 @@ fn test_ui_only_events_dropped() {
             "UI-only event should produce no notifications"
         );
     }
+}
+
+#[test]
+fn test_background_task_events() {
+    let mut mapper = EventMapper::new("turn_1".into());
+
+    let events = mapper.map(LoopEvent::BackgroundTaskStarted {
+        task_id: "task_1".into(),
+        task_type: cocode_protocol::TaskType::Agent,
+    });
+    assert_eq!(events.len(), 1);
+    assert!(matches!(&events[0], ServerNotification::TaskStarted(_)));
+
+    let events = mapper.map(LoopEvent::BackgroundTaskCompleted {
+        task_id: "task_1".into(),
+        result: "done".into(),
+    });
+    assert_eq!(events.len(), 1);
+    match &events[0] {
+        ServerNotification::TaskCompleted(params) => {
+            assert_eq!(params.task_id, "task_1");
+            assert_eq!(params.result, "done");
+        }
+        other => panic!("expected TaskCompleted, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_interrupted_and_max_turns() {
+    let mut mapper = EventMapper::new("turn_1".into());
+
+    let events = mapper.map(LoopEvent::Interrupted);
+    assert_eq!(events.len(), 1);
+    assert!(matches!(&events[0], ServerNotification::TurnInterrupted(_)));
+
+    let events = mapper.map(LoopEvent::MaxTurnsReached);
+    assert_eq!(events.len(), 1);
+    assert!(matches!(&events[0], ServerNotification::MaxTurnsReached(_)));
+}
+
+#[test]
+fn test_model_fallback_started() {
+    let mut mapper = EventMapper::new("turn_1".into());
+
+    let events = mapper.map(LoopEvent::ModelFallbackStarted {
+        from: "opus".into(),
+        to: "sonnet".into(),
+        reason: "rate limited".into(),
+    });
+
+    assert_eq!(events.len(), 1);
+    match &events[0] {
+        ServerNotification::ModelFallbackStarted(params) => {
+            assert_eq!(params.from_model, "opus");
+            assert_eq!(params.to_model, "sonnet");
+            assert_eq!(params.reason, "rate limited");
+        }
+        other => panic!("expected ModelFallbackStarted, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_permission_mode_changed() {
+    let mut mapper = EventMapper::new("turn_1".into());
+
+    let events = mapper.map(LoopEvent::PermissionModeChanged {
+        mode: cocode_protocol::PermissionMode::AcceptEdits,
+    });
+
+    assert_eq!(events.len(), 1);
+    assert!(matches!(
+        &events[0],
+        ServerNotification::PermissionModeChanged(_)
+    ));
 }
 
 #[test]
@@ -425,7 +497,9 @@ fn test_failed_tool_use() {
 }
 
 #[test]
-fn test_question_asked_forwarded() {
+fn test_question_asked_dropped_by_mapper() {
+    // QuestionAsked is now handled as ServerRequest::RequestUserInput
+    // in the turn loop, not mapped to a notification by EventMapper.
     let mut mapper = EventMapper::new("turn_1".into());
 
     let events = mapper.map(LoopEvent::QuestionAsked {
@@ -433,12 +507,8 @@ fn test_question_asked_forwarded() {
         questions: json!([{"question": "Which option?"}]),
     });
 
-    assert_eq!(events.len(), 1);
-    match &events[0] {
-        ServerNotification::Error(params) => {
-            assert_eq!(params.category.as_deref(), Some("user_question"));
-            assert!(params.message.contains("q_1"));
-        }
-        other => panic!("expected Error with user_question category, got {other:?}"),
-    }
+    assert!(
+        events.is_empty(),
+        "QuestionAsked should produce no notifications (handled as ServerRequest in turn loop)"
+    );
 }

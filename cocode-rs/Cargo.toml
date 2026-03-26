@@ -228,6 +228,7 @@ shlex = "1"
 serde_yml = "0.0.12"
 similar = "2"
 snafu = "0.8"
+sse-stream = "0.2.1"
 streaming-iterator = "0.1"
 strum = { version = "0.27", features = ["derive"] }
 sha1 = "0.10.6"

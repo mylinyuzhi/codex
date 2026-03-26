@@ -485,3 +485,29 @@ fn test_definitions_filtered_includes_enabled_gate() {
     assert!(defs.iter().any(|d| d.name == "always_on"));
     assert!(defs.iter().any(|d| d.name == "ls_tool"));
 }
+
+#[test]
+fn test_mcp_server_registration_populates_metadata() {
+    let mut registry = ToolRegistry::new();
+
+    let tools = vec![McpToolInfo {
+        server: "".to_string(),
+        name: "search".to_string(),
+        description: Some("Search for items".to_string()),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": { "query": { "type": "string" } },
+            "required": ["query"]
+        }),
+    }];
+    registry.register_mcp_server("my_server", tools);
+
+    let info = registry
+        .get_mcp("mcp__my_server__search")
+        .expect("MCP tool should be registered");
+    assert_eq!(info.server, "my_server");
+    assert_eq!(info.name, "search");
+    assert_eq!(info.description, Some("Search for items".to_string()),);
+    assert_eq!(info.input_schema["properties"]["query"]["type"], "string",);
+    assert_eq!(info.input_schema["required"][0], "query");
+}
