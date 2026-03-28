@@ -3,7 +3,8 @@
 use cocode_message::TrackedMessage;
 use cocode_message::Turn;
 use cocode_protocol::AutoCompactTracking;
-use cocode_protocol::LoopEvent;
+use cocode_protocol::TuiEvent;
+use cocode_protocol::server_notification::*;
 
 use tracing::debug;
 use tracing::info;
@@ -94,19 +95,17 @@ impl AgentLoop {
             .await;
 
         // Emit events
-        self.emit(LoopEvent::SessionMemoryCompactApplied {
+        self.emit_tui(TuiEvent::SessionMemoryCompactApplied {
             saved_tokens: tokens_saved,
             summary_tokens: summary.token_estimate,
         })
         .await;
 
-        // Emit compact boundary inserted event
-        self.emit(LoopEvent::CompactBoundaryInserted {
-            trigger: cocode_protocol::CompactTrigger::Auto,
-            pre_tokens: tokens_before,
+        tracing::debug!(
+            pre_tokens = tokens_before,
             post_tokens,
-        })
-        .await;
+            "Compact boundary inserted"
+        );
 
         // Rebuild FileTracker from remaining messages after compaction
         self.rebuild_file_tracker_from_history().await;
@@ -329,13 +328,12 @@ impl AgentLoop {
                     .await;
             }
 
-            // Emit context restoration event
-            self.emit(LoopEvent::ContextRestored {
-                files_count: files_count as i32,
-                has_todos: restoration.todos.is_some(),
-                has_plan: restoration.plan.is_some(),
-            })
-            .await;
+            tracing::debug!(
+                files_count,
+                has_todos = restoration.todos.is_some(),
+                has_plan = restoration.plan.is_some(),
+                "Context restored"
+            );
         }
     }
 
@@ -386,10 +384,10 @@ impl AgentLoop {
 
         for outcome in &outcomes {
             // Emit HookExecuted event for each hook
-            self.emit(LoopEvent::HookExecuted {
-                hook_type: cocode_protocol::HookEventType::PostCompact,
+            self.emit_protocol(ServerNotification::HookExecuted(HookExecutedParams {
+                hook_type: cocode_protocol::HookEventType::PostCompact.to_string(),
                 hook_name: outcome.hook_name.clone(),
-            })
+            }))
             .await;
 
             hooks_executed += 1;
@@ -416,11 +414,11 @@ impl AgentLoop {
 
         if hooks_executed > 0 {
             let additional_context_count = hook_contexts.len() as i32;
-            self.emit(LoopEvent::PostCompactHooksExecuted {
+            tracing::debug!(
                 hooks_executed,
                 additional_context_count,
-            })
-            .await;
+                "Post-compact hooks executed"
+            );
 
             // Inject hook additional context into message history as a meta message
             if let Some(formatted) = wrap_hook_additional_context(&hook_contexts) {

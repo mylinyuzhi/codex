@@ -74,7 +74,7 @@ pub fn permission_section(mode: &PermissionMode) -> &'static str {
         PermissionMode::Default => templates::PERMISSION_DEFAULT,
         PermissionMode::Plan => templates::PERMISSION_PLAN,
         PermissionMode::AcceptEdits => templates::PERMISSION_ACCEPT_EDITS,
-        PermissionMode::Bypass => templates::PERMISSION_BYPASS,
+        PermissionMode::Bypass | PermissionMode::Auto => templates::PERMISSION_BYPASS,
         PermissionMode::DontAsk => templates::PERMISSION_DEFAULT,
     }
 }

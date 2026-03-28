@@ -680,7 +680,7 @@ Brief description of what will be implemented.
 ### Related Events
 
 ```rust
-pub enum LoopEvent {
+pub enum CoreEvent {
     PlanModeEntered { plan_file: PathBuf },
     PlanModeExited { approved: bool },
     // ...
@@ -1013,7 +1013,7 @@ impl AgentLoop {
         self.emit_hook(HookEventType::PreCompact).await?;
 
         // 2. Emit start event
-        self.emit(LoopEvent::CompactionStarted).await;
+        self.emit(CoreEvent::CompactionStarted).await;
 
         // 3. Try Session Memory Compact first (Tier 1)
         if self.try_session_memory_compact().await? {
@@ -1028,7 +1028,7 @@ impl AgentLoop {
         self.restore_context_after_compact().await?;
 
         // 6. Emit completion event
-        self.emit(LoopEvent::CompactionCompleted {
+        self.emit(CoreEvent::CompactionCompleted {
             removed_messages: removed,
             summary_tokens: self.context.estimate_tokens(),
         }).await;
@@ -1229,7 +1229,7 @@ pub fn format_system_reminder(content: &str) -> String {
 ### Events
 
 ```rust
-pub enum LoopEvent {
+pub enum CoreEvent {
     CompactionStarted,
     CompactionCompleted {
         removed_messages: i32,
@@ -1498,7 +1498,7 @@ impl AgentLoop {
             ConversationMessage::summary(summary),
         );
 
-        self.emit(LoopEvent::SessionMemoryCompactApplied {
+        self.emit(CoreEvent::SessionMemoryCompactApplied {
             saved_tokens: net_savings,
             summary_tokens,
         }).await;
@@ -1926,7 +1926,7 @@ ultra_think = 32000
 ### Related Events
 
 ```rust
-pub enum LoopEvent {
+pub enum CoreEvent {
     // Thinking mode events
     ThinkingDelta { turn_id: String, delta: String },
     ThinkingComplete { turn_id: String, total_tokens: i32 },

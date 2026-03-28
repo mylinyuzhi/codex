@@ -29,7 +29,15 @@ fn test_create_channels() {
     let (agent_tx, _agent_rx, command_tx, _command_rx) = create_channels(16);
 
     // Channels should be usable
-    assert!(agent_tx.try_send(LoopEvent::StreamRequestStart).is_ok());
+    assert!(
+        agent_tx
+            .try_send(CoreEvent::Protocol(
+                cocode_protocol::server_notification::ServerNotification::TurnInterrupted(
+                    cocode_protocol::server_notification::TurnInterruptedParams { turn_id: None },
+                ),
+            ))
+            .is_ok()
+    );
     assert!(
         command_tx
             .try_send(UserCommand::SubmitInput {

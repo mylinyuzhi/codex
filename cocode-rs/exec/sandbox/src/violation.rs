@@ -51,7 +51,7 @@ impl Violation {
 ///
 /// Supports an optional observer channel that receives the delta count
 /// of non-benign violations on each push. Used by the loop driver to
-/// emit `LoopEvent::SandboxViolationsDetected` for TUI flash messages.
+/// emit `SandboxViolationsDetected` for TUI flash messages.
 pub struct ViolationStore {
     violations: VecDeque<Violation>,
     max_size: i32,

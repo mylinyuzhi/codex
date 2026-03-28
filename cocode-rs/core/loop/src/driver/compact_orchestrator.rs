@@ -8,8 +8,9 @@ use cocode_prompt::SystemPromptBuilder;
 use cocode_protocol::AgentStatus;
 use cocode_protocol::AutoCompactTracking;
 use cocode_protocol::HookEventType;
-use cocode_protocol::LoopEvent;
 use cocode_protocol::QueryTracking;
+use cocode_protocol::TuiEvent;
+use cocode_protocol::server_notification::*;
 
 use snafu::ResultExt;
 use tracing::debug;
@@ -56,10 +57,10 @@ impl AgentLoop {
         let mut hook_additional_context = Vec::new();
         for outcome in &outcomes {
             // Emit HookExecuted event for each hook
-            self.emit(LoopEvent::HookExecuted {
-                hook_type: HookEventType::PreCompact,
+            self.emit_protocol(ServerNotification::HookExecuted(HookExecutedParams {
+                hook_type: HookEventType::PreCompact.to_string(),
                 hook_name: outcome.hook_name.clone(),
-            })
+            }))
             .await;
 
             match &outcome.result {
@@ -69,11 +70,6 @@ impl AgentLoop {
                         reason = %reason,
                         "Compaction skipped by hook"
                     );
-                    self.emit(LoopEvent::CompactionSkippedByHook {
-                        hook_name: outcome.hook_name.clone(),
-                        reason: reason.clone(),
-                    })
-                    .await;
                     return Ok(());
                 }
                 cocode_hooks::HookResult::ContinueWithContext {
@@ -87,7 +83,10 @@ impl AgentLoop {
 
         // Update status to compacting
         self.set_status(AgentStatus::Compacting);
-        self.emit(LoopEvent::CompactionStarted).await;
+        self.emit_protocol(ServerNotification::CompactionStarted(
+            CompactionStartedParams {},
+        ))
+        .await;
         if let Some(otel) = &self.otel_manager {
             otel.counter("cocode.compaction.started", 1, &[]);
         }
@@ -172,13 +171,7 @@ impl AgentLoop {
                         if attempt <= max_retries {
                             // Exponential backoff: 1s, 2s, 4s, ...
                             let delay_ms = 1000 * (1 << (attempt - 1));
-                            self.emit(LoopEvent::CompactionRetry {
-                                attempt,
-                                max_attempts: max_retries + 1,
-                                delay_ms,
-                                reason: last_error.clone(),
-                            })
-                            .await;
+                            tracing::debug!(attempt, max_attempts = max_retries + 1, delay_ms, reason = %last_error, "Compaction retry");
                             tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms as u64))
                                 .await;
                             continue;
@@ -199,13 +192,7 @@ impl AgentLoop {
                             delay_ms,
                             "Compaction API call failed, retrying"
                         );
-                        self.emit(LoopEvent::CompactionRetry {
-                            attempt,
-                            max_attempts: max_retries + 1,
-                            delay_ms,
-                            reason: last_error.clone(),
-                        })
-                        .await;
+                        tracing::debug!(attempt, max_attempts = max_retries + 1, delay_ms, reason = %last_error, "Compaction retry");
                         tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms as u64))
                             .await;
                         continue;
@@ -221,10 +208,12 @@ impl AgentLoop {
                 consecutive_failures = self.compact_failure_count,
                 "Compaction failed after all retries"
             );
-            self.emit(LoopEvent::CompactionFailed {
-                attempts: attempt,
-                error: last_error,
-            })
+            self.emit_protocol(ServerNotification::CompactionFailed(
+                CompactionFailedParams {
+                    error: last_error,
+                    attempts: attempt,
+                },
+            ))
             .await;
 
             // Trip circuit breaker after 3 consecutive failures
@@ -234,7 +223,7 @@ impl AgentLoop {
                     consecutive_failures = self.compact_failure_count,
                     "Auto-compaction circuit breaker opened"
                 );
-                self.emit(LoopEvent::CompactionCircuitBreakerOpen {
+                self.emit_tui(TuiEvent::CompactionCircuitBreakerOpen {
                     consecutive_failures: self.compact_failure_count,
                 })
                 .await;
@@ -320,19 +309,19 @@ impl AgentLoop {
             otel.counter("cocode.compaction.completed", 1, &[]);
         }
         let removed_messages = (turn_count_before - self.message_history.turn_count()).max(0);
-        self.emit(LoopEvent::CompactionCompleted {
-            removed_messages,
-            summary_tokens: post_tokens,
-        })
+        self.emit_protocol(ServerNotification::ContextCompacted(
+            ContextCompactedParams {
+                removed_messages,
+                summary_tokens: post_tokens,
+            },
+        ))
         .await;
 
-        // Emit compact boundary inserted event
-        self.emit(LoopEvent::CompactBoundaryInserted {
-            trigger: cocode_protocol::CompactTrigger::Auto,
-            pre_tokens: tokens_before,
+        tracing::debug!(
+            pre_tokens = tokens_before,
             post_tokens,
-        })
-        .await;
+            "Compact boundary inserted"
+        );
 
         self.emit_invoked_skills_restored(&invoked_skills).await;
 
@@ -450,10 +439,7 @@ impl AgentLoop {
     ) {
         if !invoked_skills.is_empty() {
             let skill_names: Vec<String> = invoked_skills.iter().map(|s| s.name.clone()).collect();
-            self.emit(LoopEvent::InvokedSkillsRestored {
-                skills: skill_names,
-            })
-            .await;
+            tracing::debug!(?skill_names, "Invoked skills restored after compaction");
         }
     }
 }

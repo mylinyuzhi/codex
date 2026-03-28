@@ -8,6 +8,7 @@
 mod commands;
 mod otel_init;
 mod output;
+mod print_runner;
 mod repl;
 mod sdk;
 mod tui_runner;
@@ -126,9 +127,17 @@ struct Cli {
     #[arg(long, global = true)]
     debug_file: Option<PathBuf>,
 
-    /// Run initialization hooks and exit.
+    /// Run initialization hooks then continue normal session.
     #[arg(long, global = true)]
     init: bool,
+
+    /// Validate config and initialize subsystems, then exit (CI/CD).
+    #[arg(long, global = true)]
+    init_only: bool,
+
+    /// Print response and exit (non-interactive, for pipes and scripts).
+    #[arg(short = 'p', long, global = true)]
+    print: bool,
 
     /// Disable skill/slash commands for the session.
     #[arg(long, global = true)]
@@ -169,6 +178,8 @@ pub struct CliFlags {
     pub debug: bool,
     pub debug_file: Option<PathBuf>,
     pub init: bool,
+    pub init_only: bool,
+    pub print: bool,
     pub disable_slash_commands: bool,
     pub fork_session: Option<String>,
     pub max_turns: Option<i32>,
@@ -317,6 +328,12 @@ enum Commands {
         #[command(subcommand)]
         action: PluginAction,
     },
+
+    /// Test MCP server connectivity and tools
+    Mcp {
+        #[command(subcommand)]
+        action: commands::mcp::McpAction,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -407,6 +424,8 @@ fn build_cli_flags(cli: &mut Cli) -> anyhow::Result<CliFlags> {
         debug: cli.debug,
         debug_file: cli.debug_file.take(),
         init: cli.init,
+        init_only: cli.init_only,
+        print: cli.print,
         disable_slash_commands: cli.disable_slash_commands,
         fork_session: cli.fork_session.take(),
         max_turns: cli.max_turns,
@@ -461,20 +480,40 @@ async fn cli_main(_arg0_paths: cocode_arg0::Arg0DispatchPaths) -> anyhow::Result
 
     let flags = build_cli_flags(&mut cli)?;
 
-    // Handle --init: validate config, create ephemeral session, and exit.
-    // This mirrors Claude Code's --init which validates the environment without
-    // starting an interactive session — useful for CI/CD setup verification.
-    if flags.init {
+    // Handle --init-only: validate config, create ephemeral session, and exit.
+    // Useful for CI/CD setup verification without starting an interactive session.
+    if flags.init_only {
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         let snapshot = std::sync::Arc::new(
             config.build_config(ConfigOverrides::default().with_cwd(cwd.clone()))?,
         );
         let selections = config.build_all_selections();
         let session = Session::with_selections(cwd, selections);
-        // Creating SessionState validates config and initializes all subsystems
         let _state = cocode_session::SessionState::new(session, snapshot).await?;
         eprintln!("Initialization complete.");
         return Ok(());
+    }
+
+    // Handle --init: run Setup hooks then continue normal session.
+    // Creates an ephemeral session to load hook config, executes Setup hooks
+    // (side effects like file writes persist), then drops the session.
+    // The subsequent TUI/REPL path creates a fresh session.
+    if flags.init {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let snapshot = std::sync::Arc::new(
+            config.build_config(ConfigOverrides::default().with_cwd(cwd.clone()))?,
+        );
+        let selections = config.build_all_selections();
+        let session = Session::with_selections(cwd.clone(), selections);
+        let state = cocode_session::SessionState::new(session, snapshot).await?;
+        let ctx = cocode_hooks::HookContext::new(
+            cocode_hooks::HookEventType::Setup,
+            state.session_id().to_string(),
+            cwd,
+        );
+        state.hook_registry.execute(&ctx).await;
+        drop(state);
+        eprintln!("Setup hooks executed.");
     }
 
     // Handle --resume, --continue, --fork-session as top-level flags (override subcommands)
@@ -513,19 +552,19 @@ async fn cli_main(_arg0_paths: cocode_arg0::Arg0DispatchPaths) -> anyhow::Result
         Some(Commands::Sessions { all }) => commands::sessions::run(all, &config).await,
         Some(Commands::Status) => commands::status::run(&config).await,
         Some(Commands::Plugin { action }) => commands::plugin::run(action, &config).await,
+        Some(Commands::Mcp { action }) => commands::mcp::run(action).await,
         None => {
             // No subcommand - either run prompt or start interactive chat
             if let Some(prompt) = cli.prompt {
-                // Non-interactive mode: run single prompt (always uses REPL mode)
-                // Global --max-turns overrides the default single-turn limit
+                // Non-interactive mode: run single prompt via print mode
                 let effective_max_turns = flags.max_turns.or(Some(1));
                 run_interactive(
                     Some(prompt),
                     None,
-                    None, // No session name for single prompt
+                    None,
                     effective_max_turns,
                     &config,
-                    true, // Force no-tui for single prompt
+                    no_tui,
                     flags,
                 )
                 .await
@@ -556,13 +595,43 @@ async fn run_interactive(
     no_tui: bool,
     flags: CliFlags,
 ) -> anyhow::Result<()> {
+    use std::io::IsTerminal;
+    use std::io::Read;
+
     // Set all CLI-flag env vars once, before forking into TUI or REPL.
     // This runs during single-threaded init, before any async tasks spawn.
     set_cli_env_vars(&flags);
 
-    // For single prompt or explicit --no-tui, use REPL mode
-    if initial_prompt.is_some() || no_tui {
-        return commands::chat::run(initial_prompt, title, name, max_turns, config, flags).await;
+    // Auto-detect piped stdin: read all input as prompt
+    let effective_prompt = if !std::io::stdin().is_terminal() && initial_prompt.is_none() {
+        let mut buf = String::new();
+        std::io::stdin().read_to_string(&mut buf)?;
+        let trimmed = buf.trim().to_string();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    } else {
+        initial_prompt
+    };
+
+    // Auto-detect piped stdout: force print mode
+    let force_print = !std::io::stdout().is_terminal();
+
+    // Print mode: single-turn, format-aware output, exit
+    if flags.print || force_print || effective_prompt.is_some() {
+        let prompt = effective_prompt.unwrap_or_default();
+        if prompt.is_empty() {
+            anyhow::bail!("No prompt provided for print mode");
+        }
+        let effective_max_turns = max_turns.unwrap_or(1);
+        return print_runner::run(prompt, effective_max_turns, config, flags).await;
+    }
+
+    // For explicit --no-tui, use REPL mode
+    if no_tui {
+        return commands::chat::run(None, title, name, max_turns, config, flags).await;
     }
 
     // Interactive mode: use TUI

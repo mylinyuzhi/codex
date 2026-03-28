@@ -138,7 +138,7 @@ Main agent loop driver.
 ```rust
 pub struct AgentLoop { ... }
 pub struct LoopConfig { ... }
-pub enum LoopEvent { ... }
+pub enum CoreEvent { ... }
 pub struct ToolExecutor { ... }  // Parallel/sequential execution
 ```
 

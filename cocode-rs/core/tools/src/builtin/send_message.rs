@@ -67,6 +67,7 @@ impl Tool for SendMessageTool {
                         MessageType::Broadcast.as_str(),
                         MessageType::ShutdownRequest.as_str(),
                         MessageType::ShutdownResponse.as_str(),
+                        MessageType::PlanApprovalRequest.as_str(),
                         MessageType::PlanApprovalResponse.as_str(),
                         MessageType::IdleNotification.as_str(),
                     ],
@@ -97,6 +98,9 @@ impl Tool for SendMessageTool {
             Some(s) if s == MessageType::Broadcast.as_str() => MessageType::Broadcast,
             Some(s) if s == MessageType::ShutdownRequest.as_str() => MessageType::ShutdownRequest,
             Some(s) if s == MessageType::ShutdownResponse.as_str() => MessageType::ShutdownResponse,
+            Some(s) if s == MessageType::PlanApprovalRequest.as_str() => {
+                MessageType::PlanApprovalRequest
+            }
             Some(s) if s == MessageType::PlanApprovalResponse.as_str() => {
                 MessageType::PlanApprovalResponse
             }

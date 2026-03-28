@@ -197,6 +197,7 @@ impl HookRegistry {
     ///
     /// One-shot hooks (`once: true`) are removed after successful execution.
     /// They are NOT removed on timeout or failure, allowing retry.
+    #[tracing::instrument(skip_all, fields(event = %ctx.event_type))]
     pub async fn execute(&self, ctx: &HookContext) -> Vec<HookOutcome> {
         // Snapshot settings once to avoid holding lock across filtering
         let (disable_all, allow_managed_only, workspace_trusted) = {
@@ -208,6 +209,7 @@ impl HookRegistry {
             )
         };
         if disable_all {
+            debug!("Hooks: all hooks disabled, skipping");
             return Vec::new();
         }
 
@@ -267,6 +269,12 @@ impl HookRegistry {
             HookHandler::Inline => 4,
             HookHandler::SdkCallback { .. } => 5,
         });
+
+        debug!(
+            event = %ctx.event_type,
+            matching_count = matching.len(),
+            "Hooks: dispatching event"
+        );
 
         // Execute all matching hooks in parallel
         let futures: Vec<_> = matching

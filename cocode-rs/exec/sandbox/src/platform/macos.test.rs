@@ -369,3 +369,64 @@ fn test_generate_seatbelt_profile_long_command_tag_truncated() {
         tag.len()
     );
 }
+
+#[test]
+fn test_generate_seatbelt_profile_denied_read_paths() {
+    let config = SandboxConfig {
+        enforcement: EnforcementLevel::WorkspaceWrite,
+        writable_roots: vec![],
+        denied_paths: vec![],
+        denied_read_paths: vec![
+            std::path::PathBuf::from("/etc/shadow"),
+            std::path::PathBuf::from("/private/var/secrets"),
+        ],
+        allow_network: true,
+        ..Default::default()
+    };
+
+    let profile = generate_seatbelt_profile(&config, "ls", "_test_SBX");
+    assert!(
+        profile.contains("(deny file-read* (subpath \"/etc/shadow\"))"),
+        "Profile should deny reading /etc/shadow"
+    );
+    assert!(
+        profile.contains("(deny file-read* (subpath \"/private/var/secrets\"))"),
+        "Profile should deny reading /private/var/secrets"
+    );
+}
+
+#[test]
+fn test_generate_seatbelt_profile_no_denied_read_when_empty() {
+    let config = SandboxConfig {
+        enforcement: EnforcementLevel::ReadOnly,
+        writable_roots: vec![],
+        denied_paths: vec![],
+        denied_read_paths: vec![],
+        allow_network: true,
+        ..Default::default()
+    };
+
+    let profile = generate_seatbelt_profile(&config, "ls", "_test_SBX");
+    assert!(
+        !profile.contains("Explicitly denied read paths"),
+        "Profile should NOT have denied read section when no paths configured"
+    );
+}
+
+#[test]
+fn test_generate_seatbelt_profile_denied_paths_also_deny_read() {
+    let config = SandboxConfig {
+        enforcement: EnforcementLevel::WorkspaceWrite,
+        writable_roots: vec![],
+        denied_paths: vec![std::path::PathBuf::from("/sensitive/data")],
+        denied_read_paths: vec![],
+        allow_network: true,
+        ..Default::default()
+    };
+
+    let profile = generate_seatbelt_profile(&config, "ls", "_test_SBX");
+    assert!(
+        profile.contains("(deny file-read* (subpath \"/sensitive/data\"))"),
+        "denied_paths should also generate file-read* deny rules"
+    );
+}

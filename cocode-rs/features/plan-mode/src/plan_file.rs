@@ -6,6 +6,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use snafu::ResultExt;
+use tracing::debug;
 
 use crate::error::Result;
 use crate::error::plan_mode_error;
@@ -55,7 +56,9 @@ pub fn get_plan_file_path(session_id: &str, agent_id: Option<&str>) -> PathBuf {
 /// `Some(content)` if the file exists and is readable, `None` if it doesn't exist.
 pub fn read_plan_file(session_id: &str, agent_id: Option<&str>) -> Option<String> {
     let path = get_plan_file_path(session_id, agent_id);
-    std::fs::read_to_string(&path).ok()
+    let result = std::fs::read_to_string(&path).ok();
+    debug!(path = %path.display(), found = result.is_some(), "Plan: reading plan file");
+    result
 }
 
 /// Check if a path is a plan file (for permission exceptions).
@@ -81,6 +84,7 @@ pub fn is_plan_file(path: &Path, plan_path: &Path) -> bool {
 /// Returns an error if directory creation fails.
 pub fn ensure_plan_dir() -> Result<PathBuf> {
     let plan_dir = get_plan_dir();
+    debug!(dir = %plan_dir.display(), "Plan: ensuring plan directory");
     std::fs::create_dir_all(&plan_dir).context(plan_mode_error::CreateDirSnafu {
         message: format!("failed to create {}", plan_dir.display()),
     })?;

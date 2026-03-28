@@ -82,6 +82,8 @@ pub struct AttachmentSettings {
     pub cron_reminders: bool,
     /// Enable delegate mode instructions.
     pub delegate_mode: bool,
+    /// Enable auto mode instructions (autonomous execution).
+    pub auto_mode: bool,
     /// Enable collaboration notifications.
     pub collab_notifications: bool,
     /// Enable team context injection for teammates.
@@ -119,6 +121,15 @@ pub struct AttachmentSettings {
     /// Enable sandbox violation notifications.
     pub sandbox_violations: bool,
 
+    /// Enable auto mode reminder.
+    pub auto_mode: bool,
+    /// Enable effort level reminder.
+    pub effort_level: bool,
+    /// Enable date change reminder.
+    pub date_change: bool,
+    /// Enable IDE context reminders (selected lines and opened files).
+    pub ide_context: bool,
+
     /// Minimum severity for LSP diagnostics (error, warning, info, hint).
     pub lsp_diagnostics_min_severity: DiagnosticSeverity,
 }
@@ -142,6 +153,7 @@ impl Default for AttachmentSettings {
             todo_reminders: true,
             cron_reminders: true,
             delegate_mode: true,
+            auto_mode: true,
             collab_notifications: true,
             team_context: true,
             team_mailbox: true,
@@ -160,6 +172,10 @@ impl Default for AttachmentSettings {
             output_token_usage: true,
             config_change: true,
             sandbox_violations: true,
+            auto_mode: true,
+            effort_level: true,
+            date_change: true,
+            ide_context: true,
             lsp_diagnostics_min_severity: DiagnosticSeverity::Warning,
         }
     }

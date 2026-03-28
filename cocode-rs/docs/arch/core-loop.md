@@ -8,7 +8,7 @@ The agent loop is the core execution engine, modeled after Claude Code's `coreMe
 - **Concurrency-safe execution**: Parallel for safe tools, sequential for unsafe
 - **Auto-compaction**: Automatic context summarization when approaching limits
 - **Model fallback**: Switch to fallback model on overload
-- **Event-driven**: All state changes emit `LoopEvent` for UI integration
+- **Event-driven**: All state changes emit `CoreEvent` for UI integration
 
 ## Architecture
 
@@ -30,7 +30,7 @@ The agent loop is the core execution engine, modeled after Claude Code's `coreMe
 │                                                                  │
 │  ┌────────────────────────────────────────────────────────────┐ │
 │  │              Event Channel                                  │ │
-│  │  mpsc::Sender<LoopEvent> → UI / app-server / TUI          │ │
+│  │  mpsc::Sender<CoreEvent> → UI / app-server / TUI          │ │
 │  └────────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -257,12 +257,12 @@ impl Default for LoopConfig {
 }
 ```
 
-### LoopEvent (Complete)
+### CoreEvent (Complete)
 
 Based on Claude Code v2.1.7 implementation, the event types include additional streaming and error events:
 
 ```rust
-pub enum LoopEvent {
+pub enum CoreEvent {
     // Stream lifecycle
     StreamRequestStart,
     StreamRequestEnd { usage: TokenUsage },
@@ -396,7 +396,7 @@ pub struct AgentLoop {
     hooks: Arc<HookRegistry>,
 
     /// Event sender for streaming updates
-    event_tx: mpsc::Sender<LoopEvent>,
+    event_tx: mpsc::Sender<CoreEvent>,
 
     /// Cancellation token
     cancel: CancellationToken,
@@ -745,7 +745,7 @@ impl AgentLoop {
         }
 
         // Emit retry event
-        self.emit(LoopEvent::Retry {
+        self.emit(CoreEvent::Retry {
             attempt,
             max_attempts: MAX_OUTPUT_TOKEN_RECOVERY,
             delay_ms: 0,
@@ -807,7 +807,7 @@ impl AgentLoop {
         auto_compact_tracking: &mut AutoCompactTracking,
     ) -> Result<LoopResult, LoopError> {
         // STEP 1: Signal stream request start
-        self.emit(LoopEvent::StreamRequestStart).await;
+        self.emit(CoreEvent::StreamRequestStart).await;
 
         // STEP 2: Setup query tracking
         query_tracking.depth += 1;
@@ -820,7 +820,7 @@ impl AgentLoop {
         if self.config.enable_micro_compaction {
             let removed = self.micro_compact();
             if removed > 0 {
-                self.emit(LoopEvent::MicroCompactionApplied { removed_results: removed }).await;
+                self.emit(CoreEvent::MicroCompactionApplied { removed_results: removed }).await;
             }
         }
 
@@ -834,7 +834,7 @@ impl AgentLoop {
         // STEP 6: Initialize state
         self.turn_number += 1;
         self.tool_executor.reset();
-        self.emit(LoopEvent::TurnStarted {
+        self.emit(CoreEvent::TurnStarted {
             turn_id: turn_id.clone(),
             turn_number: self.turn_number,
         }).await;
@@ -859,7 +859,7 @@ impl AgentLoop {
                     if output_recovery_attempts >= MAX_OUTPUT_TOKEN_RECOVERY {
                         return Err(e);
                     }
-                    self.emit(LoopEvent::Retry {
+                    self.emit(CoreEvent::Retry {
                         attempt: output_recovery_attempts,
                         max_attempts: MAX_OUTPUT_TOKEN_RECOVERY,
                         delay_ms: 0,
@@ -886,7 +886,7 @@ impl AgentLoop {
 
             // STEP 13: Handle abort after tool execution
             if self.tool_executor.has_aborted() {
-                self.emit(LoopEvent::ToolExecutionAborted {
+                self.emit(CoreEvent::ToolExecutionAborted {
                     reason: self.tool_executor.abort_reason(),
                 }).await;
             }
@@ -914,13 +914,13 @@ impl AgentLoop {
         // STEP 17: Check max turns limit
         if let Some(max) = self.config.max_turns {
             if self.turn_number >= max {
-                self.emit(LoopEvent::MaxTurnsReached).await;
+                self.emit(CoreEvent::MaxTurnsReached).await;
                 return Ok(LoopResult::max_turns_reached());
             }
         }
 
         // Emit turn completed
-        self.emit(LoopEvent::TurnCompleted {
+        self.emit(CoreEvent::TurnCompleted {
             turn_id: turn_id.clone(),
             usage: response.usage.clone(),
         }).await;
@@ -928,7 +928,7 @@ impl AgentLoop {
         // Check stop reason
         match response.finish_reason {
             FinishReason::Stop => {
-                self.emit(LoopEvent::StreamRequestEnd { usage: response.usage }).await;
+                self.emit(CoreEvent::StreamRequestEnd { usage: response.usage }).await;
                 Ok(LoopResult::completed(response))
             }
             FinishReason::ToolUse => {
@@ -949,7 +949,7 @@ impl AgentLoop {
 
         // Collect completed results during streaming (non-blocking)
         for result in self.tool_executor.get_completed_results() {
-            self.emit(LoopEvent::ToolUseCompleted {
+            self.emit(CoreEvent::ToolUseCompleted {
                 call_id: result.tool_use_id.clone(),
                 output: result.content.clone(),
                 is_error: result.is_error,
@@ -960,7 +960,7 @@ impl AgentLoop {
         // Wait for remaining results (blocking)
         let mut remaining = self.tool_executor.get_remaining_results().await;
         while let Some(result) = remaining.next().await {
-            self.emit(LoopEvent::ToolUseCompleted {
+            self.emit(CoreEvent::ToolUseCompleted {
                 call_id: result.tool_use_id.clone(),
                 output: result.content.clone(),
                 is_error: result.is_error,
@@ -990,19 +990,19 @@ impl AgentLoop {
         while let Some(event) = stream.next_event().await {
             match event? {
                 StreamEvent::TextDelta { delta, .. } => {
-                    self.emit(LoopEvent::TextDelta {
+                    self.emit(CoreEvent::TextDelta {
                         turn_id: turn_id.to_string(),
                         delta,
                     }).await;
                 }
                 StreamEvent::ThinkingDelta { delta, .. } => {
-                    self.emit(LoopEvent::ThinkingDelta {
+                    self.emit(CoreEvent::ThinkingDelta {
                         turn_id: turn_id.to_string(),
                         delta,
                     }).await;
                 }
                 StreamEvent::ToolCallStart { id, name, .. } => {
-                    self.emit(LoopEvent::ToolUseQueued {
+                    self.emit(CoreEvent::ToolUseQueued {
                         call_id: id.clone(),
                         name: name.clone(),
                         input: Value::Null, // Will be filled in
@@ -1014,7 +1014,7 @@ impl AgentLoop {
                     self.tool_executor.add_tool(tool_use, &stream.current_message());
 
                     // Emit started event
-                    self.emit(LoopEvent::ToolUseStarted {
+                    self.emit(CoreEvent::ToolUseStarted {
                         call_id: tool_use.id.clone(),
                         name: tool_use.name.clone(),
                     }).await;
@@ -1027,7 +1027,7 @@ impl AgentLoop {
 
             // Check for completed tool results and emit events
             for result in self.tool_executor.get_completed_results() {
-                self.emit(LoopEvent::ToolUseCompleted {
+                self.emit(CoreEvent::ToolUseCompleted {
                     call_id: result.tool_use_id.clone(),
                     output: result.content.clone(),
                     is_error: result.is_error,
@@ -1107,7 +1107,7 @@ Micro-compact runs at the start of each turn, before the threshold check:
 if self.config.enable_micro_compaction {
     let removed = self.micro_compact();
     if removed > 0 {
-        self.emit(LoopEvent::MicroCompactionApplied { removed_results: removed }).await;
+        self.emit(CoreEvent::MicroCompactionApplied { removed_results: removed }).await;
     }
 }
 
@@ -1159,7 +1159,7 @@ impl AgentLoop {
         self.hooks.execute(HookEventType::PreCompact, &self.context).await?;
 
         // 2. Emit start event
-        self.emit(LoopEvent::CompactionStarted).await;
+        self.emit(CoreEvent::CompactionStarted).await;
 
         // 3. Try Session Memory Compact first (Tier 1 - zero API cost)
         if self.try_session_memory_compact().await? {
@@ -1174,7 +1174,7 @@ impl AgentLoop {
         self.restore_context_after_compact().await?;
 
         // 6. Emit completion event
-        self.emit(LoopEvent::CompactionCompleted {
+        self.emit(CoreEvent::CompactionCompleted {
             removed_messages: removed,
             summary_tokens: self.context.estimate_tokens(),
         }).await;
@@ -1208,7 +1208,7 @@ impl AgentLoop {
                         &metadata.last_summarized_id,
                         ConversationMessage::summary(summary),
                     );
-                    self.emit(LoopEvent::SessionMemoryCompactApplied {
+                    self.emit(CoreEvent::SessionMemoryCompactApplied {
                         saved_tokens: tokens_to_save - summary_tokens,
                         summary_tokens,
                     }).await;
@@ -1313,7 +1313,7 @@ impl AgentLoop {
         turn_id: &str,
         request: ChatRequest,
     ) -> Result<GenerateResponse, LoopError> {
-        self.emit(LoopEvent::StreamStallDetected {
+        self.emit(CoreEvent::StreamStallDetected {
             turn_id: turn_id.to_string(),
             timeout: self.config.stall_detection.stall_timeout,
         }).await;
@@ -1329,7 +1329,7 @@ impl AgentLoop {
             StallRecovery::Fallback => {
                 // Switch to fallback model and retry
                 if let Some(fallback) = &self.config.fallback_model {
-                    self.emit(LoopEvent::ModelFallbackStarted {
+                    self.emit(CoreEvent::ModelFallbackStarted {
                         from: self.model.name().to_string(),
                         to: fallback.clone(),
                         reason: "Stream stalled".to_string(),
@@ -1359,7 +1359,7 @@ impl AgentLoop {
 
                 // Switch to fallback
                 let fallback = self.config.fallback_model.clone().unwrap();
-                self.emit_sync(LoopEvent::ModelFallbackStarted {
+                self.emit_sync(CoreEvent::ModelFallbackStarted {
                     from: self.model.name().to_string(),
                     to: fallback.clone(),
                     reason: "Model overloaded".to_string(),
@@ -1653,7 +1653,7 @@ impl AgentLoop {
 ## Usage Example
 
 ```rust
-use cocode_loop::{AgentLoop, LoopConfig, LoopEvent};
+use cocode_loop::{AgentLoop, LoopConfig, CoreEvent};
 use cocode_tools::ToolRegistry;
 use cocode_tools::register_all_tools;
 use hyper_sdk::prelude::*;
@@ -1674,9 +1674,9 @@ async fn run_agent() -> Result<()> {
     tokio::spawn(async move {
         while let Some(event) = event_rx.recv().await {
             match event {
-                LoopEvent::TextDelta { delta, .. } => print!("{delta}"),
-                LoopEvent::ToolUseStarted { name, .. } => println!("\n[Tool: {name}]"),
-                LoopEvent::SubagentSpawned { agent_type, description, .. } => {
+                CoreEvent::TextDelta { delta, .. } => print!("{delta}"),
+                CoreEvent::ToolUseStarted { name, .. } => println!("\n[Tool: {name}]"),
+                CoreEvent::SubagentSpawned { agent_type, description, .. } => {
                     println!("\n[Spawning {agent_type}: {description}]");
                 }
                 _ => {}

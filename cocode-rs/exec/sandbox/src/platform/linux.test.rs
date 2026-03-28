@@ -81,7 +81,7 @@ fn test_build_bwrap_args_readonly() {
     assert!(args.contains(&"--unshare-user".to_string()));
     assert!(args.contains(&"--ro-bind".to_string()));
     assert!(args.contains(&"--dev".to_string()));
-    assert!(args.contains(&"--proc".to_string()));
+    // --proc is conditional on proc_mount_available() (may be absent in containers)
     assert!(args.contains(&"--tmpfs".to_string()));
     // No writable roots means no --bind
     assert!(!args.contains(&"--bind".to_string()));
@@ -110,9 +110,14 @@ fn test_build_bwrap_args_network_allowed() {
 
 #[test]
 fn test_build_bwrap_args_with_writable_roots() {
+    // Use real temp dirs so they exist (non-existent roots are skipped gracefully)
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root_path = tmp.path().to_path_buf();
+    let root_str = root_path.display().to_string();
+
     let config = SandboxConfig {
         enforcement: EnforcementLevel::WorkspaceWrite,
-        writable_roots: vec![WritableRoot::new("/home/user/project")],
+        writable_roots: vec![WritableRoot::new(&root_path)],
         denied_paths: vec![],
         allow_network: false,
         ..Default::default()
@@ -120,8 +125,8 @@ fn test_build_bwrap_args_with_writable_roots() {
 
     let args = build_bwrap_args(&config);
     let bind_idx = args.iter().position(|a| a == "--bind").expect("--bind");
-    assert_eq!(args[bind_idx + 1], "/home/user/project");
-    assert_eq!(args[bind_idx + 2], "/home/user/project");
+    assert_eq!(args[bind_idx + 1], root_str);
+    assert_eq!(args[bind_idx + 2], root_str);
 
     // Read-only subpath protection
     assert!(args.contains(&"--ro-bind-try".to_string()));
@@ -131,16 +136,21 @@ fn test_build_bwrap_args_with_writable_roots() {
 
     // CWD set to first writable root
     let chdir_idx = args.iter().position(|a| a == "--chdir").expect("--chdir");
-    assert_eq!(args[chdir_idx + 1], "/home/user/project");
+    assert_eq!(args[chdir_idx + 1], root_str);
 }
 
 #[test]
 fn test_build_bwrap_args_multiple_writable_roots() {
+    let tmp1 = tempfile::tempdir().expect("tempdir");
+    let tmp2 = tempfile::tempdir().expect("tempdir");
+    let path1 = tmp1.path().display().to_string();
+    let path2 = tmp2.path().display().to_string();
+
     let config = SandboxConfig {
         enforcement: EnforcementLevel::WorkspaceWrite,
         writable_roots: vec![
-            WritableRoot::new("/home/user/project1"),
-            WritableRoot::new("/home/user/project2"),
+            WritableRoot::new(tmp1.path()),
+            WritableRoot::new(tmp2.path()),
         ],
         denied_paths: vec![],
         allow_network: false,
@@ -156,12 +166,27 @@ fn test_build_bwrap_args_multiple_writable_roots() {
         .map(|(i, _)| i)
         .collect();
     assert_eq!(bind_positions.len(), 2);
-    assert_eq!(args[bind_positions[0] + 1], "/home/user/project1");
-    assert_eq!(args[bind_positions[1] + 1], "/home/user/project2");
+    assert_eq!(args[bind_positions[0] + 1], path1);
+    assert_eq!(args[bind_positions[1] + 1], path2);
 
     // CWD should be first root
     let chdir_idx = args.iter().position(|a| a == "--chdir").expect("--chdir");
-    assert_eq!(args[chdir_idx + 1], "/home/user/project1");
+    assert_eq!(args[chdir_idx + 1], path1);
+}
+
+#[test]
+fn test_build_bwrap_args_skips_nonexistent_roots() {
+    let config = SandboxConfig {
+        enforcement: EnforcementLevel::WorkspaceWrite,
+        writable_roots: vec![WritableRoot::new("/nonexistent/path/for/test")],
+        denied_paths: vec![],
+        allow_network: false,
+        ..Default::default()
+    };
+
+    let args = build_bwrap_args(&config);
+    // Non-existent root should be skipped (no --bind for it)
+    assert!(!args.iter().any(|a| a.contains("/nonexistent/path")));
 }
 
 #[test]
@@ -320,9 +345,10 @@ fn test_build_bwrap_args_unsets_dangerous_env_vars() {
 
 #[test]
 fn test_build_bwrap_args_env_cleanup_before_chdir() {
+    let tmp = tempfile::tempdir().expect("tempdir");
     let config = SandboxConfig {
         enforcement: EnforcementLevel::WorkspaceWrite,
-        writable_roots: vec![WritableRoot::new("/home/user/project")],
+        writable_roots: vec![WritableRoot::new(tmp.path())],
         denied_paths: vec![],
         allow_network: false,
         ..Default::default()

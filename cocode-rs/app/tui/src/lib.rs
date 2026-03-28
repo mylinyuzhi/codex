@@ -41,7 +41,6 @@
 // Initialize i18n at crate root - this generates the _rust_i18n_t function
 rust_i18n::i18n!("locales", fallback = "en");
 
-pub mod agent_event_handler;
 pub mod agent_search;
 pub mod animation;
 pub mod app;
@@ -57,14 +56,17 @@ pub mod keybinding_bridge;
 pub mod paste;
 pub mod path_display;
 pub mod render;
+mod server_notification_handler;
 pub mod shimmer;
 pub mod skill_search;
 pub mod state;
+pub mod stream_event_handler;
 pub mod streaming;
 pub mod symbol_search;
 pub mod terminal;
 pub mod terminal_palette;
 pub mod theme;
+pub mod tui_event_handler;
 pub mod update;
 pub mod widgets;
 
