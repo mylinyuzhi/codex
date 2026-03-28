@@ -44,6 +44,10 @@ class ApprovalDecision(str, Enum):
     approve_session = 'approve_session'
     deny = 'deny'
 
+class ConfigWriteScope(str, Enum):
+    user = 'user'
+    project = 'project'
+
 class FileChangeKind(str, Enum):
     add = 'add'
     delete = 'delete'
@@ -64,14 +68,6 @@ class SandboxMode(str, Enum):
     none = 'none'
     read_only = 'read_only'
     strict = 'strict'
-
-class SessionEndedReason(str, Enum):
-    completed = 'completed'
-    max_turns = 'max_turns'
-    max_budget = 'max_budget'
-    error = 'error'
-    user_interrupt = 'user_interrupt'
-    stdin_closed = 'stdin_closed'
 
 class ThinkingMode(str, Enum):
     adaptive = 'adaptive'
@@ -208,6 +204,19 @@ class SessionStartedParams(BaseModel):
     models: list[str] | None = None
     protocol_version: str = '1'
 
+class SessionResultParams(BaseModel):
+    duration_ms: int
+    session_id: str
+    stop_reason: SessionEndedReason
+    total_turns: int
+    usage: Usage
+    duration_api_ms: int | None = None
+    structured_output: Any = None
+    total_cost_cents: int | None = None
+
+class SessionEndedParams(BaseModel):
+    reason: SessionEndedReason
+
 class TurnStartedParams(BaseModel):
     turn_id: str
     turn_number: int
@@ -218,6 +227,17 @@ class TurnCompletedParams(BaseModel):
 
 class TurnFailedParams(BaseModel):
     error: str
+
+class TurnInterruptedNotifParams(BaseModel):
+    turn_id: str | None = None
+
+class MaxTurnsReachedParams(BaseModel):
+    max_turns: int | None = None
+
+class TurnRetryParams(BaseModel):
+    attempt: int
+    delay_ms: int
+    max_attempts: int
 
 class ItemEventParams(BaseModel):
     item: ThreadItem
@@ -246,6 +266,10 @@ class SubagentBackgroundedParams(BaseModel):
     agent_id: str
     output_file: str
 
+class SubagentProgressParams(BaseModel):
+    agent_id: str
+    message: str | None = None
+
 class McpStartupStatusParams(BaseModel):
     server: str
     status: str
@@ -263,6 +287,16 @@ class ContextUsageWarningParams(BaseModel):
     percent_left: float
     warning_threshold: int
 
+class CompactionStartedParams(BaseModel):
+    pass
+
+class CompactionFailedParams(BaseModel):
+    attempts: int
+    error: str
+
+class ContextClearedParams(BaseModel):
+    new_mode: str
+
 class TaskStartedParams(BaseModel):
     task_id: str
     task_type: str
@@ -272,36 +306,31 @@ class TaskCompletedParams(BaseModel):
     task_id: str
     is_error: bool = False
 
-class TurnInterruptedNotifParams(BaseModel):
-    turn_id: str | None = None
+class TaskProgressParams(BaseModel):
+    task_id: str
+    message: str | None = None
 
-class MaxTurnsReachedParams(BaseModel):
-    max_turns: int | None = None
+class AgentsKilledParams(BaseModel):
+    agent_ids: list[str]
+    count: int
 
 class ModelFallbackStartedParams(BaseModel):
     from_model: str
     reason: str
     to_model: str
 
+class ModelFallbackCompletedParams(BaseModel):
+    pass
+
 class PermissionModeChangedParams(BaseModel):
     mode: str
-
-class SessionResultParams(BaseModel):
-    duration_ms: int
-    session_id: str
-    stop_reason: SessionEndedReason
-    total_turns: int
-    usage: Usage
-    duration_api_ms: int | None = None
-    structured_output: Any = None
-    total_cost_cents: int | None = None
 
 class PromptSuggestionParams(BaseModel):
     suggestions: list[str]
 
 class ErrorNotificationParams(BaseModel):
     message: str
-    category: str | None = None
+    category: ErrorCategory | None = None
     error_info: ErrorInfo | None = None
     retryable: bool = False
 
@@ -314,8 +343,77 @@ class RateLimitParams(BaseModel):
 class KeepAliveNotifParams(BaseModel):
     timestamp: int
 
-class SessionEndedParams(BaseModel):
-    reason: SessionEndedReason
+class IdeSelectionChangedParams(BaseModel):
+    end_line: int
+    file_path: str
+    start_line: int
+    selected_text: str = ''
+
+class IdeDiagnosticsUpdatedParams(BaseModel):
+    diagnostics: list[IdeDiagnosticInfo]
+    file_path: str
+    new_count: int
+
+class PlanModeChangedParams(BaseModel):
+    entered: bool
+    approved: bool | None = None
+    plan_file: str | None = None
+
+class QueueStateChangedParams(BaseModel):
+    queued: int
+
+class CommandQueuedParams(BaseModel):
+    id: str
+    preview: str
+
+class CommandDequeuedParams(BaseModel):
+    id: str
+
+class RewindCompletedParams(BaseModel):
+    messages_removed: int
+    restored_files: int
+    rewound_turn: int
+
+class RewindFailedParams(BaseModel):
+    error: str
+
+class CostWarningParams(BaseModel):
+    current_cost_cents: int
+    threshold_cents: int
+    budget_cents: int | None = None
+
+class SandboxStateChangedParams(BaseModel):
+    active: bool
+    enforcement: str
+
+class SandboxViolationsDetectedParams(BaseModel):
+    count: int
+
+class FastModeChangedParams(BaseModel):
+    active: bool
+
+class AgentsRegisteredParams(BaseModel):
+    agents: list[AgentInfo]
+
+class HookExecutedParams(BaseModel):
+    hook_name: str
+    hook_type: str
+
+class SummarizeCompletedParams(BaseModel):
+    from_turn: int
+    summary_tokens: int
+
+class SummarizeFailedParams(BaseModel):
+    error: str
+
+class StreamStallDetectedParams(BaseModel):
+    turn_id: str | None = None
+
+class StreamWatchdogWarningParams(BaseModel):
+    elapsed_secs: int
+
+class StreamRequestEndParams(BaseModel):
+    usage: Usage
 
 
 # ---------------------------------------------------------------------------
@@ -333,6 +431,16 @@ class ServerNotification(BaseModel):
             return SessionStartedParams.model_validate(self.params)
         return None
 
+    def as_session_result(self) -> SessionResultParams | None:
+        if self.method == 'session/result':
+            return SessionResultParams.model_validate(self.params)
+        return None
+
+    def as_session_ended(self) -> SessionEndedParams | None:
+        if self.method == 'session/ended':
+            return SessionEndedParams.model_validate(self.params)
+        return None
+
     def as_turn_started(self) -> TurnStartedParams | None:
         if self.method == 'turn/started':
             return TurnStartedParams.model_validate(self.params)
@@ -346,6 +454,21 @@ class ServerNotification(BaseModel):
     def as_turn_failed(self) -> TurnFailedParams | None:
         if self.method == 'turn/failed':
             return TurnFailedParams.model_validate(self.params)
+        return None
+
+    def as_turn_interrupted(self) -> TurnInterruptedNotifParams | None:
+        if self.method == 'turn/interrupted':
+            return TurnInterruptedNotifParams.model_validate(self.params)
+        return None
+
+    def as_max_turns_reached(self) -> MaxTurnsReachedParams | None:
+        if self.method == 'turn/maxReached':
+            return MaxTurnsReachedParams.model_validate(self.params)
+        return None
+
+    def as_turn_retry(self) -> TurnRetryParams | None:
+        if self.method == 'turn/retry':
+            return TurnRetryParams.model_validate(self.params)
         return None
 
     def as_item_started(self) -> ItemEventParams | None:
@@ -388,6 +511,11 @@ class ServerNotification(BaseModel):
             return SubagentBackgroundedParams.model_validate(self.params)
         return None
 
+    def as_subagent_progress(self) -> SubagentProgressParams | None:
+        if self.method == 'subagent/progress':
+            return SubagentProgressParams.model_validate(self.params)
+        return None
+
     def as_mcp_startup_status(self) -> McpStartupStatusParams | None:
         if self.method == 'mcp/startupStatus':
             return McpStartupStatusParams.model_validate(self.params)
@@ -408,6 +536,21 @@ class ServerNotification(BaseModel):
             return ContextUsageWarningParams.model_validate(self.params)
         return None
 
+    def as_compaction_started(self) -> CompactionStartedParams | None:
+        if self.method == 'context/compactionStarted':
+            return CompactionStartedParams.model_validate(self.params)
+        return None
+
+    def as_compaction_failed(self) -> CompactionFailedParams | None:
+        if self.method == 'context/compactionFailed':
+            return CompactionFailedParams.model_validate(self.params)
+        return None
+
+    def as_context_cleared(self) -> ContextClearedParams | None:
+        if self.method == 'context/cleared':
+            return ContextClearedParams.model_validate(self.params)
+        return None
+
     def as_task_started(self) -> TaskStartedParams | None:
         if self.method == 'task/started':
             return TaskStartedParams.model_validate(self.params)
@@ -418,14 +561,14 @@ class ServerNotification(BaseModel):
             return TaskCompletedParams.model_validate(self.params)
         return None
 
-    def as_turn_interrupted(self) -> TurnInterruptedNotifParams | None:
-        if self.method == 'turn/interrupted':
-            return TurnInterruptedNotifParams.model_validate(self.params)
+    def as_task_progress(self) -> TaskProgressParams | None:
+        if self.method == 'task/progress':
+            return TaskProgressParams.model_validate(self.params)
         return None
 
-    def as_max_turns_reached(self) -> MaxTurnsReachedParams | None:
-        if self.method == 'turn/maxReached':
-            return MaxTurnsReachedParams.model_validate(self.params)
+    def as_agents_killed(self) -> AgentsKilledParams | None:
+        if self.method == 'agents/killed':
+            return AgentsKilledParams.model_validate(self.params)
         return None
 
     def as_model_fallback_started(self) -> ModelFallbackStartedParams | None:
@@ -433,14 +576,19 @@ class ServerNotification(BaseModel):
             return ModelFallbackStartedParams.model_validate(self.params)
         return None
 
+    def as_model_fallback_completed(self) -> ModelFallbackCompletedParams | None:
+        if self.method == 'model/fallbackCompleted':
+            return ModelFallbackCompletedParams.model_validate(self.params)
+        return None
+
+    def as_fast_mode_changed(self) -> FastModeChangedParams | None:
+        if self.method == 'model/fastModeChanged':
+            return FastModeChangedParams.model_validate(self.params)
+        return None
+
     def as_permission_mode_changed(self) -> PermissionModeChangedParams | None:
         if self.method == 'permission/modeChanged':
             return PermissionModeChangedParams.model_validate(self.params)
-        return None
-
-    def as_session_result(self) -> SessionResultParams | None:
-        if self.method == 'session/result':
-            return SessionResultParams.model_validate(self.params)
         return None
 
     def as_prompt_suggestion(self) -> PromptSuggestionParams | None:
@@ -463,9 +611,94 @@ class ServerNotification(BaseModel):
             return KeepAliveNotifParams.model_validate(self.params)
         return None
 
-    def as_session_ended(self) -> SessionEndedParams | None:
-        if self.method == 'session/ended':
-            return SessionEndedParams.model_validate(self.params)
+    def as_ide_selection_changed(self) -> IdeSelectionChangedParams | None:
+        if self.method == 'ide/selectionChanged':
+            return IdeSelectionChangedParams.model_validate(self.params)
+        return None
+
+    def as_ide_diagnostics_updated(self) -> IdeDiagnosticsUpdatedParams | None:
+        if self.method == 'ide/diagnosticsUpdated':
+            return IdeDiagnosticsUpdatedParams.model_validate(self.params)
+        return None
+
+    def as_plan_mode_changed(self) -> PlanModeChangedParams | None:
+        if self.method == 'plan/modeChanged':
+            return PlanModeChangedParams.model_validate(self.params)
+        return None
+
+    def as_queue_state_changed(self) -> QueueStateChangedParams | None:
+        if self.method == 'queue/stateChanged':
+            return QueueStateChangedParams.model_validate(self.params)
+        return None
+
+    def as_command_queued(self) -> CommandQueuedParams | None:
+        if self.method == 'queue/commandQueued':
+            return CommandQueuedParams.model_validate(self.params)
+        return None
+
+    def as_command_dequeued(self) -> CommandDequeuedParams | None:
+        if self.method == 'queue/commandDequeued':
+            return CommandDequeuedParams.model_validate(self.params)
+        return None
+
+    def as_rewind_completed(self) -> RewindCompletedParams | None:
+        if self.method == 'rewind/completed':
+            return RewindCompletedParams.model_validate(self.params)
+        return None
+
+    def as_rewind_failed(self) -> RewindFailedParams | None:
+        if self.method == 'rewind/failed':
+            return RewindFailedParams.model_validate(self.params)
+        return None
+
+    def as_cost_warning(self) -> CostWarningParams | None:
+        if self.method == 'cost/warning':
+            return CostWarningParams.model_validate(self.params)
+        return None
+
+    def as_sandbox_state_changed(self) -> SandboxStateChangedParams | None:
+        if self.method == 'sandbox/stateChanged':
+            return SandboxStateChangedParams.model_validate(self.params)
+        return None
+
+    def as_sandbox_violations_detected(self) -> SandboxViolationsDetectedParams | None:
+        if self.method == 'sandbox/violationsDetected':
+            return SandboxViolationsDetectedParams.model_validate(self.params)
+        return None
+
+    def as_agents_registered(self) -> AgentsRegisteredParams | None:
+        if self.method == 'agents/registered':
+            return AgentsRegisteredParams.model_validate(self.params)
+        return None
+
+    def as_hook_executed(self) -> HookExecutedParams | None:
+        if self.method == 'hook/executed':
+            return HookExecutedParams.model_validate(self.params)
+        return None
+
+    def as_summarize_completed(self) -> SummarizeCompletedParams | None:
+        if self.method == 'summarize/completed':
+            return SummarizeCompletedParams.model_validate(self.params)
+        return None
+
+    def as_summarize_failed(self) -> SummarizeFailedParams | None:
+        if self.method == 'summarize/failed':
+            return SummarizeFailedParams.model_validate(self.params)
+        return None
+
+    def as_stream_stall_detected(self) -> StreamStallDetectedParams | None:
+        if self.method == 'stream/stallDetected':
+            return StreamStallDetectedParams.model_validate(self.params)
+        return None
+
+    def as_stream_watchdog_warning(self) -> StreamWatchdogWarningParams | None:
+        if self.method == 'stream/watchdogWarning':
+            return StreamWatchdogWarningParams.model_validate(self.params)
+        return None
+
+    def as_stream_request_end(self) -> StreamRequestEndParams | None:
+        if self.method == 'stream/requestEnd':
+            return StreamRequestEndParams.model_validate(self.params)
         return None
 
 
@@ -527,6 +760,11 @@ class ServerRequest(BaseModel):
     def as_mcp_route_message(self) -> McpRouteMessageParams | None:
         if self.method == 'mcp/routeMessage':
             return McpRouteMessageParams.model_validate(self.params)
+        return None
+
+    def as_cancel_request(self) -> ServerCancelRequestParams | None:
+        if self.method == 'control/cancelRequest':
+            return ServerCancelRequestParams.model_validate(self.params)
         return None
 
 
@@ -607,15 +845,41 @@ class ThinkingConfig(BaseModel):
 class OutputFormatConfig(BaseModel):
     schema_: Any = Field(alias='schema')
 
+class HookMatcherConfig(BaseModel):
+    command: str
+    args: list[str] = []
+    tool_name: str | None = None
+
 class CommandInfo(BaseModel):
     name: str
     description: str | None = None
+
+class ClientInfo(BaseModel):
+    name: str
+    title: str | None = None
+    version: str | None = None
+
+class InitializeCapabilities(BaseModel):
+    experimental_api: bool = False
+    opt_out_notification_methods: list[str] | None = None
+
+class SessionSummary(BaseModel):
+    id: str
+    created_at: str | None = None
+    model: str | None = None
+    name: str | None = None
+    turn_count: int = 0
+    updated_at: str | None = None
+    working_dir: str | None = None
 
 # Union type: see Rust source for variants
 SystemPromptConfig = Any
 
 # Union type: see Rust source for variants
 ToolsConfig = Any
+
+# Union type: see Rust source for variants
+ErrorInfo = Any
 
 
 # ---------------------------------------------------------------------------
@@ -632,6 +896,13 @@ class PostToolUseHookInput(BaseModel):
     is_error: bool = False
     tool_input: Any = None
     tool_output: str | None = None
+    tool_use_id: str | None = None
+
+class PostToolUseFailureHookInput(BaseModel):
+    error: str
+    tool_name: str
+    is_interrupt: bool = False
+    tool_input: Any = None
     tool_use_id: str | None = None
 
 class HookCallbackOutput(BaseModel):
@@ -659,10 +930,30 @@ class NotificationHookInput(BaseModel):
     notification_type: str
     payload: Any = None
 
+class PreCompactHookInput(BaseModel):
+    trigger: str
+    custom_instructions: str | None = None
+
+class PermissionRequestHookInput(BaseModel):
+    tool_name: str
+    permission_suggestions: Any = None
+    tool_input: Any = None
+
+class SessionStartHookInput(BaseModel):
+    session_id: str
+
+class SessionEndHookInput(BaseModel):
+    reason: str
+    session_id: str
+
 
 # ---------------------------------------------------------------------------
 # Client request params
 # ---------------------------------------------------------------------------
+
+class InitializeRequestParams(BaseModel):
+    capabilities: InitializeCapabilities | None = None
+    client_info: ClientInfo | None = None
 
 class SessionStartRequestParams(BaseModel):
     prompt: str
@@ -728,6 +1019,29 @@ class UpdateEnvRequestParams(BaseModel):
 class KeepAliveRequestParams(BaseModel):
     timestamp: int | None = None
 
+class SessionListRequestParams(BaseModel):
+    cursor: str | None = None
+    limit: int | None = None
+
+class SessionReadRequestParams(BaseModel):
+    session_id: str
+
+class SessionArchiveRequestParams(BaseModel):
+    session_id: str
+
+class ConfigReadRequestParams(BaseModel):
+    key: str | None = None
+
+class ConfigWriteRequestParams(BaseModel):
+    key: str
+    value: Any
+    scope: ConfigWriteScope = 'user'
+
+class McpRouteMessageResponseParams(BaseModel):
+    request_id: str
+    error: str | None = None
+    response: Any = None
+
 class CancelRequestParams(BaseModel):
     request_id: str
 
@@ -735,6 +1049,15 @@ class CancelRequestParams(BaseModel):
 # ---------------------------------------------------------------------------
 # Client request wrappers
 # ---------------------------------------------------------------------------
+
+class InitializeRequest(BaseModel):
+    method: str = 'initialize'
+    params: InitializeRequestParams
+
+    class InitializeRequestParams(InitializeRequestParams):
+        pass
+
+InitializeRequestParams = InitializeRequest.InitializeRequestParams
 
 class SessionStartRequest(BaseModel):
     method: str = 'session/start'
@@ -862,10 +1185,91 @@ class KeepAliveRequest(BaseModel):
 
 KeepAliveRequestParams = KeepAliveRequest.KeepAliveRequestParams
 
+class SessionListRequest(BaseModel):
+    method: str = 'session/list'
+    params: SessionListRequestParams
+
+    class SessionListRequestParams(SessionListRequestParams):
+        pass
+
+SessionListRequestParams = SessionListRequest.SessionListRequestParams
+
+class SessionReadRequest(BaseModel):
+    method: str = 'session/read'
+    params: SessionReadRequestParams
+
+    class SessionReadRequestParams(SessionReadRequestParams):
+        pass
+
+SessionReadRequestParams = SessionReadRequest.SessionReadRequestParams
+
+class SessionArchiveRequest(BaseModel):
+    method: str = 'session/archive'
+    params: SessionArchiveRequestParams
+
+    class SessionArchiveRequestParams(SessionArchiveRequestParams):
+        pass
+
+SessionArchiveRequestParams = SessionArchiveRequest.SessionArchiveRequestParams
+
+class ConfigReadRequest(BaseModel):
+    method: str = 'config/read'
+    params: ConfigReadRequestParams
+
+    class ConfigReadRequestParams(ConfigReadRequestParams):
+        pass
+
+ConfigReadRequestParams = ConfigReadRequest.ConfigReadRequestParams
+
+class ConfigWriteRequest(BaseModel):
+    method: str = 'config/value/write'
+    params: ConfigWriteRequestParams
+
+    class ConfigWriteRequestParams(ConfigWriteRequestParams):
+        pass
+
+ConfigWriteRequestParams = ConfigWriteRequest.ConfigWriteRequestParams
+
+class McpRouteMessageResponseRequest(BaseModel):
+    method: str = 'mcp/routeMessageResponse'
+    params: McpRouteMessageResponseRequestParams
+
+    class McpRouteMessageResponseRequestParams(McpRouteMessageResponseParams):
+        pass
+
+McpRouteMessageResponseRequestParams = McpRouteMessageResponseRequest.McpRouteMessageResponseRequestParams
+
+class CancelRequest(BaseModel):
+    method: str = 'control/cancelRequest'
+    params: CancelRequestParams
+
+    class CancelRequestParams(CancelRequestParams):
+        pass
+
+CancelRequestParams = CancelRequest.CancelRequestParams
+
 
 # ---------------------------------------------------------------------------
 # Additional types
 # ---------------------------------------------------------------------------
+
+class AgentInfo(BaseModel):
+    agent_type: str
+    name: str
+    description: str | None = None
+
+class ConfigReadResult(BaseModel):
+    config: Any
+
+class IdeDiagnosticInfo(BaseModel):
+    line: int
+    message: str
+    severity: str
+
+class InitializeResult(BaseModel):
+    platform_family: str
+    platform_os: str
+    protocol_version: str
 
 class JsonRpcError(BaseModel):
     error: JsonRpcErrorData
@@ -895,3 +1299,12 @@ class McpServerInfoParams(BaseModel):
 class PermissionSuggestion(BaseModel):
     behavior: str
     reason: str | None = None
+
+class SdkMcpToolDef(BaseModel):
+    name: str
+    description: str | None = None
+    input_schema: Any = None
+
+class SessionListResult(BaseModel):
+    sessions: list[SessionSummary]
+    next_cursor: str | None = None

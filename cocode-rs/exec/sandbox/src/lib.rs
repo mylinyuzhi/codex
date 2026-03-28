@@ -37,6 +37,7 @@ pub use config::WritableRoot;
 pub use error::SandboxError;
 pub use monitor::ViolationMonitor;
 pub use platform::SandboxPlatform;
+pub use state::CommandSandboxSnapshot;
 pub use state::ProxyPorts;
 pub use state::SandboxState;
 pub use violation::ViolationStore;

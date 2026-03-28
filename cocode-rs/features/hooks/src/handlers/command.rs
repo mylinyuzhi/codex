@@ -264,6 +264,7 @@ impl CommandHandler {
         };
 
         debug!(command, event_type = %ctx.event_type, "Executing command hook");
+        let hook_start = std::time::Instant::now();
 
         let mut cmd = tokio::process::Command::new("sh");
         cmd.arg("-c")
@@ -394,6 +395,11 @@ impl CommandHandler {
         }
 
         let (mut result, suppress) = parse_hook_response(stdout.trim());
+        debug!(
+            command,
+            duration_ms = hook_start.elapsed().as_millis() as i64,
+            "Command hook completed"
+        );
 
         // Attach session env vars to the result if we have them
         if !session_env_vars.is_empty() {

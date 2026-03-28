@@ -895,7 +895,9 @@ dependencies = [
  "clap",
  "cocode-app-server-protocol",
  "cocode-config",
+ "cocode-file-backup",
  "cocode-hooks",
+ "cocode-message",
  "cocode-protocol",
  "cocode-session",
  "cocode-subagent",
@@ -917,6 +919,7 @@ name = "cocode-app-server-protocol"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "cocode-protocol",
  "pretty_assertions",
  "schemars 0.8.22",
  "serde",
@@ -1289,6 +1292,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cocode-llm-check"
+version = "0.0.0"
+dependencies = [
+ "lru 0.16.3",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "cocode-loop"
 version = "0.0.0"
 dependencies = [
@@ -1485,6 +1497,7 @@ dependencies = [
  "chrono",
  "humantime-serde",
  "pretty_assertions",
+ "schemars 0.8.22",
  "serde",
  "serde_json",
  "strum 0.27.2",
@@ -1883,6 +1896,7 @@ dependencies = [
  "arboard",
  "base64 0.22.1",
  "chrono",
+ "cocode-app-server-protocol",
  "cocode-config",
  "cocode-error",
  "cocode-file-search",
@@ -1895,6 +1909,7 @@ dependencies = [
  "cocode-subagent",
  "cocode-symbol-search",
  "cocode-utils-common",
+ "cocode-utils-image",
  "crossterm",
  "futures",
  "hex",

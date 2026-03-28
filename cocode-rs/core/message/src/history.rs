@@ -15,6 +15,9 @@ use cocode_protocol::TokenUsage;
 use serde::Deserialize;
 use serde::Serialize;
 use std::path::PathBuf;
+use tracing::debug;
+use tracing::info;
+use tracing::trace;
 
 /// Outcome of a micro-compact operation.
 ///
@@ -196,6 +199,12 @@ impl MessageHistory {
     pub fn add_turn(&mut self, turn: Turn) {
         self.total_input_tokens += turn.usage.input_tokens;
         self.total_output_tokens += turn.usage.output_tokens;
+        debug!(
+            turn_number = self.turns.len() + 1,
+            input_tokens = turn.usage.input_tokens,
+            output_tokens = turn.usage.output_tokens,
+            "Message history: turn added"
+        );
         self.turns.push(turn);
     }
 
@@ -232,6 +241,21 @@ impl MessageHistory {
 
     /// Collect all messages for API request.
     pub fn messages_for_api(&self) -> Vec<LanguageModelMessage> {
+        self.messages_for_api_impl(false)
+    }
+
+    /// Collect messages for API request, optionally stripping reasoning
+    /// signatures. Use this when the model/provider changed between turns:
+    /// signatures are opaque blobs tied to the originating model and cannot
+    /// be verified by a different one. Reasoning *text* is preserved.
+    pub fn messages_for_api_stripping_signatures(
+        &self,
+        strip_signatures: bool,
+    ) -> Vec<LanguageModelMessage> {
+        self.messages_for_api_impl(strip_signatures)
+    }
+
+    fn messages_for_api_impl(&self, strip_signatures: bool) -> Vec<LanguageModelMessage> {
         let mut messages = Vec::new();
 
         // Add system message first
@@ -256,16 +280,33 @@ impl MessageHistory {
         }
 
         // Normalize and add
-        let normalized = normalize_messages_for_api(&tracked, &NormalizationOptions::for_api());
+        let mut opts = NormalizationOptions::for_api();
+        if strip_signatures {
+            opts.strip_thinking_signatures = true;
+        }
+        let normalized = normalize_messages_for_api(&tracked, &opts);
         messages.extend(normalized);
 
+        // Trim excess images to stay within API limits
+        crate::normalization::trim_image_count(
+            &mut messages,
+            crate::normalization::MAX_IMAGES_IN_CONTEXT,
+        );
+
+        debug!(
+            message_count = messages.len(),
+            has_summary = self.compacted_summary.is_some(),
+            "Message history: prepared for API"
+        );
         messages
     }
 
     /// Estimate total tokens in current history.
     pub fn estimate_tokens(&self) -> i32 {
         let messages = self.messages_for_api();
-        estimate_tokens(&messages)
+        let estimated = estimate_tokens(&messages);
+        trace!(estimated, "Message history: token estimate");
+        estimated
     }
 
     /// Get messages as JSON values for compaction calculations.
@@ -353,6 +394,14 @@ impl MessageHistory {
     ) {
         let turns_compacted = self.turns.len().saturating_sub(keep_turns.max(1) as usize) as i32;
         let turn_number = self.turn_count();
+        info!(
+            turns_compacted,
+            tokens_saved,
+            trigger = ?trigger,
+            keep_turns,
+            pre_tokens,
+            "Message history: compaction applied"
+        );
 
         // Record the compaction boundary
         self.compaction_boundary = Some(CompactionBoundary {
@@ -396,6 +445,7 @@ impl MessageHistory {
 
     /// Clear all history.
     pub fn clear(&mut self) {
+        info!("Message history: cleared");
         self.turns.clear();
         self.compacted_summary = None;
         self.compaction_boundary = None;
@@ -408,6 +458,7 @@ impl MessageHistory {
     /// Used by the rewind system to roll back conversation history
     /// when files are restored to a previous state.
     pub fn truncate_from_turn(&mut self, from_turn_number: i32) {
+        info!(from_turn_number, "Message history: truncated for rewind");
         self.turns.retain(|t| t.number < from_turn_number);
     }
 

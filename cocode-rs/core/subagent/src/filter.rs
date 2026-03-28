@@ -5,22 +5,23 @@ use cocode_protocol::PermissionMode;
 use cocode_protocol::ToolName;
 
 /// Tools that are never available to any subagent, regardless of configuration.
+///
+/// Matches CC's `BACKGROUND_AGENT_EXCLUDED_TOOLS` which applies to all
+/// subagents (foreground and background). Additional filtering for background
+/// agents is handled by `ASYNC_SAFE_TOOLS` in Layer 4.
 const SYSTEM_BLOCKED: &[&str] = &[
     ToolName::Task.as_str(),
+    ToolName::TaskOutput.as_str(),
     ToolName::EnterPlanMode.as_str(),
     ToolName::ExitPlanMode.as_str(),
     ToolName::TaskStop.as_str(),
     ToolName::AskUserQuestion.as_str(),
-    ToolName::EnterWorktree.as_str(),
-    ToolName::ExitWorktree.as_str(),
-    ToolName::CronCreate.as_str(),
-    ToolName::CronDelete.as_str(),
-    ToolName::TeamCreate.as_str(),
-    ToolName::TeamDelete.as_str(),
-    ToolName::SendMessage.as_str(),
 ];
 
 /// Tools safe for async/background execution (no user interaction required).
+///
+/// Matches CC's `ASYNC_AGENT_ALLOWED_TOOLS`. Only applied for background
+/// agents (Layer 4). System-blocked tools are already removed in Layer 1.
 const ASYNC_SAFE_TOOLS: &[&str] = &[
     ToolName::Read.as_str(),
     ToolName::Edit.as_str(),
@@ -31,13 +32,6 @@ const ASYNC_SAFE_TOOLS: &[&str] = &[
     ToolName::WebFetch.as_str(),
     ToolName::WebSearch.as_str(),
     ToolName::NotebookEdit.as_str(),
-    ToolName::TaskOutput.as_str(),
-    ToolName::Task.as_str(), // Task is async-safe when explicitly allowed via Task(type) syntax
-    ToolName::TaskCreate.as_str(),
-    ToolName::TaskUpdate.as_str(),
-    ToolName::TaskGet.as_str(),
-    ToolName::TaskList.as_str(),
-    ToolName::CronList.as_str(),
     ToolName::Skill.as_str(),
     ToolName::McpSearch.as_str(),
     ToolName::TodoWrite.as_str(),

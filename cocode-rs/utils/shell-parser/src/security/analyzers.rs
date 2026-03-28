@@ -457,7 +457,11 @@ pub struct ZshDangerousCommandsAnalyzer;
 
 impl Analyzer for ZshDangerousCommandsAnalyzer {
     fn analyze(&self, cmd: &ParsedShell, analysis: &mut SecurityAnalysis) {
-        const ZSH_CMDS: &[&str] = &["zmodload", "emulate", "sysopen", "zcompile", "autoload"];
+        const ZSH_CMDS: &[&str] = &[
+            "zmodload", "emulate", "sysopen", "zcompile", "autoload", "sysread", "syswrite",
+            "sysseek", "zpty", "ztcp", "zsocket", "mapfile", "zf_rm", "zf_mv", "zf_ln", "zf_chmod",
+            "zf_chown", "zf_mkdir", "zf_rmdir", "zf_chgrp",
+        ];
 
         let commands = cmd.extract_commands();
         for args in &commands {
@@ -1066,6 +1070,62 @@ impl Analyzer for HeredocSubstitutionAnalyzer {
     }
 }
 
+/// Detects excess unbalanced closing braces/brackets after stripping quoted content.
+///
+/// Unmatched `)`, `}`, `]` after quote removal indicate possible
+/// brace-based obfuscation or injection (CC: checkExcessClosingBraces).
+pub struct ExcessClosingBracesAnalyzer;
+
+impl Analyzer for ExcessClosingBracesAnalyzer {
+    fn analyze(&self, cmd: &ParsedShell, analysis: &mut SecurityAnalysis) {
+        let source = cmd.source();
+        // Strip single-quoted and double-quoted content, then check balance
+        let mut stripped = String::with_capacity(source.len());
+        let mut in_single = false;
+        let mut in_double = false;
+        let mut chars = source.chars().peekable();
+        while let Some(ch) = chars.next() {
+            match ch {
+                '\\' if !in_single => {
+                    chars.next();
+                }
+                '\'' if !in_double => {
+                    in_single = !in_single;
+                }
+                '"' if !in_single => {
+                    in_double = !in_double;
+                }
+                _ if !in_single && !in_double => stripped.push(ch),
+                _ => {}
+            }
+        }
+
+        // Count bracket balance in stripped content
+        let mut paren: i32 = 0;
+        let mut brace: i32 = 0;
+        let mut bracket: i32 = 0;
+        for ch in stripped.chars() {
+            match ch {
+                '(' => paren += 1,
+                ')' => paren -= 1,
+                '{' => brace += 1,
+                '}' => brace -= 1,
+                '[' => bracket += 1,
+                ']' => bracket -= 1,
+                _ => {}
+            }
+            // If any counter goes negative, we have excess closing braces
+            if paren < 0 || brace < 0 || bracket < 0 {
+                analysis.add_risk(SecurityRisk::new(
+                    RiskKind::ExcessClosingBraces,
+                    "Excess unbalanced closing braces/brackets after quote stripping".to_string(),
+                ));
+                return;
+            }
+        }
+    }
+}
+
 /// Get all default analyzers.
 pub fn default_analyzers() -> Vec<Box<dyn Analyzer>> {
     vec![
@@ -1085,6 +1145,7 @@ pub fn default_analyzers() -> Vec<Box<dyn Analyzer>> {
         Box::new(ZshDangerousCommandsAnalyzer),
         Box::new(CommentQuoteDesyncAnalyzer),
         Box::new(QuotedNewlineHashAnalyzer),
+        Box::new(ExcessClosingBracesAnalyzer),
         // Ask phase
         Box::new(HeredocSubstitutionAnalyzer),
         Box::new(DangerousSubstitutionAnalyzer),

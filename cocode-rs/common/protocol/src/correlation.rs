@@ -6,7 +6,7 @@
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::LoopEvent;
+use crate::CoreEvent;
 
 /// A unique identifier for a command submission.
 ///
@@ -66,26 +66,25 @@ impl AsRef<str> for SubmissionId {
     }
 }
 
-/// A loop event with optional correlation information.
+/// A core event with optional correlation information.
 ///
-/// Wraps a [`LoopEvent`] with an optional [`SubmissionId`] to enable
+/// Wraps a [`CoreEvent`] with an optional [`SubmissionId`] to enable
 /// tracking which command triggered this event.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct CorrelatedEvent {
     /// The correlation ID linking this event to its originating command.
     ///
     /// This is `None` for events that are not triggered by a specific command,
     /// such as background task completions or system-initiated events.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub correlation_id: Option<SubmissionId>,
 
-    /// The underlying loop event.
-    pub event: LoopEvent,
+    /// The underlying core event.
+    pub event: CoreEvent,
 }
 
 impl CorrelatedEvent {
     /// Create a new correlated event with the given correlation ID.
-    pub fn new(event: LoopEvent, correlation_id: Option<SubmissionId>) -> Self {
+    pub fn new(event: CoreEvent, correlation_id: Option<SubmissionId>) -> Self {
         Self {
             correlation_id,
             event,
@@ -93,7 +92,7 @@ impl CorrelatedEvent {
     }
 
     /// Create a correlated event without a correlation ID.
-    pub fn uncorrelated(event: LoopEvent) -> Self {
+    pub fn uncorrelated(event: CoreEvent) -> Self {
         Self {
             correlation_id: None,
             event,
@@ -101,7 +100,7 @@ impl CorrelatedEvent {
     }
 
     /// Create a correlated event with a correlation ID.
-    pub fn correlated(event: LoopEvent, id: SubmissionId) -> Self {
+    pub fn correlated(event: CoreEvent, id: SubmissionId) -> Self {
         Self {
             correlation_id: Some(id),
             event,
@@ -119,35 +118,35 @@ impl CorrelatedEvent {
     }
 
     /// Get a reference to the underlying event.
-    pub fn event(&self) -> &LoopEvent {
+    pub fn event(&self) -> &CoreEvent {
         &self.event
     }
 
     /// Consume self and return the underlying event.
-    pub fn into_event(self) -> LoopEvent {
+    pub fn into_event(self) -> CoreEvent {
         self.event
     }
 
     /// Consume self and return both the correlation ID and event.
-    pub fn into_parts(self) -> (Option<SubmissionId>, LoopEvent) {
+    pub fn into_parts(self) -> (Option<SubmissionId>, CoreEvent) {
         (self.correlation_id, self.event)
     }
 }
 
-impl From<LoopEvent> for CorrelatedEvent {
-    fn from(event: LoopEvent) -> Self {
+impl From<CoreEvent> for CorrelatedEvent {
+    fn from(event: CoreEvent) -> Self {
         Self::uncorrelated(event)
     }
 }
 
-impl From<(LoopEvent, SubmissionId)> for CorrelatedEvent {
-    fn from((event, id): (LoopEvent, SubmissionId)) -> Self {
+impl From<(CoreEvent, SubmissionId)> for CorrelatedEvent {
+    fn from((event, id): (CoreEvent, SubmissionId)) -> Self {
         Self::correlated(event, id)
     }
 }
 
-impl From<(LoopEvent, Option<SubmissionId>)> for CorrelatedEvent {
-    fn from((event, id): (LoopEvent, Option<SubmissionId>)) -> Self {
+impl From<(CoreEvent, Option<SubmissionId>)> for CorrelatedEvent {
+    fn from((event, id): (CoreEvent, Option<SubmissionId>)) -> Self {
         Self::new(event, id)
     }
 }

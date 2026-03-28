@@ -340,7 +340,7 @@ All UI frontends (CLI, TUI, IDE) communicate with core via event channels:
 ┌─────────────────────────────────────────────────────────────┐
 │                        Core Layer                            │
 │                                                              │
-│  AgentLoop ──► mpsc::Sender<LoopEvent> ──┐                 │
+│  AgentLoop ──► mpsc::Sender<CoreEvent> ──┐                 │
 │                                           │                 │
 └───────────────────────────────────────────┼─────────────────┘
                                             │
@@ -417,7 +417,7 @@ Widget Layer
 
 | Layer | Extension Point | Mechanism |
 |-------|-----------------|-----------|
-| Core | New event type | Add `LoopEvent` variant |
+| Core | New event type | Add `CoreEvent` variant |
 | MCP | New transport | Implement `McpTransport` trait |
 | Features | New hook event | Add to `HookEventType` enum |
 | App | New protocol | Implement message processor |

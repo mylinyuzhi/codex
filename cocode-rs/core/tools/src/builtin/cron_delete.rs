@@ -51,6 +51,10 @@ impl Tool for CronDeleteTool {
         false
     }
 
+    fn should_defer(&self) -> bool {
+        true
+    }
+
     fn feature_gate(&self) -> Option<cocode_protocol::Feature> {
         Some(cocode_protocol::Feature::Cron)
     }

@@ -9,6 +9,7 @@ use std::time::Duration;
 use futures::future;
 use tokio::time::timeout;
 use tracing::debug;
+use tracing::trace;
 use tracing::warn;
 
 use crate::config::SystemReminderConfig;
@@ -17,6 +18,8 @@ use crate::generator::GeneratorContext;
 use crate::generators::AgentMentionsGenerator;
 use crate::generators::AtMentionedFilesGenerator;
 use crate::generators::AutoMemoryPromptGenerator;
+use crate::generators::AutoModeEnterGenerator;
+use crate::generators::AutoModeExitGenerator;
 use crate::generators::AvailableSkillsGenerator;
 use crate::generators::BudgetUsdGenerator;
 use crate::generators::ChangedFilesGenerator;
@@ -25,8 +28,11 @@ use crate::generators::CompactFileReferenceGenerator;
 use crate::generators::CompactionReminderGenerator;
 use crate::generators::ConfigChangeGenerator;
 use crate::generators::CronRemindersGenerator;
+use crate::generators::DateChangeGenerator;
 use crate::generators::DeferredToolsDeltaGenerator;
 use crate::generators::DelegateModeGenerator;
+use crate::generators::EffortLevelGenerator;
+use crate::generators::IdeContextGenerator;
 use crate::generators::InvokedSkillsGenerator;
 use crate::generators::LspDiagnosticsGenerator;
 use crate::generators::McpInstructionsDeltaGenerator;
@@ -116,6 +122,7 @@ impl SystemReminderOrchestrator {
             Arc::new(TeamContextGenerator),
             Arc::new(TeamMailboxGenerator),
             Arc::new(SandboxViolationsGenerator),
+            Arc::new(DateChangeGenerator),
             // MainAgentOnly tier
             Arc::new(AvailableSkillsGenerator::new()),
             Arc::new(LspDiagnosticsGenerator),
@@ -123,11 +130,14 @@ impl SystemReminderOrchestrator {
             Arc::new(TodoRemindersGenerator),
             Arc::new(UnifiedTasksGenerator),
             Arc::new(DelegateModeGenerator),
+            Arc::new(AutoModeEnterGenerator),
+            Arc::new(AutoModeExitGenerator),
             Arc::new(CollabNotificationsGenerator),
             Arc::new(PlanVerificationGenerator),
             Arc::new(TokenUsageGenerator),
             Arc::new(QueuedCommandsGenerator),
             Arc::new(CronRemindersGenerator),
+            Arc::new(EffortLevelGenerator),
             // New generators for enhanced features
             Arc::new(BudgetUsdGenerator),
             Arc::new(CompactFileReferenceGenerator),
@@ -147,6 +157,7 @@ impl SystemReminderOrchestrator {
             Arc::new(AtMentionedFilesGenerator),
             Arc::new(AgentMentionsGenerator),
             Arc::new(InvokedSkillsGenerator),
+            Arc::new(IdeContextGenerator),
         ]
     }
 
@@ -198,9 +209,10 @@ impl SystemReminderOrchestrator {
         }
 
         debug!(
-            "Running {} generators for turn {}",
-            applicable_generators.len(),
-            ctx.turn_number
+            count = applicable_generators.len(),
+            generators = %applicable_generators.iter().map(|g| g.name()).collect::<Vec<_>>().join(", "),
+            turn = ctx.turn_number,
+            "Running generators"
         );
 
         // Run all generators in parallel with timeout
@@ -216,7 +228,11 @@ impl SystemReminderOrchestrator {
 
                     match timeout(timeout_duration, generator.generate(ctx_ref)).await {
                         Ok(Ok(Some(reminder))) => {
-                            debug!("Generator '{}' produced reminder", name);
+                            trace!(
+                                generator = %name,
+                                reminder_chars = reminder.content().map_or(0, str::len),
+                                "Generator produced reminder"
+                            );
                             Some((attachment_type, reminder))
                         }
                         Ok(Ok(None)) => None,

@@ -35,8 +35,9 @@ use cocode_inference::LanguageModelCallOptions;
 use cocode_inference::LanguageModelMessage;
 use cocode_inference::TextPart;
 use cocode_protocol::AutoCompactTracking;
-use cocode_protocol::LoopEvent;
+use cocode_protocol::CoreEvent;
 use cocode_protocol::SessionMemoryExtractionConfig;
+use cocode_protocol::TuiEvent;
 use snafu::ResultExt;
 use tokio::sync::mpsc;
 use tracing::debug;
@@ -91,7 +92,7 @@ pub struct SessionMemoryExtractionAgent {
     /// Model to use for summarization.
     model: Arc<dyn LanguageModel>,
     /// Event sender for emitting extraction events.
-    event_tx: mpsc::Sender<LoopEvent>,
+    event_tx: mpsc::Sender<CoreEvent>,
     /// Path to the summary.md file.
     summary_path: PathBuf,
 }
@@ -102,7 +103,7 @@ impl SessionMemoryExtractionAgent {
         config: SessionMemoryExtractionConfig,
         api_client: ApiClient,
         model: Arc<dyn LanguageModel>,
-        event_tx: mpsc::Sender<LoopEvent>,
+        event_tx: mpsc::Sender<CoreEvent>,
         summary_path: PathBuf,
     ) -> Self {
         Self {
@@ -207,7 +208,7 @@ impl SessionMemoryExtractionAgent {
         message_count: i32,
     ) -> Result<ExtractionResult, AgentLoopError> {
         // Emit started event
-        self.emit(LoopEvent::SessionMemoryExtractionStarted {
+        self.emit_tui(TuiEvent::SessionMemoryExtractionStarted {
             current_tokens,
             tool_calls_since,
         })
@@ -236,7 +237,7 @@ impl SessionMemoryExtractionAgent {
             Err(e) => {
                 let error = format!("LLM request failed: {e}");
                 warn!(error = %e, "Session memory extraction failed");
-                self.emit(LoopEvent::SessionMemoryExtractionFailed { error, attempts: 1 })
+                self.emit_tui(TuiEvent::SessionMemoryExtractionFailed { error, attempts: 1 })
                     .await;
                 return Err(e).context(agent_loop_error::ExtractionLlmFailedSnafu);
             }
@@ -255,7 +256,7 @@ impl SessionMemoryExtractionAgent {
         if summary.is_empty() {
             let error = "Empty summary generated";
             warn!("Session memory extraction produced empty summary");
-            self.emit(LoopEvent::SessionMemoryExtractionFailed {
+            self.emit_tui(TuiEvent::SessionMemoryExtractionFailed {
                 error: error.to_string(),
                 attempts: 1,
             })
@@ -269,7 +270,7 @@ impl SessionMemoryExtractionAgent {
         if let Err(e) = write_session_memory(&self.summary_path, &summary, last_message_id).await {
             let error = format!("Failed to write summary.md: {e}");
             warn!(error = %e, path = ?self.summary_path, "Failed to write session memory");
-            self.emit(LoopEvent::SessionMemoryExtractionFailed {
+            self.emit_tui(TuiEvent::SessionMemoryExtractionFailed {
                 error: error.clone(),
                 attempts: 1,
             })
@@ -286,7 +287,7 @@ impl SessionMemoryExtractionAgent {
         );
 
         // Emit completed event
-        self.emit(LoopEvent::SessionMemoryExtractionCompleted {
+        self.emit_tui(TuiEvent::SessionMemoryExtractionCompleted {
             summary_tokens,
             last_summarized_id: last_message_id.to_string(),
             messages_summarized: message_count,
@@ -368,9 +369,9 @@ Maximum output: {} tokens. Each section should not exceed 2,000 tokens.
         )
     }
 
-    /// Emit an event to the event channel.
-    async fn emit(&self, event: LoopEvent) {
-        if let Err(e) = self.event_tx.send(event).await {
+    /// Emit a TUI-only event to the event channel.
+    async fn emit_tui(&self, event: TuiEvent) {
+        if let Err(e) = self.event_tx.send(CoreEvent::Tui(event)).await {
             debug!("Failed to send extraction event: {e}");
         }
     }

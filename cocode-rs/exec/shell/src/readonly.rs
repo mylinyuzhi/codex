@@ -39,23 +39,83 @@
 //! ```
 
 use cocode_shell_parser::ShellParser;
+use cocode_shell_parser::security::RiskKind;
 use cocode_shell_parser::security::RiskLevel;
 use cocode_shell_parser::security::RiskPhase;
 use cocode_shell_parser::security::SecurityAnalysis;
 use cocode_shell_parser::security::SecurityRisk;
 
 /// Known safe read-only commands that do not modify the system.
+///
+/// Aligned with Claude Code's SAFE_COMMAND_REGISTRY + SAFE_COMMAND_PATTERNS.
 const READ_ONLY_COMMANDS: &[&str] = &[
-    "ls", "cat", "head", "tail", "wc", "grep", "rg", "find", "which", "whoami", "pwd", "echo",
-    "date", "env", "printenv", "uname", "hostname", "df", "du", "file", "stat", "type", "git",
+    // File inspection
+    "ls", "cat", "head", "tail", "wc", "grep", "rg", "find", "which", "file", "stat", "diff",
+    "strings", "hexdump", "od", "nl", "readlink", // Identity / system info
+    "whoami", "pwd", "echo", "date", "env", "printenv", "uname", "hostname", "id", "groups",
+    "arch", "nproc", "locale", "uptime", "cal", // Disk / resource queries
+    "df", "du", "free", // Text processing (read-only)
+    "cut", "paste", "tr", "column", "fold", "expand", "unexpand", "rev", "tac", "uniq", "seq",
+    "sort", "expr", // Path utilities
+    "basename", "dirname", "realpath", // Type/command lookup
+    "type", "command", // Sleep (harmless)
+    "sleep",   // Boolean builtins
+    "true", "false", // Git (with subcommand checking below)
+    "git",   // Docker (with subcommand checking below)
+    "docker",
 ];
 
 /// Shell operators that may cause side effects (piping to commands, chaining, redirects).
 const UNSAFE_OPERATORS: &[&str] = &["&&", "||", ";", "|", ">", "<"];
 
 /// Git subcommands that are purely read-only.
-const GIT_READ_ONLY_SUBCOMMANDS: &[&str] =
-    &["status", "log", "diff", "show", "branch", "tag", "remote"];
+///
+/// Aligned with Claude Code's SAFE_COMMAND_REGISTRY git entries.
+const GIT_READ_ONLY_SUBCOMMANDS: &[&str] = &[
+    "status",
+    "log",
+    "diff",
+    "show",
+    "branch",
+    "tag",
+    "remote",
+    "blame",
+    "grep",
+    "shortlog",
+    "reflog",
+    "ls-remote",
+    "ls-files",
+    "merge-base",
+    "rev-parse",
+    "rev-list",
+    "describe",
+    "cat-file",
+    "for-each-ref",
+];
+
+/// Git two-word subcommands that are purely read-only (e.g. "stash list").
+const GIT_READ_ONLY_TWO_WORD_SUBCOMMANDS: &[(&str, &str)] = &[
+    ("stash", "list"),
+    ("stash", "show"),
+    ("worktree", "list"),
+    ("config", "--get"),
+];
+
+/// Docker subcommands that are purely read-only.
+const DOCKER_READ_ONLY_SUBCOMMANDS: &[&str] = &[
+    "ps", "images", "stats", "diff", "port", "logs", "inspect", "info", "version",
+];
+
+/// Docker two-word subcommands that are purely read-only (e.g. "compose ps").
+const DOCKER_READ_ONLY_TWO_WORD_SUBCOMMANDS: &[(&str, &str)] = &[
+    ("compose", "ps"),
+    ("compose", "top"),
+    ("compose", "config"),
+    ("compose", "logs"),
+];
+
+/// Git flags that enable arbitrary code execution and must be rejected.
+const GIT_DANGEROUS_FLAGS: &[&str] = &["-c", "--exec-path", "--config-env"];
 
 /// Result of command safety analysis.
 #[derive(Debug, Clone)]
@@ -149,6 +209,11 @@ pub fn analyze_command_safety(command: &str) -> SafetyResult {
         };
     }
 
+    // Step 1.5: Compound command security checks
+    if let Some(result) = check_compound_command_safety(command) {
+        return result;
+    }
+
     // Step 2: Deep security analysis via shell-parser
     let mut parser = ShellParser::new();
     let cmd = parser.parse(command);
@@ -156,6 +221,71 @@ pub fn analyze_command_safety(command: &str) -> SafetyResult {
 
     // Convert analysis to SafetyResult
     analyze_security_result(&cmd, analysis)
+}
+
+/// Maximum number of subcommands before requiring approval (prevents DoS).
+/// Matches Claude Code's Rfq=50 cap.
+const MAX_SUBCOMMAND_COUNT: usize = 50;
+
+/// Check compound commands for cd+git and multiple-cd patterns.
+///
+/// Uses `ShellParser` for proper quote-aware subcommand extraction
+/// (unlike raw string splitting which breaks on `git commit -m "fix; refactor"`).
+///
+/// Returns `Some(SafetyResult)` if the command should be flagged,
+/// `None` if compound checks pass and normal analysis should continue.
+fn check_compound_command_safety(command: &str) -> Option<SafetyResult> {
+    let mut parser = ShellParser::new();
+    let parsed = parser.parse(command);
+    let commands = parsed.extract_commands();
+
+    // If there's only one subcommand, no compound checks needed
+    if commands.len() <= 1 {
+        return None;
+    }
+
+    // Subcommand count cap — prevent analysis DoS
+    if commands.len() > MAX_SUBCOMMAND_COUNT {
+        return Some(SafetyResult::RequiresApproval {
+            risks: Vec::new(),
+            max_level: RiskLevel::Medium,
+        });
+    }
+
+    // Count cd commands — multiple directory changes require approval
+    // (prevents bare repository attacks)
+    let cd_count = commands
+        .iter()
+        .filter(|args| args.first().is_some_and(|s| s == "cd"))
+        .count();
+
+    if cd_count > 1 {
+        return Some(SafetyResult::RequiresApproval {
+            risks: vec![SecurityRisk::new(
+                RiskKind::CodeExecution,
+                "Multiple directory changes in compound command".to_string(),
+            )],
+            max_level: RiskLevel::Medium,
+        });
+    }
+
+    // cd+git compound check — cd followed by non-read-only git requires approval
+    if cd_count > 0 {
+        let has_unsafe_git = commands.iter().any(|args| {
+            args.first().is_some_and(|s| s == "git") && !is_git_read_only_internal(&args.join(" "))
+        });
+        if has_unsafe_git {
+            return Some(SafetyResult::RequiresApproval {
+                risks: vec![SecurityRisk::new(
+                    RiskKind::CodeExecution,
+                    "Directory change combined with git write operation".to_string(),
+                )],
+                max_level: RiskLevel::Medium,
+            });
+        }
+    }
+
+    None
 }
 
 /// Converts shell-parser security analysis to SafetyResult.
@@ -236,8 +366,19 @@ fn analyze_security_result(
 /// 1. Its first word is in the safe command whitelist
 /// 2. It does not contain shell operators (&&, ||, ;, |, >, <)
 fn is_simple_read_only(command: &str) -> bool {
-    let trimmed = command.trim();
+    // Strip trailing stderr redirect before analysis (matches CC's isReadOnlyCommand)
+    let trimmed = command
+        .trim()
+        .strip_suffix("2>&1")
+        .unwrap_or(command.trim())
+        .trim();
     if trimmed.is_empty() {
+        return false;
+    }
+
+    // Reject commands containing unquoted glob patterns — can't safely validate.
+    // Skip this check if globs are inside quotes (single or double).
+    if contains_unquoted_glob(trimmed) {
         return false;
     }
 
@@ -254,6 +395,11 @@ fn is_simple_read_only(command: &str) -> bool {
         None => return false,
     };
 
+    // Version check patterns — always safe regardless of the command being in the whitelist
+    if is_version_check(first_word, trimmed) {
+        return true;
+    }
+
     // Check if it is a known safe command
     if !READ_ONLY_COMMANDS.contains(&first_word) {
         return false;
@@ -264,7 +410,46 @@ fn is_simple_read_only(command: &str) -> bool {
         return is_git_read_only_internal(trimmed);
     }
 
+    // For docker commands, verify the subcommand
+    if first_word == "docker" {
+        return is_docker_read_only_internal(trimmed);
+    }
+
     true
+}
+
+/// Check if the command contains unquoted glob characters (`*`, `?`).
+/// Globs inside single or double quotes are not expanded by the shell.
+fn contains_unquoted_glob(command: &str) -> bool {
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut chars = command.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\\' => {
+                chars.next();
+            } // skip escaped char
+            '\'' if !in_double => in_single = !in_single,
+            '"' if !in_single => in_double = !in_double,
+            '*' | '?' if !in_single && !in_double => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Check if the command is a version/help check (always safe).
+fn is_version_check(first_word: &str, command: &str) -> bool {
+    let version_commands = [
+        "node", "npm", "npx", "python", "python3", "ruby", "go", "rustc", "cargo", "java", "javac",
+        "dotnet", "php", "perl", "swift", "kotlin",
+    ];
+    if !version_commands.contains(&first_word) {
+        return false;
+    }
+    let mut words = command.split_whitespace();
+    words.next(); // skip command name
+    matches!(words.next(), Some("-v" | "-V" | "--version")) && words.next().is_none()
 }
 
 /// Returns true if the command is a known read-only command.
@@ -292,11 +477,71 @@ fn is_git_read_only_internal(command: &str) -> bool {
         _ => return false,
     }
 
-    // Check subcommand
-    match words.next() {
-        Some(subcommand) => GIT_READ_ONLY_SUBCOMMANDS.contains(&subcommand),
-        None => false,
+    // Reject dangerous git flags that enable code execution
+    let remaining: Vec<&str> = words.collect();
+    for flag in GIT_DANGEROUS_FLAGS {
+        let flag_eq = format!("{flag}=");
+        if remaining
+            .iter()
+            .any(|w| *w == *flag || w.starts_with(&flag_eq))
+        {
+            return false;
+        }
     }
+
+    let subcommand = match remaining.first() {
+        Some(s) => *s,
+        None => return false,
+    };
+
+    // Check single-word subcommands
+    if GIT_READ_ONLY_SUBCOMMANDS.contains(&subcommand) {
+        return true;
+    }
+
+    // Check two-word subcommands (e.g. "stash list", "worktree list")
+    if let Some(second) = remaining.get(1) {
+        for (first, expected_second) in GIT_READ_ONLY_TWO_WORD_SUBCOMMANDS {
+            if subcommand == *first && *second == *expected_second {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+/// Internal helper to check docker read-only status.
+fn is_docker_read_only_internal(command: &str) -> bool {
+    let trimmed = command.trim();
+    let mut words = trimmed.split_whitespace();
+
+    // Skip "docker"
+    match words.next() {
+        Some("docker") => {}
+        _ => return false,
+    }
+
+    let subcommand = match words.next() {
+        Some(s) => s,
+        None => return false,
+    };
+
+    // Check single-word subcommands
+    if DOCKER_READ_ONLY_SUBCOMMANDS.contains(&subcommand) {
+        return true;
+    }
+
+    // Check two-word subcommands (e.g. "compose ps")
+    if let Some(second) = words.next() {
+        for (first, expected_second) in DOCKER_READ_ONLY_TWO_WORD_SUBCOMMANDS {
+            if subcommand == *first && second == *expected_second {
+                return true;
+            }
+        }
+    }
+
+    false
 }
 
 /// Returns true if the git command is a read-only subcommand.

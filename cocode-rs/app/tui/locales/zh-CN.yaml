@@ -392,6 +392,8 @@ toast.slow_query: "查询耗时 %{duration} 秒"
 # 快速模式
 toast.fast_mode_on: "快速模式已启用"
 toast.fast_mode_off: "快速模式已禁用"
+toast.fast_mode_unsupported: "当前模型不支持快速模式"
+toast.fast_mode_auto_disabled: "快速模式已禁用（模型已切换）"
 
 # 沙箱
 toast.sandbox_active: "沙箱已激活：%{enforcement}"

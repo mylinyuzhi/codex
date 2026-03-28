@@ -12,7 +12,7 @@ use cocode_loop::AgentLoop;
 use cocode_loop::FallbackConfig;
 use cocode_loop::LoopConfig;
 use cocode_loop::LoopResult;
-use cocode_protocol::LoopEvent;
+use cocode_protocol::CoreEvent;
 use cocode_protocol::ModelSpec;
 use cocode_protocol::RoleSelections;
 use cocode_tools::SpawnAgentFn;
@@ -172,34 +172,12 @@ impl AgentExecutor {
         );
 
         // Create event channel
-        let (event_tx, mut event_rx) = mpsc::channel::<LoopEvent>(256);
+        let (event_tx, mut event_rx) = mpsc::channel::<CoreEvent>(256);
 
         // Spawn a task to log events (in production, this would update UI)
         let _event_task = tokio::spawn(async move {
             while let Some(event) = event_rx.recv().await {
-                match &event {
-                    LoopEvent::TurnStarted {
-                        turn_id,
-                        turn_number,
-                    } => {
-                        tracing::debug!(turn_id, turn_number, "Turn started");
-                    }
-                    LoopEvent::TurnCompleted { turn_id, usage } => {
-                        tracing::debug!(
-                            turn_id,
-                            input_tokens = usage.input_tokens,
-                            output_tokens = usage.output_tokens,
-                            "Turn completed"
-                        );
-                    }
-                    LoopEvent::ToolUseQueued { name, call_id, .. } => {
-                        tracing::debug!(name, call_id, "Tool queued");
-                    }
-                    LoopEvent::Error { error } => {
-                        tracing::error!(code = %error.code, message = %error.message, "Loop error");
-                    }
-                    _ => {}
-                }
+                tracing::debug!(?event, "Agent event");
             }
         });
 

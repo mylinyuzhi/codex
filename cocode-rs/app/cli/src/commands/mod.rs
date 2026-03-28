@@ -2,6 +2,7 @@
 
 pub mod chat;
 pub mod config;
+pub mod mcp;
 pub mod plugin;
 pub mod resume;
 pub mod sessions;

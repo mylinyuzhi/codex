@@ -17,7 +17,9 @@ pub mod api_config;
 pub mod attachment_config;
 pub mod auto_memory_config;
 pub mod compact_config;
+pub mod core_event;
 pub mod correlation;
+pub mod event_types;
 pub mod execution;
 pub mod features;
 pub mod loop_config;
@@ -31,12 +33,15 @@ pub mod protocol;
 pub mod provider;
 pub mod queue;
 pub mod sandbox;
+pub mod server_notification;
+pub mod stream_event;
 pub mod subagent;
 pub mod thinking;
 pub mod tool_config;
 pub mod tool_types;
 pub mod tools;
 pub mod tracking;
+pub mod tui_event;
 pub mod web_fetch_config;
 pub mod web_search_config;
 
@@ -106,39 +111,38 @@ pub use loop_config::StallDetectionConfig;
 pub use loop_config::StallRecovery;
 pub use loop_config::WatchdogConfig;
 
-// Loop event types
-pub use loop_event::AbortReason;
-pub use loop_event::AgentProgress;
-pub use loop_event::ApiErrorInfo;
-pub use loop_event::AttachmentType;
-pub use loop_event::CompactBoundaryMetadata;
-pub use loop_event::CompactTelemetry;
-pub use loop_event::CompactTrigger;
-pub use loop_event::HookAdditionalContext;
-pub use loop_event::HookEventType;
-pub use loop_event::LoopError;
-pub use loop_event::LoopEvent;
-pub use loop_event::MarketplaceSummaryInfo;
-pub use loop_event::McpServerInfo;
-pub use loop_event::McpStartupStatus;
-pub use loop_event::MemoryAttachment;
-pub use loop_event::OutputStyleItem;
-pub use loop_event::PersistedToolResult;
-pub use loop_event::PluginAgentInfo;
-pub use loop_event::PluginSummaryInfo;
-pub use loop_event::RawStreamEvent;
-pub use loop_event::RetryInfo;
-pub use loop_event::RewindCheckpointItem;
-pub use loop_event::RewindDiffStats;
-pub use loop_event::RewindMode;
-pub use loop_event::SandboxAccessType;
-pub use loop_event::TaskProgress;
-pub use loop_event::TaskType;
-pub use loop_event::TokenBreakdown;
-pub use loop_event::TokenUsage;
-pub use loop_event::TombstonedMessage;
-pub use loop_event::ToolProgressInfo;
-pub use loop_event::ToolResultContent;
+// Event supporting types (originally in loop_event, now in event_types)
+pub use event_types::AbortReason;
+pub use event_types::AgentProgress;
+pub use event_types::ApiErrorInfo;
+pub use event_types::AttachmentType;
+pub use event_types::CompactBoundaryMetadata;
+pub use event_types::CompactTelemetry;
+pub use event_types::CompactTrigger;
+pub use event_types::HookAdditionalContext;
+pub use event_types::HookEventType;
+pub use event_types::LoopError;
+pub use event_types::MarketplaceSummaryInfo;
+pub use event_types::McpServerInfo;
+pub use event_types::McpStartupStatus;
+pub use event_types::MemoryAttachment;
+pub use event_types::OutputStyleItem;
+pub use event_types::PersistedToolResult;
+pub use event_types::PluginAgentInfo;
+pub use event_types::PluginSummaryInfo;
+pub use event_types::RawStreamEvent;
+pub use event_types::RetryInfo;
+pub use event_types::RewindCheckpointItem;
+pub use event_types::RewindDiffStats;
+pub use event_types::RewindMode;
+pub use event_types::SandboxAccessType;
+pub use event_types::TaskProgress;
+pub use event_types::TaskType;
+pub use event_types::TokenBreakdown;
+pub use event_types::TokenUsage;
+pub use event_types::TombstonedMessage;
+pub use event_types::ToolProgressInfo;
+pub use event_types::ToolResultContent;
 
 // Tool types
 pub use tool_types::ConcurrencySafety;
@@ -254,6 +258,11 @@ pub use tools::ToolName;
 
 // Subagent types
 pub use subagent::SubagentType;
+
+// Core event types
+pub use core_event::CoreEvent;
+pub use stream_event::StreamEvent;
+pub use tui_event::TuiEvent;
 
 /// Shared serde default helper returning `true`.
 ///

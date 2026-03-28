@@ -89,7 +89,7 @@ async fn test_search_no_results() {
         .await
         .unwrap();
     let text = extract_text(&result);
-    assert!(text.contains("No MCP tools found"));
+    assert!(text.contains("No deferred tools found"));
 }
 
 #[tokio::test]
