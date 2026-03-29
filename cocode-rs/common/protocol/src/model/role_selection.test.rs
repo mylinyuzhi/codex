@@ -7,6 +7,7 @@ fn test_role_selection_new() {
     assert_eq!(selection.model.slug, "claude-opus-4");
     assert!(selection.thinking_level.is_none());
     assert!(selection.supported_thinking_levels.is_none());
+    assert!(selection.capabilities.is_none());
 }
 
 #[test]
@@ -63,6 +64,31 @@ fn test_role_selection_supported_thinking_levels() {
         selection.supported_thinking_levels.as_ref().unwrap().len(),
         3
     );
+}
+
+#[test]
+fn test_role_selection_capabilities() {
+    let selection = RoleSelection::new(ModelSpec::new("anthropic", "claude-opus-4"));
+    assert!(selection.capabilities.is_none());
+    assert!(!selection.has_capability(Capability::FastMode));
+}
+
+#[test]
+fn test_role_selection_with_capabilities() {
+    let caps = vec![Capability::FastMode, Capability::Streaming];
+    let selection =
+        RoleSelection::new(ModelSpec::new("anthropic", "claude-opus-4")).with_capabilities(caps);
+    assert!(selection.has_capability(Capability::FastMode));
+    assert!(selection.has_capability(Capability::Streaming));
+    assert!(!selection.has_capability(Capability::Vision));
+}
+
+#[test]
+fn test_role_selection_new_has_no_capabilities() {
+    let selection = RoleSelection::new(ModelSpec::new("openai", "gpt-5"));
+    assert!(selection.capabilities.is_none());
+    assert!(!selection.has_capability(Capability::FastMode));
+    assert!(!selection.has_capability(Capability::TextGeneration));
 }
 
 #[test]
@@ -228,9 +254,10 @@ fn test_serde_skip_none_fields() {
     let selection = RoleSelection::new(ModelSpec::new("anthropic", "claude-opus-4"));
     let json = serde_json::to_string(&selection).unwrap();
 
-    // thinking_level and supported_thinking_levels should be skipped when None
+    // Optional fields should be skipped when None
     assert!(!json.contains("thinking_level"));
     assert!(!json.contains("supported_thinking_levels"));
+    assert!(!json.contains("capabilities"));
 
     // Empty selections should serialize to {}
     let selections = RoleSelections::default();

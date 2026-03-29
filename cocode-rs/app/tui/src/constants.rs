@@ -91,6 +91,9 @@ pub const TOAST_DURATION_WARNING: Duration = Duration::from_secs(5);
 /// Default display duration for error toasts.
 pub const TOAST_DURATION_ERROR: Duration = Duration::from_secs(8);
 
+/// Sandbox violation flash duration in the status bar.
+pub const SANDBOX_VIOLATION_FLASH_DURATION: Duration = Duration::from_secs(5);
+
 // ========== Status Bar ==========
 
 /// Truncate model names longer than this many characters.

@@ -12,6 +12,7 @@ use cocode_protocol::SandboxMode;
 use cocode_session::Session;
 use cocode_session::SessionState;
 
+use crate::mcp_bridge::SdkMcpBridge;
 use crate::permission::SdkPermissionBridge;
 use crate::session_builder;
 use crate::session_builder::SdkHookBridge;
@@ -20,6 +21,8 @@ use crate::session_builder::SdkHookBridge;
 pub struct SessionHandle {
     pub state: SessionState,
     pub hook_bridge: Option<Arc<SdkHookBridge>>,
+    /// MCP bridge for routing SDK-managed tool calls (if SDK tools were registered).
+    pub mcp_bridge: Option<Arc<SdkMcpBridge>>,
     /// The permission bridge for the currently-running turn (if any).
     /// Stored here so the processor can route `ApprovalResolve` to it.
     pub permission_bridge: Option<Arc<SdkPermissionBridge>>,
@@ -30,7 +33,7 @@ pub struct SessionHandle {
 pub async fn create_session(
     config: &ConfigManager,
     params: &SessionStartRequestParams,
-) -> anyhow::Result<(SessionState, Option<Arc<SdkHookBridge>>)> {
+) -> anyhow::Result<(SessionState, session_builder::SdkParamsResult)> {
     let working_dir = params
         .cwd
         .as_ref()
@@ -82,6 +85,6 @@ pub async fn create_session(
         state.set_model_override(model);
     }
 
-    let hook_bridge = session_builder::apply_sdk_params(&mut state, params).await?;
-    Ok((state, hook_bridge))
+    let sdk_result = session_builder::apply_sdk_params(&mut state, params).await?;
+    Ok((state, sdk_result))
 }

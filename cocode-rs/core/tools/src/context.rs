@@ -10,10 +10,11 @@ use cocode_lsp::LspServerManager;
 use cocode_policy::PermissionRuleEvaluator;
 use cocode_protocol::ApprovalDecision;
 use cocode_protocol::ApprovalRequest;
+use cocode_protocol::CoreEvent;
 use cocode_protocol::Features;
-use cocode_protocol::LoopEvent;
 use cocode_protocol::PermissionMode;
 use cocode_protocol::RoleSelections;
+use cocode_protocol::TuiEvent;
 use cocode_protocol::WebFetchConfig;
 use cocode_protocol::WebSearchConfig;
 use cocode_shell::ShellExecutor;
@@ -37,6 +38,7 @@ use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
+use tracing::debug;
 
 /// Responder for AskUserQuestion tool.
 ///
@@ -1294,8 +1296,8 @@ pub struct ToolContext {
     pub additional_working_directories: Vec<PathBuf>,
     /// Permission mode for this execution.
     pub permission_mode: PermissionMode,
-    /// Channel for emitting loop events.
-    pub event_tx: Option<mpsc::Sender<LoopEvent>>,
+    /// Channel for emitting core events.
+    pub event_tx: Option<mpsc::Sender<CoreEvent>>,
     /// Cancellation token for aborting execution.
     pub cancel_token: CancellationToken,
     /// Stored approvals.
@@ -1323,6 +1325,8 @@ pub struct ToolContext {
     pub model_call_fn: Option<ModelCallFn>,
     /// Whether plan mode is currently active.
     pub is_plan_mode: bool,
+    /// Whether this is an ultraplan session (plan pre-written by a remote session).
+    pub is_ultraplan: bool,
     /// Path to the current plan file (if in plan mode).
     pub plan_file_path: Option<PathBuf>,
     /// Auto memory directory path (for write permission bypass).
@@ -1414,6 +1418,7 @@ impl ToolContext {
             agent_output_dir: None,
             model_call_fn: None,
             is_plan_mode: false,
+            is_ultraplan: false,
             plan_file_path: None,
             auto_memory_dir: None,
             shell_executor,
@@ -1445,7 +1450,7 @@ impl ToolContext {
     }
 
     /// Set the event channel.
-    pub fn with_event_tx(mut self, tx: mpsc::Sender<LoopEvent>) -> Self {
+    pub fn with_event_tx(mut self, tx: mpsc::Sender<CoreEvent>) -> Self {
         self.event_tx = Some(tx);
         self
     }
@@ -1643,16 +1648,18 @@ impl ToolContext {
         self.spawn_agent_fn.is_some()
     }
 
-    /// Emit a loop event.
-    pub async fn emit_event(&self, event: LoopEvent) {
-        if let Some(tx) = &self.event_tx {
-            let _ = tx.send(event).await;
+    /// Emit a core event.
+    pub async fn emit_event(&self, event: CoreEvent) {
+        if let Some(tx) = &self.event_tx
+            && let Err(e) = tx.send(event).await
+        {
+            debug!("Failed to emit event: {e}");
         }
     }
 
     /// Emit tool progress.
     pub async fn emit_progress(&self, message: impl Into<String>) {
-        self.emit_event(LoopEvent::ToolProgress {
+        self.emit_event(CoreEvent::Tui(TuiEvent::ToolProgress {
             call_id: self.call_id.clone(),
             progress: cocode_protocol::ToolProgressInfo {
                 message: Some(message.into()),
@@ -1660,13 +1667,13 @@ impl ToolContext {
                 bytes_processed: None,
                 total_bytes: None,
             },
-        })
+        }))
         .await;
     }
 
     /// Emit tool progress with percentage.
     pub async fn emit_progress_percent(&self, message: impl Into<String>, percentage: i32) {
-        self.emit_event(LoopEvent::ToolProgress {
+        self.emit_event(CoreEvent::Tui(TuiEvent::ToolProgress {
             call_id: self.call_id.clone(),
             progress: cocode_protocol::ToolProgressInfo {
                 message: Some(message.into()),
@@ -1674,7 +1681,7 @@ impl ToolContext {
                 bytes_processed: None,
                 total_bytes: None,
             },
-        })
+        }))
         .await;
     }
 
@@ -1806,7 +1813,7 @@ pub struct ToolContextBuilder {
     cwd: PathBuf,
     additional_working_directories: Vec<PathBuf>,
     permission_mode: PermissionMode,
-    event_tx: Option<mpsc::Sender<LoopEvent>>,
+    event_tx: Option<mpsc::Sender<CoreEvent>>,
     cancel_token: CancellationToken,
     approval_store: Arc<Mutex<ApprovalStore>>,
     file_tracker: Arc<Mutex<FileTracker>>,
@@ -1816,6 +1823,7 @@ pub struct ToolContextBuilder {
     agent_output_dir: Option<PathBuf>,
     model_call_fn: Option<ModelCallFn>,
     is_plan_mode: bool,
+    is_ultraplan: bool,
     plan_file_path: Option<PathBuf>,
     auto_memory_dir: Option<PathBuf>,
     shell_executor: Option<ShellExecutor>,
@@ -1861,6 +1869,7 @@ impl ToolContextBuilder {
             agent_output_dir: None,
             model_call_fn: None,
             is_plan_mode: false,
+            is_ultraplan: false,
             plan_file_path: None,
             auto_memory_dir: None,
             shell_executor: None,
@@ -1922,7 +1931,7 @@ impl ToolContextBuilder {
     }
 
     /// Set the event channel.
-    pub fn event_tx(mut self, tx: mpsc::Sender<LoopEvent>) -> Self {
+    pub fn event_tx(mut self, tx: mpsc::Sender<CoreEvent>) -> Self {
         self.event_tx = Some(tx);
         self
     }
@@ -1979,6 +1988,12 @@ impl ToolContextBuilder {
     pub fn plan_mode(mut self, is_active: bool, plan_file_path: Option<PathBuf>) -> Self {
         self.is_plan_mode = is_active;
         self.plan_file_path = plan_file_path;
+        self
+    }
+
+    /// Set whether this is an ultraplan session.
+    pub fn is_ultraplan(mut self, is_ultraplan: bool) -> Self {
+        self.is_ultraplan = is_ultraplan;
         self
     }
 
@@ -2136,6 +2151,7 @@ impl ToolContextBuilder {
             agent_output_dir: self.agent_output_dir,
             model_call_fn: self.model_call_fn,
             is_plan_mode: self.is_plan_mode,
+            is_ultraplan: self.is_ultraplan,
             plan_file_path: self.plan_file_path,
             auto_memory_dir: self.auto_memory_dir,
             shell_executor,

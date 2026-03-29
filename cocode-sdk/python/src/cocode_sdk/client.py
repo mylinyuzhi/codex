@@ -17,12 +17,18 @@ from cocode_sdk.generated.protocol import (
     AgentDefinitionConfig,
     ApprovalDecision,
     ApprovalResolveRequest,
+    CancelRequest,
+    ConfigReadRequest,
+    ConfigWriteRequest,
     HookCallbackConfig,
     HookCallbackResponseRequest,
     McpServerConfig,
     RewindFilesRequest,
     ServerNotification,
     ServerRequest,
+    SessionArchiveRequest,
+    SessionListRequest,
+    SessionReadRequest,
     SessionResumeRequest,
     SessionStartRequest,
     SetModelRequest,
@@ -371,6 +377,84 @@ class CocodeClient:
         """Rewind file changes to a previous turn's state."""
         request = RewindFilesRequest(
             params=RewindFilesRequest.RewindFilesRequestParams(turn_id=turn_id)
+        )
+        await self._transport.send_line(request.model_dump_json())
+
+    async def cancel_request(self, request_id: str) -> None:
+        """Cancel a pending server-initiated request (hook callback, approval)."""
+        request = CancelRequest(
+            params=CancelRequest.CancelRequestParams(request_id=request_id)
+        )
+        await self._transport.send_line(request.model_dump_json())
+
+    async def list_sessions(
+        self, limit: int | None = None, cursor: str | None = None
+    ) -> dict[str, Any]:
+        """List saved sessions. Returns raw response dict."""
+        request = SessionListRequest(
+            params=SessionListRequest.SessionListRequestParams(
+                limit=limit, cursor=cursor
+            )
+        )
+        await self._transport.send_line(request.model_dump_json())
+        async for line_data in self._transport.read_lines():
+            if line_data.get("id") is not None:
+                return line_data.get("result", {})
+        return {}
+
+    async def read_session(self, session_id: str) -> dict[str, Any]:
+        """Read a session's items by ID (without resuming). Returns raw response dict."""
+        request = SessionReadRequest(
+            params=SessionReadRequest.SessionReadRequestParams(
+                session_id=session_id
+            )
+        )
+        await self._transport.send_line(request.model_dump_json())
+        async for line_data in self._transport.read_lines():
+            if line_data.get("id") is not None:
+                return line_data.get("result", {})
+        return {}
+
+    async def archive_session(self, session_id: str) -> None:
+        """Archive a session."""
+        request = SessionArchiveRequest(
+            params=SessionArchiveRequest.SessionArchiveRequestParams(
+                session_id=session_id
+            )
+        )
+        await self._transport.send_line(request.model_dump_json())
+
+    async def read_config(self, key: str | None = None) -> dict[str, Any]:
+        """Read effective configuration. Returns raw config dict."""
+        request = ConfigReadRequest(
+            params=ConfigReadRequest.ConfigReadRequestParams(key=key)
+        )
+        await self._transport.send_line(request.model_dump_json())
+        async for line_data in self._transport.read_lines():
+            if line_data.get("id") is not None:
+                return line_data.get("result", {})
+        return {}
+
+    async def write_config(
+        self, key: str, value: Any, scope: str = "user"
+    ) -> None:
+        """Write a single configuration value."""
+        request = ConfigWriteRequest(
+            params=ConfigWriteRequest.ConfigWriteRequestParams(
+                key=key, value=value, scope=scope
+            )
+        )
+        await self._transport.send_line(request.model_dump_json())
+
+    async def keep_alive(self, timestamp: int | None = None) -> None:
+        """Send a keepalive signal to prevent idle timeouts."""
+        from cocode_sdk.generated.protocol import KeepAliveRequest
+
+        params: dict[str, Any] = {}
+        if timestamp is not None:
+            params["timestamp"] = timestamp
+        request = KeepAliveRequest(
+            params=KeepAliveRequest.KeepAliveRequestParams(**params)
         )
         await self._transport.send_line(request.model_dump_json())
 

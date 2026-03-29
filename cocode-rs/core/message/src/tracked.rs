@@ -149,6 +149,15 @@ impl TrackedMessage {
         )
     }
 
+    /// Create a user message with multimodal content blocks (text + images).
+    pub fn user_with_content(content: Vec<UserContentPart>, turn_id: impl Into<String>) -> Self {
+        Self::new(
+            LanguageModelMessage::user(content),
+            turn_id,
+            MessageSource::User,
+        )
+    }
+
     /// Create an assistant message.
     pub fn assistant(
         content: impl Into<String>,

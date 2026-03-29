@@ -1,4 +1,20 @@
 use super::*;
+use crate::server_notification::*;
+
+/// Helper to create a simple protocol CoreEvent for testing.
+fn interrupted_event() -> CoreEvent {
+    CoreEvent::Protocol(ServerNotification::TurnInterrupted(TurnInterruptedParams {
+        turn_id: None,
+    }))
+}
+
+/// Helper to check if a CoreEvent is a TurnInterrupted notification.
+fn is_interrupted(event: &CoreEvent) -> bool {
+    matches!(
+        event,
+        CoreEvent::Protocol(ServerNotification::TurnInterrupted(_))
+    )
+}
 
 #[test]
 fn test_submission_id_new() {
@@ -31,17 +47,17 @@ fn test_submission_id_conversions() {
 
 #[test]
 fn test_correlated_event_uncorrelated() {
-    let event = LoopEvent::StreamRequestStart;
+    let event = interrupted_event();
     let correlated = CorrelatedEvent::uncorrelated(event);
 
     assert!(!correlated.has_correlation());
     assert!(correlated.correlation_id().is_none());
-    assert!(matches!(correlated.event(), LoopEvent::StreamRequestStart));
+    assert!(is_interrupted(correlated.event()));
 }
 
 #[test]
 fn test_correlated_event_with_id() {
-    let event = LoopEvent::StreamRequestStart;
+    let event = interrupted_event();
     let id = SubmissionId::from_string("sub-123");
     let correlated = CorrelatedEvent::correlated(event, id);
 
@@ -51,49 +67,32 @@ fn test_correlated_event_with_id() {
 
 #[test]
 fn test_correlated_event_into_parts() {
-    let event = LoopEvent::StreamRequestStart;
+    let event = interrupted_event();
     let id = SubmissionId::from_string("sub-123");
     let correlated = CorrelatedEvent::correlated(event, id);
 
     let (correlation, event) = correlated.into_parts();
     assert!(correlation.is_some());
-    assert!(matches!(event, LoopEvent::StreamRequestStart));
+    assert!(is_interrupted(&event));
 }
 
 #[test]
 fn test_correlated_event_from_conversions() {
-    // From LoopEvent
-    let event = LoopEvent::StreamRequestStart;
+    // From CoreEvent
+    let event = interrupted_event();
     let correlated: CorrelatedEvent = event.into();
     assert!(!correlated.has_correlation());
 
-    // From (LoopEvent, SubmissionId)
-    let event = LoopEvent::StreamRequestStart;
+    // From (CoreEvent, SubmissionId)
+    let event = interrupted_event();
     let id = SubmissionId::from_string("id");
     let correlated: CorrelatedEvent = (event, id).into();
     assert!(correlated.has_correlation());
 
-    // From (LoopEvent, Option<SubmissionId>)
-    let event = LoopEvent::StreamRequestStart;
+    // From (CoreEvent, Option<SubmissionId>)
+    let event = interrupted_event();
     let correlated: CorrelatedEvent = (event, None).into();
     assert!(!correlated.has_correlation());
-}
-
-#[test]
-fn test_correlated_event_serde() {
-    let event = LoopEvent::TurnStarted {
-        turn_id: "turn-1".to_string(),
-        turn_number: 1,
-    };
-    let id = SubmissionId::from_string("sub-123");
-    let correlated = CorrelatedEvent::correlated(event, id);
-
-    let json = serde_json::to_string(&correlated).unwrap();
-    assert!(json.contains("sub-123"));
-    assert!(json.contains("turn_started"));
-
-    let parsed: CorrelatedEvent = serde_json::from_str(&json).unwrap();
-    assert_eq!(parsed.correlation_id().unwrap().as_str(), "sub-123");
 }
 
 #[test]

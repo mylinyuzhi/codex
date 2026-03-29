@@ -93,10 +93,9 @@ impl SandboxPlatform for LinuxSandbox {
 
         if let Some(mode) = seccomp_mode {
             // Binary is visible inside bwrap via the read-only root bind.
-            let cocode_exe = std::env::current_exe().ok().unwrap_or_else(|| {
-                // Fallback: search PATH for the binary
-                PathBuf::from("cocode")
-            });
+            // Fallback to "cocode" on PATH if current_exe() fails
+            // (e.g., /proc not mounted inside bwrap).
+            let cocode_exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("cocode"));
             cmd.arg(&cocode_exe);
             cmd.arg(APPLY_SECCOMP_ARG1);
             cmd.arg(mode.as_str_arg());
@@ -111,6 +110,16 @@ impl SandboxPlatform for LinuxSandbox {
 }
 
 /// Build bubblewrap arguments from the sandbox configuration.
+///
+/// Follows codex-rs mount ordering best practices:
+/// 1. Safety flags and namespace isolation
+/// 2. Base filesystem (read-only root)
+/// 3. Minimal device and process filesystems
+/// 4. Writable roots (skip missing paths gracefully)
+/// 5. Re-apply read-only protections on subpaths
+/// 6. Symlink attack masking
+/// 7. Extra bind mounts (proxy bridges)
+/// 8. Process hardening (clear dangerous env vars)
 fn build_bwrap_args(config: &SandboxConfig) -> Vec<String> {
     let mut args = Vec::new();
 
@@ -134,29 +143,43 @@ fn build_bwrap_args(config: &SandboxConfig) -> Vec<String> {
     // Base filesystem: read-only bind of the entire root
     args.extend_from_slice(&["--ro-bind".into(), "/".into(), "/".into()]);
 
-    // Minimal device and process filesystems
-    args.extend_from_slice(&[
-        "--dev".into(),
-        "/dev".into(),
-        "--proc".into(),
-        "/proc".into(),
-        "--tmpfs".into(),
-        "/tmp".into(),
-    ]);
+    // Minimal device filesystem
+    args.push("--dev".into());
+    args.push("/dev".into());
 
-    // Writable roots
+    // /proc mount: some restrictive container runtimes block this.
+    // Adopted from codex-rs: probe first, skip if unavailable.
+    if proc_mount_available() {
+        args.extend_from_slice(&["--proc".into(), "/proc".into()]);
+    } else {
+        info!("/proc mount unavailable (restrictive container?); skipping");
+    }
+
+    // Writable temp directory
+    args.extend_from_slice(&["--tmpfs".into(), "/tmp".into()]);
+
+    // Writable roots — skip missing paths gracefully (codex-rs pattern:
+    // allows mixed-platform configs where some paths don't exist).
     for root in &config.writable_roots {
+        if !root.path.exists() {
+            tracing::debug!(
+                path = %root.path.display(),
+                "Skipping non-existent writable root"
+            );
+            continue;
+        }
         let root_path = root.path.display().to_string();
-        args.extend_from_slice(&["--bind".into(), root_path.clone(), root_path.clone()]);
+        args.extend(["--bind".to_string(), root_path.clone(), root_path]);
         // Re-apply read-only for protected subpaths
         for sub in &root.readonly_subpaths {
-            let sub_path = root.path.join(sub);
-            let sub_str = sub_path.display().to_string();
-            args.extend_from_slice(&["--ro-bind-try".into(), sub_str.clone(), sub_str]);
+            let sub_str = root.path.join(sub).display().to_string();
+            args.extend(["--ro-bind-try".to_string(), sub_str.clone(), sub_str]);
         }
     }
 
-    // Symlink attack prevention: mask dangerous symlinks with /dev/null
+    // Symlink attack prevention: mask dangerous symlinks with /dev/null.
+    // Uses component-by-component walk (adopted from codex-rs) for deeper
+    // detection than just checking immediate children.
     for root in &config.writable_roots {
         for symlink_path in find_attack_symlinks(root) {
             warn!(
@@ -172,7 +195,7 @@ fn build_bwrap_args(config: &SandboxConfig) -> Vec<String> {
     // Extra read-only bind mounts (e.g., proxy bridge UDS sockets)
     for path in &config.extra_bind_ro {
         let path_str = path.display().to_string();
-        args.extend_from_slice(&["--bind".into(), path_str.clone(), path_str]);
+        args.extend(["--ro-bind".to_string(), path_str.clone(), path_str]);
     }
 
     // Process hardening: clear dangerous env vars
@@ -180,8 +203,8 @@ fn build_bwrap_args(config: &SandboxConfig) -> Vec<String> {
         args.extend(["--unsetenv".to_string(), var.to_string()]);
     }
 
-    // Set CWD if writable roots are available (preserves symlink aliases)
-    if let Some(first_root) = config.writable_roots.first() {
+    // Set CWD to the first existing writable root (preserves symlink aliases)
+    if let Some(first_root) = config.writable_roots.iter().find(|r| r.path.exists()) {
         let cwd_str = first_root.path.display().to_string();
         args.extend_from_slice(&["--chdir".into(), cwd_str]);
     }
@@ -189,27 +212,88 @@ fn build_bwrap_args(config: &SandboxConfig) -> Vec<String> {
     args
 }
 
+/// Probe whether `--proc /proc` is available in the current environment.
+///
+/// Some restrictive container runtimes (Docker with `--security-opt=no-new-privileges`,
+/// certain Kubernetes pod security policies) block the proc mount. Adopted from
+/// codex-rs's preflight detection: run a minimal bwrap command and check if it
+/// succeeds. The result is cached per-process via `OnceLock` (not safe across
+/// fork — forked children inherit the parent's cached result).
+fn proc_mount_available() -> bool {
+    use std::sync::OnceLock;
+    static AVAILABLE: OnceLock<bool> = OnceLock::new();
+
+    *AVAILABLE.get_or_init(|| {
+        let bwrap = match LinuxSandbox::find_bwrap() {
+            Some(p) => p,
+            None => return false,
+        };
+        // Minimal probe: bind / read-only, mount /proc, run /bin/true
+        let result = std::process::Command::new(&bwrap)
+            .args([
+                "--ro-bind",
+                "/",
+                "/",
+                "--proc",
+                "/proc",
+                "--dev",
+                "/dev",
+                "--unshare-user",
+                "--unshare-pid",
+                "--",
+                "/bin/true",
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        match result {
+            Ok(status) => status.success(),
+            Err(_) => false,
+        }
+    })
+}
+
 /// Find symlinks within protected subpaths that could be used for escape attacks.
 ///
-/// A sandboxed process could replace a file in a writable area with a symlink
-/// pointing into a read-only protected subpath. By detecting existing symlinks
-/// within those subpaths, we can mask them with `/dev/null` to prevent abuse.
+/// Walks each protected subpath component-by-component (adopted from codex-rs)
+/// to detect symlinks at any depth, not just immediate children. A sandboxed
+/// process could replace a file in a writable area with a symlink pointing
+/// outside the sandbox. Detecting these early lets us mask them with `/dev/null`.
 ///
 /// Returns paths that should be masked with /dev/null.
 fn find_attack_symlinks(root: &WritableRoot) -> Vec<PathBuf> {
+    let mut seen = std::collections::HashSet::new();
     let mut symlinks = Vec::new();
+
     for sub in &root.readonly_subpaths {
         let sub_path = root.path.join(sub);
-        if sub_path.is_symlink() {
-            symlinks.push(sub_path.clone());
+
+        // Component-by-component walk from root to protected subpath.
+        // Detects symlinks at any level, not just the leaf or immediate children.
+        // Non-existent paths are skipped (they'll be protected by --ro-bind-try).
+        let mut current = root.path.clone();
+        for component in std::path::Path::new(sub).components() {
+            current.push(component);
+            match std::fs::symlink_metadata(&current) {
+                Ok(meta) if meta.file_type().is_symlink() => {
+                    if seen.insert(current.clone()) {
+                        symlinks.push(current.clone());
+                    }
+                    break;
+                }
+                Err(_) => break,
+                _ => {}
+            }
         }
-        // Also check immediate children if the subpath is a directory
+
+        // Also check immediate children of the protected subpath directory
         if sub_path.is_dir()
             && let Ok(entries) = std::fs::read_dir(&sub_path)
         {
             for entry in entries.flatten() {
-                if entry.path().is_symlink() {
-                    symlinks.push(entry.path());
+                let path = entry.path();
+                if path.is_symlink() && seen.insert(path.clone()) {
+                    symlinks.push(path);
                 }
             }
         }

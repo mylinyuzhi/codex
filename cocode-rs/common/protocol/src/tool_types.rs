@@ -10,7 +10,7 @@ use serde_json::Value;
 use strum::Display;
 use strum::IntoStaticStr;
 
-use crate::loop_event::ToolResultContent;
+use crate::event_types::ToolResultContent;
 
 /// Kind of file read operation.
 ///

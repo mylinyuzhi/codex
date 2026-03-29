@@ -1,8 +1,8 @@
 //! Turn execution engine.
 //!
 //! Runs a single agent turn, streaming events through the connection's
-//! outbound channel via `EventMapper`. Handles approval/question routing
-//! and hook callbacks.
+//! outbound channel via `StreamAccumulator`. Handles approval/question
+//! routing and hook callbacks.
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
@@ -15,13 +15,16 @@ use cocode_app_server_protocol::ServerRequest;
 use cocode_app_server_protocol::TurnCompletedParams;
 use cocode_app_server_protocol::TurnStartedParams;
 use cocode_app_server_protocol::Usage;
-use cocode_protocol::LoopEvent;
+use cocode_protocol::CoreEvent;
 use cocode_session::SessionState;
 use tokio::sync::mpsc;
 use tracing::info;
 use tracing::warn;
 
-use crate::event_mapper::EventMapper;
+use cocode_app_server_protocol::StreamAccumulator;
+use cocode_protocol::tui_event::TuiEvent;
+
+use crate::mcp_bridge::SdkMcpBridge;
 use crate::permission::SdkPermissionBridge;
 use crate::processor::OutboundMessage;
 use crate::session_builder::SdkHookBridge;
@@ -42,6 +45,7 @@ pub struct TurnConfig<'a> {
     pub turn_number: i32,
     pub outbound: &'a mpsc::Sender<OutboundMessage>,
     pub hook_bridge: &'a Option<Arc<SdkHookBridge>>,
+    pub mcp_bridge: &'a Option<Arc<SdkMcpBridge>>,
     pub request_counter: &'a AtomicI64,
 }
 
@@ -69,6 +73,7 @@ pub async fn run_turn(
         turn_number,
         outbound,
         hook_bridge,
+        mcp_bridge,
         request_counter,
     } = config;
 
@@ -86,14 +91,14 @@ pub async fn run_turn(
     {
         warn!("Outbound channel closed before turn started");
         // Return a no-op bridge (receiver dropped, but turn is interrupted anyway)
-        let (dummy_tx, _) = mpsc::channel::<LoopEvent>(1);
+        let (dummy_tx, _) = mpsc::channel::<CoreEvent>(1);
         return TurnResult {
             outcome: TurnOutcome::Interrupted,
             permission_bridge: Arc::new(SdkPermissionBridge::new(dummy_tx)),
         };
     }
 
-    let (event_tx, mut event_rx) = mpsc::channel::<LoopEvent>(256);
+    let (event_tx, mut event_rx) = mpsc::channel::<CoreEvent>(256);
 
     // Create bridge with the real event_tx so approval events reach the select! loop
     let bridge = Arc::new(SdkPermissionBridge::new(event_tx.clone()));
@@ -102,7 +107,7 @@ pub async fn run_turn(
     let turn_future = state.run_turn_streaming(prompt, event_tx);
     tokio::pin!(turn_future);
 
-    let mut mapper = EventMapper::new(turn_id.clone());
+    let mut accumulator = StreamAccumulator::new(turn_id.clone());
     #[allow(unused_assignments)]
     let mut turn_result = None;
 
@@ -132,56 +137,92 @@ pub async fn run_turn(
                     ),
                 );
             }
-            Some(event) = event_rx.recv() => {
-                if let LoopEvent::ApprovalRequired { ref request } = event {
-                    let server_req = SdkPermissionBridge::create_server_request(request);
-                    send_server_request(outbound, request_counter, server_req);
-                    continue;
+            Some(req) = async {
+                match mcp_bridge {
+                    Some(b) => b.recv_request().await,
+                    None => std::future::pending().await,
                 }
-                if let LoopEvent::QuestionAsked { request_id, questions } = event {
-                    send_server_request(outbound, request_counter, ServerRequest::RequestUserInput(
-                        RequestUserInputParams {
-                            request_id,
-                            message: "Agent is asking a question".into(),
-                            questions: Some(questions),
+            } => {
+                send_server_request(
+                    outbound,
+                    request_counter,
+                    ServerRequest::McpRouteMessage(
+                        cocode_app_server_protocol::McpRouteMessageParams {
+                            request_id: req.request_id,
+                            server_name: req.server_name,
+                            message: req.message,
                         },
-                    ));
-                    continue;
+                    ),
+                );
+            }
+            Some(core_event) = event_rx.recv() => {
+                match core_event {
+                    CoreEvent::Tui(TuiEvent::ApprovalRequired { ref request }) => {
+                        let server_req = SdkPermissionBridge::create_server_request(request);
+                        send_server_request(outbound, request_counter, server_req);
+                    }
+                    CoreEvent::Tui(TuiEvent::QuestionAsked { request_id, questions }) => {
+                        send_server_request(outbound, request_counter, ServerRequest::RequestUserInput(
+                            RequestUserInputParams {
+                                request_id,
+                                message: "Agent is asking a question".into(),
+                                questions: Some(questions),
+                            },
+                        ));
+                    }
+                    CoreEvent::Tui(TuiEvent::ElicitationRequested { request_id, server_name, message, schema, .. }) => {
+                        send_server_request(outbound, request_counter, ServerRequest::RequestUserInput(
+                            RequestUserInputParams {
+                                request_id,
+                                message: format!("[{server_name}] {message}"),
+                                questions: schema,
+                            },
+                        ));
+                    }
+                    CoreEvent::Protocol(notif) => {
+                        if outbound.try_send(OutboundMessage::Notification(notif)).is_err() {
+                            warn!("Outbound channel full, dropping event notification");
+                        }
+                    }
+                    CoreEvent::Stream(se) => {
+                        for notif in accumulator.process(se) {
+                            if outbound.try_send(OutboundMessage::Notification(notif)).is_err() {
+                                warn!("Outbound channel full, dropping event notification");
+                            }
+                        }
+                    }
+                    CoreEvent::Tui(_) => {}
                 }
-                if let LoopEvent::ElicitationRequested { request_id, server_name, message, schema, .. } = event {
-                    send_server_request(outbound, request_counter, ServerRequest::RequestUserInput(
-                        RequestUserInputParams {
-                            request_id,
-                            message: format!("[{server_name}] {message}"),
-                            questions: schema,
-                        },
-                    ));
-                    continue;
+            }
+        }
+    }
+
+    while let Ok(core_event) = event_rx.try_recv() {
+        match core_event {
+            CoreEvent::Tui(TuiEvent::ApprovalRequired { .. }) => {}
+            CoreEvent::Protocol(notif) => {
+                if outbound
+                    .try_send(OutboundMessage::Notification(notif))
+                    .is_err()
+                {
+                    warn!("Outbound channel full during drain");
                 }
-                for notif in mapper.map(event) {
-                    if outbound.try_send(OutboundMessage::Notification(notif)).is_err() {
-                        warn!("Outbound channel full, dropping event notification");
+            }
+            CoreEvent::Stream(se) => {
+                for notif in accumulator.process(se) {
+                    if outbound
+                        .try_send(OutboundMessage::Notification(notif))
+                        .is_err()
+                    {
+                        warn!("Outbound channel full during drain");
                     }
                 }
             }
+            CoreEvent::Tui(_) => {}
         }
     }
 
-    while let Ok(event) = event_rx.try_recv() {
-        if matches!(event, LoopEvent::ApprovalRequired { .. }) {
-            continue;
-        }
-        for notif in mapper.map(event) {
-            if outbound
-                .try_send(OutboundMessage::Notification(notif))
-                .is_err()
-            {
-                warn!("Outbound channel full during drain");
-            }
-        }
-    }
-
-    for notif in mapper.flush() {
+    for notif in accumulator.flush() {
         if outbound
             .try_send(OutboundMessage::Notification(notif))
             .is_err()
@@ -191,6 +232,9 @@ pub async fn run_turn(
     }
 
     if let Some(bridge) = hook_bridge {
+        bridge.drain_pending().await;
+    }
+    if let Some(bridge) = mcp_bridge {
         bridge.drain_pending().await;
     }
 

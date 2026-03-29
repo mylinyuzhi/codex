@@ -24,34 +24,84 @@ from pathlib import Path
 # ── Accessor maps for tagged unions ──────────────────────────────────────
 
 NOTIFICATION_ACCESSORS = {
+    # ── Session lifecycle ──────────────────────────────────────────────
     "session/started": ("as_session_started", "SessionStartedParams"),
+    "session/result": ("as_session_result", "SessionResultParams"),
+    "session/ended": ("as_session_ended", "SessionEndedParams"),
+    # ── Turn lifecycle ─────────────────────────────────────────────────
     "turn/started": ("as_turn_started", "TurnStartedParams"),
     "turn/completed": ("as_turn_completed", "TurnCompletedParams"),
     "turn/failed": ("as_turn_failed", "TurnFailedParams"),
+    "turn/interrupted": ("as_turn_interrupted", "TurnInterruptedNotifParams"),
+    "turn/maxReached": ("as_max_turns_reached", "MaxTurnsReachedParams"),
+    "turn/retry": ("as_turn_retry", "TurnRetryParams"),
+    # ── Item lifecycle ─────────────────────────────────────────────────
     "item/started": ("as_item_started", "ItemEventParams"),
     "item/updated": ("as_item_updated", "ItemEventParams"),
     "item/completed": ("as_item_completed", "ItemEventParams"),
+    # ── Content streaming ──────────────────────────────────────────────
     "agentMessage/delta": ("as_agent_message_delta", "AgentMessageDeltaParams"),
     "reasoning/delta": ("as_reasoning_delta", "ReasoningDeltaParams"),
+    # ── Sub-agent events ───────────────────────────────────────────────
     "subagent/spawned": ("as_subagent_spawned", "SubagentSpawnedParams"),
     "subagent/completed": ("as_subagent_completed", "SubagentCompletedParams"),
     "subagent/backgrounded": ("as_subagent_backgrounded", "SubagentBackgroundedParams"),
+    "subagent/progress": ("as_subagent_progress", "SubagentProgressParams"),
+    # ── MCP events ─────────────────────────────────────────────────────
     "mcp/startupStatus": ("as_mcp_startup_status", "McpStartupStatusParams"),
     "mcp/startupComplete": ("as_mcp_startup_complete", "McpStartupCompleteParams"),
+    # ── Context management ─────────────────────────────────────────────
     "context/compacted": ("as_context_compacted", "ContextCompactedParams"),
     "context/usageWarning": ("as_context_usage_warning", "ContextUsageWarningParams"),
+    "context/compactionStarted": ("as_compaction_started", "CompactionStartedParams"),
+    "context/compactionFailed": ("as_compaction_failed", "CompactionFailedParams"),
+    "context/cleared": ("as_context_cleared", "ContextClearedParams"),
+    # ── Background task events ─────────────────────────────────────────
     "task/started": ("as_task_started", "TaskStartedParams"),
     "task/completed": ("as_task_completed", "TaskCompletedParams"),
-    "turn/interrupted": ("as_turn_interrupted", "TurnInterruptedNotifParams"),
-    "turn/maxReached": ("as_max_turns_reached", "MaxTurnsReachedParams"),
+    "task/progress": ("as_task_progress", "TaskProgressParams"),
+    "agents/killed": ("as_agents_killed", "AgentsKilledParams"),
+    # ── Model events ───────────────────────────────────────────────────
     "model/fallbackStarted": ("as_model_fallback_started", "ModelFallbackStartedParams"),
+    "model/fallbackCompleted": ("as_model_fallback_completed", "ModelFallbackCompletedParams"),
+    "model/fastModeChanged": ("as_fast_mode_changed", "FastModeChangedParams"),
+    # ── Permission events ──────────────────────────────────────────────
     "permission/modeChanged": ("as_permission_mode_changed", "PermissionModeChangedParams"),
-    "session/result": ("as_session_result", "SessionResultParams"),
+    # ── Prompt suggestions ─────────────────────────────────────────────
     "prompt/suggestion": ("as_prompt_suggestion", "PromptSuggestionParams"),
+    # ── System-level events ────────────────────────────────────────────
     "error": ("as_error", "ErrorNotificationParams"),
     "rateLimit": ("as_rate_limit", "RateLimitParams"),
     "keepAlive": ("as_keep_alive", "KeepAliveNotifParams"),
-    "session/ended": ("as_session_ended", "SessionEndedParams"),
+    # ── IDE integration events ─────────────────────────────────────────
+    "ide/selectionChanged": ("as_ide_selection_changed", "IdeSelectionChangedParams"),
+    "ide/diagnosticsUpdated": ("as_ide_diagnostics_updated", "IdeDiagnosticsUpdatedParams"),
+    # ── Plan mode ──────────────────────────────────────────────────────
+    "plan/modeChanged": ("as_plan_mode_changed", "PlanModeChangedParams"),
+    # ── Queue ──────────────────────────────────────────────────────────
+    "queue/stateChanged": ("as_queue_state_changed", "QueueStateChangedParams"),
+    "queue/commandQueued": ("as_command_queued", "CommandQueuedParams"),
+    "queue/commandDequeued": ("as_command_dequeued", "CommandDequeuedParams"),
+    # ── Rewind ─────────────────────────────────────────────────────────
+    "rewind/completed": ("as_rewind_completed", "RewindCompletedParams"),
+    "rewind/failed": ("as_rewind_failed", "RewindFailedParams"),
+    # ── Cost ───────────────────────────────────────────────────────────
+    "cost/warning": ("as_cost_warning", "CostWarningParams"),
+    # ── Sandbox ────────────────────────────────────────────────────────
+    "sandbox/stateChanged": ("as_sandbox_state_changed", "SandboxStateChangedParams"),
+    "sandbox/violationsDetected": ("as_sandbox_violations_detected", "SandboxViolationsDetectedParams"),
+    # ── Agent registry ─────────────────────────────────────────────────
+    "agents/registered": ("as_agents_registered", "AgentsRegisteredParams"),
+    # ── Hook ───────────────────────────────────────────────────────────
+    "hook/executed": ("as_hook_executed", "HookExecutedParams"),
+    # ── Summarize ──────────────────────────────────────────────────────
+    "summarize/completed": ("as_summarize_completed", "SummarizeCompletedParams"),
+    "summarize/failed": ("as_summarize_failed", "SummarizeFailedParams"),
+    # ── Stream health ──────────────────────────────────────────────────
+    "stream/stallDetected": ("as_stream_stall_detected", "StreamStallDetectedParams"),
+    "stream/watchdogWarning": ("as_stream_watchdog_warning", "StreamWatchdogWarningParams"),
+    # ── Stream lifecycle ───────────────────────────────────────────────
+    "stream/requestEnd": ("as_stream_request_end", "StreamRequestEndParams"),
 }
 
 SERVER_REQUEST_ACCESSORS = {
@@ -59,6 +109,7 @@ SERVER_REQUEST_ACCESSORS = {
     "input/requestUserInput": ("as_request_user_input", "RequestUserInputParams"),
     "hook/callback": ("as_hook_callback", "HookCallbackParams"),
     "mcp/routeMessage": ("as_mcp_route_message", "McpRouteMessageParams"),
+    "control/cancelRequest": ("as_cancel_request", "ServerCancelRequestParams"),
 }
 
 THREAD_ITEM_ACCESSORS = {
@@ -75,6 +126,7 @@ THREAD_ITEM_ACCESSORS = {
 
 # Maps for ClientRequest wrapper generation: method -> (class_name, params_type)
 CLIENT_REQUEST_WRAPPERS = {
+    "initialize": ("InitializeRequest", "InitializeRequestParams"),
     "session/start": ("SessionStartRequest", "SessionStartRequestParams"),
     "session/resume": ("SessionResumeRequest", "SessionResumeRequestParams"),
     "turn/start": ("TurnStartRequest", "TurnStartRequestParams"),
@@ -89,6 +141,13 @@ CLIENT_REQUEST_WRAPPERS = {
     "control/rewindFiles": ("RewindFilesRequest", "RewindFilesRequestParams"),
     "control/updateEnv": ("UpdateEnvRequest", "UpdateEnvRequestParams"),
     "control/keepAlive": ("KeepAliveRequest", "KeepAliveRequestParams"),
+    "session/list": ("SessionListRequest", "SessionListRequestParams"),
+    "session/read": ("SessionReadRequest", "SessionReadRequestParams"),
+    "session/archive": ("SessionArchiveRequest", "SessionArchiveRequestParams"),
+    "config/read": ("ConfigReadRequest", "ConfigReadRequestParams"),
+    "config/value/write": ("ConfigWriteRequest", "ConfigWriteRequestParams"),
+    "mcp/routeMessageResponse": ("McpRouteMessageResponseRequest", "McpRouteMessageResponseParams"),
+    "control/cancelRequest": ("CancelRequest", "CancelRequestParams"),
 }
 
 # Rename map: Rust type name -> Python type name (where they differ)
@@ -114,6 +173,9 @@ def resolve_ref(ref: str) -> str:
 
 def schema_to_python_type(prop: dict, required: bool, defs: dict) -> str:
     """Convert a JSON schema property to a Python type annotation."""
+    if isinstance(prop, bool):
+        return "Any"
+
     if "$ref" in prop:
         name = resolve_ref(prop["$ref"])
         name = TYPE_RENAMES.get(name, name)
@@ -241,11 +303,14 @@ def generate_model(name: str, schema: dict, all_defs: dict) -> str:
         # it needs a default even if required
         is_nullable = "| None" in py_type
 
+        # Boolean schema (true = any value) has no dict methods
+        prop_dict = prop if isinstance(prop, dict) else {}
+
         if alias_annotation:
             # Field with alias
             lines.append(f"    {py_field_name}: {py_type}{alias_annotation}")
         elif not is_required:
-            default = prop.get("default")
+            default = prop_dict.get("default")
             if py_type == "bool":
                 default_str = str(default) if default is not None else "False"
                 lines.append(f"    {py_field_name}: {py_type} = {default_str}")
@@ -658,6 +723,9 @@ def main() -> None:
         "SandboxConfig", "ThinkingConfig", "OutputFormatConfig",
         "SystemPromptConfig", "ToolsConfig", "HookMatcherConfig",
         "CommandInfo",
+        # Initialize / session management result types
+        "ClientInfo", "InitializeCapabilities",
+        "SessionSummary",
     ]
     sections.append("# " + "-" * 75)
     sections.append("# Config types")
@@ -672,7 +740,7 @@ def main() -> None:
     # Union-type aliases (oneOf types that aren't enums or objects)
     # These need to be defined as `Any` since they're complex unions
     # (e.g., SystemPromptConfig = str | {preset, append})
-    union_types = ["SystemPromptConfig", "ToolsConfig"]
+    union_types = ["SystemPromptConfig", "ToolsConfig", "ErrorInfo"]
     for name in union_types:
         if name in all_defs and name not in model_names and name not in enum_names:
             sections.append(f"# Union type: see Rust source for variants")
@@ -682,9 +750,12 @@ def main() -> None:
 
     # ── Section: Hook input/output types ──
     hook_types = [
-        "PreToolUseHookInput", "PostToolUseHookInput", "HookCallbackOutput",
+        "PreToolUseHookInput", "PostToolUseHookInput", "PostToolUseFailureHookInput",
+        "HookCallbackOutput",
         "StopHookInput", "SubagentStartHookInput", "SubagentStopHookInput",
         "UserPromptSubmitHookInput", "NotificationHookInput",
+        "PreCompactHookInput", "PermissionRequestHookInput",
+        "SessionStartHookInput", "SessionEndHookInput",
     ]
     sections.append("# " + "-" * 75)
     sections.append("# Hook input/output types")
@@ -745,6 +816,73 @@ def main() -> None:
             if name in all_defs:
                 sections.append(generate_model(name, all_defs[name], all_defs))
                 sections.append("")
+
+    # ── Validation: ensure accessor maps cover all schema variants ──
+    validation_errors: list[str] = []
+
+    # Validate ServerNotification coverage
+    schema_notif_methods = {m for m, _ in notif_methods}
+    accessor_notif_methods = set(NOTIFICATION_ACCESSORS.keys())
+    missing_notif = schema_notif_methods - accessor_notif_methods
+    extra_notif = accessor_notif_methods - schema_notif_methods
+    if missing_notif:
+        validation_errors.append(
+            f"NOTIFICATION_ACCESSORS missing {len(missing_notif)} methods "
+            f"from schema: {sorted(missing_notif)}"
+        )
+    if extra_notif:
+        validation_errors.append(
+            f"NOTIFICATION_ACCESSORS has {len(extra_notif)} methods "
+            f"not in schema: {sorted(extra_notif)}"
+        )
+
+    # Validate ServerRequest coverage
+    sr_methods_from_schema: set[str] = set()
+    for variant in sr_schema.get("oneOf", []):
+        method_val = variant.get("properties", {}).get("method", {}).get("enum", [None])[0]
+        if method_val:
+            sr_methods_from_schema.add(method_val)
+    accessor_sr_methods = set(SERVER_REQUEST_ACCESSORS.keys())
+    missing_sr = sr_methods_from_schema - accessor_sr_methods
+    extra_sr = accessor_sr_methods - sr_methods_from_schema
+    if missing_sr:
+        validation_errors.append(
+            f"SERVER_REQUEST_ACCESSORS missing {len(missing_sr)} methods "
+            f"from schema: {sorted(missing_sr)}"
+        )
+    if extra_sr:
+        validation_errors.append(
+            f"SERVER_REQUEST_ACCESSORS has {len(extra_sr)} methods "
+            f"not in schema: {sorted(extra_sr)}"
+        )
+
+    # Validate ClientRequest coverage
+    schema_cr_methods = {m for m, _ in cr_methods}
+    wrapper_cr_methods = set(CLIENT_REQUEST_WRAPPERS.keys())
+    missing_cr = schema_cr_methods - wrapper_cr_methods
+    extra_cr = wrapper_cr_methods - schema_cr_methods
+    if missing_cr:
+        validation_errors.append(
+            f"CLIENT_REQUEST_WRAPPERS missing {len(missing_cr)} methods "
+            f"from schema: {sorted(missing_cr)}"
+        )
+    if extra_cr:
+        validation_errors.append(
+            f"CLIENT_REQUEST_WRAPPERS has {len(extra_cr)} methods "
+            f"not in schema: {sorted(extra_cr)}"
+        )
+
+    if validation_errors:
+        print("VALIDATION ERRORS:", file=sys.stderr)
+        for err in validation_errors:
+            print(f"  - {err}", file=sys.stderr)
+        sys.exit(1)
+
+    print(
+        f"Validated: {len(NOTIFICATION_ACCESSORS)} notifications, "
+        f"{len(SERVER_REQUEST_ACCESSORS)} server requests, "
+        f"{len(CLIENT_REQUEST_WRAPPERS)} client requests"
+    )
 
     # Write output
     content = "\n".join(sections)

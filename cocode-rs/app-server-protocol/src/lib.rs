@@ -6,8 +6,6 @@
 //!
 //! Design principles:
 //! - **Transport-agnostic**: usable over channels, stdio NDJSON, or WebSocket.
-//! - **Self-contained**: no dependency on internal `cocode-protocol` crate so
-//!   the public API stays stable even as internals evolve.
 //! - **Schema-derivable**: all types derive `schemars::JsonSchema` to enable
 //!   multi-language codegen (Python via `datamodel-code-generator`, TypeScript
 //!   via `json-schema-to-typescript`).
@@ -17,6 +15,7 @@ mod item;
 pub mod jsonrpc;
 mod notification;
 mod request;
+pub mod stream_accumulator;
 mod usage;
 
 pub use config::*;
@@ -24,6 +23,7 @@ pub use item::*;
 pub use jsonrpc::*;
 pub use notification::*;
 pub use request::*;
+pub use stream_accumulator::StreamAccumulator;
 pub use usage::*;
 
 #[cfg(test)]

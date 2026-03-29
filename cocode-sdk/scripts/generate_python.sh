@@ -10,7 +10,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-SCHEMA_DIR="$REPO_ROOT/cocode-rs/app-server-protocol/schema/json"
+SCHEMA_DIR="$REPO_ROOT/cocode-sdk/schemas/json"
 SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"
 OUTPUT_FILE="$REPO_ROOT/cocode-sdk/python/src/cocode_sdk/generated/protocol.py"
 

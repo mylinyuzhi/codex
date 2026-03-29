@@ -1,7 +1,5 @@
 //! Micro-compaction: no-LLM-call tool result cleanup.
 
-use cocode_protocol::LoopEvent;
-
 use tracing::debug;
 
 use super::AgentLoop;
@@ -36,12 +34,7 @@ impl AgentLoop {
             return (0, 0);
         }
 
-        // Emit started event before compaction begins
-        self.emit(LoopEvent::MicroCompactionStarted {
-            candidates: 0, // Exact count will be in MicroCompactionApplied
-            potential_savings: 0,
-        })
-        .await;
+        tracing::debug!("Micro-compaction started");
 
         // Apply micro-compaction using configured recent_tool_results_to_keep
         // Get paths from ContextModifier::FileRead for FileTracker cleanup

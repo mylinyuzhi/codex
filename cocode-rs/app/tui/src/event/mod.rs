@@ -13,7 +13,7 @@ mod stream;
 pub use broker::EventBroker;
 pub use stream::TuiEventStream;
 
-use cocode_protocol::LoopEvent;
+use cocode_protocol::CoreEvent;
 use crossterm::event::KeyEvent;
 use crossterm::event::MouseEvent;
 
@@ -57,7 +57,7 @@ pub enum TuiEvent {
 
     // ========== Agent Events ==========
     /// Event from the core agent loop.
-    Agent(LoopEvent),
+    Agent(CoreEvent),
 
     // ========== Commands ==========
     /// A user command to execute.

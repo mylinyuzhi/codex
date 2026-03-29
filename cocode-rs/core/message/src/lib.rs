@@ -82,16 +82,17 @@ pub use factory::create_tool_result_message;
 pub use factory::create_tool_result_structured;
 pub use factory::create_tool_results_batch;
 pub use factory::create_user_message;
-pub use factory::create_user_message_with_content;
 pub use history::FileReadExtraction;
 pub use history::HistoryBuilder;
 pub use history::HistoryConfig;
 pub use history::MessageHistory;
 pub use history::MicroCompactOutcome;
+pub use normalization::MAX_IMAGES_IN_CONTEXT;
 pub use normalization::NormalizationOptions;
 pub use normalization::ValidationError;
 pub use normalization::estimate_tokens;
 pub use normalization::normalize_messages_for_api;
+pub use normalization::trim_image_count;
 pub use normalization::validate_messages;
 // Re-export core read tracking functions (complex state reconstruction is in system-reminder)
 pub use read_tracking_policy::collect_cleared_read_paths;

@@ -52,6 +52,7 @@ members = [
     "exec/process-hardening",
     "features/skill",
     "features/hooks",
+    "features/llm-check",
     "features/plugin",
     "features/plan-mode",
     "features/team",
@@ -157,6 +158,7 @@ cocode-process-hardening = { path = "exec/process-hardening" }
 cocode-skill = { path = "features/skill" }
 cocode-hooks = { path = "features/hooks" }
 cocode-plugin = { path = "features/plugin" }
+cocode-llm-check = { path = "features/llm-check" }
 cocode-plan-mode = { path = "features/plan-mode" }
 cocode-team = { path = "features/team" }
 cocode-cron = { path = "features/cron" }

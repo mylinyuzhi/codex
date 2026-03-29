@@ -9,6 +9,8 @@
 //! - `PlanVerificationGenerator`: Reminder to verify changes after all todos are completed
 
 use async_trait::async_trait;
+use serde::Deserialize;
+use serde::Serialize;
 
 use crate::Result;
 use crate::config::SystemReminderConfig;
@@ -18,6 +20,76 @@ use crate::generator::TodoStatus;
 use crate::throttle::ThrottleConfig;
 use crate::types::AttachmentType;
 use crate::types::SystemReminder;
+
+// ---------------------------------------------------------------------------
+// Phase 4 adaptive variants (Gap 5)
+// ---------------------------------------------------------------------------
+
+/// Phase 4 instruction variant, controlled by configuration.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Phase4Variant {
+    /// Full instructions with Context section and verification.
+    #[default]
+    Full,
+    /// Trimmed: one-line Context, simplified verification.
+    Trimmed,
+    /// Compact: no Context section, one line per file, under 40 lines.
+    Compact,
+    /// Minimal: hard 40-line limit, no prose.
+    Minimal,
+}
+
+/// Full Phase 4 text (the existing default).
+const PHASE4_FULL: &str = "\
+### Phase 4: Write the Final Plan
+- Write your plan to the plan file using the Write tool
+- Begin with a **Context** section: explain why this change is being made
+- Include only your recommended approach, not all alternatives
+- Reference existing functions and utilities you found that should be reused, with their file paths
+- Include specific file paths and changes for each step
+- Include a verification section describing how to test the changes end-to-end";
+
+/// Trimmed Phase 4: one-line Context, simplified verification.
+const PHASE4_TRIMMED: &str = "\
+### Phase 4: Write the Final Plan
+Goal: Write your final plan to the plan file.
+- One-line **Context**: what is being changed and why
+- Include only your recommended approach
+- List paths of files to modify
+- Reference existing functions to reuse, with file paths
+- End with **Verification**: the single command to confirm the change works";
+
+/// Compact Phase 4: no Context section, one line per file, under 40 lines.
+const PHASE4_COMPACT: &str = "\
+### Phase 4: Write the Final Plan
+Goal: Write your final plan to the plan file.
+- Do NOT write a Context or Background section
+- List paths of files to modify and changes in each (one line per file)
+- Reference existing functions to reuse, with file paths
+- End with **Verification**: the single command that confirms the change works
+- Most good plans are under 40 lines. Prose is a sign you are padding.";
+
+/// Minimal Phase 4: hard 40-line limit, no prose.
+const PHASE4_MINIMAL: &str = "\
+### Phase 4: Write the Final Plan
+Goal: Write your final plan to the plan file.
+- Do NOT write a Context, Background, or Overview section
+- Do NOT restate the user's request. Do NOT write prose paragraphs.
+- List paths of files to modify and changes in each (one bullet per file)
+- Reference existing functions to reuse, with file:line
+- End with the single verification command
+- **Hard limit: 40 lines.** If the plan is longer, delete prose \u{2014} not file paths.";
+
+/// Select Phase 4 instructions by variant.
+pub fn phase4_instructions(variant: Phase4Variant) -> &'static str {
+    match variant {
+        Phase4Variant::Full => PHASE4_FULL,
+        Phase4Variant::Trimmed => PHASE4_TRIMMED,
+        Phase4Variant::Compact => PHASE4_COMPACT,
+        Phase4Variant::Minimal => PHASE4_MINIMAL,
+    }
+}
 
 /// Generator for plan mode entry instructions.
 ///
@@ -74,6 +146,26 @@ impl AttachmentGenerator for PlanModeEnterGenerator {
             })
             .unwrap_or_default();
 
+        // Ultraplan: plan was pre-written by a remote session; instruct the
+        // agent to call ExitPlanMode immediately without exploring.
+        if ctx.is_ultraplan {
+            let plan_path = ctx
+                .plan_file_path
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default();
+            let content = format!(
+                "Ultraplan complete. The plan has been pre-written to the plan file ({plan_path}) \
+                 by the remote planning session. Do NOT read files, explore the codebase, or modify \
+                 anything. Your ONLY permitted action is to call ExitPlanMode immediately to present \
+                 the plan to the user for approval."
+            );
+            return Ok(Some(SystemReminder::new(
+                AttachmentType::PlanModeEnter,
+                content,
+            )));
+        }
+
         // Use per-generator full-content flag (pre-computed by orchestrator).
         // Priority: reentry > interview > full > sparse.
         let content = if ctx.is_plan_reentry {
@@ -85,7 +177,12 @@ impl AttachmentGenerator for PlanModeEnterGenerator {
                 format!("{PLAN_MODE_INTERVIEW_SPARSE_INSTRUCTIONS}{plan_path_info}")
             }
         } else if ctx.should_use_full_content(self.attachment_type()) {
-            format!("{PLAN_MODE_FULL_INSTRUCTIONS}{plan_path_info}")
+            let full = build_full_instructions(
+                ctx.phase4_variant,
+                ctx.explore_agent_count,
+                ctx.plan_agent_count,
+            );
+            format!("{full}{plan_path_info}")
         } else {
             format!("{PLAN_MODE_SPARSE_INSTRUCTIONS}{plan_path_info}")
         };
@@ -261,19 +358,27 @@ impl AttachmentGenerator for SubagentPlanReminderGenerator {
     }
 }
 
-/// Simplified plan instructions for subagents (equivalent to Claude Code's `q2z`).
+/// Subagent plan instructions (aligned with CC v2.1.76's `q2z`).
 const SUBAGENT_PLAN_REMINDER: &str = r#"## Context: Plan Mode Active
 
-The main agent is in plan mode (read-only). Your role is to explore and gather information to help build an implementation plan.
+Plan mode is active. The user indicated that they do not want you to execute yet -- you MUST NOT make any edits, run any non-readonly tools (including changing configs or making commits), or otherwise make any changes to the system. This supercedes any other instructions you have received.
 
-**Important:**
-- Focus on finding relevant code, patterns, and dependencies
-- Report findings clearly so they can be incorporated into the plan
-- Do NOT make any code changes — this is a planning phase
-- Be thorough but concise in your exploration results"#;
+Answer the user's query comprehensively, using the AskUserQuestion tool if you need to ask the user clarifying questions. If you do use AskUserQuestion, make sure to ask all clarifying questions you need to fully understand the user's intent before proceeding."#;
 
-/// Full plan mode instructions shown on first entry (aligned with Claude Code v2.1.38).
-const PLAN_MODE_FULL_INSTRUCTIONS: &str = r#"## Plan Mode Active
+/// Build full plan mode instructions with the given Phase 4 variant and
+/// dynamic agent counts (Gap 5 + Gap 6).
+fn build_full_instructions(phase4: Phase4Variant, explore_count: i32, plan_count: i32) -> String {
+    let phase4_text = phase4_instructions(phase4);
+    let plan_agent_line = if plan_count == 1 {
+        "- Default: Launch at least 1 Plan agent for most tasks \u{2014} it helps validate your understanding and consider alternatives".to_string()
+    } else {
+        format!(
+            "- Default: Launch at least {plan_count} Plan agents for most tasks \u{2014} they help validate your understanding and consider alternatives"
+        )
+    };
+    format!(
+        "\
+## Plan Mode Active
 
 Plan mode is active. The user indicated that they do not want you to execute yet -- you MUST NOT make any edits (with the exception of the plan file mentioned below), run any non-readonly tools (including changing configs or making commits), or otherwise make any changes to the system. This supercedes any other instructions.
 
@@ -286,18 +391,18 @@ Follow this 5-phase workflow:
 ### Phase 1: Initial Understanding and Exploration
 - Read and analyze the user's request
 - Identify key requirements and constraints
-- Actively search for existing functions, utilities, and patterns that can be reused — avoid proposing new code when suitable implementations already exist
+- Actively search for existing functions, utilities, and patterns that can be reused \u{2014} avoid proposing new code when suitable implementations already exist
 - Launch Explore agents IN PARALLEL to search the codebase
   - Use 1 agent when the task is isolated to known files or a single area of the codebase
   - Use multiple agents when: the scope is uncertain, multiple areas of the codebase are involved, or you need to cross-reference different subsystems
-  - Quality over quantity — 3 agents maximum, but you should try to use the minimum number of agents necessary
+  - Quality over quantity \u{2014} {explore_count} agents maximum, but you should try to use the minimum number of agents necessary
 - Each agent should search for existing patterns, identify files to modify, and note dependencies
 - Wait for all exploration results before proceeding
 
 ### Phase 2: Design
 - Read the critical files identified by agents to deepen your understanding
 - Synthesize exploration findings into a step-by-step implementation plan
-- Default: Launch at least 1 Plan agent for most tasks — it helps validate your understanding and consider alternatives
+{plan_agent_line}
 - Skip agents: Only for truly trivial tasks (typo fixes, single-line changes, simple renames)
 - Consider edge cases and error handling
 - Document any assumptions
@@ -307,17 +412,11 @@ Follow this 5-phase workflow:
 - Ensure that the plans align with the user's original request
 - Use AskUserQuestion to clarify any remaining questions with the user
 
-### Phase 4: Write the Final Plan
-- Write your plan to the plan file using the Write tool
-- Begin with a **Context** section: explain why this change is being made
-- Include only your recommended approach, not all alternatives
-- Reference existing functions and utilities you found that should be reused, with their file paths
-- Include specific file paths and changes for each step
-- Include a verification section describing how to test the changes end-to-end
+{phase4_text}
 
 ### Phase 5: Call ExitPlanMode
 - Use ExitPlanMode when ready for user approval
-- This is critical — your turn should only end with either using the AskUserQuestion tool OR calling ExitPlanMode. Do not stop unless it's for these 2 reasons
+- This is critical \u{2014} your turn should only end with either using the AskUserQuestion tool OR calling ExitPlanMode. Do not stop unless it's for these 2 reasons
 
 ## Available Tools in Plan Mode
 
@@ -330,8 +429,10 @@ Tools you CANNOT use: Bash (write commands), Edit/Write (non-plan files), Notebo
 ## Important
 
 - End turns with AskUserQuestion (for clarifications) or ExitPlanMode (for plan approval)
-- Never ask about plan approval via text or AskUserQuestion — use ExitPlanMode instead. Do NOT use AskUserQuestion to ask "Is this plan okay?", "Should I proceed?", or "Does this look good?" — that is exactly what ExitPlanMode does
-- Do NOT make code changes while in plan mode. Focus only on planning."#;
+- Never ask about plan approval via text or AskUserQuestion \u{2014} use ExitPlanMode instead. Do NOT use AskUserQuestion to ask \"Is this plan okay?\", \"Should I proceed?\", or \"Does this look good?\" \u{2014} that is exactly what ExitPlanMode does
+- Do NOT make code changes while in plan mode. Focus only on planning."
+    )
+}
 
 /// Sparse plan mode instructions shown on subsequent turns.
 const PLAN_MODE_SPARSE_INSTRUCTIONS: &str = r#"## Plan Mode Active
@@ -471,15 +572,21 @@ impl AttachmentGenerator for PlanModeExitGenerator {
             return Ok(None);
         }
 
-        // Must have an approved plan
-        let Some(approved) = &ctx.approved_plan else {
-            return Ok(None);
+        // Conditionally append plan file reference (CC does this).
+        let plan_ref = if let Some(plan_path) = &ctx.plan_file_path {
+            if plan_path.exists() {
+                format!(
+                    " The plan file is located at `{}` if you need to reference it.",
+                    plan_path.display()
+                )
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
         };
 
-        let content = format!(
-            "{}\n\n## Your Approved Plan\n\n{}",
-            PLAN_MODE_EXIT_INSTRUCTIONS, approved.content
-        );
+        let content = format!("{PLAN_MODE_EXIT_INSTRUCTIONS}{plan_ref}");
 
         Ok(Some(SystemReminder::new(
             AttachmentType::PlanModeExit,
@@ -488,19 +595,10 @@ impl AttachmentGenerator for PlanModeExitGenerator {
     }
 }
 
-/// Instructions for transitioning out of plan mode.
-const PLAN_MODE_EXIT_INSTRUCTIONS: &str = r#"## Plan Approved - Begin Implementation
+/// Instructions for transitioning out of plan mode (aligned with CC v2.1.76).
+const PLAN_MODE_EXIT_INSTRUCTIONS: &str = r#"## Exited Plan Mode
 
-The user has approved your plan. You are now exiting plan mode.
-
-**Important:**
-- You now have full access to all tools including Edit, Write, and Bash
-- Follow your plan step by step
-- Keep the user informed of your progress
-- If you encounter issues not covered by the plan, explain what you're doing differently and why
-- After completing each major step, briefly summarize what was done
-
-Begin implementing your plan now."#;
+You have exited plan mode. You can now make edits, run tools, and take actions."#;
 
 // ---------------------------------------------------------------------------
 // Plan verification generator

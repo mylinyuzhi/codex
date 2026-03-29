@@ -11,7 +11,6 @@ use cocode_inference::LanguageModelMessage;
 use cocode_inference::ToolContentPart;
 use cocode_inference::ToolResultContent;
 use cocode_inference::ToolResultPart;
-use cocode_inference::UserContentPart;
 
 /// Create a user message.
 pub fn create_user_message(
@@ -19,18 +18,6 @@ pub fn create_user_message(
     turn_id: impl Into<String>,
 ) -> TrackedMessage {
     TrackedMessage::user(content, turn_id)
-}
-
-/// Create a user message with multiple content parts.
-pub fn create_user_message_with_content(
-    content: Vec<UserContentPart>,
-    turn_id: impl Into<String>,
-) -> TrackedMessage {
-    TrackedMessage::new(
-        LanguageModelMessage::user(content),
-        turn_id,
-        MessageSource::User,
-    )
 }
 
 /// Create an assistant message from API response.

@@ -124,6 +124,17 @@ pub trait Tool: Send + Sync {
         30_000
     }
 
+    /// Whether this tool should be deferred (not sent as a definition by default).
+    ///
+    /// Deferred tools are excluded from the initial tool definitions sent to the
+    /// model, reducing token usage. They can be restored dynamically when
+    /// discovered via ToolSearch. Matches Claude Code's `shouldDefer` pattern.
+    ///
+    /// Default: `false` (always sent).
+    fn should_defer(&self) -> bool {
+        false
+    }
+
     /// Optional feature flag that gates this tool's visibility.
     ///
     /// When `Some(feature)`, the tool is only included in API requests

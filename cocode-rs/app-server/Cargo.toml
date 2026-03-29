@@ -20,7 +20,9 @@ workspace = true
 # Internal
 cocode-app-server-protocol.workspace = true
 cocode-config.workspace = true
+cocode-file-backup.workspace = true
 cocode-hooks.workspace = true
+cocode-message.workspace = true
 cocode-protocol.workspace = true
 cocode-session.workspace = true
 cocode-subagent.workspace = true

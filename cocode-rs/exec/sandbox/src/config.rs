@@ -58,6 +58,9 @@ impl From<cocode_protocol::SandboxMode> for EnforcementLevel {
             cocode_protocol::SandboxMode::ReadOnly => Self::ReadOnly,
             cocode_protocol::SandboxMode::WorkspaceWrite => Self::WorkspaceWrite,
             cocode_protocol::SandboxMode::FullAccess => Self::Disabled,
+            // ExternalSandbox: workspace-write enforcement for permission checks,
+            // but platform wrapping (bwrap/Seatbelt) is skipped by SandboxState.
+            cocode_protocol::SandboxMode::ExternalSandbox => Self::WorkspaceWrite,
         }
     }
 }
@@ -78,10 +81,40 @@ pub struct WritableRoot {
 
 impl WritableRoot {
     /// Creates a writable root with default read-only subpaths.
+    ///
+    /// If `.git` is a pointer file (git worktrees/submodules), the actual
+    /// gitdir is also added to the read-only subpaths (adopted from codex-rs).
     pub fn new(path: impl Into<PathBuf>) -> Self {
+        let path = path.into();
+        let mut subpaths = default_readonly_subpaths();
+
+        // Detect git pointer files: in worktrees and submodules, `.git` is a
+        // file containing `gitdir: <path>`. The actual gitdir must also be
+        // protected as read-only (codex-rs pattern).
+        let git_path = path.join(".git");
+        if git_path.is_file()
+            && let Some(gitdir) = resolve_git_pointer(&git_path)
+        {
+            match gitdir.strip_prefix(&path) {
+                Ok(rel) => {
+                    let rel_str = rel.display().to_string();
+                    if !subpaths.contains(&rel_str) {
+                        subpaths.push(rel_str);
+                    }
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        gitdir = %gitdir.display(),
+                        root = %path.display(),
+                        "Git pointer resolves outside writable root; cannot protect"
+                    );
+                }
+            }
+        }
+
         Self {
-            path: path.into(),
-            readonly_subpaths: default_readonly_subpaths(),
+            path,
+            readonly_subpaths: subpaths,
         }
     }
 
@@ -119,6 +152,34 @@ impl WritableRoot {
             .iter()
             .map(|sub| self.path.join(sub))
             .collect()
+    }
+}
+
+/// Resolve a `.git` pointer file to the actual gitdir path.
+///
+/// Git worktrees and submodules use a `.git` file (not directory) containing
+/// `gitdir: <path>`. Returns the resolved absolute path to the actual gitdir,
+/// or `None` if the file isn't a valid pointer.
+fn resolve_git_pointer(git_file: &Path) -> Option<PathBuf> {
+    let content = std::fs::read_to_string(git_file).ok()?;
+    // Extract first line only — pointer files have `gitdir: <path>` on line 1.
+    let first_line = content.lines().next()?.trim();
+    let gitdir = first_line.strip_prefix("gitdir:")?.trim();
+    if gitdir.is_empty() {
+        return None;
+    }
+    let gitdir_path = PathBuf::from(gitdir);
+    let resolved = if gitdir_path.is_relative() {
+        git_file.parent()?.join(&gitdir_path)
+    } else {
+        gitdir_path
+    };
+    match std::fs::canonicalize(&resolved) {
+        Ok(p) => Some(p),
+        Err(e) => {
+            tracing::debug!(path = %resolved.display(), error = %e, "Failed to resolve gitdir");
+            None
+        }
     }
 }
 
@@ -360,7 +421,11 @@ fn default_true() -> bool {
 }
 
 fn default_enabled_platforms() -> Vec<String> {
-    vec!["macos".to_string(), "linux".to_string()]
+    vec![
+        "macos".to_string(),
+        "linux".to_string(),
+        "windows".to_string(),
+    ]
 }
 
 fn default_mandatory_deny_search_depth() -> i32 {
@@ -461,6 +526,8 @@ impl SandboxSettings {
             "macos"
         } else if cfg!(target_os = "linux") {
             "linux"
+        } else if cfg!(target_os = "windows") {
+            "windows"
         } else {
             return false;
         };

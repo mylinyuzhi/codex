@@ -672,3 +672,399 @@ fn test_new_hook_input_types_roundtrip() {
     let parsed: UserPromptSubmitHookInput = serde_json::from_str(&json).unwrap();
     assert_eq!(parsed.prompt, "Hello");
 }
+
+#[test]
+fn test_client_request_session_list_roundtrip() {
+    let req = ClientRequest::SessionList(SessionListRequestParams {
+        limit: Some(10),
+        cursor: Some("prev_id".into()),
+    });
+
+    let value: serde_json::Value = serde_json::to_value(&req).unwrap();
+    assert_eq!(value["method"], "session/list");
+    assert_eq!(value["params"]["limit"], 10);
+
+    let json = serde_json::to_string(&req).unwrap();
+    let parsed: ClientRequest = serde_json::from_str(&json).unwrap();
+    match parsed {
+        ClientRequest::SessionList(params) => {
+            assert_eq!(params.limit, Some(10));
+            assert_eq!(params.cursor.as_deref(), Some("prev_id"));
+        }
+        other => panic!("expected SessionList, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_session_list_result_roundtrip() {
+    let result = SessionListResult {
+        sessions: vec![SessionSummary {
+            id: "sess_1".into(),
+            name: Some("My session".into()),
+            working_dir: Some("/home/user".into()),
+            model: Some("sonnet".into()),
+            created_at: Some("2026-03-26T12:00:00Z".into()),
+            updated_at: None,
+            turn_count: 5,
+        }],
+        next_cursor: None,
+    };
+
+    let json = serde_json::to_string(&result).unwrap();
+    let parsed: SessionListResult = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed.sessions.len(), 1);
+    assert_eq!(parsed.sessions[0].id, "sess_1");
+    assert_eq!(parsed.sessions[0].turn_count, 5);
+}
+
+#[test]
+fn test_config_read_write_roundtrip() {
+    let req = ClientRequest::ConfigRead(ConfigReadRequestParams {
+        key: Some("model.main".into()),
+    });
+    let value: serde_json::Value = serde_json::to_value(&req).unwrap();
+    assert_eq!(value["method"], "config/read");
+
+    let req = ClientRequest::ConfigWrite(ConfigWriteRequestParams {
+        key: "model.main".into(),
+        value: json!("opus"),
+        scope: ConfigWriteScope::User,
+    });
+    let value: serde_json::Value = serde_json::to_value(&req).unwrap();
+    assert_eq!(value["method"], "config/value/write");
+    assert_eq!(value["params"]["scope"], "user");
+}
+
+#[test]
+fn test_error_notification_with_error_info() {
+    let notif = ServerNotification::Error(ErrorNotificationParams {
+        message: "rate limit exceeded".into(),
+        category: Some(ErrorCategory::Api),
+        retryable: true,
+        error_info: Some(ErrorInfo::RateLimitExceeded),
+    });
+
+    let value: serde_json::Value = serde_json::to_value(&notif).unwrap();
+    assert_eq!(value["params"]["retryable"], true);
+    assert_eq!(value["params"]["error_info"], "rate_limit_exceeded");
+
+    let json = serde_json::to_string(&notif).unwrap();
+    let parsed: ServerNotification = serde_json::from_str(&json).unwrap();
+    match parsed {
+        ServerNotification::Error(params) => {
+            assert!(params.retryable);
+            assert!(matches!(
+                params.error_info,
+                Some(ErrorInfo::RateLimitExceeded)
+            ));
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_error_info_server_overloaded_with_retry() {
+    let info = ErrorInfo::ServerOverloaded {
+        retry_after_ms: Some(5000),
+    };
+    let json = serde_json::to_string(&info).unwrap();
+    let parsed: ErrorInfo = serde_json::from_str(&json).unwrap();
+    match parsed {
+        ErrorInfo::ServerOverloaded { retry_after_ms } => {
+            assert_eq!(retry_after_ms, Some(5000));
+        }
+        other => panic!("expected ServerOverloaded, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_initialize_request_roundtrip() {
+    let req = ClientRequest::Initialize(InitializeRequestParams {
+        client_info: Some(ClientInfo {
+            name: "test_client".into(),
+            title: None,
+            version: Some("0.1.0".into()),
+        }),
+        capabilities: Some(InitializeCapabilities {
+            experimental_api: true,
+            opt_out_notification_methods: None,
+        }),
+    });
+
+    let value: serde_json::Value = serde_json::to_value(&req).unwrap();
+    assert_eq!(value["method"], "initialize");
+    assert_eq!(value["params"]["client_info"]["name"], "test_client");
+
+    let json = serde_json::to_string(&req).unwrap();
+    let parsed: ClientRequest = serde_json::from_str(&json).unwrap();
+    match parsed {
+        ClientRequest::Initialize(params) => {
+            assert_eq!(params.client_info.unwrap().name, "test_client");
+            assert!(params.capabilities.unwrap().experimental_api);
+        }
+        other => panic!("expected Initialize, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_server_cancel_request_roundtrip() {
+    let req = ServerRequest::CancelRequest(ServerCancelRequestParams {
+        request_id: "req_cancel_1".into(),
+        reason: Some("timed out".into()),
+    });
+
+    let value: serde_json::Value = serde_json::to_value(&req).unwrap();
+    assert_eq!(value["method"], "control/cancelRequest");
+
+    let json = serde_json::to_string(&req).unwrap();
+    let parsed: ServerRequest = serde_json::from_str(&json).unwrap();
+    match parsed {
+        ServerRequest::CancelRequest(params) => {
+            assert_eq!(params.request_id, "req_cancel_1");
+            assert_eq!(params.reason.as_deref(), Some("timed out"));
+        }
+        other => panic!("expected CancelRequest, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_mcp_tool_call_item_with_result() {
+    let item = ThreadItem {
+        id: "mcp_1".into(),
+        details: ThreadItemDetails::McpToolCall(McpToolCallItem {
+            server: "weather".into(),
+            tool: "get_forecast".into(),
+            arguments: json!({"city": "Tokyo"}),
+            result: Some(McpToolCallResult {
+                content: vec![json!({"type": "text", "text": "Sunny"})],
+                structured_content: None,
+            }),
+            error: None,
+            status: ItemStatus::Completed,
+        }),
+    };
+
+    let json = serde_json::to_string(&item).unwrap();
+    let parsed: ThreadItem = serde_json::from_str(&json).unwrap();
+    match parsed.details {
+        ThreadItemDetails::McpToolCall(mcp) => {
+            assert!(mcp.result.is_some());
+            assert_eq!(mcp.result.unwrap().content.len(), 1);
+        }
+        other => panic!("expected McpToolCall, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_mcp_server_config_all_variants() {
+    let stdio = McpServerConfig::Stdio {
+        command: "npx".into(),
+        args: vec!["server".into()],
+        env: None,
+    };
+    let value: serde_json::Value = serde_json::to_value(&stdio).unwrap();
+    assert_eq!(value["type"], "stdio");
+    assert_eq!(value["command"], "npx");
+
+    let sdk = McpServerConfig::Sdk {
+        tools: vec![SdkMcpToolDef {
+            name: "search".into(),
+            description: Some("Search stuff".into()),
+            input_schema: Some(json!({"type": "object"})),
+        }],
+    };
+    let value: serde_json::Value = serde_json::to_value(&sdk).unwrap();
+    assert_eq!(value["type"], "sdk");
+    assert_eq!(value["tools"][0]["name"], "search");
+
+    let json = serde_json::to_string(&sdk).unwrap();
+    let parsed: McpServerConfig = serde_json::from_str(&json).unwrap();
+    match parsed {
+        McpServerConfig::Sdk { tools } => {
+            assert_eq!(tools.len(), 1);
+            assert_eq!(tools[0].name, "search");
+        }
+        other => panic!("expected Sdk, got {other:?}"),
+    }
+}
+
+// ── Category B notification round-trip tests ────────────────────────
+
+#[test]
+fn test_plan_mode_changed_roundtrip() {
+    let notif = ServerNotification::PlanModeChanged(PlanModeChangedParams {
+        entered: true,
+        plan_file: Some("/tmp/plan.md".into()),
+        approved: None,
+    });
+    let json = serde_json::to_string(&notif).unwrap();
+    let parsed: ServerNotification = serde_json::from_str(&json).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(value["method"], "plan/modeChanged");
+    match parsed {
+        ServerNotification::PlanModeChanged(p) => {
+            assert!(p.entered);
+            assert_eq!(p.plan_file.as_deref(), Some("/tmp/plan.md"));
+            assert_eq!(p.approved, None);
+        }
+        other => panic!("expected PlanModeChanged, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_queue_state_changed_roundtrip() {
+    let notif = ServerNotification::QueueStateChanged(QueueStateChangedParams { queued: 5 });
+    let json = serde_json::to_string(&notif).unwrap();
+    let parsed: ServerNotification = serde_json::from_str(&json).unwrap();
+    match parsed {
+        ServerNotification::QueueStateChanged(p) => assert_eq!(p.queued, 5),
+        other => panic!("expected QueueStateChanged, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_rewind_completed_roundtrip() {
+    let notif = ServerNotification::RewindCompleted(RewindCompletedParams {
+        rewound_turn: 3,
+        restored_files: 5,
+        messages_removed: 12,
+    });
+    let json = serde_json::to_string(&notif).unwrap();
+    let parsed: ServerNotification = serde_json::from_str(&json).unwrap();
+    match parsed {
+        ServerNotification::RewindCompleted(p) => {
+            assert_eq!(p.rewound_turn, 3);
+            assert_eq!(p.restored_files, 5);
+            assert_eq!(p.messages_removed, 12);
+        }
+        other => panic!("expected RewindCompleted, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_rewind_failed_roundtrip() {
+    let notif = ServerNotification::RewindFailed(RewindFailedParams {
+        error: "no snapshot".into(),
+    });
+    let json = serde_json::to_string(&notif).unwrap();
+    let parsed: ServerNotification = serde_json::from_str(&json).unwrap();
+    match parsed {
+        ServerNotification::RewindFailed(p) => assert_eq!(p.error, "no snapshot"),
+        other => panic!("expected RewindFailed, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_cost_warning_roundtrip() {
+    let notif = ServerNotification::CostWarning(CostWarningParams {
+        current_cost_cents: 800,
+        threshold_cents: 500,
+        budget_cents: Some(2000),
+    });
+    let json = serde_json::to_string(&notif).unwrap();
+    let parsed: ServerNotification = serde_json::from_str(&json).unwrap();
+    match parsed {
+        ServerNotification::CostWarning(p) => {
+            assert_eq!(p.current_cost_cents, 800);
+            assert_eq!(p.threshold_cents, 500);
+            assert_eq!(p.budget_cents, Some(2000));
+        }
+        other => panic!("expected CostWarning, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_sandbox_state_changed_roundtrip() {
+    let notif = ServerNotification::SandboxStateChanged(SandboxStateChangedParams {
+        active: true,
+        enforcement: "read_only".into(),
+    });
+    let json = serde_json::to_string(&notif).unwrap();
+    let parsed: ServerNotification = serde_json::from_str(&json).unwrap();
+    match parsed {
+        ServerNotification::SandboxStateChanged(p) => {
+            assert!(p.active);
+            assert_eq!(p.enforcement, "read_only");
+        }
+        other => panic!("expected SandboxStateChanged, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_fast_mode_changed_roundtrip() {
+    let notif = ServerNotification::FastModeChanged(FastModeChangedParams { active: true });
+    let json = serde_json::to_string(&notif).unwrap();
+    let parsed: ServerNotification = serde_json::from_str(&json).unwrap();
+    match parsed {
+        ServerNotification::FastModeChanged(p) => assert!(p.active),
+        other => panic!("expected FastModeChanged, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_agents_registered_roundtrip() {
+    let notif = ServerNotification::AgentsRegistered(AgentsRegisteredParams {
+        agents: vec![AgentInfo {
+            name: "Review".into(),
+            agent_type: "code-review".into(),
+            description: Some("Reviews PRs".into()),
+        }],
+    });
+    let json = serde_json::to_string(&notif).unwrap();
+    let parsed: ServerNotification = serde_json::from_str(&json).unwrap();
+    match parsed {
+        ServerNotification::AgentsRegistered(p) => {
+            assert_eq!(p.agents.len(), 1);
+            assert_eq!(p.agents[0].name, "Review");
+            assert_eq!(p.agents[0].agent_type, "code-review");
+        }
+        other => panic!("expected AgentsRegistered, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_hook_executed_roundtrip() {
+    let notif = ServerNotification::HookExecuted(HookExecutedParams {
+        hook_type: "before_tool_call".into(),
+        hook_name: "lint".into(),
+    });
+    let json = serde_json::to_string(&notif).unwrap();
+    let parsed: ServerNotification = serde_json::from_str(&json).unwrap();
+    match parsed {
+        ServerNotification::HookExecuted(p) => {
+            assert_eq!(p.hook_type, "before_tool_call");
+            assert_eq!(p.hook_name, "lint");
+        }
+        other => panic!("expected HookExecuted, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_summarize_completed_roundtrip() {
+    let notif = ServerNotification::SummarizeCompleted(SummarizeCompletedParams {
+        from_turn: 2,
+        summary_tokens: 300,
+    });
+    let json = serde_json::to_string(&notif).unwrap();
+    let parsed: ServerNotification = serde_json::from_str(&json).unwrap();
+    match parsed {
+        ServerNotification::SummarizeCompleted(p) => {
+            assert_eq!(p.from_turn, 2);
+            assert_eq!(p.summary_tokens, 300);
+        }
+        other => panic!("expected SummarizeCompleted, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_summarize_failed_roundtrip() {
+    let notif = ServerNotification::SummarizeFailed(SummarizeFailedParams {
+        error: "no messages".into(),
+    });
+    let json = serde_json::to_string(&notif).unwrap();
+    let parsed: ServerNotification = serde_json::from_str(&json).unwrap();
+    match parsed {
+        ServerNotification::SummarizeFailed(p) => assert_eq!(p.error, "no messages"),
+        other => panic!("expected SummarizeFailed, got {other:?}"),
+    }
+}

@@ -26,10 +26,13 @@ use cocode_hooks::HookRegistry;
 use cocode_hooks::HookResult;
 use cocode_policy::ApprovalStore;
 use cocode_protocol::AbortReason;
-use cocode_protocol::LoopEvent;
+use cocode_protocol::CoreEvent;
 use cocode_protocol::PermissionMode;
+use cocode_protocol::StreamEvent;
 use cocode_protocol::ToolOutput;
+use cocode_protocol::TuiEvent;
 use cocode_protocol::ValidationResult;
+use cocode_protocol::server_notification::*;
 use cocode_shell::ShellExecutor;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -44,6 +47,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
+use tracing::trace;
 use tracing::warn;
 
 /// Default maximum concurrent tool executions.
@@ -87,6 +91,8 @@ pub struct ExecutorConfig {
     pub default_timeout_secs: i64,
     /// Whether plan mode is currently active.
     pub is_plan_mode: bool,
+    /// Whether this is an ultraplan session (plan pre-written by a remote session).
+    pub is_ultraplan: bool,
     /// Path to the current plan file (if in plan mode).
     pub plan_file_path: Option<PathBuf>,
     /// Auto memory directory path (for write permission bypass).
@@ -127,6 +133,7 @@ impl Default for ExecutorConfig {
             permission_mode: PermissionMode::Default,
             default_timeout_secs: 120,
             is_plan_mode: false,
+            is_ultraplan: false,
             plan_file_path: None,
             auto_memory_dir: None,
             session_dir: None,
@@ -192,7 +199,7 @@ pub struct ToolExecutionResult {
 pub struct StreamingToolExecutor {
     registry: Arc<ToolRegistry>,
     config: ExecutorConfig,
-    event_tx: Option<mpsc::Sender<LoopEvent>>,
+    event_tx: Option<mpsc::Sender<CoreEvent>>,
     cancel_token: CancellationToken,
     approval_store: Arc<Mutex<ApprovalStore>>,
     file_tracker: Arc<Mutex<FileTracker>>,
@@ -239,6 +246,15 @@ pub struct StreamingToolExecutor {
     /// uses this to visually group tools that were dispatched together; it does
     /// not affect execution ordering.
     current_batch_id: Arc<std::sync::RwLock<Option<String>>>,
+    /// Cancellation token for sibling abort propagation.
+    ///
+    /// When a Bash tool fails (`is_error == true`) during parallel execution,
+    /// this token is cancelled to abort all other concurrent sibling tools in
+    /// the same batch. Reset at the start of each streaming turn by replacing
+    /// the inner token. Matches Claude Code's `siblingAbortController` pattern.
+    sibling_abort_token: Arc<std::sync::RwLock<CancellationToken>>,
+    /// Description of the tool that triggered sibling abort (for error messages).
+    sibling_error_desc: Arc<std::sync::RwLock<Option<String>>>,
 
     /// Allowlist of tool names the model was actually given.
     ///
@@ -351,7 +367,7 @@ impl StreamingToolExecutor {
     pub fn new(
         registry: Arc<ToolRegistry>,
         config: ExecutorConfig,
-        event_tx: Option<mpsc::Sender<LoopEvent>>,
+        event_tx: Option<mpsc::Sender<CoreEvent>>,
     ) -> Self {
         let shell_executor = ShellExecutor::new(config.cwd.clone());
         Self {
@@ -378,6 +394,8 @@ impl StreamingToolExecutor {
             permission_requester: None,
             permission_evaluator: None,
             current_batch_id: Arc::new(std::sync::RwLock::new(None)),
+            sibling_abort_token: Arc::new(std::sync::RwLock::new(CancellationToken::new())),
+            sibling_error_desc: Arc::new(std::sync::RwLock::new(None)),
             allowed_tool_names: Arc::new(std::sync::RwLock::new(None)),
             invoked_skills: Arc::new(Mutex::new(Vec::new())),
             skill_allowed_tools: Arc::new(std::sync::RwLock::new(None)),
@@ -573,6 +591,16 @@ impl StreamingToolExecutor {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) =
             Some(uuid::Uuid::new_v4().to_string());
+
+        // Reset sibling abort state for the new batch
+        *self
+            .sibling_abort_token
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = CancellationToken::new();
+        *self
+            .sibling_error_desc
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
 
     /// Set skill-level tool restrictions.
@@ -690,7 +718,7 @@ impl StreamingToolExecutor {
         }
 
         // Emit queued event
-        self.emit_event(LoopEvent::ToolUseQueued {
+        self.emit_stream(StreamEvent::ToolUseQueued {
             call_id: call_id.clone(),
             name: name.clone(),
             input: tool_call.input.clone(),
@@ -711,6 +739,12 @@ impl StreamingToolExecutor {
         };
 
         let is_safe = tool.is_concurrency_safe_for(&tool_call.input);
+        debug!(
+            tool = %name,
+            call_id = %call_id,
+            is_safe,
+            "Tool concurrency classification"
+        );
 
         match is_safe {
             true => {
@@ -795,7 +829,7 @@ impl StreamingToolExecutor {
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
-        self.emit_event(LoopEvent::ToolUseStarted {
+        self.emit_stream(StreamEvent::ToolUseStarted {
             call_id: call_id.to_string(),
             name: name.to_string(),
             batch_id,
@@ -829,8 +863,32 @@ impl StreamingToolExecutor {
         let tool_config = self.config.tool_config.clone();
         let max_tool_output_chars = self.config.max_tool_output_chars;
         let otel_manager = self.otel_manager.clone();
+        let sibling_abort_token = self
+            .sibling_abort_token
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let sibling_error_desc = self.sibling_error_desc.clone();
+        let task_name = name.clone();
 
         let handle = tokio::spawn(async move {
+            // Check sibling abort before starting
+            if sibling_abort_token.is_cancelled() {
+                let desc = sibling_error_desc
+                    .read()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone()
+                    .unwrap_or_default();
+                return ToolExecutionResult {
+                    call_id,
+                    name,
+                    result: Ok(ToolOutput::error(format!(
+                        "Cancelled: parallel tool call {desc} errored"
+                    ))),
+                    additional_contexts: Vec::new(),
+                    stop_continuation: None,
+                };
+            }
             let tool_start = std::time::Instant::now();
             let result = execute_tool(
                 &registry,
@@ -874,6 +932,27 @@ impl StreamingToolExecutor {
             let mut additional_contexts = pre_hook_contexts;
             additional_contexts.extend(post_hook_contexts);
 
+            // Sibling abort: if a Bash tool failed, cancel all parallel siblings.
+            // Matches Claude Code's siblingAbortController pattern where Bash
+            // is_error triggers abort("sibling_error") for all concurrent tools.
+            if task_name == cocode_protocol::ToolName::Bash.as_str() {
+                let is_error = match &result {
+                    Ok(output) => output.is_error,
+                    Err(_) => true,
+                };
+                if is_error {
+                    // Set description first, then release the lock before
+                    // cancelling to avoid holding it during cancel propagation.
+                    {
+                        let mut guard = sibling_error_desc
+                            .write()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        *guard = Some(task_name.clone());
+                    }
+                    sibling_abort_token.cancel();
+                }
+            }
+
             ToolExecutionResult {
                 call_id,
                 name,
@@ -900,6 +979,11 @@ impl StreamingToolExecutor {
             let mut lock = self.pending_unsafe.lock().await;
             std::mem::take(&mut *lock)
         };
+
+        debug!(
+            pending_count = pending.len(),
+            "Executing pending unsafe tools"
+        );
 
         let mut queue = std::collections::VecDeque::from(pending);
 
@@ -1022,6 +1106,10 @@ impl StreamingToolExecutor {
     }
 
     /// Wait for all active tasks to complete and collect their results.
+    ///
+    /// If sibling abort has been triggered (e.g. Bash error), tasks that were
+    /// aborted will produce synthetic error results matching Claude Code's
+    /// `<tool_use_error>Cancelled: parallel tool call ... errored</tool_use_error>`.
     async fn drain_active_tasks(&self) {
         let tasks: Vec<_> = {
             let mut lock = self.active_tasks.lock().await;
@@ -1033,6 +1121,31 @@ impl StreamingToolExecutor {
                 Ok(result) => {
                     self.emit_completed(&result.call_id, &result.result).await;
                     self.completed_results.lock().await.push(result);
+                }
+                Err(e) if e.is_cancelled() => {
+                    // Task was aborted (e.g. by sibling abort or user interrupt).
+                    // Create a synthetic error result.
+                    let desc = self
+                        .sibling_error_desc
+                        .read()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .clone();
+                    let msg = match desc {
+                        Some(d) => format!("Cancelled: parallel tool call {d} errored"),
+                        None => "Cancelled: parallel tool call errored".to_string(),
+                    };
+                    let result = Ok(ToolOutput::error(msg));
+                    self.emit_completed(&call_id, &result).await;
+                    self.completed_results
+                        .lock()
+                        .await
+                        .push(ToolExecutionResult {
+                            call_id: call_id.clone(),
+                            name: format!("<aborted:{call_id}>"),
+                            result,
+                            additional_contexts: Vec::new(),
+                            stop_continuation: None,
+                        });
                 }
                 Err(e) => {
                     error!(call_id = %call_id, error = %e, "Task panicked");
@@ -1136,7 +1249,7 @@ impl StreamingToolExecutor {
         }
 
         // Emit aborted event
-        self.emit_event(LoopEvent::ToolExecutionAborted { reason })
+        self.emit_tui(TuiEvent::ToolExecutionAborted { reason })
             .await;
     }
 
@@ -1156,7 +1269,7 @@ impl StreamingToolExecutor {
         self.pending_unsafe.lock().await.clear();
 
         // Emit aborted event
-        self.emit_event(LoopEvent::ToolExecutionAborted { reason })
+        self.emit_tui(TuiEvent::ToolExecutionAborted { reason })
             .await;
     }
 
@@ -1209,6 +1322,7 @@ impl StreamingToolExecutor {
             .approval_store(self.approval_store.clone())
             .file_tracker(self.file_tracker.clone())
             .plan_mode(self.config.is_plan_mode, self.config.plan_file_path.clone())
+            .is_ultraplan(self.config.is_ultraplan)
             .auto_memory_dir(self.config.auto_memory_dir.clone())
             .features(self.config.features.clone())
             .web_search_config(self.config.web_search_config.clone())
@@ -1295,12 +1409,27 @@ impl StreamingToolExecutor {
         builder.build()
     }
 
-    /// Emit a loop event.
-    async fn emit_event(&self, event: LoopEvent) {
+    async fn emit_protocol(&self, notif: ServerNotification) {
         if let Some(tx) = &self.event_tx
-            && let Err(e) = tx.send(event).await
+            && let Err(e) = tx.send(CoreEvent::Protocol(notif)).await
         {
-            debug!("Failed to send tool event: {e}");
+            debug!("Failed to send protocol event: {e}");
+        }
+    }
+
+    async fn emit_stream(&self, event: StreamEvent) {
+        if let Some(tx) = &self.event_tx
+            && let Err(e) = tx.send(CoreEvent::Stream(event)).await
+        {
+            debug!("Failed to send stream event: {e}");
+        }
+    }
+
+    async fn emit_tui(&self, event: TuiEvent) {
+        if let Some(tx) = &self.event_tx
+            && let Err(e) = tx.send(CoreEvent::Tui(event)).await
+        {
+            debug!("Failed to send TUI event: {e}");
         }
     }
 
@@ -1314,7 +1443,7 @@ impl StreamingToolExecutor {
             ),
         };
 
-        self.emit_event(LoopEvent::ToolUseCompleted {
+        self.emit_stream(StreamEvent::ToolUseCompleted {
             call_id: call_id.to_string(),
             output,
             is_error,
@@ -1358,10 +1487,10 @@ impl StreamingToolExecutor {
 
         for outcome in outcomes {
             // Emit hook executed event
-            self.emit_event(LoopEvent::HookExecuted {
-                hook_type: HookEventType::PreToolUse,
+            self.emit_protocol(ServerNotification::HookExecuted(HookExecutedParams {
+                hook_type: HookEventType::PreToolUse.to_string(),
                 hook_name: outcome.hook_name.clone(),
-            })
+            }))
             .await;
 
             match outcome.result {
@@ -1652,16 +1781,25 @@ fn is_edit_tool(registry: &ToolRegistry, name: &str) -> bool {
 /// Check if a tool name is read-only or a plan mode control tool.
 ///
 /// Plan control tools are always allowed regardless of the tool's own declaration.
+/// MCP tools (prefixed with `mcp__`) always bypass plan mode filtering, matching
+/// Claude Code's behavior where MCP tools are always available in plan mode.
 /// For all other tools, delegates to the tool's [`Tool::is_read_only`] via registry lookup.
 fn is_read_only_or_plan_tool(registry: &ToolRegistry, name: &str) -> bool {
+    use cocode_protocol::ToolName;
+
+    // MCP tools always bypass plan mode filtering (CC: mcp__ prefix check in Xk8)
+    if name.starts_with("mcp__") {
+        return true;
+    }
+
     // Plan control tools (always allowed in plan mode)
     const PLAN_CONTROL: &[&str] = &[
-        "EnterPlanMode",
-        "ExitPlanMode",
-        "AskUserQuestion",
-        "TodoWrite",
-        "TaskCreate",
-        "TaskUpdate",
+        ToolName::EnterPlanMode.as_str(),
+        ToolName::ExitPlanMode.as_str(),
+        ToolName::AskUserQuestion.as_str(),
+        ToolName::TodoWrite.as_str(),
+        ToolName::TaskCreate.as_str(),
+        ToolName::TaskUpdate.as_str(),
     ];
     if PLAN_CONTROL.contains(&name) {
         return true;
@@ -1852,6 +1990,12 @@ fn apply_permission_mode(
             cocode_protocol::PermissionResult::Denied { .. } => result,
             _ => cocode_protocol::PermissionResult::Allowed,
         },
+        // Auto auto-approves NeedsApproval but respects explicit denials.
+        // Currently identical to Bypass but kept separate for future differentiation.
+        PermissionMode::Auto => match result {
+            cocode_protocol::PermissionResult::Denied { .. } => result,
+            _ => cocode_protocol::PermissionResult::Allowed,
+        },
         PermissionMode::DontAsk => match result {
             cocode_protocol::PermissionResult::NeedsApproval { request } => {
                 cocode_protocol::PermissionResult::Denied {
@@ -1887,6 +2031,7 @@ fn apply_permission_mode(
 }
 
 /// Inner tool execution logic (without timeout).
+#[tracing::instrument(skip_all, fields(tool = %tool_call.tool_name, call_id = %tool_call.tool_call_id))]
 async fn execute_tool_inner(
     registry: &ToolRegistry,
     tool_call: ToolCall,
@@ -1915,12 +2060,14 @@ async fn execute_tool_inner(
     }
 
     // Validate input
+    debug!(tool = %name, call_id = %call_id, "Stage 1: Validating tool input");
     let validation = tool.validate(&input).await;
     if let ValidationResult::Invalid { errors } = validation {
         let error_msgs: Vec<String> = errors
             .iter()
             .map(std::string::ToString::to_string)
             .collect();
+        warn!(tool = %name, errors = ?error_msgs, "Stage 1: Validation failed");
         return Err(crate::error::tool_error::InvalidInputSnafu {
             message: error_msgs.join(", "),
         }
@@ -1928,6 +2075,7 @@ async fn execute_tool_inner(
     }
 
     // Run the full permission pipeline
+    debug!(tool = %name, "Stage 2: Checking permissions");
     let pipeline_result = check_permission_pipeline(tool.as_ref(), name, &input, ctx).await;
 
     // Apply permission mode on top
@@ -1986,6 +2134,7 @@ async fn execute_tool_inner(
                         PermissionMode::Default => "default",
                         PermissionMode::Plan => "plan",
                         PermissionMode::AcceptEdits => "acceptEdits",
+                        PermissionMode::Auto => "auto",
                         PermissionMode::Bypass => "bypassPermissions",
                         PermissionMode::DontAsk => "dontAsk",
                     });
@@ -2123,12 +2272,37 @@ async fn execute_tool_inner(
     }
 
     // Execute
+    debug!(tool = %name, call_id = %call_id, "Stage 3: Executing tool");
+    trace!(
+        tool = %name,
+        input = %cocode_utils_string::truncate_for_log(&input.to_string(), 512),
+        "Stage 3: Tool input"
+    );
+    let execute_start = std::time::Instant::now();
     let result = tool.execute(input, ctx).await;
+    let execute_duration_ms = execute_start.elapsed().as_millis() as i64;
 
     // Post-process
     let mut output = match result {
-        Ok(output) => tool.post_process(output, ctx).await,
-        Err(e) => return Err(e),
+        Ok(output) => {
+            debug!(
+                tool = %name,
+                duration_ms = execute_duration_ms,
+                is_error = output.is_error,
+                "Stage 3: Tool execution completed"
+            );
+            debug!(tool = %name, "Stage 4: Post-processing");
+            tool.post_process(output, ctx).await
+        }
+        Err(e) => {
+            warn!(
+                tool = %name,
+                duration_ms = execute_duration_ms,
+                error = %e,
+                "Stage 3: Tool execution failed"
+            );
+            return Err(e);
+        }
     };
 
     // Persist oversized results BEFORE truncation.
@@ -2155,8 +2329,17 @@ async fn execute_tool_inner(
         None => per_tool_limit,
     };
     output.truncate_to(max_chars);
+    if tracing::enabled!(tracing::Level::TRACE) {
+        trace!(
+            tool = %name,
+            is_error = output.is_error,
+            output = %cocode_utils_string::truncate_for_log(&format!("{:?}", output.content), 512),
+            "Stage 4: Tool output (post-truncation)"
+        );
+    }
 
     // Cleanup
+    trace!(tool = %name, "Stage 5: Cleanup");
     tool.cleanup(ctx).await;
 
     Ok(output)

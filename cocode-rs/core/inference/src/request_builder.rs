@@ -27,6 +27,9 @@ pub struct RequestBuilder {
     temperature_override: Option<f32>,
     max_tokens_override: Option<u64>,
     top_p_override: Option<f32>,
+
+    // Fast mode
+    fast_mode: bool,
 }
 
 impl RequestBuilder {
@@ -40,6 +43,7 @@ impl RequestBuilder {
             temperature_override: None,
             max_tokens_override: None,
             top_p_override: None,
+            fast_mode: false,
         }
     }
 
@@ -76,6 +80,12 @@ impl RequestBuilder {
     /// Override the top_p from context.
     pub fn top_p(mut self, p: f32) -> Self {
         self.top_p_override = Some(p);
+        self
+    }
+
+    /// Enable fast mode (injects `speed: "fast"` for Anthropic providers).
+    pub fn fast_mode(mut self, active: bool) -> Self {
+        self.fast_mode = active;
         self
     }
 
@@ -143,6 +153,17 @@ impl RequestBuilder {
             );
             provider_options =
                 request_options_merge::merge_provider_options(provider_options, thinking_opts);
+        }
+
+        // Step 3.5: Fast mode speed injection (Anthropic only).
+        // Placed after thinking (Step 3) so thinking config is preserved,
+        // but before user request_options (Step 4) so users can override.
+        if self.fast_mode && matches!(api, cocode_protocol::ProviderApi::Anthropic) {
+            let mut speed_map = std::collections::HashMap::new();
+            speed_map.insert("speed".to_string(), serde_json::json!("fast"));
+            let speed_opts = request_options_merge::build_options("anthropic", speed_map);
+            provider_options =
+                request_options_merge::merge_provider_options(provider_options, Some(speed_opts));
         }
 
         // Step 4: Merge request_options into provider_options (overrides thinking)
