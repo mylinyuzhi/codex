@@ -17,6 +17,7 @@ futures = { workspace = true }
 
 # Internal - common
 cocode-protocol = { workspace = true }
+cocode-app-server-protocol = { workspace = true }
 cocode-error = { workspace = true }
 cocode-config = { workspace = true }
 cocode-utils-common = { workspace = true }
@@ -49,6 +50,7 @@ base64 = { workspace = true }
 cocode-inference = { workspace = true }
 arboard = { workspace = true }
 image = { workspace = true, features = ["png"] }
+cocode-utils-image = { workspace = true }
 
 # Serialization
 serde_json = { workspace = true }

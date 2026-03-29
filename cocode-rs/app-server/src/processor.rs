@@ -13,7 +13,6 @@ use cocode_app_server_protocol::JsonRpcMessage;
 use cocode_app_server_protocol::JsonRpcRequest;
 use cocode_app_server_protocol::RequestId;
 use cocode_app_server_protocol::ServerNotification;
-use cocode_app_server_protocol::SessionListResult;
 use cocode_config::ConfigManager;
 use tokio::sync::mpsc;
 use tracing::debug;
@@ -26,6 +25,7 @@ use crate::error_code::ALREADY_INITIALIZED_ERROR_CODE;
 use crate::error_code::INVALID_PARAMS_ERROR_CODE;
 use crate::error_code::NOT_INITIALIZED_ERROR_CODE;
 use crate::error_code::OVERLOADED_ERROR_CODE;
+use crate::persistence_handlers;
 use crate::session_factory;
 use crate::session_factory::SessionHandle;
 use crate::turn_runner;
@@ -237,14 +237,15 @@ impl Processor {
                     return;
                 }
                 match session_factory::create_session(&self.config, &params).await {
-                    Ok((state, hook_bridge)) => {
+                    Ok((state, sdk_result)) => {
                         let session_id = state.session.id.clone();
                         let model = state.model().to_string();
                         self.sessions.insert(
                             conn_id,
                             SessionHandle {
                                 state,
-                                hook_bridge,
+                                hook_bridge: sdk_result.hook_bridge,
+                                mcp_bridge: sdk_result.mcp_bridge,
                                 permission_bridge: None,
                                 turn_number: 0,
                             },
@@ -283,10 +284,57 @@ impl Processor {
                 }
             }
 
-            ClientRequest::SessionResume(_params) => {
+            ClientRequest::SessionResume(params) => {
                 self.mark_initialized(conn_id);
-                self.send_response(conn_id, id, serde_json::json!({"status": "ok"}))
+                if self.draining {
+                    self.send_error(
+                        conn_id,
+                        id,
+                        OVERLOADED_ERROR_CODE,
+                        "Server is draining; retry later".into(),
+                    )
                     .await;
+                    return;
+                }
+                match persistence_handlers::handle_session_resume(&self.config, &params).await {
+                    Ok(handle) => {
+                        let session_id = handle.state.session.id.clone();
+                        let model = handle.state.model().to_string();
+                        self.sessions.insert(conn_id, handle);
+                        self.send_response(
+                            conn_id,
+                            id,
+                            serde_json::json!({"session_id": &session_id}),
+                        )
+                        .await;
+                        self.send_notification(
+                            conn_id,
+                            ServerNotification::SessionStarted(
+                                cocode_app_server_protocol::SessionStartedParams {
+                                    session_id: session_id.clone(),
+                                    protocol_version: "2".to_string(),
+                                    models: Some(vec![model]),
+                                    commands: None,
+                                },
+                            ),
+                        );
+                        info!(%conn_id, session_id, "Session resumed");
+                        if let Some(prompt) = params.prompt
+                            && !prompt.is_empty()
+                        {
+                            self.run_turn(conn_id, prompt).await;
+                        }
+                    }
+                    Err(e) => {
+                        self.send_error(
+                            conn_id,
+                            id,
+                            INVALID_PARAMS_ERROR_CODE,
+                            format!("Failed to resume session: {e}"),
+                        )
+                        .await;
+                    }
+                }
             }
 
             ClientRequest::TurnStart(params) => {
@@ -406,12 +454,8 @@ impl Processor {
             }
 
             ClientRequest::SessionList(params) => {
-                let limit = params.limit.unwrap_or(50);
-                debug!(%conn_id, limit, "Session list requested");
-                let result = SessionListResult {
-                    sessions: vec![],
-                    next_cursor: None,
-                };
+                debug!(%conn_id, limit = params.limit, "Session list requested");
+                let result = persistence_handlers::handle_session_list(&params).await;
                 self.send_response(
                     conn_id,
                     id,
@@ -422,25 +466,51 @@ impl Processor {
 
             ClientRequest::SessionRead(params) => {
                 debug!(%conn_id, session_id = params.session_id, "Session read");
-                self.send_response(conn_id, id, serde_json::json!({"items": []}))
-                    .await;
+                let result = persistence_handlers::handle_session_read(&params.session_id).await;
+                self.send_response(conn_id, id, result).await;
             }
 
             ClientRequest::SessionArchive(params) => {
                 debug!(%conn_id, session_id = params.session_id, "Session archive");
-                self.send_response(conn_id, id, serde_json::json!({"status": "ok"}))
-                    .await;
+                let result = persistence_handlers::handle_session_archive(&params.session_id).await;
+                self.send_response(conn_id, id, result).await;
             }
 
-            ClientRequest::ConfigRead(_) => {
-                self.send_response(conn_id, id, serde_json::json!({"config": {}}))
-                    .await;
+            ClientRequest::ConfigRead(params) => {
+                let result =
+                    persistence_handlers::handle_config_read(&self.config, params.key.as_deref());
+                self.send_response(
+                    conn_id,
+                    id,
+                    serde_json::to_value(result).unwrap_or_default(),
+                )
+                .await;
             }
 
             ClientRequest::ConfigWrite(params) => {
                 debug!(%conn_id, key = params.key, "Config write");
-                self.send_response(conn_id, id, serde_json::json!({"status": "ok"}))
-                    .await;
+                match persistence_handlers::handle_config_write(
+                    &self.config,
+                    &params.key,
+                    params.value,
+                    params.scope,
+                )
+                .await
+                {
+                    Ok(()) => {
+                        self.send_response(conn_id, id, serde_json::json!({"status": "ok"}))
+                            .await;
+                    }
+                    Err(e) => {
+                        self.send_error(
+                            conn_id,
+                            id,
+                            INVALID_PARAMS_ERROR_CODE,
+                            format!("Config write failed: {e}"),
+                        )
+                        .await;
+                    }
+                }
             }
 
             ClientRequest::HookCallbackResponse(params) => {
@@ -453,25 +523,52 @@ impl Processor {
                     .await;
             }
 
-            ClientRequest::RewindFiles(_) => {
+            ClientRequest::RewindFiles(params) => {
+                if let Some(handle) = self.sessions.get_mut(&conn_id) {
+                    let notification =
+                        persistence_handlers::handle_rewind_files(&mut handle.state, &params).await;
+                    self.send_notification(conn_id, notification);
+                }
                 self.send_response(conn_id, id, serde_json::json!({"status": "ok"}))
                     .await;
             }
 
             ClientRequest::McpRouteMessageResponse(params) => {
-                debug!(%conn_id, "MCP route message response (wiring deferred)");
-                let _ = params;
+                if let Some(handle) = self.sessions.get(&conn_id)
+                    && let Some(ref bridge) = handle.mcp_bridge
+                {
+                    let response = if let Some(err) = params.error {
+                        serde_json::json!({"error": err})
+                    } else {
+                        params.response
+                    };
+                    bridge.resolve(&params.request_id, response).await;
+                } else {
+                    warn!(
+                        %conn_id,
+                        request_id = params.request_id,
+                        "MCP route response but no bridge"
+                    );
+                }
                 self.send_response(conn_id, id, serde_json::json!({"status": "ok"}))
                     .await;
             }
 
             ClientRequest::CancelRequest(params) => {
-                if let Some(handle) = self.sessions.get(&conn_id)
-                    && let Some(ref bridge) = handle.hook_bridge
-                {
-                    bridge
-                        .resolve(&params.request_id, serde_json::Value::Null)
-                        .await;
+                if let Some(handle) = self.sessions.get(&conn_id) {
+                    if let Some(ref bridge) = handle.hook_bridge {
+                        bridge
+                            .resolve(&params.request_id, serde_json::Value::Null)
+                            .await;
+                    }
+                    if let Some(ref bridge) = handle.mcp_bridge {
+                        bridge
+                            .resolve(
+                                &params.request_id,
+                                serde_json::json!({"error": "cancelled_by_client"}),
+                            )
+                            .await;
+                    }
                 }
                 self.send_response(conn_id, id, serde_json::json!({"status": "ok"}))
                     .await;
@@ -503,6 +600,7 @@ impl Processor {
                 turn_number,
                 outbound: &outbound,
                 hook_bridge: &handle.hook_bridge,
+                mcp_bridge: &handle.mcp_bridge,
                 request_counter: &self.request_counter,
             },
         )

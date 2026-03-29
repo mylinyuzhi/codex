@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use cocode_app_server_protocol::AgentDefinitionConfig;
 use cocode_app_server_protocol::HookCallbackConfig;
+use cocode_app_server_protocol::McpServerConfig;
 use cocode_app_server_protocol::SessionStartRequestParams;
 use cocode_hooks::HookSdkCallbackFn;
 use cocode_protocol::HookEventType;
@@ -25,6 +26,8 @@ use cocode_subagent::McpServerRef;
 use cocode_subagent::MemoryScope;
 use tokio::sync::Mutex;
 use tokio::sync::oneshot;
+
+use crate::mcp_bridge::SdkMcpBridge;
 
 /// Info about a pending hook callback that needs to be sent to the client.
 pub struct HookCallbackRequestInfo {
@@ -75,13 +78,21 @@ impl SdkHookBridge {
     }
 }
 
+/// Result of applying SDK session parameters.
+pub struct SdkParamsResult {
+    /// Hook bridge for routing SDK callbacks (if hooks were registered).
+    pub hook_bridge: Option<Arc<SdkHookBridge>>,
+    /// MCP bridge for routing SDK-managed tool calls (if SDK tools were registered).
+    pub mcp_bridge: Option<Arc<SdkMcpBridge>>,
+}
+
 /// Apply all SDK session parameters to the given `SessionState`.
 ///
-/// Returns an optional `SdkHookBridge` if SDK hook callbacks were registered.
+/// Returns bridges for hook callbacks and MCP routing.
 pub async fn apply_sdk_params(
     state: &mut SessionState,
     params: &SessionStartRequestParams,
-) -> anyhow::Result<Option<Arc<SdkHookBridge>>> {
+) -> anyhow::Result<SdkParamsResult> {
     let mgr = state.subagent_manager();
     let mut mgr = mgr.lock().await;
 
@@ -151,11 +162,16 @@ pub async fn apply_sdk_params(
         tracing::debug!("SDK sandbox config applied at config level");
     }
 
-    if params.mcp_servers.is_some() {
-        tracing::info!("SDK MCP servers config received (wiring deferred)");
-    }
+    let mcp_bridge = if let Some(ref mcp_servers) = params.mcp_servers {
+        register_sdk_mcp_servers(state, mcp_servers)?
+    } else {
+        None
+    };
 
-    Ok(hook_bridge)
+    Ok(SdkParamsResult {
+        hook_bridge,
+        mcp_bridge,
+    })
 }
 
 fn register_sdk_hooks(
@@ -251,6 +267,84 @@ fn register_sdk_hooks(
     })
 }
 
+/// Register SDK-managed MCP servers and their tools via the bridge.
+///
+/// Only handles `McpServerConfig::Sdk` servers (in-process tools routed
+/// through the JSON-RPC protocol). Stdio/HTTP/SSE servers are not yet
+/// supported in the app-server (they require long-lived subprocess management).
+fn register_sdk_mcp_servers(
+    state: &mut SessionState,
+    servers: &HashMap<String, McpServerConfig>,
+) -> anyhow::Result<Option<Arc<SdkMcpBridge>>> {
+    let sdk_servers: Vec<_> = servers
+        .iter()
+        .filter(|(_, config)| matches!(config, McpServerConfig::Sdk { .. }))
+        .collect();
+
+    if sdk_servers.is_empty() {
+        // Log non-SDK servers that are not yet supported
+        for name in servers.keys() {
+            tracing::warn!(
+                server = %name,
+                "Non-SDK MCP server types (stdio/http/sse) not yet supported in app-server"
+            );
+        }
+        return Ok(None);
+    }
+
+    let registry = Arc::get_mut(&mut state.tool_registry).ok_or_else(|| {
+        anyhow::anyhow!(
+            "SDK MCP tool registration failed: tool registry already shared. \
+             Ensure apply_sdk_params is called before the executor clones the registry."
+        )
+    })?;
+
+    let bridge = Arc::new(SdkMcpBridge::new());
+
+    for (name, config) in &sdk_servers {
+        if let McpServerConfig::Sdk { tools } = config {
+            let tools_count = tools.len();
+            for tool_def in tools {
+                let schema = tool_def
+                    .input_schema
+                    .clone()
+                    .unwrap_or_else(|| serde_json::json!({"type": "object"}));
+                let wrapper = bridge.create_tool_wrapper(
+                    (*name).clone(),
+                    tool_def.name.clone(),
+                    tool_def.description.clone().unwrap_or_default(),
+                    schema.clone(),
+                );
+                let qualified_name = wrapper.qualified_name();
+                registry.register_tool(qualified_name.clone(), Arc::new(wrapper));
+                registry.register_mcp_tool_info(
+                    name,
+                    &tool_def.name,
+                    tool_def.description.as_deref(),
+                    &schema,
+                );
+            }
+            tracing::info!(
+                server = %name,
+                tools = tools_count,
+                "Registered SDK-managed MCP server"
+            );
+        }
+    }
+
+    // Log non-SDK servers that are not yet supported
+    for (name, config) in servers {
+        if !matches!(config, McpServerConfig::Sdk { .. }) {
+            tracing::warn!(
+                server = %name,
+                "Non-SDK MCP server types (stdio/http/sse) not yet supported in app-server"
+            );
+        }
+    }
+
+    Ok(Some(bridge))
+}
+
 fn convert_agent_config(name: &str, config: &AgentDefinitionConfig) -> AgentDefinition {
     let critical_reminder = config
         .prompt
@@ -297,6 +391,7 @@ fn parse_permission_mode(mode: &str) -> PermissionMode {
         "bypassPermissions" | "bypass" => PermissionMode::Bypass,
         "plan" => PermissionMode::Plan,
         "dontAsk" => PermissionMode::DontAsk,
+        "auto" => PermissionMode::Auto,
         _ => PermissionMode::Default,
     }
 }

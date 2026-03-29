@@ -70,6 +70,7 @@ impl ToolRegistry {
     /// Register a built-in tool.
     pub fn register(&mut self, tool: impl Tool + 'static) {
         let name = tool.name().to_string();
+        debug!(tool = %name, "Registering built-in tool");
         self.tools.insert(name, Arc::new(tool));
     }
 
@@ -472,11 +473,52 @@ impl ToolRegistry {
         mcp_tool_names
     }
 
-    /// Restore deferred MCP tools into the active executable set.
+    /// Defer built-in tools that have `should_defer() == true`.
     ///
-    /// When `McpSearchTool` discovers tools matching a query, it emits a
-    /// `ContextModifier::RestoreDeferredMcpTools` with the qualified names.
-    /// The driver calls this method to move those tools from the deferred
+    /// Moves built-in tools marked as deferrable from the active `tools` map
+    /// into the `deferred_tools` storage. This reduces token usage by not
+    /// sending their schemas in every API request. Deferred tools can be
+    /// restored via `restore_deferred_tools()` when discovered by ToolSearch.
+    ///
+    /// Returns the names of tools that were deferred.
+    pub fn defer_builtin_tool_definitions(&mut self) -> Vec<String> {
+        let deferrable: Vec<String> = self
+            .tools
+            .iter()
+            .filter(|(_, tool)| tool.should_defer())
+            .map(|(name, _)| name.clone())
+            .collect();
+
+        for name in &deferrable {
+            if let Some(tool) = self.tools.remove(name) {
+                self.deferred_tools.insert(name.clone(), tool);
+            }
+        }
+
+        deferrable
+    }
+
+    /// Get searchable metadata for all deferred tools (MCP + built-in).
+    ///
+    /// Returns (name, description) pairs for tools in the deferred storage.
+    /// Used by the search tool to find deferred built-in tools by keyword.
+    pub fn deferred_tool_info(&self) -> Vec<(String, Option<String>)> {
+        self.deferred_tools
+            .iter()
+            .map(|(name, tool)| (name.clone(), Some(tool.description().to_string())))
+            .collect()
+    }
+
+    /// Get the names of all currently deferred tools.
+    pub fn deferred_tool_names(&self) -> Vec<String> {
+        self.deferred_tools.keys().cloned().collect()
+    }
+
+    /// Restore deferred tools (MCP or built-in) into the active executable set.
+    ///
+    /// When `McpSearchTool` or ToolSearch discovers tools matching a query, it
+    /// emits a `ContextModifier::RestoreDeferredMcpTools` with the qualified
+    /// names. The driver calls this method to move those tools from the deferred
     /// storage back into the active `tools` map so they become callable.
     ///
     /// Returns the qualified names of the tools that were actually restored.

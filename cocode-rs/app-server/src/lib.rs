@@ -4,13 +4,14 @@
 //! - **Transport layer** (`transport.rs`): Axum WebSocket + stdio NDJSON
 //! - **Processor** (`processor.rs`): JSON-RPC dispatch, session/turn lifecycle
 //! - **Connection** (`connection.rs`): Per-connection state tracking
-//! - **Shared modules**: `event_mapper`, `permission`, `session_builder`
+//! - **Shared modules**: `permission`, `session_builder`
 //!   are reused by both the app-server and the CLI SDK mode.
 
 mod connection;
 mod error_code;
-pub mod event_mapper;
+pub mod mcp_bridge;
 pub mod permission;
+mod persistence_handlers;
 pub mod processor;
 pub mod session_builder;
 mod session_factory;

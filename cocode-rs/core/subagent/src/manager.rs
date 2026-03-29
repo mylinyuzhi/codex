@@ -6,7 +6,7 @@ use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 use cocode_error::BoxedError;
-use cocode_protocol::LoopEvent;
+use cocode_protocol::CoreEvent;
 use cocode_protocol::execution::ExecutionIdentity;
 use serde::Deserialize;
 use serde::Serialize;
@@ -201,7 +201,7 @@ struct BackgroundCompletionCtx<'a> {
     result: &'a std::result::Result<String, BoxedError>,
     output_file: &'a std::path::Path,
     prompt: &'a str,
-    event_tx: Option<&'a mpsc::Sender<LoopEvent>>,
+    event_tx: Option<&'a mpsc::Sender<CoreEvent>>,
     stop_hook_fn: Option<&'a BackgroundStopHookFn>,
     agent_type: &'a str,
     transitioned_from_foreground: bool,
@@ -272,10 +272,14 @@ async fn handle_background_completion(ctx: BackgroundCompletionCtx<'_>) {
     if let Some(tx) = event_tx {
         let output_str = result.as_deref().unwrap_or("[agent failed]").to_string();
         let _ = tx
-            .send(LoopEvent::SubagentCompleted {
-                agent_id: agent_id.to_string(),
-                result: output_str,
-            })
+            .send(CoreEvent::Protocol(
+                cocode_protocol::server_notification::ServerNotification::SubagentCompleted(
+                    cocode_protocol::server_notification::SubagentCompletedParams {
+                        agent_id: agent_id.to_string(),
+                        result: output_str,
+                    },
+                ),
+            ))
             .await;
     }
 
@@ -390,7 +394,7 @@ pub struct SubagentManager {
     /// Base directory for background agent output files.
     output_dir: PathBuf,
     /// Optional event sender for background agent completion notifications.
-    event_tx: Option<mpsc::Sender<LoopEvent>>,
+    event_tx: Option<mpsc::Sender<CoreEvent>>,
     /// Optional callback for SubagentStop hooks on background completion.
     background_stop_hook_fn: Option<BackgroundStopHookFn>,
     /// Maximum number of concurrent background agents.
@@ -486,7 +490,7 @@ impl SubagentManager {
     ///
     /// Called per-turn so background agents can emit `SubagentCompleted`
     /// events when they finish, notifying the main agent.
-    pub fn set_event_tx(&mut self, tx: mpsc::Sender<LoopEvent>) {
+    pub fn set_event_tx(&mut self, tx: mpsc::Sender<CoreEvent>) {
         self.event_tx = Some(tx);
     }
 
@@ -882,10 +886,14 @@ impl SubagentManager {
                         // Notify main agent of auto-background transition
                         if let Some(ref tx) = self.event_tx {
                             let _ = tx
-                                .send(LoopEvent::SubagentBackgrounded {
-                                    agent_id: agent_id.clone(),
-                                    output_file: self.output_dir.join(format!("{agent_id}.jsonl")),
-                                })
+                                .send(CoreEvent::Protocol(
+                                    cocode_protocol::server_notification::ServerNotification::SubagentBackgrounded(
+                                        cocode_protocol::server_notification::SubagentBackgroundedParams {
+                                            agent_id: agent_id.clone(),
+                                            output_file: self.output_dir.join(format!("{agent_id}.jsonl")).to_string_lossy().into_owned(),
+                                        },
+                                    ),
+                                ))
                                 .await;
                         }
 

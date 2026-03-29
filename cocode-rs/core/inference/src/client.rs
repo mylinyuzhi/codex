@@ -148,6 +148,7 @@ impl ApiClient {
     }
 
     /// Make a streaming request with retry support.
+    #[tracing::instrument(skip_all, fields(model = %model.model_id(), streaming = options.streaming))]
     pub async fn stream_request(
         &self,
         model: &dyn LanguageModel,
@@ -164,6 +165,7 @@ impl ApiClient {
                 model = %model.model_id(),
                 attempt = retry_ctx.current_attempt(),
                 streaming = use_streaming,
+                max_tokens = ?current_request.max_output_tokens,
                 "Making API request"
             );
 

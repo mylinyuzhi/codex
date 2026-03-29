@@ -16,11 +16,13 @@ use cocode_config::ConfigManager;
 use cocode_config::ConfigOverrides;
 use cocode_loop::StopReason;
 use cocode_otel::otel_provider::OtelProvider;
-use cocode_protocol::LoopError;
-use cocode_protocol::LoopEvent;
+use cocode_protocol::CoreEvent;
 use cocode_protocol::SubmissionId;
 use cocode_protocol::TokenUsage;
 use cocode_protocol::model::ModelRole;
+use cocode_protocol::server_notification::*;
+use cocode_protocol::stream_event::StreamEvent;
+use cocode_protocol::tui_event::TuiEvent;
 use cocode_session::Session;
 use cocode_system_reminder::QueuedCommandInfo;
 use cocode_tui::App;
@@ -207,6 +209,14 @@ pub async fn run_tui(
         flags.debug_file.as_deref(),
     );
 
+    // Log key startup parameters now that tracing is initialized
+    info!(
+        cwd = %cwd.display(),
+        permission_mode = ?flags.permission_mode,
+        verbose = flags.verbose,
+        "TUI startup configuration"
+    );
+
     // Build initial RoleSelections for ALL configured roles
     let mut initial_selections = config.build_all_selections();
     flags.apply_model_overrides(config, &mut initial_selections)?;
@@ -266,7 +276,7 @@ pub async fn run_tui(
 #[allow(clippy::too_many_arguments)]
 async fn run_agent_driver(
     mut command_rx: mpsc::Receiver<UserCommand>,
-    event_tx: mpsc::Sender<LoopEvent>,
+    event_tx: mpsc::Sender<CoreEvent>,
     snapshot: Arc<Config>,
     config: ConfigManager,
     initial_selections: cocode_protocol::RoleSelections,
@@ -299,13 +309,14 @@ async fn run_agent_driver(
         Err(e) => {
             error!("Failed to create session: {e}");
             let _ = event_tx
-                .send(LoopEvent::Error {
-                    error: LoopError {
-                        code: "session_error".to_string(),
+                .send(CoreEvent::Protocol(ServerNotification::Error(
+                    ErrorNotificationParams {
                         message: format!("Failed to create session: {e}"),
-                        recoverable: false,
+                        category: Some(ErrorCategory::Internal),
+                        retryable: false,
+                        error_info: None,
                     },
-                })
+                )))
                 .await;
             return;
         }
@@ -330,7 +341,18 @@ async fn run_agent_driver(
             .collect();
         if !agents.is_empty() {
             let _ = event_tx
-                .send(LoopEvent::PluginAgentsLoaded { agents })
+                .send(CoreEvent::Protocol(ServerNotification::AgentsRegistered(
+                    AgentsRegisteredParams {
+                        agents: agents
+                            .into_iter()
+                            .map(|a| AgentInfo {
+                                name: a.name,
+                                agent_type: a.agent_type,
+                                description: Some(a.description),
+                            })
+                            .collect(),
+                    },
+                )))
                 .await;
         }
     }
@@ -379,12 +401,14 @@ async fn run_agent_driver(
                 let turn_id = format!("turn-{turn_counter}");
 
                 let _ = event_tx
-                    .send(LoopEvent::TurnStarted {
-                        turn_id: turn_id.clone(),
-                        turn_number: turn_counter,
-                    })
+                    .send(CoreEvent::Protocol(ServerNotification::TurnStarted(
+                        TurnStartedParams {
+                            turn_id: turn_id.clone(),
+                            turn_number: turn_counter,
+                        },
+                    )))
                     .await;
-                let _ = event_tx.send(LoopEvent::StreamRequestStart).await;
+                tracing::debug!("Stream request started");
 
                 // ── Run turn with concurrent command handling ──
                 let mut pending_plan_exit_option = None;
@@ -402,7 +426,7 @@ async fn run_agent_driver(
                 )
                 .await;
 
-                emit_turn_result(&event_tx, &turn_id, result, "turn_error").await;
+                emit_turn_result(&event_tx, &turn_id, result).await;
 
                 // Handle plan exit option (clear context / mode change)
                 if let Some(exit_option) = pending_plan_exit_option.take() {
@@ -422,12 +446,14 @@ async fn run_agent_driver(
                         );
 
                         let _ = event_tx
-                            .send(LoopEvent::TurnStarted {
-                                turn_id: plan_turn_id.clone(),
-                                turn_number: turn_counter,
-                            })
+                            .send(CoreEvent::Protocol(ServerNotification::TurnStarted(
+                                TurnStartedParams {
+                                    turn_id: plan_turn_id.clone(),
+                                    turn_number: turn_counter,
+                                },
+                            )))
                             .await;
-                        let _ = event_tx.send(LoopEvent::StreamRequestStart).await;
+                        tracing::debug!("Stream request started");
 
                         let mut plan_exit = None;
                         let mut plan_feedback = None;
@@ -444,8 +470,7 @@ async fn run_agent_driver(
                         )
                         .await;
 
-                        emit_turn_result(&event_tx, &plan_turn_id, plan_result, "plan_turn_error")
-                            .await;
+                        emit_turn_result(&event_tx, &plan_turn_id, plan_result).await;
                     }
                 }
 
@@ -461,12 +486,14 @@ async fn run_agent_driver(
                     );
 
                     let _ = event_tx
-                        .send(LoopEvent::TurnStarted {
-                            turn_id: feedback_turn_id.clone(),
-                            turn_number: turn_counter,
-                        })
+                        .send(CoreEvent::Protocol(ServerNotification::TurnStarted(
+                            TurnStartedParams {
+                                turn_id: feedback_turn_id.clone(),
+                                turn_number: turn_counter,
+                            },
+                        )))
                         .await;
-                    let _ = event_tx.send(LoopEvent::StreamRequestStart).await;
+                    tracing::debug!("Stream request started");
 
                     let mut fb_plan_exit = None;
                     let mut fb_feedback = None;
@@ -483,13 +510,7 @@ async fn run_agent_driver(
                     )
                     .await;
 
-                    emit_turn_result(
-                        &event_tx,
-                        &feedback_turn_id,
-                        fb_result,
-                        "feedback_turn_error",
-                    )
-                    .await;
+                    emit_turn_result(&event_tx, &feedback_turn_id, fb_result).await;
                 }
 
                 // Reset cancel token if the turn was interrupted
@@ -582,12 +603,14 @@ async fn run_agent_driver(
                 let turn_id = format!("turn-{turn_counter}");
 
                 let _ = event_tx
-                    .send(LoopEvent::TurnStarted {
-                        turn_id: turn_id.clone(),
-                        turn_number: turn_counter,
-                    })
+                    .send(CoreEvent::Protocol(ServerNotification::TurnStarted(
+                        TurnStartedParams {
+                            turn_id: turn_id.clone(),
+                            turn_number: turn_counter,
+                        },
+                    )))
                     .await;
-                let _ = event_tx.send(LoopEvent::StreamRequestStart).await;
+                tracing::debug!("Stream request started");
 
                 // ── Run skill turn with concurrent command handling ──
                 let mut _skill_plan_exit = None;
@@ -626,29 +649,36 @@ async fn run_agent_driver(
                     })
                 };
 
-                let error_code = "skill_error";
                 match result {
                     Ok(turn_result) => {
                         let usage = turn_result.usage.clone();
                         let _ = event_tx
-                            .send(LoopEvent::StreamRequestEnd {
-                                usage: usage.clone(),
-                            })
+                            .send(CoreEvent::Protocol(ServerNotification::StreamRequestEnd(
+                                StreamRequestEndParams {
+                                    usage: usage.clone().into(),
+                                },
+                            )))
                             .await;
                         let _ = event_tx
-                            .send(LoopEvent::TurnCompleted { turn_id, usage })
+                            .send(CoreEvent::Protocol(ServerNotification::TurnCompleted(
+                                TurnCompletedParams {
+                                    turn_id,
+                                    usage: usage.into(),
+                                },
+                            )))
                             .await;
                     }
                     Err(e) => {
                         error!("Skill execution failed: {e}");
                         let _ = event_tx
-                            .send(LoopEvent::Error {
-                                error: LoopError {
-                                    code: error_code.to_string(),
+                            .send(CoreEvent::Protocol(ServerNotification::Error(
+                                ErrorNotificationParams {
                                     message: e.to_string(),
-                                    recoverable: true,
+                                    category: Some(ErrorCategory::Internal),
+                                    retryable: true,
+                                    error_info: None,
                                 },
-                            })
+                            )))
                             .await;
                     }
                 }
@@ -697,7 +727,7 @@ async fn run_agent_driver(
 async fn run_turn_concurrent(
     state: &mut cocode_session::SessionState,
     input: &str,
-    event_tx: &mpsc::Sender<LoopEvent>,
+    event_tx: &mpsc::Sender<CoreEvent>,
     turn_id: &str,
     command_rx: &mut mpsc::Receiver<UserCommand>,
     deferred: &mut Vec<UserCommand>,
@@ -740,7 +770,7 @@ async fn run_skill_turn_concurrent(
     state: &mut cocode_session::SessionState,
     input: &str,
     model_override: Option<&str>,
-    event_tx: &mpsc::Sender<LoopEvent>,
+    event_tx: &mpsc::Sender<CoreEvent>,
     command_rx: &mut mpsc::Receiver<UserCommand>,
     deferred: &mut Vec<UserCommand>,
     should_shutdown: &mut bool,
@@ -783,7 +813,7 @@ async fn handle_in_flight_command(
     command: UserCommand,
     cancel_token: &CancellationToken,
     shared_queue: &Arc<Mutex<Vec<QueuedCommandInfo>>>,
-    event_tx: &mpsc::Sender<LoopEvent>,
+    event_tx: &mpsc::Sender<CoreEvent>,
     deferred: &mut Vec<UserCommand>,
     should_shutdown: &mut bool,
     pending_plan_exit_option: &mut Option<cocode_protocol::PlanExitOption>,
@@ -794,7 +824,11 @@ async fn handle_in_flight_command(
         UserCommand::Interrupt => {
             info!("Interrupt requested (during turn)");
             cancel_token.cancel();
-            let _ = event_tx.send(LoopEvent::Interrupted).await;
+            let _ = event_tx
+                .send(CoreEvent::Protocol(ServerNotification::TurnInterrupted(
+                    TurnInterruptedParams { turn_id: None },
+                )))
+                .await;
         }
         UserCommand::QueueCommand { prompt } => {
             // Push directly to the shared queue — the running AgentLoop
@@ -815,7 +849,9 @@ async fn handle_in_flight_command(
                 prompt.clone()
             };
             let _ = event_tx
-                .send(LoopEvent::CommandQueued { id, preview })
+                .send(CoreEvent::Protocol(ServerNotification::CommandQueued(
+                    CommandQueuedParams { id, preview },
+                )))
                 .await;
         }
         UserCommand::ClearQueues => {
@@ -825,7 +861,9 @@ async fn handle_in_flight_command(
                 .clear();
             info!("Cleared all queued commands (during turn)");
             let _ = event_tx
-                .send(LoopEvent::QueueStateChanged { queued: 0 })
+                .send(CoreEvent::Protocol(ServerNotification::QueueStateChanged(
+                    QueueStateChangedParams { queued: 0 },
+                )))
                 .await;
         }
         UserCommand::ApprovalResponse {
@@ -847,12 +885,7 @@ async fn handle_in_flight_command(
             {
                 *pending_feedback = Some(text);
             }
-            let _ = event_tx
-                .send(LoopEvent::ApprovalResponse {
-                    request_id,
-                    decision,
-                })
-                .await;
+            tracing::debug!(%request_id, ?decision, "Approval response");
         }
         UserCommand::QuestionResponse {
             request_id,
@@ -901,7 +934,7 @@ fn queue_command_shared(shared_queue: &Arc<Mutex<Vec<QueuedCommandInfo>>>, promp
 async fn handle_idle_command(
     command: UserCommand,
     state: &mut cocode_session::SessionState,
-    event_tx: &mpsc::Sender<LoopEvent>,
+    event_tx: &mpsc::Sender<CoreEvent>,
     config: &ConfigManager,
     working_dir: &Path,
     should_shutdown: &mut bool,
@@ -910,7 +943,11 @@ async fn handle_idle_command(
         UserCommand::Interrupt => {
             info!("Interrupt requested (idle)");
             // No turn running — just acknowledge.
-            let _ = event_tx.send(LoopEvent::Interrupted).await;
+            let _ = event_tx
+                .send(CoreEvent::Protocol(ServerNotification::TurnInterrupted(
+                    TurnInterruptedParams { turn_id: None },
+                )))
+                .await;
         }
         UserCommand::Shutdown => {
             info!("Shutdown requested");
@@ -918,15 +955,15 @@ async fn handle_idle_command(
         }
         UserCommand::SetPlanMode { active } => {
             info!(active, "Plan mode changed");
-            if active {
-                let _ = event_tx
-                    .send(LoopEvent::PlanModeEntered { plan_file: None })
-                    .await;
-            } else {
-                let _ = event_tx
-                    .send(LoopEvent::PlanModeExited { approved: false })
-                    .await;
-            }
+            let _ = event_tx
+                .send(CoreEvent::Protocol(ServerNotification::PlanModeChanged(
+                    PlanModeChangedParams {
+                        entered: active,
+                        plan_file: None,
+                        approved: if active { None } else { Some(false) },
+                    },
+                )))
+                .await;
         }
         UserCommand::SetThinkingLevel { level } => {
             info!(?level, "Thinking level changed");
@@ -942,13 +979,14 @@ async fn handle_idle_command(
             if let Err(e) = config.switch_spec(&selection.model) {
                 error!(error = %e, "Failed to switch model");
                 let _ = event_tx
-                    .send(LoopEvent::Error {
-                        error: LoopError {
-                            code: "model_switch_error".to_string(),
+                    .send(CoreEvent::Protocol(ServerNotification::Error(
+                        ErrorNotificationParams {
                             message: format!("Failed to switch model: {e}"),
-                            recoverable: true,
+                            category: Some(ErrorCategory::Internal),
+                            retryable: true,
+                            error_info: None,
                         },
-                    })
+                    )))
                     .await;
                 return;
             }
@@ -965,13 +1003,14 @@ async fn handle_idle_command(
                 Err(e) => {
                     error!(error = %e, "Failed to build config snapshot after switch");
                     let _ = event_tx
-                        .send(LoopEvent::Error {
-                            error: LoopError {
-                                code: "model_switch_error".to_string(),
+                        .send(CoreEvent::Protocol(ServerNotification::Error(
+                            ErrorNotificationParams {
                                 message: format!("Failed to build config after switch: {e}"),
-                                recoverable: true,
+                                category: Some(ErrorCategory::Internal),
+                                retryable: true,
+                                error_info: None,
                             },
-                        })
+                        )))
                         .await;
                     return;
                 }
@@ -985,13 +1024,14 @@ async fn handle_idle_command(
                 Err(e) => {
                     error!(error = %e, "Failed to create session with new model");
                     let _ = event_tx
-                        .send(LoopEvent::Error {
-                            error: LoopError {
-                                code: "model_switch_error".to_string(),
+                        .send(CoreEvent::Protocol(ServerNotification::Error(
+                            ErrorNotificationParams {
                                 message: format!("Failed to create session with new model: {e}"),
-                                recoverable: true,
+                                category: Some(ErrorCategory::Internal),
+                                retryable: true,
+                                error_info: None,
                             },
-                        })
+                        )))
                         .await;
                 }
             }
@@ -1002,12 +1042,7 @@ async fn handle_idle_command(
             ..
         } => {
             info!(request_id, decision = ?decision, "Approval response received (idle)");
-            let _ = event_tx
-                .send(LoopEvent::ApprovalResponse {
-                    request_id,
-                    decision,
-                })
-                .await;
+            tracing::debug!(%request_id, ?decision, "Approval response");
         }
         UserCommand::QueueCommand { prompt } => {
             let id = state.queue_command(&prompt);
@@ -1022,14 +1057,18 @@ async fn handle_idle_command(
                 prompt.clone()
             };
             let _ = event_tx
-                .send(LoopEvent::CommandQueued { id, preview })
+                .send(CoreEvent::Protocol(ServerNotification::CommandQueued(
+                    CommandQueuedParams { id, preview },
+                )))
                 .await;
         }
         UserCommand::ClearQueues => {
             state.clear_queued_commands();
             info!("Cleared all queued commands");
             let _ = event_tx
-                .send(LoopEvent::QueueStateChanged { queued: 0 })
+                .send(CoreEvent::Protocol(ServerNotification::QueueStateChanged(
+                    QueueStateChangedParams { queued: 0 },
+                )))
                 .await;
         }
         UserCommand::BackgroundAllTasks => {
@@ -1042,10 +1081,12 @@ async fn handle_idle_command(
             let count = killed.len();
             info!(count, "Killed all running agents (idle)");
             let _ = event_tx
-                .send(LoopEvent::AllAgentsKilled {
-                    count,
-                    agent_ids: killed,
-                })
+                .send(CoreEvent::Protocol(ServerNotification::AgentsKilled(
+                    AgentsKilledParams {
+                        count: count as i32,
+                        agent_ids: killed,
+                    },
+                )))
                 .await;
         }
         UserCommand::SetOutputStyle { style } => {
@@ -1074,16 +1115,18 @@ async fn handle_idle_command(
                     description: None,
                 });
             }
-            let _ = event_tx.send(LoopEvent::OutputStylesReady { styles }).await;
+            let _ = event_tx
+                .send(CoreEvent::Tui(TuiEvent::OutputStylesReady { styles }))
+                .await;
         }
         UserCommand::RequestPluginData => {
             info!("Plugin data requested");
             let (installed, marketplaces) = state.plugin_summaries();
             let _ = event_tx
-                .send(LoopEvent::PluginDataReady {
+                .send(CoreEvent::Tui(TuiEvent::PluginDataReady {
                     installed,
                     marketplaces,
-                })
+                }))
                 .await;
         }
         UserCommand::Rewind => {
@@ -1122,15 +1165,31 @@ async fn handle_idle_command(
             let is_plan = mode == cocode_protocol::PermissionMode::Plan;
             if is_plan && !was_plan {
                 let _ = event_tx
-                    .send(LoopEvent::PlanModeEntered { plan_file: None })
+                    .send(CoreEvent::Protocol(ServerNotification::PlanModeChanged(
+                        PlanModeChangedParams {
+                            entered: true,
+                            plan_file: None,
+                            approved: None,
+                        },
+                    )))
                     .await;
             } else if !is_plan && was_plan {
                 let _ = event_tx
-                    .send(LoopEvent::PlanModeExited { approved: false })
+                    .send(CoreEvent::Protocol(ServerNotification::PlanModeChanged(
+                        PlanModeChangedParams {
+                            entered: false,
+                            plan_file: None,
+                            approved: Some(false),
+                        },
+                    )))
                     .await;
             }
             let _ = event_tx
-                .send(LoopEvent::PermissionModeChanged { mode })
+                .send(CoreEvent::Protocol(
+                    ServerNotification::PermissionModeChanged(PermissionModeChangedParams {
+                        mode: mode.to_string(),
+                    }),
+                ))
                 .await;
         }
         UserCommand::QuestionResponse {
@@ -1178,13 +1237,15 @@ async fn handle_idle_command(
 /// `RequestDiffStats` when the user selects a checkpoint in the overlay.
 async fn build_checkpoint_items(
     state: &cocode_session::SessionState,
-    event_tx: &mpsc::Sender<LoopEvent>,
+    event_tx: &mpsc::Sender<CoreEvent>,
 ) -> bool {
     let Some(sm) = state.snapshot_manager().cloned() else {
         let _ = event_tx
-            .send(LoopEvent::RewindFailed {
-                error: "Rewind is not available (no snapshot manager)".to_string(),
-            })
+            .send(CoreEvent::Protocol(ServerNotification::RewindFailed(
+                RewindFailedParams {
+                    error: "Rewind is not available (no snapshot manager)".to_string(),
+                },
+            )))
             .await;
         return false;
     };
@@ -1235,7 +1296,9 @@ async fn build_checkpoint_items(
         .collect();
 
     let _ = event_tx
-        .send(LoopEvent::RewindCheckpointsReady { checkpoints })
+        .send(CoreEvent::Tui(TuiEvent::RewindCheckpointsReady {
+            checkpoints,
+        }))
         .await;
     true
 }
@@ -1243,7 +1306,7 @@ async fn build_checkpoint_items(
 /// Compute diff stats for a single checkpoint on-demand and emit the result.
 async fn compute_diff_stats_for_turn(
     state: &cocode_session::SessionState,
-    event_tx: &mpsc::Sender<LoopEvent>,
+    event_tx: &mpsc::Sender<CoreEvent>,
     turn_number: i32,
 ) {
     let Some(sm) = state.snapshot_manager().cloned() else {
@@ -1252,14 +1315,14 @@ async fn compute_diff_stats_for_turn(
     match sm.dry_run_diff_stats(turn_number).await {
         Ok(stats) => {
             let _ = event_tx
-                .send(LoopEvent::DiffStatsReady {
+                .send(CoreEvent::Tui(TuiEvent::DiffStatsReady {
                     turn_number,
                     stats: cocode_protocol::RewindDiffStats {
                         files_changed: stats.files_changed,
                         insertions: stats.insertions,
                         deletions: stats.deletions,
                     },
-                })
+                }))
                 .await;
         }
         Err(e) => {
@@ -1276,7 +1339,7 @@ async fn compute_diff_stats_for_turn(
 /// avoid duplicating that logic here.
 async fn execute_rewind(
     state: &mut cocode_session::SessionState,
-    event_tx: &mpsc::Sender<LoopEvent>,
+    event_tx: &mpsc::Sender<CoreEvent>,
     target_turn: Option<i32>,
     mode: cocode_protocol::RewindMode,
 ) {
@@ -1286,7 +1349,7 @@ async fn execute_rewind(
                 // Delegate ALL conversation state changes to SessionState.
                 // This handles: history truncation, todo rebuild, file tracker
                 // pruning, and prompt capture — in a single consistent operation.
-                let (messages_removed, restored_prompt) =
+                let (messages_removed, _restored_prompt) =
                     state.apply_rewind_mode_for_turn(result.rewound_turn, mode);
 
                 // Telemetry: rewind completed
@@ -1303,13 +1366,13 @@ async fn execute_rewind(
                 }
 
                 let _ = event_tx
-                    .send(LoopEvent::RewindCompleted {
-                        rewound_turn: result.rewound_turn,
-                        restored_files: result.restored_files.len() as i32,
-                        messages_removed,
-                        mode,
-                        restored_prompt,
-                    })
+                    .send(CoreEvent::Protocol(ServerNotification::RewindCompleted(
+                        RewindCompletedParams {
+                            rewound_turn: result.rewound_turn,
+                            restored_files: result.restored_files.len() as i32,
+                            messages_removed,
+                        },
+                    )))
                     .await;
             }
             Err(e) => {
@@ -1319,17 +1382,21 @@ async fn execute_rewind(
                 }
 
                 let _ = event_tx
-                    .send(LoopEvent::RewindFailed {
-                        error: e.to_string(),
-                    })
+                    .send(CoreEvent::Protocol(ServerNotification::RewindFailed(
+                        RewindFailedParams {
+                            error: e.to_string(),
+                        },
+                    )))
                     .await;
             }
         }
     } else {
         let _ = event_tx
-            .send(LoopEvent::RewindFailed {
-                error: "Rewind is not available (no snapshot manager)".to_string(),
-            })
+            .send(CoreEvent::Protocol(ServerNotification::RewindFailed(
+                RewindFailedParams {
+                    error: "Rewind is not available (no snapshot manager)".to_string(),
+                },
+            )))
             .await;
     }
 }
@@ -1337,7 +1404,7 @@ async fn execute_rewind(
 /// Execute a summarize (partial compact) from a specific turn.
 async fn execute_summarize_from_turn(
     state: &mut cocode_session::SessionState,
-    event_tx: &mpsc::Sender<LoopEvent>,
+    event_tx: &mpsc::Sender<CoreEvent>,
     turn_number: i32,
     context: Option<&str>,
 ) {
@@ -1347,18 +1414,22 @@ async fn execute_summarize_from_turn(
     {
         Ok(result) => {
             let _ = event_tx
-                .send(LoopEvent::SummarizeCompleted {
-                    from_turn: result.from_turn,
-                    summary_tokens: result.summary_tokens,
-                })
+                .send(CoreEvent::Protocol(ServerNotification::SummarizeCompleted(
+                    SummarizeCompletedParams {
+                        from_turn: result.from_turn,
+                        summary_tokens: result.summary_tokens,
+                    },
+                )))
                 .await;
         }
         Err(e) => {
             error!("Summarize from turn {turn_number} failed: {e}");
             let _ = event_tx
-                .send(LoopEvent::SummarizeFailed {
-                    error: e.to_string(),
-                })
+                .send(CoreEvent::Protocol(ServerNotification::SummarizeFailed(
+                    SummarizeFailedParams {
+                        error: e.to_string(),
+                    },
+                )))
                 .await;
         }
     }
@@ -1376,7 +1447,7 @@ async fn execute_summarize_from_turn(
 async fn handle_plan_exit_option(
     exit_option: &cocode_protocol::PlanExitOption,
     state: &mut cocode_session::SessionState,
-    event_tx: &mpsc::Sender<LoopEvent>,
+    event_tx: &mpsc::Sender<CoreEvent>,
     _config: &ConfigManager,
 ) -> Option<String> {
     let Some(target_mode) = exit_option.target_mode() else {
@@ -1411,12 +1482,18 @@ async fn handle_plan_exit_option(
 
         // Notify TUI of context clear and mode change
         let _ = event_tx
-            .send(LoopEvent::ContextCleared {
-                new_mode: target_mode,
-            })
+            .send(CoreEvent::Protocol(ServerNotification::ContextCleared(
+                ContextClearedParams {
+                    new_mode: target_mode.to_string(),
+                },
+            )))
             .await;
         let _ = event_tx
-            .send(LoopEvent::PermissionModeChanged { mode: target_mode })
+            .send(CoreEvent::Protocol(
+                ServerNotification::PermissionModeChanged(PermissionModeChangedParams {
+                    mode: target_mode.to_string(),
+                }),
+            ))
             .await;
 
         // Return plan as initial prompt for auto-submission, with transcript reference
@@ -1440,7 +1517,11 @@ async fn handle_plan_exit_option(
         state.set_permission_mode(target_mode);
 
         let _ = event_tx
-            .send(LoopEvent::PermissionModeChanged { mode: target_mode })
+            .send(CoreEvent::Protocol(
+                ServerNotification::PermissionModeChanged(PermissionModeChangedParams {
+                    mode: target_mode.to_string(),
+                }),
+            ))
             .await;
         None
     } else {
@@ -1450,37 +1531,41 @@ async fn handle_plan_exit_option(
 
 /// Emit the standard turn result events (StreamRequestEnd + TurnCompleted or Error).
 async fn emit_turn_result(
-    event_tx: &mpsc::Sender<LoopEvent>,
+    event_tx: &mpsc::Sender<CoreEvent>,
     turn_id: &str,
     result: Result<TokenUsage, cocode_error::BoxedError>,
-    error_code: &str,
 ) {
     match result {
         Ok(usage) => {
             let _ = event_tx
-                .send(LoopEvent::StreamRequestEnd {
-                    usage: usage.clone(),
-                })
+                .send(CoreEvent::Protocol(ServerNotification::StreamRequestEnd(
+                    StreamRequestEndParams {
+                        usage: usage.clone().into(),
+                    },
+                )))
                 .await;
             let _ = event_tx
-                .send(LoopEvent::TurnCompleted {
-                    turn_id: turn_id.to_string(),
-                    usage,
-                })
+                .send(CoreEvent::Protocol(ServerNotification::TurnCompleted(
+                    TurnCompletedParams {
+                        turn_id: turn_id.to_string(),
+                        usage: usage.into(),
+                    },
+                )))
                 .await;
         }
         Err(e) => {
-            // 日志：使用内部错误的 Debug（stack_trace_debug）输出虚拟堆栈，避免系统 backtrace 噪音。
-            // 这里的 `e` 不再是 anyhow::Error。
+            // Use Debug (stack_trace_debug) output for internal errors to get the
+            // virtual stack trace while avoiding system backtrace noise.
             error!(error = ?e, status = ?e.status_code(), "Turn failed");
             let _ = event_tx
-                .send(LoopEvent::Error {
-                    error: LoopError {
-                        code: error_code.to_string(),
+                .send(CoreEvent::Protocol(ServerNotification::Error(
+                    ErrorNotificationParams {
                         message: e.output_msg(),
-                        recoverable: true,
+                        category: Some(ErrorCategory::Internal),
+                        retryable: true,
+                        error_info: None,
                     },
-                })
+                )))
                 .await;
         }
     }
@@ -1490,7 +1575,7 @@ async fn emit_turn_result(
 async fn process_deferred(
     deferred: &mut Vec<UserCommand>,
     state: &mut cocode_session::SessionState,
-    event_tx: &mpsc::Sender<LoopEvent>,
+    event_tx: &mpsc::Sender<CoreEvent>,
     config: &ConfigManager,
     working_dir: &Path,
 ) {
@@ -1516,7 +1601,7 @@ async fn handle_local_command_in_driver(
     name: &str,
     args: &str,
     state: &mut cocode_session::SessionState,
-    event_tx: &mpsc::Sender<LoopEvent>,
+    event_tx: &mpsc::Sender<CoreEvent>,
 ) {
     match name {
         "skills" => {
@@ -1568,7 +1653,13 @@ async fn handle_local_command_in_driver(
             let prompt = "Please compact the conversation context now.";
             match run_turn_with_events(state, prompt, event_tx, "compact").await {
                 Ok(usage) => {
-                    let _ = event_tx.send(LoopEvent::StreamRequestEnd { usage }).await;
+                    let _ = event_tx
+                        .send(CoreEvent::Protocol(ServerNotification::StreamRequestEnd(
+                            StreamRequestEndParams {
+                                usage: usage.into(),
+                            },
+                        )))
+                        .await;
                 }
                 Err(e) => {
                     error!("Failed to compact: {e}");
@@ -1601,7 +1692,7 @@ async fn handle_local_command_in_driver(
 async fn handle_output_style_command(
     args: &str,
     state: &mut cocode_session::SessionState,
-    event_tx: &mpsc::Sender<LoopEvent>,
+    event_tx: &mpsc::Sender<CoreEvent>,
 ) {
     let arg = args.trim();
     let cocode_home = state.cocode_home().to_path_buf();
@@ -1736,32 +1827,36 @@ async fn persist_output_style(style: Option<&str>) {
 }
 
 /// Emit a simple text response as a single-turn cycle (TurnStarted + TextDelta + TurnCompleted).
-async fn emit_text_response(event_tx: &mpsc::Sender<LoopEvent>, text: &str) {
+async fn emit_text_response(event_tx: &mpsc::Sender<CoreEvent>, text: &str) {
     let turn_id = format!("local-{}", uuid::Uuid::new_v4());
     let _ = event_tx
-        .send(LoopEvent::TurnStarted {
-            turn_id: turn_id.clone(),
-            turn_number: 0,
-        })
+        .send(CoreEvent::Protocol(ServerNotification::TurnStarted(
+            TurnStartedParams {
+                turn_id: turn_id.clone(),
+                turn_number: 0,
+            },
+        )))
         .await;
     let _ = event_tx
-        .send(LoopEvent::TextDelta {
+        .send(CoreEvent::Stream(StreamEvent::TextDelta {
+            turn_id: turn_id.clone(),
             delta: text.to_string(),
-            turn_id: turn_id.clone(),
-        })
+        }))
         .await;
     let _ = event_tx
-        .send(LoopEvent::TurnCompleted {
-            turn_id,
-            usage: TokenUsage::default(),
-        })
+        .send(CoreEvent::Protocol(ServerNotification::TurnCompleted(
+            TurnCompletedParams {
+                turn_id,
+                usage: TokenUsage::default().into(),
+            },
+        )))
         .await;
 }
 
 async fn run_turn_with_events(
     state: &mut cocode_session::SessionState,
     input: &str,
-    event_tx: &mpsc::Sender<LoopEvent>,
+    event_tx: &mpsc::Sender<CoreEvent>,
     _turn_id: &str,
 ) -> Result<TokenUsage, cocode_error::BoxedError> {
     let result = state.run_turn_streaming(input, event_tx.clone()).await?;

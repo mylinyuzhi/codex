@@ -825,7 +825,7 @@ impl Default for DelegateModeConfig {
 ### Events
 
 ```rust
-pub enum LoopEvent {
+pub enum CoreEvent {
     // Delegate mode events
     DelegateModeEntered {
         team_name: String,

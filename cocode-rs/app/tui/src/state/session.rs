@@ -97,8 +97,13 @@ pub struct SessionState {
     /// Whether sandbox mode is active.
     pub sandbox_active: bool,
 
-    /// Recent sandbox violation count (auto-clears after display).
+    /// Recent sandbox violation count (auto-clears after flash expires).
     pub sandbox_violation_count: i32,
+
+    /// Deadline after which the violation count resets to 0.
+    /// Set to `Instant::now() + 5s` on each new violation batch;
+    /// new violations extend the deadline.
+    pub sandbox_violation_flash_until: Option<Instant>,
 }
 
 impl SessionState {
@@ -120,8 +125,17 @@ impl SessionState {
             .find(|m| m.role == MessageRole::Assistant)
     }
 
-    /// Update token usage.
+    /// Update token usage from internal `TokenUsage`.
     pub fn update_tokens(&mut self, usage: TokenUsage) {
+        self.token_usage.input_tokens += usage.input_tokens;
+        self.token_usage.output_tokens += usage.output_tokens;
+        if let Some(cache) = usage.cache_read_tokens {
+            *self.token_usage.cache_read_tokens.get_or_insert(0) += cache;
+        }
+    }
+
+    /// Update token usage from protocol `Usage`.
+    pub fn update_tokens_from_protocol(&mut self, usage: &cocode_app_server_protocol::Usage) {
         self.token_usage.input_tokens += usage.input_tokens;
         self.token_usage.output_tokens += usage.output_tokens;
         if let Some(cache) = usage.cache_read_tokens {
@@ -261,6 +275,16 @@ impl SessionState {
     pub fn update_subagent_progress(&mut self, agent_id: &str, progress: AgentProgress) {
         if let Some(subagent) = self.subagents.iter_mut().find(|s| s.id == agent_id) {
             subagent.progress = Some(progress);
+        }
+    }
+
+    /// Update subagent progress from protocol message string.
+    pub fn update_subagent_progress_msg(&mut self, agent_id: &str, message: String) {
+        if let Some(subagent) = self.subagents.iter_mut().find(|s| s.id == agent_id) {
+            subagent.progress = Some(AgentProgress {
+                message: Some(message),
+                ..Default::default()
+            });
         }
     }
 

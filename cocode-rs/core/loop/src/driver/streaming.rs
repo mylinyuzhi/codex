@@ -15,9 +15,10 @@ use cocode_inference::TextPart;
 use cocode_inference::ToolCall;
 use cocode_inference::ToolCallPart;
 use cocode_prompt::SystemPromptBuilder;
-use cocode_protocol::LoopEvent;
 use cocode_protocol::QueryTracking;
+use cocode_protocol::StreamEvent;
 use cocode_protocol::TokenUsage;
+use cocode_protocol::server_notification::*;
 use cocode_system_reminder::InjectedBlock;
 use cocode_system_reminder::InjectedMessage;
 use cocode_tools::StreamingToolExecutor;
@@ -25,12 +26,14 @@ use cocode_tools::ToolDefinition;
 use snafu::ResultExt;
 use tracing::debug;
 use tracing::error;
+use tracing::trace;
 use tracing::warn;
 
 use super::AgentLoop;
 use crate::error::agent_loop_error;
 
 impl AgentLoop {
+    #[tracing::instrument(skip_all, fields(turn_id))]
     pub(super) async fn stream_with_tools(
         &mut self,
         turn_id: &str,
@@ -75,6 +78,12 @@ impl AgentLoop {
             .prepare_main_with_selections(&effective_selections, session_id, self.turn_number)
             .context(agent_loop_error::PrepareMainModelSnafu)?;
 
+        debug!(
+            model_id = %model.model_id(),
+            model_slug = %ctx.model_info.slug,
+            "Step 7: Model resolved"
+        );
+
         // Build messages and tools using existing logic (model-aware filtering)
         let (messages, tools) = self.build_messages_and_tools(injected_messages, &ctx.model_info);
 
@@ -83,6 +92,9 @@ impl AgentLoop {
         // hallucinated calls to apply_patch (when type=None/Shell) or tools
         // outside experimental_supported_tools.
         executor.set_allowed_tool_names(tools.iter().map(|d| d.name().to_string()).collect());
+
+        let message_count = messages.len();
+        let tool_count = tools.len();
 
         // Use RequestBuilder to assemble the final request with context parameters
         let mut builder = RequestBuilder::new(ctx).messages(messages);
@@ -94,6 +106,13 @@ impl AgentLoop {
         }
 
         let request = builder.build();
+
+        debug!(
+            message_count,
+            tool_count,
+            max_tokens = ?self.config.max_tokens,
+            "API request parameters"
+        );
 
         let api_request_start = Instant::now();
         let stream_result = self
@@ -164,9 +183,9 @@ impl AgentLoop {
                                 elapsed_secs = elapsed,
                                 "Stream watchdog warning: no event received"
                             );
-                            self.emit(LoopEvent::StreamWatchdogWarning {
+                            self.emit_protocol(ServerNotification::StreamWatchdogWarning(StreamWatchdogWarningParams {
                                 elapsed_secs: elapsed,
-                            }).await;
+                            })).await;
                             warning_emitted = true;
                             // Continue the loop — the next iteration will use
                             // abort_timeout as the deadline.
@@ -175,10 +194,9 @@ impl AgentLoop {
 
                         // Tier 2: Abort phase — stream is stalled beyond recovery
                         let stall_timeout = abort_timeout;
-                        self.emit(LoopEvent::StreamStallDetected {
-                            turn_id: turn_id.to_string(),
-                            timeout: stall_timeout,
-                        }).await;
+                        self.emit_protocol(ServerNotification::StreamStallDetected(StreamStallDetectedParams {
+                            turn_id: None,
+                        })).await;
 
                         // Handle based on recovery strategy
                         let strategy = self.config.stall_detection.recovery;
@@ -218,6 +236,7 @@ impl AgentLoop {
                     // Transient network errors should NOT trigger a model switch.
                     let classified = cocode_inference::error::classify_by_message(&err_str);
                     if classified.is_overload_or_rate_limit() {
+                        self.maybe_disable_fast_mode(&err_str).await;
                         self.try_model_fallback(&err_str).await;
                     }
                     error!("Stream error from provider: {err_str}");
@@ -238,14 +257,14 @@ impl AgentLoop {
                             AssistantContentPart::Text(TextPart { text, .. })
                                 if !text.is_empty() =>
                             {
-                                self.emit(LoopEvent::TextDelta {
+                                self.emit_stream(StreamEvent::TextDelta {
                                     turn_id: turn_id.to_string(),
                                     delta: text.clone(),
                                 })
                                 .await;
                             }
                             AssistantContentPart::Reasoning(rp) if !rp.text.is_empty() => {
-                                self.emit(LoopEvent::ThinkingDelta {
+                                self.emit_stream(StreamEvent::ThinkingDelta {
                                     turn_id: turn_id.to_string(),
                                     delta: rp.text.clone(),
                                 })
@@ -297,6 +316,7 @@ impl AgentLoop {
                     // Only attempt model fallback for overload/rate-limit errors.
                     // Transient network errors should NOT trigger a model switch.
                     if is_retryable && classified.is_overload_or_rate_limit() {
+                        self.maybe_disable_fast_mode(&msg).await;
                         self.try_model_fallback(&msg).await;
                     }
 
@@ -309,6 +329,31 @@ impl AgentLoop {
             }
         }
 
+        let content_parts = all_content.len();
+        let tool_call_count = all_content
+            .iter()
+            .filter(|p| matches!(p, AssistantContentPart::ToolCall(_)))
+            .count();
+        debug!(
+            finish_reason = ?final_finish_reason.unified,
+            content_parts,
+            tool_call_count,
+            duration_ms = api_request_start.elapsed().as_millis() as i64,
+            "API response completed"
+        );
+        if let Some(ref usage) = final_usage {
+            debug!(
+                input_tokens = usage.input_tokens,
+                output_tokens = usage.output_tokens,
+                "API response token usage"
+            );
+            trace!(
+                cache_read_tokens = usage.cache_read_tokens,
+                cache_creation_tokens = usage.cache_creation_tokens,
+                "API response cache details"
+            );
+        }
+
         Ok(CollectedResponse {
             content: all_content,
             usage: final_usage,
@@ -317,7 +362,22 @@ impl AgentLoop {
     }
 
     /// Attempt model fallback for a retryable error.
+    /// Disable fast mode on overload/rate-limit errors.
     ///
+    /// Once disabled, fast_mode remains off for the session to prevent
+    /// repeated throttling. Matches Claude Code's adaptive fast mode
+    /// fallback (Lf7/Ef7 in chunks.89.mjs).
+    async fn maybe_disable_fast_mode(&mut self, reason: &str) {
+        if self.fast_mode {
+            warn!("Disabling fast mode due to rate limit: {reason}");
+            self.fast_mode = false;
+            self.emit_protocol(ServerNotification::FastModeChanged(FastModeChangedParams {
+                active: false,
+            }))
+            .await;
+        }
+    }
+
     /// Checks whether fallback is configured and available. If so, emits
     /// `ModelFallbackStarted`, fires the notification hook, records the
     /// fallback in state, and increments the telemetry counter.
@@ -332,11 +392,13 @@ impl AgentLoop {
         };
 
         let from_model = self.fallback_state.current_model.clone();
-        self.emit(LoopEvent::ModelFallbackStarted {
-            from: from_model.clone(),
-            to: fallback_model.clone(),
-            reason: reason.to_string(),
-        })
+        self.emit_protocol(ServerNotification::ModelFallbackStarted(
+            ModelFallbackStartedParams {
+                from_model: from_model.clone(),
+                to_model: fallback_model.clone(),
+                reason: reason.to_string(),
+            },
+        ))
         .await;
         self.fire_notification_hook(
             "model_fallback",

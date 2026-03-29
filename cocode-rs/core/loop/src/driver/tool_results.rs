@@ -2,7 +2,6 @@
 
 use std::sync::Arc;
 
-use cocode_inference::LanguageModelMessage;
 use cocode_inference::ToolCall;
 use cocode_message::TrackedMessage;
 use cocode_message::Turn;
@@ -39,6 +38,10 @@ impl AgentLoop {
         let mut all_modifiers: Vec<ContextModifier> = Vec::new();
 
         // Add tool results to current turn for tracking
+        debug!(
+            result_count = results.len(),
+            "Adding tool results to history"
+        );
         for result in results {
             let (output, is_error) = match &result.result {
                 Ok(output) => {
@@ -48,6 +51,12 @@ impl AgentLoop {
                 }
                 Err(e) => (ToolResultContent::Text(e.to_string()), true),
             };
+            debug!(
+                tool = %result.name,
+                call_id = %result.call_id,
+                is_error,
+                "Tool result added to history"
+            );
             self.message_history
                 .add_tool_result(&result.call_id, &result.name, output, is_error);
         }
@@ -100,8 +109,7 @@ impl AgentLoop {
                     cocode_inference::FilePart::image_base64(&img.data, &img.media_type),
                 ));
             }
-            let message = LanguageModelMessage::user(content_parts);
-            TrackedMessage::new(message, &next_turn_id, cocode_message::MessageSource::User)
+            TrackedMessage::user_with_content(content_parts, &next_turn_id)
         };
         let turn = Turn::new(self.turn_number + 1, user_msg);
         self.message_history.add_turn(turn);

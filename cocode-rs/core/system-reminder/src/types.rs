@@ -93,6 +93,10 @@ pub enum AttachmentType {
     TodoReminders,
     /// Delegate mode instructions.
     DelegateMode,
+    /// Auto mode instructions (autonomous execution).
+    AutoMode,
+    /// Auto mode exit notification.
+    AutoModeExit,
     /// Collaboration notifications from other agents.
     CollabNotifications,
     /// Plan verification reminder during implementation.
@@ -184,6 +188,12 @@ pub enum AttachmentType {
     OutputTokenUsage,
     /// Configuration change notification.
     ConfigChange,
+
+    // === Effort / date / IDE ===
+    EffortLevel,
+    DateChange,
+    SelectedLinesInIde,
+    OpenedFileInIde,
 }
 
 impl AttachmentType {
@@ -204,6 +214,8 @@ impl AttachmentType {
             | AttachmentType::OutputStyle
             | AttachmentType::TodoReminders
             | AttachmentType::DelegateMode
+            | AttachmentType::AutoMode
+            | AttachmentType::AutoModeExit
             | AttachmentType::CollabNotifications
             | AttachmentType::PlanVerification
             | AttachmentType::AtMentionedFiles
@@ -231,7 +243,11 @@ impl AttachmentType {
             | AttachmentType::SandboxViolations
             | AttachmentType::SessionName
             | AttachmentType::OutputTokenUsage
-            | AttachmentType::ConfigChange => XmlTag::SystemReminder,
+            | AttachmentType::ConfigChange
+            | AttachmentType::EffortLevel
+            | AttachmentType::DateChange
+            | AttachmentType::SelectedLinesInIde
+            | AttachmentType::OpenedFileInIde => XmlTag::SystemReminder,
 
             // Already read files don't use XML tags (uses tool_use/tool_result)
             AttachmentType::AlreadyReadFile => XmlTag::None,
@@ -259,7 +275,8 @@ impl AttachmentType {
             | AttachmentType::TeamContext
             | AttachmentType::TeamMailbox
             | AttachmentType::AutoMemoryPrompt
-            | AttachmentType::SandboxViolations => ReminderTier::Core,
+            | AttachmentType::SandboxViolations
+            | AttachmentType::DateChange => ReminderTier::Core,
 
             // MainAgentOnly tier
             AttachmentType::AvailableSkills
@@ -268,6 +285,8 @@ impl AttachmentType {
             | AttachmentType::OutputStyle
             | AttachmentType::TodoReminders
             | AttachmentType::DelegateMode
+            | AttachmentType::AutoMode
+            | AttachmentType::AutoModeExit
             | AttachmentType::CollabNotifications
             | AttachmentType::PlanVerification
             | AttachmentType::AsyncHookResponse
@@ -290,12 +309,15 @@ impl AttachmentType {
             | AttachmentType::McpInstructionsDelta
             | AttachmentType::SessionName
             | AttachmentType::OutputTokenUsage
-            | AttachmentType::ConfigChange => ReminderTier::MainAgentOnly,
+            | AttachmentType::ConfigChange
+            | AttachmentType::EffortLevel => ReminderTier::MainAgentOnly,
 
             // UserPrompt tier
             AttachmentType::AtMentionedFiles
             | AttachmentType::AgentMentions
-            | AttachmentType::InvokedSkills => ReminderTier::UserPrompt,
+            | AttachmentType::InvokedSkills
+            | AttachmentType::SelectedLinesInIde
+            | AttachmentType::OpenedFileInIde => ReminderTier::UserPrompt,
         }
     }
 
@@ -316,6 +338,8 @@ impl AttachmentType {
             AttachmentType::OutputStyle => "output_style",
             AttachmentType::TodoReminders => "todo_reminders",
             AttachmentType::DelegateMode => "delegate_mode",
+            AttachmentType::AutoMode => "auto_mode",
+            AttachmentType::AutoModeExit => "auto_mode_exit",
             AttachmentType::CollabNotifications => "collab_notifications",
             AttachmentType::PlanVerification => "plan_verification",
             AttachmentType::AtMentionedFiles => "at_mentioned_files",
@@ -346,6 +370,10 @@ impl AttachmentType {
             AttachmentType::SessionName => "session_name",
             AttachmentType::OutputTokenUsage => "output_token_usage",
             AttachmentType::ConfigChange => "config_change",
+            AttachmentType::EffortLevel => "effort_level",
+            AttachmentType::DateChange => "date_change",
+            AttachmentType::SelectedLinesInIde => "selected_lines_in_ide",
+            AttachmentType::OpenedFileInIde => "opened_file_in_ide",
         }
     }
 }

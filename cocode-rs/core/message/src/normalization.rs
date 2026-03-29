@@ -5,6 +5,8 @@
 
 use crate::tracked::TrackedMessage;
 use cocode_inference::AssistantContentPart;
+use cocode_inference::DataContent;
+use cocode_inference::FilePart;
 use cocode_inference::LanguageModelMessage;
 use cocode_inference::ReasoningPart;
 use cocode_inference::TextPart;
@@ -164,6 +166,10 @@ fn merge_messages(target: &mut LanguageModelMessage, source: &LanguageModelMessa
 }
 
 /// Strip thinking signatures from a message.
+///
+/// Creates fresh `ReasoningPart`s that keep the reasoning *text* but drop
+/// `provider_metadata` (which holds provider-specific signatures such as
+/// Anthropic's `signature`/`redactedData` or Google's `thoughtSignature`).
 fn strip_thinking_signatures(message: &LanguageModelMessage) -> LanguageModelMessage {
     match message {
         LanguageModelMessage::Assistant {
@@ -174,8 +180,12 @@ fn strip_thinking_signatures(message: &LanguageModelMessage) -> LanguageModelMes
                 .iter()
                 .map(|block| match block {
                     AssistantContentPart::Reasoning(rp) => {
-                        // Reasoning parts don't carry signatures in vercel-ai, but
-                        // we strip provider_metadata as a cross-provider safety measure.
+                        if rp.provider_metadata.is_some() {
+                            tracing::trace!(
+                                text_len = rp.text.len(),
+                                "Stripped provider_metadata from reasoning part"
+                            );
+                        }
                         AssistantContentPart::Reasoning(ReasoningPart::new(&rp.text))
                     }
                     other => other.clone(),
@@ -327,7 +337,7 @@ pub fn estimate_tokens(messages: &[LanguageModelMessage]) -> i32 {
                 .iter()
                 .map(|p| match p {
                     UserContentPart::Text(TextPart { text, .. }) => (text.len() / 4) as i32,
-                    UserContentPart::File(_) => 1000,
+                    UserContentPart::File(fp) => estimate_image_tokens(fp),
                 })
                 .sum(),
             LanguageModelMessage::Assistant { content, .. } => content
@@ -374,6 +384,95 @@ pub fn estimate_tokens(messages: &[LanguageModelMessage]) -> i32 {
                 .sum(),
         })
         .sum()
+}
+
+/// Estimate tokens for an image content block.
+///
+/// Anthropic bills image tokens as `ceil(width * height / 750)` with a
+/// minimum of 85 tokens (the cost of a 258×258 tile).  Without decoded
+/// dimensions we approximate from the encoded data size:
+///
+///   decoded_bytes ≈ base64_len × 3/4
+///   tokens        ≈ decoded_bytes / 750   (min 85)
+///
+/// URL-only images have unknown size — we fall back to 1000 tokens.
+fn estimate_image_tokens(fp: &FilePart) -> i32 {
+    let decoded_bytes = match &fp.data {
+        DataContent::Base64(b64) => (b64.len() as i64 * 3) / 4,
+        DataContent::Bytes(bytes) => bytes.len() as i64,
+        DataContent::Url(_) => return 1000,
+    };
+    (decoded_bytes / 750).max(85) as i32
+}
+
+/// Maximum number of image/document content blocks allowed in the context.
+///
+/// Matches Claude Code's `MAX_IMAGES_IN_CONTEXT` (PA4 = 100).
+pub const MAX_IMAGES_IN_CONTEXT: i32 = 100;
+
+/// Trim excess image content blocks, removing the oldest first.
+///
+/// Matches Claude Code's `trimImageCount` (`q9z`). Strategy: count all
+/// image/file blocks across the conversation, then strip from the earliest
+/// messages so the most recent visual context is preserved for the model.
+pub fn trim_image_count(messages: &mut [LanguageModelMessage], max_images: i32) {
+    // Count total images across all messages
+    let total: i32 = messages.iter().map(count_images_in_message).sum();
+
+    let mut excess = total - max_images;
+    if excess <= 0 {
+        return;
+    }
+
+    // Remove from oldest messages first (front of the vec)
+    for msg in messages.iter_mut() {
+        if excess <= 0 {
+            break;
+        }
+        remove_images_from_message(msg, &mut excess);
+    }
+}
+
+/// Count image/file blocks in a single message.
+fn count_images_in_message(msg: &LanguageModelMessage) -> i32 {
+    match msg {
+        LanguageModelMessage::User { content, .. } => content
+            .iter()
+            .filter(|p| matches!(p, UserContentPart::File(_)))
+            .count() as i32,
+        LanguageModelMessage::Assistant { content, .. } => content
+            .iter()
+            .filter(|p| matches!(p, AssistantContentPart::File(_)))
+            .count() as i32,
+        _ => 0,
+    }
+}
+
+/// Remove image blocks from a message, decrementing excess counter.
+fn remove_images_from_message(msg: &mut LanguageModelMessage, excess: &mut i32) {
+    match msg {
+        LanguageModelMessage::User { content, .. } => {
+            content.retain(|p| {
+                if *excess > 0 && matches!(p, UserContentPart::File(_)) {
+                    *excess -= 1;
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+        LanguageModelMessage::Assistant { content, .. } => {
+            content.retain(|p| {
+                if *excess > 0 && matches!(p, AssistantContentPart::File(_)) {
+                    *excess -= 1;
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+        _ => {}
+    }
 }
 
 #[cfg(test)]

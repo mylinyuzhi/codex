@@ -257,6 +257,22 @@ fn test_zsh_dangerous_commands() {
 }
 
 #[test]
+fn test_zsh_dangerous_commands_extended() {
+    for cmd in &[
+        "sysread", "syswrite", "zpty", "ztcp", "zsocket", "mapfile", "zf_rm", "zf_chmod",
+    ] {
+        let analysis = analyze_command(cmd);
+        assert!(
+            analysis
+                .risks
+                .iter()
+                .any(|r| r.kind == RiskKind::ZshDangerousCommands),
+            "{cmd} should be flagged as dangerous zsh command"
+        );
+    }
+}
+
+#[test]
 fn test_zsh_dangerous_commands_safe() {
     let analysis = analyze_command("echo hello");
     assert!(
@@ -425,5 +441,41 @@ fn test_malformed_tokens_double_quoted_brackets() {
             .iter()
             .any(|r| r.kind == RiskKind::MalformedTokens && r.message.contains("unbalanced")),
         "double-quoted balanced brackets should not flag: {analysis:?}"
+    );
+}
+
+#[test]
+fn test_excess_closing_braces_detected() {
+    let analysis = analyze_command("echo test)");
+    assert!(
+        analysis
+            .risks
+            .iter()
+            .any(|r| r.kind == RiskKind::ExcessClosingBraces),
+        "excess closing paren should be detected: {analysis:?}"
+    );
+}
+
+#[test]
+fn test_excess_closing_braces_balanced_ok() {
+    let analysis = analyze_command("echo (test)");
+    assert!(
+        !analysis
+            .risks
+            .iter()
+            .any(|r| r.kind == RiskKind::ExcessClosingBraces),
+        "balanced braces should not flag: {analysis:?}"
+    );
+}
+
+#[test]
+fn test_excess_closing_braces_quoted_ok() {
+    let analysis = analyze_command("echo 'test)'");
+    assert!(
+        !analysis
+            .risks
+            .iter()
+            .any(|r| r.kind == RiskKind::ExcessClosingBraces),
+        "closing brace inside quotes should not flag: {analysis:?}"
     );
 }

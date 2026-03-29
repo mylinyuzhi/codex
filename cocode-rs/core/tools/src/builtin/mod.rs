@@ -82,7 +82,8 @@ fn map_shell_risk(
         | RiskKind::BraceExpansion
         | RiskKind::ZshDangerousCommands
         | RiskKind::CommentQuoteDesync
-        | RiskKind::QuotedNewlineHash => cocode_protocol::RiskType::Unknown,
+        | RiskKind::QuotedNewlineHash
+        | RiskKind::ExcessClosingBraces => cocode_protocol::RiskType::Unknown,
     };
 
     let severity = match r.level {
@@ -184,6 +185,7 @@ pub use grep::GrepTool;
 pub use kill_shell::KillShellTool;
 pub use ls::LsTool;
 pub use lsp::LspTool;
+pub use mcp_search::DeferredToolInfo;
 pub use mcp_search::McpSearchTool;
 pub use notebook_edit::NotebookEditTool;
 pub use read::ReadTool;

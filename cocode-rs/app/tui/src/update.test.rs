@@ -1,8 +1,10 @@
 use super::*;
+use crate::server_notification_handler::handle_server_notification;
 use crate::state::MessageRole;
-use cocode_protocol::LoopEvent;
-use cocode_protocol::TokenUsage;
+use crate::stream_event_handler::handle_stream_event_tui;
+use cocode_app_server_protocol::ServerNotification;
 use cocode_protocol::ToolResultContent;
+use cocode_protocol::stream_event::StreamEvent;
 
 fn create_test_state() -> AppState {
     AppState::new()
@@ -12,12 +14,12 @@ fn create_test_state() -> AppState {
 fn test_handle_agent_event_turn_started() {
     let mut state = create_test_state();
 
-    handle_agent_event(
+    handle_server_notification(
         &mut state,
-        LoopEvent::TurnStarted {
+        ServerNotification::TurnStarted(cocode_app_server_protocol::TurnStartedParams {
             turn_id: "turn-1".to_string(),
             turn_number: 1,
-        },
+        }),
     );
 
     assert!(state.is_streaming());
@@ -32,16 +34,16 @@ fn test_handle_agent_event_text_delta() {
     let mut state = create_test_state();
     state.ui.start_streaming("turn-1".to_string());
 
-    handle_agent_event(
+    handle_stream_event_tui(
         &mut state,
-        LoopEvent::TextDelta {
+        &StreamEvent::TextDelta {
             turn_id: "turn-1".to_string(),
             delta: "Hello ".to_string(),
         },
     );
-    handle_agent_event(
+    handle_stream_event_tui(
         &mut state,
-        LoopEvent::TextDelta {
+        &StreamEvent::TextDelta {
             turn_id: "turn-1".to_string(),
             delta: "World".to_string(),
         },
@@ -59,12 +61,16 @@ fn test_handle_agent_event_turn_completed() {
     state.ui.start_streaming("turn-1".to_string());
     state.ui.append_streaming("Test content");
 
-    handle_agent_event(
+    handle_server_notification(
         &mut state,
-        LoopEvent::TurnCompleted {
+        ServerNotification::TurnCompleted(cocode_app_server_protocol::TurnCompletedParams {
             turn_id: "turn-1".to_string(),
-            usage: TokenUsage::new(100, 50),
-        },
+            usage: cocode_app_server_protocol::Usage {
+                input_tokens: 100,
+                output_tokens: 50,
+                ..Default::default()
+            },
+        }),
     );
 
     assert!(!state.is_streaming());
@@ -77,9 +83,9 @@ fn test_handle_agent_event_turn_completed() {
 fn test_handle_agent_event_tool_lifecycle() {
     let mut state = create_test_state();
 
-    handle_agent_event(
+    handle_stream_event_tui(
         &mut state,
-        LoopEvent::ToolUseStarted {
+        &StreamEvent::ToolUseStarted {
             call_id: "call-1".to_string(),
             name: "bash".to_string(),
             batch_id: None,
@@ -89,9 +95,9 @@ fn test_handle_agent_event_tool_lifecycle() {
     assert_eq!(state.session.tool_executions.len(), 1);
     assert_eq!(state.session.tool_executions[0].name, "bash");
 
-    handle_agent_event(
+    handle_stream_event_tui(
         &mut state,
-        LoopEvent::ToolUseCompleted {
+        &StreamEvent::ToolUseCompleted {
             call_id: "call-1".to_string(),
             output: ToolResultContent::Text("Success".to_string()),
             is_error: false,

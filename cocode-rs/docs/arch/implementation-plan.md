@@ -174,7 +174,7 @@ core/loop/
 └── src/
     ├── lib.rs
     ├── config.rs       # LoopConfig
-    ├── event.rs        # LoopEvent (complete event types)
+    ├── event.rs        # CoreEvent (complete event types)
     ├── driver.rs       # AgentLoop
     ├── executor.rs     # StreamingToolExecutor (parallel/sequential)
     ├── result.rs       # LoopResult
