@@ -120,9 +120,6 @@ pub struct AttachmentSettings {
     pub config_change: bool,
     /// Enable sandbox violation notifications.
     pub sandbox_violations: bool,
-
-    /// Enable auto mode reminder.
-    pub auto_mode: bool,
     /// Enable effort level reminder.
     pub effort_level: bool,
     /// Enable date change reminder.
@@ -172,7 +169,6 @@ impl Default for AttachmentSettings {
             output_token_usage: true,
             config_change: true,
             sandbox_violations: true,
-            auto_mode: true,
             effort_level: true,
             date_change: true,
             ide_context: true,

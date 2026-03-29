@@ -532,7 +532,7 @@ impl AgentLoopBuilder {
             current_structured_tasks: None,
             current_cron_jobs: None,
             delegate_mode: false,
-            fast_mode: self.fast_mode,
+            fast_mode: self.fast_mode.load(std::sync::atomic::Ordering::Relaxed),
             queued_commands: self.queued_commands.clone(),
             features: self.features,
             web_search_config: self.web_search_config,
@@ -551,7 +551,6 @@ impl AgentLoopBuilder {
             background_agent_tasks: Vec::new(),
             killed_agents: self.killed_agents,
             permission_requester: self.permission_requester,
-            previous_selections: self.previous_selections,
         }
     }
 }

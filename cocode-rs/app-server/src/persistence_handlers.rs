@@ -22,9 +22,7 @@ use tracing::warn;
 use crate::session_factory::SessionHandle;
 
 /// List saved sessions from the storage directory with pagination.
-pub async fn handle_session_list(
-    params: &SessionListRequestParams,
-) -> SessionListResult {
+pub async fn handle_session_list(params: &SessionListRequestParams) -> SessionListResult {
     let limit = params.limit.unwrap_or(50).max(1) as usize;
     let manager = SessionManager::new();
 
@@ -149,9 +147,7 @@ pub async fn handle_session_read(session_id: &str) -> serde_json::Value {
 pub async fn handle_session_archive(session_id: &str) -> serde_json::Value {
     let path = cocode_session::persistence::session_file_path(session_id);
 
-    if !cocode_session::persistence::session_file_path(session_id)
-        .exists()
-    {
+    if !cocode_session::persistence::session_file_path(session_id).exists() {
         return serde_json::json!({
             "status": "not_found",
             "error": format!("Session '{session_id}' not found"),
@@ -162,8 +158,7 @@ pub async fn handle_session_archive(session_id: &str) -> serde_json::Value {
         Ok(()) => {
             info!(session_id, "Session archived (deleted)");
             // Also remove the backup directory if it exists
-            let backup_dir = cocode_session::persistence::default_sessions_dir()
-                .join(session_id);
+            let backup_dir = cocode_session::persistence::default_sessions_dir().join(session_id);
             if backup_dir.exists() {
                 let _ = tokio::fs::remove_dir_all(&backup_dir).await;
             }
@@ -232,10 +227,7 @@ pub async fn handle_session_resume(
 }
 
 /// Read effective configuration, optionally filtered by key.
-pub fn handle_config_read(
-    config: &ConfigManager,
-    key: Option<&str>,
-) -> ConfigReadResult {
+pub fn handle_config_read(config: &ConfigManager, key: Option<&str>) -> ConfigReadResult {
     let app_config = config.app_config();
 
     let config_json = serde_json::to_value(&app_config).unwrap_or_default();
@@ -259,8 +251,7 @@ pub async fn handle_config_write(
     let config_dir = match scope {
         ConfigWriteScope::User => cocode_config::find_cocode_home(),
         ConfigWriteScope::Project => {
-            let cwd = std::env::current_dir()
-                .unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             cwd.join(".cocode")
         }
     };
@@ -272,8 +263,7 @@ pub async fn handle_config_write(
         let content = tokio::fs::read_to_string(&config_path)
             .await
             .map_err(|e| format!("Failed to read config: {e}"))?;
-        serde_json::from_str(&content)
-            .map_err(|e| format!("Failed to parse config: {e}"))?
+        serde_json::from_str(&content).map_err(|e| format!("Failed to parse config: {e}"))?
     } else {
         serde_json::json!({})
     };
@@ -325,11 +315,9 @@ pub async fn handle_rewind_files(
     };
 
     if turn_number < 0 {
-        return ServerNotification::RewindFailed(
-            cocode_app_server_protocol::RewindFailedParams {
-                error: format!("Invalid turn_id: '{}'", params.turn_id),
-            },
-        );
+        return ServerNotification::RewindFailed(cocode_app_server_protocol::RewindFailedParams {
+            error: format!("Invalid turn_id: '{}'", params.turn_id),
+        });
     }
 
     // First, rewind files via the snapshot manager
@@ -362,18 +350,14 @@ pub async fn handle_rewind_files(
 
     info!(
         turn = turn_number,
-        restored_files,
-        messages_removed,
-        "Rewind completed"
+        restored_files, messages_removed, "Rewind completed"
     );
 
-    ServerNotification::RewindCompleted(
-        cocode_app_server_protocol::RewindCompletedParams {
-            rewound_turn: turn_number,
-            restored_files,
-            messages_removed,
-        },
-    )
+    ServerNotification::RewindCompleted(cocode_app_server_protocol::RewindCompletedParams {
+        rewound_turn: turn_number,
+        restored_files,
+        messages_removed,
+    })
 }
 
 /// Extract a nested value from a JSON object using dot-separated key path.

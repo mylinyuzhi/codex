@@ -241,18 +241,16 @@ impl Tool for TaskTool {
                 }
 
                 // Emit SubagentSpawned event for TUI visibility
-                ctx.emit_event(
-                    cocode_protocol::CoreEvent::Protocol(
-                        cocode_protocol::server_notification::ServerNotification::SubagentSpawned(
-                            cocode_protocol::server_notification::SubagentSpawnedParams {
-                                agent_id: result.agent_id.clone(),
-                                agent_type: subagent_type.to_string(),
-                                description: description.to_string(),
-                                color: result.color.clone(),
-                            },
-                        ),
+                ctx.emit_event(cocode_protocol::CoreEvent::Protocol(
+                    cocode_protocol::server_notification::ServerNotification::SubagentSpawned(
+                        cocode_protocol::server_notification::SubagentSpawnedParams {
+                            agent_id: result.agent_id.clone(),
+                            agent_type: subagent_type.to_string(),
+                            description: description.to_string(),
+                            color: result.color.clone(),
+                        },
                     ),
-                )
+                ))
                 .await;
 
                 if result.output_file.is_some() {

@@ -617,6 +617,33 @@ impl AgentLoop {
         result
     }
 
+    /// Run the agent loop with multimodal content parts (text + images).
+    ///
+    /// Extracts text from content parts, adds the multimodal user message
+    /// to history, then delegates to `run` for the full lifecycle.
+    pub async fn run_with_content(
+        &mut self,
+        content: Vec<cocode_inference::UserContentPart>,
+    ) -> crate::error::Result<LoopResult> {
+        // Extract text for the `run` entrypoint (hooks/otel use the string form)
+        let text_preview: String = content
+            .iter()
+            .filter_map(|part| match part {
+                cocode_inference::UserContentPart::Text(tp) => Some(tp.text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Pre-add the multimodal message so `run` finds it in history
+        let turn_id = uuid::Uuid::new_v4().to_string();
+        let user_msg = TrackedMessage::user_with_content(content, &turn_id);
+        let turn = Turn::new(1, user_msg);
+        self.message_history.add_turn(turn);
+
+        self.run(&text_preview).await
+    }
+
     /// The 18-step core message loop.
     ///
     /// This implements the algorithm from `docs/arch/core-loop.md`:
@@ -2056,6 +2083,7 @@ impl AgentLoop {
                             slug.to_string(),
                             self.turn_number,
                             self.config.permission_mode,
+                            None,
                         );
                         // Enforce Plan permission mode so the executor
                         // blocks non-read-only tools (especially Bash).

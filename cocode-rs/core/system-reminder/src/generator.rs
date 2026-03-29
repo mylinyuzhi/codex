@@ -831,6 +831,12 @@ impl Default for GeneratorContextBuilder<'_> {
             mcp_instructions_changes: Vec::new(),
             session_name: None,
             config_changes: Vec::new(),
+            auto_mode: false,
+            auto_mode_exiting: false,
+            thinking_effort: None,
+            last_recorded_date: None,
+            ide_selection: None,
+            ide_opened_file: None,
         }
     }
 }

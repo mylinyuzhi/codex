@@ -40,7 +40,6 @@ use tracing_subscriber::Layer;
 use tracing_subscriber::fmt;
 use tracing_subscriber::prelude::*;
 
-
 /// Logging state returned by init_tui_logging.
 /// All fields must be kept alive for the duration of the program.
 struct TuiLoggingState {

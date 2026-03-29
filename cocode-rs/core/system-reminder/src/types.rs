@@ -189,8 +189,7 @@ pub enum AttachmentType {
     /// Configuration change notification.
     ConfigChange,
 
-    // === Auto mode / effort / date / IDE ===
-    AutoMode,
+    // === Effort / date / IDE ===
     EffortLevel,
     DateChange,
     SelectedLinesInIde,
@@ -245,7 +244,6 @@ impl AttachmentType {
             | AttachmentType::SessionName
             | AttachmentType::OutputTokenUsage
             | AttachmentType::ConfigChange
-            | AttachmentType::AutoMode
             | AttachmentType::EffortLevel
             | AttachmentType::DateChange
             | AttachmentType::SelectedLinesInIde
@@ -312,7 +310,6 @@ impl AttachmentType {
             | AttachmentType::SessionName
             | AttachmentType::OutputTokenUsage
             | AttachmentType::ConfigChange
-            | AttachmentType::AutoMode
             | AttachmentType::EffortLevel => ReminderTier::MainAgentOnly,
 
             // UserPrompt tier
@@ -373,7 +370,6 @@ impl AttachmentType {
             AttachmentType::SessionName => "session_name",
             AttachmentType::OutputTokenUsage => "output_token_usage",
             AttachmentType::ConfigChange => "config_change",
-            AttachmentType::AutoMode => "auto_mode",
             AttachmentType::EffortLevel => "effort_level",
             AttachmentType::DateChange => "date_change",
             AttachmentType::SelectedLinesInIde => "selected_lines_in_ide",

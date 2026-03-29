@@ -296,9 +296,7 @@ impl Processor {
                     .await;
                     return;
                 }
-                match persistence_handlers::handle_session_resume(&self.config, &params)
-                    .await
-                {
+                match persistence_handlers::handle_session_resume(&self.config, &params).await {
                     Ok(handle) => {
                         let session_id = handle.state.session.id.clone();
                         let model = handle.state.model().to_string();
@@ -468,23 +466,19 @@ impl Processor {
 
             ClientRequest::SessionRead(params) => {
                 debug!(%conn_id, session_id = params.session_id, "Session read");
-                let result =
-                    persistence_handlers::handle_session_read(&params.session_id).await;
+                let result = persistence_handlers::handle_session_read(&params.session_id).await;
                 self.send_response(conn_id, id, result).await;
             }
 
             ClientRequest::SessionArchive(params) => {
                 debug!(%conn_id, session_id = params.session_id, "Session archive");
-                let result =
-                    persistence_handlers::handle_session_archive(&params.session_id).await;
+                let result = persistence_handlers::handle_session_archive(&params.session_id).await;
                 self.send_response(conn_id, id, result).await;
             }
 
             ClientRequest::ConfigRead(params) => {
-                let result = persistence_handlers::handle_config_read(
-                    &self.config,
-                    params.key.as_deref(),
-                );
+                let result =
+                    persistence_handlers::handle_config_read(&self.config, params.key.as_deref());
                 self.send_response(
                     conn_id,
                     id,
@@ -504,12 +498,8 @@ impl Processor {
                 .await
                 {
                     Ok(()) => {
-                        self.send_response(
-                            conn_id,
-                            id,
-                            serde_json::json!({"status": "ok"}),
-                        )
-                        .await;
+                        self.send_response(conn_id, id, serde_json::json!({"status": "ok"}))
+                            .await;
                     }
                     Err(e) => {
                         self.send_error(
@@ -535,11 +525,8 @@ impl Processor {
 
             ClientRequest::RewindFiles(params) => {
                 if let Some(handle) = self.sessions.get_mut(&conn_id) {
-                    let notification = persistence_handlers::handle_rewind_files(
-                        &mut handle.state,
-                        &params,
-                    )
-                    .await;
+                    let notification =
+                        persistence_handlers::handle_rewind_files(&mut handle.state, &params).await;
                     self.send_notification(conn_id, notification);
                 }
                 self.send_response(conn_id, id, serde_json::json!({"status": "ok"}))

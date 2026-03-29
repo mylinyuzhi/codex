@@ -123,8 +123,16 @@ impl Tool for ExitPlanModeTool {
         // Ultraplan: plan was pre-written by remote session — no implementation needed.
         // CC: chunks.143.mjs:2997-3001 returns a summary-only directive.
         if ctx.is_ultraplan {
-            ctx.emit_event(cocode_protocol::LoopEvent::PlanModeExited { approved: true })
-                .await;
+            ctx.emit_event(cocode_protocol::CoreEvent::Protocol(
+                cocode_protocol::server_notification::ServerNotification::PlanModeChanged(
+                    cocode_protocol::server_notification::PlanModeChangedParams {
+                        entered: false,
+                        plan_file: None,
+                        approved: Some(true),
+                    },
+                ),
+            ))
+            .await;
             return Ok(ToolOutput::text(
                 "User has reviewed the ultraplan. There is nothing else to do. \
                  Respond with a brief summary of the plan.",
