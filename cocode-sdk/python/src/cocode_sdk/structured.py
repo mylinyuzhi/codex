@@ -48,6 +48,15 @@ class TypedClient(CocodeClient, Generic[T]):
 
         Raises ValueError if no structured output is returned.
         """
+        result, _ = await self.get_typed_result_with_metadata()
+        return result
+
+    async def get_typed_result_with_metadata(self) -> tuple[T, SessionResultParams]:
+        """Consume events and return both typed output and session metadata.
+
+        Returns a tuple of (typed_output, session_result_params).
+        Raises ValueError if no structured output is returned.
+        """
         session_result: SessionResultParams | None = None
         async for event in self.events():
             sr = event.as_session_result()
@@ -58,8 +67,10 @@ class TypedClient(CocodeClient, Generic[T]):
             raise ValueError("No structured output returned from session")
 
         try:
-            return self._output_type.model_validate(session_result.structured_output)
+            typed = self._output_type.model_validate(session_result.structured_output)
         except Exception as exc:
             raise ValueError(
                 f"Structured output does not match {self._output_type.__name__}: {exc}"
             ) from exc
+
+        return typed, session_result

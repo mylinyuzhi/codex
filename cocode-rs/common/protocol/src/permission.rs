@@ -26,6 +26,12 @@ pub enum PermissionMode {
     Plan,
     /// Accept edits automatically, but ask for other operations.
     AcceptEdits,
+    /// Auto mode - autonomous execution (feature-gated).
+    ///
+    /// CC equivalent: `"auto"` mode — gated by `cbq()` in mode cycling.
+    /// Allows full tool execution without prompts, similar to Bypass but
+    /// feature-gated and available in the mode cycling sequence.
+    Auto,
     /// Bypass all permission checks (dangerous).
     Bypass,
     /// Never ask for permission, deny if not pre-approved.
@@ -40,25 +46,61 @@ impl PermissionMode {
 
     /// Check if this mode allows automatic edit acceptance.
     pub fn auto_accept_edits(&self) -> bool {
-        matches!(self, PermissionMode::AcceptEdits | PermissionMode::Bypass)
+        matches!(
+            self,
+            PermissionMode::AcceptEdits | PermissionMode::Auto | PermissionMode::Bypass
+        )
     }
 
     /// Check if this mode bypasses all permission checks.
     pub fn is_bypass(&self) -> bool {
-        matches!(self, PermissionMode::Bypass)
+        matches!(self, PermissionMode::Bypass | PermissionMode::Auto)
     }
 
-    /// Cycle to the next permission mode.
+    /// Cycle to the next permission mode (without feature gates).
     ///
-    /// Claude Code cycles: Default → AcceptEdits → Plan → Default.
-    /// Bypass and DontAsk don't participate in the cycle (they stay as-is).
+    /// Base cycle: Default → AcceptEdits → Plan → Default.
+    /// Use [`next_cycle_with_gates`] for the full cycle including Auto/Bypass.
+    /// Bypass, Auto, and DontAsk don't participate in the base cycle.
     pub fn next_cycle(&self) -> Self {
         match self {
             PermissionMode::Default => PermissionMode::AcceptEdits,
             PermissionMode::AcceptEdits => PermissionMode::Plan,
             PermissionMode::Plan => PermissionMode::Default,
-            // Bypass and DontAsk are sticky — they don't participate in the cycle
+            // Auto, Bypass, DontAsk are sticky — they don't participate in the base cycle
             other => *other,
+        }
+    }
+
+    /// Cycle to the next permission mode with feature gates.
+    ///
+    /// CC equivalent: `W26` function in `chunks.191.mjs:3007-3024`.
+    ///
+    /// Full cycle: Default → AcceptEdits → Plan → [Bypass | Auto | Default].
+    /// - `bypass_available`: Bypass Permissions mode is available (enterprise).
+    /// - `auto_available`: Auto mode is feature-gated.
+    pub fn next_cycle_with_gates(&self, bypass_available: bool, auto_available: bool) -> Self {
+        match self {
+            PermissionMode::Default => PermissionMode::AcceptEdits,
+            PermissionMode::AcceptEdits => PermissionMode::Plan,
+            PermissionMode::Plan => {
+                if bypass_available {
+                    PermissionMode::Bypass
+                } else if auto_available {
+                    PermissionMode::Auto
+                } else {
+                    PermissionMode::Default
+                }
+            }
+            PermissionMode::Bypass => {
+                if auto_available {
+                    PermissionMode::Auto
+                } else {
+                    PermissionMode::Default
+                }
+            }
+            PermissionMode::Auto => PermissionMode::Default,
+            PermissionMode::DontAsk => PermissionMode::Default,
         }
     }
 
@@ -86,6 +128,7 @@ impl FromStr for PermissionMode {
             "default" => Ok(PermissionMode::Default),
             "plan" => Ok(PermissionMode::Plan),
             "acceptedits" => Ok(PermissionMode::AcceptEdits),
+            "auto" => Ok(PermissionMode::Auto),
             "bypasspermissions" | "bypass" => Ok(PermissionMode::Bypass),
             "dontask" => Ok(PermissionMode::DontAsk),
             _ => Err(PermissionModeParseError(s.to_string())),
@@ -101,7 +144,7 @@ impl std::fmt::Display for PermissionModeParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "unknown permission mode: '{}'. Valid values: default, plan, acceptEdits, bypassPermissions, dontAsk",
+            "unknown permission mode: '{}'. Valid values: default, plan, acceptEdits, auto, bypassPermissions, dontAsk",
             self.0
         )
     }

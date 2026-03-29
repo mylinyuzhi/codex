@@ -5,6 +5,7 @@
 
 use serde::Deserialize;
 use serde::Serialize;
+use tracing::debug;
 
 /// Categories for token budget allocation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -76,6 +77,12 @@ pub struct ContextBudget {
 impl ContextBudget {
     /// Create a new context budget.
     pub fn new(total_tokens: i32, output_reserved: i32) -> Self {
+        debug!(
+            total_tokens,
+            output_reserved,
+            input_budget = total_tokens - output_reserved,
+            "Context budget created"
+        );
         Self {
             total_tokens,
             output_reserved,

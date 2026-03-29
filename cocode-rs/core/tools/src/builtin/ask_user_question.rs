@@ -131,6 +131,10 @@ impl Tool for AskUserQuestionTool {
         true
     }
 
+    fn should_defer(&self) -> bool {
+        true
+    }
+
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
         let questions = input["questions"].as_array().ok_or_else(|| {
             crate::error::tool_error::InvalidInputSnafu {
@@ -227,10 +231,12 @@ impl Tool for AskUserQuestionTool {
             }
 
             // Emit event for TUI to show question overlay
-            ctx.emit_event(cocode_protocol::LoopEvent::QuestionAsked {
-                request_id,
-                questions: Value::Array(questions.clone()),
-            })
+            ctx.emit_event(cocode_protocol::CoreEvent::Tui(
+                cocode_protocol::TuiEvent::QuestionAsked {
+                    request_id,
+                    questions: Value::Array(questions.clone()),
+                },
+            ))
             .await;
 
             // Wait for user response (blocks until TUI sends answers)

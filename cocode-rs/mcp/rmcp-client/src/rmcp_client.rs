@@ -61,6 +61,7 @@ use tokio::io::BufReader;
 use tokio::process::Command;
 use tokio::sync::Mutex;
 use tokio::time;
+use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
@@ -430,7 +431,7 @@ impl RmcpClient {
             .peer()
             .peer_info()
             .ok_or_else(|| anyhow!("handshake succeeded but server info was missing"))?;
-        let initialize_result = convert_to_mcp(initialize_result_rmcp)?;
+        let initialize_result: InitializeResult = convert_to_mcp(initialize_result_rmcp)?;
 
         {
             let mut guard = self.state.lock().await;
@@ -446,6 +447,11 @@ impl RmcpClient {
             warn!("failed to persist OAuth tokens after initialize: {error}");
         }
 
+        info!(
+            server_name = %initialize_result.server_info.name,
+            protocol_version = %initialize_result.protocol_version,
+            "MCP: initialized"
+        );
         Ok(initialize_result)
     }
 
@@ -577,14 +583,20 @@ impl RmcpClient {
         Ok(converted)
     }
 
+    #[tracing::instrument(skip(self, arguments), fields(tool = %name))]
     pub async fn call_tool(
         &self,
         name: String,
         arguments: Option<serde_json::Value>,
         timeout: Option<Duration>,
     ) -> Result<CallToolResult> {
+        debug!(has_args = arguments.is_some(), "MCP: calling tool");
+        let start = std::time::Instant::now();
         self.refresh_oauth_if_needed().await;
-        let params = CallToolRequestParams { arguments, name };
+        let params = CallToolRequestParams {
+            arguments,
+            name: name.clone(),
+        };
         let rmcp_params: CallToolRequestParam = convert_to_rmcp(params)?;
         let result = self
             .run_service_operation("tools/call", timeout, {
@@ -597,6 +609,12 @@ impl RmcpClient {
             .await?;
         let converted = convert_call_tool_result(result)?;
         self.persist_oauth_tokens().await;
+        debug!(
+            tool = %name,
+            is_error = converted.is_error.unwrap_or(false),
+            duration_ms = start.elapsed().as_millis() as i64,
+            "MCP: tool call completed"
+        );
         Ok(converted)
     }
 

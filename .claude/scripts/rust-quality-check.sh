@@ -2,6 +2,10 @@
 # Rust quality gate — runs when Claude stops after editing Rust files.
 # Exit 0 = pass (stop proceeds), Exit 2 = fail (stop blocked, stderr fed to agent).
 
+# Ensure cargo/rustup are on PATH (hooks run without .bashrc)
+[ -f "/usr/local/cargo/env" ] && . "/usr/local/cargo/env"
+[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
+
 cd "${CLAUDE_PROJECT_DIR:?CLAUDE_PROJECT_DIR not set}/cocode-rs"
 
 # Check if any .rs files were modified (staged or unstaged)

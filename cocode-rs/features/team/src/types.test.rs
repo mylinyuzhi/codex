@@ -9,8 +9,11 @@ fn message_type_serde_round_trip() {
         MessageType::Broadcast,
         MessageType::ShutdownRequest,
         MessageType::ShutdownResponse,
+        MessageType::PlanApprovalRequest,
         MessageType::PlanApprovalResponse,
         MessageType::IdleNotification,
+        MessageType::SandboxPermissionRequest,
+        MessageType::SandboxPermissionResponse,
     ];
     for mt in types {
         let json = serde_json::to_string(&mt).unwrap();
@@ -151,6 +154,86 @@ fn format_team_summary_with_team() {
     assert!(summary.contains("Team: t1"));
     assert!(summary.contains("alice"));
     assert!(summary.contains("[active]"));
+}
+
+#[test]
+fn sandbox_permission_request_round_trip() {
+    let req = SandboxPermissionRequest::new(
+        "npm install",
+        SandboxRestrictionKind::Network,
+        "registry.npmjs.org",
+    )
+    .with_worker_name("builder-1")
+    .with_worker_color("#00ff00");
+    assert!(req.request_id.starts_with("sandbox-"));
+    assert!(req.created_at > 0);
+    assert_eq!(req.worker_name.as_deref(), Some("builder-1"));
+
+    let msg = req.clone().into_message("worker-1", "leader").unwrap();
+    assert_eq!(msg.message_type, MessageType::SandboxPermissionRequest);
+    assert_eq!(msg.from, "worker-1");
+    assert_eq!(msg.to, "leader");
+
+    let parsed = SandboxPermissionRequest::from_message(&msg).unwrap();
+    assert_eq!(parsed.request_id, req.request_id);
+    assert_eq!(parsed.command, "npm install");
+    assert_eq!(parsed.restriction_kind, SandboxRestrictionKind::Network);
+    assert_eq!(parsed.detail, "registry.npmjs.org");
+    assert_eq!(parsed.worker_name.as_deref(), Some("builder-1"));
+    assert_eq!(parsed.worker_color.as_deref(), Some("#00ff00"));
+    assert_eq!(parsed.created_at, req.created_at);
+}
+
+#[test]
+fn sandbox_permission_request_optional_fields_default() {
+    let req = SandboxPermissionRequest::new("ls", SandboxRestrictionKind::Filesystem, "/etc");
+    assert!(req.worker_name.is_none());
+    assert!(req.worker_color.is_none());
+
+    let msg = req.into_message("w", "l").unwrap();
+    let parsed = SandboxPermissionRequest::from_message(&msg).unwrap();
+    assert!(parsed.worker_name.is_none());
+    assert!(parsed.worker_color.is_none());
+}
+
+#[test]
+fn sandbox_permission_response_round_trip() {
+    let resp = SandboxPermissionResponse {
+        request_id: "sandbox-123-abcd".to_string(),
+        approved: true,
+        detail: Some("registry.npmjs.org".to_string()),
+        timestamp: 1711540800000,
+    };
+
+    let msg = resp.into_message("leader", "worker-1").unwrap();
+    assert_eq!(msg.message_type, MessageType::SandboxPermissionResponse);
+
+    let parsed = SandboxPermissionResponse::from_message(&msg).unwrap();
+    assert_eq!(parsed.request_id, "sandbox-123-abcd");
+    assert!(parsed.approved);
+    assert_eq!(parsed.detail.as_deref(), Some("registry.npmjs.org"));
+    assert_eq!(parsed.timestamp, 1711540800000);
+}
+
+#[test]
+fn sandbox_restriction_kind_serde_round_trip() {
+    let kinds = [
+        SandboxRestrictionKind::Network,
+        SandboxRestrictionKind::Filesystem,
+        SandboxRestrictionKind::UnixSocket,
+    ];
+    for kind in kinds {
+        let json = serde_json::to_string(&kind).unwrap();
+        let parsed: SandboxRestrictionKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, kind);
+    }
+}
+
+#[test]
+fn sandbox_permission_from_wrong_type_returns_none() {
+    let msg = AgentMessage::new("a", "b", "{}", MessageType::Message);
+    assert!(SandboxPermissionRequest::from_message(&msg).is_none());
+    assert!(SandboxPermissionResponse::from_message(&msg).is_none());
 }
 
 #[test]

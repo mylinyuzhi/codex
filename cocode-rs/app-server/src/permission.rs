@@ -2,9 +2,9 @@
 //!
 //! Implements [`PermissionRequester`] so the tool executor can block on
 //! approval decisions from the client. Each approval request emits a
-//! `LoopEvent::ApprovalRequired` (picked up by the event loop to emit
-//! `ServerRequest::AskForApproval`), then blocks on a oneshot channel
-//! until `resolve()` is called with the client's decision.
+//! `CoreEvent::Tui(TuiEvent::ApprovalRequired)` (picked up by the event
+//! loop to emit `ServerRequest::AskForApproval`), then blocks on a oneshot
+//! channel until `resolve()` is called with the client's decision.
 //!
 //! Shared by both the CLI SDK mode and the app-server WebSocket mode.
 
@@ -16,7 +16,8 @@ use cocode_app_server_protocol::AskForApprovalParams;
 use cocode_app_server_protocol::ServerRequest;
 use cocode_protocol::ApprovalDecision;
 use cocode_protocol::ApprovalRequest;
-use cocode_protocol::LoopEvent;
+use cocode_protocol::CoreEvent;
+use cocode_protocol::TuiEvent;
 use cocode_tools::PermissionRequester;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
@@ -28,12 +29,12 @@ use tracing::warn;
 pub struct SdkPermissionBridge {
     /// Pending requests keyed by request_id → oneshot sender.
     pending: Arc<Mutex<HashMap<String, oneshot::Sender<ApprovalDecision>>>>,
-    /// Event channel for emitting `LoopEvent::ApprovalRequired`.
-    event_tx: mpsc::Sender<LoopEvent>,
+    /// Event channel for emitting `CoreEvent::Tui(TuiEvent::ApprovalRequired)`.
+    event_tx: mpsc::Sender<CoreEvent>,
 }
 
 impl SdkPermissionBridge {
-    pub fn new(event_tx: mpsc::Sender<LoopEvent>) -> Self {
+    pub fn new(event_tx: mpsc::Sender<CoreEvent>) -> Self {
         Self {
             pending: Arc::new(Mutex::new(HashMap::new())),
             event_tx,
@@ -100,9 +101,9 @@ impl PermissionRequester for SdkPermissionBridge {
 
         if let Err(e) = self
             .event_tx
-            .send(LoopEvent::ApprovalRequired {
+            .send(CoreEvent::Tui(TuiEvent::ApprovalRequired {
                 request: request.clone(),
-            })
+            }))
             .await
         {
             warn!("Failed to emit ApprovalRequired event: {e}");

@@ -92,7 +92,7 @@ fn test_proxy_env_vars_populated_with_network() {
         vars.get("ALL_PROXY").map(String::as_str),
         Some("socks5h://localhost:1080")
     );
-    assert!(vars.get("NO_PROXY").is_some());
+    assert!(vars.contains_key("NO_PROXY"));
 }
 
 #[test]
@@ -378,4 +378,95 @@ fn test_describe_network_with_proxy_and_domains() {
     let denied = parsed["deniedHosts"].as_array().expect("array");
     assert_eq!(denied.len(), 1);
     assert_eq!(denied[0].as_str(), Some("evil.com"));
+}
+
+// ==========================================================================
+// ExternalSandbox mode
+// ==========================================================================
+
+#[test]
+fn test_external_sandbox_is_active() {
+    let settings = SandboxSettings::enabled();
+    let config = SandboxConfig {
+        enforcement: EnforcementLevel::WorkspaceWrite,
+        ..Default::default()
+    };
+    let state = SandboxState::external(EnforcementLevel::WorkspaceWrite, settings, config);
+    assert!(state.is_active());
+    assert!(state.is_external_sandbox());
+    assert!(!state.network_active());
+}
+
+#[test]
+fn test_external_sandbox_should_sandbox_commands() {
+    let settings = SandboxSettings::enabled();
+    let config = SandboxConfig {
+        enforcement: EnforcementLevel::WorkspaceWrite,
+        ..Default::default()
+    };
+    let state = SandboxState::external(EnforcementLevel::WorkspaceWrite, settings, config);
+    assert!(state.should_sandbox_command("echo hello", SandboxBypass::No));
+    // Bypass is honored in open mode (allow_unsandboxed_commands=true by default)
+    assert!(!state.should_sandbox_command("echo hello", SandboxBypass::Requested));
+}
+
+#[test]
+fn test_external_sandbox_should_sandbox_closed_mode() {
+    let mut settings = SandboxSettings::enabled();
+    settings.allow_unsandboxed_commands = false;
+    let config = SandboxConfig {
+        enforcement: EnforcementLevel::WorkspaceWrite,
+        ..Default::default()
+    };
+    let state = SandboxState::external(EnforcementLevel::WorkspaceWrite, settings, config);
+    // In closed mode, bypass is rejected
+    assert!(state.should_sandbox_command("echo hello", SandboxBypass::Requested));
+}
+
+#[test]
+fn test_external_sandbox_auto_allow() {
+    let settings = SandboxSettings::enabled();
+    let config = SandboxConfig {
+        enforcement: EnforcementLevel::WorkspaceWrite,
+        ..Default::default()
+    };
+    let state = SandboxState::external(EnforcementLevel::WorkspaceWrite, settings, config);
+    assert!(state.auto_allow_enabled());
+}
+
+#[test]
+fn test_external_sandbox_debug_includes_flag() {
+    let settings = SandboxSettings::enabled();
+    let config = SandboxConfig {
+        enforcement: EnforcementLevel::WorkspaceWrite,
+        ..Default::default()
+    };
+    let state = SandboxState::external(EnforcementLevel::WorkspaceWrite, settings, config);
+    let debug_str = format!("{state:?}");
+    assert!(
+        debug_str.contains("external_sandbox: true"),
+        "Debug output should contain external_sandbox: {debug_str}"
+    );
+}
+
+// ==========================================================================
+// add_writable_root
+// ==========================================================================
+
+#[test]
+fn test_add_writable_root_adds_new_path() {
+    let state = make_active_state();
+    let initial_count = state.config().writable_roots.len();
+    state.add_writable_root(std::path::PathBuf::from("/tmp/new_worktree"));
+    assert_eq!(state.config().writable_roots.len(), initial_count + 1);
+}
+
+#[test]
+fn test_add_writable_root_deduplicates() {
+    let state = make_active_state();
+    let path = std::path::PathBuf::from("/tmp/dedup_test");
+    state.add_writable_root(path.clone());
+    let count_after_first = state.config().writable_roots.len();
+    state.add_writable_root(path);
+    assert_eq!(state.config().writable_roots.len(), count_after_first);
 }

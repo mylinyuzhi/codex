@@ -458,8 +458,8 @@ impl ConfigManager {
 
     /// Build a `RoleSelection` from a `ModelSpec` and optional `ModelInfo`.
     ///
-    /// Populates display_name, thinking_level, and supported_thinking_levels
-    /// from the model info when available.
+    /// Populates display_name, thinking_level, supported_thinking_levels,
+    /// and capabilities from the model info when available.
     fn build_selection(mut spec: ModelSpec, model_info: Option<ModelInfo>) -> RoleSelection {
         let Some(info) = model_info else {
             return RoleSelection::new(spec);
@@ -470,6 +470,7 @@ impl ConfigManager {
             None => RoleSelection::new(spec),
         };
         selection.supported_thinking_levels = info.supported_thinking_levels;
+        selection.capabilities = info.capabilities;
         selection
     }
 

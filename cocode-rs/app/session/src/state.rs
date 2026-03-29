@@ -23,8 +23,8 @@ use cocode_loop::LoopResult;
 use cocode_loop::StopReason;
 use cocode_message::MessageHistory;
 use cocode_plan_mode::PlanModeState;
+use cocode_protocol::CoreEvent;
 use cocode_protocol::Feature;
-use cocode_protocol::LoopEvent;
 use cocode_protocol::PermissionMode;
 use cocode_protocol::ProviderApi;
 use cocode_protocol::RoleSelection;
@@ -56,7 +56,6 @@ use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::debug;
 use tracing::info;
 
 use cocode_error::StatusCode;
@@ -247,6 +246,11 @@ pub struct SessionState {
     /// in Step 6.5 and injected as steering system-reminders.
     queued_commands: Arc<Mutex<Vec<QueuedCommandInfo>>>,
 
+    /// Fast mode toggle shared with the running `AgentLoop`.
+    /// TUI can set this while a turn is executing; the loop reads it
+    /// at each API request via `Arc<AtomicBool>`.
+    fast_mode: Arc<std::sync::atomic::AtomicBool>,
+
     /// Optional suffix appended to the end of the system prompt.
     system_prompt_suffix: Option<String>,
 
@@ -349,6 +353,14 @@ pub struct SessionState {
     /// When set, the `AgentLoop` wires this into the `StreamingToolExecutor`
     /// so tools needing approval can block on a response from the SDK client.
     permission_requester: Option<Arc<dyn cocode_tools::PermissionRequester>>,
+
+    /// Role selections from the previous turn for detecting model/provider switches.
+    ///
+    /// Updated after each turn completes; `None` on the first turn of a session.
+    /// Passed to the `AgentLoop` builder so the loop can detect selection changes,
+    /// strip stale reasoning signatures, and populate `config_changes` for the
+    /// `ConfigChangeGenerator` system reminder.
+    previous_turn_selections: Option<RoleSelections>,
 }
 
 impl SessionState {
@@ -754,6 +766,33 @@ impl SessionState {
             None
         };
 
+        // Defer built-in tools marked as deferrable and register
+        // the search tool so the model can discover them on demand.
+        let deferred_builtin_names = tool_registry.defer_builtin_tool_definitions();
+        if !deferred_builtin_names.is_empty() {
+            let deferred_info: Vec<cocode_tools::builtin::DeferredToolInfo> = tool_registry
+                .deferred_tool_info()
+                .into_iter()
+                .map(|(name, desc)| cocode_tools::builtin::DeferredToolInfo {
+                    name,
+                    description: desc.unwrap_or_default(),
+                })
+                .collect();
+
+            let mcp_snapshot = tool_registry.mcp_tool_snapshot();
+            let mcp_tools_arc = Arc::new(tokio::sync::Mutex::new(mcp_snapshot));
+            let deferred_arc = Arc::new(deferred_info);
+            tool_registry.register(cocode_tools::builtin::McpSearchTool::with_deferred_builtin(
+                mcp_tools_arc,
+                deferred_arc,
+            ));
+            tracing::info!(
+                count = deferred_builtin_names.len(),
+                tools = ?deferred_builtin_names,
+                "Deferred built-in tool definitions for on-demand discovery"
+            );
+        }
+
         let state_result = Ok(Self {
             session,
             message_history: MessageHistory::new(),
@@ -779,6 +818,7 @@ impl SessionState {
             sandbox_proxy,
             sandbox_bridge,
             queued_commands: Arc::new(Mutex::new(Vec::new())),
+            fast_mode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             system_prompt_suffix: plugin_agent_suffix,
             system_prompt_override: None,
             structured_output_schema: None,
@@ -802,6 +842,7 @@ impl SessionState {
             team_store,
             team_mailbox,
             permission_requester: None,
+            previous_turn_selections: None,
         });
 
         // Clean up orphaned worktrees at session startup (Gap 8 fix)
@@ -884,7 +925,7 @@ impl SessionState {
         self.session.touch();
 
         // Create event channel
-        let (event_tx, mut event_rx) = mpsc::channel::<LoopEvent>(256);
+        let (event_tx, mut event_rx) = mpsc::channel::<CoreEvent>(256);
 
         // Spawn task to handle events (logging for now)
         let cancel_token = self.cancel_token.clone();
@@ -893,7 +934,7 @@ impl SessionState {
                 if cancel_token.is_cancelled() {
                     break;
                 }
-                Self::handle_event(&event);
+                tracing::debug!(?event, "Session event");
             }
         });
 
@@ -1010,6 +1051,7 @@ impl SessionState {
         .hooks(self.hook_registry.clone())
         .cancel_token(self.cancel_token.clone())
         .queued_commands(self.queued_commands.clone())
+        .fast_mode(self.fast_mode.clone())
         .features(self.config.features.clone())
         .web_search_config(self.config.web_search_config.clone())
         .web_fetch_config(self.config.web_fetch_config.clone())
@@ -1031,6 +1073,11 @@ impl SessionState {
         .team_store(Arc::clone(&self.team_store))
         .team_mailbox(Arc::clone(&self.team_mailbox));
 
+        // Wire previous selections for model/provider switch detection
+        if let Some(ref prev) = self.previous_turn_selections {
+            builder = builder.previous_selections(prev.clone());
+        }
+
         // Wire snapshot manager for rewind support (main turn only)
         if let Some(ref sm) = self.snapshot_manager {
             builder = builder.snapshot_manager(sm.clone());
@@ -1047,6 +1094,9 @@ impl SessionState {
         loop_instance.set_background_agent_tasks(self.collect_background_agent_tasks().await);
 
         let result = loop_instance.run(user_input).await?;
+
+        // Save current selections as "previous" for next turn's switch detection
+        self.previous_turn_selections = Some(self.session.selections.clone());
 
         // Extract todos state before dropping the loop
         if let Some(todos) = loop_instance.take_todos() {
@@ -1155,7 +1205,7 @@ impl SessionState {
         &mut self,
         prompt: &str,
         model_override: Option<&str>,
-        event_tx: mpsc::Sender<LoopEvent>,
+        event_tx: mpsc::Sender<CoreEvent>,
     ) -> Result<TurnResult, cocode_error::BoxedError> {
         let saved_selection = if let Some(model_name) = model_override {
             let current = self.session.selections.get(ModelRole::Main).cloned();
@@ -1244,39 +1294,6 @@ impl SessionState {
             cancel_token: result.cancel_token,
             color: result.color,
         })
-    }
-
-    /// Handle a loop event (logging).
-    fn handle_event(event: &LoopEvent) {
-        match event {
-            LoopEvent::TurnStarted {
-                turn_id,
-                turn_number,
-            } => {
-                debug!(turn_id, turn_number, "Turn started");
-            }
-            LoopEvent::TurnCompleted { turn_id, usage } => {
-                debug!(
-                    turn_id,
-                    input_tokens = usage.input_tokens,
-                    output_tokens = usage.output_tokens,
-                    "Turn completed"
-                );
-            }
-            LoopEvent::TextDelta { delta, .. } => {
-                // In a real implementation, this would stream to UI
-                debug!(delta_len = delta.len(), "Text delta");
-            }
-            LoopEvent::ToolUseQueued { name, call_id, .. } => {
-                debug!(name, call_id, "Tool queued");
-            }
-            LoopEvent::Error { error } => {
-                tracing::error!(code = %error.code, message = %error.message, "Loop error");
-            }
-            _ => {
-                debug!(?event, "Loop event");
-            }
-        }
     }
 
     /// Get the OTel manager (if configured).
@@ -1937,6 +1954,13 @@ impl SessionState {
         self.queued_commands.clone()
     }
 
+    /// Get a shared handle to the fast mode toggle.
+    ///
+    /// The TUI driver uses this to toggle fast mode while a turn is running.
+    pub fn shared_fast_mode(&self) -> Arc<std::sync::atomic::AtomicBool> {
+        self.fast_mode.clone()
+    }
+
     /// Get a shared handle to the question responder.
     ///
     /// The TUI driver extracts this before a turn starts and passes it to
@@ -2360,7 +2384,7 @@ impl SessionState {
     /// progress, text deltas, and tool activity are visible to the TUI.
     fn build_execute_fn(
         &self,
-        parent_event_tx: mpsc::Sender<LoopEvent>,
+        parent_event_tx: mpsc::Sender<CoreEvent>,
     ) -> cocode_subagent::AgentExecuteFn {
         let api_client = self.api_client.clone();
         let model_hub = self.model_hub.clone();
@@ -2971,9 +2995,9 @@ impl SessionState {
     ///
     /// ```ignore
     /// use tokio::sync::mpsc;
-    /// use cocode_protocol::LoopEvent;
+    /// use cocode_protocol::CoreEvent;
     ///
-    /// let (event_tx, mut event_rx) = mpsc::channel::<LoopEvent>(256);
+    /// let (event_tx, mut event_rx) = mpsc::channel::<CoreEvent>(256);
     ///
     /// // Spawn task to handle events
     /// tokio::spawn(async move {
@@ -2987,11 +3011,24 @@ impl SessionState {
     pub async fn run_turn_streaming(
         &mut self,
         user_input: &str,
-        event_tx: mpsc::Sender<LoopEvent>,
+        event_tx: mpsc::Sender<CoreEvent>,
+    ) -> Result<TurnResult, cocode_error::BoxedError> {
+        self.run_turn_streaming_with_content(
+            vec![cocode_inference::UserContentPart::text(user_input)],
+            event_tx,
+        )
+        .await
+    }
+
+    /// Run a single streaming turn with multimodal content (text + images).
+    pub async fn run_turn_streaming_with_content(
+        &mut self,
+        content: Vec<cocode_inference::UserContentPart>,
+        event_tx: mpsc::Sender<CoreEvent>,
     ) -> Result<TurnResult, cocode_error::BoxedError> {
         info!(
             session_id = %self.session.id,
-            input_len = user_input.len(),
+            content_blocks = content.len(),
             "Running turn with streaming"
         );
 
@@ -3047,6 +3084,7 @@ impl SessionState {
         .hooks(self.hook_registry.clone())
         .cancel_token(self.cancel_token.clone())
         .queued_commands(self.queued_commands.clone())
+        .fast_mode(self.fast_mode.clone())
         .features(self.config.features.clone())
         .web_search_config(self.config.web_search_config.clone())
         .web_fetch_config(self.config.web_fetch_config.clone())
@@ -3067,6 +3105,11 @@ impl SessionState {
         .auto_memory_state(Arc::clone(&self.auto_memory_state))
         .team_store(Arc::clone(&self.team_store))
         .team_mailbox(Arc::clone(&self.team_mailbox));
+
+        // Wire previous selections for model/provider switch detection
+        if let Some(ref prev) = self.previous_turn_selections {
+            builder = builder.previous_selections(prev.clone());
+        }
 
         // Wire snapshot manager for rewind support (skill turn)
         if let Some(ref sm) = self.snapshot_manager {
@@ -3093,7 +3136,13 @@ impl SessionState {
         // each message ("Please address this message and continue").
         // The shared Arc<Mutex> means any commands queued by the TUI driver during
         // the turn are visible to the loop immediately — no take-back needed.
-        let result = loop_instance.run(user_input).await.map_err(boxed_err)?;
+        let result = loop_instance
+            .run_with_content(content)
+            .await
+            .map_err(boxed_err)?;
+
+        // Save current selections as "previous" for next turn's switch detection
+        self.previous_turn_selections = Some(self.session.selections.clone());
 
         // Extract todos state from the loop
         if let Some(todos) = loop_instance.take_todos() {
@@ -3140,7 +3189,7 @@ impl SessionState {
     pub async fn run_partial_compact(
         &mut self,
         from_turn_number: i32,
-        event_tx: mpsc::Sender<LoopEvent>,
+        event_tx: mpsc::Sender<CoreEvent>,
         user_context: Option<&str>,
     ) -> anyhow::Result<PartialCompactResult> {
         info!(
@@ -3149,7 +3198,13 @@ impl SessionState {
             "Running partial compaction (summarize from turn)"
         );
 
-        let _ = event_tx.send(LoopEvent::CompactionStarted).await;
+        let _ = event_tx
+            .send(CoreEvent::Protocol(
+                cocode_protocol::server_notification::ServerNotification::CompactionStarted(
+                    cocode_protocol::server_notification::CompactionStartedParams {},
+                ),
+            ))
+            .await;
 
         // 1. Build conversation text from turns at/after from_turn_number.
         // Extract Message objects (role + content) from turns, matching the
@@ -3274,10 +3329,14 @@ impl SessionState {
         }
 
         let _ = event_tx
-            .send(LoopEvent::CompactionCompleted {
-                removed_messages: 0,
-                summary_tokens: post_tokens,
-            })
+            .send(CoreEvent::Protocol(
+                cocode_protocol::server_notification::ServerNotification::ContextCompacted(
+                    cocode_protocol::server_notification::ContextCompactedParams {
+                        removed_messages: 0,
+                        summary_tokens: post_tokens,
+                    },
+                ),
+            ))
             .await;
 
         // Rebuild todos and file tracker after partial compaction

@@ -72,7 +72,7 @@ pub fn paste_image(mut cb: arboard::Clipboard) -> Result<(Vec<u8>, String), Clip
                 && let Ok(data) = std::fs::read(path)
             {
                 tracing::debug!(media_type, bytes = data.len(), "clipboard image from file");
-                return Ok((data, media_type.to_string()));
+                return normalize_for_api(data, media_type);
             }
         }
     }
@@ -98,7 +98,8 @@ pub fn paste_image(mut cb: arboard::Clipboard) -> Result<(Vec<u8>, String), Clip
         .write_to(&mut cursor, image::ImageFormat::Png)
         .map_err(|e| ClipboardImageError::EncodeFailed(e.to_string()))?;
 
-    Ok((png, "image/png".to_string()))
+    // Normalize dimensions for API (resize if oversized)
+    normalize_for_api(png, "image/png")
 }
 
 /// Try to read text from the system clipboard.
@@ -136,6 +137,32 @@ pub fn open_clipboard() -> Result<arboard::Clipboard, ClipboardImageError> {
     Err(ClipboardImageError::ClipboardUnavailable(
         "clipboard is unsupported on Android".into(),
     ))
+}
+
+/// Normalize image bytes for API submission (resize if oversized).
+///
+/// Falls back to the original data if normalization fails, but rejects
+/// images exceeding the 5 MB API hard limit.
+fn normalize_for_api(
+    data: Vec<u8>,
+    media_type: &str,
+) -> Result<(Vec<u8>, String), ClipboardImageError> {
+    let original_len = data.len();
+    match cocode_utils_image::normalize_image_bytes(data, media_type) {
+        Ok((normalized, mime)) => {
+            tracing::debug!(
+                original = original_len,
+                normalized = normalized.len(),
+                mime = %mime,
+                "normalized clipboard image"
+            );
+            Ok((normalized, mime))
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "image normalization failed");
+            Err(ClipboardImageError::EncodeFailed(e.to_string()))
+        }
+    }
 }
 
 #[cfg(test)]

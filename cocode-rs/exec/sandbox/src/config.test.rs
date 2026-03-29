@@ -69,6 +69,10 @@ fn test_enforcement_level_from_protocol() {
         EnforcementLevel::from(cocode_protocol::SandboxMode::FullAccess),
         EnforcementLevel::Disabled
     );
+    assert_eq!(
+        EnforcementLevel::from(cocode_protocol::SandboxMode::ExternalSandbox),
+        EnforcementLevel::WorkspaceWrite
+    );
 }
 
 // ==========================================================================
@@ -196,7 +200,10 @@ fn test_sandbox_settings_default_disabled() {
     assert!(!settings.enabled);
     assert!(settings.auto_allow_bash_if_sandboxed);
     assert!(settings.allow_unsandboxed_commands);
-    assert_eq!(settings.enabled_platforms, vec!["macos", "linux"]);
+    assert_eq!(
+        settings.enabled_platforms,
+        vec!["macos", "linux", "windows"]
+    );
     assert!(settings.excluded_commands.is_empty());
     assert!(settings.network.allowed_domains.is_empty());
     assert!(settings.network.denied_domains.is_empty());
@@ -358,8 +365,10 @@ fn test_is_platform_enabled() {
         assert!(settings.is_platform_enabled());
     }
 
-    let mut empty = SandboxSettings::default();
-    empty.enabled_platforms = vec![];
+    let empty = SandboxSettings {
+        enabled_platforms: vec![],
+        ..Default::default()
+    };
     assert!(!empty.is_platform_enabled());
 }
 
@@ -415,7 +424,10 @@ fn test_sandbox_settings_from_empty_json() {
     assert!(!settings.enabled);
     assert!(settings.auto_allow_bash_if_sandboxed);
     assert!(settings.allow_unsandboxed_commands);
-    assert_eq!(settings.enabled_platforms, vec!["macos", "linux"]);
+    assert_eq!(
+        settings.enabled_platforms,
+        vec!["macos", "linux", "windows"]
+    );
     assert!(settings.network.allowed_domains.is_empty());
     assert!(settings.filesystem.deny_read.is_empty());
     assert_eq!(settings.mandatory_deny_search_depth, 3);
@@ -608,5 +620,109 @@ fn test_sandbox_settings_ignore_violations() {
     assert_eq!(
         settings.ignore_violations.get("npm install").unwrap().len(),
         2
+    );
+}
+
+// ==========================================================================
+// Git pointer file detection
+// ==========================================================================
+
+#[test]
+fn test_writable_root_detects_git_pointer_file() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let gitdir = root.join("actual_gitdir");
+    std::fs::create_dir_all(&gitdir).expect("create gitdir");
+
+    // Create a .git pointer file like git worktrees use
+    std::fs::write(root.join(".git"), format!("gitdir: {}", gitdir.display())).expect("write");
+
+    let wr = WritableRoot::new(root);
+    // Should contain default subpaths plus the resolved gitdir
+    assert!(wr.readonly_subpaths.contains(&".git".to_string()));
+    assert!(wr.readonly_subpaths.contains(&".cocode".to_string()));
+    let gitdir_rel = gitdir
+        .strip_prefix(root)
+        .expect("strip")
+        .display()
+        .to_string();
+    assert!(
+        wr.readonly_subpaths.contains(&gitdir_rel),
+        "Should contain resolved gitdir: {gitdir_rel}, got: {:?}",
+        wr.readonly_subpaths
+    );
+}
+
+#[test]
+fn test_writable_root_git_dir_no_pointer_file() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    // Create a normal .git directory (not a pointer file)
+    std::fs::create_dir_all(root.join(".git")).expect("create .git");
+
+    let wr = WritableRoot::new(root);
+    // Default subpaths only — no extra gitdir resolution
+    assert_eq!(wr.readonly_subpaths, default_readonly_subpaths());
+}
+
+#[test]
+fn test_writable_root_no_git_at_all() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wr = WritableRoot::new(dir.path());
+    assert_eq!(wr.readonly_subpaths, default_readonly_subpaths());
+}
+
+#[test]
+fn test_writable_root_git_pointer_relative_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let gitdir = root.join("..").join("shared_git");
+    std::fs::create_dir_all(&gitdir).expect("create gitdir");
+
+    // Create .git pointer with relative path
+    std::fs::write(root.join(".git"), "gitdir: ../shared_git").expect("write");
+
+    let wr = WritableRoot::new(root);
+    // Relative gitdir outside root → should warn but not add (can't strip_prefix)
+    // Just check it doesn't panic and has default subpaths
+    assert!(wr.readonly_subpaths.contains(&".git".to_string()));
+}
+
+#[test]
+fn test_writable_root_git_pointer_invalid_content() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+
+    // Create .git with invalid content (no "gitdir:" prefix)
+    std::fs::write(root.join(".git"), "not a valid pointer").expect("write");
+
+    let wr = WritableRoot::new(root);
+    // Should fall back to default subpaths
+    assert_eq!(wr.readonly_subpaths, default_readonly_subpaths());
+}
+
+#[test]
+fn test_writable_root_git_pointer_multiline() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let gitdir = root.join("actual_gitdir");
+    std::fs::create_dir_all(&gitdir).expect("create gitdir");
+
+    // Multi-line content — only first line should be parsed
+    std::fs::write(
+        root.join(".git"),
+        format!("gitdir: {}\nextra line\n", gitdir.display()),
+    )
+    .expect("write");
+
+    let wr = WritableRoot::new(root);
+    let gitdir_rel = gitdir
+        .strip_prefix(root)
+        .expect("strip")
+        .display()
+        .to_string();
+    assert!(
+        wr.readonly_subpaths.contains(&gitdir_rel),
+        "Multi-line pointer should resolve correctly"
     );
 }

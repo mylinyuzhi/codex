@@ -401,6 +401,7 @@ fn parse_permission_mode(mode: &str) -> PermissionMode {
         "bypassPermissions" | "bypass" => PermissionMode::Bypass,
         "plan" => PermissionMode::Plan,
         "dontAsk" => PermissionMode::DontAsk,
+        "auto" => PermissionMode::Auto,
         _ => PermissionMode::Default,
     }
 }

@@ -328,7 +328,11 @@ const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::PlanModeInterview,
         key: "plan_mode_interview",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Experimental {
+            name: "Plan Mode Interview",
+            menu_description: "Iterative pair-planning with Q&A instead of 5-phase workflow",
+            announcement: "Plan mode interview phase is now available",
+        },
         default_enabled: false,
     },
     FeatureSpec {

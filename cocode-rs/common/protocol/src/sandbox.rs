@@ -47,6 +47,13 @@ pub enum SandboxMode {
     /// The agent has unrestricted filesystem access.
     /// Only use this mode when you trust the agent completely.
     FullAccess,
+
+    /// External sandbox already applied (Docker, CI, managed environments).
+    ///
+    /// Skips platform-level wrapping (bubblewrap/Seatbelt) because the
+    /// process is already sandboxed by an external mechanism. Network proxy
+    /// filtering and violation tracking still apply when configured.
+    ExternalSandbox,
 }
 
 impl SandboxMode {
@@ -58,6 +65,11 @@ impl SandboxMode {
     /// Check if this mode has full unrestricted access.
     pub fn is_full_access(&self) -> bool {
         matches!(self, SandboxMode::FullAccess)
+    }
+
+    /// Check if this mode uses an external sandbox (Docker, CI).
+    pub fn is_external_sandbox(&self) -> bool {
+        matches!(self, SandboxMode::ExternalSandbox)
     }
 
     /// Get the mode as a string.
@@ -76,8 +88,11 @@ impl std::str::FromStr for SandboxMode {
                 Ok(SandboxMode::WorkspaceWrite)
             }
             "full-access" | "fullaccess" | "full_access" => Ok(SandboxMode::FullAccess),
+            "external-sandbox" | "externalsandbox" | "external_sandbox" | "external" => {
+                Ok(SandboxMode::ExternalSandbox)
+            }
             _ => Err(format!(
-                "unknown sandbox mode: '{s}'. Expected: read-only, workspace-write, or full-access"
+                "unknown sandbox mode: '{s}'. Expected: read-only, workspace-write, full-access, or external-sandbox"
             )),
         }
     }

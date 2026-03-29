@@ -1,6 +1,6 @@
 //! Hook execution bridge methods for the agent loop.
 
-use cocode_protocol::LoopEvent;
+use cocode_protocol::server_notification::*;
 use tracing::info;
 
 use super::AgentLoop;
@@ -15,10 +15,10 @@ impl AgentLoop {
         let mut rejected = false;
 
         for outcome in &outcomes {
-            self.emit(LoopEvent::HookExecuted {
-                hook_type: ctx.event_type.clone(),
+            self.emit_protocol(ServerNotification::HookExecuted(HookExecutedParams {
+                hook_type: ctx.event_type.to_string(),
                 hook_name: outcome.hook_name.clone(),
-            })
+            }))
             .await;
 
             match &outcome.result {
@@ -88,10 +88,10 @@ impl AgentLoop {
 
         let outcomes = self.hooks.execute(&ctx).await;
         for outcome in &outcomes {
-            self.emit(LoopEvent::HookExecuted {
-                hook_type: ctx.event_type.clone(),
+            self.emit_protocol(ServerNotification::HookExecuted(HookExecutedParams {
+                hook_type: ctx.event_type.to_string(),
                 hook_name: outcome.hook_name.clone(),
-            })
+            }))
             .await;
         }
     }

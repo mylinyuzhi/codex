@@ -6,6 +6,7 @@ use cocode_context::ConversationContext;
 use cocode_context::InjectionPosition;
 use cocode_context::SubagentType;
 use cocode_protocol::CacheScope;
+use tracing::debug;
 
 use crate::cache_block::SystemPromptBlock;
 use crate::engine;
@@ -27,7 +28,9 @@ pub struct SystemPromptBuilder;
 impl SystemPromptBuilder {
     /// Build the complete system prompt for a main agent.
     pub fn build(ctx: &ConversationContext) -> String {
-        assemble_sections(&Self::build_ordered_sections(ctx))
+        let prompt = assemble_sections(&Self::build_ordered_sections(ctx));
+        debug!(total_length = prompt.len(), "System prompt built");
+        prompt
     }
 
     /// Build the system prompt as cache-scoped blocks for prompt caching.
@@ -71,6 +74,12 @@ impl SystemPromptBuilder {
             });
         }
 
+        debug!(
+            block_count = blocks.len(),
+            stable_len = blocks.first().map_or(0, |b| b.text.len()),
+            dynamic_len = blocks.last().map_or(0, |b| b.text.len()),
+            "System prompt built for cache"
+        );
         blocks
     }
 

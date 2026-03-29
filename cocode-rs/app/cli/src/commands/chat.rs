@@ -64,6 +64,13 @@ pub async fn run(
 
     // Get working directory
     let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    tracing::debug!(
+        cwd = %working_dir.display(),
+        has_initial_prompt = initial_prompt.is_some(),
+        max_turns = ?max_turns,
+        permission_mode = ?flags.permission_mode,
+        "REPL session configuration"
+    );
 
     // Build Config snapshot from ConfigManager
     let snapshot =

@@ -107,9 +107,15 @@ impl Tool for EnterPlanModeTool {
         };
 
         // Emit plan mode event with the plan file path
-        ctx.emit_event(cocode_protocol::LoopEvent::PlanModeEntered {
-            plan_file: Some(plan_path.clone()),
-        })
+        ctx.emit_event(cocode_protocol::CoreEvent::Protocol(
+            cocode_protocol::server_notification::ServerNotification::PlanModeChanged(
+                cocode_protocol::server_notification::PlanModeChangedParams {
+                    entered: true,
+                    plan_file: Some(plan_path.to_string_lossy().into_owned()),
+                    approved: None,
+                },
+            ),
+        ))
         .await;
 
         tracing::info!(

@@ -40,7 +40,8 @@ use std::time::Instant;
 use async_trait::async_trait;
 use cocode_protocol::ApprovalDecision;
 use cocode_protocol::ApprovalRequest;
-use cocode_protocol::LoopEvent;
+use cocode_protocol::CoreEvent;
+use cocode_protocol::TuiEvent;
 use cocode_tools::PermissionRequester;
 use serde::Deserialize;
 use serde::Serialize;
@@ -180,7 +181,7 @@ pub struct WorkerPermissionQueue {
     /// Channel for notifying the main thread of new requests.
     notify_tx: broadcast::Sender<String>,
     /// Event sender for emitting events.
-    event_tx: Option<mpsc::Sender<LoopEvent>>,
+    event_tx: Option<mpsc::Sender<CoreEvent>>,
     /// Default timeout for requests.
     default_timeout: Duration,
     /// Counter for generating request IDs.
@@ -202,7 +203,7 @@ impl WorkerPermissionQueue {
     }
 
     /// Create a queue with an event sender.
-    pub fn with_event_tx(mut self, tx: mpsc::Sender<LoopEvent>) -> Self {
+    pub fn with_event_tx(mut self, tx: mpsc::Sender<CoreEvent>) -> Self {
         self.event_tx = Some(tx);
         self
     }
@@ -269,7 +270,7 @@ impl WorkerPermissionQueue {
         );
 
         // Emit event
-        self.emit_event(LoopEvent::ApprovalRequired { request })
+        self.emit_event(CoreEvent::Tui(TuiEvent::ApprovalRequired { request }))
             .await;
 
         // Notify the main thread
@@ -343,7 +344,7 @@ impl WorkerPermissionQueue {
         );
 
         // Emit event
-        self.emit_event(LoopEvent::ApprovalRequired { request })
+        self.emit_event(CoreEvent::Tui(TuiEvent::ApprovalRequired { request }))
             .await;
 
         // Notify the main thread
@@ -390,12 +391,7 @@ impl WorkerPermissionQueue {
                 "Permission response sent"
             );
 
-            // Emit event
-            self.emit_event(LoopEvent::ApprovalResponse {
-                request_id: request_id.to_string(),
-                decision,
-            })
-            .await;
+            tracing::debug!(request_id, ?decision, "Approval response");
 
             true
         } else {
@@ -564,8 +560,8 @@ impl WorkerPermissionQueue {
         requests.remove(request_id);
     }
 
-    /// Emit a loop event.
-    async fn emit_event(&self, event: LoopEvent) {
+    /// Emit a core event.
+    async fn emit_event(&self, event: CoreEvent) {
         if let Some(tx) = &self.event_tx
             && let Err(e) = tx.send(event).await
         {

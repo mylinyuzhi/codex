@@ -32,11 +32,14 @@ use cocode_policy::ApprovalStore;
 use cocode_protocol::AgentStatus;
 use cocode_protocol::AutoCompactTracking;
 use cocode_protocol::CompactConfig;
+use cocode_protocol::CoreEvent;
 use cocode_protocol::LoopConfig;
-use cocode_protocol::LoopEvent;
 use cocode_protocol::QueryTracking;
 use cocode_protocol::RoleSelections;
+use cocode_protocol::StreamEvent;
 use cocode_protocol::ToolResultContent;
+use cocode_protocol::TuiEvent;
+use cocode_protocol::server_notification::*;
 use cocode_skill::SkillManager;
 use cocode_system_reminder::ApprovedPlanInfo;
 use cocode_system_reminder::AsyncHookResponseInfo;
@@ -76,6 +79,7 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::info;
+use tracing::trace;
 use tracing::warn;
 
 use crate::compaction::ThresholdStatus;
@@ -137,7 +141,7 @@ pub struct AgentLoop {
     async_hook_tracker: Arc<AsyncHookTracker>,
 
     // Event channel
-    event_tx: mpsc::Sender<LoopEvent>,
+    event_tx: mpsc::Sender<CoreEvent>,
 
     // State tracking
     turn_number: i32,
@@ -238,6 +242,14 @@ pub struct AgentLoop {
     /// Whether the main agent is in delegate mode (coordination-only tools).
     delegate_mode: bool,
 
+    // Fast mode
+    /// Whether fast mode is active (use fast/smaller model for speed).
+    ///
+    /// Auto-disabled on rate-limit/overload errors (matching Claude Code's
+    /// adaptive fast mode fallback). When disabled, emits `FastModeChanged`
+    /// event to notify the TUI.
+    pub(crate) fast_mode: bool,
+
     // Real-time steering
     /// Queued commands from user (Enter during streaming).
     /// Shared via `Arc<Mutex>` so the TUI driver can push commands while the
@@ -324,7 +336,7 @@ impl AgentLoop {
         selections: RoleSelections,
         tool_registry: Arc<ToolRegistry>,
         context: ConversationContext,
-        event_tx: mpsc::Sender<LoopEvent>,
+        event_tx: mpsc::Sender<CoreEvent>,
     ) -> AgentLoopBuilder {
         AgentLoopBuilder::new(
             api_client,
@@ -605,6 +617,33 @@ impl AgentLoop {
         result
     }
 
+    /// Run the agent loop with multimodal content parts (text + images).
+    ///
+    /// Extracts text from content parts, adds the multimodal user message
+    /// to history, then delegates to `run` for the full lifecycle.
+    pub async fn run_with_content(
+        &mut self,
+        content: Vec<cocode_inference::UserContentPart>,
+    ) -> crate::error::Result<LoopResult> {
+        // Extract text for the `run` entrypoint (hooks/otel use the string form)
+        let text_preview: String = content
+            .iter()
+            .filter_map(|part| match part {
+                cocode_inference::UserContentPart::Text(tp) => Some(tp.text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Pre-add the multimodal message so `run` finds it in history
+        let turn_id = uuid::Uuid::new_v4().to_string();
+        let user_msg = TrackedMessage::user_with_content(content, &turn_id);
+        let turn = Turn::new(1, user_msg);
+        self.message_history.add_turn(turn);
+
+        self.run(&text_preview).await
+    }
+
     /// The 18-step core message loop.
     ///
     /// This implements the algorithm from `docs/arch/core-loop.md`:
@@ -626,7 +665,7 @@ impl AgentLoop {
         }
 
         // ── STEP 1: Signal stream_request_start ──
-        self.emit(LoopEvent::StreamRequestStart).await;
+        tracing::debug!("Stream request started");
 
         // ── STEP 2: Setup query tracking ──
         query_tracking.depth += 1;
@@ -666,7 +705,7 @@ impl AgentLoop {
         if self.config.enable_micro_compaction {
             let (removed, tokens_saved) = self.micro_compact().await;
             if removed > 0 {
-                self.emit(LoopEvent::MicroCompactionApplied {
+                self.emit_tui(TuiEvent::MicroCompactionApplied {
                     removed_results: removed,
                     tokens_saved,
                 })
@@ -700,11 +739,13 @@ impl AgentLoop {
         if status.is_above_warning_threshold && !status.is_above_auto_compact_threshold {
             let target = self.compact_config.auto_compact_target(context_window);
             let warning_threshold = self.compact_config.warning_threshold(target);
-            self.emit(LoopEvent::ContextUsageWarning {
-                estimated_tokens: estimated_with_margin,
-                warning_threshold,
-                percent_left: status.percent_left,
-            })
+            self.emit_protocol(ServerNotification::ContextUsageWarning(
+                ContextUsageWarningParams {
+                    estimated_tokens: estimated_with_margin,
+                    warning_threshold,
+                    percent_left: status.percent_left,
+                },
+            ))
             .await;
 
             self.fire_notification_hook(
@@ -768,13 +809,19 @@ impl AgentLoop {
 
         // ── STEP 6: Initialize state ──
         self.turn_number += 1;
+        debug!(
+            turn_number = self.turn_number,
+            turn_id = %turn_id,
+            estimated_tokens = estimated_with_margin,
+            "Step 6: Turn initialized"
+        );
         let turn_start = Instant::now();
         // Update status to streaming
         self.set_status(AgentStatus::streaming(turn_id.clone()));
-        self.emit(LoopEvent::TurnStarted {
+        self.emit_protocol(ServerNotification::TurnStarted(TurnStartedParams {
             turn_id: turn_id.clone(),
             turn_number: self.turn_number,
-        })
+        }))
         .await;
         if let Some(otel) = &self.otel_manager {
             otel.counter("cocode.turn.started", 1, &[]);
@@ -790,9 +837,19 @@ impl AgentLoop {
         } else {
             None
         };
+        debug!(
+            turn_id = %turn_id,
+            create_ghost,
+            has_snapshot = turn_ghost_commit.is_some(),
+            "Step 6.1: Turn snapshot started"
+        );
 
         // ── STEP 6.5: Generate system reminders ──
         let injected_messages = self.generate_system_reminders().await;
+        debug!(
+            reminder_count = injected_messages.len(),
+            "Step 6.5: System reminders generated"
+        );
 
         // ── STEP 7: Resolve model (permissions checked externally) ──
         // In this implementation, model selection is handled by ApiClient.
@@ -854,14 +911,34 @@ impl AgentLoop {
                 Err(e) => {
                     // Check if retriable (output token exhaustion)
                     output_recovery_attempts += 1;
+                    warn!(
+                        attempt = output_recovery_attempts,
+                        max_attempts = MAX_OUTPUT_TOKEN_RECOVERY,
+                        error = %e,
+                        "Step 9: Output token recovery attempt"
+                    );
                     if output_recovery_attempts >= MAX_OUTPUT_TOKEN_RECOVERY {
                         return Err(e);
                     }
-                    self.emit(LoopEvent::Retry {
+
+                    // Reduce max_output_tokens by 25% per retry to avoid
+                    // repeated output token exhaustion (matches CC behavior).
+                    if let Some(current) = self.config.max_tokens {
+                        let reduced = (current as f64 * 0.75) as i32;
+                        self.config.max_tokens = Some(reduced.max(1));
+                        info!(
+                            attempt = output_recovery_attempts,
+                            previous = current,
+                            reduced = reduced,
+                            "Reduced max_output_tokens for retry"
+                        );
+                    }
+
+                    self.emit_protocol(ServerNotification::TurnRetry(TurnRetryParams {
                         attempt: output_recovery_attempts,
                         max_attempts: MAX_OUTPUT_TOKEN_RECOVERY,
                         delay_ms: 0,
-                    })
+                    }))
                     .await;
                     if let Some(otel) = &self.otel_manager {
                         otel.counter(
@@ -879,6 +956,13 @@ impl AgentLoop {
         if let Some(usage) = &collected.usage {
             self.total_input_tokens += usage.input_tokens as i32;
             self.total_output_tokens += usage.output_tokens as i32;
+            debug!(
+                total_input_tokens = self.total_input_tokens,
+                total_output_tokens = self.total_output_tokens,
+                turn_input = usage.input_tokens,
+                turn_output = usage.output_tokens,
+                "Step 10: Cumulative token usage"
+            );
 
             if let Some(otel) = &self.otel_manager {
                 otel.histogram("cocode.inference.input_tokens", usage.input_tokens, &[]);
@@ -898,9 +982,11 @@ impl AgentLoop {
         }
 
         let usage = collected.usage.clone().unwrap_or_default();
-        self.emit(LoopEvent::StreamRequestEnd {
-            usage: usage.clone(),
-        })
+        self.emit_protocol(ServerNotification::StreamRequestEnd(
+            StreamRequestEndParams {
+                usage: usage.clone().into(),
+            },
+        ))
         .await;
 
         // Extract text from response
@@ -931,6 +1017,10 @@ impl AgentLoop {
         // the (possibly partial) response. This prevents unexpected tool
         // runs after the user pressed Ctrl-C.
         if has_tool_calls && self.cancel_token.is_cancelled() {
+            info!(
+                turn_number = self.turn_number,
+                "Step 10.5: Cancelled before tool execution"
+            );
             // Extract tool calls so we can generate synthetic interrupt results
             let tool_calls: Vec<_> = collected
                 .content
@@ -984,6 +1074,11 @@ impl AgentLoop {
         // ── STEP 12: Execute tool queue ──
         // Tool execution already started DURING streaming for safe tools.
         // Now we execute pending unsafe tools and collect all results.
+        debug!(
+            has_tool_calls,
+            turn_number = self.turn_number,
+            "Step 11-12: Tool call check and execution"
+        );
         if has_tool_calls {
             let tool_calls: Vec<_> = collected
                 .content
@@ -999,17 +1094,33 @@ impl AgentLoop {
                 })
                 .collect();
 
+            debug!(
+                tool_call_count = tool_calls.len(),
+                tool_names = %tool_calls.iter().map(|tc| tc.tool_name.as_str()).collect::<Vec<_>>().join(", "),
+                "Step 11: Tool calls extracted"
+            );
+
             // Execute pending unsafe tools (safe tools already started during streaming)
             executor.execute_pending_unsafe().await;
 
             // Drain all results (both from streaming and unsafe execution)
             let results = executor.drain().await;
+            debug!(
+                result_count = results.len(),
+                error_count = results.iter().filter(|r| r.result.is_err()).count(),
+                "Step 12: Tool execution completed"
+            );
 
             // ── STEP 13: Handle abort after tool execution ──
             // Preserve completed tool results BEFORE cancel check (P0 fix:
             // prevents loss of results from safe tools that finished).
             // Then generate synthetic interrupt results for incomplete calls.
             if self.cancel_token.is_cancelled() {
+                info!(
+                    completed_results = results.len(),
+                    total_tool_calls = tool_calls.len(),
+                    "Step 13: Abort after tool execution"
+                );
                 // 1. Record completed results so the model sees what DID finish
                 let completed_results_turn_added = !results.is_empty();
                 if completed_results_turn_added {
@@ -1078,6 +1189,10 @@ impl AgentLoop {
 
         // ── STEP 15: Update auto-compact tracking ──
         auto_compact_tracking.turn_counter += 1;
+        trace!(
+            turn_counter = auto_compact_tracking.turn_counter,
+            "Step 15: Auto-compact tracking updated"
+        );
 
         // ── STEP 15.5: Check session memory extraction trigger ──
         // This runs a background agent to proactively update summary.md
@@ -1154,7 +1269,15 @@ impl AgentLoop {
         if let Some(max) = self.config.max_turns
             && self.turn_number >= max
         {
-            self.emit(LoopEvent::MaxTurnsReached).await;
+            info!(
+                turn_number = self.turn_number,
+                max_turns = max,
+                "Step 17: Max turns reached"
+            );
+            self.emit_protocol(ServerNotification::MaxTurnsReached(MaxTurnsReachedParams {
+                max_turns: None,
+            }))
+            .await;
             return Ok(LoopResult::max_turns_reached(
                 self.turn_number,
                 self.total_input_tokens,
@@ -1163,10 +1286,10 @@ impl AgentLoop {
         }
 
         // Emit turn completed
-        self.emit(LoopEvent::TurnCompleted {
+        self.emit_protocol(ServerNotification::TurnCompleted(TurnCompletedParams {
             turn_id: turn_id.clone(),
-            usage,
-        })
+            usage: usage.into(),
+        }))
         .await;
         if let Some(otel) = &self.otel_manager {
             otel.record_duration("cocode.turn.duration_ms", turn_start.elapsed(), &[]);
@@ -1182,6 +1305,12 @@ impl AgentLoop {
         }
 
         // ── STEP 18: Recurse or return ──
+        debug!(
+            finish_reason = ?collected.finish_reason.unified,
+            turn_number = self.turn_number,
+            duration_ms = turn_start.elapsed().as_millis() as i64,
+            "Step 18: Loop decision"
+        );
         match collected.finish_reason.unified {
             UnifiedFinishReason::Stop => {
                 // Clear skill-level tool restrictions — the model has finished
@@ -1735,19 +1864,23 @@ impl AgentLoop {
                 }
             }
 
+            // Populate deferred tools list on first turn so the model knows
+            // what's available via ToolSearch. On subsequent turns, only delta
+            // changes (new MCP connections/disconnections) will be reported.
+            if turn_number == 1 {
+                let deferred_names = self.tool_registry.deferred_tool_names();
+                if !deferred_names.is_empty() {
+                    builder = builder.deferred_tools_added(deferred_names);
+                }
+            }
+
             let gen_ctx = builder.build();
             let reminders = self.reminder_orchestrator.generate_all(gen_ctx).await;
 
-            // Emit SystemReminderDisplay for silent reminders (UI notification only)
+            // Log silent reminders (trace-only, not emitted as events)
             for reminder in &reminders {
-                if reminder.is_silent
-                    && let Some(ref metadata) = reminder.metadata
-                {
-                    self.emit(LoopEvent::SystemReminderDisplay {
-                        reminder_type: reminder.attachment_type.name().to_string(),
-                        payload: serde_json::to_value(metadata).unwrap_or_default(),
-                    })
-                    .await;
+                if reminder.is_silent && reminder.metadata.is_some() {
+                    tracing::debug!(reminder_type = %reminder.attachment_type.name(), "System reminder displayed");
                 }
             }
 
@@ -1950,6 +2083,7 @@ impl AgentLoop {
                             slug.to_string(),
                             self.turn_number,
                             self.config.permission_mode,
+                            None,
                         );
                         // Enforce Plan permission mode so the executor
                         // blocks non-read-only tools (especially Bash).
@@ -2018,10 +2152,24 @@ impl AgentLoop {
         None
     }
 
-    /// Emit a loop event to the event channel.
-    async fn emit(&self, event: LoopEvent) {
-        if let Err(e) = self.event_tx.send(event).await {
-            debug!("Failed to send loop event: {e}");
+    /// Emit a protocol event (SDK/app-server visible).
+    async fn emit_protocol(&self, notif: ServerNotification) {
+        if let Err(e) = self.event_tx.send(CoreEvent::Protocol(notif)).await {
+            debug!("Failed to send protocol event: {e}");
+        }
+    }
+
+    /// Emit a stream event (requires stateful accumulation).
+    async fn emit_stream(&self, event: StreamEvent) {
+        if let Err(e) = self.event_tx.send(CoreEvent::Stream(event)).await {
+            debug!("Failed to send stream event: {e}");
+        }
+    }
+
+    /// Emit a TUI-only event (dropped by SDK consumers).
+    async fn emit_tui(&self, event: TuiEvent) {
+        if let Err(e) = self.event_tx.send(CoreEvent::Tui(event)).await {
+            debug!("Failed to send TUI event: {e}");
         }
     }
 

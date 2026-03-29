@@ -41,7 +41,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use cocode_protocol::LoopEvent;
+use cocode_protocol::CoreEvent;
+use cocode_protocol::TuiEvent;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::Mutex;
@@ -218,7 +219,7 @@ pub struct SpeculationTracker {
     /// Active speculation batches keyed by speculation ID.
     batches: Arc<Mutex<HashMap<String, SpeculationBatch>>>,
     /// Event sender for emitting speculation events.
-    event_tx: Option<mpsc::Sender<LoopEvent>>,
+    event_tx: Option<mpsc::Sender<CoreEvent>>,
     /// Counter for generating speculation IDs.
     next_id: Arc<Mutex<u64>>,
 }
@@ -234,7 +235,7 @@ impl SpeculationTracker {
     }
 
     /// Create a tracker with an event sender.
-    pub fn with_event_tx(mut self, tx: mpsc::Sender<LoopEvent>) -> Self {
+    pub fn with_event_tx(mut self, tx: mpsc::Sender<CoreEvent>) -> Self {
         self.event_tx = Some(tx);
         self
     }
@@ -261,12 +262,7 @@ impl SpeculationTracker {
             "Started speculation batch"
         );
 
-        // Emit event
-        self.emit_event(LoopEvent::SpeculativeStarted {
-            speculation_id: spec_id.clone(),
-            tool_calls: call_ids,
-        })
-        .await;
+        tracing::debug!(speculation_id = %spec_id, "Speculative execution started");
 
         spec_id
     }
@@ -282,12 +278,7 @@ impl SpeculationTracker {
             "Started speculation batch"
         );
 
-        // Emit event
-        self.emit_event(LoopEvent::SpeculativeStarted {
-            speculation_id: spec_id.to_string(),
-            tool_calls: call_ids,
-        })
-        .await;
+        tracing::debug!(speculation_id = %spec_id, "Speculative execution started");
     }
 
     /// Record a tool result for a speculation batch.
@@ -344,13 +335,8 @@ impl SpeculationTracker {
             "Committed speculation batch"
         );
 
-        // Emit event (drop lock first)
-        let event = LoopEvent::SpeculativeCommitted {
-            speculation_id: speculation_id.to_string(),
-            committed_count,
-        };
         drop(batches);
-        self.emit_event(event).await;
+        tracing::debug!(speculation_id = %speculation_id, committed_count, "Speculative execution committed");
 
         Some(results)
     }
@@ -387,11 +373,11 @@ impl SpeculationTracker {
         );
 
         // Emit event (drop lock first)
-        let event = LoopEvent::SpeculativeRolledBack {
+        let event = CoreEvent::Tui(TuiEvent::SpeculativeRolledBack {
             speculation_id: speculation_id.to_string(),
             reason: reason.to_string(),
             rolled_back_calls: rolled_back_calls.clone(),
-        };
+        });
         drop(batches);
         self.emit_event(event).await;
 
@@ -503,8 +489,8 @@ impl SpeculationTracker {
         }
     }
 
-    /// Emit a loop event.
-    async fn emit_event(&self, event: LoopEvent) {
+    /// Emit a core event.
+    async fn emit_event(&self, event: CoreEvent) {
         if let Some(tx) = &self.event_tx
             && let Err(e) = tx.send(event).await
         {

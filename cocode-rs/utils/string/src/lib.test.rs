@@ -79,3 +79,20 @@ fn truncate_str_multibyte_boundary() {
     let result = truncate_str("\u{1F600}\u{1F600}\u{1F600}\u{1F600}", 5);
     assert!(result.ends_with("..."));
 }
+
+#[test]
+fn truncate_for_log_short_unchanged() {
+    assert_eq!(truncate_for_log("hello", 10), "hello");
+}
+
+#[test]
+fn truncate_for_log_long_shows_length() {
+    let result = truncate_for_log("hello world this is long", 5);
+    assert!(result.starts_with("[24 chars]"));
+    assert!(result.ends_with("..."));
+}
+
+#[test]
+fn truncate_for_log_exact_length_unchanged() {
+    assert_eq!(truncate_for_log("hello", 5), "hello");
+}
