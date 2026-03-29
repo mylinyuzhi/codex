@@ -167,6 +167,13 @@ impl Tool for EnterWorktreeTool {
         ctx.cwd = worktree_path.clone();
         ctx.shell_executor.set_cwd(worktree_path.clone());
 
+        // Add worktree path as a writable root so sandboxed commands can
+        // write within the new workspace. Uses default read-only subpath
+        // protections (.git, .cocode, .agents).
+        if let Some(ref state) = ctx.sandbox_state {
+            state.add_writable_root(worktree_path.clone());
+        }
+
         // Fire WorktreeCreate hook
         if let Some(ref hooks) = ctx.hook_registry {
             let hook_ctx = cocode_hooks::HookContext::new(

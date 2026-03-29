@@ -1,8 +1,11 @@
-//! macOS sandbox violation monitor.
+//! Sandbox violation monitor.
 //!
-//! Spawns a `log stream` process to capture Seatbelt deny events in real-time,
-//! parses each line into a `Violation`, and pushes it into a shared
+//! On macOS, spawns a `log stream` process to capture Seatbelt deny events in
+//! real-time, parses each line into a `Violation`, and pushes it into a shared
 //! `ViolationStore`.
+//!
+//! On Linux, monitors the proxy server's rejection log for network violations
+//! and detects seccomp-killed processes via exit signal (SIGSYS = signal 31).
 //!
 //! Uses a session-unique tag (`_<random>_SBX`) to filter log events and
 //! base64-encoded command tags (`CMD64_<b64>_END_<tag>`) for correlation.
@@ -58,16 +61,39 @@ impl ViolationMonitor {
         })
     }
 
-    /// On non-macOS platforms, always returns `None`.
+    /// On Linux, returns a passive monitor (no background process). Violations
+    /// are pushed into the store by the proxy filter (network denials) and the
+    /// shell executor (seccomp SIGSYS detection).
+    ///
+    /// On Windows, returns a passive monitor for the same reason (violations
+    /// flow through the inner stage helper).
+    ///
+    /// On other platforms, returns `None`.
     #[cfg(not(target_os = "macos"))]
     pub fn start(
         _violations: Arc<Mutex<ViolationStore>>,
-        _cancel_token: CancellationToken,
+        cancel_token: CancellationToken,
         session_tag: String,
     ) -> Option<Self> {
-        // Store the tag even on non-macOS for API consistency
-        let _ = session_tag;
-        None
+        // Passive monitoring: violations are pushed directly into the shared
+        // ViolationStore by components (proxy filter, shell executor), rather
+        // than being captured from a separate log stream process.
+        //
+        // This is architecturally different from macOS where we must parse
+        // a separate log stream process.
+        if cfg!(any(target_os = "linux", target_os = "windows")) {
+            tracing::debug!(
+                "Sandbox violation monitor active (passive mode: proxy + seccomp signal)"
+            );
+            Some(Self {
+                cancel_token,
+                task_handle: None,
+                session_tag,
+            })
+        } else {
+            let _ = session_tag;
+            None
+        }
     }
 
     /// Stop the monitor gracefully.
@@ -290,6 +316,51 @@ pub(crate) fn extract_command_tag(line: &str) -> Option<String> {
     // Find the end of the tag (next whitespace or end of line)
     let end = rest.find(|c: char| c.is_whitespace()).unwrap_or(rest.len());
     Some(rest[..end].to_string())
+}
+
+/// Check if a process exit status indicates a seccomp violation (SIGSYS).
+///
+/// On Linux, seccomp BPF filters kill the process with SIGSYS (signal 31)
+/// when a blocked syscall is attempted. This function detects that signal
+/// from the process exit status so we can record it as a violation.
+///
+/// Returns `true` if the exit status indicates SIGSYS (seccomp kill).
+#[cfg(target_os = "linux")]
+pub fn is_seccomp_violation(exit_status: &std::process::ExitStatus) -> bool {
+    use std::os::unix::process::ExitStatusExt;
+    // SIGSYS = 31 on Linux (bad system call, used by seccomp)
+    exit_status.signal() == Some(31)
+}
+
+/// Fallback for non-Linux platforms.
+#[cfg(not(target_os = "linux"))]
+pub fn is_seccomp_violation(_exit_status: &std::process::ExitStatus) -> bool {
+    false
+}
+
+/// Create a violation entry for a seccomp-killed process.
+pub fn seccomp_violation(command_tag: Option<String>) -> crate::violation::Violation {
+    crate::violation::Violation {
+        timestamp: std::time::SystemTime::now(),
+        operation: "seccomp-kill".to_string(),
+        path: None,
+        command_tag,
+        benign: false,
+    }
+}
+
+/// Create a violation entry for a proxy-denied network request.
+pub fn network_deny_violation(
+    domain: &str,
+    command_tag: Option<String>,
+) -> crate::violation::Violation {
+    crate::violation::Violation {
+        timestamp: std::time::SystemTime::now(),
+        operation: "network-denied".to_string(),
+        path: Some(domain.to_string()),
+        command_tag,
+        benign: false,
+    }
 }
 
 #[cfg(test)]

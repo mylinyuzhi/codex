@@ -120,6 +120,25 @@ impl Tool for ExitPlanModeTool {
         // If we reach execute(), the user has approved the plan
         ctx.emit_progress("Plan approved - exiting plan mode").await;
 
+        // Ultraplan: plan was pre-written by remote session — no implementation needed.
+        // CC: chunks.143.mjs:2997-3001 returns a summary-only directive.
+        if ctx.is_ultraplan {
+            ctx.emit_event(cocode_protocol::CoreEvent::Protocol(
+                cocode_protocol::server_notification::ServerNotification::PlanModeChanged(
+                    cocode_protocol::server_notification::PlanModeChangedParams {
+                        entered: false,
+                        plan_file: None,
+                        approved: Some(true),
+                    },
+                ),
+            ))
+            .await;
+            return Ok(ToolOutput::text(
+                "User has reviewed the ultraplan. There is nothing else to do. \
+                 Respond with a brief summary of the plan.",
+            ));
+        }
+
         // Extract allowedPrompts from input (prompt-based permission declarations)
         let allowed_prompts = input
             .get("allowedPrompts")
@@ -152,8 +171,16 @@ impl Tool for ExitPlanModeTool {
         );
 
         // Emit plan mode exit event with approved=true
-        ctx.emit_event(cocode_protocol::LoopEvent::PlanModeExited { approved: true })
-            .await;
+        ctx.emit_event(cocode_protocol::CoreEvent::Protocol(
+            cocode_protocol::server_notification::ServerNotification::PlanModeChanged(
+                cocode_protocol::server_notification::PlanModeChangedParams {
+                    entered: false,
+                    plan_file: None,
+                    approved: Some(true),
+                },
+            ),
+        ))
+        .await;
 
         // Return structured response with plan content and allowed prompts
         let response = serde_json::json!({

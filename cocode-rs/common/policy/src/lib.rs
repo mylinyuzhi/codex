@@ -15,8 +15,11 @@ pub mod store;
 // Re-export primary types at crate root for convenience.
 pub use evaluator::PermissionRuleEvaluator;
 pub use normalize::normalize_command;
+pub use persist::RuleDestination;
 pub use persist::persist_rule;
+pub use persist::persist_rule_with_options;
 pub use persist::remove_rule;
+pub use persist::remove_rule_with_options;
 pub use rule::PermissionRule;
 pub use rule::RuleAction;
 pub use store::ApprovalStore;

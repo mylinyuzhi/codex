@@ -9,6 +9,12 @@ import os
 import shutil
 from typing import Any, AsyncIterator
 
+from cocode_sdk.errors import (
+    CLIConnectionError,
+    CLINotFoundError,
+    ProcessError,
+    TransportClosedError,
+)
 from cocode_sdk.generated.protocol import ServerNotification
 
 from . import Transport
@@ -30,7 +36,7 @@ def _find_cocode_binary() -> str:
         if os.path.isfile(path) and os.access(path, os.X_OK):
             return path
 
-    raise FileNotFoundError(
+    raise CLINotFoundError(
         "cocode binary not found. Install it or set COCODE_PATH environment variable."
     )
 
@@ -71,7 +77,7 @@ class SubprocessCLITransport(Transport):
                     attempt + 1, self.MAX_START_RETRIES, e, backoff,
                 )
                 await asyncio.sleep(backoff)
-        raise RuntimeError(
+        raise CLIConnectionError(
             f"Failed to start cocode after {self.MAX_START_RETRIES} attempts"
         ) from last_error
 
@@ -109,22 +115,23 @@ class SubprocessCLITransport(Transport):
 
     async def send_line(self, line: str) -> None:
         if not self._process or not self._process.stdin:
-            raise RuntimeError("Transport not started")
+            raise TransportClosedError("Transport not started")
         data = (line.rstrip("\n") + "\n").encode()
         self._process.stdin.write(data)
         await self._process.stdin.drain()
 
     async def read_lines(self) -> AsyncIterator[dict[str, Any]]:
         if not self._process or not self._process.stdout:
-            raise RuntimeError("Transport not started")
+            raise TransportClosedError("Transport not started")
 
         while True:
             line = await self._process.stdout.readline()
             if not line:
                 returncode = self._process.returncode
                 if returncode is not None and returncode != 0:
-                    raise RuntimeError(
-                        f"cocode process exited with code {returncode}"
+                    raise ProcessError(
+                        f"cocode process exited with code {returncode}",
+                        exit_code=returncode,
                     )
                 break
             line_str = line.decode().strip()

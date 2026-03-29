@@ -136,7 +136,7 @@ Fire-and-forget background execution that drains the message generator:
 ```rust
 /// Fire-and-forget background execution loop
 pub fn aggregate_async_agent_execution(
-    message_generator: Pin<Box<dyn Stream<Item = LoopEvent> + Send>>,
+    message_generator: Pin<Box<dyn Stream<Item = CoreEvent> + Send>>,
     task_id: String,
     set_app_state: Arc<dyn Fn(AppStateUpdater) + Send + Sync>,
     final_callback: Option<Box<dyn FnOnce(AgentResult) + Send>>,
@@ -159,18 +159,18 @@ pub fn aggregate_async_agent_execution(
                 }
                 event = stream.next() => {
                     match event {
-                        Some(LoopEvent::TextDelta { delta, .. }) => {
+                        Some(CoreEvent::TextDelta { delta, .. }) => {
                             // Accumulate text in messages
                             accumulate_text(&mut all_messages, delta);
                         }
-                        Some(LoopEvent::ToolUseCompleted { call_id, .. }) => {
+                        Some(CoreEvent::ToolUseCompleted { call_id, .. }) => {
                             tool_use_count += 1;
                             recent_activities.push_back(format!("Tool: {call_id}"));
                             if recent_activities.len() > 5 {  // Keep last 5 (aligned with Claude Code)
                                 recent_activities.pop_front();
                             }
                         }
-                        Some(LoopEvent::StreamRequestEnd { usage, .. }) => {
+                        Some(CoreEvent::StreamRequestEnd { usage, .. }) => {
                             token_count += usage.total_tokens;
                         }
                         None => {
@@ -215,7 +215,7 @@ pub async fn run_backgroundable_agent(
     agent_id: &str,
     loop_driver: &mut AgentLoop,
     initial_msg: ConversationMessage,
-    event_tx: mpsc::Sender<LoopEvent>,
+    event_tx: mpsc::Sender<CoreEvent>,
     set_app_state: Arc<dyn Fn(AppStateUpdater) + Send + Sync>,
 ) -> Result<AgentResult, AgentError> {
     // Register for background signal
@@ -231,7 +231,7 @@ pub async fn run_backgroundable_agent(
                 match event {
                     Some(e) => {
                         event_tx.send(e.clone()).await?;
-                        if matches!(e, LoopEvent::TurnCompleted { .. }) {
+                        if matches!(e, CoreEvent::TurnCompleted { .. }) {
                             // Check if more turns needed
                             if !stream.has_more() {
                                 break;
@@ -245,7 +245,7 @@ pub async fn run_backgroundable_agent(
             // Background signal path
             _ = bg_signal => {
                 // Emit backgrounded event
-                event_tx.send(LoopEvent::SubagentBackgrounded {
+                event_tx.send(CoreEvent::SubagentBackgrounded {
                     agent_id: agent_id.to_string(),
                     output_file: get_output_file(agent_id),
                 }).await?;
@@ -897,10 +897,10 @@ impl SubagentManager {
             // ... message loop ...
             while let Some(event) = stream.next().await {
                 match event {
-                    LoopEvent::TextDelta { delta, .. } => {
+                    CoreEvent::TextDelta { delta, .. } => {
                         streamer.write(delta.as_bytes()).await.ok();
                     }
-                    LoopEvent::ToolUseCompleted { output, .. } => {
+                    CoreEvent::ToolUseCompleted { output, .. } => {
                         let text = format!("\n[Tool completed]\n{}\n", output.as_text());
                         streamer.write(text.as_bytes()).await.ok();
                     }
@@ -1064,7 +1064,7 @@ pub async fn write_to_transcript(
 ## Events
 
 ```rust
-pub enum LoopEvent {
+pub enum CoreEvent {
     // Background task events
     BackgroundTaskStarted { task_id: String, task_type: TaskType },
     BackgroundTaskProgress { task_id: String, progress: TaskProgress },

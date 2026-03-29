@@ -380,7 +380,8 @@ impl Tool for ReadTool {
             .build());
         }
 
-        // Handle image files — return as base64 data URL
+        // Handle image files — return as image content block via ToolOutput.images
+        // so the LLM receives proper multimodal vision content.
         if is_image_file(&path) {
             let bytes = fs::read(&path).await.map_err(|e| {
                 crate::error::tool_error::ExecutionFailedSnafu {
@@ -392,10 +393,9 @@ impl Tool for ReadTool {
             let mime = image_mime_type(&path);
             use base64::Engine;
             let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-            let data_url = format!("data:{mime};base64,{b64}");
 
             let output = format!(
-                "Image file: {}\nSize: {} bytes\nType: {mime}\n\n{data_url}",
+                "Image file: {}\nSize: {} bytes\nType: {mime}",
                 path.display(),
                 bytes.len(),
             );
@@ -412,7 +412,15 @@ impl Tool for ReadTool {
             )
             .await;
 
-            return Ok(ToolOutput::text(output));
+            return Ok(ToolOutput {
+                content: cocode_protocol::ToolResultContent::Text(output),
+                is_error: false,
+                modifiers: Vec::new(),
+                images: vec![cocode_protocol::ImageData {
+                    data: b64,
+                    media_type: mime.to_string(),
+                }],
+            });
         }
 
         // Handle PDF files — extract text or return info

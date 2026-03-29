@@ -28,10 +28,18 @@ pub enum MessageType {
     ShutdownRequest,
     /// Response to shutdown request.
     ShutdownResponse,
+    /// Request for plan approval from another agent.
+    PlanApprovalRequest,
     /// Response to a plan approval request.
     PlanApprovalResponse,
     /// Notification that an agent has become idle.
     IdleNotification,
+    /// Worker requests sandbox bypass permission from the leader.
+    /// Content is JSON-serialized [`SandboxPermissionRequest`].
+    SandboxPermissionRequest,
+    /// Leader responds to a worker's sandbox bypass request.
+    /// Content is JSON-serialized [`SandboxPermissionResponse`].
+    SandboxPermissionResponse,
 }
 
 impl MessageType {
@@ -42,8 +50,11 @@ impl MessageType {
             Self::Broadcast => "broadcast",
             Self::ShutdownRequest => "shutdown_request",
             Self::ShutdownResponse => "shutdown_response",
+            Self::PlanApprovalRequest => "plan_approval_request",
             Self::PlanApprovalResponse => "plan_approval_response",
             Self::IdleNotification => "idle_notification",
+            Self::SandboxPermissionRequest => "sandbox_permission_request",
+            Self::SandboxPermissionResponse => "sandbox_permission_response",
         }
     }
 }
@@ -238,6 +249,151 @@ impl Team {
             .collect()
     }
 }
+
+// ============================================================================
+// Sandbox Permission Sync (Worker-Leader Protocol)
+// ============================================================================
+
+/// What kind of sandbox restriction triggered the permission request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SandboxRestrictionKind {
+    /// Network domain blocked by sandbox proxy.
+    Network,
+    /// Filesystem path blocked by sandbox enforcement.
+    Filesystem,
+    /// Unix socket blocked by sandbox enforcement.
+    UnixSocket,
+}
+
+/// Worker → Leader: request sandbox bypass permission.
+///
+/// Sent via the mailbox when a worker agent's command is blocked by
+/// sandbox restrictions and the worker needs the leader (which has
+/// the TUI) to prompt the user for approval.
+///
+/// Matches Claude Code's `sendSandboxPermissionRequest` (xb4) protocol.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SandboxPermissionRequest {
+    /// Unique request ID: `sandbox-{timestamp_ms}-{random_hex}`.
+    pub request_id: String,
+    /// The command that was blocked.
+    pub command: String,
+    /// What kind of restriction was hit.
+    pub restriction_kind: SandboxRestrictionKind,
+    /// Detail about the restriction (domain, path, or socket path).
+    pub detail: String,
+    /// Display name of the worker agent (for the leader's permission dialog).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_name: Option<String>,
+    /// Display color of the worker agent (for TUI rendering).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_color: Option<String>,
+    /// When the request was created (Unix milliseconds).
+    pub created_at: i64,
+}
+
+impl SandboxPermissionRequest {
+    /// Create a new request with a generated ID and current timestamp.
+    pub fn new(
+        command: impl Into<String>,
+        restriction_kind: SandboxRestrictionKind,
+        detail: impl Into<String>,
+    ) -> Self {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let random = uuid::Uuid::new_v4().as_fields().0;
+        Self {
+            request_id: format!("sandbox-{now_ms}-{random:08x}"),
+            command: command.into(),
+            restriction_kind,
+            detail: detail.into(),
+            worker_name: None,
+            worker_color: None,
+            created_at: now_ms,
+        }
+    }
+
+    /// Set the worker display name.
+    pub fn with_worker_name(mut self, name: impl Into<String>) -> Self {
+        self.worker_name = Some(name.into());
+        self
+    }
+
+    /// Set the worker display color.
+    pub fn with_worker_color(mut self, color: impl Into<String>) -> Self {
+        self.worker_color = Some(color.into());
+        self
+    }
+
+    /// Wrap this request into an [`AgentMessage`] for mailbox delivery.
+    ///
+    /// Serialization of this struct is infallible in practice (no maps with
+    /// non-string keys, no recursive structures) so the error path is purely
+    /// for type safety.
+    pub fn into_message(self, from: &str, to: &str) -> Result<AgentMessage, serde_json::Error> {
+        let content = serde_json::to_string(&self)?;
+        Ok(AgentMessage::new(
+            from,
+            to,
+            content,
+            MessageType::SandboxPermissionRequest,
+        ))
+    }
+
+    /// Parse from an [`AgentMessage`] content field.
+    pub fn from_message(msg: &AgentMessage) -> Option<Self> {
+        if msg.message_type != MessageType::SandboxPermissionRequest {
+            return None;
+        }
+        serde_json::from_str(&msg.content).ok()
+    }
+}
+
+/// Leader → Worker: sandbox bypass decision.
+///
+/// Matches Claude Code's `sendSandboxPermissionResponse` (bb4) protocol.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SandboxPermissionResponse {
+    /// Must match the `request_id` from the corresponding request.
+    pub request_id: String,
+    /// Whether the user approved the bypass.
+    pub approved: bool,
+    /// The host/path that was approved or denied (echoed from the request detail).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    /// When the decision was made (Unix milliseconds, same as `SandboxPermissionRequest.created_at`).
+    pub timestamp: i64,
+}
+
+impl SandboxPermissionResponse {
+    /// Wrap this response into an [`AgentMessage`] for mailbox delivery.
+    ///
+    /// Serialization is infallible in practice; error return is for type safety.
+    pub fn into_message(self, from: &str, to: &str) -> Result<AgentMessage, serde_json::Error> {
+        let content = serde_json::to_string(&self)?;
+        Ok(AgentMessage::new(
+            from,
+            to,
+            content,
+            MessageType::SandboxPermissionResponse,
+        ))
+    }
+
+    /// Parse from an [`AgentMessage`] content field.
+    pub fn from_message(msg: &AgentMessage) -> Option<Self> {
+        if msg.message_type != MessageType::SandboxPermissionResponse {
+            return None;
+        }
+        serde_json::from_str(&msg.content).ok()
+    }
+}
+
+// ============================================================================
+// Formatting
+// ============================================================================
 
 /// Format teams as human-readable summary.
 pub fn format_team_summary(teams: &BTreeMap<String, Team>) -> String {

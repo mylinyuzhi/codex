@@ -1079,6 +1079,25 @@ fn test_is_read_only_or_plan_tool_unknown() {
 }
 
 #[test]
+fn test_is_read_only_or_plan_tool_mcp_tools_bypass() {
+    let registry = ToolRegistry::new();
+
+    // MCP tools always bypass plan mode filtering (CC: mcp__ prefix in Xk8)
+    assert!(is_read_only_or_plan_tool(&registry, "mcp__server__tool"));
+    assert!(is_read_only_or_plan_tool(
+        &registry,
+        "mcp__github__list_repos"
+    ));
+    assert!(is_read_only_or_plan_tool(
+        &registry,
+        "mcp__slack__send_message"
+    ));
+
+    // Non-MCP unknown tools are still denied
+    assert!(!is_read_only_or_plan_tool(&registry, "some_random_tool"));
+}
+
+#[test]
 fn test_permission_level_from_decision() {
     assert_eq!(
         PermissionLevel::from_decision("deny"),

@@ -32,22 +32,44 @@ pub struct SandboxInitResult {
 /// or `None` if sandbox is disabled by settings, platform, or missing deps.
 pub fn initialize_sandbox(config: &Config) -> Option<Arc<SandboxState>> {
     let settings = &config.sandbox_settings;
+    let is_external = config.sandbox_mode.is_external_sandbox();
 
-    // Run the 4-gate enable check
-    let gate_result = check_enable_gates(settings);
-    match gate_result {
-        EnableCheckResult::Enabled => {}
-        other => {
-            tracing::debug!("Sandbox disabled: {other:?}");
+    // External sandbox only requires settings.enabled (gates 2-4 don't apply
+    // since platform wrapping is skipped). Standard sandbox uses the full
+    // 4-gate check (settings, platform, allowlist, deps).
+    if is_external {
+        if !settings.enabled {
+            tracing::debug!("Sandbox disabled: settings.enabled is false");
             return None;
+        }
+    } else {
+        let gate_result = check_enable_gates(settings);
+        match gate_result {
+            EnableCheckResult::Enabled => {}
+            other => {
+                tracing::debug!("Sandbox disabled: {other:?}");
+                return None;
+            }
         }
     }
 
     // Convert protocol SandboxMode → enforcement level
     let enforcement = EnforcementLevel::from(config.sandbox_mode);
     if enforcement == EnforcementLevel::Disabled {
-        tracing::debug!("Sandbox disabled: enforcement level is Disabled (FullAccess mode)");
-        return None;
+        // Fail-closed network (from codex-rs): still create sandbox state when
+        // domain filtering is configured, so the managed proxy enforces network
+        // restrictions even with full filesystem access. The proxy is a separate
+        // security layer from filesystem enforcement.
+        let has_domain_filtering = !settings.network.allowed_domains.is_empty()
+            || !settings.network.denied_domains.is_empty();
+        if !has_domain_filtering {
+            tracing::debug!("Sandbox disabled: enforcement level is Disabled (FullAccess mode)");
+            return None;
+        }
+        tracing::info!(
+            "Filesystem enforcement disabled (FullAccess) but domain filtering configured; \
+             creating sandbox state for fail-closed network proxy"
+        );
     }
 
     // Build SandboxConfig from the session config
@@ -78,19 +100,28 @@ pub fn initialize_sandbox(config: &Config) -> Option<Arc<SandboxState>> {
         ..Default::default()
     };
 
-    // Create platform-specific implementation
-    let platform = create_platform();
-
-    let state = SandboxState::new(enforcement, settings.clone(), sandbox_config, platform);
-
-    if state.is_active() {
+    // ExternalSandbox: skip platform wrapping (bwrap/Seatbelt); the environment
+    // is already sandboxed by Docker, CI, or another external mechanism.
+    let state = if is_external {
         tracing::info!(
             enforcement = ?enforcement,
-            "Sandbox initialized with platform enforcement"
+            "Sandbox initialized in external mode (platform wrapping skipped)"
         );
+        SandboxState::external(enforcement, settings.clone(), sandbox_config)
     } else {
-        tracing::warn!("Sandbox enabled in settings but platform enforcement unavailable");
-    }
+        let platform = create_platform();
+        let s = SandboxState::new(enforcement, settings.clone(), sandbox_config, platform);
+
+        if s.is_active() {
+            tracing::info!(
+                enforcement = ?enforcement,
+                "Sandbox initialized with platform enforcement"
+            );
+        } else {
+            tracing::warn!("Sandbox enabled in settings but platform enforcement unavailable");
+        }
+        s
+    };
 
     Some(Arc::new(state))
 }

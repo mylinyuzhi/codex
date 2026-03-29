@@ -6,6 +6,9 @@ fn make_command(prompt: &str) -> UserQueuedCommand {
         id: format!("cmd-{}", prompt.len()),
         prompt: prompt.to_string(),
         queued_at: 1234567890,
+        has_images: false,
+        command_mode: None,
+        origin: None,
     }
 }
 

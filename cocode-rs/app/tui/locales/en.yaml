@@ -392,6 +392,8 @@ toast.slow_query: "Query took %{duration}s"
 # Fast mode
 toast.fast_mode_on: "Fast mode enabled"
 toast.fast_mode_off: "Fast mode disabled"
+toast.fast_mode_unsupported: "Fast mode not available for this model"
+toast.fast_mode_auto_disabled: "Fast mode disabled (model changed)"
 
 # Sandbox
 toast.sandbox_active: "Sandbox active: %{enforcement}"

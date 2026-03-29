@@ -360,7 +360,7 @@ impl Config {
         match self.sandbox_mode {
             SandboxMode::ReadOnly => false,
             SandboxMode::FullAccess => true,
-            SandboxMode::WorkspaceWrite => {
+            SandboxMode::WorkspaceWrite | SandboxMode::ExternalSandbox => {
                 // Check if path is under any writable root
                 self.writable_roots
                     .iter()

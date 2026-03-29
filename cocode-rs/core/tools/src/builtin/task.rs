@@ -241,21 +241,31 @@ impl Tool for TaskTool {
                 }
 
                 // Emit SubagentSpawned event for TUI visibility
-                ctx.emit_event(cocode_protocol::LoopEvent::SubagentSpawned {
-                    agent_id: result.agent_id.clone(),
-                    agent_type: subagent_type.to_string(),
-                    description: description.to_string(),
-                    color: result.color.clone(),
-                })
+                ctx.emit_event(cocode_protocol::CoreEvent::Protocol(
+                    cocode_protocol::server_notification::ServerNotification::SubagentSpawned(
+                        cocode_protocol::server_notification::SubagentSpawnedParams {
+                            agent_id: result.agent_id.clone(),
+                            agent_type: subagent_type.to_string(),
+                            description: description.to_string(),
+                            color: result.color.clone(),
+                        },
+                    ),
+                ))
                 .await;
 
                 if result.output_file.is_some() {
                     // Emit SubagentBackgrounded event
                     let output_file = result.output_file.clone().unwrap_or_default();
-                    ctx.emit_event(cocode_protocol::LoopEvent::SubagentBackgrounded {
-                        agent_id: result.agent_id.clone(),
-                        output_file,
-                    })
+                    ctx.emit_event(
+                        cocode_protocol::CoreEvent::Protocol(
+                            cocode_protocol::server_notification::ServerNotification::SubagentBackgrounded(
+                                cocode_protocol::server_notification::SubagentBackgroundedParams {
+                                    agent_id: result.agent_id.clone(),
+                                    output_file: output_file.to_string_lossy().into_owned(),
+                                },
+                            ),
+                        ),
+                    )
                     .await;
 
                     // Background agent - return ID and output file path
@@ -311,10 +321,16 @@ impl Tool for TaskTool {
                         )))
                     } else {
                         // Normal completion — emit event AFTER hooks pass
-                        ctx.emit_event(cocode_protocol::LoopEvent::SubagentCompleted {
-                            agent_id: result.agent_id.clone(),
-                            result: output.clone(),
-                        })
+                        ctx.emit_event(
+                            cocode_protocol::CoreEvent::Protocol(
+                                cocode_protocol::server_notification::ServerNotification::SubagentCompleted(
+                                    cocode_protocol::server_notification::SubagentCompletedParams {
+                                        agent_id: result.agent_id.clone(),
+                                        result: output.clone(),
+                                    },
+                                ),
+                            ),
+                        )
                         .await;
 
                         // Fire TaskCompleted hooks

@@ -85,6 +85,10 @@ impl Tool for WebFetchTool {
         true
     }
 
+    fn should_defer(&self) -> bool {
+        true
+    }
+
     fn max_result_size_chars(&self) -> i32 {
         MAX_RESULT_CHARS
     }

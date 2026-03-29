@@ -69,6 +69,10 @@ impl Tool for SkillTool {
         false
     }
 
+    fn should_defer(&self) -> bool {
+        true
+    }
+
     async fn check_permission(&self, input: &Value, ctx: &ToolContext) -> PermissionResult {
         // Auto-allow skills that have no unsafe properties (no allowed_tools, no hooks).
         // Skills with tool restrictions or hooks need user approval.
@@ -162,12 +166,16 @@ impl Tool for SkillTool {
                 };
 
                 // Emit SubagentSpawned event for TUI visibility
-                ctx.emit_event(cocode_protocol::LoopEvent::SubagentSpawned {
-                    agent_id: String::new(), // Will be filled by result
-                    agent_type: agent_type.clone(),
-                    description: format!("Skill fork: {skill_name}"),
-                    color: None,
-                })
+                ctx.emit_event(cocode_protocol::CoreEvent::Protocol(
+                    cocode_protocol::server_notification::ServerNotification::SubagentSpawned(
+                        cocode_protocol::server_notification::SubagentSpawnedParams {
+                            agent_id: String::new(), // Will be filled by result
+                            agent_type: agent_type.clone(),
+                            description: format!("Skill fork: {skill_name}"),
+                            color: None,
+                        },
+                    ),
+                ))
                 .await;
 
                 match ctx.spawn_agent(spawn_input).await {

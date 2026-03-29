@@ -10,11 +10,14 @@ fn all_tools() -> Vec<String> {
         ToolName::Glob.as_str().to_string(),
         ToolName::Grep.as_str().to_string(),
         ToolName::Task.as_str().to_string(),
+        ToolName::TaskOutput.as_str().to_string(),
         ToolName::EnterPlanMode.as_str().to_string(),
         ToolName::ExitPlanMode.as_str().to_string(),
         ToolName::TaskStop.as_str().to_string(),
         ToolName::AskUserQuestion.as_str().to_string(),
         ToolName::EnterWorktree.as_str().to_string(),
+        ToolName::SendMessage.as_str().to_string(),
+        ToolName::CronCreate.as_str().to_string(),
     ]
 }
 
@@ -33,7 +36,13 @@ fn make_def(tools: Vec<&str>, disallowed: Vec<&str>) -> AgentDefinition {
 fn test_system_blocked_always_removed() {
     let def = make_def(vec![], vec![]);
     let result = filter_tools_for_agent(&all_tools(), &def, false, None);
+    // These 6 tools match CC's BACKGROUND_AGENT_EXCLUDED_TOOLS
     assert!(!result.tools.contains(&ToolName::Task.as_str().to_string()));
+    assert!(
+        !result
+            .tools
+            .contains(&ToolName::TaskOutput.as_str().to_string())
+    );
     assert!(
         !result
             .tools
@@ -54,10 +63,21 @@ fn test_system_blocked_always_removed() {
             .tools
             .contains(&ToolName::AskUserQuestion.as_str().to_string())
     );
+    // These tools are NOT system-blocked (available to foreground subagents)
     assert!(
-        !result
+        result
             .tools
             .contains(&ToolName::EnterWorktree.as_str().to_string())
+    );
+    assert!(
+        result
+            .tools
+            .contains(&ToolName::SendMessage.as_str().to_string())
+    );
+    assert!(
+        result
+            .tools
+            .contains(&ToolName::CronCreate.as_str().to_string())
     );
 }
 
@@ -117,7 +137,7 @@ fn test_background_limits_to_async_safe() {
         ToolName::WebFetch.as_str(),
         ToolName::WebSearch.as_str(),
         ToolName::NotebookEdit.as_str(),
-        ToolName::TaskOutput.as_str(),
+        ToolName::EnterWorktree.as_str(),
         "SomeInteractiveTool",
     ]
     .into_iter()
@@ -133,10 +153,11 @@ fn test_background_limits_to_async_safe() {
             .tools
             .contains(&ToolName::WebFetch.as_str().to_string())
     );
+    // EnterWorktree is in ASYNC_SAFE_TOOLS (not system-blocked)
     assert!(
         result
             .tools
-            .contains(&ToolName::TaskOutput.as_str().to_string())
+            .contains(&ToolName::EnterWorktree.as_str().to_string())
     );
 }
 
@@ -152,6 +173,12 @@ fn test_background_also_applies_system_blocked() {
     );
     // Task is system-blocked
     assert!(!result.tools.contains(&ToolName::Task.as_str().to_string()));
+    // TaskOutput is system-blocked
+    assert!(
+        !result
+            .tools
+            .contains(&ToolName::TaskOutput.as_str().to_string())
+    );
 }
 
 #[test]
@@ -365,8 +392,16 @@ fn test_async_safe_tools_include_skill_and_mcp_search() {
             .tools
             .contains(&ToolName::TodoWrite.as_str().to_string())
     );
-    // EnterWorktree and ExitWorktree are system-blocked (Layer 1),
-    // but they are in ASYNC_SAFE_TOOLS for when they pass Layer 1
-    // (e.g., when allowed via definition override). In background mode with
-    // no allow-list, they are removed by Layer 1 first.
+    // EnterWorktree and ExitWorktree are in ASYNC_SAFE_TOOLS and
+    // not system-blocked, so they pass through in background mode.
+    assert!(
+        result
+            .tools
+            .contains(&ToolName::EnterWorktree.as_str().to_string())
+    );
+    assert!(
+        result
+            .tools
+            .contains(&ToolName::ExitWorktree.as_str().to_string())
+    );
 }

@@ -37,4 +37,5 @@ pub use plan_file::read_plan_file;
 pub use plan_slug::generate_slug;
 pub use plan_slug::get_unique_slug;
 pub use state::PlanModeState;
+pub use state::PrePlanModeTag;
 pub use state::is_safe_file;

@@ -10,5 +10,9 @@ echo "==> Generating JSON Schema from Rust types..."
 cd "$REPO_ROOT/cocode-rs"
 cargo run --bin export-app-server-schema
 
-echo "==> Schemas written to cocode-rs/app-server-protocol/schema/json/"
-ls -la "$REPO_ROOT/cocode-rs/app-server-protocol/schema/json/"
+echo "==> Copying schemas to cocode-sdk/schemas/json/..."
+mkdir -p "$REPO_ROOT/cocode-sdk/schemas/json"
+cp "$REPO_ROOT/cocode-rs/app-server-protocol/schema/json/"*.json "$REPO_ROOT/cocode-sdk/schemas/json/"
+
+echo "==> Schemas written to cocode-sdk/schemas/json/"
+ls -la "$REPO_ROOT/cocode-sdk/schemas/json/"
