@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
 
 use cocode_context::ConversationContext;
 use cocode_hooks::AsyncHookTracker;
@@ -12,8 +13,8 @@ use cocode_message::MessageHistory;
 use cocode_policy::ApprovalStore;
 use cocode_protocol::AgentStatus;
 use cocode_protocol::CompactConfig;
+use cocode_protocol::CoreEvent;
 use cocode_protocol::LoopConfig;
-use cocode_protocol::LoopEvent;
 use cocode_protocol::RoleSelections;
 use cocode_shell::ShellExecutor;
 use cocode_skill::SkillManager;
@@ -43,7 +44,7 @@ pub struct AgentLoopBuilder {
     selections: RoleSelections,
     tool_registry: Arc<ToolRegistry>,
     context: ConversationContext,
-    event_tx: mpsc::Sender<LoopEvent>,
+    event_tx: mpsc::Sender<CoreEvent>,
 
     // Optional fields (set via builder methods)
     message_history: Option<MessageHistory>,
@@ -66,6 +67,7 @@ pub struct AgentLoopBuilder {
     spawn_agent_fn: Option<SpawnAgentFn>,
     skill_manager: Option<Arc<SkillManager>>,
     queued_commands: Arc<Mutex<Vec<QueuedCommandInfo>>>,
+    fast_mode: Arc<AtomicBool>,
     status_tx: Option<watch::Sender<AgentStatus>>,
     features: cocode_protocol::Features,
     web_search_config: cocode_protocol::WebSearchConfig,
@@ -87,6 +89,9 @@ pub struct AgentLoopBuilder {
     killed_agents: cocode_tools::context::KilledAgents,
     /// Optional permission requester for interactive approval flow (SDK mode).
     permission_requester: Option<Arc<dyn PermissionRequester>>,
+    /// Previous turn's role selections for detecting provider/model switches.
+    /// `None` on the first turn of a session.
+    previous_selections: Option<RoleSelections>,
 }
 
 impl AgentLoopBuilder {
@@ -99,7 +104,7 @@ impl AgentLoopBuilder {
         selections: RoleSelections,
         tool_registry: Arc<ToolRegistry>,
         context: ConversationContext,
-        event_tx: mpsc::Sender<LoopEvent>,
+        event_tx: mpsc::Sender<CoreEvent>,
     ) -> Self {
         Self {
             api_client,
@@ -128,6 +133,7 @@ impl AgentLoopBuilder {
             spawn_agent_fn: None,
             skill_manager: None,
             queued_commands: Arc::new(Mutex::new(Vec::new())),
+            fast_mode: Arc::new(AtomicBool::new(false)),
             status_tx: None,
             features: cocode_protocol::Features::with_defaults(),
             web_search_config: cocode_protocol::WebSearchConfig::default(),
@@ -143,6 +149,7 @@ impl AgentLoopBuilder {
             cocode_home: None,
             killed_agents: Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new())),
             permission_requester: None,
+            previous_selections: None,
         }
     }
 
@@ -278,6 +285,15 @@ impl AgentLoopBuilder {
         self
     }
 
+    /// Set the shared fast-mode handle.
+    ///
+    /// The same `Arc<AtomicBool>` is held by the TUI driver so it can toggle
+    /// fast mode while the loop is running.
+    pub fn fast_mode(mut self, handle: Arc<AtomicBool>) -> Self {
+        self.fast_mode = handle;
+        self
+    }
+
     /// Set the status watch channel sender.
     ///
     /// This enables efficient status polling without processing all events.
@@ -391,6 +407,12 @@ impl AgentLoopBuilder {
     /// Set the cocode home directory for durable cron persistence.
     pub fn cocode_home(mut self, path: std::path::PathBuf) -> Self {
         self.cocode_home = Some(path);
+        self
+    }
+
+    /// Set the previous turn's role selections for switch detection.
+    pub fn previous_selections(mut self, selections: RoleSelections) -> Self {
+        self.previous_selections = Some(selections);
         self
     }
 
@@ -510,6 +532,7 @@ impl AgentLoopBuilder {
             current_structured_tasks: None,
             current_cron_jobs: None,
             delegate_mode: false,
+            fast_mode: self.fast_mode.load(std::sync::atomic::Ordering::Relaxed),
             queued_commands: self.queued_commands.clone(),
             features: self.features,
             web_search_config: self.web_search_config,

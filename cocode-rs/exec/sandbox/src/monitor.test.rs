@@ -279,11 +279,24 @@ fn test_parse_violation_line_process_exec() {
     assert!(!violation.benign);
 }
 
-// --- ViolationMonitor non-macOS ---
+// --- ViolationMonitor Linux (passive mode) ---
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
 #[tokio::test]
-async fn test_monitor_start_returns_none_on_non_macos() {
+async fn test_monitor_start_returns_some_on_linux() {
+    let store = Arc::new(Mutex::new(ViolationStore::new()));
+    let token = CancellationToken::new();
+    let tag = generate_session_tag();
+    let monitor = ViolationMonitor::start(store, token, tag);
+    // Linux uses passive mode (no background process, but returns Some)
+    assert!(monitor.is_some());
+}
+
+// --- ViolationMonitor unsupported platforms ---
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[tokio::test]
+async fn test_monitor_start_returns_none_on_unsupported() {
     let store = Arc::new(Mutex::new(ViolationStore::new()));
     let token = CancellationToken::new();
     let tag = generate_session_tag();
@@ -318,4 +331,53 @@ async fn test_monitor_stop_is_idempotent() {
     monitor.stop().await;
     // Second stop should not panic.
     monitor.stop().await;
+}
+
+// --- Violation helpers (cross-platform) ---
+
+#[test]
+fn test_seccomp_violation_fields() {
+    let violation = seccomp_violation(Some("CMD64_test_END_tag".to_string()));
+    assert_eq!(violation.operation, "seccomp-kill");
+    assert!(violation.path.is_none());
+    assert!(!violation.benign);
+    assert_eq!(violation.command_tag.as_deref(), Some("CMD64_test_END_tag"));
+}
+
+#[test]
+fn test_network_deny_violation_fields() {
+    let violation = network_deny_violation("evil.com", None);
+    assert_eq!(violation.operation, "network-denied");
+    assert_eq!(violation.path.as_deref(), Some("evil.com"));
+    assert!(!violation.benign);
+    assert!(violation.command_tag.is_none());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn test_is_seccomp_violation_sigsys() {
+    use std::os::unix::process::ExitStatusExt;
+    // SIGSYS = signal 31 on Linux
+    let status = std::process::ExitStatus::from_raw(31);
+    assert!(is_seccomp_violation(&status));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn test_is_seccomp_violation_normal_exit() {
+    use std::os::unix::process::ExitStatusExt;
+    // Normal exit (code 0, encoded as 0<<8 = 0)
+    let status = std::process::ExitStatus::from_raw(0);
+    assert!(!is_seccomp_violation(&status));
+}
+
+#[test]
+fn test_is_seccomp_violation_non_linux() {
+    // On non-Linux platforms, should always return false
+    if !cfg!(target_os = "linux") {
+        let status = std::process::Command::new("true")
+            .status()
+            .expect("run true");
+        assert!(!is_seccomp_violation(&status));
+    }
 }

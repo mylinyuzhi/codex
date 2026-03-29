@@ -1013,7 +1013,7 @@ impl AgentLoop {
         }
 
         // Emit HookExecuted event
-        self.emit(LoopEvent::HookExecuted {
+        self.emit(CoreEvent::HookExecuted {
             hook_type: HookEventType::PreToolUse,
             hook_name: tool.name().to_string(),
         }).await;

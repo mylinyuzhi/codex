@@ -290,3 +290,158 @@ fn test_filter_risks_by_level() {
         "risks: {risks:?}"
     );
 }
+
+#[test]
+fn test_expanded_read_only_commands() {
+    // New safe commands added from CC alignment
+    assert!(is_read_only_command("cal"));
+    assert!(is_read_only_command("uptime"));
+    assert!(is_read_only_command("basename /foo/bar.txt"));
+    assert!(is_read_only_command("dirname /foo/bar.txt"));
+    assert!(is_read_only_command("realpath ."));
+    assert!(is_read_only_command("nproc"));
+    assert!(is_read_only_command("free -h"));
+    assert!(is_read_only_command("diff file1 file2"));
+    assert!(is_read_only_command("sleep 3"));
+    assert!(is_read_only_command("true"));
+    assert!(is_read_only_command("false"));
+    assert!(is_read_only_command("sort"));
+    assert!(is_read_only_command("arch"));
+}
+
+#[test]
+fn test_version_check_patterns() {
+    assert!(is_read_only_command("node --version"));
+    assert!(is_read_only_command("npm -v"));
+    assert!(is_read_only_command("python --version"));
+    assert!(is_read_only_command("python3 --version"));
+    assert!(is_read_only_command("cargo --version"));
+    assert!(is_read_only_command("rustc -V"));
+    assert!(is_read_only_command("go --version"));
+    // But not with extra args
+    assert!(!is_read_only_command("node --version extra"));
+    // And not arbitrary commands
+    assert!(!is_read_only_command("curl --version"));
+}
+
+#[test]
+fn test_docker_read_only() {
+    assert!(is_read_only_command("docker ps"));
+    assert!(is_read_only_command("docker images"));
+    assert!(is_read_only_command("docker stats"));
+    assert!(is_read_only_command("docker logs container1"));
+    assert!(is_read_only_command("docker inspect abc123"));
+    assert!(is_read_only_command("docker info"));
+    assert!(is_read_only_command("docker version"));
+    // Docker compose read-only
+    assert!(is_read_only_command("docker compose ps"));
+    assert!(is_read_only_command("docker compose logs"));
+    // Docker write operations
+    assert!(!is_read_only_command("docker run ubuntu"));
+    assert!(!is_read_only_command("docker rm abc123"));
+    assert!(!is_read_only_command("docker exec -it abc123 bash"));
+    // Docker bare command
+    assert!(!is_read_only_command("docker"));
+}
+
+#[test]
+fn test_git_expanded_subcommands() {
+    assert!(is_read_only_command("git blame file.rs"));
+    assert!(is_read_only_command("git grep pattern"));
+    assert!(is_read_only_command("git shortlog"));
+    assert!(is_read_only_command("git reflog"));
+    assert!(is_read_only_command("git ls-remote origin"));
+    assert!(is_read_only_command("git ls-files"));
+    assert!(is_read_only_command("git merge-base main feature"));
+    assert!(is_read_only_command("git rev-parse HEAD"));
+    assert!(is_read_only_command("git describe --tags"));
+    assert!(is_read_only_command("git cat-file -p HEAD"));
+    // Two-word subcommands
+    assert!(is_read_only_command("git stash list"));
+    assert!(is_read_only_command("git stash show"));
+    assert!(is_read_only_command("git worktree list"));
+    assert!(is_read_only_command("git config --get user.name"));
+}
+
+#[test]
+fn test_git_dangerous_flags_rejected() {
+    // -c allows arbitrary code execution via config
+    assert!(!is_read_only_command("git -c user.name=evil status"));
+    assert!(!is_read_only_command("git --exec-path=/tmp status"));
+    assert!(!is_read_only_command(
+        "git --config-env=GIT_WORK_TREE=HOME status"
+    ));
+}
+
+#[test]
+fn test_stderr_redirect_stripping() {
+    assert!(is_read_only_command("ls -la 2>&1"));
+    assert!(is_read_only_command("git status 2>&1"));
+}
+
+#[test]
+fn test_glob_pattern_rejection() {
+    // Unquoted glob patterns can't be safely validated
+    assert!(!is_read_only_command("ls *.txt"));
+    assert!(!is_read_only_command("cat file?.log"));
+    // But quoted globs are fine (shell doesn't expand them)
+    assert!(is_read_only_command("find . -name '*.rs'"));
+    assert!(is_read_only_command("grep 'foo*' file.txt"));
+}
+
+#[test]
+fn test_compound_multiple_cd_rejected() {
+    let result = analyze_command_safety("cd repo1 && git commit && cd repo2 && git push");
+    assert!(
+        result.requires_approval(),
+        "Multiple cd in compound command should require approval"
+    );
+}
+
+#[test]
+fn test_compound_cd_plus_git_write_rejected() {
+    let result = analyze_command_safety("cd /tmp && git push");
+    assert!(
+        result.requires_approval(),
+        "cd + git write should require approval"
+    );
+}
+
+#[test]
+fn test_compound_cd_plus_git_read_ok() {
+    // cd + git read-only is fine
+    let result = analyze_command_safety("cd src && git status");
+    assert!(
+        !result.requires_approval() || result.is_safe(),
+        "cd + git read-only should be ok or handled by normal analysis"
+    );
+}
+
+#[test]
+fn test_compound_quote_aware_no_false_positive() {
+    // Semicolons inside quotes should NOT trigger compound detection
+    let result = analyze_command_safety("git commit -m 'fix; refactor'");
+    assert!(
+        !result.requires_approval(),
+        "Semicolon inside quotes should not trigger compound cd check"
+    );
+    // Ampersand inside quotes should NOT trigger compound detection
+    let result = analyze_command_safety("echo 'hello & world'");
+    assert!(
+        result.is_safe(),
+        "Ampersand inside quotes should not trigger compound cd check"
+    );
+}
+
+#[test]
+fn test_git_dangerous_flag_equals_format() {
+    // git -c=user.name=evil format (equals separator)
+    assert!(!is_read_only_command("git -c=core.editor=vim status"));
+    assert!(!is_read_only_command("git --exec-path=/tmp/evil status"));
+}
+
+#[test]
+fn test_operator_in_stderr_redirect_rejected() {
+    // `ls 2>&1 | grep foo` has a pipe operator — should not pass fast path
+    assert!(!is_read_only_command("ls 2>&1 | grep foo"));
+}

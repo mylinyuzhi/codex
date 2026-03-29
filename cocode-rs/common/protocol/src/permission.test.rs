@@ -11,14 +11,75 @@ fn test_permission_mode_methods() {
     assert!(PermissionMode::Default.requires_write_approval());
     assert!(PermissionMode::Plan.requires_write_approval());
     assert!(!PermissionMode::AcceptEdits.requires_write_approval());
+    assert!(!PermissionMode::Auto.requires_write_approval());
     assert!(!PermissionMode::Bypass.requires_write_approval());
 
     assert!(!PermissionMode::Default.auto_accept_edits());
     assert!(PermissionMode::AcceptEdits.auto_accept_edits());
+    assert!(PermissionMode::Auto.auto_accept_edits());
     assert!(PermissionMode::Bypass.auto_accept_edits());
 
     assert!(!PermissionMode::Default.is_bypass());
+    assert!(PermissionMode::Auto.is_bypass());
     assert!(PermissionMode::Bypass.is_bypass());
+}
+
+#[test]
+fn test_permission_mode_base_cycle() {
+    assert_eq!(
+        PermissionMode::Default.next_cycle(),
+        PermissionMode::AcceptEdits
+    );
+    assert_eq!(
+        PermissionMode::AcceptEdits.next_cycle(),
+        PermissionMode::Plan
+    );
+    assert_eq!(PermissionMode::Plan.next_cycle(), PermissionMode::Default);
+    // Sticky modes don't cycle
+    assert_eq!(PermissionMode::Bypass.next_cycle(), PermissionMode::Bypass);
+    assert_eq!(PermissionMode::Auto.next_cycle(), PermissionMode::Auto);
+    assert_eq!(
+        PermissionMode::DontAsk.next_cycle(),
+        PermissionMode::DontAsk
+    );
+}
+
+#[test]
+fn test_permission_mode_gated_cycle_with_auto() {
+    // CC: default → acceptEdits → plan → auto → default
+    assert_eq!(
+        PermissionMode::Plan.next_cycle_with_gates(/*bypass*/ false, /*auto*/ true),
+        PermissionMode::Auto
+    );
+    assert_eq!(
+        PermissionMode::Auto.next_cycle_with_gates(false, true),
+        PermissionMode::Default
+    );
+}
+
+#[test]
+fn test_permission_mode_gated_cycle_with_bypass_and_auto() {
+    // CC: default → acceptEdits → plan → bypass → auto → default
+    assert_eq!(
+        PermissionMode::Plan.next_cycle_with_gates(/*bypass*/ true, /*auto*/ true),
+        PermissionMode::Bypass
+    );
+    assert_eq!(
+        PermissionMode::Bypass.next_cycle_with_gates(true, true),
+        PermissionMode::Auto
+    );
+    assert_eq!(
+        PermissionMode::Auto.next_cycle_with_gates(true, true),
+        PermissionMode::Default
+    );
+}
+
+#[test]
+fn test_permission_mode_from_str_auto() {
+    assert_eq!(
+        "auto".parse::<PermissionMode>().unwrap(),
+        PermissionMode::Auto
+    );
 }
 
 #[test]

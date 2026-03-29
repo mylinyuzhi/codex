@@ -1,7 +1,8 @@
 //! Platform-specific sandbox implementations.
 //!
 //! Provides a `SandboxPlatform` trait with platform-gated implementations
-//! for macOS (Seatbelt) and Linux (bubblewrap + seccomp).
+//! for macOS (Seatbelt), Linux (bubblewrap + seccomp), and Windows
+//! (restricted token + ACL enforcement).
 
 use crate::config::SandboxConfig;
 use crate::error::Result;
@@ -11,6 +12,8 @@ pub mod macos;
 
 #[cfg(target_os = "linux")]
 pub mod linux;
+
+pub mod windows;
 
 /// Platform-specific sandbox enforcement.
 ///
@@ -49,17 +52,23 @@ pub fn create_platform() -> Box<dyn SandboxPlatform> {
     Box::new(linux::LinuxSandbox)
 }
 
+/// Returns the Windows sandbox implementation.
+#[cfg(target_os = "windows")]
+pub fn create_platform() -> Box<dyn SandboxPlatform> {
+    Box::new(windows::WindowsSandbox)
+}
+
 /// Returns a no-op sandbox for unsupported platforms.
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 pub fn create_platform() -> Box<dyn SandboxPlatform> {
     Box::new(NoopSandbox)
 }
 
 /// No-op sandbox for unsupported platforms.
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 struct NoopSandbox;
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 impl SandboxPlatform for NoopSandbox {
     fn available(&self) -> bool {
         false

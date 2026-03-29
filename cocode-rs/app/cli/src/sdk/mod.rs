@@ -2,12 +2,11 @@
 //!
 //! When `--sdk-mode` is passed, the CLI:
 //! 1. Reads a `SessionStartRequestParams` from stdin (first JSON line)
-//! 2. Maps `LoopEvent` → `ServerNotification` → NDJSON to stdout
+//! 2. Maps `CoreEvent` → `ServerNotification` → NDJSON to stdout
 //! 3. Reads `ClientRequest` from stdin (subsequent lines)
 //! 4. Routes approval/question responses back to the agent loop
 
 mod control;
-mod event_mapper;
 mod mcp_bridge;
 mod session_builder;
 mod stdio;
@@ -26,11 +25,13 @@ use cocode_app_server_protocol::ServerNotification;
 use cocode_app_server_protocol::ServerRequest;
 use cocode_app_server_protocol::SessionStartRequestParams;
 use cocode_app_server_protocol::SessionStartedParams;
+use cocode_app_server_protocol::StreamAccumulator;
 use cocode_app_server_protocol::TurnFailedParams;
 use cocode_app_server_protocol::TurnStartedParams;
 use cocode_config::ConfigManager;
 use cocode_config::ConfigOverrides;
-use cocode_protocol::LoopEvent;
+use cocode_protocol::CoreEvent;
+use cocode_protocol::tui_event::TuiEvent;
 use cocode_session::Session;
 use cocode_session::SessionState;
 use tokio::sync::mpsc;
@@ -43,7 +44,6 @@ use cocode_app_server_protocol::SessionEndedReason;
 use cocode_app_server_protocol::SessionResultParams;
 
 use self::control::SdkPermissionBridge;
-use self::event_mapper::EventMapper;
 use self::stdio::InboundMessage;
 use self::stdio::StdinReader;
 use self::stdio::StdoutWriter;
@@ -323,7 +323,7 @@ async fn run_sdk_turn_loop_inner(
         turn_number += 1;
 
         // Create event channel for streaming
-        let (event_tx, mut event_rx) = mpsc::channel::<LoopEvent>(256);
+        let (event_tx, mut event_rx) = mpsc::channel::<CoreEvent>(256);
 
         // Create permission bridge and wire into session state
         let bridge = Arc::new(SdkPermissionBridge::new(event_tx.clone()));
@@ -356,7 +356,7 @@ async fn run_sdk_turn_loop_inner(
             let turn_future = state.run_turn_streaming(&turn_prompt, event_tx);
             tokio::pin!(turn_future);
 
-            let mut mapper = EventMapper::new(turn_id.clone());
+            let mut accumulator = StreamAccumulator::new(turn_id.clone());
             let mut turn_result = None;
 
             // Concurrent event loop: process events, stdin, and hook callbacks
@@ -401,43 +401,50 @@ async fn run_sdk_turn_loop_inner(
                             ),
                         ).await?;
                     }
-                    Some(event) = event_rx.recv() => {
-                        // Capture cost from warnings
-                        if let LoopEvent::CostWarningThresholdReached { current_cost_cents, .. } = &event {
-                            metrics.last_cost_cents = Some(*current_cost_cents);
-                        }
-                        if let LoopEvent::ApprovalRequired { ref request } = event {
-                            let server_req = SdkPermissionBridge::create_server_request(request);
-                            writer.write_server_request(&server_req).await?;
-                            continue;
-                        }
-                        if let LoopEvent::QuestionAsked { request_id, questions } = event {
-                            writer
-                                .write_server_request(&ServerRequest::RequestUserInput(
-                                    RequestUserInputParams {
-                                        request_id,
-                                        message: "Agent is asking a question".into(),
-                                        questions: Some(questions),
-                                    },
-                                ))
-                                .await?;
-                            continue;
-                        }
-                        if let LoopEvent::ElicitationRequested { request_id, server_name, message, schema, .. } = event {
-                            let elicitation_msg = format!("[{server_name}] {message}");
-                            writer
-                                .write_server_request(&ServerRequest::RequestUserInput(
-                                    RequestUserInputParams {
-                                        request_id,
-                                        message: elicitation_msg,
-                                        questions: schema,
-                                    },
-                                ))
-                                .await?;
-                            continue;
-                        }
-                        for notif in mapper.map(event) {
-                            writer.write_notification(&notif).await?;
+                    Some(core_event) = event_rx.recv() => {
+                        match core_event {
+                            CoreEvent::Protocol(ref sn) => {
+                                // Capture cost from CostWarning notifications
+                                if let ServerNotification::CostWarning(params) = sn {
+                                    metrics.last_cost_cents = Some(params.current_cost_cents);
+                                }
+                                writer.write_notification(sn).await?;
+                            }
+                            CoreEvent::Stream(se) => {
+                                for notif in accumulator.process(se) {
+                                    writer.write_notification(&notif).await?;
+                                }
+                            }
+                            CoreEvent::Tui(TuiEvent::ApprovalRequired { ref request }) => {
+                                let server_req = SdkPermissionBridge::create_server_request(request);
+                                writer.write_server_request(&server_req).await?;
+                            }
+                            CoreEvent::Tui(TuiEvent::QuestionAsked { request_id, questions }) => {
+                                writer
+                                    .write_server_request(&ServerRequest::RequestUserInput(
+                                        RequestUserInputParams {
+                                            request_id,
+                                            message: "Agent is asking a question".into(),
+                                            questions: Some(questions),
+                                        },
+                                    ))
+                                    .await?;
+                            }
+                            CoreEvent::Tui(TuiEvent::ElicitationRequested { request_id, server_name, message, schema, .. }) => {
+                                let elicitation_msg = format!("[{server_name}] {message}");
+                                writer
+                                    .write_server_request(&ServerRequest::RequestUserInput(
+                                        RequestUserInputParams {
+                                            request_id,
+                                            message: elicitation_msg,
+                                            questions: schema,
+                                        },
+                                    ))
+                                    .await?;
+                            }
+                            CoreEvent::Tui(_) => {
+                                // Other TUI events are not relevant for SDK
+                            }
                         }
                     }
                     msg = reader.read_message() => {
@@ -554,20 +561,25 @@ async fn run_sdk_turn_loop_inner(
             }
 
             // Drain remaining events
-            while let Ok(event) = event_rx.try_recv() {
-                if matches!(event, LoopEvent::ApprovalRequired { .. }) {
-                    continue;
-                }
-                for notif in mapper.map(event) {
-                    writer.write_notification(&notif).await?;
+            while let Ok(core_event) = event_rx.try_recv() {
+                match core_event {
+                    CoreEvent::Protocol(sn) => {
+                        writer.write_notification(&sn).await?;
+                    }
+                    CoreEvent::Stream(se) => {
+                        for notif in accumulator.process(se) {
+                            writer.write_notification(&notif).await?;
+                        }
+                    }
+                    CoreEvent::Tui(_) => {}
                 }
             }
 
             // Capture final text for structured output before flush drains it
-            let turn_final_text = mapper.accumulated_text().to_string();
+            let turn_final_text = accumulator.accumulated_text().to_string();
 
             // Flush accumulated text/reasoning
-            for notif in mapper.flush() {
+            for notif in accumulator.flush() {
                 writer.write_notification(&notif).await?;
             }
 
@@ -829,7 +841,3 @@ fn init_sdk_logging(config: &ConfigManager) {
 
     let _ = tracing_subscriber::registry().with(stderr_layer).try_init();
 }
-
-#[cfg(test)]
-#[path = "event_mapper.test.rs"]
-mod event_mapper_tests;

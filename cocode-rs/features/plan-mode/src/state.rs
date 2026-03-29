@@ -6,7 +6,22 @@
 use std::path::Path;
 use std::path::PathBuf;
 
+use serde::Deserialize;
+use serde::Serialize;
+
 use cocode_protocol::PermissionMode;
+use tracing::info;
+
+/// Tag identifying the plan mode variant (e.g., ultraplan from remote sessions).
+///
+/// CC equivalent: `prePlanMode` field values beyond normal permission modes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PrePlanModeTag {
+    /// Plan pre-written by remote planning session.
+    /// Agent's only action: call ExitPlanMode immediately.
+    Ultraplan,
+}
 
 /// Plan mode state for a session.
 ///
@@ -38,6 +53,10 @@ pub struct PlanModeState {
     /// On exit, this is restored so the session returns to its
     /// previous permission state (e.g., default → plan → default).
     pub pre_plan_mode: Option<PermissionMode>,
+    /// Plan mode variant tag (e.g., ultraplan from remote sessions).
+    ///
+    /// Set when a remote planning session pre-writes the plan.
+    pub pre_plan_mode_tag: Option<PrePlanModeTag>,
 }
 
 impl PlanModeState {
@@ -46,22 +65,36 @@ impl PlanModeState {
         Self::default()
     }
 
+    /// Check if this is an ultraplan session (plan pre-written by a remote session).
+    pub fn is_ultraplan(&self) -> bool {
+        self.pre_plan_mode_tag == Some(PrePlanModeTag::Ultraplan)
+    }
+
     /// Enter plan mode with the given plan file path and slug.
     ///
     /// Saves `current_mode` so it can be restored on exit.
+    /// Optionally accepts a `mode_tag` for plan mode variants (e.g., ultraplan).
     pub fn enter_with_mode(
         &mut self,
         plan_file_path: PathBuf,
         slug: String,
         turn: i32,
         current_mode: PermissionMode,
+        mode_tag: Option<PrePlanModeTag>,
     ) {
         self.pre_plan_mode = Some(current_mode);
+        self.pre_plan_mode_tag = mode_tag;
         self.enter(plan_file_path, slug, turn);
     }
 
     /// Enter plan mode with the given plan file path and slug.
     pub fn enter(&mut self, plan_file_path: PathBuf, slug: String, turn: i32) {
+        info!(
+            plan_file = %plan_file_path.display(),
+            slug = %slug,
+            turn,
+            "Plan mode: entered"
+        );
         self.is_active = true;
         self.plan_file_path = Some(plan_file_path);
         self.plan_slug = Some(slug);
@@ -71,11 +104,13 @@ impl PlanModeState {
 
     /// Exit plan mode and return the permission mode to restore.
     pub fn exit(&mut self, turn: i32) -> Option<PermissionMode> {
+        info!(turn, "Plan mode: exited");
         self.is_active = false;
         self.has_exited = true;
         self.exited_at_turn = Some(turn);
         self.needs_exit_attachment = true;
         self.plan_slug = None;
+        self.pre_plan_mode_tag = None;
         self.pre_plan_mode.take()
     }
 

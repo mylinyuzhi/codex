@@ -20,6 +20,16 @@ use crate::types::AttachmentType;
 use crate::types::ReminderTier;
 use crate::types::SystemReminder;
 
+/// IDE selection context from connected IDE via MCP.
+#[derive(Debug, Clone)]
+pub struct IdeSelection {
+    pub ide_name: String,
+    pub filename: String,
+    pub line_start: i32,
+    pub line_end: i32,
+    pub content: String,
+}
+
 /// Trait for attachment generators.
 ///
 /// Each generator is responsible for producing a specific type of system
@@ -511,6 +521,14 @@ pub struct GeneratorContext<'a> {
     pub is_plan_reentry: bool,
     /// Whether interview-style plan mode is active.
     pub is_plan_interview_phase: bool,
+    /// Whether this is an ultraplan session (plan pre-written by remote session).
+    pub is_ultraplan: bool,
+    /// Phase 4 instruction variant for plan mode (Gap 5).
+    pub phase4_variant: crate::generators::plan_mode::Phase4Variant,
+    /// Maximum Explore agent count for plan mode Phase 1 (Gap 6).
+    pub explore_agent_count: i32,
+    /// Minimum Plan agent count for plan mode Phase 2 (Gap 6).
+    pub plan_agent_count: i32,
     /// Approved plan (one-time, after ExitPlanMode).
     pub approved_plan: Option<ApprovedPlanInfo>,
     /// Restored plan (after compaction).
@@ -561,6 +579,12 @@ pub struct GeneratorContext<'a> {
     pub delegate_mode_exiting: bool,
     /// Information about delegated agents.
     pub delegated_agents: Vec<DelegatedAgentInfo>,
+
+    // === Auto mode state ===
+    /// Whether auto mode (autonomous execution) is active.
+    pub is_auto_mode: bool,
+    /// Whether auto mode exit attachment should be generated this turn.
+    pub auto_mode_exit_pending: bool,
 
     // === Token/budget tracking ===
     /// Token usage statistics.
@@ -630,6 +654,19 @@ pub struct GeneratorContext<'a> {
     pub session_name: Option<String>,
     /// Configuration changes since last turn.
     pub config_changes: Vec<String>,
+
+    /// Whether auto mode is active (autonomous execution mode).
+    pub auto_mode: bool,
+    /// Whether exiting auto mode this turn (was active, now inactive).
+    pub auto_mode_exiting: bool,
+    /// Current reasoning effort level for ultrathink reminder.
+    pub thinking_effort: Option<cocode_protocol::model::ReasoningEffort>,
+    /// Last recorded date for date change detection.
+    pub last_recorded_date: Option<String>,
+    /// IDE selection context (user-selected lines in IDE).
+    pub ide_selection: Option<IdeSelection>,
+    /// IDE opened file (user opened a file in IDE).
+    pub ide_opened_file: Option<String>,
 }
 
 /// Lightweight rewind info for system reminder generation.
@@ -674,7 +711,6 @@ impl<'a> GeneratorContext<'a> {
 }
 
 /// Builder for [`GeneratorContext`].
-#[derive(Default)]
 pub struct GeneratorContextBuilder<'a> {
     config: Option<&'a SystemReminderConfig>,
     turn_number: i32,
@@ -690,6 +726,10 @@ pub struct GeneratorContextBuilder<'a> {
     is_plan_mode: bool,
     is_plan_reentry: bool,
     is_plan_interview_phase: bool,
+    is_ultraplan: bool,
+    phase4_variant: crate::generators::plan_mode::Phase4Variant,
+    explore_agent_count: i32,
+    plan_agent_count: i32,
     approved_plan: Option<ApprovedPlanInfo>,
     restored_plan: Option<RestoredPlanInfo>,
     background_tasks: Vec<BackgroundTaskInfo>,
@@ -706,6 +746,8 @@ pub struct GeneratorContextBuilder<'a> {
     is_delegate_mode: bool,
     delegate_mode_exiting: bool,
     delegated_agents: Vec<DelegatedAgentInfo>,
+    is_auto_mode: bool,
+    auto_mode_exit_pending: bool,
     token_usage: Option<TokenUsageStats>,
     budget: Option<BudgetInfo>,
     collab_notifications: Vec<CollabNotification>,
@@ -724,6 +766,79 @@ pub struct GeneratorContextBuilder<'a> {
     mcp_instructions_changes: Vec<(String, String)>,
     session_name: Option<String>,
     config_changes: Vec<String>,
+    auto_mode: bool,
+    auto_mode_exiting: bool,
+    thinking_effort: Option<cocode_protocol::model::ReasoningEffort>,
+    last_recorded_date: Option<String>,
+    ide_selection: Option<IdeSelection>,
+    ide_opened_file: Option<String>,
+}
+
+impl Default for GeneratorContextBuilder<'_> {
+    fn default() -> Self {
+        Self {
+            config: None,
+            turn_number: 0,
+            is_main_agent: false,
+            has_user_input: false,
+            context_window: 0,
+            user_prompt: None,
+            user_mentioned_files: Vec::new(),
+            user_mentioned_agents: Vec::new(),
+            file_tracker: None,
+            cwd: None,
+            plan_file_path: None,
+            is_plan_mode: false,
+            is_plan_reentry: false,
+            is_plan_interview_phase: false,
+            is_ultraplan: false,
+            phase4_variant: crate::generators::plan_mode::Phase4Variant::default(),
+            explore_agent_count: cocode_protocol::DEFAULT_PLAN_EXPLORE_AGENT_COUNT,
+            plan_agent_count: cocode_protocol::DEFAULT_PLAN_AGENT_COUNT,
+            approved_plan: None,
+            restored_plan: None,
+            background_tasks: Vec::new(),
+            diagnostics: Vec::new(),
+            todos: Vec::new(),
+            structured_tasks: Vec::new(),
+            cron_jobs: Vec::new(),
+            nested_memory_triggers: HashSet::new(),
+            full_content_flags: HashMap::new(),
+            hook_state: HookState::default(),
+            available_skills: Vec::new(),
+            invoked_skills: Vec::new(),
+            compacted_large_files: Vec::new(),
+            is_delegate_mode: false,
+            delegate_mode_exiting: false,
+            delegated_agents: Vec::new(),
+            is_auto_mode: false,
+            auto_mode_exit_pending: false,
+            token_usage: None,
+            budget: None,
+            collab_notifications: Vec::new(),
+            team_context: None,
+            unread_messages: Vec::new(),
+            queued_commands: Vec::new(),
+            plan_mode_exit_pending: false,
+            rewind_info: None,
+            mention_read_records: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            is_auto_compact_enabled: false,
+            auto_memory_state: None,
+            active_worktree_count: 0,
+            sandbox_violations: Vec::new(),
+            deferred_tools_added: Vec::new(),
+            deferred_tools_removed: Vec::new(),
+            mcp_instructions_changes: Vec::new(),
+            session_name: None,
+            config_changes: Vec::new(),
+            auto_mode: false,
+            auto_mode_exiting: false,
+            thinking_effort: None,
+            last_recorded_date: None,
+            ide_selection: None,
+            ide_opened_file: None,
+        }
+    }
 }
 
 impl<'a> GeneratorContextBuilder<'a> {
@@ -797,6 +912,26 @@ impl<'a> GeneratorContextBuilder<'a> {
         self
     }
 
+    pub fn is_ultraplan(mut self, is_ultraplan: bool) -> Self {
+        self.is_ultraplan = is_ultraplan;
+        self
+    }
+
+    pub fn phase4_variant(mut self, variant: crate::generators::plan_mode::Phase4Variant) -> Self {
+        self.phase4_variant = variant;
+        self
+    }
+
+    pub fn explore_agent_count(mut self, count: i32) -> Self {
+        self.explore_agent_count = count;
+        self
+    }
+
+    pub fn plan_agent_count(mut self, count: i32) -> Self {
+        self.plan_agent_count = count;
+        self
+    }
+
     pub fn approved_plan(mut self, plan: ApprovedPlanInfo) -> Self {
         self.approved_plan = Some(plan);
         self
@@ -864,6 +999,16 @@ impl<'a> GeneratorContextBuilder<'a> {
 
     pub fn delegate_mode_exiting(mut self, exiting: bool) -> Self {
         self.delegate_mode_exiting = exiting;
+        self
+    }
+
+    pub fn is_auto_mode(mut self, active: bool) -> Self {
+        self.is_auto_mode = active;
+        self
+    }
+
+    pub fn auto_mode_exit_pending(mut self, pending: bool) -> Self {
+        self.auto_mode_exit_pending = pending;
         self
     }
 
@@ -968,6 +1113,36 @@ impl<'a> GeneratorContextBuilder<'a> {
         self
     }
 
+    pub fn auto_mode(mut self, active: bool) -> Self {
+        self.auto_mode = active;
+        self
+    }
+
+    pub fn auto_mode_exiting(mut self, exiting: bool) -> Self {
+        self.auto_mode_exiting = exiting;
+        self
+    }
+
+    pub fn thinking_effort(mut self, effort: cocode_protocol::model::ReasoningEffort) -> Self {
+        self.thinking_effort = Some(effort);
+        self
+    }
+
+    pub fn last_recorded_date(mut self, date: impl Into<String>) -> Self {
+        self.last_recorded_date = Some(date.into());
+        self
+    }
+
+    pub fn ide_selection(mut self, selection: IdeSelection) -> Self {
+        self.ide_selection = Some(selection);
+        self
+    }
+
+    pub fn ide_opened_file(mut self, path: impl Into<String>) -> Self {
+        self.ide_opened_file = Some(path.into());
+        self
+    }
+
     /// Build the generator context.
     ///
     /// # Panics
@@ -990,6 +1165,10 @@ impl<'a> GeneratorContextBuilder<'a> {
             is_plan_mode: self.is_plan_mode,
             is_plan_reentry: self.is_plan_reentry,
             is_plan_interview_phase: self.is_plan_interview_phase,
+            is_ultraplan: self.is_ultraplan,
+            phase4_variant: self.phase4_variant,
+            explore_agent_count: self.explore_agent_count,
+            plan_agent_count: self.plan_agent_count,
             approved_plan: self.approved_plan,
             restored_plan: self.restored_plan,
             background_tasks: self.background_tasks,
@@ -1006,6 +1185,8 @@ impl<'a> GeneratorContextBuilder<'a> {
             is_delegate_mode: self.is_delegate_mode,
             delegate_mode_exiting: self.delegate_mode_exiting,
             delegated_agents: self.delegated_agents,
+            is_auto_mode: self.is_auto_mode,
+            auto_mode_exit_pending: self.auto_mode_exit_pending,
             token_usage: self.token_usage,
             budget: self.budget,
             collab_notifications: self.collab_notifications,
@@ -1024,6 +1205,12 @@ impl<'a> GeneratorContextBuilder<'a> {
             mcp_instructions_changes: self.mcp_instructions_changes,
             session_name: self.session_name,
             config_changes: self.config_changes,
+            auto_mode: self.auto_mode,
+            auto_mode_exiting: self.auto_mode_exiting,
+            thinking_effort: self.thinking_effort,
+            last_recorded_date: self.last_recorded_date,
+            ide_selection: self.ide_selection,
+            ide_opened_file: self.ide_opened_file,
         }
     }
 }

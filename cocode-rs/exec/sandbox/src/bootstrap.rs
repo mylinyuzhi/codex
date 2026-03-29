@@ -79,6 +79,9 @@ fn is_supported_platform() -> bool {
         // Exclude WSL1 (WSL2 with real kernel is fine)
         return !is_wsl1();
     }
+    if cfg!(target_os = "windows") {
+        return true;
+    }
     false
 }
 
@@ -102,9 +105,7 @@ fn is_wsl1() -> bool {
 
 /// Human-readable reason why the current platform is unsupported.
 fn unsupported_reason() -> String {
-    if cfg!(target_os = "windows") {
-        "Windows is not supported for sandboxing".to_string()
-    } else if cfg!(target_os = "linux") && is_wsl1() {
+    if cfg!(target_os = "linux") && is_wsl1() {
         "WSL1 is not supported (missing namespace syscalls); use WSL2".to_string()
     } else {
         format!("unsupported OS: {}", std::env::consts::OS)

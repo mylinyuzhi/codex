@@ -27,4 +27,6 @@ pub enum Capability {
     ReasoningSummaries,
     /// Parallel tool calls support.
     ParallelToolCalls,
+    /// Fast mode (reduced-latency inference on same model) support.
+    FastMode,
 }

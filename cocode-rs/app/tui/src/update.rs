@@ -991,7 +991,7 @@ pub async fn handle_command(
         // ========== Plugin Manager ==========
         TuiCommand::ShowPluginManager => {
             // Request plugin data from the session — the response will
-            // arrive as `LoopEvent::PluginDataReady` and open the overlay.
+            // arrive as `TuiEvent::PluginDataReady` and open the overlay.
             let _ = command_tx.send(UserCommand::RequestPluginData).await;
         }
         TuiCommand::PluginManagerNextTab => {
@@ -1122,7 +1122,24 @@ pub async fn handle_command(
 }
 
 /// Toggle fast mode on/off.
+///
+/// Enabling is gated on the current model's `FastMode` capability.
+/// Disabling always succeeds.
 async fn toggle_fast_mode(state: &mut AppState, command_tx: &mpsc::Sender<UserCommand>) {
+    if !state.session.fast_mode {
+        // Enabling: check model supports fast mode
+        let supports = state
+            .session
+            .current_selection
+            .as_ref()
+            .is_some_and(|s| s.has_capability(cocode_protocol::Capability::FastMode));
+        if !supports {
+            state
+                .ui
+                .toast_warning(t!("toast.fast_mode_unsupported").to_string());
+            return;
+        }
+    }
     let active = !state.session.fast_mode;
     state.session.fast_mode = active;
     let key = if active {
@@ -1137,13 +1154,9 @@ async fn toggle_fast_mode(state: &mut AppState, command_tx: &mpsc::Sender<UserCo
 /// Cycle permission mode: Default → AcceptEdits → Plan → Default.
 async fn cycle_permission_mode(state: &mut AppState, command_tx: &mpsc::Sender<UserCommand>) {
     use cocode_protocol::PermissionMode;
-    let next = match state.session.permission_mode {
-        PermissionMode::Default => PermissionMode::AcceptEdits,
-        PermissionMode::AcceptEdits => PermissionMode::Plan,
-        PermissionMode::Plan => PermissionMode::Default,
-        PermissionMode::Bypass => PermissionMode::Default,
-        PermissionMode::DontAsk => PermissionMode::Default,
-    };
+    // TODO: use next_cycle_with_gates() when feature gate state
+    // (bypass_available, auto_available) is available in TUI context.
+    let next = state.session.permission_mode.next_cycle();
     state.session.permission_mode = next;
     state.session.plan_mode = next == PermissionMode::Plan;
     state
@@ -1558,10 +1571,7 @@ pub fn handle_file_search_event(state: &mut AppState, event: FileSearchEvent) {
     }
 }
 
-// `handle_agent_event` is defined in `agent_event_handler.rs` for module
-// size management. Re-exported here for backward compatibility with
-// existing callers (e.g., `app.rs`).
-pub use crate::agent_event_handler::handle_agent_event;
+pub use crate::tui_event_handler::handle_tui_event;
 
 /// Extract images from paste pills in question answers and embed them as `_images` metadata.
 ///

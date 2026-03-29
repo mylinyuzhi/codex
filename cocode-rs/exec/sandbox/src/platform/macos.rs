@@ -153,6 +153,19 @@ fn generate_seatbelt_profile(config: &SandboxConfig, command: &str, session_tag:
     }
     profile.push('\n');
 
+    // Denied read paths (from config.denied_read_paths + config.denied_paths).
+    // In Seatbelt, explicit deny rules override allow rules for the same or
+    // more specific paths, regardless of order in the profile.
+    let has_denied_reads = !config.denied_read_paths.is_empty() || !config.denied_paths.is_empty();
+    if has_denied_reads {
+        profile.push_str("; Explicitly denied read paths\n");
+        for path in config.denied_read_paths.iter().chain(&config.denied_paths) {
+            let escaped = escape_sbpl_path(&path.display().to_string());
+            let _ = write!(profile, "(deny file-read* (subpath \"{escaped}\"))\n");
+        }
+        profile.push('\n');
+    }
+
     // Standard output and device file writes (from Claude Code kx6)
     profile.push_str("; Standard output and device file writes\n");
     for dev in &[

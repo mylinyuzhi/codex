@@ -511,7 +511,7 @@ pub fn matches_mcp_permission(granted: &str, requested: &str) -> bool {
 ### MCP-Related Loop Events
 
 ```rust
-pub enum LoopEvent {
+pub enum CoreEvent {
     // ... other events ...
 
     // MCP tool execution

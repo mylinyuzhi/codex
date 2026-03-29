@@ -165,33 +165,14 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
     let argv1 = args.next().unwrap_or_default();
     #[cfg(target_os = "linux")]
     if argv1 == cocode_sandbox::platform::linux::APPLY_SECCOMP_ARG1 {
-        let mode_str = args
-            .next()
-            .and_then(|s| s.to_str().map(str::to_owned))
-            .unwrap_or_default();
-        let mode = cocode_sandbox::seccomp::NetworkSeccompMode::from_str_arg(&mode_str)
+        let (param, program, remaining) = parse_inner_stage_args(&mut args, "seccomp");
+        let mode = cocode_sandbox::seccomp::NetworkSeccompMode::from_str_arg(&param)
             .unwrap_or_else(|| {
                 eprintln!(
-                    "seccomp: unknown mode '{mode_str}', expected 'restricted' or 'proxy-routed'"
+                    "seccomp: unknown mode '{param}', expected 'restricted' or 'proxy-routed'"
                 );
                 std::process::exit(1);
             });
-
-        // Skip the "--" separator
-        let separator = args.next().unwrap_or_default();
-        if separator != "--" {
-            eprintln!(
-                "seccomp: expected '--' separator after mode, got '{}'",
-                separator.to_string_lossy()
-            );
-            std::process::exit(1);
-        }
-
-        let program = args.next().unwrap_or_else(|| {
-            eprintln!("seccomp: missing program after '--'");
-            std::process::exit(1);
-        });
-        let remaining: Vec<String> = args.map(|s| s.to_string_lossy().into_owned()).collect();
 
         cocode_sandbox::seccomp::apply_seccomp_and_exec(
             mode,
@@ -199,6 +180,19 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
             &remaining,
         );
         // apply_seccomp_and_exec never returns
+    }
+
+    // argv[1] hijack: --apply-windows-sandbox <config-b64> -- <program> <args...>
+    // Used on Windows to apply restricted token + ACL enforcement before exec.
+    if argv1 == cocode_sandbox::platform::windows::APPLY_WINDOWS_SANDBOX_ARG1 {
+        let (config_b64, program, remaining) = parse_inner_stage_args(&mut args, "windows-sandbox");
+
+        cocode_sandbox::platform::windows::apply_windows_sandbox_and_exec(
+            &config_b64,
+            &program.to_string_lossy(),
+            &remaining,
+        );
+        // apply_windows_sandbox_and_exec never returns
     }
 
     // argv[1] hijack: --cocode-run-as-apply-patch
@@ -282,6 +276,38 @@ where
 
         main_fn(paths).await
     })
+}
+
+/// Parse the `<param> -- <program> <args...>` pattern used by inner-stage
+/// sandbox dispatchers (seccomp, windows-sandbox).
+///
+/// Returns `(param_string, program_os_string, remaining_args)`.
+/// Exits with an error message if the separator or program is missing.
+fn parse_inner_stage_args(
+    args: &mut std::env::ArgsOs,
+    label: &str,
+) -> (String, std::ffi::OsString, Vec<String>) {
+    let param = args
+        .next()
+        .and_then(|s| s.to_str().map(str::to_owned))
+        .unwrap_or_default();
+
+    let separator = args.next().unwrap_or_default();
+    if separator != "--" {
+        eprintln!(
+            "{label}: expected '--' separator, got '{}'",
+            separator.to_string_lossy()
+        );
+        std::process::exit(1);
+    }
+
+    let program = args.next().unwrap_or_else(|| {
+        eprintln!("{label}: missing program after '--'");
+        std::process::exit(1);
+    });
+    let remaining: Vec<String> = args.map(|s| s.to_string_lossy().into_owned()).collect();
+
+    (param, program, remaining)
 }
 
 /// Remove environment variables that could be used for library injection attacks.

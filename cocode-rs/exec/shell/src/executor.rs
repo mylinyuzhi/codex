@@ -2,13 +2,15 @@
 //!
 //! ## Sandbox Mode
 //!
-//! This executor currently runs in **non-sandbox mode** by default, which means
-//! commands execute directly without any sandbox restrictions. This matches
-//! Claude Code's architecture where sandbox is optional and disabled by default.
+//! When a [`SandboxState`] is configured (via [`ShellExecutor::with_sandbox_state`]),
+//! commands that qualify for sandboxing are wrapped with platform-specific enforcement
+//! (bubblewrap + seccomp on Linux, Seatbelt on macOS). Sandbox is optional and
+//! disabled by default — matching Claude Code's architecture.
 //!
-//! To check if a command should be sandboxed, use [`cocode_sandbox::SandboxSettings::is_sandboxed()`].
-//! When sandbox mode is enabled in the future, the executor will wrap commands with
-//! platform-specific sandbox enforcement (Landlock on Linux, Seatbelt on macOS).
+//! The decision flow: [`SandboxState::should_sandbox_command`] checks enforcement level,
+//! platform availability, bypass flag, and command exclusion patterns. If the command
+//! qualifies, [`maybe_apply_sandbox`] injects sandbox env vars and calls
+//! [`SandboxPlatform::wrap_command`] to rewrite the `Command` with OS-level isolation.
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -98,6 +100,8 @@ pub struct ShellExecutor {
     env_overlay: Arc<StdMutex<std::collections::HashMap<String, String>>>,
     /// Sandbox state for platform-level command isolation.
     sandbox_state: Option<Arc<SandboxState>>,
+    /// Optional shell prefix from `COCODE_SHELL_PREFIX` env var.
+    shell_prefix: Option<String>,
 }
 
 impl std::fmt::Debug for ShellExecutor {
@@ -143,6 +147,9 @@ impl ShellExecutor {
             path_extractor: None,
             env_overlay: Arc::new(StdMutex::new(std::collections::HashMap::new())),
             sandbox_state: None,
+            shell_prefix: std::env::var("COCODE_SHELL_PREFIX")
+                .ok()
+                .filter(|s| !s.is_empty()),
         }
     }
 
@@ -159,6 +166,9 @@ impl ShellExecutor {
             path_extractor: None,
             sandbox_state: None,
             env_overlay: Arc::new(StdMutex::new(std::collections::HashMap::new())),
+            shell_prefix: std::env::var("COCODE_SHELL_PREFIX")
+                .ok()
+                .filter(|s| !s.is_empty()),
         }
     }
 
@@ -342,6 +352,10 @@ impl ShellExecutor {
     /// // cd in one call does NOT affect the next call
     /// ```
     pub fn fork_for_subagent(&self, initial_cwd: PathBuf) -> Self {
+        tracing::debug!(
+            initial_cwd = %initial_cwd.display(),
+            "Forked shell executor for subagent"
+        );
         Self {
             default_timeout_secs: self.default_timeout_secs,
             cwd: Arc::new(StdMutex::new(initial_cwd)), // Independent CWD for subagent
@@ -351,6 +365,9 @@ impl ShellExecutor {
             path_extractor: self.path_extractor.clone(), // Share path extractor
             env_overlay: self.env_overlay.clone(),       // Share env overlay
             sandbox_state: self.sandbox_state.clone(),   // Share sandbox state
+            shell_prefix: std::env::var("COCODE_SHELL_PREFIX")
+                .ok()
+                .filter(|s| !s.is_empty()),
         }
     }
 
@@ -380,6 +397,7 @@ impl ShellExecutor {
     ///
     /// If the command times out, a `CommandResult` is returned with exit code -1
     /// and a timeout message in stderr.
+    #[tracing::instrument(skip(self, command), fields(timeout_secs, cwd = %self.cwd().display()))]
     pub async fn execute(
         &self,
         command: &str,
@@ -394,6 +412,13 @@ impl ShellExecutor {
             self.default_timeout_secs
         };
 
+        tracing::debug!(
+            timeout_secs = timeout,
+            cwd = %self.cwd().display(),
+            "Shell: executing command"
+        );
+        tracing::trace!(command, "Shell: command text");
+
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(timeout as u64),
             self.run_command(command, sandbox_bypass),
@@ -406,18 +431,32 @@ impl ShellExecutor {
             Ok(cmd_result) => {
                 let mut cmd_result = cmd_result;
                 cmd_result.duration_ms = duration_ms;
+                tracing::debug!(
+                    exit_code = cmd_result.exit_code,
+                    duration_ms,
+                    truncated = cmd_result.truncated,
+                    sandboxed = cmd_result.sandboxed,
+                    "Shell: command completed"
+                );
                 cmd_result
             }
-            Err(_) => CommandResult {
-                exit_code: -1,
-                stdout: String::new(),
-                stderr: format!("Command timed out after {timeout} seconds"),
-                duration_ms,
-                truncated: false,
-                new_cwd: None,
-                extracted_paths: None,
-                sandboxed: false,
-            },
+            Err(_) => {
+                tracing::warn!(
+                    timeout_secs = timeout,
+                    duration_ms,
+                    "Shell: command timed out"
+                );
+                CommandResult {
+                    exit_code: -1,
+                    stdout: String::new(),
+                    stderr: format!("Command timed out after {timeout} seconds"),
+                    duration_ms,
+                    truncated: false,
+                    new_cwd: None,
+                    extracted_paths: None,
+                    sandboxed: false,
+                }
+            }
         }
     }
 
@@ -891,7 +930,8 @@ impl ShellExecutor {
 
     /// Applies sandbox wrapping to a command if sandbox is active and the command qualifies.
     ///
-    /// Returns `true` if the command was wrapped with sandbox enforcement.
+    /// Returns `true` if any sandbox enforcement was applied (filesystem wrapping
+    /// or network proxy injection).
     fn maybe_apply_sandbox(
         &self,
         command: &str,
@@ -902,18 +942,30 @@ impl ShellExecutor {
             return false;
         };
 
-        if !state.should_sandbox_command(command, sandbox_bypass) {
+        // Single-lock snapshot avoids 5+ separate RwLock acquisitions per command.
+        let snap = state.command_snapshot(command, sandbox_bypass);
+
+        // Fail-closed network: always inject proxy env vars when the managed
+        // proxy is active, regardless of filesystem enforcement level.
+        let proxy_injected = if snap.network_active {
+            for (key, value) in &snap.proxy_env {
+                cmd.env(key, value);
+            }
+            true
+        } else {
+            false
+        };
+
+        if !snap.should_wrap {
             tracing::debug!(
                 bypass = ?sandbox_bypass,
-                "sandbox.command_decision: skipped (not qualifying)"
+                proxy_injected,
+                "sandbox.command_decision: filesystem wrapping skipped"
             );
-            return false;
+            return proxy_injected;
         }
 
         // Apply sandbox environment variables.
-        // SANDBOX_RUNTIME signals to child processes that they are sandboxed.
-        // COCODE_SANDBOX indicates the sandbox backend (from codex-rs pattern).
-        // TMPDIR is set to a sandbox-writable temp dir (matches Claude Code's f21).
         cmd.env("SANDBOX_RUNTIME", "1");
         cmd.env(
             "COCODE_SANDBOX",
@@ -929,18 +981,8 @@ impl ShellExecutor {
             .unwrap_or_else(|| "/tmp/cocode".to_string());
         cmd.env("TMPDIR", &sandbox_tmpdir);
 
-        // Signal network-disabled state so child tools can fail fast instead of
-        // hanging on connection timeouts (from codex-rs pattern).
-        if !state.config().allow_network {
+        if !snap.allow_network {
             cmd.env("COCODE_SANDBOX_NETWORK_DISABLED", "1");
-        }
-
-        // Apply proxy env vars only when network isolation is active.
-        // Avoids allocating an empty HashMap per command when no proxy is configured.
-        if state.network_active() {
-            for (key, value) in state.proxy_env_vars() {
-                cmd.env(key, value);
-            }
         }
 
         // Canonicalize CWD before sandbox wrapping so mount points match
@@ -957,20 +999,20 @@ impl ShellExecutor {
             cmd.current_dir(&canonical);
         }
 
-        // Wrap with platform enforcement (Seatbelt on macOS, bubblewrap on Linux).
-        // Pass the command string and session tag for macOS CMD64_ violation correlation.
-        let config = state.config();
-        if let Err(e) = state
-            .platform()
-            .wrap_command(&config, command, state.session_tag(), cmd)
+        // Wrap with platform enforcement. Skip for external sandbox mode.
+        if !state.is_external_sandbox()
+            && let Some(ref config) = snap.config
+            && let Err(e) = state
+                .platform()
+                .wrap_command(config, command, state.session_tag(), cmd)
         {
             tracing::warn!("Failed to apply sandbox wrapping: {e}");
             return false;
         }
 
         tracing::info!(
-            enforcement = ?state.enforcement(),
-            network_active = state.network_active(),
+            enforcement = ?snap.enforcement,
+            network_active = snap.network_active,
             decision = "sandboxed",
             "sandbox.command_decision"
         );
@@ -1146,6 +1188,21 @@ impl ShellExecutor {
         }
     }
 
+    /// Wrap a command with the configured shell prefix.
+    ///
+    /// Uses CC's smart splitting: finds last ` -` to separate base from flags.
+    /// Example: prefix="docker exec -i mycontainer" + command="ls"
+    /// -> "docker exec -i mycontainer bash -c 'ls'"
+    fn apply_shell_prefix(&self, command: &str) -> String {
+        let Some(ref prefix) = self.shell_prefix else {
+            return command.to_string();
+        };
+
+        // Shell-quote the inner command
+        let quoted = shell_single_quote(command);
+        format!("{prefix} bash -c {quoted}")
+    }
+
     /// Internal: runs a command and captures output, tracking CWD changes.
     ///
     /// CWD tracking uses a file-based approach: the command chain writes
@@ -1153,7 +1210,15 @@ impl ShellExecutor {
     /// This avoids polluting stdout with CWD markers and is resilient to
     /// output truncation.
     async fn run_command(&self, command: &str, sandbox_bypass: SandboxBypass) -> CommandResult {
-        let args = self.get_shell_args(command);
+        let mut args = self.get_shell_args(command);
+
+        // Apply COCODE_SHELL_PREFIX wrapping if configured
+        if self.shell_prefix.is_some()
+            && let Some(cmd) = args.get_mut(2)
+        {
+            *cmd = self.apply_shell_prefix(cmd);
+        }
+
         let args = self.maybe_wrap_shell_lc_with_snapshot(args);
         let cwd = self.resolve_cwd();
         let cwd_file = generate_cwd_file_path();
@@ -1219,6 +1284,20 @@ impl ShellExecutor {
         let exit_code = output.status.code().unwrap_or(-1);
         let (stdout, truncated_stdout) = truncate_output(&output.stdout);
         let (stderr, truncated_stderr) = truncate_output(&output.stderr);
+
+        // Detect seccomp violations on Linux: SIGSYS (signal 31) indicates
+        // a blocked syscall was attempted inside the bwrap sandbox.
+        if sandboxed
+            && cocode_sandbox::monitor::is_seccomp_violation(&output.status)
+            && let Some(ref state) = self.sandbox_state
+        {
+            let violation = cocode_sandbox::monitor::seccomp_violation(None);
+            let store = state.violations().clone();
+            // Non-blocking: spawn a task to push the violation
+            tokio::spawn(async move {
+                store.lock().await.push(violation);
+            });
+        }
 
         // Read CWD from file (no stdout pollution)
         let new_cwd = read_cwd_file(&cwd_file);

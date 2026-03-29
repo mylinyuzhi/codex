@@ -1,0 +1,267 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ServerRequest",
+  "description": "Requests from the server to a client.\n\nThese require a response from the client (unlike notifications which are fire-and-forget). Used for permission prompts, user input requests, and MCP message routing.",
+  "oneOf": [
+    {
+      "description": "Ask the client to approve a tool execution.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "approval/askForApproval"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/AskForApprovalParams"
+        }
+      }
+    },
+    {
+      "description": "Ask the client for user input (e.g., AskUserQuestion tool).",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "input/requestUserInput"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/RequestUserInputParams"
+        }
+      }
+    },
+    {
+      "description": "Route an MCP message to a client-managed MCP server.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "mcp/routeMessage"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/McpRouteMessageParams"
+        }
+      }
+    },
+    {
+      "description": "Invoke an SDK-registered hook callback.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "hook/callback"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/HookCallbackParams"
+        }
+      }
+    },
+    {
+      "description": "Cancel a previously sent request (e.g., hook callback timeout).",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "control/cancelRequest"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/ServerCancelRequestParams"
+        }
+      }
+    }
+  ],
+  "definitions": {
+    "AskForApprovalParams": {
+      "description": "Parameters for `approval/askForApproval`.",
+      "type": "object",
+      "required": [
+        "input",
+        "request_id",
+        "tool_name"
+      ],
+      "properties": {
+        "blocked_path": {
+          "description": "Filesystem path that triggered a permission block (if applicable).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "decision_reason": {
+          "description": "Reason for the permission decision.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "description": "Human-readable description of what the tool will do.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "input": {
+          "description": "Tool input (JSON)."
+        },
+        "permission_suggestions": {
+          "description": "Suggested approval behaviors the SDK client may present to the user.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/PermissionSuggestion"
+          }
+        },
+        "request_id": {
+          "description": "Unique request identifier (for correlation with response).",
+          "type": "string"
+        },
+        "tool_name": {
+          "description": "Tool name that needs approval.",
+          "type": "string"
+        }
+      }
+    },
+    "HookCallbackParams": {
+      "description": "Parameters for `hook/callback`.",
+      "type": "object",
+      "required": [
+        "callback_id",
+        "event_type",
+        "request_id"
+      ],
+      "properties": {
+        "callback_id": {
+          "description": "Callback identifier (pre-registered at initialize time).",
+          "type": "string"
+        },
+        "event_type": {
+          "description": "Hook event type (e.g., \"PreToolUse\").",
+          "type": "string"
+        },
+        "input": {
+          "description": "Hook input payload (tool name, input, context).",
+          "default": null
+        },
+        "request_id": {
+          "description": "Unique request identifier (for correlation with response).",
+          "type": "string"
+        }
+      }
+    },
+    "McpRouteMessageParams": {
+      "description": "Parameters for `mcp/routeMessage`.",
+      "type": "object",
+      "required": [
+        "message",
+        "request_id",
+        "server_name"
+      ],
+      "properties": {
+        "message": {
+          "description": "MCP message payload."
+        },
+        "request_id": {
+          "description": "Unique request identifier.",
+          "type": "string"
+        },
+        "server_name": {
+          "description": "Target MCP server name.",
+          "type": "string"
+        }
+      }
+    },
+    "PermissionSuggestion": {
+      "description": "A permission suggestion that can be presented to the user.",
+      "type": "object",
+      "required": [
+        "behavior"
+      ],
+      "properties": {
+        "behavior": {
+          "description": "Suggested behavior (e.g., \"allow\", \"deny\").",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Human-readable reason for the suggestion.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "RequestUserInputParams": {
+      "description": "Parameters for `input/requestUserInput`.",
+      "type": "object",
+      "required": [
+        "message",
+        "request_id"
+      ],
+      "properties": {
+        "message": {
+          "description": "Human-readable message or question.",
+          "type": "string"
+        },
+        "questions": {
+          "description": "Structured questions (JSON array of question objects)."
+        },
+        "request_id": {
+          "description": "Unique request identifier.",
+          "type": "string"
+        }
+      }
+    },
+    "ServerCancelRequestParams": {
+      "description": "Parameters for server-originated `control/cancelRequest`.\n\nTells the client to stop waiting for a response to the given request_id. Emitted when a hook callback times out or an approval is superseded.",
+      "type": "object",
+      "required": [
+        "request_id"
+      ],
+      "properties": {
+        "reason": {
+          "description": "Reason for cancellation.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_id": {
+          "description": "The request_id being cancelled.",
+          "type": "string"
+        }
+      }
+    }
+  }
+}

@@ -121,6 +121,18 @@ pub fn truncate_str(s: &str, max_len: usize) -> String {
     }
 }
 
+/// Truncate for structured logging: returns `"[{total} chars] {prefix}..."`
+/// when over budget, original string otherwise.
+/// Use at `debug!` level for summaries; log full content at `trace!`.
+pub fn truncate_for_log(s: &str, max_chars: usize) -> String {
+    if s.len() <= max_chars {
+        s.to_string()
+    } else {
+        let prefix = &s[..s.floor_char_boundary(max_chars)];
+        format!("[{} chars] {prefix}...", s.len())
+    }
+}
+
 /// Encodes a byte slice as a lowercase hex string.
 pub fn bytes_to_hex(bytes: &[u8]) -> String {
     use std::fmt::Write;

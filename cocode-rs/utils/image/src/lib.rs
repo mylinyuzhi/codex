@@ -118,6 +118,24 @@ pub fn load_for_prompt_bytes(
     })
 }
 
+/// Normalize raw image bytes for API submission.
+///
+/// Resizes if the image exceeds `MAX_WIDTH`x`MAX_HEIGHT` and re-encodes
+/// to a suitable format. Returns the normalized bytes and MIME type.
+pub fn normalize_image_bytes(
+    bytes: Vec<u8>,
+    source_mime: &str,
+) -> Result<(Vec<u8>, String), ImageProcessingError> {
+    let dummy_path = match source_mime {
+        "image/jpeg" => Path::new("clipboard.jpg"),
+        "image/gif" => Path::new("clipboard.gif"),
+        "image/webp" => Path::new("clipboard.webp"),
+        _ => Path::new("clipboard.png"),
+    };
+    let encoded = load_for_prompt_bytes(dummy_path, bytes, PromptImageMode::ResizeToFit)?;
+    Ok((encoded.bytes, encoded.mime))
+}
+
 fn can_preserve_source_bytes(format: ImageFormat) -> bool {
     // Preserve byte-for-byte only for formats we can safely pass through.
     matches!(

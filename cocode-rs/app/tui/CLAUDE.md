@@ -22,7 +22,10 @@ The TUI follows **The Elm Architecture (TEA)** with async event handling:
 |------|---------|
 | `app.rs` | Main `App` struct, async run loop with `tokio::select!` |
 | `command.rs` | `UserCommand` enum (TUI → Core) |
-| `update.rs` | `handle_command()`, `handle_agent_event()` |
+| `update.rs` | `handle_command()`, re-exports `handle_tui_event` |
+| `tui_event_handler.rs` | `handle_tui_event()` — TUI-only events (overlays, toasts, progress) |
+| `stream_event_handler.rs` | `handle_stream_event_tui()` — streaming display (deltas, tool tracking) |
+| `server_notification_handler.rs` | `handle_server_notification()` — protocol events (turns, subagents, errors) |
 | `render.rs` | `render()` function, overlay rendering, help overlay |
 | `state/mod.rs` | `AppState`, `SessionState`, `UiState` |
 | `state/ui.rs` | `UiState`, `InputState`, `Overlay`, suggestion states |
@@ -187,7 +190,7 @@ Translation key namespaces: `command.*`, `status.*`, `dialog.*`, `help.*`, `toas
 
 1. **New keyboard shortcut**: Add to `event/handler.rs` → add `TuiCommand` variant in `event/mod.rs` → handle in `update.rs`
 2. **New overlay**: Add variant to `state/ui.rs::Overlay`, render in `render.rs`
-3. **Handle new LoopEvent**: Add case in `update.rs::handle_agent_event()`
+3. **Handle new TuiEvent**: Add case in `tui_event_handler.rs::handle_tui_event()`
 4. **New widget**: Create in `widgets/`, use in `render.rs`
 5. **New UserCommand**: Add to `command.rs`, handle in `tui_runner.rs` (`handle_turn_command` + `handle_idle_command`)
 6. **New i18n key**: Add to both `locales/en.yaml` and `locales/zh-CN.yaml`

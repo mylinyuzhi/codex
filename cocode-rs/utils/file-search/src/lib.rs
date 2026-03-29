@@ -213,10 +213,10 @@ fn create_session_inner(
         threads: threads.get(),
         compute_indices,
         respect_gitignore,
-        cancelled: cancelled.clone(),
+        cancelled,
         shutdown: Arc::new(AtomicBool::new(false)),
         reporter,
-        work_tx: work_tx.clone(),
+        work_tx,
     });
 
     let matcher_inner = inner.clone();

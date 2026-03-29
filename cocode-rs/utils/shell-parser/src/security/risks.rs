@@ -80,6 +80,8 @@ pub enum RiskKind {
     CommentQuoteDesync,
     /// Literal newline followed by # inside double quotes.
     QuotedNewlineHash,
+    /// Excess unbalanced closing braces/brackets after quote stripping.
+    ExcessClosingBraces,
 
     // Ask phase risks (8)
     /// Unsafe heredoc in command substitution (unquoted delimiter allows expansion).
@@ -121,6 +123,7 @@ impl RiskKind {
             RiskKind::ZshDangerousCommands => RiskLevel::High,
             RiskKind::CommentQuoteDesync => RiskLevel::Medium,
             RiskKind::QuotedNewlineHash => RiskLevel::Medium,
+            RiskKind::ExcessClosingBraces => RiskLevel::Medium,
 
             // Ask phase - generally higher severity
             RiskKind::UnsafeHeredocSubstitution => RiskLevel::Medium,
@@ -152,7 +155,8 @@ impl RiskKind {
             | RiskKind::BraceExpansion
             | RiskKind::ZshDangerousCommands
             | RiskKind::CommentQuoteDesync
-            | RiskKind::QuotedNewlineHash => RiskPhase::Deny,
+            | RiskKind::QuotedNewlineHash
+            | RiskKind::ExcessClosingBraces => RiskPhase::Deny,
 
             RiskKind::UnsafeHeredocSubstitution
             | RiskKind::DangerousSubstitution
@@ -192,6 +196,7 @@ impl RiskKind {
             RiskKind::PrivilegeEscalation => "privilege escalation",
             RiskKind::FileSystemTampering => "file system tampering",
             RiskKind::CodeExecution => "code execution",
+            RiskKind::ExcessClosingBraces => "excess closing braces",
         }
     }
 }

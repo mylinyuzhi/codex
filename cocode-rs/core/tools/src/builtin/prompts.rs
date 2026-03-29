@@ -107,18 +107,38 @@ Launch a new agent to handle complex, multi-step tasks autonomously.\n\
 The Task tool launches specialized agents (subprocesses) that autonomously handle complex tasks. \
 Each agent type has specific capabilities and tools available to it.\n\
 \n\
+Available agent types and the tools they have access to:\n\
+- general-purpose: General-purpose agent for researching complex questions, searching for code, \
+and executing multi-step tasks. (Tools: *)\n\
+- Explore: Fast agent specialized for exploring codebases. Use this when you need to quickly find \
+files by patterns, search code for keywords, or answer questions about the codebase. \
+(Tools: All tools except Task, ExitPlanMode, Edit, Write, NotebookEdit)\n\
+- Plan: Software architect agent for designing implementation plans. Use this when you need to \
+plan the implementation strategy for a task. Returns step-by-step plans, identifies critical \
+files, and considers architectural trade-offs. \
+(Tools: All tools except Task, ExitPlanMode, Edit, Write, NotebookEdit)\n\
+- statusline-setup: Use this agent to configure the user's status line setting. (Tools: Read, Edit)\n\
+- claude-code-guide: Use this agent when the user asks questions about Claude Code features, \
+hooks, slash commands, MCP servers, settings, IDE integrations, Agent SDK, or Claude API. \
+(Tools: Glob, Grep, Read, WebFetch, WebSearch)\n\
+\n\
 When NOT to use the Task tool:\n\
-- If you want to read a specific file path, use the Read or Glob tool instead\n\
-- If you are searching for a specific class definition, use the Glob tool instead\n\
-- If you are searching for code within a specific file, use the Read tool instead\n\
+- If you want to read a specific file path, use the Read tool or the Glob tool instead\n\
+- If you are searching for a specific class definition like \"class Foo\", use the Glob tool instead\n\
+- If you are searching for code within a specific file or set of 2-3 files, use the Read tool instead\n\
+- Other tasks that are not related to the agent descriptions above\n\
 \n\
 Usage notes:\n\
 - Always include a short description (3-5 words) summarizing what the agent will do\n\
-- Launch multiple agents concurrently whenever possible\n\
-- The result returned by the agent is not visible to the user — summarize it in your response\n\
-- You can run agents in the background using run_in_background\n\
-- Agents can be resumed using the resume parameter\n\
-- Provide clear, detailed prompts so the agent can work autonomously";
+- Launch multiple agents concurrently whenever possible, to maximize performance; to do that, \
+use a single message with multiple tool uses\n\
+- When the agent is done, it will return a single message back to you. The result returned by \
+the agent is not visible to the user. To show the user the result, you should send a text \
+message back to the user with a concise summary of the result.\n\
+- You can optionally run agents in the background using the run_in_background parameter\n\
+- To continue a previously spawned agent, use the resume parameter with the agent's ID\n\
+- Provide clear, detailed prompts so the agent can work autonomously and return exactly the \
+information you need";
 
 /// Description for the TaskOutput tool.
 pub const TASK_OUTPUT_DESCRIPTION: &str = "\

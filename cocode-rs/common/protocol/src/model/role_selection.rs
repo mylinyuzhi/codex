@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 
+use super::Capability;
 use super::ModelRole;
 use super::ModelSpec;
 use crate::ThinkingLevel;
@@ -43,6 +44,10 @@ pub struct RoleSelection {
     /// Thinking levels this model supports (for UI cycling). From ModelInfo.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supported_thinking_levels: Option<Vec<ThinkingLevel>>,
+
+    /// Model capabilities (for UI gating). From ModelInfo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<Vec<Capability>>,
 }
 
 impl RoleSelection {
@@ -52,6 +57,7 @@ impl RoleSelection {
             model,
             thinking_level: None,
             supported_thinking_levels: None,
+            capabilities: None,
         }
     }
 
@@ -61,6 +67,7 @@ impl RoleSelection {
             model,
             thinking_level: Some(level),
             supported_thinking_levels: None,
+            capabilities: None,
         }
     }
 
@@ -73,6 +80,17 @@ impl RoleSelection {
     pub fn with_supported_thinking_levels(mut self, levels: Vec<ThinkingLevel>) -> Self {
         self.supported_thinking_levels = Some(levels);
         self
+    }
+
+    /// Set capabilities (for UI gating).
+    pub fn with_capabilities(mut self, caps: Vec<Capability>) -> Self {
+        self.capabilities = Some(caps);
+        self
+    }
+
+    /// Check whether this model supports a specific capability.
+    pub fn has_capability(&self, cap: Capability) -> bool {
+        self.capabilities.as_ref().is_some_and(|c| c.contains(&cap))
     }
 
     /// Effective thinking level: explicit override or default (None effort).

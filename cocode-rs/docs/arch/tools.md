@@ -934,7 +934,7 @@ impl Tool for McpToolWrapper {
         _progress: Option<ProgressCallback>,
     ) -> Result<ToolOutput, ToolError> {
         // Emit McpToolCallBegin event
-        ctx.emit_event(LoopEvent::McpToolCallBegin {
+        ctx.emit_event(CoreEvent::McpToolCallBegin {
             server: self.server_name.clone(),
             tool: self.tool_def.name.clone(),
             call_id: ctx.call_id.clone(),
@@ -947,7 +947,7 @@ impl Tool for McpToolWrapper {
         ).await?;
 
         // Emit McpToolCallEnd event
-        ctx.emit_event(LoopEvent::McpToolCallEnd {
+        ctx.emit_event(CoreEvent::McpToolCallEnd {
             server: self.server_name.clone(),
             tool: self.tool_def.name.clone(),
             call_id: ctx.call_id.clone(),

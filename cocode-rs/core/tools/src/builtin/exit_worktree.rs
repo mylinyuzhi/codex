@@ -57,6 +57,11 @@ impl Tool for ExitWorktreeTool {
                     "type": "boolean",
                     "description": "Also delete the worktree's branch when removing (default: false)",
                     "default": false
+                },
+                "discard_changes": {
+                    "type": "boolean",
+                    "description": "Force removal even if worktree has uncommitted files or unpushed commits (default: false)",
+                    "default": false
                 }
             },
             "required": ["worktreePath"]
@@ -80,6 +85,7 @@ impl Tool for ExitWorktreeTool {
         let worktree_path = PathBuf::from(worktree_path_str);
         let action = input["action"].as_str().unwrap_or("remove");
         let delete_branch = super::input_helpers::bool_or(&input, "delete_branch", false);
+        let discard_changes = super::input_helpers::bool_or(&input, "discard_changes", false);
 
         // Restore CWD to previous_cwd before worktree removal (Gap 9 fix)
         if let Some(prev_cwd) = input["previousCwd"].as_str() {
@@ -92,6 +98,32 @@ impl Tool for ExitWorktreeTool {
         let repo_root = find_main_repo_root(&ctx.cwd).await?;
 
         if action == "remove" {
+            // Pre-flight safety check: detect uncommitted files and unpushed commits
+            if !discard_changes {
+                let (dirty_files, unpushed_commits) = check_worktree_changes(&worktree_path).await;
+
+                if !dirty_files.is_empty() || !unpushed_commits.is_empty() {
+                    let mut msg =
+                        String::from("Cannot remove worktree with uncommitted changes.\n");
+                    if !dirty_files.is_empty() {
+                        msg.push_str(&format!(
+                            "\nUncommitted files ({}):\n{}",
+                            dirty_files.len(),
+                            dirty_files.join("\n")
+                        ));
+                    }
+                    if !unpushed_commits.is_empty() {
+                        msg.push_str(&format!(
+                            "\nUnpushed commits ({}):\n{}",
+                            unpushed_commits.len(),
+                            unpushed_commits.join("\n")
+                        ));
+                    }
+                    msg.push_str("\n\nSet discard_changes: true to force removal.");
+                    return Ok(ToolOutput::error(msg));
+                }
+            }
+
             // Fire WorktreeRemove hook before removal
             if let Some(ref hooks) = ctx.hook_registry {
                 let hook_ctx = cocode_hooks::HookContext::new(
@@ -160,6 +192,37 @@ impl Tool for ExitWorktreeTool {
             )))
         }
     }
+}
+
+/// Check for uncommitted files and unpushed commits in a worktree.
+async fn check_worktree_changes(worktree_path: &std::path::Path) -> (Vec<String>, Vec<String>) {
+    let status_fut = tokio::process::Command::new("git")
+        .current_dir(worktree_path)
+        .args(["status", "--porcelain"])
+        .output();
+
+    let log_fut = tokio::process::Command::new("git")
+        .current_dir(worktree_path)
+        .args(["log", "@{upstream}..HEAD", "--oneline"])
+        .output();
+
+    let (status_result, log_result) = tokio::join!(status_fut, log_fut);
+
+    let parse_lines = |result: std::io::Result<std::process::Output>| -> Vec<String> {
+        result
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .filter(|l| !l.is_empty())
+                    .map(String::from)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+
+    (parse_lines(status_result), parse_lines(log_result))
 }
 
 async fn find_main_repo_root(cwd: &std::path::Path) -> Result<PathBuf> {

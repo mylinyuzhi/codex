@@ -86,7 +86,7 @@ Design core to support multiple UI frontends without modification:
 
 - **Event-Driven Architecture**
   - All UI communication via event channels
-  - `LoopEvent` for streaming updates
+  - `CoreEvent` for streaming updates
   - Broadcast channels for fan-out to multiple subscribers
 
 - **app-server Pattern** (for IDE integration)

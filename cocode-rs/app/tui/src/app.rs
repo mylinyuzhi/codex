@@ -6,8 +6,9 @@
 use std::io;
 use std::sync::Arc;
 
+use cocode_app_server_protocol::StreamAccumulator;
 use cocode_config::Config;
-use cocode_protocol::LoopEvent;
+use cocode_protocol::CoreEvent;
 use cocode_protocol::RoleSelection;
 use futures::StreamExt;
 use tokio::sync::mpsc;
@@ -27,14 +28,16 @@ use crate::file_search::FileSearchManager;
 use crate::file_search::create_file_search_channel;
 use crate::paste::PasteManager;
 use crate::render::render;
+use crate::server_notification_handler::handle_server_notification;
 use crate::skill_search::SkillSearchManager;
 use crate::state::AppState;
 use crate::state::Overlay;
+use crate::stream_event_handler::handle_stream_event_tui;
 use crate::symbol_search::SymbolSearchEvent;
 use crate::symbol_search::SymbolSearchManager;
 use crate::symbol_search::create_symbol_search_channel;
 use crate::terminal::Tui;
-use crate::update::handle_agent_event;
+use crate::tui_event_handler::handle_tui_event;
 use crate::update::handle_command;
 use crate::update::handle_file_search_event;
 use crate::update::handle_symbol_search_event;
@@ -52,7 +55,7 @@ pub struct App {
     /// Application state.
     state: AppState,
     /// Receiver for events from the core agent.
-    agent_rx: mpsc::Receiver<LoopEvent>,
+    agent_rx: mpsc::Receiver<CoreEvent>,
     /// Sender for commands to the core agent.
     command_tx: mpsc::Sender<UserCommand>,
     /// Available models for the picker.
@@ -73,6 +76,8 @@ pub struct App {
     paste_manager: PasteManager,
     /// Keybindings manager for customizable key resolution.
     keybindings: KeybindingsManager,
+    /// Accumulates `StreamEvent`s into `ServerNotification`s during a turn.
+    stream_accumulator: Option<StreamAccumulator>,
 }
 
 impl App {
@@ -88,7 +93,7 @@ impl App {
     ///
     /// Returns an error if terminal setup fails.
     pub fn new(
-        agent_rx: mpsc::Receiver<LoopEvent>,
+        agent_rx: mpsc::Receiver<CoreEvent>,
         command_tx: mpsc::Sender<UserCommand>,
         config: Arc<Config>,
     ) -> io::Result<Self> {
@@ -146,6 +151,7 @@ impl App {
             symbol_search_rx,
             paste_manager,
             keybindings,
+            stream_accumulator: None,
         })
     }
 
@@ -153,7 +159,7 @@ impl App {
     #[cfg(test)]
     pub fn with_terminal(
         tui: Tui,
-        agent_rx: mpsc::Receiver<LoopEvent>,
+        agent_rx: mpsc::Receiver<CoreEvent>,
         command_tx: mpsc::Sender<UserCommand>,
     ) -> Self {
         use std::path::PathBuf;
@@ -180,6 +186,7 @@ impl App {
                 std::env::temp_dir().join("cocode-test-paste-cache"),
             ),
             keybindings: KeybindingsManager::defaults_only(),
+            stream_accumulator: None,
         }
     }
 
@@ -231,8 +238,8 @@ impl App {
                     self.handle_tui_event(event).await?;
                 }
                 // Handle agent events
-                Some(loop_event) = self.agent_rx.recv() => {
-                    self.handle_loop_event(loop_event);
+                Some(core_event) = self.agent_rx.recv() => {
+                    self.handle_core_event(core_event);
                     self.tui.request_redraw();
                 }
                 // Handle file search results
@@ -349,6 +356,15 @@ impl App {
                     needs_render = true;
                 }
 
+                // Expire sandbox violation flash (5s after last violation)
+                if let Some(deadline) = self.state.session.sandbox_violation_flash_until
+                    && std::time::Instant::now() >= deadline
+                {
+                    self.state.session.sandbox_violation_count = 0;
+                    self.state.session.sandbox_violation_flash_until = None;
+                    needs_render = true;
+                }
+
                 // Check for idle notification
                 if self.state.ui.check_idle() {
                     self.state
@@ -373,8 +389,8 @@ impl App {
                 self.check_slash_command();
                 self.tui.request_redraw();
             }
-            TuiEvent::Agent(loop_event) => {
-                self.handle_loop_event(loop_event);
+            TuiEvent::Agent(core_event) => {
+                self.handle_core_event(core_event);
                 self.tui.request_redraw();
             }
             TuiEvent::Command(cmd) => {
@@ -594,21 +610,60 @@ impl App {
         }
     }
 
-    /// Handle a loop event from the core agent.
-    fn handle_loop_event(&mut self, event: LoopEvent) {
+    /// Handle a core event from the agent loop.
+    ///
+    /// Dispatches by variant:
+    /// - `Protocol` → `handle_server_notification` (same as SDK clients)
+    /// - `Stream`   → TUI display + `StreamAccumulator` → notifications
+    /// - `Tui`      → `handle_tui_event` (overlays, toasts, progress)
+    fn handle_core_event(&mut self, event: CoreEvent) {
+        use cocode_app_server_protocol::ServerNotification;
+
         self.state.ui.touch_activity();
 
-        // Handle plugin agents loaded event to update TUI autocomplete
-        if let LoopEvent::PluginAgentsLoaded { ref agents } = event {
-            self.agent_search
-                .load_agents(agents.iter().map(|a| AgentInfo {
-                    agent_type: a.agent_type.clone(),
-                    name: a.name.clone(),
-                    description: a.description.clone(),
-                }));
-            return;
+        match event {
+            CoreEvent::Protocol(ref sn) => {
+                // Initialize accumulator on TurnStarted
+                if let ServerNotification::TurnStarted(params) = sn {
+                    self.stream_accumulator = Some(StreamAccumulator::new(params.turn_id.clone()));
+                }
+
+                // Update TUI agent search on AgentsRegistered
+                if let ServerNotification::AgentsRegistered(params) = sn {
+                    self.agent_search
+                        .load_agents(params.agents.iter().map(|a| AgentInfo {
+                            agent_type: a.agent_type.clone(),
+                            name: a.name.clone(),
+                            description: a.description.clone().unwrap_or_default(),
+                        }));
+                }
+
+                handle_server_notification(&mut self.state, sn.clone());
+
+                // Flush accumulator on TurnCompleted
+                if let ServerNotification::TurnCompleted(_) = sn
+                    && let Some(ref mut acc) = self.stream_accumulator
+                {
+                    for notification in acc.flush() {
+                        handle_server_notification(&mut self.state, notification);
+                    }
+                }
+            }
+            CoreEvent::Stream(se) => {
+                // Direct TUI handling (streaming buffers, tool tracking)
+                handle_stream_event_tui(&mut self.state, &se);
+
+                // Accumulate into protocol notifications
+                if let Some(ref mut acc) = self.stream_accumulator {
+                    for notification in acc.process(se) {
+                        handle_server_notification(&mut self.state, notification);
+                    }
+                }
+            }
+            CoreEvent::Tui(te) => {
+                handle_tui_event(&mut self.state, te);
+            }
         }
-        handle_agent_event(&mut self.state, event);
     }
 
     /// Render the current state to the terminal.
@@ -635,15 +690,15 @@ fn has_line_range_suffix(query: &str) -> bool {
 /// Create a channel pair for TUI-agent communication.
 ///
 /// Returns `(agent_tx, agent_rx, command_tx, command_rx)` where:
-/// - `agent_tx`: Core sends LoopEvents to TUI
-/// - `agent_rx`: TUI receives LoopEvents
+/// - `agent_tx`: Core sends CoreEvents to TUI
+/// - `agent_rx`: TUI receives CoreEvents
 /// - `command_tx`: TUI sends UserCommands to Core
 /// - `command_rx`: Core receives UserCommands
 pub fn create_channels(
     buffer_size: usize,
 ) -> (
-    mpsc::Sender<LoopEvent>,
-    mpsc::Receiver<LoopEvent>,
+    mpsc::Sender<CoreEvent>,
+    mpsc::Receiver<CoreEvent>,
     mpsc::Sender<UserCommand>,
     mpsc::Receiver<UserCommand>,
 ) {
