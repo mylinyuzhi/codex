@@ -30,8 +30,8 @@
 
 use cocode_message::MessageHistory;
 use cocode_protocol::ToolName;
-use cocode_tools::FileReadState;
-use cocode_tools::FileTracker;
+use cocode_tools_api::FileReadState;
+use cocode_tools_api::FileTracker;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;

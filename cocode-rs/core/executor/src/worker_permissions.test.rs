@@ -10,6 +10,7 @@ fn create_test_request(id: &str, tool: &str) -> ApprovalRequest {
         allow_remember: false,
         proposed_prefix_pattern: None,
         input: None,
+        source_agent_id: None,
     }
 }
 

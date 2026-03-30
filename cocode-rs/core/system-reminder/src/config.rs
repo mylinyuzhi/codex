@@ -90,6 +90,8 @@ pub struct AttachmentSettings {
     pub team_context: bool,
     /// Enable unread mailbox message injection for teammates.
     pub team_mailbox: bool,
+    /// Enable idle state reminder for teammates with no work.
+    pub teammate_idle: bool,
     /// Enable plan verification reminders.
     pub plan_verification: bool,
     /// Enable token usage display.
@@ -154,6 +156,7 @@ impl Default for AttachmentSettings {
             collab_notifications: true,
             team_context: true,
             team_mailbox: true,
+            teammate_idle: true,
             plan_verification: true,
             token_usage: true,
             security_guidelines: true,

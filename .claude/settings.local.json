@@ -106,6 +106,26 @@
             "statusMessage": "Running Rust quality checks (fmt + check + clippy + test)..."
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/scripts/toolname-constants-check.sh\"",
+            "timeout": 30,
+            "statusMessage": "Checking tool name constants..."
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/scripts/sdk-schema-check.sh\"",
+            "timeout": 300,
+            "statusMessage": "Checking SDK schema freshness..."
+          }
+        ]
       }
     ]
   }

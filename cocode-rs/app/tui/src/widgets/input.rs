@@ -207,6 +207,8 @@ pub struct InputWidget<'a> {
     placeholder: Option<&'a str>,
     /// Whether the agent is currently streaming (Enter queues instead of submitting).
     is_streaming: bool,
+    /// Optional accent color override (from /color command).
+    accent_color: Option<ratatui::style::Color>,
 }
 
 impl<'a> InputWidget<'a> {
@@ -220,6 +222,7 @@ impl<'a> InputWidget<'a> {
             queued_count: 0,
             placeholder: None,
             is_streaming: false,
+            accent_color: None,
         }
     }
 
@@ -250,6 +253,12 @@ impl<'a> InputWidget<'a> {
     /// Set whether the agent is streaming (Enter queues instead of submitting).
     pub fn is_streaming(mut self, streaming: bool) -> Self {
         self.is_streaming = streaming;
+        self
+    }
+
+    /// Set the accent color override.
+    pub fn accent_color(mut self, color: Option<ratatui::style::Color>) -> Self {
+        self.accent_color = color;
         self
     }
 
@@ -387,13 +396,13 @@ impl Widget for InputWidget<'_> {
 
         let lines = self.get_lines();
 
-        // Create block — dim border when streaming to signal queuing mode
+        let accent = self.accent_color.unwrap_or(self.theme.border_focused);
         let border_style = if self.plan_mode {
             ratatui::style::Style::default().fg(self.theme.plan_mode)
         } else if self.is_streaming {
             ratatui::style::Style::default().fg(self.theme.warning)
         } else if self.focused {
-            ratatui::style::Style::default().fg(self.theme.border_focused)
+            ratatui::style::Style::default().fg(accent)
         } else {
             ratatui::style::Style::default().fg(self.theme.border)
         };

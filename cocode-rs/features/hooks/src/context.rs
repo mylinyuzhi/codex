@@ -470,8 +470,17 @@ impl HookContext {
             }
             HookEventType::PreCompact => self.trigger.as_deref(),
             HookEventType::ConfigChange => self.config_key.as_deref(),
-            // UserPromptSubmit, Stop, TeammateIdle, TaskCompleted: no matcher target
-            _ => None,
+            HookEventType::UserPromptSubmit
+            | HookEventType::Stop
+            | HookEventType::TeammateIdle
+            | HookEventType::TaskCompleted
+            | HookEventType::PostCompact
+            | HookEventType::WorktreeCreate
+            | HookEventType::WorktreeRemove
+            | HookEventType::Setup
+            | HookEventType::Elicitation
+            | HookEventType::ElicitationResult
+            | HookEventType::InstructionsLoaded => None,
         }
     }
 }

@@ -261,6 +261,7 @@ class SubagentSpawnedParams(BaseModel):
 class SubagentCompletedParams(BaseModel):
     agent_id: str
     result: str
+    is_error: bool = False
 
 class SubagentBackgroundedParams(BaseModel):
     agent_id: str
@@ -268,7 +269,10 @@ class SubagentBackgroundedParams(BaseModel):
 
 class SubagentProgressParams(BaseModel):
     agent_id: str
+    current_step: int | None = None
     message: str | None = None
+    summary: str | None = None
+    total_steps: int | None = None
 
 class McpStartupStatusParams(BaseModel):
     server: str
@@ -324,6 +328,7 @@ class ModelFallbackCompletedParams(BaseModel):
 
 class PermissionModeChangedParams(BaseModel):
     mode: str
+    bypass_available: bool = False
 
 class PromptSuggestionParams(BaseModel):
     suggestions: list[str]
@@ -398,6 +403,14 @@ class AgentsRegisteredParams(BaseModel):
 class HookExecutedParams(BaseModel):
     hook_name: str
     hook_type: str
+
+class WorktreeEnteredParams(BaseModel):
+    branch: str
+    worktree_path: str
+
+class WorktreeExitedParams(BaseModel):
+    action: WorktreeExitAction
+    worktree_path: str
 
 class SummarizeCompletedParams(BaseModel):
     from_turn: int
@@ -674,6 +687,16 @@ class ServerNotification(BaseModel):
     def as_hook_executed(self) -> HookExecutedParams | None:
         if self.method == 'hook/executed':
             return HookExecutedParams.model_validate(self.params)
+        return None
+
+    def as_worktree_entered(self) -> WorktreeEnteredParams | None:
+        if self.method == 'worktree/entered':
+            return WorktreeEnteredParams.model_validate(self.params)
+        return None
+
+    def as_worktree_exited(self) -> WorktreeExitedParams | None:
+        if self.method == 'worktree/exited':
+            return WorktreeExitedParams.model_validate(self.params)
         return None
 
     def as_summarize_completed(self) -> SummarizeCompletedParams | None:
@@ -968,7 +991,9 @@ class SessionStartRequestParams(BaseModel):
     model: str | None = None
     output_format: OutputFormatConfig | None = None
     permission_mode: str | None = None
+    permission_prompt_tool: str | None = None
     permission_rules: list[Any] | None = None
+    prompt_suggestions: bool | None = None
     sandbox: SandboxConfig | None = None
     system_prompt: SystemPromptConfig | None = None
     system_prompt_suffix: str | None = None

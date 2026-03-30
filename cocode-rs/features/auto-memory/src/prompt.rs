@@ -20,35 +20,6 @@ pub fn build_auto_memory_prompt(
     index: Option<&MemoryIndex>,
     max_lines: i32,
 ) -> String {
-    let index_content = match index {
-        Some(idx) if !idx.raw_content.trim().is_empty() => {
-            let mut s = String::new();
-            s.push_str("# claudeMd\n");
-            s.push_str(
-                "Codebase and user instructions are shown below. Be sure to adhere to these instructions. \
-                 IMPORTANT: These instructions OVERRIDE any default behavior and you MUST follow them exactly as written.\n\n",
-            );
-            s.push_str(&format!("Contents of {memory_dir}/MEMORY.md:\n\n"));
-            s.push_str(&idx.raw_content);
-            if idx.was_truncated {
-                s.push_str(&format!(
-                    "\n\nIMPORTANT: MEMORY.md has {} lines but only the first {max_lines} are shown. \
-                     Keep it concise to stay under the limit.",
-                    idx.line_count
-                ));
-            }
-            s
-        }
-        Some(_) => {
-            // MEMORY.md exists but is empty — show a hint.
-            format!(
-                "Your `MEMORY.md` at `{memory_dir}/MEMORY.md` is currently empty. \
-                 When you save new memories, they will appear here.\n"
-            )
-        }
-        None => String::new(),
-    };
-
     let memory_index_desc = format!(
         "`MEMORY.md` is always loaded into your conversation context — lines after {max_lines} \
          will be truncated, so keep the index concise.\n\n\
@@ -80,11 +51,103 @@ pub fn build_auto_memory_prompt(
     parts.push(MEMORY_VS_PLAN_VS_TASK.to_string());
     parts.push(build_search_context_section(memory_dir));
 
+    let index_content = build_memory_index_section(
+        "claudeMd", memory_dir, index, max_lines, /*include_preamble*/ true,
+    );
     if !index_content.is_empty() {
         parts.push(index_content);
     }
 
     parts.join("\n")
+}
+
+/// Build combined user+team memory prompt with typed frontmatter guidance.
+///
+/// Includes both user memory and team memory sections with structured
+/// memory type descriptions (team-scoped) and team-typed save instructions.
+pub fn build_typed_combined_memory_prompt(
+    memory_dir: &str,
+    team_dir: &str,
+    index: Option<&MemoryIndex>,
+    team_index: Option<&MemoryIndex>,
+    max_lines: i32,
+) -> String {
+    let write_tool = ToolName::Write.as_str();
+
+    let mut parts = Vec::new();
+    parts.push("# auto memory\n".to_string());
+    parts.push(format!(
+        "You have a persistent, file-based memory system with two directories:\n\
+         - **User memory** at `{memory_dir}/` — private to you and this user.\n\
+         - **Team memory** at `{team_dir}/` — shared with all team members.\n\n\
+         Both directories already exist — write to them directly with the {write_tool} tool \
+         (do not run mkdir or check for their existence).\n"
+    ));
+    parts.push(
+        "You should build up this memory system over time so that future conversations can have \
+         a complete picture of who the user is, how they'd like to collaborate with you, what \
+         behaviors to avoid or repeat, and the context behind the work the user gives you.\n\n\
+         If the user explicitly asks you to remember something, save it immediately as whichever \
+         type fits best. If they ask you to forget something, find and remove the relevant entry.\n"
+            .to_string(),
+    );
+    parts.push(format!(
+        "`MEMORY.md` is always loaded into your conversation context — lines after {max_lines} \
+         will be truncated, so keep the index concise.\n\n\
+         Memory files are re-read from disk each turn, so changes are immediately visible.\n"
+    ));
+    parts.push(MEMORY_TYPES_SECTION_WITH_TEAM_SCOPE.to_string());
+    parts.push(build_user_vs_team_guidance_section());
+    parts.push(WHAT_NOT_TO_SAVE_SECTION.to_string());
+    parts.push(HOW_TO_SAVE_TEAM_TYPED.to_string());
+    parts.push(WHEN_TO_ACCESS.to_string());
+    parts.push(BEFORE_RECOMMENDING.to_string());
+    parts.push(MEMORY_VS_PLAN_VS_TASK.to_string());
+    parts.push(build_search_context_section(memory_dir));
+    parts.push(build_team_search_context_section(team_dir));
+    parts.push(build_memory_index_section(
+        "claudeMd", memory_dir, index, max_lines, /*include_preamble*/ true,
+    ));
+    parts.push(build_memory_index_section(
+        "Team Memory",
+        team_dir,
+        team_index,
+        max_lines,
+        /*include_preamble*/ false,
+    ));
+
+    parts.join("\n")
+}
+
+/// Build extraction-mode combined prompt (read-only with background extraction).
+///
+/// The main agent gets a read-only view of both user and team memory,
+/// with extraction handled by a background subagent.
+pub fn build_extract_mode_typed_combined_prompt(
+    memory_dir: &str,
+    team_dir: &str,
+    max_lines: i32,
+) -> String {
+    format!(
+        "# auto memory\n\n\
+         You have a persistent, file-based memory system with two directories:\n\
+         - **User memory** at `{memory_dir}/` — private to you and this user.\n\
+         - **Team memory** at `{team_dir}/` — shared with all team members.\n\n\
+         `MEMORY.md` in each directory is an index of memory files, loaded into your \
+         conversation context (first {max_lines} lines). Use them to find relevant notes \
+         from prior sessions.\n\n\
+         A background agent automatically extracts and saves memories from this conversation.\n\
+         If the user asks you to remember or forget something, acknowledge it — the save happens automatically.\n\
+         You should not write to memory files yourself.\n\n\
+         ## When to access memories\n\
+         - When specific known memories seem relevant to the task at hand.\n\
+         - When the user seems to be referring to work you may have done in a prior conversation.\n\
+         - You MUST access memory when the user explicitly asks you to check your memory, recall, or remember.\n\n\
+         {}\n\
+         {}\n",
+        build_search_context_section(memory_dir),
+        build_team_search_context_section(team_dir),
+    )
 }
 
 /// Build a read-only memory prompt for background agents.
@@ -122,6 +185,287 @@ fn build_search_context_section(memory_dir: &str) -> String {
          - Memory file names indicate their topic (e.g., `feedback_testing.md`, `project_auth.md`).\n"
     )
 }
+
+// ========================================================================
+// Extraction Prompt Variants (2x2 matrix: team x typed)
+// ========================================================================
+
+/// Build extraction subagent prompt - standard single memory.
+///
+/// The default extraction prompt for a single user memory directory.
+/// Includes save triggers, content guidelines, and exclusions.
+pub fn build_extraction_prompt_standard(message_count: i32) -> String {
+    let parts = [
+        extraction_preamble(message_count),
+        EXTRACTION_WHEN_TO_SAVE.to_string(),
+        EXTRACTION_WHAT_TO_SAVE.to_string(),
+        WHAT_NOT_TO_SAVE_SECTION.to_string(),
+        EXTRACTION_EXPLICIT_REQUESTS.to_string(),
+        HOW_TO_SAVE.to_string(),
+    ];
+    parts.join("\n")
+}
+
+/// Build extraction subagent prompt - typed single memory (with frontmatter format).
+///
+/// Uses structured memory types with YAML frontmatter for organized storage.
+pub fn build_extraction_prompt_typed(message_count: i32) -> String {
+    let parts = [
+        extraction_preamble(message_count),
+        MEMORY_TYPES_SECTION.to_string(),
+        WHAT_NOT_TO_SAVE_SECTION.to_string(),
+        HOW_TO_SAVE.to_string(),
+    ];
+    parts.join("\n")
+}
+
+/// Build extraction subagent prompt - team mode (user + team distinction).
+///
+/// Guides the extraction agent on routing memories to the correct
+/// directory: user (private) vs team (shared).
+pub fn build_extraction_prompt_team(message_count: i32) -> String {
+    let parts = [
+        extraction_preamble(message_count),
+        EXTRACTION_WHEN_TO_SAVE.to_string(),
+        EXTRACTION_WHAT_TO_SAVE_USER.to_string(),
+        EXTRACTION_WHAT_TO_SAVE_TEAM.to_string(),
+        EXTRACTION_CHOOSING_USER_VS_TEAM.to_string(),
+        WHAT_NOT_TO_SAVE_SECTION.to_string(),
+        EXTRACTION_EXPLICIT_REQUESTS.to_string(),
+        HOW_TO_SAVE.to_string(),
+    ];
+    parts.join("\n")
+}
+
+/// Build extraction subagent prompt - typed team mode (both typed format and user/team).
+///
+/// Combines structured memory types with user/team routing guidance.
+pub fn build_extraction_prompt_typed_team(message_count: i32) -> String {
+    let parts = [
+        extraction_preamble(message_count),
+        MEMORY_TYPES_SECTION_WITH_TEAM_SCOPE.to_string(),
+        EXTRACTION_CHOOSING_USER_VS_TEAM.to_string(),
+        WHAT_NOT_TO_SAVE_SECTION.to_string(),
+        HOW_TO_SAVE_TEAM_TYPED.to_string(),
+    ];
+    parts.join("\n")
+}
+
+/// Shared preamble for all extraction prompt variants.
+fn extraction_preamble(message_count: i32) -> String {
+    format!(
+        "You are now acting as the memory extraction subagent. \
+         Any prior instruction to not write memory files applies to the main conversation — \
+         in this role, writing is your job. Analyze the most recent ~{message_count} messages above \
+         and use them to update your persistent memory systems."
+    )
+}
+
+// ========================================================================
+// Helper functions for prompt composition
+// ========================================================================
+
+/// Build the user-vs-team guidance section for combined prompts.
+fn build_user_vs_team_guidance_section() -> String {
+    "\
+## Choosing between user memory and team memory
+
+- **User memory** (private): personal preferences, role details, feedback on your behavior, \
+individual workflow habits. Only you and this user will see these.
+- **Team memory** (shared): project decisions, architecture context, deployment procedures, \
+shared conventions, team agreements. All team members benefit from these.
+
+When in doubt, prefer team memory for project-related facts and user memory for personal \
+preferences. If a memory is both personal and project-relevant, save the project parts to \
+team memory and the personal parts to user memory.\n"
+        .to_string()
+}
+
+/// Build the team search context section.
+fn build_team_search_context_section(team_dir: &str) -> String {
+    let read_tool = ToolName::Read.as_str();
+    let grep_tool = ToolName::Grep.as_str();
+    format!(
+        "## Searching team memory files\n\
+         - Check `MEMORY.md` in `{team_dir}` for the team memory overview.\n\
+         - Use the {read_tool} tool to read individual team memory files.\n\
+         - Use the {grep_tool} tool to search across all team memory files in `{team_dir}`.\n"
+    )
+}
+
+/// Build a MEMORY.md index content section.
+///
+/// Unified builder for both user and team memory index sections.
+/// `heading` is the section heading (e.g. "claudeMd" or "Team Memory"),
+/// `dir` is the memory directory path, `max_lines` controls the
+/// truncation threshold, and `include_preamble` adds the CLAUDE.md-style
+/// override instructions when true.
+fn build_memory_index_section(
+    heading: &str,
+    dir: &str,
+    index: Option<&MemoryIndex>,
+    max_lines: i32,
+    include_preamble: bool,
+) -> String {
+    match index {
+        Some(idx) if !idx.raw_content.trim().is_empty() => {
+            let mut s = String::new();
+            s.push_str(&format!("# {heading}\n"));
+            if include_preamble {
+                s.push_str(
+                    "Codebase and user instructions are shown below. Be sure to adhere to these \
+                     instructions. IMPORTANT: These instructions OVERRIDE any default behavior \
+                     and you MUST follow them exactly as written.\n\n",
+                );
+            } else {
+                s.push('\n');
+            }
+            s.push_str(&format!("Contents of {dir}/MEMORY.md:\n\n"));
+            s.push_str(&idx.raw_content);
+            if idx.was_truncated {
+                s.push_str(&format!(
+                    "\n\nIMPORTANT: MEMORY.md has {line_count} lines but only the first \
+                     {max_lines} are shown. Keep it concise to stay under the limit.",
+                    line_count = idx.line_count,
+                ));
+            }
+            s
+        }
+        Some(_) => {
+            format!(
+                "Your `MEMORY.md` at `{dir}/MEMORY.md` is currently empty. \
+                 When you save new memories, they will appear here.\n"
+            )
+        }
+        None => String::new(),
+    }
+}
+
+// ========================================================================
+// Extraction-specific constants
+// ========================================================================
+
+const EXTRACTION_WHEN_TO_SAVE: &str = "\
+## You MUST save memories when:
+
+- The user shares information about themselves (role, preferences, expertise)
+- The user gives feedback on your behavior (corrections or confirmations)
+- You learn project context not derivable from code (decisions, deadlines, stakeholders)
+- The user mentions external resources or references
+- The user explicitly asks you to remember something\n";
+
+const EXTRACTION_WHAT_TO_SAVE: &str = "\
+## What to save in memories:
+
+- User profile details (role, expertise, preferences)
+- Behavioral feedback (what to do, what to avoid, confirmed approaches)
+- Project context (decisions, timelines, stakeholder constraints)
+- External references (tools, dashboards, documentation links)
+- Non-obvious conventions or agreements\n";
+
+const EXTRACTION_EXPLICIT_REQUESTS: &str = "\
+## Explicit user requests:
+
+If the user explicitly asks to remember something, save it immediately using the most \
+appropriate memory type. If they ask to forget something, find and remove the relevant \
+entry from both the memory file and the MEMORY.md index.\n";
+
+const EXTRACTION_WHAT_TO_SAVE_USER: &str = "\
+## What to save in user memory (private):
+
+- Personal preferences and workflow habits
+- Role, expertise, and knowledge level
+- Feedback on assistant behavior (corrections and confirmations)
+- Individual goals and responsibilities
+- Communication style preferences\n";
+
+const EXTRACTION_WHAT_TO_SAVE_TEAM: &str = "\
+## What to save in team memory (shared):
+
+- Project decisions and architecture context
+- Deployment procedures and operational knowledge
+- Shared conventions and coding standards
+- Team agreements and process decisions
+- Cross-cutting concerns (compliance, security policies)
+- External system references used by the team\n";
+
+const EXTRACTION_CHOOSING_USER_VS_TEAM: &str = "\
+## Choosing between user memory and team memory:
+
+- **User memory**: anything personal — preferences, role details, feedback on your behavior, \
+individual workflow habits. Only this user benefits from these.
+- **Team memory**: anything project-related — decisions, architecture, conventions, procedures. \
+All team members benefit from these.
+
+When in doubt, prefer team memory for project facts and user memory for personal preferences. \
+Never store sensitive personal information in team memory (API keys, personal contacts, \
+private feedback about specific team members).\n";
+
+const MEMORY_TYPES_SECTION_WITH_TEAM_SCOPE: &str = "\
+## Types of memory
+
+There are several discrete types of memory. Each type can be stored in either the \
+user directory (private) or the team directory (shared), depending on the content.
+
+<types>
+<type>
+    <name>user</name>
+    <scope>Usually private (user directory)</scope>
+    <description>Information about the user's role, goals, responsibilities, and knowledge.</description>
+    <when_to_save>When you learn details about the user's role, preferences, or knowledge</when_to_save>
+</type>
+<type>
+    <name>feedback</name>
+    <scope>Usually private (user directory)</scope>
+    <description>Guidance the user has given about how to approach work — corrections and confirmations.</description>
+    <when_to_save>When the user corrects your approach or confirms a non-obvious approach worked</when_to_save>
+</type>
+<type>
+    <name>project</name>
+    <scope>Usually shared (team directory)</scope>
+    <description>Information about ongoing work, goals, decisions, or incidents not derivable from code.</description>
+    <when_to_save>When you learn who is doing what, why, or by when</when_to_save>
+</type>
+<type>
+    <name>reference</name>
+    <scope>Shared (team directory) unless personal</scope>
+    <description>Pointers to where information can be found in external systems.</description>
+    <when_to_save>When you learn about resources in external systems</when_to_save>
+</type>
+</types>\n";
+
+const HOW_TO_SAVE_TEAM_TYPED: &str = "\
+## How to save memories
+
+Saving a memory is a two-step process:
+
+**Step 1** — write the memory to its own file in the chosen directory \
+(user directory for private memories, team directory for shared memories). \
+Use this frontmatter format:
+
+```markdown
+---
+name: {{memory name}}
+description: {{one-line description — used to decide relevance in future conversations, so be specific}}
+type: {{user, feedback, project, reference}}
+---
+
+{{memory content}}
+```
+
+**Step 2** — add a pointer to that file in the same directory's `MEMORY.md`. \
+`MEMORY.md` is an index, not a memory — it should contain only links to memory files \
+with brief descriptions. It has no frontmatter. Never write memory content directly \
+into `MEMORY.md`.
+
+- Keep the name, description, and type fields in memory files up-to-date with the content
+- Organize memory semantically by topic, not chronologically
+- Update or remove memories that turn out to be wrong or outdated
+- Do not write duplicate memories. First check if there is an existing memory you can update.\n";
+
+// ========================================================================
+// Existing constants
+// ========================================================================
 
 const MEMORY_TYPES_SECTION: &str = "\
 ## Types of memory

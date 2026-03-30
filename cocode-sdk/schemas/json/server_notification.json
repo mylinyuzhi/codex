@@ -954,6 +954,44 @@
       }
     },
     {
+      "description": "A git worktree was entered (created).",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "worktree/entered"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/WorktreeEnteredParams"
+        }
+      }
+    },
+    {
+      "description": "A git worktree was exited (removed or kept).",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "worktree/exited"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/WorktreeExitedParams"
+        }
+      }
+    },
+    {
       "description": "Partial compaction completed.",
       "type": "object",
       "required": [
@@ -1719,6 +1757,11 @@
         "mode"
       ],
       "properties": {
+        "bypass_available": {
+          "description": "Whether bypass-permissions mode is available for this session.\n\nSet to `true` when the session was launched with `--dangerously-skip-permissions`. Used by the TUI to gate the ClearAndBypass option in the plan exit dialog and to enable Bypass in mode cycling.",
+          "default": false,
+          "type": "boolean"
+        },
         "mode": {
           "type": "string"
         }
@@ -2046,6 +2089,11 @@
         "agent_id": {
           "type": "string"
         },
+        "is_error": {
+          "description": "Whether the agent completed with an error.",
+          "default": false,
+          "type": "boolean"
+        },
         "result": {
           "type": "string"
         }
@@ -2061,11 +2109,31 @@
         "agent_id": {
           "type": "string"
         },
+        "current_step": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
         "message": {
           "type": [
             "string",
             "null"
           ]
+        },
+        "summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "total_steps": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
         }
       }
     },
@@ -2623,6 +2691,44 @@
             "null"
           ],
           "format": "int64"
+        }
+      }
+    },
+    "WorktreeEnteredParams": {
+      "type": "object",
+      "required": [
+        "branch",
+        "worktree_path"
+      ],
+      "properties": {
+        "branch": {
+          "type": "string"
+        },
+        "worktree_path": {
+          "type": "string"
+        }
+      }
+    },
+    "WorktreeExitAction": {
+      "description": "Whether a worktree was removed or kept on exit.",
+      "type": "string",
+      "enum": [
+        "remove",
+        "keep"
+      ]
+    },
+    "WorktreeExitedParams": {
+      "type": "object",
+      "required": [
+        "action",
+        "worktree_path"
+      ],
+      "properties": {
+        "action": {
+          "$ref": "#/definitions/WorktreeExitAction"
+        },
+        "worktree_path": {
+          "type": "string"
         }
       }
     }

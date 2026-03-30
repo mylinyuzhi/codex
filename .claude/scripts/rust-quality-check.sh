@@ -8,6 +8,11 @@
 
 cd "${CLAUDE_PROJECT_DIR:?CLAUDE_PROJECT_DIR not set}/cocode-rs"
 
+# Workaround: virtiofs (macOS Podman) caps open FDs at ~700, too low for a
+# full-workspace cargo build.  Place target dir on the container-local overlay
+# filesystem, keyed by workspace path so concurrent worktrees stay isolated.
+export CARGO_TARGET_DIR="/tmp/cargo-target-$(echo "$PWD" | md5sum | cut -c1-12)"
+
 # Check if any .rs files were modified (staged or unstaged)
 if ! git diff --name-only HEAD 2>/dev/null | grep -q '\.rs$'; then
   exit 0  # No Rust changes, skip checks

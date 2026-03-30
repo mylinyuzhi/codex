@@ -231,7 +231,7 @@ impl Tool for WebSearchTool {
         Some(cocode_protocol::Feature::WebSearch)
     }
 
-    async fn check_permission(&self, input: &Value, _ctx: &ToolContext) -> PermissionResult {
+    async fn check_permission(&self, input: &Value, ctx: &ToolContext) -> PermissionResult {
         let query = match input.get("query").and_then(|v| v.as_str()) {
             Some(q) => q,
             None => return PermissionResult::Passthrough,
@@ -246,12 +246,13 @@ impl Tool for WebSearchTool {
                 allow_remember: true,
                 proposed_prefix_pattern: None,
                 input: Some(input.clone()),
+                source_agent_id: ctx.identity.agent_id.clone(),
             },
         }
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
-        let config = &ctx.web_search_config;
+        let config = &ctx.env.web_search_config;
 
         // 1. Parse query
         let query = input["query"].as_str().ok_or_else(|| {

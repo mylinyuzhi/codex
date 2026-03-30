@@ -123,7 +123,7 @@ impl Tool for LspTool {
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
-        let manager = ctx.lsp_manager.as_ref().ok_or_else(|| {
+        let manager = ctx.services.lsp_manager.as_ref().ok_or_else(|| {
             tool_error::ExecutionFailedSnafu {
                 message: "LSP feature not enabled. No LSP server manager available.",
             }
@@ -151,7 +151,7 @@ impl Tool for LspTool {
         let character = input["character"].as_i64().map(|n| n as u32);
 
         // Build ignore checker for filtering cross-file results
-        let ignore_checker = build_ignore_checker(&ctx.cwd);
+        let ignore_checker = build_ignore_checker(&ctx.env.cwd);
 
         let result = match operation {
             "goToDefinition" => {
@@ -264,7 +264,7 @@ impl Tool for LspTool {
                 // For workspace symbol, we need any file to get a client
                 let path = file_path
                     .map(|p| ctx.resolve_path(p))
-                    .unwrap_or(ctx.cwd.clone());
+                    .unwrap_or(ctx.env.cwd.clone());
                 let client = manager
                     .get_client(&path)
                     .await

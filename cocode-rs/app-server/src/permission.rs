@@ -18,7 +18,7 @@ use cocode_protocol::ApprovalDecision;
 use cocode_protocol::ApprovalRequest;
 use cocode_protocol::CoreEvent;
 use cocode_protocol::TuiEvent;
-use cocode_tools::PermissionRequester;
+use cocode_tools_api::PermissionRequester;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;

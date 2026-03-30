@@ -157,6 +157,8 @@ fn test_client_request_session_start() {
         max_budget_cents: None,
         hooks: None,
         disable_builtin_agents: None,
+        prompt_suggestions: None,
+        permission_prompt_tool: None,
     }));
 
     let value: serde_json::Value = serde_json::to_value(&req).unwrap();

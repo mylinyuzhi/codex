@@ -89,6 +89,7 @@ fn test_render_with_permission_overlay() {
                 allow_remember: true,
                 proposed_prefix_pattern: None,
                 input: None,
+                source_agent_id: None,
             },
         )));
 

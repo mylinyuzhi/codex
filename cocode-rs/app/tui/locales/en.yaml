@@ -107,6 +107,10 @@ command.background_all_tasks: "Background All Tasks"
 # Kill agents
 command.kill_all_agents: "Kill All Agents"
 
+# Agent quick-switch
+command.focus_next_agent: "Focus Next Agent"
+command.focus_prev_agent: "Focus Previous Agent"
+
 # Tool collapse
 command.toggle_tool_collapse: "Toggle Tool Collapse"
 
@@ -118,6 +122,9 @@ command.toggle_fast_mode: "Toggle Fast Mode"
 
 # Permission mode
 command.cycle_permission_mode: "Cycle Permission Mode"
+
+# Accent color
+command.set_accent_color: "Set Accent Color"
 
 # Transcript mode
 command.toggle_transcript_mode: "Toggle Transcript Mode"
@@ -361,6 +368,13 @@ toast.background_task_started: "Background task started: %{task_type}"
 toast.background_task_completed: "Background task completed"
 toast.agents_killed: "%{count} agent(s) terminated"
 toast.killing_all_agents: "Killing all running agents..."
+toast.subagent_completed: "Agent '%{agent}' completed"
+toast.subagent_failed: "Agent '%{agent}' failed"
+toast.subagent_backgrounded: "Agent '%{agent}' moved to background"
+
+# Worktrees
+toast.worktree_entered: "Entered worktree: %{branch}"
+toast.worktree_exited: "Worktree %{action}: done"
 
 # API / retry
 toast.retry: "Retrying (%{attempt}/%{max})..."
@@ -385,6 +399,11 @@ toast.editor_error: "Editor error: %{error}"
 
 # Unsupported command
 toast.unsupported_command: "/%{name} is not yet supported in TUI."
+
+# Accent color
+toast.color_set: "Accent color set to %{color}"
+toast.color_reset: "Accent color reset to default"
+toast.color_invalid: "Invalid color: %{input}. Use a name (red, green, blue, cyan, magenta, gray)."
 
 # Slow query
 toast.slow_query: "Query took %{duration}s"
@@ -493,6 +512,7 @@ header.turn_count: "%{count} turns"
 header.compacting: "Compacting..."
 header.fallback: "Fallback: %{model}"
 header.worktrees: "Worktrees: %{count}"
+header.worktree_branch: "[wt:%{branch}]"
 
 # ============================================================
 # Status bar (additional)
@@ -531,6 +551,7 @@ subagent.title: "Subagents"
 subagent.running: "Running"
 subagent.completed: "Completed"
 subagent.backgrounded: "Backgrounded"
+subagent.killed: "Killed"
 subagent.step_progress: "Step %{current}/%{total}"
 subagent.more: "+%{count} more..."
 

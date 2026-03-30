@@ -45,15 +45,35 @@ impl AttachmentGenerator for AutoMemoryPromptGenerator {
 
         let memory_dir = state.memory_dir_str();
         let max_lines = state.config.max_lines;
+        let team_enabled = state.config.team_memory_enabled;
+        let extraction_enabled = state.config.memory_extraction_enabled;
 
-        // Select prompt variant based on agent role and memory extraction mode.
-        // - Subagents always get the read-only prompt (they shouldn't write memory).
-        // - When memory extraction is enabled, the main agent also gets read-only
-        //   because a background extraction agent handles saves.
-        // - Otherwise, the main agent gets the full read/write prompt.
-        let prompt = if !ctx.is_main_agent || state.config.memory_extraction_enabled {
-            cocode_auto_memory::build_background_agent_memory_prompt(&memory_dir, max_lines)
+        let prompt = if !ctx.is_main_agent || extraction_enabled {
+            // Subagents and extraction-mode main agents get read-only prompt.
+            if team_enabled {
+                let team_dir = state.team_memory_dir_str();
+                cocode_auto_memory::prompt::build_extract_mode_typed_combined_prompt(
+                    &memory_dir,
+                    &team_dir,
+                    max_lines,
+                )
+            } else {
+                cocode_auto_memory::build_background_agent_memory_prompt(&memory_dir, max_lines)
+            }
+        } else if team_enabled {
+            // Main agent with team memory — use combined prompt.
+            let team_dir = state.team_memory_dir_str();
+            let index = state.index().await;
+            let team_index = state.team_index().await;
+            cocode_auto_memory::prompt::build_typed_combined_memory_prompt(
+                &memory_dir,
+                &team_dir,
+                index.as_ref(),
+                team_index.as_ref(),
+                max_lines,
+            )
         } else {
+            // Main agent, single directory — standard prompt.
             let index = state.index().await;
             cocode_auto_memory::build_auto_memory_prompt(&memory_dir, index.as_ref(), max_lines)
         };

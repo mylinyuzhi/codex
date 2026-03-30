@@ -117,12 +117,13 @@ impl Tool for ReadManyFilesTool {
                         allow_remember: true,
                         proposed_prefix_pattern: None,
                         input: Some(input.clone()),
+                        source_agent_id: ctx.identity.agent_id.clone(),
                     },
                 };
             }
 
             // Outside working directory → NeedsApproval
-            if crate::sensitive_files::is_outside_cwd(&path, &ctx.cwd) {
+            if crate::sensitive_files::is_outside_cwd(&path, &ctx.env.cwd) {
                 return PermissionResult::NeedsApproval {
                     request: ApprovalRequest {
                         request_id: format!("outside-cwd-readmany-{}", path.display()),
@@ -135,6 +136,7 @@ impl Tool for ReadManyFilesTool {
                         allow_remember: true,
                         proposed_prefix_pattern: None,
                         input: Some(input.clone()),
+                        source_agent_id: ctx.identity.agent_id.clone(),
                     },
                 };
             }
@@ -231,13 +233,17 @@ impl Tool for ReadManyFilesTool {
                     .map(|d| d.as_millis() as i64)
             });
             let read_state = if !truncated {
-                FileReadState::complete_with_turn(content.clone(), file_mtime, ctx.turn_number)
+                FileReadState::complete_with_turn(
+                    content.clone(),
+                    file_mtime,
+                    ctx.identity.turn_number,
+                )
             } else {
                 FileReadState::partial_with_turn(
                     0,
                     MAX_LINES_PER_FILE as i64,
                     file_mtime,
-                    ctx.turn_number,
+                    ctx.identity.turn_number,
                 )
             };
             ctx.record_file_read_with_state(&path, read_state).await;

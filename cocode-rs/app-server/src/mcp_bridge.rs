@@ -19,9 +19,9 @@ use async_trait::async_trait;
 use cocode_protocol::ConcurrencySafety;
 use cocode_protocol::ToolOutput;
 use cocode_protocol::ToolResultContent;
-use cocode_tools::Tool;
-use cocode_tools::context::ToolContext;
-use cocode_tools::error::Result;
+use cocode_tools_api::Tool;
+use cocode_tools_api::context::ToolContext;
+use cocode_tools_api::error::Result;
 use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
@@ -173,7 +173,13 @@ pub struct SdkMcpToolWrapper {
 impl SdkMcpToolWrapper {
     /// Qualified name following the `mcp__<server>__<tool>` convention.
     pub fn qualified_name(&self) -> String {
-        format!("mcp__{}__{}", self.server_name, self.tool_name)
+        format!(
+            "{}{}{}{}",
+            cocode_protocol::MCP_TOOL_PREFIX,
+            self.server_name,
+            cocode_protocol::MCP_TOOL_SEPARATOR,
+            self.tool_name,
+        )
     }
 }
 
@@ -211,7 +217,7 @@ impl Tool for SdkMcpToolWrapper {
             .call(&self.server_name, &self.tool_name, input)
             .await
             .map_err(|e| {
-                cocode_tools::error::ToolError::execution_failed(format!(
+                cocode_tools_api::error::ToolError::execution_failed(format!(
                     "SDK MCP tool call failed: {e}"
                 ))
             })?;

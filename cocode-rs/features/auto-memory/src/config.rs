@@ -9,14 +9,15 @@ use cocode_protocol::AutoMemoryConfig;
 
 use crate::directory;
 
-// Environment variable names (matching cocode-config env_loader constants).
-// Defined locally to avoid a dependency on the config crate.
+// Environment variable names — config-only vars defined here,
+// shared vars imported from directory.rs (canonical definitions).
 const ENV_DISABLE_AUTO_MEMORY: &str = "COCODE_DISABLE_AUTO_MEMORY";
 const ENV_DISABLE_AUTO_MEMORY_COMPAT: &str = "CLAUDE_CODE_DISABLE_AUTO_MEMORY";
 const ENV_REMOTE: &str = "COCODE_REMOTE";
 const ENV_REMOTE_COMPAT: &str = "CLAUDE_CODE_REMOTE";
-const ENV_REMOTE_MEMORY_DIR: &str = "COCODE_REMOTE_MEMORY_DIR";
-const ENV_REMOTE_MEMORY_DIR_COMPAT: &str = "CLAUDE_CODE_REMOTE_MEMORY_DIR";
+use crate::directory::ENV_COWORK_MEMORY_PATH_OVERRIDE;
+use crate::directory::ENV_REMOTE_MEMORY_DIR;
+use crate::directory::ENV_REMOTE_MEMORY_DIR_COMPAT;
 
 /// Reason why auto memory is disabled.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,6 +67,16 @@ pub struct ResolvedAutoMemoryConfig {
     pub min_keyword_length: i32,
     /// Reason for being disabled (if not enabled).
     pub disable_reason: Option<DisableReason>,
+    /// Whether team memory is enabled.
+    pub team_memory_enabled: bool,
+    /// Team memory directory path ({auto_memory_dir}/team/).
+    pub team_memory_directory: PathBuf,
+    /// Maximum characters for MEMORY.md (soft limit, TUI warning only).
+    pub max_memory_chars: i64,
+    /// Whether cowork mode is active (disables write bypass).
+    pub is_cowork_mode: bool,
+    /// Model role for LLM-based memory selection.
+    pub memory_selection_model_role: cocode_protocol::ModelRole,
 }
 
 /// Resolve auto memory configuration.
@@ -88,6 +99,7 @@ pub fn resolve_auto_memory_config(
     feature_enabled: bool,
     relevant_memories_enabled: bool,
     memory_extraction_enabled: bool,
+    team_memory_enabled: bool,
 ) -> ResolvedAutoMemoryConfig {
     let (enabled, disable_reason) = resolve_enabled(json_config, feature_enabled);
     let dir = directory::get_auto_memory_directory(cwd, json_config.directory.as_deref());
@@ -95,6 +107,12 @@ pub fn resolve_auto_memory_config(
     // Sub-feature flags are only active when auto memory itself is enabled.
     let relevant_memories_enabled = enabled && relevant_memories_enabled;
     let memory_extraction_enabled = enabled && memory_extraction_enabled;
+    let team_memory_enabled = enabled && team_memory_enabled;
+
+    let team_memory_directory = directory::get_team_memory_directory(&dir);
+    let is_cowork_mode = std::env::var(ENV_COWORK_MEMORY_PATH_OVERRIDE)
+        .ok()
+        .is_some_and(|v| !v.is_empty());
 
     ResolvedAutoMemoryConfig {
         enabled,
@@ -111,6 +129,14 @@ pub fn resolve_auto_memory_config(
         max_files_to_scan: json_config.max_files_to_scan,
         min_keyword_length: json_config.min_keyword_length,
         disable_reason,
+        team_memory_enabled,
+        team_memory_directory,
+        max_memory_chars: json_config.max_memory_chars,
+        is_cowork_mode,
+        memory_selection_model_role: json_config
+            .memory_selection_model_role
+            .parse()
+            .unwrap_or(cocode_protocol::ModelRole::Fast),
     }
 }
 
