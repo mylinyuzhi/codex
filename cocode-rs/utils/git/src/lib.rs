@@ -7,6 +7,7 @@ mod errors;
 mod ghost_commits;
 mod operations;
 mod platform;
+mod worktree;
 
 // Basic git operations
 pub use operations::commit_all;
@@ -41,6 +42,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
+pub use worktree::cleanup_orphaned_worktrees;
 
 type CommitID = String;
 

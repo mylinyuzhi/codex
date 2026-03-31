@@ -324,12 +324,13 @@ impl Tool for ReadTool {
                     allow_remember: true,
                     proposed_prefix_pattern: None,
                     input: Some(input.clone()),
+                    source_agent_id: ctx.identity.agent_id.clone(),
                 },
             };
         }
 
         // Outside working directory → NeedsApproval
-        if crate::sensitive_files::is_outside_cwd(&path, &ctx.cwd) {
+        if crate::sensitive_files::is_outside_cwd(&path, &ctx.env.cwd) {
             return PermissionResult::NeedsApproval {
                 request: ApprovalRequest {
                     request_id: format!("outside-cwd-read-{}", path.display()),
@@ -342,6 +343,7 @@ impl Tool for ReadTool {
                     allow_remember: true,
                     proposed_prefix_pattern: None,
                     input: Some(input.clone()),
+                    source_agent_id: ctx.identity.agent_id.clone(),
                 },
             };
         }
@@ -407,7 +409,7 @@ impl Tool for ReadTool {
                         .await
                         .ok()
                         .and_then(|m| m.modified().ok()),
-                    ctx.turn_number,
+                    ctx.identity.turn_number,
                 ),
             )
             .await;
@@ -500,7 +502,7 @@ impl Tool for ReadTool {
                         .await
                         .ok()
                         .and_then(|m| m.modified().ok()),
-                    ctx.turn_number,
+                    ctx.identity.turn_number,
                 ),
             )
             .await;
@@ -534,7 +536,7 @@ impl Tool for ReadTool {
                         .await
                         .ok()
                         .and_then(|m| m.modified().ok()),
-                    ctx.turn_number,
+                    ctx.identity.turn_number,
                 ),
             )
             .await;
@@ -615,9 +617,9 @@ impl Tool for ReadTool {
         // Record file read with full state tracking
         use crate::context::FileReadState;
         let read_state = if is_complete {
-            FileReadState::complete_with_turn(content.clone(), file_mtime, ctx.turn_number)
+            FileReadState::complete_with_turn(content.clone(), file_mtime, ctx.identity.turn_number)
         } else {
-            FileReadState::partial_with_turn(offset, limit, file_mtime, ctx.turn_number)
+            FileReadState::partial_with_turn(offset, limit, file_mtime, ctx.identity.turn_number)
         };
         ctx.record_file_read_with_state(&path, read_state).await;
 

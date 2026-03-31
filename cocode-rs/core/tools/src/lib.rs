@@ -1,30 +1,10 @@
-//! cocode-tools - Tool execution layer for the agent system.
+//! cocode-tools - Builtin tool implementations for the agent system.
 //!
-//! This crate provides the tool system for the agent:
-//! - Tool trait with 5-stage pipeline and input-dependent concurrency
-//! - Tool registry (built-in + MCP)
-//! - Streaming tool executor
-//! - 18 built-in tools aligned with Claude Code v2.1.7
+//! This crate provides the 40+ builtin tools (Read, Write, Edit, Bash, etc.)
+//! and the `register_builtin_tools()` function for populating a `ToolRegistry`.
 //!
-//! # Architecture
-//!
-//! ```text
-//! ┌─────────────────────────────────────────────────────────────────┐
-//! │                        cocode-tools                             │
-//! ├─────────────────────────────────────────────────────────────────┤
-//! │  Tool Trait          │  ToolRegistry       │  Executor          │
-//! │  - validate()        │  - builtin tools    │  - concurrent exec │
-//! │  - check_permission()│  - MCP tools        │  - sequential exec │
-//! │  - execute()         │  - aliases          │  - abort handling  │
-//! │  - post_process()    │                     │                    │
-//! │  - cleanup()         │                     │                    │
-//! ├──────────────────────┴─────────────────────┴────────────────────┤
-//! │  Built-in Tools (18): Read, Glob, Grep, Edit, Write, Bash,      │
-//! │  Task, TaskOutput, KillShell, TodoWrite, EnterPlanMode,         │
-//! │  ExitPlanMode, AskUserQuestion, WebFetch, WebSearch, Skill,     │
-//! │  Lsp, ApplyPatch                                                │
-//! └─────────────────────────────────────────────────────────────────┘
-//! ```
+//! The Tool trait, ToolContext, ToolRegistry, and StreamingToolExecutor are
+//! provided by `cocode-tools-api` and re-exported here for convenience.
 //!
 //! # Quick Start
 //!
@@ -38,122 +18,14 @@
 //! let (team_store, mailbox) = create_default_team_stores();
 //! let mut registry = ToolRegistry::new();
 //! register_builtin_tools(&mut registry, &features, team_store, mailbox);
-//!
-//! // Create executor
-//! let config = ExecutorConfig::default();
-//! let executor = StreamingToolExecutor::new(Arc::new(registry), config, None);
-//!
-//! // During streaming - when tool_use block completes
-//! executor.on_tool_complete(tool_call).await;
-//!
-//! // After message_stop - execute pending unsafe tools
-//! executor.execute_pending_unsafe().await;
-//!
-//! // Get all results
-//! let results = executor.drain().await;
 //! ```
-//!
-//! # Implementing Custom Tools
-//!
-//! ```ignore
-//! use cocode_tools::{Tool, ToolContext, ToolOutput, ToolError};
-//! use async_trait::async_trait;
-//!
-//! struct MyTool;
-//!
-//! #[async_trait]
-//! impl Tool for MyTool {
-//!     fn name(&self) -> &str { "my_tool" }
-//!     fn description(&self) -> &str { "My custom tool" }
-//!     fn input_schema(&self) -> serde_json::Value {
-//!         serde_json::json!({
-//!             "type": "object",
-//!             "properties": {
-//!                 "input": {"type": "string"}
-//!             },
-//!             "required": ["input"]
-//!         })
-//!     }
-//!
-//!     async fn execute(
-//!         &self,
-//!         input: serde_json::Value,
-//!         ctx: &mut ToolContext,
-//!     ) -> Result<ToolOutput, ToolError> {
-//!         let value = input["input"].as_str().unwrap();
-//!         Ok(ToolOutput::text(format!("Processed: {value}")))
-//!     }
-//! }
-//! ```
-//!
-//! # Module Structure
-//!
-//! - [`error`] - Error types for tool execution
-//! - [`tool`] - Tool trait definition
-//! - [`context`] - Execution context and approvals
-//! - [`registry`] - Tool registry management
-//! - [`executor`] - Streaming tool executor
-//! - [`builtin`] - 17 built-in tools (Read, Glob, Grep, Edit, Write, Bash, Task, Lsp, etc.)
 
 pub mod builtin;
-pub mod context;
-pub mod error;
-pub mod executor;
-pub mod mcp_tool;
-pub mod registry;
-pub mod result_persistence;
-pub mod sensitive_files;
-pub mod tool;
 
-// Re-export from cocode-policy (permission types moved there)
-pub use cocode_policy::ApprovalStore;
-pub use cocode_policy::PermissionRule;
-pub use cocode_policy::PermissionRuleEvaluator;
-pub use cocode_policy::RuleAction;
-
-// Re-export main types at crate root
-pub use context::FileReadState;
-pub use context::FileTracker;
-pub use context::InvokedSkill;
-pub use context::ModelCallFn;
-pub use context::ModelCallInput;
-pub use context::ModelCallResult;
-pub use context::PermissionRequester;
-pub use context::QuestionResponder;
-pub use context::SpawnAgentFn;
-pub use context::SpawnAgentInput;
-pub use context::SpawnAgentResult;
-pub use context::ToolContext;
-pub use context::ToolContextBuilder;
-pub use error::Result;
-pub use error::ToolError;
-pub use executor::ExecutorConfig;
-pub use executor::StreamingToolExecutor;
-pub use executor::ToolExecutionResult;
-pub use mcp_tool::McpToolWrapper;
-pub use registry::McpToolInfo;
-pub use registry::ToolRegistry;
-pub use tool::Tool;
-pub use tool::ToolOutputExt;
-
-// Re-export commonly used types from dependencies
-pub use cocode_inference::ToolCall;
-pub use cocode_protocol::AbortReason;
-pub use cocode_protocol::ApprovalDecision;
-pub use cocode_protocol::ConcurrencySafety;
-pub use cocode_protocol::ContextModifier;
-pub use cocode_protocol::PermissionMode;
-pub use cocode_protocol::PermissionResult;
-pub use cocode_protocol::ToolOutput;
-pub use cocode_protocol::ToolResultContent;
-pub use cocode_protocol::ValidationResult;
-
-/// A tool definition for the API.
-///
-/// This is the Vercel AI SDK v4 function tool type (`LanguageModelFunctionTool`).
-/// Fields: `name`, `description: Option<String>`, `input_schema: JSONSchema`,
-/// `input_examples`, `strict`, `provider_options`.
-pub type ToolDefinition = cocode_inference::LanguageModelFunctionTool;
+// Re-export entire API surface from cocode-tools-api so that existing
+// `use cocode_tools::Foo` and `use cocode_tools::module::Bar` paths
+// continue to work without changes.
+pub use cocode_tools_api::*;
 
 /// Prelude module for convenient imports.
 pub mod prelude {
@@ -161,7 +33,6 @@ pub mod prelude {
     pub use crate::PermissionMode;
     pub use crate::ToolCall;
     pub use crate::ToolDefinition;
-    pub use crate::ToolOutput;
     pub use crate::builtin::builtin_tool_names;
     pub use crate::builtin::create_default_team_stores;
     pub use crate::builtin::register_builtin_tools;

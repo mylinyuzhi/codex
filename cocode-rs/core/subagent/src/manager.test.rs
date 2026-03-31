@@ -1,4 +1,5 @@
 use super::*;
+use crate::McpServerRef;
 
 fn test_definition(name: &str) -> AgentDefinition {
     AgentDefinition {
@@ -225,6 +226,70 @@ async fn test_foreground_does_not_count_toward_background_limit() {
     let mut bg_input = test_spawn_input("bash", "background task");
     bg_input.run_in_background = Some(true);
     mgr.spawn_full(bg_input).await.expect("background spawn");
+}
+
+// ── MCP server availability validation tests ──
+
+#[test]
+fn test_validate_mcp_servers_no_requirements() {
+    let def = test_definition("bash");
+    let empty = std::collections::HashSet::new();
+    assert!(SubagentManager::validate_mcp_servers(&def, &empty));
+}
+
+#[test]
+fn test_validate_mcp_servers_available() {
+    let available: std::collections::HashSet<String> = ["slack".to_string()].into_iter().collect();
+    let mut def = test_definition("slack-bot");
+    def.mcp_servers = Some(vec![McpServerRef {
+        name: "slack".to_string(),
+        transport: None,
+    }]);
+    assert!(SubagentManager::validate_mcp_servers(&def, &available));
+}
+
+#[test]
+fn test_validate_mcp_servers_unavailable() {
+    let mut def = test_definition("slack-bot");
+    def.mcp_servers = Some(vec![McpServerRef {
+        name: "slack".to_string(),
+        transport: None,
+    }]);
+    let empty = std::collections::HashSet::new();
+    assert!(!SubagentManager::validate_mcp_servers(&def, &empty));
+}
+
+#[test]
+fn test_available_definitions_filters() {
+    let mcp_github_tool = format!(
+        "{prefix}github{sep}search",
+        prefix = cocode_protocol::MCP_TOOL_PREFIX,
+        sep = cocode_protocol::MCP_TOOL_SEPARATOR,
+    );
+    let mut mgr = SubagentManager::new().with_tools(vec![
+        cocode_protocol::ToolName::Read.as_str().to_string(),
+        mcp_github_tool,
+    ]);
+    // Agent without MCP requirements — always available
+    mgr.register_agent_type(test_definition("bash"));
+    // Agent requiring github — available
+    let mut github_def = test_definition("github-bot");
+    github_def.mcp_servers = Some(vec![McpServerRef {
+        name: "github".to_string(),
+        transport: None,
+    }]);
+    mgr.register_agent_type(github_def);
+    // Agent requiring slack — NOT available
+    let mut slack_def = test_definition("slack-bot");
+    slack_def.mcp_servers = Some(vec![McpServerRef {
+        name: "slack".to_string(),
+        transport: None,
+    }]);
+    mgr.register_agent_type(slack_def);
+
+    let available = mgr.available_definitions();
+    let names: Vec<&str> = available.iter().map(|d| d.agent_type.as_str()).collect();
+    assert_eq!(names, vec!["bash", "github-bot"]);
 }
 
 // ── Lifecycle method tests ──
@@ -534,8 +599,9 @@ async fn test_gc_stale_removes_old_agents() {
     let id2 = mgr.spawn("bash", "t2").await.expect("spawn");
 
     // Both completed (stub). Set id1 completed_at to long ago.
-    mgr.agents.get_mut(&id1).expect("a").completed_at =
-        Some(std::time::Instant::now() - std::time::Duration::from_secs(600));
+    let a1 = mgr.agents.get_mut(&id1).expect("a");
+    a1.completed_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(600));
+    a1.parent_notified = true; // parent has seen it, eligible for GC
     // id2 completed just now (already set by stub)
 
     let removed = mgr.gc_stale(std::time::Duration::from_secs(300));
@@ -592,4 +658,114 @@ async fn test_kill_all_running_empty() {
 
     let killed = mgr.kill_all_running();
     assert!(killed.is_empty());
+}
+
+// ── mark_notified tests ──
+
+#[tokio::test]
+async fn test_mark_notified_sets_flag() {
+    let mut mgr = SubagentManager::new();
+    mgr.register_agent_type(test_definition("bash"));
+    let id = mgr.spawn("bash", "test").await.expect("spawn");
+
+    assert!(!mgr.agents.get(&id).expect("a").parent_notified);
+    assert!(mgr.mark_notified(&id));
+    assert!(mgr.agents.get(&id).expect("a").parent_notified);
+}
+
+#[test]
+fn test_mark_notified_unknown_returns_false() {
+    let mut mgr = SubagentManager::new();
+    assert!(!mgr.mark_notified("nonexistent"));
+}
+
+#[tokio::test]
+async fn test_gc_stale_keeps_unnotified_agents() {
+    let mut mgr = SubagentManager::new();
+    mgr.register_agent_type(test_definition("bash"));
+    let id = mgr.spawn("bash", "test").await.expect("spawn");
+
+    // Completed long ago but parent not notified — should be kept.
+    let a = mgr.agents.get_mut(&id).expect("a");
+    a.completed_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(600));
+    // parent_notified defaults to false
+
+    let removed = mgr.gc_stale(std::time::Duration::from_secs(300));
+    assert_eq!(removed, 0, "Unnotified agents should not be GC'd");
+    assert!(mgr.get_status(&id).is_some());
+}
+
+#[tokio::test]
+async fn test_agent_infos_includes_new_fields() {
+    let mut mgr = SubagentManager::new();
+    mgr.register_agent_type(test_definition("bash"));
+
+    let mut input = test_spawn_input("bash", "test");
+    input.run_in_background = Some(true);
+    let result = mgr.spawn_full(input).await.expect("spawn_full");
+
+    let infos = mgr.agent_infos();
+    let info = infos
+        .iter()
+        .find(|i| i.id == result.agent_id)
+        .expect("info");
+
+    assert!(
+        info.output_file.is_some(),
+        "Background agent should have output_file"
+    );
+    assert!(!info.parent_notified, "New agent should not be notified");
+}
+
+#[tokio::test]
+async fn test_read_deltas_returns_empty_when_no_output_files() {
+    let mut mgr = SubagentManager::new();
+    mgr.register_agent_type(test_definition("bash"));
+
+    // Foreground agent has no output file — read_deltas should be empty.
+    let _id = mgr.spawn("bash", "test").await.expect("spawn");
+    let deltas = mgr.read_deltas().await;
+    assert!(deltas.is_empty());
+}
+
+#[tokio::test]
+async fn test_read_deltas_reads_from_transcript() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mut mgr = SubagentManager::new();
+    mgr.register_agent_type(test_definition("bash"));
+
+    let mut input = test_spawn_input("bash", "test");
+    input.run_in_background = Some(true);
+    let result = mgr.spawn_full(input).await.expect("spawn_full");
+    let agent_id = result.agent_id.clone();
+
+    // Write a transcript entry to the output file.
+    let output_file = mgr
+        .agents
+        .get(&agent_id)
+        .expect("a")
+        .output_file
+        .clone()
+        .expect("file");
+    // Ensure parent directory
+    if let Some(parent) = output_file.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let entry = serde_json::json!({"type": "progress", "message": "doing work"});
+    std::fs::write(
+        &output_file,
+        format!("{}\n", serde_json::to_string(&entry).expect("json")),
+    )
+    .expect("write");
+
+    let deltas = mgr.read_deltas().await;
+    assert_eq!(deltas.len(), 1);
+    assert_eq!(deltas[0].0, agent_id);
+    assert!(deltas[0].1.contains("doing work"));
+
+    // Second read should return nothing (offset advanced).
+    let deltas2 = mgr.read_deltas().await;
+    assert!(deltas2.is_empty());
+
+    drop(tmp);
 }

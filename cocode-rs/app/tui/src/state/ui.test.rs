@@ -541,6 +541,7 @@ fn test_overlay_queue_agent_driven_queued() {
         allow_remember: true,
         proposed_prefix_pattern: None,
         input: None,
+        source_agent_id: None,
     };
     ui.set_overlay(Overlay::Permission(PermissionOverlay::new(request1)));
     assert!(matches!(ui.overlay, Some(Overlay::Permission(_))));
@@ -554,6 +555,7 @@ fn test_overlay_queue_agent_driven_queued() {
         allow_remember: true,
         proposed_prefix_pattern: None,
         input: None,
+        source_agent_id: None,
     };
     ui.set_overlay(Overlay::Permission(PermissionOverlay::new(request2)));
     assert_eq!(ui.queued_overlay_count(), 1);
@@ -581,6 +583,7 @@ fn test_overlay_user_displaces_agent() {
         allow_remember: true,
         proposed_prefix_pattern: None,
         input: None,
+        source_agent_id: None,
     };
     ui.set_overlay(Overlay::Permission(PermissionOverlay::new(request)));
 
@@ -667,6 +670,7 @@ fn test_higher_priority_agent_queues_displaced() {
         allow_remember: true,
         proposed_prefix_pattern: None,
         input: None,
+        source_agent_id: None,
     };
     ui.set_overlay(Overlay::Permission(PermissionOverlay::new(request)));
 
@@ -695,6 +699,7 @@ fn test_promoted_permission_re_pauses_timing() {
         allow_remember: true,
         proposed_prefix_pattern: None,
         input: None,
+        source_agent_id: None,
     };
     ui.set_overlay(Overlay::Permission(PermissionOverlay::new(request_a)));
     assert!(ui.query_timing.is_paused());
@@ -708,6 +713,7 @@ fn test_promoted_permission_re_pauses_timing() {
         allow_remember: true,
         proposed_prefix_pattern: None,
         input: None,
+        source_agent_id: None,
     };
     ui.set_overlay(Overlay::Permission(PermissionOverlay::new(request_b)));
     assert_eq!(ui.queued_overlay_count(), 1);
@@ -738,6 +744,7 @@ fn test_timing_not_paused_when_overlay_queued_by_gate() {
         allow_remember: true,
         proposed_prefix_pattern: None,
         input: None,
+        source_agent_id: None,
     };
     ui.set_overlay(Overlay::Permission(PermissionOverlay::new(request)));
     assert_eq!(ui.queued_overlay_count(), 1);

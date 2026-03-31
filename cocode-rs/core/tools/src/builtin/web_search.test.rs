@@ -178,7 +178,10 @@ fn test_web_search_config_via_context() {
         api_key: Some("test-key".to_string()),
     };
     let mut ctx = make_context();
-    ctx.web_search_config = config;
-    assert_eq!(ctx.web_search_config.provider, WebSearchProvider::Tavily);
-    assert_eq!(ctx.web_search_config.max_results, 10);
+    ctx.env.web_search_config = config;
+    assert_eq!(
+        ctx.env.web_search_config.provider,
+        WebSearchProvider::Tavily
+    );
+    assert_eq!(ctx.env.web_search_config.max_results, 10);
 }

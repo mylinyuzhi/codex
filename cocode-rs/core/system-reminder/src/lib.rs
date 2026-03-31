@@ -102,8 +102,8 @@ pub use history_file_read_state::merge_file_read_state;
 pub use history_file_read_state::ReadFileState;
 pub use history_file_read_state::ReadStateKind;
 // Re-export FileTracker from cocode-tools (unified file tracking)
-pub use cocode_tools::FileReadState;
-pub use cocode_tools::FileTracker;
+pub use cocode_tools_api::FileReadState;
+pub use cocode_tools_api::FileTracker;
 pub use generator::ApprovedPlanInfo;
 pub use generator::AsyncHookResponseInfo;
 pub use generator::AttachmentGenerator;
@@ -177,5 +177,5 @@ pub mod prelude {
     pub use crate::types::XmlTag;
     pub use crate::xml::wrap_system_reminder;
     // Re-export FileTracker from cocode-tools
-    pub use cocode_tools::FileTracker;
+    pub use cocode_tools_api::FileTracker;
 }

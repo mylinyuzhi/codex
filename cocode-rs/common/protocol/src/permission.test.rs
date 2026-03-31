@@ -105,6 +105,7 @@ fn test_permission_result_methods() {
             allow_remember: false,
             proposed_prefix_pattern: None,
             input: None,
+            source_agent_id: None,
         },
     };
     assert!(!needs_approval.is_allowed());
@@ -235,6 +236,7 @@ fn test_approval_request_proposed_prefix_pattern() {
         allow_remember: true,
         proposed_prefix_pattern: None,
         input: None,
+        source_agent_id: None,
     };
     let json = serde_json::to_string(&request).unwrap();
     assert!(!json.contains("proposed_prefix_pattern"));
@@ -248,6 +250,7 @@ fn test_approval_request_proposed_prefix_pattern() {
         allow_remember: true,
         proposed_prefix_pattern: Some("git *".to_string()),
         input: None,
+        source_agent_id: None,
     };
     let json = serde_json::to_string(&request).unwrap();
     assert!(json.contains("proposed_prefix_pattern"));

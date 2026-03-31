@@ -285,10 +285,11 @@ impl Tool for BashTool {
             super::input_helpers::bool_or(input, "dangerouslyDisableSandbox", false);
         let effective_bypass = bypass_requested
             && ctx
+                .services
                 .sandbox_state
                 .as_ref()
                 .is_some_and(|s| s.settings().allow_unsandboxed_commands);
-        if let Some(ref state) = ctx.sandbox_state
+        if let Some(ref state) = ctx.services.sandbox_state
             && state.auto_allow_enabled()
             && !effective_bypass
             && state.should_sandbox_command(command, cocode_sandbox::SandboxBypass::No)
@@ -297,7 +298,7 @@ impl Tool for BashTool {
         }
 
         // Plan mode: only allow read-only commands.
-        if ctx.is_plan_mode {
+        if ctx.env.is_plan_mode {
             if is_plan_mode_allowed(command) {
                 return PermissionResult::Allowed;
             }
@@ -362,6 +363,7 @@ impl Tool for BashTool {
                         allow_remember: true,
                         proposed_prefix_pattern: None,
                         input: Some(input.clone()),
+                        source_agent_id: ctx.identity.agent_id.clone(),
                     },
                 };
             }
@@ -381,6 +383,7 @@ impl Tool for BashTool {
                         allow_remember: true,
                         proposed_prefix_pattern: None,
                         input: Some(input.clone()),
+                        source_agent_id: ctx.identity.agent_id.clone(),
                     },
                 };
             }
@@ -403,6 +406,7 @@ impl Tool for BashTool {
                 allow_remember: true,
                 proposed_prefix_pattern: None,
                 input: Some(input.clone()),
+                source_agent_id: ctx.identity.agent_id.clone(),
             },
         }
     }
@@ -431,6 +435,7 @@ impl Tool for BashTool {
         // Background execution — delegate to ShellExecutor
         if run_in_background {
             let task_id = ctx
+                .services
                 .shell_executor
                 .spawn_background(command)
                 .await
@@ -446,11 +451,12 @@ impl Tool for BashTool {
 
         // Foreground execution — delegate to ShellExecutor with backgrounding support
         match ctx
+            .services
             .shell_executor
             .execute_backgroundable_with_cwd_tracking(
                 command,
                 timeout_secs,
-                &ctx.call_id,
+                &ctx.identity.call_id,
                 sandbox_bypass,
             )
             .await
@@ -460,13 +466,13 @@ impl Tool for BashTool {
                 if result.exit_code == 0
                     && let Some(ref new_cwd) = result.new_cwd
                 {
-                    ctx.cwd = new_cwd.clone();
+                    ctx.env.cwd = new_cwd.clone();
                 }
 
                 // Annotate sandbox violations in stderr using XML tags so the
                 // model can machine-parse them distinct from normal output.
                 if result.sandboxed
-                    && let Some(ref state) = ctx.sandbox_state
+                    && let Some(ref state) = ctx.services.sandbox_state
                 {
                     let store = state.violations().lock().await;
                     let recent = store.recent(10);

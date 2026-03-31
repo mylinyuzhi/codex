@@ -136,11 +136,9 @@ pub fn action_to_command(action: &Action, state: &AppState) -> Option<TuiCommand
         | Action::AttachmentsExit => None, // not yet implemented
 
         // ===== Footer =====
-        Action::FooterNext
-        | Action::FooterPrevious
-        | Action::FooterSelect
-        | Action::FooterOpenSelected
-        | Action::FooterClearSelection => None, // not yet implemented
+        Action::FooterNext => Some(TuiCommand::FocusNextAgent),
+        Action::FooterPrevious => Some(TuiCommand::FocusPrevAgent),
+        Action::FooterSelect | Action::FooterOpenSelected | Action::FooterClearSelection => None, // not yet implemented
 
         // ===== Message Selector =====
         Action::MessageSelectorNext | Action::MessageSelectorDown => Some(TuiCommand::CursorDown),

@@ -226,7 +226,7 @@ async fn test_invoked_skill_tracked() {
     });
 
     tool.execute(input, &mut ctx).await.unwrap();
-    let invoked = ctx.invoked_skills.lock().await;
+    let invoked = ctx.state.invoked_skills.lock().await;
     assert_eq!(invoked.len(), 1);
     assert_eq!(invoked[0].name, "commit");
     assert!(!invoked[0].prompt_content.is_empty());

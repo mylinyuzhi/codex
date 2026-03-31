@@ -1,0 +1,44 @@
+[package]
+name = "cocode-tools-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cocode-protocol.workspace = true
+cocode-policy.workspace = true
+cocode-error.workspace = true
+cocode-config.workspace = true
+cocode-inference.workspace = true
+cocode-hooks.workspace = true
+cocode-skill.workspace = true
+cocode-lsp.workspace = true
+cocode-sandbox.workspace = true
+cocode-shell.workspace = true
+cocode-mcp-types.workspace = true
+cocode-rmcp-client.workspace = true
+cocode-otel.workspace = true
+cocode-file-encoding.workspace = true
+cocode-file-backup.workspace = true
+cocode-plan-mode.workspace = true
+cocode-auto-memory.workspace = true
+cocode-utils-string.workspace = true
+async-trait.workspace = true
+futures = { workspace = true, default-features = false, features = ["alloc"] }
+lru.workspace = true
+sha2.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+snafu.workspace = true
+tokio = { workspace = true, features = ["sync", "time", "fs"] }
+tokio-util.workspace = true
+tracing.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "test-util"] }
+pretty_assertions.workspace = true
+
+[lints]
+workspace = true

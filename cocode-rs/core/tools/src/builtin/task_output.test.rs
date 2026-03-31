@@ -35,7 +35,8 @@ async fn test_task_output_tool_with_task() {
         completed: Arc::new(Notify::new()),
         cancel_token: tokio_util::sync::CancellationToken::new(),
     };
-    ctx.shell_executor
+    ctx.services
+        .shell_executor
         .background_registry
         .register("task-123".to_string(), process)
         .await;
@@ -75,11 +76,13 @@ async fn test_task_output_tool_completed_after_stop() {
         completed: Arc::new(Notify::new()),
         cancel_token: tokio_util::sync::CancellationToken::new(),
     };
-    ctx.shell_executor
+    ctx.services
+        .shell_executor
         .background_registry
         .register("task-stopped".to_string(), process)
         .await;
-    ctx.shell_executor
+    ctx.services
+        .shell_executor
         .background_registry
         .stop("task-stopped")
         .await;

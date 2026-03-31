@@ -130,6 +130,7 @@ impl Tool for TaskTool {
 
         // Parse optional fields, gated by BackgroundTasks feature flag
         let run_in_background = if ctx
+            .env
             .features
             .enabled(cocode_protocol::Feature::BackgroundTasks)
         {
@@ -160,7 +161,7 @@ impl Tool for TaskTool {
         }
 
         // Check Task(type) restrictions: only allow spawning permitted agent types
-        if let Some(ref restrictions) = ctx.task_type_restrictions
+        if let Some(ref restrictions) = ctx.env.task_type_restrictions
             && !restrictions.iter().any(|t| t == subagent_type)
         {
             return Err(crate::error::tool_error::InvalidInputSnafu {
@@ -174,11 +175,11 @@ impl Tool for TaskTool {
 
         // Execute SubagentStart hooks before spawning (non-blocking per CC semantics)
         let mut hook_additional_context: Option<String> = None;
-        if let Some(hooks) = &ctx.hook_registry {
+        if let Some(hooks) = &ctx.services.hook_registry {
             let hook_ctx = cocode_hooks::HookContext::new(
                 cocode_hooks::HookEventType::SubagentStart,
-                ctx.session_id.clone(),
-                ctx.cwd.clone(),
+                ctx.identity.session_id.clone(),
+                ctx.env.cwd.clone(),
             )
             .with_agent_type(subagent_type)
             .with_metadata("description", description);
@@ -218,7 +219,7 @@ impl Tool for TaskTool {
             max_turns,
             run_in_background,
             allowed_tools,
-            parent_selections: ctx.parent_selections.clone(),
+            parent_selections: ctx.agent.parent_selections.clone(),
             permission_mode: None, // Resolved by driver from AgentDefinition
             resume_from,
             isolation,
@@ -234,7 +235,8 @@ impl Tool for TaskTool {
             Ok(result) => {
                 // Register cancel token so TaskStop can cancel this agent by ID
                 if let Some(token) = result.cancel_token.clone() {
-                    ctx.agent_cancel_tokens
+                    ctx.agent
+                        .agent_cancel_tokens
                         .lock()
                         .await
                         .insert(result.agent_id.clone(), token);
@@ -288,11 +290,11 @@ impl Tool for TaskTool {
 
                     let mut stop_blocked = false;
                     let mut stop_reason = String::new();
-                    if let Some(hooks) = &ctx.hook_registry {
+                    if let Some(hooks) = &ctx.services.hook_registry {
                         let hook_ctx = cocode_hooks::HookContext::new(
                             cocode_hooks::HookEventType::SubagentStop,
-                            ctx.session_id.clone(),
-                            ctx.cwd.clone(),
+                            ctx.identity.session_id.clone(),
+                            ctx.env.cwd.clone(),
                         )
                         .with_agent_type(subagent_type)
                         .with_agent_id(result.agent_id.clone())
@@ -327,6 +329,7 @@ impl Tool for TaskTool {
                                     cocode_protocol::server_notification::SubagentCompletedParams {
                                         agent_id: result.agent_id.clone(),
                                         result: output.clone(),
+                                        is_error: false,
                                     },
                                 ),
                             ),
@@ -334,11 +337,11 @@ impl Tool for TaskTool {
                         .await;
 
                         // Fire TaskCompleted hooks
-                        if let Some(hooks) = &ctx.hook_registry {
+                        if let Some(hooks) = &ctx.services.hook_registry {
                             let hook_ctx = cocode_hooks::HookContext::new(
                                 cocode_hooks::HookEventType::TaskCompleted,
-                                ctx.session_id.clone(),
-                                ctx.cwd.clone(),
+                                ctx.identity.session_id.clone(),
+                                ctx.env.cwd.clone(),
                             )
                             .with_task_id(&result.agent_id)
                             .with_task_subject(description);

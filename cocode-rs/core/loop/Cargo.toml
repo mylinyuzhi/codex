@@ -8,6 +8,7 @@ license.workspace = true
 cocode-protocol.workspace = true
 cocode-policy.workspace = true
 cocode-inference.workspace = true
+cocode-tools-api.workspace = true
 cocode-tools.workspace = true
 cocode-sandbox.workspace = true
 cocode-shell.workspace = true

@@ -94,6 +94,9 @@ NOTIFICATION_ACCESSORS = {
     "agents/registered": ("as_agents_registered", "AgentsRegisteredParams"),
     # ── Hook ───────────────────────────────────────────────────────────
     "hook/executed": ("as_hook_executed", "HookExecutedParams"),
+    # ── Worktree events ───────────────────────────────────────────────
+    "worktree/entered": ("as_worktree_entered", "WorktreeEnteredParams"),
+    "worktree/exited": ("as_worktree_exited", "WorktreeExitedParams"),
     # ── Summarize ──────────────────────────────────────────────────────
     "summarize/completed": ("as_summarize_completed", "SummarizeCompletedParams"),
     "summarize/failed": ("as_summarize_failed", "SummarizeFailedParams"),

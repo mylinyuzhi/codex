@@ -1,5 +1,6 @@
 //! Agent loop driver for multi-turn conversations with LLM providers.
 
+pub mod auto_memory_extraction;
 mod compaction;
 mod driver;
 mod error;

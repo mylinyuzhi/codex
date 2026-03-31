@@ -109,6 +109,10 @@ pub enum Feature {
     RelevantMemories,
     /// Enable background memory extraction agent.
     MemoryExtraction,
+    /// Enable team memory (shared memory across organization members).
+    /// Adds a `team/` subdirectory under the auto memory directory
+    /// with its own MEMORY.md index and topic files.
+    TeamMemory,
     /// Enable user-customizable keybindings via `keybindings.json`.
     KeybindingCustomization,
     /// Enable IDE integration (MCP connection to IDE extensions).
@@ -194,6 +198,9 @@ impl Features {
             self.enable(Feature::AutoMemory);
         }
         if self.enabled(Feature::MemoryExtraction) && !self.enabled(Feature::AutoMemory) {
+            self.enable(Feature::AutoMemory);
+        }
+        if self.enabled(Feature::TeamMemory) && !self.enabled(Feature::AutoMemory) {
             self.enable(Feature::AutoMemory);
         }
         if self.enabled(Feature::WindowsSandboxElevated) && !self.enabled(Feature::WindowsSandbox) {
@@ -374,6 +381,12 @@ const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::MemoryExtraction,
         key: "memory_extraction",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::TeamMemory,
+        key: "team_memory",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

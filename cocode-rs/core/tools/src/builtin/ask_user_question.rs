@@ -207,8 +207,8 @@ impl Tool for AskUserQuestionTool {
         ctx.emit_progress("Asking user a question").await;
 
         // Use question responder for interactive TUI flow
-        if let Some(responder) = &ctx.question_responder {
-            let request_id = ctx.call_id.clone();
+        if let Some(responder) = &ctx.services.question_responder {
+            let request_id = ctx.identity.call_id.clone();
             let rx = responder.register(request_id.clone());
 
             // Inject extra options to each question:
@@ -221,7 +221,7 @@ impl Tool for AskUserQuestionTool {
                         "label": CHAT_ABOUT_THIS_LABEL,
                         "description": "Request clarification or provide additional context before answering."
                     }));
-                    if ctx.is_plan_mode {
+                    if ctx.env.is_plan_mode {
                         opts.push(serde_json::json!({
                             "label": SKIP_INTERVIEW_LABEL,
                             "description": "Skip these questions and proceed directly to planning."
