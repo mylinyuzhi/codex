@@ -13,7 +13,7 @@
 //!
 //! # Types
 //!
-//! - `ReadFileState`: Alias for `cocode_tools::FileReadState` - file read state snapshot
+//! - `ReadFileState`: Alias for `cocode_tools_api::FileReadState` - file read state snapshot
 //! - `ReadStateKind`: Alias for `cocode_protocol::FileReadKind` - read operation type
 //! - `FileReadStateEntry`: Entry tuple (path, state) for collections
 
@@ -23,7 +23,7 @@ use std::time::SystemTime;
 
 use cocode_protocol::ContextModifier;
 use cocode_protocol::FileReadKind;
-use cocode_tools::FileReadState;
+use cocode_tools_api::FileReadState;
 
 // Use shared policy functions from this crate
 use crate::file_read_tracking_policy::is_read_state_source_tool;
@@ -35,7 +35,7 @@ use crate::file_read_tracking_policy::is_stronger_kind;
 
 /// Alias for file read state, matching reference branch API.
 ///
-/// This is the same as `cocode_tools::FileReadState` but re-exported
+/// This is the same as `cocode_tools_api::FileReadState` but re-exported
 /// here for convenience and API consistency with the reference branch.
 pub type ReadFileState = FileReadState;
 

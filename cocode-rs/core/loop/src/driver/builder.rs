@@ -21,11 +21,11 @@ use cocode_skill::SkillManager;
 use cocode_system_reminder::QueuedCommandInfo;
 use cocode_system_reminder::SystemReminderConfig;
 use cocode_system_reminder::SystemReminderOrchestrator;
-use cocode_tools::FileReadState;
-use cocode_tools::FileTracker;
-use cocode_tools::PermissionRequester;
-use cocode_tools::SpawnAgentFn;
-use cocode_tools::ToolRegistry;
+use cocode_tools_api::FileReadState;
+use cocode_tools_api::FileTracker;
+use cocode_tools_api::PermissionRequester;
+use cocode_tools_api::SpawnAgentFn;
+use cocode_tools_api::ToolRegistry;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -55,6 +55,8 @@ pub struct AgentLoopBuilder {
     hooks: Option<Arc<HookRegistry>>,
     cancel_token: CancellationToken,
     extraction_agent: Option<Arc<SessionMemoryExtractionAgent>>,
+    auto_memory_extraction:
+        Option<Arc<crate::auto_memory_extraction::AutoMemoryExtractionCoordinator>>,
     is_subagent: bool,
     custom_system_prompt: Option<String>,
     system_prompt_suffix: Option<String>,
@@ -77,7 +79,7 @@ pub struct AgentLoopBuilder {
     lsp_manager: Option<Arc<cocode_lsp::LspServerManager>>,
     task_type_restrictions: Option<Vec<String>>,
     snapshot_manager: Option<Arc<cocode_file_backup::SnapshotManager>>,
-    question_responder: Option<Arc<cocode_tools::QuestionResponder>>,
+    question_responder: Option<Arc<cocode_tools_api::QuestionResponder>>,
     approval_store: Option<Arc<tokio::sync::Mutex<ApprovalStore>>>,
     /// Initial file tracker state for session resumption.
     /// Vector of (path, read_state) pairs to restore into the FileTracker.
@@ -86,12 +88,14 @@ pub struct AgentLoopBuilder {
     reminder_file_tracker_state: Vec<(std::path::PathBuf, FileReadState)>,
     cocode_home: Option<std::path::PathBuf>,
     /// Shared set of agent IDs killed via TaskStop (persists across turns).
-    killed_agents: cocode_tools::context::KilledAgents,
+    killed_agents: cocode_tools_api::context::KilledAgents,
     /// Optional permission requester for interactive approval flow (SDK mode).
     permission_requester: Option<Arc<dyn PermissionRequester>>,
     /// Previous turn's role selections for detecting provider/model switches.
     /// `None` on the first turn of a session.
     previous_selections: Option<RoleSelections>,
+    /// Agent-specific memory directories for @agent-name search in system reminders.
+    agent_memory_dirs: std::collections::HashMap<String, std::path::PathBuf>,
 }
 
 impl AgentLoopBuilder {
@@ -121,6 +125,7 @@ impl AgentLoopBuilder {
             hooks: None,
             cancel_token: CancellationToken::new(),
             extraction_agent: None,
+            auto_memory_extraction: None,
             is_subagent: false,
             custom_system_prompt: None,
             system_prompt_suffix: None,
@@ -150,6 +155,7 @@ impl AgentLoopBuilder {
             killed_agents: Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new())),
             permission_requester: None,
             previous_selections: None,
+            agent_memory_dirs: std::collections::HashMap::new(),
         }
     }
 
@@ -193,6 +199,18 @@ impl AgentLoopBuilder {
     /// Set the background session memory extraction agent.
     pub fn extraction_agent(mut self, agent: Arc<SessionMemoryExtractionAgent>) -> Self {
         self.extraction_agent = Some(agent);
+        self
+    }
+
+    /// Set the auto memory extraction coordinator.
+    ///
+    /// This coordinator manages fire-and-forget extraction of persistent
+    /// memories after each agent turn. Distinct from session memory extraction.
+    pub fn auto_memory_extraction(
+        mut self,
+        coordinator: Arc<crate::auto_memory_extraction::AutoMemoryExtractionCoordinator>,
+    ) -> Self {
+        self.auto_memory_extraction = Some(coordinator);
         self
     }
 
@@ -367,7 +385,10 @@ impl AgentLoopBuilder {
     }
 
     /// Set the question responder for AskUserQuestion tool.
-    pub fn question_responder(mut self, responder: Arc<cocode_tools::QuestionResponder>) -> Self {
+    pub fn question_responder(
+        mut self,
+        responder: Arc<cocode_tools_api::QuestionResponder>,
+    ) -> Self {
         self.question_responder = Some(responder);
         self
     }
@@ -399,7 +420,7 @@ impl AgentLoopBuilder {
     }
 
     /// Set the shared killed agents registry (persists across turns).
-    pub fn killed_agents(mut self, killed: cocode_tools::context::KilledAgents) -> Self {
+    pub fn killed_agents(mut self, killed: cocode_tools_api::context::KilledAgents) -> Self {
         self.killed_agents = killed;
         self
     }
@@ -413,6 +434,15 @@ impl AgentLoopBuilder {
     /// Set the previous turn's role selections for switch detection.
     pub fn previous_selections(mut self, selections: RoleSelections) -> Self {
         self.previous_selections = Some(selections);
+        self
+    }
+
+    /// Set agent-specific memory directories for @agent-name search in system reminders.
+    pub fn agent_memory_dirs(
+        mut self,
+        dirs: std::collections::HashMap<String, std::path::PathBuf>,
+    ) -> Self {
+        self.agent_memory_dirs = dirs;
         self
     }
 
@@ -486,6 +516,23 @@ impl AgentLoopBuilder {
         let (extraction_result_tx, extraction_result_rx) =
             mpsc::channel::<crate::session_memory_agent::ExtractionOutcome>(4);
 
+        // Auto-create coordinator from auto_memory_state if not explicitly provided.
+        // This enables the builder to wire up extraction without the caller needing
+        // to manually create the coordinator when auto_memory_state is available.
+        let auto_memory_extraction = self.auto_memory_extraction.or_else(|| {
+            self.auto_memory_state.as_ref().and_then(|state| {
+                if state.config.memory_extraction_enabled {
+                    Some(
+                        crate::auto_memory_extraction::AutoMemoryExtractionCoordinator::new_arc(
+                            state.config.directory.clone(),
+                        ),
+                    )
+                } else {
+                    None
+                }
+            })
+        });
+
         AgentLoop {
             api_client: self.api_client,
             model_hub: self.model_hub,
@@ -510,6 +557,7 @@ impl AgentLoopBuilder {
             extraction_agent: self.extraction_agent,
             extraction_result_rx,
             extraction_result_tx,
+            auto_memory_extraction,
             compact_failure_count: 0,
             circuit_breaker_open: false,
             is_subagent: self.is_subagent,
@@ -545,12 +593,13 @@ impl AgentLoopBuilder {
             snapshot_manager: self.snapshot_manager,
             question_responder: self
                 .question_responder
-                .unwrap_or_else(|| Arc::new(cocode_tools::QuestionResponder::new())),
+                .unwrap_or_else(|| Arc::new(cocode_tools_api::QuestionResponder::new())),
             pending_compacted_large_files: Vec::new(),
             cocode_home: self.cocode_home,
             background_agent_tasks: Vec::new(),
             killed_agents: self.killed_agents,
             permission_requester: self.permission_requester,
+            agent_memory_dirs: self.agent_memory_dirs,
         }
     }
 }

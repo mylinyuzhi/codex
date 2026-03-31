@@ -38,6 +38,9 @@ pub struct SessionState {
     /// Active subagent instances.
     pub subagents: Vec<SubagentInstance>,
 
+    /// Active team info (if agent is part of a team).
+    pub team: Option<TeamInfo>,
+
     /// Total token usage for the session.
     pub token_usage: TokenUsage,
 
@@ -82,8 +85,8 @@ pub struct SessionState {
     /// Current turn number (set by TurnStarted, used for message tagging).
     pub current_turn_number: Option<i32>,
 
-    /// Active worktree count (for header display).
-    pub active_worktrees: i32,
+    /// Active worktree paths (count derived via `.len()`, branch via `.last()`).
+    pub active_worktree_paths: Vec<WorktreeInfo>,
 
     /// Active background tasks.
     pub background_tasks: Vec<BackgroundTask>,
@@ -93,6 +96,15 @@ pub struct SessionState {
 
     /// Whether fast mode is active.
     pub fast_mode: bool,
+
+    /// Whether bypass-permissions mode is available for this session.
+    ///
+    /// Set to `true` when the session was launched with `--dangerously-skip-permissions`.
+    /// Gates the ClearAndBypass option in the plan exit dialog and Bypass in mode cycling.
+    pub bypass_available: bool,
+
+    /// Index of the currently focused subagent in the panel (for quick-switch).
+    pub focused_subagent_index: Option<i32>,
 
     /// Whether sandbox mode is active.
     pub sandbox_active: bool,
@@ -250,6 +262,15 @@ impl SessionState {
         }
     }
 
+    /// Look up a subagent's type name by ID, falling back to `"agent"`.
+    pub fn subagent_type_name(&self, agent_id: &str) -> String {
+        self.subagents
+            .iter()
+            .find(|s| s.id == agent_id)
+            .map(|s| s.agent_type.clone())
+            .unwrap_or_else(|| "agent".to_string())
+    }
+
     /// Start a new subagent.
     pub fn start_subagent(
         &mut self,
@@ -278,16 +299,6 @@ impl SessionState {
         }
     }
 
-    /// Update subagent progress from protocol message string.
-    pub fn update_subagent_progress_msg(&mut self, agent_id: &str, message: String) {
-        if let Some(subagent) = self.subagents.iter_mut().find(|s| s.id == agent_id) {
-            subagent.progress = Some(AgentProgress {
-                message: Some(message),
-                ..Default::default()
-            });
-        }
-    }
-
     /// Complete a subagent.
     pub fn complete_subagent(&mut self, agent_id: &str, result: String) {
         if let Some(subagent) = self.subagents.iter_mut().find(|s| s.id == agent_id) {
@@ -304,12 +315,43 @@ impl SessionState {
         }
     }
 
+    /// Kill a subagent (mark as killed by user action).
+    pub fn kill_subagent(&mut self, agent_id: &str) {
+        if let Some(subagent) = self.subagents.iter_mut().find(|s| s.id == agent_id) {
+            subagent.status = SubagentStatus::Killed;
+        }
+    }
+
     /// Move a subagent to background.
     pub fn background_subagent(&mut self, agent_id: &str, output_file: PathBuf) {
         if let Some(subagent) = self.subagents.iter_mut().find(|s| s.id == agent_id) {
             subagent.status = SubagentStatus::Backgrounded;
             subagent.output_file = Some(output_file);
         }
+    }
+
+    /// Focus the next subagent in the panel (wraps around).
+    pub fn focus_next_subagent(&mut self) {
+        if self.subagents.is_empty() {
+            return;
+        }
+        let max = self.subagents.len() as i32 - 1;
+        self.focused_subagent_index = Some(match self.focused_subagent_index {
+            Some(i) if i < max => i + 1,
+            _ => 0,
+        });
+    }
+
+    /// Focus the previous subagent in the panel (wraps around).
+    pub fn focus_prev_subagent(&mut self) {
+        if self.subagents.is_empty() {
+            return;
+        }
+        let max = self.subagents.len() as i32 - 1;
+        self.focused_subagent_index = Some(match self.focused_subagent_index {
+            Some(i) if i > 0 => i - 1,
+            _ => max,
+        });
     }
 
     /// Check if there are any running subagents.
@@ -319,12 +361,12 @@ impl SessionState {
             .any(|s| s.status == SubagentStatus::Running)
     }
 
-    /// Remove completed/failed subagents older than a certain threshold.
+    /// Remove terminal subagents older than a certain threshold.
     pub fn cleanup_completed_subagents(&mut self, max_completed: usize) {
         let completed_count = self
             .subagents
             .iter()
-            .filter(|s| matches!(s.status, SubagentStatus::Completed | SubagentStatus::Failed))
+            .filter(|s| s.status.is_terminal())
             .count();
 
         if completed_count > max_completed {
@@ -334,12 +376,21 @@ impl SessionState {
                 if removed >= to_remove {
                     return true;
                 }
-                if matches!(s.status, SubagentStatus::Completed | SubagentStatus::Failed) {
+                if s.status.is_terminal() {
                     removed += 1;
                     return false;
                 }
                 true
             });
+            if let Some(idx) = self.focused_subagent_index
+                && idx >= self.subagents.len() as i32
+            {
+                self.focused_subagent_index = if self.subagents.is_empty() {
+                    None
+                } else {
+                    Some(self.subagents.len() as i32 - 1)
+                };
+            }
         }
     }
 
@@ -567,6 +618,9 @@ pub struct ChatMessage {
     /// Whether this is a meta message (hidden from chat, visible to model).
     /// System reminders and injected context use this flag.
     pub is_meta: bool,
+
+    /// Category label for meta messages (e.g., "ChangedFiles", "PlanMode").
+    pub meta_category: Option<String>,
 }
 
 /// An inline tool call displayed within a chat message.
@@ -596,6 +650,7 @@ impl ChatMessage {
             tool_calls: Vec::new(),
             turn_number: None,
             is_meta: false,
+            meta_category: None,
         }
     }
 
@@ -610,6 +665,7 @@ impl ChatMessage {
             tool_calls: Vec::new(),
             turn_number: None,
             is_meta: false,
+            meta_category: None,
         }
     }
 
@@ -624,6 +680,7 @@ impl ChatMessage {
             tool_calls: Vec::new(),
             turn_number: None,
             is_meta: false,
+            meta_category: None,
         }
     }
 
@@ -638,7 +695,14 @@ impl ChatMessage {
             tool_calls: Vec::new(),
             turn_number: None,
             is_meta: false,
+            meta_category: None,
         }
+    }
+
+    /// Set the meta category for this message.
+    pub fn with_meta_category(mut self, category: impl Into<String>) -> Self {
+        self.meta_category = Some(category.into());
+        self
     }
 
     /// Append content to the message.
@@ -681,6 +745,15 @@ pub enum ToolStatus {
     Failed,
 }
 
+/// Information about an active worktree.
+#[derive(Debug, Clone)]
+pub struct WorktreeInfo {
+    /// Absolute path to the worktree directory.
+    pub path: String,
+    /// Git branch associated with the worktree.
+    pub branch: String,
+}
+
 /// A tool execution in progress or completed.
 #[derive(Debug, Clone)]
 pub struct ToolExecution {
@@ -713,6 +786,15 @@ pub enum SubagentStatus {
     Failed,
     /// Subagent was moved to background.
     Backgrounded,
+    /// Subagent was explicitly killed by user action.
+    Killed,
+}
+
+impl SubagentStatus {
+    /// Whether this status represents a terminal (finished) state.
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Completed | Self::Failed | Self::Killed)
+    }
 }
 
 /// Phase of plan mode workflow.
@@ -797,6 +879,65 @@ pub struct SubagentInstance {
     pub color: Option<String>,
     /// When this subagent was spawned.
     pub started_at: Instant,
+}
+
+// ============================================================================
+// Team Member State
+// ============================================================================
+
+/// Runtime status of a team member (mirrored from `cocode_team::MemberStatus`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TeamMemberStatus {
+    /// Agent is actively processing work.
+    Active,
+    /// Agent has finished current work and is awaiting new tasks.
+    Idle,
+    /// Shutdown has been requested but not yet completed.
+    ShuttingDown,
+    /// Agent has stopped executing.
+    Stopped,
+}
+
+impl std::fmt::Display for TeamMemberStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Active => write!(f, "active"),
+            Self::Idle => write!(f, "idle"),
+            Self::ShuttingDown => write!(f, "shutting down"),
+            Self::Stopped => write!(f, "stopped"),
+        }
+    }
+}
+
+/// A team member entry for TUI display.
+#[derive(Debug, Clone)]
+pub struct TeamMemberEntry {
+    /// Agent ID.
+    pub agent_id: String,
+    /// Display name (if set).
+    pub name: Option<String>,
+    /// Agent type.
+    pub agent_type: Option<String>,
+    /// Current status.
+    pub status: TeamMemberStatus,
+    /// Whether this is the team leader.
+    pub is_leader: bool,
+}
+
+impl TeamMemberEntry {
+    /// Get the display name (name if set, otherwise agent_id).
+    pub fn display_name(&self) -> String {
+        self.name.as_deref().unwrap_or(&self.agent_id).to_string()
+    }
+}
+
+/// Team info for TUI display.
+#[derive(Debug, Clone, Default)]
+pub struct TeamInfo {
+    /// Team name.
+    pub name: String,
+    /// Team members.
+    pub members: Vec<TeamMemberEntry>,
 }
 
 #[cfg(test)]

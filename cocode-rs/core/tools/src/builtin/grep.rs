@@ -243,9 +243,14 @@ impl Tool for GrepTool {
             .get("path")
             .and_then(|v| v.as_str())
             .map(|p| ctx.resolve_path(p))
-            .unwrap_or_else(|| ctx.cwd.clone());
+            .unwrap_or_else(|| ctx.env.cwd.clone());
 
-        crate::sensitive_files::check_directory_permission(self.name(), &search_path, &ctx.cwd)
+        crate::sensitive_files::check_directory_permission(
+            self.name(),
+            &search_path,
+            &ctx.env.cwd,
+            ctx.identity.agent_id.as_deref(),
+        )
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
@@ -282,7 +287,7 @@ impl Tool for GrepTool {
         let search_path = input["path"]
             .as_str()
             .map(|p| ctx.resolve_path(p))
-            .unwrap_or_else(|| ctx.cwd.clone());
+            .unwrap_or_else(|| ctx.env.cwd.clone());
 
         let file_glob = input["glob"].as_str();
         let file_type = input["type"].as_str();

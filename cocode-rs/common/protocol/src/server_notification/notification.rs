@@ -210,6 +210,12 @@ server_notification_definitions! {
     /// A hook was executed.
     HookExecuted => "hook/executed" (HookExecutedParams),
 
+    // ── Worktree events ───────────────────────────────────────────────
+    /// A git worktree was entered (created).
+    WorktreeEntered => "worktree/entered" (WorktreeEnteredParams),
+    /// A git worktree was exited (removed or kept).
+    WorktreeExited => "worktree/exited" (WorktreeExitedParams),
+
     // ── Summarize ──────────────────────────────────────────────────────
     /// Partial compaction completed.
     SummarizeCompleted => "summarize/completed" (SummarizeCompletedParams),
@@ -313,6 +319,9 @@ pub struct SubagentSpawnedParams {
 pub struct SubagentCompletedParams {
     pub agent_id: String,
     pub result: String,
+    /// Whether the agent completed with an error.
+    #[serde(default)]
+    pub is_error: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -407,6 +416,13 @@ pub struct ModelFallbackStartedParams {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct PermissionModeChangedParams {
     pub mode: String,
+    /// Whether bypass-permissions mode is available for this session.
+    ///
+    /// Set to `true` when the session was launched with `--dangerously-skip-permissions`.
+    /// Used by the TUI to gate the ClearAndBypass option in the plan exit dialog
+    /// and to enable Bypass in mode cycling.
+    #[serde(default)]
+    pub bypass_available: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -649,6 +665,40 @@ pub struct HookExecutedParams {
     pub hook_name: String,
 }
 
+// ── Worktree params ────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct WorktreeEnteredParams {
+    pub worktree_path: String,
+    pub branch: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct WorktreeExitedParams {
+    pub worktree_path: String,
+    pub action: WorktreeExitAction,
+}
+
+/// Whether a worktree was removed or kept on exit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum WorktreeExitAction {
+    Remove,
+    Keep,
+}
+
+impl WorktreeExitAction {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Remove => "remove",
+            Self::Keep => "keep",
+        }
+    }
+}
+
 // ── Summarize params ───────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -682,6 +732,12 @@ pub struct SubagentProgressParams {
     pub agent_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_step: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_steps: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
 }
 
 /// Parameters for `context/compactionStarted`.

@@ -221,6 +221,10 @@ pub struct BuiltinStores {
     pub team_store: std::sync::Arc<cocode_team::TeamStore>,
     /// The shared mailbox used by SendMessage.
     pub mailbox: std::sync::Arc<cocode_team::Mailbox>,
+    /// The shared task ledger for team task claiming and dependencies.
+    pub task_ledger: std::sync::Arc<cocode_team::TaskLedger>,
+    /// The shared fast path for in-process message delivery.
+    pub fast_path: std::sync::Arc<cocode_team::FastPath>,
 }
 
 /// Create default team stores for use when no pre-loaded stores are available.
@@ -230,11 +234,18 @@ pub struct BuiltinStores {
 pub fn create_default_team_stores() -> (
     std::sync::Arc<cocode_team::TeamStore>,
     std::sync::Arc<cocode_team::Mailbox>,
+    std::sync::Arc<cocode_team::TaskLedger>,
+    std::sync::Arc<cocode_team::FastPath>,
 ) {
     let team_base_dir = cocode_config::find_cocode_home().join("teams");
     let team_store = std::sync::Arc::new(cocode_team::TeamStore::new(team_base_dir.clone(), true));
-    let mailbox = std::sync::Arc::new(cocode_team::Mailbox::new(team_base_dir));
-    (team_store, mailbox)
+    let mailbox = std::sync::Arc::new(cocode_team::Mailbox::new(team_base_dir.clone()));
+    let task_ledger = std::sync::Arc::new(cocode_team::TaskLedger::new(
+        team_base_dir,
+        /*persist=*/ true,
+    ));
+    let fast_path = std::sync::Arc::new(cocode_team::FastPath::new());
+    (team_store, mailbox, task_ledger, fast_path)
 }
 
 /// Register all built-in tools with a registry.
@@ -304,10 +315,19 @@ pub fn register_builtin_tools(
     registry.register(TeamDeleteTool::new(team_store.clone()));
     registry.register(SendMessageTool::new(team_store.clone(), mailbox.clone()));
 
+    let team_base_dir = team_store.base_dir();
+    let task_ledger = std::sync::Arc::new(cocode_team::TaskLedger::new(
+        team_base_dir.to_path_buf(),
+        /*persist=*/ true,
+    ));
+    let fast_path = std::sync::Arc::new(cocode_team::FastPath::new());
+
     BuiltinStores {
         cron_store,
         team_store,
         mailbox,
+        task_ledger,
+        fast_path,
     }
 }
 

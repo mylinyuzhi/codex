@@ -15,6 +15,7 @@ fn make_team_context() -> TeamContextData {
         agent_name: Some("researcher-1".to_string()),
         team_name: "my-team".to_string(),
         agent_type: "Explore".to_string(),
+        is_leader: false,
         members: vec![
             TeamMemberInfo {
                 agent_id: "lead".to_string(),

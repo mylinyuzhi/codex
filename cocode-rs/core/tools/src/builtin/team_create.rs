@@ -90,7 +90,7 @@ impl Tool for TeamCreateTool {
             name: name.to_string(),
             description: input["description"].as_str().map(String::from),
             agent_type: input["agent_type"].as_str().map(String::from),
-            leader_agent_id: ctx.agent_id.clone(),
+            leader_agent_id: ctx.identity.agent_id.clone(),
             members: Vec::new(),
             created_at: now,
         };

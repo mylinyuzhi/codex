@@ -1055,6 +1055,14 @@ pub async fn handle_command(
             }
         }
 
+        // ========== Agent Quick-Switch ==========
+        TuiCommand::FocusNextAgent => {
+            state.session.focus_next_subagent();
+        }
+        TuiCommand::FocusPrevAgent => {
+            state.session.focus_prev_subagent();
+        }
+
         // ========== Kill All Agents ==========
         TuiCommand::KillAllAgents => {
             let _ = command_tx.send(UserCommand::KillAllAgents).await;
@@ -1114,6 +1122,11 @@ pub async fn handle_command(
             toggle_transcript_mode(state);
         }
 
+        // ========== Accent Color ==========
+        TuiCommand::SetAccentColor(color_str) => {
+            apply_accent_color(state, &color_str);
+        }
+
         // ========== Quit ==========
         TuiCommand::Quit => {
             state.quit();
@@ -1151,12 +1164,16 @@ async fn toggle_fast_mode(state: &mut AppState, command_tx: &mpsc::Sender<UserCo
     let _ = command_tx.send(UserCommand::SetFastMode { active }).await;
 }
 
-/// Cycle permission mode: Default → AcceptEdits → Plan → Default.
+/// Cycle permission mode with feature gates.
+///
+/// Full cycle: Default → AcceptEdits → Plan → [Bypass | Default].
+/// Bypass is only included when `--dangerously-skip-permissions` was set.
 async fn cycle_permission_mode(state: &mut AppState, command_tx: &mpsc::Sender<UserCommand>) {
     use cocode_protocol::PermissionMode;
-    // TODO: use next_cycle_with_gates() when feature gate state
-    // (bypass_available, auto_available) is available in TUI context.
-    let next = state.session.permission_mode.next_cycle();
+    let next = state.session.permission_mode.next_cycle_with_gates(
+        state.session.bypass_available,
+        /*auto_available*/ false,
+    );
     state.session.permission_mode = next;
     state.session.plan_mode = next == PermissionMode::Plan;
     state
@@ -1288,12 +1305,47 @@ async fn handle_local_command(
             state.ui.scroll_offset = 0;
             state.ui.reset_user_scrolled();
         }
+        "color" => {
+            let args = _args.trim();
+            if args.is_empty() {
+                state
+                    .ui
+                    .toast_error(t!("toast.color_invalid", input = "").to_string());
+            } else {
+                apply_accent_color(state, args);
+            }
+        }
         _ => {
             state
                 .ui
                 .toast_info(t!("toast.unsupported_command", name = local_cmd.name).to_string());
         }
     }
+}
+
+/// Apply an accent color from a user-supplied string.
+fn apply_accent_color(state: &mut AppState, color_str: &str) {
+    if color_str == "reset" || color_str == "default" {
+        state.ui.accent_color_override = None;
+        state.ui.toast_info(t!("toast.color_reset").to_string());
+    } else if let Some(color) = parse_color(color_str) {
+        state.ui.accent_color_override = Some(color);
+        state
+            .ui
+            .toast_info(t!("toast.color_set", color = color_str).to_string());
+    } else {
+        state
+            .ui
+            .toast_error(t!("toast.color_invalid", input = color_str).to_string());
+    }
+}
+
+/// Parse a color name into a ratatui ANSI Color.
+///
+/// Delegates to ratatui's built-in `FromStr` which supports all ANSI names
+/// (red, green, blue, cyan, magenta, gray/grey, dark_gray, light_*, etc.).
+fn parse_color(s: &str) -> Option<ratatui::style::Color> {
+    s.parse::<ratatui::style::Color>().ok()
 }
 
 /// Execute a command action from the command palette.

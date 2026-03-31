@@ -1464,6 +1464,13 @@
                 "null"
               ]
             },
+            "permission_prompt_tool": {
+              "description": "MCP tool name for routing permission decisions (enterprise automation).\n\nWhen set, permission approval requests are first routed to the named MCP tool. If the tool is unavailable or returns an error, the request falls back to the default SDK approval bridge.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "permission_rules": {
               "description": "Permission rules.",
               "items": true,
@@ -1475,6 +1482,13 @@
             "prompt": {
               "description": "Initial prompt to send.",
               "type": "string"
+            },
+            "prompt_suggestions": {
+              "description": "Enable prompt suggestions after each turn.",
+              "type": [
+                "boolean",
+                "null"
+              ]
             },
             "sandbox": {
               "anyOf": [
@@ -4471,6 +4485,11 @@
         },
         "PermissionModeChangedParams": {
           "properties": {
+            "bypass_available": {
+              "default": false,
+              "description": "Whether bypass-permissions mode is available for this session.\n\nSet to `true` when the session was launched with `--dangerously-skip-permissions`. Used by the TUI to gate the ClearAndBypass option in the plan exit dialog and to enable Bypass in mode cycling.",
+              "type": "boolean"
+            },
             "mode": {
               "type": "string"
             }
@@ -4797,6 +4816,11 @@
             "agent_id": {
               "type": "string"
             },
+            "is_error": {
+              "default": false,
+              "description": "Whether the agent completed with an error.",
+              "type": "boolean"
+            },
             "result": {
               "type": "string"
             }
@@ -4813,9 +4837,29 @@
             "agent_id": {
               "type": "string"
             },
+            "current_step": {
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "message": {
               "type": [
                 "string",
+                "null"
+              ]
+            },
+            "summary": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "total_steps": {
+              "format": "int32",
+              "type": [
+                "integer",
                 "null"
               ]
             }
@@ -5380,6 +5424,44 @@
               ]
             }
           },
+          "type": "object"
+        },
+        "WorktreeEnteredParams": {
+          "properties": {
+            "branch": {
+              "type": "string"
+            },
+            "worktree_path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "branch",
+            "worktree_path"
+          ],
+          "type": "object"
+        },
+        "WorktreeExitAction": {
+          "description": "Whether a worktree was removed or kept on exit.",
+          "enum": [
+            "remove",
+            "keep"
+          ],
+          "type": "string"
+        },
+        "WorktreeExitedParams": {
+          "properties": {
+            "action": {
+              "$ref": "#/definitions/WorktreeExitAction"
+            },
+            "worktree_path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "action",
+            "worktree_path"
+          ],
           "type": "object"
         }
       },
@@ -6327,6 +6409,44 @@
             },
             "params": {
               "$ref": "#/definitions/HookExecutedParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A git worktree was entered (created).",
+          "properties": {
+            "method": {
+              "enum": [
+                "worktree/entered"
+              ],
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/WorktreeEnteredParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A git worktree was exited (removed or kept).",
+          "properties": {
+            "method": {
+              "enum": [
+                "worktree/exited"
+              ],
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/WorktreeExitedParams"
             }
           },
           "required": [
@@ -7664,6 +7784,13 @@
             "null"
           ]
         },
+        "permission_prompt_tool": {
+          "description": "MCP tool name for routing permission decisions (enterprise automation).\n\nWhen set, permission approval requests are first routed to the named MCP tool. If the tool is unavailable or returns an error, the request falls back to the default SDK approval bridge.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "permission_rules": {
           "description": "Permission rules.",
           "items": true,
@@ -7675,6 +7802,13 @@
         "prompt": {
           "description": "Initial prompt to send.",
           "type": "string"
+        },
+        "prompt_suggestions": {
+          "description": "Enable prompt suggestions after each turn.",
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "sandbox": {
           "anyOf": [

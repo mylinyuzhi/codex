@@ -122,7 +122,7 @@ impl Tool for ApplyPatchTool {
     }
 
     async fn check_permission(&self, input: &Value, ctx: &ToolContext) -> PermissionResult {
-        if !ctx.is_plan_mode {
+        if !ctx.env.is_plan_mode {
             return PermissionResult::Passthrough;
         }
 
@@ -141,7 +141,7 @@ impl Tool for ApplyPatchTool {
         };
 
         let argv = vec!["apply_patch".to_string(), patch_str];
-        let cwd = ctx.cwd.clone();
+        let cwd = ctx.env.cwd.clone();
 
         match maybe_parse_apply_patch_verified(&argv, &cwd) {
             MaybeApplyPatchVerified::Body(action) => {
@@ -202,12 +202,12 @@ impl Tool for ApplyPatchTool {
 
         // 2. Parse and verify the patch
         let argv = vec!["apply_patch".to_string(), patch_input.clone()];
-        let cwd = ctx.cwd.clone();
+        let cwd = ctx.env.cwd.clone();
 
         match maybe_parse_apply_patch_verified(&argv, &cwd) {
             MaybeApplyPatchVerified::Body(action) => {
                 // 3. Plan mode check: only allow modifications to plan file
-                if ctx.is_plan_mode {
+                if ctx.env.is_plan_mode {
                     for path in action.changes().keys() {
                         if !ctx.plan_mode_allows_write(path) {
                             return Err(tool_error::ExecutionFailedSnafu {
@@ -222,7 +222,7 @@ impl Tool for ApplyPatchTool {
                 }
 
                 // 4. Backup files before modification (Tier 1 rewind)
-                if let Some(ref backup_store) = ctx.file_backup_store {
+                if let Some(ref backup_store) = ctx.services.file_backup_store {
                     for path in action.changes().keys() {
                         if let Err(e) = backup_store.backup_before_modify(path).await {
                             tracing::warn!("File backup failed for {}: {e}", path.display());
@@ -263,7 +263,7 @@ impl Tool for ApplyPatchTool {
                                         FileReadState::complete_with_turn(
                                             content.clone(),
                                             mtime,
-                                            ctx.turn_number,
+                                            ctx.identity.turn_number,
                                         ),
                                     )
                                     .await;

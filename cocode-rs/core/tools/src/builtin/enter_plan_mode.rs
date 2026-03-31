@@ -89,12 +89,12 @@ impl Tool for EnterPlanModeTool {
         ctx.emit_progress("Entering plan mode").await;
 
         // Get or generate the session-unique slug (cached per session_id)
-        let slug = get_unique_slug(&ctx.session_id, None);
+        let slug = get_unique_slug(&ctx.identity.session_id, None);
 
         // Create plan file manager and ensure directory exists.
         // Subagent filtering (SYSTEM_BLOCKED) prevents subagents from calling
         // this tool, so we always use the main agent path.
-        let manager = PlanFileManager::new(&ctx.session_id);
+        let manager = PlanFileManager::new(&ctx.identity.session_id);
 
         let plan_path = match manager.ensure_and_get_path() {
             Ok(path) => path,
@@ -119,7 +119,7 @@ impl Tool for EnterPlanModeTool {
         .await;
 
         tracing::info!(
-            session_id = %ctx.session_id,
+            session_id = %ctx.identity.session_id,
             plan_file = %plan_path.display(),
             slug = %slug,
             "Entered plan mode"
@@ -130,6 +130,7 @@ impl Tool for EnterPlanModeTool {
         // - Interview ON: Brief placeholder (full instructions come via system reminder)
         // - Interview OFF: Step-by-step guide
         let message = if ctx
+            .env
             .features
             .enabled(cocode_protocol::Feature::PlanModeInterview)
         {

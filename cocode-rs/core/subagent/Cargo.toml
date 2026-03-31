@@ -8,9 +8,9 @@ license.workspace = true
 cocode-config = { path = "../../common/config" }
 cocode-message.workspace = true
 cocode-protocol.workspace = true
-cocode-tools.workspace = true
 cocode-auto-memory.workspace = true
 cocode-error.workspace = true
+cocode-utils-string.workspace = true
 tokio = { workspace = true, features = ["sync", "time", "fs"] }
 tokio-util.workspace = true
 tracing.workspace = true

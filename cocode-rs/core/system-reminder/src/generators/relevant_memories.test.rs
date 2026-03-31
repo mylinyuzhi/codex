@@ -138,9 +138,11 @@ fn test_relevance_score_hyphenated_word_match() {
 
 #[tokio::test]
 async fn test_extract_index_filenames_from_markdown_links() {
+    let directory = PathBuf::from("/tmp/test-memory");
+    let team_memory_directory = directory.join("team");
     let config = cocode_auto_memory::config::ResolvedAutoMemoryConfig {
         enabled: true,
-        directory: PathBuf::from("/tmp/test-memory"),
+        directory,
         max_lines: 200,
         max_relevant_files: 5,
         max_lines_per_file: 200,
@@ -153,6 +155,11 @@ async fn test_extract_index_filenames_from_markdown_links() {
         max_files_to_scan: 200,
         min_keyword_length: 3,
         disable_reason: None,
+        team_memory_enabled: false,
+        team_memory_directory,
+        max_memory_chars: 40_000,
+        is_cowork_mode: false,
+        memory_selection_model_role: cocode_protocol::ModelRole::Fast,
     };
 
     let state = cocode_auto_memory::AutoMemoryState::new(config);
@@ -198,9 +205,11 @@ fn test_throttle_config_reads_from_auto_memory_state() {
     let generator = RelevantMemoriesGenerator;
 
     // Create config with custom throttle value
+    let directory = PathBuf::from("/tmp/test-memory");
+    let team_memory_directory = directory.join("team");
     let mut auto_config = cocode_auto_memory::config::ResolvedAutoMemoryConfig {
         enabled: true,
-        directory: PathBuf::from("/tmp/test-memory"),
+        directory,
         max_lines: 200,
         max_relevant_files: 5,
         max_lines_per_file: 200,
@@ -213,6 +222,11 @@ fn test_throttle_config_reads_from_auto_memory_state() {
         max_files_to_scan: 200,
         min_keyword_length: 3,
         disable_reason: None,
+        team_memory_enabled: false,
+        team_memory_directory,
+        max_memory_chars: 40_000,
+        is_cowork_mode: false,
+        memory_selection_model_role: cocode_protocol::ModelRole::Fast,
     };
 
     let state = Arc::new(cocode_auto_memory::AutoMemoryState::new(

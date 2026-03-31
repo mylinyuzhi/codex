@@ -47,7 +47,7 @@ fn test_background_task_lifecycle() {
 }
 
 #[test]
-fn test_all_agents_killed_marks_subagents_failed() {
+fn test_all_agents_killed_marks_subagents_killed() {
     let mut state = AppState::default();
     state.session.start_subagent(
         "a1".to_string(),
@@ -65,7 +65,7 @@ fn test_all_agents_killed_marks_subagents_failed() {
     );
     assert_eq!(
         state.session.subagents[0].status,
-        crate::state::SubagentStatus::Failed
+        crate::state::SubagentStatus::Killed
     );
     assert!(!state.ui.toasts.is_empty());
 }

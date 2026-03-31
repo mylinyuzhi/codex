@@ -1,8 +1,8 @@
 //! FileTracker management methods for the agent loop.
 
 use cocode_system_reminder::MentionReadRecord;
-use cocode_tools::FileReadState;
-use cocode_tools::FileTracker;
+use cocode_tools_api::FileReadState;
+use cocode_tools_api::FileTracker;
 use tracing::debug;
 
 use crate::compaction::FileRestoration;
@@ -136,18 +136,21 @@ impl AgentLoop {
             let state = match extraction.kind {
                 cocode_protocol::FileReadKind::FullContent => {
                     if let Some(content) = extraction.content {
-                        cocode_tools::FileReadState::complete_with_turn(
+                        cocode_tools_api::FileReadState::complete_with_turn(
                             content,
                             file_mtime,
                             extraction.read_turn,
                         )
                     } else {
                         // Content was compacted, just track metadata
-                        cocode_tools::FileReadState::metadata_only(file_mtime, extraction.read_turn)
+                        cocode_tools_api::FileReadState::metadata_only(
+                            file_mtime,
+                            extraction.read_turn,
+                        )
                     }
                 }
                 cocode_protocol::FileReadKind::PartialContent => {
-                    cocode_tools::FileReadState::partial_with_turn(
+                    cocode_tools_api::FileReadState::partial_with_turn(
                         extraction.offset.unwrap_or(0),
                         extraction.limit.unwrap_or(0),
                         file_mtime,
@@ -155,7 +158,7 @@ impl AgentLoop {
                     )
                 }
                 cocode_protocol::FileReadKind::MetadataOnly => {
-                    cocode_tools::FileReadState::metadata_only(file_mtime, extraction.read_turn)
+                    cocode_tools_api::FileReadState::metadata_only(file_mtime, extraction.read_turn)
                 }
             };
 

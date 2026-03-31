@@ -86,12 +86,16 @@ impl Tool for ExitPlanModeTool {
 
     /// Requires user approval before exiting plan mode.
     ///
-    /// The TUI shows an approval overlay where the user can:
-    /// - Approve: proceed with implementation (tool executes)
-    /// - Deny: stay in plan mode with feedback (tool does not execute)
+    /// - User mode: TUI shows an approval overlay (approve → execute, deny → stay)
+    /// - Team mode: auto-allowed (approval routed through team mailbox instead)
     async fn check_permission(&self, _input: &Value, ctx: &ToolContext) -> PermissionResult {
+        // Team mode: skip user dialog, approval goes through team-lead mailbox
+        if ctx.agent.team_name.is_some() {
+            return PermissionResult::Allowed;
+        }
+
         // Build plan preview for the approval dialog
-        let manager = PlanFileManager::new(&ctx.session_id);
+        let manager = PlanFileManager::new(&ctx.identity.session_id);
         let plan_preview = manager.read().unwrap_or_default();
         let truncated = if plan_preview.len() > 2000 {
             // Find a valid UTF-8 char boundary at or before byte 2000
@@ -105,24 +109,22 @@ impl Tool for ExitPlanModeTool {
 
         PermissionResult::NeedsApproval {
             request: ApprovalRequest {
-                request_id: ctx.call_id.clone(),
+                request_id: ctx.identity.call_id.clone(),
                 tool_name: cocode_protocol::ToolName::ExitPlanMode.as_str().to_string(),
                 description,
                 risks: Vec::new(),
                 allow_remember: false,
                 proposed_prefix_pattern: None,
                 input: None,
+                source_agent_id: ctx.identity.agent_id.clone(),
             },
         }
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
-        // If we reach execute(), the user has approved the plan
-        ctx.emit_progress("Plan approved - exiting plan mode").await;
-
         // Ultraplan: plan was pre-written by remote session — no implementation needed.
-        // CC: chunks.143.mjs:2997-3001 returns a summary-only directive.
-        if ctx.is_ultraplan {
+        if ctx.env.is_ultraplan {
+            ctx.emit_progress("Plan approved - exiting plan mode").await;
             ctx.emit_event(cocode_protocol::CoreEvent::Protocol(
                 cocode_protocol::server_notification::ServerNotification::PlanModeChanged(
                     cocode_protocol::server_notification::PlanModeChangedParams {
@@ -153,24 +155,41 @@ impl Tool for ExitPlanModeTool {
                     .collect::<Vec<_>>()
             });
 
-        // Create plan file manager.
-        // Subagent filtering (SYSTEM_BLOCKED) prevents subagents from calling
-        // this tool, so we always use the main agent path.
-        let manager = PlanFileManager::new(&ctx.session_id);
-
-        // Get plan file path and content
+        let manager = PlanFileManager::new(&ctx.identity.session_id);
         let plan_path = Some(manager.path());
         let plan_content = manager.read();
 
-        // Log plan submission
+        // Team mode: submit plan for team-lead approval via mailbox
+        // (CC: chunks.143.mjs:2879-2907)
+        if let Some(ref team_name) = ctx.agent.team_name {
+            tracing::info!(
+                session_id = %ctx.identity.session_id,
+                team = %team_name,
+                has_plan = plan_content.is_some(),
+                "Plan submitted for team-lead approval"
+            );
+
+            let response = serde_json::json!({
+                "plan": plan_content,
+                "filePath": plan_path.map(|p| p.display().to_string()),
+                "awaitingLeaderApproval": true,
+                "teamName": team_name,
+                "allowedPrompts": allowed_prompts
+            });
+
+            return Ok(ToolOutput::structured(response));
+        }
+
+        // User mode: plan approved via TUI dialog
+        ctx.emit_progress("Plan approved - exiting plan mode").await;
+
         tracing::info!(
-            session_id = %ctx.session_id,
+            session_id = %ctx.identity.session_id,
             has_plan = plan_content.is_some(),
             allowed_prompts_count = allowed_prompts.as_ref().map_or(0, Vec::len),
             "Plan mode exited (approved)"
         );
 
-        // Emit plan mode exit event with approved=true
         ctx.emit_event(cocode_protocol::CoreEvent::Protocol(
             cocode_protocol::server_notification::ServerNotification::PlanModeChanged(
                 cocode_protocol::server_notification::PlanModeChangedParams {
@@ -182,7 +201,6 @@ impl Tool for ExitPlanModeTool {
         ))
         .await;
 
-        // Return structured response with plan content and allowed prompts
         let response = serde_json::json!({
             "plan": plan_content,
             "filePath": plan_path.map(|p| p.display().to_string()),

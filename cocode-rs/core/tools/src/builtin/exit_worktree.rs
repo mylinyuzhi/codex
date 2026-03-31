@@ -90,12 +90,12 @@ impl Tool for ExitWorktreeTool {
         // Restore CWD to previous_cwd before worktree removal (Gap 9 fix)
         if let Some(prev_cwd) = input["previousCwd"].as_str() {
             let prev = PathBuf::from(prev_cwd);
-            ctx.cwd = prev.clone();
-            ctx.shell_executor.set_cwd(prev);
+            ctx.env.cwd = prev.clone();
+            ctx.services.shell_executor.set_cwd(prev);
         }
 
         // Find the main repo root (not the worktree)
-        let repo_root = find_main_repo_root(&ctx.cwd).await?;
+        let repo_root = find_main_repo_root(&ctx.env.cwd).await?;
 
         if action == "remove" {
             // Pre-flight safety check: detect uncommitted files and unpushed commits
@@ -125,11 +125,11 @@ impl Tool for ExitWorktreeTool {
             }
 
             // Fire WorktreeRemove hook before removal
-            if let Some(ref hooks) = ctx.hook_registry {
+            if let Some(ref hooks) = ctx.services.hook_registry {
                 let hook_ctx = cocode_hooks::HookContext::new(
                     cocode_hooks::HookEventType::WorktreeRemove,
-                    ctx.session_id.clone(),
-                    ctx.cwd.clone(),
+                    ctx.identity.session_id.clone(),
+                    ctx.env.cwd.clone(),
                 )
                 .with_worktree_path(worktree_path_str.to_string());
                 let _ = hooks.execute(&hook_ctx).await;
@@ -182,10 +182,30 @@ impl Tool for ExitWorktreeTool {
                 .output()
                 .await;
 
+            ctx.emit_event(cocode_protocol::CoreEvent::Protocol(
+                cocode_protocol::server_notification::ServerNotification::WorktreeExited(
+                    cocode_protocol::server_notification::WorktreeExitedParams {
+                        worktree_path: worktree_path_str.to_string(),
+                        action: cocode_protocol::server_notification::WorktreeExitAction::Remove,
+                    },
+                ),
+            ))
+            .await;
+
             Ok(ToolOutput::text(format!(
                 "Worktree removed: {worktree_path_str}"
             )))
         } else {
+            ctx.emit_event(cocode_protocol::CoreEvent::Protocol(
+                cocode_protocol::server_notification::ServerNotification::WorktreeExited(
+                    cocode_protocol::server_notification::WorktreeExitedParams {
+                        worktree_path: worktree_path_str.to_string(),
+                        action: cocode_protocol::server_notification::WorktreeExitAction::Keep,
+                    },
+                ),
+            ))
+            .await;
+
             // Keep the worktree
             Ok(ToolOutput::text(format!(
                 "Worktree kept at: {worktree_path_str}\nBranch preserved for future use."

@@ -8,13 +8,13 @@
 
 mod control;
 mod mcp_bridge;
+mod permission_prompt;
 mod session_builder;
 mod stdio;
 
-// Re-export shared types from cocode-app-server for consistency.
-// The local modules (control, event_mapper, session_builder) remain
-// as thin wrappers or are being migrated to the app-server crate.
-// TODO: migrate SDK mode to use cocode_app_server types directly.
+// Shared protocol types live in cocode-app-server-protocol.
+// Local modules (control, session_builder, mcp_bridge) wire
+// the protocol layer into the core agent loop.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -117,6 +117,8 @@ pub async fn run_sdk_mode(config: &ConfigManager) -> anyhow::Result<()> {
                 max_budget_cents: None,
                 hooks: None,
                 disable_builtin_agents: None,
+                prompt_suggestions: None,
+                permission_prompt_tool: None,
             };
             (start, state, None)
         }
@@ -327,7 +329,17 @@ async fn run_sdk_turn_loop_inner(
 
         // Create permission bridge and wire into session state
         let bridge = Arc::new(SdkPermissionBridge::new(event_tx.clone()));
-        state.set_permission_requester(bridge.clone());
+        let mcp_perm = start_params.permission_prompt_tool.as_deref().map(|tool| {
+            Arc::new(permission_prompt::McpPermissionRequester::new(
+                tool,
+                bridge.clone(),
+            ))
+        });
+        if let Some(ref mcp_perm) = mcp_perm {
+            state.set_permission_requester(mcp_perm.clone());
+        } else {
+            state.set_permission_requester(bridge.clone());
+        }
 
         // Emit turn/started
         let turn_id = format!("turn_{turn_number}");
@@ -397,6 +409,31 @@ async fn run_sdk_turn_loop_inner(
                                     request_id: req.request_id,
                                     server_name: req.server_name,
                                     message: req.message,
+                                },
+                            ),
+                        ).await?;
+                    }
+                    // Poll for MCP permission prompt tool requests
+                    Some(req) = async {
+                        match mcp_perm {
+                            Some(ref p) => p.recv_request().await,
+                            None => std::future::pending().await,
+                        }
+                    } => {
+                        let message = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "method": "tools/call",
+                            "params": {
+                                "name": req.tool_name,
+                                "arguments": req.arguments,
+                            }
+                        });
+                        writer.write_server_request(
+                            &ServerRequest::McpRouteMessage(
+                                cocode_app_server_protocol::McpRouteMessageParams {
+                                    request_id: req.request_id,
+                                    server_name: req.server_name,
+                                    message,
                                 },
                             ),
                         ).await?;
@@ -478,12 +515,21 @@ async fn run_sdk_turn_loop_inner(
                                 }
                             }
                             Ok(InboundMessage::McpRouteMessageResponse(params)) => {
+                                let response = if let Some(err) = params.error {
+                                    serde_json::json!({"error": err})
+                                } else {
+                                    params.response
+                                };
+                                // Try MCP permission bridge first; on miss, fall through to MCP tool bridge
+                                let response = if let Some(ref perm) = mcp_perm {
+                                    match perm.try_resolve(&params.request_id, response).await {
+                                        Ok(()) => continue,
+                                        Err(v) => v,
+                                    }
+                                } else {
+                                    response
+                                };
                                 if let Some(bridge) = mcp_bridge {
-                                    let response = if let Some(err) = params.error {
-                                        serde_json::json!({"error": err})
-                                    } else {
-                                        params.response
-                                    };
                                     bridge.resolve(&params.request_id, response).await;
                                 } else {
                                     tracing::warn!(
@@ -508,15 +554,13 @@ async fn run_sdk_turn_loop_inner(
                                     .await;
                             }
                             Ok(InboundMessage::CancelRequest(params)) => {
-                                // Cancel a pending server request (hook callback)
-                                if let Some(bridge) = &hook_bridge {
-                                    bridge.resolve(
-                                        &params.request_id,
-                                        serde_json::json!({"error": "cancelled_by_client"}),
-                                    ).await;
+                                let err = serde_json::json!({"error": "cancelled_by_client"});
+                                if let Some(ref perm) = mcp_perm {
+                                    let _ = perm.try_resolve(&params.request_id, err.clone()).await;
                                 }
-                                // Approval cancellation is handled by the permission
-                                // bridge in the control module
+                                if let Some(bridge) = &hook_bridge {
+                                    bridge.resolve(&params.request_id, err).await;
+                                }
                                 tracing::debug!(
                                     request_id = %params.request_id,
                                     "Cancelled pending request"
@@ -591,6 +635,10 @@ async fn run_sdk_turn_loop_inner(
             if let Some(bridge) = mcp_bridge {
                 bridge.drain_pending().await;
             }
+            // Drain any in-flight MCP permission requests
+            if let Some(ref perm) = mcp_perm {
+                perm.drain_pending().await;
+            }
 
             // Produce outcome
             match turn_result {
@@ -638,6 +686,17 @@ async fn run_sdk_turn_loop_inner(
                 writer
                     .write_notification(&ServerNotification::TurnCompleted(params))
                     .await?;
+
+                // Emit prompt suggestion if enabled
+                if start_params.prompt_suggestions.unwrap_or(false) {
+                    let _ = writer
+                        .write_notification(&ServerNotification::PromptSuggestion(
+                            cocode_app_server_protocol::PromptSuggestionParams {
+                                suggestions: Vec::new(),
+                            },
+                        ))
+                        .await;
+                }
             }
             TurnOutcome::Failed(error) => {
                 writer
@@ -698,10 +757,12 @@ async fn run_sdk_turn_loop_inner(
                     state.switch_thinking_level(cocode_protocol::ModelRole::Main, level);
                 }
                 Ok(InboundMessage::RewindFiles(params)) => {
-                    tracing::info!(
-                        turn_id = params.turn_id,
-                        "Rewind files requested (wiring deferred)"
-                    );
+                    let notification =
+                        cocode_app_server::persistence_handlers::handle_rewind_files(
+                            state, &params,
+                        )
+                        .await;
+                    let _ = writer.write_notification(&notification).await;
                 }
                 Ok(InboundMessage::UpdateEnv(params)) => {
                     state.apply_sdk_env_overrides(&params.env);

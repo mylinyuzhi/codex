@@ -76,13 +76,19 @@ pub fn render(frame: &mut Frame, state: &AppState) {
 
 /// Render the header bar at the top.
 fn render_header_bar(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
+    let active_branch = state
+        .session
+        .active_worktree_paths
+        .last()
+        .map(|w| w.branch.as_str());
     let header = HeaderBar::new(theme)
         .session_id(state.session.session_id.as_deref())
         .working_dir(state.session.working_dir.as_deref())
         .turn_count(state.session.turn_count)
         .is_compacting(state.session.is_compacting)
         .fallback_model(state.session.fallback_model.as_deref())
-        .active_worktrees(state.session.active_worktrees);
+        .active_worktrees(state.session.active_worktree_paths.len() as i32)
+        .active_worktree_branch(active_branch);
     frame.render_widget(header, area);
 }
 
@@ -221,7 +227,8 @@ fn render_chat_and_input(frame: &mut Frame, area: Rect, state: &AppState, theme:
         .plan_mode(state.session.plan_mode)
         .queued_count(state.session.queued_count())
         .placeholder(&placeholder)
-        .is_streaming(state.is_streaming());
+        .is_streaming(state.is_streaming())
+        .accent_color(state.ui.accent_color_override);
     frame.render_widget(input, chunks[input_chunk_index]);
 
     // Suggestion popups are mutually exclusive — only render one at a time.
@@ -295,7 +302,8 @@ fn render_tools(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) 
 /// Render the subagents panel.
 fn render_subagents(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
     let panel = SubagentPanel::new(&state.session.subagents, theme)
-        .max_display(constants::MAX_SUBAGENT_PANEL_DISPLAY);
+        .max_display(constants::MAX_SUBAGENT_PANEL_DISPLAY)
+        .focused_index(state.session.focused_subagent_index);
     frame.render_widget(panel, area);
 }
 
@@ -540,7 +548,7 @@ fn render_permission_overlay(
     frame.render_widget(paragraph, inner);
 }
 
-/// Render the plan exit approval overlay with 4 options.
+/// Render the plan exit approval overlay with dynamically filtered options.
 fn render_plan_exit_overlay(
     frame: &mut Frame,
     area: Rect,
@@ -578,15 +586,24 @@ fn render_plan_exit_overlay(
         lines.push(Line::from(""));
     }
 
-    // 5 options
-    let options = [
-        t!("dialog.plan_exit_clear_accept").to_string(),
-        t!("dialog.plan_exit_clear_bypass").to_string(),
-        t!("dialog.plan_exit_keep_elevate").to_string(),
-        t!("dialog.plan_exit_keep_default").to_string(),
-        t!("dialog.plan_exit_keep_planning").to_string(),
-    ];
-    for (i, opt) in options.iter().enumerate() {
+    // Dynamic options — ClearAndBypass only shown when bypass_available
+    let option_labels: Vec<String> = plan_exit
+        .visible_options()
+        .iter()
+        .map(|opt| {
+            use cocode_protocol::PlanExitOption;
+            match opt {
+                PlanExitOption::ClearAndAcceptEdits => {
+                    t!("dialog.plan_exit_clear_accept").to_string()
+                }
+                PlanExitOption::ClearAndBypass => t!("dialog.plan_exit_clear_bypass").to_string(),
+                PlanExitOption::KeepAndElevate => t!("dialog.plan_exit_keep_elevate").to_string(),
+                PlanExitOption::KeepAndDefault => t!("dialog.plan_exit_keep_default").to_string(),
+                PlanExitOption::KeepPlanning => t!("dialog.plan_exit_keep_planning").to_string(),
+            }
+        })
+        .collect();
+    for (i, opt) in option_labels.iter().enumerate() {
         let is_selected = plan_exit.selected == i as i32;
         let line = if is_selected {
             Line::from(Span::raw(format!("▸ {opt}")).bold().fg(theme.primary))

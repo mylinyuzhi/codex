@@ -129,11 +129,11 @@ impl ExecutionIdentity {
 
     /// Parse a loose identity string (case-insensitive, with aliases).
     ///
-    /// Accepts: "main", "fast"/"haiku", "explore", "plan", "vision",
-    /// "review", "compact" → Role. Anything else → Inherit.
+    /// Accepts: "main"/"opus"/"sonnet", "fast"/"haiku", "explore", "plan",
+    /// "vision", "review", "compact" → Role. Anything else → Inherit.
     pub fn parse_loose(s: &str) -> Self {
         match s.to_lowercase().as_str() {
-            "main" => Self::Role(ModelRole::Main),
+            "main" | "opus" | "sonnet" => Self::Role(ModelRole::Main),
             "fast" | "haiku" => Self::Role(ModelRole::Fast),
             "explore" => Self::Role(ModelRole::Explore),
             "plan" => Self::Role(ModelRole::Plan),
@@ -141,6 +141,24 @@ impl ExecutionIdentity {
             "review" => Self::Role(ModelRole::Review),
             "compact" => Self::Role(ModelRole::Compact),
             _ => Self::Inherit,
+        }
+    }
+
+    /// Parse a model string that may be a `provider/model` spec or a short name.
+    ///
+    /// - `"anthropic/claude-sonnet"` → `Spec(ModelSpec)`
+    /// - `"haiku"` → `Role(Fast)` (via `parse_loose`)
+    /// - `"sonnet"` → `Role(Main)` (via `parse_loose`)
+    /// - `"opus"` → `Role(Main)` (via `parse_loose`)
+    /// - Unrecognized → `Inherit`
+    pub fn parse_model_string(s: &str) -> Self {
+        if s.contains('/') {
+            match s.parse::<ModelSpec>() {
+                Ok(spec) => Self::Spec(spec),
+                Err(_) => Self::Inherit,
+            }
+        } else {
+            Self::parse_loose(s)
         }
     }
 }
