@@ -127,6 +127,44 @@ fn test_hook_event_type_from_str_pascal_case() {
 }
 
 #[test]
+fn test_hook_event_type_new_events() {
+    assert_eq!(HookEventType::Elicitation.as_str(), "elicitation");
+    assert_eq!(
+        HookEventType::ElicitationResult.as_str(),
+        "elicitation_result"
+    );
+    assert_eq!(
+        HookEventType::InstructionsLoaded.as_str(),
+        "instructions_loaded"
+    );
+
+    assert_eq!(
+        "elicitation".parse::<HookEventType>().unwrap(),
+        HookEventType::Elicitation
+    );
+    assert_eq!(
+        "Elicitation".parse::<HookEventType>().unwrap(),
+        HookEventType::Elicitation
+    );
+    assert_eq!(
+        "elicitation_result".parse::<HookEventType>().unwrap(),
+        HookEventType::ElicitationResult
+    );
+    assert_eq!(
+        "ElicitationResult".parse::<HookEventType>().unwrap(),
+        HookEventType::ElicitationResult
+    );
+    assert_eq!(
+        "instructions_loaded".parse::<HookEventType>().unwrap(),
+        HookEventType::InstructionsLoaded
+    );
+    assert_eq!(
+        "InstructionsLoaded".parse::<HookEventType>().unwrap(),
+        HookEventType::InstructionsLoaded
+    );
+}
+
+#[test]
 fn test_hook_event_type_from_str_unknown() {
     assert!("unknown_event".parse::<HookEventType>().is_err());
     let err = "bogus".parse::<HookEventType>().unwrap_err();

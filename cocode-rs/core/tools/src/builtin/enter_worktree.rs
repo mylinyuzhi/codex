@@ -74,7 +74,7 @@ impl Tool for EnterWorktreeTool {
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {
         // Must be in a git repo
-        let cwd = ctx.cwd.clone();
+        let cwd = ctx.env.cwd.clone();
         if !cocode_git::is_inside_git_repo(&cwd) {
             return Ok(ToolOutput::error(
                 "Not inside a git repository. EnterWorktree requires a git repo.",
@@ -164,27 +164,37 @@ impl Tool for EnterWorktreeTool {
         let previous_cwd = cwd.display().to_string();
 
         // Update the agent's working directory to the worktree (Gap 9 fix)
-        ctx.cwd = worktree_path.clone();
-        ctx.shell_executor.set_cwd(worktree_path.clone());
+        ctx.env.cwd = worktree_path.clone();
+        ctx.services.shell_executor.set_cwd(worktree_path.clone());
 
         // Add worktree path as a writable root so sandboxed commands can
         // write within the new workspace. Uses default read-only subpath
         // protections (.git, .cocode, .agents).
-        if let Some(ref state) = ctx.sandbox_state {
+        if let Some(ref state) = ctx.services.sandbox_state {
             state.add_writable_root(worktree_path.clone());
         }
 
         // Fire WorktreeCreate hook
-        if let Some(ref hooks) = ctx.hook_registry {
+        if let Some(ref hooks) = ctx.services.hook_registry {
             let hook_ctx = cocode_hooks::HookContext::new(
                 cocode_hooks::HookEventType::WorktreeCreate,
-                ctx.session_id.clone(),
-                ctx.cwd.clone(),
+                ctx.identity.session_id.clone(),
+                ctx.env.cwd.clone(),
             )
             .with_worktree_path(worktree_path.display().to_string())
             .with_worktree_branch(&branch);
             let _ = hooks.execute(&hook_ctx).await;
         }
+
+        ctx.emit_event(cocode_protocol::CoreEvent::Protocol(
+            cocode_protocol::server_notification::ServerNotification::WorktreeEntered(
+                cocode_protocol::server_notification::WorktreeEnteredParams {
+                    worktree_path: worktree_path.display().to_string(),
+                    branch: branch.clone(),
+                },
+            ),
+        ))
+        .await;
 
         let result = serde_json::json!({
             "worktreePath": worktree_path.display().to_string(),

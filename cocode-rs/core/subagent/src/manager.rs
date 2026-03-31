@@ -31,6 +31,13 @@ pub enum AgentStatus {
     Killed,
 }
 
+impl AgentStatus {
+    /// Whether this status represents a terminal (finished) state.
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, Self::Completed | Self::Failed | Self::Killed)
+    }
+}
+
 /// How an agent ended up in the background.
 ///
 /// CC distinguishes `background: true` (explicit) from `isBackgrounded: true`
@@ -101,6 +108,12 @@ pub struct AgentInstance {
 
     /// When this agent completed/failed/was killed (for GC).
     pub completed_at: Option<Instant>,
+
+    /// Byte offset for incremental delta reads of the output file.
+    pub last_read_offset: u64,
+
+    /// Whether the parent agent has been notified of this agent's completion.
+    pub parent_notified: bool,
 }
 
 /// Parameters for executing an agent.
@@ -270,13 +283,18 @@ async fn handle_background_completion(ctx: BackgroundCompletionCtx<'_>) {
 
     // Notify main agent of completion
     if let Some(tx) = event_tx {
-        let output_str = result.as_deref().unwrap_or("[agent failed]").to_string();
+        let is_error = result.is_err();
+        let output_str = match result {
+            Ok(s) => s.to_string(),
+            Err(e) => e.output_msg(),
+        };
         let _ = tx
             .send(CoreEvent::Protocol(
                 cocode_protocol::server_notification::ServerNotification::SubagentCompleted(
                     cocode_protocol::server_notification::SubagentCompletedParams {
                         agent_id: agent_id.to_string(),
                         result: output_str,
+                        is_error,
                     },
                 ),
             ))
@@ -381,6 +399,10 @@ pub struct AgentInstanceInfo {
     pub status: AgentStatus,
     /// How this agent ended up in the background (if applicable).
     pub background_origin: Option<BackgroundOrigin>,
+    /// Background output file path (if running in background).
+    pub output_file: Option<PathBuf>,
+    /// Whether the parent agent has been notified of this agent's completion.
+    pub parent_notified: bool,
 }
 
 /// Manages subagent registration, spawning, and lifecycle tracking.
@@ -502,6 +524,50 @@ impl SubagentManager {
     /// Get registered agent type definitions.
     pub fn definitions(&self) -> &[AgentDefinition] {
         &self.definitions
+    }
+
+    /// Get agent definitions filtered by MCP server availability.
+    ///
+    /// Agents that declare required `mcp_servers` are excluded if none of
+    /// the currently available MCP servers match. Agents with no MCP
+    /// requirements pass through.
+    ///
+    /// Matches Claude Code's `filterByMcpServers` / `validateMcpServers`.
+    pub fn available_definitions(&self) -> Vec<&AgentDefinition> {
+        let available_servers: std::collections::HashSet<String> = self
+            .all_tools
+            .iter()
+            .filter_map(|t| {
+                t.strip_prefix(cocode_protocol::MCP_TOOL_PREFIX)
+                    .and_then(|rest| rest.split(cocode_protocol::MCP_TOOL_SEPARATOR).next())
+                    .map(str::to_lowercase)
+            })
+            .collect();
+
+        self.definitions
+            .iter()
+            .filter(|d| Self::validate_mcp_servers(d, &available_servers))
+            .collect()
+    }
+
+    /// Check whether all MCP servers required by an agent are available.
+    ///
+    /// Case-insensitive substring match: `available.contains(required)`.
+    fn validate_mcp_servers(
+        definition: &AgentDefinition,
+        available_servers: &std::collections::HashSet<String>,
+    ) -> bool {
+        let required = match &definition.mcp_servers {
+            Some(servers) if !servers.is_empty() => servers,
+            _ => return true,
+        };
+
+        required.iter().all(|server| {
+            let name = server.name.to_lowercase();
+            available_servers
+                .iter()
+                .any(|available| available.contains(&name))
+        })
     }
 
     /// Register a new agent type definition.
@@ -729,6 +795,8 @@ impl SubagentManager {
                 output_file: Some(output_file.clone()),
                 background_origin: Some(BackgroundOrigin::Explicit),
                 completed_at: None,
+                last_read_offset: 0,
+                parent_notified: false,
             };
             self.agents.insert(agent_id.clone(), instance);
 
@@ -797,6 +865,8 @@ impl SubagentManager {
                 output_file: None,
                 background_origin: None,
                 completed_at: None,
+                last_read_offset: 0,
+                parent_notified: false,
             };
             self.agents.insert(agent_id.clone(), instance);
 
@@ -970,6 +1040,8 @@ impl SubagentManager {
             instance.status = AgentStatus::Backgrounded;
             instance.output_file = Some(output_file.clone());
             instance.background_origin = Some(origin);
+            instance.last_read_offset = 0;
+            instance.parent_notified = false;
         }
 
         // Move the in-flight future into a background task
@@ -1047,10 +1119,8 @@ impl SubagentManager {
     ///
     /// Returns `None` if the agent is still running or backgrounded.
     pub fn remove_agent(&mut self, agent_id: &str) -> Option<AgentInstance> {
-        match self.agents.get(agent_id).map(|a| &a.status) {
-            Some(AgentStatus::Completed | AgentStatus::Failed | AgentStatus::Killed) => {
-                self.agents.remove(agent_id)
-            }
+        match self.agents.get(agent_id).map(|a| a.status.is_terminal()) {
+            Some(true) => self.agents.remove(agent_id),
             _ => None,
         }
     }
@@ -1058,28 +1128,24 @@ impl SubagentManager {
     /// Remove all completed, failed, and killed agents. Returns the count removed.
     pub fn gc_completed(&mut self) -> usize {
         let before = self.agents.len();
-        self.agents.retain(|_, a| {
-            !matches!(
-                a.status,
-                AgentStatus::Completed | AgentStatus::Failed | AgentStatus::Killed
-            )
-        });
+        self.agents.retain(|_, a| !a.status.is_terminal());
         before - self.agents.len()
     }
 
     /// Remove completed/failed/killed agents older than `max_age`. Returns count removed.
     ///
     /// Unlike `gc_completed()`, this preserves recently finished agents so they
-    /// remain visible to TaskOutput for a while after completion.
+    /// remain visible to TaskOutput for a while after completion. Agents whose
+    /// parent has not yet been notified are always retained regardless of age.
     pub fn gc_stale(&mut self, max_age: std::time::Duration) -> usize {
         let before = self.agents.len();
         let now = Instant::now();
         self.agents.retain(|_, a| {
-            if !matches!(
-                a.status,
-                AgentStatus::Completed | AgentStatus::Failed | AgentStatus::Killed
-            ) {
+            if !a.status.is_terminal() {
                 return true; // keep running/backgrounded agents
+            }
+            if !a.parent_notified {
+                return true; // keep unnotified agents regardless of age
             }
             match a.completed_at {
                 Some(at) => now.duration_since(at) < max_age,
@@ -1136,8 +1202,70 @@ impl SubagentManager {
                 name: a.name.clone(),
                 status: a.status.clone(),
                 background_origin: a.background_origin.clone(),
+                output_file: a.output_file.clone(),
+                parent_notified: a.parent_notified,
             })
             .collect()
+    }
+
+    /// Read delta output from background agents since last read.
+    ///
+    /// Returns `(agent_id, delta_text)` pairs. Updates internal offsets so
+    /// subsequent calls only return new content.
+    pub async fn read_deltas(&mut self) -> Vec<(String, String)> {
+        let mut deltas = Vec::new();
+        for (id, instance) in &mut self.agents {
+            let Some(ref output_file) = instance.output_file else {
+                continue;
+            };
+            // Skip only Killed agents — all others may have useful output
+            if instance.status == AgentStatus::Killed {
+                continue;
+            }
+            match crate::transcript::read_from_offset(output_file, instance.last_read_offset).await
+            {
+                Ok((entries, new_offset)) => {
+                    if new_offset > instance.last_read_offset {
+                        instance.last_read_offset = new_offset;
+                        let summary: Vec<String> = entries
+                            .iter()
+                            .filter_map(|e| {
+                                e.get("output")
+                                    .and_then(|v| v.as_str())
+                                    .map(String::from)
+                                    .or_else(|| {
+                                        e.get("message").and_then(|v| v.as_str()).map(String::from)
+                                    })
+                                    .or_else(|| {
+                                        e.get("text").and_then(|v| v.as_str()).map(String::from)
+                                    })
+                            })
+                            .collect();
+                        if !summary.is_empty() {
+                            let joined = summary.join(" | ");
+                            deltas.push((
+                                id.clone(),
+                                cocode_utils_string::truncate_str(&joined, 500),
+                            ));
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::debug!(agent_id = %id, error = %e, "Failed to read agent delta");
+                }
+            }
+        }
+        deltas
+    }
+
+    /// Mark an agent as notified by the parent. Returns `true` if the agent was found.
+    pub fn mark_notified(&mut self, agent_id: &str) -> bool {
+        if let Some(instance) = self.agents.get_mut(agent_id) {
+            instance.parent_notified = true;
+            true
+        } else {
+            false
+        }
     }
 
     /// Get count of agents by status.

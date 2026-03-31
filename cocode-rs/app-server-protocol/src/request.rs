@@ -159,6 +159,16 @@ pub struct SessionStartRequestParams {
     /// Disable all built-in agent definitions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disable_builtin_agents: Option<bool>,
+    /// Enable prompt suggestions after each turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_suggestions: Option<bool>,
+    /// MCP tool name for routing permission decisions (enterprise automation).
+    ///
+    /// When set, permission approval requests are first routed to the named
+    /// MCP tool. If the tool is unavailable or returns an error, the request
+    /// falls back to the default SDK approval bridge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_prompt_tool: Option<String>,
 }
 
 /// Parameters for `session/resume`.

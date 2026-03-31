@@ -109,7 +109,11 @@ impl Tool for SendMessageTool {
         };
 
         // Determine sender ID
-        let from = ctx.agent_id.clone().unwrap_or_else(|| "main".to_string());
+        let from = ctx
+            .identity
+            .agent_id
+            .clone()
+            .unwrap_or_else(|| "main".to_string());
         let team_name = input["team"].as_str();
 
         // Require team for all message types (no magic default)

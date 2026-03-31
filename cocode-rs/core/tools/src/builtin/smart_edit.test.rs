@@ -6,7 +6,7 @@ use tempfile::NamedTempFile;
 fn make_context() -> ToolContext {
     let mut ctx = ToolContext::new("call-1", "session-1", PathBuf::from("/tmp"));
     // Enable SmartEdit feature for tests
-    ctx.features.enable(Feature::SmartEdit);
+    ctx.env.features.enable(Feature::SmartEdit);
     ctx
 }
 
@@ -117,7 +117,7 @@ async fn test_smart_edit_with_mock_model_call() {
             })
         })
     });
-    ctx.model_call_fn = Some(mock_fn);
+    ctx.agent.model_call_fn = Some(mock_fn);
 
     // Use a completely wrong variable name that won't match any strategy
     let input = serde_json::json!({
@@ -168,7 +168,7 @@ async fn test_smart_edit_no_changes_required() {
             })
         })
     });
-    ctx.model_call_fn = Some(mock_fn);
+    ctx.agent.model_call_fn = Some(mock_fn);
 
     let input = serde_json::json!({
         "file_path": path,

@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use cocode_tools::FileTracker;
+use cocode_tools_api::FileTracker;
 
 use crate::Result;
 use crate::config::SystemReminderConfig;
@@ -437,6 +437,8 @@ pub struct TeamContextData {
     pub team_name: String,
     /// Agent type (e.g., "Explore", "general-purpose").
     pub agent_type: String,
+    /// Whether this agent is the team leader.
+    pub is_leader: bool,
     /// Team members.
     pub members: Vec<TeamMemberInfo>,
 }
@@ -461,6 +463,8 @@ pub struct TeamMemberInfo {
 pub mod message_types {
     pub const SHUTDOWN_REQUEST: &str = "shutdown_request";
     pub const SHUTDOWN_RESPONSE: &str = "shutdown_response";
+    pub const PLAN_APPROVAL_REQUEST: &str = "plan_approval_request";
+    pub const PLAN_APPROVAL_RESPONSE: &str = "plan_approval_response";
 }
 
 /// An unread message from the agent's mailbox.
@@ -482,7 +486,6 @@ pub struct UnreadMessage {
 ///
 /// This provides all the runtime state needed for generators to
 /// determine what content to produce.
-#[derive(Debug)]
 pub struct GeneratorContext<'a> {
     /// Current configuration.
     pub config: &'a SystemReminderConfig,
@@ -622,6 +625,15 @@ pub struct GeneratorContext<'a> {
     // === Auto memory ===
     /// Auto memory state for prompt injection and relevant memories search.
     pub auto_memory_state: Option<Arc<cocode_auto_memory::AutoMemoryState>>,
+    /// Lightweight model call callback for LLM-based memory selection.
+    /// Reuses the `ModelCallFn` pattern from tools-api (same as SmartEdit).
+    pub model_call_fn: Option<cocode_tools_api::ModelCallFn>,
+    /// Agent-specific memory directories for @agent-name search.
+    pub agent_memory_dirs: HashMap<String, PathBuf>,
+    /// Paths already read via Read tool this turn (avoid duplicate injection).
+    pub read_file_paths: HashSet<PathBuf>,
+    /// Recently used tool names (for LLM memory selection context).
+    pub recent_tool_names: Vec<String>,
 
     // === Mention read records ===
     /// Records of files read via @mention syntax during this turn.
@@ -667,6 +679,18 @@ pub struct GeneratorContext<'a> {
     pub ide_selection: Option<IdeSelection>,
     /// IDE opened file (user opened a file in IDE).
     pub ide_opened_file: Option<String>,
+}
+
+impl std::fmt::Debug for GeneratorContext<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GeneratorContext")
+            .field("turn_number", &self.turn_number)
+            .field("is_main_agent", &self.is_main_agent)
+            .field("has_user_input", &self.has_user_input)
+            .field("is_plan_mode", &self.is_plan_mode)
+            .field("model_call_fn", &self.model_call_fn.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 /// Lightweight rewind info for system reminder generation.
@@ -759,6 +783,10 @@ pub struct GeneratorContextBuilder<'a> {
     mention_read_records: std::sync::Arc<std::sync::Mutex<Vec<MentionReadRecord>>>,
     is_auto_compact_enabled: bool,
     auto_memory_state: Option<Arc<cocode_auto_memory::AutoMemoryState>>,
+    model_call_fn: Option<cocode_tools_api::ModelCallFn>,
+    agent_memory_dirs: HashMap<String, PathBuf>,
+    read_file_paths: HashSet<PathBuf>,
+    recent_tool_names: Vec<String>,
     active_worktree_count: i32,
     sandbox_violations: Vec<(String, Option<String>, Option<String>)>,
     deferred_tools_added: Vec<String>,
@@ -824,6 +852,10 @@ impl Default for GeneratorContextBuilder<'_> {
             mention_read_records: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             is_auto_compact_enabled: false,
             auto_memory_state: None,
+            model_call_fn: None,
+            agent_memory_dirs: HashMap::new(),
+            read_file_paths: HashSet::new(),
+            recent_tool_names: Vec::new(),
             active_worktree_count: 0,
             sandbox_violations: Vec::new(),
             deferred_tools_added: Vec::new(),
@@ -1075,6 +1107,26 @@ impl<'a> GeneratorContextBuilder<'a> {
         self
     }
 
+    pub fn model_call_fn(mut self, f: cocode_tools_api::ModelCallFn) -> Self {
+        self.model_call_fn = Some(f);
+        self
+    }
+
+    pub fn agent_memory_dirs(mut self, dirs: HashMap<String, PathBuf>) -> Self {
+        self.agent_memory_dirs = dirs;
+        self
+    }
+
+    pub fn read_file_paths(mut self, paths: HashSet<PathBuf>) -> Self {
+        self.read_file_paths = paths;
+        self
+    }
+
+    pub fn recent_tool_names(mut self, names: Vec<String>) -> Self {
+        self.recent_tool_names = names;
+        self
+    }
+
     pub fn active_worktree_count(mut self, count: i32) -> Self {
         self.active_worktree_count = count;
         self
@@ -1198,6 +1250,10 @@ impl<'a> GeneratorContextBuilder<'a> {
             rewind_info: self.rewind_info,
             mention_read_records: self.mention_read_records,
             auto_memory_state: self.auto_memory_state,
+            model_call_fn: self.model_call_fn,
+            agent_memory_dirs: self.agent_memory_dirs,
+            read_file_paths: self.read_file_paths,
+            recent_tool_names: self.recent_tool_names,
             active_worktree_count: self.active_worktree_count,
             sandbox_violations: self.sandbox_violations,
             deferred_tools_added: self.deferred_tools_added,

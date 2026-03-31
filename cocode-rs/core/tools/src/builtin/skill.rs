@@ -82,6 +82,7 @@ impl Tool for SkillTool {
         };
 
         let skill = match ctx
+            .services
             .skill_manager
             .as_ref()
             .and_then(|sm| sm.find_by_name_or_alias(skill_name))
@@ -111,7 +112,7 @@ impl Tool for SkillTool {
             .await;
 
         // Get skill manager from context
-        let skill_manager = ctx.skill_manager.as_ref().ok_or_else(|| {
+        let skill_manager = ctx.services.skill_manager.as_ref().ok_or_else(|| {
             crate::error::tool_error::InternalSnafu {
                 message: "Skill manager not configured",
             }
@@ -154,7 +155,7 @@ impl Tool for SkillTool {
                     max_turns: None,
                     run_in_background: Some(false),
                     allowed_tools: skill.allowed_tools.clone(),
-                    parent_selections: ctx.parent_selections.clone(),
+                    parent_selections: ctx.agent.parent_selections.clone(),
                     permission_mode: None,
                     resume_from: None,
                     isolation: None,
@@ -182,7 +183,8 @@ impl Tool for SkillTool {
                     Ok(result) => {
                         // Register cancel token for background agents
                         if let Some(token) = result.cancel_token.clone() {
-                            ctx.agent_cancel_tokens
+                            ctx.agent
+                                .agent_cancel_tokens
                                 .lock()
                                 .await
                                 .insert(result.agent_id.clone(), token);
@@ -214,7 +216,7 @@ impl Tool for SkillTool {
 
         // Register skill hooks if the skill has an interface with hooks
         if let Some(ref interface) = skill.interface
-            && let Some(ref registry) = ctx.hook_registry
+            && let Some(ref registry) = ctx.services.hook_registry
         {
             let hook_count = register_skill_hooks(registry, interface);
             if hook_count > 0 {
@@ -223,12 +225,12 @@ impl Tool for SkillTool {
         }
 
         // Record usage for scoring
-        if let Some(ref tracker) = ctx.skill_usage_tracker {
+        if let Some(ref tracker) = ctx.services.skill_usage_tracker {
             tracker.track(skill_name);
         }
 
         // Track every inline invocation for system reminder injection
-        ctx.invoked_skills.lock().await.push(InvokedSkill {
+        ctx.state.invoked_skills.lock().await.push(InvokedSkill {
             name: skill_name.to_string(),
             started_at: Instant::now(),
             prompt_content: prompt.clone(),

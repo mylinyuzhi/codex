@@ -85,6 +85,23 @@ pub enum TeamError {
         #[snafu(implicit)]
         location: Location,
     },
+
+    /// Task not found in the ledger.
+    #[snafu(display("Task '{id}' not found"))]
+    TaskNotFound {
+        id: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+
+    /// Task already claimed by another agent.
+    #[snafu(display("Task '{id}' already claimed by '{owner}'"))]
+    TaskAlreadyClaimed {
+        id: String,
+        owner: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
 impl ErrorExt for TeamError {
@@ -97,6 +114,8 @@ impl ErrorExt for TeamError {
             Self::Mailbox { .. } | Self::Persist { .. } => StatusCode::IoError,
             Self::Serde { .. } => StatusCode::Internal,
             Self::ShutdownTimeout { .. } => StatusCode::Timeout,
+            Self::TaskNotFound { .. } => StatusCode::FileNotFound,
+            Self::TaskAlreadyClaimed { .. } => StatusCode::InvalidArguments,
         }
     }
 

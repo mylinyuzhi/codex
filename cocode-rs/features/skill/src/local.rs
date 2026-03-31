@@ -91,6 +91,11 @@ pub fn builtin_local_commands() -> &'static [LocalCommandDef] {
             aliases: &["checkpoint"],
         },
         LocalCommandDef {
+            name: "color",
+            description: "Set accent color (name or 'reset')",
+            aliases: &[],
+        },
+        LocalCommandDef {
             name: "exit",
             description: "Exit the session",
             aliases: &["quit", "q"],

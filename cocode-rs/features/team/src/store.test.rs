@@ -39,11 +39,22 @@ async fn create_and_get_team_in_memory() {
 }
 
 #[tokio::test]
-async fn create_duplicate_team_errors() {
+async fn create_duplicate_team_strict_errors() {
+    let store = TeamStore::new(PathBuf::from("/tmp/unused"), false);
+    store.create_team_strict(make_team("t1")).await.unwrap();
+    let err = store.create_team_strict(make_team("t1")).await;
+    assert!(err.is_err());
+}
+
+#[tokio::test]
+async fn create_duplicate_team_deduplicates() {
     let store = TeamStore::new(PathBuf::from("/tmp/unused"), false);
     store.create_team(make_team("t1")).await.unwrap();
-    let err = store.create_team(make_team("t1")).await;
-    assert!(err.is_err());
+    store.create_team(make_team("t1")).await.unwrap();
+    let teams = store.list_teams().await;
+    assert_eq!(teams.len(), 2);
+    assert!(teams.contains_key("t1"));
+    assert!(teams.contains_key("t1-2"));
 }
 
 #[tokio::test]

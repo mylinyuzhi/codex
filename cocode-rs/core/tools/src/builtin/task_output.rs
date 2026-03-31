@@ -85,6 +85,7 @@ impl Tool for TaskOutputTool {
 
         // Check if task exists in background shell registry
         let is_shell_running = ctx
+            .services
             .shell_executor
             .background_registry
             .is_running(task_id)
@@ -92,6 +93,7 @@ impl Tool for TaskOutputTool {
 
         // Resolve command name for richer headers
         let command_label = ctx
+            .services
             .shell_executor
             .background_registry
             .get_command(task_id)
@@ -112,6 +114,7 @@ impl Tool for TaskOutputTool {
 
                 // Use Notify-based waiting instead of polling
                 if let Some(notify) = ctx
+                    .services
                     .shell_executor
                     .background_registry
                     .get_completed_notify(task_id)
@@ -121,7 +124,7 @@ impl Tool for TaskOutputTool {
                         _ = notify.notified() => { /* completed */ }
                         _ = tokio::time::sleep(timeout_duration) => {
                             let output = ctx
-                                .shell_executor
+                                .services.shell_executor
                                 .background_registry
                                 .get_output(task_id)
                                 .await
@@ -131,9 +134,9 @@ impl Tool for TaskOutputTool {
                                 header(&format!("still running, timeout after {timeout_ms}ms"))
                             )));
                         }
-                        _ = ctx.cancel_token.cancelled() => {
+                        _ = ctx.channels.cancel_token.cancelled() => {
                             let output = ctx
-                                .shell_executor
+                                .services.shell_executor
                                 .background_registry
                                 .get_output(task_id)
                                 .await
@@ -148,12 +151,14 @@ impl Tool for TaskOutputTool {
             }
 
             let output = ctx
+                .services
                 .shell_executor
                 .background_registry
                 .get_output(task_id)
                 .await
                 .unwrap_or_default();
             let status = if ctx
+                .services
                 .shell_executor
                 .background_registry
                 .is_running(task_id)
@@ -168,6 +173,7 @@ impl Tool for TaskOutputTool {
 
         // Check if we can still get shell output (task may have completed/stopped)
         if let Some(output) = ctx
+            .services
             .shell_executor
             .background_registry
             .get_output(task_id)
@@ -184,10 +190,10 @@ impl Tool for TaskOutputTool {
         let agent_file_name = format!("{task_id}.jsonl");
         let mut candidate_paths = Vec::new();
 
-        if let Some(ref dir) = ctx.agent_output_dir {
+        if let Some(ref dir) = ctx.agent.agent_output_dir {
             candidate_paths.push(dir.join(&agent_file_name));
         }
-        if let Some(ref session_dir) = ctx.session_dir {
+        if let Some(ref session_dir) = ctx.paths.session_dir {
             candidate_paths.push(
                 session_dir
                     .parent()
@@ -215,9 +221,12 @@ impl Tool for TaskOutputTool {
                 }
                 for path in &candidate_paths {
                     if path.exists() {
-                        return Ok(
-                            read_agent_output_delta(task_id, path, &ctx.output_offsets).await
-                        );
+                        return Ok(read_agent_output_delta(
+                            task_id,
+                            path,
+                            &ctx.state.output_offsets,
+                        )
+                        .await);
                     }
                 }
                 if start.elapsed() >= timeout_duration {
@@ -231,7 +240,9 @@ impl Tool for TaskOutputTool {
             // Non-blocking: check once
             for path in &candidate_paths {
                 if path.exists() {
-                    return Ok(read_agent_output_delta(task_id, path, &ctx.output_offsets).await);
+                    return Ok(
+                        read_agent_output_delta(task_id, path, &ctx.state.output_offsets).await,
+                    );
                 }
             }
         }

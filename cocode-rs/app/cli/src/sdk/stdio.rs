@@ -1,13 +1,13 @@
-//! JSON-RPC transport over stdin/stdout.
+//! JSON-RPC 2.0 transport over stdin/stdout.
 //!
 //! Split into [`StdinReader`] and [`StdoutWriter`] so the SDK turn loop
 //! can read client requests and write notifications concurrently within
 //! a `tokio::select!` loop.
 //!
-//! Wire format follows JSON-RPC 2.0 semantics:
-//! - Messages with `id` are requests (expect a response)
-//! - Messages without `id` are notifications (fire-and-forget)
-//! - Backward compatible: accepts both `ClientRequest` and `JsonRpcRequest`
+//! Wire format follows JSON-RPC 2.0:
+//! - Inbound: `ClientRequest` deserialized via `#[serde(tag = "method")]`
+//! - Outbound notifications: `ServerNotification` (no `id`)
+//! - Outbound requests: `ServerRequest` wrapped with auto-incrementing `id`
 
 use anyhow::Context;
 use cocode_app_server_protocol::ApprovalResolveRequestParams;
@@ -64,7 +64,7 @@ pub enum InboundMessage {
     CancelRequest(cocode_app_server_protocol::CancelRequestParams),
 }
 
-/// Reads client requests from stdin as NDJSON (JSON-RPC or legacy format).
+/// Reads JSON-RPC 2.0 client requests from stdin as NDJSON.
 pub struct StdinReader {
     reader: BufReader<tokio::io::Stdin>,
 }
@@ -76,10 +76,10 @@ impl StdinReader {
         }
     }
 
-    /// Read the next JSON line from stdin and parse as a client request.
+    /// Read the next JSON line from stdin and parse as a `ClientRequest`.
     ///
-    /// Accepts both JSON-RPC format (`{"id":..,"method":..,"params":..}`)
-    /// and legacy format (`{"method":..,"params":..}`).
+    /// `ClientRequest` uses `#[serde(tag = "method")]` so it matches on the
+    /// `method` field regardless of whether an `id` is present.
     pub async fn read_message(&mut self) -> anyhow::Result<InboundMessage> {
         let mut line = String::new();
         let bytes_read = self
@@ -94,8 +94,7 @@ impl StdinReader {
 
         let line = line.trim();
 
-        // Parse as ClientRequest (handles both JSON-RPC and legacy formats
-        // since ClientRequest uses tag="method" which matches both)
+        // ClientRequest uses serde tag="method" for routing
         let request: ClientRequest =
             serde_json::from_str(line).context("failed to parse client request")?;
 

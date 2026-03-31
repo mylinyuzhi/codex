@@ -3,8 +3,8 @@ use cocode_inference::LanguageModelTool;
 use cocode_protocol::ApplyPatchToolType;
 use cocode_protocol::ModelInfo;
 use cocode_protocol::ToolName;
-use cocode_tools::ToolDefinition;
 use cocode_tools::builtin::ApplyPatchTool;
+use cocode_tools_api::ToolDefinition;
 
 fn sample_defs() -> Vec<ToolDefinition> {
     vec![

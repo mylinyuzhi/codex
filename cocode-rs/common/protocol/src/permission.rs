@@ -469,6 +469,9 @@ pub struct ApprovalRequest {
     /// Tool input parameters (for SDK clients to make informed decisions).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input: Option<serde_json::Value>,
+    /// Agent ID if this request originated from a subagent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_agent_id: Option<String>,
 }
 
 /// A security risk associated with an operation.

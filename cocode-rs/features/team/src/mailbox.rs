@@ -58,6 +58,39 @@ impl Mailbox {
         self.write_all(&path, &messages).await
     }
 
+    /// Send with dual-write: fast path first, then filesystem for persistence.
+    ///
+    /// If the recipient has an in-process channel via [`FastPath`], the message
+    /// is delivered immediately over the channel. The filesystem write always
+    /// happens for audit trail and crash recovery.
+    pub async fn send_with_fast_path(
+        &self,
+        team_name: &str,
+        msg: &AgentMessage,
+        fast_path: &crate::fast_path::FastPath,
+    ) -> Result<()> {
+        // Fast path: try in-process channel (non-blocking, best-effort).
+        fast_path.try_send(team_name, &msg.to, msg.clone()).await;
+
+        // Always persist to filesystem for audit trail.
+        self.send(team_name, msg).await
+    }
+
+    /// Broadcast with dual-write: fast path + filesystem.
+    pub async fn broadcast_with_fast_path(
+        &self,
+        team_name: &str,
+        msg: &AgentMessage,
+        members: &[String],
+        fast_path: &crate::fast_path::FastPath,
+    ) -> Result<()> {
+        // Fast path for all in-process recipients.
+        fast_path.broadcast(team_name, msg, members).await;
+
+        // Always persist to filesystem for audit trail.
+        self.broadcast(team_name, msg, members).await
+    }
+
     /// Read unread messages for an agent.
     pub async fn read_unread(&self, team_name: &str, agent_id: &str) -> Result<Vec<AgentMessage>> {
         let path = self.mailbox_path(team_name, agent_id);

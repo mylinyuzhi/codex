@@ -58,6 +58,7 @@ const CLEAN_ENV: &[(&str, Option<&str>)] = &[
     ("CLAUDE_CODE_REMOTE", None),
     ("COCODE_REMOTE_MEMORY_DIR", None),
     ("CLAUDE_CODE_REMOTE_MEMORY_DIR", None),
+    ("COCODE_COWORK_MEMORY_PATH_OVERRIDE", None),
 ];
 
 #[test]
@@ -67,6 +68,7 @@ fn test_feature_disabled_returns_false() {
         let resolved = resolve_auto_memory_config(
             std::path::Path::new("/tmp/test"),
             &config,
+            false,
             false,
             false,
             false,
@@ -89,6 +91,7 @@ fn test_feature_enabled_returns_true() {
             true,
             false,
             false,
+            false,
         );
         assert!(resolved.enabled);
         assert_eq!(resolved.disable_reason, None);
@@ -105,6 +108,7 @@ fn test_user_setting_overrides_feature_flag() {
         let resolved = resolve_auto_memory_config(
             std::path::Path::new("/tmp/test"),
             &config,
+            false,
             false,
             false,
             false,
@@ -126,6 +130,7 @@ fn test_user_setting_disable_overrides_feature_flag() {
             true,
             false,
             false,
+            false,
         );
         assert!(!resolved.enabled);
         assert_eq!(resolved.disable_reason, Some(DisableReason::UserSetting));
@@ -140,6 +145,7 @@ fn test_default_limits() {
             std::path::Path::new("/tmp/test"),
             &config,
             true,
+            false,
             false,
             false,
         );
@@ -159,6 +165,7 @@ fn test_relevant_memories_flag_propagated() {
             true,
             true,
             false,
+            false,
         );
         assert!(resolved.enabled);
         assert!(resolved.relevant_memories_enabled);
@@ -176,6 +183,7 @@ fn test_memory_extraction_flag_propagated() {
             true,
             false,
             true,
+            false,
         );
         assert!(resolved.enabled);
         assert!(!resolved.relevant_memories_enabled);
@@ -193,6 +201,7 @@ fn test_sub_flags_disabled_when_auto_memory_disabled() {
             false,
             true,
             true,
+            false,
         );
         assert!(!resolved.enabled);
         assert!(!resolved.relevant_memories_enabled);
@@ -222,6 +231,7 @@ fn test_env_var_disable_overrides_everything() {
                 true, // feature flag says enable
                 false,
                 false,
+                false,
             );
             assert!(
                 !resolved.enabled,
@@ -248,6 +258,7 @@ fn test_env_var_enable_overrides_feature_flag() {
                 false, // feature flag says disable
                 false,
                 false,
+                false,
             );
             assert!(
                 resolved.enabled,
@@ -272,6 +283,7 @@ fn test_env_var_truthy_variants() {
                     std::path::Path::new("/tmp/test"),
                     &config,
                     true,
+                    false,
                     false,
                     false,
                 );
@@ -301,6 +313,7 @@ fn test_env_var_falsy_variants() {
                     false,
                     false,
                     false,
+                    false,
                 );
                 assert!(resolved.enabled, "Env var '{val}' should be falsy (enable)");
             },
@@ -322,6 +335,7 @@ fn test_compat_prefix_disable() {
                 std::path::Path::new("/tmp/test"),
                 &config,
                 true,
+                false,
                 false,
                 false,
             );
@@ -353,6 +367,7 @@ fn test_remote_mode_without_memory_dir_disables() {
                 true,
                 false,
                 false,
+                false,
             );
             assert!(
                 !resolved.enabled,
@@ -380,6 +395,7 @@ fn test_remote_mode_with_memory_dir_allows() {
                 std::path::Path::new("/tmp/test"),
                 &config,
                 true,
+                false,
                 false,
                 false,
             );

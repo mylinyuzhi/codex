@@ -30,7 +30,7 @@ async fn test_enter_plan_mode_interview_phase() {
     let mut features = cocode_protocol::Features::with_defaults();
     features.enable(cocode_protocol::Feature::PlanModeInterview);
     let mut ctx = ToolContext::new("call-1", "session-1", PathBuf::from("/tmp"));
-    ctx.features = features;
+    ctx.env.features = features;
 
     let input = serde_json::json!({});
     let result = tool.execute(input, &mut ctx).await.unwrap();

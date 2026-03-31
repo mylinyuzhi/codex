@@ -42,6 +42,11 @@ impl TeamStore {
         }
     }
 
+    /// Get the base directory path.
+    pub fn base_dir(&self) -> &std::path::Path {
+        &self.base_dir
+    }
+
     /// Load existing teams from disk.
     ///
     /// Scans `{base_dir}/*/config.json` and populates the in-memory cache.
@@ -84,7 +89,25 @@ impl TeamStore {
     }
 
     /// Create a new team.
-    pub async fn create_team(&self, team: Team) -> Result<()> {
+    ///
+    /// If a team with the same name already exists, a numeric suffix is
+    /// appended (e.g., "alpha-2", "alpha-3") to deduplicate. The actual
+    /// name used is stored in the returned team.
+    pub async fn create_team(&self, mut team: Team) -> Result<()> {
+        let base_name = team.name.clone();
+        let final_name;
+        {
+            let mut teams = self.teams.lock().await;
+            final_name = deduplicate_name(&base_name, &teams);
+            team.name.clone_from(&final_name);
+            teams.insert(final_name.clone(), team);
+        }
+        self.persist_team(&final_name).await?;
+        Ok(())
+    }
+
+    /// Create a team, failing if the name already exists (no dedup).
+    pub async fn create_team_strict(&self, team: Team) -> Result<()> {
         let name = team.name.clone();
         {
             let mut teams = self.teams.lock().await;
@@ -239,6 +262,23 @@ impl TeamStore {
         let config_path = dir.join("config.json");
         atomic_write_json(&config_path, &team).await?;
         Ok(())
+    }
+}
+
+/// Generate a unique team name by appending a suffix if needed.
+///
+/// If "alpha" exists, tries "alpha-2", "alpha-3", etc.
+fn deduplicate_name(base: &str, teams: &BTreeMap<String, Team>) -> String {
+    if !teams.contains_key(base) {
+        return base.to_string();
+    }
+    let mut suffix = 2;
+    loop {
+        let candidate = format!("{base}-{suffix}");
+        if !teams.contains_key(&candidate) {
+            return candidate;
+        }
+        suffix += 1;
     }
 }
 

@@ -406,6 +406,8 @@ impl Widget for ChatWidget<'_> {
         for message in &visible_messages {
             if message.is_meta {
                 // Render meta (system reminder) messages as collapsed dim lines
+                let fallback = t!("chat.system_reminder");
+                let label = message.meta_category.as_deref().unwrap_or(&fallback);
                 let flat = message.content.replace('\n', " ");
                 let (preview, suffix) = if UnicodeWidthStr::width(flat.as_str()) > 60 {
                     let boundary = flat.floor_char_boundary(60);
@@ -414,12 +416,9 @@ impl Widget for ChatWidget<'_> {
                     (flat.as_str(), "")
                 };
                 all_lines.push(
-                    Line::from(format!(
-                        "  [{sr}] {preview}{suffix}",
-                        sr = t!("chat.system_reminder")
-                    ))
-                    .fg(self.theme.text_dim)
-                    .italic(),
+                    Line::from(format!("  [{label}] {preview}{suffix}"))
+                        .fg(self.theme.text_dim)
+                        .italic(),
                 );
             } else {
                 all_lines.extend(self.format_message(message));
