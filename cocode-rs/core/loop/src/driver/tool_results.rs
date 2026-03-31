@@ -7,8 +7,8 @@ use cocode_message::TrackedMessage;
 use cocode_message::Turn;
 use cocode_protocol::ContextModifier;
 use cocode_protocol::ToolResultContent;
-use cocode_tools::FileReadState;
-use cocode_tools::ToolExecutionResult;
+use cocode_tools_api::FileReadState;
+use cocode_tools_api::ToolExecutionResult;
 use tracing::debug;
 
 use super::AgentLoop;

@@ -107,6 +107,10 @@ command.background_all_tasks: "后台运行所有任务"
 # 终止代理
 command.kill_all_agents: "终止所有代理"
 
+# 代理快速切换
+command.focus_next_agent: "聚焦下一个代理"
+command.focus_prev_agent: "聚焦上一个代理"
+
 # 工具折叠
 command.toggle_tool_collapse: "切换工具结果折叠"
 
@@ -118,6 +122,9 @@ command.toggle_fast_mode: "切换快速模式"
 
 # 权限模式
 command.cycle_permission_mode: "切换权限模式"
+
+# 强调色
+command.set_accent_color: "设置强调色"
 
 # 转录模式
 command.toggle_transcript_mode: "切换转录模式"
@@ -361,6 +368,13 @@ toast.background_task_started: "后台任务已开始：%{task_type}"
 toast.background_task_completed: "后台任务已完成"
 toast.agents_killed: "已终止 %{count} 个代理"
 toast.killing_all_agents: "正在终止所有运行中的代理..."
+toast.subagent_completed: "代理 '%{agent}' 已完成"
+toast.subagent_failed: "代理 '%{agent}' 已失败"
+toast.subagent_backgrounded: "代理 '%{agent}' 已移至后台"
+
+# 工作树
+toast.worktree_entered: "已进入工作树：%{branch}"
+toast.worktree_exited: "工作树 %{action}：完成"
 
 # API / 重试
 toast.retry: "正在重试（%{attempt}/%{max}）..."
@@ -385,6 +399,11 @@ toast.editor_error: "编辑器错误：%{error}"
 
 # 不支持的命令
 toast.unsupported_command: "/%{name} 在 TUI 中尚不支持。"
+
+# 强调色
+toast.color_set: "强调色已设为 %{color}"
+toast.color_reset: "强调色已重置为默认"
+toast.color_invalid: "无效颜色：%{input}。使用名称（red、green、blue、cyan、magenta、gray）。"
 
 # 慢查询
 toast.slow_query: "查询耗时 %{duration} 秒"
@@ -493,6 +512,7 @@ header.turn_count: "%{count} 轮"
 header.compacting: "压缩中..."
 header.fallback: "回退: %{model}"
 header.worktrees: "工作树: %{count}"
+header.worktree_branch: "[wt:%{branch}]"
 
 # ============================================================
 # 状态栏（附加）
@@ -531,6 +551,7 @@ subagent.title: "子代理"
 subagent.running: "运行中"
 subagent.completed: "已完成"
 subagent.backgrounded: "后台运行"
+subagent.killed: "已终止"
 subagent.step_progress: "步骤 %{current}/%{total}"
 subagent.more: "+%{count} 更多..."
 

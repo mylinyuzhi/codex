@@ -13,11 +13,12 @@ use tracing::debug;
 use crate::error::auto_memory_error as err;
 
 // Environment variable names (matching cocode-config env_loader constants).
-const ENV_COWORK_MEMORY_PATH_OVERRIDE: &str = "COCODE_COWORK_MEMORY_PATH_OVERRIDE";
+// Canonical definitions — config.rs re-uses these via `crate::directory::`.
+pub(crate) const ENV_COWORK_MEMORY_PATH_OVERRIDE: &str = "COCODE_COWORK_MEMORY_PATH_OVERRIDE";
 const ENV_AUTO_MEMORY_DIR: &str = "COCODE_AUTO_MEMORY_DIR";
 const ENV_AUTO_MEMORY_DIR_COMPAT: &str = "CLAUDE_CODE_AUTO_MEMORY_DIR";
-const ENV_REMOTE_MEMORY_DIR: &str = "COCODE_REMOTE_MEMORY_DIR";
-const ENV_REMOTE_MEMORY_DIR_COMPAT: &str = "CLAUDE_CODE_REMOTE_MEMORY_DIR";
+pub(crate) const ENV_REMOTE_MEMORY_DIR: &str = "COCODE_REMOTE_MEMORY_DIR";
+pub(crate) const ENV_REMOTE_MEMORY_DIR_COMPAT: &str = "CLAUDE_CODE_REMOTE_MEMORY_DIR";
 
 /// Get the auto memory directory path.
 ///
@@ -51,6 +52,14 @@ pub fn get_auto_memory_directory(cwd: &Path, custom_dir: Option<&str>) -> PathBu
     let home = get_home_directory();
     let hash = project_hash(cwd);
     home.join("projects").join(hash).join("memory")
+}
+
+/// Team memory subdirectory name.
+pub const TEAM_MEMORY_SUBDIR: &str = "team";
+
+/// Get the team memory directory path.
+pub fn get_team_memory_directory(memory_dir: &Path) -> PathBuf {
+    memory_dir.join(TEAM_MEMORY_SUBDIR)
 }
 
 /// Ensure the memory directory exists.

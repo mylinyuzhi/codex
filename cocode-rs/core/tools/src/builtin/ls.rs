@@ -225,9 +225,14 @@ impl Tool for LsTool {
             .get("path")
             .and_then(|v| v.as_str())
             .map(|p| ctx.resolve_path(p))
-            .unwrap_or_else(|| ctx.cwd.clone());
+            .unwrap_or_else(|| ctx.env.cwd.clone());
 
-        crate::sensitive_files::check_directory_permission(self.name(), &list_path, &ctx.cwd)
+        crate::sensitive_files::check_directory_permission(
+            self.name(),
+            &list_path,
+            &ctx.env.cwd,
+            ctx.identity.agent_id.as_deref(),
+        )
     }
 
     async fn execute(&self, input: Value, ctx: &mut ToolContext) -> Result<ToolOutput> {

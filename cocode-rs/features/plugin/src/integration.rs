@@ -12,7 +12,7 @@ use cocode_hooks::HookRegistry;
 use cocode_rmcp_client::RmcpClient;
 use cocode_skill::SkillManager;
 use cocode_subagent::SubagentManager;
-use cocode_tools::ToolRegistry;
+use cocode_tools_api::ToolRegistry;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;

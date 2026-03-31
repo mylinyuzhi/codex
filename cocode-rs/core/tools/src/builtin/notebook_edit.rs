@@ -267,8 +267,8 @@ impl Tool for NotebookEditTool {
             }
 
             // Auto-allow plan file writes (bypasses NeedsApproval and mode override)
-            if ctx.is_plan_mode
-                && cocode_plan_mode::is_safe_file(&path, ctx.plan_file_path.as_deref())
+            if ctx.env.is_plan_mode
+                && cocode_plan_mode::is_safe_file(&path, ctx.paths.plan_file_path.as_deref())
             {
                 return PermissionResult::Allowed;
             }
@@ -482,7 +482,11 @@ impl Tool for NotebookEditTool {
         use crate::context::FileReadState;
         ctx.record_file_read_with_state(
             &path,
-            FileReadState::complete_with_turn(new_content.clone(), new_mtime, ctx.turn_number),
+            FileReadState::complete_with_turn(
+                new_content.clone(),
+                new_mtime,
+                ctx.identity.turn_number,
+            ),
         )
         .await;
 

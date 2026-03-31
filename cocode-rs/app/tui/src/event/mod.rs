@@ -285,6 +285,12 @@ pub enum TuiCommand {
     /// Kill all running agents (Ctrl+F).
     KillAllAgents,
 
+    /// Focus the next subagent in the subagent panel (Alt+Right).
+    FocusNextAgent,
+
+    /// Focus the previous subagent in the subagent panel (Alt+Left).
+    FocusPrevAgent,
+
     // ========== Tool Collapse ==========
     /// Toggle collapse of tool results in chat.
     ToggleToolCollapse,
@@ -310,6 +316,10 @@ pub enum TuiCommand {
     // ========== Transcript Mode ==========
     /// Toggle between chat and transcript view modes.
     ToggleTranscriptMode,
+
+    // ========== Accent Color ==========
+    /// Set the accent color override (from /color command).
+    SetAccentColor(String),
 
     // ========== Quit ==========
     /// Request to quit the application.
@@ -424,6 +434,12 @@ impl std::fmt::Display for TuiCommand {
             TuiCommand::KillAllAgents => {
                 write!(f, "{}", t!("command.kill_all_agents"))
             }
+            TuiCommand::FocusNextAgent => {
+                write!(f, "{}", t!("command.focus_next_agent"))
+            }
+            TuiCommand::FocusPrevAgent => {
+                write!(f, "{}", t!("command.focus_prev_agent"))
+            }
             TuiCommand::ToggleToolCollapse => {
                 write!(f, "{}", t!("command.toggle_tool_collapse"))
             }
@@ -438,6 +454,9 @@ impl std::fmt::Display for TuiCommand {
             }
             TuiCommand::ToggleTranscriptMode => {
                 write!(f, "{}", t!("command.toggle_transcript_mode"))
+            }
+            TuiCommand::SetAccentColor(_) => {
+                write!(f, "{}", t!("command.set_accent_color"))
             }
             TuiCommand::Quit => write!(f, "{}", t!("command.quit")),
         }

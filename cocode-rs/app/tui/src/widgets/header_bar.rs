@@ -23,6 +23,7 @@ pub struct HeaderBar<'a> {
     is_compacting: bool,
     fallback_model: Option<&'a str>,
     active_worktrees: i32,
+    active_worktree_branch: Option<&'a str>,
 }
 
 impl<'a> HeaderBar<'a> {
@@ -36,6 +37,7 @@ impl<'a> HeaderBar<'a> {
             is_compacting: false,
             fallback_model: None,
             active_worktrees: 0,
+            active_worktree_branch: None,
         }
     }
 
@@ -72,6 +74,12 @@ impl<'a> HeaderBar<'a> {
     /// Set the active worktree count.
     pub fn active_worktrees(mut self, count: i32) -> Self {
         self.active_worktrees = count;
+        self
+    }
+
+    /// Set the active worktree branch name.
+    pub fn active_worktree_branch(mut self, branch: Option<&'a str>) -> Self {
+        self.active_worktree_branch = branch;
         self
     }
 
@@ -112,6 +120,15 @@ impl Widget for HeaderBar<'_> {
         if let Some(dir) = self.working_dir {
             let short_dir = crate::path_display::shorten_path(dir, Self::HEADER_PATH_MAX_LEN);
             left_spans.push(Span::raw(format!(" {short_dir} ")).fg(self.theme.text_dim));
+            if let Some(branch) = self.active_worktree_branch {
+                left_spans.push(
+                    Span::raw(format!(
+                        "{} ",
+                        t!("header.worktree_branch", branch = branch)
+                    ))
+                    .fg(self.theme.secondary),
+                );
+            }
             left_spans.push(Span::raw("│").fg(self.theme.text_dim));
         }
 

@@ -139,7 +139,7 @@ impl Tool for CronCreateTool {
 
         // Persist durable jobs to disk
         if super::input_helpers::bool_or(&input, "durable", false)
-            && let Some(ref home) = ctx.cocode_home
+            && let Some(ref home) = ctx.paths.cocode_home
             && let Err(e) = cocode_cron::save_durable_jobs(&self.store, home).await
         {
             tracing::warn!(error = %e, "Failed to save durable cron jobs");

@@ -25,6 +25,7 @@ pub struct SubagentPanel<'a> {
     subagents: &'a [SubagentInstance],
     theme: &'a Theme,
     max_display: i32,
+    focused_index: Option<i32>,
 }
 
 impl<'a> SubagentPanel<'a> {
@@ -34,12 +35,19 @@ impl<'a> SubagentPanel<'a> {
             subagents,
             theme,
             max_display: 5,
+            focused_index: None,
         }
     }
 
     /// Set the maximum number of subagents to display.
     pub fn max_display(mut self, max: i32) -> Self {
         self.max_display = max;
+        self
+    }
+
+    /// Set the focused subagent index (for quick-switch highlighting).
+    pub fn focused_index(mut self, index: Option<i32>) -> Self {
+        self.focused_index = index;
         self
     }
 }
@@ -65,7 +73,14 @@ impl Widget for SubagentPanel<'_> {
 
         // Render subagents
         let mut y = inner.y;
-        for subagent in self.subagents.iter().take(self.max_display as usize) {
+        for (idx, subagent) in self
+            .subagents
+            .iter()
+            .enumerate()
+            .take(self.max_display as usize)
+        {
+            let is_focused = self.focused_index == Some(idx as i32);
+
             if y >= inner.y + inner.height {
                 break;
             }
@@ -76,6 +91,13 @@ impl Widget for SubagentPanel<'_> {
                 SubagentStatus::Completed => ("✓", Style::default().fg(self.theme.tool_completed)),
                 SubagentStatus::Failed => ("✗", Style::default().fg(self.theme.tool_error)),
                 SubagentStatus::Backgrounded => ("◐", Style::default().fg(self.theme.secondary)),
+                SubagentStatus::Killed => ("⊘", Style::default().fg(self.theme.tool_error)),
+            };
+
+            let focus_style = if is_focused {
+                style.bold().underlined()
+            } else {
+                style
             };
 
             // Use agent color from definition if available
@@ -111,17 +133,22 @@ impl Widget for SubagentPanel<'_> {
             };
 
             // Render status icon
-            buf.set_string(inner.x, y, icon, style);
+            buf.set_string(inner.x, y, icon, focus_style);
 
             // Render agent type icon (uses definition color if available)
             let icon_x = inner.x + 2;
-            buf.set_string(icon_x, y, type_icon, Style::default().fg(type_color));
+            let type_icon_style = if is_focused {
+                Style::default().fg(type_color).bold().underlined()
+            } else {
+                Style::default().fg(type_color)
+            };
+            buf.set_string(icon_x, y, type_icon, type_icon_style);
 
             // Render agent type
             let type_x = icon_x + UnicodeWidthStr::width(type_icon) as u16;
             let type_width = UnicodeWidthStr::width(type_str.as_str())
                 .min((inner.width as usize).saturating_sub(3));
-            buf.set_string(type_x, y, &type_str[..type_width], style.bold());
+            buf.set_string(type_x, y, &type_str[..type_width], focus_style.bold());
 
             // Render colon
             let colon_x = type_x + type_width as u16;

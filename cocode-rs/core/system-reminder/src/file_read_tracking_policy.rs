@@ -206,7 +206,7 @@ pub enum MentionReadDecision {
 ///
 /// The appropriate `MentionReadDecision` for this file.
 pub fn resolve_mention_read_decision(
-    tracker: Option<&cocode_tools::FileTracker>,
+    tracker: Option<&cocode_tools_api::FileTracker>,
     path: &Path,
     has_line_range: bool,
 ) -> MentionReadDecision {

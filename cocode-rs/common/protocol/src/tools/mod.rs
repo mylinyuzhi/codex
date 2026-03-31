@@ -6,6 +6,15 @@
 use serde::Deserialize;
 use serde::Serialize;
 
+/// Prefix for MCP tool qualified names: `mcp__<server>__<tool>`.
+pub const MCP_TOOL_PREFIX: &str = "mcp__";
+
+/// Separator between server and tool in MCP qualified names.
+pub const MCP_TOOL_SEPARATOR: &str = "__";
+
+/// Branch prefix for agent worktrees created by `EnterWorktree`.
+pub const AGENT_WORKTREE_BRANCH_PREFIX: &str = "agent/task-";
+
 /// Builtin tool names with type-safe identifiers.
 ///
 /// Each variant represents a builtin tool with its string name

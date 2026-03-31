@@ -107,6 +107,9 @@ pub struct UiState {
     /// Whether transcript mode is active (shows last N messages only).
     pub transcript_mode: bool,
 
+    /// Per-session accent color override (set by /color command).
+    pub accent_color_override: Option<ratatui::style::Color>,
+
     /// Deadline until which agent-driven overlays are queued instead of
     /// shown immediately. Set when a user-triggered overlay opens to
     /// prevent jarring permission dialog flashes during UI transitions.
@@ -1384,42 +1387,62 @@ impl SandboxPermissionOverlay {
 
 /// Plan mode exit approval overlay.
 ///
-/// Provides 5 options matching Claude Code:
-/// 0 = Clear context + accept edits (Shift+Tab)
-/// 1 = Clear context + bypass
-/// 2 = Keep context + elevate to accept-edits
-/// 3 = Keep context + manual approve (restore pre-plan mode)
-/// 4 = Keep planning (deny) — supports feedback text input
+/// Options are dynamically filtered based on session capabilities.
+/// ClearAndBypass is only shown when `bypass_available` (session launched
+/// with `--dangerously-skip-permissions`).
+///
+/// Without bypass (4 options):
+///   0=ClearAndAcceptEdits, 1=KeepAndElevate, 2=KeepAndDefault, 3=KeepPlanning
+///
+/// With bypass (5 options):
+///   0=ClearAndAcceptEdits, 1=ClearAndBypass, 2=KeepAndElevate, 3=KeepAndDefault, 4=KeepPlanning
 #[derive(Debug, Clone)]
 pub struct PlanExitOverlay {
     /// The approval request from ExitPlanMode.
     pub request: ApprovalRequest,
-    /// Selected option index (0-4).
+    /// Selected option index (0-based within the visible options).
     pub selected: i32,
     /// Plan preview text (first ~2000 chars of plan).
     pub plan_preview: String,
-    /// Whether the feedback text input is active (option 4 selected + Enter pressed).
+    /// Whether the feedback text input is active (last option selected + Enter pressed).
     pub feedback_active: bool,
     /// Feedback text for "keep planning" option.
     pub feedback_text: String,
+    /// Cached visible options (computed once from `bypass_available`).
+    options: Vec<cocode_protocol::PlanExitOption>,
 }
 
 impl PlanExitOverlay {
     /// Create a new plan exit overlay.
-    pub fn new(request: ApprovalRequest) -> Self {
-        // Extract plan preview from the request description
+    pub fn new(request: ApprovalRequest, bypass_available: bool) -> Self {
         let plan_preview = request
             .description
             .strip_prefix("Exit plan mode?\n\n## Implementation Plan\n\n")
             .unwrap_or(&request.description)
             .to_string();
+
+        use cocode_protocol::PlanExitOption;
+        let mut options = vec![PlanExitOption::ClearAndAcceptEdits];
+        if bypass_available {
+            options.push(PlanExitOption::ClearAndBypass);
+        }
+        options.push(PlanExitOption::KeepAndElevate);
+        options.push(PlanExitOption::KeepAndDefault);
+        options.push(PlanExitOption::KeepPlanning);
+
         Self {
             request,
             selected: 0,
             plan_preview,
             feedback_active: false,
             feedback_text: String::new(),
+            options,
         }
+    }
+
+    /// The ordered list of visible `PlanExitOption` values.
+    pub fn visible_options(&self) -> &[cocode_protocol::PlanExitOption] {
+        &self.options
     }
 
     /// Move selection up.
@@ -1431,20 +1454,18 @@ impl PlanExitOverlay {
 
     /// Move selection down.
     pub fn move_down(&mut self) {
-        if self.selected < 4 {
+        let max_index = self.options.len() as i32 - 1;
+        if self.selected < max_index {
             self.selected += 1;
         }
     }
 
     /// Get the `PlanExitOption` for the current selection.
     pub fn selected_option(&self) -> cocode_protocol::PlanExitOption {
-        match self.selected {
-            0 => cocode_protocol::PlanExitOption::ClearAndAcceptEdits,
-            1 => cocode_protocol::PlanExitOption::ClearAndBypass,
-            2 => cocode_protocol::PlanExitOption::KeepAndElevate,
-            3 => cocode_protocol::PlanExitOption::KeepAndDefault,
-            _ => cocode_protocol::PlanExitOption::KeepPlanning,
-        }
+        self.options
+            .get(self.selected as usize)
+            .copied()
+            .unwrap_or(cocode_protocol::PlanExitOption::KeepPlanning)
     }
 }
 

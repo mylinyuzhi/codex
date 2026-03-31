@@ -325,13 +325,16 @@ async fn run_agent_driver(
     // Apply CLI flags to session state (permission mode, agents, tool filters, etc.)
     crate::commands::chat::apply_cli_flags_to_state(&mut state, &flags).await;
 
+    // Gates ClearAndBypass in plan exit dialog and Bypass in mode cycling.
+    let bypass_available = flags.permission_mode == Some(cocode_protocol::PermissionMode::Bypass);
+
     // Emit plugin agent definitions to TUI for autocomplete.
-    // We send all agent definitions (builtin + plugin) so the TUI has
-    // the complete set after plugins are loaded.
+    // Send agent definitions filtered by MCP server availability so the
+    // TUI only shows agents whose required MCP servers are connected.
     {
         let manager = state.subagent_manager().lock().await;
         let agents: Vec<_> = manager
-            .definitions()
+            .available_definitions()
             .iter()
             .map(|d| cocode_protocol::PluginAgentInfo {
                 name: d.name.clone(),
@@ -430,8 +433,14 @@ async fn run_agent_driver(
 
                 // Handle plan exit option (clear context / mode change)
                 if let Some(exit_option) = pending_plan_exit_option.take() {
-                    let plan_prompt =
-                        handle_plan_exit_option(&exit_option, &mut state, &event_tx, &config).await;
+                    let plan_prompt = handle_plan_exit_option(
+                        &exit_option,
+                        &mut state,
+                        &event_tx,
+                        &config,
+                        bypass_available,
+                    )
+                    .await;
 
                     // Auto-submit plan as the first message in the fresh conversation.
                     // This matches CC's behavior: after clear context, the plan is
@@ -525,6 +534,7 @@ async fn run_agent_driver(
                     &event_tx,
                     &config,
                     &working_dir,
+                    bypass_available,
                 )
                 .await;
             }
@@ -692,6 +702,7 @@ async fn run_agent_driver(
                     &event_tx,
                     &config,
                     &working_dir,
+                    bypass_available,
                 )
                 .await;
             }
@@ -705,6 +716,7 @@ async fn run_agent_driver(
                     &config,
                     &working_dir,
                     &mut should_shutdown,
+                    bypass_available,
                 )
                 .await;
             }
@@ -938,6 +950,7 @@ async fn handle_idle_command(
     config: &ConfigManager,
     working_dir: &Path,
     should_shutdown: &mut bool,
+    bypass_available: bool,
 ) {
     match command {
         UserCommand::Interrupt => {
@@ -1188,6 +1201,7 @@ async fn handle_idle_command(
                 .send(CoreEvent::Protocol(
                     ServerNotification::PermissionModeChanged(PermissionModeChangedParams {
                         mode: mode.to_string(),
+                        bypass_available,
                     }),
                 ))
                 .await;
@@ -1449,6 +1463,7 @@ async fn handle_plan_exit_option(
     state: &mut cocode_session::SessionState,
     event_tx: &mpsc::Sender<CoreEvent>,
     _config: &ConfigManager,
+    bypass_available: bool,
 ) -> Option<String> {
     let Some(target_mode) = exit_option.target_mode() else {
         // KeepPlanning — nothing to do
@@ -1492,18 +1507,19 @@ async fn handle_plan_exit_option(
             .send(CoreEvent::Protocol(
                 ServerNotification::PermissionModeChanged(PermissionModeChangedParams {
                     mode: target_mode.to_string(),
+                    bypass_available,
                 }),
             ))
             .await;
 
         // Return plan as initial prompt for auto-submission, with transcript reference
         plan_content.map(|plan| {
+            let path = transcript_path.display();
             format!(
                 "Implement the following plan:\n\n{plan}\n\n\
                  If you need specific details from before exiting plan mode \
                  (like exact code snippets, error messages, or content you generated), \
-                 read the full transcript at: {}",
-                transcript_path.display()
+                 read the full transcript at: {path}"
             )
         })
     } else if exit_option.is_approved() {
@@ -1520,6 +1536,7 @@ async fn handle_plan_exit_option(
             .send(CoreEvent::Protocol(
                 ServerNotification::PermissionModeChanged(PermissionModeChangedParams {
                     mode: target_mode.to_string(),
+                    bypass_available,
                 }),
             ))
             .await;
@@ -1578,6 +1595,7 @@ async fn process_deferred(
     event_tx: &mpsc::Sender<CoreEvent>,
     config: &ConfigManager,
     working_dir: &Path,
+    bypass_available: bool,
 ) {
     let mut dummy_shutdown = false;
     for cmd in deferred.drain(..) {
@@ -1588,6 +1606,7 @@ async fn process_deferred(
             config,
             working_dir,
             &mut dummy_shutdown,
+            bypass_available,
         )
         .await;
     }
@@ -1619,7 +1638,7 @@ async fn handle_local_command_in_driver(
         }
         "agents" => {
             let mgr = state.subagent_manager().lock().await;
-            let defs = mgr.definitions();
+            let defs = mgr.available_definitions();
             let mut text = String::new();
             text.push_str(&format!("Available agent types ({}):\n\n", defs.len()));
             for def in defs {

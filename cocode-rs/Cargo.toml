@@ -8,6 +8,7 @@ members = [
     "common/stack-trace-macro",
     "core/inference",
     "core/message",
+    "core/tools-api",
     "core/tools",
     "core/context",
     "core/prompt",
@@ -101,6 +102,7 @@ cocode-stack-trace-macro = { path = "common/stack-trace-macro" }
 # Internal - core
 cocode-inference = { path = "core/inference" }
 cocode-message = { path = "core/message" }
+cocode-tools-api = { path = "core/tools-api" }
 cocode-tools = { path = "core/tools" }
 cocode-context = { path = "core/context" }
 cocode-prompt = { path = "core/prompt" }

@@ -129,15 +129,30 @@ pub fn handle_server_notification(state: &mut AppState, notification: ServerNoti
             );
         }
         ServerNotification::SubagentCompleted(params) => {
+            let agent_name = state.session.subagent_type_name(&params.agent_id);
+            let is_error = params.is_error;
             state
                 .session
                 .complete_subagent(&params.agent_id, params.result);
             state.session.cleanup_completed_subagents(5);
+            if is_error {
+                state
+                    .ui
+                    .toast_warning(t!("toast.subagent_failed", agent = agent_name).to_string());
+            } else {
+                state
+                    .ui
+                    .toast_success(t!("toast.subagent_completed", agent = agent_name).to_string());
+            }
         }
         ServerNotification::SubagentBackgrounded(params) => {
+            let agent_name = state.session.subagent_type_name(&params.agent_id);
             state
                 .session
                 .background_subagent(&params.agent_id, params.output_file.into());
+            state
+                .ui
+                .toast_info(t!("toast.subagent_backgrounded", agent = agent_name).to_string());
         }
 
         // ── MCP events ─────────────────────────────────────────────────
@@ -262,6 +277,10 @@ pub fn handle_server_notification(state: &mut AppState, notification: ServerNoti
             if let Ok(mode) = params.mode.parse::<cocode_protocol::PermissionMode>() {
                 state.session.permission_mode = mode;
                 state.session.plan_mode = mode == cocode_protocol::PermissionMode::Plan;
+            }
+            // Latch bypass_available: once set to true, it stays true for the session.
+            if params.bypass_available {
+                state.session.bypass_available = true;
             }
         }
 
@@ -388,6 +407,29 @@ pub fn handle_server_notification(state: &mut AppState, notification: ServerNoti
             );
         }
 
+        // ── Worktree events ───────────────────────────────────────────
+        ServerNotification::WorktreeEntered(params) => {
+            state
+                .session
+                .active_worktree_paths
+                .push(crate::state::WorktreeInfo {
+                    path: params.worktree_path,
+                    branch: params.branch.clone(),
+                });
+            state
+                .ui
+                .toast_info(t!("toast.worktree_entered", branch = params.branch).to_string());
+        }
+        ServerNotification::WorktreeExited(params) => {
+            state
+                .session
+                .active_worktree_paths
+                .retain(|w| w.path != params.worktree_path);
+            state.ui.toast_info(
+                t!("toast.worktree_exited", action = params.action.as_str()).to_string(),
+            );
+        }
+
         // ── Summarize ──────────────────────────────────────────────────
         ServerNotification::SummarizeCompleted(params) => {
             if matches!(
@@ -424,11 +466,16 @@ pub fn handle_server_notification(state: &mut AppState, notification: ServerNoti
             );
         }
         ServerNotification::SubagentProgress(params) => {
-            if let Some(msg) = &params.message {
-                state
-                    .session
-                    .update_subagent_progress_msg(&params.agent_id, msg.clone());
-            }
+            let progress = cocode_protocol::AgentProgress {
+                message: params.message,
+                current_step: params.current_step,
+                total_steps: params.total_steps,
+                summary: params.summary,
+                activity: None,
+            };
+            state
+                .session
+                .update_subagent_progress(&params.agent_id, progress);
         }
         ServerNotification::CompactionStarted(_) => {
             state.ui.toast_info(t!("toast.compacting").to_string());
@@ -463,7 +510,7 @@ pub fn handle_server_notification(state: &mut AppState, notification: ServerNoti
         }
         ServerNotification::AgentsKilled(params) => {
             for id in &params.agent_ids {
-                state.session.fail_subagent(id, "killed".to_string());
+                state.session.kill_subagent(id);
             }
             state
                 .ui

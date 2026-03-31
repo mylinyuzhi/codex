@@ -62,16 +62,16 @@ use cocode_system_reminder::generator::DiagnosticInfo;
 use cocode_system_reminder::generator::TeamContextData;
 use cocode_system_reminder::generator::TeamMemberInfo;
 use cocode_system_reminder::generator::UnreadMessage;
-use cocode_tools::ExecutorConfig;
-use cocode_tools::FileReadState;
-use cocode_tools::FileTracker;
-use cocode_tools::ModelCallFn;
-use cocode_tools::ModelCallInput;
-use cocode_tools::ModelCallResult;
-use cocode_tools::SpawnAgentFn;
-use cocode_tools::StreamingToolExecutor;
-use cocode_tools::ToolExecutionResult;
-use cocode_tools::ToolRegistry;
+use cocode_tools_api::ExecutorConfig;
+use cocode_tools_api::FileReadState;
+use cocode_tools_api::FileTracker;
+use cocode_tools_api::ModelCallFn;
+use cocode_tools_api::ModelCallInput;
+use cocode_tools_api::ModelCallResult;
+use cocode_tools_api::SpawnAgentFn;
+use cocode_tools_api::StreamingToolExecutor;
+use cocode_tools_api::ToolExecutionResult;
+use cocode_tools_api::ToolRegistry;
 use std::sync::Mutex;
 
 use tokio::sync::mpsc;
@@ -150,12 +150,18 @@ pub struct AgentLoop {
     total_input_tokens: i32,
     total_output_tokens: i32,
 
-    // Background extraction agent (optional)
+    // Background extraction agent (optional, session memory compaction)
     extraction_agent: Option<Arc<SessionMemoryExtractionAgent>>,
     /// Channel for receiving extraction outcomes from background tasks.
     extraction_result_rx: mpsc::Receiver<crate::session_memory_agent::ExtractionOutcome>,
     /// Sender cloned into each background extraction task.
     extraction_result_tx: mpsc::Sender<crate::session_memory_agent::ExtractionOutcome>,
+
+    // Auto memory extraction coordinator (persistent memory, distinct from session memory)
+    /// Coordinates fire-and-forget extraction of persistent memories
+    /// (user, feedback, project, reference) after each agent turn.
+    auto_memory_extraction:
+        Option<Arc<crate::auto_memory_extraction::AutoMemoryExtractionCoordinator>>,
 
     // Circuit breaker for auto-compaction
     /// Consecutive compaction failure count. Reset to 0 on success.
@@ -212,7 +218,7 @@ pub struct AgentLoop {
     skill_manager: Option<Arc<SkillManager>>,
     /// Shared tracker for skills invoked via the Skill tool during execution.
     /// Persists across turns so invoked skills can be injected into system reminders.
-    invoked_skills_tracker: Arc<tokio::sync::Mutex<Vec<cocode_tools::InvokedSkill>>>,
+    invoked_skills_tracker: Arc<tokio::sync::Mutex<Vec<cocode_tools_api::InvokedSkill>>>,
     /// Active skill-level tool restrictions.
     /// Set when a skill with `allowed_tools` is invoked via the Skill tool.
     /// Applied to the executor on the next turn iteration.
@@ -300,7 +306,7 @@ pub struct AgentLoop {
     ///
     /// Shared across turns so the TUI driver can send responses that
     /// unblock the AskUserQuestion tool's oneshot channel.
-    question_responder: Arc<cocode_tools::QuestionResponder>,
+    question_responder: Arc<cocode_tools_api::QuestionResponder>,
 
     /// Large files that were compacted but not restored inline.
     ///
@@ -313,10 +319,10 @@ pub struct AgentLoop {
     cocode_home: Option<std::path::PathBuf>,
 
     /// Optional permission requester for interactive approval flow (SDK mode).
-    permission_requester: Option<Arc<dyn cocode_tools::PermissionRequester>>,
+    permission_requester: Option<Arc<dyn cocode_tools_api::PermissionRequester>>,
 
     /// Shared set of agent IDs killed via TaskStop (persists across turns).
-    killed_agents: cocode_tools::context::KilledAgents,
+    killed_agents: cocode_tools_api::context::KilledAgents,
 
     /// Per-turn background agent task info pushed by the session layer.
     ///
@@ -326,6 +332,12 @@ pub struct AgentLoop {
     /// collected directly from the registry, this closes the feedback loop
     /// between the subagent manager and the unified tasks system reminder.
     background_agent_tasks: Vec<cocode_system_reminder::BackgroundTaskInfo>,
+
+    /// Agent-specific memory directories for @agent-name search in system reminders.
+    ///
+    /// Maps agent type names to their resolved memory directory paths,
+    /// populated from registered agent definitions with `MemoryScope`.
+    agent_memory_dirs: std::collections::HashMap<String, std::path::PathBuf>,
 }
 
 impl AgentLoop {
@@ -1079,6 +1091,15 @@ impl AgentLoop {
             turn_number = self.turn_number,
             "Step 11-12: Tool call check and execution"
         );
+        // Collect file-modified paths from this turn's tool results for
+        // direct-write detection by auto memory extraction (step 15.3).
+        // Only allocated when extraction is enabled.
+        let mut turn_write_paths: Option<Vec<std::path::PathBuf>> =
+            if self.auto_memory_extraction.is_some() {
+                Some(Vec::new())
+            } else {
+                None
+            };
         if has_tool_calls {
             let tool_calls: Vec<_> = collected
                 .content
@@ -1156,9 +1177,25 @@ impl AgentLoop {
             self.add_tool_results_to_history(&results, &tool_calls)
                 .await;
 
+            // Collect file-modified paths for direct-write detection (step 15.3)
+            if let Some(ref mut write_paths) = turn_write_paths {
+                for result in &results {
+                    if let Ok(output) = &result.result {
+                        for modifier in &output.modifiers {
+                            if let cocode_protocol::ContextModifier::FileModified { path, .. } =
+                                modifier
+                            {
+                                write_paths.push(path.clone());
+                            }
+                        }
+                    }
+                }
+            }
+
             // ── Handle plan mode transitions ──
-            if let Some(result) =
-                self.handle_plan_mode_transitions(&tool_calls, &results, &collected.content)
+            if let Some(result) = self
+                .handle_plan_mode_transitions(&tool_calls, &results, &collected.content)
+                .await
             {
                 return Ok(result);
             }
@@ -1193,6 +1230,59 @@ impl AgentLoop {
             turn_counter = auto_compact_tracking.turn_counter,
             "Step 15: Auto-compact tracking updated"
         );
+
+        // ── STEP 15.3: Auto memory extraction (persistent memories) ──
+        // Fire-and-forget extraction of user/feedback/project/reference memories.
+        // Distinct from session memory extraction (step 15.5) which does compaction.
+        if let Some(ref coordinator) = self.auto_memory_extraction {
+            let memory_enabled = self
+                .auto_memory_state
+                .as_ref()
+                .is_some_and(|s| s.config.enabled);
+            if coordinator.should_extract(self.is_subagent, memory_enabled)
+                && !coordinator.has_direct_memory_writes(turn_write_paths.as_deref().unwrap_or(&[]))
+            {
+                let team_memory_enabled =
+                    self.features.enabled(cocode_protocol::Feature::TeamMemory);
+                let variant = crate::auto_memory_extraction::ExtractionPromptVariant::select(
+                    team_memory_enabled,
+                    /*typed_format=*/ true,
+                );
+                let message_count = self.message_history.turn_count();
+                let coordinator = Arc::clone(coordinator);
+                let cancel = self.cancel_token.clone();
+                if let Some(variant) = coordinator.try_start(message_count, variant).await {
+                    let prompt = crate::auto_memory_extraction::build_extraction_prompt(
+                        variant,
+                        message_count,
+                    );
+                    debug!(message_count, "Step 15.3: Spawning auto memory extraction");
+                    let coordinator_clone = Arc::clone(&coordinator);
+                    tokio::spawn(async move {
+                        if cancel.is_cancelled() {
+                            coordinator.mark_failed().await;
+                            return;
+                        }
+                        // Placeholder: the extraction prompt is built and ready.
+                        // When spawn_agent_fn is wired, this will spawn a restricted
+                        // subagent with only Read + Edit/Write in memory dir.
+                        let _ = prompt;
+                        debug!("Auto memory extraction task completed (stub)");
+                        if let Some(trailing) = coordinator.complete().await {
+                            // Handle trailing extraction from coalescing
+                            let _trailing_prompt =
+                                crate::auto_memory_extraction::build_extraction_prompt(
+                                    trailing.variant,
+                                    trailing.message_count,
+                                );
+                            debug!("Trailing auto memory extraction completed (stub)");
+                            // Complete the trailing run too
+                            let _ = coordinator_clone.complete().await;
+                        }
+                    });
+                }
+            }
+        }
 
         // ── STEP 15.5: Check session memory extraction trigger ──
         // This runs a background agent to proactively update summary.md
@@ -1526,9 +1616,51 @@ impl AgentLoop {
                 })
                 .is_auto_compact_enabled(self.compact_config.is_auto_compact_enabled());
 
+            // Wire read file paths for anti-deduplication in relevant memories.
+            // Reuse the already-snapshotted reminder_tracker_view instead of
+            // re-locking the shared tools tracker.
+            {
+                let read_paths: std::collections::HashSet<std::path::PathBuf> =
+                    reminder_tracker_view.read_files().into_iter().collect();
+                if !read_paths.is_empty() {
+                    builder = builder.read_file_paths(read_paths);
+                }
+            }
+
+            // Wire recent tool names from the previous turn for LLM memory selection.
+            // The current turn is being constructed, so we look at the second-to-last
+            // turn's tool_calls to know which tools were just exercised.
+            {
+                let turns = self.message_history.turns();
+                if turns.len() >= 2 {
+                    let prev_turn = &turns[turns.len() - 2];
+                    let tool_names: Vec<String> = prev_turn
+                        .tool_calls
+                        .iter()
+                        .map(|tc| tc.name.clone())
+                        .collect();
+                    if !tool_names.is_empty() {
+                        builder = builder.recent_tool_names(tool_names);
+                    }
+                }
+            }
+
             // Wire auto memory state into generator context
             if let Some(ref state) = self.auto_memory_state {
                 builder = builder.auto_memory_state(Arc::clone(state));
+
+                // LLM-based memory selection — model role is configurable
+                // (defaults to Fast). Reuses the ModelCallFn pattern from tools-api.
+                if state.config.relevant_memories_enabled {
+                    builder = builder.model_call_fn(
+                        self.build_model_call_fn(state.config.memory_selection_model_role),
+                    );
+                }
+            }
+
+            // Wire agent memory directories for @agent-name search
+            if !self.agent_memory_dirs.is_empty() {
+                builder = builder.agent_memory_dirs(self.agent_memory_dirs.clone());
             }
 
             // Wire sandbox violations into generator context
@@ -1552,11 +1684,16 @@ impl AgentLoop {
             {
                 // Query team membership
                 if let Some(team) = store.get_team(team_name).await {
+                    let is_leader = team
+                        .leader_agent_id
+                        .as_ref()
+                        .is_some_and(|lid| *lid == identity.agent_id);
                     builder = builder.team_context(TeamContextData {
                         agent_id: identity.agent_id.clone(),
                         agent_name: identity.name.clone(),
                         team_name: team_name.clone(),
                         agent_type: identity.agent_type.clone(),
+                        is_leader,
                         members: team
                             .members
                             .iter()
@@ -1574,6 +1711,21 @@ impl AgentLoop {
                 if let Ok(messages) = mbox.take_unread(team_name, &identity.agent_id).await
                     && !messages.is_empty()
                 {
+                    // Handle plan_approval_response: auto-exit plan mode on approval
+                    // Validate sender is the team leader (CC: chunks.194.mjs:1074-1095)
+                    let leader_id = store
+                        .get_team(team_name)
+                        .await
+                        .and_then(|t| t.leader_agent_id);
+                    for msg in &messages {
+                        if msg.message_type == cocode_team::MessageType::PlanApprovalResponse
+                            && self.plan_mode_state.is_active
+                            && leader_id.as_deref().is_some_and(|lid| lid == msg.from)
+                        {
+                            self.handle_plan_approval_response(&msg.content).await;
+                        }
+                    }
+
                     builder = builder.unread_messages(
                         messages
                             .into_iter()
@@ -1909,6 +2061,27 @@ impl AgentLoop {
         injected_messages
     }
 
+    /// Build a `ModelCallFn` closure that resolves the given role through
+    /// the model hub and delegates to `do_generate`.
+    fn build_model_call_fn(&self, role: cocode_protocol::ModelRole) -> ModelCallFn {
+        let hub = self.model_hub.clone();
+        let sels = self.selections.clone();
+        Arc::new(move |input: ModelCallInput| {
+            let hub = hub.clone();
+            let sels = sels.clone();
+            Box::pin(async move {
+                let (model, _provider) = hub
+                    .get_model_for_role_with_selections(role, &sels)
+                    .map_err(cocode_error::boxed_err)?;
+                let response = model
+                    .do_generate(input.request)
+                    .await
+                    .map_err(|e| cocode_error::boxed(e, cocode_error::StatusCode::External))?;
+                Ok(ModelCallResult { response })
+            })
+        })
+    }
+
     /// Build the `StreamingToolExecutor` for the current turn.
     ///
     /// Configures the executor with all tool system components: permissions,
@@ -1930,6 +2103,9 @@ impl AgentLoop {
                     .and_then(|(_, info, _)| info.max_tool_output_chars)
             });
 
+        // Resolve team name from agent identity (if running as a teammate)
+        let team_name_for_executor = cocode_subagent::current_agent().and_then(|id| id.team_name);
+
         let executor_config = ExecutorConfig {
             session_id: query_tracking.chain_id.clone(),
             turn_id: turn_id.to_string(),
@@ -1942,10 +2118,15 @@ impl AgentLoop {
                 .auto_memory_state
                 .as_ref()
                 .map(|s| s.config.directory.clone()),
+            is_cowork_mode: self
+                .auto_memory_state
+                .as_ref()
+                .is_some_and(|s| s.config.is_cowork_mode),
             features: self.features.clone(),
             web_search_config: self.web_search_config.clone(),
             web_fetch_config: self.web_fetch_config.clone(),
             max_tool_output_chars,
+            team_name: team_name_for_executor,
             ..ExecutorConfig::default()
         };
         let mut executor = StreamingToolExecutor::new(
@@ -1997,25 +2178,8 @@ impl AgentLoop {
         }
 
         // Wire model_call_fn for SmartEdit LLM correction (prefer Fast model, fallback to Main)
-        {
-            let hub = self.model_hub.clone();
-            let sels = self.selections.clone();
-            let model_call_fn: ModelCallFn = std::sync::Arc::new(move |input: ModelCallInput| {
-                let hub = hub.clone();
-                let sels = sels.clone();
-                Box::pin(async move {
-                    let (model, _provider) = hub
-                        .get_model_for_role_with_selections(cocode_protocol::ModelRole::Fast, &sels)
-                        .map_err(cocode_error::boxed_err)?;
-                    let response = model
-                        .do_generate(input.request)
-                        .await
-                        .map_err(|e| cocode_error::boxed(e, cocode_error::StatusCode::External))?;
-                    Ok(ModelCallResult { response })
-                })
-            });
-            executor = executor.with_model_call_fn(model_call_fn);
-        }
+        executor =
+            executor.with_model_call_fn(self.build_model_call_fn(cocode_protocol::ModelRole::Fast));
 
         // Add skill_manager if available for Skill tool
         if let Some(ref sm) = self.skill_manager {
@@ -2053,7 +2217,7 @@ impl AgentLoop {
     ///
     /// Returns `Some(LoopResult)` if ExitPlanMode was called (early loop exit),
     /// or `None` if no plan mode exit occurred.
-    fn handle_plan_mode_transitions(
+    async fn handle_plan_mode_transitions(
         &mut self,
         tool_calls: &[ToolCall],
         results: &[ToolExecutionResult],
@@ -2097,7 +2261,29 @@ impl AgentLoop {
                         tracing::warn!("ExitPlanMode called while not in plan mode, ignoring");
                         continue;
                     }
-                    // Update plan mode state and restore pre-plan permission mode
+
+                    // Check if the tool returned awaitingLeaderApproval (team mode)
+                    let is_team_approval = results
+                        .iter()
+                        .find(|r| r.call_id == tc.tool_call_id)
+                        .and_then(|r| r.result.as_ref().ok())
+                        .and_then(|output| match &output.content {
+                            ToolResultContent::Structured(json) => {
+                                json.get("awaitingLeaderApproval")?.as_bool()
+                            }
+                            _ => None,
+                        })
+                        .unwrap_or(false);
+
+                    if is_team_approval {
+                        // Team mode: send plan_approval_request to team-lead via
+                        // mailbox, but do NOT exit plan mode (wait for response).
+                        self.send_plan_approval_to_leader(tc, results).await;
+                        // Loop continues — plan mode stays active
+                        continue;
+                    }
+
+                    // User mode: exit plan mode and restore permission mode
                     let restored_mode = self.plan_mode_state.exit(self.turn_number);
                     if let Some(mode) = restored_mode {
                         self.config.permission_mode = mode;
@@ -2150,6 +2336,157 @@ impl AgentLoop {
             }
         }
         None
+    }
+
+    /// Send a plan approval request to the team-lead via mailbox.
+    ///
+    /// Called when ExitPlanMode returns `awaitingLeaderApproval: true` in team
+    /// mode. The teammate stays in plan mode until the team-lead responds.
+    async fn send_plan_approval_to_leader(&self, tc: &ToolCall, results: &[ToolExecutionResult]) {
+        let Some(mbox) = &self.team_mailbox else {
+            tracing::warn!("Team mailbox not available for plan approval request");
+            return;
+        };
+        let Some(store) = &self.team_store else {
+            tracing::warn!("Team store not available for plan approval request");
+            return;
+        };
+        let Some(identity) = cocode_subagent::current_agent() else {
+            tracing::warn!("No agent identity for plan approval request");
+            return;
+        };
+        let Some(ref team_name) = identity.team_name else {
+            tracing::warn!("No team name for plan approval request");
+            return;
+        };
+
+        // Resolve the leader's agent_id from the team store
+        let leader_id = match store.get_team(team_name).await {
+            Some(team) => team
+                .leader_agent_id
+                .unwrap_or_else(|| "team-lead".to_string()),
+            None => {
+                tracing::warn!(team = %team_name, "Team not found for plan approval");
+                return;
+            }
+        };
+
+        // Extract plan content and file path from the tool result
+        let (plan_content, plan_file_path) = results
+            .iter()
+            .find(|r| r.call_id == tc.tool_call_id)
+            .and_then(|r| r.result.as_ref().ok())
+            .map(|output| match &output.content {
+                ToolResultContent::Structured(json) => {
+                    let content = json
+                        .get("plan")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let path = json
+                        .get("filePath")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    (content, path)
+                }
+                _ => (String::new(), String::new()),
+            })
+            .unwrap_or_default();
+
+        // Build the plan approval request message (CC: chunks.143.mjs:2884-2907)
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let request_id = format!("plan_approval_{}_{ts}", identity.agent_id);
+        let request_content = serde_json::json!({
+            "type": cocode_team::MessageType::PlanApprovalRequest.as_str(),
+            "from": identity.agent_id,
+            "timestamp": ts,
+            "planFilePath": plan_file_path,
+            "planContent": plan_content,
+            "requestId": request_id,
+        });
+
+        let msg = cocode_team::AgentMessage::new(
+            &identity.agent_id,
+            &leader_id,
+            request_content.to_string(),
+            cocode_team::MessageType::PlanApprovalRequest,
+        )
+        .with_team(team_name);
+
+        match mbox.send(team_name, &msg).await {
+            Ok(()) => {
+                info!(
+                    turn = self.turn_number,
+                    team = %team_name,
+                    "Sent plan_approval_request to team-lead"
+                );
+            }
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    "Failed to send plan_approval_request to team-lead"
+                );
+            }
+        }
+    }
+
+    /// Handle a plan_approval_response message from the team-lead.
+    ///
+    /// When approved, exits plan mode and restores the pre-plan permission mode.
+    /// When rejected, stays in plan mode (the rejection feedback is shown via
+    /// the system reminder as a regular unread message).
+    ///
+    /// CC: chunks.194.mjs:1074-1095 (InboxPoller)
+    async fn handle_plan_approval_response(&mut self, content: &str) {
+        let response: serde_json::Value = match serde_json::from_str(content) {
+            Ok(v) => v,
+            Err(_) => {
+                tracing::warn!("Failed to parse plan_approval_response as JSON");
+                return;
+            }
+        };
+
+        let approved = response
+            .get("approved")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+
+        if approved {
+            let restored_mode = self.plan_mode_state.exit(self.turn_number);
+            if let Some(mode) = restored_mode {
+                self.config.permission_mode = mode;
+            }
+            info!(
+                turn = self.turn_number,
+                "Plan approved by team-lead, exited plan mode"
+            );
+            // plan_file_path persists after exit() for PlanFileReferenceGenerator
+            let plan_file = self
+                .plan_mode_state
+                .plan_file_path
+                .as_ref()
+                .map(|p| p.display().to_string());
+            self.emit_protocol(ServerNotification::PlanModeChanged(PlanModeChangedParams {
+                entered: false,
+                plan_file,
+                approved: Some(true),
+            }))
+            .await;
+        } else {
+            let feedback = response
+                .get("feedback")
+                .and_then(|v| v.as_str())
+                .unwrap_or("No feedback provided");
+            info!(
+                turn = self.turn_number,
+                feedback = %feedback,
+                "Plan rejected by team-lead, staying in plan mode"
+            );
+        }
     }
 
     /// Emit a protocol event (SDK/app-server visible).

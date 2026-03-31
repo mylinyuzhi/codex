@@ -21,8 +21,8 @@ use cocode_protocol::TokenUsage;
 use cocode_protocol::server_notification::*;
 use cocode_system_reminder::InjectedBlock;
 use cocode_system_reminder::InjectedMessage;
-use cocode_tools::StreamingToolExecutor;
-use cocode_tools::ToolDefinition;
+use cocode_tools_api::StreamingToolExecutor;
+use cocode_tools_api::ToolDefinition;
 use snafu::ResultExt;
 use tracing::debug;
 use tracing::error;
@@ -48,19 +48,9 @@ impl AgentLoop {
         let session_id = &query_tracking.chain_id;
 
         // Apply skill model override if set, then clear it (one-shot).
-        let override_role =
-            self.model_override
-                .take()
-                .and_then(|m| match m.to_lowercase().as_str() {
-                    "sonnet" | "fast" => Some(cocode_protocol::model::ModelRole::Fast),
-                    "opus" | "main" => Some(cocode_protocol::model::ModelRole::Main),
-                    "haiku" => Some(cocode_protocol::model::ModelRole::Fast),
-                    "inherit" => None,
-                    _ => {
-                        warn!(model = %m, "Unknown skill model override, ignoring");
-                        None
-                    }
-                });
+        let override_role = self.model_override.take().and_then(|m| {
+            cocode_protocol::execution::ExecutionIdentity::parse_model_string(&m).as_role()
+        });
 
         let effective_selections = if let Some(role) = override_role {
             // Temporarily swap main selection with the role's selection

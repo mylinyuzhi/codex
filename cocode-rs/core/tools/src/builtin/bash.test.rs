@@ -353,7 +353,7 @@ fn test_plan_mode_allowed_sed_without_inplace() {
 async fn test_plan_mode_check_permission_allows_readonly() {
     let tool = BashTool::new();
     let mut ctx = make_context();
-    ctx.is_plan_mode = true;
+    ctx.env.is_plan_mode = true;
 
     // Read-only command should be allowed
     let input = serde_json::json!({ "command": "ls -la" });
@@ -370,7 +370,7 @@ async fn test_plan_mode_check_permission_allows_readonly() {
 async fn test_plan_mode_check_permission_denies_write() {
     let tool = BashTool::new();
     let mut ctx = make_context();
-    ctx.is_plan_mode = true;
+    ctx.env.is_plan_mode = true;
 
     // Write command should be denied
     let input = serde_json::json!({ "command": "rm -rf /" });
@@ -449,7 +449,7 @@ fn test_compound_single_cd_ok() {
 async fn test_non_plan_mode_unaffected() {
     let tool = BashTool::new();
     let ctx = make_context();
-    assert!(!ctx.is_plan_mode);
+    assert!(!ctx.env.is_plan_mode);
 
     // In normal mode, read-only commands are still Allowed
     let input = serde_json::json!({ "command": "ls -la" });
