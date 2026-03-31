@@ -387,6 +387,22 @@ fn build_cli_flags(cli: &mut Cli) -> anyhow::Result<CliFlags> {
 
     // Parse --permission-mode, with --dangerously-skip-permissions as override
     let permission_mode = if cli.dangerously_skip_permissions {
+        // CC safety check: block --dangerously-skip-permissions when running as root
+        // unless inside a sandbox (IS_SANDBOX=1 or COCODE_BUBBLEWRAP=1).
+        #[cfg(unix)]
+        {
+            // SAFETY: getuid() is a simple syscall with no safety invariants.
+            let uid = unsafe { libc::getuid() };
+            if uid == 0
+                && std::env::var("IS_SANDBOX").as_deref() != Ok("1")
+                && std::env::var("COCODE_BUBBLEWRAP").as_deref() != Ok("1")
+            {
+                anyhow::bail!(
+                    "--dangerously-skip-permissions cannot be used with root/sudo privileges \
+                     for security reasons. Use IS_SANDBOX=1 to override in sandboxed environments."
+                );
+            }
+        }
         Some(PermissionMode::Bypass)
     } else if let Some(ref mode_str) = cli.permission_mode {
         Some(parse_permission_mode(mode_str)?)

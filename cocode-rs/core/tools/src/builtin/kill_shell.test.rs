@@ -33,14 +33,16 @@ async fn test_kill_shell_tool_stops_task() {
         completed: Arc::new(Notify::new()),
         cancel_token: tokio_util::sync::CancellationToken::new(),
     };
-    ctx.shell_executor
+    ctx.services
+        .shell_executor
         .background_registry
         .register("task-123".to_string(), process)
         .await;
 
     // Verify task is running
     assert!(
-        ctx.shell_executor
+        ctx.services
+            .shell_executor
             .background_registry
             .is_running("task-123")
             .await
@@ -62,7 +64,8 @@ async fn test_kill_shell_tool_stops_task() {
 
     // Verify task is no longer running
     assert!(
-        !ctx.shell_executor
+        !ctx.services
+            .shell_executor
             .background_registry
             .is_running("task-123")
             .await
@@ -76,7 +79,8 @@ async fn test_kill_agent_with_cancel_token() {
 
     // Register a cancel token for an agent
     let token = tokio_util::sync::CancellationToken::new();
-    ctx.agent_cancel_tokens
+    ctx.agent
+        .agent_cancel_tokens
         .lock()
         .await
         .insert("agent-abc".to_string(), token.clone());
@@ -105,7 +109,8 @@ async fn test_kill_agent_records_killed_id() {
 
     // Register a cancel token for an agent
     let token = tokio_util::sync::CancellationToken::new();
-    ctx.agent_cancel_tokens
+    ctx.agent
+        .agent_cancel_tokens
         .lock()
         .await
         .insert("agent-xyz".to_string(), token.clone());
@@ -119,7 +124,7 @@ async fn test_kill_agent_records_killed_id() {
     assert!(token.is_cancelled());
 
     // Verify the agent_id was recorded in killed_agents
-    let killed = ctx.killed_agents.lock().await;
+    let killed = ctx.agent.killed_agents.lock().await;
     assert!(killed.contains("agent-xyz"));
 }
 

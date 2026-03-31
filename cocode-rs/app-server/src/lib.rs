@@ -11,7 +11,7 @@ mod connection;
 mod error_code;
 pub mod mcp_bridge;
 pub mod permission;
-mod persistence_handlers;
+pub mod persistence_handlers;
 pub mod processor;
 pub mod session_builder;
 mod session_factory;

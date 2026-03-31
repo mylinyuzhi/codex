@@ -28,7 +28,7 @@ cocode-error.workspace = true
 cocode-app-server-protocol.workspace = true
 cocode-app-server.workspace = true
 cocode-hooks.workspace = true
-cocode-tools.workspace = true
+cocode-tools-api.workspace = true
 cocode-rmcp-client.workspace = true
 cocode-mcp-types.workspace = true
 
@@ -46,6 +46,9 @@ dirs.workspace = true
 futures.workspace = true
 serde_json.workspace = true
 uuid = { workspace = true, features = ["v4"] }
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

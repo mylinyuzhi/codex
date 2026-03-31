@@ -6,6 +6,7 @@ use super::ModelSpec;
 use serde::Deserialize;
 use serde::Serialize;
 use strum::Display;
+use strum::EnumString;
 use strum::IntoStaticStr;
 
 /// Model role identifier.
@@ -23,6 +24,7 @@ use strum::IntoStaticStr;
     Serialize,
     Deserialize,
     Display,
+    EnumString,
     IntoStaticStr,
 )]
 #[serde(rename_all = "lowercase")]

@@ -132,6 +132,8 @@ pub enum AttachmentType {
     TeamContext,
     /// Unread mailbox messages for teammates.
     TeamMailbox,
+    /// Idle state reminder for teammates with no work.
+    TeammateIdle,
 
     // === Phase 2 (future) ===
     /// Tool result injection.
@@ -234,6 +236,7 @@ impl AttachmentType {
             | AttachmentType::Rewind
             | AttachmentType::TeamContext
             | AttachmentType::TeamMailbox
+            | AttachmentType::TeammateIdle
             | AttachmentType::CompactionReminder
             | AttachmentType::AutoMemoryPrompt
             | AttachmentType::RelevantMemories
@@ -274,6 +277,7 @@ impl AttachmentType {
             | AttachmentType::NestedMemory
             | AttachmentType::TeamContext
             | AttachmentType::TeamMailbox
+            | AttachmentType::TeammateIdle
             | AttachmentType::AutoMemoryPrompt
             | AttachmentType::SandboxViolations
             | AttachmentType::DateChange => ReminderTier::Core,
@@ -359,6 +363,7 @@ impl AttachmentType {
             AttachmentType::CompactFileReference => "compact_file_reference",
             AttachmentType::TeamContext => "team_context",
             AttachmentType::TeamMailbox => "team_mailbox",
+            AttachmentType::TeammateIdle => "teammate_idle",
             AttachmentType::Rewind => "rewind",
             AttachmentType::CompactionReminder => "compaction_reminder",
             AttachmentType::AutoMemoryPrompt => "auto_memory_prompt",

@@ -7,6 +7,7 @@ use super::*;
 use crate::config::ResolvedAutoMemoryConfig;
 
 fn test_config(dir: PathBuf) -> ResolvedAutoMemoryConfig {
+    let team_memory_directory = dir.join("team");
     ResolvedAutoMemoryConfig {
         enabled: true,
         directory: dir,
@@ -22,6 +23,11 @@ fn test_config(dir: PathBuf) -> ResolvedAutoMemoryConfig {
         max_files_to_scan: 200,
         min_keyword_length: 3,
         disable_reason: None,
+        team_memory_enabled: false,
+        team_memory_directory,
+        max_memory_chars: 40_000,
+        is_cowork_mode: false,
+        memory_selection_model_role: cocode_protocol::ModelRole::Fast,
     }
 }
 

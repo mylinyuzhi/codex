@@ -103,7 +103,7 @@ impl Tool for ShellTool {
         // the sandbox itself becomes the security boundary.
         let bypass_requested =
             super::input_helpers::bool_or(input, "dangerouslyDisableSandbox", false);
-        if let Some(ref state) = ctx.sandbox_state
+        if let Some(ref state) = ctx.services.sandbox_state
             && state.auto_allow_enabled()
             && !bypass_requested
             && state.should_sandbox_command(&command_str, cocode_sandbox::SandboxBypass::No)
@@ -112,7 +112,7 @@ impl Tool for ShellTool {
         }
 
         // Plan mode: only allow read-only commands.
-        if ctx.is_plan_mode {
+        if ctx.env.is_plan_mode {
             if super::bash::is_plan_mode_allowed(&command_str) {
                 return PermissionResult::Allowed;
             }
@@ -163,6 +163,7 @@ impl Tool for ShellTool {
                         allow_remember: true,
                         proposed_prefix_pattern: None,
                         input: Some(input.clone()),
+                        source_agent_id: ctx.identity.agent_id.clone(),
                     },
                 };
             }
@@ -171,7 +172,7 @@ impl Tool for ShellTool {
         // Non-trivial command with no detected risks → still needs approval
         let description = cocode_utils_string::truncate_str(&command_str, 120);
         // Annotate when sandbox bypass is active so the user knows this runs unsandboxed
-        let description = if bypass_requested && ctx.sandbox_state.is_some() {
+        let description = if bypass_requested && ctx.services.sandbox_state.is_some() {
             format!("{description} (unsandboxed)")
         } else {
             description
@@ -185,6 +186,7 @@ impl Tool for ShellTool {
                 allow_remember: true,
                 proposed_prefix_pattern: None,
                 input: Some(input.clone()),
+                source_agent_id: ctx.identity.agent_id.clone(),
             },
         }
     }
@@ -223,7 +225,7 @@ impl Tool for ShellTool {
         let result = tokio::time::timeout(timeout_duration, async {
             Command::new(&args[0])
                 .args(&args[1..])
-                .current_dir(&ctx.cwd)
+                .current_dir(&ctx.env.cwd)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .output()

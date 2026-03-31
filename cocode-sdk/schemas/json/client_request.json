@@ -1315,6 +1315,13 @@
             "null"
           ]
         },
+        "permission_prompt_tool": {
+          "description": "MCP tool name for routing permission decisions (enterprise automation).\n\nWhen set, permission approval requests are first routed to the named MCP tool. If the tool is unavailable or returns an error, the request falls back to the default SDK approval bridge.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "permission_rules": {
           "description": "Permission rules.",
           "type": [
@@ -1326,6 +1333,13 @@
         "prompt": {
           "description": "Initial prompt to send.",
           "type": "string"
+        },
+        "prompt_suggestions": {
+          "description": "Enable prompt suggestions after each turn.",
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "sandbox": {
           "description": "Sandbox configuration.",

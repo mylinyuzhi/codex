@@ -253,7 +253,10 @@ pub use web_search_config::WebSearchProvider;
 pub use correlation::CorrelatedEvent;
 pub use correlation::SubmissionId;
 
-// Tool name types
+// Tool name types and MCP/worktree constants
+pub use tools::AGENT_WORKTREE_BRANCH_PREFIX;
+pub use tools::MCP_TOOL_PREFIX;
+pub use tools::MCP_TOOL_SEPARATOR;
 pub use tools::ToolName;
 
 // Subagent types

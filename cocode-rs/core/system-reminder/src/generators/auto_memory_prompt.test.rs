@@ -6,9 +6,11 @@ fn test_auto_memory_config(
     enabled: bool,
     memory_extraction_enabled: bool,
 ) -> cocode_auto_memory::ResolvedAutoMemoryConfig {
+    let directory = std::path::PathBuf::from("/tmp/test-memory");
+    let team_memory_directory = directory.join("team");
     cocode_auto_memory::ResolvedAutoMemoryConfig {
         enabled,
-        directory: std::path::PathBuf::from("/tmp/test-memory"),
+        directory,
         max_lines: 200,
         max_relevant_files: 5,
         max_lines_per_file: 200,
@@ -21,6 +23,11 @@ fn test_auto_memory_config(
         max_files_to_scan: 200,
         min_keyword_length: 3,
         disable_reason: None,
+        team_memory_enabled: false,
+        team_memory_directory,
+        max_memory_chars: 40_000,
+        is_cowork_mode: false,
+        memory_selection_model_role: cocode_protocol::ModelRole::Fast,
     }
 }
 

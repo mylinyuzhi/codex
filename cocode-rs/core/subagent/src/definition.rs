@@ -148,6 +148,28 @@ pub enum MemoryScope {
     Local,
 }
 
+impl MemoryScope {
+    /// Resolve the memory directory for an agent with this scope.
+    pub fn resolve_dir(
+        &self,
+        cocode_home: &std::path::Path,
+        working_dir: &std::path::Path,
+        agent_type: &str,
+    ) -> std::path::PathBuf {
+        match self {
+            Self::User => cocode_home.join("agent-memory").join(agent_type),
+            Self::Project => working_dir
+                .join(".cocode")
+                .join("agent-memory")
+                .join(agent_type),
+            Self::Local => working_dir
+                .join(".cocode")
+                .join("agent-memory-local")
+                .join(agent_type),
+        }
+    }
+}
+
 /// A lightweight hook definition scoped to an agent.
 ///
 /// Similar to `HookDefinition` but serialized from agent frontmatter.

@@ -97,7 +97,7 @@ impl Tool for WebFetchTool {
         Some(cocode_protocol::Feature::WebFetch)
     }
 
-    async fn check_permission(&self, input: &Value, _ctx: &ToolContext) -> PermissionResult {
+    async fn check_permission(&self, input: &Value, ctx: &ToolContext) -> PermissionResult {
         let url = match input.get("url").and_then(|v| v.as_str()) {
             Some(u) => u,
             None => return PermissionResult::Passthrough,
@@ -140,6 +140,7 @@ impl Tool for WebFetchTool {
                 allow_remember: true,
                 proposed_prefix_pattern: None,
                 input: Some(input.clone()),
+                source_agent_id: ctx.identity.agent_id.clone(),
             },
         }
     }
@@ -174,7 +175,7 @@ impl Tool for WebFetchTool {
             .build());
         }
 
-        let config = &ctx.web_fetch_config;
+        let config = &ctx.env.web_fetch_config;
         let max_content_length = config.max_content_length;
 
         ctx.emit_progress(format!("Fetching {url}")).await;

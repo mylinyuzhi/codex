@@ -37,6 +37,12 @@ pub const DEFAULT_MAX_FILES_TO_SCAN: i32 = 200;
 /// Minimum word length for keyword relevance matching.
 pub const DEFAULT_MIN_KEYWORD_LENGTH: i32 = 3;
 
+/// Default model role for LLM-based memory selection.
+pub const DEFAULT_MEMORY_SELECTION_MODEL_ROLE: &str = "fast";
+
+/// Maximum character count for MEMORY.md soft limit (TUI warning).
+pub const DEFAULT_MAX_MEMORY_CHARS: i64 = 40_000;
+
 /// Auto memory configuration.
 ///
 /// # JSON Format
@@ -110,6 +116,24 @@ pub struct AutoMemoryConfig {
     /// Days after which a memory triggers a staleness warning.
     #[serde(default = "default_staleness_warning_days")]
     pub staleness_warning_days: i32,
+
+    // ========================================================================
+    // Character Limit (soft)
+    // ========================================================================
+    /// Maximum characters for MEMORY.md soft limit (TUI warning, no truncation).
+    #[serde(default = "default_max_memory_chars")]
+    pub max_memory_chars: i64,
+
+    // ========================================================================
+    // Model Selection
+    // ========================================================================
+    /// Model role for LLM-based memory selection.
+    ///
+    /// Specifies which configured model role to use for semantic memory
+    /// file ranking. Supports any role: "fast", "main", "plan", etc.
+    /// Defaults to "fast" for lower latency and cost.
+    #[serde(default = "default_memory_selection_model_role")]
+    pub memory_selection_model_role: String,
 }
 
 fn default_max_lines() -> i32 {
@@ -148,6 +172,14 @@ fn default_min_keyword_length() -> i32 {
     DEFAULT_MIN_KEYWORD_LENGTH
 }
 
+fn default_max_memory_chars() -> i64 {
+    DEFAULT_MAX_MEMORY_CHARS
+}
+
+fn default_memory_selection_model_role() -> String {
+    DEFAULT_MEMORY_SELECTION_MODEL_ROLE.to_string()
+}
+
 impl Default for AutoMemoryConfig {
     fn default() -> Self {
         Self {
@@ -162,6 +194,8 @@ impl Default for AutoMemoryConfig {
             relevant_memories_throttle_turns: DEFAULT_RELEVANT_MEMORIES_THROTTLE_TURNS,
             max_files_to_scan: DEFAULT_MAX_FILES_TO_SCAN,
             min_keyword_length: DEFAULT_MIN_KEYWORD_LENGTH,
+            max_memory_chars: DEFAULT_MAX_MEMORY_CHARS,
+            memory_selection_model_role: DEFAULT_MEMORY_SELECTION_MODEL_ROLE.to_string(),
         }
     }
 }

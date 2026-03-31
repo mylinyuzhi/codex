@@ -164,7 +164,7 @@ impl<'a> Repl<'a> {
                 }
                 "agents" => {
                     let mgr = self.session.subagent_manager().lock().await;
-                    let defs = mgr.definitions();
+                    let defs = mgr.available_definitions();
                     if defs.is_empty() {
                         println!("No agents registered.");
                     } else {

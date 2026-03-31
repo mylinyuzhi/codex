@@ -63,13 +63,19 @@ impl Tool for KillShellTool {
 
         // Try shell background registry first
         let final_output = ctx
+            .services
             .shell_executor
             .background_registry
             .get_output(task_id)
             .await
             .unwrap_or_default();
 
-        let was_running = ctx.shell_executor.background_registry.stop(task_id).await;
+        let was_running = ctx
+            .services
+            .shell_executor
+            .background_registry
+            .stop(task_id)
+            .await;
 
         if was_running {
             return Ok(ToolOutput::text(format!(
@@ -78,14 +84,18 @@ impl Tool for KillShellTool {
         }
 
         // Fall through to check background agents via cancel token registry
-        let maybe_token = ctx.agent_cancel_tokens.lock().await.remove(task_id);
+        let maybe_token = ctx.agent.agent_cancel_tokens.lock().await.remove(task_id);
         if let Some(token) = maybe_token {
             // Read partial output before cancellation (best-effort)
             let partial = read_agent_partial_output(task_id, ctx).await;
             token.cancel();
 
             // Record the kill so status is reported as Killed (not Failed)
-            ctx.killed_agents.lock().await.insert(task_id.to_string());
+            ctx.agent
+                .killed_agents
+                .lock()
+                .await
+                .insert(task_id.to_string());
 
             let msg = match partial {
                 Some(output) => {
@@ -110,10 +120,10 @@ async fn read_agent_partial_output(task_id: &str, ctx: &ToolContext) -> Option<S
     let agent_file_name = format!("{task_id}.jsonl");
     let mut candidate_paths = Vec::new();
 
-    if let Some(ref dir) = ctx.agent_output_dir {
+    if let Some(ref dir) = ctx.agent.agent_output_dir {
         candidate_paths.push(dir.join(&agent_file_name));
     }
-    if let Some(ref session_dir) = ctx.session_dir {
+    if let Some(ref session_dir) = ctx.paths.session_dir {
         candidate_paths.push(
             session_dir
                 .parent()

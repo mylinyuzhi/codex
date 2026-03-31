@@ -20,7 +20,7 @@ pub fn handle_tui_event(state: &mut AppState, event: TuiEvent) {
         TuiEvent::ApprovalRequired { request } => {
             if request.tool_name == cocode_protocol::ToolName::ExitPlanMode.as_str() {
                 state.ui.set_overlay(Overlay::PlanExitApproval(
-                    crate::state::PlanExitOverlay::new(request),
+                    crate::state::PlanExitOverlay::new(request, state.session.bypass_available),
                 ));
             } else {
                 state

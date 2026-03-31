@@ -142,11 +142,11 @@ impl Tool for TaskUpdateTool {
                 let store = self.store.lock().await;
                 store.get(id).map(|t| t.subject.clone()).unwrap_or_default()
             };
-            if let Some(hooks) = &ctx.hook_registry {
+            if let Some(hooks) = &ctx.services.hook_registry {
                 let hook_ctx = cocode_hooks::HookContext::new(
                     cocode_hooks::HookEventType::TaskCompleted,
-                    ctx.session_id.clone(),
-                    ctx.cwd.clone(),
+                    ctx.identity.session_id.clone(),
+                    ctx.env.cwd.clone(),
                 )
                 .with_task_id(id)
                 .with_task_subject(&subject);

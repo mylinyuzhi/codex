@@ -343,6 +343,12 @@ pub enum HookEventType {
     WorktreeRemove,
     /// Initial setup phase before session starts.
     Setup,
+    /// When an MCP server sends an elicitation request (user input).
+    Elicitation,
+    /// After an elicitation has been answered.
+    ElicitationResult,
+    /// When instruction files (CLAUDE.md) are loaded or reloaded.
+    InstructionsLoaded,
 }
 
 impl HookEventType {
@@ -368,6 +374,9 @@ impl HookEventType {
             Self::WorktreeCreate => "worktree_create",
             Self::WorktreeRemove => "worktree_remove",
             Self::Setup => "setup",
+            Self::Elicitation => "elicitation",
+            Self::ElicitationResult => "elicitation_result",
+            Self::InstructionsLoaded => "instructions_loaded",
         }
     }
 }
@@ -402,6 +411,9 @@ impl std::str::FromStr for HookEventType {
             "WorktreeCreate" | "worktree_create" => Ok(Self::WorktreeCreate),
             "WorktreeRemove" | "worktree_remove" => Ok(Self::WorktreeRemove),
             "Setup" | "setup" => Ok(Self::Setup),
+            "Elicitation" | "elicitation" => Ok(Self::Elicitation),
+            "ElicitationResult" | "elicitation_result" => Ok(Self::ElicitationResult),
+            "InstructionsLoaded" | "instructions_loaded" => Ok(Self::InstructionsLoaded),
             other => Err(format!("unknown hook event type: {other}")),
         }
     }
