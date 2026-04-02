@@ -47,7 +47,7 @@ pub struct QueryEngine {
 
 /// Tracks permission denials for SDK audit trail.
 pub struct SdkPermissionDenial {
-    pub tool_name: String,
+    pub tool_id: ToolId,
     pub input_summary: String,
     pub reason: String,
     pub timestamp: i64,
@@ -55,7 +55,7 @@ pub struct SdkPermissionDenial {
 
 /// Recovery mechanism when tool fails after permission was already granted.
 pub struct OrphanedPermission {
-    pub tool_name: String,
+    pub tool_id: ToolId,
     pub tool_use_id: String,
     pub granted_input: Value,
 }
@@ -269,6 +269,142 @@ pub struct TurnResult {
 }
 ```
 
+## Steering: Mid-Turn Message Queue & Injection (from `utils/messageQueueManager.ts` 548 LOC, `query.ts:1570-1590`, `utils/attachments.ts` 3760 LOC, `utils/queueProcessor.ts` 96 LOC, `utils/QueryGuard.ts`)
+
+Steering allows users to send messages/guidance to the LLM while it is actively working,
+without interrupting the current generation. Messages are queued and injected between
+tool calls so the LLM sees new context and adapts direction.
+
+### Command Queue
+
+```rust
+/// Priority ordering: Now(0) > Next(1) > Later(2). FIFO within same priority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum QueuePriority { Now, Next, Later }
+
+pub struct QueuedCommand {
+    pub value: MessageContent,          // String or Vec<ContentBlock>
+    pub mode: PromptInputMode,          // Prompt, Bash, TaskNotification
+    pub priority: QueuePriority,        // Default: Next
+    pub uuid: Option<String>,
+    pub pasted_contents: Option<HashMap<i32, PastedContent>>,
+    pub agent_id: Option<AgentId>,      // For subagent routing
+    pub is_meta: bool,
+}
+
+pub enum PromptInputMode { Prompt, Bash, TaskNotification }
+
+/// Module-level singleton queue with frozen snapshot + signal notification.
+/// Rust equivalent: Arc<RwLock<CommandQueueState>> + tokio::sync::watch for change signal.
+pub struct CommandQueue {
+    commands: Vec<QueuedCommand>,       // Priority-sorted
+    snapshot: Arc<[QueuedCommand]>,     // Frozen snapshot (updated on each mutation)
+}
+
+impl CommandQueue {
+    pub fn enqueue(&mut self, cmd: QueuedCommand);
+    pub fn enqueue_notification(&mut self, cmd: QueuedCommand);  // Default priority: Later
+    pub fn dequeue(&mut self, filter: Option<&dyn Fn(&QueuedCommand) -> bool>) -> Option<QueuedCommand>;
+    pub fn dequeue_all_matching(&mut self, predicate: impl Fn(&QueuedCommand) -> bool) -> Vec<QueuedCommand>;
+    pub fn peek(&self, filter: Option<&dyn Fn(&QueuedCommand) -> bool>) -> Option<&QueuedCommand>;
+    pub fn snapshot(&self) -> Arc<[QueuedCommand]>;
+}
+```
+
+### Query Guard (Synchronization Primitive)
+
+```rust
+/// Ensures queue processor does not fire while an LLM query is active.
+/// Rust equivalent: tokio::sync::watch<bool> or atomic flag.
+pub struct QueryGuard {
+    active: AtomicBool,
+    notify: tokio::sync::watch::Sender<bool>,
+}
+
+impl QueryGuard {
+    /// Acquire exclusive query right (called at prompt submit).
+    pub fn reserve(&self);
+    /// Release (called in finally block after query completes).
+    pub fn release(&self);
+    /// Check if a query is currently active.
+    pub fn is_active(&self) -> bool;
+    /// Wait until query becomes inactive.
+    pub async fn wait_idle(&self);
+}
+```
+
+### Mid-Turn Attachment Injection
+
+```rust
+/// INJECTION POINT: Called AFTER each tool call completes, BEFORE next API request.
+/// Located in the query loop between tool execution and the next LLM call.
+///
+/// Sources of injected messages:
+/// 1. CommandQueue snapshot (user typed while LLM was working)
+/// 2. AppState.inbox (teammate messages queued mid-turn)
+/// 3. Memory prefetches (retrieved context)
+/// 4. Skill discovery results
+///
+/// Deduplication: Uses "from|timestamp|text[..100]" as key.
+/// After injection, inbox messages marked 'processed' and cleaned up on turn end.
+pub async fn get_attachment_messages(
+    queued_commands: &[QueuedCommand],
+    context: &ToolUseContext,
+    messages: &[Message],
+) -> Vec<Message>;
+```
+
+### Queue Processing Strategy
+
+```rust
+/// Processing rules (from queueProcessor.ts):
+/// - Slash commands (start with '/') → processed one-at-a-time individually
+/// - Bash-mode commands → processed individually (per-command error isolation)
+/// - Regular prompts → batched by mode (all same-mode prompts drained together)
+/// - Different modes (Prompt vs TaskNotification) never mixed in a batch
+pub fn process_queue(
+    queue: &mut CommandQueue,
+    execute: impl FnMut(Vec<QueuedCommand>),
+);
+```
+
+### Inbox System (for Teammate Messages)
+
+```rust
+/// Async teammate messages delivered via AppState.inbox.
+/// Two-phase delivery:
+///   1. If session idle → submit immediately as new turn
+///   2. If query active → queue in inbox, deliver via getAttachmentMessages() mid-turn
+pub struct InboxMessage {
+    pub id: String,
+    pub from: String,
+    pub text: String,
+    pub timestamp: String,
+    pub status: InboxStatus,  // Pending, Processing, Processed
+    pub color: Option<String>,
+    pub summary: Option<String>,
+}
+
+pub enum InboxStatus { Pending, Processing, Processed }
+```
+
+### Steering Flow
+
+```
+User types while LLM working
+  → enqueue(QueuedCommand, priority=Next)
+  → [LLM completes tool call N]
+  → get_attachment_messages(queue_snapshot)   ← INJECTION POINT
+  → Convert queued messages to user attachments
+  → Inject into tool_results before next API call
+  → LLM sees new context in turn N+1
+  → LLM adapts direction without restart
+  → [Turn ends] → QueryGuard.release()
+  → Queue processor fires (idle detected)
+```
+
+---
+
 ### Query Events (emitted to UI)
 
 ```rust
@@ -276,7 +412,7 @@ pub enum QueryEvent {
     StreamStart { model: String },
     TextDelta { text: String },
     ThinkingDelta { text: String },
-    ToolUseStart { tool_name: String, tool_use_id: String },
+    ToolUseStart { tool_id: ToolId, tool_use_id: String },
     ToolUseEnd { tool_use_id: String },
     ToolResult { tool_use_id: String, result: String },
     TurnComplete { usage: TokenUsage, cost_usd: f64 },

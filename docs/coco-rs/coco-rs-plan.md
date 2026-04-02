@@ -589,8 +589,8 @@ Each crate defines errors with snafu:
 pub enum QueryError {
     #[snafu(display("API call failed"))]
     ApiError { source: ApiError },
-    #[snafu(display("tool execution failed: {tool_name}"))]
-    ToolError { tool_name: String, source: ToolError },
+    #[snafu(display("tool execution failed: {}", tool_id.as_wire_str()))]
+    ToolError { tool_id: ToolId, source: ToolError },
     #[snafu(display("context overflow"))]
     ContextOverflow,
 }

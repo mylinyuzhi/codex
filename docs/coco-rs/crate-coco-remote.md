@@ -47,7 +47,7 @@ pub trait RemoteSessionCallbacks: Send + Sync {
 /// Permission request from remote CCR worker.
 pub struct RemotePermissionRequest {
     pub request_id: String,
-    pub tool_name: String,
+    pub tool_id: ToolId,
     pub tool_use_id: String,
     pub description: Option<String>,
     pub input: Value,

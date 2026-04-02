@@ -43,7 +43,7 @@ pub struct TeamFile {
 pub struct TeamMember {
     pub agent_id: AgentId,
     pub name: String,
-    pub agent_type: String,
+    pub agent_type: AgentTypeId,
     pub model: Option<String>,
     pub prompt: Option<String>,
     pub color: AgentColor,
@@ -57,7 +57,7 @@ pub struct TeamMember {
 
 pub struct TeamAllowedPath {
     pub path: PathBuf,
-    pub tool_name: String,
+    pub tool_id: ToolId,
     pub added_by: String,
     pub added_at: String,
 }
@@ -78,7 +78,7 @@ pub enum AgentColor {
 pub struct SwarmPermissionRequest {
     pub id: String,
     pub worker_id: AgentId,
-    pub tool_name: String,
+    pub tool_id: ToolId,
     pub input: Value,
     pub status: PermissionRequestStatus,
     pub feedback: Option<String>,

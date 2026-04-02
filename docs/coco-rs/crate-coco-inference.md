@@ -84,13 +84,65 @@ pub struct QueryParams {
     pub output_format: Option<OutputFormat>,
 }
 
-/// API-level thinking configuration. Owned by coco-inference (not coco-types).
-/// Distinct from ThinkingLevel in coco-config (user-facing setting).
-/// coco-config::ThinkingLevel → resolved to coco-inference::ThinkingConfig at query time.
-pub struct ThinkingConfig {
-    pub enabled: bool,
-    pub budget_tokens: Option<i64>,
+/// Unified thinking configuration for all providers.
+/// Follows cocode-rs pattern: protocol crate owns ThinkingLevel, inference converts per-provider.
+///
+/// Design (from cocode-rs common/protocol/src/thinking.rs):
+///   User-facing: ThinkingLevel (effort + optional budget + interleaved flag)
+///   API-facing: provider-specific conversion via thinking_convert module
+///   This is NOT a simple on/off — it's a multi-provider abstraction.
+pub struct ThinkingLevel {
+    /// Reasoning effort level (required, used for ordering).
+    pub effort: ReasoningEffort,
+    /// Token budget for budget-based models (optional, Anthropic/Volcengine/Z.AI).
+    pub budget_tokens: Option<i32>,
+    /// Max output tokens for thinking (optional, falls back to outer max_output_tokens).
+    pub max_output_tokens: Option<i32>,
+    /// Enable interleaved thinking mode (Anthropic future models).
+    pub interleaved: bool,
 }
+
+/// Reasoning effort level. Ordered from lowest to highest (derives Ord).
+/// Flexible deserialization: accepts string shorthand ("high") or full object.
+#[derive(PartialOrd, Ord)]
+pub enum ReasoningEffort {
+    None,     // 0 — thinking disabled
+    Minimal,  // 1
+    Low,      // 2
+    Medium,   // 3 — default
+    High,     // 4
+    XHigh,    // 5 — ultrathink
+}
+
+/// Provider-specific conversion (from cocode-rs core/inference/src/thinking_convert.rs).
+/// Each provider gets different API-level config from the same ThinkingLevel:
+///
+/// | Provider | effort→API | budget_tokens→API |
+/// |----------|-----------|-------------------|
+/// | Anthropic | Adaptive (no budget) or Enabled { budget } | budget_tokens as u64 |
+/// | OpenAI | "low"/"medium"/"high" string | N/A (effort only) |
+/// | Google | GoogleThinkingLevel::Low/Medium/High | N/A |
+/// | Volcengine | "minimal"/"low"/"medium"/"high" | budget_tokens as i32 |
+/// | Z.AI | N/A (budget only) | budget_tokens required |
+pub mod thinking_convert {
+    pub fn to_provider_options(
+        level: &ThinkingLevel,
+        model_info: &ModelInfo,
+        provider: ProviderApi,
+    ) -> Option<ProviderOptions>;
+
+    pub fn effort_to_reasoning_level(effort: ReasoningEffort) -> Option<String>;
+}
+
+/// Resolution flow:
+///   1. ModelInfo.default_thinking_level (builtin per-model defaults)
+///   2. RoleSelection.thinking_level (runtime override via /think command)
+///   3. InferenceContext.effective_thinking_level() (merged)
+///   4. RequestBuilder → thinking_convert::to_provider_options()
+///
+/// Environment variables:
+///   COCODE_THINKING_LEVEL: none, low, medium, high, xhigh
+///   COCODE_THINKING_BUDGET: token count (integer)
 
 // TaskBudget is defined in coco-types (shared with coco-query).
 // Fields: total: i64, remaining: Option<i64>
@@ -322,6 +374,32 @@ pub struct AwsCredentials {
 }
 ```
 
+### OAuth 2.0 PKCE Flow (from `services/oauth/` — client.ts 18K LOC, auth-code-listener.ts 6.6K LOC, crypto.ts 566 LOC)
+
+```rust
+/// 7-step OAuth 2.0 PKCE flow:
+/// 1. Generate PKCE: code_verifier (random 43-128 chars) + code_challenge (SHA-256)
+/// 2. Build authorization URL with: client_id, redirect_uri, scope, state, code_challenge
+/// 3. Open browser (automatic) OR display URL (manual fallback)
+/// 4. Start localhost callback server (auth-code-listener) on random port
+/// 5. Wait for authorization code redirect
+/// 6. Exchange code + code_verifier → access_token + refresh_token
+/// 7. Store tokens in secure storage (macOS Keychain or .credentials.json)
+///
+/// Profile fetch: After token exchange, fetch user profile for subscription type + rate limit tier.
+/// Scope: "user:inference", "user:profile" (optional: "org:read")
+pub async fn perform_oauth_flow() -> Result<OAuthTokens, AuthError>;
+
+/// Authorization code callback server.
+/// Listens on localhost:{random_port}/callback.
+/// Returns auth code to caller, then shuts down.
+pub async fn start_auth_code_listener() -> Result<String, AuthError>;
+
+/// PKCE crypto (from crypto.ts).
+pub fn generate_code_verifier() -> String;    // 43-128 random alphanumeric
+pub fn generate_code_challenge(verifier: &str) -> String;  // SHA-256 → base64url
+```
+
 ### HTTP Utilities (from `http.ts`, 137 LOC)
 
 ```rust
@@ -445,6 +523,89 @@ pub struct BootstrapConfig {
     pub additional_model_options: Option<Vec<AdditionalModel>>,
 }
 ```
+
+## Prompt Cache Break Detection (from `services/api/promptCacheBreakDetection.ts`, 727 LOC)
+
+```rust
+/// Anthropic prompt caching: cache_control block annotation.
+/// Scope determines TTL and billing attribution.
+pub enum CacheScope {
+    Global,  // 5-minute TTL, standard billing
+    Org,     // 1-hour TTL, org-level caching
+}
+
+/// 2-phase cache break detection algorithm.
+/// Phase 1: Record state BEFORE API call.
+/// Phase 2: Check response AFTER API call for cache degradation.
+pub struct CacheBreakDetector {
+    /// Per-source tracking (main_thread, sdk, agents).
+    states: HashMap<QuerySource, CachePromptState>,
+}
+
+pub struct CachePromptState {
+    /// Hash of system prompt blocks (content hash).
+    pub system_hash: u64,
+    /// Hash of tool definitions (schema hash).
+    pub tools_hash: u64,
+    /// Hash of cache_control annotations.
+    pub cache_control_hash: u64,
+    /// Previous cache_read_input_tokens from API response.
+    pub prev_cache_read_tokens: i64,
+    /// Reference TTL for expiration detection.
+    pub reference_ttl: CacheTtl,
+}
+
+pub enum CacheTtl { FiveMinutes, OneHour }
+
+impl CacheBreakDetector {
+    /// Phase 1: Record prompt state before API call.
+    /// Computes hashes of system, tools, and cache_control separately.
+    pub fn record_prompt_state(
+        &mut self,
+        source: QuerySource,
+        system: &SystemPrompt,
+        tools: &[ToolDefinition],
+        cache_control: &[CacheControlBlock],
+    );
+
+    /// Phase 2: Check response for cache break.
+    /// Detects: 5% drop in cache_read_input_tokens → potential cache miss.
+    /// Categorizes: TTL expiration (5min/1hour), system change, tools change.
+    /// Emits telemetry event with break reason.
+    pub fn check_response_for_cache_break(
+        &mut self,
+        source: QuerySource,
+        usage: &TokenUsage,
+    ) -> Option<CacheBreakEvent>;
+}
+
+pub struct CacheBreakEvent {
+    pub source: QuerySource,
+    pub reason: CacheBreakReason,
+    pub cache_read_drop_pct: f64,
+    pub prev_tokens: i64,
+    pub curr_tokens: i64,
+}
+
+pub enum CacheBreakReason {
+    TtlExpired { ttl: CacheTtl },
+    SystemChanged,
+    ToolsChanged,
+    CacheControlChanged,
+    Unknown,
+}
+```
+
+### Cache-Aware Microcompact
+
+```rust
+/// Microcompact strategies that preserve prompt cache:
+/// - cache_edits: Clear tool results but preserve cache_control blocks
+/// - cache_deletions: Remove messages but keep cache-critical prefix intact
+/// Integration: coco-compact calls back to check cache state before compacting.
+```
+
+---
 
 ## ModelHub (from cocode-rs `model_hub.rs`)
 

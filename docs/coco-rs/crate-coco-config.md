@@ -626,14 +626,37 @@ pub fn model_supports_max_effort(model_info: &ModelInfo) -> bool {
 }
 pub fn get_default_effort(model_info: &ModelInfo) -> Option<EffortLevel>;
 
+/// Fast mode: same model (Opus 4.6), faster output speed. NOT a model switch.
 pub enum FastModeState {
     Active,
     Cooldown { reset_at: i64, reason: CooldownReason },
 }
 pub enum CooldownReason { RateLimit, Overloaded }
 
+/// Org-level availability check (from utils/fastMode.ts 533 LOC).
+/// Returns (available, reason) where reason explains why not available.
+/// Unavailability reasons:
+///   "free" — free account tier (fast mode requires paid subscription)
+///   "preference" — organization disabled fast mode via policy
+///   "extra_usage_disabled" — requires billing, not enabled
+///   "network_error" — org check failed (behind proxy)
+///   "unknown" — unexpected failure
+pub fn get_fast_mode_unavailable_reason(config: &ResolvedConfig) -> Option<String>;
 pub fn is_fast_mode_available(config: &ResolvedConfig) -> bool;
 pub fn get_fast_mode_model() -> String;  // "opus" or "opus[1m]"
+
+/// Cooldown trigger: 429 (rate limit) or 503 (overloaded) during fast mode.
+/// Duration: From reset_at timestamp (typically minutes).
+/// Reset: Automatic when now >= reset_at.
+pub fn trigger_cooldown(reason: CooldownReason, reset_at: i64);
+
+/// Org status check endpoint: {BASE_API_URL}/api/claude_code_penguin_mode
+/// Throttle: 30s minimum between requests.
+/// Cache: penguinModeOrgEnabled persisted in global config.
+/// Prefetch: runs at startup (prefetchFastModeStatus).
+///   Checks auth scope (user:profile), OAuth vs API key.
+///   30s throttle interval, in-flight promise memoization.
+pub async fn prefetch_fast_mode_status();
 ```
 
 ---

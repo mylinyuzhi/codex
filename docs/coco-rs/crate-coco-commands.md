@@ -120,7 +120,7 @@ impl CommandRegistry {
 | `reload-plugins` | Hot-reload plugins | Integration |
 | `rename` | Rename session | Session |
 | `reset-limits` | Reset rate limits | Config |
-| `rewind` | Rewind to earlier turn | Session |
+| `rewind` | Rewind to earlier turn (see Rewind Mechanism below) | Session |
 | `sandbox-toggle` | Toggle sandbox mode | Config |
 | `share` | Share session | Session |
 | `stats` | Show detailed statistics | Info |
@@ -187,6 +187,29 @@ impl CommandRegistry {
 | `backfill-sessions` | Internal migration tool |
 | `terminalSetup` | Terminal setup wizard |
 | `issue` | Bug report helper |
+
+## Rewind Mechanism (from `commands/rewind/rewind.ts`, `utils/fileHistory.ts`)
+
+```rust
+/// /rewind command: Opens message selector UI, lets user pick a previous turn
+/// to rewind to. Restores conversation state + file state to that point.
+///
+/// Flow:
+/// 1. Opens message selector (TUI overlay listing selectable user messages)
+/// 2. Filter: selectableUserMessagesFilter() — skips non-user messages,
+///    respects compact boundaries (cannot rewind past compaction)
+/// 3. User selects a message → fileHistoryMakeSnapshot() for that point
+/// 4. Truncate conversation: remove all messages after selected turn
+/// 5. Restore file state: revert modified files to snapshot state
+/// 6. removeLastFromHistory() for auto-restore-on-interrupt
+///
+/// File history integration (from utils/fileHistory.ts 200 LOC):
+///   FileHistoryState tracks file contents keyed by message UUID.
+///   Each file edit creates a snapshot entry.
+///   On rewind, snapshots are replayed to restore files.
+///
+/// Return: { type: 'skip' } — no console output (UI handles display).
+```
 
 ### Count Summary
 

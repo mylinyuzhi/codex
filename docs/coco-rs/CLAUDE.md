@@ -23,7 +23,10 @@ Each piece of information has exactly one owner. No duplication across docs.
 | ModelHub, ProviderFactory, RequestBuilder, auth, retry, files API, bootstrap | `crate-coco-inference.md` | multi-provider-plan.md shows architecture, not struct fields |
 | Multi-provider architecture (flow, beta headers) | `multi-provider-plan.md` | |
 | File ownership (which crate owns which config file) | `config-file-map.md` | crate plans reference, not copy |
+| ToolId, AgentTypeId, ToolName, SubagentType — identity enums | `crate-coco-types.md` | other docs use by name |
 | Tool trait, ToolUseContext, StreamingToolExecutor | `crate-coco-tool.md` | |
+| Tool input enums: GrepOutputMode, ConfigAction, LspAction | `crate-coco-tools.md` | |
+| Context enums: Platform, ShellKind | `crate-coco-context.md` | |
 | MCP types, config, client, auth, channels | `crate-coco-mcp.md` | |
 | Permission evaluation pipeline, auto-mode/yolo classifier, denial tracking | `crate-coco-permissions.md` | |
 | Error handling architecture (3-layer model, error flow) | `CLAUDE.md` (this file) | crate docs show per-crate error types, not architecture |
@@ -36,6 +39,15 @@ Each piece of information has exactly one owner. No duplication across docs.
 | Voice recording, STT WebSocket, keyterms, hold-to-talk | `crate-coco-voice.md` | |
 | Assistant session history pagination | `crate-coco-assistant.md` | |
 | Remote session WS, SDK message adapter, upstream proxy | `crate-coco-remote.md` | |
+| Steering: mid-turn message queue, CommandQueue, QueryGuard, attachment injection | `crate-coco-query.md` | |
+| Prompt cache break detection, CacheScope, CacheBreakDetector | `crate-coco-inference.md` | |
+| AgentTool architecture: spawn, fork, worktree, tool filtering, agent-as-task | `crate-coco-tools.md` | |
+| Skills loading, SkillDefinition, SkillManager, bundled registry | `crate-coco-skills.md` | |
+| Hooks: HooksSettings, HookMatcher, HookCommand, HookExecutor, AsyncHookRegistry | `crate-coco-hooks.md` | |
+| Background task execution: TaskState, isBackgrounded, task output, notification, PlanFileManager | `crate-coco-tasks.md` | |
+| Memory entry management: MemoryManager, staleness, recall, auto-extraction | `crate-coco-memory.md` | |
+| Plugin loading: PluginManifest, PluginManager, contributions | `crate-coco-plugins.md` | |
+| Keybinding resolution: 18 contexts, 50+ actions, chord, platform defaults | `crate-coco-keybindings.md` | |
 | Per-crate plan (dependencies, modules, data definitions) | `crate-coco-{name}.md` | |
 
 ### Rules
@@ -52,17 +64,19 @@ Each piece of information has exactly one owner. No duplication across docs.
 Owns all enum/struct definitions that are shared across 3+ crates:
 
 ```
-Message, UserMessage, AssistantMessage, StopReason
+Message, UserMessage, AssistantMessage, StopReason, MessageKind, NormalizedMessage
 PermissionMode, PermissionBehavior, PermissionRule, PermissionRuleSource, PermissionDecision
-CommandBase, CommandType
-ToolInputSchema, ToolResult<T>, ToolProgress<P>
+CommandBase, CommandType, CommandAvailability, CommandSource
+ToolId { Builtin | Mcp | Custom }, ToolInputSchema, ToolResult<T>, ToolProgress
+AgentTypeId { Builtin(SubagentType) | Custom }
 TaskType, TaskStatus, TaskStateBase, TaskHandle
 SessionId, AgentId, TaskId
-HookEventType, HookResult
+HookEventType (27 variants), HookOutcome, HookResult
 SandboxMode
 TokenUsage, ModelUsage
 ProviderApi, ModelRole, ModelSpec, Capability, ApplyPatchToolType, WireApi
 PermissionDecisionReason, StreamingToolUse, StreamingThinking, TaskBudget
+UserType, Entrypoint
 ```
 
 Also re-exports vercel-ai types as version-agnostic aliases:
@@ -97,6 +111,47 @@ StreamingToolExecutor, ToolRegistry, ToolBatch
 DescriptionOptions, ValidationResult, InterruptBehavior
 ```
 
+### coco-tools
+
+Owns tool-specific input enums (not shared beyond tool implementations):
+
+```
+GrepOutputMode { Content, FilesWithMatches, Count }
+ConfigAction { Get, Set, List, Reset }
+LspAction { Definition, References, Diagnostics, Symbols, Hover }
+```
+
+### coco-context
+
+Owns environment enums:
+
+```
+Platform { Darwin, Linux, Windows }
+ShellKind { Bash, Zsh, Sh, PowerShell }
+```
+
+### coco-query
+
+Owns the query loop and steering:
+
+```
+QueryEngine, QueryEngineConfig, QueryConfig, QueryGates
+BudgetTracker, BudgetDecision, QueryEvent
+QueuedCommand, QueuePriority, CommandQueue, QueryGuard, PromptInputMode
+InboxMessage, InboxStatus
+```
+
+### coco-inference
+
+Owns (in addition to ModelHub, auth, retry):
+
+```
+ThinkingLevel (unified multi-provider: effort + budget_tokens + interleaved)
+ReasoningEffort (6-level enum: None → Minimal → Low → Medium → High → XHigh)
+thinking_convert module (per-provider conversion: Anthropic/OpenAI/Google/Volcengine/Z.AI)
+CacheScope, CacheBreakDetector, CachePromptState, CacheBreakEvent
+```
+
 ## Canonical Names (Resolved Inconsistencies)
 
 These names are final. All docs must use these exact names.
@@ -109,6 +164,8 @@ These names are final. All docs must use these exact names.
 | `ApiClient` | ~~Arc<dyn LanguageModelV4>~~ directly | QueryEngine holds `Arc<ApiClient>` which wraps vercel-ai internally |
 | `ThinkingLevel` | (user-facing setting) | In coco-config. `ThinkingConfig` (API-level) is in coco-inference. Both exist at different layers |
 | `ToolResult<T>` | ~~ToolResult~~ unparameterized | Generic in coco-types. Tool trait uses `ToolResult<Value>` |
+| `ToolId` | ~~tool_name: String~~ for identity | `ToolId { Builtin(ToolName) \| Mcp { server, tool } \| Custom(String) }`. Use for identity fields. Permission patterns stay `String` (ToolPattern). |
+| `AgentTypeId` | ~~agent_type: String~~ | `AgentTypeId { Builtin(SubagentType) \| Custom(String) }`. Same pattern as ToolId. |
 
 ## Dependency Layer Rules
 

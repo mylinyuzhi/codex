@@ -1,6 +1,6 @@
 # coco-context — Crate Plan
 
-TS source: `src/context.ts`, `src/utils/systemPromptType.ts`, `src/utils/attachments.ts`, `src/utils/claudemd.ts`, `src/utils/cwd.ts`
+TS source: `src/context.ts`, `src/utils/systemPromptType.ts`, `src/utils/attachments.ts`, `src/utils/claudemd.ts`, `src/utils/cwd.ts`, `src/utils/fileHistory.ts` (200 LOC), `src/utils/fileStateCache.ts` (1.5K LOC), `src/utils/fileRead.ts`
 
 ## Dependencies
 
@@ -22,13 +22,21 @@ coco-context does NOT depend on:
 ### System Context (from `context.ts`)
 
 ```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Platform { Darwin, Linux, Windows }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShellKind { Bash, Zsh, Sh, PowerShell }
+
 /// Collected once per turn, injected into system prompt
 pub struct SystemContext {
     pub cwd: PathBuf,
-    pub platform: String,             // darwin, linux, win32
-    pub shell: String,                // bash, zsh
+    pub platform: Platform,
+    pub shell: ShellKind,
     pub os_version: String,
-    pub model: String,                // current model name
+    pub model: String,                // current model name (dynamic, stays String)
     pub knowledge_cutoff: String,     // "May 2025"
     pub current_date: String,
     pub git_status: Option<GitStatus>,
@@ -44,6 +52,44 @@ pub struct GitStatus {
 
 pub fn get_system_context() -> SystemContext;
 pub fn get_git_status(cwd: &Path) -> Option<GitStatus>;
+```
+
+### File History & Encoding (from `fileHistory.ts` 200 LOC, `fileRead.ts`, `fileStateCache.ts` 1.5K LOC)
+
+```rust
+/// File edit tracking per turn: records file contents keyed by message UUID.
+/// Used by /rewind command to restore file state to a previous turn.
+pub struct FileHistoryState {
+    /// Snapshots keyed by message UUID → file path → content.
+    snapshots: HashMap<String, HashMap<PathBuf, FileSnapshot>>,
+}
+
+pub struct FileSnapshot {
+    pub content: String,
+    pub encoding: FileEncoding,
+    pub line_ending: LineEnding,
+}
+
+pub enum FileEncoding { Utf8, Latin1, Binary }
+pub enum LineEnding { Lf, CrLf, Cr }
+
+impl FileHistoryState {
+    /// Record a file's content before modification.
+    pub fn track_edit(&mut self, message_uuid: &str, path: &Path);
+    /// Create a snapshot at a specific message point (for /rewind).
+    pub fn make_snapshot(&self, message_uuid: &str) -> HashMap<PathBuf, FileSnapshot>;
+}
+
+/// File read with encoding detection and line ending preservation.
+/// Detects encoding via BOM or byte analysis.
+/// Preserves line endings (LF vs CRLF) on write-back.
+pub fn read_file_with_metadata(path: &Path) -> Result<(String, FileEncoding, LineEnding), io::Error>;
+
+/// LRU file read cache (per turn, up to 50 entries).
+/// Avoids re-reading unchanged files within a turn.
+pub struct FileStateCache {
+    cache: lru::LruCache<PathBuf, CachedFileState>,
+}
 ```
 
 ### Attachments (from `utils/attachments.ts` — 4K LOC)

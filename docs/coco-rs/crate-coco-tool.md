@@ -180,7 +180,7 @@ pub struct ToolUseContext {
     // === Agent identity ===
     pub tool_use_id: Option<String>,
     pub agent_id: Option<AgentId>,
-    pub agent_type: Option<String>,
+    pub agent_type: Option<AgentTypeId>,
 
     // === File tracking ===
     pub file_reading_limits: Option<FileReadingLimits>,
@@ -435,7 +435,7 @@ pub fn classify_tool_error(error: &ToolError) -> &'static str;
 /// 工具执行完成时发送的遥测事件。
 /// validation error 和 execution error 都通过此事件记录。
 pub struct ToolUseEvent {
-    pub tool_name: String,
+    pub tool_id: ToolId,
     pub success: bool,
     pub duration_ms: i64,
     // ValidationResult 失败时填充

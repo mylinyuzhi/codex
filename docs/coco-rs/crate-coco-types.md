@@ -29,6 +29,7 @@ pub use vercel_ai_provider::ToolCallPart as ToolCallContent;
 pub use vercel_ai_provider::ToolResultPart as ToolResultContent;
 pub use vercel_ai_provider::ReasoningPart as ReasoningContent;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Message {
     User(UserMessage),
     Assistant(AssistantMessage),
@@ -69,6 +70,8 @@ pub struct AssistantMessage {
     pub api_error: Option<ApiError>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum StopReason { EndTurn, MaxTokens, StopSequence, ToolUse }
 
 pub struct ProgressMessage {
@@ -79,17 +82,27 @@ pub struct ProgressMessage {
 
 pub struct TombstoneMessage {
     pub uuid: Uuid,
-    pub original_type: String,  // what message type was removed
+    pub original_kind: MessageKind,
+}
+
+/// Which message variant was tombstoned. Mirrors `Message` enum variants 1:1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MessageKind {
+    User, Assistant, System, Attachment, ToolResult,
+    Progress, Tombstone, ToolUseSummary,
 }
 
 pub struct ToolUseSummaryMessage {
     pub uuid: Uuid,
-    pub tool_name: String,
+    pub tool_id: ToolId,
     pub summary: String,
 }
 
 /// System messages have sub-types for different notification kinds.
 /// All system messages are `role: "user"` with `is_meta: true` for the API.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SystemMessage {
     Informational(SystemInformationalMessage),
     ApiError(SystemAPIErrorMessage),
@@ -107,6 +120,8 @@ pub enum SystemMessage {
     ScheduledTaskFire(SystemScheduledTaskFireMessage),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SystemMessageLevel { Info, Warning, Error }
 
 pub struct SystemInformationalMessage {
@@ -145,6 +160,8 @@ pub struct SystemLocalCommandMessage {
 // SystemStopHookSummaryMessage, SystemTurnDurationMessage,
 // SystemScheduledTaskFireMessage — detailed during implementation.
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum MessageOrigin {
     UserInput,
     SystemInjected,
@@ -154,24 +171,23 @@ pub enum MessageOrigin {
 }
 
 /// API-normalized message forms (produced by coco-messages normalize_for_api).
-/// Distinct from internal Message — strips meta fields, merges consecutive same-role.
-pub struct NormalizedUserMessage {
-    pub role: String,  // "user"
-    pub content: Vec<ContentBlock>,
+/// Distinct from internal Message — strips ALL metadata (uuid, is_meta, usage, etc.)
+/// and merges consecutive same-role messages. Only content survives.
+/// Role is implicit in the enum variant (no String field needed).
+/// Serialized with {"role": "user"/"assistant", "content": [...]} via custom Serialize.
+#[derive(Debug, Clone)]
+pub enum NormalizedMessage {
+    User { content: Vec<ContentBlock> },
+    Assistant { content: Vec<ContentBlock> },
 }
-
-pub struct NormalizedAssistantMessage {
-    pub role: String,  // "assistant"
-    pub content: Vec<ContentBlock>,
-}
-
-pub type NormalizedMessage = Either<NormalizedUserMessage, NormalizedAssistantMessage>;
 
 /// Stream events emitted during API response processing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum StreamEvent {
     TextDelta { text: String },
     ThinkingDelta { text: String },
-    ToolUseStart { id: String, name: String },
+    ToolUseStart { id: String, tool_id: ToolId },
     ToolUseInput { id: String, delta: String },
     ToolUseEnd { id: String },
     RequestStart(RequestStartEvent),
@@ -184,6 +200,8 @@ pub struct RequestStartEvent {
 }
 
 /// Direction hint for partial compaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PartialCompactDirection { Oldest, Newest }
 
 /// Streaming accumulation types — used by coco-messages, coco-inference, coco-query (3+ crates).
@@ -195,7 +213,7 @@ pub struct TaskBudget {
 
 pub struct StreamingToolUse {
     pub id: String,
-    pub name: String,
+    pub tool_id: ToolId,
     pub input_json: String,  // Accumulated JSON string
 }
 
@@ -207,6 +225,8 @@ pub struct StreamingThinking {
 ### Permission Types (from `types/permissions.ts`)
 
 ```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PermissionMode {
     Default,
     Plan,
@@ -217,8 +237,12 @@ pub enum PermissionMode {
     Bubble,   // internal: escalate to parent
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PermissionBehavior { Allow, Deny, Ask }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PermissionRuleSource {
     UserSettings, ProjectSettings, LocalSettings, FlagSettings,
     PolicySettings, CliArg, Command, Session,
@@ -230,11 +254,17 @@ pub struct PermissionRule {
     pub value: PermissionRuleValue,
 }
 
+/// Permission rule value — tool_pattern is a glob/wildcard expression that matches
+/// against ToolId wire-format strings. NOT a structured ToolId — because patterns
+/// support wildcards ("mcp__slack__*", "*") that ToolId cannot represent.
+/// Examples: "Read", "Bash(git *)", "mcp__slack__*", "*"
 pub struct PermissionRuleValue {
-    pub tool_name: String,
-    pub rule_content: Option<String>,  // e.g. "prefix:git *"
+    pub tool_pattern: String,
+    pub rule_content: Option<String>,  // e.g. "git *" (command pattern within tool)
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "decision", rename_all = "snake_case")]
 pub enum PermissionDecision {
     Allow { updated_input: Option<Value>, feedback: Option<String> },
     Ask { message: String, suggestions: Vec<PermissionUpdate> },
@@ -242,6 +272,8 @@ pub enum PermissionDecision {
 }
 
 /// Why a permission decision was made. Attached to PermissionDecision::Deny.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PermissionDecisionReason {
     Rule { rule: PermissionRule },
     Mode { mode: PermissionMode },
@@ -267,19 +299,29 @@ pub struct ToolPermissionContext {
 ### Command Types (from `types/command.ts`)
 
 ```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandAvailability { ClaudeAi, Console }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandSource { Skills, Plugin, Bundled, Mcp }
+
 pub struct CommandBase {
     pub name: String,
     pub description: String,
     pub aliases: Vec<String>,
-    pub availability: Vec<CommandAvailability>,  // ClaudeAi, Console
+    pub availability: Vec<CommandAvailability>,
     pub is_hidden: bool,
     pub argument_hint: Option<String>,
     pub when_to_use: Option<String>,
     pub user_invocable: bool,
     pub is_sensitive: bool,
-    pub loaded_from: Option<CommandSource>,  // Skills, Plugin, Bundled, Mcp
+    pub loaded_from: Option<CommandSource>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum CommandType {
     Prompt(PromptCommandData),
     Local(LocalCommandData),
@@ -300,8 +342,83 @@ pub struct PromptCommandData {
 ### Tool Types (from `Tool.ts`)
 
 ```rust
+/// Tool identity — type-safe for all tool kinds.
+/// Built-in tools use ToolName (Copy, const fn as_str()), MCP and custom are structured.
+///
+/// Three distinct concepts:
+///   ToolId      = identity ("who am I")         → this enum
+///   ToolName    = built-in tools only (Copy)     → inner enum, 36 variants
+///   ToolPattern = permission match expression    → String ("Bash(git *)", "mcp__slack__*")
+/// Serde: serializes/deserializes as a FLAT STRING via Display/FromStr.
+/// "Read" (builtin), "mcp__slack__send" (MCP), "my_plugin_tool" (custom).
+/// NOT tagged JSON — wire format is always a single string.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ToolId {
+    /// Built-in tool (36 variants, Copy, const fn as_str())
+    Builtin(ToolName),
+
+    /// MCP tool: structured server + tool name.
+    /// Wire format: "mcp__<server>__<tool>"
+    Mcp { server: String, tool: String },
+
+    /// Plugin/custom tool (future extensibility).
+    /// Wire format: tool name as-is.
+    Custom(String),
+}
+
+impl fmt::Display for ToolId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Builtin(name) => f.write_str(name.as_str()),
+            Self::Mcp { server, tool } => write!(f, "mcp__{server}__{tool}"),
+            Self::Custom(name) => f.write_str(name),
+        }
+    }
+}
+
+/// Parses wire-format string. "mcp__server__tool" → Mcp, known → Builtin, else → Custom.
+impl FromStr for ToolId {
+    type Err = Infallible;  // always succeeds — Custom is catch-all
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if let Some(rest) = s.strip_prefix("mcp__") {
+            if let Some((server, tool)) = rest.split_once("__") {
+                return Ok(Self::Mcp { server: server.into(), tool: tool.into() });
+            }
+        }
+        Ok(ToolName::from_str(s)
+            .map(Self::Builtin)
+            .unwrap_or_else(|| Self::Custom(s.into())))
+    }
+}
+
+/// Serde as flat string — delegates to Display/FromStr.
+impl Serialize for ToolId {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+impl<'de> Deserialize<'de> for ToolId {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        Ok(s.parse().unwrap()) // Infallible
+    }
+}
+
+impl From<ToolName> for ToolId {
+    fn from(name: ToolName) -> Self { Self::Builtin(name) }
+}
+
+impl ToolId {
+    pub fn is_builtin(&self) -> bool { matches!(self, Self::Builtin(_)) }
+    pub fn is_mcp(&self) -> bool { matches!(self, Self::Mcp { .. }) }
+    pub fn mcp_server(&self) -> Option<&str> {
+        match self { Self::Mcp { server, .. } => Some(server), _ => None }
+    }
+}
+
 pub struct ToolInputSchema {
-    pub schema_type: String,  // always "object"
+    /// JSON Schema properties for tool input. Type is always "object" (not stored).
     pub properties: HashMap<String, Value>,
 }
 
@@ -318,9 +435,61 @@ pub struct ToolProgress {
 }
 ```
 
+### Agent Type (from `tools/AgentTool/`)
+
+```rust
+/// Agent identity — same pattern as ToolId.
+/// SubagentType (7 builtin, Copy) wrapped with Custom for user-defined agents.
+/// User agents loaded from: ~/.claude/agents/*.md, .claude/agents/*.md, plugins.
+/// Serde as flat string — same pattern as ToolId.
+/// "explore" (builtin), "my-custom-agent" (custom from .claude/agents/).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum AgentTypeId {
+    Builtin(SubagentType),
+    Custom(String),
+}
+
+impl fmt::Display for AgentTypeId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Builtin(t) => f.write_str(t.as_str()),
+            Self::Custom(name) => f.write_str(name),
+        }
+    }
+}
+
+impl FromStr for AgentTypeId {
+    type Err = Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(SubagentType::from_str(s)
+            .map(Self::Builtin)
+            .unwrap_or_else(|| Self::Custom(s.into())))
+    }
+}
+
+impl Serialize for AgentTypeId {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+impl<'de> Deserialize<'de> for AgentTypeId {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        Ok(s.parse().unwrap())
+    }
+}
+
+impl From<SubagentType> for AgentTypeId {
+    fn from(t: SubagentType) -> Self { Self::Builtin(t) }
+}
+```
+
 ### Task Types (from `Task.ts`)
 
 ```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TaskType {
     LocalBash,
     LocalAgent,
@@ -331,6 +500,8 @@ pub enum TaskType {
     Dream,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TaskStatus { Pending, Running, Completed, Failed, Killed }
 
 pub struct TaskStateBase {
@@ -362,24 +533,64 @@ pub struct AgentId(pub String);  // format: `a(?:.+-)?[0-9a-f]{16}$`
 pub struct TaskId(pub String);
 
 // SandboxMode (from cocode-rs, needed by exec/sandbox)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SandboxMode { ReadOnly, WorkspaceWrite, FullAccess, ExternalSandbox }
 ```
 
 ### Hook Types (from `types/hooks.ts`)
 
 ```rust
+/// 27 hook event types (synced with TS coreSchemas.ts HOOK_EVENTS).
+/// Uses #[non_exhaustive] because TS adds new events across versions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, IntoStaticStr)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+#[non_exhaustive]
 pub enum HookEventType {
+    // Tool lifecycle
     PreToolUse,
     PostToolUse,
+    PostToolUseFailure,
+    // Session lifecycle
     SessionStart,
+    SessionEnd,
     Setup,
+    Stop,
+    StopFailure,
+    // Subagent lifecycle
     SubagentStart,
+    SubagentStop,
+    // User interaction
     UserPromptSubmit,
+    PermissionRequest,
+    PermissionDenied,
+    Notification,
+    Elicitation,
+    ElicitationResult,
+    // Compaction
+    PreCompact,
+    PostCompact,
+    // Task lifecycle
+    TeammateIdle,
+    TaskCreated,
+    TaskCompleted,
+    // Config & environment
+    ConfigChange,
+    InstructionsLoaded,
+    CwdChanged,
     FileChanged,
+    // Worktree
+    WorktreeCreate,
+    WorktreeRemove,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HookOutcome { Success, Blocking, NonBlockingError, Cancelled }
+
 pub struct HookResult {
-    pub outcome: HookOutcome,  // Success, Blocking, NonBlockingError, Cancelled
+    pub outcome: HookOutcome,
     pub message: Option<Message>,
     pub permission_behavior: Option<PermissionBehavior>,
     pub stop_reason: Option<String>,
@@ -391,6 +602,7 @@ pub struct HookResult {
 
 ```rust
 /// Per-request token counts (returned by LLM API)
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenUsage {
     pub input_tokens: i64,
     pub output_tokens: i64,
@@ -399,6 +611,7 @@ pub struct TokenUsage {
 }
 
 /// Per-model accumulated usage (for cost tracking in coco-messages)
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct ModelUsage {
     pub input_tokens: i64,
     pub output_tokens: i64,
@@ -414,6 +627,8 @@ pub struct ModelUsage {
 ```rust
 /// Which LLM provider implementation to use.
 /// Consumed by coco-config (ProviderInfo) and coco-inference (ProviderFactory).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ProviderApi {
     Anthropic,
     Openai,
@@ -425,6 +640,8 @@ pub enum ProviderApi {
 
 /// Which purpose a model serves. Multiple roles can map to different models.
 /// Consumed by coco-config (ModelRoles) and coco-query (role resolution).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ModelRole {
     Main,       // Primary conversation
     Fast,       // Quick/cheap (Haiku)
@@ -438,6 +655,7 @@ pub enum ModelRole {
 
 /// A resolved model identity: provider + model ID.
 /// Produced by coco-config, consumed by coco-inference.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ModelSpec {
     pub provider: ProviderApi,
     pub model_id: String,
@@ -445,6 +663,8 @@ pub struct ModelSpec {
 }
 
 /// Model capabilities (checked at request time).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Capability {
     ToolUse,
     Vision,
@@ -458,13 +678,18 @@ pub enum Capability {
 }
 
 /// How a model handles file editing tools.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ApplyPatchToolType {
+    #[default]
     None,           // Use FileEdit (Anthropic default)
     CustomToolCall, // apply_patch via custom tool_call (OpenAI)
     BuiltIn,        // Native apply_patch support (future)
 }
 
 /// Communication protocol (OpenAI has two APIs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum WireApi {
     Chat,       // Standard chat completions
     Responses,  // OpenAI responses API (supports apply_patch)
@@ -474,17 +699,25 @@ pub enum WireApi {
 ### Log Types (from `types/logs.ts`)
 
 ```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UserType { Human, Api }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Entrypoint { Cli, SdkTs, SdkPy, Vscode, Jetbrains, Web }
+
 /// Serialized message for log persistence (session replay, analytics)
 pub struct SerializedMessage {
-    pub message: Message,           // flattened
+    pub message: Message,
     pub cwd: String,
-    pub user_type: String,
-    pub entrypoint: Option<String>, // cli, sdk-ts, sdk-py, etc.
+    pub user_type: UserType,
+    pub entrypoint: Option<Entrypoint>,
     pub session_id: String,
     pub timestamp: String,
     pub version: String,
     pub git_branch: Option<String>,
-    pub slug: Option<String>,       // session slug for plans (resume)
+    pub slug: Option<String>,
 }
 
 pub struct LogOption {

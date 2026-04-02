@@ -330,7 +330,7 @@ pub fn strip_dangerous_rules(rules: &mut Vec<PermissionRule>);
 /// Wraps tool + input + decision logic into a frozen context object.
 /// Used by the interactive handler to manage the decision lifecycle.
 pub struct PermissionContext {
-    tool_name: String,
+    tool_id: ToolId,
     input: Value,
     context: ToolPermissionContext,
     tool_use_id: String,

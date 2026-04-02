@@ -244,6 +244,43 @@ Exhaustive comparison of all plan docs against actual TS source + cocode-rs sour
 | coco-shell: modeValidation | Listed only | **FIXED**: acceptEdits auto-allow commands |
 | coco-shell: bash permissions pipeline | Not documented | **FIXED**: Full 7-step pipeline |
 
+## Cross-Review Round 4 (35-Area TS-First Validation — April 2026)
+
+### Major Corrections
+
+| Issue | What was wrong | Fix |
+|-------|---------------|-----|
+| Steering ≠ GrowthBook | Area 21 "steering" wrongly identified as feature flags. Actual: mid-turn message queue & injection (user sends guidance while LLM working) | **FIXED**: Added steering section to crate-coco-query.md (QueuedCommand, CommandQueue, QueryGuard, mid-turn attachment injection, inbox) |
+| Background execution = v1, not v2 | Both BashTool and AgentTool support `run_in_background`. Task framework is v1 core, coordinator is v2 orchestration on top | **FIXED**: Expanded coco-tasks in modules.md with TaskState union, isBackgrounded, auto-background, task output, notifications |
+| Subagent = agent-as-task | Agents are not separate from tasks — they register as LocalAgentTaskState. No separate SubagentManager needed | **FIXED**: Added AgentTool architecture to crate-coco-tools.md (spawn routing, fork, worktree, tool filtering, lifecycle) |
+| Prompt cache undocumented | 727 LOC cache break detection algorithm missing from inference doc | **FIXED**: Added CacheScope, CacheBreakDetector, 2-phase detection to crate-coco-inference.md |
+| ts-utils-mapping B12 error | forkedAgent.ts etc. wrongly mapped to `memory/` | **FIXED**: Remapped to `coco-tools` (AgentTool submodule) |
+| ThinkingConfig boolean | Rust doc had bool+budget, TS has 3-variant union (adaptive/enabled/disabled) | **FIXED**: Changed to enum in crate-coco-inference.md |
+| Fast mode stub | Only enum documented, org-level behavior missing | **FIXED**: Added availability check, cooldown semantics, prefetch to crate-coco-config.md |
+| Rewind 1-line | Only "Rewind to earlier turn" | **FIXED**: Added mechanism (message selector, file snapshots, restoration) to crate-coco-commands.md |
+| FileHistory missing | Not in any doc | **FIXED**: Added FileHistoryState, encoding detection, FileStateCache to crate-coco-context.md |
+| OAuth PKCE missing | Auth outline only | **FIXED**: Added 7-step PKCE flow, auth-code listener, crypto to crate-coco-inference.md |
+
+### Stub Expansions
+
+| Crate | What was expanded | Key additions |
+|-------|------------------|---------------|
+| coco-skills (modules.md) | 3-line load() → full multi-source discovery | Loading order (bundled→plugin→user→project→managed), dedup via realpath, conditional activation, memoization, bundled registry |
+| coco-hooks (modules.md) | 6 event types → 15 | FileChanged, CwdChanged, PermissionDenied, PostToolUseFailure, PermissionRequest, Notification, Elicitation, ElicitationResult, WorktreeCreate + AsyncHookRegistry + HookScope priority |
+| coco-memory (modules.md) | Basic CRUD → full feature | 4-type taxonomy scope rules, staleness detection (memoryAge), MEMORY.md truncation (200 lines/25KB), Sonnet-based recall selector, two-step save |
+| coco-keybindings (modules.md) | 3 struct fields → full system | 18 KeybindingContext variants, 50+ KeybindingAction variants, chord support, platform defaults, reserved shortcuts (ctrl+c/d double-press), user binding merge |
+| coco-tasks (modules.md) | Basic TaskManager → full background exec | TaskState 7-variant union, isBackgrounded flag, 3 entry points (explicit/auto/Ctrl+B), task output persistence (5GB cap), `<task-notification>` XML, PlanFileManager CRUD |
+
+### False Positives Identified
+
+| Area | Original assessment | Correction |
+|------|-------------------|------------|
+| 04 System Reminder | MISSING (CRITICAL) | N/A — Rust architectural improvement, not a TS module port |
+| 14 Code Indexing | N/A | Confirmed: TS has only detection (22 tool types), no indexing |
+| 21 Steering (GrowthBook) | MISSING (HIGH) | L6 intentionally deferred per mapping. Actual steering is message queue (fixed separately) |
+| 26 Background Agents | PARTIAL (HIGH) | Merged into task system (#13). Background exec is v1 core |
+| 27 LSP Integration | MISSING (CRITICAL) | cocode strategy (copy from cocode-rs). No TS-first doc needed |
+
 ### Remaining Deferred (implementation-time)
 
 | Priority | Gap | Phase |

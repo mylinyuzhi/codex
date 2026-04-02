@@ -366,14 +366,14 @@ All 338 top-level TS utils files mapped to their Rust destination.
 |---------|-------------|
 | `claudeCodeHints.ts` | Plugin hints |
 
-### B12. → `memory/`
+### B12. → `coco-tools` (AgentTool submodule)
 
 | TS file | What it does |
 |---------|-------------|
-| `forkedAgent.ts` (689 LOC) | Forked agent management |
-| `agentContext.ts` | Agent context building |
-| `agentId.ts` | Agent ID management |
-| `standaloneAgent.ts` | Standalone agent mode |
+| `forkedAgent.ts` (689 LOC) | Forked agent execution, cache-safe params, subagent context |
+| `agentContext.ts` | Agent context building (tool pool, system prompt assembly) |
+| `agentId.ts` | Agent ID generation and validation |
+| `standaloneAgent.ts` | Standalone agent mode (headless agent execution) |
 
 ### B13. → `coco-mcp`
 
