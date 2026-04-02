@@ -36,11 +36,20 @@ Exhaustive comparison of all plan docs against actual TS source + cocode-rs sour
 
 ### 3. coco-permissions: auto-mode/yolo classifier not documented
 
-`src/utils/permissions/yoloClassifier.ts` (500+ LOC) — entire auto-approve system. Uses LLM (Haiku) to classify bash commands as safe/unsafe without prompting. Integrates with:
-- `bashClassifier.ts` (500+ LOC) — ML-based command safety
-- `denialTracking.ts` — escalation after repeated denials
-- `autoModeState.ts` — state machine for auto-mode
-- 24 files total in permissions/ directory
+`src/utils/permissions/yoloClassifier.ts` (1495 LOC) — two-stage XML classifier system:
+- Stage 1: FAST (64 tokens, nudged for quick block decision)
+- Stage 2: THINKING (4096+ tokens, full chain-of-thought reasoning)
+- Shared prompt prefix for cache hits between stages
+- Integrates with:
+  - `bashClassifier.ts` — semantic command safety (stub for external builds)
+  - `classifierDecision.ts` (98 LOC) — classifier → PermissionDecision mapping
+  - `classifierShared.ts` — safe-tool allowlist (read-only tools skip classifier)
+  - `denialTracking.ts` (45 LOC) — 3 consecutive or 20 total denials → fallback to prompting
+  - `autoModeState.ts` (39 LOC) — session state machine with GrowthBook circuit breaker
+  - `dangerousPatterns.ts` — code-exec pattern stripping at auto-mode entry
+  - `shellRuleMatching.ts` — wildcard/prefix/exact command matching
+  - `PermissionContext.ts` (388 LOC) — decision lifecycle wrapper
+  - 26 files total in permissions/ directory
 
 **Action**: Document the **permission evaluation pipeline** as a flowchart, not list every function.
 
@@ -59,16 +68,25 @@ Exhaustive comparison of all plan docs against actual TS source + cocode-rs sour
 ### 5. coco-app/state: AppState has 60+ fields, plan has ~10
 
 **Missing entire subsystems in AppState:**
-- Bridge state (12 fields: replBridgeEnabled, replBridgeConnected, etc.)
-- Tungsten/tmux integration (5 fields)
-- WebBrowser/Bagel tool (3 fields)
-- Computer-use MCP state (7 sub-fields)
-- Coordinator mode (3 fields)
-- KAIROS/assistant mode (2 fields)
-- Elicitation queue
-- Remote agent state
-- Thinking toggle
-- Session hooks state
+- Bridge state (11 fields: replBridgeEnabled, replBridgeConnected, replBridgeSessionActive, etc.)
+- Tungsten/tmux integration (5 fields: tungstenActiveSession, tungstenPanelVisible, etc.)
+- WebBrowser/Bagel tool (3 fields: bagelActive, bagelUrl, bagelPanelVisible)
+- Computer-use MCP state (computerUseMcpState)
+- Coordinator mode (coordinatorTaskIndex, viewSelectionMode)
+- KAIROS/assistant mode (kairosEnabled)
+- Elicitation queue (elicitation.queue)
+- Remote agent state (remoteAgentTaskSuggestions, remoteConnectionStatus)
+- Thinking toggle (thinkingEnabled)
+- Session hooks state (sessionHooks)
+- Speculation/pipelining (speculation, speculationSessionTimeSavedMs)
+- Fast mode & advisor (fastMode, advisorModel, effortValue)
+- Inbox messages (inbox.messages)
+- Notifications (notifications.current, notifications.queue)
+- Worker sandbox permissions (workerSandboxPermissions)
+- Ultraplan state (ultraplanLaunching, isUltraplanMode, etc.)
+- Plugin system (plugins.enabled, plugins.disabled, plugins.errors, plugins.installationStatus)
+- MCP system (mcp.clients, mcp.tools, mcp.commands, mcp.resources)
+- Prompt suggestion (promptSuggestion)
 
 ### 6. ts-to-rust-mapping.md: 8 unmapped TS util files
 
@@ -83,31 +101,33 @@ Exhaustive comparison of all plan docs against actual TS source + cocode-rs sour
 | `utils/theme.ts` | 200+ | `coco-tui` |
 | `utils/config.ts` | 600+ | `coco-config` (GlobalConfig — already partially added) |
 
-### 7. coco-inference: missing 3 major subsystems
+### 7. coco-inference: missing 5 major subsystems
 
 | Subsystem | TS source | LOC | What it does |
 |-----------|-----------|-----|-------------|
-| `filesApi.ts` | `services/api/filesApi.ts` | 600+ | File uploads API (500MB limit, retry, download) |
-| `dumpPrompts.ts` | `services/api/dumpPrompts.ts` | 200+ | Debug: cache last 5 API requests to JSONL |
-| `utils/auth.ts` | `utils/auth.ts` | 65K | Full auth system: OAuth, Bedrock, Vertex, Foundry, API key |
+| `claude.ts` | `services/api/claude.ts` | 3,419 | Full query orchestration: streaming/non-streaming, beta headers, system prompt, fallback, media limits |
+| `withRetry.ts` | `services/api/withRetry.ts` | 550 | Two-layer retry: exponential backoff + auth-aware retry + fast-mode aware + persistent mode |
+| `filesApi.ts` | `services/api/filesApi.ts` | 748 | File upload/download: 500MB limit, retry, path security, concurrency pool |
+| `dumpPrompts.ts` | `services/api/dumpPrompts.ts` | 227 | Non-blocking debug trace: fingerprint dedup, JSONL output, session-scoped |
+| `utils/auth.ts` | `utils/auth.ts` | 2,002 | OAuth/API key: token refresh pipeline, distributed lock, 401 dedup, AWS/GCP auth |
 
 ### 8. coco-compact: 4 undocumented submodules
 
 | Module | What it does |
 |--------|-------------|
-| `grouping.ts` | Groups messages at API-round boundaries (for reactive compact) |
-| `postCompactCleanup.ts` | Clears 10+ caches after compaction |
-| `apiMicrocompact.ts` | API-level micro compaction (different from tool-level) |
-| `timeBasedMCConfig.ts` | Time-based model context window configuration |
+| `grouping.ts` (64 LOC) | Groups messages at API-round boundaries (by assistant.id, not human turns) |
+| `postCompactCleanup.ts` (78 LOC) | Clears 10+ caches after compaction (classifier approvals, memory files, system prompt, etc.) |
+| `apiMicrocompact.ts` (154 LOC) | API-level context management (clear_tool_uses, clear_thinking strategies) |
+| `timeBasedMCConfig.ts` (44 LOC) | GrowthBook config: 60-min gap threshold, keep-recent=5 |
 
 ### 9. coco-shell: 4 undocumented modules
 
 | Module | What it does |
 |--------|-------------|
-| `shouldUseSandbox.ts` (150+ LOC) | Complex decision logic: sandbox enabled → policy → excluded commands → feature flags |
-| `destructiveCommandWarning.ts` | Warning system for destructive commands |
-| `sedEditParser.ts` (200+ LOC) | Sed in-place edit parsing and validation |
-| `modeValidation.ts` | Sandbox mode validation |
+| `shouldUseSandbox.ts` (154 LOC) | Complex decision: sandbox enabled → policy → excluded commands (GrowthBook + user config) → feature flags |
+| `destructiveCommandWarning.ts` (103 LOC) | ~20 regex patterns for destructive commands (git reset --hard, rm -rf, kubectl delete, terraform destroy, etc.) |
+| `sedEditParser.ts` (200+ LOC) | Sed in-place edit parsing and constraint validation |
+| `modeValidation.ts` (116 LOC) | Permission mode auto-allow: acceptEdits → mkdir/touch/rm/mv/cp/sed |
 
 ### 10. multi-provider-plan.md: missing provider-specific details
 
@@ -147,23 +167,18 @@ Exhaustive comparison of all plan docs against actual TS source + cocode-rs sour
 
 | # | Gap | Status |
 |---|-----|--------|
-| 1 | coco-messages 114 functions | **P2**: Document by category during implementation |
+| 1 | coco-messages 114 functions | **FIXED**: Documented 15 categories with 114 function signatures in crate-coco-messages.md |
 | 2 | Missing core concepts (ContentReplacementState, FileStateCache, etc.) | **FIXED**: Added 9 files to ts-to-rust-mapping.md |
-| 3 | coco-permissions auto-mode/yolo | **P1**: Document during implementation |
+| 3 | coco-permissions auto-mode/yolo | **FIXED**: Full classifier documentation added to crate-coco-permissions.md (two-stage XML, denial tracking, safe-tool allowlist, dangerous patterns, CLAUDE.md integration) |
 | 4 | coco-tools 7 missing tools | **FIXED**: Added MCPTool, McpAuthTool, PowerShellTool, REPLTool, SleepTool, SyntheticOutputTool + ScheduleCronTool paths to crate-coco-tools.md |
 | 5 | AppState 60+ fields | **P2**: Full state documented during coco-state implementation |
 | 6 | ts-to-rust-mapping gaps | **FIXED**: Added 24 previously unmapped files |
-| 7 | coco-inference auth + filesApi | **P1**: Document during implementation |
-| 8 | coco-compact submodules | **P3**: Document during implementation |
-| 9 | coco-shell modules | **P3**: Document during implementation |
+| 7 | coco-inference auth + filesApi + retry + claude.ts | **FIXED**: Added auth system (OAuth, token refresh, distributed lock, 401 dedup, AWS/GCP), filesApi (upload/download pipeline, path security), retry engine (two-layer, fast-mode aware, persistent), query options, bootstrap, dump_prompts, HTTP utils to crate-coco-inference.md |
+| 8 | coco-compact submodules | **FIXED**: Added grouping (API-round boundaries), postCompactCleanup (10+ cache clears), apiMicrocompact (context strategies), timeBasedMCConfig (GrowthBook config) to crate-coco-compact.md |
+| 9 | coco-shell modules | **FIXED**: Added destructiveCommandWarning (20 patterns), shouldUseSandbox (decision logic), modeValidation (acceptEdits auto-allow), bash permission pipeline to crate-coco-shell.md |
 | 10 | multi-provider beta headers | **FIXED**: Added 13-row beta header matrix to multi-provider-plan.md |
 | 11 | coco-config patterns | **P3**: ConfigSection trait documented during implementation |
 | 12 | Hooks 15+ executor files | **FIXED**: Added to ts-to-rust-mapping.md |
-
-### Remaining P1 items (to be documented during implementation, not in plan):
-- Permissions auto-mode/yolo classifier flow (coco-permissions)
-- Auth system 65K LOC (coco-inference)
-- These are **implementation detail** — the plan correctly identifies the crate boundaries and TS sources
 
 ---
 
@@ -204,18 +219,38 @@ Exhaustive comparison of all plan docs against actual TS source + cocode-rs sour
 | Message types incomplete | 5 variants, TS has 8+ | **FIXED**: Expanded to 8 variants + 14 system message sub-types + NormalizedMessage + StreamEvent + MessageOrigin |
 | crate-coco-app.md missing TS source | No combined TS source header | **FIXED**: Added TS source line |
 
+---
+
+## Cross-Review Round 3 (Deep TS comparison — April 2026)
+
+### Newly Fixed (this round)
+
+| Gap | What was missing | Fix |
+|-----|------------------|-----|
+| coco-permissions: full classifier architecture | 74-line stub → TS has 1495-line 2-stage XML classifier | **FIXED**: Full documentation in crate-coco-permissions.md (two-stage, denial tracking, CLAUDE.md integration, safe-tool allowlist, dangerous pattern stripping, security invariants) |
+| coco-messages: 114 functions | 7 documented | **FIXED**: 15 categories with signatures in crate-coco-messages.md |
+| coco-inference: auth system | "65K LOC" placeholder | **FIXED**: Actual 2002 LOC with OAuth, token refresh, distributed lock, 401 dedup, AWS/GCP auth |
+| coco-inference: claude.ts | Not documented | **FIXED**: 3419 LOC query orchestration (streaming/non-streaming, beta headers, fallback, media limits) |
+| coco-inference: withRetry.ts | Skeleton only | **FIXED**: 550 LOC two-layer retry (auth-aware, fast-mode, persistent, context overflow) |
+| coco-inference: filesApi.ts | Listed only | **FIXED**: 748 LOC upload/download pipeline, path security, concurrency |
+| coco-inference: dumpPrompts.ts | Not documented | **FIXED**: 227 LOC non-blocking debug trace |
+| coco-inference: bootstrap.ts | Not documented | **FIXED**: 141 LOC lazy-fetch org config |
+| coco-compact: grouping.ts | Listed only | **FIXED**: API-round boundary grouping (by assistant.id) |
+| coco-compact: postCompactCleanup.ts | Listed only | **FIXED**: 10+ cache clears, main-thread guard |
+| coco-compact: apiMicrocompact.ts | Listed only | **FIXED**: API-level clear_tool_uses / clear_thinking strategies |
+| coco-compact: timeBasedMCConfig.ts | Listed only | **FIXED**: GrowthBook config (60-min gap, keep-recent=5) |
+| coco-shell: destructiveCommandWarning | Listed only | **FIXED**: 20 regex patterns documented |
+| coco-shell: shouldUseSandbox | Listed only | **FIXED**: Decision logic (GrowthBook + user config + policy) |
+| coco-shell: modeValidation | Listed only | **FIXED**: acceptEdits auto-allow commands |
+| coco-shell: bash permissions pipeline | Not documented | **FIXED**: Full 7-step pipeline |
+
 ### Remaining Deferred (implementation-time)
 
 | Priority | Gap | Phase |
 |----------|-----|-------|
-| P1 | Permissions auto-mode/yolo classifier (500+ LOC) | Phase 3 |
-| P1 | Auth system (65K LOC) — OAuth, Bedrock, Vertex, Foundry | Phase 3 |
-| P2 | coco-messages: 114 functions (document by category) | Phase 4 |
-| P2 | AppState: 60+ fields (remote, notifications, attribution, tungsten) | Phase 7 |
+| P2 | AppState: 60+ fields (remote, notifications, attribution, tungsten, speculation, plugins, MCP, inbox) | Phase 7 |
 | P2 | ErrorExt::telemetry_msg() — 遥测脱敏方法 (TS 有 TelemetrySafeError，cocode-rs 无对应) | Phase 2 (cocode-error 扩展) |
-| P3 | coco-compact submodules | Phase 3 |
-| P3 | coco-shell submodules | Phase 4 |
-| P3 | coco-config cocode-rs patterns | Phase 2 |
+| P3 | coco-config cocode-rs patterns (ConfigSection trait, ConfigResolver) | Phase 2 |
 | P3 | 工具执行错误 errno 保留 — 确保 IO 错误在 OTel 中保留操作系统级 errno | Phase 4 |
 | P1 | coco-otel L2: span 层级体系 — cocode-rs 仅 session_span，缺 interaction→tool→hook 嵌套 | Phase 1 |
 | P1 | coco-otel L3: ~53 应用事件 — cocode-rs 仅 7 事件，缺 query/session/config/oauth/mcp 等 | Phase 3 |

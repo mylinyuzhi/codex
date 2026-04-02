@@ -185,6 +185,23 @@ pub struct RequestStartEvent {
 
 /// Direction hint for partial compaction.
 pub enum PartialCompactDirection { Oldest, Newest }
+
+/// Streaming accumulation types — used by coco-messages, coco-inference, coco-query (3+ crates).
+/// Task budget for API output pacing. Used by coco-inference and coco-query.
+pub struct TaskBudget {
+    pub total: i64,
+    pub remaining: Option<i64>,
+}
+
+pub struct StreamingToolUse {
+    pub id: String,
+    pub name: String,
+    pub input_json: String,  // Accumulated JSON string
+}
+
+pub struct StreamingThinking {
+    pub text: String,
+}
 ```
 
 ### Permission Types (from `types/permissions.ts`)
@@ -222,6 +239,18 @@ pub enum PermissionDecision {
     Allow { updated_input: Option<Value>, feedback: Option<String> },
     Ask { message: String, suggestions: Vec<PermissionUpdate> },
     Deny { message: String, reason: PermissionDecisionReason },
+}
+
+/// Why a permission decision was made. Attached to PermissionDecision::Deny.
+pub enum PermissionDecisionReason {
+    Rule { rule: PermissionRule },
+    Mode { mode: PermissionMode },
+    Classifier { classifier: String, reason: String },
+    Hook { hook_name: String, reason: Option<String> },
+    SafetyCheck { reason: String, classifier_approvable: bool },
+    AsyncAgent { reason: String },
+    User,
+    Sandboxed,
 }
 
 pub struct ToolPermissionContext {

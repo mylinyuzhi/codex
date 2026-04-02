@@ -1,6 +1,6 @@
 # coco-inference — Crate Plan
 
-TS source: `src/services/api/`, `src/utils/auth.ts`, `src/services/oauth/`, `src/services/analytics/`, `src/services/tokenEstimation.ts`, `src/services/claudeAiLimits.ts`, `src/services/rateLimitMessages.ts`
+TS source: `src/services/api/claude.ts` (3419 LOC), `src/services/api/withRetry.ts` (550 LOC), `src/services/api/filesApi.ts` (748 LOC), `src/services/api/bootstrap.ts` (141 LOC), `src/services/api/dumpPrompts.ts` (227 LOC), `src/utils/auth.ts` (2002 LOC), `src/services/oauth/`, `src/services/tokenEstimation.ts`, `src/services/claudeAiLimits.ts`, `src/services/rateLimitMessages.ts`
 
 ## Dependencies
 
@@ -23,19 +23,23 @@ coco-inference does NOT depend on:
 
 ```
 coco-inference/src/
-  model_hub.rs      # ModelHub: caches providers + models, resolves ModelRole -> ModelSpec
-  provider_factory.rs # ProviderFactory: ProviderApi -> Arc<dyn ProviderV4>
-  request_builder.rs  # 5-step pipeline: normalize, cache, thinking, options, headers
-  client.rs         # ApiClient wrapper around LanguageModelV4
-  query.rs          # queryWithStreaming(), queryWithoutStreaming()
-  retry.rs          # Exponential backoff, fallback, 529 handling
-  errors.rs         # Error classification (retryable, auth, prompt-too-long)
-  usage.rs          # TokenUsage accumulation (ModelUsage from coco-types)
-  auth.rs           # API key, OAuth, Bedrock/Vertex/Foundry auth
-  logging.rs        # Per-request logging (usage, TTFT, latency)
-  rate_limit.rs     # Rate limit enforcement, cooldown, messaging
+  model_hub.rs         # ModelHub: caches providers + models, resolves ModelRole -> ModelSpec
+  provider_factory.rs  # ProviderFactory: ProviderApi -> Arc<dyn ProviderV4>
+  request_builder.rs   # 5-step pipeline: normalize, cache, thinking, options, headers
+  client.rs            # ApiClient wrapper around LanguageModelV4
+  query.rs             # queryWithStreaming(), queryWithoutStreaming()
+  retry.rs             # Two-layer retry: exponential backoff + auth retry + persistent mode
+  errors.rs            # Error classification (retryable, auth, prompt-too-long)
+  usage.rs             # TokenUsage accumulation (ModelUsage from coco-types)
+  auth.rs              # OAuth, API key, Bedrock/Vertex/GCP auth, token refresh
+  files_api.rs         # File upload/download API (500MB limit, retry, path security)
+  dump_prompts.rs      # Non-blocking debug trace for API requests/responses
+  logging.rs           # Per-request logging (usage, TTFT, latency)
+  rate_limit.rs        # Rate limit enforcement, cooldown, messaging
   token_estimation.rs  # Token counting for budget decisions
-  analytics.rs      # Telemetry events, feature flags
+  analytics.rs         # Telemetry events, feature flags
+  bootstrap.rs         # Lazy-fetch org-specific config (model options, client data)
+  http.rs              # Auth headers, user-agent, OAuth retry wrapper
 ```
 
 ## Data Definitions
@@ -64,7 +68,7 @@ pub struct ApiClientConfig {
 
 ```rust
 pub struct QueryParams {
-    pub messages: Vec<MessageParam>,
+    pub prompt: LlmPrompt,  // LanguageModelV4Prompt from coco-types (not raw MessageParam)
     pub model: String,
     pub max_tokens: i64,
     pub system: Option<SystemPrompt>,
@@ -74,31 +78,130 @@ pub struct QueryParams {
     pub thinking: Option<ThinkingConfig>,
     pub effort: Option<EffortLevel>,
     pub custom_headers: HashMap<String, String>,  // beta headers
+    pub enable_prompt_caching: bool,
+    pub fast_mode: bool,
+    pub task_budget: Option<TaskBudget>,
+    pub output_format: Option<OutputFormat>,
 }
 
+/// API-level thinking configuration. Owned by coco-inference (not coco-types).
+/// Distinct from ThinkingLevel in coco-config (user-facing setting).
+/// coco-config::ThinkingLevel → resolved to coco-inference::ThinkingConfig at query time.
 pub struct ThinkingConfig {
     pub enabled: bool,
     pub budget_tokens: Option<i64>,
 }
+
+// TaskBudget is defined in coco-types (shared with coco-query).
+// Fields: total: i64, remaining: Option<i64>
 ```
 
-### Retry Configuration (from `withRetry.ts`)
+### Query Options (from `claude.ts`, 3419 LOC)
+
+```rust
+/// Full query options (matches TS Options type)
+pub struct QueryOptions {
+    pub model: String,
+    pub tool_choice: Option<ToolChoice>,
+    pub is_non_interactive_session: bool,
+    pub extra_tool_schemas: Vec<ToolDefinition>,
+    pub max_output_tokens_override: Option<i64>,
+    pub fallback_model: Option<String>,
+    pub callback_tx: Option<mpsc::UnboundedSender<QueryCallback>>,  // replaces FnOnce trait object
+    pub query_source: QuerySource,
+    pub agents: Vec<AgentDefinition>,
+    pub allowed_agent_types: Option<Vec<String>>,
+    pub has_append_system_prompt: bool,
+    pub enable_prompt_caching: bool,
+    pub skip_cache_write: bool,
+    pub temperature_override: Option<f64>,
+    pub effort_value: Option<EffortValue>,
+    pub mcp_tools: Vec<ToolDefinition>,
+    pub has_pending_mcp_servers: bool,
+    pub fast_mode: bool,
+    pub advisor_model: Option<String>,
+    pub task_budget: Option<TaskBudget>,
+    pub output_format: Option<OutputFormat>,
+}
+
+/// Streaming vs non-streaming selection:
+/// - queryModelWithStreaming(): yields StreamEvent/AssistantMessage/SystemAPIErrorMessage
+/// - queryModelWithoutStreaming(): collects single AssistantMessage
+/// - Fallback: on streaming 529, switches to non-streaming with adjusted max_tokens
+/// - Timeout: 120s (CCR remote) or 300s (local), overridable via API_TIMEOUT_MS
+/// Returns a stream of events. Stream items are Result to handle mid-stream errors
+/// (auth expiry, connection reset, context overflow detected mid-response).
+pub async fn query_model_with_streaming(
+    options: &QueryOptions,
+    messages: &[Message],
+    system: &SystemPrompt,
+    tools: &[ToolDefinition],
+) -> Result<impl Stream<Item = Result<StreamEvent, ApiError>>, ApiError>;
+
+pub async fn query_model_without_streaming(
+    options: &QueryOptions,
+    messages: &[Message],
+    system: &SystemPrompt,
+    tools: &[ToolDefinition],
+) -> Result<AssistantMessage, ApiError>;
+```
+
+### Retry Configuration (from `withRetry.ts`, 550 LOC)
 
 ```rust
 pub struct RetryConfig {
-    pub max_retries: i32,           // default: 10
-    pub base_delay_ms: i64,         // 500ms exponential base
-    pub max_529_retries: i32,       // 3 consecutive before fallback
-    pub persistent_max_backoff_ms: i64,  // 5 min
-    pub persistent_reset_cap_ms: i64,    // 6 hours
+    pub max_retries: i32,                // default: 10
+    pub base_delay_ms: i64,              // 500ms exponential base
+    pub max_529_retries: i32,            // 3 consecutive before fallback
+    pub persistent_max_backoff_ms: i64,  // 5 min (300_000)
+    pub persistent_reset_cap_ms: i64,    // 6 hours (21_600_000)
 }
 
-/// Retryable conditions:
-/// - 429: rate limit (always retry)
-/// - 529: overloaded (only for foreground queries)
-/// - APIConnectionError: timeouts, ECONNRESET, EPIPE
-pub fn should_retry(error: &ApiError, config: &RetryConfig) -> bool;
-pub fn calculate_backoff(attempt: i32, base_delay_ms: i64) -> Duration;
+pub struct RetryContext {
+    pub max_tokens_override: Option<i64>,
+    pub model: String,
+    pub thinking_config: ThinkingConfig,
+    pub fast_mode: bool,
+}
+
+/// Two-layer retry engine:
+///
+/// Layer 1 — Standard retry (exponential backoff):
+///   Non-retriable (throw immediately):
+///     404, 405, 408, 410, 413, 418, 429+ (after max retries)
+///     User abort (APIUserAbortError)
+///     Non-foreground 529 errors (background queries bail early)
+///   Retriable (retry with backoff):
+///     5xx errors, 429 rate limits, 529 overloaded
+///     Connection errors (ECONNRESET, EPIPE) — disable keep-alive on retry
+///
+/// Layer 2 — Auth-aware retry:
+///     401 API key invalid → clear cache, get fresh client
+///     401/403 OAuth token revoked → handleOAuth401Error() → refresh → retry
+///     Bedrock auth error → clear AWS credentials cache
+///     Vertex auth error → trigger GCP credential refresh
+///
+/// Fast-mode aware:
+///     On 429/529 with fast_mode active:
+///     - Retry-After <= 60s: wait and retry (preserve prompt cache)
+///     - Retry-After > 60s: trigger fast-mode cooldown (switch model)
+///
+/// Persistent retry (ANT-only, UNATTENDED_RETRY):
+///     Indefinite retry on 429/529
+///     Backoff capped at 5 min, reset cap at 6 hours
+///     Chunked sleep (heartbeat yields every 30s for session keep-alive)
+///
+/// Context overflow fallback:
+///     400 "context window exceeded" → reduce max_tokens for retry
+///     Ensures >= 3000 output tokens + thinking budget
+pub async fn with_retry<F, Fut, T>(
+    f: F,
+    config: RetryConfig,
+    cancel: CancellationToken,
+) -> Result<T, CannotRetryError>
+where
+    F: Fn(&RetryContext) -> Fut,
+    Fut: Future<Output = Result<T, ApiError>>;
 ```
 
 ### Error Classification (from `errors.ts`)
@@ -113,6 +216,8 @@ pub enum ApiErrorKind {
     BadRequest,        // 400 (other)
     ServerError,       // 500, 502, 503
     ConnectionError,   // timeouts, ECONNRESET
+    UserAbort,         // User cancelled
+    ContextOverflow,   // 400 "context window exceeded"
 }
 
 pub fn classify_error(status: u16, body: &str) -> ApiErrorKind;
@@ -130,7 +235,218 @@ pub fn detect_gateway(headers: &HeaderMap, base_url: &str) -> Option<KnownGatewa
 // Known gateways: litellm, helicone, portkey, cloudflare, kong, braintrust, databricks
 ```
 
-### ModelHub (from cocode-rs `model_hub.rs`)
+## Authentication System (from `auth.ts`, 2002 LOC)
+
+### API Key Sources (Priority Order)
+
+```rust
+pub enum ApiKeySource {
+    AnthropicApiKey,     // ANTHROPIC_API_KEY env var
+    FileDescriptor,      // CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR
+    ApiKeyHelper,        // Async cached helper with TTL + SWR
+    Keychain,            // macOS Keychain or ~/.coco/.globalConfig
+}
+
+/// Validates format: alphanumeric + dashes/underscores only
+pub async fn get_api_key() -> Option<(String, ApiKeySource)>;
+```
+
+### OAuth Token Management
+
+```rust
+pub struct OAuthTokens {
+    pub access_token: String,
+    pub refresh_token: Option<String>,
+    pub expires_at: Option<String>,
+    pub scopes: Vec<String>,
+    pub subscription_type: Option<SubscriptionType>,
+    pub rate_limit_tier: Option<String>,
+}
+
+pub enum SubscriptionType { Max, Pro, Enterprise, Team }
+
+/// Primary source: CLAUDE_CODE_OAUTH_TOKEN env var (inference-only, no refresh)
+/// Secondary: OAuth file descriptor (CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR)
+/// Fallback: Secure storage (macOS Keychain or .credentials.json)
+/// Cached via memoize — cleared on disk mutation detection
+pub async fn get_oauth_tokens() -> Option<OAuthTokens>;
+```
+
+### Token Refresh Pipeline
+
+```rust
+/// THREAD SAFETY: Uses fs2::FileExt for cross-process file locks + tokio::sync::Notify
+/// for in-process deduplication. Both are needed because:
+/// - File lock: prevents thundering herd across CLI processes (multi-tab)
+/// - Notify: prevents redundant refresh within same process (multi-task)
+///
+/// Flow (atomic check-then-refresh under lock):
+/// 1. Check in-flight dedup: if another task refreshing same token, await its Notify
+/// 2. Check local expiration (skip if force=true)
+/// 3. Acquire file lock (~/.coco/.token.lock via fs2::try_lock_exclusive)
+///    - Max 5 retries with 1-2s exponential backoff if locked by another process
+/// 4. Re-read from storage under lock (detect other-process refreshes)
+/// 5. If token changed since step 2 → another process refreshed, reuse it
+/// 6. Otherwise call refresh_oauth_token() with optional scope override
+/// 7. Store refreshed tokens; clear caches; release lock; notify waiters
+///
+/// In-process dedup implementation:
+///   static IN_FLIGHT: Lazy<Mutex<HashMap<String, Arc<Notify>>>> = ...;
+pub async fn check_and_refresh_token_if_needed(force: bool) -> Result<(), AuthError>;
+
+/// 401 error handling (atomic check-then-refresh to avoid TOCTOU):
+/// 1. Acquire file lock (same lock as refresh pipeline)
+/// 2. Re-read from storage under lock
+/// 3. If stored token != failed_token → another process already refreshed (reuse)
+/// 4. If stored token == failed_token → force refresh under same lock hold
+/// 5. Release lock; notify in-process waiters
+/// Key: steps 2-4 are under single lock hold (no TOCTOU gap)
+pub async fn handle_oauth_401_error(failed_token: &str) -> Result<(), AuthError>;
+```
+
+### AWS/GCP Auth Refresh
+
+```rust
+/// Run user-provided commands for interactive auth.
+/// Both check STS caller-identity first; skip refresh if valid.
+/// 3-minute timeout; streams output in real-time.
+/// Credentials cached with TTL (AWS: 1h, GCP: 1h).
+/// Security: Check workspace trust before executing project-settings commands.
+pub async fn aws_auth_refresh(command: &str) -> Result<AwsCredentials, AuthError>;
+pub async fn gcp_auth_refresh(command: &str) -> Result<GcpCredentials, AuthError>;
+
+pub struct AwsCredentials {
+    pub access_key_id: String,
+    pub secret_access_key: String,
+    pub session_token: Option<String>,
+}
+```
+
+### HTTP Utilities (from `http.ts`, 137 LOC)
+
+```rust
+/// Auth header selection:
+/// - OAuth subscriber: Authorization: Bearer {token} + anthropic-beta: OAUTH_BETA
+/// - API key user: x-api-key: {key}
+pub fn get_auth_headers() -> AuthHeaders;
+
+/// Retry on 401/403 with token refresh:
+pub async fn with_oauth_401_retry<T>(
+    request: impl Future<Output = Result<T, ApiError>>,
+) -> Result<T, ApiError>;
+
+/// User-Agent format:
+/// "claude-cli/{VERSION} ({USER_TYPE}, {ENTRYPOINT}, agent-sdk/{VERSION}, client-app/{APP})"
+pub fn build_user_agent() -> String;
+```
+
+## File Upload/Download API (from `filesApi.ts`, 748 LOC)
+
+### Configuration
+
+```rust
+pub struct FilesApiConfig {
+    pub oauth_token: String,
+    pub base_url: String,       // Default: https://api.anthropic.com
+    pub session_id: String,
+}
+```
+
+### Download Pipeline
+
+```rust
+/// Single file download with 3 retry attempts (500ms → 1s → 2s backoff).
+/// Non-retriable: 404 (not found), 401 (auth), 403 (access denied)
+/// Retriable: 5xx, timeouts, connection errors
+/// Timeout: 60 seconds per attempt
+pub async fn download_file(
+    config: &FilesApiConfig,
+    file_id: &str,
+    dest_path: &Path,
+) -> Result<DownloadResult, FilesApiError>;
+
+/// Batch download with concurrency pool (default: 5 workers).
+/// Worker pool pattern: spawns min(concurrency, files.len()) workers.
+/// Maintains input order in results.
+pub async fn download_session_files(
+    config: &FilesApiConfig,
+    files: &[FileReference],
+    concurrency: usize,
+) -> Vec<DownloadResult>;
+
+/// Path security: canonicalize then verify prefix (prevents symlink + ".." escapes).
+/// Steps:
+/// 1. Join base + session_id + "uploads" + relative
+/// 2. Canonicalize result (resolves symlinks, "..", ".")
+/// 3. Canonicalize base separately
+/// 4. Verify canonicalized result starts_with canonicalized base
+/// 5. Reject on mismatch (PathError::Traversal)
+pub fn build_download_path(base: &Path, session_id: &str, relative: &str) -> Result<PathBuf, PathError>;
+```
+
+### Upload Pipeline
+
+```rust
+/// Single file upload via multipart form-data.
+/// Validation: size <= 500MB
+/// Boundary: UUID (avoid collisions)
+/// Retry: 3 attempts (500ms exponential backoff)
+/// Non-retriable: 401, 403, 413 (file too large)
+/// Timeout: 120 seconds (for large files)
+pub async fn upload_file(
+    config: &FilesApiConfig,
+    path: &Path,
+) -> Result<UploadResult, FilesApiError>;
+
+/// Batch upload with same concurrency pool pattern.
+pub async fn upload_session_files(
+    config: &FilesApiConfig,
+    files: &[PathBuf],
+    concurrency: usize,
+) -> Vec<UploadResult>;
+
+/// List files created after a timestamp, with pagination.
+/// Uses after_id cursor when has_more=true.
+pub async fn list_files_created_after(
+    config: &FilesApiConfig,
+    after: DateTime<Utc>,
+) -> Result<Vec<FileInfo>, FilesApiError>;
+```
+
+## Debug Prompt Dump (from `dumpPrompts.ts`, 227 LOC)
+
+```rust
+/// Non-blocking debug trace for API requests/responses.
+/// Used by /issue command for diagnostics.
+///
+/// Architecture:
+/// - createDumpPromptsFetch() wraps fetch function
+/// - Deferred via spawn_blocking so parsing doesn't block API calls
+/// - Cheap fingerprint first (model + tool names + system size)
+/// - Skip full hash if fingerprint unchanged
+///
+/// File layout: ~/.coco/dump-prompts/{session_id}.jsonl
+/// Entry types: init, system_update, message, response
+pub fn create_dump_prompts_fetch(session_id: &str) -> impl Fn(Request) -> Future<Output = Response>;
+```
+
+## Bootstrap (from `bootstrap.ts`, 141 LOC)
+
+```rust
+/// Lazy-fetch org-specific config (model options, client data).
+/// Skip conditions: privacy mode, 3rd-party provider, no usable auth, missing user:profile scope
+/// Endpoint: {BASE_API_URL}/api/claude_cli/bootstrap
+/// Timeout: 5 seconds
+/// Caching: persists to disk only if data changed (isEqual check)
+pub async fn fetch_bootstrap_config() -> Option<BootstrapConfig>;
+
+pub struct BootstrapConfig {
+    pub client_data: Option<Value>,
+    pub additional_model_options: Option<Vec<AdditionalModel>>,
+}
+```
+
+## ModelHub (from cocode-rs `model_hub.rs`)
 
 ```rust
 /// Central model management. Caches providers and models.
@@ -146,17 +462,6 @@ impl ModelHub {
     pub async fn get_model(&self, spec: &ModelSpec) -> Result<Arc<dyn LanguageModelV4>, ApiError>;
     pub fn resolve_role(&self, role: ModelRole) -> ModelSpec;
     pub async fn get_or_create_provider(&self, api: &ProviderApi) -> Result<Arc<dyn ProviderV4>, ApiError>;
-}
-```
-
-### ProviderFactory (from cocode-rs `provider_factory.rs`)
-
-```rust
-/// Routes ProviderApi enum to concrete provider implementation.
-pub struct ProviderFactory;
-
-impl ProviderFactory {
-    pub fn create_provider(&self, info: &ProviderInfo) -> Result<Arc<dyn ProviderV4>, ApiError>;
 }
 ```
 
@@ -195,21 +500,6 @@ pub fn collect_stream_to_message(
     stream: impl Stream<Item = StreamPart>,
     event_tx: &mpsc::Sender<QueryEvent>,
 ) -> (AssistantMessage, TokenUsage);
-```
-
-### Retry with Fallback
-
-```rust
-/// Retry loop with exponential backoff.
-/// On 529 overloaded (3 consecutive), triggers model fallback.
-/// On persistent retry (unattended), caps at 5min backoff, 6hr total.
-pub async fn with_retry<F, T>(
-    f: F,
-    config: RetryConfig,
-    cancel: CancellationToken,
-) -> Result<T, CannotRetryError>
-where
-    F: Fn() -> Future<Output = Result<T, ApiError>>;
 ```
 
 ### Rate Limiting

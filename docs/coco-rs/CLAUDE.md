@@ -20,12 +20,12 @@ Each piece of information has exactly one owner. No duplication across docs.
 | TS utils file -> Rust target | `ts-utils-mapping.md` | |
 | Multi-provider types (ModelRole, ProviderApi, Capability) | `crate-coco-types.md` | multi-provider-plan.md shows usage, not definition |
 | ModelInfo, ProviderInfo, ModelRoles structs | `crate-coco-config.md` | multi-provider-plan.md shows usage, not definition |
-| ModelHub, ProviderFactory, RequestBuilder | `crate-coco-inference.md` | multi-provider-plan.md shows architecture, not struct fields |
+| ModelHub, ProviderFactory, RequestBuilder, auth, retry, files API, bootstrap | `crate-coco-inference.md` | multi-provider-plan.md shows architecture, not struct fields |
 | Multi-provider architecture (flow, beta headers) | `multi-provider-plan.md` | |
 | File ownership (which crate owns which config file) | `config-file-map.md` | crate plans reference, not copy |
 | Tool trait, ToolUseContext, StreamingToolExecutor | `crate-coco-tool.md` | |
 | MCP types, config, client, auth, channels | `crate-coco-mcp.md` | |
-| Permission evaluation pipeline | `crate-coco-permissions.md` | |
+| Permission evaluation pipeline, auto-mode/yolo classifier, denial tracking | `crate-coco-permissions.md` | |
 | Error handling architecture (3-layer model, error flow) | `CLAUDE.md` (this file) | crate docs show per-crate error types, not architecture |
 | ToolError, ValidationResult, error_code conventions | `crate-coco-tool.md` | |
 | Directory structure, dependency graph, phases | `coco-rs-plan.md` | |
@@ -62,6 +62,7 @@ HookEventType, HookResult
 SandboxMode
 TokenUsage, ModelUsage
 ProviderApi, ModelRole, ModelSpec, Capability, ApplyPatchToolType, WireApi
+PermissionDecisionReason, StreamingToolUse, StreamingThinking, TaskBudget
 ```
 
 Also re-exports vercel-ai types as version-agnostic aliases:
@@ -83,7 +84,7 @@ ProviderInfo       (uses ProviderApi from coco-types)
 ModelRoles         (uses ModelRole from coco-types)
 GlobalConfig, Settings, SettingsWithSource, SettingSource
 EnvOnlyConfig, ProviderConfig, RuntimeOverrides, ResolvedConfig
-ModelAlias, EffortLevel, FastModeState, SettingsWatcher
+ModelAlias, EffortLevel, FastModeState, SettingsWatcher, AutoModeConfig
 ```
 
 ### coco-tool
@@ -122,7 +123,7 @@ L2  coco-inference                         — coco-types, coco-config, coco-err
 L2  coco-sandbox                           — coco-types (SandboxMode)
 L3  coco-messages                          — coco-types, coco-error
 L3  coco-context                           — coco-types, coco-config, coco-error, utils/git
-L3  coco-permissions                       — coco-types, coco-config, coco-error
+L3  coco-permissions                       — coco-types, coco-config, coco-inference, coco-error
 L3  coco-tool                              — coco-types, coco-config, coco-error
 L3  coco-shell                             — coco-types, utils/shell-parser, coco-sandbox
 L3  coco-compact                           — coco-types, coco-inference, coco-messages
@@ -147,6 +148,7 @@ L5  coco-remote                            — coco-types, coco-config, coco-err
 - `coco-tools` does NOT depend on `commands/`, `skills/`, `tasks/`. Interaction is via callback closures in `ToolUseContext`.
 - `coco-config` does NOT depend on `coco-hooks`. The `Settings.hooks` field uses `serde_json::Value`, not typed `HooksSettings`. Each feature crate deserializes its own section.
 - `coco-query` does NOT depend on `coco-tools`. Concrete tools are injected via `ToolRegistry` at runtime.
+- `coco-permissions` depends on `coco-inference` (L2) for the auto-mode classifier LLM calls. This makes coco-permissions L3 (not L2). The classifier calls ApiClient to run the two-stage XML classification.
 
 ## Permission vs Settings Priority (Two Separate Systems)
 
@@ -462,7 +464,7 @@ Every TS `src/` directory maps to a Rust crate, and every crate has a plan doc.
 | `utils/permissions/` | `coco-permissions` | `crate-coco-permissions.md` | v1 |
 | `Tool.ts`, `services/tools/`, `tools.ts` | `coco-tool` | `crate-coco-tool.md` | v1 |
 | `tools/` (43 dirs) | `coco-tools` | `crate-coco-tools.md` | v1 |
-| `utils/bash/`, `utils/Shell.ts`, `utils/shell/` | `coco-shell` | `crate-coco-shell.md` | v1 |
+| `utils/bash/`, `utils/Shell.ts`, `utils/shell/`, `tools/BashTool/{bashPermissions,bashSecurity,readOnlyValidation,commandSemantics,destructiveCommandWarning,shouldUseSandbox,modeValidation,sedEditParser}.ts` | `coco-shell` | `crate-coco-shell.md` | v1 |
 | `commands/` (~56 dirs) | `coco-commands` | `crate-coco-commands.md` | v1 |
 | `query/`, `QueryEngine.ts`, `utils/processUserInput/` | `coco-query` | `crate-coco-query.md` | v1 |
 | `skills/`, `schemas/hooks.ts`, `utils/hooks/`, `tasks/`, `memdir/`, `services/extractMemories/`, `services/SessionMemory/`, `services/autoDream/`, `plugins/`, `services/plugins/`, `keybindings/` | `coco-skills`, `coco-hooks`, `coco-tasks`, `coco-memory`, `coco-plugins`, `coco-keybindings` | `crate-coco-modules.md` | v1 |
@@ -500,17 +502,20 @@ When modifying any doc in this directory:
 
 ## Known Gaps (from audit-gaps.md)
 
-Intentionally deferred — will be documented during implementation:
+Previously deferred P1 gaps now documented (Round 3, April 2026):
+- ~~Permissions auto-mode/yolo classifier~~ → **FIXED** in crate-coco-permissions.md
+- ~~Auth system~~ → **FIXED** in crate-coco-inference.md (actual 2002 LOC, not 65K)
+- ~~coco-messages: 114 functions~~ → **FIXED** in crate-coco-messages.md (15 categories)
+- ~~coco-compact submodules~~ → **FIXED** in crate-coco-compact.md
+- ~~coco-shell submodules~~ → **FIXED** in crate-coco-shell.md
+- ~~coco-inference: claude.ts, withRetry.ts, filesApi.ts~~ → **FIXED** in crate-coco-inference.md
+
+Remaining deferred — will be documented during implementation:
 
 | Priority | Gap | Phase |
 |----------|-----|-------|
-| P1 | Permissions auto-mode/yolo classifier (500+ LOC) | Phase 3 |
-| P1 | Auth system (65K LOC) — OAuth, Bedrock, Vertex, Foundry | Phase 3 |
-| P2 | coco-messages: 114 functions (document by category) | Phase 4 |
-| P2 | AppState: 60+ fields (full state during coco-state impl) | Phase 7 |
+| P2 | AppState: 60+ fields (remote, notifications, attribution, tungsten, speculation, plugins, MCP) | Phase 7 |
 | P2 | ErrorExt::telemetry_msg() 遥测脱敏 (TS TelemetrySafeError 对应) | Phase 2 |
-| P3 | coco-compact submodules (grouping, postCompactCleanup, apiMicrocompact, timeBasedMCConfig) | Phase 3 |
-| P3 | coco-shell submodules (shouldUseSandbox, destructiveCommandWarning, sedEditParser) | Phase 4 |
 | P3 | coco-config cocode-rs patterns (ConfigSection trait, ConfigResolver) | Phase 2 |
 | P3 | 工具执行 errno 保留 — IO 错误在 OTel 中保留操作系统级 errno | Phase 4 |
 | P1 | coco-otel L2: span 层级体系 (interaction→llm_request→tool→hook→user_input) | Phase 1 |
@@ -560,16 +565,16 @@ Added in Round 2 review:
 | `audit-gaps.md` | Gap analysis with fix status and priority |
 | `crate-coco-types.md` | Foundation types (Message, Permission, Tool, Task, Provider) |
 | `crate-coco-config.md` | Settings, model config, provider config, effort, fast mode |
-| `crate-coco-inference.md` | LLM client, retry, auth, rate limiting, analytics |
+| `crate-coco-inference.md` | LLM client, retry engine, auth (OAuth/API key/AWS/GCP), files API, bootstrap, rate limiting |
 | `crate-coco-tool.md` | Tool trait, executor, registry |
 | `crate-coco-tools.md` | 40+ tool implementations |
 | `crate-coco-mcp.md` | MCP server lifecycle, config, auth, channels (23 TS files, 12K LOC) |
 | `crate-coco-query.md` | Multi-turn agent loop |
 | `crate-coco-context.md` | System context, attachments, CLAUDE.md discovery |
-| `crate-coco-messages.md` | Message creation, normalization, history |
-| `crate-coco-permissions.md` | Permission evaluation pipeline |
-| `crate-coco-compact.md` | Context compaction (full, micro, auto, session memory) |
-| `crate-coco-shell.md` | Shell execution, bash security (rewrite from TS 23K LOC) |
+| `crate-coco-messages.md` | Message creation (13), normalization (10), filtering (11), predicates (19), lookups (8), history, cost tracking |
+| `crate-coco-permissions.md` | Permission evaluation pipeline, auto-mode/yolo classifier, denial tracking |
+| `crate-coco-compact.md` | Context compaction (full, micro, auto, session memory), grouping, post-compact cleanup, API microcompact |
+| `crate-coco-shell.md` | Shell execution, bash security, destructive warnings, sandbox decisions, mode validation (rewrite from TS 23K LOC) |
 | `crate-coco-commands.md` | Slash command system |
 | `crate-coco-modules.md` | Skills, hooks, tasks, memory, plugins, keybindings |
 | `crate-coco-app.md` | State, session, TUI, CLI, bridge |

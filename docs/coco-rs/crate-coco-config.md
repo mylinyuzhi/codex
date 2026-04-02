@@ -187,9 +187,21 @@ pub struct Settings {
     // === Plans ===
     pub plans_directory: Option<String>,
 
+    // === Auto-Mode ===
+    pub auto_mode: Option<AutoModeConfig>,
+
     // === Attribution ===
     pub include_co_authored_by: Option<bool>,
     pub include_git_instructions: Option<bool>,
+}
+
+/// Auto-mode/yolo classifier user configuration.
+/// Read by coco-permissions for classifier prompt construction.
+#[derive(Deserialize, Default, Clone)]
+pub struct AutoModeConfig {
+    pub allow: Vec<String>,       // Safe patterns (e.g., "git commits")
+    pub soft_deny: Vec<String>,   // Suspicious patterns (e.g., "file deletion")
+    pub environment: Vec<String>, // Context (e.g., "building web app")
 }
 
 #[derive(Deserialize, Default, Clone)]

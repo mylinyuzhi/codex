@@ -95,9 +95,8 @@ pub struct QueryEngineConfig {
     pub set_sdk_status: Option<Arc<dyn Fn(SdkStatus) + Send + Sync>>,
 }
 
-pub struct TaskBudget {
-    pub total: i64,  // total token budget
-}
+// TaskBudget is defined in coco-types (shared with coco-inference).
+// Fields: total: i64, remaining: Option<i64>
 ```
 
 ### QueryConfig (from `query/config.ts`)

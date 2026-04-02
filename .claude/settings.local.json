@@ -2,18 +2,15 @@
   "permissions": {
     "allow": [
       "WebSearch",
-
       "WebFetch(domain:docs.rs)",
       "WebFetch(domain:crates.io)",
       "WebFetch(domain:lib.rs)",
       "WebFetch(domain:serde.rs)",
       "WebFetch(domain:ratatui.rs)",
       "WebFetch(domain:users.rust-lang.org)",
-
       "WebFetch(domain:github.com)",
       "WebFetch(domain:raw.githubusercontent.com)",
       "WebFetch(domain:gist.github.com)",
-
       "WebFetch(domain:developers.openai.com)",
       "WebFetch(domain:platform.openai.com)",
       "WebFetch(domain:cookbook.openai.com)",
@@ -24,14 +21,12 @@
       "WebFetch(domain:docs.cloud.google.com)",
       "WebFetch(domain:ai-sdk.dev)",
       "WebFetch(domain:sdk.vercel.ai)",
-
       "WebFetch(domain:medium.com)",
       "WebFetch(domain:dev.to)",
       "WebFetch(domain:www.reddit.com)",
       "WebFetch(domain:news.ycombinator.com)",
       "WebFetch(domain:microsoft.github.io)",
       "WebFetch(domain:html.spec.whatwg.org)",
-
       "Bash(cargo:*)",
       "Bash(just:*)",
       "Bash(rustc:*)",
@@ -39,9 +34,7 @@
       "Bash(rustfmt:*)",
       "Bash(rust-analyzer:*)",
       "Bash(sccache:*)",
-
       "Bash(git:*)",
-
       "Bash(ls:*)",
       "Bash(tree:*)",
       "Bash(cat:*)",
@@ -58,19 +51,16 @@
       "Bash(echo:*)",
       "Bash(test:*)",
       "Bash(xxd:*)",
-
       "Bash(cp:*)",
       "Bash(touch:*)",
       "Bash(mkdir:*)",
       "Bash(chmod:*)",
-
       "Bash(env)",
       "Bash(export:*)",
       "Bash(cd:*)",
       "Bash(du:*)",
       "Bash(jobs:*)",
       "Bash(wait)",
-
       "Bash(curl:*)",
       "Bash(python3 -m pytest:*)",
       "Bash(pip3 install:*)",
@@ -80,12 +70,13 @@
       "Bash(podman system:*)",
       "Bash(podman machine:*)",
       "Bash(ollama pull:*)",
-
       "Skill(update-claude-md)",
       "Skill(wt-del)",
       "Skill(squash)",
-
-      "Read(//Users/bytedance/codespace/myapp/**)"
+      "Read(//Users/bytedance/codespace/myapp/**)",
+      "Bash(/tmp/extract_functions.sh)",
+      "Bash(xargs -I{} basename {})",
+      "Bash(bash /tmp/check_areas.sh)"
     ],
     "deny": [],
     "ask": [],
