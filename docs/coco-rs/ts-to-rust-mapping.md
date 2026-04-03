@@ -83,9 +83,9 @@ Every TS `src/` directory and top-level file mapped to its Rust crate, version, 
 | `cli/` | `coco-cli` | `app/cli/` | v1 | TS | Transports (SSE, WS, NDJSON) |
 | `server/` | `coco-cli` | `app/cli/` | v1 | TS | Server/daemon mode |
 | `bridge/` | `coco-bridge` | `bridge/` | v1 | TS | IDE bridge (VS Code, JetBrains) |
-| `utils/bash/` | `coco-shell` | `exec/shell/` | v1 | TS | Bash parsing + validation (12K LOC) |
-| `utils/Shell.ts` | `coco-shell` | `exec/shell/` | v1 | TS | Shell execution |
-| `utils/shell/` | `coco-shell` | `exec/shell/` | v1 | TS | Shell utilities |
+| `utils/bash/` | `coco-shell` | `exec/shell/` | v1 | HYBRID | Bash parsing + validation (12K LOC). Base: cocode-rs `utils/shell-parser` (24 analyzers). Add: TS read-only validation, destructive warnings, 7-phase permission pipeline |
+| `utils/Shell.ts` | `coco-shell` | `exec/shell/` | v1 | HYBRID | Shell execution. Base: cocode-rs shell executor. Add: TS CWD tracking, env snapshotting |
+| `utils/shell/` | `coco-shell` | `exec/shell/` | v1 | HYBRID | Shell utilities |
 | `utils/effort.ts` | `coco-config` | `common/config/` | v1 | TS | Effort level |
 | `utils/fastMode.ts` | `coco-config` | `common/config/` | v1 | TS | Fast mode |
 | `utils/thinking.ts` | `coco-config` | `common/config/` | v1 | TS | Thinking/reasoning support |

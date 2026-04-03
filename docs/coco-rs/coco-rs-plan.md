@@ -56,7 +56,7 @@ When the plan keeps cocode-rs code instead of rewriting from TS, one of these re
 | `exec/process-hardening` | KEEP | **Rust-only**: `prctl`, `ptrace(PT_DENY_ATTACH)`, env sanitization via libc; TS has nothing |
 | `coco-lsp` | KEEP | **Rust superior**: AI-friendly symbol-name queries (not line/column), built-in caching, incremental sync, auto-restart; TS's LSP is simpler |
 | `coco-retrieval` | KEEP (optional) | **No TS equiv**: TS has no code search/retrieval system |
-| `coco-shell` (exec/shell) | **REWRITE from TS** | TS has 23K LOC of battle-tested bash validation (permissions, security, heredoc, read-only checks, command semantics); cocode-rs only 6.2K. **TS leads here.** |
+| `coco-shell` (exec/shell) | **HYBRID** | Build on cocode-rs `utils/shell-parser` (24 analyzers, native Rust parsing). Add TS enhancements: read-only validation (40 cmds + 200 flags), destructive warnings (18 patterns), 7-phase permission pipeline, two-phase wrapper stripping (HackerOne fix), 3.4K-input test corpus. |
 
 ---
 
@@ -241,7 +241,7 @@ When the plan keeps cocode-rs code instead of rewriting from TS, one of these re
 
 | Source | coco-rs crate | Strategy | Reason |
 |--------|---------------|----------|--------|
-| TS `utils/bash/` (12K LOC) + `utils/Shell.ts` + `utils/shell/` + `tools/BashTool/bashPermissions.ts` + `bashSecurity.ts` (23K total) | `coco-shell` | **REWRITE from TS** | TS has 4x more sophisticated bash validation, 3.4K-input test corpus, command semantics, heredoc handling. cocode-rs only 6.2K LOC. |
+| TS `utils/bash/` (12K LOC) + `utils/Shell.ts` + `utils/shell/` + `tools/BashTool/bashPermissions.ts` + `bashSecurity.ts` (23K total) | `coco-shell` | **HYBRID** | Build on cocode-rs `utils/shell-parser` (24 analyzers, native Rust parsing) as base. Add TS enhancements: read-only validation (40 cmds), destructive warnings (18 patterns), 7-phase permission pipeline, two-phase wrapper stripping, 3.4K-input test corpus. |
 | cocode-rs `exec/sandbox` (8.4K LOC) | `coco-sandbox` | **KEEP cocode-rs** | TS is just adapter around npm package; cocode-rs has seccomp, Seatbelt/bubblewrap, violation monitoring |
 | cocode-rs `exec/process-hardening` (212 LOC) | `coco-process-hardening` | **KEEP cocode-rs** | Rust-only: prctl, ptrace deny, env sanitization via libc. No TS equivalent. |
 
@@ -385,7 +385,7 @@ coco-rs/
 
   # ─── exec/ (3) ── Rust-specific execution layer ───
   exec/
-    shell/              # coco-shell              <- TS utils/bash/ + Shell.ts (REWRITE from TS)
+    shell/              # coco-shell              <- HYBRID: cocode-rs shell-parser base + TS enhancements
     sandbox/            # coco-sandbox            <- cocode-rs (KEEP)
     process-hardening/  # coco-process-hardening  <- cocode-rs (KEEP)
 
@@ -751,8 +751,10 @@ not direct crate imports. app/query wires these at runtime.
 - `coco-otel` — 复用 L0-L1 (export + 7 基础事件), 新增 L2-L5 (span 层级/53 应用事件/8 业务 metrics/BigQuery+1P+Perfetto). L6 运营控制暂不实现
 - `utils/shell-parser` — cocode-rs security analysis + TS corpus-validated parser
 
+### HYBRID (cocode-rs base + TS enhancements)
+- `coco-shell` — cocode-rs `utils/shell-parser` (24 analyzers, native parsing) as base + TS read-only validation (40 cmds), destructive warnings, 7-phase permission pipeline, 3.4K test corpus
+
 ### REWRITE from TS (TS leads)
-- `coco-shell` — TS has 23K LOC bash validation vs cocode-rs 6.2K. **TS is 4x more comprehensive.**
 - `coco-types`, `coco-config` — redesigned from TS types/settings/model
 - `coco-inference` — TS services/api through vercel-ai abstraction
 - `coco-messages`, `coco-context`, `coco-permissions`, `coco-compact`

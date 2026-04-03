@@ -1,15 +1,18 @@
-# coco-shell — Crate Plan (REWRITE from TS)
+# coco-shell — Crate Plan (HYBRID: cocode-rs base + TS enhancements)
 
 TS source: `src/utils/bash/` (12K LOC), `src/utils/Shell.ts`, `src/utils/shell/`, `src/tools/BashTool/bashPermissions.ts` (700+), `src/tools/BashTool/bashSecurity.ts`, `src/tools/BashTool/readOnlyValidation.ts` (68K), `src/tools/BashTool/commandSemantics.ts`, `src/tools/BashTool/destructiveCommandWarning.ts` (103), `src/tools/BashTool/shouldUseSandbox.ts` (154), `src/tools/BashTool/modeValidation.ts` (116), `src/tools/BashTool/sedEditParser.ts` (200+)
 
-**Strategy**: REWRITE from TS. TS has 23K LOC of battle-tested validation; cocode-rs only 6.2K.
+**Strategy**: HYBRID — build on cocode-rs `utils/shell-parser` (24 analyzers, native Rust parsing) as the base, then add TS-specific enhancements:
+- **KEEP from cocode-rs**: shell-parser crate (command parsing, 24 risk type analyzers, AST analysis) — Rust-native, no WASM dependency
+- **ADD from TS**: read-only validation (40 safe commands + 200+ flag configs), destructive command warnings (18 patterns), two-phase wrapper stripping (HackerOne #3543050), 7-phase permission pipeline, command semantics, heredoc extraction, CWD tracking, 3449-input test corpus
+- **Rationale**: cocode-rs shell-parser has stronger Rust-native parsing infrastructure; TS has 4x more security validation coverage. Merge both.
 
 ## Dependencies
 
 ```
 coco-shell depends on:
   - coco-types       (SandboxMode, PermissionMode)
-  - utils/shell-parser (command parsing, security analysis — HYBRID: cocode-rs structure + TS corpus)
+  - utils/shell-parser (KEEP: 24 risk type analyzers, AST parsing — extend with TS's 23 SecurityCheckId validators, read-only allowlist, destructive patterns)
   - coco-sandbox     (SandboxSettings, sandbox enforcement)
   - tokio, tokio-util (CancellationToken, process spawning)
 

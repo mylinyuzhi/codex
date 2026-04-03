@@ -2,49 +2,98 @@
 
 Exhaustive comparison of all plan docs against actual TS source + cocode-rs source.
 
-## Round 4: 35-Area Cross-Verification (April 2026)
+## Round 5: 35-Area Deep Cross-Validation (April 3, 2026)
 
-Full TS source vs coco-rs docs comparison across all 35 functional areas.
+Full TS source code analysis vs coco-rs docs. Each area verified by dedicated agent reading actual TS files.
+Multi-provider awareness checked. Shell-parser strategy updated to HYBRID (cocode-rs base + TS enhancements).
 
 ### Coverage Summary
 
 | Rating | Count | Areas |
 |--------|-------|-------|
-| Missing | 1 | 22_IDE Integration |
-| Minimal (<20%) | 7 | 01_CLI, 02_UI, 15_State, 16_FileSystem, 20_SDK, 25_Plugin, 31_AutoMemory |
-| Partial (20-60%) | 22 | 03_LLM, 04_SysReminder, 05_Tools, 06_MCP, 07_Compact, 08_Subagent, 09_SlashCmd, 10_Skill, 11_Hooks, 12_PlanMode, 13_Task, 17_Telemetry, 19_ThinkLevel, 21_Steering, 23_PromptCache, 24_Auth, 26_BgAgents, 27_LSP, 29_ShellParser, 30_AgentTeams, 32_Keybindings, 33_Remote, 34_FastMode, 35_Rewind |
-| Mostly Complete | 1 | 18_Sandbox |
-| N/A/Deferred | 2 | 14_CodeIndexing (KEEP justified), 28_BrowserControl (v3 TBD) |
+| Complete (100%) | 4 | 14_CodeIndexing, 32_Keybindings, 33_Remote, 35_Rewind |
+| Good (75-99%) | 4 | 05_Tools (85%), 09_SlashCmd (88%), 18_Sandbox (80%), 31_AutoMemory (80%) |
+| Partial (40-74%) | 20 | 01_CLI (75%), 03_LLM (60%), 04_SysReminder (50%), 06_MCP (65%), 07_Compact (70%), 08_Subagent (65%), 10_Skill (70%), 11_Hooks (65%), 13_Task (55%), 15_State (55%), 16_FileSystem (75%), 17_Telemetry (60%), 19_ThinkLevel (60%), 21_Steering (65%), 23_PromptCache (60%), 24_Auth (55%), 25_Plugin (70%), 26_BgAgents (65%), 30_AgentTeams (60%), 34_FastMode (75%) |
+| Weak (20-39%) | 4 | 12_PlanMode (30%), 20_SDK (40%), 27_LSP (20%), 29_ShellParser (35%) |
+| Missing (<20%) | 2 | 02_UI (15%), 22_IDE (10%) |
+| Deferred (v3) | 1 | 28_BrowserControl (correctly deferred) |
 
-### P0 Factual Errors — FIXED (12 items, April 2026)
+### P0 Critical Gaps — Block Implementation
 
-All fixed in Round 4. See CLAUDE.md "Round 4 factual errors fixed" section.
+| # | Gap | Area | What's Missing | Action |
+|---|-----|------|---------------|--------|
+| 1 | **No crate-coco-tui.md** | 02_UI | 346 component files unmapped; 30+ message renderers, dialog system, notification (5 terminal backends), output styles | Create crate-coco-tui.md: widget taxonomy, message components, dialog lifecycle, notification channels |
+| 2 | **No crate-coco-lsp.md** | 27_LSP | Server lifecycle (6 states), diagnostic dedup (LRU 500), 9 LSP operations, crash recovery, plugin discovery | Create crate-coco-lsp.md: state machine, operations, diagnostics registry, error retry |
+| 3 | **File backup/snapshot system** | 16_Files | Content-addressed backup (`~/.claude/file-history/`), 100-snapshot cap, message-level snapshotting, undo/rewind | Add FileHistoryState/Snapshot/Backup structs to crate-coco-context.md or crate-coco-tools.md |
+| 4 | **Interrupt semantics** | 21_Steering | Reason codes (interrupt vs submit-interrupt), conditional message emission, vendor cleanup | Add interrupt handling spec to crate-coco-query.md |
+| 5 | **Plan mode state machine** | 12_Plan | Plan file CRUD, storage path, recovery (3-source), interview phase, teammate approval, circuit breaker | Major expansion of plan mode in crate-coco-tools.md or new doc |
+| 6 | **IDE architecture** | 22_IDE | MCP-based 17-IDE bridge, CCR daemon (3 spawn modes), DirectConnect server, permission bridge, diagnostics tracking | Create/rewrite IDE section in crate-coco-app.md |
+| 7 | **Shell read-only validation** | 29_Shell | ~40 safe commands + 200 flags in COMMAND_ALLOWLIST. **Strategy: extend cocode-rs shell-parser with TS data** | Add read-only allowlist data to crate-coco-shell.md (already structurally present, needs flag detail) |
 
-### P1 Minimal Areas — Need Major Expansion
+### P1 High-Priority Gaps — Affect Core Logic
 
-| Area | Current state | What's needed |
-|------|--------------|---------------|
-| 01_CLI | 6 modes, ~8 flags | 50+ subcommands, 60+ flags, StructuredIO SDK protocol (21 control subtypes), fast-path dispatch |
-| 02_UI | 8 widgets, one loop | Custom Ink renderer, 30+ message renderers, 15 permission UIs, dialog system, FullscreenLayout, VirtualMessageList |
-| 15_State | 13 of 80+ fields | Full AppState (80+ fields), bootstrap State singleton (70+ fields), onChangeAppState side-effects |
-| 16_FileSystem | 3-4 field skeletons | PDF/image/notebook in ReadTool, file_unchanged dedup, token limits, read-before-write enforcement, encoding |
-| 20_SDK | 3 transport names | 21 control request subtypes, 22+ message types, V2 session API, DirectConnect server, Permission DSL |
-| 25_Plugin | 6-field manifest | plugin.json (JSON not TOML), marketplace 2-level architecture, 7 source types, 9 contribution types, dependency resolution, security |
-| 31_AutoMemory | 86-line stub | Session Memory (9-section template, threshold triggers), Auto-Dream (3-gate scheduling, lock file), extraction forked agent |
-| 22_IDE | Wrong architecture | Rewrite: MCP-based IDE (17 IDEs), CCR bridge daemon (3 spawn modes), DirectConnect server |
+| # | Gap | Area | Detail |
+|---|-----|------|--------|
+| 1 | Policy limits fetching | 03_LLM | Background polling (1h), ETag cache, role-based eligibility (OAuth + Team/Enterprise). Enterprise feature completely absent from Rust plan |
+| 2 | Attachment 3-batch parallel | 04_SysReminder | Three parallel batches with 1000ms timeout, tier isolation (MainAgentOnly/AllThread/Always), generator streaming, 40+ attachment types |
+| 3 | MCP channel servers + elicitation | 06_MCP | Permission relay via channels (KAIROS gate), form/URL elicitation, XAA token exchange (OIDC discovery) |
+| 4 | API microcompact + reactive compact | 07_Compact | clear_tool_uses/clear_thinking API strategies, reactive compact (feature-gated prompt_too_long recovery), circuit breaker (3 failures) |
+| 5 | Hook input/output mutation + 27 events | 11_Hooks | PreToolUse→updatedInput, PostToolUse→updatedMCPToolOutput. TS has **27 event types** (docs undercount): adds SessionEnd, InstructionsLoaded, ConfigChange, TeammateIdle, TaskCreated, TaskCompleted + WorktreeCreate/Remove, CwdChanged, FileChanged, Elicitation/Result, PostToolUseFailure, StopFailure, SubagentStart/Stop. Scope mismatch: TS is session>local>project>user (not skill>plugin>project>user). statusMessage field, asyncRewake flag (exit code 2), function hooks (session-scoped callbacks) |
+| 6 | DirectConnect server | 20_SDK | HTTP+WS session lifecycle (starting→running→detached→stopping→stopped), NDJSON codec, session index persistence |
+| 7 | Agent effort/handoff/cache/isolation | 08_Subagent | effort field, useExactTools (cache-identical prefixes), handoff classifier (auto-mode post-execution gate), model inheritance precedence (param>def>parent). Also: `isolation: 'remote'` (CCR, ant-only), `memory: 'user'\|'project'\|'local'` scope, `mcpServers` per-agent, `initialPrompt` field |
+| 8 | Telemetry L6 controls | 17_Otel | Sampling (per-event config), killswitch (sink disable), GrowthBook integration, PII safety markers — all implemented in TS but marked "deferred" in docs |
+| 9 | Auth apiKeyHelper + bare mode | 24_Auth | Command-based API key with 5min TTL cache, async prefetch; bare mode (--bare) hermetic auth; MCP OAuth XAA/OIDC |
+| 10 | Generator vs loop + QueryGuard 3-state | 21_Steering | TS uses async generators (query loop, attachments, tool executor); docs assume classical loops. Affects SDK streaming. QueryGuard is 3-state (idle→dispatching→running) with generation counter — not binary. CommandQueue has 3-level priority (now>next>later). Memory/skill prefetch uses resource disposal pattern (load-bearing for performance) |
+| 11 | Task management tools | 13_Task | 6 tools (Create/Update/Get/List/Stop/Output), TodoWrite, dependency graph (blocks/blockedBy), verification agent nudge |
+| 12 | Multi-provider thinking conversion | 19_Think | Adaptive thinking (per-model), numeric effort (0-255 ANT scale), env overrides chain, per-model defaults (Opus 4.6→medium) |
 
-### P2 Highest-Gap Partial Areas
+### P2 Medium-Priority Gaps
 
-| Area | Gaps | Top items to add |
-|------|------|-----------------|
-| 30_Agent Teams | 28 | Dual file+mailbox permission, sandbox permission, CLI propagation, teammate mode snapshot |
-| 24_Auth | 20 | Bare mode, CCR/FD credential injection, Unix socket proxy, forceLoginOrgUUID |
-| 32_Keybindings | 18 | Validation subsystem, command bindings, reserved shortcuts, hot-reload, template generation |
-| 13_Task | 18 | LocalMainSessionTask, DreamTask fields, RemoteAgent fields, stall watchdog, SDK events |
-| 29_Shell | 17 | Heredoc extraction (734 LOC), pure-TS parser, validator ordering, PowerShell provider |
-| 21_Steering | 16 | 3-state QueryGuard + generation counter, `now` abort semantics, SleepTool drain widening, post-turn hooks (7 tasks) |
-| 06_MCP | 16 | Transport details, OAuth hardening (step-up, DCR, RFC 7009), XAA, channel servers, config policy engine |
-| 04_SysReminder | 15 | 50+ attachment types (vs 6), @include directive, nested/relevant memory, getAttachments() orchestrator |
+| Gap | Area | Notes |
+|-----|------|-------|
+| Session persistence JSONL + cost restoration | 15_State | SessionManager file layout, resume picker, fork-session semantics |
+| Skill effort/files/aliases + dynamic discovery | 10_Skill | Walks directory tree from edited files, conditional activation state machine |
+| Prompt cache TTL latching + 12 hash dimensions | 23_Cache | GrowthBook allowlist, per-tool schema hashing |
+| Plugin MCPB format + author validation + channels | 25_Plugin | Chrome extension bundles, homograph attack prevention |
+| Agent teams idle notification + pane lifecycle | 30_Teams | planModeRequired, worktree ownership, hidden pane management |
+| Background agent progress metadata + delta reads | 26_BgAgents | AgentProgress struct, streaming output, symlink-based output |
+| Team memory dual-directory + KAIROS daily-log | 31_Memory | Private vs team dirs, nightly /dream skill, mutual exclusion |
+| Compact circuit breaker (3 consecutive failures) | 07_Compact | Prevents 250K wasted API calls on irrecoverable errors |
+| Destructive command warnings (18 patterns) | 29_Shell | Application-level, git/rm/db/k8s/terraform patterns (already in crate doc structurally) |
+| Context overflow FLOOR_OUTPUT_TOKENS | 03_LLM | 3000-token floor check + thinking budget preservation on retry |
+| Fast mode cooldown/overage + per-session opt-in | 34_Fast | handleFastModeOverageRejection, 1m merge behavior |
+| FileEdit desanitization + quote handling | 16_Files | Reverses XML sanitization, contraction-aware curly quote normalization |
+| Slash command 3-type union + auth gating | 09_Cmd | prompt/local/local-jsx execution models, availability[] filtering |
+| 60+ deferred AppState fields | 15_State | Remote, notifications, attribution, plugins, MCP, speculation subsystems |
+| GrowthBook equivalent decision | Cross | Pervasive in TS (15+ feature flags); needs architectural decision for Rust |
+| Transport selection + retry constants | 01_CLI | getTransportForUrl() logic, POST_MAX_RETRIES=10, 500ms base delay, SSE 45s liveness, 600s give-up window |
+| Daemon worker lifecycle | 01_CLI | `--daemon-worker=<kind>` arg parsing, worker registry, supervisor/worker protocol |
+| Bootstrap config fetching | 03_LLM | `/api/claude_cli/bootstrap` endpoint, 5s timeout, disk caching, model options merge |
+| NotebookEdit output clearing on replace | 16_Files | Resets execution_count to null, clears outputs array (stale execution data invalidation) |
+| Sed edit parser | 29_Shell | 200+ LOC: sed in-place edit parsing and constraint validation |
+| CWD tracking implementation | 29_Shell | Hidden temp file (pwd -P), deleted CWD recovery, NFC normalization, hook integration |
+| Agent teams CLI flag propagation | 30_Teams | buildInheritedCliFlags(): permission mode, model override, plugin config, --teammate-mode flag, plan mode precedence |
+| Agent teams session mode matching | 30_Teams | matchSessionMode() auto-flips CLAUDE_CODE_COORDINATOR_MODE env var on session resume |
+| Prompt cache token billing | 23_Cache | cache_creation_input_tokens vs cache_read_input_tokens cost tier semantics |
+
+### Factual Corrections (docs say X, TS actually does Y)
+
+| Doc Location | Docs Say | TS Actually | Fix |
+|-------------|---------|-------------|-----|
+| crate-coco-hooks.md | "Scope: Skill > Plugin > Project > User > Global" | session > local > project > user > plugin/builtin (numeric priority); Global doesn't exist as hook source | Fix scope hierarchy |
+| crate-coco-otel.md | "~53 application events" | 37 core Datadog events + 8 OAuth events + Chrome bridge events; docs undercount OAuth (2 methods vs 8 TS events) | Fix event count |
+| crate-coco-otel.md | "L6 暂不实现 (sampling/killswitch)" | All L6 controls implemented in TS production: shouldSampleEvent(), sinkKilled(), checkMetricsEnabled() | Elevate L6 to P1 |
+| ts-to-rust-mapping.md | memdir/ = 507 LOC | Actually ~1,736 LOC (memoryTypes 272 + memdir 508 + memoryAge 53 + findRelevantMemories 141 + memoryScan 95 + more) | Fix LOC |
+| audit-gaps.md (Round 4) | "6 missing event types" in hooks | Actually ~16 missing event types from documented set to reach TS's 27 total | Fixed in Round 5 P1 #5 |
+
+### Cross-Cutting Observations
+
+1. **Generator pattern**: TS uses async generators for query loop, attachment injection, tool execution streaming. Docs model as classical loops. This architectural mismatch affects SDK streaming.
+2. **Feature flags**: 15+ GrowthBook flags control tool loading, 12+ control behaviors. Labeled "v2/v3 deferred" in docs but ship in production Kairos builds.
+3. **Multi-provider**: Auth routing (Anthropic/Bedrock/Vertex/Foundry) well-covered in crate-coco-inference.md. Thinking conversion per-provider documented. **Gap**: beta header matrix needs per-provider prompt cache behavior, model switching semantics.
+4. **Shell-parser strategy updated**: HYBRID (cocode-rs `utils/shell-parser` base + TS security enhancements). No longer REWRITE.
+5. **LOC undercounts**: memdir 507→1736, shell "6.2K cocode-rs" but TS is 23K, components 346 files.
+6. **PII safety**: TS has type-enforced markers for telemetry. Not in docs.
 
 ---
 
