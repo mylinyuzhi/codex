@@ -195,7 +195,7 @@ impl QueryEngine {
                 model: self.config.model.clone(),
                 system: Some(system),
                 tools: Some(self.tool_registry.definitions()),
-                thinking: self.config.thinking_config.clone(),
+                thinking_level: self.config.thinking_level.clone(),
                 ..Default::default()
             }, cancel.clone()).await?;
 

@@ -484,51 +484,129 @@ impl ResolvedConfig {
 ### ModelInfo (per-model, from config + defaults)
 
 ```rust
-/// Rich per-model configuration.
-/// TS: scattered across modelCapabilities.ts, thinking.ts, model configs.
+/// Rich per-model configuration. All fields optional for layered merging.
+/// Aligned with cocode-rs common/protocol/src/model/model_info.rs.
+///
+/// Config layers (later overrides earlier):
+///   builtin defaults → models.json → provider.models[model_id]
+/// Merged via ModelInfo::merge_from() (other.Some overrides self).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ModelInfo {
-    pub slug: String,
+    // === Identity ===
+    pub model_id: String,
     pub display_name: Option<String>,
-    pub context_window: i64,                        // default 200_000
-    pub max_output_tokens: i64,
-    pub capabilities: HashSet<Capability>,
-    /// Multi-provider thinking configuration (cocode-rs improvement over TS).
-    /// TS only has boolean detection (modelSupportsThinking/modelSupportsAdaptiveThinking).
-    /// coco-rs needs richer per-model config because different providers use different
-    /// thinking parameters: OpenAI=effort only, Anthropic=budget/adaptive, Gemini=effort+include,
-    /// Volcengine=both, Z.AI=budget required.
-    /// ThinkingLevel struct defined in coco-types (shared across config/inference/query).
-    pub default_thinking_level: Option<ThinkingLevel>,
-    pub supported_thinking_levels: Option<Vec<ThinkingLevel>>,
-    pub apply_patch_tool_type: ApplyPatchToolType,
-    pub excluded_tools: Vec<String>,
-    pub base_instructions: Option<String>,          // model-specific prompt additions
+
+    // === Capacity ===
+    pub context_window: Option<i64>,
+    pub max_output_tokens: Option<i64>,
+    pub timeout_secs: Option<i64>,
+
+    // === Capabilities ===
+    pub capabilities: Option<Vec<Capability>>,
+
+    // === Sampling ===
     pub temperature: Option<f32>,
     pub top_p: Option<f32>,
+    pub top_k: Option<i64>,
+
+    // === Thinking/Reasoning ===
+    /// Supported thinking levels — the authority source for ThinkingLevel definitions.
+    /// Each entry is a complete ThinkingLevel with effort + budget_tokens + options.
+    /// User selects effort name → system resolves full entry from this list.
+    pub supported_thinking_levels: Option<Vec<ThinkingLevel>>,
+    /// Default effort level — a ref (ReasoningEffort name) into supported_thinking_levels.
+    /// NOT a full ThinkingLevel — resolved at runtime by looking up the effort in the list.
+    pub default_thinking_level: Option<ReasoningEffort>,
+
+    // === Context Management ===
+    pub auto_compact_pct: Option<i32>,
+
+    // === Tools ===
+    pub apply_patch_tool_type: Option<ApplyPatchToolType>,
+    pub excluded_tools: Option<Vec<String>>,
+    pub shell_type: Option<ConfigShellToolType>,
+    pub max_tool_output_chars: Option<i32>,
+
+    // === Instructions ===
+    pub base_instructions: Option<String>,
+    pub base_instructions_file: Option<String>,
+
+    // === Provider-Specific Extensions ===
+    /// Per-model provider options — merged into ProviderOptions at RequestBuilder Step 4.
+    /// For non-thinking provider-specific params (e.g., store: false).
+    /// Thinking-related params belong in ThinkingLevel.options instead.
+    pub options: Option<HashMap<String, serde_json::Value>>,
 }
 
 impl ModelInfo {
-    pub fn supports(&self, cap: Capability) -> bool { self.capabilities.contains(&cap) }
-}
+    pub fn has_capability(&self, cap: Capability) -> bool {
+        self.capabilities.as_ref().is_some_and(|caps| caps.contains(&cap))
+    }
 
-/// ThinkingLevel struct is defined in coco-types (not here).
-/// Resolution: ModelInfo.default_thinking_level → RoleSelection override → effective level.
-/// See coco-types for ThinkingLevel/ReasoningEffort definitions.
-/// See coco-inference for thinking_convert (per-provider conversion).
+    /// Get default ThinkingLevel by looking up default effort in supported levels.
+    pub fn default_thinking(&self) -> Option<&ThinkingLevel> {
+        let effort = self.default_thinking_level?;
+        self.supported_thinking_levels.as_ref()?
+            .iter()
+            .find(|l| l.effort == effort)
+    }
+
+    /// Resolve a requested effort to the best matching supported ThinkingLevel.
+    pub fn resolve_thinking_level(&self, requested: &ThinkingLevel) -> ThinkingLevel {
+        match &self.supported_thinking_levels {
+            Some(levels) if !levels.is_empty() => {
+                levels.iter()
+                    .find(|l| l.effort == requested.effort)
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        // nearest match by effort distance
+                        levels.iter()
+                            .min_by_key(|l| (l.effort as i32 - requested.effort as i32).abs())
+                            .cloned()
+                            .unwrap_or_else(|| requested.clone())
+                    })
+            }
+            _ => requested.clone(),
+        }
+    }
+
+    /// Merge another config into this one (other.Some overrides self).
+    pub fn merge_from(&mut self, other: &Self);
+}
 ```
 
 ### ProviderInfo (runtime provider config)
 
 ```rust
+/// Resolved provider configuration at runtime.
+/// Aligned with cocode-rs common/protocol/src/provider.rs.
 pub struct ProviderInfo {
     pub name: String,
     pub api: ProviderApi,
     pub base_url: String,
-    pub api_key: String,           // resolved from env or config
-    pub timeout_secs: i64,
-    pub streaming: bool,
+    pub api_key: String,
+    pub timeout_secs: i64,                          // default: 600
+    pub streaming: bool,                             // default: true
     pub wire_api: WireApi,
-    pub options: Option<Value>,
+    /// Models registered under this provider (model_id → ProviderModel).
+    pub models: HashMap<String, ProviderModel>,
+    /// SDK client construction options (org_id, auth_token, headers, etc.).
+    /// Used at provider init time, NOT per-request.
+    pub options: Option<serde_json::Value>,
+    /// HTTP interceptor chain names (applied as headers at RequestBuilder Step 5).
+    pub interceptors: Vec<String>,
+}
+
+/// A model entry within a provider — combines ModelInfo with provider-specific overrides.
+pub struct ProviderModel {
+    /// Merged ModelInfo (builtin → models.json → provider config).
+    #[serde(flatten)]
+    pub model_info: ModelInfo,
+    /// API model name if different from model_id (e.g., Bedrock endpoint ID).
+    pub api_model_name: Option<String>,
+    /// Per-provider per-model options — merged with ModelInfo.options in ModelHub,
+    /// with these taking precedence.
+    pub model_options: HashMap<String, serde_json::Value>,
 }
 ```
 
@@ -624,7 +702,7 @@ pub fn model_supports_effort(model_info: &ModelInfo) -> bool {
 }
 pub fn model_supports_max_effort(model_info: &ModelInfo) -> bool {
     // Opus 4.6 only
-    model_info.slug.contains("opus-4-6")
+    model_info.model_id.contains("opus-4-6")
 }
 pub fn get_default_thinking_level(model_info: &ModelInfo) -> Option<ThinkingLevel>;
 

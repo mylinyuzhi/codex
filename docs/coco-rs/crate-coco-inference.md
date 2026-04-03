@@ -83,56 +83,162 @@ pub struct QueryParams {
     pub output_format: Option<OutputFormat>,
 }
 
-/// ThinkingLevel is the SINGLE unified type for effort + thinking (defined in coco-types).
-/// Replaces both TS EffortLevel and ThinkingConfig — see crate-coco-types.md for rationale.
-///
-/// thinking_convert (below) maps ThinkingLevel → per-provider API parameters.
-// ThinkingLevel struct and ReasoningEffort enum are defined in coco-types.
+// ThinkingLevel and ReasoningEffort are defined in coco-types. Not redefined here.
+// TaskBudget is defined in coco-types (shared with coco-query).
+```
 
-/// Reasoning effort level. Ordered from lowest to highest (derives Ord).
-/// Flexible deserialization: accepts string shorthand ("high") or full object.
-#[derive(PartialOrd, Ord)]
-pub enum ReasoningEffort {
-    None,     // 0 — thinking disabled
-    Minimal,  // 1
-    Low,      // 2
-    Medium,   // 3 — default
-    High,     // 4
-    XHigh,    // 5 — ultrathink
-}
+### thinking_convert (from cocode-rs, evolved with options passthrough)
 
-/// Provider-specific conversion (from cocode-rs core/inference/src/thinking_convert.rs).
-/// Each provider gets different API-level config from the same ThinkingLevel:
+```rust
+/// Two-step conversion: typed fields (effort/budget) → per-provider mapping,
+/// then ThinkingLevel.options → direct merge into ProviderOptions.
 ///
-/// | Provider | effort→API | budget_tokens→API |
-/// |----------|-----------|-------------------|
-/// | Anthropic | Adaptive (no budget) or Enabled { budget } | budget_tokens as u64 |
-/// | OpenAI | "low"/"medium"/"high" string | N/A (effort only) |
-/// | Google | GoogleThinkingLevel::Low/Medium/High | N/A |
-/// | Volcengine | "minimal"/"low"/"medium"/"high" | budget_tokens as i32 |
-/// | Z.AI | N/A (budget only) | budget_tokens required |
+/// ModelInfo is retained for:
+///   - Budget validation/clamping (budget_tokens <= max_output_tokens - 1)
+///   - Capability-conditional logic (e.g., only inject reasoningSummary if ReasoningSummaries)
+///   - Future model-global thinking constraints
+///
+/// | Provider   | effort→API                       | budget→API             | options→API              |
+/// |------------|----------------------------------|------------------------|--------------------------|
+/// | Anthropic  | Adaptive or Enabled              | budgetTokens as u64    | {"interleaved": true}    |
+/// | OpenAI     | "low"/"medium"/"high"            | N/A                    | {"reasoningSummary":...}  |
+/// | Google     | ThinkingLevel Low/Medium/High    | N/A                    | {"includeThoughts":...}   |
+/// | Volcengine | "minimal"/"low"/"medium"/"high"  | budgetTokens as i32    | (any future)             |
+/// | Z.AI       | N/A                              | budgetTokens required  | (any future)             |
 pub mod thinking_convert {
+    /// Convert ThinkingLevel to provider-specific ProviderOptions.
+    ///
+    /// Step 1: Map effort + budget_tokens via per-provider match (typed conversion).
+    ///         Uses model_info for budget clamping (budget <= max_output_tokens - 1).
+    /// Step 2: Merge level.options into output (data passthrough, no typed conversion).
     pub fn to_provider_options(
         level: &ThinkingLevel,
         model_info: &ModelInfo,
         provider: ProviderApi,
     ) -> Option<ProviderOptions>;
 
-    pub fn effort_to_reasoning_level(effort: ReasoningEffort) -> Option<String>;
+    /// Map ReasoningEffort to vercel-ai ReasoningLevel enum.
+    pub fn effort_to_reasoning_level(effort: ReasoningEffort) -> Option<ReasoningLevel>;
+}
+```
+
+### request_options_merge (from cocode-rs core/inference/src/request_options_merge.rs)
+
+```rust
+/// Merge model request_options into vercel-ai ProviderOptions.
+/// All keys from the generic HashMap are placed into the provider-specific
+/// namespace of the ProviderOptions nested HashMap.
+pub mod request_options_merge {
+    /// Map ProviderApi to SDK namespace key (e.g., Anthropic → "anthropic", Openai → "openai").
+    pub fn provider_name_for_type(provider: ProviderApi) -> &'static str;
+
+    /// Generate per-provider base options (injected at RequestBuilder Step 2).
+    /// OpenAI: { "store": false }. Gemini: { "thinkingConfig": { "includeThoughts": true } }.
+    pub fn provider_base_options(provider: ProviderApi) -> Option<ProviderOptions>;
+
+    /// Merge request_options HashMap into ProviderOptions under the provider namespace.
+    pub fn merge_into_provider_options(
+        existing: Option<ProviderOptions>,
+        request_options: &HashMap<String, serde_json::Value>,
+        provider: ProviderApi,
+    ) -> ProviderOptions;
+
+    /// Merge two ProviderOptions (override takes precedence per key).
+    pub fn merge_provider_options(
+        base: Option<ProviderOptions>,
+        override_opts: Option<ProviderOptions>,
+    ) -> Option<ProviderOptions>;
+
+    /// Build a ProviderOptions with a single provider entry.
+    pub fn build_options(provider_name: &str, opts: HashMap<String, serde_json::Value>) -> ProviderOptions;
+}
+```
+
+### RequestBuilder Pipeline (from cocode-rs core/inference/src/request_builder.rs)
+
+```rust
+/// Build LanguageModelCallOptions from InferenceContext.
+///
+/// 5-step pipeline (each step overrides previous — user config always wins):
+///   Step 1: Message normalization + prompt cache breakpoints
+///   Step 2: Provider base options (store:false, thinkingConfig default)
+///   Step 3: ThinkingLevel → provider-specific options
+///           Step 3a: effort + budget_tokens → per-provider typed conversion
+///           Step 3b: level.options → merge into ProviderOptions (passthrough)
+///   Step 3.5: Fast mode speed injection (Anthropic only)
+///   Step 4: request_options merge (ModelInfo.options + ProviderModel.model_options)
+///   Step 5: HTTP interceptors → extra headers
+pub struct RequestBuilder { /* context, prompt, tools, overrides, fast_mode */ }
+
+impl RequestBuilder {
+    pub fn new(context: InferenceContext) -> Self;
+    pub fn messages(self, msgs: Vec<LanguageModelMessage>) -> Self;
+    pub fn tools(self, tools: Vec<LanguageModelTool>) -> Self;
+    pub fn fast_mode(self, active: bool) -> Self;
+    pub fn build(self) -> LanguageModelCallOptions;
+}
+```
+
+### InferenceContext (from cocode-rs common/protocol/src/execution/inference_context.rs)
+
+```rust
+/// Complete context for an LLM request. Assembled by ModelHub, consumed by RequestBuilder.
+pub struct InferenceContext {
+    // === Identity ===
+    pub call_id: String,
+    pub session_id: String,
+    pub turn_number: i32,
+
+    // === Resolved Model ===
+    pub model_spec: ModelSpec,
+    pub model_info: ModelInfo,
+
+    // === Thinking ===
+    /// Resolved ThinkingLevel (from RoleSelection override or ModelInfo default).
+    /// Contains effort + budget_tokens + options (provider-specific extensions).
+    pub thinking_level: Option<ThinkingLevel>,
+
+    // === Agent ===
+    pub agent_kind: AgentKind,
+    pub original_identity: ExecutionIdentity,
+
+    // === Extensions ===
+    /// Merged from ModelInfo.options + ProviderModel.model_options.
+    /// Applied at RequestBuilder Step 4 (highest config priority).
+    pub request_options: Option<HashMap<String, serde_json::Value>>,
+    /// HTTP interceptor names (from ProviderInfo.interceptors).
+    pub interceptor_names: Vec<String>,
+    /// Prompt cache strategy.
+    pub prompt_cache_config: Option<PromptCacheConfig>,
 }
 
-/// Resolution flow (from cocode-rs, layered override):
-///   1. ModelInfo.default_thinking_level (builtin per-model defaults)
-///   2. RoleSelection.thinking_level (runtime override via /think command)
-///   3. effective_thinking_level() → picks highest-priority available
-///   4. thinking_convert::to_provider_options() → per-provider API params
-///
-/// Environment variables:
-///   COCODE_THINKING_LEVEL: none, low, medium, high, xhigh
-///   COCODE_THINKING_BUDGET: token count (integer)
+impl InferenceContext {
+    /// Get effective thinking level (explicit override or ModelInfo default).
+    pub fn effective_thinking_level(&self) -> Option<&ThinkingLevel>;
+    /// Create child context for subagent (inherits model config).
+    pub fn child_context(&self, call_id: &str, agent_type: &str, identity: ExecutionIdentity) -> Self;
+}
+```
 
-// TaskBudget is defined in coco-types (shared with coco-query).
-// Fields: total: i64, remaining: Option<i64>
+### Resolution Flow
+
+```
+User /effort high
+  → ModelInfo.resolve_thinking_level(ThinkingLevel::high())
+    → lookup supported_thinking_levels for effort==High
+    → returns full ThinkingLevel { effort: High, options: { "reasoningSummary": "auto", ... } }
+  → RoleSelections.set_thinking_level(Main, resolved_level)
+  → ModelHub.build_context():
+    → InferenceContext.thinking_level = Some(resolved_level)
+    → InferenceContext.request_options = ModelInfo.options ∪ ProviderModel.model_options
+  → RequestBuilder.build():
+    Step 2: provider_base_options()
+    Step 3: thinking_convert(level, model_info, provider)
+      3a: effort + budget_tokens → per-provider typed conversion (budget clamped to max_output_tokens)
+      3b: level.options → merge into output (data passthrough)
+    Step 4: request_options → merge (ModelInfo.options, e.g., { "store": false })
+    Step 5: interceptors → headers
+  → LanguageModelCallOptions.provider_options
 ```
 
 ### Query Options (from `claude.ts`, 3419 LOC)

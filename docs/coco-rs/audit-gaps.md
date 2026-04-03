@@ -362,3 +362,30 @@ Cross-referenced with TS source to identify redundancy and collisions.
 
 Round 4 "Remaining Deferred" items reviewed — all still valid:
 - P2 AppState, P2 telemetry_msg, P3 config patterns, P3 errno, P1/P2 coco-otel L2-L5: no changes
+
+## Cross-Review Round 6 (opencode Multi-Provider Comparison — April 2026)
+
+Deep comparison of coco-rs multi-provider design against opencode (TS, 40+ providers) and cocode-rs (Rust, 6 providers).
+
+### Design Decisions
+
+| # | Decision | Analysis | Outcome |
+|---|----------|----------|---------|
+| R6-1 | ThinkingLevel.options (HashMap) | cocode-rs used typed fields per provider param (include_thoughts, reasoning_summary, interleaved) → poor extensibility (3 crate changes per new param). opencode uses variant dicts (data-driven, zero code changes for new params). | **ADOPTED**: ThinkingLevel keeps only 2 typed fields (effort, budget_tokens — truly universal). All provider-specific thinking params move to `options: HashMap<String, Value>`. thinking_convert retains `&ModelInfo` for budget validation/clamping, does typed conversion for effort/budget, then merges options as passthrough. |
+| R6-2 | default_thinking_level type | Was `Option<ThinkingLevel>` (full struct with params). Causes duplication — same params defined in both default and supported_thinking_levels. | **FIXED**: Changed to `Option<ReasoningEffort>` — just a ref to an entry in supported_thinking_levels. Single source of truth. |
+| R6-3 | ModelInfo.slug naming | "slug" is a web URL term. vercel-ai uses `model_id()`, opencode uses `id`, all LLM APIs use `model`. | **RENAMED**: `model_id` in coco-rs plan docs. Aligns with vercel-ai and industry convention. |
+| R6-4 | sdk_namespace for Bedrock/Vertex | Proposed adding ProviderInfo.sdk_namespace to route ProviderOptions to different namespaces for same ProviderApi. | **REJECTED**: vercel-ai provider impls handle Bedrock/Vertex parameter differences internally. Adding sdk_namespace would leak provider impl details to config layer. |
+| R6-5 | opencode-style variant concept | opencode has `model.variants: Record<string, Record<string, any>>` — named presets user can select. | **NOT ADOPTED as separate concept**: ThinkingLevel.options + supported_thinking_levels achieves the same: user selects effort name, system resolves full param set from supported list. More type-safe. |
+| R6-6 | ReasoningSummary enum | Was a typed enum (None/Auto/Concise/Detailed) on ModelInfo. | **REMOVED**: Now a string value in ThinkingLevel.options (e.g., `"reasoningSummary": "auto"`). No longer needs a standalone type. |
+| R6-7 | ModelInfo.options vs ThinkingLevel.options | cocode-rs has ModelInfo.options for all extensions. Need clear separation. | **CLARIFIED**: ModelInfo.options = non-thinking per-model params (store:false). ThinkingLevel.options = thinking-related per-effort-level params (reasoningSummary, interleaved). Different merge points in RequestBuilder (Step 4 vs Step 3b). |
+| R6-8 | ModelSpec.provider type | Was `ProviderApi` enum. Doesn't support sub-provider routing (bedrock, vertex). | **CHANGED**: `provider: String` (free-form) + `api: ProviderApi` (for dispatch). String supports "bedrock"/"vertex" without enum expansion. Aligned with cocode-rs actual impl. |
+| R6-9 | Plan docs missing cocode-rs fields | ModelInfo, ProviderInfo, InferenceContext, RequestBuilder pipeline were incomplete vs cocode-rs actual code. | **FIXED**: All plan docs updated to reflect cocode-rs actual fields (top_k, timeout_secs, shell_type, max_tool_output_chars, ProviderModel, interceptors, request_options_merge module). |
+| R6-10 | Capability enum alignment | coco-rs had different variant names than cocode-rs (ToolUse vs ToolCalling, Thinking vs ExtendedThinking). | **FIXED**: Aligned with cocode-rs Capability enum (TextGeneration, ToolCalling, ExtendedThinking, ReasoningSummaries, ParallelToolCalls, etc.). |
+
+### Files Modified
+
+- `crate-coco-types.md`: ThinkingLevel (options field, removed interleaved/max_output_tokens), ModelSpec (provider: String + api), Capability aligned, ApplyPatchToolType aligned
+- `crate-coco-config.md`: ModelInfo full alignment (all cocode-rs fields), default_thinking_level as ReasoningEffort, ProviderInfo with models/interceptors, ProviderModel
+- `crate-coco-inference.md`: thinking_convert simplified (no ModelInfo param), RequestBuilder full pipeline, request_options_merge module, InferenceContext full fields
+- `multi-provider-plan.md`: config examples updated, design decisions table, removed redundant type definitions
+- `CLAUDE.md`: type ownership, canonical names updated

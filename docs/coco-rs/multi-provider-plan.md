@@ -107,61 +107,10 @@ pub enum WireApi {
 }
 ```
 
-### ModelInfo (per-model configuration, from cocode-rs)
+### ModelInfo, Capability, ApplyPatchToolType
 
-```rust
-/// Per-model configuration. Supports different capabilities per model.
-/// TS equivalent: scattered across modelCapabilities.ts, thinking.ts, effort.ts
-pub struct ModelInfo {
-    // Identity
-    pub slug: String,                          // "claude-opus-4-6"
-    pub display_name: Option<String>,
-    
-    // Capacity (concrete types with defaults — see CLAUDE.md)
-    pub context_window: i64,                   // default 200_000
-    pub max_output_tokens: i64,                // default model-specific
-    
-    // Capabilities
-    pub capabilities: HashSet<Capability>,
-    
-    // Thinking/Reasoning (multi-provider, from cocode-rs)
-    pub default_thinking_level: Option<ThinkingLevel>,
-    pub supported_thinking_levels: Option<Vec<ThinkingLevel>>,
-    
-    // Tools
-    pub apply_patch_tool_type: ApplyPatchToolType,           // defaults to None variant
-    pub excluded_tools: Vec<String>,                         // blacklist
-    
-    // Instructions (model-specific system prompt additions)
-    pub base_instructions: Option<String>,
-    pub base_instructions_file: Option<String>,
-    
-    // Sampling
-    pub temperature: Option<f32>,
-    pub top_p: Option<f32>,
-}
-
-pub enum Capability {
-    ToolUse,
-    Vision,
-    Thinking,
-    AdaptiveThinking,
-    StructuredOutput,
-    Effort,
-    FastMode,
-    PromptCaching,
-    Streaming,
-}
-
-// ThinkingLevel struct and ReasoningEffort enum are defined in coco-types.
-// See crate-coco-types.md for canonical definitions.
-// See crate-coco-inference.md for thinking_convert (per-provider mapping).
-
-pub enum ApplyPatchToolType {
-    None,           // Anthropic: use FileEdit tool
-    CustomToolCall, // OpenAI: apply_patch via custom tool_call
-    BuiltIn,        // Future: native apply_patch support
-}
+> **Source of truth**: `crate-coco-config.md` owns ModelInfo, `crate-coco-types.md` owns Capability/ApplyPatchToolType.
+> See those docs for canonical definitions. Not redefined here.
 ```
 
 ### ModelRoles (role -> model mapping)
@@ -464,56 +413,89 @@ impl ModelHub {
 ## 8. Configuration Example
 
 ```jsonc
-// ~/.coco/config.json
+// ~/.coco/models.json — ModelInfo definitions
 {
-  "providers": {
-    "anthropic": {
-      "api": "anthropic",
-      "base_url": "https://api.anthropic.com",
-      "api_key_env": "ANTHROPIC_API_KEY"
-    },
-    "openai": {
-      "api": "openai",
-      "base_url": "https://api.openai.com/v1",
-      "api_key_env": "OPENAI_API_KEY",
-      "wire_api": "responses"
-    },
-    "bedrock": {
-      "api": "anthropic",
-      "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com"
-    }
+  "claude-opus-4-6": {
+    "display_name": "Claude Opus 4.6",
+    "context_window": 200000,
+    "max_output_tokens": 128000,
+    "capabilities": ["text_generation", "streaming", "vision", "tool_calling", "extended_thinking", "fast_mode"],
+    "supported_thinking_levels": [
+      { "effort": "low" },
+      { "effort": "medium" },
+      { "effort": "high", "options": { "interleaved": true } },
+      { "effort": "xhigh", "budget_tokens": 128000, "options": { "interleaved": true } }
+    ],
+    "default_thinking_level": "medium"
   },
-  "models": {
-    "claude-opus-4-6": {
-      "provider": "anthropic",
-      "context_window": 200000,
-      "max_output_tokens": 128000,
-      "capabilities": ["tool_use", "vision", "thinking", "adaptive_thinking", "effort", "fast_mode", "prompt_caching"],
-      "default_thinking_level": "medium"
-    },
-    "claude-haiku-4-5": {
-      "provider": "anthropic",
-      "context_window": 200000,
-      "max_output_tokens": 64000,
-      "capabilities": ["tool_use", "vision", "thinking", "prompt_caching"]
-    },
-    "gpt-4o": {
-      "provider": "openai",
-      "context_window": 128000,
-      "max_output_tokens": 16384,
-      "capabilities": ["tool_use", "vision", "structured_output"],
-      "apply_patch_tool_type": "custom_tool_call",
-      "excluded_tools": ["FileEdit"],
-      "base_instructions": "Use the apply_patch tool instead of FileEdit for file modifications."
-    }
+  "gpt-5": {
+    "display_name": "GPT-5",
+    "context_window": 272000,
+    "max_output_tokens": 32000,
+    "capabilities": ["text_generation", "streaming", "vision", "tool_calling", "extended_thinking", "structured_output", "reasoning_summaries"],
+    "supported_thinking_levels": [
+      { "effort": "low",    "options": { "reasoningSummary": "auto" } },
+      { "effort": "medium", "options": { "reasoningSummary": "auto" } },
+      { "effort": "high",   "options": { "reasoningSummary": "auto", "include": ["reasoning.encrypted_content"], "textVerbosity": "low" } }
+    ],
+    "default_thinking_level": "medium",
+    "apply_patch_tool_type": "shell",
+    "shell_type": "shell_command",
+    "excluded_tools": ["edit", "write"],
+    "options": { "store": false }
   },
+  "gemini-2.5-pro": {
+    "display_name": "Gemini 2.5 Pro",
+    "context_window": 1000000,
+    "max_output_tokens": 65536,
+    "capabilities": ["text_generation", "streaming", "vision", "tool_calling", "extended_thinking"],
+    "supported_thinking_levels": [
+      { "effort": "high",  "budget_tokens": 16000, "options": { "includeThoughts": true } },
+      { "effort": "xhigh", "budget_tokens": 24576, "options": { "includeThoughts": true } }
+    ],
+    "default_thinking_level": "high"
+  }
+}
+
+// ~/.coco/providers.json — ProviderInfo definitions
+{
+  "anthropic": {
+    "api": "anthropic",
+    "base_url": "https://api.anthropic.com",
+    "env_key": "ANTHROPIC_API_KEY",
+    "models": [
+      { "model_id": "claude-opus-4-6" },
+      { "model_id": "claude-sonnet-4-6" },
+      { "model_id": "claude-haiku-4-5" }
+    ]
+  },
+  "bedrock": {
+    "api": "anthropic",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "models": [
+      { "model_id": "claude-opus-4-6", "api_model_name": "anthropic.claude-opus-4-6" }
+    ]
+  },
+  "openai": {
+    "api": "openai",
+    "base_url": "https://api.openai.com/v1",
+    "env_key": "OPENAI_API_KEY",
+    "wire_api": "responses",
+    "models": [
+      { "model_id": "gpt-5" },
+      { "model_id": "gpt-5.2", "model_options": { "textVerbosity": "low" } }
+    ]
+  }
+}
+
+// model_roles section
+{
   "model_roles": {
-    "main": "claude-opus-4-6",
-    "fast": "claude-haiku-4-5",
-    "compact": null,
-    "plan": "claude-opus-4-6",
-    "hook_agent": "claude-haiku-4-5",
-    "memory": "claude-sonnet-4-6"
+    "main": "anthropic/claude-opus-4-6",
+    "fast": "anthropic/claude-haiku-4-5",
+    "plan": "anthropic/claude-opus-4-6",
+    "hook_agent": "anthropic/claude-haiku-4-5",
+    "memory": "anthropic/claude-sonnet-4-6"
   }
 }
 ```
@@ -539,12 +521,13 @@ impl ModelHub {
 
 | Decision | Rationale |
 |----------|-----------|
+| **ThinkingLevel.options for extensibility** | Only effort + budget_tokens as typed fields (universal). All provider-specific thinking params (reasoningSummary, interleaved, includeThoughts, include encrypted_content) go through `options: HashMap<String, Value>` — data-driven, no code changes for new params. Inspired by opencode's variant system but integrated into ThinkingLevel rather than a separate concept. |
+| **default_thinking_level as ReasoningEffort ref** | Not a full ThinkingLevel — just an effort name that points into supported_thinking_levels. Single source of truth, no param duplication. |
+| **ModelInfo.options for non-thinking extensions** | Per-model provider options (e.g., store: false) separate from thinking-related options. Merged at RequestBuilder Step 4 (highest config priority). |
+| **model_id not slug** | `model_id` aligns with vercel-ai `model_id()` method and industry convention. |
+| **ModelSpec.provider: String (not ProviderApi enum)** | Supports sub-provider routing (bedrock, vertex) without expanding the enum. ModelSpec.api: ProviderApi for dispatch. |
+| **No sdk_namespace** | vercel-ai provider impls handle Bedrock/Vertex parameter differences internally. |
+| **No opencode-style variants concept** | ThinkingLevel.options + supported_thinking_levels achieves the same: user selects effort name, system resolves full param set. More type-safe than raw variant dicts. |
 | **ModelRole enum, not ad-hoc functions** | TS uses scattered functions (getSmallFastModel, getMainLoopModel). Rust unifies into enum for type safety. |
-| **ModelInfo per-model config** | TS checks capabilities at call time with `modelSupportsX()` functions. Rust pre-loads into ModelInfo struct. |
-| **apply_patch as conditional tool** | OpenAI uses apply_patch instead of FileEdit. Loaded only when `apply_patch_tool_type == CustomToolCall`. |
-| **base_instructions per model** | TS has model-agnostic prompts. Rust adds optional per-model instructions for provider-specific tools. |
-| **ProviderFactory from cocode-rs** | Proven pattern for routing ProviderApi to implementation. |
-| **ModelHub caching from cocode-rs** | Avoids re-creating providers/models per request. |
 | **RequestBuilder 5-step pipeline** | Handles provider-specific quirks (cache breakpoints for Anthropic, reasoning_effort for OpenAI). |
 | **Capability enum, not booleans** | Extensible set vs fixed fields. New capabilities don't require struct changes. |
-| **WireApi for OpenAI** | OpenAI has two APIs (Chat Completions vs Responses). Responses supports apply_patch. |

@@ -728,7 +728,7 @@ pub struct ModelUsage {
 ### Thinking Types (multi-provider improvement over TS)
 
 ```rust
-/// Unified thinking configuration for all providers (from cocode-rs).
+/// Unified thinking configuration for all providers.
 /// The SINGLE type for effort + thinking across the entire pipeline.
 ///
 /// Replaces both TS EffortLevel and ThinkingConfig (redundant with this):
@@ -737,44 +737,65 @@ pub struct ModelUsage {
 ///   TS ThinkingConfig { type: 'enabled', N }     → ThinkingLevel { effort: Medium, budget: Some(N) }
 ///   TS ThinkingConfig { type: 'disabled' }       → ThinkingLevel::none()
 ///
-/// WHY (multi-provider improvement over TS):
-///   TS targets Anthropic only → separate effort + thinking suffices.
-///   coco-rs targets 6 providers, each with different thinking APIs:
-///     OpenAI: reasoningEffort string only
-///     Anthropic: adaptive (no budget) or enabled { budget_tokens }
-///     Gemini: thinkingLevel + include_thoughts
-///     Volcengine: effort + budget_tokens
-///     Z.AI: budget_tokens required
-///   ThinkingLevel unifies these. thinking_convert (coco-inference) maps per-provider.
+/// DESIGN (data-driven extensibility):
+///   Only 2 typed fields (effort + budget_tokens) — truly universal across providers.
+///   All provider-specific thinking params go through `options` (data-driven passthrough):
+///     - OpenAI: { "reasoningSummary": "auto", "include": ["reasoning.encrypted_content"] }
+///     - Anthropic: { "interleaved": true }
+///     - Gemini: { "includeThoughts": true }
+///     - Future params: just add to options, no code changes needed.
 ///
-/// Flow: user settings → ThinkingLevel → ModelInfo resolution → per-provider API params
+///   This replaces the previous approach of typed fields per provider param
+///   (include_thoughts, reasoning_summary, interleaved) which required changing
+///   3 crates (L0 protocol + L1 config + L2 inference) for each new param.
+///
+/// FLOW:
+///   ModelInfo.supported_thinking_levels → defines full param sets per effort level
+///   ModelInfo.default_thinking_level (ReasoningEffort) → ref to one supported entry
+///   User /effort high → resolve from supported_thinking_levels → full ThinkingLevel
+///   thinking_convert(level, provider):
+///     Step 1: effort + budget_tokens → per-provider typed conversion
+///     Step 2: level.options → merge directly into ProviderOptions (passthrough)
 ///
 /// Used by: ModelInfo (coco-config), RoleSelection, InferenceContext, thinking_convert.
-/// Design from cocode-rs common/protocol/src/thinking.rs (proven, working).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Evolved from cocode-rs common/protocol/src/thinking.rs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ThinkingLevel {
-    /// Reasoning effort level (required, used for ordering).
+    /// Reasoning effort level — universal across all providers.
+    /// thinking_convert maps this to per-provider values (reasoningEffort, thinkingLevel, etc.).
     pub effort: ReasoningEffort,
-    /// Token budget for budget-based models (optional, Anthropic/Volcengine/Z.AI).
+
+    /// Token budget — universal for budget-based providers (Anthropic/Gemini/Volcengine/Z.AI).
+    /// thinking_convert maps this to budgetTokens/thinkingBudget per provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budget_tokens: Option<i32>,
-    /// Max output tokens for thinking (optional, falls back to outer max_output_tokens).
-    pub max_output_tokens: Option<i32>,
-    /// Enable interleaved thinking mode (Anthropic).
-    pub interleaved: bool,
+
+    /// Provider-specific thinking extensions — data-driven passthrough.
+    /// Merged directly into ProviderOptions by thinking_convert (no typed conversion needed).
+    /// Examples:
+    ///   OpenAI:    { "reasoningSummary": "auto", "include": ["reasoning.encrypted_content"], "textVerbosity": "low" }
+    ///   Anthropic: { "interleaved": true }
+    ///   Gemini:    { "includeThoughts": true }
+    ///   Future:    any new provider param, zero code changes
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub options: HashMap<String, serde_json::Value>,
 }
 
 impl ThinkingLevel {
-    pub fn none() -> Self { Self { effort: ReasoningEffort::None, budget_tokens: None, max_output_tokens: None, interleaved: false } }
+    pub fn none() -> Self { Self { effort: ReasoningEffort::None, budget_tokens: None, options: HashMap::new() } }
     pub fn low() -> Self { Self { effort: ReasoningEffort::Low, ..Self::none() } }
     pub fn medium() -> Self { Self { effort: ReasoningEffort::Medium, ..Self::none() } }
     pub fn high() -> Self { Self { effort: ReasoningEffort::High, ..Self::none() } }
     pub fn xhigh() -> Self { Self { effort: ReasoningEffort::XHigh, ..Self::none() } }
     pub fn is_enabled(&self) -> bool { self.effort != ReasoningEffort::None }
+    pub fn with_budget(effort: ReasoningEffort, budget: i32) -> Self {
+        Self { effort, budget_tokens: Some(budget), options: HashMap::new() }
+    }
 }
 
 /// Flexible deserialization: accepts string shorthand ("high") or full object
-/// {"effort": "high", "budget_tokens": 32000}. Matches cocode-rs behavior.
-impl FromStr for ThinkingLevel { /* ... */ }
+/// {"effort": "high", "budget_tokens": 32000, "options": {"interleaved": true}}.
+impl FromStr for ThinkingLevel { /* parses effort name only, no options */ }
 
 /// Reasoning effort level. Ordered from lowest to highest (derives Ord).
 /// Provider-agnostic scale — thinking_convert maps to per-provider values.
@@ -823,36 +844,45 @@ pub enum ModelRole {
 
 /// A resolved model identity: provider + model ID.
 /// Produced by coco-config, consumed by coco-inference.
+///
+/// `provider` is a free-form String (not ProviderApi enum) to support sub-provider
+/// routing (e.g., "bedrock", "vertex") without expanding the enum.
+/// `api` is the ProviderApi enum used for thinking_convert dispatch and provider factory.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ModelSpec {
-    pub provider: ProviderApi,
-    pub model_id: String,
-    pub canonical_id: String,
+    pub provider: String,       // "anthropic", "bedrock", "vertex", "openai", ...
+    pub api: ProviderApi,       // resolved ProviderApi for dispatch
+    pub model_id: String,       // "claude-opus-4-6", "gpt-5"
+    pub display_name: String,   // human-readable (excluded from PartialEq/Hash)
 }
 
 /// Model capabilities (checked at request time).
+/// Aligned with cocode-rs Capability enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Capability {
-    ToolUse,
-    Vision,
-    Thinking,
-    AdaptiveThinking,
-    StructuredOutput,
-    Effort,
-    FastMode,
-    PromptCaching,
+    TextGeneration,
     Streaming,
+    Vision,
+    Audio,
+    ToolCalling,
+    Embedding,
+    ExtendedThinking,
+    StructuredOutput,
+    ReasoningSummaries,
+    ParallelToolCalls,
+    FastMode,
 }
 
-/// How a model handles file editing tools.
+/// How a model handles file editing / apply_patch tool.
+/// Aligned with cocode-rs ApplyPatchToolType.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ApplyPatchToolType {
     #[default]
-    None,           // Use FileEdit (Anthropic default)
-    CustomToolCall, // apply_patch via custom tool_call (OpenAI)
-    BuiltIn,        // Native apply_patch support (future)
+    Freeform,    // String-schema function tool (GPT-5.2+, codex models)
+    Function,    // JSON function tool (gpt-oss)
+    Shell,       // Shell-based, prompt instructions only (GPT-5, o3, o4-mini)
 }
 
 /// Communication protocol (OpenAI has two APIs).
@@ -885,7 +915,7 @@ pub struct SerializedMessage {
     pub timestamp: String,
     pub version: String,
     pub git_branch: Option<String>,
-    pub slug: Option<String>,
+    pub model_id: Option<String>,
 }
 
 pub struct LogOption {
