@@ -76,7 +76,9 @@
       "Read(//Users/bytedance/codespace/myapp/**)",
       "Bash(/tmp/extract_functions.sh)",
       "Bash(xargs -I{} basename {})",
-      "Bash(bash /tmp/check_areas.sh)"
+      "Bash(bash /tmp/check_areas.sh)",
+      "Bash(xargs -I {} bash -c 'grep -l \"name = \" {} && dirname {}')",
+      "Bash(read dir:*)"
     ],
     "deny": [],
     "ask": [],

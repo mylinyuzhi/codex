@@ -573,6 +573,20 @@ Previously deferred P1 gaps now documented (Round 3, April 2026):
 - ~~coco-shell submodules~~ → **FIXED** in crate-coco-shell.md
 - ~~coco-inference: claude.ts, withRetry.ts, filesApi.ts~~ → **FIXED** in crate-coco-inference.md
 
+Round 4 factual errors fixed (April 2026, 35-area cross-verification):
+- ~~crate-coco-skills.md: invented SHA-256 fingerprint~~ → **FIXED** (replaced with TS file extraction security model)
+- ~~crate-coco-tools.md: cell_index:i32~~ → **FIXED** (cell_id:String + edit_mode + cell_type)
+- ~~crate-coco-shell.md: security IDs 11-24 wrong~~ → **FIXED** (renumbered to match TS exactly, 23 IDs)
+- ~~crate-coco-shell.md: timeout 120s~~ → **FIXED** (30 minutes)
+- ~~crate-coco-shell.md: commandSemantics wrong~~ → **FIXED** (exit-code interpretation, not classification)
+- ~~crate-coco-shell.md: modeValidation flag restriction~~ → **FIXED** (TS auto-allows all 7 commands without flag checks)
+- ~~crate-coco-keybindings.md: fabricated action names~~ → **FIXED** (73 exact TS `namespace:camelCase` names)
+- ~~crate-coco-context.md: FileHistoryState HashMap~~ → **FIXED** (ordered Vec + content-addressed files on disk)
+- ~~crate-coco-context.md: fileHistory.ts 200 LOC~~ → **FIXED** (~1110 LOC)
+- ~~crate-coco-tasks.md: slug from prompt~~ → **FIXED** (random word slug, not prompt-derived)
+- ~~crate-coco-remote.md: 4001 exponential backoff~~ → **FIXED** (linear backoff)
+- ~~crate-coco-app.md: IDE bridge direct WebSocket~~ → **FIXED** (MCP-based + CCR daemon + DirectConnect)
+
 Remaining deferred — will be documented during implementation:
 
 | Priority | Gap | Phase |

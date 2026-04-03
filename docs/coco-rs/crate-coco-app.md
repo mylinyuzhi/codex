@@ -39,68 +39,128 @@ coco-state/coco-session/coco-tui do NOT depend on each other circularly.
 
 ## coco-state
 
-TS source: `src/state/AppState.tsx`, `src/state/AppStateStore.ts`
+TS source: `src/state/AppState.tsx`, `src/state/AppStateStore.ts`, `src/bootstrap/state.ts`
 
-### Data Definitions
+TS has TWO state tiers:
+1. **AppState** — reactive UI state (`Arc<RwLock<AppState>>`, ~80+ fields)
+2. **Bootstrap State** — non-reactive process singleton (`bootstrap/state.ts`, ~70 fields)
+
+### AppState (reactive, ~80+ fields)
 
 ```rust
 /// Global application state (Zustand-like: Arc<RwLock<AppState>>)
 pub struct AppState {
-    // Config
+    // === Config ===
     pub settings: Settings,
     pub main_loop_model: String,
+    pub main_loop_model_for_session: Option<String>,
     pub verbose: bool,
-    pub thinking_level: Option<ThinkingLevel>,
-    pub fast_mode: bool,
 
-    // UI
-    pub expanded_view: ExpandedView,  // None, Tasks, Teammates
-    pub footer_selection: Option<FooterItem>,
+    // === UI Display ===
+    pub expanded_view: ExpandedView,      // None, Tasks, Teammates
+    pub is_brief_only: bool,
+    pub show_teammate_message_preview: bool,
     pub spinner_tip: Option<String>,
+    pub footer_selection: Option<FooterItem>,
+    pub status_line_text: Option<String>,
 
-    // MCP
-    pub mcp: McpState,
-
-    // Plugins
-    pub plugins: PluginState,
-
-    // Permissions
+    // === Permissions ===
     pub permission_context: ToolPermissionContext,
+    pub denial_tracking: DenialTracking,
+    pub active_overlays: Vec<OverlayState>,
 
-    // Tasks
+    // === Tasks & Agents ===
     pub tasks: HashMap<TaskId, TaskState>,
-    pub foregrounded_task_id: Option<TaskId>,
-
-    // Agents
-    pub agent_name_registry: HashMap<String, AgentId>,
+    pub agent_name_registry: HashMap<String, AgentId>, // name → agentId for SendMessage routing
     pub agent_definitions: Vec<AgentDefinition>,
+    pub foregrounded_task_id: Option<TaskId>,
+    pub viewing_agent_task_id: Option<TaskId>,
+    pub selected_ip_agent_index: Option<i32>,
+    pub coordinator_task_index: i32,
+    pub view_selection_mode: ViewSelectionMode,
 
-    // File tracking
+    // === MCP ===
+    pub mcp: McpState,  // clients, tools, commands, resources, plugin_reconnect_key
+
+    // === Plugins ===
+    pub plugins: PluginState, // enabled, disabled, commands, errors, installation_status, needs_refresh
+
+    // === File Tracking ===
     pub file_history: FileHistoryState,
-    pub attribution: AttributionState,
+    pub attribution: Option<AttributionState>,
     pub todos: HashMap<AgentId, TodoList>,
 
-    // Notifications + elicitation
-    pub notifications: NotificationState,
+    // === Notifications & Elicitation ===
+    pub notifications: NotificationState,  // current + queue
     pub elicitation_queue: Vec<ElicitationRequestEvent>,
 
-    // Session hooks
+    // === Hooks & Session ===
     pub session_hooks: SessionHooksState,
+    pub auth_version: i64,
+    pub initial_message: Option<String>,
 
-    // Thinking toggle
+    // === Thinking & Suggestions ===
     pub thinking_enabled: Option<bool>,
     pub prompt_suggestion_enabled: bool,
+    pub prompt_suggestion: Option<String>,
 
-    // --- v2 fields (remote, tungsten, voice) ---
+    // === Mode Flags ===
+    pub fast_mode: bool,
+    pub advisor_model: Option<String>,
+    pub effort_value: Option<ReasoningEffort>,  // from coco-types (low/medium/high/max)
+    pub agent: Option<AgentDefinition>,
+    pub pending_plan_verification: bool,
+
+    // === Swarm/Teams (v2) ===
+    pub team_context: Option<TeamContext>,          // team name, lead/self agent, membership
+    pub standalone_agent_context: Option<Value>,
+    pub inbox: InboxState,                         // messages: Vec<InboxMessage>
+    pub worker_sandbox_permissions: HashMap<String, bool>,
+    pub pending_worker_request: Option<Value>,
+    pub pending_sandbox_request: Option<Value>,
+
+    // === Bridge/Remote (v3) ===
+    // pub repl_bridge: ReplBridgeState,           // 12 fields: enabled, connected, session_active, etc.
     // pub remote_session_url: Option<String>,
-    // pub remote_connection_status: RemoteConnectionStatus,
+    // pub remote_connection_status: ConnectionStatus,
     // pub remote_background_task_count: i32,
-    // pub repl_bridge: ReplBridgeState,  // 12 fields
-    // pub tungsten: Option<TungstenState>,  // tmux integration
-    // pub bagel_active: bool,              // web browser tool
-    // pub coordinator_task_index: i32,
-    // pub view_selection_mode: ViewSelectionMode,
+    // pub channel_permission_callbacks: HashMap<String, Value>,
+
+    // === Deferred (niche features) ===
+    // pub tungsten: Option<TungstenState>,        // tmux panel integration (5 fields)
+    // pub bagel: Option<BagelState>,              // web browser tool (3 fields)
+    // pub computer_use_mcp_state: Option<Value>,  // macOS computer use (7 sub-fields)
+    // pub repl_context: Option<Value>,            // REPL VM sandbox
+    // pub speculation: Option<SpeculationState>,  // auto-complete pipelining
+    // pub ultraplan: Option<UltraplanState>,      // remote plan generation (5 fields)
+    // pub companion: Option<CompanionState>,      // buddy pet (2 fields)
 }
+
+### Bootstrap State (non-reactive process singleton, ~70 fields)
+
+TS `src/bootstrap/state.ts` holds process-lifetime state that does NOT need UI reactivity.
+In Rust this maps to a `static` or a `OnceCell<Arc<BootstrapState>>`.
+
+Key field categories (not exhaustive — see TS source for full list):
+- **Session identity**: session_id, parent_session_id, project_root, original_cwd, cwd
+- **Cost/timing accumulators**: total_cost_usd, total_api_duration, total_tool_duration, total_lines_added/removed
+- **Model overrides**: main_loop_model_override, initial_main_loop_model, model_strings
+- **Beta header latches** (session-stable, prevent cache busting): afk_mode_header_latched, fast_mode_header_latched, cache_editing_header_latched, thinking_clear_latched
+- **Prompt cache state**: prompt_cache_1h_allowlist, prompt_cache_1h_eligible
+- **Session flags**: is_interactive, session_bypass_permissions_mode, session_persistence_disabled, has_exited_plan_mode, needs_plan_mode_exit_attachment
+- **Skills & cron**: invoked_skills (Set), session_cron_tasks, plan_slug_cache (Map<SessionId, String>)
+- **Telemetry handles**: meter, session_counter, cost_counter, token_counter, logger_provider, tracer_provider
+- **API debug**: last_api_request, last_classifier_requests, cached_claude_md_content
+- **Client type**: client_type (12 variants: cli, sdk-cli, sdk-typescript, sdk-python, remote, claude-vscode, etc.)
+
+### onChangeAppState Side-Effects
+
+A single handler that fires on every AppState mutation:
+- Syncs `permission_context.mode` changes to CCR via `notifySessionMetadataChanged`
+- Persists `main_loop_model` changes to user settings
+- Persists `expanded_view` and `verbose` to global config
+- Clears auth caches on `settings` change
+- Re-applies env vars on `settings.env` change
 
 pub struct NotificationState {
     pub current: Option<Notification>,
@@ -241,85 +301,161 @@ impl App {
 
 ## coco-cli
 
-TS source: `src/main.tsx`, `src/entrypoints/cli.tsx`, `src/cli/`
+TS source: `src/main.tsx` (~4500 LOC), `src/entrypoints/cli.tsx`, `src/cli/`
 
-### Entry Point
+### Two-Tier Dispatch Architecture
 
-```rust
-/// Binary: `coco`
-/// Modes:
-///   coco                     — interactive TUI
-///   coco -p "prompt"         — print mode (non-interactive)
-///   coco --sdk               — SDK mode (NDJSON structured IO)
-///   coco resume <session-id> — resume session
-///   coco config              — edit config
-///   coco doctor              — diagnostics
-fn main() {
-    let cli = Cli::parse();  // clap
-    match cli.command {
-        None => run_tui(cli),
-        Some(Command::Config) => run_config(),
-        Some(Command::Doctor) => run_doctor(),
-        Some(Command::Resume { id }) => run_resume(id),
-        // ...
-    }
-}
+TS has a two-tier entry point: `cli.tsx` handles fast-path dispatch (zero module loading)
+before `main.tsx` constructs the full Commander program.
+
+**Fast-path branches** (in `cli.tsx`, before Commander.js):
+- `--version / -v / -V` — zero module loading
+- `--dump-system-prompt` — ant-internal eval tool
+- `--chrome-native-host`, `--computer-use-mcp` — in-process MCP servers
+- `--daemon-worker` — feature-gated worker process
+- `remote-control | rc | remote | sync | bridge` — CCR bridge mode
+- `daemon`, `ps | logs | attach | kill | --bg` — background session management
+- `--handle-uri` — deep link / URL scheme handler
+
+### Subcommand Tree (~50+)
+
+```
+coco                          — interactive TUI (default)
+coco -p "prompt"              — print mode (non-interactive)
+coco --sdk-url <url>          — SDK mode (structured IO via remote endpoint)
+
+coco mcp serve|add|remove|list|get|add-json|add-from-claude-desktop|reset-project-choices
+coco auth login|logout|status
+coco plugin list|validate|install|uninstall|enable|disable|update
+coco plugin marketplace add|list|remove|update
+coco doctor
+coco update (alias: upgrade)
+coco agents
+coco setup-token
+coco completion <shell>
+coco server --port --host --unix --auth-token --workspace --idle-timeout --max-sessions
+coco ssh <host> [dir]
+coco open <cc-url>
+coco remote-control
+coco assistant [sessionId]
+coco auto-mode defaults|config|critique
+
+Feature-gated:
+  coco daemon [subcommand]
+  coco ps|logs|attach|kill       (background sessions)
+  coco new|list|reply            (templates)
+  coco environment-runner        (BYOC runner)
+  coco task create|list|get|update|dir
 ```
 
-### Startup Flow
+### Key Flag Categories (60+)
 
-```rust
-/// 1. Parse CLI args (clap)
-/// 2. Load settings (layered: user -> project -> local -> policy -> cli)
-/// 3. Initialize auth (API key, OAuth, Bedrock/Vertex)
-/// 4. Initialize OTel (if configured)
-/// 5. Load tools + commands + skills + plugins
-/// 6. Start MCP servers
-/// 7. Enter mode (TUI, print, SDK)
-pub async fn initialize(cli: &Cli) -> Result<AppContext, InitError>;
+| Category | Flags |
+|----------|-------|
+| Session | `-p/--print`, `--output-format`, `--input-format`, `--json-schema`, `--max-turns`, `--max-budget-usd` |
+| Resume | `-c/--continue`, `-r/--resume`, `--fork-session`, `--from-pr`, `--session-id`, `-n/--name`, `--rewind-files` |
+| Auth/Perms | `--dangerously-skip-permissions`, `--permission-mode`, `--permission-prompt-tool` |
+| Tools | `--allowed-tools`, `--disallowed-tools`, `--tools` |
+| Config | `--settings`, `--setting-sources`, `--system-prompt`, `--mcp-config`, `--add-dir`, `--plugin-dir` |
+| Model | `--model`, `--betas`, `--agent`, `--agents`, `--thinking`, `--effort`, `--fallback-model` |
+| Worktree | `-w/--worktree`, `--tmux` |
+| Misc | `--bare`, `--init`, `--verbose`, `--file`, `--ide`, `--prefill`, `--disable-slash-commands` |
+
+### Startup Flow (expanded)
+
+```
+1. Early argv parsing: MDM raw read + keychain prefetch (parallelized)
+2. Fast-path dispatch (15 branches, zero module load for --version)
+3. Client type determination (12 variants: cli, sdk-cli, sdk-typescript, sdk-python, remote, etc.)
+4. Eager settings load (--settings, --setting-sources before init())
+5. Commander program construction with preAction hook
+6. preAction: ensureMdmSettingsLoaded → init() → runMigrations (11 versioned) → loadRemoteManagedSettings → loadPolicyLimits
+7. Telemetry init (deferred until after trust dialog)
+8. Enter mode (TUI, print, SDK)
+9. Deferred prefetches (after first render): credentials, file count, MCP, model capabilities
 ```
 
-### Transport Types (from `src/cli/`)
+### StructuredIO SDK Protocol (21 control subtypes)
 
-```rust
-pub enum Transport {
-    Ndjson,       // NDJSON stdin/stdout (SDK mode)
-    Sse,          // Server-sent events (remote streaming)
-    WebSocket,    // Bidirectional (remote daemon)
-}
+Bidirectional NDJSON protocol over stdin/stdout for programmatic SDK use:
+
+**Control request subtypes** (SDK host → agent):
 ```
+initialize, interrupt, can_use_tool, set_permission_mode, set_model,
+set_max_thinking_tokens, mcp_status, get_context_usage, hook_callback,
+mcp_message, rewind_files, cancel_async_message, seed_read_state,
+mcp_set_servers, reload_plugins, mcp_reconnect, mcp_toggle, stop_task,
+apply_flag_settings, get_settings, elicitation
+```
+Plus: `keep_alive`, `update_environment_variables`, `control_cancel_request`
+
+**SDK output messages** (agent → SDK host, 22+ types):
+```
+assistant, user, stream_event, result
+system/init, system/status, system/compact_boundary, system/post_turn_summary
+system/api_retry, system/hook_started, system/hook_progress, system/hook_response
+system/files_persisted, system/task_notification, system/task_started, system/task_progress
+system/session_state_changed (idle/running/requires_action)
+system/elicitation_complete, system/local_command_output
+tool_progress, tool_use_summary, rate_limit_event, auth_status
+```
+
+**Permission racing**: hook evaluation races against SDK permission prompt (whichever resolves first wins).
+**Duplicate dedup**: LRU set of 1000 resolved tool_use IDs prevents double-processing.
+
+### Transport Types (4 concrete implementations)
+
+| Transport | Description |
+|-----------|-------------|
+| `WebSocketTransport` | Default: WS read + WS write |
+| `HybridTransport` | V2: WS read + HTTP POST write (batched, with retry/backpressure) |
+| `SSETransport` | CCR v2: SSE read + HTTP POST write |
+| `CCRClient` | Used from RemoteIO for CCR-specific session management |
+
+Selection via `getTransportForUrl()` using env vars (`CLAUDE_CODE_USE_CCR_V2`, etc.).
 
 ---
 
 ## coco-bridge
 
-TS source: `src/bridge/`
+TS source: `src/bridge/` (CCR daemon), `src/server/` (DirectConnect)
 
 ### Architecture
 
+**NOTE**: The bridge is NOT a direct IDE↔agent WebSocket relay.
+The TS implementation has TWO distinct subsystems:
+
+1. **CCR Bridge** (`src/bridge/`): A standalone daemon process that registers as an
+   "environment" with the Anthropic backend (REST), long-polls for work items, spawns
+   child `claude` processes per session, and relays events. It has 3 spawn modes
+   (`single-session`, `worktree`, `same-dir`), JWT-based session ingress auth,
+   V1 (WebSocket) and V2 (HybridTransport: WS read + HTTP POST write) transports.
+
+2. **DirectConnect Server** (`src/server/`): A local HTTP+WebSocket server
+   (`POST /sessions` → `{session_id, ws_url, work_dir}`) for programmatic SDK use.
+   Session lifecycle: starting → running → detached → stopping → stopped.
+
+3. **IDE Integration**: IDEs connect as **MCP servers** (not via the bridge).
+   `useIDEIntegration` detects IDE via lockfiles at `~/.claude/ide/<port>.lock`,
+   registers as `sse-ide` or `ws-ide` MCP transport type. 17 IDE types supported
+   (VS Code, Cursor, Windsurf + 14 JetBrains IDEs). IDE sends 4 MCP notification
+   types: `selection_changed`, `at_mentioned`, `log_event`, `ide_connected`.
+   Outbound RPC: `openDiff`, `close_tab`, `openFile`, `getDiagnostics`.
+
 ```rust
-pub struct Bridge {
-    transport: BridgeTransport,  // WebSocket or stdio
-    session: SessionState,
+// TODO: These are placeholder types. Full spec needed per subsystem above.
+// See 22_ide_integration gap analysis for the complete TS feature inventory.
+
+pub struct BridgeConfig {
+    pub bridge_id: String,
+    pub environment_id: Option<String>,
+    pub worker_type: BridgeWorkerType, // claude_code | claude_code_assistant
+    pub spawn_mode: SpawnMode,         // SingleSession | Worktree | SameDir
+    pub max_sessions: i32,
+    pub session_ingress_url: Option<String>,
+    pub session_timeout_ms: Option<i64>,
 }
 
-pub enum BridgeTransport {
-    WebSocket { url: String },
-    Stdio,
-}
-
-impl Bridge {
-    /// Handle IDE -> agent messages
-    pub async fn handle_inbound(&mut self, msg: BridgeMessage);
-    /// Send agent -> IDE messages
-    pub async fn send_outbound(&self, msg: BridgeMessage);
-}
-
-pub enum BridgeMessage {
-    UserInput { text: String, attachments: Vec<Attachment> },
-    ToolApproval { tool_use_id: String, approved: bool },
-    ModelResponse { content: String },
-    ToolProgress { tool_use_id: String, progress: Value },
-    SessionState { messages: Vec<Message> },
-}
+pub enum SpawnMode { SingleSession, Worktree, SameDir }
+pub enum BridgeWorkerType { ClaudeCode, ClaudeCodeAssistant }
 ```

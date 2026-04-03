@@ -177,8 +177,9 @@ pub struct AgentSpawnInput {
 pub struct PlanFileManager;
 
 impl PlanFileManager {
-    /// Generate slug from prompt keywords (adjective-verb-noun pattern).
-    pub fn get_plan_slug(prompt: &str) -> String;
+    /// Generate random word slug (adjective-verb-noun pattern, NOT derived from prompt).
+    /// Uses generateWordSlug() with up to 10 collision retries against existing files.
+    pub fn get_plan_slug() -> String;
     /// Set active plan slug (cached for session).
     pub fn set_plan_slug(slug: &str);
     pub fn clear_plan_slug();

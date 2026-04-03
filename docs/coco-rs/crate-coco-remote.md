@@ -157,7 +157,7 @@ impl SessionsWebSocket {
 
 Reconnect strategy:
 - 4003 (unauthorized) -> stop
-- 4001 (session not found) -> retry 3x with exponential backoff
+- 4001 (session not found) -> retry 3x with linear backoff (RECONNECT_DELAY_MS * attempt_count; server briefly sees session as stale during compaction)
 - Other transient -> retry 5x, base delay 2s
 - Heartbeat ping every 30s
 

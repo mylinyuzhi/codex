@@ -927,15 +927,16 @@ pub struct LogOption {
 ### Plugin Types (from `types/plugin.ts`)
 
 ```rust
-/// Re-exports from utils/plugins/schemas (canonical definitions in coco-modules)
-/// Provided here for convenience: PluginAuthor, PluginManifest, CommandMetadata
+/// Re-exports from utils/plugins/schemas (canonical definitions in coco-plugins)
 
 /// Built-in plugin that ships with the CLI (can be enabled/disabled by users)
+/// NOTE: To avoid L1→L4 dependency on coco-plugins, the manifest field uses
+/// serde_json::Value. The consuming crate (coco-plugins) deserializes it.
 pub struct BuiltinPluginDefinition {
     pub name: String,
     pub display_name: String,
     pub description: String,
-    pub manifest: PluginManifest,
+    pub manifest: serde_json::Value,  // PluginManifest — deserialized by coco-plugins
 }
 ```
 

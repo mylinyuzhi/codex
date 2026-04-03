@@ -25,7 +25,7 @@ pub struct SkillDefinition {
     pub thinking_level: Option<ThinkingLevel>,
     pub context: SkillContext,  // Inline or Fork (subagent)
     pub agent: Option<String>,
-    pub hooks: Option<HooksSettings>,
+    pub hooks: Option<serde_json::Value>,  // Deserialized as HooksSettings by coco-hooks at runtime (config isolation pattern)
     pub paths: Option<Vec<String>>,  // glob patterns for applicability
     pub prompt_content: String,       // markdown body
 }
@@ -70,7 +70,11 @@ impl SkillManager {
 }
 
 /// Bundled skills registry (compiled into binary).
-/// Each has a SHA-256 fingerprint for integrity checking.
+/// Security: bundled skill files extracted to per-process nonce directory
+/// (~/.claude/bundled-skills/<nonce>/), written with O_NOFOLLOW | O_EXCL
+/// (symlink attack prevention), dir mode 0o700, file mode 0o600.
+/// Path traversal validated (no ".." allowed).
+/// "Base directory for this skill: <dir>" prepended to prompt.
 pub fn get_bundled_skills() -> Vec<SkillDefinition>;
 
 /// Token estimation for skill frontmatter (used in context budgeting).

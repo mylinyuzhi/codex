@@ -2,6 +2,54 @@
 
 Exhaustive comparison of all plan docs against actual TS source + cocode-rs source.
 
+## Round 4: 35-Area Cross-Verification (April 2026)
+
+Full TS source vs coco-rs docs comparison across all 35 functional areas.
+
+### Coverage Summary
+
+| Rating | Count | Areas |
+|--------|-------|-------|
+| Missing | 1 | 22_IDE Integration |
+| Minimal (<20%) | 7 | 01_CLI, 02_UI, 15_State, 16_FileSystem, 20_SDK, 25_Plugin, 31_AutoMemory |
+| Partial (20-60%) | 22 | 03_LLM, 04_SysReminder, 05_Tools, 06_MCP, 07_Compact, 08_Subagent, 09_SlashCmd, 10_Skill, 11_Hooks, 12_PlanMode, 13_Task, 17_Telemetry, 19_ThinkLevel, 21_Steering, 23_PromptCache, 24_Auth, 26_BgAgents, 27_LSP, 29_ShellParser, 30_AgentTeams, 32_Keybindings, 33_Remote, 34_FastMode, 35_Rewind |
+| Mostly Complete | 1 | 18_Sandbox |
+| N/A/Deferred | 2 | 14_CodeIndexing (KEEP justified), 28_BrowserControl (v3 TBD) |
+
+### P0 Factual Errors — FIXED (12 items, April 2026)
+
+All fixed in Round 4. See CLAUDE.md "Round 4 factual errors fixed" section.
+
+### P1 Minimal Areas — Need Major Expansion
+
+| Area | Current state | What's needed |
+|------|--------------|---------------|
+| 01_CLI | 6 modes, ~8 flags | 50+ subcommands, 60+ flags, StructuredIO SDK protocol (21 control subtypes), fast-path dispatch |
+| 02_UI | 8 widgets, one loop | Custom Ink renderer, 30+ message renderers, 15 permission UIs, dialog system, FullscreenLayout, VirtualMessageList |
+| 15_State | 13 of 80+ fields | Full AppState (80+ fields), bootstrap State singleton (70+ fields), onChangeAppState side-effects |
+| 16_FileSystem | 3-4 field skeletons | PDF/image/notebook in ReadTool, file_unchanged dedup, token limits, read-before-write enforcement, encoding |
+| 20_SDK | 3 transport names | 21 control request subtypes, 22+ message types, V2 session API, DirectConnect server, Permission DSL |
+| 25_Plugin | 6-field manifest | plugin.json (JSON not TOML), marketplace 2-level architecture, 7 source types, 9 contribution types, dependency resolution, security |
+| 31_AutoMemory | 86-line stub | Session Memory (9-section template, threshold triggers), Auto-Dream (3-gate scheduling, lock file), extraction forked agent |
+| 22_IDE | Wrong architecture | Rewrite: MCP-based IDE (17 IDEs), CCR bridge daemon (3 spawn modes), DirectConnect server |
+
+### P2 Highest-Gap Partial Areas
+
+| Area | Gaps | Top items to add |
+|------|------|-----------------|
+| 30_Agent Teams | 28 | Dual file+mailbox permission, sandbox permission, CLI propagation, teammate mode snapshot |
+| 24_Auth | 20 | Bare mode, CCR/FD credential injection, Unix socket proxy, forceLoginOrgUUID |
+| 32_Keybindings | 18 | Validation subsystem, command bindings, reserved shortcuts, hot-reload, template generation |
+| 13_Task | 18 | LocalMainSessionTask, DreamTask fields, RemoteAgent fields, stall watchdog, SDK events |
+| 29_Shell | 17 | Heredoc extraction (734 LOC), pure-TS parser, validator ordering, PowerShell provider |
+| 21_Steering | 16 | 3-state QueryGuard + generation counter, `now` abort semantics, SleepTool drain widening, post-turn hooks (7 tasks) |
+| 06_MCP | 16 | Transport details, OAuth hardening (step-up, DCR, RFC 7009), XAA, channel servers, config policy engine |
+| 04_SysReminder | 15 | 50+ attachment types (vs 6), @include directive, nested/relevant memory, getAttachments() orchestrator |
+
+---
+
+## Historical Gaps (Rounds 1-3)
+
 ## Critical Gaps (must fix before implementation)
 
 ### 1. coco-messages: 100+ missing functions

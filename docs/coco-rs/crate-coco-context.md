@@ -1,6 +1,6 @@
 # coco-context — Crate Plan
 
-TS source: `src/context.ts`, `src/utils/systemPromptType.ts`, `src/utils/attachments.ts`, `src/utils/claudemd.ts`, `src/utils/cwd.ts`, `src/utils/fileHistory.ts` (200 LOC), `src/utils/fileStateCache.ts` (1.5K LOC), `src/utils/fileRead.ts`
+TS source: `src/context.ts`, `src/utils/systemPromptType.ts`, `src/utils/attachments.ts`, `src/utils/claudemd.ts`, `src/utils/cwd.ts`, `src/utils/fileHistory.ts` (~1110 LOC), `src/utils/fileStateCache.ts` (1.5K LOC), `src/utils/fileRead.ts`
 
 ## Dependencies
 
@@ -54,20 +54,34 @@ pub fn get_system_context() -> SystemContext;
 pub fn get_git_status(cwd: &Path) -> Option<GitStatus>;
 ```
 
-### File History & Encoding (from `fileHistory.ts` 200 LOC, `fileRead.ts`, `fileStateCache.ts` 1.5K LOC)
+### File History & Encoding (from `fileHistory.ts` ~1110 LOC, `fileRead.ts`, `fileStateCache.ts` 1.5K LOC)
 
 ```rust
-/// File edit tracking per turn: records file contents keyed by message UUID.
+/// File edit tracking per turn: content-addressed backup files on disk.
 /// Used by /rewind command to restore file state to a previous turn.
+/// IMPORTANT: Uses an **ordered Vec** (not HashMap) — order matters for
+/// findLast() and snapshots.last() operations.
 pub struct FileHistoryState {
-    /// Snapshots keyed by message UUID → file path → content.
-    snapshots: HashMap<String, HashMap<PathBuf, FileSnapshot>>,
+    /// Ordered array of snapshots (newest last), capped at MAX_SNAPSHOTS=100.
+    /// Evicts oldest when full; snapshot_sequence never resets.
+    snapshots: Vec<FileHistorySnapshot>,
+    tracked_files: HashSet<PathBuf>,
+    snapshot_sequence: i64,  // monotonically increasing (survives eviction)
 }
 
-pub struct FileSnapshot {
-    pub content: String,
-    pub encoding: FileEncoding,
-    pub line_ending: LineEnding,
+pub struct FileHistorySnapshot {
+    pub message_id: Uuid,
+    pub tracked_file_backups: HashMap<PathBuf, FileHistoryBackup>,
+    pub timestamp: DateTime<Utc>,
+}
+
+/// Content-addressed backup file on disk at:
+///   ~/.claude/file-history/{session_id}/{sha256_prefix}@v{N}
+/// backup_file_name=None means file did not exist at that version.
+pub struct FileHistoryBackup {
+    pub backup_file_name: Option<String>,
+    pub version: i32,
+    pub backup_time: DateTime<Utc>,
 }
 
 pub enum FileEncoding { Utf8, Latin1, Binary }
@@ -92,7 +106,45 @@ pub struct FileStateCache {
 }
 ```
 
-### Attachments (from `utils/attachments.ts` — 4K LOC)
+### Attachments (from `utils/attachments.ts` — 38K LOC, 50+ types)
+
+The `getAttachments()` function is the main per-turn injection engine.
+It runs three parallel batches with a 1000ms timeout per batch:
+
+**Batch 1: User-input attachments** (triggered by @-mentions in user text):
+- `at_mentioned_files` — FileAttachment, AlreadyReadFile, PdfReference, directory listing
+- `mcp_resources` — MCP resource content
+- `agent_mentions` — @agent references
+- `skill_discovery` — feature-gated experimental skill search
+
+**Batch 2: All-thread attachments** (every turn, main + sub-agents):
+- `queued_commands` — user prompt queue (carries text, images, provenance)
+- `date_change` — midnight crossing detection (does NOT clear getUserContext cache)
+- `ultrathink_effort` — triggers extended thinking on keyword
+- `deferred_tools_delta` — newly-available ToolSearch tools
+- `agent_listing_delta` — diff of agent types vs already-announced
+- `mcp_instructions_delta` — diff of MCP server instructions
+- `changed_files` — files modified since last turn (FileStateCache)
+- `nested_memory` — per-turn context-sensitive CLAUDE.md rules for @-mentioned files
+- `relevant_memories` — async prefetch (up to 5 files × 4KB = 20KB/turn, 60KB session cap)
+- `plan_mode` — full/sparse reminder on 5-turn cycle
+- `plan_mode_exit` — one-shot on exit
+- `auto_mode` / `auto_mode_exit` — transcript classifier mode
+- `todo_reminders` / `task_reminder` — every 10 turns after 10 turns since last write
+- `teammate_mailbox` — inter-agent DMs in swarm mode
+- `team_context` — swarm team metadata
+- `agent_pending_messages` — drained from LocalAgentTask queue
+- `compaction_reminder` — 1M context only, fires above 25% usage
+
+**Batch 3: Main-thread-only attachments**:
+- `ide_selection` — selected lines from IDE
+- `ide_opened_file` — currently open file in IDE
+- `output_style` — prose style instruction
+- `diagnostics` + `lsp_diagnostics` — IDE/LSP error files
+- `unified_tasks` — todo/task list
+- `async_hook_responses` — results from async hooks
+- `token_usage` — env-gated usage attachment
+- `budget_usd` — remaining budget display
 
 ```rust
 pub enum Attachment {
@@ -103,6 +155,11 @@ pub enum Attachment {
     Hook(HookAttachment),
     Memory(MemoryAttachment),
     TeammateMail(TeammateMailboxAttachment),
+    // Plus ~40 more inline types that use generic SystemReminder format:
+    // date_change, plan_mode, queued_commands, changed_files, nested_memory,
+    // relevant_memories, deferred_tools_delta, agent_listing_delta, mcp_instructions_delta,
+    // compaction_reminder, todo_reminders, ide_selection, diagnostics, token_usage, etc.
+    SystemReminder { attachment_type: String, content: String },
 }
 
 pub struct FileAttachment {
@@ -138,18 +195,38 @@ pub struct MemoryFileInfo {
     pub globs: Option<Vec<String>>,
 }
 
-pub enum MemoryType { Managed, User, Project, Local }
+/// 6 variants (not 4): includes AutoMem and TeamMem with distinct injection semantics.
+pub enum MemoryType { Managed, User, Project, Local, AutoMem, TeamMem }
 
 /// Discovery order (priority):
-/// 1. Managed: /etc/claude-code/CLAUDE.md
-/// 2. User: ~/.claude/CLAUDE.md
-/// 3. Project: CLAUDE.md, .claude/CLAUDE.md, .claude/rules/*.md
-/// 4. Local: CLAUDE.local.md
+/// 1. Managed: /etc/claude-code/CLAUDE.md + /etc/claude-code/.claude/rules/*.md
+/// 2. User: ~/.claude/CLAUDE.md + ~/.claude/rules/*.md (only if userSettings enabled)
+/// 3. Project + Local: full upward CWD walk to filesystem root at each level:
+///    CLAUDE.md, .claude/CLAUDE.md, .claude/rules/*.md, CLAUDE.local.md
+///    Handles git worktree nesting (skips double-load of checked-in files)
+/// 4. Additional directories (--add-dir): CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD
+/// 5. AutoMem: MEMORY.md memdir entrypoint (feature-gated, isAutoMemoryEnabled())
+/// 6. TeamMem: team memory entrypoint (feature-gated TEAMMEM, wrapped in <team-memory-content> XML)
 pub fn get_memory_files(cwd: &Path) -> Vec<MemoryFileInfo>;
 
-pub const MAX_MEMORY_LINES: usize = 200;
-pub const MAX_MEMORY_BYTES: usize = 25_000;  // per-file truncation
+/// @include directive: resolves @path, @./rel, @~/home, @/abs references recursively.
+/// MAX_INCLUDE_DEPTH=5, binary file extension blocklist (~80 text extensions allowed),
+/// circular reference prevention, symlink resolution.
+pub fn resolve_includes(content: &str, base_dir: &Path, depth: i32) -> String;
 
+/// Conditional rules: files with `paths:` frontmatter key are only injected when
+/// the model is working on a file matching those globs. Used for nested_memory injection.
+pub fn get_conditional_rules_for_paths(files: &[MemoryFileInfo], target_paths: &[&Path]) -> Vec<MemoryFileInfo>;
+
+/// `claudeMdExcludes` setting: glob patterns to exclude specific CLAUDE.md paths.
+/// Symlink-resolved for macOS /tmp → /private/tmp aliasing.
+
+pub const MAX_MEMORY_CHARACTER_COUNT: usize = 40_000; // warning threshold per file
+pub const MAX_MEMORY_LINES: usize = 200;    // MEMORY.md index line cap
+pub const MAX_MEMORY_BYTES: usize = 25_000; // MEMORY.md byte cap
+
+/// Strip block-level HTML comments (<!-- -->), preserving comments inside code blocks.
+/// Uses marked Lexer for block-level parsing so inline/code block comments are preserved.
 pub fn strip_html_comments(content: &str) -> String;
 pub fn truncate_entrypoint(raw: &str) -> (String, bool);  // (content, was_truncated)
 ```

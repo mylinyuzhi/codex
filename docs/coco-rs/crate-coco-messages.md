@@ -76,13 +76,14 @@ pub fn split_multi_block_messages(messages: &[Message]) -> Vec<Message>;
 pub fn strip_images_from_messages(messages: &[Message]) -> Vec<Message>;
 pub fn strip_signature_blocks(content: &str) -> String;
 
-/// Since Message already wraps LanguageModelV4Message, this is trivial:
+/// Since Message already wraps LlmMessage, this is trivial:
 ///   messages.iter().map(|m| m.message().clone()).collect()
-/// Plus prepending SystemPrompt as LanguageModelV4Message::System.
-pub fn to_language_model_prompt(
+/// Plus prepending SystemPrompt as LlmMessage::System.
+/// Uses coco_types re-exports — never raw vercel-ai types.
+pub fn to_llm_prompt(
     normalized: &[Message],
     system: &SystemPrompt,
-) -> LanguageModelV4Prompt;
+) -> LlmPrompt;  // = Vec<LlmMessage> via coco_types alias
 ```
 
 ### Category 3: Filtering & Cleanup (11 functions)

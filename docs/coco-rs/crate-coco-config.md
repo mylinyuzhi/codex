@@ -497,8 +497,8 @@ pub struct ModelInfo {
     pub display_name: Option<String>,
 
     // === Capacity ===
-    pub context_window: Option<i64>,
-    pub max_output_tokens: Option<i64>,
+    pub context_window: i64,           // NOT Option — every model has one (default 200_000)
+    pub max_output_tokens: i64,        // NOT Option — every model has one
     pub timeout_secs: Option<i64>,
 
     // === Capabilities ===

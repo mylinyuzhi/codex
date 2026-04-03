@@ -43,7 +43,145 @@ Circular dependency prevention:
 | `FileEditTool` | `tools/FileEditTool/` | `{ file_path: String, old_string: String, new_string: String }` | **Unsafe** |
 | `GlobTool` | `tools/GlobTool/` | `{ pattern: String, path: Option<String> }` | Safe |
 | `GrepTool` | `tools/GrepTool/` | `{ pattern: String, path: Option<String>, output_mode: Option<GrepOutputMode> }` | Safe |
-| `NotebookEditTool` | `tools/NotebookEditTool/` | `{ notebook_path: String, cell_index: i32, ... }` | **Unsafe** |
+| `NotebookEditTool` | `tools/NotebookEditTool/` | `{ notebook_path: String, cell_id: String, new_source: String, cell_type: Option<String>, edit_mode: EditMode }` | **Unsafe** |
+
+#### FileReadTool Details
+
+Input (full):
+```rust
+pub struct FileReadInput {
+    pub file_path: String,
+    pub offset: Option<i64>,    // 1-based line number to start from
+    pub limit: Option<i64>,     // max lines to read (default ~2000)
+    pub pages: Option<String>,  // PDF page range, e.g. "1-5", "3", "10-20"
+}
+```
+
+Output types (five variants based on file type):
+- **text** — plain text with `cat -n` line numbering (default for most files)
+- **image** — binary image file (PNG/JPG/GIF/WebP/SVG); auto-resized via sharp to fit token budget, returns base64 with dimension metadata (`width`, `height`)
+- **notebook** — `.ipynb` Jupyter notebook; parsed into cells, returns all cells with outputs (code + markdown + visualization)
+- **pdf** — `.pdf` document; extracts pages as base64 parts with structured error types; respects `pages` param; max 20 pages per request; large PDFs (>10 pages) require `pages` param or request fails
+- **file_unchanged** — dedup optimization; if file was previously read in same turn and mtime has not changed, returns stub indicating no change (readFileState mtime check)
+
+Behavioral details:
+- Dual token limit: `maxSizeBytes` = 256 KB + `maxTokens` = 25000; env var `CLAUDE_FILE_MAX_TOKENS` overrides `maxTokens`
+- Blocked device paths: `/dev/zero`, `/dev/random`, `/dev/urandom`, `/proc/*/fd/*` — rejected before read
+- Binary file guard: extension-based detection (`.exe`, `.bin`, `.so`, `.dll`, `.dylib`, etc.) — returns error message, not raw bytes
+- UNC path guard: rejects `\\server\share` paths on Windows to prevent NTLM credential leak
+- Event hook: `registerFileReadListener` fires after successful read (used by context tracking)
+- Skill discovery: `discoverSkillDirsForPaths` triggers on read to detect `.claude/` skill directories in read paths
+
+#### FileWriteTool Details
+
+Input:
+```rust
+pub struct FileWriteInput {
+    pub file_path: String,
+    pub content: String,
+}
+```
+
+Behavioral details:
+- Read-before-write enforcement: a `readFileState` entry must exist for the path (tool must have been read first, or the file must be new); returns validation error otherwise
+- mtime staleness check: compares current mtime against last-read mtime; if file was modified externally since last read, rejects write with staleness error; Windows fallback: content-comparison when mtime is unreliable
+- Auto-creates parent directories: `mkdir -p` equivalent before write
+- Encoding preservation: detects original encoding (UTF-8/UTF-16LE) on first read, reuses same encoding on write
+- Line ending: unconditional LF normalization (design decision — model's content is authoritative, no CRLF preservation)
+- LSP notifications: sends `textDocument/didChange` + `textDocument/didSave` after successful write
+- File history: calls `fileHistoryTrackEdit` to create backup entry for undo/rewind support
+- Team memory secret guard: blocks writes that would embed secrets from team memory into files
+- Settings file validation: if writing to a known settings file (`.claude/settings.json`, etc.), validates JSON structure before commit
+
+#### FileEditTool Details
+
+Input (full):
+```rust
+pub struct FileEditInput {
+    pub file_path: String,
+    pub old_string: String,
+    pub new_string: String,
+    pub replace_all: bool,     // default false; if true, replaces all occurrences
+}
+```
+
+Behavioral details:
+- 1 GiB max file size guard: rejects files exceeding ~1 GiB before attempting edit
+- Quote normalization: `findActualString` and `preserveQuoteStyle` handle curly-to-straight quote mapping (`\u{201c}`/`\u{201d}` to `"`, `\u{2018}`/`\u{2019}` to `'`); model output often uses straight quotes while file content has curly — normalizer matches both
+- `.ipynb` redirect: if file is a Jupyter notebook, redirects to `NotebookEditTool` with guidance message
+- `userModified` flag: output includes boolean indicating whether the edit actually changed file content (false if old_string == new_string)
+- Read-before-write enforcement: same readFileState check as FileWriteTool
+- LSP + file history: same post-write notifications and backup as FileWriteTool
+
+#### GlobTool Details
+
+Input:
+```rust
+pub struct GlobInput {
+    pub pattern: String,           // glob pattern, e.g. "**/*.rs", "src/**/*.ts"
+    pub path: Option<String>,      // directory to search in (default: cwd)
+}
+```
+
+Behavioral details:
+- Results sorted by modification time (most-recent first)
+- Hard cap: 100 results maximum; output includes `truncated: true` flag when limit is hit
+- Paths relativized: all returned paths are relative to cwd (not absolute)
+
+#### GrepTool Details
+
+Input (full):
+```rust
+pub struct GrepInput {
+    pub pattern: String,                          // regex pattern (ripgrep syntax)
+    pub path: Option<String>,                     // file or directory to search (default: cwd)
+    pub output_mode: Option<GrepOutputMode>,      // content | files_with_matches (default) | count
+    pub glob: Option<String>,                     // file glob filter, e.g. "*.js", "*.{ts,tsx}"
+    pub r#type: Option<String>,                   // ripgrep --type, e.g. "js", "py", "rust"
+    #[serde(rename = "-B")]
+    pub before_context: Option<i64>,              // lines before match (rg -B)
+    #[serde(rename = "-A")]
+    pub after_context: Option<i64>,               // lines after match (rg -A)
+    #[serde(rename = "-C")]
+    pub context: Option<i64>,                     // lines before+after match (rg -C)
+    #[serde(rename = "-n")]
+    pub line_numbers: Option<bool>,               // show line numbers (default true for content mode)
+    #[serde(rename = "-i")]
+    pub case_insensitive: Option<bool>,           // case-insensitive search
+    pub head_limit: Option<i64>,                  // limit output to first N entries (default 250)
+    pub offset: Option<i64>,                      // skip first N entries before applying head_limit
+    pub multiline: Option<bool>,                  // enable multiline mode (rg -U --multiline-dotall)
+}
+```
+
+Behavioral details:
+- VCS directory auto-exclusion: `.git`, `.svn`, `.hg`, `.bzr`, `.jj`, `.sl` directories always excluded from search
+- Max column limit: 500 characters per line; longer lines are truncated
+- Permission-based ignore: injects additional ignore patterns from permission settings (e.g., project-level `.gitignore` extensions)
+
+#### NotebookEditTool Details
+
+Input (full):
+```rust
+pub struct NotebookEditInput {
+    pub notebook_path: String,
+    pub cell_id: String,           // cell UUID or numeric index as string
+    pub new_source: String,        // new cell content
+    pub cell_type: Option<String>, // "code" or "markdown" (for insert mode)
+    pub edit_mode: EditMode,       // replace | insert | delete
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EditMode { Replace, Insert, Delete }
+```
+
+Behavioral details:
+- Cell lookup: resolves `cell_id` by UUID first; if not found, falls back to parsing as numeric index (0-based)
+- Auto-generates UUIDs: new cells get a UUID assigned automatically, but only when notebook format is nbformat >= 4.5 (earlier formats do not use cell IDs)
+- On replace: resets `execution_count` to `null` and clears `outputs` array (stale outputs from previous execution are invalid after source change)
+- Read-before-edit enforcement: same readFileState + mtime staleness check as FileWriteTool
+- LSP + file history: same post-write notifications and backup as FileWriteTool
 
 ### Web Tools
 
