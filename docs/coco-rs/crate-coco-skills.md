@@ -6,7 +6,7 @@ TS source: `src/skills/` (20 files, 1.35K LOC)
 
 ```
 coco-skills depends on:
-  - coco-types, coco-config (EffortLevel), utils/frontmatter
+  - coco-types (ThinkingLevel), coco-config, utils/frontmatter
 
 coco-skills does NOT depend on:
   - coco-tools, coco-query, coco-inference, any app/ crate
@@ -22,7 +22,7 @@ pub struct SkillDefinition {
     pub argument_hint: Option<String>,
     pub allowed_tools: Option<Vec<String>>,
     pub model: Option<String>,
-    pub effort: Option<EffortLevel>,
+    pub thinking_level: Option<ThinkingLevel>,
     pub context: SkillContext,  // Inline or Fork (subagent)
     pub agent: Option<String>,
     pub hooks: Option<HooksSettings>,

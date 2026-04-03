@@ -75,8 +75,7 @@ pub struct QueryParams {
     pub tools: Option<Vec<ToolDefinition>>,
     pub tool_choice: Option<ToolChoice>,
     pub temperature: Option<f64>,
-    pub thinking: Option<ThinkingConfig>,
-    pub effort: Option<EffortLevel>,
+    pub thinking_level: Option<ThinkingLevel>,  // unified: replaces both TS effort + thinking
     pub custom_headers: HashMap<String, String>,  // beta headers
     pub enable_prompt_caching: bool,
     pub fast_mode: bool,
@@ -84,23 +83,11 @@ pub struct QueryParams {
     pub output_format: Option<OutputFormat>,
 }
 
-/// Unified thinking configuration for all providers.
-/// Follows cocode-rs pattern: protocol crate owns ThinkingLevel, inference converts per-provider.
+/// ThinkingLevel is the SINGLE unified type for effort + thinking (defined in coco-types).
+/// Replaces both TS EffortLevel and ThinkingConfig — see crate-coco-types.md for rationale.
 ///
-/// Design (from cocode-rs common/protocol/src/thinking.rs):
-///   User-facing: ThinkingLevel (effort + optional budget + interleaved flag)
-///   API-facing: provider-specific conversion via thinking_convert module
-///   This is NOT a simple on/off — it's a multi-provider abstraction.
-pub struct ThinkingLevel {
-    /// Reasoning effort level (required, used for ordering).
-    pub effort: ReasoningEffort,
-    /// Token budget for budget-based models (optional, Anthropic/Volcengine/Z.AI).
-    pub budget_tokens: Option<i32>,
-    /// Max output tokens for thinking (optional, falls back to outer max_output_tokens).
-    pub max_output_tokens: Option<i32>,
-    /// Enable interleaved thinking mode (Anthropic future models).
-    pub interleaved: bool,
-}
+/// thinking_convert (below) maps ThinkingLevel → per-provider API parameters.
+// ThinkingLevel struct and ReasoningEffort enum are defined in coco-types.
 
 /// Reasoning effort level. Ordered from lowest to highest (derives Ord).
 /// Flexible deserialization: accepts string shorthand ("high") or full object.
@@ -134,11 +121,11 @@ pub mod thinking_convert {
     pub fn effort_to_reasoning_level(effort: ReasoningEffort) -> Option<String>;
 }
 
-/// Resolution flow:
+/// Resolution flow (from cocode-rs, layered override):
 ///   1. ModelInfo.default_thinking_level (builtin per-model defaults)
 ///   2. RoleSelection.thinking_level (runtime override via /think command)
-///   3. InferenceContext.effective_thinking_level() (merged)
-///   4. RequestBuilder → thinking_convert::to_provider_options()
+///   3. effective_thinking_level() → picks highest-priority available
+///   4. thinking_convert::to_provider_options() → per-provider API params
 ///
 /// Environment variables:
 ///   COCODE_THINKING_LEVEL: none, low, medium, high, xhigh
@@ -167,7 +154,7 @@ pub struct QueryOptions {
     pub enable_prompt_caching: bool,
     pub skip_cache_write: bool,
     pub temperature_override: Option<f64>,
-    pub effort_value: Option<EffortValue>,
+    pub thinking_level: Option<ThinkingLevel>,
     pub mcp_tools: Vec<ToolDefinition>,
     pub has_pending_mcp_servers: bool,
     pub fast_mode: bool,
@@ -212,7 +199,7 @@ pub struct RetryConfig {
 pub struct RetryContext {
     pub max_tokens_override: Option<i64>,
     pub model: String,
-    pub thinking_config: ThinkingConfig,
+    pub thinking_level: Option<ThinkingLevel>,
     pub fast_mode: bool,
 }
 

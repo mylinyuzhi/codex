@@ -179,6 +179,17 @@ Exhaustive comparison of all plan docs against actual TS source + cocode-rs sour
 | 10 | multi-provider beta headers | **FIXED**: Added 13-row beta header matrix to multi-provider-plan.md |
 | 11 | coco-config patterns | **P3**: ConfigSection trait documented during implementation |
 | 12 | Hooks 15+ executor files | **FIXED**: Added to ts-to-rust-mapping.md |
+| 13 | String→Enum type safety (Round 5) | **FIXED**: ToolId, AgentTypeId, 8 new enums, 31 enum derive annotations, String→ToolId across 10+ docs |
+| R5-1 | ToolName enum missing from crate-coco-types.md | **FIXED**: Added 41-variant enum with as_str(), FromStr |
+| R5-2 | SubagentType enum missing from crate-coco-types.md | **FIXED**: Added 7-variant enum with as_str(), FromStr |
+| R5-3 | ShellType vs ShellKind inconsistency | **FIXED**: Unified to ShellKind in coco-hooks + coco-config |
+| R5-4 | EffortValue vs EffortLevel inconsistency | **FIXED**: Unified to EffortLevel in coco-types + coco-inference |
+| R5-5 | BuiltinPluginDefinition layer violation (L1→L4) | **P2** |
+| R5-6 | SkillDefinition.hooks type mismatch | **P2** |
+| R5-7 | MessageRole undefined in coco-messages | **P3** |
+| R5-8 | ThinkingLevel name collision (config enum vs inference struct) | **FIXED**: Removed config enum, struct→coco-types, ModelInfo restored |
+| R5-9 | TaskStateBase dual definition (types vs tasks) | **P2** |
+| R5-10 | OAuthTokens collision (inference vs mcp) | **P2** |
 
 ---
 
@@ -294,4 +305,60 @@ Exhaustive comparison of all plan docs against actual TS source + cocode-rs sour
 | P2 | coco-otel L4: 8+ 业务 metrics — 缺 token.usage, cost.usage, lines_of_code, session.count 等 | Phase 3 |
 | P2 | coco-otel L5: 自定义 exporter — 缺 BigQuery, 1P Event Logging, Perfetto, Beta tracing | Phase 3 |
 | — | coco-otel L6: 运营控制 (event sampling, killswitch, metrics opt-out, GrowthBook) | **暂不实现** |
-| — | services/analytics/ 映射修正 — 从 coco-inference 移至 coco-otel | **FIXED** |
+
+## Cross-Review Round 5 (String→Enum Audit + Cross-Verification — April 2026)
+
+### String→Enum Type Safety Audit — Completed
+
+Systematic review of all struct/enum definitions across crate docs. Every `String` field evaluated
+for enum replacement. 67 String fields confirmed correct (dynamic values); all identity fields
+converted to typed enums.
+
+| Change | Scope | Details |
+|--------|-------|---------|
+| ToolId enum added | coco-types | `Builtin(ToolName) \| Mcp { server, tool } \| Custom(String)` — custom serde via Display/FromStr (flat string wire format) |
+| AgentTypeId enum added | coco-types | `Builtin(SubagentType) \| Custom(String)` — same pattern as ToolId |
+| HookEventType expanded | coco-types | 7 → 27 variants, `#[non_exhaustive]`, strum derives |
+| 6 new enums added | coco-types | MessageKind, HookOutcome, CommandAvailability, CommandSource, UserType, Entrypoint |
+| NormalizedMessage redesigned | coco-types | Replaced `role: String` with enum variants User/Assistant |
+| tool_name→tool_id | 10+ crate docs | All identity fields across query, permissions, coordinator, remote, tool, hooks |
+| agent_type→AgentTypeId | 4 crate docs | tools, tasks, coordinator, tool |
+| Tool input enums | coco-tools | GrepOutputMode, ConfigAction, LspAction — all with full derives |
+| Context enums | coco-context | Platform, ShellKind — replaced String fields in SystemContext |
+| All 31 enums annotated | coco-types | Proper `#[derive]`, `#[serde(rename_all)]`, Copy where applicable, Default where applicable |
+| CLAUDE.md updated | CLAUDE.md | Type Ownership, Canonical Names, Document Map — all reflect new enums |
+
+### New Gaps Found (Cross-Verification)
+
+| # | Gap | What's wrong | Severity | Fix |
+|---|-----|-------------|----------|-----|
+| R5-1 | ToolName enum missing | Referenced by `ToolId::Builtin(ToolName)` but enum not defined | **FIXED** | Added 41-variant enum with as_str(), FromStr, serde to crate-coco-types.md |
+| R5-2 | SubagentType enum missing | Referenced by `AgentTypeId::Builtin(SubagentType)` but enum not defined | **FIXED** | Added 7-variant enum with as_str(), FromStr, serde to crate-coco-types.md |
+| R5-3 | ShellType vs ShellKind inconsistency | coco-hooks and coco-config used `ShellType` (undefined); coco-context defines `ShellKind` | **FIXED** | Unified to `ShellKind` in coco-hooks.md and coco-config.md |
+| R5-4 | EffortValue vs EffortLevel inconsistency | crate-coco-types.md and crate-coco-inference.md used `EffortValue` (undefined); 10+ other refs use `EffortLevel` | **FIXED** | Unified to `EffortLevel` in coco-types.md and coco-inference.md |
+| R5-5 | BuiltinPluginDefinition layer violation | coco-types (L1) references `PluginManifest` from coco-plugins (L4) | **Architecture** | Move `BuiltinPluginDefinition` to coco-plugins, or change `manifest` field to `Value` |
+| R5-6 | SkillDefinition.hooks type mismatch | Uses `Option<HooksSettings>` but coco-skills doesn't declare coco-hooks dependency | **Architecture** | Change to `Option<Value>` per config isolation pattern (same as Settings.hooks) |
+| R5-7 | MessageRole undefined | `filter_by_role(messages, role: MessageRole)` in coco-messages but MessageRole never defined | **Minor** | Replace with `MessageKind` (already defined in coco-types) |
+
+### Type Collision Audit (comprehensive cross-doc review)
+
+Systematically collected all ~238 struct/enum definitions across 27 crate docs.
+Cross-referenced with TS source to identify redundancy and collisions.
+
+| # | Collision | Files | Analysis | Resolution |
+|---|-----------|-------|----------|------------|
+| R5-8 | ThinkingLevel name collision | coco-config (was enum None/Low/Med/High) vs coco-inference (struct {effort, budget, interleaved}) | Config enum had NO TS equivalent — TS uses capability checks. The struct IS needed for multi-provider (cocode-rs proven design). | **FIXED**: Removed config enum. ThinkingLevel struct moved to coco-types as canonical shared type. ModelInfo restored with `default_thinking_level: Option<ThinkingLevel>` and `supported_thinking_levels`. Rationale: multi-provider needs richer thinking abstraction than TS's simple ThinkingConfig. |
+| R5-9 | TaskStateBase dual definition | coco-types (11 fields) vs coco-tasks (5 fields) | Different field sets for same type name. coco-types version is more complete. | **P2**: Unify at implementation time. coco-types is canonical owner. |
+| R5-10 | OAuthTokens collision | coco-inference (API OAuth: 6 fields) vs coco-mcp (MCP OAuth: 4 fields, different expires_at type) | Genuinely different structs for different OAuth contexts. | **P2**: Rename to `ApiOAuthTokens` / `McpOAuthTokens` at implementation time. |
+
+**Unified to ThinkingLevel only** (EffortLevel + ThinkingConfig eliminated):
+- TS has EffortLevel (4 levels) + ThinkingConfig (3 variants) as separate types
+- cocode-rs has only ThinkingLevel struct — proven design, no EffortLevel/ThinkingConfig
+- ThinkingLevel is a strict superset: can express everything both TS types can, plus budget+interleaved
+- ReasoningEffort (6 levels) is the effort dimension WITHIN ThinkingLevel (not a standalone type)
+- Flow: user settings → ThinkingLevel → ModelInfo resolution → per-provider API params
+
+### Stale Entry Cleanup
+
+Round 4 "Remaining Deferred" items reviewed — all still valid:
+- P2 AppState, P2 telemetry_msg, P3 config patterns, P3 errno, P1/P2 coco-otel L2-L5: no changes

@@ -67,13 +67,15 @@ Owns all enum/struct definitions that are shared across 3+ crates:
 Message, UserMessage, AssistantMessage, StopReason, MessageKind, NormalizedMessage
 PermissionMode, PermissionBehavior, PermissionRule, PermissionRuleSource, PermissionDecision
 CommandBase, CommandType, CommandAvailability, CommandSource
-ToolId { Builtin | Mcp | Custom }, ToolInputSchema, ToolResult<T>, ToolProgress
-AgentTypeId { Builtin(SubagentType) | Custom }
+ToolName (41 builtin variants, Copy), ToolId { Builtin(ToolName) | Mcp | Custom }
+ToolInputSchema, ToolResult<T>, ToolProgress
+SubagentType (7 builtin variants, Copy), AgentTypeId { Builtin(SubagentType) | Custom }
 TaskType, TaskStatus, TaskStateBase, TaskHandle
 SessionId, AgentId, TaskId
 HookEventType (27 variants), HookOutcome, HookResult
 SandboxMode
 TokenUsage, ModelUsage
+ThinkingLevel { effort, budget_tokens, interleaved }, ReasoningEffort (6 levels)
 ProviderApi, ModelRole, ModelSpec, Capability, ApplyPatchToolType, WireApi
 PermissionDecisionReason, StreamingToolUse, StreamingThinking, TaskBudget
 UserType, Entrypoint
@@ -98,7 +100,7 @@ ProviderInfo       (uses ProviderApi from coco-types)
 ModelRoles         (uses ModelRole from coco-types)
 GlobalConfig, Settings, SettingsWithSource, SettingSource
 EnvOnlyConfig, ProviderConfig, RuntimeOverrides, ResolvedConfig
-ModelAlias, EffortLevel, FastModeState, SettingsWatcher, AutoModeConfig
+ModelAlias, FastModeState, SettingsWatcher, AutoModeConfig
 ```
 
 ### coco-tool
@@ -146,11 +148,12 @@ InboxMessage, InboxStatus
 Owns (in addition to ModelHub, auth, retry):
 
 ```
-ThinkingLevel (unified multi-provider: effort + budget_tokens + interleaved)
-ReasoningEffort (6-level enum: None → Minimal → Low → Medium → High → XHigh)
-thinking_convert module (per-provider conversion: Anthropic/OpenAI/Google/Volcengine/Z.AI)
+thinking_convert module (per-provider conversion: ThinkingLevel → Anthropic/OpenAI/Google/Volcengine/Z.AI)
 CacheScope, CacheBreakDetector, CachePromptState, CacheBreakEvent
 ```
+
+Note: ThinkingLevel and ReasoningEffort are in coco-types (shared across config/inference/query).
+EffortLevel and ThinkingConfig removed — ThinkingLevel is the single unified type (cocode-rs design).
 
 ## Canonical Names (Resolved Inconsistencies)
 
@@ -162,7 +165,7 @@ These names are final. All docs must use these exact names.
 | `check_permissions` (plural) | ~~check_permission~~ | Matches TS `checkPermissions()` |
 | `ProviderApi` | ~~ApiProvider~~ | Canonical enum in coco-types. Anthropic sub-routing (Bedrock/Vertex/Foundry) is in `ProviderInfo`, not enum variants |
 | `ApiClient` | ~~Arc<dyn LanguageModelV4>~~ directly | QueryEngine holds `Arc<ApiClient>` which wraps vercel-ai internally |
-| `ThinkingLevel` | (user-facing setting) | In coco-config. `ThinkingConfig` (API-level) is in coco-inference. Both exist at different layers |
+| `ThinkingLevel` | ~~EffortLevel~~, ~~ThinkingConfig~~, ~~ThinkingParams~~ | Single unified struct in coco-types. Replaces TS EffortLevel + ThinkingConfig. Fields: effort (ReasoningEffort) + budget_tokens + interleaved. Matches cocode-rs `common/protocol/src/thinking.rs`. |
 | `ToolResult<T>` | ~~ToolResult~~ unparameterized | Generic in coco-types. Tool trait uses `ToolResult<Value>` |
 | `ToolId` | ~~tool_name: String~~ for identity | `ToolId { Builtin(ToolName) \| Mcp { server, tool } \| Custom(String) }`. Use for identity fields. Permission patterns stay `String` (ToolPattern). |
 | `AgentTypeId` | ~~agent_type: String~~ | `AgentTypeId { Builtin(SubagentType) \| Custom(String) }`. Same pattern as ToolId. |

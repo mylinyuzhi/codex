@@ -39,7 +39,7 @@ pub struct HookMatcher {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HookCommand {
-    Command { command: String, shell: Option<ShellType>, timeout: Option<i64>, once: bool, r#async: bool },
+    Command { command: String, shell: Option<ShellKind>, timeout: Option<i64>, once: bool, r#async: bool },
     Prompt { prompt: String, model: Option<String>, timeout: Option<i64>, once: bool },
     Http { url: String, headers: HashMap<String, String>, timeout: Option<i64>, once: bool },
     Agent { prompt: String, model: Option<String>, timeout: Option<i64>, once: bool },

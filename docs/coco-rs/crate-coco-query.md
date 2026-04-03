@@ -80,7 +80,7 @@ pub struct QueryEngineConfig {
     pub append_system_prompt: Option<String>,
     pub model: Option<String>,
     pub fallback_model: Option<String>,
-    pub thinking_config: Option<ThinkingConfig>,
+    pub thinking_level: Option<ThinkingLevel>,
     pub max_turns: Option<i32>,
     pub max_budget_usd: Option<f64>,
     pub task_budget: Option<TaskBudget>,    // token budget for task

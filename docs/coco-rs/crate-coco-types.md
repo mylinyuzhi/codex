@@ -334,7 +334,7 @@ pub struct PromptCommandData {
     pub model: Option<String>,
     pub context: CommandContext,  // Inline or Fork
     pub agent: Option<String>,
-    pub effort: Option<EffortValue>,
+    pub thinking_level: Option<ThinkingLevel>,
     pub hooks: Option<Value>,  // deserialized by coco-hooks, not typed here (avoids L1->L4 dep)
 }
 ```
@@ -342,19 +342,87 @@ pub struct PromptCommandData {
 ### Tool Types (from `Tool.ts`)
 
 ```rust
+/// All 41 built-in tool names (matches crate-coco-tools.md Tool Inventory).
+/// Copy + const fn as_str() — zero-cost identity for builtins.
+/// MCPTool excluded: MCP proxy instances use ToolId::Mcp, not ToolName.
+/// FromStr matches the exact name string ("Read", "Bash", "WebFetch", etc.).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum ToolName {
+    // File I/O (7)
+    Bash, Read, Write, Edit, Glob, Grep, NotebookEdit,
+    // Web (2)
+    WebFetch, WebSearch,
+    // Agent & Team (5)
+    Agent, Skill, SendMessage, TeamCreate, TeamDelete,
+    // Task Management (7)
+    TaskCreate, TaskGet, TaskList, TaskUpdate, TaskStop, TaskOutput, TodoWrite,
+    // Plan & Worktree (4)
+    EnterPlanMode, ExitPlanMode, EnterWorktree, ExitWorktree,
+    // Utility (5)
+    AskUserQuestion, ToolSearch, Config, Brief,
+    #[serde(rename = "LSP")]
+    Lsp,
+    // MCP management (3) — not the MCP proxy itself
+    McpAuth, ListMcpResources, ReadMcpResource,
+    // Scheduling (4)
+    CronCreate, CronDelete, CronList, RemoteTrigger,
+    // Shell (2)
+    PowerShell,
+    #[serde(rename = "REPL")]
+    Repl,
+    // Internal/SDK (2)
+    Sleep, SyntheticOutput,
+}
+
+impl ToolName {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Bash => "Bash", Self::Read => "Read", Self::Write => "Write",
+            Self::Edit => "Edit", Self::Glob => "Glob", Self::Grep => "Grep",
+            Self::NotebookEdit => "NotebookEdit",
+            Self::WebFetch => "WebFetch", Self::WebSearch => "WebSearch",
+            Self::Agent => "Agent", Self::Skill => "Skill",
+            Self::SendMessage => "SendMessage",
+            Self::TeamCreate => "TeamCreate", Self::TeamDelete => "TeamDelete",
+            Self::TaskCreate => "TaskCreate", Self::TaskGet => "TaskGet",
+            Self::TaskList => "TaskList", Self::TaskUpdate => "TaskUpdate",
+            Self::TaskStop => "TaskStop", Self::TaskOutput => "TaskOutput",
+            Self::TodoWrite => "TodoWrite",
+            Self::EnterPlanMode => "EnterPlanMode", Self::ExitPlanMode => "ExitPlanMode",
+            Self::EnterWorktree => "EnterWorktree", Self::ExitWorktree => "ExitWorktree",
+            Self::AskUserQuestion => "AskUserQuestion", Self::ToolSearch => "ToolSearch",
+            Self::Config => "Config", Self::Brief => "Brief", Self::Lsp => "LSP",
+            Self::McpAuth => "McpAuth",
+            Self::ListMcpResources => "ListMcpResources",
+            Self::ReadMcpResource => "ReadMcpResource",
+            Self::CronCreate => "CronCreate", Self::CronDelete => "CronDelete",
+            Self::CronList => "CronList", Self::RemoteTrigger => "RemoteTrigger",
+            Self::PowerShell => "PowerShell", Self::Repl => "REPL",
+            Self::Sleep => "Sleep", Self::SyntheticOutput => "SyntheticOutput",
+        }
+    }
+}
+
+/// FromStr: "Read" → Ok(Read), "REPL" → Ok(Repl), "unknown" → Err
+impl FromStr for ToolName {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> { /* match on as_str() inverse */ }
+}
+
 /// Tool identity — type-safe for all tool kinds.
 /// Built-in tools use ToolName (Copy, const fn as_str()), MCP and custom are structured.
 ///
 /// Three distinct concepts:
 ///   ToolId      = identity ("who am I")         → this enum
-///   ToolName    = built-in tools only (Copy)     → inner enum, 36 variants
+///   ToolName    = built-in tools only (Copy)     → inner enum, 41 variants
 ///   ToolPattern = permission match expression    → String ("Bash(git *)", "mcp__slack__*")
 /// Serde: serializes/deserializes as a FLAT STRING via Display/FromStr.
 /// "Read" (builtin), "mcp__slack__send" (MCP), "my_plugin_tool" (custom).
 /// NOT tagged JSON — wire format is always a single string.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ToolId {
-    /// Built-in tool (36 variants, Copy, const fn as_str())
+    /// Built-in tool (41 variants, Copy, const fn as_str())
     Builtin(ToolName),
 
     /// MCP tool: structured server + tool name.
@@ -438,6 +506,41 @@ pub struct ToolProgress {
 ### Agent Type (from `tools/AgentTool/`)
 
 ```rust
+/// 7 built-in subagent types (matches TS AgentTool loadAgentsDir.ts).
+/// Copy + const fn as_str() — same pattern as ToolName.
+/// Fork is special: implicit agent spawned when subagent_type is omitted + fork experiment enabled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubagentType {
+    Explore,
+    Plan,
+    Review,
+    StatusLine,
+    ClaudeCodeGuide,
+    Fork,
+    HookAgent,
+}
+
+impl SubagentType {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Explore => "explore",
+            Self::Plan => "plan",
+            Self::Review => "review",
+            Self::StatusLine => "statusline-setup",
+            Self::ClaudeCodeGuide => "claude-code-guide",
+            Self::Fork => "fork",
+            Self::HookAgent => "hook-agent",
+        }
+    }
+}
+
+/// FromStr: "explore" → Ok(Explore), "unknown" → Err
+impl FromStr for SubagentType {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> { /* match on as_str() inverse */ }
+}
+
 /// Agent identity — same pattern as ToolId.
 /// SubagentType (7 builtin, Copy) wrapped with Custom for user-defined agents.
 /// User agents loaded from: ~/.claude/agents/*.md, .claude/agents/*.md, plugins.
@@ -619,6 +722,71 @@ pub struct ModelUsage {
     pub cache_creation_input_tokens: i64,
     pub web_search_requests: i64,
     pub cost_usd: f64,
+}
+```
+
+### Thinking Types (multi-provider improvement over TS)
+
+```rust
+/// Unified thinking configuration for all providers (from cocode-rs).
+/// The SINGLE type for effort + thinking across the entire pipeline.
+///
+/// Replaces both TS EffortLevel and ThinkingConfig (redundant with this):
+///   TS EffortLevel ('low'|'medium'|'high'|'max') → ThinkingLevel::low()/medium()/high()/xhigh()
+///   TS ThinkingConfig { type: 'adaptive' }       → ThinkingLevel { effort: High, budget: None }
+///   TS ThinkingConfig { type: 'enabled', N }     → ThinkingLevel { effort: Medium, budget: Some(N) }
+///   TS ThinkingConfig { type: 'disabled' }       → ThinkingLevel::none()
+///
+/// WHY (multi-provider improvement over TS):
+///   TS targets Anthropic only → separate effort + thinking suffices.
+///   coco-rs targets 6 providers, each with different thinking APIs:
+///     OpenAI: reasoningEffort string only
+///     Anthropic: adaptive (no budget) or enabled { budget_tokens }
+///     Gemini: thinkingLevel + include_thoughts
+///     Volcengine: effort + budget_tokens
+///     Z.AI: budget_tokens required
+///   ThinkingLevel unifies these. thinking_convert (coco-inference) maps per-provider.
+///
+/// Flow: user settings → ThinkingLevel → ModelInfo resolution → per-provider API params
+///
+/// Used by: ModelInfo (coco-config), RoleSelection, InferenceContext, thinking_convert.
+/// Design from cocode-rs common/protocol/src/thinking.rs (proven, working).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThinkingLevel {
+    /// Reasoning effort level (required, used for ordering).
+    pub effort: ReasoningEffort,
+    /// Token budget for budget-based models (optional, Anthropic/Volcengine/Z.AI).
+    pub budget_tokens: Option<i32>,
+    /// Max output tokens for thinking (optional, falls back to outer max_output_tokens).
+    pub max_output_tokens: Option<i32>,
+    /// Enable interleaved thinking mode (Anthropic).
+    pub interleaved: bool,
+}
+
+impl ThinkingLevel {
+    pub fn none() -> Self { Self { effort: ReasoningEffort::None, budget_tokens: None, max_output_tokens: None, interleaved: false } }
+    pub fn low() -> Self { Self { effort: ReasoningEffort::Low, ..Self::none() } }
+    pub fn medium() -> Self { Self { effort: ReasoningEffort::Medium, ..Self::none() } }
+    pub fn high() -> Self { Self { effort: ReasoningEffort::High, ..Self::none() } }
+    pub fn xhigh() -> Self { Self { effort: ReasoningEffort::XHigh, ..Self::none() } }
+    pub fn is_enabled(&self) -> bool { self.effort != ReasoningEffort::None }
+}
+
+/// Flexible deserialization: accepts string shorthand ("high") or full object
+/// {"effort": "high", "budget_tokens": 32000}. Matches cocode-rs behavior.
+impl FromStr for ThinkingLevel { /* ... */ }
+
+/// Reasoning effort level. Ordered from lowest to highest (derives Ord).
+/// Provider-agnostic scale — thinking_convert maps to per-provider values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningEffort {
+    None,     // 0 — thinking disabled
+    Minimal,  // 1
+    Low,      // 2
+    Medium,   // 3 — default
+    High,     // 4
+    XHigh,    // 5 — ultrathink
 }
 ```
 

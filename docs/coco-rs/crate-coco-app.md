@@ -9,7 +9,7 @@ All in `app/` directory: query, state, session, tui, cli.
 
 ```
 coco-state depends on:
-  - coco-types, coco-config (Settings, EffortLevel, FastModeState)
+  - coco-types (ThinkingLevel), coco-config (Settings, FastModeState)
   - coco-tool (Tool trait, ToolPermissionContext — Arc<dyn Tool> in McpState)
 
 coco-session depends on:
@@ -50,7 +50,7 @@ pub struct AppState {
     pub settings: Settings,
     pub main_loop_model: String,
     pub verbose: bool,
-    pub effort_value: Option<EffortLevel>,
+    pub thinking_level: Option<ThinkingLevel>,
     pub fast_mode: bool,
 
     // UI

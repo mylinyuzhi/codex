@@ -58,7 +58,7 @@ coco-config/src/
     aliases.rs          # ModelAlias resolution
     capabilities.rs     # ModelInfo, Capability checks
     agent.rs            # Subagent model selection
-  effort.rs             # EffortLevel support checks
+  effort.rs             # ThinkingLevel support checks (TS effort.ts)
   fast_mode.rs          # FastModeState, cooldown
   env.rs                # Environment variable helpers (is_env_truthy, etc.)
   constants.rs          # System constants
@@ -154,7 +154,7 @@ pub struct Settings {
     pub model: Option<String>,                              // user-specified model
     pub available_models: Option<Vec<String>>,              // enterprise allowlist
     pub model_overrides: Option<HashMap<String, String>>,   // canonical -> provider-specific
-    pub effort_level: Option<EffortLevel>,
+    pub thinking_level: Option<ThinkingLevel>,
     pub fast_mode: Option<bool>,
     pub always_thinking_enabled: Option<bool>,
 
@@ -171,7 +171,7 @@ pub struct Settings {
     pub enable_all_project_mcp_servers: bool,
 
     // === Shell ===
-    pub default_shell: Option<ShellType>,   // Bash (default), PowerShell
+    pub default_shell: Option<ShellKind>,   // Bash (default), PowerShell — defined in coco-context
 
     // === Display ===
     pub output_style: Option<String>,
@@ -432,7 +432,7 @@ pub fn is_env_falsy(key: &str) -> bool;
 /// TS: bootstrap/state.ts mainLoopModelOverride, etc.
 pub struct RuntimeOverrides {
     pub model_override: Option<String>,         // /model command
-    pub effort_override: Option<EffortLevel>,   // /effort command
+    pub thinking_level_override: Option<ThinkingLevel>,  // /effort or /think command
     pub fast_mode_override: Option<bool>,       // /fast command
     pub permission_mode_override: Option<PermissionMode>,  // plan mode toggle
 }
@@ -473,7 +473,7 @@ impl ResolvedConfig {
 
     /// Get the effective effort level.
     /// Priority: override > env > settings > model default
-    pub fn effort(&self, model: &str) -> Option<EffortLevel> { ... }
+    pub fn effective_thinking_level(&self, model: &str) -> Option<ThinkingLevel> { ... }
 }
 ```
 
@@ -492,8 +492,14 @@ pub struct ModelInfo {
     pub context_window: i64,                        // default 200_000
     pub max_output_tokens: i64,
     pub capabilities: HashSet<Capability>,
+    /// Multi-provider thinking configuration (cocode-rs improvement over TS).
+    /// TS only has boolean detection (modelSupportsThinking/modelSupportsAdaptiveThinking).
+    /// coco-rs needs richer per-model config because different providers use different
+    /// thinking parameters: OpenAI=effort only, Anthropic=budget/adaptive, Gemini=effort+include,
+    /// Volcengine=both, Z.AI=budget required.
+    /// ThinkingLevel struct defined in coco-types (shared across config/inference/query).
     pub default_thinking_level: Option<ThinkingLevel>,
-    pub supported_thinking_levels: Vec<ThinkingLevel>,
+    pub supported_thinking_levels: Option<Vec<ThinkingLevel>>,
     pub apply_patch_tool_type: ApplyPatchToolType,
     pub excluded_tools: Vec<String>,
     pub base_instructions: Option<String>,          // model-specific prompt additions
@@ -505,14 +511,10 @@ impl ModelInfo {
     pub fn supports(&self, cap: Capability) -> bool { self.capabilities.contains(&cap) }
 }
 
-/// User-facing thinking/reasoning level (config-layer).
-/// Distinct from ThinkingConfig (API-layer, in coco-inference).
-pub enum ThinkingLevel {
-    None,
-    Low,
-    Medium,
-    High,
-}
+/// ThinkingLevel struct is defined in coco-types (not here).
+/// Resolution: ModelInfo.default_thinking_level → RoleSelection override → effective level.
+/// See coco-types for ThinkingLevel/ReasoningEffort definitions.
+/// See coco-inference for thinking_convert (per-provider conversion).
 ```
 
 ### ProviderInfo (runtime provider config)
@@ -624,7 +626,7 @@ pub fn model_supports_max_effort(model_info: &ModelInfo) -> bool {
     // Opus 4.6 only
     model_info.slug.contains("opus-4-6")
 }
-pub fn get_default_effort(model_info: &ModelInfo) -> Option<EffortLevel>;
+pub fn get_default_thinking_level(model_info: &ModelInfo) -> Option<ThinkingLevel>;
 
 /// Fast mode: same model (Opus 4.6), faster output speed. NOT a model switch.
 pub enum FastModeState {

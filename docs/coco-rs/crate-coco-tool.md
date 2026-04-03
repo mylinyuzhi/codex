@@ -157,7 +157,7 @@ pub struct ToolUseContext {
     pub tools: Arc<Vec<Arc<dyn Tool>>>,
     pub commands: Arc<Vec<Command>>,
     pub main_loop_model: String,
-    pub thinking_config: ThinkingConfig,
+    pub thinking_level: Option<ThinkingLevel>,
     pub mcp_clients: Vec<McpConnection>,
     pub mcp_resources: HashMap<String, Vec<ServerResource>>,
     pub is_non_interactive: bool,

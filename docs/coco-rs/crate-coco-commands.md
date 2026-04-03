@@ -8,7 +8,7 @@ TS source: `src/commands.ts`, `src/commands/` (86 command dirs + 15 top-level co
 coco-commands depends on:
   - coco-types    (Message, SessionId)
   - coco-tool     (ToolRegistry — for command context)
-  - coco-config   (Settings, EffortLevel, FastModeState)
+  - coco-config   (Settings, FastModeState)
   - coco-error
 
 coco-commands does NOT depend on:

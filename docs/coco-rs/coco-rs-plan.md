@@ -110,7 +110,7 @@ When the plan keeps cocode-rs code instead of rewriting from TS, one of these re
 | `utils/model/aliases.ts` | `coco-config` | `ModelAlias` (sonnet, opus, haiku, best) |
 | `utils/model/providers.ts` | `coco-config` | `ProviderApi` enum (Anthropic, Openai, Gemini, etc.) + provider detection |
 | `utils/model/modelCapabilities.ts` | `coco-config` | `ModelCapability`, capability detection |
-| `utils/effort.ts` | `coco-config` | `EffortLevel` (low, medium, high, max) |
+| `utils/effort.ts` | `coco-config` | ThinkingLevel support checks (TS EffortLevel → unified into ThinkingLevel in coco-types) |
 | `utils/fastMode.ts` | `coco-config` | `FastModeState`, availability checks |
 | `constants/*` | `coco-config` | System constants |
 | `migrations/` | `coco-config` | Settings migrations (model renames, config format upgrades) |
@@ -465,7 +465,8 @@ pub enum ModelAlias {
     OpusLargeCtx,   // opus[1m]
 }
 
-pub enum EffortLevel { Low, Medium, High, Max }
+// EffortLevel removed — unified into ThinkingLevel (coco-types).
+// See crate-coco-types.md for ThinkingLevel struct definition.
 
 pub struct ModelConfig {
     pub canonical_name: String,

@@ -124,9 +124,9 @@ pub struct ModelInfo {
     // Capabilities
     pub capabilities: HashSet<Capability>,
     
-    // Thinking/Reasoning
+    // Thinking/Reasoning (multi-provider, from cocode-rs)
     pub default_thinking_level: Option<ThinkingLevel>,
-    pub supported_thinking_levels: Vec<ThinkingLevel>,
+    pub supported_thinking_levels: Option<Vec<ThinkingLevel>>,
     
     // Tools
     pub apply_patch_tool_type: ApplyPatchToolType,           // defaults to None variant
@@ -153,12 +153,9 @@ pub enum Capability {
     Streaming,
 }
 
-pub enum ThinkingLevel {
-    None,
-    Low,
-    Medium,
-    High,
-}
+// ThinkingLevel struct and ReasoningEffort enum are defined in coco-types.
+// See crate-coco-types.md for canonical definitions.
+// See crate-coco-inference.md for thinking_convert (per-provider mapping).
 
 pub enum ApplyPatchToolType {
     None,           // Anthropic: use FileEdit tool
