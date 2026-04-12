@@ -1,0 +1,11 @@
+Save important information to memory so it persists across conversations.
+
+1. Determine what the user wants to remember
+2. Check existing memory files:
+   - Project memory: `CLAUDE.md` in project root
+   - User memory: `~/.claude/CLAUDE.md`
+3. Choose the appropriate location based on scope:
+   - Project-specific info → project CLAUDE.md
+   - Personal preferences → user CLAUDE.md
+4. Add the information in a clear, concise format
+5. Avoid duplicating existing entries — update if similar info exists

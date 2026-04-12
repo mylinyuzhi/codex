@@ -1,0 +1,28 @@
+---
+source: app/tui/src/widgets/mod.test.rs
+expression: output
+---
+ | opus-4                                                                       
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+            ┌ Bash [HIGH] ─────────────────────────────────────────┐            
+            │Execute shell command                                 │            
+            │                                                      │            
+            │Command:                                              │            
+            │  $ rm -rf /tmp/test                                  │            
+            │                                                      │            
+            │Directory: /home/user/project                         │            
+            │                                                      │            
+            │⚠ Removes files recursively                           │            
+            │                                                      │            
+            │[Y] Approve  [N] Deny  [A] Always Allow               │            
+            │                                                      │            
+            │                                                      │            
+            └──────────────────────────────────────────────────────┘            
+                                                                                
+ Input ─────────────────────────────────────────────────────────────────────────
+> Type a message...                                                             
+                                                                                
+ opus-4 | Default | 0 msgs

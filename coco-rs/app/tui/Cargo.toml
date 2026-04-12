@@ -1,0 +1,26 @@
+[package]
+name = "coco-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+coco-types.workspace = true
+
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+anyhow.workspace = true
+ratatui.workspace = true
+crossterm = { workspace = true, features = ["event-stream"] }
+tokio = { workspace = true, features = ["sync", "macros", "time", "process"] }
+tokio-stream.workspace = true
+rust-i18n.workspace = true
+nucleo.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+insta.workspace = true
