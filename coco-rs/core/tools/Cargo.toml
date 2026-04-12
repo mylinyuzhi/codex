@@ -1,0 +1,34 @@
+[package]
+name = "coco-tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+coco-types.workspace = true
+coco-tool.workspace = true
+coco-context.workspace = true
+coco-shell.workspace = true
+
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+globset.workspace = true
+ignore.workspace = true
+grep-regex.workspace = true
+grep-searcher.workspace = true
+regex.workspace = true
+walkdir.workspace = true
+tokio = { workspace = true, features = ["process", "time", "fs"] }
+tracing.workspace = true
+reqwest = { workspace = true, features = ["rustls-tls"] }
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tempfile.workspace = true
+coco-tool = { workspace = true, features = ["testing"] }

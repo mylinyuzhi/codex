@@ -1,0 +1,371 @@
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use crate::result::CommandResult;
+use crate::result::ExecOptions;
+use crate::safety::SafetyResult;
+use crate::shell_types::Shell;
+use crate::shell_types::ShellType;
+use crate::shell_types::default_user_shell;
+use crate::snapshot::ShellSnapshot;
+use crate::snapshot::SnapshotConfig;
+
+/// CWD tracking marker — appended to commands to detect directory changes.
+const CWD_MARKER_PREFIX: &str = "___COCO_CWD___";
+
+/// Shell executor with CWD tracking, timeout, and environment snapshot support.
+pub struct ShellExecutor {
+    /// Current working directory.
+    cwd: PathBuf,
+    /// Shell configuration with type, path, and optional snapshot.
+    shell: Shell,
+}
+
+impl ShellExecutor {
+    pub fn new(cwd: &Path) -> Self {
+        Self {
+            cwd: cwd.to_path_buf(),
+            shell: default_user_shell(),
+        }
+    }
+
+    pub fn cwd(&self) -> &Path {
+        &self.cwd
+    }
+
+    pub fn set_cwd(&mut self, cwd: PathBuf) {
+        self.cwd = cwd;
+    }
+
+    /// Returns the underlying Shell.
+    pub fn shell(&self) -> &Shell {
+        &self.shell
+    }
+
+    /// Returns the current snapshot if available.
+    pub fn shell_snapshot(&self) -> Option<Arc<ShellSnapshot>> {
+        self.shell.shell_snapshot()
+    }
+
+    /// Starts async shell snapshotting in a background task.
+    ///
+    /// The snapshot captures the user's shell environment (functions, aliases,
+    /// options, exports) and sources it before each command, avoiding login
+    /// shell overhead while preserving the user's interactive environment.
+    pub fn start_snapshotting(&mut self, coco_home: PathBuf, session_id: &str) {
+        if std::env::var("COCO_DISABLE_SHELL_SNAPSHOT").is_ok() {
+            return;
+        }
+        let config = SnapshotConfig::new(&coco_home);
+        ShellSnapshot::start_snapshotting(config, session_id, &mut self.shell);
+    }
+
+    /// Execute a shell command with timeout and CWD tracking.
+    ///
+    /// When a shell snapshot is available, it is sourced before the command
+    /// to restore the user's interactive environment without login shell overhead.
+    /// When no snapshot, falls back to login shell (`-l`) so the user still
+    /// gets their default environment.
+    pub async fn execute(
+        &mut self,
+        command: &str,
+        options: &ExecOptions,
+    ) -> anyhow::Result<CommandResult> {
+        let effective_cwd = options.cwd_override.as_deref().unwrap_or(&self.cwd);
+
+        let (shell_command, use_login_shell) = self.build_exec_command(command);
+        let tracked_command = if options.prevent_cwd_changes {
+            shell_command
+        } else {
+            format!("{shell_command}; echo \"{CWD_MARKER_PREFIX}$(pwd -P)\"")
+        };
+
+        let shell_flag = if use_login_shell { "-lc" } else { "-c" };
+
+        let mut cmd = tokio::process::Command::new(self.shell.shell_path());
+        cmd.arg(shell_flag).arg(&tracked_command);
+        cmd.current_dir(effective_cwd);
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
+
+        for (key, value) in &options.extra_env {
+            cmd.env(key, value);
+        }
+
+        let child = cmd.kill_on_drop(true).spawn()?;
+
+        let timeout_ms = options.timeout_ms.unwrap_or(120_000);
+        let timeout_duration = std::time::Duration::from_millis(timeout_ms as u64);
+
+        let output = match tokio::time::timeout(timeout_duration, child.wait_with_output()).await {
+            Ok(Ok(output)) => output,
+            Ok(Err(e)) => return Err(e.into()),
+            Err(_) => {
+                return Ok(CommandResult {
+                    exit_code: -1,
+                    stdout: String::new(),
+                    stderr: format!("Command timed out after {timeout_ms}ms"),
+                    new_cwd: None,
+                    timed_out: true,
+                });
+            }
+        };
+
+        let mut stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+        let new_cwd = if !options.prevent_cwd_changes {
+            extract_cwd_from_output(&mut stdout)
+        } else {
+            None
+        };
+
+        if let Some(ref new) = new_cwd {
+            self.cwd = new.clone();
+        }
+
+        Ok(CommandResult {
+            exit_code: output.status.code().unwrap_or(-1),
+            stdout,
+            stderr,
+            new_cwd,
+            timed_out: false,
+        })
+    }
+
+    /// Check command safety before execution.
+    pub fn check_safety(&self, command: &str) -> SafetyResult {
+        if let Some(warning) = crate::destructive::get_destructive_warning(command) {
+            return SafetyResult::Denied { reason: warning };
+        }
+
+        if crate::read_only::is_read_only_command(command) {
+            return SafetyResult::Safe;
+        }
+
+        SafetyResult::RequiresApproval {
+            reason: "command may have side effects".into(),
+        }
+    }
+
+    /// Execute a command with streaming progress via a callback.
+    ///
+    /// Reader tasks share an atomic byte counter with the progress loop so
+    /// the callback receives real-time output volume approximately every second.
+    pub async fn execute_with_progress<F>(
+        &mut self,
+        command: &str,
+        options: &ExecOptions,
+        mut on_progress: F,
+    ) -> anyhow::Result<CommandResult>
+    where
+        F: FnMut(ShellProgress) + Send + 'static,
+    {
+        use std::sync::atomic::AtomicI64;
+        use std::sync::atomic::Ordering;
+        use tokio::io::AsyncReadExt;
+
+        let effective_cwd = options.cwd_override.as_deref().unwrap_or(&self.cwd);
+        let (shell_command, use_login_shell) = self.build_exec_command(command);
+        let tracked_command = if options.prevent_cwd_changes {
+            shell_command
+        } else {
+            format!("{shell_command}; echo \"{CWD_MARKER_PREFIX}$(pwd -P)\"")
+        };
+
+        let shell_flag = if use_login_shell { "-lc" } else { "-c" };
+
+        let mut cmd = tokio::process::Command::new(self.shell.shell_path());
+        cmd.arg(shell_flag).arg(&tracked_command);
+        cmd.current_dir(effective_cwd);
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
+
+        for (key, value) in &options.extra_env {
+            cmd.env(key, value);
+        }
+
+        let mut child = cmd.kill_on_drop(true).spawn()?;
+
+        let stdout_bytes = Arc::new(AtomicI64::new(0));
+        let stderr_bytes = Arc::new(AtomicI64::new(0));
+
+        let stdout_pipe = child.stdout.take();
+        let stderr_pipe = child.stderr.take();
+
+        let timeout_ms = options.timeout_ms.unwrap_or(120_000);
+        let timeout_duration = std::time::Duration::from_millis(timeout_ms as u64);
+        let start = std::time::Instant::now();
+
+        let stdout_counter = stdout_bytes.clone();
+        let stdout_handle = tokio::spawn(async move {
+            let mut collected = String::new();
+            if let Some(mut pipe) = stdout_pipe {
+                let mut buf = vec![0u8; 8192];
+                loop {
+                    match pipe.read(&mut buf).await {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            let chunk = String::from_utf8_lossy(&buf[..n]);
+                            collected.push_str(&chunk);
+                            stdout_counter.fetch_add(n as i64, Ordering::Relaxed);
+                        }
+                        Err(_) => break,
+                    }
+                }
+            }
+            collected
+        });
+
+        let stderr_counter = stderr_bytes.clone();
+        let stderr_handle = tokio::spawn(async move {
+            let mut collected = String::new();
+            if let Some(mut pipe) = stderr_pipe {
+                let mut buf = vec![0u8; 8192];
+                loop {
+                    match pipe.read(&mut buf).await {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            let chunk = String::from_utf8_lossy(&buf[..n]);
+                            collected.push_str(&chunk);
+                            stderr_counter.fetch_add(n as i64, Ordering::Relaxed);
+                        }
+                        Err(_) => break,
+                    }
+                }
+            }
+            collected
+        });
+
+        let progress_interval = std::time::Duration::from_secs(1);
+        let wait_result = loop {
+            tokio::select! {
+                biased;
+                result = child.wait() => {
+                    break result.map(Some);
+                }
+                () = tokio::time::sleep(progress_interval) => {
+                    let elapsed = start.elapsed();
+                    if elapsed > timeout_duration {
+                        let _ = child.kill().await;
+                        return Ok(CommandResult {
+                            exit_code: -1,
+                            stdout: String::new(),
+                            stderr: format!("Command timed out after {timeout_ms}ms"),
+                            new_cwd: None,
+                            timed_out: true,
+                        });
+                    }
+                    let total = stdout_bytes.load(Ordering::Relaxed)
+                        + stderr_bytes.load(Ordering::Relaxed);
+                    on_progress(ShellProgress {
+                        elapsed_seconds: elapsed.as_secs_f64(),
+                        total_bytes: total,
+                    });
+                }
+            }
+        };
+
+        let status = wait_result?;
+        let mut stdout = stdout_handle.await.unwrap_or_default();
+        let stderr = stderr_handle.await.unwrap_or_default();
+
+        let new_cwd = if !options.prevent_cwd_changes {
+            extract_cwd_from_output(&mut stdout)
+        } else {
+            None
+        };
+
+        if let Some(ref new) = new_cwd {
+            self.cwd = new.clone();
+        }
+
+        let exit_code = status.and_then(|s| s.code()).unwrap_or(-1);
+
+        Ok(CommandResult {
+            exit_code,
+            stdout,
+            stderr,
+            new_cwd,
+            timed_out: false,
+        })
+    }
+
+    /// Create a forked executor for subagent with isolated CWD.
+    pub fn fork_for_subagent(&self) -> Self {
+        Self {
+            cwd: self.cwd.clone(),
+            shell: self.shell.clone(),
+        }
+    }
+
+    /// Builds the full command string with snapshot sourcing, extglob disable,
+    /// and eval wrapping.
+    ///
+    /// Returns `(command_string, use_login_shell)`.
+    ///
+    /// TS alignment (`bashProvider.ts:buildExecCommand`):
+    /// - If snapshot exists and file accessible: source snapshot, disable extglob,
+    ///   eval-wrap the command. Use `-c` (no login shell needed).
+    /// - If snapshot missing/inaccessible: use `-c -l` (login shell provides
+    ///   user environment as fallback).
+    fn build_exec_command(&self, command: &str) -> (String, bool) {
+        if let Some(snapshot) = self.shell.shell_snapshot()
+            && snapshot.path().exists()
+        {
+            let snapshot_path = snapshot.path().display();
+            let extglob_cmd = disable_extglob_command(self.shell.shell_type());
+            // TS: commandParts.join(' && ') — source, extglob, eval
+            let cmd = format!(
+                ". '{snapshot_path}' 2>/dev/null || true && \
+                 {extglob_cmd} && \
+                 eval {command}"
+            );
+            return (cmd, /*use_login_shell*/ false);
+        }
+
+        // No snapshot: fall back to login shell for user environment
+        (command.to_string(), /*use_login_shell*/ true)
+    }
+}
+
+/// Returns the shell command to disable extended globbing.
+///
+/// TS: `bashProvider.ts:getDisableExtglobCommand()` — security measure to
+/// prevent malicious filename expansion after sourcing user config.
+fn disable_extglob_command(shell_type: &ShellType) -> &'static str {
+    match shell_type {
+        ShellType::Bash => "shopt -u extglob 2>/dev/null || true",
+        ShellType::Zsh => "setopt NO_EXTENDED_GLOB 2>/dev/null || true",
+        // For unknown or sh, try both (TS does this when CLAUDE_CODE_SHELL_PREFIX is set)
+        _ => "{ shopt -u extglob || setopt NO_EXTENDED_GLOB; } >/dev/null 2>&1 || true",
+    }
+}
+
+/// Progress update during streaming shell execution.
+#[derive(Debug, Clone)]
+pub struct ShellProgress {
+    /// Elapsed time in seconds since command started.
+    pub elapsed_seconds: f64,
+    /// Total bytes of combined stdout+stderr output so far.
+    pub total_bytes: i64,
+}
+
+/// Extract CWD from output by finding the marker line and removing it.
+fn extract_cwd_from_output(stdout: &mut String) -> Option<PathBuf> {
+    if let Some(marker_pos) = stdout.rfind(CWD_MARKER_PREFIX) {
+        let cwd_line = stdout[marker_pos + CWD_MARKER_PREFIX.len()..].trim();
+        let cwd = PathBuf::from(cwd_line);
+
+        *stdout = stdout[..marker_pos].trim_end().to_string();
+
+        if cwd.is_absolute() { Some(cwd) } else { None }
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+#[path = "executor.test.rs"]
+mod tests;

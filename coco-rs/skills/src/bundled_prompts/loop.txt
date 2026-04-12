@@ -1,0 +1,11 @@
+Run a prompt or slash command on a recurring interval.
+
+Usage: /loop [interval] [command]
+Example: /loop 5m /verify
+Default interval: 10 minutes
+
+1. Parse the interval (e.g., 5m, 1h, 30s)
+2. Execute the specified command or prompt
+3. Wait for the interval
+4. Repeat until interrupted (Ctrl+C)
+5. Report each iteration's result
