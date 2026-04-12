@@ -1,0 +1,12 @@
+Review the recently changed code for opportunities to improve reuse, quality, and efficiency. Follow these steps:
+
+1. Check git status and diff to see what changed
+2. For each changed file, look for:
+   - Duplicated logic that could be consolidated
+   - Overly complex code that could be simplified
+   - Inefficient patterns (unnecessary clones, redundant allocations)
+   - Missing error handling or edge cases
+   - Code that doesn't follow project conventions
+3. Fix any issues you find directly — don't just report them
+4. Run the project's linter/formatter after changes
+5. Keep fixes minimal and focused — don't refactor unrelated code

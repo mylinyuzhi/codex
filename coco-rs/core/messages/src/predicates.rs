@@ -1,0 +1,154 @@
+//! Message predicates — 19 boolean checks used throughout the pipeline.
+
+use coco_types::AssistantContent;
+use coco_types::LlmMessage;
+use coco_types::Message;
+use coco_types::MessageKind;
+use coco_types::StopReason;
+use coco_types::ToolId;
+
+pub fn is_user_message(msg: &Message) -> bool {
+    msg.kind() == MessageKind::User
+}
+
+pub fn is_assistant_message(msg: &Message) -> bool {
+    msg.kind() == MessageKind::Assistant
+}
+
+pub fn is_system_message(msg: &Message) -> bool {
+    msg.kind() == MessageKind::System
+}
+
+pub fn is_tool_result(msg: &Message) -> bool {
+    msg.kind() == MessageKind::ToolResult
+}
+
+pub fn is_progress_message(msg: &Message) -> bool {
+    msg.kind() == MessageKind::Progress
+}
+
+pub fn is_tombstone(msg: &Message) -> bool {
+    msg.kind() == MessageKind::Tombstone
+}
+
+/// Whether the message is hidden from UI but visible to model.
+pub fn is_meta_message(msg: &Message) -> bool {
+    match msg {
+        Message::User(m) => m.is_meta,
+        Message::Attachment(m) => m.is_meta,
+        _ => false,
+    }
+}
+
+/// Whether the message is not sent to API (client-side only).
+pub fn is_virtual_message(msg: &Message) -> bool {
+    match msg {
+        Message::User(m) => m.is_virtual,
+        _ => false,
+    }
+}
+
+/// Whether the message is a compact summary.
+pub fn is_compact_summary(msg: &Message) -> bool {
+    match msg {
+        Message::User(m) => m.is_compact_summary,
+        _ => false,
+    }
+}
+
+/// Whether an assistant message has tool calls in its content.
+pub fn has_tool_calls(msg: &Message) -> bool {
+    match msg {
+        Message::Assistant(m) => match &m.message {
+            LlmMessage::Assistant { content, .. } => content
+                .iter()
+                .any(|c| matches!(c, AssistantContent::ToolCall(_))),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// Whether an assistant message stopped due to tool use.
+pub fn stopped_for_tool_use(msg: &Message) -> bool {
+    match msg {
+        Message::Assistant(m) => m.stop_reason == Some(StopReason::ToolUse),
+        _ => false,
+    }
+}
+
+/// Whether an assistant message stopped due to max tokens.
+pub fn stopped_for_max_tokens(msg: &Message) -> bool {
+    match msg {
+        Message::Assistant(m) => m.stop_reason == Some(StopReason::MaxTokens),
+        _ => false,
+    }
+}
+
+/// Whether a tool result is an error.
+pub fn is_tool_error(msg: &Message) -> bool {
+    match msg {
+        Message::ToolResult(m) => m.is_error,
+        _ => false,
+    }
+}
+
+/// Whether a tool result is for a specific tool.
+pub fn is_tool_result_for(msg: &Message, tool_id: &ToolId) -> bool {
+    match msg {
+        Message::ToolResult(m) => &m.tool_id == tool_id,
+        _ => false,
+    }
+}
+
+/// Whether a message has any text content.
+pub fn has_text_content(msg: &Message) -> bool {
+    match msg {
+        Message::User(m) => match &m.message {
+            LlmMessage::User { content, .. } => content
+                .iter()
+                .any(|c| matches!(c, coco_types::UserContent::Text(_))),
+            _ => false,
+        },
+        Message::Assistant(m) => match &m.message {
+            LlmMessage::Assistant { content, .. } => content
+                .iter()
+                .any(|c| matches!(c, AssistantContent::Text(_))),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// Whether a message is an API error system message.
+pub fn is_api_error_message(msg: &Message) -> bool {
+    matches!(msg, Message::System(coco_types::SystemMessage::ApiError(_)))
+}
+
+/// Whether a message is a tool use summary.
+pub fn is_tool_use_summary(msg: &Message) -> bool {
+    msg.kind() == MessageKind::ToolUseSummary
+}
+
+/// Whether a message is an attachment.
+pub fn is_attachment(msg: &Message) -> bool {
+    msg.kind() == MessageKind::Attachment
+}
+
+/// Count tool calls in an assistant message.
+pub fn tool_call_count(msg: &Message) -> usize {
+    match msg {
+        Message::Assistant(m) => match &m.message {
+            LlmMessage::Assistant { content, .. } => content
+                .iter()
+                .filter(|c| matches!(c, AssistantContent::ToolCall(_)))
+                .count(),
+            _ => 0,
+        },
+        _ => 0,
+    }
+}
+
+#[cfg(test)]
+#[path = "predicates.test.rs"]
+mod tests;
