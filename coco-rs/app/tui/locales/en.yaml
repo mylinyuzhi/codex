@@ -1,0 +1,80 @@
+# English translations for coco-tui.
+# Key namespaces: command, status, dialog, help, toast, chat, input, tool, subagent
+
+command:
+  submit_input: "Submit"
+  interrupt: "Interrupt"
+  quit: "Quit"
+  clear_screen: "Clear screen"
+  toggle_plan_mode: "Toggle plan mode"
+  cycle_thinking: "Cycle thinking level"
+  cycle_model: "Cycle model"
+  show_help: "Help"
+  show_command_palette: "Command palette"
+  show_session_browser: "Session browser"
+  open_editor: "Open editor"
+  background_all: "Background all"
+  kill_agents: "Kill all agents"
+  toggle_fast_mode: "Toggle fast mode"
+
+status:
+  model: "Model"
+  tokens: "tokens"
+  messages: "msgs"
+  plan_mode: "PLAN"
+  fast_mode: "FAST"
+  compacting: "compacting..."
+  turn: "turn"
+
+dialog:
+  permission_title: "Permission Required"
+  approve: "Approve"
+  deny: "Deny"
+  approve_all: "Always Allow"
+  help_title: "Help"
+  error_title: "Error"
+  model_picker_title: "Select Model"
+  command_palette_title: "Commands"
+  session_browser_title: "Sessions"
+  plan_exit_title: "Exit Plan Mode"
+  cost_warning_title: "Cost Warning"
+
+help:
+  tab: "Toggle plan mode"
+  ctrl_t: "Cycle thinking level"
+  ctrl_m: "Cycle model"
+  ctrl_c: "Interrupt"
+  ctrl_l: "Clear screen"
+  ctrl_e: "External editor"
+  ctrl_p: "Command palette"
+  ctrl_s: "Session browser"
+  ctrl_q: "Quit"
+  f1: "This help"
+  esc: "Close overlay"
+  pageup_down: "Scroll"
+
+toast:
+  compact_done: "Compacted %{count} messages"
+  not_implemented: "Not yet implemented"
+
+chat:
+  placeholder: "Type a message..."
+  thinking_tokens: "~%{count} thinking tokens"
+
+input:
+  plan_mode_title: "Plan Mode"
+  queue_title: "Queue Input"
+  input_title: "Input"
+
+tool:
+  no_active: "No active tools"
+  running: "Running"
+  completed: "Completed"
+  failed: "Failed"
+
+subagent:
+  no_agents: "No agents"
+  running: "Running"
+  completed: "Completed"
+  backgrounded: "Backgrounded"
+  failed: "Failed"

@@ -1,0 +1,28 @@
+---
+source: app/tui/src/widgets/mod.test.rs
+expression: output
+---
+ | opus-4                                                                       
+            ┌ Help ────────────────────────────────────────────────┐            
+            │Tab           Toggle plan mode                        │            
+            │Shift+Tab     Cycle permission mode                   │            
+            │Ctrl+T        Cycle thinking level                    │            
+            │Ctrl+M        Cycle model                             │            
+            │Ctrl+C        Interrupt                               │            
+            │Ctrl+L        Clear screen                            │            
+            │Ctrl+K        Kill to end of line                     │            
+            │Ctrl+Y        Yank killed text                        │            
+            │Ctrl+E        External editor                         │            
+            │Ctrl+P        Command palette                         │            
+            │Ctrl+S        Session browser                         │            
+            │Ctrl+Shift+F  Global search                           │            
+            │Ctrl+O        Quick open file                         │            
+            │Ctrl+W        Context window                          │            
+            │F6            Focus next panel                        │            
+            │Ctrl+Q        Quit                                    │            
+            │?/F1          This help                               │            
+            │Esc           Close overlay                           │            
+ Input ─────│PageUp/Down   Scroll                                  │────────────
+> Type a mes│                                                      │            
+            └──────────────────────────────────────────────────────┘            
+ opus-4 | Default | 0 msgs

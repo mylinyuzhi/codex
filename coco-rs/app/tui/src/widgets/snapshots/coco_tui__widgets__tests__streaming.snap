@@ -1,0 +1,28 @@
+---
+source: app/tui/src/widgets/mod.test.rs
+expression: output
+---
+ | opus-4                                                                       
+> Explain Rust                                                                  
+                                                                                
+  Rust is a systems programming language                                        
+▌                                                                               
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+ Queue Input ───────────────────────────────────────────────────────────────────
+~ Type a message...                                                             
+                                                                                
+ opus-4 | Default | 1 msgs

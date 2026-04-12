@@ -1,0 +1,28 @@
+---
+source: app/tui/src/widgets/mod.test.rs
+expression: output
+---
+ | opus-4                                                                       
+> Hello, how are you?                                                           
+                                                                                
+  I'm doing well! How can I help you today?                                     
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+ Input ─────────────────────────────────────────────────────────────────────────
+> Type a message...                                                             
+                                                                                
+ opus-4 | Default | 2 msgs

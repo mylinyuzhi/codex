@@ -1,0 +1,28 @@
+[package]
+name = "coco-inference"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+coco-types.workspace = true
+coco-config.workspace = true
+vercel-ai-provider.workspace = true
+
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+anyhow.workspace = true
+tokio = { workspace = true, features = ["sync", "time"] }
+async-trait.workspace = true
+tracing.workspace = true
+futures.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "macros"] }
+vercel-ai.workspace = true
+futures.workspace = true
