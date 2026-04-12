@@ -1,0 +1,62 @@
+set positional-arguments
+
+# Display help
+help:
+    just -l
+
+# ============================================================================
+# Development
+# ============================================================================
+
+# Format code
+fmt:
+    cargo fmt -- --config imports_granularity=Item 2>/dev/null
+
+# Check all crates
+check *args:
+    cargo check "$@"
+
+# Build all crates
+build *args:
+    cargo build "$@"
+
+# Run clippy on all crates
+clippy *args:
+    cargo clippy --all-features --tests "$@"
+
+# Fix clippy warnings
+fix *args:
+    cargo clippy --fix --all-features --tests --allow-dirty "$@"
+
+# Install dependencies
+install:
+    rustup show active-toolchain
+    cargo fetch
+
+# ============================================================================
+# Testing
+# ============================================================================
+
+# Run all tests (nextest, faster than cargo test)
+test *args:
+    cargo nextest run --no-fail-fast "$@"
+
+# Test a specific crate
+test-crate crate *args:
+    cargo test -p {{crate}} "$@"
+
+# ============================================================================
+# Pre-commit
+# ============================================================================
+
+# REQUIRED before commit
+pre-commit: fmt check clippy test
+
+# ============================================================================
+# Running
+# ============================================================================
+
+# Run coco CLI
+alias c := coco
+coco *args:
+    cargo run --bin coco -- "$@"

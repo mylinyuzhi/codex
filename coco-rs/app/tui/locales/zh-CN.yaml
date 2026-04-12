@@ -1,0 +1,79 @@
+# 简体中文翻译
+
+command:
+  submit_input: "提交"
+  interrupt: "中断"
+  quit: "退出"
+  clear_screen: "清屏"
+  toggle_plan_mode: "切换计划模式"
+  cycle_thinking: "切换思考级别"
+  cycle_model: "切换模型"
+  show_help: "帮助"
+  show_command_palette: "命令面板"
+  show_session_browser: "会话浏览"
+  open_editor: "打开编辑器"
+  background_all: "后台运行全部"
+  kill_agents: "终止全部代理"
+  toggle_fast_mode: "切换快速模式"
+
+status:
+  model: "模型"
+  tokens: "令牌"
+  messages: "条消息"
+  plan_mode: "计划"
+  fast_mode: "快速"
+  compacting: "压缩中..."
+  turn: "轮次"
+
+dialog:
+  permission_title: "需要权限"
+  approve: "允许"
+  deny: "拒绝"
+  approve_all: "始终允许"
+  help_title: "帮助"
+  error_title: "错误"
+  model_picker_title: "选择模型"
+  command_palette_title: "命令"
+  session_browser_title: "会话"
+  plan_exit_title: "退出计划模式"
+  cost_warning_title: "费用警告"
+
+help:
+  tab: "切换计划模式"
+  ctrl_t: "切换思考级别"
+  ctrl_m: "切换模型"
+  ctrl_c: "中断"
+  ctrl_l: "清屏"
+  ctrl_e: "外部编辑器"
+  ctrl_p: "命令面板"
+  ctrl_s: "会话浏览"
+  ctrl_q: "退出"
+  f1: "此帮助"
+  esc: "关闭弹窗"
+  pageup_down: "滚动"
+
+toast:
+  compact_done: "已压缩 %{count} 条消息"
+  not_implemented: "尚未实现"
+
+chat:
+  placeholder: "输入消息..."
+  thinking_tokens: "~%{count} 思考令牌"
+
+input:
+  plan_mode_title: "计划模式"
+  queue_title: "排队输入"
+  input_title: "输入"
+
+tool:
+  no_active: "无活动工具"
+  running: "运行中"
+  completed: "已完成"
+  failed: "失败"
+
+subagent:
+  no_agents: "无代理"
+  running: "运行中"
+  completed: "已完成"
+  backgrounded: "后台运行"
+  failed: "失败"

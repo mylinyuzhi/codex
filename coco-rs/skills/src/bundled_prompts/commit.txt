@@ -1,0 +1,10 @@
+Create a git commit for the staged changes. Follow these steps:
+1. Run git status to see staged changes
+2. Run git diff --cached to see the actual changes
+3. Analyze the changes and write a clear, concise commit message
+4. Create the commit
+
+The commit message should:
+- Start with a verb in imperative mood (Add, Fix, Update, Refactor, etc.)
+- Be under 72 characters for the first line
+- Include a body if the changes are complex

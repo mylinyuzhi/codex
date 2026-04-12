@@ -1,0 +1,15 @@
+Review the pull request. Follow these steps:
+
+1. Get the PR diff using `gh pr diff` or `git diff`
+2. Read the changed files to understand context
+3. Check for:
+   - Bugs and logic errors
+   - Security vulnerabilities (injection, auth bypass, data leaks)
+   - Performance issues (N+1 queries, unnecessary allocations)
+   - Code quality (naming, structure, duplication)
+   - Missing error handling
+   - Missing or inadequate tests
+   - API contract changes that could break consumers
+4. Provide specific, actionable feedback with file paths and line numbers
+5. Categorize issues by severity: critical, warning, suggestion
+6. Acknowledge what was done well

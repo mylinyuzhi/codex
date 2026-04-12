@@ -1,0 +1,20 @@
+[package]
+name = "coco-messages"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+coco-types.workspace = true
+vercel-ai-provider.workspace = true
+
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+anyhow.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true

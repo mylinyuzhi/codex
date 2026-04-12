@@ -1,0 +1,22 @@
+[package]
+name = "coco-commands"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+coco-types.workspace = true
+coco-plugins.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "process", "fs"] }
+dirs.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros", "process", "fs"] }
+tempfile.workspace = true

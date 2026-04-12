@@ -1,0 +1,11 @@
+Help the user configure their settings. The configuration file is at `.claude/settings.json` (project) or `~/.claude/settings.json` (user global).
+
+1. Read the current settings file(s) to understand existing configuration
+2. Apply the requested changes
+3. Validate the JSON structure after changes
+4. Common settings to know about:
+   - `permissions`: Tool permission rules (allow/deny per tool)
+   - `hooks`: Event hooks for PreToolUse, PostToolUse, Stop
+   - `env`: Environment variable overrides
+   - `mcpServers`: MCP server configurations
+5. Write the updated settings file
