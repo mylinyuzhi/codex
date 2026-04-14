@@ -24,6 +24,10 @@ from pydantic import BaseModel, Field
 # Enums
 # ---------------------------------------------------------------------------
 
+class McpConnectionStatus(str, Enum):
+    connected = 'connected'
+    disconnected = 'disconnected'
+
 class PermissionMode(str, Enum):
     default = 'default'
     auto = 'auto'
@@ -182,7 +186,7 @@ class SubagentProgressParams(BaseModel):
 
 class McpStartupStatusParams(BaseModel):
     server: str
-    status: str
+    status: McpConnectionStatus
 
 class McpStartupCompleteParams(BaseModel):
     servers: list[str]
@@ -852,6 +856,12 @@ class UserInputResolveParams(BaseModel):
     answer: str
     request_id: str
 
+class ElicitationResolveParams(BaseModel):
+    approved: bool
+    mcp_server_name: str
+    request_id: str
+    values: dict[str, Any] = {}
+
 class SetModelParams(BaseModel):
     model: str | None = None
 
@@ -1167,11 +1177,11 @@ class JsonRpcResponse(BaseModel):
 
 class McpServerInit(BaseModel):
     name: str
-    status: str
+    status: McpConnectionStatus
 
 class McpServerStatus(BaseModel):
     name: str
-    status: str
+    status: McpConnectionStatus
     error: str | None = None
     tool_count: int = 0
 
@@ -1181,7 +1191,7 @@ class McpSetServersResult(BaseModel):
     removed: list[str]
 
 class McpStatusResult(BaseModel):
-    mcp_servers: list[McpServerStatus]
+    mcpServers: list[McpServerStatus]
 
 class MessageBreakdown(BaseModel):
     assistant_message_tokens: int

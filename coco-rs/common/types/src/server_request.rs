@@ -142,18 +142,40 @@ pub struct ConfigReadResult {
 
 /// Response to `ClientRequest::McpStatus`.
 /// Matches TS `SDKControlMcpStatusResponseSchema` (controlSchemas.ts:165-173).
+///
+/// The `mcpServers` field is camelCase on the wire to match the TS
+/// zod schema. Internal Rust uses snake_case for the field name.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpStatusResult {
+    #[serde(rename = "mcpServers")]
     pub mcp_servers: Vec<McpServerStatus>,
+}
+
+/// MCP server connection state on the wire.
+///
+/// Matches the TS `McpServerStatusSchema` enum at `coreSchemas.ts:167-173`:
+/// `'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled'`.
+/// `Disconnected` is a coco-rs extension used when the connection manager
+/// has no record of a named server.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum McpConnectionStatus {
+    Connected,
+    Pending,
+    Failed,
+    NeedsAuth,
+    Disabled,
+    /// coco-rs extension: server name unknown to the connection manager.
+    Disconnected,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpServerStatus {
     pub name: String,
-    /// "connected" | "connecting" | "failed" | "disabled".
-    pub status: String,
+    pub status: McpConnectionStatus,
     #[serde(default)]
     pub tool_count: i32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -247,38 +269,155 @@ pub struct PluginReloadResult {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct InitializeResult {
-    /// Protocol version the server speaks.
-    pub protocol_version: String,
-    /// coco-rs binary version.
-    pub version: String,
-    /// Available tool names.
-    #[serde(default)]
-    pub tools: Vec<String>,
     /// Slash commands the client can invoke.
     #[serde(default)]
-    pub commands: Vec<String>,
-    /// Agent type names available for spawning.
+    pub commands: Vec<SdkSlashCommand>,
+    /// Subagents available for the `Agent` tool.
     #[serde(default)]
-    pub agents: Vec<String>,
-    /// Available models (keyed by model id).
+    pub agents: Vec<SdkAgentInfo>,
+    /// Currently-selected output style (e.g. `"default"`, `"explanatory"`).
+    pub output_style: String,
+    /// All output styles the server knows about.
     #[serde(default)]
-    pub models: Vec<ModelInfo>,
-    /// Process PID for tmux/terminal integration.
+    pub available_output_styles: Vec<String>,
+    /// Available models.
+    #[serde(default)]
+    pub models: Vec<SdkModelInfo>,
+    /// Account / auth info for the logged-in user.
+    #[serde(default)]
+    pub account: SdkAccountInfo,
+    /// Process PID — used by SDK clients for tmux socket isolation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pid: Option<u32>,
+    /// Fast-mode feature state if enabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fast_mode_state: Option<crate::event::FastModeState>,
+    // coco-rs extensions (not in TS). TS parsers accept unknown fields by
+    // default, so these pass through transparently. Prefixed with
+    // `_cocoRs` so they're visually distinct from protocol fields.
+    /// Protocol version the coco-rs server speaks.
+    #[serde(default, rename = "_cocoRsProtocolVersion")]
+    pub protocol_version: String,
+    /// coco-rs binary version.
+    #[serde(default, rename = "_cocoRsVersion")]
+    pub version: String,
 }
 
-/// Minimal model info exposed via `initialize`.
+/// Slash command descriptor for `InitializeResult.commands`. Matches TS
+/// `SlashCommandSchema` at `coreSchemas.ts:1016-1028`.
+///
+/// Named `SdkSlashCommand` to avoid colliding with the existing coco-rs
+/// `commands` crate notion of a slash command (which has richer
+/// internal fields not on the SDK wire).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModelInfo {
-    pub id: String,
-    pub display_name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub context_window: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_output_tokens: Option<i64>,
+pub struct SdkSlashCommand {
+    /// Command name without the leading `/`.
+    pub name: String,
+    /// Description shown in help / completion UI.
+    pub description: String,
+    /// Argument hint rendered next to the command (e.g. `"<file>"`).
+    #[serde(rename = "argumentHint")]
+    pub argument_hint: String,
 }
+
+/// Available subagent descriptor for `InitializeResult.agents`. Matches
+/// TS `AgentInfoSchema` at `coreSchemas.ts:1030-1045`.
+///
+/// Named `SdkAgentInfo` to avoid colliding with `event::AgentInfo`
+/// (the payload for the `agents/registered` notification, which has a
+/// different schema — `description: Option<String>` without `model`).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SdkAgentInfo {
+    /// Agent type identifier (e.g. `"Explore"`).
+    pub name: String,
+    /// Description of when to use this agent.
+    pub description: String,
+    /// Model alias this agent uses; `None` means inherit parent model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
+/// Model capability descriptor for `InitializeResult.models`. Matches
+/// TS `ModelInfoSchema` at `coreSchemas.ts:1047-1079`. The wire uses
+/// `value` + camelCase capability keys.
+///
+/// Named `SdkModelInfo` to match the existing re-export name at the
+/// crate root and to leave breathing room for other model-info shapes
+/// (e.g. per-provider config models) elsewhere in the codebase.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SdkModelInfo {
+    /// Model identifier used in API calls (e.g. `"claude-opus-4-6"`).
+    pub value: String,
+    /// Human-readable display name.
+    #[serde(rename = "displayName")]
+    pub display_name: String,
+    /// Short description of the model's capabilities.
+    pub description: String,
+    #[serde(rename = "supportsEffort", default, skip_serializing_if = "Option::is_none")]
+    pub supports_effort: Option<bool>,
+    #[serde(rename = "supportedEffortLevels", default, skip_serializing_if = "Vec::is_empty")]
+    pub supported_effort_levels: Vec<EffortLevel>,
+    #[serde(
+        rename = "supportsAdaptiveThinking",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub supports_adaptive_thinking: Option<bool>,
+    #[serde(rename = "supportsFastMode", default, skip_serializing_if = "Option::is_none")]
+    pub supports_fast_mode: Option<bool>,
+    #[serde(rename = "supportsAutoMode", default, skip_serializing_if = "Option::is_none")]
+    pub supports_auto_mode: Option<bool>,
+}
+
+/// Model effort tier. Matches TS enum `z.enum(['low','medium','high','max'])`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EffortLevel {
+    Low,
+    Medium,
+    High,
+    Max,
+}
+
+/// Account + auth info for the logged-in user. Matches TS
+/// `AccountInfoSchema` at `coreSchemas.ts:1081-1097`. All fields optional
+/// — clients that don't sign in get an empty struct.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SdkAccountInfo {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub organization: Option<String>,
+    #[serde(rename = "subscriptionType", default, skip_serializing_if = "Option::is_none")]
+    pub subscription_type: Option<String>,
+    #[serde(rename = "tokenSource", default, skip_serializing_if = "Option::is_none")]
+    pub token_source: Option<String>,
+    #[serde(rename = "apiKeySource", default, skip_serializing_if = "Option::is_none")]
+    pub api_key_source: Option<String>,
+    /// Active API backend. Anthropic OAuth login only applies when
+    /// `FirstParty`; for third-party providers the other fields are
+    /// absent and auth is external (AWS creds, gcloud ADC, etc.).
+    #[serde(rename = "apiProvider", default, skip_serializing_if = "Option::is_none")]
+    pub api_provider: Option<ApiProvider>,
+}
+
+/// Active API backend. Matches TS
+/// `z.enum(['firstParty', 'bedrock', 'vertex', 'foundry'])`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ApiProvider {
+    FirstParty,
+    Bedrock,
+    Vertex,
+    Foundry,
+}
+
 
 /// Minimal session metadata returned by `session/list` and `session/read`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

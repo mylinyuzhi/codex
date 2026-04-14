@@ -331,10 +331,10 @@ impl QueryEngine {
         turn_messages: Vec<Message>,
         event_tx: Option<tokio::sync::mpsc::Sender<crate::CoreEvent>>,
     ) -> anyhow::Result<QueryResult> {
-        // Phase 1.1: SessionStarted (must happen before anything can error)
+        // SessionStarted must happen before anything that can error.
         self.emit_session_started(&event_tx).await;
 
-        // Phase 1.2a: Running — agent is actively processing
+        // Running — agent is actively processing.
         Self::emit(
             &event_tx,
             crate::CoreEvent::Protocol(crate::ServerNotification::SessionStateChanged {
@@ -345,7 +345,7 @@ impl QueryEngine {
 
         let result = self.run_session_loop(turn_messages, event_tx.clone()).await;
 
-        // Phase 1.2b: Idle — turn-over signal; emit regardless of outcome.
+        // Idle — turn-over signal; emit regardless of outcome.
         Self::emit(
             &event_tx,
             crate::CoreEvent::Protocol(crate::ServerNotification::SessionStateChanged {
@@ -354,9 +354,9 @@ impl QueryEngine {
         )
         .await;
 
-        // Phase 1.3: SessionResult — always emitted. On Err, we synthesize a
-        // minimal QueryResult-like view so SDK consumers see a terminal
-        // `result` event matching TS SDKResultErrorMessage.
+        // SessionResult — always emitted. On Err, we synthesize a minimal
+        // QueryResult-like view so SDK consumers see a terminal `result`
+        // event matching TS SDKResultErrorMessage.
         let params = match &result {
             Ok(qr) => self.build_session_result_params(qr, /*error_messages*/ Vec::new()),
             Err(e) => self.build_session_error_params(e.to_string()),
@@ -379,7 +379,12 @@ impl QueryEngine {
         let Some(bootstrap) = &self.session_bootstrap else {
             return;
         };
-        let permission_mode = permission_mode_to_wire(&self.config.permission_mode);
+        // Wire format is whatever `PermissionMode`'s serde serialization
+        // produces — now camelCase matching TS `PermissionModeSchema`.
+        let permission_mode = serde_json::to_value(self.config.permission_mode)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .unwrap_or_else(|| "default".into());
         let tools = if bootstrap.tools.is_empty() {
             self.tools
                 .loaded_tools()
@@ -485,7 +490,7 @@ impl QueryEngine {
             total_cost_usd: qr.cost_tracker.total_cost_usd(),
             usage: qr.total_usage,
             model_usage,
-            // Phase 2.F.2: accumulated across PermissionDecision::Deny branches.
+            // Accumulated across PermissionDecision::Deny branches.
             permission_denials: qr.permission_denials.clone(),
             result: if is_error {
                 None
@@ -667,11 +672,12 @@ impl QueryEngine {
 
             turn += 1;
             info!(turn, "starting turn");
+            let turn_id = format!("turn-{turn}");
             Self::emit(
                 &event_tx,
                 crate::CoreEvent::Protocol(crate::ServerNotification::TurnStarted(
                     coco_types::TurnStartedParams {
-                        turn_id: Some(format!("turn-{turn}")),
+                        turn_id: Some(turn_id.clone()),
                         turn_number: turn,
                     },
                 )),
@@ -748,7 +754,6 @@ impl QueryEngine {
             let mut response_text = String::new();
             let mut tool_calls: Vec<ToolCallPart> = Vec::new();
 
-            let turn_id = format!("turn-{turn}");
             for part in &llm_result.content {
                 match part {
                     AssistantContentPart::Text(t) => {
@@ -856,12 +861,12 @@ impl QueryEngine {
                             continue;
                         }
                         PermissionDecision::Ask { .. } => {
-                            // Phase 2.C.9: route the ask to the permission bridge
-                            // if one is installed (e.g. `SdkPermissionBridge`
-                            // issuing `approval/askForApproval` to the SDK
-                            // client). Fall back to the previous auto-allow
-                            // behavior if no bridge is configured — tests
-                            // and headless CLI mode still work unchanged.
+                            // Route the ask to the permission bridge if one
+                            // is installed (e.g. `SdkPermissionBridge` issuing
+                            // `approval/askForApproval` to the SDK client).
+                            // Fall back to the previous auto-allow behavior
+                            // if no bridge is configured — tests and headless
+                            // CLI mode still work unchanged.
                             //
                             // TS reference: notifySessionStateChanged(
                             //     'requires_action') in print.ts:818 on
@@ -878,8 +883,14 @@ impl QueryEngine {
                             .await;
 
                             if let Some(bridge) = self.permission_bridge.as_ref() {
+                                // `id` is a fresh correlation id for this
+                                // approval request; `tool_use_id` is the
+                                // model-assigned tool-call id that the SDK
+                                // client uses to group the approval UI with
+                                // the tool-call rendering.
                                 let request = coco_tool::ToolPermissionRequest {
-                                    id: tc.tool_call_id.clone(),
+                                    id: format!("approval-{}", uuid::Uuid::new_v4()),
+                                    tool_use_id: tc.tool_call_id.clone(),
                                     agent_id: self.config.session_id.clone(),
                                     tool_name: tc.tool_name.clone(),
                                     description: format!("Approval required for {}", tc.tool_name),
@@ -1064,32 +1075,37 @@ impl QueryEngine {
             let executor = StreamingToolExecutor::new();
             let results = executor.execute_all(pending, &ctx).await;
 
-            // Phase 3: Process results into history
-            for result in &results {
+            // Pre-serialize successful outputs once so the stream-emit pass and
+            // the history-append pass don't re-serialize the same JSON value.
+            let output_strs: Vec<String> = results
+                .iter()
+                .map(|result| match &result.result {
+                    Ok(r) => serde_json::to_string(&r.data).unwrap_or_default(),
+                    Err(e) => e.to_string(),
+                })
+                .collect();
+
+            // Phase 3: Emit stream events in arrival order, then process into history.
+            for (result, output) in results.iter().zip(output_strs.iter()) {
                 let tool_name = tool_calls
                     .iter()
                     .find(|tc| tc.tool_call_id == result.tool_use_id)
                     .map(|tc| tc.tool_name.clone())
                     .unwrap_or_else(|| "unknown".to_string());
 
-                let output = match &result.result {
-                    Ok(r) => serde_json::to_string(&r.data).unwrap_or_default(),
-                    Err(e) => e.to_string(),
-                };
-
                 Self::emit(
                     &event_tx,
                     crate::CoreEvent::Stream(crate::AgentStreamEvent::ToolUseCompleted {
                         call_id: result.tool_use_id.clone(),
                         name: tool_name,
-                        output,
+                        output: output.clone(),
                         is_error: result.result.is_err(),
                     }),
                 )
                 .await;
             }
 
-            for result in results {
+            for (result, output) in results.into_iter().zip(output_strs.into_iter()) {
                 let tool_name = tool_calls
                     .iter()
                     .find(|tc| tc.tool_call_id == result.tool_use_id)
@@ -1107,8 +1123,7 @@ impl QueryEngine {
                                 tool_name,
                                 &result.tool_use_id,
                                 &serde_json::Value::Null,
-                                &serde_json::to_value(&tool_result.data)
-                                    .unwrap_or(serde_json::Value::Null),
+                                &tool_result.data,
                                 hook_tx_opt.as_ref(),
                             )
                             .await
@@ -1128,10 +1143,7 @@ impl QueryEngine {
                                     coco_types::ToolResultContent {
                                         tool_call_id: result.tool_use_id.clone(),
                                         tool_name: tool_name.to_string(),
-                                        output: ToolResultContent::text(
-                                            serde_json::to_string(&tool_result.data)
-                                                .unwrap_or_default(),
-                                        ),
+                                        output: ToolResultContent::text(output),
                                         is_error: false,
                                         provider_metadata: None,
                                     },
@@ -1253,7 +1265,7 @@ impl QueryEngine {
                 &event_tx,
                 crate::CoreEvent::Protocol(crate::ServerNotification::TurnCompleted(
                     coco_types::TurnCompletedParams {
-                        turn_id: Some(format!("turn-{turn}")),
+                        turn_id: Some(turn_id),
                         usage: llm_result.usage,
                     },
                 )),
@@ -1668,20 +1680,6 @@ fn hook_outcome_to_status(outcome: coco_types::HookOutcome) -> coco_types::HookO
         coco_types::HookOutcome::Blocking => coco_types::HookOutcomeStatus::Error,
         coco_types::HookOutcome::NonBlockingError => coco_types::HookOutcomeStatus::Error,
         coco_types::HookOutcome::Cancelled => coco_types::HookOutcomeStatus::Cancelled,
-    }
-}
-
-/// Convert `PermissionMode` to its snake_case wire string.
-/// TS `PermissionModeSchema`: z.enum(['default','acceptEdits','bypassPermissions','plan','dontAsk']).
-fn permission_mode_to_wire(mode: &PermissionMode) -> String {
-    match mode {
-        PermissionMode::Default => "default".into(),
-        PermissionMode::AcceptEdits => "acceptEdits".into(),
-        PermissionMode::BypassPermissions => "bypassPermissions".into(),
-        PermissionMode::Plan => "plan".into(),
-        PermissionMode::DontAsk => "dontAsk".into(),
-        PermissionMode::Auto => "auto".into(),
-        PermissionMode::Bubble => "bubble".into(),
     }
 }
 

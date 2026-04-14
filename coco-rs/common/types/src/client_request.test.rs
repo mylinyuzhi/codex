@@ -27,7 +27,8 @@ fn turn_start_carries_prompt_and_overrides() {
     let j = serde_json::to_value(&req).unwrap();
     assert_eq!(j["method"], "turn/start");
     assert_eq!(j["params"]["prompt"], "hello");
-    assert_eq!(j["params"]["permission_mode"], "accept_edits");
+    // Wire format matches TS `PermissionModeSchema` (camelCase).
+    assert_eq!(j["params"]["permission_mode"], "acceptEdits");
 }
 
 #[test]

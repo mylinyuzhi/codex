@@ -45,6 +45,7 @@ async fn request_permission_approved_round_trip() {
         bridge
             .request_permission(ToolPermissionRequest {
                 id: "req-1".into(),
+                tool_use_id: "toolu_01AAA".into(),
                 agent_id: "agent-main".into(),
                 tool_name: "Bash".into(),
                 description: "Execute ls".into(),
@@ -60,6 +61,7 @@ async fn request_permission_approved_round_trip() {
             assert_eq!(r.method, "approval/askForApproval");
             assert_eq!(r.params["tool_name"], "Bash");
             assert_eq!(r.params["request_id"], "req-1");
+            assert_eq!(r.params["tool_use_id"], "toolu_01AAA");
             assert_eq!(r.params["agent_id"], "agent-main");
             r.request_id
         }
@@ -95,6 +97,7 @@ async fn request_permission_denied_round_trip() {
         bridge
             .request_permission(ToolPermissionRequest {
                 id: "req-2".into(),
+                tool_use_id: "toolu_01BBB".into(),
                 agent_id: "agent-main".into(),
                 tool_name: "Bash".into(),
                 description: "rm -rf /".into(),
@@ -137,6 +140,7 @@ async fn request_permission_client_error_is_treated_as_denial() {
         bridge
             .request_permission(ToolPermissionRequest {
                 id: "req-3".into(),
+                tool_use_id: "toolu_01CCC".into(),
                 agent_id: "agent-main".into(),
                 tool_name: "Bash".into(),
                 description: "test".into(),
@@ -179,6 +183,7 @@ async fn request_permission_errors_if_transport_not_initialized() {
     let result = bridge
         .request_permission(ToolPermissionRequest {
             id: "r".into(),
+            tool_use_id: "toolu_01DDD".into(),
             agent_id: "a".into(),
             tool_name: "Bash".into(),
             description: "x".into(),

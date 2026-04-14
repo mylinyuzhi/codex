@@ -9,8 +9,8 @@
 //!   used for unit tests and integration harnesses.
 //!
 //! The transport layer is **protocol-agnostic**: it deals in
-//! `JsonRpcMessage` envelopes only. The dispatch loop on top of it
-//! (Phase 2.C.1 `SdkServer`) owns the `ClientRequest` → handler routing.
+//! `JsonRpcMessage` envelopes only. The `SdkServer` dispatch loop on top
+//! of it owns the `ClientRequest` → handler routing.
 //!
 //! TS reference: `src/cli/structuredIO.ts` — `StructuredIO` class. TS
 //! uses raw strings + ad-hoc JSON parsing; coco-rs types the wire

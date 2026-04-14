@@ -80,14 +80,47 @@ fn mcp_status_result_roundtrip() {
     let r = McpStatusResult {
         mcp_servers: vec![McpServerStatus {
             name: "github".into(),
-            status: "connected".into(),
+            status: McpConnectionStatus::Connected,
             tool_count: 5,
             error: None,
         }],
     };
     let j = serde_json::to_value(&r).unwrap();
-    assert_eq!(j["mcp_servers"][0]["name"], "github");
-    assert_eq!(j["mcp_servers"][0]["tool_count"], 5);
+    assert_eq!(j["mcpServers"][0]["name"], "github");
+    assert_eq!(j["mcpServers"][0]["status"], "connected");
+    assert_eq!(j["mcpServers"][0]["tool_count"], 5);
+}
+
+#[test]
+fn mcp_connection_status_wire_format_matches_ts() {
+    // TS enum: 'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled'
+    // Note kebab-case `needs-auth` (not snake_case), matches TS
+    // coreSchemas.ts:167-173.
+    assert_eq!(
+        serde_json::to_value(McpConnectionStatus::Connected).unwrap(),
+        "connected"
+    );
+    assert_eq!(
+        serde_json::to_value(McpConnectionStatus::Pending).unwrap(),
+        "pending"
+    );
+    assert_eq!(
+        serde_json::to_value(McpConnectionStatus::Failed).unwrap(),
+        "failed"
+    );
+    assert_eq!(
+        serde_json::to_value(McpConnectionStatus::NeedsAuth).unwrap(),
+        "needs-auth"
+    );
+    assert_eq!(
+        serde_json::to_value(McpConnectionStatus::Disabled).unwrap(),
+        "disabled"
+    );
+    // coco-rs extension — not in TS.
+    assert_eq!(
+        serde_json::to_value(McpConnectionStatus::Disconnected).unwrap(),
+        "disconnected"
+    );
 }
 
 #[test]

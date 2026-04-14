@@ -24,15 +24,17 @@
 //! - The turn completes (`flush()`)
 
 use std::collections::HashMap;
+use std::str::FromStr;
 
 use coco_types::AgentStreamEvent;
 use coco_types::ContentDeltaParams;
 use coco_types::FileChangeInfo;
 use coco_types::ItemStatus;
-use coco_types::MCP_TOOL_PREFIX;
 use coco_types::ServerNotification;
 use coco_types::ThreadItem;
 use coco_types::ThreadItemDetails;
+use coco_types::ToolId;
+use coco_types::ToolName;
 
 /// Stateful accumulator that converts `AgentStreamEvent` into
 /// `ServerNotification` sequences suitable for SDK consumption.
@@ -123,7 +125,7 @@ impl StreamAccumulator {
             self.text_item_id = Some(id.clone());
             out.push(ServerNotification::ItemStarted {
                 item: ThreadItem {
-                    item_id: id.clone(),
+                    item_id: id,
                     turn_id: self.turn_id.clone(),
                     details: ThreadItemDetails::AgentMessage {
                         text: String::new(),
@@ -177,7 +179,7 @@ impl StreamAccumulator {
             self.thinking_item_id = Some(id.clone());
             out.push(ServerNotification::ItemStarted {
                 item: ThreadItem {
-                    item_id: id.clone(),
+                    item_id: id,
                     turn_id: self.turn_id.clone(),
                     details: ThreadItemDetails::Reasoning {
                         text: String::new(),
@@ -235,7 +237,7 @@ impl StreamAccumulator {
             turn_id: self.turn_id.clone(),
             details,
         };
-        self.active_items.insert(call_id.clone(), item.clone());
+        self.active_items.insert(call_id, item.clone());
         out.push(ServerNotification::ItemStarted { item });
         out
     }
@@ -341,13 +343,10 @@ fn build_tool_details(
     input: &serde_json::Value,
     status: ItemStatus,
 ) -> ThreadItemDetails {
-    if tool_name.starts_with(MCP_TOOL_PREFIX) {
-        // mcp__<server>__<tool>
-        let rest = &tool_name[MCP_TOOL_PREFIX.len()..];
-        let (server, tool) = match rest.find("__") {
-            Some(idx) => (rest[..idx].to_string(), rest[idx + 2..].to_string()),
-            None => (rest.to_string(), String::new()),
-        };
+    // ToolId::from_str is infallible and handles MCP parsing + builtin lookup.
+    let tool_id = ToolId::from_str(tool_name).expect("ToolId::from_str is infallible");
+
+    if let ToolId::Mcp { server, tool } = tool_id {
         return ThreadItemDetails::McpToolCall {
             server,
             tool,
@@ -358,65 +357,60 @@ fn build_tool_details(
         };
     }
 
-    match tool_name {
-        "Bash" | "PowerShell" => ThreadItemDetails::CommandExecution {
-            command: input
-                .get("command")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string(),
+    let str_field = |key: &str| -> String {
+        input
+            .get(key)
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string()
+    };
+
+    let builtin = match &tool_id {
+        ToolId::Builtin(name) => Some(*name),
+        _ => None,
+    };
+
+    match builtin {
+        Some(ToolName::Bash | ToolName::PowerShell) => ThreadItemDetails::CommandExecution {
+            command: str_field("command"),
             output: String::new(),
             exit_code: None,
             status,
         },
-        "Edit" | "Write" | "NotebookEdit" => {
-            let path = input
-                .get("file_path")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string();
-            let kind = if tool_name == "Write" {
-                "create".to_string()
+        Some(name @ (ToolName::Edit | ToolName::Write | ToolName::NotebookEdit)) => {
+            let kind = if name == ToolName::Write {
+                "create"
             } else {
-                "modify".to_string()
-            };
+                "modify"
+            }
+            .to_string();
             ThreadItemDetails::FileChange {
-                changes: vec![FileChangeInfo { path, kind }],
+                changes: vec![FileChangeInfo {
+                    path: str_field("file_path"),
+                    kind,
+                }],
                 status,
             }
         }
-        "WebSearch" => ThreadItemDetails::WebSearch {
-            query: input
-                .get("query")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string(),
+        Some(ToolName::WebSearch) => ThreadItemDetails::WebSearch {
+            query: str_field("query"),
             status,
         },
-        "Agent" => {
-            let description = input
-                .get("description")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string();
-            let agent_type = input
+        Some(ToolName::Agent) => ThreadItemDetails::Subagent {
+            agent_id: String::new(),
+            agent_type: input
                 .get("subagent_type")
-                .and_then(|v| v.as_str())
+                .and_then(serde_json::Value::as_str)
                 .unwrap_or("general")
-                .to_string();
-            let is_background = input
+                .to_string(),
+            description: str_field("description"),
+            is_background: input
                 .get("background")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            ThreadItemDetails::Subagent {
-                agent_id: String::new(),
-                agent_type,
-                description,
-                is_background,
-                result: None,
-                status,
-            }
-        }
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
+            result: None,
+            status,
+        },
         _ => ThreadItemDetails::ToolCall {
             tool: tool_name.to_string(),
             input: input.clone(),

@@ -23,6 +23,7 @@ use coco_tool::ToolPermissionResolution;
 use coco_types::ApprovalDecision;
 use coco_types::ApprovalResolveParams;
 use coco_types::JsonRpcMessage;
+use coco_types::ServerAskForApprovalParams;
 use tracing::debug;
 use tracing::warn;
 
@@ -68,16 +69,24 @@ impl ToolPermissionBridge for SdkPermissionBridge {
             }
         };
 
-        // Build the `approval/askForApproval` params. Matches TS
-        // `SDKControlPermissionRequestSchema` (controlSchemas.ts:108-121).
-        let params = serde_json::json!({
-            "request_id": request.id,
-            "tool_name": request.tool_name,
-            "input": request.input,
-            "tool_use_id": request.id,
-            "description": request.description,
-            "agent_id": request.agent_id,
-        });
+        // Build the `approval/askForApproval` params via the typed struct so
+        // the serde schema stays the single source of truth (any new optional
+        // field shows up here automatically).
+        let params = ServerAskForApprovalParams {
+            request_id: request.id.clone(),
+            tool_name: request.tool_name.clone(),
+            input: request.input.clone(),
+            tool_use_id: request.tool_use_id.clone(),
+            description: Some(request.description.clone()),
+            title: None,
+            display_name: None,
+            blocked_path: None,
+            decision_reason: None,
+            agent_id: Some(request.agent_id.clone()),
+            permission_suggestions: Vec::new(),
+        };
+        let params = serde_json::to_value(&params)
+            .map_err(|e| format!("serialize ServerAskForApprovalParams: {e}"))?;
 
         debug!(
             request_id = %request.id,
@@ -96,7 +105,7 @@ impl ToolPermissionBridge for SdkPermissionBridge {
         // `ApprovalResolveParams`-shaped payloads; we parse that.
         match reply {
             JsonRpcMessage::Response(r) => {
-                let parsed: ApprovalResolveParams = serde_json::from_value(r.result.clone())
+                let parsed: ApprovalResolveParams = serde_json::from_value(r.result)
                     .map_err(|e| format!("invalid approval response: {e}"))?;
                 let decision = match parsed.decision {
                     ApprovalDecision::Allow => ToolPermissionDecision::Approved,

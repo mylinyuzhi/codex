@@ -1064,7 +1064,7 @@ impl ToolPermissionBridge for RecordingBridge {
         &self,
         request: ToolPermissionRequest,
     ) -> Result<ToolPermissionResolution, String> {
-        self.calls.lock().unwrap().push(request.clone());
+        self.calls.lock().unwrap().push(request);
         Ok(ToolPermissionResolution {
             decision: self.decision,
             feedback: Some("recorded".into()),

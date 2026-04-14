@@ -408,7 +408,7 @@ fn session_started_has_all_init_fields() {
         skills: vec![],
         mcp_servers: vec![McpServerInit {
             name: "github".into(),
-            status: "connected".into(),
+            status: crate::server_request::McpConnectionStatus::Connected,
         }],
         plugins: vec![],
         api_key_source: Some("env".into()),

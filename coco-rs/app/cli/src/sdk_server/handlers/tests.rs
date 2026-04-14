@@ -24,8 +24,8 @@ use tokio::sync::Notify;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use super::SessionHandle;
 use super::SessionStats;
+use super::TurnHandoff;
 use super::TurnRunner;
 use crate::sdk_server::InMemoryTransport;
 use crate::sdk_server::SdkServer;
@@ -138,7 +138,7 @@ impl TurnRunner for ScriptedRunner {
     fn run_turn<'a>(
         &'a self,
         _params: coco_types::TurnStartParams,
-        _session: SessionHandle,
+        _handoff: TurnHandoff,
         event_tx: mpsc::Sender<CoreEvent>,
         _cancel: CancellationToken,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + 'a>> {
@@ -178,7 +178,7 @@ impl TurnRunner for BlockingRunner {
     fn run_turn<'a>(
         &'a self,
         _params: coco_types::TurnStartParams,
-        _session: SessionHandle,
+        _handoff: TurnHandoff,
         _event_tx: mpsc::Sender<CoreEvent>,
         cancel: CancellationToken,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + 'a>> {
@@ -207,7 +207,7 @@ impl TurnRunner for StatsEmittingRunner {
     fn run_turn<'a>(
         &'a self,
         _params: coco_types::TurnStartParams,
-        _session: SessionHandle,
+        _handoff: TurnHandoff,
         event_tx: mpsc::Sender<CoreEvent>,
         _cancel: CancellationToken,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + 'a>> {
@@ -270,17 +270,152 @@ async fn initialize_returns_capability_info() {
     match reply {
         JsonRpcMessage::Response(r) => {
             assert_eq!(r.request_id, RequestId::Integer(1));
-            assert_eq!(r.result["protocol_version"], "1.0");
-            assert!(r.result["version"].is_string());
+            // TS-required fields.
             assert!(r.result["models"].is_array());
             assert!(r.result["models"].as_array().unwrap().len() >= 2);
             assert!(r.result["pid"].is_number());
+            assert!(r.result["output_style"].is_string());
+            assert!(r.result["available_output_styles"].is_array());
+            assert!(r.result["account"].is_object());
+            // coco-rs extension fields carried under `_cocoRs*` keys.
+            assert_eq!(r.result["_cocoRsProtocolVersion"], "1.0");
+            assert!(r.result["_cocoRsVersion"].is_string());
+            // Model shape uses TS wire keys (`value`, `displayName`).
+            let first_model = &r.result["models"][0];
+            assert!(first_model["value"].is_string());
+            assert!(first_model["displayName"].is_string());
+            assert!(first_model["description"].is_string());
         }
         other => panic!("expected Response, got {other:?}"),
     }
 
     drop(client);
     server_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn initialize_with_bootstrap_returns_real_commands() {
+    use crate::sdk_server::CliInitializeBootstrap;
+    use coco_commands::CommandRegistry;
+    use coco_commands::register_extended_builtins;
+
+    let (server_end, client_end) = InMemoryTransport::pair(32);
+    let mut registry = CommandRegistry::new();
+    register_extended_builtins(&mut registry);
+    let command_count = registry.visible().len();
+    assert!(
+        command_count > 0,
+        "extended built-ins should register at least one visible command"
+    );
+
+    let bootstrap: Arc<dyn crate::sdk_server::InitializeBootstrap> = Arc::new(
+        CliInitializeBootstrap::new("Explanatory".into())
+            .with_command_registry(Arc::new(registry)),
+    );
+    let server = SdkServer::new(server_end).with_initialize_bootstrap(bootstrap);
+    let server_task = tokio::spawn(async move {
+        let _ = server.run().await;
+    });
+
+    client_end
+        .send(req(1, "initialize", serde_json::json!({})))
+        .await
+        .unwrap();
+    let reply = client_end.recv().await.unwrap().unwrap();
+    match reply {
+        JsonRpcMessage::Response(r) => {
+            let commands = r.result["commands"].as_array().expect("commands array");
+            assert_eq!(commands.len(), command_count);
+            // Every command has the three TS-required fields.
+            for cmd in commands {
+                assert!(cmd["name"].is_string());
+                assert!(cmd["description"].is_string());
+                assert!(cmd["argumentHint"].is_string()); // camelCase on the wire
+            }
+            assert_eq!(r.result["output_style"], "Explanatory");
+            // Built-in output styles always present — TS canonical set
+            // is lowercase `default` + capitalized `Explanatory` / `Learning`.
+            let styles = r.result["available_output_styles"]
+                .as_array()
+                .expect("available_output_styles array");
+            assert!(styles.iter().any(|s| s == "default"));
+            assert!(styles.iter().any(|s| s == "Explanatory"));
+            assert!(styles.iter().any(|s| s == "Learning"));
+        }
+        other => panic!("expected Response, got {other:?}"),
+    }
+
+    drop(client_end);
+    server_task.await.unwrap();
+}
+
+/// Mock [`InitializeBootstrap`] used to exercise the serialization
+/// round-trip for `fast_mode_state: Some(...)` — the `CliInitializeBootstrap`
+/// impl currently stubs this field to `None`, so a regression in the
+/// wire format for non-None values would slip past bootstrap tests.
+struct MockFastModeBootstrap {
+    state: coco_types::FastModeState,
+}
+
+#[async_trait::async_trait]
+impl crate::sdk_server::InitializeBootstrap for MockFastModeBootstrap {
+    async fn commands(&self) -> Vec<coco_types::SdkSlashCommand> {
+        Vec::new()
+    }
+    async fn agents(&self) -> Vec<coco_types::SdkAgentInfo> {
+        Vec::new()
+    }
+    async fn account(&self) -> coco_types::SdkAccountInfo {
+        coco_types::SdkAccountInfo::default()
+    }
+    async fn output_style(&self) -> String {
+        "default".into()
+    }
+    async fn available_output_styles(&self) -> Vec<String> {
+        vec!["default".into()]
+    }
+    async fn fast_mode_state(&self) -> Option<coco_types::FastModeState> {
+        Some(self.state)
+    }
+}
+
+#[tokio::test]
+async fn initialize_fast_mode_state_some_serializes_to_wire() {
+    // Exercise each FastModeState variant to guarantee the serde
+    // rename emits the TS-canonical lowercase strings (`off` /
+    // `cooldown` / `on`) and that a non-None `fast_mode_state` field
+    // actually reaches the wire.
+    for (state, expected) in [
+        (coco_types::FastModeState::Off, "off"),
+        (coco_types::FastModeState::Cooldown, "cooldown"),
+        (coco_types::FastModeState::On, "on"),
+    ] {
+        let (server_end, client_end) = InMemoryTransport::pair(32);
+        let bootstrap: Arc<dyn crate::sdk_server::InitializeBootstrap> =
+            Arc::new(MockFastModeBootstrap { state });
+        let server = SdkServer::new(server_end).with_initialize_bootstrap(bootstrap);
+        let server_task = tokio::spawn(async move {
+            let _ = server.run().await;
+        });
+
+        client_end
+            .send(req(1, "initialize", serde_json::json!({})))
+            .await
+            .unwrap();
+        let reply = client_end.recv().await.unwrap().unwrap();
+        match reply {
+            JsonRpcMessage::Response(r) => {
+                assert_eq!(
+                    r.result["fast_mode_state"], expected,
+                    "fast_mode_state wire string drift for {state:?}"
+                );
+            }
+            other => panic!("expected Response, got {other:?}"),
+        }
+
+        drop(client_end);
+        server_task.await.unwrap();
+    }
 }
 
 #[tokio::test]
@@ -1224,6 +1359,131 @@ async fn session_archive_emits_aggregated_session_result() {
     server_task.await.unwrap();
 }
 
+/// Runner that emits a late `TurnFailed` event AFTER observing cancel
+/// and BEFORE returning from `run_turn`. Used to exercise the archive
+/// ordering contract: the late event must arrive on the wire BEFORE
+/// the aggregated `SessionResult`, since archive waits for the runner
+/// + forwarder to drain before emitting its aggregate.
+struct LateEventOnCancelRunner {
+    started: Arc<Notify>,
+}
+
+impl TurnRunner for LateEventOnCancelRunner {
+    fn run_turn<'a>(
+        &'a self,
+        _params: coco_types::TurnStartParams,
+        _handoff: TurnHandoff,
+        event_tx: mpsc::Sender<CoreEvent>,
+        cancel: CancellationToken,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        let started = self.started.clone();
+        Box::pin(async move {
+            started.notify_one();
+            // Wait for the cancel signal (archive triggers it).
+            cancel.cancelled().await;
+            // Emit a late event POST-cancel — archive must flush this
+            // before emitting its own aggregated SessionResult.
+            let _ = event_tx
+                .send(CoreEvent::Protocol(ServerNotification::TurnFailed(
+                    coco_types::TurnFailedParams {
+                        error: "cancelled mid-turn".into(),
+                    },
+                )))
+                .await;
+            Ok(())
+        })
+    }
+}
+
+#[tokio::test]
+async fn session_archive_flushes_late_events_before_aggregate() {
+    // Archive must wait for the runner + forwarder to drain so any
+    // events emitted after the cancel token fires (but before the
+    // runner exits) land on the wire BEFORE the aggregated
+    // `SessionResult`. Otherwise the client sees:
+    //     session/result (aggregated, archived)
+    //     turn/failed (cancelled mid-turn)   ← out of order
+    // which confuses strict event-order consumers.
+    let started = Arc::new(Notify::new());
+    let runner = Arc::new(LateEventOnCancelRunner {
+        started: started.clone(),
+    });
+    let (server_task, client) = {
+        let (server_end, client_end) = InMemoryTransport::pair(32);
+        let server = SdkServer::new(server_end).with_turn_runner(runner);
+        let handle = tokio::spawn(async move {
+            let _ = server.run().await;
+        });
+        (handle, client_end)
+    };
+
+    // Start session + turn.
+    client
+        .send(req(1, "session/start", serde_json::json!({})))
+        .await
+        .unwrap();
+    let session_id = match client.recv().await.unwrap().unwrap() {
+        JsonRpcMessage::Response(r) => r.result["session_id"].as_str().unwrap().to_string(),
+        other => panic!("expected Response, got {other:?}"),
+    };
+
+    client
+        .send(req(2, "turn/start", serde_json::json!({ "prompt": "hi" })))
+        .await
+        .unwrap();
+    // turn/start response (sync).
+    let _ = client.recv().await.unwrap().unwrap();
+
+    // Wait for the runner to actually start before archiving.
+    started.notified().await;
+
+    // Archive while the turn is blocked on cancel. Archive cancels the
+    // token, the runner emits its late TurnFailed, the forwarder pushes
+    // it onto the wire, then archive emits the aggregate.
+    client
+        .send(req(
+            3,
+            "session/archive",
+            serde_json::json!({ "session_id": session_id }),
+        ))
+        .await
+        .unwrap();
+
+    // Drain messages until we see the archive response, collecting all
+    // notifications in order. Assert that TurnFailed arrives BEFORE
+    // SessionResult.
+    let mut observed_kinds: Vec<&'static str> = Vec::new();
+    loop {
+        let msg = client.recv().await.unwrap().unwrap();
+        match msg {
+            JsonRpcMessage::Notification(n) => {
+                if n.method == "turn/failed" {
+                    observed_kinds.push("turn/failed");
+                } else if n.method == "session/result" {
+                    observed_kinds.push("session/result");
+                }
+            }
+            JsonRpcMessage::Response(r) if r.request_id == RequestId::Integer(3) => break,
+            _ => continue,
+        }
+    }
+
+    // TurnFailed must appear before session/result on the wire.
+    let late_pos = observed_kinds.iter().position(|k| *k == "turn/failed");
+    let result_pos = observed_kinds.iter().position(|k| *k == "session/result");
+    assert!(
+        late_pos.is_some() && result_pos.is_some(),
+        "expected both turn/failed and session/result notifications, got {observed_kinds:?}"
+    );
+    assert!(
+        late_pos < result_pos,
+        "expected turn/failed BEFORE session/result, got {observed_kinds:?}"
+    );
+
+    drop(client);
+    server_task.await.unwrap();
+}
+
 // ----- Phase 2.C.8: ServerRequest emission round-trip -----------------
 
 #[tokio::test]
@@ -1419,14 +1679,14 @@ impl TurnRunner for HistoryRecordingRunner {
     fn run_turn<'a>(
         &'a self,
         params: coco_types::TurnStartParams,
-        session: SessionHandle,
+        handoff: TurnHandoff,
         _event_tx: mpsc::Sender<CoreEvent>,
         _cancel: CancellationToken,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + 'a>> {
         let observed = self.observed_prior_lens.clone();
         Box::pin(async move {
             let prior_len = {
-                let h = session.history.lock().await;
+                let h = handoff.history.lock().await;
                 h.len()
             };
             observed.lock().await.push(prior_len);
@@ -1435,7 +1695,7 @@ impl TurnRunner for HistoryRecordingRunner {
                 "(simulated reply to: {})",
                 params.prompt
             ));
-            let mut h = session.history.lock().await;
+            let mut h = handoff.history.lock().await;
             h.push(user);
             h.push(assistant);
             Ok(())
@@ -1594,7 +1854,7 @@ impl TurnRunner for ErrorRunner {
     fn run_turn<'a>(
         &'a self,
         _params: coco_types::TurnStartParams,
-        session: SessionHandle,
+        handoff: TurnHandoff,
         event_tx: mpsc::Sender<CoreEvent>,
         _cancel: CancellationToken,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + 'a>> {
@@ -1603,7 +1863,7 @@ impl TurnRunner for ErrorRunner {
             // path: emit a synthetic SessionResult with is_error=true
             // and then return Err.
             let params = coco_types::SessionResultParams {
-                session_id: session.session_id.clone(),
+                session_id: handoff.session_id.clone(),
                 total_turns: 1,
                 duration_ms: 0,
                 duration_api_ms: 0,
@@ -1650,19 +1910,29 @@ impl TurnRunner for SlowRunner {
     fn run_turn<'a>(
         &'a self,
         _params: coco_types::TurnStartParams,
-        session: SessionHandle,
+        handoff: TurnHandoff,
         event_tx: mpsc::Sender<CoreEvent>,
-        _cancel: CancellationToken,
+        cancel: CancellationToken,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + 'a>> {
         let started = self.started.clone();
         let unblock = self.unblock.clone();
         let emit = self.emit_session_result;
         Box::pin(async move {
             started.notify_one();
-            unblock.notified().await;
+            // Honor the cancel token so `session/archive`'s join-before-
+            // emit path doesn't wait for the 5s timeout. If cancel fires
+            // first, skip the synthetic emit and exit immediately — that
+            // matches real runners that abort mid-turn on cancel.
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => {
+                    return Ok(());
+                }
+                _ = unblock.notified() => {}
+            }
             if emit {
                 let params = coco_types::SessionResultParams {
-                    session_id: session.session_id.clone(),
+                    session_id: handoff.session_id.clone(),
                     total_turns: 1,
                     duration_ms: 0,
                     duration_api_ms: 0,
@@ -2593,7 +2863,7 @@ async fn mcp_status_returns_empty_list_when_no_manager_wired() {
     let reply = client.recv().await.unwrap().unwrap();
     match reply {
         JsonRpcMessage::Response(r) => {
-            assert_eq!(r.result["mcp_servers"].as_array().unwrap().len(), 0);
+            assert_eq!(r.result["mcpServers"].as_array().unwrap().len(), 0);
         }
         other => panic!("expected Response, got {other:?}"),
     }
@@ -3120,7 +3390,7 @@ async fn mcp_status_lists_registered_servers_after_set_servers() {
     let reply = client.recv().await.unwrap().unwrap();
     match reply {
         JsonRpcMessage::Response(r) => {
-            let servers = r.result["mcp_servers"].as_array().unwrap();
+            let servers = r.result["mcpServers"].as_array().unwrap();
             assert_eq!(servers.len(), 1);
             assert_eq!(servers[0]["name"], "github");
             // Not connected — the registered config exists but no

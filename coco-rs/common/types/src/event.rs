@@ -472,6 +472,85 @@ pub enum ServerNotification {
     ToolProgress(ToolProgressParams),
 }
 
+impl ServerNotification {
+    /// Return the JSON-RPC wire method for this notification variant.
+    ///
+    /// Mirrors the `#[serde(rename = "...")]` attribute on each variant and
+    /// is exhaustive — adding a new variant without updating this method
+    /// fails compilation. Used by the SDK dispatcher to build
+    /// `JsonRpcNotification` envelopes without round-tripping through a
+    /// `serde_json::Value` just to pull out the tag.
+    pub const fn method(&self) -> &'static str {
+        match self {
+            Self::SessionStarted(_) => "session/started",
+            Self::SessionResult(_) => "session/result",
+            Self::SessionEnded(_) => "session/ended",
+            Self::TurnStarted(_) => "turn/started",
+            Self::TurnCompleted(_) => "turn/completed",
+            Self::TurnFailed(_) => "turn/failed",
+            Self::TurnInterrupted(_) => "turn/interrupted",
+            Self::ItemStarted { .. } => "item/started",
+            Self::ItemUpdated { .. } => "item/updated",
+            Self::ItemCompleted { .. } => "item/completed",
+            Self::AgentMessageDelta(_) => "agentMessage/delta",
+            Self::ReasoningDelta(_) => "reasoning/delta",
+            Self::SubagentSpawned(_) => "subagent/spawned",
+            Self::SubagentCompleted(_) => "subagent/completed",
+            Self::SubagentBackgrounded(_) => "subagent/backgrounded",
+            Self::SubagentProgress(_) => "subagent/progress",
+            Self::McpStartupStatus(_) => "mcp/startupStatus",
+            Self::McpStartupComplete(_) => "mcp/startupComplete",
+            Self::ContextCompacted(_) => "context/compacted",
+            Self::ContextUsageWarning(_) => "context/usageWarning",
+            Self::CompactionStarted => "context/compactionStarted",
+            Self::CompactionFailed(_) => "context/compactionFailed",
+            Self::ContextCleared(_) => "context/cleared",
+            Self::TaskStarted(_) => "task/started",
+            Self::TaskCompleted(_) => "task/completed",
+            Self::TaskProgress(_) => "task/progress",
+            Self::AgentsKilled(_) => "agents/killed",
+            Self::ModelFallbackStarted(_) => "model/fallbackStarted",
+            Self::ModelFallbackCompleted => "model/fallbackCompleted",
+            Self::FastModeChanged { .. } => "model/fastModeChanged",
+            Self::PermissionModeChanged(_) => "permission/modeChanged",
+            Self::PromptSuggestion { .. } => "prompt/suggestion",
+            Self::Error(_) => "error",
+            Self::RateLimit(_) => "rateLimit",
+            Self::KeepAlive { .. } => "keepAlive",
+            Self::IdeSelectionChanged(_) => "ide/selectionChanged",
+            Self::IdeDiagnosticsUpdated(_) => "ide/diagnosticsUpdated",
+            Self::PlanModeChanged(_) => "plan/modeChanged",
+            Self::QueueStateChanged { .. } => "queue/stateChanged",
+            Self::CommandQueued { .. } => "queue/commandQueued",
+            Self::CommandDequeued { .. } => "queue/commandDequeued",
+            Self::RewindCompleted(_) => "rewind/completed",
+            Self::RewindFailed { .. } => "rewind/failed",
+            Self::CostWarning(_) => "cost/warning",
+            Self::SandboxStateChanged(_) => "sandbox/stateChanged",
+            Self::SandboxViolationsDetected { .. } => "sandbox/violationsDetected",
+            Self::AgentsRegistered { .. } => "agents/registered",
+            Self::HookExecuted(_) => "hook/executed",
+            Self::HookStarted(_) => "hook/started",
+            Self::HookProgress(_) => "hook/progress",
+            Self::HookResponse(_) => "hook/response",
+            Self::WorktreeEntered(_) => "worktree/entered",
+            Self::WorktreeExited(_) => "worktree/exited",
+            Self::SummarizeCompleted(_) => "summarize/completed",
+            Self::SummarizeFailed { .. } => "summarize/failed",
+            Self::StreamStallDetected { .. } => "stream/stallDetected",
+            Self::StreamWatchdogWarning { .. } => "stream/watchdogWarning",
+            Self::StreamRequestEnd { .. } => "stream/requestEnd",
+            Self::SessionStateChanged { .. } => "session/stateChanged",
+            Self::MaxTurnsReached { .. } => "turn/maxReached",
+            Self::LocalCommandOutput(_) => "localCommand/output",
+            Self::FilesPersisted(_) => "files/persisted",
+            Self::ElicitationComplete(_) => "elicitation/complete",
+            Self::ToolUseSummary(_) => "tool/useSummary",
+            Self::ToolProgress(_) => "tool/progress",
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // ServerNotification param structs
 // ---------------------------------------------------------------------------
@@ -523,8 +602,7 @@ pub struct SessionStartedParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpServerInit {
     pub name: String,
-    /// Status: "connected", "connecting", "failed", "disabled".
-    pub status: String,
+    pub status: crate::server_request::McpConnectionStatus,
 }
 
 /// Plugin init entry (inline struct in TS).
@@ -775,7 +853,7 @@ pub struct SubagentProgressParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpStartupStatusParams {
     pub server: String,
-    pub status: String,
+    pub status: crate::server_request::McpConnectionStatus,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

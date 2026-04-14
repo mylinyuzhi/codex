@@ -176,6 +176,25 @@
       }
     },
     {
+      "description": "Resolve a pending MCP elicitation request. Counterpart to the `ServerRequest` the agent sends when an MCP server needs structured user input (form values, OAuth tokens, etc.).\n\nTS: `SDKControlElicitationRequestSchema` — documented as a planned addition in `event-system-design.md` §5.4.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "elicitation/resolve"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/ElicitationResolveParams"
+        }
+      }
+    },
+    {
       "type": "object",
       "required": [
         "method",
@@ -603,6 +622,35 @@
         "value": true
       }
     },
+    "ElicitationResolveParams": {
+      "description": "Params for `elicitation/resolve`.\n\nSent client→server in response to a prior `ServerRequest` that asked the client to collect structured input on behalf of an MCP server (form values, OAuth tokens, etc.). The client populates `values` with the user's input and sets `approved=true`, or sets `approved=false` to reject the elicitation.\n\nTS reference: `SDKControlElicitationRequestSchema` (controlSchemas.ts) — TS uses a single bidirectional message that carries both request and response shapes; coco-rs splits them into a `ServerRequest` for the ask and this params struct for the reply.",
+      "type": "object",
+      "required": [
+        "approved",
+        "mcp_server_name",
+        "request_id"
+      ],
+      "properties": {
+        "approved": {
+          "description": "Whether the user approved the elicitation. If `false`, `values` is ignored and the MCP server sees a rejection.",
+          "type": "boolean"
+        },
+        "mcp_server_name": {
+          "description": "Which MCP server the elicitation originated from. Echoed back so the agent can route the resolution to the right connection.",
+          "type": "string"
+        },
+        "request_id": {
+          "description": "Correlation id matching the `ServerRequest` the agent sent.",
+          "type": "string"
+        },
+        "values": {
+          "description": "The collected field values keyed by field name. Each value is an opaque JSON payload so typed/untyped fields share the wire format. Empty when `approved=false`.",
+          "default": {},
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
     "HookCallbackMatcher": {
       "description": "Matches TS `SDKHookCallbackMatcherSchema` (controlSchemas.ts:43-51).",
       "type": "object",
@@ -783,16 +831,16 @@
       ]
     },
     "PermissionMode": {
-      "description": "Permission mode (top-level because it's used by both message and permission modules).",
+      "description": "Permission mode (top-level because it's used by both message and permission modules).\n\nWire format is camelCase to match TS `PermissionModeSchema` at `coreSchemas.ts:337-347`: `z.enum(['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk'])`. The serde aliases on the drifting variants accept legacy snake_case input so old session transcripts deserialize cleanly.",
       "oneOf": [
         {
           "type": "string",
           "enum": [
             "default",
             "plan",
-            "bypass_permissions",
-            "dont_ask",
-            "accept_edits"
+            "bypassPermissions",
+            "dontAsk",
+            "acceptEdits"
           ]
         },
         {

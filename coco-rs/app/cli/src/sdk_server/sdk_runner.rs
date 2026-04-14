@@ -35,7 +35,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 use tracing::warn;
 
-use crate::sdk_server::handlers::SessionHandle;
+use crate::sdk_server::handlers::TurnHandoff;
 use crate::sdk_server::handlers::TurnRunner;
 
 /// `TurnRunner` implementation that spawns a fresh `QueryEngine` per
@@ -90,7 +90,7 @@ impl TurnRunner for QueryEngineRunner {
     fn run_turn<'a>(
         &'a self,
         params: TurnStartParams,
-        session: SessionHandle,
+        handoff: TurnHandoff,
         event_tx: mpsc::Sender<CoreEvent>,
         cancel: CancellationToken,
     ) -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + 'a>> {
@@ -101,12 +101,12 @@ impl TurnRunner for QueryEngineRunner {
         let client = self.client.clone();
         let tools = self.tools.clone();
         let permission_bridge = self.permission_bridge.clone();
-        let history_handle = session.history.clone();
+        let history_handle = handoff.history.clone();
         Box::pin(async move {
             info!(
-                session_id = %session.session_id,
-                model = %session.model,
-                cwd = %session.cwd,
+                session_id = %handoff.session_id,
+                model = %handoff.model,
+                cwd = %handoff.cwd,
                 "QueryEngineRunner: run_turn"
             );
 
@@ -114,12 +114,10 @@ impl TurnRunner for QueryEngineRunner {
             // provided, otherwise fall back to the session's default
             // (Default permission mode) — same behavior as the TS
             // headless flow.
-            let permission_mode = params
-                .permission_mode
-                .unwrap_or_else(|| coco_types::PermissionMode::Default);
+            let permission_mode = params.permission_mode.unwrap_or_default();
 
             let config = QueryEngineConfig {
-                model_name: session.model.clone(),
+                model_name: handoff.model.clone(),
                 permission_mode,
                 context_window: 200_000,
                 max_output_tokens,
@@ -145,9 +143,8 @@ impl TurnRunner for QueryEngineRunner {
             //
             // The engine's `run_session_loop` finds the LAST user
             // message in the list and keys the file history snapshot
-            // against it (see Phase 2.C.10 change in engine.rs), so
-            // passing the whole combined list works for both single
-            // and multi-turn scenarios.
+            // against it, so passing the whole combined list works
+            // for both single and multi-turn scenarios.
             let new_user_msg = coco_messages::create_user_message(&prompt);
             let combined: Vec<coco_types::Message> = {
                 let mut h = history_handle.lock().await;
@@ -158,7 +155,7 @@ impl TurnRunner for QueryEngineRunner {
             // Clone the event channel so we can still emit on the
             // error path (the engine takes ownership of the original).
             let event_tx_for_error = event_tx.clone();
-            let session_id_for_error = session.session_id.clone();
+            let session_id_for_error = handoff.session_id.clone();
 
             match engine.run_with_messages(combined, event_tx).await {
                 Ok(result) => {

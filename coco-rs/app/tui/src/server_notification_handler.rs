@@ -162,7 +162,7 @@ fn translate_protocol(notif: ServerNotification, _state: &AppState) -> Vec<TuiNo
         }],
         ServerNotification::McpStartupStatus(p) => vec![TuiNotification::McpStatus {
             server_name: p.server,
-            connected: p.status == "connected",
+            connected: matches!(p.status, coco_types::McpConnectionStatus::Connected),
             tool_count: 0,
         }],
         ServerNotification::Error(p) => vec![TuiNotification::Error {

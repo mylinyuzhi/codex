@@ -1811,6 +1811,28 @@
         "content": true
       }
     },
+    "McpConnectionStatus": {
+      "description": "MCP server connection state on the wire.\n\nMatches the TS `McpServerStatusSchema` enum at `coreSchemas.ts:167-173`: `'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled'`. `Disconnected` is a coco-rs extension used when the connection manager has no record of a named server.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "connected",
+            "pending",
+            "failed",
+            "needs-auth",
+            "disabled"
+          ]
+        },
+        {
+          "description": "coco-rs extension: server name unknown to the connection manager.",
+          "type": "string",
+          "enum": [
+            "disconnected"
+          ]
+        }
+      ]
+    },
     "McpServerInit": {
       "description": "MCP server init entry (inline struct in TS).",
       "type": "object",
@@ -1823,8 +1845,7 @@
           "type": "string"
         },
         "status": {
-          "description": "Status: \"connected\", \"connecting\", \"failed\", \"disabled\".",
-          "type": "string"
+          "$ref": "#/definitions/McpConnectionStatus"
         }
       }
     },
@@ -1860,7 +1881,7 @@
           "type": "string"
         },
         "status": {
-          "type": "string"
+          "$ref": "#/definitions/McpConnectionStatus"
         }
       }
     },

@@ -65,10 +65,9 @@ impl SdkServer {
         // succeed. We panic if it doesn't — that would indicate a
         // programmer error (e.g. the state was pre-shared).
         {
-            let mut slot = state
-                .transport
-                .try_write()
-                .expect("SdkServer::new: state was already locked at construction time");
+            let Ok(mut slot) = state.transport.try_write() else {
+                panic!("SdkServer::new: state was already locked at construction time");
+            };
             *slot = Some(transport.clone());
         }
         Self { transport, state }
@@ -84,11 +83,9 @@ impl SdkServer {
     /// indicate a programmer error (the state was pre-shared and a
     /// reader is active during construction).
     pub fn with_turn_runner(self, runner: Arc<dyn TurnRunner>) -> Self {
-        let mut slot = self
-            .state
-            .turn_runner
-            .try_write()
-            .expect("with_turn_runner: state was already locked at construction time");
+        let Ok(mut slot) = self.state.turn_runner.try_write() else {
+            panic!("with_turn_runner: state was already locked at construction time");
+        };
         *slot = runner;
         drop(slot);
         self
@@ -99,11 +96,9 @@ impl SdkServer {
     /// browse and restore historical sessions. Without this, those
     /// handlers reply with `METHOD_NOT_FOUND`.
     pub fn with_session_manager(self, manager: Arc<coco_session::SessionManager>) -> Self {
-        let mut slot = self
-            .state
-            .session_manager
-            .try_write()
-            .expect("with_session_manager: state was already locked at construction time");
+        let Ok(mut slot) = self.state.session_manager.try_write() else {
+            panic!("with_session_manager: state was already locked at construction time");
+        };
         *slot = Some(manager);
         drop(slot);
         self
@@ -119,19 +114,15 @@ impl SdkServer {
         config_home: std::path::PathBuf,
     ) -> Self {
         {
-            let mut slot = self
-                .state
-                .file_history
-                .try_write()
-                .expect("with_file_history: state was already locked at construction time");
+            let Ok(mut slot) = self.state.file_history.try_write() else {
+                panic!("with_file_history: state was already locked at construction time");
+            };
             *slot = Some(history);
         }
         {
-            let mut slot = self
-                .state
-                .file_history_config_home
-                .try_write()
-                .expect("with_file_history: state was already locked at construction time");
+            let Ok(mut slot) = self.state.file_history_config_home.try_write() else {
+                panic!("with_file_history: state was already locked at construction time");
+            };
             *slot = Some(config_home);
         }
         self
@@ -146,12 +137,26 @@ impl SdkServer {
         self,
         manager: Arc<tokio::sync::Mutex<coco_mcp::McpConnectionManager>>,
     ) -> Self {
-        let mut slot = self
-            .state
-            .mcp_manager
-            .try_write()
-            .expect("with_mcp_manager: state was already locked at construction time");
+        let Ok(mut slot) = self.state.mcp_manager.try_write() else {
+            panic!("with_mcp_manager: state was already locked at construction time");
+        };
         *slot = Some(manager);
+        drop(slot);
+        self
+    }
+
+    /// Install an [`InitializeBootstrap`] provider so `handle_initialize`
+    /// returns real data (commands, agents, account, output styles) instead
+    /// of empty / default values. Without this, `initialize` still succeeds
+    /// with a TS-conformant shape but empty lists.
+    pub fn with_initialize_bootstrap(
+        self,
+        bootstrap: Arc<dyn crate::sdk_server::handlers::InitializeBootstrap>,
+    ) -> Self {
+        let Ok(mut slot) = self.state.initialize_bootstrap.try_write() else {
+            panic!("with_initialize_bootstrap: state was already locked at construction time");
+        };
+        *slot = Some(bootstrap);
         drop(slot);
         self
     }
@@ -168,7 +173,7 @@ impl SdkServer {
 
     /// Access the underlying transport — used by code paths that need
     /// to issue outbound `ServerRequest` messages (e.g. the approval
-    /// bridge in Phase 2.C.9).
+    /// bridge).
     pub fn transport(&self) -> Arc<dyn SdkTransport> {
         self.transport.clone()
     }
@@ -200,28 +205,69 @@ impl SdkServer {
         // from the moment the server exists, not just from the moment
         // `run()` executes its first await point.
         let (notif_tx, mut notif_rx) = mpsc::channel::<CoreEvent>(256);
+        let (reply_tx, mut reply_rx) = mpsc::channel::<JsonRpcMessage>(256);
 
-        // Background task: drain the notification channel and write
-        // JsonRpcNotification messages to the transport.
+        // Background task: single-writer transport serializer. Drains both
+        // the notification channel and the per-request reply channel,
+        // preferring notifications first so every notification queued
+        // before a reply is written to the transport first.
+        //
+        // Routing all outbound transport writes through this one task
+        // gives the SDK a total order on wire messages — critical for
+        // `session/archive`, where the aggregated `SessionResult` event
+        // must land BEFORE the archive's own JSON-RPC reply.
         let notif_transport = self.transport.clone();
-        let notif_task = tokio::spawn(async move {
-            while let Some(event) = notif_rx.recv().await {
-                if let Some(notif) = core_event_to_notification(event) {
-                    let msg = JsonRpcMessage::Notification(notif);
-                    if let Err(e) = notif_transport.send(msg).await {
-                        warn!(error = %e, "notification forward failed");
-                        break;
+        let writer_task = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    biased;
+                    event = notif_rx.recv() => {
+                        match event {
+                            Some(event) => {
+                                if let Some(notif) = core_event_to_notification(event) {
+                                    let msg = JsonRpcMessage::Notification(notif);
+                                    if let Err(e) = notif_transport.send(msg).await {
+                                        warn!(error = %e, "notification forward failed");
+                                        break;
+                                    }
+                                }
+                            }
+                            None => {
+                                // Notification channel closed — drain replies then exit.
+                                while let Some(reply) = reply_rx.recv().await {
+                                    if let Err(e) = notif_transport.send(reply).await {
+                                        warn!(error = %e, "reply forward failed");
+                                        break;
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    reply = reply_rx.recv() => {
+                        match reply {
+                            Some(reply) => {
+                                if let Err(e) = notif_transport.send(reply).await {
+                                    warn!(error = %e, "reply forward failed");
+                                    break;
+                                }
+                            }
+                            None => {
+                                // Reply channel closed; notifications still
+                                // coming — keep looping to drain them.
+                            }
+                        }
                     }
                 }
             }
-            debug!("notification forwarder exited");
+            debug!("transport writer exited");
         });
 
         // Main dispatch loop.
         loop {
             match self.transport.recv().await {
                 Ok(Some(msg)) => {
-                    self.handle_message(msg, notif_tx.clone()).await;
+                    self.handle_message(msg, notif_tx.clone(), &reply_tx).await;
                 }
                 Ok(None) => {
                     info!("SdkServer: transport EOF, shutting down");
@@ -238,9 +284,11 @@ impl SdkServer {
             }
         }
 
-        // Drop notif_tx to signal the forwarder task to exit.
+        // Drop the notification + reply senders to signal the writer
+        // task to exit. It drains any pending items first.
         drop(notif_tx);
-        let _ = notif_task.await;
+        drop(reply_tx);
+        let _ = writer_task.await;
 
         Ok(())
     }
@@ -253,12 +301,19 @@ impl SdkServer {
     ///   request matches, the message is logged and dropped.
     /// - `Notification` → logged and dropped (coco-rs SDK clients do
     ///   not emit notifications to the server).
-    async fn handle_message(&self, msg: JsonRpcMessage, notif_tx: mpsc::Sender<CoreEvent>) {
+    async fn handle_message(
+        &self,
+        msg: JsonRpcMessage,
+        notif_tx: mpsc::Sender<CoreEvent>,
+        reply_tx: &mpsc::Sender<JsonRpcMessage>,
+    ) {
         match msg {
             JsonRpcMessage::Request(req) => {
                 let request_id = req.request_id.clone();
                 let reply = self.handle_request(req, notif_tx).await;
-                if let Err(e) = self.transport.send(reply).await {
+                // Route via the writer task so replies are ordered AFTER
+                // any notifications the handler emitted on `notif_tx`.
+                if let Err(e) = reply_tx.send(reply).await {
                     warn!(error = %e, request_id = %request_id.as_display(), "reply send failed");
                 }
             }
@@ -390,20 +445,12 @@ fn error_reply_with_data(
 /// by non-TUI consumers (per `event-system-design.md` §12).
 fn core_event_to_notification(event: CoreEvent) -> Option<JsonRpcNotification> {
     match event {
-        CoreEvent::Protocol(notif) => {
-            // ServerNotification is already `{method, params}`-tagged via
-            // serde, so we can round-trip it into the JsonRpcNotification
-            // shape with serde_json.
-            let value = serde_json::to_value(&notif).ok()?;
-            let method = value.get("method")?.as_str()?.to_string();
-            let params = value.get("params").cloned().unwrap_or(Value::Null);
-            Some(JsonRpcNotification { method, params })
-        }
+        CoreEvent::Protocol(notif) => server_notification_to_jsonrpc(notif),
         CoreEvent::Stream(stream_evt) => {
             // Stream events don't have wire methods in the protocol — they
             // must pass through a StreamAccumulator first. For now, wrap
             // them under a fixed method so SDK consumers can inspect them
-            // during debugging. Phase 2.C.2+ will run the accumulator and
+            // during debugging. A follow-up will run the accumulator and
             // emit ItemStarted/Updated/Completed instead.
             let params = serde_json::to_value(&stream_evt).ok()?;
             Some(JsonRpcNotification {
@@ -418,10 +465,18 @@ fn core_event_to_notification(event: CoreEvent) -> Option<JsonRpcNotification> {
 /// Serialize a `ServerNotification` as a `JsonRpcNotification` directly.
 /// Exposed for handlers that want to emit synthetic protocol notifications
 /// without going through CoreEvent.
+///
+/// Uses `ServerNotification::method()` for the wire method and moves the
+/// params subtree out of the intermediate `Value` object so the hot path
+/// (per-token `AgentMessageDelta` / `ReasoningDelta`) doesn't deep-clone
+/// the params payload on every emission.
 pub fn server_notification_to_jsonrpc(notif: ServerNotification) -> Option<JsonRpcNotification> {
+    let method = notif.method().to_string();
     let value = serde_json::to_value(&notif).ok()?;
-    let method = value.get("method")?.as_str()?.to_string();
-    let params = value.get("params").cloned().unwrap_or(Value::Null);
+    let params = match value {
+        Value::Object(mut map) => map.remove("params").unwrap_or(Value::Null),
+        _ => return None,
+    };
     Some(JsonRpcNotification { method, params })
 }
 

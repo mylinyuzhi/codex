@@ -153,11 +153,17 @@ pub use server_request::ContextUsageResult;
 pub use server_request::HookCallbackParams as ServerHookCallbackParams;
 pub use server_request::InitializeResult;
 pub use server_request::McpRouteMessageParams as ServerMcpRouteMessageParams;
+pub use server_request::McpConnectionStatus;
 pub use server_request::McpServerStatus;
 pub use server_request::McpSetServersResult;
 pub use server_request::McpStatusResult;
 pub use server_request::MessageBreakdown;
-pub use server_request::ModelInfo as SdkModelInfo;
+pub use server_request::ApiProvider as SdkApiProvider;
+pub use server_request::EffortLevel as SdkEffortLevel;
+pub use server_request::SdkAccountInfo;
+pub use server_request::SdkAgentInfo;
+pub use server_request::SdkModelInfo;
+pub use server_request::SdkSlashCommand;
 pub use server_request::PluginReloadResult;
 pub use server_request::RequestUserInputParams as ServerRequestUserInputParams;
 pub use server_request::RewindFilesResult;
@@ -357,17 +363,26 @@ pub use extended::{
 };
 
 /// Permission mode (top-level because it's used by both message and permission modules).
+///
+/// Wire format is camelCase to match TS `PermissionModeSchema` at
+/// `coreSchemas.ts:337-347`: `z.enum(['default', 'acceptEdits',
+/// 'bypassPermissions', 'plan', 'dontAsk'])`. The serde aliases on the
+/// drifting variants accept legacy snake_case input so old session
+/// transcripts deserialize cleanly.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize,
 )]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub enum PermissionMode {
     #[default]
     Default,
     Plan,
+    #[serde(alias = "bypass_permissions")]
     BypassPermissions,
+    #[serde(alias = "dont_ask")]
     DontAsk,
+    #[serde(alias = "accept_edits")]
     AcceptEdits,
     /// Feature-gated auto mode.
     Auto,

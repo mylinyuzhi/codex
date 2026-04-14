@@ -68,9 +68,23 @@ pub enum AgentStatus {
     Backgrounded { agent_id: String },
 }
 
+/// Upper bound on the size of a single agent-definition markdown file.
+/// The parser reads the entire file into memory; anything larger than
+/// this is almost certainly unintended and would waste memory / CPU
+/// on an adversary-controlled file in `~/.coco/agents/`.
+const MAX_AGENT_FILE_BYTES: u64 = 1_048_576; // 1 MiB
+
 /// Load agent definitions from directories.
 ///
 /// TS: loadAgentsDir() — walks directories for .md agent definition files.
+///
+/// Security hardening:
+/// - `follow_links(false)` — symlinks inside agent dirs are ignored so
+///   a `~/.coco/agents/escape -> /etc` link can't cause the parser to
+///   read files outside the user-controlled agent tree.
+/// - `MAX_AGENT_FILE_BYTES` — files larger than 1 MiB are skipped
+///   silently to bound memory usage. A realistic agent definition is
+///   a few KiB of YAML + markdown.
 pub fn load_agents_from_dirs(dirs: &[PathBuf]) -> Vec<AgentDefinition> {
     let mut agents = Vec::new();
 
@@ -81,15 +95,21 @@ pub fn load_agents_from_dirs(dirs: &[PathBuf]) -> Vec<AgentDefinition> {
 
         for entry in walkdir::WalkDir::new(dir)
             .max_depth(2)
-            .follow_links(true)
+            .follow_links(false)
             .into_iter()
             .filter_map(Result::ok)
         {
             let path = entry.path();
-            if path.extension().is_some_and(|e| e == "md")
-                && path.is_file()
-                && let Some(agent) = parse_agent_definition(path)
+            if !path.extension().is_some_and(|e| e == "md") || !path.is_file() {
+                continue;
+            }
+            // Skip oversized files before the parser touches them.
+            if let Ok(meta) = std::fs::metadata(path)
+                && meta.len() > MAX_AGENT_FILE_BYTES
             {
+                continue;
+            }
+            if let Some(agent) = parse_agent_definition(path) {
                 agents.push(agent);
             }
         }
@@ -244,6 +264,76 @@ pub fn general_purpose_agent() -> AgentDefinition {
         max_turns: Some(30),
         ..Default::default()
     }
+}
+
+/// Return the full set of built-in agent definitions shipped with
+/// coco-rs. Used by the SDK server's `initialize` response to advertise
+/// available agents to clients before any user-defined markdown files
+/// are discovered.
+///
+/// Descriptions are deliberately short and task-focused; individual
+/// agents can be enriched later by placing override markdown under
+/// `~/.coco/agents/` which `load_agents_from_dirs` will merge on top
+/// of these defaults by name.
+pub fn builtin_agents() -> Vec<AgentDefinition> {
+    vec![
+        general_purpose_agent(),
+        AgentDefinition {
+            agent_type: AgentTypeId::Builtin(SubagentType::Explore),
+            name: "Explore".to_string(),
+            description: Some(
+                "Fast codebase explorer — finds files, searches content, answers \
+                 structural questions without modifying state."
+                    .to_string(),
+            ),
+            max_turns: Some(15),
+            ..Default::default()
+        },
+        AgentDefinition {
+            agent_type: AgentTypeId::Builtin(SubagentType::Plan),
+            name: "Plan".to_string(),
+            description: Some(
+                "Software architect — designs implementation strategies and returns \
+                 step-by-step plans without writing code."
+                    .to_string(),
+            ),
+            max_turns: Some(20),
+            ..Default::default()
+        },
+        AgentDefinition {
+            agent_type: AgentTypeId::Builtin(SubagentType::Review),
+            name: "Review".to_string(),
+            description: Some(
+                "Code review agent — inspects diffs and proposed changes for \
+                 correctness, style, and hidden regressions."
+                    .to_string(),
+            ),
+            max_turns: Some(15),
+            ..Default::default()
+        },
+        AgentDefinition {
+            agent_type: AgentTypeId::Builtin(SubagentType::StatusLine),
+            name: "statusline-setup".to_string(),
+            description: Some(
+                "Configures the CLI status line — keybindings, prompts, and \
+                 appearance in `~/.coco/statusline.json`."
+                    .to_string(),
+            ),
+            max_turns: Some(5),
+            ..Default::default()
+        },
+        AgentDefinition {
+            agent_type: AgentTypeId::Builtin(SubagentType::ClaudeCodeGuide),
+            name: "claude-code-guide".to_string(),
+            description: Some(
+                "Reference assistant for Claude Code / Anthropic SDK / Claude API \
+                 usage questions."
+                    .to_string(),
+            ),
+            max_turns: Some(10),
+            ..Default::default()
+        },
+    ]
 }
 
 #[cfg(test)]

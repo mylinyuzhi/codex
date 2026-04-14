@@ -2,7 +2,7 @@
 //! CoreEvent → JsonRpcNotification translator.
 //!
 //! Per-handler behavior (session/*, turn/*, approval/*, control/*) is
-//! tested in `handlers.test.rs`.
+//! tested in `handlers/tests.rs`.
 
 use coco_types::JsonRpcMessage;
 use coco_types::JsonRpcRequest;

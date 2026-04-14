@@ -247,15 +247,15 @@
           "type": "string"
         },
         "PermissionMode": {
-          "description": "Permission mode (top-level because it's used by both message and permission modules).",
+          "description": "Permission mode (top-level because it's used by both message and permission modules).\n\nWire format is camelCase to match TS `PermissionModeSchema` at `coreSchemas.ts:337-347`: `z.enum(['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk'])`. The serde aliases on the drifting variants accept legacy snake_case input so old session transcripts deserialize cleanly.",
           "oneOf": [
             {
               "enum": [
                 "default",
                 "plan",
-                "bypass_permissions",
-                "dont_ask",
-                "accept_edits"
+                "bypassPermissions",
+                "dontAsk",
+                "acceptEdits"
               ],
               "type": "string"
             },
@@ -663,6 +663,35 @@
           ],
           "type": "object"
         },
+        "ElicitationResolveParams": {
+          "description": "Params for `elicitation/resolve`.\n\nSent client→server in response to a prior `ServerRequest` that asked the client to collect structured input on behalf of an MCP server (form values, OAuth tokens, etc.). The client populates `values` with the user's input and sets `approved=true`, or sets `approved=false` to reject the elicitation.\n\nTS reference: `SDKControlElicitationRequestSchema` (controlSchemas.ts) — TS uses a single bidirectional message that carries both request and response shapes; coco-rs splits them into a `ServerRequest` for the ask and this params struct for the reply.",
+          "properties": {
+            "approved": {
+              "description": "Whether the user approved the elicitation. If `false`, `values` is ignored and the MCP server sees a rejection.",
+              "type": "boolean"
+            },
+            "mcp_server_name": {
+              "description": "Which MCP server the elicitation originated from. Echoed back so the agent can route the resolution to the right connection.",
+              "type": "string"
+            },
+            "request_id": {
+              "description": "Correlation id matching the `ServerRequest` the agent sent.",
+              "type": "string"
+            },
+            "values": {
+              "additionalProperties": true,
+              "default": {},
+              "description": "The collected field values keyed by field name. Each value is an opaque JSON payload so typed/untyped fields share the wire format. Empty when `approved=false`.",
+              "type": "object"
+            }
+          },
+          "required": [
+            "approved",
+            "mcp_server_name",
+            "request_id"
+          ],
+          "type": "object"
+        },
         "HookCallbackMatcher": {
           "description": "Matches TS `SDKHookCallbackMatcherSchema` (controlSchemas.ts:43-51).",
           "properties": {
@@ -843,15 +872,15 @@
           "type": "string"
         },
         "PermissionMode": {
-          "description": "Permission mode (top-level because it's used by both message and permission modules).",
+          "description": "Permission mode (top-level because it's used by both message and permission modules).\n\nWire format is camelCase to match TS `PermissionModeSchema` at `coreSchemas.ts:337-347`: `z.enum(['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk'])`. The serde aliases on the drifting variants accept legacy snake_case input so old session transcripts deserialize cleanly.",
           "oneOf": [
             {
               "enum": [
                 "default",
                 "plan",
-                "bypass_permissions",
-                "dont_ask",
-                "accept_edits"
+                "bypassPermissions",
+                "dontAsk",
+                "acceptEdits"
               ],
               "type": "string"
             },
@@ -1545,6 +1574,25 @@
             },
             "params": {
               "$ref": "#/definitions/UserInputResolveParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Resolve a pending MCP elicitation request. Counterpart to the `ServerRequest` the agent sends when an MCP server needs structured user input (form values, OAuth tokens, etc.).\n\nTS: `SDKControlElicitationRequestSchema` — documented as a planned addition in `event-system-design.md` §5.4.",
+          "properties": {
+            "method": {
+              "enum": [
+                "elicitation/resolve"
+              ],
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ElicitationResolveParams"
             }
           },
           "required": [
@@ -2961,14 +3009,37 @@
     },
     "McpServerInit": {
       "$schema": "http://json-schema.org/draft-07/schema#",
+      "definitions": {
+        "McpConnectionStatus": {
+          "description": "MCP server connection state on the wire.\n\nMatches the TS `McpServerStatusSchema` enum at `coreSchemas.ts:167-173`: `'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled'`. `Disconnected` is a coco-rs extension used when the connection manager has no record of a named server.",
+          "oneOf": [
+            {
+              "enum": [
+                "connected",
+                "pending",
+                "failed",
+                "needs-auth",
+                "disabled"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "coco-rs extension: server name unknown to the connection manager.",
+              "enum": [
+                "disconnected"
+              ],
+              "type": "string"
+            }
+          ]
+        }
+      },
       "description": "MCP server init entry (inline struct in TS).",
       "properties": {
         "name": {
           "type": "string"
         },
         "status": {
-          "description": "Status: \"connected\", \"connecting\", \"failed\", \"disabled\".",
-          "type": "string"
+          "$ref": "#/definitions/McpConnectionStatus"
         }
       },
       "required": [
@@ -2980,6 +3051,30 @@
     },
     "McpServerStatus": {
       "$schema": "http://json-schema.org/draft-07/schema#",
+      "definitions": {
+        "McpConnectionStatus": {
+          "description": "MCP server connection state on the wire.\n\nMatches the TS `McpServerStatusSchema` enum at `coreSchemas.ts:167-173`: `'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled'`. `Disconnected` is a coco-rs extension used when the connection manager has no record of a named server.",
+          "oneOf": [
+            {
+              "enum": [
+                "connected",
+                "pending",
+                "failed",
+                "needs-auth",
+                "disabled"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "coco-rs extension: server name unknown to the connection manager.",
+              "enum": [
+                "disconnected"
+              ],
+              "type": "string"
+            }
+          ]
+        }
+      },
       "properties": {
         "error": {
           "type": [
@@ -2991,8 +3086,7 @@
           "type": "string"
         },
         "status": {
-          "description": "\"connected\" | \"connecting\" | \"failed\" | \"disabled\".",
-          "type": "string"
+          "$ref": "#/definitions/McpConnectionStatus"
         },
         "tool_count": {
           "default": 0,
@@ -3079,12 +3173,36 @@
     },
     "McpStartupStatusParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
+      "definitions": {
+        "McpConnectionStatus": {
+          "description": "MCP server connection state on the wire.\n\nMatches the TS `McpServerStatusSchema` enum at `coreSchemas.ts:167-173`: `'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled'`. `Disconnected` is a coco-rs extension used when the connection manager has no record of a named server.",
+          "oneOf": [
+            {
+              "enum": [
+                "connected",
+                "pending",
+                "failed",
+                "needs-auth",
+                "disabled"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "coco-rs extension: server name unknown to the connection manager.",
+              "enum": [
+                "disconnected"
+              ],
+              "type": "string"
+            }
+          ]
+        }
+      },
       "properties": {
         "server": {
           "type": "string"
         },
         "status": {
-          "type": "string"
+          "$ref": "#/definitions/McpConnectionStatus"
         }
       },
       "required": [
@@ -3097,6 +3215,28 @@
     "McpStatusResult": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "definitions": {
+        "McpConnectionStatus": {
+          "description": "MCP server connection state on the wire.\n\nMatches the TS `McpServerStatusSchema` enum at `coreSchemas.ts:167-173`: `'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled'`. `Disconnected` is a coco-rs extension used when the connection manager has no record of a named server.",
+          "oneOf": [
+            {
+              "enum": [
+                "connected",
+                "pending",
+                "failed",
+                "needs-auth",
+                "disabled"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "coco-rs extension: server name unknown to the connection manager.",
+              "enum": [
+                "disconnected"
+              ],
+              "type": "string"
+            }
+          ]
+        },
         "McpServerStatus": {
           "properties": {
             "error": {
@@ -3109,8 +3249,7 @@
               "type": "string"
             },
             "status": {
-              "description": "\"connected\" | \"connecting\" | \"failed\" | \"disabled\".",
-              "type": "string"
+              "$ref": "#/definitions/McpConnectionStatus"
             },
             "tool_count": {
               "default": 0,
@@ -3125,9 +3264,9 @@
           "type": "object"
         }
       },
-      "description": "Response to `ClientRequest::McpStatus`. Matches TS `SDKControlMcpStatusResponseSchema` (controlSchemas.ts:165-173).",
+      "description": "Response to `ClientRequest::McpStatus`. Matches TS `SDKControlMcpStatusResponseSchema` (controlSchemas.ts:165-173).\n\nThe `mcpServers` field is camelCase on the wire to match the TS zod schema. Internal Rust uses snake_case for the field name.",
       "properties": {
-        "mcp_servers": {
+        "mcpServers": {
           "items": {
             "$ref": "#/definitions/McpServerStatus"
           },
@@ -3135,7 +3274,7 @@
         }
       },
       "required": [
-        "mcp_servers"
+        "mcpServers"
       ],
       "title": "McpStatusResult",
       "type": "object"
@@ -3235,15 +3374,15 @@
     },
     "PermissionMode": {
       "$schema": "http://json-schema.org/draft-07/schema#",
-      "description": "Permission mode (top-level because it's used by both message and permission modules).",
+      "description": "Permission mode (top-level because it's used by both message and permission modules).\n\nWire format is camelCase to match TS `PermissionModeSchema` at `coreSchemas.ts:337-347`: `z.enum(['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk'])`. The serde aliases on the drifting variants accept legacy snake_case input so old session transcripts deserialize cleanly.",
       "oneOf": [
         {
           "enum": [
             "default",
             "plan",
-            "bypass_permissions",
-            "dont_ask",
-            "accept_edits"
+            "bypassPermissions",
+            "dontAsk",
+            "acceptEdits"
           ],
           "type": "string"
         },
@@ -4109,6 +4248,28 @@
           ],
           "type": "object"
         },
+        "McpConnectionStatus": {
+          "description": "MCP server connection state on the wire.\n\nMatches the TS `McpServerStatusSchema` enum at `coreSchemas.ts:167-173`: `'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled'`. `Disconnected` is a coco-rs extension used when the connection manager has no record of a named server.",
+          "oneOf": [
+            {
+              "enum": [
+                "connected",
+                "pending",
+                "failed",
+                "needs-auth",
+                "disabled"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "coco-rs extension: server name unknown to the connection manager.",
+              "enum": [
+                "disconnected"
+              ],
+              "type": "string"
+            }
+          ]
+        },
         "McpServerInit": {
           "description": "MCP server init entry (inline struct in TS).",
           "properties": {
@@ -4116,8 +4277,7 @@
               "type": "string"
             },
             "status": {
-              "description": "Status: \"connected\", \"connecting\", \"failed\", \"disabled\".",
-              "type": "string"
+              "$ref": "#/definitions/McpConnectionStatus"
             }
           },
           "required": [
@@ -4153,7 +4313,7 @@
               "type": "string"
             },
             "status": {
-              "type": "string"
+              "$ref": "#/definitions/McpConnectionStatus"
             }
           },
           "required": [
@@ -7410,15 +7570,15 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "definitions": {
         "PermissionMode": {
-          "description": "Permission mode (top-level because it's used by both message and permission modules).",
+          "description": "Permission mode (top-level because it's used by both message and permission modules).\n\nWire format is camelCase to match TS `PermissionModeSchema` at `coreSchemas.ts:337-347`: `z.enum(['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk'])`. The serde aliases on the drifting variants accept legacy snake_case input so old session transcripts deserialize cleanly.",
           "oneOf": [
             {
               "enum": [
                 "default",
                 "plan",
-                "bypass_permissions",
-                "dont_ask",
-                "accept_edits"
+                "bypassPermissions",
+                "dontAsk",
+                "acceptEdits"
               ],
               "type": "string"
             },
@@ -7512,6 +7672,28 @@
           ],
           "type": "string"
         },
+        "McpConnectionStatus": {
+          "description": "MCP server connection state on the wire.\n\nMatches the TS `McpServerStatusSchema` enum at `coreSchemas.ts:167-173`: `'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled'`. `Disconnected` is a coco-rs extension used when the connection manager has no record of a named server.",
+          "oneOf": [
+            {
+              "enum": [
+                "connected",
+                "pending",
+                "failed",
+                "needs-auth",
+                "disabled"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "coco-rs extension: server name unknown to the connection manager.",
+              "enum": [
+                "disconnected"
+              ],
+              "type": "string"
+            }
+          ]
+        },
         "McpServerInit": {
           "description": "MCP server init entry (inline struct in TS).",
           "properties": {
@@ -7519,8 +7701,7 @@
               "type": "string"
             },
             "status": {
-              "description": "Status: \"connected\", \"connecting\", \"failed\", \"disabled\".",
-              "type": "string"
+              "$ref": "#/definitions/McpConnectionStatus"
             }
           },
           "required": [
@@ -7708,15 +7889,15 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "definitions": {
         "PermissionMode": {
-          "description": "Permission mode (top-level because it's used by both message and permission modules).",
+          "description": "Permission mode (top-level because it's used by both message and permission modules).\n\nWire format is camelCase to match TS `PermissionModeSchema` at `coreSchemas.ts:337-347`: `z.enum(['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk'])`. The serde aliases on the drifting variants accept legacy snake_case input so old session transcripts deserialize cleanly.",
           "oneOf": [
             {
               "enum": [
                 "default",
                 "plan",
-                "bypass_permissions",
-                "dont_ask",
-                "accept_edits"
+                "bypassPermissions",
+                "dontAsk",
+                "acceptEdits"
               ],
               "type": "string"
             },
@@ -9462,15 +9643,15 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "definitions": {
         "PermissionMode": {
-          "description": "Permission mode (top-level because it's used by both message and permission modules).",
+          "description": "Permission mode (top-level because it's used by both message and permission modules).\n\nWire format is camelCase to match TS `PermissionModeSchema` at `coreSchemas.ts:337-347`: `z.enum(['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk'])`. The serde aliases on the drifting variants accept legacy snake_case input so old session transcripts deserialize cleanly.",
           "oneOf": [
             {
               "enum": [
                 "default",
                 "plan",
-                "bypass_permissions",
-                "dont_ask",
-                "accept_edits"
+                "bypassPermissions",
+                "dontAsk",
+                "acceptEdits"
               ],
               "type": "string"
             },

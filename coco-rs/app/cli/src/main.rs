@@ -23,6 +23,9 @@ use coco_cli::PluginAction;
 use coco_cli::sdk_server::QueryEngineRunner;
 use coco_cli::sdk_server::SdkServer;
 use coco_cli::sdk_server::StdioTransport;
+use coco_cli::sdk_server::cli_bootstrap::CliInitializeBootstrap;
+use coco_commands::CommandRegistry;
+use coco_commands::register_extended_builtins;
 use coco_config::global_config;
 use coco_inference::ApiClient;
 use coco_inference::RetryConfig;
@@ -479,7 +482,13 @@ async fn run_chat(cli: &Cli, prompt: Option<&str>) -> Result<()> {
 async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     // Build the shared model client + tool registry once. QueryEngines
     // created per turn will share these.
-    let (model, _mode) = create_model(cli.model.as_deref());
+    //
+    // `_mode` distinguishes "real Anthropic provider" from the built-in
+    // mock. When mock, the SDK's `initialize.account` must NOT report a
+    // first-party Anthropic session — otherwise clients see mock-shaped
+    // turn output while the account panel claims a real OAuth login.
+    let (model, mode) = create_model(cli.model.as_deref());
+    let is_real_anthropic = mode == "anthropic";
     let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
 
     let mut registry = ToolRegistry::new();
@@ -515,13 +524,71 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
         coco_mcp::McpConnectionManager::new(global_config::config_home()),
     ));
 
+    // Build the slash-command registry with the extended built-ins so
+    // `initialize` advertises a real commands list. Future follow-ups
+    // can splice plugin + user-directory commands in here.
+    let mut command_registry = CommandRegistry::new();
+    register_extended_builtins(&mut command_registry);
+    let command_registry = Arc::new(command_registry);
+
+    // Locate user + project output-style directories so
+    // `available_output_styles` discovers custom markdown files. Both
+    // live under the coco config home tree today; a future iteration
+    // can add `~/.claude/output-styles` for TS compatibility.
+    let output_style_dirs = vec![global_config::config_home().join("output-styles")];
+    let current_output_style = "default".to_string();
+
+    // Standard agent-definition directories — mirrors what the Agent
+    // tool walks at spawn time. `initialize` reads the same sources so
+    // clients see the same list the agent tool will actually use.
+    let agent_dirs = coco_tools::tools::agent_spawn::get_agent_dirs(
+        &global_config::config_home(),
+        &cwd,
+    );
+
+    // Resolve auth once so `initialize.account` can report the
+    // provider / subscription. The actual credentials don't leak to SDK
+    // clients — only the structured `SdkAccountInfo` projection.
+    //
+    // **Consistency with `create_model`**: we only surface a resolved
+    // auth method when `create_model` picked the real Anthropic provider.
+    // Otherwise `create_model` fell back to a mock (no env var, no
+    // provider wired) and advertising OAuth tokens as the account would
+    // contradict the mock turn output the client is about to see. Run
+    // the resolution on the blocking pool because
+    // `load_stored_oauth_tokens` does sync disk I/O.
+    let auth_method = if is_real_anthropic {
+        let config_dir = global_config::config_home();
+        tokio::task::spawn_blocking(move || {
+            coco_inference::auth::resolve_auth(&coco_inference::auth::AuthResolveOptions {
+                config_dir: Some(config_dir),
+                ..Default::default()
+            })
+        })
+        .await
+        .ok()
+        .flatten()
+    } else {
+        None
+    };
+
+    let mut bootstrap_builder = CliInitializeBootstrap::new(current_output_style)
+        .with_command_registry(command_registry)
+        .with_output_style_dirs(output_style_dirs)
+        .with_agent_dirs(agent_dirs);
+    if let Some(auth) = auth_method {
+        bootstrap_builder = bootstrap_builder.with_auth_method(auth);
+    }
+    let bootstrap: Arc<dyn coco_cli::sdk_server::InitializeBootstrap> = Arc::new(bootstrap_builder);
+
     // Build the server with a default runner first so we have a live
     // `state` handle to give to the approval bridge.
     let transport = StdioTransport::new();
     let server = SdkServer::new(transport)
         .with_session_manager(session_manager)
         .with_file_history(file_history, global_config::config_home())
-        .with_mcp_manager(mcp_manager);
+        .with_mcp_manager(mcp_manager)
+        .with_initialize_bootstrap(bootstrap);
     let state = server.state();
 
     // Build the real runner with an SdkPermissionBridge that routes
