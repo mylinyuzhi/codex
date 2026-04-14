@@ -369,7 +369,7 @@ fn test_load_from_dirs_with_legacy() {
 
     let mut mgr = SkillManager::new();
     // Simulate path ending in "commands"
-    let cmd_path = commands_dir.path().to_path_buf();
+    let _cmd_path = commands_dir.path().to_path_buf();
     // load_from_dirs checks if path ends with "commands"
     let commands_path = tempfile::tempdir().unwrap();
     let actual_cmd_dir = commands_path.path().join("commands");
@@ -583,4 +583,95 @@ Test.
     assert!(skill.paths.contains(&"*.tsx".to_string()));
     assert!(skill.paths.contains(&"src/**/*.js".to_string()));
     assert!(skill.paths.contains(&"src/**/*.jsx".to_string()));
+}
+
+// ── R7-T10: discover_skill_dirs_for_paths ──
+//
+// TS `loadSkillsDir.ts:861-915` walks up from each file path collecting
+// `<ancestor>/.claude/skills/` directories that exist. The walk stops
+// at (but excludes) cwd, since cwd-level skills are loaded at startup.
+// The tests below cover the core walk, the cwd boundary, deepest-first
+// ordering, and the missing-dir fast path.
+
+#[test]
+fn test_discover_skill_dirs_finds_nested() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path();
+    // Create a nested project with a skills dir at the inner level only.
+    let project = cwd.join("project");
+    let inner = project.join("subdir");
+    std::fs::create_dir_all(inner.join(".claude").join("skills")).unwrap();
+    let file = inner.join("foo.rs");
+    std::fs::write(&file, "// touched by Read").unwrap();
+
+    let result = discover_skill_dirs_for_paths(&[file.as_path()], cwd);
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0], inner.join(".claude").join("skills"));
+}
+
+#[test]
+fn test_discover_skill_dirs_excludes_cwd_level() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path();
+    // Skills dir AT cwd should NOT be returned — cwd-level skills are
+    // loaded at startup, the dynamic walker only finds nested ones.
+    std::fs::create_dir_all(cwd.join(".claude").join("skills")).unwrap();
+    let file = cwd.join("readme.md");
+    std::fs::write(&file, "").unwrap();
+
+    let result = discover_skill_dirs_for_paths(&[file.as_path()], cwd);
+    assert!(
+        result.is_empty(),
+        "cwd-level skills should be excluded, got: {result:?}"
+    );
+}
+
+#[test]
+fn test_discover_skill_dirs_deepest_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path();
+    // Two skills dirs at different depths.
+    let outer = cwd.join("project");
+    let inner = outer.join("module");
+    std::fs::create_dir_all(outer.join(".claude").join("skills")).unwrap();
+    std::fs::create_dir_all(inner.join(".claude").join("skills")).unwrap();
+    let file = inner.join("hot.rs");
+    std::fs::write(&file, "").unwrap();
+
+    let result = discover_skill_dirs_for_paths(&[file.as_path()], cwd);
+    assert_eq!(result.len(), 2);
+    // Inner (more components) must come before outer.
+    assert_eq!(result[0], inner.join(".claude").join("skills"));
+    assert_eq!(result[1], outer.join(".claude").join("skills"));
+}
+
+#[test]
+fn test_discover_skill_dirs_no_skills_dir_returns_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path();
+    let project = cwd.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let file = project.join("plain.rs");
+    std::fs::write(&file, "").unwrap();
+
+    let result = discover_skill_dirs_for_paths(&[file.as_path()], cwd);
+    assert!(result.is_empty());
+}
+
+#[test]
+fn test_discover_skill_dirs_dedupes_across_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path();
+    let project = cwd.join("project");
+    std::fs::create_dir_all(project.join(".claude").join("skills")).unwrap();
+    let file1 = project.join("a.rs");
+    let file2 = project.join("b.rs");
+    std::fs::write(&file1, "").unwrap();
+    std::fs::write(&file2, "").unwrap();
+
+    let result = discover_skill_dirs_for_paths(&[file1.as_path(), file2.as_path()], cwd);
+    // Same skills dir should only appear once even though both files
+    // resolve to it.
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0], project.join(".claude").join("skills"));
 }

@@ -446,6 +446,12 @@ pub struct BashProgressTracker {
     progress_emitted: bool,
 }
 
+impl Default for BashProgressTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BashProgressTracker {
     pub fn new() -> Self {
         Self {
@@ -543,10 +549,10 @@ pub fn get_command_type_for_logging(command: &str) -> &'static str {
 ///
 /// TS: BashTool.description() + getToolUseSummary() + getActivityDescription()
 pub fn extract_description(command: &str, description: Option<&str>) -> String {
-    if let Some(desc) = description {
-        if !desc.is_empty() {
-            return desc.to_string();
-        }
+    if let Some(desc) = description
+        && !desc.is_empty()
+    {
+        return desc.to_string();
     }
     // Truncate command to a reasonable summary length
     const MAX_SUMMARY_LEN: usize = 80;

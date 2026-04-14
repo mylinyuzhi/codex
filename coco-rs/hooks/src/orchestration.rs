@@ -1023,6 +1023,7 @@ pub async fn execute_pre_tool_use(
     tool_name: &str,
     tool_use_id: &str,
     tool_input: &serde_json::Value,
+    event_tx: Option<&tokio::sync::mpsc::Sender<crate::HookExecutionEvent>>,
 ) -> anyhow::Result<AggregatedHookResult> {
     let input = PreToolUseInput {
         base: base_from_ctx(ctx),
@@ -1049,7 +1050,7 @@ pub async fn execute_pre_tool_use(
         &env,
         &ctx.cancel,
         DEFAULT_HOOK_TIMEOUT,
-        /*event_tx*/ None,
+        event_tx,
         ctx.allow_managed_hooks_only,
     )
     .await;
@@ -1067,6 +1068,7 @@ pub async fn execute_post_tool_use(
     tool_use_id: &str,
     tool_input: &serde_json::Value,
     tool_response: &serde_json::Value,
+    event_tx: Option<&tokio::sync::mpsc::Sender<crate::HookExecutionEvent>>,
 ) -> anyhow::Result<AggregatedHookResult> {
     let input = PostToolUseInput {
         base: base_from_ctx(ctx),
@@ -1094,7 +1096,7 @@ pub async fn execute_post_tool_use(
         &env,
         &ctx.cancel,
         DEFAULT_HOOK_TIMEOUT,
-        /*event_tx*/ None,
+        event_tx,
         ctx.allow_managed_hooks_only,
     )
     .await;

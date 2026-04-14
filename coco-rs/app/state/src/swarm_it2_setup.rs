@@ -81,7 +81,13 @@ pub async fn detect_python_package_manager() -> Option<PythonPackageManager> {
 /// TS: `installIt2(packageManager)`
 pub async fn install_it2(pm: PythonPackageManager) -> It2InstallResult {
     let cmd = pm.install_command();
-    let (program, args) = cmd.split_first().expect("non-empty command");
+    let Some((program, args)) = cmd.split_first() else {
+        return It2InstallResult {
+            success: false,
+            error: Some("install command is empty".to_string()),
+            package_manager: Some(pm),
+        };
+    };
 
     let result = tokio::process::Command::new(program)
         .args(args)
@@ -102,14 +108,14 @@ pub async fn install_it2(pm: PythonPackageManager) -> It2InstallResult {
                     .args(["install", "--user", "it2"])
                     .output()
                     .await;
-                if let Ok(fb) = fallback {
-                    if fb.status.success() {
-                        return It2InstallResult {
-                            success: true,
-                            error: None,
-                            package_manager: Some(pm),
-                        };
-                    }
+                if let Ok(fb) = fallback
+                    && fb.status.success()
+                {
+                    return It2InstallResult {
+                        success: true,
+                        error: None,
+                        package_manager: Some(pm),
+                    };
                 }
             }
             It2InstallResult {

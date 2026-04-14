@@ -1,7 +1,7 @@
 //! Tests for server notification handler.
 
-use crate::server_notification_handler::ServerNotification;
-use crate::server_notification_handler::handle_server_notification;
+use crate::server_notification_handler::TuiNotification;
+use crate::server_notification_handler::handle_tui_notification;
 use crate::state::AppState;
 use crate::state::session::ChatRole;
 use crate::state::session::TokenUsage;
@@ -11,25 +11,23 @@ fn test_turn_lifecycle() {
     let mut state = AppState::new();
 
     // Turn started
-    let changed = handle_server_notification(
-        &mut state,
-        ServerNotification::TurnStarted { turn_number: 1 },
-    );
+    let changed =
+        handle_tui_notification(&mut state, TuiNotification::TurnStarted { turn_number: 1 });
     assert!(changed);
     assert_eq!(state.session.turn_count, 1);
     assert!(state.session.is_busy());
     assert!(state.is_streaming());
 
     // Text delta
-    handle_server_notification(
+    handle_tui_notification(
         &mut state,
-        ServerNotification::TextDelta {
+        TuiNotification::TextDelta {
             delta: "Hello ".to_string(),
         },
     );
-    handle_server_notification(
+    handle_tui_notification(
         &mut state,
-        ServerNotification::TextDelta {
+        TuiNotification::TextDelta {
             delta: "world".to_string(),
         },
     );
@@ -39,9 +37,9 @@ fn test_turn_lifecycle() {
     );
 
     // Turn completed — streaming committed to messages
-    handle_server_notification(
+    handle_tui_notification(
         &mut state,
-        ServerNotification::TurnCompleted {
+        TuiNotification::TurnCompleted {
             usage: TokenUsage {
                 input_tokens: 100,
                 output_tokens: 50,
@@ -62,9 +60,9 @@ fn test_tool_use_lifecycle() {
     let mut state = AppState::new();
 
     // Tool queued
-    handle_server_notification(
+    handle_tui_notification(
         &mut state,
-        ServerNotification::ToolUseQueued {
+        TuiNotification::ToolUseQueued {
             call_id: "c1".to_string(),
             name: "Bash".to_string(),
             input_preview: "ls -la".to_string(),
@@ -73,9 +71,9 @@ fn test_tool_use_lifecycle() {
     assert_eq!(state.session.tool_executions.len(), 1);
 
     // Tool completed
-    handle_server_notification(
+    handle_tui_notification(
         &mut state,
-        ServerNotification::ToolUseCompleted {
+        TuiNotification::ToolUseCompleted {
             call_id: "c1".to_string(),
             output: "file1.rs\nfile2.rs".to_string(),
             is_error: false,
@@ -90,9 +88,9 @@ fn test_tool_use_lifecycle() {
 fn test_subagent_lifecycle() {
     let mut state = AppState::new();
 
-    handle_server_notification(
+    handle_tui_notification(
         &mut state,
-        ServerNotification::SubagentSpawned {
+        TuiNotification::SubagentSpawned {
             agent_id: "a1".to_string(),
             agent_type: "Explore".to_string(),
             description: "Searching codebase".to_string(),
@@ -101,9 +99,9 @@ fn test_subagent_lifecycle() {
     );
     assert_eq!(state.session.subagents.len(), 1);
 
-    handle_server_notification(
+    handle_tui_notification(
         &mut state,
-        ServerNotification::SubagentCompleted {
+        TuiNotification::SubagentCompleted {
             agent_id: "a1".to_string(),
             result: "Found 3 files".to_string(),
             is_error: false,
@@ -119,9 +117,9 @@ fn test_subagent_lifecycle() {
 fn test_permission_request_shows_overlay() {
     let mut state = AppState::new();
 
-    handle_server_notification(
+    handle_tui_notification(
         &mut state,
-        ServerNotification::PermissionRequest {
+        TuiNotification::PermissionRequest {
             request_id: "req-1".to_string(),
             tool_name: "Bash".to_string(),
             description: "Execute command".to_string(),
@@ -139,9 +137,9 @@ fn test_permission_request_shows_overlay() {
 fn test_error_shows_toast() {
     let mut state = AppState::new();
 
-    handle_server_notification(
+    handle_tui_notification(
         &mut state,
-        ServerNotification::Error {
+        TuiNotification::Error {
             message: "API rate limit".to_string(),
             retryable: true,
         },
@@ -154,9 +152,9 @@ fn test_mcp_status() {
     let mut state = AppState::new();
 
     // New server
-    handle_server_notification(
+    handle_tui_notification(
         &mut state,
-        ServerNotification::McpStatus {
+        TuiNotification::McpStatus {
             server_name: "github".to_string(),
             connected: true,
             tool_count: 5,
@@ -166,9 +164,9 @@ fn test_mcp_status() {
     assert_eq!(state.session.connected_mcp_count(), 1);
 
     // Update existing
-    handle_server_notification(
+    handle_tui_notification(
         &mut state,
-        ServerNotification::McpStatus {
+        TuiNotification::McpStatus {
             server_name: "github".to_string(),
             connected: false,
             tool_count: 0,
@@ -182,9 +180,9 @@ fn test_mcp_status() {
 fn test_session_ended_quits() {
     let mut state = AppState::new();
 
-    handle_server_notification(
+    handle_tui_notification(
         &mut state,
-        ServerNotification::SessionEnded {
+        TuiNotification::SessionEnded {
             reason: "max_turns".to_string(),
         },
     );

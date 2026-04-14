@@ -196,10 +196,10 @@ pub fn matches_interactive_prompt(tail: &str) -> bool {
     // Directed question patterns (TS regex equivalent):
     // /\b(?:Do you|Would you|Shall I|Are you sure|Ready to)\b.*\? *$/i
     let question_prefixes = ["do you", "would you", "shall i", "are you sure", "ready to"];
-    if lower.ends_with('?') || lower.ends_with("? ") {
-        if question_prefixes.iter().any(|p| lower.contains(p)) {
-            return true;
-        }
+    if (lower.ends_with('?') || lower.ends_with("? "))
+        && question_prefixes.iter().any(|p| lower.contains(p))
+    {
+        return true;
     }
 
     // Action prompts ending with ?

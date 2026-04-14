@@ -120,8 +120,8 @@ fn test_create_post_compact_file_attachments_basic() {
     std::fs::write(&file_b, "fn b() {}").expect("write");
 
     let snapshot = vec![
-        (file_a.clone(), make_entry("fn a() {}", 1)),
-        (file_b.clone(), make_entry("fn b() {}", 2)),
+        (file_a, make_entry("fn a() {}", 1)),
+        (file_b, make_entry("fn b() {}", 2)),
     ];
 
     let atts = create_post_compact_file_attachments(&snapshot, &[], dir.path(), /*plan*/ None);

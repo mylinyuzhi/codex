@@ -3,7 +3,6 @@
 use crate::state::AppState;
 use crate::state::session::ChatMessage;
 use crate::state::session::ChatRole;
-use crate::state::session::MessageContent;
 use crate::state::session::TokenUsage;
 use crate::state::ui::Overlay;
 use crate::state::ui::PermissionDetail;

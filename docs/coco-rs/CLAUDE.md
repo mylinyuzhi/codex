@@ -134,14 +134,19 @@ ShellKind { Bash, Zsh, Sh, PowerShell }
 
 ### coco-query
 
-Owns the query loop and steering:
+Owns the query loop, steering, and stream-to-item conversion:
 
 ```
 QueryEngine, QueryEngineConfig, QueryConfig, QueryGates
-BudgetTracker, BudgetDecision, QueryEvent
+BudgetTracker, BudgetDecision, ContinueReason
 QueuedCommand, QueuePriority, CommandQueue, QueryGuard, PromptInputMode
 InboxMessage, InboxStatus
+StreamAccumulator (AgentStreamEvent → ServerNotification converter)
 ```
+
+Note: The old `QueryEvent` enum has been deleted in Phase 0. QueryEngine now
+emits `coco_types::CoreEvent` directly (3-layer Protocol/Stream/Tui).
+See `event-system-design.md`.
 
 ### coco-inference
 
@@ -350,7 +355,7 @@ Wire: provider-specific JSON
 /// vercel-ai stream → 内部 AssistantMessage
 pub fn collect_stream_to_message(
     stream: impl Stream<Item = StreamPart>,
-    event_tx: &mpsc::Sender<QueryEvent>,
+    event_tx: &mpsc::Sender<coco_types::CoreEvent>,
 ) -> (AssistantMessage, TokenUsage);
 ```
 

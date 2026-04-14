@@ -23,23 +23,24 @@ use crate::state::AppState;
 use crate::terminal::Tui;
 use crate::update::handle_command;
 
+use coco_types::CoreEvent;
+
 use crate::server_notification_handler;
-use crate::server_notification_handler::ServerNotification;
 
 /// Create the TUI ↔ Core communication channels.
 ///
-/// Returns (command_tx, command_rx, notification_tx, notification_rx):
+/// Returns (command_tx, command_rx, event_tx, event_rx):
 /// - command: TUI → Core (user actions)
-/// - notification: Core → TUI (agent events)
+/// - event: Core → TUI (agent CoreEvent stream, 3-layer Protocol/Stream/Tui)
 pub fn create_channels() -> (
     mpsc::Sender<UserCommand>,
     mpsc::Receiver<UserCommand>,
-    mpsc::Sender<ServerNotification>,
-    mpsc::Receiver<ServerNotification>,
+    mpsc::Sender<CoreEvent>,
+    mpsc::Receiver<CoreEvent>,
 ) {
     let (cmd_tx, cmd_rx) = mpsc::channel::<UserCommand>(32);
-    let (notif_tx, notif_rx) = mpsc::channel::<ServerNotification>(256);
-    (cmd_tx, cmd_rx, notif_tx, notif_rx)
+    let (event_tx, event_rx) = mpsc::channel::<CoreEvent>(256);
+    (cmd_tx, cmd_rx, event_tx, event_rx)
 }
 
 /// Main TUI application.
@@ -47,15 +48,15 @@ pub struct App {
     tui: Tui,
     state: AppState,
     command_tx: mpsc::Sender<UserCommand>,
-    /// Receives agent lifecycle events from the core.
-    notification_rx: mpsc::Receiver<ServerNotification>,
+    /// Receives CoreEvent (3-layer: Protocol/Stream/Tui) from the agent loop.
+    notification_rx: mpsc::Receiver<CoreEvent>,
 }
 
 impl App {
     /// Create a new TUI application.
     pub fn new(
         command_tx: mpsc::Sender<UserCommand>,
-        notification_rx: mpsc::Receiver<ServerNotification>,
+        notification_rx: mpsc::Receiver<CoreEvent>,
     ) -> io::Result<Self> {
         let tui = Tui::new()?;
         let state = AppState::new();
@@ -72,7 +73,7 @@ impl App {
     pub fn with_terminal(
         tui: Tui,
         command_tx: mpsc::Sender<UserCommand>,
-        notification_rx: mpsc::Receiver<ServerNotification>,
+        notification_rx: mpsc::Receiver<CoreEvent>,
     ) -> Self {
         Self {
             tui,
@@ -117,11 +118,11 @@ impl App {
                         needs_redraw = self.handle_event(event).await;
                     }
                 }
-                // Agent notifications from core
-                Some(notification) = self.notification_rx.recv() => {
-                    needs_redraw = server_notification_handler::handle_server_notification(
+                // Agent CoreEvent from core
+                Some(event) = self.notification_rx.recv() => {
+                    needs_redraw = server_notification_handler::handle_core_event(
                         &mut self.state,
-                        notification,
+                        event,
                     );
                 }
                 // Tick timer
@@ -241,13 +242,11 @@ impl App {
             } => {
                 if let Some(crate::state::Overlay::Permission(ref p)) = self.state.ui.overlay
                     && p.request_id == request_id
-                {
-                    if let Some(crate::state::Overlay::Permission(ref mut p)) =
+                    && let Some(crate::state::Overlay::Permission(ref mut p)) =
                         self.state.ui.overlay
-                    {
-                        p.classifier_checking = false;
-                        p.classifier_auto_approved = Some(matched_rule.unwrap_or_default());
-                    }
+                {
+                    p.classifier_checking = false;
+                    p.classifier_auto_approved = Some(matched_rule.unwrap_or_default());
                 }
                 true
             }

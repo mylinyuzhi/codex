@@ -1,7 +1,15 @@
 //! Server notification handler — processes protocol events from the agent loop.
 //!
-//! Maps agent lifecycle events (turn started/completed, tool use, subagent spawn)
-//! to SessionState mutations.
+//! Architecture: this module receives `CoreEvent` from the agent loop (via
+//! `handle_core_event`), translates each variant into one or more internal
+//! `TuiNotification`s (the TUI's pragmatic state-update type), and applies
+//! them via `handle_tui_notification`. This keeps the TUI's state mutation
+//! logic stable while letting it consume the 3-layer CoreEvent protocol.
+
+use coco_types::AgentStreamEvent;
+use coco_types::CoreEvent;
+use coco_types::ServerNotification;
+use coco_types::TuiOnlyEvent;
 
 use crate::state::AppState;
 use crate::state::session::ChatMessage;
@@ -11,12 +19,13 @@ use crate::state::session::SubagentStatus;
 use crate::state::session::TokenUsage;
 use crate::state::ui::Toast;
 
-/// A protocol notification from the agent loop.
+/// Internal TUI notification type.
 ///
-/// These map to the `ServerNotification` variants from `event-system-design.md`.
-/// Simplified subset for initial implementation.
+/// This is the pragmatic state-mutation type used inside the TUI.
+/// External `CoreEvent`s are translated into zero or more `TuiNotification`s
+/// via `core_event_to_tui_notifications()`.
 #[derive(Debug, Clone)]
-pub enum ServerNotification {
+pub enum TuiNotification {
     /// Agent turn started.
     TurnStarted { turn_number: i32 },
     /// Agent turn completed.
@@ -99,18 +108,166 @@ pub enum ServerNotification {
     SessionEnded { reason: String },
 }
 
-/// Handle a server notification, updating state accordingly.
+/// Handle a CoreEvent from the agent loop.
+///
+/// Translates the event into zero or more internal `TuiNotification`s and
+/// applies them. Returns `true` if any redraw is needed.
+///
+/// See `event-system-design.md` Section 1.4 for the 3-layer CoreEvent model.
+pub fn handle_core_event(state: &mut AppState, event: CoreEvent) -> bool {
+    let notifications = core_event_to_tui_notifications(event, state);
+    let mut needs_redraw = false;
+    for n in notifications {
+        needs_redraw |= handle_tui_notification(state, n);
+    }
+    needs_redraw
+}
+
+/// Translate a CoreEvent into zero or more TuiNotifications.
+///
+/// Protocol events map to lifecycle notifications; Stream events map to
+/// streaming display notifications; Tui events map to overlay/toast actions.
+fn core_event_to_tui_notifications(event: CoreEvent, state: &AppState) -> Vec<TuiNotification> {
+    match event {
+        CoreEvent::Protocol(n) => translate_protocol(n, state),
+        CoreEvent::Stream(s) => translate_stream(s),
+        CoreEvent::Tui(t) => translate_tui_only(t),
+    }
+}
+
+fn translate_protocol(notif: ServerNotification, _state: &AppState) -> Vec<TuiNotification> {
+    match notif {
+        ServerNotification::TurnStarted(p) => vec![TuiNotification::TurnStarted {
+            turn_number: p.turn_number,
+        }],
+        ServerNotification::TurnCompleted(p) => vec![TuiNotification::TurnCompleted {
+            usage: TokenUsage {
+                input_tokens: p.usage.input_tokens,
+                output_tokens: p.usage.output_tokens,
+                cache_read_tokens: p.usage.cache_read_input_tokens,
+                cache_creation_tokens: p.usage.cache_creation_input_tokens,
+            },
+        }],
+        ServerNotification::TurnFailed(p) => vec![TuiNotification::TurnFailed { error: p.error }],
+        ServerNotification::SubagentSpawned(p) => vec![TuiNotification::SubagentSpawned {
+            agent_id: p.agent_id,
+            agent_type: p.agent_type,
+            description: p.description,
+            color: p.color,
+        }],
+        ServerNotification::SubagentCompleted(p) => vec![TuiNotification::SubagentCompleted {
+            agent_id: p.agent_id,
+            result: p.result,
+            is_error: p.is_error,
+        }],
+        ServerNotification::McpStartupStatus(p) => vec![TuiNotification::McpStatus {
+            server_name: p.server,
+            connected: p.status == "connected",
+            tool_count: 0,
+        }],
+        ServerNotification::Error(p) => vec![TuiNotification::Error {
+            message: p.message,
+            retryable: p.retryable,
+        }],
+        ServerNotification::PlanModeChanged(p) => {
+            vec![TuiNotification::PlanModeChanged { entered: p.entered }]
+        }
+        ServerNotification::ContextCompacted(p) => vec![TuiNotification::ContextCompacted {
+            removed_messages: p.removed_messages,
+            summary_tokens: p.summary_tokens,
+        }],
+        ServerNotification::SessionEnded(p) => {
+            vec![TuiNotification::SessionEnded { reason: p.reason }]
+        }
+        // Events not currently surfaced in the TUI are dropped silently.
+        _ => vec![],
+    }
+}
+
+fn translate_stream(event: AgentStreamEvent) -> Vec<TuiNotification> {
+    match event {
+        AgentStreamEvent::TextDelta { delta, .. } => vec![TuiNotification::TextDelta { delta }],
+        AgentStreamEvent::ThinkingDelta { delta, .. } => {
+            vec![TuiNotification::ThinkingDelta { delta }]
+        }
+        AgentStreamEvent::ToolUseQueued {
+            call_id,
+            name,
+            input,
+        } => {
+            let input_preview = input.to_string();
+            vec![TuiNotification::ToolUseQueued {
+                call_id,
+                name,
+                input_preview,
+            }]
+        }
+        AgentStreamEvent::ToolUseStarted { .. } => vec![], // in-progress indicator not wired yet
+        AgentStreamEvent::ToolUseCompleted {
+            call_id,
+            name: _,
+            output,
+            is_error,
+        } => vec![TuiNotification::ToolUseCompleted {
+            call_id,
+            output,
+            is_error,
+        }],
+        AgentStreamEvent::McpToolCallBegin { .. } | AgentStreamEvent::McpToolCallEnd { .. } => {
+            vec![]
+        }
+    }
+}
+
+fn translate_tui_only(event: TuiOnlyEvent) -> Vec<TuiNotification> {
+    match event {
+        TuiOnlyEvent::ApprovalRequired {
+            request_id,
+            tool_name,
+            description,
+            input_preview,
+        } => vec![TuiNotification::PermissionRequest {
+            request_id,
+            tool_name,
+            description,
+            input_preview,
+        }],
+        TuiOnlyEvent::DiffStatsReady {
+            message_id,
+            files_changed,
+            insertions,
+            deletions,
+        } => vec![TuiNotification::DiffStatsLoaded {
+            message_id,
+            files_changed,
+            insertions,
+            deletions,
+            has_any_changes: files_changed > 0,
+        }],
+        TuiOnlyEvent::RewindCompleted {
+            target_message_id,
+            files_changed,
+        } => vec![TuiNotification::RewindCompleted {
+            target_message_id,
+            files_changed,
+        }],
+        // QuestionAsked, ToolCallDelta, ToolProgress: not yet wired into state
+        _ => vec![],
+    }
+}
+
+/// Handle an internal TUI notification, updating state accordingly.
 ///
 /// Returns `true` if the state changed and a redraw is needed.
-pub fn handle_server_notification(state: &mut AppState, notification: ServerNotification) -> bool {
+pub fn handle_tui_notification(state: &mut AppState, notification: TuiNotification) -> bool {
     match notification {
-        ServerNotification::TurnStarted { turn_number } => {
+        TuiNotification::TurnStarted { turn_number } => {
             state.session.turn_count = turn_number;
             state.session.set_busy(true);
             state.ui.streaming = Some(crate::state::ui::StreamingState::new());
             true
         }
-        ServerNotification::TurnCompleted { usage } => {
+        TuiNotification::TurnCompleted { usage } => {
             state.session.set_busy(false);
             state.session.update_tokens(usage);
             // Commit streaming content to messages
@@ -134,52 +291,49 @@ pub fn handle_server_notification(state: &mut AppState, notification: ServerNoti
             if state.session.was_interrupted
                 && state.ui.input.is_empty()
                 && state.ui.overlay.is_none()
-            {
-                if let Some(idx) =
+                && let Some(idx) =
                     crate::update_rewind::find_last_user_message_index(&state.session.messages)
-                {
-                    if crate::update_rewind::messages_after_are_only_synthetic(
-                        &state.session.messages,
-                        idx,
-                    ) {
-                        // Lossless: auto-restore input and truncate
-                        let input_text = state.session.messages[idx].text_content().to_string();
-                        let perm = state.session.messages[idx].permission_mode;
-                        state.session.messages.truncate(idx);
-                        if let Some(mode) = perm {
-                            state.session.permission_mode = mode;
-                        }
-                        if !input_text.is_empty() {
-                            state.ui.input.text = input_text;
-                            state.ui.input.cursor = state.ui.input.text.chars().count() as i32;
-                        }
-                        state.ui.scroll_offset = 0;
-                        state.ui.user_scrolled = false;
-                    }
+                && crate::update_rewind::messages_after_are_only_synthetic(
+                    &state.session.messages,
+                    idx,
+                )
+            {
+                // Lossless: auto-restore input and truncate
+                let input_text = state.session.messages[idx].text_content().to_string();
+                let perm = state.session.messages[idx].permission_mode;
+                state.session.messages.truncate(idx);
+                if let Some(mode) = perm {
+                    state.session.permission_mode = mode;
                 }
+                if !input_text.is_empty() {
+                    state.ui.input.text = input_text;
+                    state.ui.input.cursor = state.ui.input.text.chars().count() as i32;
+                }
+                state.ui.scroll_offset = 0;
+                state.ui.user_scrolled = false;
             }
             state.session.was_interrupted = false;
             true
         }
-        ServerNotification::TurnFailed { error } => {
+        TuiNotification::TurnFailed { error } => {
             state.session.set_busy(false);
             state.ui.streaming = None;
             state.ui.add_toast(Toast::error(error));
             true
         }
-        ServerNotification::TextDelta { delta } => {
+        TuiNotification::TextDelta { delta } => {
             if let Some(ref mut streaming) = state.ui.streaming {
                 streaming.append_text(&delta);
             }
             true
         }
-        ServerNotification::ThinkingDelta { delta } => {
+        TuiNotification::ThinkingDelta { delta } => {
             if let Some(ref mut streaming) = state.ui.streaming {
                 streaming.append_thinking(&delta);
             }
             true
         }
-        ServerNotification::ToolUseQueued {
+        TuiNotification::ToolUseQueued {
             call_id,
             name,
             input_preview: _,
@@ -187,7 +341,7 @@ pub fn handle_server_notification(state: &mut AppState, notification: ServerNoti
             state.session.start_tool(call_id, name);
             true
         }
-        ServerNotification::ToolUseCompleted {
+        TuiNotification::ToolUseCompleted {
             call_id,
             output,
             is_error,
@@ -216,7 +370,7 @@ pub fn handle_server_notification(state: &mut AppState, notification: ServerNoti
             }
             true
         }
-        ServerNotification::SubagentSpawned {
+        TuiNotification::SubagentSpawned {
             agent_id,
             agent_type,
             description,
@@ -231,7 +385,7 @@ pub fn handle_server_notification(state: &mut AppState, notification: ServerNoti
             });
             true
         }
-        ServerNotification::SubagentCompleted {
+        TuiNotification::SubagentCompleted {
             agent_id,
             result: _,
             is_error,
@@ -250,7 +404,7 @@ pub fn handle_server_notification(state: &mut AppState, notification: ServerNoti
             }
             true
         }
-        ServerNotification::McpStatus {
+        TuiNotification::McpStatus {
             server_name,
             connected,
             tool_count,
@@ -272,18 +426,18 @@ pub fn handle_server_notification(state: &mut AppState, notification: ServerNoti
             }
             true
         }
-        ServerNotification::Error {
+        TuiNotification::Error {
             message,
             retryable: _,
         } => {
             state.ui.add_toast(Toast::error(message));
             true
         }
-        ServerNotification::PlanModeChanged { entered } => {
+        TuiNotification::PlanModeChanged { entered } => {
             state.session.plan_mode = entered;
             true
         }
-        ServerNotification::ContextCompacted {
+        TuiNotification::ContextCompacted {
             removed_messages,
             summary_tokens: _,
         } => {
@@ -293,7 +447,7 @@ pub fn handle_server_notification(state: &mut AppState, notification: ServerNoti
             )));
             true
         }
-        ServerNotification::PermissionRequest {
+        TuiNotification::PermissionRequest {
             request_id,
             tool_name,
             description,
@@ -313,7 +467,7 @@ pub fn handle_server_notification(state: &mut AppState, notification: ServerNoti
             ));
             true
         }
-        ServerNotification::DiffStatsLoaded {
+        TuiNotification::DiffStatsLoaded {
             message_id: stats_message_id,
             files_changed: diff_files,
             insertions,
@@ -345,7 +499,7 @@ pub fn handle_server_notification(state: &mut AppState, notification: ServerNoti
             }
             true
         }
-        ServerNotification::RewindCompleted {
+        TuiNotification::RewindCompleted {
             target_message_id,
             files_changed,
             ..
@@ -356,33 +510,31 @@ pub fn handle_server_notification(state: &mut AppState, notification: ServerNoti
             let mut restored_permission_mode = None;
             let mut restored_input_text = None;
 
-            if !target_message_id.is_empty() {
-                if let Some(target_msg) = state
+            if !target_message_id.is_empty()
+                && let Some(target_msg) = state
                     .session
                     .messages
                     .iter()
                     .find(|m| m.id == target_message_id)
-                {
-                    // TS: message.permissionMode
-                    restored_permission_mode = target_msg.permission_mode;
-                    // TS: textForResubmit(message) — extract user input for
-                    // re-submission after rewind.
-                    restored_input_text =
-                        Some(target_msg.text_content().to_string()).filter(|s| !s.is_empty());
-                }
+            {
+                // TS: message.permissionMode
+                restored_permission_mode = target_msg.permission_mode;
+                // TS: textForResubmit(message) — extract user input for
+                // re-submission after rewind.
+                restored_input_text =
+                    Some(target_msg.text_content().to_string()).filter(|s| !s.is_empty());
             }
 
             // Truncate messages to the target message.
             // TS: setMessages(prev.slice(0, messageIndex))
-            if !target_message_id.is_empty() {
-                if let Some(idx) = state
+            if !target_message_id.is_empty()
+                && let Some(idx) = state
                     .session
                     .messages
                     .iter()
                     .position(|m| m.id == target_message_id)
-                {
-                    state.session.messages.truncate(idx);
-                }
+            {
+                state.session.messages.truncate(idx);
             }
 
             // Restore permission mode.
@@ -413,7 +565,7 @@ pub fn handle_server_notification(state: &mut AppState, notification: ServerNoti
             state.ui.add_toast(Toast::success(msg));
             true
         }
-        ServerNotification::SessionEnded { reason: _ } => {
+        TuiNotification::SessionEnded { reason: _ } => {
             state.quit();
             true
         }

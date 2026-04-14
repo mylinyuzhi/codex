@@ -4,6 +4,7 @@
 
 pub mod output;
 pub mod sdk;
+pub mod sdk_server;
 pub mod transport;
 
 use clap::Parser;
@@ -254,6 +255,13 @@ pub enum Commands {
 
     /// Show cost and usage information.
     Usage,
+
+    /// Run in SDK mode — NDJSON over stdio with the JSON-RPC control
+    /// protocol. Intended to be spawned as a subprocess by the
+    /// Python/TypeScript SDK client.
+    ///
+    /// TS: `src/cli/structuredIO.ts` — the `StructuredIO` loop.
+    Sdk,
 }
 
 /// Config subcommand actions.

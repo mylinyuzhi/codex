@@ -260,10 +260,9 @@ pub fn find_unsafe_type_references(command: &str) -> Vec<String> {
                 && !type_name
                     .chars()
                     .all(|c| c.is_ascii_digit() || c == ',' || c == ' ')
+                && !is_clm_allowed_type(type_name)
             {
-                if !is_clm_allowed_type(type_name) {
-                    unsafe_types.push(type_name.to_string());
-                }
+                unsafe_types.push(type_name.to_string());
             }
             rest = &after_open[close + 1..];
         } else {
@@ -369,12 +368,7 @@ pub fn classify_ps_command(command: &str) -> (bool, bool) {
     let mut has_non_neutral = false;
 
     for part in &parts {
-        let base = part
-            .trim()
-            .split_whitespace()
-            .next()
-            .unwrap_or("")
-            .to_lowercase();
+        let base = part.split_whitespace().next().unwrap_or("").to_lowercase();
         if base.is_empty() {
             continue;
         }

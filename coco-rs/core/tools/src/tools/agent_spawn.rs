@@ -86,10 +86,11 @@ pub fn load_agents_from_dirs(dirs: &[PathBuf]) -> Vec<AgentDefinition> {
             .filter_map(Result::ok)
         {
             let path = entry.path();
-            if path.extension().is_some_and(|e| e == "md") && path.is_file() {
-                if let Some(agent) = parse_agent_definition(path) {
-                    agents.push(agent);
-                }
+            if path.extension().is_some_and(|e| e == "md")
+                && path.is_file()
+                && let Some(agent) = parse_agent_definition(path)
+            {
+                agents.push(agent);
             }
         }
     }
@@ -152,10 +153,7 @@ fn parse_agent_definition(path: &Path) -> Option<AgentDefinition> {
         .trim()
         .to_string();
 
-    let name = frontmatter
-        .get("name")
-        .cloned()
-        .unwrap_or(file_name.clone());
+    let name = frontmatter.get("name").cloned().unwrap_or(file_name);
 
     let parse_list = |key: &str| -> Vec<String> {
         frontmatter

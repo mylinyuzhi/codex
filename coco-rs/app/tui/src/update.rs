@@ -1045,13 +1045,13 @@ fn filtered_session_count(s: &SessionBrowserOverlay) -> i32 {
 /// Called after navigation (OverlayNext/Prev) so diff stats update when user
 /// scrolls through messages. TS: MessageSelector useEffect re-computes on selectedIndex change.
 async fn request_diff_stats_if_rewind(state: &AppState, command_tx: &mpsc::Sender<UserCommand>) {
-    if let Some(Overlay::Rewind(ref r)) = state.ui.overlay {
-        if let Some(msg) = r.messages.get(r.selected as usize) {
-            let _ = command_tx
-                .send(UserCommand::RequestDiffStats {
-                    message_id: msg.message_id.clone(),
-                })
-                .await;
-        }
+    if let Some(Overlay::Rewind(ref r)) = state.ui.overlay
+        && let Some(msg) = r.messages.get(r.selected as usize)
+    {
+        let _ = command_tx
+            .send(UserCommand::RequestDiffStats {
+                message_id: msg.message_id.clone(),
+            })
+            .await;
     }
 }

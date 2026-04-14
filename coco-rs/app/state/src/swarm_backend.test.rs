@@ -12,7 +12,7 @@ fn test_backend_detection_result_clone() {
         is_native: true,
         needs_it2_setup: false,
     };
-    let cloned = result.clone();
+    let cloned = result;
     assert_eq!(cloned.backend_type, BackendType::Tmux);
     assert!(cloned.is_native);
 }

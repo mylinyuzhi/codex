@@ -33,7 +33,7 @@ and UI behaviors that need Rust widget implementations.
 ```
 coco-tui depends on:
   - coco-types, coco-config, coco-state (AppState)
-  - coco-query (QueryEvent — for streaming updates)
+  - coco-query (re-exports CoreEvent from coco-types — QueryEngine emits these directly)
   - coco-commands (CommandRegistry — for command palette)
   - ratatui, crossterm
 

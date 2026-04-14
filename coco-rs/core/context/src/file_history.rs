@@ -169,12 +169,11 @@ impl FileHistoryState {
         session_id: &str,
     ) -> Result<()> {
         // Phase 1: Check if already tracked in current snapshot.
-        if let Some(snapshot) = self.snapshots.last() {
-            if snapshot.message_id == message_id
-                && snapshot.tracked_file_backups.contains_key(file_path)
-            {
-                return Ok(());
-            }
+        if let Some(snapshot) = self.snapshots.last()
+            && snapshot.message_id == message_id
+            && snapshot.tracked_file_backups.contains_key(file_path)
+        {
+            return Ok(());
         }
 
         self.tracked_files.insert(file_path.to_path_buf());
@@ -213,21 +212,21 @@ impl FileHistoryState {
             backup_time: current_time_ms(),
         };
 
-        if let Some(snapshot) = self.snapshots.last_mut() {
-            if snapshot.message_id == message_id {
-                snapshot
-                    .tracked_file_backups
-                    .insert(file_path.to_path_buf(), backup);
-                // TS: tengu_file_history_track_edit_success
-                tracing::info!(
-                    target: "file_history",
-                    event = "track_edit_success",
-                    file = %file_path.display(),
-                    version,
-                    is_new_file,
-                );
-                return Ok(());
-            }
+        if let Some(snapshot) = self.snapshots.last_mut()
+            && snapshot.message_id == message_id
+        {
+            snapshot
+                .tracked_file_backups
+                .insert(file_path.to_path_buf(), backup);
+            // TS: tengu_file_history_track_edit_success
+            tracing::info!(
+                target: "file_history",
+                event = "track_edit_success",
+                file = %file_path.display(),
+                version,
+                is_new_file,
+            );
+            return Ok(());
         }
 
         // New snapshot — inherit backups from previous.

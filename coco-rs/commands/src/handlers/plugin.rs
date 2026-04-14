@@ -481,7 +481,7 @@ async fn marketplace_add(source: &str) -> anyhow::Result<String> {
     let (name, mkt_source) =
         if source.contains('/') && !source.contains("://") && !source.contains(' ') {
             // GitHub shorthand: owner/repo
-            let name = source.split('/').last().unwrap_or(source);
+            let name = source.split('/').next_back().unwrap_or(source);
             (
                 name.to_string(),
                 coco_plugins::schemas::MarketplaceSource::Github {

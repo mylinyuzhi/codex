@@ -48,7 +48,7 @@ where
 ///
 /// TS: `getTeammateContext()`
 pub fn get_teammate_context() -> Option<TeammateContextData> {
-    TEAMMATE_CONTEXT.try_with(|ctx| ctx.clone()).ok()
+    TEAMMATE_CONTEXT.try_with(std::clone::Clone::clone).ok()
 }
 
 /// Check if running as an in-process teammate.

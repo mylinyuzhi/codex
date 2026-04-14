@@ -93,10 +93,10 @@ impl PermissionEvaluator {
                     if is_shell_tool(&rule.value.tool_pattern) && rule.value.rule_content.is_some()
                     {
                         let content = rule.value.rule_content.as_deref().unwrap_or("");
-                        if let Some(command) = extract_shell_command(input) {
-                            if !shell_rules::matches_bash_rule(content, &command) {
-                                continue;
-                            }
+                        if let Some(command) = extract_shell_command(input)
+                            && !shell_rules::matches_bash_rule(content, &command)
+                        {
+                            continue;
                         }
                     }
                     return PermissionDecision::Deny {
@@ -167,23 +167,20 @@ impl PermissionEvaluator {
         // Step 4: Ask rules — tool-wide ask
         if let Some(ask_rule) = get_tool_wide_rule(context, &tool_str, PermissionBehavior::Ask) {
             // If this is a shell tool, check if there are content-specific rules first
-            if is_shell_tool(&ask_rule.value.tool_pattern) {
-                if let Some(command) = extract_shell_command(input) {
-                    // Step 5: Content-specific ask rules
-                    for rules in context.ask_rules.values() {
-                        for rule in rules {
-                            if matches_tool_pattern(&rule.value.tool_pattern, &tool_str) {
-                                if let Some(content) = &rule.value.rule_content {
-                                    if shell_rules::matches_bash_rule(content, &command) {
-                                        return PermissionDecision::Ask {
-                                            message: format!(
-                                                "ask rule matched: {tool_str}({content})"
-                                            ),
-                                            suggestions: vec![],
-                                        };
-                                    }
-                                }
-                            }
+            if is_shell_tool(&ask_rule.value.tool_pattern)
+                && let Some(command) = extract_shell_command(input)
+            {
+                // Step 5: Content-specific ask rules
+                for rules in context.ask_rules.values() {
+                    for rule in rules {
+                        if matches_tool_pattern(&rule.value.tool_pattern, &tool_str)
+                            && let Some(content) = &rule.value.rule_content
+                            && shell_rules::matches_bash_rule(content, &command)
+                        {
+                            return PermissionDecision::Ask {
+                                message: format!("ask rule matched: {tool_str}({content})"),
+                                suggestions: vec![],
+                            };
                         }
                     }
                 }
@@ -196,19 +193,19 @@ impl PermissionEvaluator {
         }
 
         // Step 6: Path safety checks for file-modifying tools
-        if is_file_modifying_tool(&tool_str) {
-            if let Some(path) = extract_file_path(input) {
-                let safety = filesystem::check_path_safety_for_auto_edit(&path);
-                if let filesystem::PathSafetyResult::Blocked {
+        if is_file_modifying_tool(&tool_str)
+            && let Some(path) = extract_file_path(input)
+        {
+            let safety = filesystem::check_path_safety_for_auto_edit(&path);
+            if let filesystem::PathSafetyResult::Blocked {
+                message,
+                classifier_approvable: _,
+            } = safety
+            {
+                return PermissionDecision::Ask {
                     message,
-                    classifier_approvable: _,
-                } = safety
-                {
-                    return PermissionDecision::Ask {
-                        message,
-                        suggestions: vec![],
-                    };
-                }
+                    suggestions: vec![],
+                };
             }
         }
 
@@ -483,18 +480,18 @@ fn matches_tool_pattern(pattern: &str, tool: &str) -> bool {
         return tool == base;
     }
     // MCP server-level: "mcp__server" matches "mcp__server__tool"
-    if let Some(pattern_rest) = pattern.strip_prefix(MCP_TOOL_PREFIX) {
-        if let Some(tool_rest) = tool.strip_prefix(MCP_TOOL_PREFIX) {
-            // pattern_rest = "server" (no separator = server-level rule)
-            // tool_rest = "server__tool"
-            if !pattern_rest.contains(MCP_TOOL_SEPARATOR) {
-                // Server-level pattern: extract server from tool
-                let tool_server = tool_rest
-                    .split_once(MCP_TOOL_SEPARATOR)
-                    .map(|(s, _)| s)
-                    .unwrap_or(tool_rest);
-                return pattern_rest == tool_server;
-            }
+    if let Some(pattern_rest) = pattern.strip_prefix(MCP_TOOL_PREFIX)
+        && let Some(tool_rest) = tool.strip_prefix(MCP_TOOL_PREFIX)
+    {
+        // pattern_rest = "server" (no separator = server-level rule)
+        // tool_rest = "server__tool"
+        if !pattern_rest.contains(MCP_TOOL_SEPARATOR) {
+            // Server-level pattern: extract server from tool
+            let tool_server = tool_rest
+                .split_once(MCP_TOOL_SEPARATOR)
+                .map(|(s, _)| s)
+                .unwrap_or(tool_rest);
+            return pattern_rest == tool_server;
         }
     }
     pattern == tool

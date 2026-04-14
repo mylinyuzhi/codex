@@ -1,0 +1,1322 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ClientRequest",
+  "description": "Bidirectional control protocol — client-initiated requests.\n\nEach variant carries a unique `method` string used on the wire. The method is the discriminator; params are the variant-specific payload.\n\nSee `event-system-design.md` §5.1 for the 22 base variants and §5.4 for the 7 gap additions. 29 total.",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "initialize"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/InitializeParams"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "session/start"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/SessionStartParams"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "session/resume"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/SessionResumeParams"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "method"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "session/list"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "session/read"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/SessionReadParams"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "session/archive"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/SessionArchiveParams"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "turn/start"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/TurnStartParams"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "method"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "turn/interrupt"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "approval/resolve"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/ApprovalResolveParams"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "input/resolveUserInput"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/UserInputResolveParams"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "control/setModel"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/SetModelParams"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "control/setPermissionMode"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/SetPermissionModeParams"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "control/setThinking"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/SetThinkingParams"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "control/stopTask"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/StopTaskParams"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "control/rewindFiles"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/RewindFilesParams"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "control/updateEnv"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/UpdateEnvParams"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "method"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "control/keepAlive"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "control/cancelRequest"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/CancelRequestParams"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "method"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "config/read"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "config/value/write"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/ConfigWriteParams"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "hook/callbackResponse"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/HookCallbackResponseParams"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "mcp/routeMessageResponse"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/McpRouteMessageResponseParams"
+        }
+      }
+    },
+    {
+      "description": "Query MCP server connection status. TS: `SDKControlMcpStatusRequestSchema`",
+      "type": "object",
+      "required": [
+        "method"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "mcp/status"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Get context window usage breakdown. TS: `SDKControlGetContextUsageRequestSchema`",
+      "type": "object",
+      "required": [
+        "method"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "context/usage"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Hot-reload MCP server configurations. TS: `SDKControlMcpSetServersRequestSchema`",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "mcp/setServers"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/McpSetServersParams"
+        }
+      }
+    },
+    {
+      "description": "Reconnect a specific MCP server. TS: `SDKControlMcpReconnectRequestSchema`",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "mcp/reconnect"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/McpReconnectParams"
+        }
+      }
+    },
+    {
+      "description": "Enable/disable a specific MCP server. TS: `SDKControlMcpToggleRequestSchema`",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "mcp/toggle"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/McpToggleParams"
+        }
+      }
+    },
+    {
+      "description": "Reload all plugins from disk. TS: `SDKControlReloadPluginsRequestSchema`",
+      "type": "object",
+      "required": [
+        "method"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "plugin/reload"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Apply feature flag settings at runtime. TS: `SDKControlApplyFlagSettingsRequestSchema`",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "config/applyFlags"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/ConfigApplyFlagsParams"
+        }
+      }
+    }
+  ],
+  "definitions": {
+    "ApprovalDecision": {
+      "description": "TS uses `allow` / `deny` / `ask` for the canUseTool response flow.",
+      "type": "string",
+      "enum": [
+        "allow",
+        "deny"
+      ]
+    },
+    "ApprovalResolveParams": {
+      "description": "Matches TS `SDKControlPermissionRequestSchema` response shape flipped — here the SDK is *resolving* an approval request, so it's sent client→server.",
+      "type": "object",
+      "required": [
+        "decision",
+        "request_id"
+      ],
+      "properties": {
+        "decision": {
+          "$ref": "#/definitions/ApprovalDecision"
+        },
+        "feedback": {
+          "description": "Optional feedback to inject back to the model.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "permission_update": {
+          "description": "Optional permission update to persist to rules.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PermissionUpdate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "updated_input": {
+          "description": "Optional modified tool input (for pre-approval mutation)."
+        }
+      }
+    },
+    "CancelRequestParams": {
+      "description": "Params for `control/cancelRequest`.",
+      "type": "object",
+      "required": [
+        "request_id"
+      ],
+      "properties": {
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_id": {
+          "type": "string"
+        }
+      }
+    },
+    "ConfigApplyFlagsParams": {
+      "description": "Matches TS `SDKControlApplyFlagSettingsRequestSchema` (controlSchemas.ts:467-472).",
+      "type": "object",
+      "required": [
+        "settings"
+      ],
+      "properties": {
+        "settings": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "ConfigWriteParams": {
+      "description": "Params for `config/value/write`.",
+      "type": "object",
+      "required": [
+        "key",
+        "value"
+      ],
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "scope": {
+          "description": "Optional scope: \"user\" | \"project\" | \"local\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value": true
+      }
+    },
+    "HookCallbackMatcher": {
+      "description": "Matches TS `SDKHookCallbackMatcherSchema` (controlSchemas.ts:43-51).",
+      "type": "object",
+      "required": [
+        "hook_callback_ids"
+      ],
+      "properties": {
+        "hook_callback_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "matcher": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timeout": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      }
+    },
+    "HookCallbackResponseParams": {
+      "description": "Matches TS `SDKHookCallbackRequestSchema` response direction flipped — client→server reply to a prior `hook/callback` ServerRequest.",
+      "type": "object",
+      "required": [
+        "callback_id",
+        "output"
+      ],
+      "properties": {
+        "callback_id": {
+          "type": "string"
+        },
+        "output": {
+          "description": "Hook output (stdout/stderr + optional behavior field)."
+        }
+      }
+    },
+    "InitializeParams": {
+      "description": "Matches TS `SDKControlInitializeRequestSchema` (controlSchemas.ts:57-71).\n\nSent once at session start for capability negotiation. Carries hooks, SDK MCP servers, output format, system prompt, and agent definitions so the agent can construct its registries before the first turn.",
+      "type": "object",
+      "properties": {
+        "agent_progress_summaries": {
+          "description": "Enable agent progress summaries.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "agents": {
+          "description": "Custom agent definitions keyed by name.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "append_system_prompt": {
+          "description": "Text appended to the default system prompt.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hooks": {
+          "description": "Hook callbacks keyed by event type.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/definitions/HookCallbackMatcher"
+            }
+          }
+        },
+        "json_schema": {
+          "description": "JSON schema for structured output."
+        },
+        "prompt_suggestions": {
+          "description": "Enable prompt suggestions in the output stream.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "sdk_mcp_servers": {
+          "description": "SDK-provided MCP server names (to skip env-configured ones).",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "system_prompt": {
+          "description": "Full system prompt override.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "McpReconnectParams": {
+      "description": "Matches TS `SDKControlMcpReconnectRequestSchema` (controlSchemas.ts:438-441).",
+      "type": "object",
+      "required": [
+        "server_name"
+      ],
+      "properties": {
+        "server_name": {
+          "type": "string"
+        }
+      }
+    },
+    "McpRouteMessageResponseParams": {
+      "description": "Matches TS `SDKControlMcpMessageRequestSchema` response direction — client→server reply to a prior `mcp/routeMessage` ServerRequest.",
+      "type": "object",
+      "required": [
+        "message",
+        "request_id"
+      ],
+      "properties": {
+        "message": {
+          "description": "JSON-RPC message response from the SDK-hosted MCP server."
+        },
+        "request_id": {
+          "type": "string"
+        }
+      }
+    },
+    "McpSetServersParams": {
+      "description": "Matches TS `SDKControlMcpSetServersRequestSchema` (controlSchemas.ts:387-390).",
+      "type": "object",
+      "required": [
+        "servers"
+      ],
+      "properties": {
+        "servers": {
+          "description": "Server configs keyed by name.",
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "McpToggleParams": {
+      "description": "Matches TS `SDKControlMcpToggleRequestSchema` (controlSchemas.ts:447-451).",
+      "type": "object",
+      "required": [
+        "enabled",
+        "server_name"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "server_name": {
+          "type": "string"
+        }
+      }
+    },
+    "PermissionBehavior": {
+      "description": "Permission behavior for a rule.",
+      "type": "string",
+      "enum": [
+        "allow",
+        "deny",
+        "ask"
+      ]
+    },
+    "PermissionMode": {
+      "description": "Permission mode (top-level because it's used by both message and permission modules).",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "default",
+            "plan",
+            "bypass_permissions",
+            "dont_ask",
+            "accept_edits"
+          ]
+        },
+        {
+          "description": "Feature-gated auto mode.",
+          "type": "string",
+          "enum": [
+            "auto"
+          ]
+        },
+        {
+          "description": "Internal: escalate to parent agent.",
+          "type": "string",
+          "enum": [
+            "bubble"
+          ]
+        }
+      ]
+    },
+    "PermissionRule": {
+      "description": "A single permission rule.",
+      "type": "object",
+      "required": [
+        "behavior",
+        "source",
+        "value"
+      ],
+      "properties": {
+        "behavior": {
+          "$ref": "#/definitions/PermissionBehavior"
+        },
+        "source": {
+          "$ref": "#/definitions/PermissionRuleSource"
+        },
+        "value": {
+          "$ref": "#/definitions/PermissionRuleValue"
+        }
+      }
+    },
+    "PermissionRuleSource": {
+      "description": "Source of a permission rule (ordered by priority: Session is most specific).",
+      "type": "string",
+      "enum": [
+        "user_settings",
+        "project_settings",
+        "local_settings",
+        "flag_settings",
+        "policy_settings",
+        "cli_arg",
+        "command",
+        "session"
+      ]
+    },
+    "PermissionRuleValue": {
+      "description": "Permission rule value — tool_pattern is a glob/wildcard expression. Examples: \"Read\", \"Bash(git *)\", \"mcp__slack__*\", \"*\"",
+      "type": "object",
+      "required": [
+        "tool_pattern"
+      ],
+      "properties": {
+        "rule_content": {
+          "description": "Command pattern within tool (e.g. \"git *\").",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_pattern": {
+          "type": "string"
+        }
+      }
+    },
+    "PermissionUpdate": {
+      "description": "A permission update action.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "destination",
+            "rules",
+            "type"
+          ],
+          "properties": {
+            "destination": {
+              "$ref": "#/definitions/PermissionUpdateDestination"
+            },
+            "rules": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/PermissionRule"
+              }
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "add_rules"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "destination",
+            "rules",
+            "type"
+          ],
+          "properties": {
+            "destination": {
+              "$ref": "#/definitions/PermissionUpdateDestination"
+            },
+            "rules": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/PermissionRule"
+              }
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "replace_rules"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "destination",
+            "rules",
+            "type"
+          ],
+          "properties": {
+            "destination": {
+              "$ref": "#/definitions/PermissionUpdateDestination"
+            },
+            "rules": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/PermissionRule"
+              }
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "remove_rules"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "mode",
+            "type"
+          ],
+          "properties": {
+            "mode": {
+              "$ref": "#/definitions/PermissionMode"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "set_mode"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "destination",
+            "directories",
+            "type"
+          ],
+          "properties": {
+            "destination": {
+              "$ref": "#/definitions/PermissionUpdateDestination"
+            },
+            "directories": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "add_directories"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "destination",
+            "directories",
+            "type"
+          ],
+          "properties": {
+            "destination": {
+              "$ref": "#/definitions/PermissionUpdateDestination"
+            },
+            "directories": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "remove_directories"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "PermissionUpdateDestination": {
+      "description": "Destination for persisting permission updates.",
+      "type": "string",
+      "enum": [
+        "user_settings",
+        "project_settings",
+        "local_settings",
+        "session",
+        "cli_arg"
+      ]
+    },
+    "ReasoningEffort": {
+      "description": "Reasoning effort level. Ordered from lowest to highest. Provider-agnostic scale — thinking_convert maps to per-provider values.",
+      "type": "string",
+      "enum": [
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "x_high"
+      ]
+    },
+    "RewindFilesParams": {
+      "description": "Matches TS `SDKControlRewindFilesRequestSchema` (controlSchemas.ts:311-315).",
+      "type": "object",
+      "required": [
+        "user_message_id"
+      ],
+      "properties": {
+        "dry_run": {
+          "default": false,
+          "type": "boolean"
+        },
+        "user_message_id": {
+          "type": "string"
+        }
+      }
+    },
+    "SessionArchiveParams": {
+      "description": "Params for `session/archive`.",
+      "type": "object",
+      "required": [
+        "session_id"
+      ],
+      "properties": {
+        "session_id": {
+          "type": "string"
+        }
+      }
+    },
+    "SessionReadParams": {
+      "description": "Params for `session/read`.",
+      "type": "object",
+      "required": [
+        "session_id"
+      ],
+      "properties": {
+        "cursor": {
+          "description": "Optional pagination cursor.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "session_id": {
+          "type": "string"
+        }
+      }
+    },
+    "SessionResumeParams": {
+      "description": "Params for `session/resume`.",
+      "type": "object",
+      "required": [
+        "session_id"
+      ],
+      "properties": {
+        "session_id": {
+          "type": "string"
+        }
+      }
+    },
+    "SessionStartParams": {
+      "description": "Params for `session/start`.",
+      "type": "object",
+      "properties": {
+        "append_system_prompt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "initial_prompt": {
+          "description": "Optional initial user prompt to run immediately after start.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max_budget_usd": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "max_turns": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "permission_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PermissionMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "system_prompt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "SetModelParams": {
+      "description": "Matches TS `SDKControlSetModelRequestSchema` (controlSchemas.ts:140-143).",
+      "type": "object",
+      "properties": {
+        "model": {
+          "description": "None means revert to the default model.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "SetPermissionModeParams": {
+      "description": "Matches TS `SDKControlSetPermissionModeRequestSchema` (controlSchemas.ts:127-134).",
+      "type": "object",
+      "required": [
+        "mode"
+      ],
+      "properties": {
+        "mode": {
+          "$ref": "#/definitions/PermissionMode"
+        },
+        "ultraplan": {
+          "description": "TS `ultraplan` — enables ultraplan mode within Plan (feature flag).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
+    "SetThinkingParams": {
+      "description": "Matches TS `SDKControlSetMaxThinkingTokensRequestSchema` + ThinkingConfig. TS only carries `max_thinking_tokens: number | null`; coco-rs uses the richer `ThinkingLevel` from coco-types which includes effort level and per-provider options.",
+      "type": "object",
+      "properties": {
+        "thinking_level": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThinkingLevel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "StopTaskParams": {
+      "description": "Matches TS `SDKControlStopTaskRequestSchema` (controlSchemas.ts:458-461).",
+      "type": "object",
+      "required": [
+        "task_id"
+      ],
+      "properties": {
+        "task_id": {
+          "type": "string"
+        }
+      }
+    },
+    "ThinkingLevel": {
+      "description": "Unified thinking configuration for all providers.\n\nReplaces both TS EffortLevel and ThinkingConfig: TS EffortLevel ('low'|'medium'|'high'|'max') → ThinkingLevel::low()/medium()/high()/xhigh() TS ThinkingConfig { type: 'enabled', N }     → ThinkingLevel { effort: Medium, budget: Some(N) } TS ThinkingConfig { type: 'disabled' }       → ThinkingLevel::none()\n\nOnly 2 typed fields (effort + budget_tokens) are universal across providers. All provider-specific thinking params go through `options` (data-driven passthrough).",
+      "type": "object",
+      "required": [
+        "effort"
+      ],
+      "properties": {
+        "budget_tokens": {
+          "description": "Token budget — universal for budget-based providers.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "effort": {
+          "description": "Reasoning effort level — universal across all providers.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            }
+          ]
+        },
+        "options": {
+          "description": "Provider-specific thinking extensions — data-driven passthrough.",
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "TurnStartParams": {
+      "description": "Params for `turn/start`.",
+      "type": "object",
+      "required": [
+        "prompt"
+      ],
+      "properties": {
+        "permission_mode": {
+          "description": "Optional turn-scoped permission mode override.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PermissionMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "thinking_level": {
+          "description": "Optional turn-scoped thinking override.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThinkingLevel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "UpdateEnvParams": {
+      "description": "Params for `control/updateEnv`.",
+      "type": "object",
+      "required": [
+        "env"
+      ],
+      "properties": {
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "UserInputResolveParams": {
+      "description": "Params for `input/resolveUserInput`.",
+      "type": "object",
+      "required": [
+        "answer",
+        "request_id"
+      ],
+      "properties": {
+        "answer": {
+          "description": "The user's answer to the `AskUserQuestion` prompt.",
+          "type": "string"
+        },
+        "request_id": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

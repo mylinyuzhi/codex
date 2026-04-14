@@ -381,15 +381,15 @@ pub fn find_dangerous_classifier_permissions(
 
 /// Parse a tool spec like `"Bash(git *)"` into `("Bash", Some("git *"))`.
 fn parse_tool_spec(spec: &str) -> (&str, Option<&str>) {
-    if let Some(open) = spec.find('(') {
-        if let Some(close) = spec.rfind(')') {
-            let tool_name = &spec[..open];
-            let content = spec[open + 1..close].trim();
-            if content.is_empty() {
-                return (tool_name, None);
-            }
-            return (tool_name, Some(content));
+    if let Some(open) = spec.find('(')
+        && let Some(close) = spec.rfind(')')
+    {
+        let tool_name = &spec[..open];
+        let content = spec[open + 1..close].trim();
+        if content.is_empty() {
+            return (tool_name, None);
         }
+        return (tool_name, Some(content));
     }
     (spec, None)
 }

@@ -27,8 +27,19 @@ pub mod error;
 pub struct EncodedImage {
     pub bytes: Vec<u8>,
     pub mime: String,
+    /// Width of the encoded image as written to `bytes`. For un-resized
+    /// images this equals `original_width`; for resized images this is
+    /// the post-resize width. Kept as the canonical "current" width so
+    /// existing callers continue to work.
     pub width: u32,
+    /// Height of the encoded image as written to `bytes` (see `width`).
     pub height: u32,
+    /// Original source width before any resize. TS Read tool reports
+    /// this as `dimensions.originalWidth` so the model can convert
+    /// click coordinates back to the source image's coordinate space.
+    pub original_width: u32,
+    /// Original source height before any resize.
+    pub original_height: u32,
 }
 
 impl EncodedImage {
@@ -77,42 +88,54 @@ pub fn load_for_prompt_bytes(
         let dynamic = image::load_from_memory(&file_bytes)
             .map_err(|source| ImageProcessingError::decode_error(&path_buf, source))?;
 
-        let (width, height) = dynamic.dimensions();
+        // Original (pre-resize) dimensions — captured before any
+        // resize so the EncodedImage can report both original and
+        // display sizes to the model. TS `FileReadTool.ts:276-296`
+        // surfaces both via the `dimensions` field on image output.
+        let (original_width, original_height) = dynamic.dimensions();
 
-        let encoded =
-            if mode == PromptImageMode::Original || (width <= MAX_WIDTH && height <= MAX_HEIGHT) {
-                if let Some(format) = format.filter(|format| can_preserve_source_bytes(*format)) {
-                    let mime = format_to_mime(format);
-                    EncodedImage {
-                        bytes: file_bytes,
-                        mime,
-                        width,
-                        height,
-                    }
-                } else {
-                    let (bytes, output_format) = encode_image(&dynamic, ImageFormat::Png)?;
-                    let mime = format_to_mime(output_format);
-                    EncodedImage {
-                        bytes,
-                        mime,
-                        width,
-                        height,
-                    }
+        let encoded = if mode == PromptImageMode::Original
+            || (original_width <= MAX_WIDTH && original_height <= MAX_HEIGHT)
+        {
+            // No resize: display dims == original dims.
+            if let Some(format) = format.filter(|format| can_preserve_source_bytes(*format)) {
+                let mime = format_to_mime(format);
+                EncodedImage {
+                    bytes: file_bytes,
+                    mime,
+                    width: original_width,
+                    height: original_height,
+                    original_width,
+                    original_height,
                 }
             } else {
-                let resized = dynamic.resize(MAX_WIDTH, MAX_HEIGHT, FilterType::Triangle);
-                let target_format = format
-                    .filter(|format| can_preserve_source_bytes(*format))
-                    .unwrap_or(ImageFormat::Png);
-                let (bytes, output_format) = encode_image(&resized, target_format)?;
+                let (bytes, output_format) = encode_image(&dynamic, ImageFormat::Png)?;
                 let mime = format_to_mime(output_format);
                 EncodedImage {
                     bytes,
                     mime,
-                    width: resized.width(),
-                    height: resized.height(),
+                    width: original_width,
+                    height: original_height,
+                    original_width,
+                    original_height,
                 }
-            };
+            }
+        } else {
+            let resized = dynamic.resize(MAX_WIDTH, MAX_HEIGHT, FilterType::Triangle);
+            let target_format = format
+                .filter(|format| can_preserve_source_bytes(*format))
+                .unwrap_or(ImageFormat::Png);
+            let (bytes, output_format) = encode_image(&resized, target_format)?;
+            let mime = format_to_mime(output_format);
+            EncodedImage {
+                bytes,
+                mime,
+                width: resized.width(),
+                height: resized.height(),
+                original_width,
+                original_height,
+            }
+        };
 
         Ok(encoded)
     })

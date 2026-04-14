@@ -119,7 +119,7 @@ async fn test_classify_stage2_fallback_on_ambiguous() {
         "Write",
         &serde_json::json!({"file_path": "/etc/passwd", "content": "hack"}),
         &AutoModeRules::default(),
-        move |req: ClassifyRequest| {
+        move |_req: ClassifyRequest| {
             let cc = cc.clone();
             async move {
                 let stage = cc.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;

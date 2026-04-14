@@ -265,7 +265,7 @@ pub fn path_in_working_path(path: &str, working_path: &str) -> bool {
 
     // Path must start with working_path + separator
     let with_sep = if abs_working.ends_with('/') {
-        abs_working.clone()
+        abs_working
     } else {
         format!("{abs_working}/")
     };
@@ -387,12 +387,11 @@ pub fn has_shell_expansion(path: &str) -> bool {
     let bytes = path.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'%' {
-            if let Some(end) = bytes[i + 1..].iter().position(|&b| b == b'%') {
-                if end > 0 {
-                    return true;
-                }
-            }
+        if bytes[i] == b'%'
+            && let Some(end) = bytes[i + 1..].iter().position(|&b| b == b'%')
+            && end > 0
+        {
+            return true;
         }
         i += 1;
     }
@@ -528,25 +527,25 @@ fn resolve_deepest_existing_ancestor(path: &Path) -> Option<PathBuf> {
         match std::fs::symlink_metadata(&current) {
             Ok(meta) => {
                 // Found existing path — resolve it
-                if meta.file_type().is_symlink() {
-                    if let Ok(resolved) = std::fs::canonicalize(&current) {
-                        // Rejoin tail segments
-                        let mut result = resolved;
-                        for seg in tail_segments.into_iter().rev() {
-                            result.push(seg);
-                        }
-                        return Some(result);
+                if meta.file_type().is_symlink()
+                    && let Ok(resolved) = std::fs::canonicalize(&current)
+                {
+                    // Rejoin tail segments
+                    let mut result = resolved;
+                    for seg in tail_segments.into_iter().rev() {
+                        result.push(seg);
                     }
+                    return Some(result);
                 }
                 // Existing non-symlink: resolve via canonicalize
-                if let Ok(resolved) = std::fs::canonicalize(&current) {
-                    if resolved != current {
-                        let mut result = resolved;
-                        for seg in tail_segments.into_iter().rev() {
-                            result.push(seg);
-                        }
-                        return Some(result);
+                if let Ok(resolved) = std::fs::canonicalize(&current)
+                    && resolved != current
+                {
+                    let mut result = resolved;
+                    for seg in tail_segments.into_iter().rev() {
+                        result.push(seg);
                     }
+                    return Some(result);
                 }
                 return None; // No symlinks in ancestry
             }
@@ -571,7 +570,7 @@ fn resolve_deepest_existing_ancestor(path: &Path) -> Option<PathBuf> {
 /// Exemptions: plan files, scratchpad, agent memory.
 pub fn is_editable_internal_path(path: &str, cwd: &str, session_id: Option<&str>) -> bool {
     let normalized = normalize_for_comparison(&resolve_path(path, cwd));
-    let cwd_lower = cwd.to_lowercase();
+    let _cwd_lower = cwd.to_lowercase();
 
     // Plan files: {cwd}/.claude/plans/*.md
     if normalized.contains("/.claude/plans/") && normalized.ends_with(".md") {
@@ -579,8 +578,8 @@ pub fn is_editable_internal_path(path: &str, cwd: &str, session_id: Option<&str>
     }
 
     // Scratchpad: /tmp/claude-*/{cwd}/{session}/scratchpad/
-    if let Some(sid) = session_id {
-        let scratchpad_pattern = format!("/tmp/claude-");
+    if let Some(_sid) = session_id {
+        let scratchpad_pattern = "/tmp/claude-".to_string();
         if normalized.starts_with(&scratchpad_pattern) && normalized.contains("/scratchpad/") {
             return true;
         }

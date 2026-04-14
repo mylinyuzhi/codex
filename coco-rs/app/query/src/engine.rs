@@ -123,6 +123,34 @@ impl Default for QueryEngineConfig {
     }
 }
 
+/// One-shot bootstrap data for `SessionStarted` emission.
+///
+/// Collected by the CLI layer at session start and handed to the engine so it
+/// can emit a single `CoreEvent::Protocol(ServerNotification::SessionStarted)`
+/// with full context before the first turn.
+///
+/// TS equivalent: `buildSystemInitMessage()` in
+/// `src/utils/messages/systemInit.ts`. Fields mirror
+/// `SDKSystemMessageSchema` init subtype (coreSchemas.ts:1457-1494).
+#[derive(Debug, Clone, Default)]
+pub struct SessionBootstrap {
+    pub protocol_version: String,
+    pub cwd: String,
+    pub version: String,
+    /// Tool names the LLM will see. If empty, the engine falls back to
+    /// `ToolRegistry::loaded_tools()` names.
+    pub tools: Vec<String>,
+    pub slash_commands: Vec<String>,
+    pub agents: Vec<String>,
+    pub skills: Vec<String>,
+    pub mcp_servers: Vec<coco_types::McpServerInit>,
+    pub plugins: Vec<coco_types::PluginInit>,
+    pub api_key_source: Option<String>,
+    pub betas: Vec<String>,
+    pub output_style: Option<String>,
+    pub fast_mode_state: Option<coco_types::FastModeState>,
+}
+
 /// Result of running the query engine.
 #[derive(Debug)]
 pub struct QueryResult {
@@ -146,6 +174,16 @@ pub struct QueryResult {
     pub duration_api_ms: i64,
     /// Stop reason from the model.
     pub stop_reason: Option<String>,
+    /// Permission denials accumulated during the session. Populated on each
+    /// `PermissionDecision::Deny` branch in the tool execution loop and
+    /// flushed into `SessionResultParams` at session end.
+    /// Matches TS `SDKPermissionDenial` array (coreSchemas.ts:1399-1405).
+    pub permission_denials: Vec<coco_types::PermissionDenialInfo>,
+    /// Final message history at the end of the turn, including the
+    /// user prompt, any tool calls + results, and the final assistant
+    /// reply. Used by multi-turn SDK sessions to thread context
+    /// forward into the next `turn/start`.
+    pub final_messages: Vec<Message>,
 }
 
 /// The query engine — orchestrates multi-turn agent conversations.
@@ -166,6 +204,12 @@ pub struct QueryEngine {
     file_history: Option<Arc<RwLock<FileHistoryState>>>,
     /// Config home directory for file history backup storage.
     config_home: Option<std::path::PathBuf>,
+    /// One-shot SessionStarted payload; emitted at the first turn entry.
+    session_bootstrap: Option<SessionBootstrap>,
+    /// Optional permission bridge for routing `PermissionDecision::Ask`
+    /// outcomes to an external authority (swarm leader or SDK client).
+    /// `None` uses the engine's fallback auto-allow behavior.
+    permission_bridge: Option<coco_tool::ToolPermissionBridgeRef>,
 }
 
 impl QueryEngine {
@@ -187,7 +231,25 @@ impl QueryEngine {
             file_read_state: None,
             file_history: None,
             config_home: None,
+            session_bootstrap: None,
+            permission_bridge: None,
         }
+    }
+
+    /// Attach session bootstrap data to be emitted as `SessionStarted`
+    /// before the first turn. Without this, the engine still runs normally
+    /// but does not emit `SessionStarted` (backwards compatible for tests).
+    pub fn with_session_bootstrap(mut self, bootstrap: SessionBootstrap) -> Self {
+        self.session_bootstrap = Some(bootstrap);
+        self
+    }
+
+    /// Attach a permission bridge so `PermissionDecision::Ask` outcomes
+    /// are forwarded to an external authority (e.g. the SDK client via
+    /// `SdkPermissionBridge`) instead of auto-allowing.
+    pub fn with_permission_bridge(mut self, bridge: coco_tool::ToolPermissionBridgeRef) -> Self {
+        self.permission_bridge = Some(bridge);
+        self
     }
 
     /// Set file read state for @mention dedup and changed-file detection.
@@ -224,7 +286,7 @@ impl QueryEngine {
     pub async fn run_with_events(
         &self,
         user_prompt: &str,
-        event_tx: tokio::sync::mpsc::Sender<crate::QueryEvent>,
+        event_tx: tokio::sync::mpsc::Sender<crate::CoreEvent>,
     ) -> anyhow::Result<QueryResult> {
         let user_msg = coco_messages::create_user_message(user_prompt);
         self.run_internal_with_messages(vec![user_msg], Some(event_tx))
@@ -235,7 +297,7 @@ impl QueryEngine {
     pub async fn run_with_messages(
         &self,
         messages: Vec<Message>,
-        event_tx: tokio::sync::mpsc::Sender<crate::QueryEvent>,
+        event_tx: tokio::sync::mpsc::Sender<crate::CoreEvent>,
     ) -> anyhow::Result<QueryResult> {
         if messages.is_empty() {
             anyhow::bail!("No messages to process");
@@ -254,10 +316,193 @@ impl QueryEngine {
     ///
     /// First message is the user message (used for file history snapshot UUID).
     /// Subsequent messages are attachment messages (is_meta=true, system-reminder wrapped).
+    ///
+    /// Session lifecycle sequence (matches TS print.ts + QueryEngine.ts):
+    /// 1. SessionStarted  (if bootstrap attached)   — TS: buildSystemInitMessage
+    /// 2. SessionStateChanged(Running)              — TS: notifySessionStateChanged('running')
+    /// 3. run_session_loop: turn-by-turn work       — TS: query() generator loop
+    /// 4. SessionStateChanged(Idle)                 — TS: notifySessionStateChanged('idle')
+    /// 5. SessionResult (success or error subtype)  — TS: SDKResultMessage
+    ///
+    /// Steps 1/2/4/5 fire regardless of success or error so SDK consumers
+    /// always see a complete session envelope.
     async fn run_internal_with_messages(
         &self,
         turn_messages: Vec<Message>,
-        event_tx: Option<tokio::sync::mpsc::Sender<crate::QueryEvent>>,
+        event_tx: Option<tokio::sync::mpsc::Sender<crate::CoreEvent>>,
+    ) -> anyhow::Result<QueryResult> {
+        // Phase 1.1: SessionStarted (must happen before anything can error)
+        self.emit_session_started(&event_tx).await;
+
+        // Phase 1.2a: Running — agent is actively processing
+        Self::emit(
+            &event_tx,
+            crate::CoreEvent::Protocol(crate::ServerNotification::SessionStateChanged {
+                state: coco_types::SessionState::Running,
+            }),
+        )
+        .await;
+
+        let result = self.run_session_loop(turn_messages, event_tx.clone()).await;
+
+        // Phase 1.2b: Idle — turn-over signal; emit regardless of outcome.
+        Self::emit(
+            &event_tx,
+            crate::CoreEvent::Protocol(crate::ServerNotification::SessionStateChanged {
+                state: coco_types::SessionState::Idle,
+            }),
+        )
+        .await;
+
+        // Phase 1.3: SessionResult — always emitted. On Err, we synthesize a
+        // minimal QueryResult-like view so SDK consumers see a terminal
+        // `result` event matching TS SDKResultErrorMessage.
+        let params = match &result {
+            Ok(qr) => self.build_session_result_params(qr, /*error_messages*/ Vec::new()),
+            Err(e) => self.build_session_error_params(e.to_string()),
+        };
+        Self::emit(
+            &event_tx,
+            crate::CoreEvent::Protocol(crate::ServerNotification::SessionResult(Box::new(params))),
+        )
+        .await;
+
+        result
+    }
+
+    /// Emit the `SessionStarted` protocol event from attached bootstrap data.
+    /// No-op if the engine was not built with `with_session_bootstrap()`.
+    async fn emit_session_started(
+        &self,
+        event_tx: &Option<tokio::sync::mpsc::Sender<crate::CoreEvent>>,
+    ) {
+        let Some(bootstrap) = &self.session_bootstrap else {
+            return;
+        };
+        let permission_mode = permission_mode_to_wire(&self.config.permission_mode);
+        let tools = if bootstrap.tools.is_empty() {
+            self.tools
+                .loaded_tools()
+                .iter()
+                .map(|t| t.name().to_string())
+                .collect()
+        } else {
+            bootstrap.tools.clone()
+        };
+        Self::emit(
+            event_tx,
+            crate::CoreEvent::Protocol(crate::ServerNotification::SessionStarted(
+                coco_types::SessionStartedParams {
+                    session_id: self.config.session_id.clone(),
+                    protocol_version: bootstrap.protocol_version.clone(),
+                    cwd: bootstrap.cwd.clone(),
+                    model: self.config.model_name.clone(),
+                    permission_mode,
+                    tools,
+                    slash_commands: bootstrap.slash_commands.clone(),
+                    agents: bootstrap.agents.clone(),
+                    skills: bootstrap.skills.clone(),
+                    mcp_servers: bootstrap.mcp_servers.clone(),
+                    plugins: bootstrap.plugins.clone(),
+                    api_key_source: bootstrap.api_key_source.clone(),
+                    betas: bootstrap.betas.clone(),
+                    version: bootstrap.version.clone(),
+                    output_style: bootstrap.output_style.clone(),
+                    fast_mode_state: bootstrap.fast_mode_state,
+                },
+            )),
+        )
+        .await;
+    }
+
+    /// Synthesize a `SessionResultParams` for the error path (when
+    /// `run_session_loop` returned `Err`). Matches TS `SDKResultErrorSchema`.
+    fn build_session_error_params(&self, error_msg: String) -> coco_types::SessionResultParams {
+        coco_types::SessionResultParams {
+            session_id: self.config.session_id.clone(),
+            total_turns: 0,
+            duration_ms: 0,
+            duration_api_ms: 0,
+            is_error: true,
+            stop_reason: "error_during_execution".into(),
+            total_cost_usd: 0.0,
+            usage: TokenUsage::default(),
+            model_usage: Default::default(),
+            permission_denials: Vec::new(),
+            result: None,
+            errors: vec![error_msg],
+            structured_output: None,
+            fast_mode_state: None,
+            num_api_calls: None,
+        }
+    }
+
+    /// Build a `SessionResultParams` from a completed `QueryResult`.
+    /// Matches TS `SDKResultMessage` shape (coreSchemas.ts:1407-1451).
+    ///
+    /// `error_messages` is propagated into the `errors` field (for TS
+    /// `SDKResultErrorSchema` parity); success results pass an empty Vec.
+    fn build_session_result_params(
+        &self,
+        qr: &QueryResult,
+        error_messages: Vec<String>,
+    ) -> coco_types::SessionResultParams {
+        // Per-model usage aggregated from CostTracker.
+        let model_usage = qr
+            .cost_tracker
+            .per_model
+            .iter()
+            .map(|(model, usage)| {
+                (
+                    model.clone(),
+                    coco_types::SessionModelUsage {
+                        input_tokens: usage.input_tokens,
+                        output_tokens: usage.output_tokens,
+                        cache_read_input_tokens: usage.cache_read_input_tokens,
+                        cache_creation_input_tokens: usage.cache_creation_input_tokens,
+                        web_search_requests: usage.web_search_requests,
+                        cost_usd: usage.cost_usd,
+                        context_window: self.config.context_window,
+                        max_output_tokens: self.config.max_output_tokens,
+                    },
+                )
+            })
+            .collect();
+
+        let stop_reason = qr
+            .stop_reason
+            .clone()
+            .unwrap_or_else(|| "end_turn".to_string());
+        let is_error = qr.cancelled || qr.budget_exhausted || !error_messages.is_empty();
+
+        coco_types::SessionResultParams {
+            session_id: self.config.session_id.clone(),
+            total_turns: qr.turns,
+            duration_ms: qr.duration_ms,
+            duration_api_ms: qr.duration_api_ms,
+            is_error,
+            stop_reason,
+            total_cost_usd: qr.cost_tracker.total_cost_usd(),
+            usage: qr.total_usage,
+            model_usage,
+            // Phase 2.F.2: accumulated across PermissionDecision::Deny branches.
+            permission_denials: qr.permission_denials.clone(),
+            result: if is_error {
+                None
+            } else {
+                Some(qr.response_text.clone())
+            },
+            errors: error_messages,
+            structured_output: None,
+            fast_mode_state: None,
+            num_api_calls: Some(qr.cost_tracker.total_api_calls as i32),
+        }
+    }
+
+    async fn run_session_loop(
+        &self,
+        turn_messages: Vec<Message>,
+        event_tx: Option<tokio::sync::mpsc::Sender<crate::CoreEvent>>,
     ) -> anyhow::Result<QueryResult> {
         let start_time = std::time::Instant::now();
         let mut api_time_ms: i64 = 0;
@@ -271,11 +516,17 @@ impl QueryEngine {
             self.config.max_turns,
             /*max_continuations*/ 3,
         );
-        // Add turn messages: user message first, then attachment messages.
-        // TS: [userMessage, ...attachmentMessages]
+        // The "current turn" user message id is the LAST user message in
+        // `turn_messages`. In single-turn mode the list is
+        // `[user_msg, attachment, ...]` and the first (and only) user
+        // message is also the last. In multi-turn SDK mode the list is
+        // `[prior_history..., new_user_msg]`, so the LAST user message
+        // is the current turn's prompt — which is what file history
+        // snapshots should key on.
         let user_msg_uuid = turn_messages
-            .first()
-            .and_then(|m| match m {
+            .iter()
+            .rev()
+            .find_map(|m| match m {
                 Message::User(u) => Some(u.uuid.to_string()),
                 _ => None,
             })
@@ -283,6 +534,32 @@ impl QueryEngine {
         for msg in turn_messages {
             history.push(msg);
         }
+
+        // NOTE: `SessionStarted` + `SessionStateChanged(Running)` are emitted
+        // by the outer `run_internal_with_messages` BEFORE calling this
+        // function, so SDK consumers see them even if the session loop errors
+        // out before its first turn. See TS `runHeadless()` which initializes
+        // the init message at the very top of the entry function.
+
+        // Set up the Hook → CoreEvent forwarder. When a hook executes during
+        // tool execution, its HookExecutionEvents flow into this channel, and
+        // a background task translates them into CoreEvent::Protocol(Hook*)
+        // notifications. TS: print.ts emits SDKHookStartedMessage/etc. directly.
+        //
+        // The forwarder keeps running for the lifetime of the session; we
+        // close the tx side at end to signal the receiver task to exit.
+        let hook_tx_opt: Option<tokio::sync::mpsc::Sender<coco_hooks::HookExecutionEvent>> =
+            if event_tx.is_some() {
+                let (hook_event_tx, hook_event_rx) =
+                    tokio::sync::mpsc::channel::<coco_hooks::HookExecutionEvent>(64);
+                let core_tx = event_tx.clone();
+                // Detached: the forwarder task exits when `hook_event_tx` is
+                // dropped at the end of `run_session_loop`. We don't join it.
+                tokio::spawn(Self::forward_hook_events(hook_event_rx, core_tx));
+                Some(hook_event_tx)
+            } else {
+                None
+            };
 
         // Create file history snapshot for this user message.
         // TS: fileHistoryMakeSnapshot() in handlePromptSubmit.ts + QueryEngine.ts
@@ -296,6 +573,13 @@ impl QueryEngine {
             }
         }
 
+        // Permission denials accumulated across all tool calls in this session.
+        // Populated on each `PermissionDecision::Deny` branch and flushed
+        // into `SessionResultParams.permission_denials` via the `make_result`
+        // closure. Matches TS `QueryEngine.permissionDenials` wrapper
+        // behavior (QueryEngine.ts:244-271).
+        let mut permission_denials: Vec<coco_types::PermissionDenialInfo> = Vec::new();
+
         let make_result = |response_text: String,
                            turns: i32,
                            total_usage: TokenUsage,
@@ -305,7 +589,9 @@ impl QueryEngine {
                            last_continue_reason: Option<ContinueReason>,
                            start_time: std::time::Instant,
                            api_time_ms: i64,
-                           stop_reason: Option<String>| {
+                           stop_reason: Option<String>,
+                           permission_denials: Vec<coco_types::PermissionDenialInfo>,
+                           final_messages: Vec<Message>| {
             QueryResult {
                 response_text,
                 turns,
@@ -317,6 +603,8 @@ impl QueryEngine {
                 duration_ms: start_time.elapsed().as_millis() as i64,
                 duration_api_ms: api_time_ms,
                 stop_reason,
+                permission_denials,
+                final_messages,
             }
         };
 
@@ -333,6 +621,8 @@ impl QueryEngine {
                     start_time,
                     api_time_ms,
                     Some("cancelled".into()),
+                    permission_denials,
+                    history.messages.clone(),
                 ));
             }
 
@@ -352,31 +642,49 @@ impl QueryEngine {
                         start_time,
                         api_time_ms,
                         Some("budget_exhausted".into()),
+                        permission_denials,
+                        history.messages.clone(),
                     ));
                 }
                 BudgetDecision::Nudge { message } => {
                     info!(%message, "budget nudge");
-                    Self::emit(&event_tx, crate::QueryEvent::BudgetNudge { message }).await;
+                    // No direct ServerNotification for budget nudge; emit as non-retryable Error
+                    // so SDK consumers can surface the warning.
+                    Self::emit(
+                        &event_tx,
+                        crate::CoreEvent::Protocol(crate::ServerNotification::Error(
+                            coco_types::ErrorParams {
+                                message,
+                                category: Some("budget".into()),
+                                retryable: false,
+                            },
+                        )),
+                    )
+                    .await;
                 }
                 BudgetDecision::Continue => {}
             }
 
             turn += 1;
             info!(turn, "starting turn");
-            Self::emit(&event_tx, crate::QueryEvent::TurnStarted { turn }).await;
+            Self::emit(
+                &event_tx,
+                crate::CoreEvent::Protocol(crate::ServerNotification::TurnStarted(
+                    coco_types::TurnStartedParams {
+                        turn_id: Some(format!("turn-{turn}")),
+                        turn_number: turn,
+                    },
+                )),
+            )
+            .await;
 
             // Build prompt from history
             let prompt = self.build_prompt(&history);
             let tool_defs = self.build_tool_definitions();
 
-            Self::emit(
-                &event_tx,
-                crate::QueryEvent::StreamRequestStart {
-                    turn,
-                    model: self.config.model_name.clone(),
-                },
-            )
-            .await;
+            // StreamRequestStart has no direct protocol equivalent; it was
+            // previously only used for test classification. The model_name is
+            // already carried in SessionStarted at session init.
 
             // Call LLM
             let params = QueryParams {
@@ -413,10 +721,9 @@ impl QueryEngine {
                         );
                         Self::emit(
                             &event_tx,
-                            crate::QueryEvent::ErrorRecovery {
-                                reason: ContinueReason::ReactiveCompactRetry,
-                                message: "reactive compaction after prompt_too_long".into(),
-                            },
+                            crate::CoreEvent::Protocol(
+                                crate::ServerNotification::CompactionStarted,
+                            ),
                         )
                         .await;
                         last_continue_reason = Some(ContinueReason::ReactiveCompactRetry);
@@ -441,15 +748,17 @@ impl QueryEngine {
             let mut response_text = String::new();
             let mut tool_calls: Vec<ToolCallPart> = Vec::new();
 
+            let turn_id = format!("turn-{turn}");
             for part in &llm_result.content {
                 match part {
                     AssistantContentPart::Text(t) => {
                         response_text.push_str(&t.text);
                         Self::emit(
                             &event_tx,
-                            crate::QueryEvent::TextDelta {
-                                text: t.text.clone(),
-                            },
+                            crate::CoreEvent::Stream(crate::AgentStreamEvent::TextDelta {
+                                turn_id: turn_id.clone(),
+                                delta: t.text.clone(),
+                            }),
                         )
                         .await;
                     }
@@ -459,9 +768,10 @@ impl QueryEngine {
                     AssistantContentPart::Reasoning(r) => {
                         Self::emit(
                             &event_tx,
-                            crate::QueryEvent::ReasoningDelta {
-                                text: r.text.clone(),
-                            },
+                            crate::CoreEvent::Stream(crate::AgentStreamEvent::ThinkingDelta {
+                                turn_id: turn_id.clone(),
+                                delta: r.text.clone(),
+                            }),
                         )
                         .await;
                     }
@@ -506,6 +816,8 @@ impl QueryEngine {
                     start_time,
                     api_time_ms,
                     Some("end_turn".into()),
+                    permission_denials,
+                    history.messages.clone(),
                 ));
             }
 
@@ -527,6 +839,14 @@ impl QueryEngine {
                     match decision {
                         PermissionDecision::Deny { message, .. } => {
                             warn!(tool = tc.tool_name, %message, "tool permission denied");
+                            // Accumulate the denial for the session result.
+                            // TS: QueryEngine.permissionDenials.push(...) wrapper
+                            // around canUseTool() in QueryEngine.ts:244-271.
+                            permission_denials.push(coco_types::PermissionDenialInfo {
+                                tool_name: tc.tool_name.clone(),
+                                tool_use_id: tc.tool_call_id.clone(),
+                                tool_input: tc.input.clone(),
+                            });
                             history.push(make_tool_error_message(
                                 &tc.tool_call_id,
                                 &tc.tool_name,
@@ -536,7 +856,129 @@ impl QueryEngine {
                             continue;
                         }
                         PermissionDecision::Ask { .. } => {
-                            // Non-TUI mode: treat Ask as Allow.
+                            // Phase 2.C.9: route the ask to the permission bridge
+                            // if one is installed (e.g. `SdkPermissionBridge`
+                            // issuing `approval/askForApproval` to the SDK
+                            // client). Fall back to the previous auto-allow
+                            // behavior if no bridge is configured — tests
+                            // and headless CLI mode still work unchanged.
+                            //
+                            // TS reference: notifySessionStateChanged(
+                            //     'requires_action') in print.ts:818 on
+                            // can_use_tool entry, then transition back to
+                            // 'running' after the approval resolves.
+                            Self::emit(
+                                &event_tx,
+                                crate::CoreEvent::Protocol(
+                                    crate::ServerNotification::SessionStateChanged {
+                                        state: coco_types::SessionState::RequiresAction,
+                                    },
+                                ),
+                            )
+                            .await;
+
+                            if let Some(bridge) = self.permission_bridge.as_ref() {
+                                let request = coco_tool::ToolPermissionRequest {
+                                    id: tc.tool_call_id.clone(),
+                                    agent_id: self.config.session_id.clone(),
+                                    tool_name: tc.tool_name.clone(),
+                                    description: format!("Approval required for {}", tc.tool_name),
+                                    input: tc.input.clone(),
+                                };
+                                // Make the bridge await cancellation-aware:
+                                // if the turn is interrupted while waiting for
+                                // the SDK client's approval response, the
+                                // oneshot inside `send_server_request` isn't
+                                // cancel-aware and would otherwise hang the
+                                // engine indefinitely. `select!` lets the
+                                // cancel token abort the await and treat it
+                                // as a rejection with feedback (same path as
+                                // an infrastructure error).
+                                let bridge_result = tokio::select! {
+                                    biased;
+                                    _ = self.cancel.cancelled() => {
+                                        Err("Turn cancelled while waiting for \
+                                             permission approval".to_string())
+                                    }
+                                    r = bridge.request_permission(request) => r,
+                                };
+                                match bridge_result {
+                                    Ok(resolution) => match resolution.decision {
+                                        coco_tool::ToolPermissionDecision::Rejected => {
+                                            let feedback =
+                                                resolution.feedback.unwrap_or_else(|| {
+                                                    "Permission denied by client".into()
+                                                });
+                                            warn!(tool = tc.tool_name, "approval bridge: rejected");
+                                            permission_denials.push(
+                                                coco_types::PermissionDenialInfo {
+                                                    tool_name: tc.tool_name.clone(),
+                                                    tool_use_id: tc.tool_call_id.clone(),
+                                                    tool_input: tc.input.clone(),
+                                                },
+                                            );
+                                            history.push(make_tool_error_message(
+                                                &tc.tool_call_id,
+                                                &tc.tool_name,
+                                                &tool_id,
+                                                &format!("Permission denied: {feedback}"),
+                                            ));
+                                            Self::emit(
+                                                &event_tx,
+                                                crate::CoreEvent::Protocol(
+                                                    crate::ServerNotification::SessionStateChanged {
+                                                        state: coco_types::SessionState::Running,
+                                                    },
+                                                ),
+                                            )
+                                            .await;
+                                            continue;
+                                        }
+                                        coco_tool::ToolPermissionDecision::Approved => {
+                                            // fall through to execute
+                                        }
+                                    },
+                                    Err(e) => {
+                                        warn!(
+                                            error = %e,
+                                            tool = tc.tool_name,
+                                            "approval bridge failed; auto-denying"
+                                        );
+                                        permission_denials.push(coco_types::PermissionDenialInfo {
+                                            tool_name: tc.tool_name.clone(),
+                                            tool_use_id: tc.tool_call_id.clone(),
+                                            tool_input: tc.input.clone(),
+                                        });
+                                        history.push(make_tool_error_message(
+                                            &tc.tool_call_id,
+                                            &tc.tool_name,
+                                            &tool_id,
+                                            &format!("Approval bridge error: {e}"),
+                                        ));
+                                        Self::emit(
+                                            &event_tx,
+                                            crate::CoreEvent::Protocol(
+                                                crate::ServerNotification::SessionStateChanged {
+                                                    state: coco_types::SessionState::Running,
+                                                },
+                                            ),
+                                        )
+                                        .await;
+                                        continue;
+                                    }
+                                }
+                            }
+                            // Back to running whether we consulted a bridge or
+                            // fell through to auto-allow.
+                            Self::emit(
+                                &event_tx,
+                                crate::CoreEvent::Protocol(
+                                    crate::ServerNotification::SessionStateChanged {
+                                        state: coco_types::SessionState::Running,
+                                    },
+                                ),
+                            )
+                            .await;
                         }
                         PermissionDecision::Allow { .. } => {}
                     }
@@ -550,6 +992,7 @@ impl QueryEngine {
                             &tc.tool_name,
                             &tc.tool_call_id,
                             &tc.input,
+                            hook_tx_opt.as_ref(),
                         )
                         .await
                         {
@@ -573,6 +1016,17 @@ impl QueryEngine {
                         }
                     }
 
+                    // Emit stream event: tool queued with complete input.
+                    Self::emit(
+                        &event_tx,
+                        crate::CoreEvent::Stream(crate::AgentStreamEvent::ToolUseQueued {
+                            call_id: tc.tool_call_id.clone(),
+                            name: tc.tool_name.clone(),
+                            input: tc.input.clone(),
+                        }),
+                    )
+                    .await;
+
                     pending.push(PendingToolCall {
                         tool_use_id: tc.tool_call_id.clone(),
                         tool: tool.clone(),
@@ -584,7 +1038,29 @@ impl QueryEngine {
             }
 
             // Phase 2: Execute via StreamingToolExecutor (concurrent-safe tools
-            // run in parallel, non-concurrent tools run sequentially)
+            // run in parallel, non-concurrent tools run sequentially).
+            //
+            // Emit ToolUseStarted for every pending tool so the TUI can
+            // transition queued items to "running" state before execution
+            // begins. TS has no distinct event for this — coco-rs adds it for
+            // richer display.
+            for pc in &pending {
+                let tool_name = tool_calls
+                    .iter()
+                    .find(|tc| tc.tool_call_id == pc.tool_use_id)
+                    .map(|tc| tc.tool_name.clone())
+                    .unwrap_or_else(|| "unknown".to_string());
+                Self::emit(
+                    &event_tx,
+                    crate::CoreEvent::Stream(crate::AgentStreamEvent::ToolUseStarted {
+                        call_id: pc.tool_use_id.clone(),
+                        name: tool_name,
+                        batch_id: None,
+                    }),
+                )
+                .await;
+            }
+
             let executor = StreamingToolExecutor::new();
             let results = executor.execute_all(pending, &ctx).await;
 
@@ -593,17 +1069,22 @@ impl QueryEngine {
                 let tool_name = tool_calls
                     .iter()
                     .find(|tc| tc.tool_call_id == result.tool_use_id)
-                    .map(|tc| tc.tool_name.as_str())
-                    .unwrap_or("unknown");
+                    .map(|tc| tc.tool_name.clone())
+                    .unwrap_or_else(|| "unknown".to_string());
+
+                let output = match &result.result {
+                    Ok(r) => serde_json::to_string(&r.data).unwrap_or_default(),
+                    Err(e) => e.to_string(),
+                };
 
                 Self::emit(
                     &event_tx,
-                    crate::QueryEvent::ToolUseEnd {
-                        tool_use_id: result.tool_use_id.clone(),
-                        tool_name: tool_name.to_string(),
+                    crate::CoreEvent::Stream(crate::AgentStreamEvent::ToolUseCompleted {
+                        call_id: result.tool_use_id.clone(),
+                        name: tool_name,
+                        output,
                         is_error: result.result.is_err(),
-                        duration_ms: result.duration_ms,
-                    },
+                    }),
                 )
                 .await;
             }
@@ -628,6 +1109,7 @@ impl QueryEngine {
                                 &serde_json::Value::Null,
                                 &serde_json::to_value(&tool_result.data)
                                     .unwrap_or(serde_json::Value::Null),
+                                hook_tx_opt.as_ref(),
                             )
                             .await
                             {
@@ -698,7 +1180,16 @@ impl QueryEngine {
                     history.push(msg);
                 }
                 self.command_queue.remove(&prompts_to_remove).await;
-                Self::emit(&event_tx, crate::QueryEvent::CommandsDrained { count }).await;
+                // Report the new queue state after draining.
+                let remaining = self.command_queue.len().await as i32;
+                Self::emit(
+                    &event_tx,
+                    crate::CoreEvent::Protocol(crate::ServerNotification::QueueStateChanged {
+                        queued: remaining,
+                    }),
+                )
+                .await;
+                let _ = count; // count retained for future telemetry
             }
 
             // Drain inbox messages from teammates.
@@ -713,7 +1204,9 @@ impl QueryEngine {
                     );
                     history.push(coco_messages::create_user_message(&text));
                 }
-                Self::emit(&event_tx, crate::QueryEvent::InboxConsumed { count }).await;
+                // No direct ServerNotification for inbox consumption;
+                // silently consumed into history. count retained for future metrics.
+                let _ = count;
             }
 
             last_continue_reason = Some(ContinueReason::NextTurn);
@@ -728,9 +1221,20 @@ impl QueryEngine {
                 self.config.max_output_tokens,
             ) {
                 // Micro-compact first to free tokens quickly
+                let pre_count = history.messages.len() as i32;
                 coco_compact::micro_compact(&mut history.messages, /*keep_recent*/ 10);
                 info!("auto micro-compaction triggered");
-                Self::emit(&event_tx, crate::QueryEvent::CompactionTriggered).await;
+                let removed = (pre_count - history.messages.len() as i32).max(0);
+                Self::emit(
+                    &event_tx,
+                    crate::CoreEvent::Protocol(crate::ServerNotification::ContextCompacted(
+                        coco_types::ContextCompactedParams {
+                            removed_messages: removed,
+                            summary_tokens: 0,
+                        },
+                    )),
+                )
+                .await;
 
                 // Re-check: if still over threshold, attempt full LLM compact.
                 // TS: falls through to compactConversation() when micro isn't enough.
@@ -747,12 +1251,15 @@ impl QueryEngine {
             // Emit turn completed
             Self::emit(
                 &event_tx,
-                crate::QueryEvent::TurnCompleted {
-                    turn,
-                    has_tool_calls: !tool_calls.is_empty(),
-                },
+                crate::CoreEvent::Protocol(crate::ServerNotification::TurnCompleted(
+                    coco_types::TurnCompletedParams {
+                        turn_id: Some(format!("turn-{turn}")),
+                        usage: llm_result.usage,
+                    },
+                )),
             )
             .await;
+            let _ = tool_calls; // has_tool_calls retained for future metrics
         }
     }
 
@@ -763,7 +1270,7 @@ impl QueryEngine {
     async fn try_full_compact(
         &self,
         history: &mut MessageHistory,
-        event_tx: &Option<tokio::sync::mpsc::Sender<crate::QueryEvent>>,
+        event_tx: &Option<tokio::sync::mpsc::Sender<crate::CoreEvent>>,
     ) {
         // 1. Snapshot + clear FileReadState (TS: cacheToObject + readFileState.clear())
         let snapshot = if let Some(frs) = &self.file_read_state {
@@ -899,7 +1406,16 @@ impl QueryEngine {
                 new_messages.extend(result.hook_results);
                 history.messages = new_messages;
 
-                Self::emit(event_tx, crate::QueryEvent::CompactionTriggered).await;
+                Self::emit(
+                    event_tx,
+                    crate::CoreEvent::Protocol(crate::ServerNotification::ContextCompacted(
+                        coco_types::ContextCompactedParams {
+                            removed_messages: 0,
+                            summary_tokens: result.post_compact_tokens as i32,
+                        },
+                    )),
+                )
+                .await;
             }
             Err(e) => {
                 warn!("full compaction failed: {e}");
@@ -915,13 +1431,86 @@ impl QueryEngine {
         }
     }
 
-    /// Emit a query event if a sender is available.
+    /// Emit a core event if a sender is available.
     async fn emit(
-        tx: &Option<tokio::sync::mpsc::Sender<crate::QueryEvent>>,
-        event: crate::QueryEvent,
+        tx: &Option<tokio::sync::mpsc::Sender<crate::CoreEvent>>,
+        event: crate::CoreEvent,
     ) {
         if let Some(sender) = tx {
             let _ = sender.send(event).await;
+        }
+    }
+
+    /// Consume `HookExecutionEvent` from the orchestration layer and forward
+    /// them as `CoreEvent::Protocol(HookStarted/Progress/Response)`.
+    ///
+    /// TS: print.ts emits these directly from the hook execution path; in
+    /// Rust we use a background task so orchestration stays independent of
+    /// the coco-query event type.
+    async fn forward_hook_events(
+        mut rx: tokio::sync::mpsc::Receiver<coco_hooks::HookExecutionEvent>,
+        core_tx: Option<tokio::sync::mpsc::Sender<crate::CoreEvent>>,
+    ) {
+        let Some(core_tx) = core_tx else {
+            return;
+        };
+        while let Some(evt) = rx.recv().await {
+            let core_evt = match evt {
+                coco_hooks::HookExecutionEvent::Started {
+                    hook_id,
+                    hook_name,
+                    hook_event,
+                } => crate::CoreEvent::Protocol(crate::ServerNotification::HookStarted(
+                    coco_types::HookStartedParams {
+                        hook_id,
+                        hook_name,
+                        hook_event,
+                    },
+                )),
+                coco_hooks::HookExecutionEvent::Progress {
+                    hook_id,
+                    hook_name,
+                    stdout,
+                    stderr,
+                } => crate::CoreEvent::Protocol(crate::ServerNotification::HookProgress(
+                    coco_types::HookProgressParams {
+                        hook_id,
+                        hook_name,
+                        // The orchestration-layer event doesn't carry the
+                        // hook event name on Progress; consumers can correlate
+                        // via `hook_id` against the preceding Started event.
+                        hook_event: String::new(),
+                        stdout,
+                        stderr,
+                        output: String::new(),
+                    },
+                )),
+                coco_hooks::HookExecutionEvent::Response {
+                    hook_id,
+                    hook_name,
+                    exit_code,
+                    stdout,
+                    stderr,
+                    outcome,
+                } => crate::CoreEvent::Protocol(crate::ServerNotification::HookResponse(
+                    coco_types::HookResponseParams {
+                        hook_id,
+                        hook_name,
+                        hook_event: String::new(),
+                        // orchestration layer merges stdout into output on
+                        // the raw event; expose both fields separately for
+                        // SDK consumers.
+                        output: stdout.clone(),
+                        stdout,
+                        stderr,
+                        exit_code,
+                        outcome: hook_outcome_to_status(outcome),
+                    },
+                )),
+            };
+            if core_tx.send(core_evt).await.is_err() {
+                break;
+            }
         }
     }
 
@@ -1020,9 +1609,9 @@ impl QueryEngine {
             agent_type: None,
             file_reading_limits: Default::default(),
             glob_limits: Default::default(),
-            nested_memory_attachment_triggers: Default::default(),
+            nested_memory_attachment_triggers: Arc::new(RwLock::new(Default::default())),
             loaded_nested_memory_paths: Default::default(),
-            dynamic_skill_dir_triggers: Default::default(),
+            dynamic_skill_dir_triggers: Arc::new(RwLock::new(Default::default())),
             discovered_skill_names: Default::default(),
             tool_decisions: Default::default(),
             user_modified: false,
@@ -1036,9 +1625,13 @@ impl QueryEngine {
             schedules: Arc::new(coco_tool::NoOpScheduleStore),
             agent: Arc::new(coco_tool::NoOpAgentHandle),
             cwd_override: None,
-            permission_bridge: None,
+            permission_bridge: self.permission_bridge.clone(),
             progress_tx: None,
             task_handle: None,
+            // TODO(B1.3 follow-up): bridge app/query hook registry into
+            // HookHandle impl to wire PreToolUse/PostToolUse hooks through
+            // the executor. For now the executor treats None as a no-op.
+            hook_handle: None,
             file_read_state: self.file_read_state.clone(),
             file_history: self.file_history.clone(),
             config_home: self.config_home.clone(),
@@ -1063,6 +1656,32 @@ fn parse_stop_reason(s: &str) -> Option<coco_types::StopReason> {
         "length" => Some(coco_types::StopReason::MaxTokens),
         "tool-calls" => Some(coco_types::StopReason::ToolUse),
         _ => None,
+    }
+}
+
+/// Map `HookOutcome` to the protocol-layer `HookOutcomeStatus`.
+/// Treats Blocking as Error since blocking is a user-visible failure from the
+/// SDK consumer's perspective.
+fn hook_outcome_to_status(outcome: coco_types::HookOutcome) -> coco_types::HookOutcomeStatus {
+    match outcome {
+        coco_types::HookOutcome::Success => coco_types::HookOutcomeStatus::Success,
+        coco_types::HookOutcome::Blocking => coco_types::HookOutcomeStatus::Error,
+        coco_types::HookOutcome::NonBlockingError => coco_types::HookOutcomeStatus::Error,
+        coco_types::HookOutcome::Cancelled => coco_types::HookOutcomeStatus::Cancelled,
+    }
+}
+
+/// Convert `PermissionMode` to its snake_case wire string.
+/// TS `PermissionModeSchema`: z.enum(['default','acceptEdits','bypassPermissions','plan','dontAsk']).
+fn permission_mode_to_wire(mode: &PermissionMode) -> String {
+    match mode {
+        PermissionMode::Default => "default".into(),
+        PermissionMode::AcceptEdits => "acceptEdits".into(),
+        PermissionMode::BypassPermissions => "bypassPermissions".into(),
+        PermissionMode::Plan => "plan".into(),
+        PermissionMode::DontAsk => "dontAsk".into(),
+        PermissionMode::Auto => "auto".into(),
+        PermissionMode::Bubble => "bubble".into(),
     }
 }
 

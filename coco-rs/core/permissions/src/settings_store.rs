@@ -196,17 +196,31 @@ impl SettingsPermissionStore {
         }
 
         let mut settings = Self::read_settings_json(&path);
-        let permissions = settings
-            .as_object_mut()
-            .expect("settings is object")
+        // Ensure the top level is an object; replace otherwise.
+        if !settings.is_object() {
+            settings = serde_json::json!({});
+        }
+        let Some(settings_obj) = settings.as_object_mut() else {
+            return Ok(());
+        };
+        let permissions = settings_obj
             .entry("permissions")
             .or_insert_with(|| serde_json::json!({}));
-        let arr = permissions
-            .as_object_mut()
-            .expect("permissions is object")
+        if !permissions.is_object() {
+            *permissions = serde_json::json!({});
+        }
+        let Some(permissions_obj) = permissions.as_object_mut() else {
+            return Ok(());
+        };
+        let arr = permissions_obj
             .entry(behavior_key)
             .or_insert_with(|| serde_json::json!([]));
-        let existing = arr.as_array_mut().expect("behavior is array");
+        if !arr.is_array() {
+            *arr = serde_json::json!([]);
+        }
+        let Some(existing) = arr.as_array_mut() else {
+            return Ok(());
+        };
 
         // Normalize existing entries via roundtrip to prevent duplicates
         let existing_normalized: std::collections::HashSet<String> = existing

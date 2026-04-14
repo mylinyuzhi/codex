@@ -2,6 +2,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 /// Per-request token counts (returned by LLM API).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenUsage {
     pub input_tokens: i64,

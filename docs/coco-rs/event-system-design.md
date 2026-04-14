@@ -13,7 +13,7 @@
 │                     Agent Loop (core/loop)                       │
 │                                                                   │
 │  emit(CoreEvent::Protocol(ServerNotification))  → all consumers  │
-│  emit(CoreEvent::Stream(StreamEvent))           → needs accum.   │
+│  emit(CoreEvent::Stream(AgentStreamEvent))       → needs accum.   │
 │  emit(CoreEvent::Tui(TuiEvent))                 → TUI exclusive  │
 └─────────────────────────────┬───────────────────────────────────┘
                               │ mpsc::channel<CoreEvent>
@@ -34,29 +34,228 @@
 - cocode-rs uses a three-layer `CoreEvent` with explicit separation; TuiEvent does not leak to SDK
 - TS requires `convertSDKMessage()` to reverse-parse for UI; cocode-rs dispatches directly
 
-### 1.2 TS Flat Model (Reference)
+### 1.2 TS Actual Model (Reference)
 
+TS `query()` is an async generator that directly yields **core data types**, not SDK-specific wrappers:
+
+```typescript
+// query.ts:219-228 — actual signature
+async function* query(params: QueryParams): AsyncGenerator<
+  | StreamEvent          // raw Anthropic SDK stream event (message_start, content_block_delta, ...)
+  | RequestStartEvent    // { type: 'stream_request_start' }
+  | Message              // UserMessage | AssistantMessage | SystemMessage | ...
+  | TombstoneMessage     // { type: 'tombstone', message: Message }
+  | ToolUseSummaryMessage // { type: 'tool_use_summary', summary, preceding_tool_use_ids }
+, Terminal>
 ```
-query() yields Message (internal)
-  → normalizeMessage() conversion
-  → SDKMessage (24 variants, discriminated by type+subtype)
-  → all consumers consume uniformly
-  → UI side uses convertSDKMessage() to reverse-parse
-```
+
+**Consumer-side adaptation** (not producer-side conversion):
+- **TUI (REPL.tsx)**: `for await (event of query(...))` → `handleMessageFromStream(event, callbacks...)` dispatches to 8 callbacks (onMessage, onStreamingText, onStreamingToolUses, onSetStreamMode, onTombstone, onStreamingThinking, onApiMetrics, onUpdateLength)
+- **SDK (print.ts)**: `normalizeMessage()` converts internal Message → SDKMessage (24 variants) → `structuredIO.write()` → NDJSON stdout
+- **Background tasks**: `sdkEventQueue` collects task_started/task_progress/task_notification events, drained via `drainSdkEvents()` before result emission
+
+Key insight: TS yields **the same core types** to both TUI and SDK consumers. The conversion to SDKMessage happens only at the SDK serialization boundary (`normalizeMessage()` in `queryHelpers.ts`), not in the agent loop.
 
 ### 1.3 Decision: Keep the cocode-rs Three-Layer Architecture
 
-The cocode-rs design is superior; there is no need to switch to the TS flat model. What needs to be done:
+The cocode-rs design is superior because:
+- TS `handleMessageFromStream()` must dispatch on 5 unrelated types with type-checking workarounds; CoreEvent provides type-safe 3-way dispatch
+- TS `normalizeMessage()` converts at SDK boundary, losing the streaming position information; CoreEvent::Stream preserves it
+- TS mixes UI-only events (SpinnerMode) into the same stream; CoreEvent::Tui isolates them
+
+What needs to be done:
 1. Supplement the `ServerNotification` layer with SDK-visible events from TS
 2. Supplement the `TuiEvent` layer with UI-only events from TS
 3. Supplement the `ClientRequest`/`ServerRequest` layer with the TS control protocol
 4. Ensure `StreamAccumulator` covers all streaming conversion scenarios
 
+### 1.4 CoreEvent Envelope Definition
+
+> **Naming**: The event-system's stream layer is called `AgentStreamEvent` (not `StreamEvent`) to avoid collision with `coco_types::StreamEvent` which represents raw inference-layer LLM stream events. `AgentStreamEvent` is the agent-loop-processed version with tool lifecycle semantics and MCP events.
+
+```rust
+/// Three-layer event envelope. All consumers receive CoreEvent via mpsc channel.
+/// Defined in coco-types (shared across 3+ crates: coco-query, coco-tui, coco-cli).
+#[derive(Debug, Clone)]
+pub enum CoreEvent {
+    /// Protocol-level notifications visible to ALL consumers (TUI, SDK, IDE, App-Server).
+    /// 56 base variants + 9 TS gap additions = 65 total (see §2 for the catalog).
+    /// Covers session/turn/item/content/subagent/MCP/context/task/model/permission/
+    /// system/IDE/plan/queue/rewind/cost/sandbox/agent/hook/worktree/summarize/stream lifecycle.
+    Protocol(ServerNotification),
+
+    /// Agent-loop stream events requiring accumulation before SDK consumption.
+    /// TUI consumes directly for real-time display; SDK passes through StreamAccumulator
+    /// which converts them to Protocol(ItemStarted/Updated/Completed) notifications.
+    Stream(AgentStreamEvent),
+
+    /// TUI-exclusive events (overlays, toasts, streaming deltas for display).
+    /// SDK and App-Server consumers DROP these events.
+    Tui(TuiEvent),
+}
+```
+
+### 1.5 AgentStreamEvent Definition
+
+```rust
+/// Agent-loop stream events. These are higher-level than coco_types::StreamEvent
+/// (which represents raw LLM inference deltas). AgentStreamEvent adds:
+/// - Tool lifecycle states (Queued → Started → Completed)
+/// - MCP tool call tracking
+/// - Turn-scoped item IDs
+///
+/// Defined in coco-types. Input to StreamAccumulator.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AgentStreamEvent {
+    /// Text content delta from assistant response.
+    TextDelta { turn_id: String, delta: String },
+    /// Thinking/reasoning delta from extended thinking.
+    ThinkingDelta { turn_id: String, delta: String },
+    /// Tool use block received from API (input complete). Creates a ThreadItem.
+    ToolUseQueued { call_id: String, name: String, input: serde_json::Value },
+    /// Tool execution has begun (after permission check).
+    ToolUseStarted { call_id: String, name: String, batch_id: Option<String> },
+    /// Tool execution completed with result.
+    ToolUseCompleted { call_id: String, output: String, is_error: bool },
+    /// MCP tool call initiated (separate from builtin tools).
+    McpToolCallBegin { server: String, tool: String, call_id: String },
+    /// MCP tool call completed.
+    McpToolCallEnd { server: String, tool: String, call_id: String, is_error: bool },
+}
+```
+
+### 1.6 ThreadItem and ItemStatus Definitions
+
+```rust
+/// Semantic representation of a conversation thread item.
+/// Produced by StreamAccumulator from AgentStreamEvent sequences.
+/// Used in ServerNotification::ItemStarted/ItemUpdated/ItemCompleted.
+///
+/// Defined in coco-types.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThreadItem {
+    pub item_id: String,
+    pub turn_id: String,
+    pub details: ThreadItemDetails,
+}
+
+/// Tool-specific semantic mapping (see Section 6.2 for mapping rules).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ThreadItemDetails {
+    /// Bash tool → command execution with output.
+    CommandExecution {
+        command: String,
+        output: String,
+        exit_code: Option<i32>,
+        status: ItemStatus,
+    },
+    /// Edit/Write tools → file change with diff info.
+    FileChange {
+        changes: Vec<FileChangeInfo>,
+        status: ItemStatus,
+    },
+    /// WebSearch tool.
+    WebSearch {
+        query: String,
+        status: ItemStatus,
+    },
+    /// MCP server tool call.
+    McpToolCall {
+        server: String,
+        tool: String,
+        arguments: serde_json::Value,
+        result: Option<String>,
+        error: Option<String>,
+        status: ItemStatus,
+    },
+    /// Agent/Task tool → subagent lifecycle.
+    Subagent {
+        agent_id: String,
+        agent_type: String,
+        description: String,
+        is_background: bool,
+        result: Option<String>,
+        status: ItemStatus,
+    },
+    /// All other tools (Read, Glob, Grep, etc.).
+    ToolCall {
+        tool: String,
+        input: serde_json::Value,
+        output: Option<String>,
+        is_error: bool,
+        status: ItemStatus,
+    },
+    /// Assistant text content.
+    AgentMessage { text: String },
+    /// Reasoning/thinking content.
+    Reasoning { text: String },
+    /// Error during processing.
+    Error { message: String },
+}
+
+pub struct FileChangeInfo {
+    pub path: String,
+    pub kind: String, // "create", "modify", "delete"
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ItemStatus {
+    InProgress,
+    Completed,
+    Failed,
+    Declined,
+}
+```
+
+### 1.7 Type Ownership
+
+| Type | Owner Crate | Rationale |
+|------|-------------|-----------|
+| `CoreEvent` | `coco-types` | Shared across coco-query (producer), coco-tui, coco-cli, coco-bridge (consumers) |
+| `ServerNotification` (56 base + 9 TS gaps = 65 target) | `coco-types` | Protocol-level, shared across all consumers and serialized to SDK. Phase 0 implemented 56 base + 4 P1 gaps = 60. |
+| `AgentStreamEvent` (7 variants) | `coco-types` | Shared across coco-query (producer) and coco-tui/StreamAccumulator (consumers) |
+| `TuiOnlyEvent` (20 variants) | `coco-types` | Although UI-exclusive in semantics, the type must live in `coco-types` because `CoreEvent::Tui(TuiOnlyEvent)` is part of the envelope enum defined in `coco-types`. Moving it to `coco-tui` would create a cyclic dependency (coco-types → coco-tui → coco-types). The TUI-only semantic contract is preserved via consumer dispatch rules in `StreamAccumulator` and `handle_core_event()` — SDK and App-Server consumers drop these events. |
+| `ThreadItem`, `ThreadItemDetails`, `ItemStatus` | `coco-types` | Used in ServerNotification params and StreamAccumulator output |
+| `StreamAccumulator` | `coco-query` | Stateful converter, only used inside the query/SDK output path |
+| `ClientRequest`, `ServerRequest` | `coco-types` | Protocol-level, shared across SDK server and transport layers |
+| `TuiNotification` (17 variants) | `coco-tui` | Internal TUI state-update type. Not part of the protocol. The translator `core_event_to_tui_notifications()` converts `CoreEvent` to zero or more `TuiNotification`s so the existing TUI state mutation logic remains stable. |
+| `TuiEvent` (terminal input) | `coco-tui` | Crossterm input events (Key, Mouse, Resize, Tick, SpinnerTick, Paste). Completely distinct from `TuiOnlyEvent`; not part of the CoreEvent envelope. |
+
+> **Naming collision note**: `coco-tui` has two "event" types with different purposes:
+> - `TuiEvent` (in `tui/src/events.rs`): low-level terminal input (Crossterm events + timers).
+> - `TuiOnlyEvent` (in `coco-types/src/event.rs`): high-level UI overlay/toast events that flow through `CoreEvent::Tui(...)`.
+>
+> Do not conflate these. The former is produced by the terminal event stream; the latter is produced by the agent loop or CLI handlers and consumed by the TUI as part of `CoreEvent` dispatch.
+
+> **Note on coco_types::StreamEvent**: The existing `StreamEvent` in `crate-coco-types.md` (7 variants: TextDelta, ThinkingDelta, ToolUseStart, ToolUseInput, ToolUseEnd, RequestStart, MessageComplete) represents **raw inference-layer** LLM stream output. It is consumed by QueryEngine internally and converted to `AgentStreamEvent` for the CoreEvent channel. These are two distinct types at different abstraction layers; both live in coco-types.
+
+### 1.8 Migration from Current Implementation
+
+The current coco-rs implementation uses `QueryEvent` (13 variants) as an interim event type, mapped to `ServerNotification` (17 variants) via `map_query_event()` in `tui_runner.rs`. This is **not in the target design** and should be replaced:
+
+1. **Delete `QueryEvent`** — Replace with `CoreEvent` emission in QueryEngine
+2. **Move `ServerNotification`** — From TUI crate to coco-types, expand from 17 → 60 variants (56 base + 4 P1 gaps)
+3. **Delete `map_query_event()`** — No intermediate mapping needed; QueryEngine emits CoreEvent directly
+4. **TUI consumes CoreEvent** — Replace `notification_rx: Receiver<ServerNotification>` with `Receiver<CoreEvent>`
+5. **Add AgentStreamEvent emission** — QueryEngine emits `CoreEvent::Stream(...)` for streaming deltas instead of `CoreEvent::Protocol(TextDelta)`
+
 ---
 
 ## 2. Event Catalog: ServerNotification (Protocol Layer)
 
-### 2.1 Existing (43 variants) — Already Implemented in cocode-rs
+### 2.1 Existing (56 variants) — From cocode-rs Base
+
+These are the `ServerNotification` variants available in the cocode-rs reference
+implementation, which form the foundation for coco-rs. Phase 0 of the refactor
+has **implemented all 56 in `coco-types::ServerNotification`** plus 4 of the 9
+TS gap additions from §2.2 (all P1 priority). See `audit-gaps.md` Round 8.
+
+> **Counting note**: Earlier revisions of this doc claimed "43 variants"; a manual
+> row count of the table below yields **56**. The error did not affect the design
+> itself — only the summary arithmetic. Corrected in the Phase 0 review.
 
 | Category | Variant | Wire Method | Params |
 |----------|---------|-------------|--------|
@@ -121,21 +320,23 @@ The cocode-rs design is superior; there is no need to switch to the TS flat mode
 
 The following events exist in TS `SDKMessage` and need to be added to `ServerNotification`:
 
-| # | Proposed Variant | Wire Method | TS Source | Params | Priority |
-|---|-----------------|-------------|-----------|--------|----------|
-| 1 | `AuthStatus` | `auth/status` | `SDKAuthStatusMessage` | is_authenticating, output: Vec<String>, error? | P2 |
-| 2 | `HookStarted` | `hook/started` | `SDKHookStartedMessage` | hook_id, hook_name, hook_event | P1 |
-| 3 | `HookProgress` | `hook/progress` | `SDKHookProgressMessage` | hook_id, hook_name, hook_event, stdout, stderr, output | P1 |
-| 4 | `HookResponse` | `hook/response` | `SDKHookResponseMessage` | hook_id, hook_name, hook_event, output, stdout, stderr, exit_code?, outcome | P1 |
-| 5 | `LocalCommandOutput` | `localCommand/output` | `SDKLocalCommandOutputMessage` | content | P2 |
-| 6 | `SessionStateChanged` | `session/stateChanged` | `SDKSessionStateChangedMessage` | state: idle/running/requires_action | P1 |
-| 7 | `FilesPersisted` | `files/persisted` | `SDKFilesPersistedEvent` | files: Vec<{filename, file_id}>, failed: Vec<{filename, error}>, processed_at | P2 |
-| 8 | `ElicitationComplete` | `elicitation/complete` | `SDKElicitationCompleteMessage` | mcp_server_name, elicitation_id | P2 |
-| 9 | `ToolUseSummary` | `tool/useSummary` | `SDKToolUseSummaryMessage` | summary, preceding_tool_use_ids: Vec | P2 |
+| # | Proposed Variant | Wire Method | TS Source | Params | Priority | Status |
+|---|-----------------|-------------|-----------|--------|----------|--------|
+| 1 | `HookStarted` | `hook/started` | `SDKHookStartedMessage` | hook_id, hook_name, hook_event | P1 | ✅ implemented |
+| 2 | `HookProgress` | `hook/progress` | `SDKHookProgressMessage` | hook_id, hook_name, hook_event, stdout, stderr, output | P1 | ✅ implemented |
+| 3 | `HookResponse` | `hook/response` | `SDKHookResponseMessage` | hook_id, hook_name, hook_event, output, stdout, stderr, exit_code?, outcome | P1 | ✅ implemented |
+| 4 | `SessionStateChanged` | `session/stateChanged` | `SDKSessionStateChangedMessage` | state: idle/running/requires_action | P1 | ✅ implemented |
+| 5 | `LocalCommandOutput` | `localCommand/output` | `SDKLocalCommandOutputMessage` | content | P2 | ✅ implemented |
+| 6 | `FilesPersisted` | `files/persisted` | `SDKFilesPersistedEvent` | files: Vec<{filename, file_id}>, failed: Vec<{filename, error}>, processed_at | P2 | ✅ implemented |
+| 7 | `ElicitationComplete` | `elicitation/complete` | `SDKElicitationCompleteMessage` | mcp_server_name, elicitation_id | P2 | ✅ implemented |
+| 8 | `ToolUseSummary` | `tool/useSummary` | `SDKToolUseSummaryMessage` | summary, preceding_tool_use_ids: Vec | P2 | ✅ implemented |
+| 9 | `ToolProgress` | `tool/progress` | `SDKToolProgressMessage` | tool_use_id, tool_name, parent_tool_use_id, elapsed_time_seconds, task_id? | P1 | ✅ implemented |
 
-**Analysis**:
-- **P1 (affects core logic)**: HookStarted/Progress/Response (3 events) + SessionStateChanged — SDK consumers depend on these events to track hook execution and session state
-- **P2 (nice-to-have)**: AuthStatus, LocalCommandOutput, FilesPersisted, ElicitationComplete, ToolUseSummary
+> **AuthStatus removed from the gap list** (April 2026): The TS `SDKAuthStatusMessage` is bespoke to Claude Code's OAuth flow and does not apply to coco-rs's multi-provider auth model. coco-rs tracks auth via `coco-inference` retry events and MCP auth status (`McpAuthStatus`) independently. No ServerNotification equivalent needed.
+
+**Priority summary**:
+- **P1 (affects core logic)**: 5 events (Hook lifecycle ×3, SessionStateChanged, ToolProgress)
+- **P2 (nice-to-have)**: 4 events (LocalCommandOutput, FilesPersisted, ElicitationComplete, ToolUseSummary)
 
 ### 2.3 cocode-rs Exclusive Events (Not in TS, KEEP)
 
@@ -154,7 +355,9 @@ The following events are design enhancements in cocode-rs with no TS counterpart
 
 ---
 
-## 3. Event Catalog: StreamEvent (Accumulation Layer)
+## 3. Event Catalog: AgentStreamEvent (Accumulation Layer)
+
+> **Not to be confused with** `coco_types::StreamEvent` (inference-layer raw LLM stream). See Section 1.5 for the distinction.
 
 ### 3.1 Existing (7 variants) — KEEP
 
@@ -170,19 +373,19 @@ The following events are design enhancements in cocode-rs with no TS counterpart
 
 ### 3.2 TS Comparison
 
-TS `StreamEvent` is an internal type (not exposed to the SDK), converted to SDKMessage via `normalizeMessage()`. The cocode-rs `StreamAccumulator` is an equivalent explicit state machine, and is clearer.
+TS raw `StreamEvent` (from `@anthropic-ai/sdk`) is internal to `queryModelWithStreaming()` in `claude.ts`. It is NOT exposed to SDK consumers — TS converts it to `SDKPartialAssistantMessage` (type: `'stream_event'`, wrapping the raw event) for SDK output, or passes it through `handleMessageFromStream()` for TUI consumption.
 
-**TS `stream_event` types** (internal to query.ts):
-- `content_block_delta` (text, thinking, tool_use input)
-- `content_block_start` / `content_block_stop`
-- `message_delta` (stop_reason, usage)
+**TS raw stream event types** (from Anthropic SDK, consumed inside `queryModelWithStreaming()`):
 - `message_start` / `message_stop`
+- `content_block_start` / `content_block_stop` (with `content_block.type`: `text`, `thinking`, `tool_use`)
+- `content_block_delta` (with `delta.type`: `text_delta`, `thinking_delta`, `input_json_delta`)
+- `message_delta` (stop_reason, usage)
 
-The 7 cocode-rs StreamEvent variants are already a high-level abstraction of the TS raw SSE events and do not need alignment.
+The 7 `AgentStreamEvent` variants are a high-level abstraction of these raw SSE events, adding tool lifecycle semantics (Queued → Started → Completed) and MCP tracking that TS handles implicitly inside `query()`. No alignment needed.
 
 ### 3.3 Gap: ToolCallDelta in Stream Layer
 
-TS passes partial tool call JSON (streaming tool input) via `content_block_delta`. cocode-rs currently places `ToolCallDelta` in `TuiEvent`.
+TS passes partial tool call JSON (streaming tool input) via `content_block_delta` with `delta.type === 'input_json_delta'`. In TS TUI, `handleMessageFromStream()` dispatches this to `onStreamingToolUses()` which accumulates the JSON string in `StreamingToolUse.unparsedToolInput`. cocode-rs places the equivalent `ToolCallDelta` in `TuiEvent`.
 
 **Decision**: Keep the status quo — `ToolCallDelta` serves a purely UI display purpose (showing a typing effect for tool input) and the SDK does not need partial JSON. `ToolUseQueued` already contains the complete input.
 
@@ -387,7 +590,7 @@ pub struct PluginReloadResult {
 ### 6.1 Existing State Machine
 
 ```
-StreamEvent flow:
+AgentStreamEvent flow:
   ThinkingDelta* → TextDelta* → ToolUseQueued → ToolUseStarted → ToolUseCompleted
        ↓                ↓              ↓                ↓                ↓
   ItemStarted      ItemStarted    ItemStarted     ItemUpdated     ItemCompleted
@@ -549,79 +752,74 @@ pub enum RateLimitStatus {
 
 ---
 
-## 9. TaskStarted/TaskProgress Enhancement
+## 9. Task Events (Aligned with TS sdkEventQueue)
 
-### 9.1 TS Task Events Are Richer
+### 9.1 TS Pattern: sdkEventQueue
+
+TS uses a dedicated `sdkEventQueue` (utils/sdkEventQueue.ts) for background task
+events. Events are **queued** via `enqueueSdkEvent()` during task execution and
+**drained** via `drainSdkEvents()` before each `result` message is emitted, plus
+mid-turn for real-time streaming.
+
+Queue characteristics:
+- `MAX_QUEUE_SIZE = 1000` (FIFO with shift on overflow)
+- Only active in non-interactive/headless mode (`getIsNonInteractiveSession()`)
+- Each drained event is enriched with `uuid` and `session_id` at drain time
+- Four event types: `task_started`, `task_progress`, `task_notification`, `session_state_changed`
+
+### 9.2 TS Task Event Fields (from coreSchemas.ts:1694-1767)
 
 ```typescript
 // TS SDKTaskStartedMessage
 {
-  task_id, tool_use_id?, description,
-  task_type?,        // "local_workflow", "agent", etc.
-  workflow_name?,    // meta.name from workflow script
-  prompt?,           // agent prompt
+  type: 'system', subtype: 'task_started',
+  task_id, tool_use_id?, description,   // description REQUIRED
+  task_type?, workflow_name?, prompt?,
+  uuid, session_id,
 }
 
 // TS SDKTaskProgressMessage
 {
-  task_id, tool_use_id?, description,
-  usage: { total_tokens, tool_uses, duration_ms },
-  last_tool_name?, summary?,
-  workflow_progress?: SdkWorkflowProgress[],
+  type: 'system', subtype: 'task_progress',
+  task_id, tool_use_id?, description,   // description REQUIRED
+  usage: { total_tokens, tool_uses, duration_ms },  // usage REQUIRED
+  last_tool_name?, summary?, workflow_progress?,
+  uuid, session_id,
+}
+
+// TS SDKTaskNotificationMessage (maps to coco-rs TaskCompletedParams)
+{
+  type: 'system', subtype: 'task_notification',
+  task_id, tool_use_id?,
+  status: 'completed' | 'failed' | 'stopped',
+  output_file, summary,                 // both REQUIRED
+  usage?,
+  uuid, session_id,
 }
 ```
 
-### 9.2 Proposed: Enhance Task Params
+### 9.3 coco-rs Implementation (Phase 0 — structural, not wired)
+
+`TaskStartedParams`, `TaskProgressParams`, `TaskCompletedParams` are defined in
+`coco-types` and field-aligned with TS exactly. `TaskCompletedParams` uses the
+TS `SDKTaskNotificationMessage` shape (status/output_file/summary) — coco-rs
+uses the wire method `task/completed` but the fields match TS's task_notification.
+
+**Not yet wired** (Phase 1+):
+- An `sdkEventQueue` equivalent in coco-query that accumulates task events
+- Emit points in `coco-tasks` / `coco-subagent` crates
+- Drain logic before each session result
+
+Structural types are in place so the queue/drain infrastructure can be added
+without re-shaping the protocol.
 
 ```rust
-pub struct TaskStartedParams {
-    pub task_id: String,
-    pub task_type: String,
-    // new
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_use_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prompt: Option<String>,
-}
-
-pub struct TaskProgressParams {
-    pub task_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
-    // new
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_use_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub usage: Option<TaskUsage>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_tool_name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub summary: Option<String>,
-}
-
-pub struct TaskUsage {
-    pub total_tokens: i64,
-    pub tool_uses: i32,
-    pub duration_ms: i64,
-}
-
-pub struct TaskCompletedParams {
-    pub task_id: String,
-    pub result: String,
-    #[serde(default)]
-    pub is_error: bool,
-    // new
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_use_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub usage: Option<TaskUsage>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub output_file: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub summary: Option<String>,
-}
+// Defined in coco-types/src/event.rs — matching TS exactly
+pub struct TaskStartedParams { ... }
+pub struct TaskProgressParams { ... }
+pub struct TaskCompletedParams { ... }  // TS: task_notification
+pub struct TaskUsage { total_tokens, tool_uses, duration_ms }
+pub enum TaskCompletionStatus { Completed, Failed, Stopped }
 ```
 
 ---
@@ -729,8 +927,8 @@ The cocode-rs approach is more standardized and extensible.
 
 | Event Layer | TUI | SDK/CLI (NDJSON) | App-Server (WebSocket) | IDE Extension |
 |-------------|-----|------------------|----------------------|---------------|
-| `ServerNotification` (43+9 = 52) | via handler | direct emit | broadcast to clients | broadcast |
-| `StreamEvent` (7) | direct display + accumulator | accumulator → ServerNotification | accumulator → ServerNotification | accumulator |
+| `ServerNotification` (56 base + 9 gaps = 65 target; 60 implemented) | via handler | direct emit | broadcast to clients | broadcast |
+| `AgentStreamEvent` (7) | direct display + accumulator | accumulator → ServerNotification | accumulator → ServerNotification | accumulator |
 | `TuiEvent` (20) | via overlay/toast handler | **dropped** | **dropped** | partial (approval only) |
 
 ### 12.2 Channel Architecture
@@ -756,8 +954,8 @@ let (inbound_tx, inbound_rx) = mpsc::channel::<TransportEvent>(64);
 
 ```
 CoreEvent::Protocol(notif) → NDJSON: {"method": "turn/started", "params": {...}}
-CoreEvent::Stream(evt) → StreamAccumulator.process(evt)
-                        → Vec<ServerNotification>
+CoreEvent::Stream(agent_evt) → StreamAccumulator.process(agent_evt)
+                             → Vec<ServerNotification>
                         → NDJSON for each
 CoreEvent::Tui(_) → dropped (log only)
 ```
@@ -766,14 +964,30 @@ CoreEvent::Tui(_) → dropped (log only)
 
 ## 13. Implementation Priority
 
-### Phase 1: P0 — SDK Consumer Parity
+### Phase 0: Foundation — CoreEvent Infrastructure
 
 | Item | Change | Effort |
 |------|--------|--------|
-| `SessionStateChanged` notification | Add variant + emission points | S |
-| `HookStarted/Progress/Response` notifications | Replace single `HookExecuted` with 3-phase lifecycle | M |
-| Enhance `TaskStarted/Progress/Completed` params | Add tool_use_id, usage, summary fields | S |
-| Enhance `SessionResultParams` | Add model_usage, permission_denials, errors | S |
+| Define `CoreEvent`, `AgentStreamEvent`, `ThreadItem`, `ItemStatus` in coco-types | New types per Section 1.4-1.6 | M |
+| Move `ServerNotification` from coco-tui to coco-types | Expand from 17 → 43 variants (existing cocode-rs base) | L |
+| Replace `QueryEvent` with `CoreEvent` emission in QueryEngine | Delete QueryEvent enum, emit CoreEvent directly | M |
+| Delete `map_query_event()` in tui_runner.rs | TUI consumes CoreEvent directly | S |
+| Implement `StreamAccumulator` in coco-query | AgentStreamEvent → ServerNotification (ItemStarted/Updated/Completed) | L |
+| TUI: consume `CoreEvent` instead of `ServerNotification` | Update `handle_server_notification()` to 3-way dispatch | M |
+
+> **TS reference**: This phase aligns with TS's pattern where `query()` yields core types directly. The key difference: TS yields raw `Message` objects, coco-rs emits `CoreEvent` with 3-layer dispatch. Both avoid intermediate summary types (like the current `QueryEvent`).
+
+### Phase 1: P0 — SDK Consumer Parity
+
+| Item | Change | Effort | Status |
+|------|--------|--------|--------|
+| `SessionStarted` emission | New `SessionBootstrap` struct + emit at session entry | S | ✅ done |
+| `SessionStateChanged` Running/Idle | Emit at session entry/exit via split `run_session_loop` | S | ✅ done |
+| `SessionStateChanged` RequiresAction | Emit when permission prompt fires | S | ⏭️ deferred to Phase 2 (needs SDK control protocol) |
+| `HookStarted/Progress/Response` wiring | Extend `execute_pre/post_tool_use` to accept `event_tx`; spawn `forward_hook_events` forwarder in engine | M | ✅ done |
+| `SessionResult` emission | `build_session_result_params` from `QueryResult` + `CostTracker.per_model` | S | ✅ done |
+| `permission_denials` accumulation | Track denials across session, populate in SessionResult | S | ⏭️ deferred to Phase 2 |
+| `Task` lifecycle emission | Needs `TaskHandle` trait event sink + subagent wiring | L | ⏭️ deferred to Phase 2 |
 
 ### Phase 2: P1 — Control Protocol Completeness
 
@@ -791,12 +1005,12 @@ CoreEvent::Tui(_) → dropped (log only)
 
 | Item | Change | Effort |
 |------|--------|--------|
-| `AuthStatus` notification | Add variant | S |
-| `LocalCommandOutput` notification | Add variant | S |
-| `FilesPersisted` notification | Add variant | S |
-| `ElicitationComplete` notification | Add variant | S |
-| `ToolUseSummary` notification | Add variant | S |
-| Enhance `RateLimitParams` | Add status/type/utilization fields | S |
+| `LocalCommandOutput` notification | Add variant (content field) | S — ✅ done |
+| `FilesPersisted` notification | Add variant (files, failed, processed_at) | S — ✅ done |
+| `ElicitationComplete` notification | Add variant (mcp_server_name, elicitation_id) | S — ✅ done |
+| `ToolUseSummary` notification | Add variant (summary, preceding_tool_use_ids) | S — ✅ done |
+| `ToolProgress` notification | Add variant (tool_use_id, tool_name, elapsed_time, task_id) | S — ✅ done |
+| Enhance `RateLimitParams` | Add status/type/utilization fields per TS SDKRateLimitInfoSchema | S — ✅ done |
 
 ---
 
@@ -808,13 +1022,13 @@ CoreEvent::Tui(_) → dropped (log only)
 Architecture:       3-layer CoreEvent ✓           Flat SDKMessage
                     (superior design)             (need reverse parse)
 
-Protocol events:    43 ServerNotification         24 SDKMessage
+Protocol events:    56 ServerNotification         24 SDKMessage
                     + 9 proposed additions        (already exceeded)
-                    = 52 total
+                    = 65 target, 60 implemented
 
-Stream events:      7 StreamEvent                 Raw SSE events
-                    + StreamAccumulator ✓          + normalizeMessage()
-                    (explicit state machine)      (ad-hoc generator)
+Stream events:      7 AgentStreamEvent             Raw SSE events (content_block_delta, etc.)
+                    + StreamAccumulator ✓          + normalizeMessage() in queryHelpers.ts
+                    (explicit state machine)      (sync conversion at SDK boundary)
 
 TUI events:         20 TuiEvent                   Mixed in SDKMessage
                     (clean separation) ✓          (needs filtering)
@@ -831,7 +1045,8 @@ Schema:             schemars → JSON Schema ✓      Zod → TS-only
 Transport:          channel / NDJSON / WS ✓       NDJSON only
 ```
 
-**Bottom line**: The cocode-rs event system is architecturally superior to TS. What needs to be supplemented:
-1. 4 P0 notification enhancements (session state, hook lifecycle, task details, result details)
-2. 7 P1 control request additions (MCP management, context usage, plugin reload, flag settings)
-3. 6 P2 minor notification additions
+**Bottom line**: The cocode-rs event system is architecturally superior to TS. What needs to be done:
+1. Phase 0: CoreEvent infrastructure (define types, replace QueryEvent, implement StreamAccumulator)
+2. Phase 1: 4 P0 notification enhancements (session state, hook lifecycle, task details, result details)
+3. Phase 2: 7 P1 control request additions (MCP management, context usage, plugin reload, flag settings)
+4. Phase 3: 6 P2 minor notification additions

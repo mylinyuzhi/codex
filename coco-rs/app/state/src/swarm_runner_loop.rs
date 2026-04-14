@@ -211,7 +211,11 @@ pub async fn run_in_process_teammate(
                 swarm_teammate::on_teammate_stop(
                     &config.identity.agent_name,
                     &config.identity.team_name,
-                    config.identity.color.as_ref().map(|c| c.as_str()),
+                    config
+                        .identity
+                        .color
+                        .as_ref()
+                        .map(super::swarm_constants::AgentColorName::as_str),
                     Some(&format!("failed: {error_msg}")),
                 );
 
@@ -383,7 +387,11 @@ pub async fn run_in_process_teammate(
     swarm_teammate::on_teammate_stop(
         &config.identity.agent_name,
         &config.identity.team_name,
-        config.identity.color.as_ref().map(|c| c.as_str()),
+        config
+            .identity
+            .color
+            .as_ref()
+            .map(super::swarm_constants::AgentColorName::as_str),
         None,
     );
 
@@ -461,22 +469,21 @@ pub async fn wait_for_next_prompt_or_shutdown(
             if msg.read {
                 continue;
             }
-            if swarm_mailbox::is_structured_protocol_message(&msg.text) {
-                if let Some(protocol) = swarm_mailbox::parse_protocol_message(&msg.text) {
-                    if matches!(
-                        protocol,
-                        swarm_mailbox::ProtocolMessage::ShutdownRequest { .. }
-                    ) {
-                        let _ = swarm_mailbox::mark_message_as_read_by_index(
-                            &identity.agent_name,
-                            &identity.team_name,
-                            i,
-                        );
-                        return WaitResult::ShutdownRequest {
-                            original_text: msg.text.clone(),
-                        };
-                    }
-                }
+            if swarm_mailbox::is_structured_protocol_message(&msg.text)
+                && let Some(protocol) = swarm_mailbox::parse_protocol_message(&msg.text)
+                && matches!(
+                    protocol,
+                    swarm_mailbox::ProtocolMessage::ShutdownRequest { .. }
+                )
+            {
+                let _ = swarm_mailbox::mark_message_as_read_by_index(
+                    &identity.agent_name,
+                    &identity.team_name,
+                    i,
+                );
+                return WaitResult::ShutdownRequest {
+                    original_text: msg.text.clone(),
+                };
             }
         }
 

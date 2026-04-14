@@ -58,8 +58,10 @@ pub use types::McpResource;
 pub use types::McpServerConfig;
 pub use types::McpToolDefinition;
 pub use types::McpTransport;
+pub use types::ScopedMcpServerConfig;
 
 // Re-export rmcp client types for consumers that need direct access
+pub use coco_rmcp_client::ElicitationResponse;
 pub use coco_rmcp_client::McpAuthStatus;
 pub use coco_rmcp_client::RmcpClient;
 pub use coco_rmcp_client::SendElicitation;

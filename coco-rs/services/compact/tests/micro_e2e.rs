@@ -57,18 +57,17 @@ fn test_realistic_mixed_tools() {
 
     // Verify non-compactable tools are untouched
     for m in &messages {
-        if let Message::ToolResult(tr) = m {
-            if tr.tool_use_id == "call_agent"
+        if let Message::ToolResult(tr) = m
+            && (tr.tool_use_id == "call_agent"
                 || tr.tool_use_id == "call_task"
-                || tr.tool_use_id == "call_ask"
-            {
-                let text = format!("{:?}", tr.message);
-                assert!(
-                    !text.contains(CLEARED_TOOL_RESULT_MESSAGE),
-                    "non-compactable tool {id} should not be cleared",
-                    id = tr.tool_use_id
-                );
-            }
+                || tr.tool_use_id == "call_ask")
+        {
+            let text = format!("{:?}", tr.message);
+            assert!(
+                !text.contains(CLEARED_TOOL_RESULT_MESSAGE),
+                "non-compactable tool {id} should not be cleared",
+                id = tr.tool_use_id
+            );
         }
     }
 
@@ -143,25 +142,25 @@ fn test_thinking_compact() {
 
     // First 3 should have thinking removed
     for m in &messages[..3] {
-        if let Message::Assistant(a) = m {
-            if let coco_types::LlmMessage::Assistant { content, .. } = &a.message {
-                let has_thinking = content
-                    .iter()
-                    .any(|c| matches!(c, coco_types::AssistantContent::Reasoning(_)));
-                assert!(!has_thinking, "old turn should have thinking removed");
-            }
+        if let Message::Assistant(a) = m
+            && let coco_types::LlmMessage::Assistant { content, .. } = &a.message
+        {
+            let has_thinking = content
+                .iter()
+                .any(|c| matches!(c, coco_types::AssistantContent::Reasoning(_)));
+            assert!(!has_thinking, "old turn should have thinking removed");
         }
     }
 
     // Last 2 should keep thinking
     for m in &messages[3..] {
-        if let Message::Assistant(a) = m {
-            if let coco_types::LlmMessage::Assistant { content, .. } = &a.message {
-                let has_thinking = content
-                    .iter()
-                    .any(|c| matches!(c, coco_types::AssistantContent::Reasoning(_)));
-                assert!(has_thinking, "recent turn should keep thinking");
-            }
+        if let Message::Assistant(a) = m
+            && let coco_types::LlmMessage::Assistant { content, .. } = &a.message
+        {
+            let has_thinking = content
+                .iter()
+                .any(|c| matches!(c, coco_types::AssistantContent::Reasoning(_)));
+            assert!(has_thinking, "recent turn should keep thinking");
         }
     }
 }
@@ -223,16 +222,16 @@ fn test_api_clear_tool_uses_realistic() {
     assert!(result.tokens_saved_estimate > 0);
 
     // Recent assistant's tool call input should be preserved
-    if let Message::Assistant(a) = &messages[messages.len() - 2] {
-        if let coco_types::LlmMessage::Assistant { content, .. } = &a.message {
-            for part in content {
-                if let coco_types::AssistantContent::ToolCall(tc) = part {
-                    assert_ne!(
-                        tc.input,
-                        serde_json::Value::Object(serde_json::Map::new()),
-                        "recent tool call input should be preserved"
-                    );
-                }
+    if let Message::Assistant(a) = &messages[messages.len() - 2]
+        && let coco_types::LlmMessage::Assistant { content, .. } = &a.message
+    {
+        for part in content {
+            if let coco_types::AssistantContent::ToolCall(tc) = part {
+                assert_ne!(
+                    tc.input,
+                    serde_json::Value::Object(serde_json::Map::new()),
+                    "recent tool call input should be preserved"
+                );
             }
         }
     }
@@ -258,16 +257,16 @@ fn test_api_clear_thinking_realistic() {
 
     // All assistant messages should still have text content
     for m in &messages {
-        if let Message::Assistant(a) = m {
-            if let coco_types::LlmMessage::Assistant { content, .. } = &a.message {
-                let has_text = content
-                    .iter()
-                    .any(|c| matches!(c, coco_types::AssistantContent::Text(_)));
-                assert!(
-                    has_text,
-                    "text content should be preserved after clearing thinking"
-                );
-            }
+        if let Message::Assistant(a) = m
+            && let coco_types::LlmMessage::Assistant { content, .. } = &a.message
+        {
+            let has_text = content
+                .iter()
+                .any(|c| matches!(c, coco_types::AssistantContent::Text(_)));
+            assert!(
+                has_text,
+                "text content should be preserved after clearing thinking"
+            );
         }
     }
 }

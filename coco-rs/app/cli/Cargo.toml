@@ -21,6 +21,7 @@ coco-tools.workspace = true
 coco-query.workspace = true
 coco-messages.workspace = true
 coco-context.workspace = true
+coco-mcp.workspace = true
 coco-tui.workspace = true
 vercel-ai-provider.workspace = true
 vercel-ai-anthropic.workspace = true
@@ -33,6 +34,7 @@ anyhow.workspace = true
 clap.workspace = true
 tokio = { workspace = true, features = ["full"] }
 async-trait.workspace = true
+thiserror.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
 
