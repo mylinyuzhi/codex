@@ -221,7 +221,7 @@ pub enum ItemStatus {
 | `ThreadItem`, `ThreadItemDetails`, `ItemStatus` | `coco-types` | Used in ServerNotification params and StreamAccumulator output |
 | `StreamAccumulator` | `coco-query` | Stateful converter, only used inside the query/SDK output path |
 | `ClientRequest`, `ServerRequest` | `coco-types` | Protocol-level, shared across SDK server and transport layers |
-| `TuiNotification` (17 variants) | `coco-tui` | Internal TUI state-update type. Not part of the protocol. The translator `core_event_to_tui_notifications()` converts `CoreEvent` to zero or more `TuiNotification`s so the existing TUI state mutation logic remains stable. |
+| ~~`TuiNotification`~~ | ~~`coco-tui`~~ | **DELETED** (April 2026 deep review). Was an internal 17-variant bridge type translating `CoreEvent` into TUI state mutations. Analysis found 75% of variants were trivial pass-throughs of `ServerNotification` fields with zero real adaptation. Extending to cover all 57 `ServerNotification` variants would create a near-1:1 copy, tripling maintenance cost (type def + translator + handler). The TUI now matches `CoreEvent`'s three layers directly with exhaustive `match` arms. Complex handler logic (e.g. `TurnCompleted` auto-restore, `RewindCompleted` truncation) extracted into named private functions. See plan WS-2 for full justification. |
 | `TuiEvent` (terminal input) | `coco-tui` | Crossterm input events (Key, Mouse, Resize, Tick, SpinnerTick, Paste). Completely distinct from `TuiOnlyEvent`; not part of the CoreEvent envelope. |
 
 > **Naming collision note**: `coco-tui` has two "event" types with different purposes:
@@ -230,17 +230,34 @@ pub enum ItemStatus {
 >
 > Do not conflate these. The former is produced by the terminal event stream; the latter is produced by the agent loop or CLI handlers and consumed by the TUI as part of `CoreEvent` dispatch.
 
+> **TUI event consumption pattern**: The TUI does NOT use a unified TEA Message type. It has two orthogonal dispatch paths:
+> - **Terminal path**: `TuiEvent → TuiCommand → update::handle_command()`
+> - **Agent path**: `CoreEvent → handle_protocol() / handle_stream() / handle_tui_only()` (exhaustive match, no intermediate type)
+>
+> This is intentional — the two paths have different event sources (terminal vs. agent loop), different timing (synchronous vs. async), and different state concerns. TS uses the same pattern: `handleMessageFromStream()` dispatches raw stream events directly to 8 setState callbacks without an intermediate message type.
+
 > **Note on coco_types::StreamEvent**: The existing `StreamEvent` in `crate-coco-types.md` (7 variants: TextDelta, ThinkingDelta, ToolUseStart, ToolUseInput, ToolUseEnd, RequestStart, MessageComplete) represents **raw inference-layer** LLM stream output. It is consumed by QueryEngine internally and converted to `AgentStreamEvent` for the CoreEvent channel. These are two distinct types at different abstraction layers; both live in coco-types.
 
-### 1.8 Migration from Current Implementation
+### 1.8 Migration History
 
-The current coco-rs implementation uses `QueryEvent` (13 variants) as an interim event type, mapped to `ServerNotification` (17 variants) via `map_query_event()` in `tui_runner.rs`. This is **not in the target design** and should be replaced:
+**Phase 0 (COMPLETE)** — `QueryEvent` (13 variants) and `map_query_event()` deleted. `ServerNotification` moved from coco-tui to coco-types and expanded to 57 variants. QueryEngine emits `CoreEvent` directly via `Sender<CoreEvent>`.
 
-1. **Delete `QueryEvent`** — Replace with `CoreEvent` emission in QueryEngine
-2. **Move `ServerNotification`** — From TUI crate to coco-types, expand from 17 → 60 variants (56 base + 4 P1 gaps)
-3. **Delete `map_query_event()`** — No intermediate mapping needed; QueryEngine emits CoreEvent directly
-4. **TUI consumes CoreEvent** — Replace `notification_rx: Receiver<ServerNotification>` with `Receiver<CoreEvent>`
-5. **Add AgentStreamEvent emission** — QueryEngine emits `CoreEvent::Stream(...)` for streaming deltas instead of `CoreEvent::Protocol(TextDelta)`
+**Phase 0.5 (IN PROGRESS)** — `TuiNotification` (17 variants) deletion. The TUI currently translates `CoreEvent → TuiNotification` via `core_event_to_tui_notifications()` with a `_ => vec![]` catch-all that silently drops 47 of 57 protocol events. Deep review (April 2026) confirmed this bridge type provides no real abstraction value:
+
+- 75% of variants are trivial field pass-throughs of `ServerNotification`
+- Scaling to 57 variants creates a near-1:1 copy with triple maintenance cost
+- The TUI is not classical TEA — `TuiNotification` is a private intermediate for one of two orthogonal dispatch paths, not the unified TEA Message
+- TS has no equivalent (direct dispatch via `handleMessageFromStream`)
+- The fix is exhaustive matching on `ServerNotification` directly, with complex handlers extracted into named functions
+
+After deletion, the TUI event consumption path becomes:
+```
+CoreEvent::Protocol(n) → handle_protocol(&mut state, n) — exhaustive match
+CoreEvent::Stream(s)   → handle_stream(&mut state, s)   — exhaustive match
+CoreEvent::Tui(t)      → handle_tui_only(&mut state, t)  — exhaustive match
+```
+
+Each handler uses `#[deny(non_exhaustive_omitted_patterns)]` so new `ServerNotification` variants fail compilation until their TUI behavior is explicit. One change point per new variant, not three.
 
 ---
 
@@ -927,9 +944,11 @@ The cocode-rs approach is more standardized and extensible.
 
 | Event Layer | TUI | SDK/CLI (NDJSON) | App-Server (WebSocket) | IDE Extension |
 |-------------|-----|------------------|----------------------|---------------|
-| `ServerNotification` (56 base + 9 gaps = 65 target; 60 implemented) | via handler | direct emit | broadcast to clients | broadcast |
-| `AgentStreamEvent` (7) | direct display + accumulator | accumulator → ServerNotification | accumulator → ServerNotification | accumulator |
-| `TuiEvent` (20) | via overlay/toast handler | **dropped** | **dropped** | partial (approval only) |
+| `ServerNotification` (57 implemented) | exhaustive `handle_protocol()` — no intermediate bridge type | `server_notification_to_jsonrpc()` → NDJSON | broadcast to clients | broadcast |
+| `AgentStreamEvent` (7) | exhaustive `handle_stream()` — direct display | `StreamAccumulator` → `ServerNotification` → NDJSON | `StreamAccumulator` → `ServerNotification` | accumulator |
+| `TuiOnlyEvent` (20) | exhaustive `handle_tui_only()` — overlays/toasts | **dropped** | **dropped** | partial (approval only) |
+
+> **Note**: The TUI consumer path was simplified (April 2026) by deleting the `TuiNotification` bridge type. The TUI now matches on `CoreEvent`'s three layers directly. See §1.7 and §1.8 for rationale.
 
 ### 12.2 Channel Architecture
 
@@ -953,41 +972,48 @@ let (inbound_tx, inbound_rx) = mpsc::channel::<TransportEvent>(64);
 ### 12.3 SDK/CLI Mode Event Flow
 
 ```
-CoreEvent::Protocol(notif) → NDJSON: {"method": "turn/started", "params": {...}}
-CoreEvent::Stream(agent_evt) → StreamAccumulator.process(agent_evt)
+CoreEvent::Protocol(notif) → server_notification_to_jsonrpc(notif)
+                           → NDJSON: {"jsonrpc":"2.0","method":"turn/started","params":{...}}
+CoreEvent::Stream(agent_evt) → StreamAccumulator.process(agent_evt) (per-turn, in writer task)
                              → Vec<ServerNotification>
-                        → NDJSON for each
-CoreEvent::Tui(_) → dropped (log only)
+                             → server_notification_to_jsonrpc each
+                             → NDJSON
+CoreEvent::Tui(_) → dropped
+
+TransportEvent (9 variants) DELETED — was dead code with zero consumers.
+The SDK wire format is ServerNotification serialized as JSON-RPC 2.0 directly.
 ```
 
 ---
 
 ## 13. Implementation Priority
 
-### Phase 0: Foundation — CoreEvent Infrastructure
+### Phase 0: Foundation — CoreEvent Infrastructure — ✅ COMPLETE
 
-| Item | Change | Effort |
-|------|--------|--------|
-| Define `CoreEvent`, `AgentStreamEvent`, `ThreadItem`, `ItemStatus` in coco-types | New types per Section 1.4-1.6 | M |
-| Move `ServerNotification` from coco-tui to coco-types | Expand from 17 → 43 variants (existing cocode-rs base) | L |
-| Replace `QueryEvent` with `CoreEvent` emission in QueryEngine | Delete QueryEvent enum, emit CoreEvent directly | M |
-| Delete `map_query_event()` in tui_runner.rs | TUI consumes CoreEvent directly | S |
-| Implement `StreamAccumulator` in coco-query | AgentStreamEvent → ServerNotification (ItemStarted/Updated/Completed) | L |
-| TUI: consume `CoreEvent` instead of `ServerNotification` | Update `handle_server_notification()` to 3-way dispatch | M |
+All items done: `CoreEvent` defined, `ServerNotification` moved to coco-types (57 variants), `QueryEvent` deleted, `StreamAccumulator` implemented, TUI consumes `CoreEvent` via `handle_core_event()`.
 
-> **TS reference**: This phase aligns with TS's pattern where `query()` yields core types directly. The key difference: TS yields raw `Message` objects, coco-rs emits `CoreEvent` with 3-layer dispatch. Both avoid intermediate summary types (like the current `QueryEvent`).
-
-### Phase 1: P0 — SDK Consumer Parity
+### Phase 0.5: Observability + Bridge Cleanup — IN PROGRESS (April 2026)
 
 | Item | Change | Effort | Status |
 |------|--------|--------|--------|
-| `SessionStarted` emission | New `SessionBootstrap` struct + emit at session entry | S | ✅ done |
-| `SessionStateChanged` Running/Idle | Emit at session entry/exit via split `run_session_loop` | S | ✅ done |
-| `SessionStateChanged` RequiresAction | Emit when permission prompt fires | S | ⏭️ deferred to Phase 2 (needs SDK control protocol) |
-| `HookStarted/Progress/Response` wiring | Extend `execute_pre/post_tool_use` to accept `event_tx`; spawn `forward_hook_events` forwarder in engine | M | ✅ done |
-| `SessionResult` emission | `build_session_result_params` from `QueryResult` + `CostTracker.per_model` | S | ✅ done |
-| `permission_denials` accumulation | Track denials across session, populate in SessionResult | S | ⏭️ deferred to Phase 2 |
-| `Task` lifecycle emission | Needs `TaskHandle` trait event sink + subagent wiring | L | ⏭️ deferred to Phase 2 |
+| `SessionStateChanged` tracker with dedup | `SessionStateTracker` struct in coco-query, replaces 5 raw emission sites | S | ✅ done (WS-4) |
+| `RequiresAction` emission on permission Ask | Tracker emits `RequiresAction` before approval bridge, `Running` after resolution | S | ✅ done (WS-4) |
+| Hook forwarder → structured child task | `JoinHandle` + `CancellationToken` + 5s drain-on-shutdown | M | ✅ done (WS-5) |
+| `TaskManager` event sink | `with_event_sink(tx)` builder; emits `TaskStarted/Progress/Completed` | M | ✅ done (WS-6) |
+| Delete `TuiNotification` bridge type | TUI matches `CoreEvent` three layers directly with exhaustive `match` | M | pending (WS-2) |
+| Delete dead `TransportEvent` + wire `StreamAccumulator` into SDK | SDK dispatcher invokes accumulator per turn; deletes `transport.rs` | M | pending (WS-1) |
+| TUI full parity with TS for all 57 variants | ~25 new widgets, ~15 `AppState` fields, insta snapshots | L | pending (WS-3) |
+
+### Phase 1: P0 — SDK Consumer Parity — ✅ COMPLETE
+
+| Item | Change | Effort | Status |
+|------|--------|--------|--------|
+| `SessionStarted` emission | `SessionBootstrap` struct + emit at session entry | S | ✅ done |
+| `SessionStateChanged` Running/Idle/RequiresAction | Via `SessionStateTracker` with dedup | S | ✅ done (Phase 0.5 WS-4) |
+| `HookStarted/Progress/Response` wiring | `forward_hook_events` child task with cancel+drain | M | ✅ done (Phase 0.5 WS-5) |
+| `SessionResult` emission | `build_session_result_params` from `QueryResult` + `CostTracker` | S | ✅ done |
+| `permission_denials` accumulation | Tracked across session in `Vec<PermissionDenialInfo>`, flushed to `SessionResult` | S | ✅ done |
+| `Task` lifecycle emission | `TaskManager.with_event_sink(tx)` emits `TaskStarted/Progress/Completed` | M | ✅ done (Phase 0.5 WS-6) |
 
 ### Phase 2: P1 — Control Protocol Completeness
 
@@ -1017,21 +1043,25 @@ CoreEvent::Tui(_) → dropped (log only)
 ## 14. Summary: cocode-rs vs TS Event Architecture
 
 ```
-                    cocode-rs (base)              TS (supplement)
-                    -----------------             ---------------
-Architecture:       3-layer CoreEvent ✓           Flat SDKMessage
-                    (superior design)             (need reverse parse)
+                    coco-rs (current)               TS (reference)
+                    -----------------               ---------------
+Architecture:       3-layer CoreEvent ✓             Flat SDKMessage
+                    (superior design)               (need reverse parse)
 
-Protocol events:    56 ServerNotification         24 SDKMessage
-                    + 9 proposed additions        (already exceeded)
-                    = 65 target, 60 implemented
+Protocol events:    57 ServerNotification           ~24 SDKMessage
+                    (Phase 0 complete)              (already exceeded)
 
-Stream events:      7 AgentStreamEvent             Raw SSE events (content_block_delta, etc.)
-                    + StreamAccumulator ✓          + normalizeMessage() in queryHelpers.ts
-                    (explicit state machine)      (sync conversion at SDK boundary)
+Stream events:      7 AgentStreamEvent              Raw SSE events (content_block_delta, etc.)
+                    + StreamAccumulator ✓            + normalizeMessage() in queryHelpers.ts
+                    (explicit state machine)
 
-TUI events:         20 TuiEvent                   Mixed in SDKMessage
-                    (clean separation) ✓          (needs filtering)
+TUI events:         20 TuiOnlyEvent                 Mixed in SDKMessage
+                    (clean separation) ✓            (needs filtering)
+
+TUI consumer:       direct exhaustive match ✓       direct callback dispatch ✓
+                    (no bridge type)                (handleMessageFromStream → 8 setState)
+                    #[deny(non_exhaustive_          TS: no compile-time coverage check
+                     omitted_patterns)]
 
 Bidirectional:      22 ClientRequest              ~21 control requests
                     + 7 proposed additions        (partially structured)
@@ -1045,8 +1075,11 @@ Schema:             schemars → JSON Schema ✓      Zod → TS-only
 Transport:          channel / NDJSON / WS ✓       NDJSON only
 ```
 
-**Bottom line**: The cocode-rs event system is architecturally superior to TS. What needs to be done:
-1. Phase 0: CoreEvent infrastructure (define types, replace QueryEvent, implement StreamAccumulator)
-2. Phase 1: 4 P0 notification enhancements (session state, hook lifecycle, task details, result details)
-3. Phase 2: 7 P1 control request additions (MCP management, context usage, plugin reload, flag settings)
-4. Phase 3: 6 P2 minor notification additions
+**Bottom line**: The coco-rs event system is architecturally superior to TS.
+
+Status (April 2026):
+1. ✅ Phase 0: CoreEvent infrastructure — complete (57 ServerNotification, StreamAccumulator, QueryEvent deleted)
+2. ✅ Phase 1: SDK consumer parity — complete (SessionState tracker, hook child task, TaskManager sink, permission denials)
+3. 🔄 Phase 0.5: Bridge cleanup — in progress (delete TuiNotification, wire StreamAccumulator into SDK, TUI full parity with TS)
+4. 📋 Phase 2: 7 control request additions (MCP management, context usage, plugin reload, flag settings)
+5. ✅ Phase 3: 6 P2 minor notification additions — complete (all 9 TS gaps implemented)

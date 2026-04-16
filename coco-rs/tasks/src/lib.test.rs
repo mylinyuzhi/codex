@@ -143,3 +143,119 @@ async fn test_remove_completed() {
     // Output for completed task should also be removed
     assert!(mgr.get_output(&id1).await.is_none());
 }
+
+// ─── WS-6: event sink emission ─────────────────────────────────────────
+//
+// When constructed with `with_event_sink(tx)`, TaskManager emits the
+// matching `ServerNotification::TaskStarted/TaskProgress/TaskCompleted`
+// for every lifecycle transition. Tests exercise the full round-trip
+// for one happy-path task plus one failure path.
+
+use coco_types::CoreEvent;
+use coco_types::ServerNotification;
+use coco_types::TaskCompletionStatus;
+use tokio::sync::mpsc;
+
+fn collect(rx: &mut mpsc::Receiver<CoreEvent>) -> Vec<ServerNotification> {
+    let mut out = Vec::new();
+    while let Ok(evt) = rx.try_recv() {
+        if let CoreEvent::Protocol(n) = evt {
+            out.push(n);
+        }
+    }
+    out
+}
+
+#[tokio::test]
+async fn test_event_sink_happy_path() {
+    let (tx, mut rx) = mpsc::channel::<CoreEvent>(16);
+    let mgr = TaskManager::new().with_event_sink(tx);
+
+    let id = mgr
+        .create(TaskType::LocalAgent, "build project", "/tmp/build.txt")
+        .await;
+    mgr.update_status(&id, TaskStatus::Running).await;
+    mgr.update_status(&id, TaskStatus::Completed).await;
+
+    let events = collect(&mut rx);
+    assert_eq!(events.len(), 3, "expected 3 events, got: {events:?}");
+
+    match &events[0] {
+        ServerNotification::TaskStarted(p) => {
+            assert_eq!(p.task_id, id);
+            assert_eq!(p.description, "build project");
+            assert_eq!(p.task_type.as_deref(), Some("local_agent"));
+        }
+        other => panic!("expected TaskStarted, got {other:?}"),
+    }
+    match &events[1] {
+        ServerNotification::TaskProgress(p) => {
+            assert_eq!(p.task_id, id);
+            assert_eq!(p.description, "build project");
+        }
+        other => panic!("expected TaskProgress, got {other:?}"),
+    }
+    match &events[2] {
+        ServerNotification::TaskCompleted(p) => {
+            assert_eq!(p.task_id, id);
+            assert_eq!(p.status, TaskCompletionStatus::Completed);
+            assert_eq!(p.output_file, "/tmp/build.txt");
+        }
+        other => panic!("expected TaskCompleted, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_event_sink_failure_maps_to_failed_status() {
+    let (tx, mut rx) = mpsc::channel::<CoreEvent>(16);
+    let mgr = TaskManager::new().with_event_sink(tx);
+
+    let id = mgr
+        .create(TaskType::LocalBash, "flaky script", "/tmp/out.txt")
+        .await;
+    mgr.update_status(&id, TaskStatus::Failed).await;
+
+    let events = collect(&mut rx);
+    assert_eq!(events.len(), 2);
+    match &events[1] {
+        ServerNotification::TaskCompleted(p) => {
+            assert_eq!(p.status, TaskCompletionStatus::Failed);
+        }
+        other => panic!("expected TaskCompleted(Failed), got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_event_sink_stop_maps_to_stopped_status() {
+    let (tx, mut rx) = mpsc::channel::<CoreEvent>(16);
+    let mgr = TaskManager::new().with_event_sink(tx);
+
+    let id = mgr
+        .create(TaskType::LocalBash, "long job", "/tmp/out.txt")
+        .await;
+    mgr.stop(&id).await;
+
+    let events = collect(&mut rx);
+    assert_eq!(events.len(), 2);
+    match &events[1] {
+        ServerNotification::TaskCompleted(p) => {
+            assert_eq!(p.status, TaskCompletionStatus::Stopped);
+        }
+        other => panic!("expected TaskCompleted(Stopped), got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_no_emission_without_sink() {
+    // Default (no sink) must not panic and must not emit anything.
+    let mgr = TaskManager::new();
+    let id = mgr
+        .create(TaskType::LocalBash, "no sink", "/tmp/out.txt")
+        .await;
+    mgr.update_status(&id, TaskStatus::Running).await;
+    mgr.update_status(&id, TaskStatus::Completed).await;
+    // Nothing observable to assert — just that these calls don't panic
+    // and the task state updates normally.
+    let task = mgr.get(&id).await.expect("task exists");
+    assert_eq!(task.status, TaskStatus::Completed);
+}

@@ -356,9 +356,17 @@ pub struct SdkModelInfo {
     pub display_name: String,
     /// Short description of the model's capabilities.
     pub description: String,
-    #[serde(rename = "supportsEffort", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "supportsEffort",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub supports_effort: Option<bool>,
-    #[serde(rename = "supportedEffortLevels", default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        rename = "supportedEffortLevels",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub supported_effort_levels: Vec<EffortLevel>,
     #[serde(
         rename = "supportsAdaptiveThinking",
@@ -366,9 +374,17 @@ pub struct SdkModelInfo {
         skip_serializing_if = "Option::is_none"
     )]
     pub supports_adaptive_thinking: Option<bool>,
-    #[serde(rename = "supportsFastMode", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "supportsFastMode",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub supports_fast_mode: Option<bool>,
-    #[serde(rename = "supportsAutoMode", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "supportsAutoMode",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub supports_auto_mode: Option<bool>,
 }
 
@@ -393,16 +409,32 @@ pub struct SdkAccountInfo {
     pub email: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub organization: Option<String>,
-    #[serde(rename = "subscriptionType", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "subscriptionType",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub subscription_type: Option<String>,
-    #[serde(rename = "tokenSource", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "tokenSource",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub token_source: Option<String>,
-    #[serde(rename = "apiKeySource", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "apiKeySource",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub api_key_source: Option<String>,
     /// Active API backend. Anthropic OAuth login only applies when
     /// `FirstParty`; for third-party providers the other fields are
     /// absent and auth is external (AWS creds, gcloud ADC, etc.).
-    #[serde(rename = "apiProvider", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "apiProvider",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub api_provider: Option<ApiProvider>,
 }
 
@@ -417,7 +449,6 @@ pub enum ApiProvider {
     Vertex,
     Foundry,
 }
-
 
 /// Minimal session metadata returned by `session/list` and `session/read`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

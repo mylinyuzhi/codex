@@ -135,10 +135,8 @@ impl InitializeBootstrap for CliInitializeBootstrap {
             for def in defs {
                 by_name.insert(def.name.clone(), def);
             }
-            let mut out: Vec<SdkAgentInfo> = by_name
-                .into_values()
-                .map(def_to_sdk_agent_info)
-                .collect();
+            let mut out: Vec<SdkAgentInfo> =
+                by_name.into_values().map(def_to_sdk_agent_info).collect();
             out.sort_by(|a, b| a.name.cmp(&b.name));
             out
         })
@@ -236,9 +234,9 @@ pub fn auth_method_to_account(auth: &AuthMethod) -> SdkAccountInfo {
         // that check `account.apiProvider === undefined` to detect 3P
         // auth would otherwise see a populated apiProvider and treat
         // the session as "logged in".
-        AuthMethod::Bedrock { .. }
-        | AuthMethod::Vertex { .. }
-        | AuthMethod::Foundry { .. } => SdkAccountInfo::default(),
+        AuthMethod::Bedrock { .. } | AuthMethod::Vertex { .. } | AuthMethod::Foundry { .. } => {
+            SdkAccountInfo::default()
+        }
     }
 }
 

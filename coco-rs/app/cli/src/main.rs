@@ -541,10 +541,8 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     // Standard agent-definition directories — mirrors what the Agent
     // tool walks at spawn time. `initialize` reads the same sources so
     // clients see the same list the agent tool will actually use.
-    let agent_dirs = coco_tools::tools::agent_spawn::get_agent_dirs(
-        &global_config::config_home(),
-        &cwd,
-    );
+    let agent_dirs =
+        coco_tools::tools::agent_spawn::get_agent_dirs(&global_config::config_home(), &cwd);
 
     // Resolve auth once so `initialize.account` can report the
     // provider / subscription. The actual credentials don't leak to SDK

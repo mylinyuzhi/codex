@@ -18,6 +18,7 @@ pub mod budget;
 pub mod command_queue;
 pub mod engine;
 pub mod sdk_types;
+mod session_state;
 pub mod single_turn;
 pub mod stream_accumulator;
 

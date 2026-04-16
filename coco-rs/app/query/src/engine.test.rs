@@ -910,6 +910,16 @@ async fn test_requires_action_emitted_on_permission_ask() {
     assert!(req_idx.is_some() && idle_idx.is_some());
     assert!(req_idx < idle_idx);
 
+    // SessionStateTracker dedup contract: no consecutive duplicate states.
+    // Two Running events in a row would indicate the engine is emitting
+    // without going through the tracker. See plan file WS-4.
+    for window in states.windows(2) {
+        assert_ne!(
+            window[0], window[1],
+            "consecutive duplicate SessionState: {states:?}"
+        );
+    }
+
     // And since Ask auto-allows, the turn still completes successfully.
     assert_eq!(result.turns, 2);
 }
@@ -1397,4 +1407,120 @@ async fn ask_branch_aborts_bridge_await_on_cancel() {
     // future doesn't continue running forever if any residual task
     // is still holding a reference.
     drop(unblock);
+}
+
+// ─── WS-5: forward_hook_events structured child task ────────────────────
+//
+// The forwarder translates `HookExecutionEvent`s into CoreEvent::Protocol
+// notifications. It is now an owned child task with two exit paths:
+//
+//   1. Graceful: the caller drops the matching sender; `rx.recv()` returns
+//      None after all queued events have been drained. Normal shutdown.
+//   2. Cancellation: the token is cancelled. Any in-flight event in the
+//      channel is discarded. Used when a drain timeout expires.
+//
+// These tests exercise both paths in isolation by invoking the private
+// `QueryEngine::forward_hook_events` directly with synthetic channels.
+
+#[tokio::test]
+async fn test_hook_forwarder_drains_on_sender_drop() {
+    // Graceful path: push three events, drop the sender, the forwarder
+    // should drain all three into the core_tx before exiting.
+    let (hook_tx, hook_rx) = tokio::sync::mpsc::channel::<coco_hooks::HookExecutionEvent>(16);
+    let (core_tx, mut core_rx) = tokio::sync::mpsc::channel::<CoreEvent>(16);
+    let cancel = CancellationToken::new();
+
+    let handle = tokio::spawn(QueryEngine::forward_hook_events(
+        hook_rx,
+        Some(core_tx),
+        cancel,
+    ));
+
+    hook_tx
+        .send(coco_hooks::HookExecutionEvent::Started {
+            hook_id: "h1".into(),
+            hook_name: "hook-one".into(),
+            hook_event: "PreToolUse".into(),
+        })
+        .await
+        .unwrap();
+    hook_tx
+        .send(coco_hooks::HookExecutionEvent::Progress {
+            hook_id: "h1".into(),
+            hook_name: "hook-one".into(),
+            stdout: "working".into(),
+            stderr: String::new(),
+        })
+        .await
+        .unwrap();
+    hook_tx
+        .send(coco_hooks::HookExecutionEvent::Response {
+            hook_id: "h1".into(),
+            hook_name: "hook-one".into(),
+            exit_code: Some(0),
+            stdout: "done".into(),
+            stderr: String::new(),
+            outcome: coco_types::HookOutcome::Success,
+        })
+        .await
+        .unwrap();
+    drop(hook_tx);
+
+    // Forwarder must exit cleanly and promptly.
+    tokio::time::timeout(std::time::Duration::from_secs(2), handle)
+        .await
+        .expect("forwarder must exit within 2s on sender-drop")
+        .expect("forwarder task must not panic");
+
+    // All three events must have been translated and forwarded.
+    let mut forwarded = Vec::new();
+    while let Ok(evt) = core_rx.try_recv() {
+        forwarded.push(evt);
+    }
+    assert_eq!(
+        forwarded.len(),
+        3,
+        "expected 3 forwarded events: {forwarded:?}"
+    );
+    assert!(matches!(
+        forwarded[0],
+        CoreEvent::Protocol(ServerNotification::HookStarted(_))
+    ));
+    assert!(matches!(
+        forwarded[1],
+        CoreEvent::Protocol(ServerNotification::HookProgress(_))
+    ));
+    assert!(matches!(
+        forwarded[2],
+        CoreEvent::Protocol(ServerNotification::HookResponse(_))
+    ));
+}
+
+#[tokio::test]
+async fn test_hook_forwarder_exits_on_cancel() {
+    // Cancellation path: the forwarder must exit within a short deadline
+    // even while the sender side is still open. Simulates the drain-timeout
+    // escape hatch in run_internal_with_messages.
+    let (_hook_tx, hook_rx) = tokio::sync::mpsc::channel::<coco_hooks::HookExecutionEvent>(16);
+    let (core_tx, _core_rx) = tokio::sync::mpsc::channel::<CoreEvent>(16);
+    let cancel = CancellationToken::new();
+
+    let cancel_clone = cancel.clone();
+    let handle = tokio::spawn(QueryEngine::forward_hook_events(
+        hook_rx,
+        Some(core_tx),
+        cancel_clone,
+    ));
+
+    // Cancel; forwarder should return without waiting for sender drop.
+    cancel.cancel();
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), handle)
+        .await
+        .expect("forwarder must exit within 2s on cancel")
+        .expect("forwarder task must not panic");
+
+    // _hook_tx is still open — the forwarder exited via the cancel branch,
+    // not the channel-closed branch. Confirming it would have hung without
+    // the cancel token.
 }

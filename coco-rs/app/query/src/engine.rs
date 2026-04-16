@@ -10,6 +10,7 @@ use crate::budget::BudgetTracker;
 use crate::command_queue::CommandQueue;
 use crate::command_queue::Inbox;
 use crate::command_queue::QueuePriority;
+use crate::session_state::SessionStateTracker;
 use coco_context::FileHistoryState;
 use coco_hooks::HookRegistry;
 use coco_hooks::orchestration;
@@ -331,28 +332,77 @@ impl QueryEngine {
         turn_messages: Vec<Message>,
         event_tx: Option<tokio::sync::mpsc::Sender<crate::CoreEvent>>,
     ) -> anyhow::Result<QueryResult> {
+        // Single choke point for all SessionStateChanged emissions. Dedupes
+        // consecutive identical states so the wire stream sees exactly one
+        // emission per real edge. See plan file WS-4.
+        let state_tracker = SessionStateTracker::new();
+
         // SessionStarted must happen before anything that can error.
         self.emit_session_started(&event_tx).await;
 
         // Running — agent is actively processing.
-        Self::emit(
-            &event_tx,
-            crate::CoreEvent::Protocol(crate::ServerNotification::SessionStateChanged {
-                state: coco_types::SessionState::Running,
-            }),
-        )
-        .await;
+        state_tracker
+            .transition_to(coco_types::SessionState::Running, &event_tx)
+            .await;
 
-        let result = self.run_session_loop(turn_messages, event_tx.clone()).await;
+        // Set up the Hook → CoreEvent forwarder as a structured child task.
+        //
+        // The forwarder is a `JoinHandle` owned by this function, cancelled
+        // via a child `CancellationToken` off `self.cancel`, and drained at
+        // the single exit point below. See plan file WS-5.
+        //
+        // TS: print.ts emits SDKHookStartedMessage/etc. directly from the
+        // hook execution path; in Rust we use this child task so
+        // orchestration stays independent of the coco-query event type.
+        let hook_cancel = self.cancel.child_token();
+        let (hook_tx_opt, hook_forwarder_handle) = if event_tx.is_some() {
+            let (hook_event_tx, hook_event_rx) =
+                tokio::sync::mpsc::channel::<coco_hooks::HookExecutionEvent>(64);
+            let core_tx = event_tx.clone();
+            let handle = tokio::spawn(Self::forward_hook_events(
+                hook_event_rx,
+                core_tx,
+                hook_cancel.clone(),
+            ));
+            (Some(hook_event_tx), Some(handle))
+        } else {
+            (None, None)
+        };
+
+        let result = self
+            .run_session_loop(
+                turn_messages,
+                event_tx.clone(),
+                &state_tracker,
+                hook_tx_opt.clone(),
+            )
+            .await;
+
+        // Drain the hook forwarder before emitting Idle/SessionResult so any
+        // in-flight hook events land on the wire before the session
+        // terminator. Order matters: drop the sender FIRST so the
+        // forwarder's `rx.recv()` sees channel-closed; then await the
+        // handle with a bounded timeout so a runaway hook can't wedge
+        // shutdown.
+        drop(hook_tx_opt);
+        if let Some(handle) = hook_forwarder_handle {
+            const DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+            match tokio::time::timeout(DRAIN_TIMEOUT, handle).await {
+                Ok(Ok(())) => {}
+                Ok(Err(join_err)) => {
+                    warn!(error = %join_err, "hook forwarder task panicked");
+                }
+                Err(_) => {
+                    warn!("hook forwarder drain timed out; cancelling");
+                    hook_cancel.cancel();
+                }
+            }
+        }
 
         // Idle — turn-over signal; emit regardless of outcome.
-        Self::emit(
-            &event_tx,
-            crate::CoreEvent::Protocol(crate::ServerNotification::SessionStateChanged {
-                state: coco_types::SessionState::Idle,
-            }),
-        )
-        .await;
+        state_tracker
+            .transition_to(coco_types::SessionState::Idle, &event_tx)
+            .await;
 
         // SessionResult — always emitted. On Err, we synthesize a minimal
         // QueryResult-like view so SDK consumers see a terminal `result`
@@ -508,6 +558,8 @@ impl QueryEngine {
         &self,
         turn_messages: Vec<Message>,
         event_tx: Option<tokio::sync::mpsc::Sender<crate::CoreEvent>>,
+        state_tracker: &SessionStateTracker,
+        hook_tx_opt: Option<tokio::sync::mpsc::Sender<coco_hooks::HookExecutionEvent>>,
     ) -> anyhow::Result<QueryResult> {
         let start_time = std::time::Instant::now();
         let mut api_time_ms: i64 = 0;
@@ -540,31 +592,12 @@ impl QueryEngine {
             history.push(msg);
         }
 
-        // NOTE: `SessionStarted` + `SessionStateChanged(Running)` are emitted
-        // by the outer `run_internal_with_messages` BEFORE calling this
-        // function, so SDK consumers see them even if the session loop errors
-        // out before its first turn. See TS `runHeadless()` which initializes
+        // NOTE: `SessionStarted` + `SessionStateChanged(Running)` + the
+        // hook → CoreEvent forwarder are set up by the outer
+        // `run_internal_with_messages` BEFORE calling this function, so
+        // SDK consumers see them even if the session loop errors out
+        // before its first turn. See TS `runHeadless()` which initializes
         // the init message at the very top of the entry function.
-
-        // Set up the Hook → CoreEvent forwarder. When a hook executes during
-        // tool execution, its HookExecutionEvents flow into this channel, and
-        // a background task translates them into CoreEvent::Protocol(Hook*)
-        // notifications. TS: print.ts emits SDKHookStartedMessage/etc. directly.
-        //
-        // The forwarder keeps running for the lifetime of the session; we
-        // close the tx side at end to signal the receiver task to exit.
-        let hook_tx_opt: Option<tokio::sync::mpsc::Sender<coco_hooks::HookExecutionEvent>> =
-            if event_tx.is_some() {
-                let (hook_event_tx, hook_event_rx) =
-                    tokio::sync::mpsc::channel::<coco_hooks::HookExecutionEvent>(64);
-                let core_tx = event_tx.clone();
-                // Detached: the forwarder task exits when `hook_event_tx` is
-                // dropped at the end of `run_session_loop`. We don't join it.
-                tokio::spawn(Self::forward_hook_events(hook_event_rx, core_tx));
-                Some(hook_event_tx)
-            } else {
-                None
-            };
 
         // Create file history snapshot for this user message.
         // TS: fileHistoryMakeSnapshot() in handlePromptSubmit.ts + QueryEngine.ts
@@ -872,15 +905,9 @@ impl QueryEngine {
                             //     'requires_action') in print.ts:818 on
                             // can_use_tool entry, then transition back to
                             // 'running' after the approval resolves.
-                            Self::emit(
-                                &event_tx,
-                                crate::CoreEvent::Protocol(
-                                    crate::ServerNotification::SessionStateChanged {
-                                        state: coco_types::SessionState::RequiresAction,
-                                    },
-                                ),
-                            )
-                            .await;
+                            state_tracker
+                                .transition_to(coco_types::SessionState::RequiresAction, &event_tx)
+                                .await;
 
                             if let Some(bridge) = self.permission_bridge.as_ref() {
                                 // `id` is a fresh correlation id for this
@@ -934,15 +961,12 @@ impl QueryEngine {
                                                 &tool_id,
                                                 &format!("Permission denied: {feedback}"),
                                             ));
-                                            Self::emit(
-                                                &event_tx,
-                                                crate::CoreEvent::Protocol(
-                                                    crate::ServerNotification::SessionStateChanged {
-                                                        state: coco_types::SessionState::Running,
-                                                    },
-                                                ),
-                                            )
-                                            .await;
+                                            state_tracker
+                                                .transition_to(
+                                                    coco_types::SessionState::Running,
+                                                    &event_tx,
+                                                )
+                                                .await;
                                             continue;
                                         }
                                         coco_tool::ToolPermissionDecision::Approved => {
@@ -966,30 +990,21 @@ impl QueryEngine {
                                             &tool_id,
                                             &format!("Approval bridge error: {e}"),
                                         ));
-                                        Self::emit(
-                                            &event_tx,
-                                            crate::CoreEvent::Protocol(
-                                                crate::ServerNotification::SessionStateChanged {
-                                                    state: coco_types::SessionState::Running,
-                                                },
-                                            ),
-                                        )
-                                        .await;
+                                        state_tracker
+                                            .transition_to(
+                                                coco_types::SessionState::Running,
+                                                &event_tx,
+                                            )
+                                            .await;
                                         continue;
                                     }
                                 }
                             }
                             // Back to running whether we consulted a bridge or
                             // fell through to auto-allow.
-                            Self::emit(
-                                &event_tx,
-                                crate::CoreEvent::Protocol(
-                                    crate::ServerNotification::SessionStateChanged {
-                                        state: coco_types::SessionState::Running,
-                                    },
-                                ),
-                            )
-                            .await;
+                            state_tracker
+                                .transition_to(coco_types::SessionState::Running, &event_tx)
+                                .await;
                         }
                         PermissionDecision::Allow { .. } => {}
                     }
@@ -1457,16 +1472,32 @@ impl QueryEngine {
     /// them as `CoreEvent::Protocol(HookStarted/Progress/Response)`.
     ///
     /// TS: print.ts emits these directly from the hook execution path; in
-    /// Rust we use a background task so orchestration stays independent of
+    /// Rust we use a child task so orchestration stays independent of
     /// the coco-query event type.
+    ///
+    /// Graceful shutdown: the normal exit path is for the caller to drop
+    /// the matching sender, which makes `rx.recv()` return `None` and
+    /// drains any queued events before returning. The `cancel` token is
+    /// a fast-path escape hatch for crash scenarios (e.g. the drain
+    /// timeout in `run_internal_with_messages` has expired); when
+    /// cancelled, pending events are discarded. See plan file WS-5.
     async fn forward_hook_events(
         mut rx: tokio::sync::mpsc::Receiver<coco_hooks::HookExecutionEvent>,
         core_tx: Option<tokio::sync::mpsc::Sender<crate::CoreEvent>>,
+        cancel: CancellationToken,
     ) {
         let Some(core_tx) = core_tx else {
             return;
         };
-        while let Some(evt) = rx.recv().await {
+        loop {
+            let evt = tokio::select! {
+                biased;
+                _ = cancel.cancelled() => break,
+                maybe = rx.recv() => match maybe {
+                    Some(evt) => evt,
+                    None => break,
+                },
+            };
             let core_evt = match evt {
                 coco_hooks::HookExecutionEvent::Started {
                     hook_id,

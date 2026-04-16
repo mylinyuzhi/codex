@@ -681,7 +681,9 @@ pub async fn dispatch_client_request(req: ClientRequest, ctx: HandlerContext) ->
         ClientRequest::SessionResume(params) => session::handle_session_resume(params, &ctx).await,
         ClientRequest::SessionList => session::handle_session_list(&ctx).await,
         ClientRequest::SessionRead(params) => session::handle_session_read(params, &ctx).await,
-        ClientRequest::SessionArchive(params) => session::handle_session_archive(params, &ctx).await,
+        ClientRequest::SessionArchive(params) => {
+            session::handle_session_archive(params, &ctx).await
+        }
 
         // === Turn control ===
         ClientRequest::TurnStart(params) => turn::handle_turn_start(params, &ctx).await,
@@ -689,12 +691,18 @@ pub async fn dispatch_client_request(req: ClientRequest, ctx: HandlerContext) ->
 
         // === Approval + user input + elicitation ===
         ClientRequest::ApprovalResolve(params) => turn::handle_approval_resolve(params, &ctx).await,
-        ClientRequest::UserInputResolve(params) => turn::handle_user_input_resolve(params, &ctx).await,
-        ClientRequest::ElicitationResolve(params) => turn::handle_elicitation_resolve(params, &ctx).await,
+        ClientRequest::UserInputResolve(params) => {
+            turn::handle_user_input_resolve(params, &ctx).await
+        }
+        ClientRequest::ElicitationResolve(params) => {
+            turn::handle_elicitation_resolve(params, &ctx).await
+        }
 
         // === Runtime control ===
         ClientRequest::SetModel(params) => runtime::handle_set_model(params, &ctx).await,
-        ClientRequest::SetPermissionMode(params) => runtime::handle_set_permission_mode(params, &ctx).await,
+        ClientRequest::SetPermissionMode(params) => {
+            runtime::handle_set_permission_mode(params, &ctx).await
+        }
         ClientRequest::SetThinking(params) => runtime::handle_set_thinking(params, &ctx).await,
         ClientRequest::StopTask(params) => runtime::handle_stop_task(params, &ctx).await,
         ClientRequest::RewindFiles(params) => rewind::handle_rewind_files(params, &ctx).await,
@@ -725,7 +733,9 @@ pub async fn dispatch_client_request(req: ClientRequest, ctx: HandlerContext) ->
         ClientRequest::McpReconnect(params) => mcp::handle_mcp_reconnect(params, &ctx).await,
         ClientRequest::McpToggle(params) => mcp::handle_mcp_toggle(params, &ctx).await,
         ClientRequest::PluginReload => runtime::handle_plugin_reload(&ctx).await,
-        ClientRequest::ConfigApplyFlags(params) => runtime::handle_config_apply_flags(params, &ctx).await,
+        ClientRequest::ConfigApplyFlags(params) => {
+            runtime::handle_config_apply_flags(params, &ctx).await
+        }
     }
 }
 

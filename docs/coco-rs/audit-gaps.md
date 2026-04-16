@@ -68,7 +68,7 @@ for SDK output.
 | # | Deviation | Rationale |
 |---|-----------|-----------|
 | 1 | `TuiOnlyEvent` owned by coco-types, not coco-tui | `CoreEvent::Tui(TuiOnlyEvent)` is part of the envelope; moving it to coco-tui creates cyclic deps. Design §1.7 updated in place. |
-| 2 | TUI keeps internal `TuiNotification` (17 variants) as state-update type | Preserves existing state mutation logic stability. Translator `core_event_to_tui_notifications()` converts `CoreEvent` → `TuiNotification`. |
+| 2 | ~~TUI keeps internal `TuiNotification` (17 variants) as state-update type~~ | **RESOLVED** (April 2026 deep review): `TuiNotification` scheduled for deletion. 75% trivial pass-throughs; scaling to 57 variants defeats abstraction. TUI will match `CoreEvent` three layers directly with exhaustive `#[deny(non_exhaustive_omitted_patterns)]`. See `event-system-design.md` §1.7-1.8 and plan WS-2. |
 | 3 | `BudgetDecision::Nudge` mapped to `ServerNotification::Error { category: "budget" }` | No direct design equivalent; Error with category field is acceptable. |
 | 4 | Inference-layer `coco_types::StreamEvent` coexists with new `AgentStreamEvent` | Two abstraction layers (raw LLM stream vs. agent-loop-processed). Documented in crate-coco-types.md. |
 

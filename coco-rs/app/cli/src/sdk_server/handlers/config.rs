@@ -35,9 +35,10 @@ pub(super) async fn handle_config_read(ctx: &HandlerContext) -> HandlerResult {
     // it on the blocking pool so frequent `config/read` polls don't stall
     // the tokio worker.
     let cwd_for_load = cwd.clone();
-    let load_result =
-        tokio::task::spawn_blocking(move || coco_config::settings::load_settings(&cwd_for_load, None))
-            .await;
+    let load_result = tokio::task::spawn_blocking(move || {
+        coco_config::settings::load_settings(&cwd_for_load, None)
+    })
+    .await;
     let loaded = match load_result {
         Ok(Ok(s)) => s,
         Ok(Err(e)) => {
@@ -135,10 +136,7 @@ pub(super) async fn handle_config_write(
     let write_result = tokio::task::spawn_blocking(move || -> Result<(), ConfigWriteError> {
         let mut doc: serde_json::Value = if path.exists() {
             let contents = std::fs::read_to_string(&path).map_err(|e| {
-                ConfigWriteError::Io(format!(
-                    "failed to read {}: {e}",
-                    path.display()
-                ))
+                ConfigWriteError::Io(format!("failed to read {}: {e}", path.display()))
             })?;
             serde_json::from_str(&contents).map_err(|e| {
                 ConfigWriteError::InvalidExisting(format!(
@@ -153,9 +151,8 @@ pub(super) async fn handle_config_write(
         set_nested_json_key(&mut doc, &key, value).map_err(ConfigWriteError::InvalidKey)?;
 
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                ConfigWriteError::Io(format!("failed to create parent dir: {e}"))
-            })?;
+            std::fs::create_dir_all(parent)
+                .map_err(|e| ConfigWriteError::Io(format!("failed to create parent dir: {e}")))?;
         }
 
         let serialized = serde_json::to_string_pretty(&doc)

@@ -31,7 +31,9 @@ async fn commands_walks_registry_visible_list() {
         command_type: CommandType::Local(coco_types::LocalCommandData {
             handler: "test".into(),
         }),
-        handler: Some(Arc::new(BuiltinCommand::new("visible-cmd", |_| String::new()))),
+        handler: Some(Arc::new(BuiltinCommand::new("visible-cmd", |_| {
+            String::new()
+        }))),
         is_enabled: None,
     });
     registry.register(RegisteredCommand {
@@ -52,7 +54,9 @@ async fn commands_walks_registry_visible_list() {
         command_type: CommandType::Local(coco_types::LocalCommandData {
             handler: "test".into(),
         }),
-        handler: Some(Arc::new(BuiltinCommand::new("hidden-cmd", |_| String::new()))),
+        handler: Some(Arc::new(BuiltinCommand::new("hidden-cmd", |_| {
+            String::new()
+        }))),
         is_enabled: None,
     });
 
@@ -90,7 +94,9 @@ async fn commands_filters_sensitive_commands() {
         command_type: CommandType::Local(coco_types::LocalCommandData {
             handler: "test".into(),
         }),
-        handler: Some(Arc::new(BuiltinCommand::new("public-cmd", |_| String::new()))),
+        handler: Some(Arc::new(BuiltinCommand::new("public-cmd", |_| {
+            String::new()
+        }))),
         is_enabled: None,
     });
     // Sensitive: must NOT appear on the SDK wire even though
@@ -113,7 +119,9 @@ async fn commands_filters_sensitive_commands() {
         command_type: CommandType::Local(coco_types::LocalCommandData {
             handler: "test".into(),
         }),
-        handler: Some(Arc::new(BuiltinCommand::new("secret-cmd", |_| String::new()))),
+        handler: Some(Arc::new(BuiltinCommand::new("secret-cmd", |_| {
+            String::new()
+        }))),
         is_enabled: None,
     });
 
@@ -177,7 +185,10 @@ async fn available_output_styles_includes_builtins_when_dirs_empty() {
     let boot = CliInitializeBootstrap::new("default".into());
     let styles = boot.available_output_styles().await;
     for builtin in BUILTIN_OUTPUT_STYLES {
-        assert!(styles.contains(&builtin.to_string()), "missing builtin {builtin}");
+        assert!(
+            styles.contains(&builtin.to_string()),
+            "missing builtin {builtin}"
+        );
     }
 }
 
@@ -210,8 +221,9 @@ async fn account_defaults_without_auth_method() {
 #[tokio::test]
 async fn account_api_key_maps_to_first_party() {
     use coco_inference::auth::AuthMethod;
-    let boot = CliInitializeBootstrap::new("default".into())
-        .with_auth_method(AuthMethod::ApiKey { key: "sk-ant-...".into() });
+    let boot = CliInitializeBootstrap::new("default".into()).with_auth_method(AuthMethod::ApiKey {
+        key: "sk-ant-...".into(),
+    });
     let account = boot.account().await;
     assert_eq!(account.api_provider, Some(SdkApiProvider::FirstParty));
     // `token_source` is intentionally None — coco-rs doesn't track TS's
@@ -304,7 +316,11 @@ async fn agents_returns_builtins_when_no_dirs_configured() {
     let agents = boot.agents().await;
     // builtin_agents() ships 6 defaults: general-purpose, Explore, Plan,
     // Review, statusline-setup, claude-code-guide.
-    assert!(agents.len() >= 6, "expected built-in agents, got {}", agents.len());
+    assert!(
+        agents.len() >= 6,
+        "expected built-in agents, got {}",
+        agents.len()
+    );
     let names: Vec<&str> = agents.iter().map(|a| a.name.as_str()).collect();
     assert!(names.contains(&"general-purpose"));
     assert!(names.contains(&"Explore"));

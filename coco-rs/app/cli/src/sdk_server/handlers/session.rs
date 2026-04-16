@@ -203,8 +203,7 @@ pub(super) async fn handle_session_start(
     if session_slot.is_some() {
         return HandlerResult::Err {
             code: coco_types::error_codes::INVALID_REQUEST,
-            message: "a session was started concurrently; retry with session/archive first"
-                .into(),
+            message: "a session was started concurrently; retry with session/archive first".into(),
             data: None,
         };
     }
@@ -456,8 +455,7 @@ pub(super) async fn handle_session_archive(
     };
     if let Some(manager) = manager_arc {
         let target_id = params.session_id.clone();
-        let delete_result =
-            tokio::task::spawn_blocking(move || manager.delete(&target_id)).await;
+        let delete_result = tokio::task::spawn_blocking(move || manager.delete(&target_id)).await;
         match delete_result {
             Ok(Ok(())) => {}
             Ok(Err(e)) => warn!(
@@ -601,8 +599,7 @@ pub(super) async fn handle_session_read(
         }
     };
     let session_id = params.session_id.clone();
-    let load_result =
-        tokio::task::spawn_blocking(move || manager.load(&session_id)).await;
+    let load_result = tokio::task::spawn_blocking(move || manager.load(&session_id)).await;
     match load_result {
         Ok(Ok(session)) => {
             info!(session_id = %params.session_id, "SdkServer: session/read");
@@ -660,8 +657,7 @@ pub(super) async fn handle_session_resume(
     // to avoid potential lock-ordering complications in future refactors.
     drop(manager_slot);
     let target_id = params.session_id.clone();
-    let resume_result =
-        tokio::task::spawn_blocking(move || manager_arc.resume(&target_id)).await;
+    let resume_result = tokio::task::spawn_blocking(move || manager_arc.resume(&target_id)).await;
     let session = match resume_result {
         Ok(Ok(s)) => s,
         Ok(Err(e)) => {

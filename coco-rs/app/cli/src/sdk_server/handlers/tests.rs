@@ -309,8 +309,7 @@ async fn initialize_with_bootstrap_returns_real_commands() {
     );
 
     let bootstrap: Arc<dyn crate::sdk_server::InitializeBootstrap> = Arc::new(
-        CliInitializeBootstrap::new("Explanatory".into())
-            .with_command_registry(Arc::new(registry)),
+        CliInitializeBootstrap::new("Explanatory".into()).with_command_registry(Arc::new(registry)),
     );
     let server = SdkServer::new(server_end).with_initialize_bootstrap(bootstrap);
     let server_task = tokio::spawn(async move {

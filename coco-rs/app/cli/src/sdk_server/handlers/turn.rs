@@ -190,7 +190,11 @@ pub(super) async fn handle_approval_resolve(
 ) -> HandlerResult {
     let request_id = params.request_id.clone();
     let decision = params.decision;
-    let outcome = ctx.state.pending_approvals.resolve(&request_id, params).await;
+    let outcome = ctx
+        .state
+        .pending_approvals
+        .resolve(&request_id, params)
+        .await;
     handle_resolve_outcome(outcome, "approval", &request_id, |state| {
         info!(request_id = %state, decision = ?decision, "SdkServer: approval/resolve");
     })

@@ -39,8 +39,14 @@ async fn multiple_pending_entries_isolated() {
     let map: PendingMap<String> = PendingMap::new();
     let rx_a = map.register("a".into()).await;
     let rx_b = map.register("b".into()).await;
-    assert_eq!(map.resolve("a", "hello".into()).await, ResolveOutcome::Delivered);
+    assert_eq!(
+        map.resolve("a", "hello".into()).await,
+        ResolveOutcome::Delivered
+    );
     assert_eq!(rx_a.await.unwrap(), "hello");
-    assert_eq!(map.resolve("b", "world".into()).await, ResolveOutcome::Delivered);
+    assert_eq!(
+        map.resolve("b", "world".into()).await,
+        ResolveOutcome::Delivered
+    );
     assert_eq!(rx_b.await.unwrap(), "world");
 }
