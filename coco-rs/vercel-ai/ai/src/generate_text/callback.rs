@@ -3,6 +3,28 @@
 //! This module provides callback types that allow users to hook into
 //! the generation lifecycle. Event types are shared between user callbacks
 //! and telemetry integrations, matching the TS SDK design.
+//!
+//! # Relationship to CoreEvent
+//!
+//! These callbacks (`OnStartEvent`, `OnStepFinishEvent`, `OnFinishEvent`,
+//! `OnErrorEvent`) fire at the **provider boundary** — one abstraction
+//! level below `AgentStreamEvent` in the `CoreEvent` envelope.
+//!
+//! They are **intentionally NOT bridged into `CoreEvent`**
+//! (confirmed April 2026, event-system-design.md §1.7, plan WS-9):
+//!
+//! - Bridging would duplicate data already emitted by the agent loop
+//!   (`AgentStreamEvent::TextDelta`, `TurnCompleted.usage`, etc.)
+//! - Correct layering: `QueryEngine` listens to these callbacks
+//!   internally and translates results into `CoreEvent::Protocol` /
+//!   `CoreEvent::Stream` emissions. The callbacks are an
+//!   implementation detail of inference, not a public event surface.
+//! - Trace correlation between callback telemetry and `CoreEvent`
+//!   streams uses shared `session_id` / `turn_id` context, not a
+//!   data-flow bridge.
+//!
+//! For the public event surface visible to SDK consumers, see
+//! `coco_types::CoreEvent` and `coco_types::ServerNotification`.
 
 use std::collections::HashMap;
 use std::sync::Arc;

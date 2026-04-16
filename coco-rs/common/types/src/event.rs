@@ -8,11 +8,29 @@ use crate::TokenUsage;
 /// All consumers (TUI, SDK, CLI, App-Server) receive `CoreEvent` via
 /// `mpsc::channel`. Each consumer matches on the layer it cares about:
 ///
-/// - **TUI**: all 3 layers
-/// - **SDK/CLI**: Protocol + Stream (TuiEvent dropped)
+/// - **TUI**: all 3 layers (exhaustive match, no intermediate bridge type)
+/// - **SDK/CLI**: Protocol + Stream (via `StreamAccumulator`; TuiEvent dropped)
 /// - **App-Server**: Protocol + Stream (TuiEvent dropped)
 ///
-/// See `event-system-design.md` Section 1.4.
+/// # Ordering contract
+///
+/// `mpsc` provides FIFO ordering **per sender**. When multiple tasks clone
+/// the same `Sender<CoreEvent>` and emit concurrently, cross-sender
+/// ordering is **not guaranteed**.
+///
+/// Where ordering matters, all related events must be emitted from a
+/// single task:
+/// - **Item lifecycle** (`ItemStarted → ItemUpdated → ItemCompleted`):
+///   emitted by `run_session_loop` (single task). Invariant.
+/// - **Hook lifecycle** (`HookStarted → HookProgress → HookResponse`):
+///   emitted by `forward_hook_events` child task. Invariant.
+/// - **Session lifecycle** (`SessionStarted → Running → Idle → SessionResult`):
+///   emitted by `run_internal_with_messages` (single task). Invariant.
+/// - **Wire serialization**: the SDK dispatcher's writer task is the single
+///   serializer — all events pass through one `tokio::select!` loop, so
+///   wire order matches channel-receive order.
+///
+/// See `event-system-design.md` §12 and plan WS-8.
 #[derive(Debug, Clone)]
 pub enum CoreEvent {
     /// Protocol-level notifications visible to ALL consumers.
