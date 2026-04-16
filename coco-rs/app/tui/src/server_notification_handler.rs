@@ -3,9 +3,9 @@
 //! Architecture (post WS-2 refactor): this module receives `CoreEvent` from
 //! the agent loop and dispatches directly to three exhaustive handlers:
 //!
-//! - `handle_protocol(state, ServerNotification)` — all 57 protocol variants
-//! - `handle_stream(state, AgentStreamEvent)` — 7 stream variants
-//! - `handle_tui_only(state, TuiOnlyEvent)` — ~20 TUI-exclusive variants
+//! - `handle_protocol(state, ServerNotification)` — all protocol variants (exhaustive)
+//! - `handle_stream(state, AgentStreamEvent)` — all stream variants (exhaustive)
+//! - `handle_tui_only(state, TuiOnlyEvent)` — TUI-exclusive variants
 //!
 //! The old `TuiNotification` bridge type has been deleted. See
 //! `event-system-design.md` §1.7-1.8 and plan file WS-2 for rationale:
