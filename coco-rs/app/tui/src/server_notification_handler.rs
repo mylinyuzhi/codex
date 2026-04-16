@@ -642,7 +642,108 @@ fn handle_tui_only(state: &mut AppState, event: TuiOnlyEvent) -> bool {
             target_message_id,
             files_changed,
         } => on_rewind_completed(state, target_message_id, files_changed),
-        _ => false,
+
+        // === Question / elicitation / sandbox overlays ===
+        TuiOnlyEvent::QuestionAsked {
+            request_id: _,
+            message,
+        } => {
+            state.ui.add_toast(Toast::info(message));
+            true
+        }
+        TuiOnlyEvent::ElicitationRequested { .. } => {
+            state
+                .ui
+                .add_toast(Toast::info("MCP elicitation requested".to_string()));
+            true
+        }
+        TuiOnlyEvent::SandboxApprovalRequired {
+            request_id: _,
+            operation,
+        } => {
+            state
+                .ui
+                .add_toast(Toast::warning(format!("Sandbox approval: {operation}")));
+            true
+        }
+
+        // === Picker data-ready ===
+        TuiOnlyEvent::PluginDataReady { .. } => false,
+        TuiOnlyEvent::OutputStylesReady { .. } => false,
+        TuiOnlyEvent::RewindCheckpointsReady { .. } => false,
+
+        // === Compaction / speculation toasts ===
+        TuiOnlyEvent::CompactionCircuitBreakerOpen { failures } => {
+            state.ui.add_toast(Toast::warning(format!(
+                "Compaction circuit breaker open ({failures} failures)"
+            )));
+            true
+        }
+        TuiOnlyEvent::MicroCompactionApplied { removed } => {
+            state.ui.add_toast(Toast::info(format!(
+                "Micro-compaction: {removed} messages removed"
+            )));
+            true
+        }
+        TuiOnlyEvent::SessionMemoryCompactApplied { summary_tokens } => {
+            state.ui.add_toast(Toast::info(format!(
+                "Session memory compacted ({summary_tokens} tokens)"
+            )));
+            true
+        }
+        TuiOnlyEvent::SpeculativeRolledBack { reason } => {
+            state
+                .ui
+                .add_toast(Toast::warning(format!("Speculation rolled back: {reason}")));
+            true
+        }
+
+        // === Memory extraction toasts ===
+        TuiOnlyEvent::SessionMemoryExtractionStarted => {
+            state
+                .ui
+                .add_toast(Toast::info("Extracting session memories...".to_string()));
+            true
+        }
+        TuiOnlyEvent::SessionMemoryExtractionCompleted { extracted } => {
+            state
+                .ui
+                .add_toast(Toast::success(format!("{extracted} memories extracted")));
+            true
+        }
+        TuiOnlyEvent::SessionMemoryExtractionFailed { error } => {
+            state
+                .ui
+                .add_toast(Toast::error(format!("Memory extraction failed: {error}")));
+            true
+        }
+
+        // === Cron toasts ===
+        TuiOnlyEvent::CronJobDisabled { job_id: _, reason } => {
+            state
+                .ui
+                .add_toast(Toast::warning(format!("Cron job disabled: {reason}")));
+            true
+        }
+        TuiOnlyEvent::CronJobsMissed { count } => {
+            state
+                .ui
+                .add_toast(Toast::warning(format!("{count} cron jobs missed")));
+            true
+        }
+
+        // === Streaming tool display ===
+        TuiOnlyEvent::ToolCallDelta { .. } => false,
+        TuiOnlyEvent::ToolProgress { .. } => false,
+        TuiOnlyEvent::ToolExecutionAborted {
+            tool_use_id: _,
+            reason,
+        } => {
+            state
+                .ui
+                .add_toast(Toast::warning(format!("Tool aborted: {reason}")));
+            true
+        }
     }
 }
 
