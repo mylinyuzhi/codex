@@ -151,14 +151,16 @@ fn core_event_tui_is_dropped() {
 }
 
 #[test]
-fn core_event_stream_wraps_as_stream_event() {
+fn core_event_stream_returns_none_handled_by_accumulator() {
+    // Stream events are handled by the writer task's StreamAccumulator,
+    // not by core_event_to_notification. They return None here.
     use coco_types::AgentStreamEvent;
     let event = CoreEvent::Stream(AgentStreamEvent::TextDelta {
         turn_id: "t1".into(),
         delta: "hello".into(),
     });
-    let notif = core_event_to_notification(event).expect("should translate");
-    assert_eq!(notif.method, "stream/event");
-    assert_eq!(notif.params["type"], "text_delta");
-    assert_eq!(notif.params["delta"], "hello");
+    assert!(
+        core_event_to_notification(event).is_none(),
+        "Stream events should return None — handled by writer task accumulator"
+    );
 }

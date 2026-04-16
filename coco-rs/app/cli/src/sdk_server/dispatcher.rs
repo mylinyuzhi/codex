@@ -10,6 +10,7 @@
 
 use std::sync::Arc;
 
+use coco_query::StreamAccumulator;
 use coco_types::ClientRequest;
 use coco_types::CoreEvent;
 use coco_types::JsonRpcError;
@@ -218,19 +219,95 @@ impl SdkServer {
         // must land BEFORE the archive's own JSON-RPC reply.
         let notif_transport = self.transport.clone();
         let writer_task = tokio::spawn(async move {
+            // Per-turn StreamAccumulator. Converts AgentStreamEvent sequences
+            // into semantic ServerNotification::ItemStarted/Updated/Completed
+            // + AgentMessageDelta/ReasoningDelta protocol events. Reset on
+            // each TurnStarted, flushed on TurnCompleted/Failed/Interrupted.
+            //
+            // TS: the SDK path uses normalizeMessage() + sdkEventQueue; we
+            // use the same StreamAccumulator that the design doc specifies.
+            let mut accumulator: Option<StreamAccumulator> = None;
+
+            /// Send a single JsonRpcNotification to the transport.
+            /// Returns false if the transport is closed.
+            async fn send_notif(transport: &dyn SdkTransport, notif: JsonRpcNotification) -> bool {
+                if let Err(e) = transport.send(JsonRpcMessage::Notification(notif)).await {
+                    warn!(error = %e, "notification forward failed");
+                    return false;
+                }
+                true
+            }
+
+            /// Forward a Vec of ServerNotifications produced by the
+            /// StreamAccumulator. Returns false if any send fails.
+            async fn send_accumulated(
+                transport: &dyn SdkTransport,
+                notifications: Vec<ServerNotification>,
+            ) -> bool {
+                for sn in notifications {
+                    if let Some(notif) = server_notification_to_jsonrpc(sn) {
+                        if !send_notif(transport, notif).await {
+                            return false;
+                        }
+                    }
+                }
+                true
+            }
+
             loop {
                 tokio::select! {
                     biased;
                     event = notif_rx.recv() => {
                         match event {
-                            Some(event) => {
-                                if let Some(notif) = core_event_to_notification(event) {
-                                    let msg = JsonRpcMessage::Notification(notif);
-                                    if let Err(e) = notif_transport.send(msg).await {
-                                        warn!(error = %e, "notification forward failed");
+                            Some(CoreEvent::Protocol(notif)) => {
+                                // Lifecycle hooks for accumulator scoping.
+                                match &notif {
+                                    ServerNotification::TurnStarted(p) => {
+                                        let turn_id = p.turn_id.clone().unwrap_or_default();
+                                        accumulator = Some(StreamAccumulator::new(turn_id));
+                                    }
+                                    ServerNotification::TurnCompleted(_)
+                                    | ServerNotification::TurnFailed(_)
+                                    | ServerNotification::TurnInterrupted(_) => {
+                                        // Flush trailing items BEFORE the terminator.
+                                        if let Some(ref mut acc) = accumulator {
+                                            let flushed = acc.flush();
+                                            if !send_accumulated(&*notif_transport, flushed).await {
+                                                break;
+                                            }
+                                        }
+                                        accumulator = None;
+                                    }
+                                    _ => {}
+                                }
+                                // Forward the protocol event itself.
+                                if let Some(jrpc) = server_notification_to_jsonrpc(notif) {
+                                    if !send_notif(&*notif_transport, jrpc).await {
                                         break;
                                     }
                                 }
+                            }
+                            Some(CoreEvent::Stream(stream_evt)) => {
+                                // Feed the accumulator, which converts raw
+                                // stream events into semantic item lifecycle
+                                // ServerNotifications.
+                                let notifications = if let Some(ref mut acc) = accumulator {
+                                    acc.process(stream_evt)
+                                } else {
+                                    // Stream event before TurnStarted — create
+                                    // a fallback accumulator to avoid dropping it.
+                                    warn!("stream event before TurnStarted; creating fallback accumulator");
+                                    let mut acc = StreamAccumulator::new("unknown");
+                                    let result = acc.process(stream_evt);
+                                    accumulator = Some(acc);
+                                    result
+                                };
+                                if !send_accumulated(&*notif_transport, notifications).await {
+                                    break;
+                                }
+                            }
+                            Some(CoreEvent::Tui(_)) => {
+                                // TUI-only events are dropped by non-TUI consumers.
                             }
                             None => {
                                 // Notification channel closed — drain replies then exit.
@@ -441,23 +518,18 @@ fn error_reply_with_data(
 // ---------------------------------------------------------------------------
 
 /// Translate a `CoreEvent` into a `JsonRpcNotification` suitable for the
-/// wire. Returns `None` for `CoreEvent::Tui(_)` since those are dropped
-/// by non-TUI consumers (per `event-system-design.md` §12).
+/// wire. Returns `None` for `CoreEvent::Tui(_)` (dropped by non-TUI
+/// consumers) and `CoreEvent::Stream(_)` (handled by the writer task's
+/// `StreamAccumulator`, not this function).
+///
+/// See `event-system-design.md` §12.
+///
+/// Only used in tests — the production writer task handles dispatch inline.
+#[cfg(test)]
 fn core_event_to_notification(event: CoreEvent) -> Option<JsonRpcNotification> {
     match event {
         CoreEvent::Protocol(notif) => server_notification_to_jsonrpc(notif),
-        CoreEvent::Stream(stream_evt) => {
-            // Stream events don't have wire methods in the protocol — they
-            // must pass through a StreamAccumulator first. For now, wrap
-            // them under a fixed method so SDK consumers can inspect them
-            // during debugging. A follow-up will run the accumulator and
-            // emit ItemStarted/Updated/Completed instead.
-            let params = serde_json::to_value(&stream_evt).ok()?;
-            Some(JsonRpcNotification {
-                method: "stream/event".into(),
-                params,
-            })
-        }
+        CoreEvent::Stream(_) => None,
         CoreEvent::Tui(_) => None,
     }
 }

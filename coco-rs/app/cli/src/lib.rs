@@ -5,7 +5,6 @@
 pub mod output;
 pub mod sdk;
 pub mod sdk_server;
-pub mod transport;
 
 use clap::Parser;
 use clap::Subcommand;
