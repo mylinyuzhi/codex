@@ -147,7 +147,7 @@ pub async fn handle_command(
         TuiCommand::QueueInput => {
             let text = state.ui.input.take_input();
             if !text.is_empty() {
-                state.session.queued_commands.push(text.clone());
+                state.session.queued_commands.push_back(text.clone());
                 let _ = command_tx
                     .send(UserCommand::QueueCommand { prompt: text })
                     .await;

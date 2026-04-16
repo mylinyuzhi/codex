@@ -34,6 +34,7 @@ use coco_types::ToolId;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
+use tracing::debug;
 use tracing::info;
 use tracing::warn;
 use vercel_ai_provider::AssistantContentPart;
@@ -1464,7 +1465,9 @@ impl QueryEngine {
         event: crate::CoreEvent,
     ) {
         if let Some(sender) = tx {
-            let _ = sender.send(event).await;
+            if sender.send(event).await.is_err() {
+                debug!("event receiver dropped — session ending");
+            }
         }
     }
 

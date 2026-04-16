@@ -86,6 +86,12 @@ fn test_tool_execution_lifecycle() {
     assert_eq!(state.session.tool_executions.len(), 1);
     assert_eq!(
         state.session.tool_executions[0].status,
+        crate::state::session::ToolStatus::Queued
+    );
+
+    state.session.run_tool("call-1");
+    assert_eq!(
+        state.session.tool_executions[0].status,
         crate::state::session::ToolStatus::Running
     );
 

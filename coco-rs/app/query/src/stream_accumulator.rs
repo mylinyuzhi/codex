@@ -29,6 +29,7 @@ use std::str::FromStr;
 use coco_types::AgentStreamEvent;
 use coco_types::ContentDeltaParams;
 use coco_types::FileChangeInfo;
+use coco_types::FileChangeKind;
 use coco_types::ItemStatus;
 use coco_types::ServerNotification;
 use coco_types::ThreadItem;
@@ -379,11 +380,10 @@ fn build_tool_details(
         },
         Some(name @ (ToolName::Edit | ToolName::Write | ToolName::NotebookEdit)) => {
             let kind = if name == ToolName::Write {
-                "create"
+                FileChangeKind::Create
             } else {
-                "modify"
-            }
-            .to_string();
+                FileChangeKind::Modify
+            };
             ThreadItemDetails::FileChange {
                 changes: vec![FileChangeInfo {
                     path: str_field("file_path"),

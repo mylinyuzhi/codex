@@ -196,8 +196,16 @@ pub enum ThreadItemDetails {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileChangeInfo {
     pub path: String,
-    /// One of: "create", "modify", "delete".
-    pub kind: String,
+    pub kind: FileChangeKind,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileChangeKind {
+    Create,
+    Modify,
+    Delete,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -211,7 +219,7 @@ pub enum ItemStatus {
 }
 
 // ---------------------------------------------------------------------------
-// ServerNotification — protocol-layer notifications (52 variants)
+// ServerNotification — protocol-layer notifications (65 variants)
 // ---------------------------------------------------------------------------
 
 /// Protocol-level notifications visible to all consumers.

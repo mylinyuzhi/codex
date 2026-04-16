@@ -71,17 +71,20 @@ fn thread_item_file_change_roundtrips() {
         details: ThreadItemDetails::FileChange {
             changes: vec![FileChangeInfo {
                 path: "src/main.rs".into(),
-                kind: "modify".into(),
+                kind: FileChangeKind::Modify,
             }],
             status: ItemStatus::InProgress,
         },
     };
     let json = serde_json::to_string(&item).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(v["details"]["changes"][0]["kind"], "modify");
     let back: ThreadItem = serde_json::from_str(&json).unwrap();
     match back.details {
         ThreadItemDetails::FileChange { changes, status } => {
             assert_eq!(changes.len(), 1);
             assert_eq!(changes[0].path, "src/main.rs");
+            assert_eq!(changes[0].kind, FileChangeKind::Modify);
             assert_eq!(status, ItemStatus::InProgress);
         }
         _ => panic!("expected FileChange"),

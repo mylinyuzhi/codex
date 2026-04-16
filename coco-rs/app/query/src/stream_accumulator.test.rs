@@ -39,8 +39,11 @@ fn text_delta_starts_item_and_emits_delta() {
     let mut acc = StreamAccumulator::new("turn-1");
     let notifs = acc.process(text_delta("hello"));
     assert_eq!(notifs.len(), 2);
-    matches!(&notifs[0], ServerNotification::ItemStarted { .. });
-    matches!(&notifs[1], ServerNotification::AgentMessageDelta(_));
+    assert!(matches!(&notifs[0], ServerNotification::ItemStarted { .. }));
+    assert!(matches!(
+        &notifs[1],
+        ServerNotification::AgentMessageDelta(_)
+    ));
 }
 
 #[test]
@@ -50,7 +53,10 @@ fn consecutive_text_deltas_share_item() {
     let second = acc.process(text_delta("world"));
     // Second delta should only produce AgentMessageDelta, no new ItemStarted.
     assert_eq!(second.len(), 1);
-    matches!(&second[0], ServerNotification::AgentMessageDelta(_));
+    assert!(matches!(
+        &second[0],
+        ServerNotification::AgentMessageDelta(_)
+    ));
 }
 
 #[test]
@@ -75,9 +81,12 @@ fn text_to_thinking_transition_flushes_text() {
     let notifs = acc.process(thinking_delta("thinking..."));
     // Should flush text (ItemCompleted) then start thinking (ItemStarted + delta).
     assert_eq!(notifs.len(), 3);
-    matches!(&notifs[0], ServerNotification::ItemCompleted { .. });
-    matches!(&notifs[1], ServerNotification::ItemStarted { .. });
-    matches!(&notifs[2], ServerNotification::ReasoningDelta(_));
+    assert!(matches!(
+        &notifs[0],
+        ServerNotification::ItemCompleted { .. }
+    ));
+    assert!(matches!(&notifs[1], ServerNotification::ItemStarted { .. }));
+    assert!(matches!(&notifs[2], ServerNotification::ReasoningDelta(_)));
 }
 
 #[test]
@@ -133,7 +142,7 @@ fn edit_tool_maps_to_file_change() {
         ServerNotification::ItemStarted { item } => match &item.details {
             ThreadItemDetails::FileChange { changes, .. } => {
                 assert_eq!(changes[0].path, "src/main.rs");
-                assert_eq!(changes[0].kind, "modify");
+                assert_eq!(changes[0].kind, FileChangeKind::Modify);
             }
             _ => panic!("expected FileChange"),
         },
@@ -152,7 +161,7 @@ fn write_tool_uses_create_kind() {
     match &notifs[0] {
         ServerNotification::ItemStarted { item } => match &item.details {
             ThreadItemDetails::FileChange { changes, .. } => {
-                assert_eq!(changes[0].kind, "create");
+                assert_eq!(changes[0].kind, FileChangeKind::Create);
             }
             _ => panic!("expected FileChange"),
         },
@@ -249,8 +258,11 @@ fn tool_queued_flushes_pending_text() {
     let notifs = acc.process(tool_queued("call-1", "Bash", json!({ "command": "ls" })));
     // Should flush text (ItemCompleted) then start tool (ItemStarted).
     assert_eq!(notifs.len(), 2);
-    matches!(&notifs[0], ServerNotification::ItemCompleted { .. });
-    matches!(&notifs[1], ServerNotification::ItemStarted { .. });
+    assert!(matches!(
+        &notifs[0],
+        ServerNotification::ItemCompleted { .. }
+    ));
+    assert!(matches!(&notifs[1], ServerNotification::ItemStarted { .. }));
 }
 
 #[test]

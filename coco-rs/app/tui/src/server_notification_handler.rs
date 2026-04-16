@@ -349,14 +349,12 @@ fn handle_protocol(state: &mut AppState, notif: ServerNotification) -> bool {
         }
         ServerNotification::CommandQueued { id, preview } => {
             let _ = id;
-            state.session.queued_commands.push(preview);
+            state.session.queued_commands.push_back(preview);
             true
         }
         ServerNotification::CommandDequeued { id } => {
             let _ = id;
-            if !state.session.queued_commands.is_empty() {
-                state.session.queued_commands.remove(0);
-            }
+            state.session.queued_commands.pop_front();
             true
         }
 
@@ -567,7 +565,10 @@ fn handle_stream(state: &mut AppState, event: AgentStreamEvent) -> bool {
             state.session.start_tool(call_id, name);
             true
         }
-        AgentStreamEvent::ToolUseStarted { .. } => false,
+        AgentStreamEvent::ToolUseStarted { call_id, .. } => {
+            state.session.run_tool(&call_id);
+            true
+        }
         AgentStreamEvent::ToolUseCompleted {
             call_id,
             name: _,
@@ -841,10 +842,12 @@ fn on_turn_completed(state: &mut AppState, p: coco_types::TurnCompletedParams) -
             streaming.content,
         ));
     }
-    state
-        .session
-        .tool_executions
-        .retain(|t| t.status == crate::state::session::ToolStatus::Running);
+    state.session.tool_executions.retain(|t| {
+        matches!(
+            t.status,
+            crate::state::session::ToolStatus::Queued | crate::state::session::ToolStatus::Running
+        )
+    });
 
     // Auto-restore on interrupt: if the turn was user-cancelled and
     // conditions are met, auto-rewind to last user message.

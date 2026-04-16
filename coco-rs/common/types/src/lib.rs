@@ -65,6 +65,7 @@ pub use event::ElicitationCompleteParams;
 pub use event::ErrorParams;
 pub use event::FastModeState;
 pub use event::FileChangeInfo;
+pub use event::FileChangeKind;
 pub use event::FilesPersistedParams;
 pub use event::HookExecutedParams;
 pub use event::HookOutcomeStatus;

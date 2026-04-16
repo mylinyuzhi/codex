@@ -51,7 +51,7 @@ pub struct SessionState {
     /// Current turn number (within multi-turn loop).
     pub current_turn_number: Option<i32>,
     /// Queued commands for mid-turn injection.
-    pub queued_commands: Vec<String>,
+    pub queued_commands: VecDeque<String>,
     /// Available models for model picker.
     pub available_models: Vec<String>,
     /// Whether file checkpointing is enabled for rewind.
@@ -120,16 +120,27 @@ impl SessionState {
         self.token_usage = usage;
     }
 
-    /// Start a tool execution.
+    /// Queue a tool execution (called from ToolUseQueued).
     pub fn start_tool(&mut self, call_id: String, name: String) {
         self.tool_executions.push(ToolExecution {
             call_id,
             name,
-            status: ToolStatus::Running,
+            status: ToolStatus::Queued,
             started_at: Instant::now(),
             description: None,
             streaming_input: None,
         });
+    }
+
+    /// Transition a queued tool to running (called from ToolUseStarted).
+    pub fn run_tool(&mut self, call_id: &str) {
+        if let Some(tool) = self
+            .tool_executions
+            .iter_mut()
+            .find(|t| t.call_id == call_id)
+        {
+            tool.status = ToolStatus::Running;
+        }
     }
 
     /// Complete a tool execution.
@@ -176,7 +187,7 @@ impl Default for SessionState {
             mcp_servers: Vec::new(),
             focused_subagent_index: None,
             current_turn_number: None,
-            queued_commands: Vec::new(),
+            queued_commands: VecDeque::new(),
             available_models: Vec::new(),
             file_history_enabled: false,
             was_interrupted: false,
@@ -495,6 +506,7 @@ impl ToolExecution {
 /// Tool execution status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolStatus {
+    Queued,
     Running,
     Completed,
     Failed,
