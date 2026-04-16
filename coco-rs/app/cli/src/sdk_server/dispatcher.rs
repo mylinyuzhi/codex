@@ -11,6 +11,7 @@
 use std::sync::Arc;
 
 use coco_query::StreamAccumulator;
+use coco_types::AgentStreamEvent;
 use coco_types::ClientRequest;
 use coco_types::CoreEvent;
 use coco_types::JsonRpcError;
@@ -227,6 +228,8 @@ impl SdkServer {
             // TS: the SDK path uses normalizeMessage() + sdkEventQueue; we
             // use the same StreamAccumulator that the design doc specifies.
             let mut accumulator: Option<StreamAccumulator> = None;
+            // Buffer stream events that arrive before TurnStarted.
+            let mut pre_turn_buffer: Vec<AgentStreamEvent> = Vec::new();
 
             /// Send a single JsonRpcNotification to the transport.
             /// Returns false if the transport is closed.
@@ -264,7 +267,16 @@ impl SdkServer {
                                 match &notif {
                                     ServerNotification::TurnStarted(p) => {
                                         let turn_id = p.turn_id.clone().unwrap_or_default();
-                                        accumulator = Some(StreamAccumulator::new(turn_id));
+                                        let mut acc = StreamAccumulator::new(turn_id);
+                                        // Drain any stream events that arrived before TurnStarted.
+                                        let buffered: Vec<_> = pre_turn_buffer
+                                            .drain(..)
+                                            .flat_map(|evt| acc.process(evt))
+                                            .collect();
+                                        if !send_accumulated(&*notif_transport, buffered).await {
+                                            break;
+                                        }
+                                        accumulator = Some(acc);
                                     }
                                     ServerNotification::TurnCompleted(_)
                                     | ServerNotification::TurnFailed(_)
@@ -277,6 +289,7 @@ impl SdkServer {
                                             }
                                         }
                                         accumulator = None;
+                                        pre_turn_buffer.clear();
                                     }
                                     _ => {}
                                 }
@@ -294,13 +307,10 @@ impl SdkServer {
                                 let notifications = if let Some(ref mut acc) = accumulator {
                                     acc.process(stream_evt)
                                 } else {
-                                    // Stream event before TurnStarted — create
-                                    // a fallback accumulator to avoid dropping it.
-                                    warn!("stream event before TurnStarted; creating fallback accumulator");
-                                    let mut acc = StreamAccumulator::new("unknown");
-                                    let result = acc.process(stream_evt);
-                                    accumulator = Some(acc);
-                                    result
+                                    // Buffer until TurnStarted provides a real turn_id.
+                                    debug!("stream event before TurnStarted; buffering");
+                                    pre_turn_buffer.push(stream_evt);
+                                    Vec::new()
                                 };
                                 if !send_accumulated(&*notif_transport, notifications).await {
                                     break;

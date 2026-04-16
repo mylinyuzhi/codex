@@ -88,6 +88,10 @@ pub struct SessionState {
     pub prompt_suggestions: Vec<String>,
     /// Local command output lines (set by LocalCommandOutput, capped at 50).
     pub local_command_output: VecDeque<String>,
+    /// Available output styles for picker (set by OutputStylesReady).
+    pub available_output_styles: Vec<String>,
+    /// Available plugins for picker (set by PluginDataReady).
+    pub available_plugins: Vec<serde_json::Value>,
 }
 
 impl SessionState {
@@ -124,6 +128,7 @@ impl SessionState {
             status: ToolStatus::Running,
             started_at: Instant::now(),
             description: None,
+            streaming_input: None,
         });
     }
 
@@ -188,6 +193,8 @@ impl Default for SessionState {
             active_hooks: Vec::new(),
             prompt_suggestions: Vec::new(),
             local_command_output: VecDeque::new(),
+            available_output_styles: Vec::new(),
+            available_plugins: Vec::new(),
         }
     }
 }
@@ -474,6 +481,8 @@ pub struct ToolExecution {
     pub status: ToolStatus,
     pub started_at: Instant,
     pub description: Option<String>,
+    /// Streaming tool input delta (typing effect for bash/powershell).
+    pub streaming_input: Option<String>,
 }
 
 impl ToolExecution {

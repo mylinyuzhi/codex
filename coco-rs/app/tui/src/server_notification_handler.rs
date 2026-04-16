@@ -20,7 +20,8 @@
 
 use coco_types::AgentStreamEvent;
 use coco_types::CoreEvent;
-use coco_types::PermissionMode;
+use coco_types::MCP_TOOL_PREFIX;
+use coco_types::MCP_TOOL_SEPARATOR;
 use coco_types::ServerNotification;
 use coco_types::TuiOnlyEvent;
 
@@ -50,7 +51,7 @@ pub fn handle_core_event(state: &mut AppState, event: CoreEvent) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Protocol layer — ServerNotification (57 variants)
+// Protocol layer — ServerNotification (65 variants)
 // ---------------------------------------------------------------------------
 
 fn handle_protocol(state: &mut AppState, notif: ServerNotification) -> bool {
@@ -298,11 +299,7 @@ fn handle_protocol(state: &mut AppState, notif: ServerNotification) -> bool {
 
         // === Permission ===
         ServerNotification::PermissionModeChanged(p) => {
-            if let Ok(mode) =
-                serde_json::from_value::<PermissionMode>(serde_json::Value::String(p.mode))
-            {
-                state.session.permission_mode = mode;
-            }
+            state.session.permission_mode = p.mode;
             true
         }
 
@@ -600,14 +597,37 @@ fn handle_stream(state: &mut AppState, event: AgentStreamEvent) -> bool {
             }
             true
         }
-        AgentStreamEvent::McpToolCallBegin { .. } | AgentStreamEvent::McpToolCallEnd { .. } => {
-            false
+        AgentStreamEvent::McpToolCallBegin {
+            server,
+            tool,
+            call_id,
+        } => {
+            // Only create if not already tracked via ToolUseQueued (avoids
+            // duplicate for MCP tools that go through the regular pipeline).
+            let already_tracked = state
+                .session
+                .tool_executions
+                .iter()
+                .any(|t| t.call_id == call_id);
+            if !already_tracked {
+                state.session.start_tool(
+                    call_id,
+                    format!("{MCP_TOOL_PREFIX}{server}{MCP_TOOL_SEPARATOR}{tool}"),
+                );
+            }
+            true
+        }
+        AgentStreamEvent::McpToolCallEnd {
+            call_id, is_error, ..
+        } => {
+            state.session.complete_tool(&call_id, is_error);
+            true
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// TUI-only layer — TuiOnlyEvent (~20 variants)
+// TUI-only layer — TuiOnlyEvent (21 variants)
 // ---------------------------------------------------------------------------
 
 fn handle_tui_only(state: &mut AppState, event: TuiOnlyEvent) -> bool {
@@ -645,31 +665,59 @@ fn handle_tui_only(state: &mut AppState, event: TuiOnlyEvent) -> bool {
 
         // === Question / elicitation / sandbox overlays ===
         TuiOnlyEvent::QuestionAsked {
-            request_id: _,
+            request_id,
             message,
         } => {
-            state.ui.add_toast(Toast::info(message));
+            state.ui.set_overlay(crate::state::Overlay::Question(
+                crate::state::ui::QuestionOverlay {
+                    request_id,
+                    question: message,
+                    options: Vec::new(),
+                    selected: 0,
+                },
+            ));
             true
         }
-        TuiOnlyEvent::ElicitationRequested { .. } => {
-            state
-                .ui
-                .add_toast(Toast::info("MCP elicitation requested".to_string()));
+        TuiOnlyEvent::ElicitationRequested {
+            request_id,
+            server,
+            schema,
+        } => {
+            let fields = parse_elicitation_fields(&schema);
+            state.ui.set_overlay(crate::state::Overlay::Elicitation(
+                crate::state::ui::ElicitationOverlay {
+                    request_id,
+                    server_name: server,
+                    message: String::new(),
+                    fields,
+                },
+            ));
             true
         }
         TuiOnlyEvent::SandboxApprovalRequired {
-            request_id: _,
+            request_id,
             operation,
         } => {
             state
                 .ui
-                .add_toast(Toast::warning(format!("Sandbox approval: {operation}")));
+                .set_overlay(crate::state::Overlay::SandboxPermission(
+                    crate::state::ui::SandboxPermissionOverlay {
+                        request_id,
+                        description: operation,
+                    },
+                ));
             true
         }
 
         // === Picker data-ready ===
-        TuiOnlyEvent::PluginDataReady { .. } => false,
-        TuiOnlyEvent::OutputStylesReady { .. } => false,
+        TuiOnlyEvent::PluginDataReady { plugins } => {
+            state.session.available_plugins = plugins;
+            true
+        }
+        TuiOnlyEvent::OutputStylesReady { styles } => {
+            state.session.available_output_styles = styles;
+            true
+        }
         TuiOnlyEvent::RewindCheckpointsReady { .. } => false,
 
         // === Compaction / speculation toasts ===
@@ -733,8 +781,34 @@ fn handle_tui_only(state: &mut AppState, event: TuiOnlyEvent) -> bool {
         }
 
         // === Streaming tool display ===
-        TuiOnlyEvent::ToolCallDelta { .. } => false,
-        TuiOnlyEvent::ToolProgress { .. } => false,
+        TuiOnlyEvent::ToolCallDelta { call_id, delta } => {
+            let Some(tool) = state
+                .session
+                .tool_executions
+                .iter_mut()
+                .find(|t| t.call_id == call_id)
+            else {
+                return false;
+            };
+            tool.streaming_input
+                .get_or_insert_with(String::new)
+                .push_str(&delta);
+            true
+        }
+        TuiOnlyEvent::ToolProgress { tool_use_id, data } => {
+            let Some(tool) = state
+                .session
+                .tool_executions
+                .iter_mut()
+                .find(|t| t.call_id == tool_use_id)
+            else {
+                return false;
+            };
+            if let Some(desc) = data.get("description").and_then(|d| d.as_str()) {
+                tool.description = Some(desc.to_string());
+            }
+            true
+        }
         TuiOnlyEvent::ToolExecutionAborted {
             tool_use_id: _,
             reason,
@@ -877,6 +951,24 @@ fn on_rewind_completed(
     };
     state.ui.add_toast(Toast::success(msg));
     true
+}
+
+/// Extract elicitation fields from a JSON Schema object.
+fn parse_elicitation_fields(schema: &serde_json::Value) -> Vec<crate::state::ui::ElicitationField> {
+    let Some(props) = schema.get("properties").and_then(|p| p.as_object()) else {
+        return Vec::new();
+    };
+    props
+        .iter()
+        .map(|(name, prop)| crate::state::ui::ElicitationField {
+            name: name.clone(),
+            description: prop
+                .get("description")
+                .and_then(|d| d.as_str())
+                .map(String::from),
+            value: String::new(),
+        })
+        .collect()
 }
 
 #[cfg(test)]

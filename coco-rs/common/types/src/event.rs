@@ -216,7 +216,7 @@ pub enum ItemStatus {
 
 /// Protocol-level notifications visible to all consumers.
 ///
-/// 43 base variants from cocode-rs design + 9 TS gap additions = 52 total.
+/// 65 variants total: 52 base + 4 TS gap P1 + 4 TS gap P2 + 5 additions.
 /// Each variant has an explicit `#[serde(rename = "...")]` for its wire method.
 /// See `event-system-design.md` Section 2.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -461,7 +461,7 @@ pub enum ServerNotification {
         max_turns: Option<i32>,
     },
 
-    // === TS gap P2: additional SDK notifications (4) ===
+    // === TS gap P2: additional SDK notifications (5) ===
     /// Output from a user-executed local command (REPL `!` prefix).
     /// Matches TS `SDKLocalCommandOutputMessage` (coreSchemas.ts:1590-1602).
     #[serde(rename = "localCommand/output")]
@@ -1001,7 +1001,7 @@ pub struct ModelFallbackParams {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionModeChangedParams {
-    pub mode: String,
+    pub mode: crate::PermissionMode,
     #[serde(default)]
     pub bypass_available: bool,
 }
@@ -1198,7 +1198,7 @@ pub enum SessionState {
 }
 
 // ---------------------------------------------------------------------------
-// TuiOnlyEvent — TUI-exclusive events (20 variants per event-system-design §4)
+// TuiOnlyEvent — TUI-exclusive events (21 variants: 20 per design §4 + 1 extension)
 // ---------------------------------------------------------------------------
 
 /// TUI-exclusive events.
