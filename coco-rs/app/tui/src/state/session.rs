@@ -63,6 +63,30 @@ pub struct SessionState {
     pub available_commands: Vec<(String, Option<String>)>,
     /// Saved sessions for session browser.
     pub saved_sessions: Vec<SavedSession>,
+
+    // === WS-3: new fields for full event coverage ===
+    /// Session state visible to SDK consumers (idle/running/requires_action).
+    pub session_state: coco_types::SessionState,
+    /// Active worktree path (set by WorktreeEntered, cleared by WorktreeExited).
+    pub worktree_path: Option<String>,
+    /// Model fallback banner message (set by ModelFallbackStarted, cleared on Completed).
+    pub model_fallback_banner: Option<String>,
+    /// Rate limit status (set by RateLimit notification).
+    pub rate_limit_info: Option<RateLimitInfo>,
+    /// Context usage percentage (set by ContextUsageWarning).
+    pub context_usage_percent: Option<f64>,
+    /// Sandbox active state (set by SandboxStateChanged).
+    pub sandbox_active: bool,
+    /// Stream health: stall detected (set by StreamStallDetected, cleared on next turn).
+    pub stream_stall: bool,
+    /// Active background tasks (set by TaskStarted, updated by TaskProgress/Completed).
+    pub active_tasks: Vec<TaskEntry>,
+    /// Active hook executions (set by HookStarted, updated by HookProgress/Response).
+    pub active_hooks: Vec<HookEntry>,
+    /// Prompt suggestions from the model (set by PromptSuggestion).
+    pub prompt_suggestions: Vec<String>,
+    /// Local command output lines (set by LocalCommandOutput, capped).
+    pub local_command_output: Vec<String>,
 }
 
 impl SessionState {
@@ -152,6 +176,17 @@ impl Default for SessionState {
             was_interrupted: false,
             available_commands: Vec::new(),
             saved_sessions: Vec::new(),
+            session_state: coco_types::SessionState::Idle,
+            worktree_path: None,
+            model_fallback_banner: None,
+            rate_limit_info: None,
+            context_usage_percent: None,
+            sandbox_active: false,
+            stream_stall: false,
+            active_tasks: Vec::new(),
+            active_hooks: Vec::new(),
+            prompt_suggestions: Vec::new(),
+            local_command_output: Vec::new(),
         }
     }
 }
@@ -499,4 +534,46 @@ pub struct SavedSession {
     pub message_count: i32,
     pub created_at: String,
     pub model: Option<String>,
+}
+
+/// Rate limit info from the last RateLimit notification.
+#[derive(Debug, Clone)]
+pub struct RateLimitInfo {
+    pub remaining: Option<i64>,
+    pub reset_at: Option<i64>,
+    pub provider: Option<String>,
+}
+
+/// Background task entry for the task panel.
+#[derive(Debug, Clone)]
+pub struct TaskEntry {
+    pub task_id: String,
+    pub description: String,
+    pub status: TaskEntryStatus,
+}
+
+/// Task entry lifecycle status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskEntryStatus {
+    Running,
+    Completed,
+    Failed,
+    Stopped,
+}
+
+/// Hook execution entry for the hook panel.
+#[derive(Debug, Clone)]
+pub struct HookEntry {
+    pub hook_id: String,
+    pub hook_name: String,
+    pub status: HookEntryStatus,
+    pub output: Option<String>,
+}
+
+/// Hook entry lifecycle status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookEntryStatus {
+    Running,
+    Completed,
+    Failed,
 }

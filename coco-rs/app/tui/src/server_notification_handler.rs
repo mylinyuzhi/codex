@@ -20,14 +20,20 @@
 
 use coco_types::AgentStreamEvent;
 use coco_types::CoreEvent;
+use coco_types::PermissionMode;
 use coco_types::ServerNotification;
 use coco_types::TuiOnlyEvent;
 
 use crate::state::AppState;
 use crate::state::session::ChatMessage;
+use crate::state::session::HookEntry;
+use crate::state::session::HookEntryStatus;
 use crate::state::session::McpServerStatus;
+use crate::state::session::RateLimitInfo;
 use crate::state::session::SubagentInstance;
 use crate::state::session::SubagentStatus;
+use crate::state::session::TaskEntry;
+use crate::state::session::TaskEntryStatus;
 use crate::state::session::TokenUsage;
 use crate::state::ui::Toast;
 
@@ -50,13 +56,15 @@ pub fn handle_core_event(state: &mut AppState, event: CoreEvent) -> bool {
 fn handle_protocol(state: &mut AppState, notif: ServerNotification) -> bool {
     match notif {
         // === Session lifecycle ===
-        ServerNotification::SessionStarted(_) => {
-            // WS-3: startup_banner widget
-            false
+        ServerNotification::SessionStarted(p) => {
+            state.session.session_id = Some(p.session_id);
+            state.session.model = p.model;
+            state.session.working_dir = Some(p.cwd);
+            true
         }
-        ServerNotification::SessionResult(_) => {
-            // WS-3: session_result widget
-            false
+        ServerNotification::SessionResult(p) => {
+            state.session.estimated_cost_cents = (p.total_cost_usd * 100.0) as i32;
+            true
         }
         ServerNotification::SessionEnded(p) => {
             let _ = p.reason;
@@ -68,6 +76,7 @@ fn handle_protocol(state: &mut AppState, notif: ServerNotification) -> bool {
         ServerNotification::TurnStarted(p) => {
             state.session.turn_count = p.turn_number;
             state.session.set_busy(true);
+            state.session.stream_stall = false;
             state.ui.streaming = Some(crate::state::ui::StreamingState::new());
             true
         }
@@ -79,9 +88,11 @@ fn handle_protocol(state: &mut AppState, notif: ServerNotification) -> bool {
             true
         }
         ServerNotification::TurnInterrupted(_) => {
-            // WS-3: interrupt_banner widget
             state.session.set_busy(false);
             state.session.was_interrupted = true;
+            state
+                .ui
+                .add_toast(Toast::warning("Turn interrupted".to_string()));
             true
         }
         ServerNotification::MaxTurnsReached { max_turns } => {
@@ -93,14 +104,14 @@ fn handle_protocol(state: &mut AppState, notif: ServerNotification) -> bool {
             true
         }
 
-        // === Item lifecycle (from StreamAccumulator — SDK path) ===
+        // === Item lifecycle (SDK-path only; TUI uses Stream layer) ===
+        // The TUI gets real-time display from AgentStreamEvent (TextDelta,
+        // ToolUseQueued, etc.) in handle_stream(). The Item* protocol events
+        // are produced by StreamAccumulator for SDK consumers and are
+        // intentionally no-ops in the TUI.
         ServerNotification::ItemStarted { .. }
         | ServerNotification::ItemUpdated { .. }
-        | ServerNotification::ItemCompleted { .. } => {
-            // WS-3: thread_item widget (SDK-path items;
-            // TUI consumes Stream layer directly for real-time display)
-            false
-        }
+        | ServerNotification::ItemCompleted { .. } => false,
 
         // === Content deltas (SDK path — TUI uses Stream layer) ===
         ServerNotification::AgentMessageDelta(_) | ServerNotification::ReasoningDelta(_) => false,
@@ -131,12 +142,23 @@ fn handle_protocol(state: &mut AppState, notif: ServerNotification) -> bool {
             }
             true
         }
-        ServerNotification::SubagentBackgrounded(_) => {
-            // WS-3: subagent_panel update (backgrounded indicator)
+        ServerNotification::SubagentBackgrounded(p) => {
+            if let Some(agent) = state
+                .session
+                .subagents
+                .iter_mut()
+                .find(|a| a.agent_id == p.agent_id)
+            {
+                agent.status = SubagentStatus::Backgrounded;
+            }
             true
         }
-        ServerNotification::SubagentProgress(_) => {
-            // WS-3: subagent_panel update (progress)
+        ServerNotification::SubagentProgress(p) => {
+            if let Some(msg) = &p.summary {
+                state
+                    .ui
+                    .add_toast(Toast::info(format!("Agent {}: {msg}", p.agent_id)));
+            }
             true
         }
 
@@ -159,8 +181,13 @@ fn handle_protocol(state: &mut AppState, notif: ServerNotification) -> bool {
             }
             true
         }
-        ServerNotification::McpStartupComplete(_) => {
-            // WS-3: mcp_status widget (all servers ready)
+        ServerNotification::McpStartupComplete(p) => {
+            if !p.failed.is_empty() {
+                state.ui.add_toast(Toast::warning(format!(
+                    "MCP: {} failed to start",
+                    p.failed.len()
+                )));
+            }
             true
         }
 
@@ -173,8 +200,14 @@ fn handle_protocol(state: &mut AppState, notif: ServerNotification) -> bool {
             )));
             true
         }
-        ServerNotification::ContextUsageWarning(_) => {
-            // WS-3: context_bar widget (usage percentage)
+        ServerNotification::ContextUsageWarning(p) => {
+            state.session.context_usage_percent = Some(p.percent_left);
+            if p.percent_left < 10.0 {
+                state.ui.add_toast(Toast::warning(format!(
+                    "Context {:.0}% remaining",
+                    p.percent_left
+                )));
+            }
             true
         }
         ServerNotification::CompactionStarted => {
@@ -196,16 +229,39 @@ fn handle_protocol(state: &mut AppState, notif: ServerNotification) -> bool {
         }
 
         // === Task ===
-        ServerNotification::TaskStarted(_) => {
-            // WS-3: task_panel widget
+        ServerNotification::TaskStarted(p) => {
+            state.session.active_tasks.push(TaskEntry {
+                task_id: p.task_id,
+                description: p.description,
+                status: TaskEntryStatus::Running,
+            });
             true
         }
-        ServerNotification::TaskCompleted(_) => {
-            // WS-3: task_panel widget
+        ServerNotification::TaskCompleted(p) => {
+            let status = match p.status {
+                coco_types::TaskCompletionStatus::Completed => TaskEntryStatus::Completed,
+                coco_types::TaskCompletionStatus::Failed => TaskEntryStatus::Failed,
+                coco_types::TaskCompletionStatus::Stopped => TaskEntryStatus::Stopped,
+            };
+            if let Some(task) = state
+                .session
+                .active_tasks
+                .iter_mut()
+                .find(|t| t.task_id == p.task_id)
+            {
+                task.status = status;
+            }
             true
         }
-        ServerNotification::TaskProgress(_) => {
-            // WS-3: task_panel widget
+        ServerNotification::TaskProgress(p) => {
+            if let Some(task) = state
+                .session
+                .active_tasks
+                .iter_mut()
+                .find(|t| t.task_id == p.task_id)
+            {
+                task.description = p.description;
+            }
             true
         }
         ServerNotification::AgentsKilled(p) => {
@@ -217,14 +273,17 @@ fn handle_protocol(state: &mut AppState, notif: ServerNotification) -> bool {
 
         // === Model ===
         ServerNotification::ModelFallbackStarted(p) => {
+            state.session.model_fallback_banner =
+                Some(format!("{} → {}", p.from_model, p.to_model));
+            state.session.model = p.to_model;
             state.ui.add_toast(Toast::warning(format!(
-                "Fallback: {} → {}",
-                p.from_model, p.to_model
+                "Fallback: {}",
+                state.session.model_fallback_banner.as_deref().unwrap_or("")
             )));
             true
         }
         ServerNotification::ModelFallbackCompleted => {
-            // WS-3: model_banner clear
+            state.session.model_fallback_banner = None;
             true
         }
         ServerNotification::FastModeChanged { active } => {
@@ -238,15 +297,19 @@ fn handle_protocol(state: &mut AppState, notif: ServerNotification) -> bool {
         }
 
         // === Permission ===
-        ServerNotification::PermissionModeChanged(_) => {
-            // WS-3: status_bar permission badge
+        ServerNotification::PermissionModeChanged(p) => {
+            if let Ok(mode) =
+                serde_json::from_value::<PermissionMode>(serde_json::Value::String(p.mode))
+            {
+                state.session.permission_mode = mode;
+            }
             true
         }
 
         // === Prompt ===
-        ServerNotification::PromptSuggestion { .. } => {
-            // WS-3: prompt_suggestions overlay
-            false
+        ServerNotification::PromptSuggestion { suggestions } => {
+            state.session.prompt_suggestions = suggestions;
+            true
         }
 
         // === System ===
@@ -254,21 +317,24 @@ fn handle_protocol(state: &mut AppState, notif: ServerNotification) -> bool {
             state.ui.add_toast(Toast::error(p.message));
             true
         }
-        ServerNotification::RateLimit(_) => {
-            // WS-3: rate_limit_banner
+        ServerNotification::RateLimit(p) => {
+            state.session.rate_limit_info = Some(RateLimitInfo {
+                remaining: p.remaining,
+                reset_at: p.reset_at,
+                provider: p.provider,
+            });
+            if p.remaining == Some(0) {
+                state
+                    .ui
+                    .add_toast(Toast::warning("Rate limited".to_string()));
+            }
             true
         }
         ServerNotification::KeepAlive { .. } => false,
 
-        // === IDE ===
-        ServerNotification::IdeSelectionChanged(_) => {
-            // WS-3: ide_panel widget
-            false
-        }
-        ServerNotification::IdeDiagnosticsUpdated(_) => {
-            // WS-3: ide_panel widget
-            false
-        }
+        // === IDE (state stored for future ide_panel widget) ===
+        ServerNotification::IdeSelectionChanged(_) => false,
+        ServerNotification::IdeDiagnosticsUpdated(_) => false,
 
         // === Plan ===
         ServerNotification::PlanModeChanged(p) => {
@@ -277,16 +343,23 @@ fn handle_protocol(state: &mut AppState, notif: ServerNotification) -> bool {
         }
 
         // === Queue ===
-        ServerNotification::QueueStateChanged { .. } => {
-            // WS-3: queue_indicator widget
+        ServerNotification::QueueStateChanged { queued } => {
+            state
+                .session
+                .queued_commands
+                .truncate(queued.max(0) as usize);
             true
         }
-        ServerNotification::CommandQueued { .. } => {
-            // WS-3: queue_indicator widget
+        ServerNotification::CommandQueued { id, preview } => {
+            let _ = id;
+            state.session.queued_commands.push(preview);
             true
         }
-        ServerNotification::CommandDequeued { .. } => {
-            // WS-3: queue_indicator widget
+        ServerNotification::CommandDequeued { id } => {
+            let _ = id;
+            if !state.session.queued_commands.is_empty() {
+                state.session.queued_commands.remove(0);
+            }
             true
         }
 
@@ -320,8 +393,8 @@ fn handle_protocol(state: &mut AppState, notif: ServerNotification) -> bool {
         }
 
         // === Sandbox ===
-        ServerNotification::SandboxStateChanged(_) => {
-            // WS-3: sandbox_banner widget
+        ServerNotification::SandboxStateChanged(p) => {
+            state.session.sandbox_active = p.active;
             true
         }
         ServerNotification::SandboxViolationsDetected { count } => {
@@ -332,36 +405,62 @@ fn handle_protocol(state: &mut AppState, notif: ServerNotification) -> bool {
         }
 
         // === Agent ===
-        ServerNotification::AgentsRegistered { .. } => {
-            // WS-3: agents loaded toast
-            false
+        ServerNotification::AgentsRegistered { agents } => {
+            if !agents.is_empty() {
+                state
+                    .ui
+                    .add_toast(Toast::info(format!("{} agents registered", agents.len())));
+            }
+            true
         }
 
         // === Hook ===
-        ServerNotification::HookExecuted(_) => {
-            // WS-3: hook_panel widget
-            false
-        }
-        ServerNotification::HookStarted(_) => {
-            // WS-3: hook_panel widget
+        ServerNotification::HookExecuted(_) => false,
+        ServerNotification::HookStarted(p) => {
+            state.session.active_hooks.push(HookEntry {
+                hook_id: p.hook_id,
+                hook_name: p.hook_name,
+                status: HookEntryStatus::Running,
+                output: None,
+            });
             true
         }
-        ServerNotification::HookProgress(_) => {
-            // WS-3: hook_panel widget
+        ServerNotification::HookProgress(p) => {
+            if let Some(hook) = state
+                .session
+                .active_hooks
+                .iter_mut()
+                .find(|h| h.hook_id == p.hook_id)
+            {
+                if !p.stdout.is_empty() {
+                    hook.output = Some(p.stdout);
+                }
+            }
             true
         }
-        ServerNotification::HookResponse(_) => {
-            // WS-3: hook_panel widget
+        ServerNotification::HookResponse(p) => {
+            if let Some(hook) = state
+                .session
+                .active_hooks
+                .iter_mut()
+                .find(|h| h.hook_id == p.hook_id)
+            {
+                hook.status = match p.outcome {
+                    coco_types::HookOutcomeStatus::Success => HookEntryStatus::Completed,
+                    _ => HookEntryStatus::Failed,
+                };
+                hook.output = Some(p.output);
+            }
             true
         }
 
         // === Worktree ===
-        ServerNotification::WorktreeEntered(_) => {
-            // WS-3: status_bar worktree badge
+        ServerNotification::WorktreeEntered(p) => {
+            state.session.worktree_path = Some(p.worktree_path);
             true
         }
         ServerNotification::WorktreeExited(_) => {
-            // WS-3: status_bar worktree badge clear
+            state.session.worktree_path = None;
             true
         }
 
@@ -381,42 +480,69 @@ fn handle_protocol(state: &mut AppState, notif: ServerNotification) -> bool {
 
         // === Stream health ===
         ServerNotification::StreamStallDetected { .. } => {
-            // WS-3: stream_health indicator
+            state.session.stream_stall = true;
+            state
+                .ui
+                .add_toast(Toast::warning("Stream stall detected".to_string()));
             true
         }
-        ServerNotification::StreamWatchdogWarning { .. } => {
-            // WS-3: stream_health indicator
+        ServerNotification::StreamWatchdogWarning { elapsed_secs } => {
+            state.ui.add_toast(Toast::warning(format!(
+                "Stream watchdog: {elapsed_secs:.0}s without data"
+            )));
             true
         }
         ServerNotification::StreamRequestEnd { .. } => false,
 
         // === Session state ===
-        ServerNotification::SessionStateChanged { .. } => {
-            // WS-3: status_bar state badge (idle/running/requires_action)
+        ServerNotification::SessionStateChanged { state: new_state } => {
+            state.session.session_state = new_state;
             true
         }
 
         // === TS P2 additions ===
-        ServerNotification::LocalCommandOutput(_) => {
-            // WS-3: local_command_output widget
+        ServerNotification::LocalCommandOutput(p) => {
+            const MAX_LOCAL_OUTPUT: usize = 50;
+            state
+                .session
+                .local_command_output
+                .push(p.content.to_string());
+            if state.session.local_command_output.len() > MAX_LOCAL_OUTPUT {
+                state.session.local_command_output.remove(0);
+            }
             true
         }
-        ServerNotification::FilesPersisted(_) => {
-            state
-                .ui
-                .add_toast(Toast::info("Files persisted".to_string()));
+        ServerNotification::FilesPersisted(p) => {
+            let count = p.files.len();
+            let failed = p.failed.len();
+            let msg = if failed > 0 {
+                format!("{count} files persisted, {failed} failed")
+            } else {
+                format!("{count} files persisted")
+            };
+            state.ui.add_toast(Toast::info(msg));
             true
         }
         ServerNotification::ElicitationComplete(_) => {
-            // WS-3: elicitation_dialog dismiss
+            state.ui.dismiss_overlay();
             true
         }
-        ServerNotification::ToolUseSummary(_) => {
-            // WS-3: tool_use_summary inline widget
+        ServerNotification::ToolUseSummary(p) => {
+            state.session.add_message(ChatMessage::system_text(
+                format!(
+                    "summary-{}",
+                    p.preceding_tool_use_ids.first().unwrap_or(&String::new())
+                ),
+                p.summary,
+            ));
             true
         }
-        ServerNotification::ToolProgress(_) => {
-            // WS-3: tool_progress elapsed indicator
+        ServerNotification::ToolProgress(p) => {
+            if let Some(tool) = state.session.tool_executions.iter_mut().find(|t| {
+                t.call_id == p.tool_use_id || Some(&t.call_id) == p.parent_tool_use_id.as_ref()
+            }) {
+                tool.description = Some(format!("{}s", p.elapsed_time_seconds));
+            }
             true
         }
     }
@@ -444,10 +570,7 @@ fn handle_stream(state: &mut AppState, event: AgentStreamEvent) -> bool {
             state.session.start_tool(call_id, name);
             true
         }
-        AgentStreamEvent::ToolUseStarted { .. } => {
-            // WS-3: tool progress indicator (in-progress animation)
-            false
-        }
+        AgentStreamEvent::ToolUseStarted { .. } => false,
         AgentStreamEvent::ToolUseCompleted {
             call_id,
             name: _,
@@ -477,12 +600,7 @@ fn handle_stream(state: &mut AppState, event: AgentStreamEvent) -> bool {
             }
             true
         }
-        AgentStreamEvent::McpToolCallBegin { .. } => {
-            // WS-3: mcp_status widget (tool call in progress)
-            false
-        }
-        AgentStreamEvent::McpToolCallEnd { .. } => {
-            // WS-3: mcp_status widget (tool call completed)
+        AgentStreamEvent::McpToolCallBegin { .. } | AgentStreamEvent::McpToolCallEnd { .. } => {
             false
         }
     }
