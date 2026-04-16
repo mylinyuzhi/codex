@@ -506,9 +506,9 @@ fn handle_protocol(state: &mut AppState, notif: ServerNotification) -> bool {
             state
                 .session
                 .local_command_output
-                .push(p.content.to_string());
-            if state.session.local_command_output.len() > MAX_LOCAL_OUTPUT {
-                state.session.local_command_output.remove(0);
+                .push_back(p.content.to_string());
+            while state.session.local_command_output.len() > MAX_LOCAL_OUTPUT {
+                state.session.local_command_output.pop_front();
             }
             true
         }

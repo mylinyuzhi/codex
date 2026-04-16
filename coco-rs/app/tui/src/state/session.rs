@@ -2,6 +2,7 @@
 //!
 //! Updated by server notification handlers when the agent loop emits events.
 
+use std::collections::VecDeque;
 use std::time::Instant;
 
 use coco_types::PermissionMode;
@@ -85,8 +86,8 @@ pub struct SessionState {
     pub active_hooks: Vec<HookEntry>,
     /// Prompt suggestions from the model (set by PromptSuggestion).
     pub prompt_suggestions: Vec<String>,
-    /// Local command output lines (set by LocalCommandOutput, capped).
-    pub local_command_output: Vec<String>,
+    /// Local command output lines (set by LocalCommandOutput, capped at 50).
+    pub local_command_output: VecDeque<String>,
 }
 
 impl SessionState {
@@ -186,7 +187,7 @@ impl Default for SessionState {
             active_tasks: Vec::new(),
             active_hooks: Vec::new(),
             prompt_suggestions: Vec::new(),
-            local_command_output: Vec::new(),
+            local_command_output: VecDeque::new(),
         }
     }
 }

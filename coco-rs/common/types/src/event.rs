@@ -34,7 +34,6 @@ use crate::TokenUsage;
 #[derive(Debug, Clone)]
 pub enum CoreEvent {
     /// Protocol-level notifications visible to ALL consumers.
-    /// 52 variants covering full session/turn/item/content lifecycle.
     Protocol(ServerNotification),
 
     /// Agent-loop stream events requiring accumulation before SDK consumption.
