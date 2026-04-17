@@ -221,6 +221,89 @@ pub fn discover_skills(dirs: &[PathBuf]) -> Vec<SkillDefinition> {
     discover_skills_with_format(dirs, SkillDirFormat::SkillMdOnly)
 }
 
+/// Walk up from each file path to the cwd boundary and collect any
+/// `<ancestor>/.claude/skills/` directories that exist on disk.
+///
+/// TS: `loadSkillsDir.ts:861-915` `discoverSkillDirsForPaths`. The
+/// scanner runs on every Read/Write/Edit so the model can pick up
+/// nested project skills without having to opt into them at startup.
+///
+/// # Algorithm
+/// 1. For each file path, start at the file's parent dir.
+/// 2. Walk upwards while the current dir is a strict descendant of cwd
+///    (i.e. `current_dir.starts_with(cwd + sep)`). The cwd boundary is
+///    excluded because cwd-level skills are already loaded at startup —
+///    only nested ones are interesting here.
+/// 3. At each level, check `<currentDir>/.claude/skills` and add it to
+///    the result list if the directory exists.
+/// 4. Sort the results by path depth (deepest first) so deeper skills
+///    take precedence when the manager loads them.
+///
+/// **Differences from TS**:
+/// - No memoization cache. TS uses a module-level `dynamicSkillDirs`
+///   `Set<string>` to skip dirs it has already stat'd. coco-rs returns
+///   the full list each call; the caller (Read/Write/Edit) is
+///   responsible for deduplicating against its own state if desired.
+/// - No gitignore filtering. TS uses `git check-ignore` to skip
+///   skill dirs under `node_modules/` etc. coco-rs follows up via
+///   `coco-file-ignore` if the caller wants it; this base function
+///   stays gitignore-agnostic so it has no `git` dependency.
+///
+/// Returns paths relative to (or absolute under) the cwd, deepest first.
+pub fn discover_skill_dirs_for_paths(file_paths: &[&Path], cwd: &Path) -> Vec<PathBuf> {
+    let resolved_cwd = cwd.to_path_buf();
+    let mut result: Vec<PathBuf> = Vec::new();
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+
+    for &file_path in file_paths {
+        // Start at the file's parent dir (skip the file itself).
+        let Some(start_parent) = file_path.parent() else {
+            continue;
+        };
+        let mut current_dir = start_parent.to_path_buf();
+
+        // Walk upward while strictly inside cwd.
+        loop {
+            // Strict descendant check — `current_dir == cwd` doesn't
+            // count because cwd-level skills are loaded at startup.
+            if !is_strict_descendant_of(&current_dir, &resolved_cwd) {
+                break;
+            }
+
+            let skill_dir = current_dir.join(".claude").join("skills");
+            if seen.insert(skill_dir.clone()) && skill_dir.is_dir() {
+                result.push(skill_dir);
+            }
+
+            // Walk to parent. Stop at root or if we cycle (shouldn't
+            // happen but defensive).
+            let Some(parent) = current_dir.parent() else {
+                break;
+            };
+            if parent == current_dir {
+                break;
+            }
+            current_dir = parent.to_path_buf();
+        }
+    }
+
+    // Deepest-first ordering so the manager honors nesting precedence.
+    // TS sorts by path-component count; we do the same via separator
+    // count, which is platform-correct because PathBuf uses native sep.
+    result.sort_by_key(|p| std::cmp::Reverse(p.components().count()));
+    result
+}
+
+/// True iff `child` is a strict descendant of `parent` (i.e. `child`
+/// starts with `parent` AND `child != parent`). Used by
+/// `discover_skill_dirs_for_paths` to gate the upward walk.
+fn is_strict_descendant_of(child: &Path, parent: &Path) -> bool {
+    if child == parent {
+        return false;
+    }
+    child.starts_with(parent)
+}
+
 /// Walk directories with explicit format control.
 pub fn discover_skills_with_format(
     dirs: &[PathBuf],

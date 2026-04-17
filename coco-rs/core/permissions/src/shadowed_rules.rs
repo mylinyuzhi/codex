@@ -95,9 +95,7 @@ fn is_shadowed_by_deny(
     let tool_name = &allow_rule.value.tool_pattern;
 
     // Only content-specific allow rules can be shadowed
-    if allow_rule.value.rule_content.is_none() {
-        return None;
-    }
+    allow_rule.value.rule_content.as_ref()?;
 
     deny_rules
         .iter()
@@ -119,9 +117,7 @@ fn is_shadowed_by_ask(
     let tool_name = &allow_rule.value.tool_pattern;
 
     // Only content-specific allow rules can be shadowed
-    if allow_rule.value.rule_content.is_none() {
-        return None;
-    }
+    allow_rule.value.rule_content.as_ref()?;
 
     let shadowing = ask_rules
         .iter()

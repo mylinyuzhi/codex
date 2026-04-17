@@ -16,9 +16,12 @@
 pub mod agent_adapter;
 pub mod budget;
 pub mod command_queue;
+pub mod emit;
 pub mod engine;
 pub mod sdk_types;
+mod session_state;
 pub mod single_turn;
+pub mod stream_accumulator;
 
 pub use budget::BudgetDecision;
 pub use budget::BudgetTracker;
@@ -34,46 +37,10 @@ pub use engine::QueryEngine;
 pub use engine::QueryEngineConfig;
 pub use engine::QueryResult;
 
-/// Events emitted during query execution for progress tracking.
-///
-/// TS: LoopEvent variants in protocol/events + QueryEngine yield types.
-#[derive(Debug, Clone)]
-pub enum QueryEvent {
-    /// A new turn has started.
-    TurnStarted { turn: i32 },
-    /// LLM returned text content (streaming delta).
-    TextDelta { text: String },
-    /// Reasoning/thinking content from the model.
-    ReasoningDelta { text: String },
-    /// A tool call is about to execute.
-    ToolUseStart {
-        tool_use_id: String,
-        tool_name: String,
-    },
-    /// A tool call finished.
-    ToolUseEnd {
-        tool_use_id: String,
-        tool_name: String,
-        is_error: bool,
-        duration_ms: i64,
-    },
-    /// The turn completed.
-    TurnCompleted { turn: i32, has_tool_calls: bool },
-    /// Auto-compaction was triggered.
-    CompactionTriggered,
-    /// Budget nudge warning.
-    BudgetNudge { message: String },
-    /// Model streaming started.
-    StreamRequestStart { turn: i32, model: String },
-    /// An error occurred but was recovered from.
-    ErrorRecovery {
-        reason: ContinueReason,
-        message: String,
-    },
-    /// Queued commands were drained and injected.
-    CommandsDrained { count: i32 },
-    /// Inbox messages were consumed.
-    InboxConsumed { count: i32 },
-    /// Query is stopping.
-    QueryStopping { reason: String },
-}
+// Re-export CoreEvent from coco-types for consumers of run_with_events().
+// The old QueryEvent enum has been deleted per event-system-design.md Phase 0:
+// QueryEngine now emits CoreEvent directly (3-layer Protocol/Stream/Tui dispatch).
+pub use coco_types::AgentStreamEvent;
+pub use coco_types::CoreEvent;
+pub use coco_types::ServerNotification;
+pub use stream_accumulator::StreamAccumulator;

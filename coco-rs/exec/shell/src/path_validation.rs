@@ -3,8 +3,6 @@
 //! TS: tools/BashTool/pathValidation.ts (2049 LOC)
 //! Checks file paths in commands for dangerous targets (/, /etc, /usr, etc.)
 
-use std::path::Path;
-
 /// Dangerous filesystem paths that always require approval for rm/rmdir.
 const DANGEROUS_REMOVAL_PATHS: &[&str] = &[
     "/",
@@ -30,7 +28,7 @@ const DANGEROUS_REMOVAL_PATHS: &[&str] = &[
 /// Check if a file path is dangerous for a destructive operation.
 ///
 /// Returns Some(reason) if the path is dangerous, None if safe.
-pub fn check_dangerous_path(command: &str, path: &str, cwd: &str) -> Option<String> {
+pub fn check_dangerous_path(_command: &str, path: &str, cwd: &str) -> Option<String> {
     let resolved = resolve_path(path, cwd);
 
     for &dangerous in DANGEROUS_REMOVAL_PATHS {
@@ -77,10 +75,10 @@ pub fn extract_paths_from_command(command_name: &str, args: &[&str]) -> Vec<Stri
 /// Returns Some(reason) if a redirection is to a dangerous path.
 pub fn check_redirect_paths(redirects: &[(String, String)], cwd: &str) -> Option<String> {
     for (operator, target) in redirects {
-        if matches!(operator.as_str(), ">" | ">>" | "&>") {
-            if let Some(reason) = check_dangerous_path("redirect", target, cwd) {
-                return Some(reason);
-            }
+        if matches!(operator.as_str(), ">" | ">>" | "&>")
+            && let Some(reason) = check_dangerous_path("redirect", target, cwd)
+        {
+            return Some(reason);
         }
     }
     None

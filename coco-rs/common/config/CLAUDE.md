@@ -6,7 +6,6 @@ Layered configuration: settings, model selection, providers, effort, fast mode.
 - `src/utils/settings/` (types.ts, settings.ts -- Zod schema -> serde)
 - `src/utils/model/` (model.ts, configs.ts, aliases.ts, providers.ts, modelCapabilities.ts)
 - `src/constants/`
-- `src/migrations/`
 - `src/utils/effort.ts`, `src/utils/fastMode.ts`, `src/utils/thinking.ts`
 - `src/services/remoteManagedSettings/`, `src/services/settingsSync/`
 - `src/utils/envUtils.ts`, `src/utils/gitSettings.ts`, `src/utils/lockfile.ts`

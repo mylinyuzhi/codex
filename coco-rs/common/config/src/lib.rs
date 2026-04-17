@@ -9,7 +9,6 @@ pub mod effort;
 pub mod env;
 pub mod fast_mode;
 pub mod global_config;
-pub mod migrations;
 pub mod model;
 pub mod overrides;
 pub mod provider;

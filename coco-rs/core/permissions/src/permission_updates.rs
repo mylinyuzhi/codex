@@ -139,9 +139,7 @@ pub fn apply_permission_updates(
     context: ToolPermissionContext,
     updates: &[PermissionUpdate],
 ) -> ToolPermissionContext {
-    updates
-        .iter()
-        .fold(context, |ctx, update| apply_permission_update(ctx, update))
+    updates.iter().fold(context, apply_permission_update)
 }
 
 /// Whether a destination supports persistence to disk.

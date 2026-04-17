@@ -1,3 +1,4 @@
+use coco_types::MCP_TOOL_PREFIX;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
 use std::collections::HashMap;
@@ -23,12 +24,41 @@ impl ToolRegistry {
     }
 
     /// Register a tool. Also registers all its aliases.
+    ///
+    /// **MCP naming convention** (B3.3): tools that report `mcp_info()`
+    /// are normalized to their `qualified_name()` form
+    /// `mcp__<server>__<tool>` if their primary name doesn't already
+    /// follow that convention. This mirrors TS `toolExecution.ts:287-300`
+    /// + `mcpStringUtils.ts` behavior and prevents hostile MCP servers
+    /// from shadowing built-in tools (e.g. an MCP server advertising a
+    /// tool named "Read" is registered as "mcp__foo__Read" rather than
+    /// overwriting the real Read tool).
     pub fn register(&mut self, tool: Arc<dyn Tool>) {
-        let name = tool.name().to_string();
+        let native_name = tool.name().to_string();
+
+        // MCP namespace enforcement: if the tool has MCP info but its
+        // name doesn't start with `mcp__`, silently promote to the
+        // qualified form so the real name is preserved as an alias.
+        let canonical = if let Some(info) = tool.mcp_info() {
+            let qualified = info.qualified_name();
+            if native_name == qualified || native_name.starts_with(MCP_TOOL_PREFIX) {
+                // Already correctly namespaced — nothing to do.
+                native_name
+            } else {
+                // Native name differs: use the qualified form as the
+                // canonical entry and map the original name back via
+                // alias so the model can still reference it both ways.
+                self.aliases.insert(native_name, qualified.clone());
+                qualified
+            }
+        } else {
+            native_name
+        };
+
         for alias in tool.aliases() {
-            self.aliases.insert(alias.to_string(), name.clone());
+            self.aliases.insert(alias.to_string(), canonical.clone());
         }
-        self.tools.insert(name, tool);
+        self.tools.insert(canonical, tool);
     }
 
     /// Look up a tool by ToolId.
@@ -115,3 +145,7 @@ impl ToolRegistry {
         self.tools.is_empty()
     }
 }
+
+#[cfg(test)]
+#[path = "registry.test.rs"]
+mod tests;

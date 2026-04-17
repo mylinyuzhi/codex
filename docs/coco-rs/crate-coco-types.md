@@ -222,6 +222,66 @@ pub struct StreamingThinking {
 }
 ```
 
+### Event System Types (from `event-system-design.md`)
+
+coco-types owns the 3-layer CoreEvent envelope and all its sub-types. The
+complete type catalog and semantics live in `event-system-design.md`; this
+section serves as the ownership declaration.
+
+```rust
+/// 3-layer event envelope. See event-system-design.md §1.4.
+pub enum CoreEvent {
+    Protocol(ServerNotification),  // 52 variants, shared with SDK/IDE/TUI
+    Stream(AgentStreamEvent),      // 7 variants, fed through StreamAccumulator
+    Tui(TuiOnlyEvent),             // 20 variants, dropped by SDK consumers
+}
+
+/// Accumulation-layer stream events. Higher-level than the inference-layer
+/// `coco_types::StreamEvent`. See event-system-design.md §1.5.
+pub enum AgentStreamEvent {
+    TextDelta { turn_id: String, delta: String },
+    ThinkingDelta { turn_id: String, delta: String },
+    ToolUseQueued { call_id: String, name: String, input: Value },
+    ToolUseStarted { call_id: String, name: String, batch_id: Option<String> },
+    ToolUseCompleted { call_id: String, name: String, output: String, is_error: bool },
+    McpToolCallBegin { server: String, tool: String, call_id: String },
+    McpToolCallEnd { server: String, tool: String, call_id: String, is_error: bool },
+}
+
+/// Semantic thread item. See event-system-design.md §1.6 and §6.2.
+pub struct ThreadItem { item_id, turn_id, details: ThreadItemDetails }
+
+pub enum ThreadItemDetails {
+    CommandExecution { command, output, exit_code, status }  // Bash
+    FileChange { changes: Vec<FileChangeInfo>, status }       // Edit/Write
+    WebSearch { query, status }                                // WebSearch
+    McpToolCall { server, tool, arguments, result, error, status }  // mcp__*
+    Subagent { agent_id, agent_type, description, is_background, result, status }  // Agent/Task
+    ToolCall { tool, input, output, is_error, status }        // all others
+    AgentMessage { text }
+    Reasoning { text }
+    Error { message }
+}
+
+pub enum ItemStatus { InProgress, Completed, Failed, Declined }
+
+/// Protocol-level notifications (52 variants). See event-system-design.md §2.
+pub enum ServerNotification { /* 52 variants with #[serde(rename = "...")] wire methods */ }
+
+/// TUI-exclusive events (20 variants). See event-system-design.md §4.
+///
+/// Note: the design's §1.7 originally proposed owning this type in coco-tui,
+/// but since CoreEvent::Tui references it, the type must live here to avoid
+/// cyclic deps. The TUI-only semantic contract is preserved via consumer
+/// dispatch rules (SDK/App-Server consumers drop Tui events).
+pub enum TuiOnlyEvent { /* 20 variants: overlays, toasts, streaming display */ }
+```
+
+**Name collision note**: `coco_types::StreamEvent` (above) is the
+**inference-layer** raw LLM stream event consumed by QueryEngine. It is
+distinct from `AgentStreamEvent` — the agent-loop-processed stream with
+tool lifecycle semantics and MCP tracking. Both coexist in `coco-types`.
+
 ### Permission Types (from `types/permissions.ts`)
 
 ```rust

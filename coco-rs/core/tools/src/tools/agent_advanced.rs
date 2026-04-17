@@ -255,13 +255,13 @@ pub fn filter_tools_for_agent_with_options(
 ///
 /// TS: permissionRuleValueFromString() → extracts toolName + ruleContent
 pub fn parse_tool_spec(spec: &str) -> (&str, Option<Vec<&str>>) {
-    if let Some(paren_start) = spec.find('(') {
-        if let Some(paren_end) = spec.find(')') {
-            let tool_name = spec[..paren_start].trim();
-            let content = &spec[paren_start + 1..paren_end];
-            let types: Vec<&str> = content.split(',').map(|s| s.trim()).collect();
-            return (tool_name, Some(types));
-        }
+    if let Some(paren_start) = spec.find('(')
+        && let Some(paren_end) = spec.find(')')
+    {
+        let tool_name = spec[..paren_start].trim();
+        let content = &spec[paren_start + 1..paren_end];
+        let types: Vec<&str> = content.split(',').map(str::trim).collect();
+        return (tool_name, Some(types));
     }
     (spec.trim(), None)
 }
@@ -318,10 +318,10 @@ pub fn resolve_agent_tools(
         let (tool_name, agent_types) = parse_tool_spec(tool_spec);
 
         // Extract allowedAgentTypes from "Agent(type1, type2)" specs
-        if tool_name == ToolName::Agent.as_str() {
-            if let Some(types) = agent_types {
-                allowed_agent_types = Some(types.into_iter().map(String::from).collect());
-            }
+        if tool_name == ToolName::Agent.as_str()
+            && let Some(types) = agent_types
+        {
+            allowed_agent_types = Some(types.into_iter().map(String::from).collect());
         }
 
         if available_set.contains(tool_name) {
@@ -442,12 +442,12 @@ pub fn summarize_agent_result(
 pub fn count_tool_uses(messages: &[serde_json::Value]) -> i64 {
     let mut count: i64 = 0;
     for msg in messages {
-        if msg.get("type").and_then(|t| t.as_str()) == Some("assistant") {
-            if let Some(content) = msg.get("content").and_then(|c| c.as_array()) {
-                for block in content {
-                    if block.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
-                        count += 1;
-                    }
+        if msg.get("type").and_then(|t| t.as_str()) == Some("assistant")
+            && let Some(content) = msg.get("content").and_then(|c| c.as_array())
+        {
+            for block in content {
+                if block.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
+                    count += 1;
                 }
             }
         }
@@ -624,7 +624,7 @@ fn parse_json_agents(path: &Path) -> Vec<AgentDefinition> {
         let model = def.get("model").and_then(|v| v.as_str()).map(String::from);
         let max_turns = def
             .get("maxTurns")
-            .and_then(|v| v.as_i64())
+            .and_then(serde_json::Value::as_i64)
             .map(|v| v as i32);
 
         let parse_str_array = |key: &str| -> Vec<String> {
@@ -638,8 +638,11 @@ fn parse_json_agents(path: &Path) -> Vec<AgentDefinition> {
                 .unwrap_or_default()
         };
 
-        let get_bool =
-            |key: &str| -> bool { def.get(key).and_then(|v| v.as_bool()).unwrap_or(false) };
+        let get_bool = |key: &str| -> bool {
+            def.get(key)
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+        };
         let get_str = |key: &str| -> Option<String> {
             def.get(key).and_then(|v| v.as_str()).map(String::from)
         };

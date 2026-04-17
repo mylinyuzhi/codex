@@ -371,23 +371,23 @@ async fn test_full_compact_summary_format() {
     .unwrap();
 
     // The summary message should have analysis stripped
-    if let Message::User(u) = &result.summary_messages[0] {
-        if let coco_types::LlmMessage::User { content, .. } = &u.message {
-            let text: String = content
-                .iter()
-                .filter_map(|c| match c {
-                    coco_types::UserContent::Text(t) => Some(t.text.as_str()),
-                    _ => None,
-                })
-                .collect();
-            assert!(
-                !text.contains("<analysis>"),
-                "analysis tags should be stripped from summary"
-            );
-            assert!(
-                text.contains("refactor parser"),
-                "summary content should be preserved"
-            );
-        }
+    if let Message::User(u) = &result.summary_messages[0]
+        && let coco_types::LlmMessage::User { content, .. } = &u.message
+    {
+        let text: String = content
+            .iter()
+            .filter_map(|c| match c {
+                coco_types::UserContent::Text(t) => Some(t.text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !text.contains("<analysis>"),
+            "analysis tags should be stripped from summary"
+        );
+        assert!(
+            text.contains("refactor parser"),
+            "summary content should be preserved"
+        );
     }
 }

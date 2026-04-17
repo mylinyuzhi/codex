@@ -154,7 +154,7 @@ fn parse_server_config(value: &serde_json::Value) -> Option<McpServerConfig> {
     // Check for disabled server
     if value
         .get("disabled")
-        .and_then(|d| d.as_bool())
+        .and_then(serde_json::Value::as_bool)
         .unwrap_or(false)
     {
         return None;

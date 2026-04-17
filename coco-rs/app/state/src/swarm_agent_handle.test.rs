@@ -14,12 +14,10 @@ fn create_test_handle() -> SwarmAgentHandle {
         "/tmp".to_string(),
         /*max_agents*/ 8,
     ));
-    let backends = Arc::new(super::super::swarm_backend::BackendRegistry::new());
     let team_manager = Arc::new(RwLock::new(None));
 
     SwarmAgentHandle::new(
         runner,
-        backends,
         team_manager,
         "/tmp".to_string(),
         "test-model".to_string(),

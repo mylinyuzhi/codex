@@ -6,9 +6,9 @@ use serde::Serialize;
 #[serde(rename_all = "snake_case")]
 pub enum GrepOutputMode {
     /// Show matching lines with context.
-    #[default]
     Content,
     /// Show only file paths containing matches.
+    #[default]
     FilesWithMatches,
     /// Show match counts per file.
     Count,

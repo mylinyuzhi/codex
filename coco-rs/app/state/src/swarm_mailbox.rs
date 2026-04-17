@@ -467,12 +467,11 @@ pub fn read_pending_permissions(
     }
     let mut requests = Vec::new();
     for entry in std::fs::read_dir(&dir)?.flatten() {
-        if entry.path().extension().is_some_and(|e| e == "json") {
-            if let Ok(content) = std::fs::read_to_string(entry.path()) {
-                if let Ok(req) = serde_json::from_str(&content) {
-                    requests.push(req);
-                }
-            }
+        if entry.path().extension().is_some_and(|e| e == "json")
+            && let Ok(content) = std::fs::read_to_string(entry.path())
+            && let Ok(req) = serde_json::from_str(&content)
+        {
+            requests.push(req);
         }
     }
     Ok(requests)
@@ -508,15 +507,15 @@ pub fn cleanup_old_resolutions(team_name: &str, max_age_ms: i64) -> anyhow::Resu
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
     for entry in std::fs::read_dir(&dir)?.flatten() {
-        if let Ok(meta) = entry.metadata() {
-            if let Ok(modified) = meta.modified() {
-                let mtime_ms = modified
-                    .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                    .map(|d| d.as_millis() as i64)
-                    .unwrap_or(0);
-                if now_ms - mtime_ms > max_age_ms {
-                    let _ = std::fs::remove_file(entry.path());
-                }
+        if let Ok(meta) = entry.metadata()
+            && let Ok(modified) = meta.modified()
+        {
+            let mtime_ms = modified
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0);
+            if now_ms - mtime_ms > max_age_ms {
+                let _ = std::fs::remove_file(entry.path());
             }
         }
     }

@@ -11,6 +11,26 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
 
+/// Long-form tool description shown to the model.
+///
+/// TS: `tools/FileEditTool/prompt.ts:8-28` `getEditToolDescription()`
+/// → `getDefaultEditDescription()`. Byte-identical port. The line
+/// number prefix format reference defaults to "line number + tab"
+/// (TS `isCompactLinePrefixEnabled() = true`), which matches the
+/// `cat -n` style produced by the Rust Read tool.
+///
+/// The `minimalUniquenessHint` (TS-only USER_TYPE='ant' branch) is
+/// omitted — coco-rs has no equivalent of TS's per-user feature flag.
+const EDIT_TOOL_DESCRIPTION: &str = "Performs exact string replacements in files.
+
+Usage:
+- You must use your `Read` tool at least once in the conversation before editing. This tool will error if you attempt an edit without reading the file.
+- When editing text from Read tool output, ensure you preserve the exact indentation (tabs/spaces) as it appears AFTER the line number prefix. The line number prefix format is: line number + tab. Everything after that is the actual file content to match. Never include any part of the line number prefix in the old_string or new_string.
+- ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.
+- Only use emojis if the user explicitly requests it. Avoid adding emojis to files unless asked.
+- The edit will FAIL if `old_string` is not unique in the file. Either provide a larger string with more surrounding context to make it unique or use `replace_all` to change every instance of `old_string`.
+- Use `replace_all` for replacing and renaming strings across the file. This parameter is useful if you want to rename a variable for instance.";
+
 /// Edit tool — performs exact string replacements in files.
 /// Single replacement requires unique match; use replace_all for multiple.
 pub struct EditTool;
@@ -26,7 +46,7 @@ impl Tool for EditTool {
     }
 
     fn description(&self, _input: &Value, _options: &DescriptionOptions) -> String {
-        "Performs exact string replacements in files.".into()
+        EDIT_TOOL_DESCRIPTION.into()
     }
 
     fn input_schema(&self) -> ToolInputSchema {
@@ -133,26 +153,66 @@ impl Tool for EditTool {
             });
         }
 
-        // Check if file was modified externally since last read.
-        // TS: FileEditTool.ts line 451-468 — rejects edit if mtime diverged.
-        if let Some(frs) = &ctx.file_read_state {
-            if let Ok(abs_path) = std::fs::canonicalize(path) {
+        // Reject edits when the file changed externally since the cached
+        // Read. TS `FileEditTool.ts` — two-layer check:
+        //   Layer 1: compare stored mtime to current disk mtime.
+        //   Layer 2: for full-view reads, if mtime matches, compare stored
+        //            content to current disk content as a fallback (mtime
+        //            precision is only 1s on some filesystems, so a same-
+        //            second overwrite would otherwise slip past).
+        // Partial-read cache entries skip Layer 2 because they can't be
+        // compared to the whole file. Layer 2 is also bypassed for files
+        // over 1 MiB to keep the Edit hot path off O(filesize) I/O.
+        const LAYER2_MAX_BYTES: u64 = 1024 * 1024;
+        if let Some(frs) = &ctx.file_read_state
+            && let Ok(abs_path) = tokio::fs::canonicalize(path).await
+        {
+            let cached = {
                 let frs_read = frs.read().await;
-                if let Some(entry) = frs_read.peek(&abs_path) {
-                    if let Ok(disk_mtime) = coco_context::file_mtime_ms(&abs_path).await {
-                        if entry.mtime_ms != disk_mtime {
-                            return Err(ToolError::ExecutionFailed {
-                                message: format!(
-                                    "{file_path} has been modified since it was last read. \
-                                     Read it again before editing."
-                                ),
-                                source: None,
-                            });
-                        }
+                frs_read.peek(&abs_path).cloned()
+            };
+            if let Some(entry) = cached {
+                if let Ok(disk_mtime) = coco_context::file_mtime_ms(&abs_path).await
+                    && entry.mtime_ms != disk_mtime
+                {
+                    return Err(ToolError::ExecutionFailed {
+                        message: format!(
+                            "{file_path} has been modified since it was last read \
+                             (mtime changed). Read it again before editing."
+                        ),
+                        source: None,
+                    });
+                }
+
+                if entry.offset.is_none()
+                    && entry.limit.is_none()
+                    && let Ok(meta) = tokio::fs::metadata(&abs_path).await
+                    && meta.len() <= LAYER2_MAX_BYTES
+                    && let Ok(raw) = tokio::fs::read(&abs_path).await
+                {
+                    let enc = coco_file_encoding::detect_encoding(&raw);
+                    if let Ok(current) = enc.decode(&raw)
+                        && current != entry.content
+                    {
+                        return Err(ToolError::ExecutionFailed {
+                            message: format!(
+                                "{file_path} has been modified since it was last read \
+                                 (content changed). Read it again before editing."
+                            ),
+                            source: None,
+                        });
                     }
                 }
             }
         }
+
+        // Team-memory secret guard. TS `FileEditTool.ts` reuses the
+        // same `checkTeamMemSecrets` invariant as FileWriteTool — an
+        // edit that introduces a secret to a synced team-memory path
+        // is rejected before the new content hits disk. We check the
+        // INTENT (the post-replacement content) below after computing
+        // `new_content`, since the secret might come from the
+        // replacement string rather than the existing file.
 
         // Track file edit for checkpoint/rewind before modifying.
         // TS: FileEditTool.ts line 435
@@ -163,6 +223,34 @@ impl Tool for EditTool {
                 message: format!("failed to read {file_path}: {e}"),
                 source: None,
             })?;
+
+        // T2: Input normalization BEFORE matching.
+        //
+        // TS `FileEditTool/utils.ts:581-657` `normalizeFileEditInput`
+        // runs two transformations on the (old_string, new_string) pair
+        // before the Edit tool's matching logic even sees them:
+        //
+        //   1. Strip trailing whitespace from new_string (unless the
+        //      file is Markdown, which uses trailing spaces as hard
+        //      line breaks).
+        //   2. Desanitize over-escaped / over-sanitized model output
+        //      (e.g. `<fnr>` → `<function_results>`) — see
+        //      `desanitization_map` in edit_utils.rs.
+        //
+        // Normalize (old_string, new_string) before matching — TS
+        // `FileEditTool/utils.ts` runs two transforms first:
+        //   1. Strip trailing whitespace from new_string (except on
+        //      Markdown, where trailing spaces are hard line breaks).
+        //   2. Desanitize over-escaped model output (e.g. `<fnr>` →
+        //      `<function_results>`) via `desanitization_map` in
+        //      edit_utils.rs.
+        // Without these, edits from models that over-escape JSON would
+        // fail literal matching here where TS succeeds.
+        let (normalized_old, normalized_new) = crate::tools::edit_utils::normalize_file_edit_input(
+            file_path, &content, old_string, new_string,
+        );
+        let old_string = normalized_old.as_str();
+        let new_string = normalized_new.as_str();
 
         let count = content.matches(old_string).count();
 
@@ -175,9 +263,25 @@ impl Tool for EditTool {
             }
             content.replace(old_string, new_string)
         } else if count == 0 {
-            // Try fuzzy matching: whitespace-normalized comparison
-            // TS: findActualString() — tries normalized whitespace, then leading indent
-            if let Some(actual) = find_fuzzy_match(&content, old_string) {
+            // Matching fallback order (TS-aligned + coco-rs extension):
+            //   1. Quote-normalized match — TS `findActualString()` at
+            //      `FileEditTool/utils.ts:73-93`. Handles the common case
+            //      where the file uses curly quotes (""'') but the model
+            //      emitted straight quotes ("'). When the match hits via
+            //      quote normalization, `preserve_quote_style` re-applies
+            //      the file's curly style to `new_string` so the round-trip
+            //      doesn't silently downgrade.
+            //   2. Whitespace-normalized match — coco-rs extension from
+            //      cocode-rs. Not in TS but useful for Python/YAML where
+            //      the model may emit slightly different indentation.
+            //      Preserved because it's backwards-compatible with
+            //      existing tests.
+            if let Some(actual) = crate::tools::edit_utils::find_actual_string(&content, old_string)
+            {
+                let preserved_new =
+                    crate::tools::edit_utils::preserve_quote_style(old_string, actual, new_string);
+                content.replacen(actual, &preserved_new, 1)
+            } else if let Some(actual) = find_fuzzy_match(&content, old_string) {
                 content.replacen(&actual, new_string, 1)
             } else {
                 return Err(ToolError::InvalidInput {
@@ -196,6 +300,17 @@ impl Tool for EditTool {
             content.replacen(old_string, new_string, 1)
         };
 
+        // Team-memory secret guard — check the POST-EDIT content (which
+        // may contain a secret introduced via `new_string`) against the
+        // path's team-memory eligibility. See `check_team_mem_secret`
+        // in lib.rs for the layered detection logic.
+        if let Some(err) = crate::check_team_mem_secret(ctx, path, &new_content) {
+            return Err(ToolError::ExecutionFailed {
+                message: err,
+                source: None,
+            });
+        }
+
         std::fs::write(file_path, &new_content).map_err(|e| ToolError::ExecutionFailed {
             message: format!("failed to write {file_path}: {e}"),
             source: None,
@@ -210,6 +325,11 @@ impl Tool for EditTool {
             format!("The file {file_path} has been updated successfully. ({replacements})");
 
         crate::record_file_edit(ctx, path, new_content).await;
+        // TS `FileEditTool.ts` mirrors `FileReadTool.ts:578-591` skill
+        // auto-discovery — when an edit touches a path under a nested
+        // `.claude/skills/` ancestor, the manager picks up the change
+        // on the next batch boundary.
+        crate::track_skill_discovery(ctx, path).await;
 
         Ok(ToolResult {
             data: serde_json::json!(result_msg),

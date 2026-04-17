@@ -323,17 +323,19 @@ impl CacheBreakDetector {
             self.pending_changes.remove(&key);
         }
 
-        // Update the snapshot in place
-        let snapshot = self.states.get_mut(&key).expect("state must exist");
-        snapshot.system_hash = input.system_hash;
-        snapshot.tools_hash = input.tools_hash;
-        snapshot.cache_control_hash = input.cache_control_hash;
-        snapshot.tool_names = input.tool_names;
-        snapshot.per_tool_hashes = input.per_tool_hashes;
-        snapshot.system_char_count = input.system_char_count;
-        snapshot.model = input.model;
-        snapshot.fast_mode = input.fast_mode;
-        snapshot.call_count += 1;
+        // Update the snapshot in place. The key is guaranteed to be present
+        // because the early-return branch above inserted it when absent.
+        if let Some(snapshot) = self.states.get_mut(&key) {
+            snapshot.system_hash = input.system_hash;
+            snapshot.tools_hash = input.tools_hash;
+            snapshot.cache_control_hash = input.cache_control_hash;
+            snapshot.tool_names = input.tool_names;
+            snapshot.per_tool_hashes = input.per_tool_hashes;
+            snapshot.system_char_count = input.system_char_count;
+            snapshot.model = input.model;
+            snapshot.fast_mode = input.fast_mode;
+            snapshot.call_count += 1;
+        }
     }
 
     /// Phase 2: Check the API response for a cache break.
@@ -449,20 +451,20 @@ impl CacheBreakDetector {
     /// Notify that a cache deletion (e.g. cached microcompact) occurred.
     /// The next response will legitimately have lower cache read tokens.
     pub fn notify_cache_deletion(&mut self, query_source: &str) {
-        if let Some(key) = self.tracking_key(query_source) {
-            if let Some(snapshot) = self.states.get_mut(&key) {
-                snapshot.cache_deletion_pending = true;
-            }
+        if let Some(key) = self.tracking_key(query_source)
+            && let Some(snapshot) = self.states.get_mut(&key)
+        {
+            snapshot.cache_deletion_pending = true;
         }
     }
 
     /// Notify that compaction occurred. Reset the baseline so the expected
     /// drop in cache tokens doesn't trigger a false positive.
     pub fn notify_compaction(&mut self, query_source: &str) {
-        if let Some(key) = self.tracking_key(query_source) {
-            if let Some(snapshot) = self.states.get_mut(&key) {
-                snapshot.prev_cache_read_tokens = None;
-            }
+        if let Some(key) = self.tracking_key(query_source)
+            && let Some(snapshot) = self.states.get_mut(&key)
+        {
+            snapshot.prev_cache_read_tokens = None;
         }
     }
 

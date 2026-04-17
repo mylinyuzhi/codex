@@ -86,25 +86,25 @@ pub fn build_system_prompt(
     env_section.push_str(&format!("- Platform: {:?}\n", environment.platform));
     env_section.push_str(&format!("- Shell: {:?}\n", environment.shell));
     env_section.push_str(&format!("- Working directory: {}\n", environment.cwd));
-    if environment.is_git_repo {
-        if let Some(ref git) = environment.git_status {
-            env_section.push_str(&format!("- Git branch: {}\n", git.branch));
-        }
+    if environment.is_git_repo
+        && let Some(ref git) = environment.git_status
+    {
+        env_section.push_str(&format!("- Git branch: {}\n", git.branch));
     }
     prompt.add_text(env_section);
 
     // Skill listing (available /commands)
-    if let Some(skills) = skill_listing {
-        if !skills.is_empty() {
-            prompt.add_text(format!("\n# Available Skills\n{skills}"));
-        }
+    if let Some(skills) = skill_listing
+        && !skills.is_empty()
+    {
+        prompt.add_text(format!("\n# Available Skills\n{skills}"));
     }
 
     // Custom append (user-specified extra instructions)
-    if let Some(append) = custom_append {
-        if !append.is_empty() {
-            prompt.add_text(format!("\n{append}"));
-        }
+    if let Some(append) = custom_append
+        && !append.is_empty()
+    {
+        prompt.add_text(format!("\n{append}"));
     }
 
     prompt

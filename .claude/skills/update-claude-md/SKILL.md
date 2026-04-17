@@ -7,7 +7,9 @@ argument-hint: [target-file-path]
 ## Context
 
 - Target file: $ARGUMENTS (default: CLAUDE.md in project root)
-- Workspace root: !`ls cocode-rs/Cargo.toml`
+- Active workspace: `coco-rs/` (primary development)
+- Reference projects: `coco-rs/` and `codex-rs/` (read-only reference implementations)
+- Workspace root: !`ls coco-rs/Cargo.toml`
 - Existing CLAUDE.md line count: !`wc -l CLAUDE.md`
 
 ## Goal
@@ -26,7 +28,7 @@ Regenerate CLAUDE.md by **discovering** all project structure at runtime. This c
 
 ### Step 1: Discover Workspace
 
-1. **Parse crate list**: Read `cocode-rs/Cargo.toml`, extract all paths from `[workspace] members` (resolve globs by listing matching directories)
+1. **Parse crate list**: Read `coco-rs/Cargo.toml`, extract all paths from `[workspace] members` (resolve globs by listing matching directories)
 
 2. **Gather crate metadata**: For each crate path, determine its name, purpose, and key types:
    - First: read the crate's `Cargo.toml` for `name` and `description` fields
@@ -34,11 +36,11 @@ Regenerate CLAUDE.md by **discovering** all project structure at runtime. This c
    - Last resort: infer purpose from the crate name itself
    - **Key types discovery** (non-Utils crates only): scan `src/lib.rs` for `pub struct`, `pub trait`, `pub enum`, and `pub use` (re-exports) to identify the primary public types. Record the most important ones (aim for 3-8 per crate) to populate the `Key Types` column in crate tables. Include brief parenthetical notes for the most important types (e.g. `ConfigManager (thread-safe, RwLock)`).
 
-3. **Auto-derive layers**: Group crates by their first path component (e.g. `common/`, `core/`, `app/`, `provider-sdks/`, `utils/`, `exec/`, `features/`, `mcp/`). Crates at the top level of `cocode-rs/` (not in a subdirectory group) form a "Standalone" layer. Derive layer display names from the path prefix (e.g. `provider-sdks` → "Provider SDKs"). Sort layers in dependency order: Common → Provider SDKs → Core → App, with others (Features, Exec, MCP, Standalone, Utils) in between as appropriate.
+3. **Auto-derive layers**: Group crates by their first path component (e.g. `common/`, `core/`, `app/`, `provider-sdks/`, `utils/`, `exec/`, `features/`, `mcp/`). Crates at the top level of `coco-rs/` (not in a subdirectory group) form a "Standalone" layer. Derive layer display names from the path prefix (e.g. `provider-sdks` → "Provider SDKs"). Sort layers in dependency order: Common → Provider SDKs → Core → App, with others (Features, Exec, MCP, Standalone, Utils) in between as appropriate.
 
-4. **Find specialized docs**: Glob for `cocode-rs/**/CLAUDE.md` — these get linked in a "Specialized Documentation" table.
+4. **Find specialized docs**: Glob for `coco-rs/**/CLAUDE.md` — these get linked in a "Specialized Documentation" table.
 
-5. **Read dev commands**: Read `cocode-rs/justfile` to extract the key development commands (fmt, pre-commit, test, help, etc.).
+5. **Read dev commands**: Read `coco-rs/justfile` to extract the key development commands (fmt, pre-commit, test, help, etc.).
 
 6. **Scan error patterns**: For each layer, check whether crates use `snafu` or `anyhow` by grepping their `Cargo.toml` dependencies. Summarize as a table.
 
@@ -76,7 +78,7 @@ Build an ASCII art layer diagram **from the discovered layers and crate names**.
 
 Assemble the file in this section order:
 
-1. **Title + one-liner** — e.g. "Multi-provider LLM SDK and CLI. All development in `cocode-rs/`."
+1. **Title + one-liner** — e.g. "Multi-provider LLM SDK and CLI. All development in `coco-rs/`."
 2. **AGENTS.md reference** — "Read `AGENTS.md` for Rust conventions."
 3. **Commands** — from justfile discovery (Step 1.5)
 4. **Architecture** — generated diagram (Step 2)

@@ -3,18 +3,13 @@
 //! TS: vim/ (1.5K LOC) — vim emulation for text input.
 
 /// Vim mode state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum VimMode {
+    #[default]
     Normal,
     Insert,
     Visual,
     Command,
-}
-
-impl Default for VimMode {
-    fn default() -> Self {
-        Self::Normal
-    }
 }
 
 /// Vim key action result.
@@ -100,11 +95,10 @@ fn process_insert_key(key: &str) -> (VimAction, VimMode) {
     match key {
         "escape" => (VimAction::SwitchMode(VimMode::Normal), VimMode::Normal),
         "backspace" => (VimAction::DeleteChar, VimMode::Insert),
-        k if k.len() == 1 => (
-            VimAction::InsertChar(k.chars().next().unwrap()),
-            VimMode::Insert,
-        ),
-        _ => (VimAction::PassThrough, VimMode::Insert),
+        k => match k.chars().next() {
+            Some(c) if k.len() == 1 => (VimAction::InsertChar(c), VimMode::Insert),
+            _ => (VimAction::PassThrough, VimMode::Insert),
+        },
     }
 }
 

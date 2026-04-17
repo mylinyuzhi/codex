@@ -145,10 +145,10 @@ pub fn resolve_auth(options: &AuthResolveOptions) -> Option<AuthMethod> {
     // Full priority chain
 
     // 1. ANTHROPIC_AUTH_TOKEN (raw token — used by bridge/CCR)
-    if let Ok(token) = std::env::var("ANTHROPIC_AUTH_TOKEN") {
-        if !token.is_empty() {
-            return Some(AuthMethod::ApiKey { key: token });
-        }
+    if let Ok(token) = std::env::var("ANTHROPIC_AUTH_TOKEN")
+        && !token.is_empty()
+    {
+        return Some(AuthMethod::ApiKey { key: token });
     }
 
     // 2. Direct API key
@@ -157,10 +157,10 @@ pub fn resolve_auth(options: &AuthResolveOptions) -> Option<AuthMethod> {
     }
 
     // 3. API key helper
-    if let Some(cmd) = &options.api_key_helper {
-        if let Some(key) = get_api_key_from_helper(cmd) {
-            return Some(AuthMethod::ApiKey { key });
-        }
+    if let Some(cmd) = &options.api_key_helper
+        && let Some(key) = get_api_key_from_helper(cmd)
+    {
+        return Some(AuthMethod::ApiKey { key });
     }
 
     // 4-6. Cloud providers
@@ -186,10 +186,10 @@ pub fn resolve_auth_from_env() -> Option<AuthMethod> {
 
 /// Try to resolve API key from ANTHROPIC_API_KEY env var.
 fn resolve_api_key_from_env() -> Option<AuthMethod> {
-    if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
-        if !key.is_empty() {
-            return Some(AuthMethod::ApiKey { key });
-        }
+    if let Ok(key) = std::env::var("ANTHROPIC_API_KEY")
+        && !key.is_empty()
+    {
+        return Some(AuthMethod::ApiKey { key });
     }
     None
 }
@@ -268,12 +268,11 @@ pub fn clear_stored_oauth_tokens(config_dir: &Path) -> anyhow::Result<()> {
 /// TS: getApiKeyFromApiKeyHelper() -- runs a command to get the key.
 pub fn get_api_key_from_helper(helper_command: &str) -> Option<String> {
     // Check cache first.
-    if let Ok(cache) = api_key_cache().lock() {
-        if let Some(entry) = cache.get(helper_command) {
-            if entry.is_valid() {
-                return Some(entry.key.clone());
-            }
-        }
+    if let Ok(cache) = api_key_cache().lock()
+        && let Some(entry) = cache.get(helper_command)
+        && entry.is_valid()
+    {
+        return Some(entry.key.clone());
     }
 
     // Cache miss or expired -- run the command.

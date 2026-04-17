@@ -40,6 +40,7 @@ impl Widget for ToolPanel<'_> {
 
         for tool in &self.tools[start..] {
             let (icon, color) = match tool.status {
+                ToolStatus::Queued => ("◦", self.theme.tool_running),
                 ToolStatus::Running => ("⏳", self.theme.tool_running),
                 ToolStatus::Completed => ("✓", self.theme.tool_completed),
                 ToolStatus::Failed => ("✗", self.theme.tool_error),

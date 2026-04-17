@@ -5,7 +5,6 @@
 //! dedup (returns `AlreadyReadFileAttachment` if unchanged).
 
 use std::path::Path;
-use std::path::PathBuf;
 
 use crate::attachment::AlreadyReadFileAttachment;
 use crate::attachment::Attachment;
@@ -102,15 +101,14 @@ async fn resolve_file_mention(
     // Dedup check: if file is in FileReadState and mtime hasn't changed,
     // return AlreadyReadFileAttachment.
     // TS: generateFileAttachment() line 3077-3115
-    if let Some(entry) = file_read_state.peek(&abs_path) {
-        if let Ok(disk_mtime) = file_mtime_ms(&abs_path).await {
-            if entry.mtime_ms == disk_mtime {
-                return Some(Attachment::AlreadyReadFile(AlreadyReadFileAttachment {
-                    filename: abs_path.to_string_lossy().into_owned(),
-                    display_path,
-                }));
-            }
-        }
+    if let Some(entry) = file_read_state.peek(&abs_path)
+        && let Ok(disk_mtime) = file_mtime_ms(&abs_path).await
+        && entry.mtime_ms == disk_mtime
+    {
+        return Some(Attachment::AlreadyReadFile(AlreadyReadFileAttachment {
+            filename: abs_path.to_string_lossy().into_owned(),
+            display_path,
+        }));
     }
 
     // Read the file via the existing attachment generator.
@@ -134,7 +132,7 @@ async fn resolve_file_mention(
 /// Update FileReadState after resolving a mention.
 async fn update_file_read_state(
     state: &mut FileReadState,
-    abs_path: &PathBuf,
+    abs_path: &Path,
     attachment: &Attachment,
     options: &FileReadOptions,
 ) {
@@ -146,7 +144,7 @@ async fn update_file_read_state(
 
     if let Ok(mtime) = file_mtime_ms(abs_path).await {
         state.set(
-            abs_path.clone(),
+            abs_path.to_path_buf(),
             FileReadEntry {
                 content,
                 mtime_ms: mtime,

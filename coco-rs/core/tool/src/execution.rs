@@ -82,6 +82,28 @@ pub async fn execute_tool_call(
 ) -> ToolExecutionResult {
     let start = Instant::now();
 
+    // R7-T19: defense-in-depth strip of internal-only Bash fields.
+    //
+    // TS `services/tools/toolExecution.ts:756-773` strips
+    // `_simulatedSedEdit` from any model-provided Bash input before
+    // reaching `tool.call()`. The field is internal — it must only
+    // be injected by the SedEditPermissionRequest UI dialog after
+    // user approval — and exposing it to model-controlled paths would
+    // let the model bypass permission checks and the sandbox by
+    // pairing an innocuous command with an arbitrary file write.
+    //
+    // coco-rs strips at the chokepoint between the executor and the
+    // tool implementation. The trusted-callers path that legitimately
+    // sets `_simulatedSedEdit` (the SedEditPermissionRequest dialog,
+    // not yet wired in coco-rs) bypasses this codepath by calling
+    // `BashTool::execute` directly. Everything that flows through
+    // `execute_tool_call` is model output.
+    //
+    // Underscore-prefixed convention: any input field on Bash whose
+    // key starts with `_` is treated as internal and stripped here,
+    // matching TS's approach of namespacing internal fields with `_`.
+    let input = strip_internal_bash_fields(tool_name, input);
+
     // Step 1: Resolve tool
     let tool_id: ToolId = tool_name
         .parse()
@@ -105,7 +127,33 @@ pub async fn execute_tool_call(
         }
     };
 
-    // Step 2: Check permissions
+    // Step 2: Validate input
+    //
+    // R7-T24: validation runs BEFORE permission check to match TS
+    // `services/tools/toolExecution.ts:614-686` ordering. TS calls
+    // `tool.inputSchema.safeParse(input)` and `tool.validateInput`
+    // before any permission resolution; this ensures malformed
+    // input is reported as an `InvalidInput` error rather than a
+    // confusing "permission denied" message. It also guarantees
+    // that permission decisions are computed against validated
+    // input, never against raw model output.
+    let validation = tool.validate_input(&input, ctx);
+    if !validation.is_valid() {
+        return ToolExecutionResult {
+            tool_use_id: tool_use_id.to_string(),
+            tool_id,
+            tool_name: tool_name.to_string(),
+            result: Err(ToolError::InvalidInput {
+                message: format!("validation failed: {validation:?}"),
+                error_code: None,
+            }),
+            duration_ms: start.elapsed().as_millis() as i64,
+            permission_denied: false,
+            error_class: Some("invalid_input".to_string()),
+        };
+    }
+
+    // Step 3: Check permissions
     let decision = tool.check_permissions(&input, ctx).await;
     match decision {
         PermissionDecision::Deny { message, .. } => {
@@ -123,23 +171,6 @@ pub async fn execute_tool_call(
             // In auto mode, treat as allow (TUI handles interactive prompts)
         }
         PermissionDecision::Allow { .. } => {}
-    }
-
-    // Step 3: Validate input
-    let validation = tool.validate_input(&input, ctx);
-    if !validation.is_valid() {
-        return ToolExecutionResult {
-            tool_use_id: tool_use_id.to_string(),
-            tool_id,
-            tool_name: tool_name.to_string(),
-            result: Err(ToolError::InvalidInput {
-                message: format!("validation failed: {validation:?}"),
-                error_code: None,
-            }),
-            duration_ms: start.elapsed().as_millis() as i64,
-            permission_denied: false,
-            error_class: Some("invalid_input".to_string()),
-        };
     }
 
     // Step 4: Execute tool (with cancellation support)
@@ -160,6 +191,37 @@ pub async fn execute_tool_call(
         permission_denied: false,
         error_class,
     }
+}
+
+/// Strip internal-only fields from model-provided Bash input.
+///
+/// TS: `services/tools/toolExecution.ts:756-773` strips
+/// `_simulatedSedEdit` from the parsed Bash input as a defense-in-depth
+/// safeguard. The convention is that any Bash input field whose key
+/// starts with `_` is treated as internal and must only be set by the
+/// permission UI dialog (e.g. SedEditPermissionRequest), never by the
+/// model. Stripping at the executor chokepoint guarantees that even
+/// if the schema accepts the field, model traffic can't reach the
+/// `apply_sed_edit` short-circuit.
+///
+/// For non-Bash tools the input is returned unchanged. For Bash inputs
+/// that are not objects (defensive), the input is returned unchanged.
+fn strip_internal_bash_fields(tool_name: &str, mut input: Value) -> Value {
+    if tool_name != ToolName::Bash.as_str() {
+        return input;
+    }
+    if let Some(obj) = input.as_object_mut() {
+        // Two-pass: collect internal keys first to avoid borrow-conflict
+        // with the mutating remove. Silent strip — TS doesn't log
+        // either, the field shouldn't be in model traffic in normal
+        // operation.
+        let internal_keys: Vec<String> =
+            obj.keys().filter(|k| k.starts_with('_')).cloned().collect();
+        for key in internal_keys {
+            obj.remove(&key);
+        }
+    }
+    input
 }
 
 /// Check if a tool is a file-editing tool (for tracking purposes).
@@ -201,7 +263,7 @@ pub fn extract_file_extension(tool_name: &str, input: &Value) -> Option<String> 
     std::path::Path::new(path)
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase())
+        .map(str::to_lowercase)
 }
 
 /// Check if a tool name refers to a deferred tool (discovered via ToolSearch).

@@ -342,7 +342,7 @@ async fn do_token_refresh(
         .map(String::from)
         .or_else(|| Some(refresh_token.to_string()));
 
-    let expires_in = body.get("expires_in").and_then(|v| v.as_i64());
+    let expires_in = body.get("expires_in").and_then(serde_json::Value::as_i64);
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()

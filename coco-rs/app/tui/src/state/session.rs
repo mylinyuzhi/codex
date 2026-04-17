@@ -2,6 +2,7 @@
 //!
 //! Updated by server notification handlers when the agent loop emits events.
 
+use std::collections::VecDeque;
 use std::time::Instant;
 
 use coco_types::PermissionMode;
@@ -50,7 +51,7 @@ pub struct SessionState {
     /// Current turn number (within multi-turn loop).
     pub current_turn_number: Option<i32>,
     /// Queued commands for mid-turn injection.
-    pub queued_commands: Vec<String>,
+    pub queued_commands: VecDeque<String>,
     /// Available models for model picker.
     pub available_models: Vec<String>,
     /// Whether file checkpointing is enabled for rewind.
@@ -63,6 +64,34 @@ pub struct SessionState {
     pub available_commands: Vec<(String, Option<String>)>,
     /// Saved sessions for session browser.
     pub saved_sessions: Vec<SavedSession>,
+
+    // === WS-3: new fields for full event coverage ===
+    /// Session state visible to SDK consumers (idle/running/requires_action).
+    pub session_state: coco_types::SessionState,
+    /// Active worktree path (set by WorktreeEntered, cleared by WorktreeExited).
+    pub worktree_path: Option<String>,
+    /// Model fallback banner message (set by ModelFallbackStarted, cleared on Completed).
+    pub model_fallback_banner: Option<String>,
+    /// Rate limit status (set by RateLimit notification).
+    pub rate_limit_info: Option<RateLimitInfo>,
+    /// Context usage percentage (set by ContextUsageWarning).
+    pub context_usage_percent: Option<f64>,
+    /// Sandbox active state (set by SandboxStateChanged).
+    pub sandbox_active: bool,
+    /// Stream health: stall detected (set by StreamStallDetected, cleared on next turn).
+    pub stream_stall: bool,
+    /// Active background tasks (set by TaskStarted, updated by TaskProgress/Completed).
+    pub active_tasks: Vec<TaskEntry>,
+    /// Active hook executions (set by HookStarted, updated by HookProgress/Response).
+    pub active_hooks: Vec<HookEntry>,
+    /// Prompt suggestions from the model (set by PromptSuggestion).
+    pub prompt_suggestions: Vec<String>,
+    /// Local command output lines (set by LocalCommandOutput, capped at 50).
+    pub local_command_output: VecDeque<String>,
+    /// Available output styles for picker (set by OutputStylesReady).
+    pub available_output_styles: Vec<String>,
+    /// Available plugins for picker (set by PluginDataReady).
+    pub available_plugins: Vec<serde_json::Value>,
 }
 
 impl SessionState {
@@ -91,15 +120,29 @@ impl SessionState {
         self.token_usage = usage;
     }
 
-    /// Start a tool execution.
+    /// Queue a tool execution (called from ToolUseQueued).
     pub fn start_tool(&mut self, call_id: String, name: String) {
         self.tool_executions.push(ToolExecution {
             call_id,
             name,
-            status: ToolStatus::Running,
+            status: ToolStatus::Queued,
             started_at: Instant::now(),
             description: None,
+            streaming_input: None,
         });
+    }
+
+    /// Transition a queued tool to running (called from ToolUseStarted).
+    pub fn run_tool(&mut self, call_id: &str) {
+        if let Some(tool) = self
+            .tool_executions
+            .iter_mut()
+            .find(|t| t.call_id == call_id)
+        {
+            tool.status = ToolStatus::Running;
+        } else {
+            tracing::debug!(call_id, "run_tool: tool not found in tool_executions");
+        }
     }
 
     /// Complete a tool execution.
@@ -114,6 +157,8 @@ impl SessionState {
             } else {
                 ToolStatus::Completed
             };
+        } else {
+            tracing::debug!(call_id, "complete_tool: tool not found in tool_executions");
         }
     }
 
@@ -146,12 +191,25 @@ impl Default for SessionState {
             mcp_servers: Vec::new(),
             focused_subagent_index: None,
             current_turn_number: None,
-            queued_commands: Vec::new(),
+            queued_commands: VecDeque::new(),
             available_models: Vec::new(),
             file_history_enabled: false,
             was_interrupted: false,
             available_commands: Vec::new(),
             saved_sessions: Vec::new(),
+            session_state: coco_types::SessionState::Idle,
+            worktree_path: None,
+            model_fallback_banner: None,
+            rate_limit_info: None,
+            context_usage_percent: None,
+            sandbox_active: false,
+            stream_stall: false,
+            active_tasks: Vec::new(),
+            active_hooks: Vec::new(),
+            prompt_suggestions: Vec::new(),
+            local_command_output: VecDeque::new(),
+            available_output_styles: Vec::new(),
+            available_plugins: Vec::new(),
         }
     }
 }
@@ -438,6 +496,8 @@ pub struct ToolExecution {
     pub status: ToolStatus,
     pub started_at: Instant,
     pub description: Option<String>,
+    /// Streaming tool input delta (typing effect for bash/powershell).
+    pub streaming_input: Option<String>,
 }
 
 impl ToolExecution {
@@ -450,6 +510,7 @@ impl ToolExecution {
 /// Tool execution status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolStatus {
+    Queued,
     Running,
     Completed,
     Failed,
@@ -499,4 +560,46 @@ pub struct SavedSession {
     pub message_count: i32,
     pub created_at: String,
     pub model: Option<String>,
+}
+
+/// Rate limit info from the last RateLimit notification.
+#[derive(Debug, Clone)]
+pub struct RateLimitInfo {
+    pub remaining: Option<i64>,
+    pub reset_at: Option<i64>,
+    pub provider: Option<String>,
+}
+
+/// Background task entry for the task panel.
+#[derive(Debug, Clone)]
+pub struct TaskEntry {
+    pub task_id: String,
+    pub description: String,
+    pub status: TaskEntryStatus,
+}
+
+/// Task entry lifecycle status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskEntryStatus {
+    Running,
+    Completed,
+    Failed,
+    Stopped,
+}
+
+/// Hook execution entry for the hook panel.
+#[derive(Debug, Clone)]
+pub struct HookEntry {
+    pub hook_id: String,
+    pub hook_name: String,
+    pub status: HookEntryStatus,
+    pub output: Option<String>,
+}
+
+/// Hook entry lifecycle status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookEntryStatus {
+    Running,
+    Completed,
+    Failed,
 }

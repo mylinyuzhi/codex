@@ -56,7 +56,45 @@ fn test_build_fork_child_message_has_xml_tags() {
     assert!(msg.contains(&format!("</{FORK_BOILERPLATE_TAG}>")));
     assert!(msg.contains(FORK_DIRECTIVE_PREFIX));
     assert!(msg.contains("Find all TODO comments"));
-    assert!(msg.contains("Non-negotiable"));
+    // The actual TS rule-body header — verified byte-for-byte against
+    // `forkSubagent.ts:177`.
+    assert!(msg.contains("RULES (non-negotiable):"));
+    // Line that mentions "forked worker process" — also byte-for-byte.
+    assert!(msg.contains("forked worker process"));
+}
+
+/// Byte-level TS alignment: `FORK_DIRECTIVE_PREFIX` must be exactly
+/// `"Your directive: "` (trailing space, no newline) per
+/// `constants/xml.ts:66`. Regression guard against the previous
+/// `"Your task:\n"` bug.
+#[test]
+fn test_fork_directive_prefix_is_ts_aligned() {
+    assert_eq!(FORK_DIRECTIVE_PREFIX, "Your directive: ");
+}
+
+/// The child message ends with `FORK_DIRECTIVE_PREFIX{directive}` and no
+/// trailing newline — TS `forkSubagent.ts:197` template literal stops
+/// at `${directive}`.
+#[test]
+fn test_build_fork_child_message_ends_with_directive() {
+    let msg = build_fork_child_message("do the thing");
+    assert!(
+        msg.ends_with("Your directive: do the thing"),
+        "message should end with prefix + directive, got tail: {:?}",
+        &msg[msg.len().saturating_sub(60)..]
+    );
+}
+
+/// Directive prefix appears after the closing tag, separated by exactly
+/// one blank line — TS template literal has `</fork-boilerplate>\n\n{prefix}`.
+#[test]
+fn test_build_fork_child_message_blank_line_before_directive() {
+    let msg = build_fork_child_message("x");
+    let expected_seq = format!("</{FORK_BOILERPLATE_TAG}>\n\nYour directive: x");
+    assert!(
+        msg.ends_with(&expected_seq),
+        "must have blank line between closing tag and directive prefix"
+    );
 }
 
 #[test]

@@ -10,7 +10,9 @@ help:
 
 # Format code
 fmt:
-    cargo fmt -- --config imports_granularity=Item 2>/dev/null
+    #!/usr/bin/env bash
+    # imports_granularity is nightly-only; filter the harmless stable warning.
+    cargo fmt 2> >(grep -v 'imports_granularity = Item' >&2 || true)
 
 # Check all crates
 check *args:

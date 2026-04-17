@@ -8,7 +8,6 @@ use crate::vim::TextObjScope;
 use crate::vim::VimState;
 use crate::vim::motions;
 use crate::vim::operators;
-use crate::vim::text_objects::TextObjResult;
 use crate::vim::text_objects::{self};
 use crate::vim::transitions::VimAction;
 use crate::vim::transitions::{self};

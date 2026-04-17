@@ -784,28 +784,13 @@ ClientRequest::ConfigApplyFlags(params) => {
 
 ## 3. P2: Nice-to-Have Notifications
 
-### 3.1 AuthStatus
+### 3.1 AuthStatus — REMOVED (not applicable)
 
-**TS source**: `SDKAuthStatusMessage` — `is_authenticating`, `output`, `error`
+~~**TS source**: `SDKAuthStatusMessage`~~
 
-```rust
-// Add to server_notification_definitions!:
-/// Authentication status update (OAuth flow progress).
-AuthStatus => "auth/status" (AuthStatusParams),
-```
-
-```rust
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub struct AuthStatusParams {
-    #[serde(default)]
-    pub is_authenticating: bool,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub output: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-```
+This event is Claude Code's OAuth flow progress indicator. coco-rs handles auth
+differently (multi-provider + MCP auth via `McpAuthStatus`), so this ServerNotification
+variant is not implemented. See `event-system-design.md` §2.2 note.
 
 ### 3.2 LocalCommandOutput
 
@@ -972,7 +957,6 @@ Add to the `type_schemas` vec in `app-server-protocol/src/export.rs`:
 ("ConfigApplyFlagsRequestParams", schema_for!(cocode_app_server_protocol::ConfigApplyFlagsRequestParams)),
 
 // P2 types
-("AuthStatusParams", schema_for!(cocode_app_server_protocol::AuthStatusParams)),
 ("LocalCommandOutputParams", schema_for!(cocode_app_server_protocol::LocalCommandOutputParams)),
 ("FilesPersistedParams", schema_for!(cocode_app_server_protocol::FilesPersistedParams)),
 ("PersistedFileInfo", schema_for!(cocode_app_server_protocol::PersistedFileInfo)),
@@ -1154,6 +1138,6 @@ Phase 1 (P0): SessionStateChanged → Hook lifecycle → Task params → Session
   ↓ after each step: just pre-commit
 Phase 2 (P1): mcp/status → context/usage → mcp/setServers → mcp/reconnect → mcp/toggle → plugin/reload → config/applyFlags
   ↓ after each step: just pre-commit
-Phase 3 (P2): AuthStatus → LocalCommandOutput → FilesPersisted → ElicitationComplete → ToolUseSummary → RateLimit enhancement
+Phase 3 (P2): LocalCommandOutput → FilesPersisted → ElicitationComplete → ToolUseSummary → RateLimit enhancement (AuthStatus not applicable to coco-rs)
 Phase 4: export.rs + schema regen + Python SDK methods + transport correlation
 ```

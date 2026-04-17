@@ -12,6 +12,7 @@ use std::str::FromStr;
 ///
 /// Only 2 typed fields (effort + budget_tokens) are universal across providers.
 /// All provider-specific thinking params go through `options` (data-driven passthrough).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ThinkingLevel {
     /// Reasoning effort level — universal across all providers.
@@ -99,6 +100,7 @@ impl FromStr for ThinkingLevel {
 
 /// Reasoning effort level. Ordered from lowest to highest.
 /// Provider-agnostic scale — thinking_convert maps to per-provider values.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, Default,
 )]

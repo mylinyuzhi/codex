@@ -335,20 +335,60 @@ impl StreamingToolExecutor {
         all_results
     }
 
-    /// Execute a single tool call.
+    /// Execute a single tool call through the full lifecycle pipeline:
+    ///
+    /// 1. PreToolUse hook — may rewrite input, override permission, or block
+    /// 2. `tool.execute()` — the actual work
+    /// 3. PostToolUse / PostToolUseFailure hook — may replace output or stop loop
+    ///
+    /// TS: `services/tools/toolExecution.ts:800-862` pipeline flow.
     async fn execute_single(&self, call: PendingToolCall, ctx: &ToolUseContext) -> ToolCallResult {
         let tool_id = call.tool.id();
         let tool_use_id = call.tool_use_id.clone();
+        let tool_name = call.tool.name().to_string();
         let start = std::time::Instant::now();
+        let mut input = call.input;
 
+        // ── Stage 1: PreToolUse hook ──
+        // Run PreToolUse hooks if a handle is configured. Hooks may rewrite
+        // the input, override permission (most-restrictive-wins: deny > ask >
+        // allow > passthrough — already aggregated in `PreToolUseOutcome`),
+        // or hard-block the call via `blocking_reason`.
+        if let Some(handle) = ctx.hook_handle.as_ref() {
+            let pre = handle
+                .run_pre_tool_use(&tool_name, &tool_use_id, &input)
+                .await;
+
+            if pre.is_blocked() {
+                let reason = pre
+                    .blocking_reason
+                    .unwrap_or_else(|| "PreToolUse hook denied tool execution".into());
+                return ToolCallResult {
+                    tool_use_id,
+                    tool_id,
+                    result: Err(ToolError::PermissionDenied { message: reason }),
+                    duration_ms: start.elapsed().as_millis() as i64,
+                };
+            }
+
+            // Apply input rewrite if the hook emitted one.
+            if let Some(updated) = pre.updated_input {
+                input = updated;
+            }
+            // Ask/Allow overrides are forwarded to the upper permission layer
+            // via the outcome; the executor doesn't re-check permissions here
+            // because `check_permissions()` was already run upstream.
+        }
+
+        // ── Stage 2: Execute ──
         // Track in-progress
         {
             let mut ids = ctx.in_progress_tool_use_ids.write().await;
             ids.insert(tool_use_id.clone());
         }
 
-        let result = tokio::select! {
-            r = call.tool.execute(call.input, ctx) => r,
+        let exec_result = tokio::select! {
+            r = call.tool.execute(input.clone(), ctx) => r,
             () = ctx.cancel.cancelled() => Err(ToolError::Cancelled),
         };
 
@@ -357,6 +397,41 @@ impl StreamingToolExecutor {
             let mut ids = ctx.in_progress_tool_use_ids.write().await;
             ids.remove(&tool_use_id);
         }
+
+        // ── Stage 3: PostToolUse / PostToolUseFailure hook ──
+        let result = if let Some(handle) = ctx.hook_handle.as_ref() {
+            match exec_result {
+                Ok(mut tool_result) => {
+                    let post = handle
+                        .run_post_tool_use(&tool_name, &tool_use_id, &input, &tool_result.data)
+                        .await;
+
+                    // Hard-block: replace result with error (TS: PostToolUse
+                    // Reject path, `toolHooks.ts:237-244`).
+                    if let Some(reason) = post.blocking_reason {
+                        Err(ToolError::PermissionDenied { message: reason })
+                    } else {
+                        // Output rewrite: use hook-modified data. Preserves
+                        // any `new_messages` from the original tool result.
+                        if let Some(updated) = post.updated_output {
+                            tool_result.data = updated;
+                        }
+                        Ok(tool_result)
+                    }
+                }
+                Err(e) => {
+                    // Failure path: run PostToolUseFailure hook but don't
+                    // let it rewrite the error (TS doesn't allow that either
+                    // — failure hooks can only inject context, not recover).
+                    let _ = handle
+                        .run_post_tool_use_failure(&tool_name, &tool_use_id, &input, &e.to_string())
+                        .await;
+                    Err(e)
+                }
+            }
+        } else {
+            exec_result
+        };
 
         let duration_ms = start.elapsed().as_millis() as i64;
 
@@ -407,14 +482,41 @@ impl StreamingToolExecutor {
                 };
                 let start = std::time::Instant::now();
 
+                // ── Stage 1: PreToolUse hook ──
+                // Concurrent path runs the same lifecycle hooks as single
+                // path. See `execute_single` docstring for the rationale.
+                // All three stages must run inside the spawned task so
+                // each tool gets its own hook invocation sequence.
+                let mut input = input;
+                if let Some(handle) = ctx_clone.hook_handle.as_ref() {
+                    let pre = handle
+                        .run_pre_tool_use(&tool_name, &tool_use_id, &input)
+                        .await;
+                    if pre.is_blocked() {
+                        let reason = pre
+                            .blocking_reason
+                            .unwrap_or_else(|| "PreToolUse hook denied tool execution".into());
+                        return ToolCallResult {
+                            tool_use_id,
+                            tool_id,
+                            result: Err(ToolError::PermissionDenied { message: reason }),
+                            duration_ms: start.elapsed().as_millis() as i64,
+                        };
+                    }
+                    if let Some(updated) = pre.updated_input {
+                        input = updated;
+                    }
+                }
+
+                // ── Stage 2: Execute ──
                 // Track in-progress
                 {
                     let mut ids = ctx_clone.in_progress_tool_use_ids.write().await;
                     ids.insert(tool_use_id.clone());
                 }
 
-                let result = tokio::select! {
-                    r = tool.execute(input, &ctx_clone) => r,
+                let exec_result = tokio::select! {
+                    r = tool.execute(input.clone(), &ctx_clone) => r,
                     () = ctx_clone.cancel.cancelled() => Err(ToolError::Cancelled),
                     () = sibling_tok.cancelled() => Err(ToolError::ExecutionFailed {
                         message: SyntheticToolError::SiblingError {
@@ -429,6 +531,43 @@ impl StreamingToolExecutor {
                     let mut ids = ctx_clone.in_progress_tool_use_ids.write().await;
                     ids.remove(&tool_use_id);
                 }
+
+                // ── Stage 3: PostToolUse / PostToolUseFailure hook ──
+                let result = if let Some(handle) = ctx_clone.hook_handle.as_ref() {
+                    match exec_result {
+                        Ok(mut tool_result) => {
+                            let post = handle
+                                .run_post_tool_use(
+                                    &tool_name,
+                                    &tool_use_id,
+                                    &input,
+                                    &tool_result.data,
+                                )
+                                .await;
+                            if let Some(reason) = post.blocking_reason {
+                                Err(ToolError::PermissionDenied { message: reason })
+                            } else {
+                                if let Some(updated) = post.updated_output {
+                                    tool_result.data = updated;
+                                }
+                                Ok(tool_result)
+                            }
+                        }
+                        Err(e) => {
+                            let _ = handle
+                                .run_post_tool_use_failure(
+                                    &tool_name,
+                                    &tool_use_id,
+                                    &input,
+                                    &e.to_string(),
+                                )
+                                .await;
+                            Err(e)
+                        }
+                    }
+                } else {
+                    exec_result
+                };
 
                 // If a shell tool failed, cancel siblings.
                 // TS: only Bash errors trigger sibling abort (StreamingToolExecutor.ts:354-363).

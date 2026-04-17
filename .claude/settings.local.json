@@ -78,7 +78,9 @@
       "Bash(xargs -I{} basename {})",
       "Bash(bash /tmp/check_areas.sh)",
       "Bash(xargs -I {} bash -c 'grep -l \"name = \" {} && dirname {}')",
-      "Bash(read dir:*)"
+      "Bash(read dir:*)",
+      "Bash(rm /lyz/codespace/codex/.claude/commands/squash.md /lyz/codespace/codex/.claude/commands/wt-del.md /lyz/codespace/codex/.claude/commands/wt-merge.md /lyz/codespace/codex/.claude/commands/wt-new.md /lyz/codespace/codex/.claude/commands/update-claude-md.md)",
+      "Bash(rmdir /lyz/codespace/codex/.claude/commands)"
     ],
     "deny": [],
     "ask": [],
@@ -94,7 +96,7 @@
             "type": "command",
             "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/scripts/rust-quality-check.sh\"",
             "timeout": 600,
-            "statusMessage": "Running Rust quality checks (fmt + check + clippy + test)..."
+            "statusMessage": "Running Rust quality checks (fmt + check + clippy)..."
           }
         ]
       },

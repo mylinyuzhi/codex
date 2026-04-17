@@ -3,6 +3,30 @@
 //! Provides a unified event system that all operations emit, allowing consumers
 //! (TUI, CLI, external tools) to adapt to the event stream.
 //!
+//! # Event isolation contract
+//!
+//! `RetrievalEvent` is **intentionally isolated** from the main agent
+//! `CoreEvent` stream (`coco_types::CoreEvent`). This was confirmed by a
+//! deep review in April 2026 (event-system-design.md §1.7, plan WS-7):
+//!
+//! - `coco-retrieval` is a largely independent crate with its own binary,
+//!   its own TUI sub-app, and its own test/build workflow.
+//! - Bridging would add ~30 `ServerNotification` variants for retrieval
+//!   internals that SDK consumers outside the retrieval subcommand would
+//!   never use.
+//! - TS reference does not have this split (retrieval is a thin MCP shim
+//!   there), so the coco-rs architectural decomposition is intentional.
+//!
+//! **Future hook**: if a slash command ever needs retrieval progress in the
+//! main agent stream, expose a **single** aggregate
+//! `ServerNotification::RetrievalProgress { phase, percent_done }` variant
+//! that coco-retrieval writes to via an optional `Sender<CoreEvent>` sink,
+//! similar to the `TaskManager::with_event_sink()` pattern. Do NOT bridge
+//! the full `RetrievalEvent` taxonomy.
+//!
+//! To subscribe to retrieval events from external code, use
+//! `EventEmitter::subscribe()` which returns an `mpsc::Receiver<RetrievalEvent>`.
+//!
 //! # Event Flow
 //!
 //! ```text

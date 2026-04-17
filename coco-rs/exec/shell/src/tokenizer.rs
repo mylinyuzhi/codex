@@ -600,7 +600,7 @@ fn is_number_literal(s: &str) -> bool {
     if start >= bytes.len() {
         return false;
     }
-    bytes[start..].iter().all(|b| b.is_ascii_digit())
+    bytes[start..].iter().all(u8::is_ascii_digit)
 }
 
 // ── Variable expansion detection ──

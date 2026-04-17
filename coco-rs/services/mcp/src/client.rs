@@ -299,6 +299,14 @@ impl McpConnectionManager {
     }
 
     /// Get the current state of a server connection.
+    /// Return the names of every registered server config, regardless
+    /// of connection state. Used by external code (e.g. the SDK
+    /// `mcp/status` handler) to enumerate servers whose state can
+    /// then be queried via [`Self::get_state`].
+    pub fn registered_server_names(&self) -> Vec<String> {
+        self.configs.keys().cloned().collect()
+    }
+
     pub async fn get_state(&self, server_name: &str) -> Option<McpConnectionState> {
         let conns = self.connections.read().await;
         conns.get(server_name).cloned()

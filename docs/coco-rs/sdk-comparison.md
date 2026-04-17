@@ -604,7 +604,7 @@ for await (const msg of query({ prompt: "..." })) {
 | **P1** | mcp/toggle ClientRequest | TS mcp_toggle control |
 | **P1** | plugin/reload ClientRequest | TS reload_plugins control |
 | **P1** | config/applyFlags ClientRequest | TS apply_flag_settings control |
-| **P2** | AuthStatus notification | TS SDKAuthStatusMessage |
+| ~~P2~~ | ~~AuthStatus notification~~ (N/A — coco-rs multi-provider auth model) | — |
 | **P2** | LocalCommandOutput notification | TS SDKLocalCommandOutputMessage |
 | **P2** | FilesPersisted notification | TS SDKFilesPersistedEvent |
 | **P2** | ElicitationComplete notification | TS SDKElicitationCompleteMessage |

@@ -108,7 +108,7 @@ impl<'a> ChatWidget<'a> {
             let running = self
                 .tool_executions
                 .iter()
-                .any(|t| t.status == ToolStatus::Running);
+                .any(|t| matches!(t.status, ToolStatus::Queued | ToolStatus::Running));
             if running {
                 lines.push(Line::from(vec![
                     Span::raw(format!("{} ", self.spinner_frame)).fg(self.theme.thinking),

@@ -29,6 +29,9 @@ result
 *.swp
 *~
 
+# Claude Code scheduler runtime state
+.claude/scheduled_tasks.lock
+
 # cli tools
 AGENTS.override.md
 

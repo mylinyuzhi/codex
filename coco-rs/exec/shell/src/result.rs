@@ -2,12 +2,31 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use tokio_util::sync::CancellationToken;
 
 /// Result of a shell command execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandResult {
     pub exit_code: i32,
     pub stdout: String,
+    /// Raw pre-UTF-8-lossy stdout bytes, populated by the executor for
+    /// binary-aware consumers like BashTool's image-detection path.
+    /// `None` when the executor short-circuits before reading stdout
+    /// (e.g., interrupted before any output).
+    ///
+    /// Why both `stdout` and `stdout_bytes`?
+    /// - `stdout` is the canonical string consumed by the model and
+    ///   the truncation pipeline; lossy conversion is fine for text.
+    /// - Binary stdout (e.g., `cat image.png`) gets mangled by the
+    ///   UTF-8 conversion (each invalid byte becomes `\u{FFFD}`),
+    ///   destroying the magic-byte signature. `stdout_bytes` keeps the
+    ///   pre-lossy bytes so detectors like `is_likely_image_bytes` can
+    ///   inspect the actual data.
+    ///
+    /// `serde(skip)` because the bytes are redundant for text content
+    /// and not part of the wire protocol.
+    #[serde(skip)]
+    pub stdout_bytes: Option<Vec<u8>>,
     pub stderr: String,
     /// New CWD if command changed directory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -15,6 +34,13 @@ pub struct CommandResult {
     /// Whether the command timed out.
     #[serde(default)]
     pub timed_out: bool,
+    /// Whether the command was interrupted by an external cancel signal.
+    /// Distinct from `timed_out`: `interrupted` means the user pressed
+    /// Ctrl+C / sent cancel token / aborted the session, rather than
+    /// the timeout watchdog firing. TS `BashTool.tsx:279-293`
+    /// `outputSchema.interrupted`.
+    #[serde(default)]
+    pub interrupted: bool,
 }
 
 /// Options for shell command execution.
@@ -30,6 +56,10 @@ pub struct ExecOptions {
     pub extra_env: HashMap<String, String>,
     /// CWD override.
     pub cwd_override: Option<PathBuf>,
+    /// External cancel token. When fired, the executor drops the child
+    /// future (which kills the child via `kill_on_drop(true)`) and
+    /// returns a `CommandResult` with `interrupted = true`. R6-T17.
+    pub cancel: Option<CancellationToken>,
 }
 
 impl Default for ExecOptions {
@@ -40,6 +70,7 @@ impl Default for ExecOptions {
             should_use_sandbox: false,
             extra_env: HashMap::new(),
             cwd_override: None,
+            cancel: None,
         }
     }
 }
