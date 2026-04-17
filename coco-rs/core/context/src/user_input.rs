@@ -29,7 +29,7 @@ pub fn process_user_input(raw: &str) -> ProcessedInput {
     if let Some(stripped) = trimmed.strip_prefix('/') {
         let parts: Vec<&str> = stripped.splitn(2, ' ').collect();
         let cmd_name = parts[0].to_string();
-        let cmd_args = parts.get(1).map(|s| s.to_string());
+        let cmd_args = parts.get(1).map(std::string::ToString::to_string);
         return ProcessedInput {
             text: trimmed.to_string(),
             is_command: true,

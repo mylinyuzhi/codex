@@ -18,7 +18,7 @@ coco-session depends on:
 
 coco-tui depends on:
   - coco-types, coco-config, coco-state (AppState)
-  - coco-query (QueryEvent — for streaming updates)
+  - coco-query (re-exports `CoreEvent` from coco-types — direct streaming events)
   - coco-commands (CommandRegistry — for command palette)
   - ratatui, crossterm
 
@@ -267,7 +267,7 @@ pub struct UiState {
 
 pub enum UiEvent {
     Key(KeyEvent),
-    QueryEvent(QueryEvent),
+    CoreEvent(coco_types::CoreEvent),  // 3-layer: Protocol/Stream/Tui
     Resize(u16, u16),
     Tick,
 }
@@ -382,6 +382,12 @@ cocode-rs reference: `app/cli/src/sdk.rs` (SDK mode entry), `app/cli/src/transpo
 The event system design from cocode-rs is reused — see `docs/coco-rs/event-system-design.md` for the
 3-layer architecture (Protocol → Stream → TUI) and StreamAccumulator state machine.
 
+**Phase 0 status** (April 2026): `CoreEvent`, `ServerNotification` (52 variants = 43 base +
+9 TS gaps + `HookExecuted` kept from cocode-rs base = 53 actual), `AgentStreamEvent` (7 variants),
+`TuiOnlyEvent` (20 variants), `ThreadItem`/`ItemStatus`, and `StreamAccumulator` are all
+implemented in `coco-types` and `coco-query`. `ClientRequest`/`ServerRequest` control protocol
+and SDK stdio transport are Phase 2 work.
+
 Bidirectional NDJSON protocol over stdin/stdout for programmatic SDK use:
 
 **Control request subtypes** (SDK host → agent):
@@ -402,7 +408,7 @@ system/api_retry, system/hook_started, system/hook_progress, system/hook_respons
 system/files_persisted, system/task_notification, system/task_started, system/task_progress
 system/session_state_changed (idle/running/requires_action)
 system/elicitation_complete, system/local_command_output
-tool_progress, tool_use_summary, rate_limit_event, auth_status
+tool_progress, tool_use_summary, rate_limit_event
 ```
 
 **Permission racing**: hook evaluation races against SDK permission prompt (whichever resolves first wins).

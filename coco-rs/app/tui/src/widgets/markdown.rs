@@ -129,7 +129,7 @@ pub fn markdown_to_lines(text: &str, theme: &Theme, width: u16) -> Vec<Line<'sta
             } else {
                 let styled = parse_inline_styles(rest.trim(), theme);
                 let mut spans = vec![Span::raw(prefix).fg(theme.text_dim)];
-                spans.extend(styled.into_iter().map(|s| s.italic()));
+                spans.extend(styled.into_iter().map(ratatui::prelude::Stylize::italic));
                 lines.push(Line::from(spans));
             }
             idx += 1;
@@ -724,10 +724,10 @@ fn current_plus_rest_starts_with_url(
         return false;
     }
     // Only start URL detection at a word boundary (start of text or after whitespace/punctuation)
-    if let Some(last) = current.chars().last() {
-        if last.is_alphanumeric() {
-            return false;
-        }
+    if let Some(last) = current.chars().last()
+        && last.is_alphanumeric()
+    {
+        return false;
     }
     // Peek ahead: we need "ttp://" or "ttps://" after 'h'
     let rest: String = chars.clone().take(7).collect();

@@ -48,13 +48,12 @@ fn test_strip_dangerous_bash_rules() {
     strip_dangerous_rules(&mut ctx, /*is_ant*/ false);
 
     // safe rules remain
-    let remaining: Vec<_> = ctx
+    let has_read = ctx
         .allow_rules
         .values()
         .flatten()
-        .map(|r| r.value.tool_pattern.as_str())
-        .collect();
-    assert!(remaining.contains(&"Read"));
+        .any(|r| r.value.tool_pattern == "Read");
+    assert!(has_read);
 
     // dangerous rules stashed
     let stripped = ctx

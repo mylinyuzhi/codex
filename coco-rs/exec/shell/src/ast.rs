@@ -291,25 +291,25 @@ fn parse_simple_from_tokens(tokens: &[&Token], original: &str) -> BashNode {
         && tokens[0].value == "("
         && tokens
             .last()
-            .map_or(false, |t| t.kind == TokenKind::Operator && t.value == ")")
+            .is_some_and(|t| t.kind == TokenKind::Operator && t.value == ")")
     {
         let inner = tokens_to_text(&tokens[1..tokens.len() - 1], original);
         return BashNode::Subshell(Box::new(parse_command(&inner)));
     }
 
     // Handle compound commands (if, for, while, case, until, select, function)
-    if let Some(first_word) = tokens.first() {
-        if first_word.kind == TokenKind::Word {
-            match first_word.value.as_str() {
-                "if" | "for" | "while" | "until" | "case" | "select" | "function" => {
-                    let body = tokens_to_text(tokens, original);
-                    return BashNode::Compound {
-                        keyword: first_word.value.clone(),
-                        body,
-                    };
-                }
-                _ => {}
+    if let Some(first_word) = tokens.first()
+        && first_word.kind == TokenKind::Word
+    {
+        match first_word.value.as_str() {
+            "if" | "for" | "while" | "until" | "case" | "select" | "function" => {
+                let body = tokens_to_text(tokens, original);
+                return BashNode::Compound {
+                    keyword: first_word.value.clone(),
+                    body,
+                };
             }
+            _ => {}
         }
     }
 
@@ -318,20 +318,20 @@ fn parse_simple_from_tokens(tokens: &[&Token], original: &str) -> BashNode {
 
     // Parse leading assignments (WORD tokens containing = with valid name before =)
     for (i, tok) in tokens.iter().enumerate() {
-        if tok.kind == TokenKind::Word {
-            if let Some(eq_pos) = tok.value.find('=') {
-                let name = &tok.value[..eq_pos];
-                if !name.is_empty()
-                    && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-                    && name.chars().next().map_or(false, |c| !c.is_ascii_digit())
-                {
-                    assignments.push(Assignment {
-                        name: name.to_string(),
-                        value: tok.value[eq_pos + 1..].to_string(),
-                    });
-                    cmd_start = i + 1;
-                    continue;
-                }
+        if tok.kind == TokenKind::Word
+            && let Some(eq_pos) = tok.value.find('=')
+        {
+            let name = &tok.value[..eq_pos];
+            if !name.is_empty()
+                && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                && name.chars().next().is_some_and(|c| !c.is_ascii_digit())
+            {
+                assignments.push(Assignment {
+                    name: name.to_string(),
+                    value: tok.value[eq_pos + 1..].to_string(),
+                });
+                cmd_start = i + 1;
+                continue;
             }
         }
         break;
@@ -357,27 +357,27 @@ fn parse_simple_from_tokens(tokens: &[&Token], original: &str) -> BashNode {
         let tok = remaining[i];
 
         // Check for redirect operators
-        if tok.kind == TokenKind::Operator {
-            if let Some(redir) = try_parse_redirect(tok, remaining.get(i + 1).copied()) {
-                if redir.target.is_empty() {
-                    // Target is the next token
-                    if let Some(next) = remaining.get(i + 1) {
-                        redirects.push(Redirect {
-                            fd: redir.fd,
-                            operator: redir.operator,
-                            target: resolve_token_value(&next.value, next.kind),
-                        });
-                        i += 2;
-                    } else {
-                        redirects.push(redir);
-                        i += 1;
-                    }
+        if tok.kind == TokenKind::Operator
+            && let Some(redir) = try_parse_redirect(tok, remaining.get(i + 1).copied())
+        {
+            if redir.target.is_empty() {
+                // Target is the next token
+                if let Some(next) = remaining.get(i + 1) {
+                    redirects.push(Redirect {
+                        fd: redir.fd,
+                        operator: redir.operator,
+                        target: resolve_token_value(&next.value, next.kind),
+                    });
+                    i += 2;
                 } else {
                     redirects.push(redir);
                     i += 1;
                 }
-                continue;
+            } else {
+                redirects.push(redir);
+                i += 1;
             }
+            continue;
         }
 
         // Check for fd+redirect: a WORD that is just digits followed by a redirect operator
@@ -386,27 +386,27 @@ fn parse_simple_from_tokens(tokens: &[&Token], original: &str) -> BashNode {
             && i + 1 < remaining.len()
         {
             let next = remaining[i + 1];
-            if next.kind == TokenKind::Operator {
-                if let Some(mut redir) = try_parse_redirect(next, remaining.get(i + 2).copied()) {
-                    redir.fd = tok.value.parse::<i32>().ok();
-                    if redir.target.is_empty() {
-                        if let Some(target_tok) = remaining.get(i + 2) {
-                            redirects.push(Redirect {
-                                fd: redir.fd,
-                                operator: redir.operator,
-                                target: resolve_token_value(&target_tok.value, target_tok.kind),
-                            });
-                            i += 3;
-                        } else {
-                            redirects.push(redir);
-                            i += 2;
-                        }
+            if next.kind == TokenKind::Operator
+                && let Some(mut redir) = try_parse_redirect(next, remaining.get(i + 2).copied())
+            {
+                redir.fd = tok.value.parse::<i32>().ok();
+                if redir.target.is_empty() {
+                    if let Some(target_tok) = remaining.get(i + 2) {
+                        redirects.push(Redirect {
+                            fd: redir.fd,
+                            operator: redir.operator,
+                            target: resolve_token_value(&target_tok.value, target_tok.kind),
+                        });
+                        i += 3;
                     } else {
                         redirects.push(redir);
                         i += 2;
                     }
-                    continue;
+                } else {
+                    redirects.push(redir);
+                    i += 2;
                 }
+                continue;
             }
         }
 

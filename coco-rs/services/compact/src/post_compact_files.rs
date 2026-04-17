@@ -170,10 +170,10 @@ fn collect_read_tool_file_paths(messages: &[Message]) -> HashSet<PathBuf> {
 /// TS: `shouldExcludeFromPostCompactRestore()` — excludes plan files and
 /// CLAUDE.md/memory-managed paths (they're re-injected via their own systems).
 fn should_exclude_from_restore(path: &Path, cwd: &Path, plan_file: Option<&Path>) -> bool {
-    if let Some(plan) = plan_file {
-        if path == plan {
-            return true;
-        }
+    if let Some(plan) = plan_file
+        && path == plan
+    {
+        return true;
     }
 
     // Exclude CLAUDE.md and memory-managed paths

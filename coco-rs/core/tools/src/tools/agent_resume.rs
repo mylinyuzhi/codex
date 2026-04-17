@@ -106,10 +106,10 @@ fn strip_unresolved_tool_uses(messages: &mut Vec<serde_json::Value>) {
     for msg in messages.iter() {
         if let Some(content) = msg.get("content").and_then(|c| c.as_array()) {
             for block in content {
-                if block.get("type").and_then(|t| t.as_str()) == Some("tool_result") {
-                    if let Some(id) = block.get("tool_use_id").and_then(|v| v.as_str()) {
-                        resolved_ids.insert(id.to_string());
-                    }
+                if block.get("type").and_then(|t| t.as_str()) == Some("tool_result")
+                    && let Some(id) = block.get("tool_use_id").and_then(|v| v.as_str())
+                {
+                    resolved_ids.insert(id.to_string());
                 }
             }
         }

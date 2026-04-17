@@ -33,7 +33,7 @@ and UI behaviors that need Rust widget implementations.
 ```
 coco-tui depends on:
   - coco-types, coco-config, coco-state (AppState)
-  - coco-query (QueryEvent — for streaming updates)
+  - coco-query (re-exports CoreEvent from coco-types — QueryEngine emits these directly)
   - coco-commands (CommandRegistry — for command palette)
   - ratatui, crossterm
 
@@ -820,7 +820,17 @@ app/tui/src/
   keybinding_bridge.rs        # KeyEvent → TuiCommand via KeybindingsManager
   tui_event_handler.rs        # TuiEvent → TuiCommand mapping
   stream_event_handler.rs     # StreamEvent → streaming display
-  server_notification_handler.rs  # CoreEvent → state changes
+  server_notification_handler/    # CoreEvent → state changes (exhaustive match, no TuiNotification bridge)
+    mod.rs                      # handle_core_event → dispatch to handle_protocol/handle_stream/handle_tui_only
+    session.rs                  # SessionStarted, SessionResult, SessionEnded, SessionStateChanged
+    turn.rs                     # TurnStarted, TurnCompleted, TurnFailed, TurnInterrupted, MaxTurnsReached
+    tool.rs                     # ToolUseQueued/Completed, ToolProgress, ToolUseSummary, ItemStarted/Updated/Completed
+    mcp.rs                      # McpStartupStatus, McpStartupComplete
+    system.rs                   # Error, RateLimit, KeepAlive, CostWarning, ContextCompacted/UsageWarning/Cleared/Compaction*
+    hook.rs                     # HookExecuted, HookStarted, HookProgress, HookResponse
+    sandbox.rs                  # SandboxStateChanged, SandboxViolationsDetected
+    stream.rs                   # AgentStreamEvent (TextDelta, ThinkingDelta, ToolUse*, McpToolCall*)
+    tui_only.rs                 # TuiOnlyEvent (ApprovalRequired, QuestionAsked, Elicitation*, Rewind*, DiffStats*)
   state/
     mod.rs                    # AppState composite
     session.rs                # SessionState (agent-synchronized)

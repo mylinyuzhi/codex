@@ -245,10 +245,10 @@ fn is_binary_hijack_var(name: &str) -> bool {
 /// Try to strip one safe env var assignment from the front of the command.
 fn strip_one_safe_env_var(command: &str) -> String {
     let trimmed = command.trim_start();
-    if let Some((var_name, after)) = try_parse_env_assignment(trimmed) {
-        if SAFE_ENV_VARS.contains(var_name) {
-            return after.trim_start().to_string();
-        }
+    if let Some((var_name, after)) = try_parse_env_assignment(trimmed)
+        && SAFE_ENV_VARS.contains(var_name)
+    {
+        return after.trim_start().to_string();
     }
     command.to_string()
 }
@@ -266,10 +266,10 @@ fn strip_one_wrapper(command: &str) -> String {
     ];
 
     for &(prefix, stripper) in wrappers {
-        if trimmed.starts_with(prefix) {
-            if let Some(rest) = stripper(&trimmed[prefix.len()..]) {
-                return rest.to_string();
-            }
+        if let Some(after_prefix) = trimmed.strip_prefix(prefix)
+            && let Some(rest) = stripper(after_prefix)
+        {
+            return rest.to_string();
         }
     }
 
@@ -344,14 +344,10 @@ fn strip_timeout_args(rest: &str) -> Option<&str> {
         remaining = remaining[next_space..].trim_start();
         // If the flag takes an argument (e.g., -k 5), skip that too
         if !remaining.starts_with('-')
-            && remaining
-                .chars()
-                .next()
-                .map_or(false, |c| c.is_ascii_digit())
+            && remaining.chars().next().is_some_and(|c| c.is_ascii_digit())
+            && let Some(ns) = remaining.find(' ')
         {
-            if let Some(ns) = remaining.find(' ') {
-                remaining = remaining[ns..].trim_start();
-            }
+            remaining = remaining[ns..].trim_start();
         }
     }
     // Skip the duration argument
@@ -381,14 +377,10 @@ fn strip_nice_args(rest: &str) -> Option<&str> {
             remaining = remaining[space..].trim_start();
         }
     } else if remaining.starts_with('-')
-        && remaining
-            .as_bytes()
-            .get(1)
-            .map_or(false, u8::is_ascii_digit)
+        && remaining.as_bytes().get(1).is_some_and(u8::is_ascii_digit)
+        && let Some(space) = remaining.find(' ')
     {
-        if let Some(space) = remaining.find(' ') {
-            remaining = remaining[space..].trim_start();
-        }
+        remaining = remaining[space..].trim_start();
     }
     if let Some(stripped) = remaining.strip_prefix("-- ") {
         Some(stripped)

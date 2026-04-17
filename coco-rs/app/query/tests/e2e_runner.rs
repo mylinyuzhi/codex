@@ -13,6 +13,7 @@
 //! cargo test -p coco-query --test e2e_runner
 //! cargo test -p coco-query --test e2e_runner test_scenario_write_doc
 //! ```
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -22,10 +23,12 @@ use std::sync::atomic::Ordering;
 
 use coco_inference::ApiClient;
 use coco_inference::RetryConfig;
+use coco_query::AgentStreamEvent;
+use coco_query::CoreEvent;
 use coco_query::QueryEngine;
 use coco_query::QueryEngineConfig;
-use coco_query::QueryEvent;
 use coco_query::QueryResult;
+use coco_query::ServerNotification;
 use coco_tool::ToolRegistry;
 use coco_tools::AgentTool;
 use coco_tools::BashTool;
@@ -397,7 +400,7 @@ fn tools_for_config(config: &ScenarioConfig) -> Arc<ToolRegistry> {
 /// Collected events from a scenario run.
 struct ScenarioRunResult {
     query: QueryResult,
-    events: Vec<QueryEvent>,
+    events: Vec<CoreEvent>,
 }
 
 async fn run_with_events(
@@ -417,7 +420,7 @@ async fn run_with_events(
     };
     let engine = QueryEngine::new(config, client, tools, cancel, None);
 
-    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<QueryEvent>(256);
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<CoreEvent>(256);
     let events_handle = tokio::spawn(async move {
         let mut events = Vec::new();
         while let Some(event) = event_rx.recv().await {
@@ -436,26 +439,39 @@ async fn run_with_events(
 }
 
 // ─── Event classification ───
+//
+// Scenario JSON fixtures reference event types by legacy string names (e.g.
+// "ToolUseEnd") for backwards compatibility with the pre-CoreEvent test suite.
+// This classifier maps CoreEvent variants back to those legacy names so the
+// fixture files don't need updating.
 
-fn classify_event(event: &QueryEvent) -> &'static str {
+fn classify_event(event: &CoreEvent) -> &'static str {
     match event {
-        QueryEvent::TurnStarted { .. } => "TurnStarted",
-        QueryEvent::TextDelta { .. } => "TextDelta",
-        QueryEvent::ReasoningDelta { .. } => "ReasoningDelta",
-        QueryEvent::ToolUseStart { .. } => "ToolUseStart",
-        QueryEvent::ToolUseEnd { .. } => "ToolUseEnd",
-        QueryEvent::TurnCompleted { .. } => "TurnCompleted",
-        QueryEvent::CompactionTriggered => "CompactionTriggered",
-        QueryEvent::BudgetNudge { .. } => "BudgetNudge",
-        QueryEvent::StreamRequestStart { .. } => "StreamRequestStart",
-        QueryEvent::ErrorRecovery { .. } => "ErrorRecovery",
-        QueryEvent::CommandsDrained { .. } => "CommandsDrained",
-        QueryEvent::InboxConsumed { .. } => "InboxConsumed",
-        QueryEvent::QueryStopping { .. } => "QueryStopping",
+        CoreEvent::Protocol(n) => match n {
+            ServerNotification::TurnStarted(_) => "TurnStarted",
+            ServerNotification::TurnCompleted(_) => "TurnCompleted",
+            ServerNotification::TurnFailed(_) => "TurnFailed",
+            ServerNotification::TurnInterrupted(_) => "TurnInterrupted",
+            ServerNotification::ContextCompacted(_) => "CompactionTriggered",
+            ServerNotification::CompactionStarted => "ErrorRecovery",
+            ServerNotification::QueueStateChanged { .. } => "CommandsDrained",
+            ServerNotification::Error(_) => "BudgetNudge",
+            _ => "Other",
+        },
+        CoreEvent::Stream(s) => match s {
+            AgentStreamEvent::TextDelta { .. } => "TextDelta",
+            AgentStreamEvent::ThinkingDelta { .. } => "ReasoningDelta",
+            AgentStreamEvent::ToolUseQueued { .. } => "ToolUseStart",
+            AgentStreamEvent::ToolUseStarted { .. } => "ToolUseStart",
+            AgentStreamEvent::ToolUseCompleted { .. } => "ToolUseEnd",
+            AgentStreamEvent::McpToolCallBegin { .. } => "ToolUseStart",
+            AgentStreamEvent::McpToolCallEnd { .. } => "ToolUseEnd",
+        },
+        CoreEvent::Tui(_) => "Tui",
     }
 }
 
-fn count_events(events: &[QueryEvent]) -> HashMap<&'static str, i32> {
+fn count_events(events: &[CoreEvent]) -> HashMap<&'static str, i32> {
     let mut counts: HashMap<&'static str, i32> = HashMap::new();
     for event in events {
         *counts.entry(classify_event(event)).or_default() += 1;
@@ -468,7 +484,7 @@ fn count_events(events: &[QueryEvent]) -> HashMap<&'static str, i32> {
 fn assert_scenario(
     expect: &ScenarioExpect,
     result: &QueryResult,
-    events: &[QueryEvent],
+    events: &[CoreEvent],
     workspace: &Path,
 ) {
     if let Some(expected_turns) = expect.turns {

@@ -5,7 +5,6 @@ use coco_tool::AgentSpawnRequest;
 use coco_tool::AgentSpawnResponse;
 use coco_tool::AgentSpawnStatus;
 use coco_tool::ToolUseContext;
-use coco_types::ToolResult;
 use pretty_assertions::assert_eq;
 
 use super::*;

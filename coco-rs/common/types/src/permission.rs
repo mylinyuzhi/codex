@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use crate::PermissionMode;
 
 /// Permission behavior for a rule.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PermissionBehavior {
@@ -21,6 +22,7 @@ pub type ClassifierBehavior = PermissionBehavior;
 /// Token usage from the classifier.
 ///
 /// TS: `ClassifierUsage` in types/permissions.ts
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ClassifierUsage {
     #[serde(default)]
@@ -36,6 +38,7 @@ pub struct ClassifierUsage {
 /// Pending classifier check — captures context for deferred bash classification.
 ///
 /// TS: `PendingClassifierCheck` in types/permissions.ts
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingClassifierCheck {
     pub command: String,
@@ -45,6 +48,7 @@ pub struct PendingClassifierCheck {
 }
 
 /// Source of a permission rule (ordered by priority: Session is most specific).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PermissionRuleSource {
@@ -155,6 +159,7 @@ pub fn matches_rule(
 
 /// Permission rule value — tool_pattern is a glob/wildcard expression.
 /// Examples: "Read", "Bash(git *)", "mcp__slack__*", "*"
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionRuleValue {
     pub tool_pattern: String,
@@ -164,6 +169,7 @@ pub struct PermissionRuleValue {
 }
 
 /// A single permission rule.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionRule {
     pub source: PermissionRuleSource,
@@ -172,6 +178,7 @@ pub struct PermissionRule {
 }
 
 /// Why a permission decision was made.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PermissionDecisionReason {
@@ -201,6 +208,7 @@ pub enum PermissionDecisionReason {
 }
 
 /// The result of a permission check.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "decision", rename_all = "snake_case")]
 pub enum PermissionDecision {
@@ -222,6 +230,7 @@ pub enum PermissionDecision {
 }
 
 /// A permission update action.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PermissionUpdate {
@@ -251,6 +260,7 @@ pub enum PermissionUpdate {
 }
 
 /// Destination for persisting permission updates.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PermissionUpdateDestination {
@@ -272,6 +282,7 @@ pub type WorkingDirectorySource = PermissionUpdateDestination;
 /// Additional working directory info for permission evaluation.
 ///
 /// TS: `AdditionalWorkingDirectory` in types/permissions.ts — tracks source origin.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdditionalWorkingDir {
     pub path: String,
@@ -280,6 +291,7 @@ pub struct AdditionalWorkingDir {
 }
 
 /// Context for evaluating tool permissions.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolPermissionContext {
     pub mode: PermissionMode,

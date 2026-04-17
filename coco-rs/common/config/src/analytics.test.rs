@@ -237,7 +237,7 @@ fn test_strip_proto_fields_no_proto_keys() {
 fn test_metadata_value_from_impls() {
     assert_eq!(MetadataValue::from(true), MetadataValue::Bool(true));
     assert_eq!(MetadataValue::from(42_i64), MetadataValue::Int(42));
-    assert_eq!(MetadataValue::from(3.14_f64), MetadataValue::Float(3.14));
+    assert_eq!(MetadataValue::from(2.5_f64), MetadataValue::Float(2.5));
     assert_eq!(
         MetadataValue::from("hello"),
         MetadataValue::Str("hello".into())

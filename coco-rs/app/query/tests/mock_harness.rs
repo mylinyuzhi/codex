@@ -198,6 +198,12 @@ pub struct MockModelBuilder {
     responses: Vec<ResponseFn>,
 }
 
+impl Default for MockModelBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MockModelBuilder {
     pub fn new() -> Self {
         Self {
@@ -267,10 +273,10 @@ pub async fn run_with_mock(
         ..Default::default()
     };
     let engine = QueryEngine::new(config, client, tools, cancel, None);
-    engine
-        .run(prompt)
-        .await
-        .expect("mock engine should not fail")
+    match engine.run(prompt).await {
+        Ok(result) => result,
+        Err(err) => panic!("mock engine should not fail: {err}"),
+    }
 }
 
 // ─── Tests using the harness ───

@@ -147,7 +147,7 @@ pub async fn handle_command(
         TuiCommand::QueueInput => {
             let text = state.ui.input.take_input();
             if !text.is_empty() {
-                state.session.queued_commands.push(text.clone());
+                state.session.queued_commands.push_back(text.clone());
                 let _ = command_tx
                     .send(UserCommand::QueueCommand { prompt: text })
                     .await;
@@ -1045,13 +1045,13 @@ fn filtered_session_count(s: &SessionBrowserOverlay) -> i32 {
 /// Called after navigation (OverlayNext/Prev) so diff stats update when user
 /// scrolls through messages. TS: MessageSelector useEffect re-computes on selectedIndex change.
 async fn request_diff_stats_if_rewind(state: &AppState, command_tx: &mpsc::Sender<UserCommand>) {
-    if let Some(Overlay::Rewind(ref r)) = state.ui.overlay {
-        if let Some(msg) = r.messages.get(r.selected as usize) {
-            let _ = command_tx
-                .send(UserCommand::RequestDiffStats {
-                    message_id: msg.message_id.clone(),
-                })
-                .await;
-        }
+    if let Some(Overlay::Rewind(ref r)) = state.ui.overlay
+        && let Some(msg) = r.messages.get(r.selected as usize)
+    {
+        let _ = command_tx
+            .send(UserCommand::RequestDiffStats {
+                message_id: msg.message_id.clone(),
+            })
+            .await;
     }
 }

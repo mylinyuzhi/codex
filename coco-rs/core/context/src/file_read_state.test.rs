@@ -133,8 +133,7 @@ fn test_iter_entries() {
             limit: None,
         },
     );
-    let entries: Vec<_> = state.iter_entries().collect();
-    assert_eq!(entries.len(), 2);
+    assert_eq!(state.iter_entries().count(), 2);
 }
 
 #[tokio::test]

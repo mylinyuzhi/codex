@@ -86,6 +86,20 @@ impl CommandRegistry {
             .collect()
     }
 
+    /// Commands safe to advertise over the SDK wire.
+    ///
+    /// Stricter than [`Self::visible`]: also filters out commands
+    /// flagged `is_sensitive`. A sensitive command may be visible in
+    /// local TUI completions (where the user is trusted to run it) but
+    /// must not leak its name / description / argument hint to remote
+    /// SDK clients, some of which may be untrusted wrappers.
+    pub fn sdk_safe(&self) -> Vec<&RegisteredCommand> {
+        self.commands
+            .values()
+            .filter(|c| !c.base.is_hidden && !c.base.is_sensitive && c.is_active())
+            .collect()
+    }
+
     /// Commands safe for the given safety level.
     pub fn safe_for(&self, safety: CommandSafety) -> Vec<&RegisteredCommand> {
         self.commands

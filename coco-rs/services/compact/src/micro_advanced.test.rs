@@ -153,26 +153,26 @@ fn test_compact_thinking_blocks_removes_old_thinking() {
     assert!(result.tokens_saved_estimate > 0, "should save tokens");
 
     // The most recent assistant message should still have thinking
-    if let Message::Assistant(asst) = &messages[2] {
-        if let LlmMessage::Assistant { content, .. } = &asst.message {
-            let has_thinking = content
-                .iter()
-                .any(|c| matches!(c, coco_types::AssistantContent::Reasoning(_)));
-            assert!(has_thinking, "recent turn should keep its thinking blocks");
-        }
+    if let Message::Assistant(asst) = &messages[2]
+        && let LlmMessage::Assistant { content, .. } = &asst.message
+    {
+        let has_thinking = content
+            .iter()
+            .any(|c| matches!(c, coco_types::AssistantContent::Reasoning(_)));
+        assert!(has_thinking, "recent turn should keep its thinking blocks");
     }
 
     // Old assistant messages should NOT have thinking
-    if let Message::Assistant(asst) = &messages[0] {
-        if let LlmMessage::Assistant { content, .. } = &asst.message {
-            let has_thinking = content
-                .iter()
-                .any(|c| matches!(c, coco_types::AssistantContent::Reasoning(_)));
-            assert!(
-                !has_thinking,
-                "old turn should have thinking blocks removed"
-            );
-        }
+    if let Message::Assistant(asst) = &messages[0]
+        && let LlmMessage::Assistant { content, .. } = &asst.message
+    {
+        let has_thinking = content
+            .iter()
+            .any(|c| matches!(c, coco_types::AssistantContent::Reasoning(_)));
+        assert!(
+            !has_thinking,
+            "old turn should have thinking blocks removed"
+        );
     }
 }
 

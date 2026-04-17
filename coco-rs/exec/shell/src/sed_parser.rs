@@ -153,10 +153,7 @@ fn parse_substitution(expr: &str) -> Option<(String, String, String)> {
 
 /// Shell argument splitting with basic quote stripping.
 fn split_shell_args(command: &str) -> Vec<String> {
-    command
-        .split_whitespace()
-        .map(|arg| strip_quotes(arg))
-        .collect()
+    command.split_whitespace().map(strip_quotes).collect()
 }
 
 /// Strip surrounding single or double quotes from an argument.

@@ -3,6 +3,41 @@ use coco_tool::Tool;
 use coco_tool::ToolUseContext;
 use serde_json::json;
 
+fn text(result: &coco_types::ToolResult<serde_json::Value>) -> &str {
+    result.data.as_str().unwrap()
+}
+
+// -----------------------------------------------------------------------
+// Tool trait contract (safety / concurrency flags)
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_grep_is_read_only() {
+    assert!(GrepTool.is_read_only(&serde_json::Value::Null));
+}
+
+#[test]
+fn test_grep_is_concurrency_safe() {
+    assert!(GrepTool.is_concurrency_safe(&serde_json::Value::Null));
+}
+
+#[test]
+fn test_grep_is_not_destructive() {
+    assert!(!GrepTool.is_destructive(&serde_json::Value::Null));
+}
+
+#[test]
+fn test_grep_is_search_command() {
+    let info = GrepTool
+        .is_search_or_read_command(&serde_json::Value::Null)
+        .expect("Grep should report as search command");
+    assert!(info.is_search);
+}
+
+// -----------------------------------------------------------------------
+// Basic modes
+// -----------------------------------------------------------------------
+
 #[tokio::test]
 async fn test_grep_files_with_matches() {
     let dir = tempfile::tempdir().unwrap();
@@ -23,9 +58,13 @@ async fn test_grep_files_with_matches() {
         .await
         .unwrap();
 
-    let text = result.data.as_str().unwrap();
-    assert!(text.contains("a.rs"));
-    assert!(!text.contains("b.rs"));
+    let t = text(&result);
+    assert!(t.contains("a.rs"), "should contain a.rs, got: {t}");
+    assert!(!t.contains("b.rs"), "should not contain b.rs");
+    assert!(
+        t.contains("Found 1 file"),
+        "should have 'Found 1 file' header"
+    );
 }
 
 #[tokio::test]
@@ -46,9 +85,10 @@ async fn test_grep_content_mode() {
         .await
         .unwrap();
 
-    let text = result.data.as_str().unwrap();
-    assert!(text.contains("fn hello()"));
-    assert!(text.contains(":2:"));
+    let t = text(&result);
+    assert!(t.contains("fn hello()"), "should contain match: {t}");
+    // TS flat format: path:linenum:content
+    assert!(t.contains(":2:"), "should have line number 2: {t}");
 }
 
 #[tokio::test]
@@ -69,9 +109,17 @@ async fn test_grep_count_mode() {
         .await
         .unwrap();
 
-    let text = result.data.as_str().unwrap();
-    assert!(text.contains(":3"));
+    let t = text(&result);
+    assert!(t.contains(":3"), "should have count 3: {t}");
+    assert!(
+        t.contains("Found 3 total occurrences across 1 file."),
+        "should have summary line: {t}"
+    );
 }
+
+// -----------------------------------------------------------------------
+// Search options
+// -----------------------------------------------------------------------
 
 #[tokio::test]
 async fn test_grep_case_insensitive() {
@@ -92,8 +140,8 @@ async fn test_grep_case_insensitive() {
         .await
         .unwrap();
 
-    let text = result.data.as_str().unwrap();
-    assert!(text.contains(":3"));
+    let t = text(&result);
+    assert!(t.contains(":3"), "should match all 3 lines: {t}");
 }
 
 #[tokio::test]
@@ -113,8 +161,9 @@ async fn test_grep_no_matches() {
         .await
         .unwrap();
 
-    let text = result.data.as_str().unwrap();
-    assert!(text.contains("No matches"));
+    let t = text(&result);
+    // Default output_mode is files_with_matches, so empty result = "No files found"
+    assert_eq!(t, "No files found", "should report no files found: {t}");
 }
 
 #[tokio::test]
@@ -140,10 +189,10 @@ async fn test_grep_context_lines() {
         .await
         .unwrap();
 
-    let text = result.data.as_str().unwrap();
-    assert!(text.contains("line2"));
-    assert!(text.contains("MATCH"));
-    assert!(text.contains("line4"));
+    let t = text(&result);
+    assert!(t.contains("line2"), "should have before-context: {t}");
+    assert!(t.contains("MATCH"), "should have match: {t}");
+    assert!(t.contains("line4"), "should have after-context: {t}");
 }
 
 #[tokio::test]
@@ -165,6 +214,869 @@ async fn test_grep_single_file() {
         .await
         .unwrap();
 
-    let text = result.data.as_str().unwrap();
-    assert!(text.contains("beta"));
+    let t = text(&result);
+    assert!(t.contains("beta"), "should contain beta: {t}");
+}
+
+// -----------------------------------------------------------------------
+// Binary detection
+// -----------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_grep_binary_skipped() {
+    let dir = tempfile::tempdir().unwrap();
+
+    std::fs::write(dir.path().join("text.rs"), "fn search_me() {}").unwrap();
+
+    // Binary file with null bytes
+    std::fs::write(
+        dir.path().join("binary.bin"),
+        b"fn search_me() {}\x00\x00binary",
+    )
+    .unwrap();
+
+    let ctx = ToolUseContext::test_default();
+    let result = GrepTool
+        .execute(
+            json!({
+                "pattern": "search_me",
+                "path": dir.path().to_str().unwrap()
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+    let t = text(&result);
+    assert!(t.contains("text.rs"), "should find text file: {t}");
+    assert!(!t.contains("binary.bin"), "should skip binary file: {t}");
+}
+
+// -----------------------------------------------------------------------
+// VCS directory exclusion
+// -----------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_grep_vcs_dirs_excluded() {
+    let dir = tempfile::tempdir().unwrap();
+
+    std::fs::write(dir.path().join("main.rs"), "fn hello() {}").unwrap();
+
+    let git_dir = dir.path().join(".git");
+    std::fs::create_dir_all(&git_dir).unwrap();
+    std::fs::write(git_dir.join("config"), "fn hello() {}").unwrap();
+
+    let ctx = ToolUseContext::test_default();
+    let result = GrepTool
+        .execute(
+            json!({
+                "pattern": "hello",
+                "path": dir.path().to_str().unwrap()
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+    let t = text(&result);
+    assert!(t.contains("main.rs"), "should find main.rs: {t}");
+    assert!(!t.contains(".git"), "should exclude .git directory: {t}");
+}
+
+// -----------------------------------------------------------------------
+// Context precedence: context > -C > -B/-A
+// -----------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_grep_context_precedence() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("prec.txt"), "a\nb\nc\nMATCH\ne\nf\ng").unwrap();
+
+    let ctx = ToolUseContext::test_default();
+
+    // `context` param should take precedence over `-C`
+    let result = GrepTool
+        .execute(
+            json!({
+                "pattern": "MATCH",
+                "path": dir.path().to_str().unwrap(),
+                "output_mode": "content",
+                "context": 1,
+                "-C": 3
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+    let t = text(&result);
+    // context=1 should show 1 line before/after, NOT 3
+    assert!(t.contains("c"), "should have 1 before-context line: {t}");
+    assert!(t.contains("e"), "should have 1 after-context line: {t}");
+    // With context=1, 'a' should NOT appear (it's 3 lines before)
+    assert!(!t.contains("-1-a"), "should not have 3-line context: {t}");
+}
+
+// -----------------------------------------------------------------------
+// head_limit = 0 means unlimited
+// -----------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_grep_head_limit_zero_unlimited() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // Create enough files to exceed default limit of 250
+    for i in 0..10 {
+        std::fs::write(
+            dir.path().join(format!("file{i:03}.txt")),
+            format!("match_target line {i}"),
+        )
+        .unwrap();
+    }
+
+    let ctx = ToolUseContext::test_default();
+    let result = GrepTool
+        .execute(
+            json!({
+                "pattern": "match_target",
+                "path": dir.path().to_str().unwrap(),
+                "head_limit": 0
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+    let t = text(&result);
+    assert!(
+        t.contains("Found 10 files"),
+        "should find all 10 files: {t}"
+    );
+    assert!(!t.contains("pagination"), "should not truncate: {t}");
+}
+
+// -----------------------------------------------------------------------
+// Multiline matching
+// -----------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_grep_multiline() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("multi.txt"), "fn hello() {\n    world\n}").unwrap();
+
+    let ctx = ToolUseContext::test_default();
+    let result = GrepTool
+        .execute(
+            json!({
+                "pattern": "hello.*world",
+                "multiline": true,
+                "path": dir.path().to_str().unwrap(),
+                "output_mode": "content"
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+    let t = text(&result);
+    assert!(
+        t.contains("hello") && t.contains("world"),
+        "should match across lines: {t}"
+    );
+}
+
+// -----------------------------------------------------------------------
+// mtime sorting for files_with_matches
+// -----------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_grep_mtime_sorting() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // Create files with distinct mtimes
+    std::fs::write(dir.path().join("old.txt"), "match_here").unwrap();
+    // Small sleep to ensure different mtime
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    std::fs::write(dir.path().join("new.txt"), "match_here").unwrap();
+
+    let ctx = ToolUseContext::test_default();
+    let result = GrepTool
+        .execute(
+            json!({
+                "pattern": "match_here",
+                "path": dir.path().to_str().unwrap(),
+                "output_mode": "files_with_matches"
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+    let t = text(&result);
+    // Newest first
+    let new_pos = t.find("new.txt").expect("should find new.txt");
+    let old_pos = t.find("old.txt").expect("should find old.txt");
+    assert!(
+        new_pos < old_pos,
+        "new.txt should appear before old.txt (mtime desc): {t}"
+    );
+}
+
+// -----------------------------------------------------------------------
+// max_result_size_chars
+// -----------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_grep_max_result_size_chars() {
+    assert_eq!(GrepTool.max_result_size_chars(), 20_000);
+}
+
+// -----------------------------------------------------------------------
+// Type filter
+// -----------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_grep_type_filter() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("code.rs"), "fn target() {}").unwrap();
+    std::fs::write(dir.path().join("code.py"), "def target(): pass").unwrap();
+
+    let ctx = ToolUseContext::test_default();
+    let result = GrepTool
+        .execute(
+            json!({
+                "pattern": "target",
+                "path": dir.path().to_str().unwrap(),
+                "type": "rust"
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+    let t = text(&result);
+    assert!(t.contains("code.rs"), "should match rust file: {t}");
+    assert!(!t.contains("code.py"), "should not match python file: {t}");
+}
+
+// -----------------------------------------------------------------------
+// Glob filter
+// -----------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_grep_glob_filter() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("a.rs"), "fn target() {}").unwrap();
+    std::fs::write(dir.path().join("b.txt"), "target here too").unwrap();
+
+    let ctx = ToolUseContext::test_default();
+    let result = GrepTool
+        .execute(
+            json!({
+                "pattern": "target",
+                "path": dir.path().to_str().unwrap(),
+                "glob": "*.rs"
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+    let t = text(&result);
+    assert!(t.contains("a.rs"), "should match .rs file: {t}");
+    assert!(!t.contains("b.txt"), "should not match .txt file: {t}");
+}
+
+// -----------------------------------------------------------------------
+// Offset
+// -----------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_grep_offset() {
+    let dir = tempfile::tempdir().unwrap();
+    for i in 0..5 {
+        std::fs::write(dir.path().join(format!("f{i}.txt")), format!("target_{i}")).unwrap();
+    }
+
+    let ctx = ToolUseContext::test_default();
+    let result = GrepTool
+        .execute(
+            json!({
+                "pattern": "target",
+                "path": dir.path().to_str().unwrap(),
+                "output_mode": "files_with_matches",
+                "offset": 3
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+    let t = text(&result);
+    assert!(
+        t.contains("Found 2 files"),
+        "should show 2 files after skipping 3: {t}"
+    );
+}
+
+// -----------------------------------------------------------------------
+// Context break separators
+// -----------------------------------------------------------------------
+
+// -----------------------------------------------------------------------
+// TS-exact output format verification
+// -----------------------------------------------------------------------
+
+/// files_with_matches: no pagination info in header when not truncated,
+/// no trailing footer.
+#[tokio::test]
+async fn test_grep_files_header_no_pagination_when_not_truncated() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("a.rs"), "target").unwrap();
+
+    let ctx = ToolUseContext::test_default();
+    let result = GrepTool
+        .execute(
+            json!({
+                "pattern": "target",
+                "path": dir.path().to_str().unwrap(),
+                "output_mode": "files_with_matches"
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+    let t = text(&result);
+    // TS format: "Found N files" with no pagination/offset info
+    assert!(
+        !t.contains("limit:") && !t.contains("offset:"),
+        "should not include pagination info when not truncated: {t}"
+    );
+    assert!(
+        !t.contains("[Showing results"),
+        "should not have trailing pagination block: {t}"
+    );
+}
+
+/// files_with_matches: "limit: X" is appended on the SAME header line when
+/// truncated (matches TS format).
+#[tokio::test]
+async fn test_grep_files_header_has_pagination_when_truncated() {
+    let dir = tempfile::tempdir().unwrap();
+    for i in 0..5 {
+        std::fs::write(dir.path().join(format!("f{i}.txt")), "target").unwrap();
+    }
+
+    let ctx = ToolUseContext::test_default();
+    let result = GrepTool
+        .execute(
+            json!({
+                "pattern": "target",
+                "path": dir.path().to_str().unwrap(),
+                "output_mode": "files_with_matches",
+                "head_limit": 2
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+    let t = text(&result);
+    // First line should be header with limit info
+    let first_line = t.lines().next().unwrap();
+    assert!(
+        first_line.contains("Found 2 files") && first_line.contains("limit: 2"),
+        "header should have 'Found 2 files limit: 2': {t}"
+    );
+}
+
+/// content mode: no footer block when not truncated and offset == 0.
+#[tokio::test]
+async fn test_grep_content_no_footer_when_not_truncated() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("f.txt"), "target").unwrap();
+
+    let ctx = ToolUseContext::test_default();
+    let result = GrepTool
+        .execute(
+            json!({
+                "pattern": "target",
+                "path": dir.path().to_str().unwrap(),
+                "output_mode": "content"
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+    let t = text(&result);
+    assert!(
+        !t.contains("[Showing results"),
+        "should not have footer when not truncated: {t}"
+    );
+}
+
+/// content mode: footer uses "limit: X" format when truncated.
+#[tokio::test]
+async fn test_grep_content_footer_format() {
+    let dir = tempfile::tempdir().unwrap();
+    for i in 0..5 {
+        std::fs::write(dir.path().join(format!("f{i}.txt")), format!("target_{i}")).unwrap();
+    }
+
+    let ctx = ToolUseContext::test_default();
+    let result = GrepTool
+        .execute(
+            json!({
+                "pattern": "target",
+                "path": dir.path().to_str().unwrap(),
+                "output_mode": "content",
+                "head_limit": 2
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+    let t = text(&result);
+    assert!(
+        t.contains("[Showing results with pagination = limit: 2]"),
+        "should have TS-format footer: {t}"
+    );
+}
+
+/// count mode: summary uses "N total occurrence(s)" phrasing per TS.
+#[tokio::test]
+async fn test_grep_count_summary_format() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("a.txt"), "x x x").unwrap();
+    std::fs::write(dir.path().join("b.txt"), "x x").unwrap();
+
+    let ctx = ToolUseContext::test_default();
+    let result = GrepTool
+        .execute(
+            json!({
+                "pattern": "x",
+                "path": dir.path().to_str().unwrap(),
+                "output_mode": "count"
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+    let t = text(&result);
+    // TS: "Found N total occurrence(s) across M file(s)."
+    assert!(
+        t.contains("total occurrences across 2 files."),
+        "should have plural summary: {t}"
+    );
+}
+
+/// count mode singular: "1 total occurrence across 1 file."
+#[tokio::test]
+async fn test_grep_count_summary_singular() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("one.txt"), "singleton").unwrap();
+
+    let ctx = ToolUseContext::test_default();
+    let result = GrepTool
+        .execute(
+            json!({
+                "pattern": "singleton",
+                "path": dir.path().to_str().unwrap(),
+                "output_mode": "count"
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+    let t = text(&result);
+    assert!(
+        t.contains("Found 1 total occurrence across 1 file."),
+        "should have singular summary: {t}"
+    );
+}
+
+/// offset > 0 adds "offset: N" to pagination footer even without truncation.
+#[tokio::test]
+async fn test_grep_offset_adds_pagination_info() {
+    let dir = tempfile::tempdir().unwrap();
+    for i in 0..5 {
+        std::fs::write(dir.path().join(format!("f{i}.txt")), "target").unwrap();
+    }
+
+    let ctx = ToolUseContext::test_default();
+    let result = GrepTool
+        .execute(
+            json!({
+                "pattern": "target",
+                "path": dir.path().to_str().unwrap(),
+                "output_mode": "content",
+                "offset": 2
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+    let t = text(&result);
+    assert!(
+        t.contains("[Showing results with pagination = offset: 2]"),
+        "should have offset in footer: {t}"
+    );
+}
+
+#[tokio::test]
+async fn test_grep_context_breaks() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("breaks.txt"),
+        "match1\na\nb\nc\nd\ne\nf\nmatch2",
+    )
+    .unwrap();
+
+    let ctx = ToolUseContext::test_default();
+    let result = GrepTool
+        .execute(
+            json!({
+                "pattern": "match",
+                "path": dir.path().to_str().unwrap(),
+                "output_mode": "content",
+                "-A": 1
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+    let t = text(&result);
+    assert!(t.contains("match1"), "should have first match: {t}");
+    assert!(t.contains("match2"), "should have second match: {t}");
+    assert!(t.contains("--"), "should have context break separator: {t}");
+}
+
+// -----------------------------------------------------------------------
+// Concurrency & cancellation (end-to-end verification of safety model)
+// -----------------------------------------------------------------------
+
+/// Two Grep calls should execute in parallel without interference. Each call
+/// owns its own state, so running them concurrently via `tokio::join!` must
+/// produce the same results as running them sequentially.
+#[tokio::test]
+async fn test_grep_parallel_execution() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("alpha.txt"), "alpha_target").unwrap();
+    std::fs::write(dir.path().join("beta.txt"), "beta_target").unwrap();
+
+    let ctx = ToolUseContext::test_default();
+    let path = dir.path().to_str().unwrap().to_string();
+
+    // Fire two grep calls simultaneously searching for different patterns.
+    let alpha_fut = GrepTool.execute(json!({"pattern": "alpha_target", "path": &path}), &ctx);
+    let beta_fut = GrepTool.execute(json!({"pattern": "beta_target", "path": &path}), &ctx);
+    let (alpha_res, beta_res) = tokio::join!(alpha_fut, beta_fut);
+
+    let alpha_text = text(alpha_res.as_ref().unwrap());
+    let beta_text = text(beta_res.as_ref().unwrap());
+
+    assert!(alpha_text.contains("alpha.txt"), "alpha: {alpha_text}");
+    assert!(
+        !alpha_text.contains("beta.txt"),
+        "alpha spilled: {alpha_text}"
+    );
+    assert!(beta_text.contains("beta.txt"), "beta: {beta_text}");
+    assert!(
+        !beta_text.contains("alpha.txt"),
+        "beta spilled: {beta_text}"
+    );
+}
+
+/// A pre-cancelled token should short-circuit execution. The tool must not
+/// hang or return arbitrary results — it returns whatever matches were
+/// collected before the cancel check fired (here: typically zero).
+#[tokio::test]
+async fn test_grep_respects_cancellation() {
+    let dir = tempfile::tempdir().unwrap();
+    for i in 0..20 {
+        std::fs::write(dir.path().join(format!("f{i}.txt")), "target").unwrap();
+    }
+
+    let mut ctx = ToolUseContext::test_default();
+    ctx.cancel = tokio_util::sync::CancellationToken::new();
+    ctx.cancel.cancel(); // fire before execute
+
+    let result = GrepTool
+        .execute(
+            json!({
+                "pattern": "target",
+                "path": dir.path().to_str().unwrap()
+            }),
+            &ctx,
+        )
+        .await
+        .expect("cancelled grep still returns Ok with partial/empty results");
+
+    let t = text(&result);
+    // The walker should see the cancel on the first iteration and bail out
+    // with zero matches, producing "No files found".
+    assert_eq!(
+        t, "No files found",
+        "pre-cancelled Grep should return empty result: {t}"
+    );
+}
+
+// -----------------------------------------------------------------------
+// TS-exact empty-result format (count/content edge cases)
+// -----------------------------------------------------------------------
+
+/// Count mode with 0 matches must still emit the summary line, matching TS
+/// exactly: `"No matches found\n\nFound 0 total occurrences across 0 files."`
+#[tokio::test]
+async fn test_grep_count_empty_includes_summary() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("a.txt"), "no target here").unwrap();
+
+    let ctx = ToolUseContext::test_default();
+    let result = GrepTool
+        .execute(
+            json!({
+                "pattern": "zzzzz",
+                "path": dir.path().to_str().unwrap(),
+                "output_mode": "count"
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+    let t = text(&result);
+    assert_eq!(
+        t, "No matches found\n\nFound 0 total occurrences across 0 files.",
+        "count empty should include summary: {t}"
+    );
+}
+
+/// Content mode with 0 matches returns bare `"No matches found"` (no footer).
+#[tokio::test]
+async fn test_grep_content_empty_no_footer() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("a.txt"), "no target").unwrap();
+
+    let ctx = ToolUseContext::test_default();
+    let result = GrepTool
+        .execute(
+            json!({
+                "pattern": "zzzzz",
+                "path": dir.path().to_str().unwrap(),
+                "output_mode": "content"
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+    let t = text(&result);
+    assert_eq!(t, "No matches found", "content empty: {t}");
+}
+
+/// Content mode with 0 matches + offset > 0 includes the pagination block.
+#[tokio::test]
+async fn test_grep_content_empty_with_offset_keeps_pagination() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("a.txt"), "no target").unwrap();
+
+    let ctx = ToolUseContext::test_default();
+    let result = GrepTool
+        .execute(
+            json!({
+                "pattern": "zzzzz",
+                "path": dir.path().to_str().unwrap(),
+                "output_mode": "content",
+                "offset": 5
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+    let t = text(&result);
+    assert_eq!(
+        t, "No matches found\n\n[Showing results with pagination = offset: 5]",
+        "content empty with offset: {t}"
+    );
+}
+
+// -----------------------------------------------------------------------
+// Glob filter splitting (whitespace / comma / brace)
+// -----------------------------------------------------------------------
+
+/// `glob: "*.js *.ts"` — whitespace-separated patterns. Both extensions
+/// should be matched per TS GrepTool.ts lines 391-409.
+#[tokio::test]
+async fn test_grep_glob_filter_whitespace() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("a.js"), "target").unwrap();
+    std::fs::write(dir.path().join("b.ts"), "target").unwrap();
+    std::fs::write(dir.path().join("c.py"), "target").unwrap();
+
+    let ctx = ToolUseContext::test_default();
+    let result = GrepTool
+        .execute(
+            json!({
+                "pattern": "target",
+                "path": dir.path().to_str().unwrap(),
+                "glob": "*.js *.ts"
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+    let t = text(&result);
+    assert!(t.contains("a.js"), "should match .js: {t}");
+    assert!(t.contains("b.ts"), "should match .ts: {t}");
+    assert!(!t.contains("c.py"), "should NOT match .py: {t}");
+}
+
+/// `glob: "*.js,*.ts"` — comma-separated patterns.
+#[tokio::test]
+async fn test_grep_glob_filter_comma() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("a.js"), "target").unwrap();
+    std::fs::write(dir.path().join("b.ts"), "target").unwrap();
+    std::fs::write(dir.path().join("c.py"), "target").unwrap();
+
+    let ctx = ToolUseContext::test_default();
+    let result = GrepTool
+        .execute(
+            json!({
+                "pattern": "target",
+                "path": dir.path().to_str().unwrap(),
+                "glob": "*.js,*.ts"
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+    let t = text(&result);
+    assert!(t.contains("a.js"), "should match .js: {t}");
+    assert!(t.contains("b.ts"), "should match .ts: {t}");
+    assert!(!t.contains("c.py"), "should NOT match .py: {t}");
+}
+
+/// `glob: "*.{js,ts}"` — brace-expansion pattern kept intact per TS.
+#[tokio::test]
+async fn test_grep_glob_filter_braces() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("a.js"), "target").unwrap();
+    std::fs::write(dir.path().join("b.ts"), "target").unwrap();
+    std::fs::write(dir.path().join("c.py"), "target").unwrap();
+
+    let ctx = ToolUseContext::test_default();
+    let result = GrepTool
+        .execute(
+            json!({
+                "pattern": "target",
+                "path": dir.path().to_str().unwrap(),
+                "glob": "*.{js,ts}"
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+    let t = text(&result);
+    assert!(t.contains("a.js"), "should match .js: {t}");
+    assert!(t.contains("b.ts"), "should match .ts: {t}");
+    assert!(!t.contains("c.py"), "should NOT match .py: {t}");
+}
+
+/// R5-T13: `-n: false` suppresses line numbers in content-mode output.
+/// TS `GrepTool.ts:357-360` only appends `-n` to ripgrep args when
+/// `show_line_numbers` is true, so a model passing `-n: false` gets
+/// `path:content` instead of `path:linenum:content`.
+#[tokio::test]
+async fn test_grep_line_numbers_suppressed() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("f.txt"), "line1\nMATCH\nline3").unwrap();
+
+    let ctx = ToolUseContext::test_default();
+    let result = GrepTool
+        .execute(
+            json!({
+                "pattern": "MATCH",
+                "path": dir.path().to_str().unwrap(),
+                "output_mode": "content",
+                "-n": false
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+    let t = text(&result);
+    assert!(t.contains("MATCH"), "should contain match: {t}");
+    // Line number segment must NOT be present. Without `-n`, lines are
+    // formatted as `path:content` — not `path:2:content`.
+    assert!(
+        !t.contains(":2:"),
+        "line number segment must be suppressed: {t}"
+    );
+    // The path separator should still be present.
+    assert!(t.contains(":MATCH"), "path:content format expected: {t}");
+}
+
+/// Default is `-n: true` — line numbers appear when omitted.
+#[tokio::test]
+async fn test_grep_line_numbers_default_on() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("f.txt"), "line1\nMATCH\nline3").unwrap();
+
+    let ctx = ToolUseContext::test_default();
+    let result = GrepTool
+        .execute(
+            json!({
+                "pattern": "MATCH",
+                "path": dir.path().to_str().unwrap(),
+                "output_mode": "content"
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+    let t = text(&result);
+    assert!(
+        t.contains(":2:"),
+        "line number segment expected by default: {t}"
+    );
+}
+
+/// `cwd_override` should redirect relative-path searches to the override.
+#[tokio::test]
+async fn test_grep_respects_cwd_override() {
+    let outer = tempfile::tempdir().unwrap();
+    let inner = tempfile::tempdir().unwrap();
+
+    // Decoy file in the process CWD / outer — must NOT be found.
+    std::fs::write(outer.path().join("decoy.txt"), "target").unwrap();
+    // Real file under the override — must be found.
+    std::fs::write(inner.path().join("real.txt"), "target").unwrap();
+
+    let mut ctx = ToolUseContext::test_default();
+    ctx.cwd_override = Some(inner.path().to_path_buf());
+
+    // No explicit `path` → tool defaults to cwd_override.
+    let result = GrepTool
+        .execute(json!({"pattern": "target"}), &ctx)
+        .await
+        .unwrap();
+
+    let t = text(&result);
+    assert!(t.contains("real.txt"), "should find override file: {t}");
+    assert!(!t.contains("decoy.txt"), "must not leak to outer: {t}");
 }

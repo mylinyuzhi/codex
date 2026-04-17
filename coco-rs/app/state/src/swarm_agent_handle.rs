@@ -32,12 +32,8 @@ use tokio::sync::RwLock;
 use super::SubAgentState;
 use super::SubAgentStatus;
 use super::swarm::TeamManager;
-use super::swarm_backend::BackendRegistry;
-use super::swarm_backend::TeammateSpawnConfig;
-use super::swarm_config::is_agent_teams_enabled;
 use super::swarm_constants::AgentColorName;
 use super::swarm_constants::TEAM_LEAD_NAME;
-use super::swarm_file_io::read_team_file;
 use super::swarm_file_io::write_team_file;
 use super::swarm_identity::get_agent_name;
 use super::swarm_identity::get_team_name;
@@ -56,8 +52,6 @@ use super::swarm_teammate::resolve_teammate_model;
 pub struct SwarmAgentHandle {
     /// In-process agent runner for direct spawning.
     runner: Arc<InProcessAgentRunner>,
-    /// Backend registry for detecting pane-based backends.
-    backends: Arc<BackendRegistry>,
     /// Team manager (if a team is active).
     team_manager: Arc<RwLock<Option<TeamManager>>>,
     /// Registered subagents for status tracking.
@@ -74,14 +68,12 @@ pub struct SwarmAgentHandle {
 impl SwarmAgentHandle {
     pub fn new(
         runner: Arc<InProcessAgentRunner>,
-        backends: Arc<BackendRegistry>,
         team_manager: Arc<RwLock<Option<TeamManager>>>,
         cwd: String,
         main_model: String,
     ) -> Self {
         Self {
             runner,
-            backends,
             team_manager,
             agents: Arc::new(RwLock::new(Vec::new())),
             execution_engine: None,

@@ -137,15 +137,14 @@ impl Tool for EnterPlanModeTool {
         // TS: handlePlanModeTransition — clear any pending exit attachment
         // when entering plan mode (prevents sending both plan_mode and
         // plan_mode_exit when user toggles quickly).
-        if let Some(state) = &ctx.app_state {
-            if let Ok(mut guard) = state.try_write() {
-                if let Some(obj) = guard.as_object_mut() {
-                    obj.insert(
-                        "needs_plan_mode_exit_attachment".into(),
-                        serde_json::Value::Bool(false),
-                    );
-                }
-            }
+        if let Some(state) = &ctx.app_state
+            && let Ok(mut guard) = state.try_write()
+            && let Some(obj) = guard.as_object_mut()
+        {
+            obj.insert(
+                "needs_plan_mode_exit_attachment".into(),
+                serde_json::Value::Bool(false),
+            );
         }
     }
 }
@@ -310,16 +309,16 @@ impl Tool for ExitPlanModeTool {
         let file_path = read_plan_file_path_from_app_state(ctx);
 
         // If plan was provided in input (CCR edit), persist to disk
-        if let (Some(plan_content), Some(path)) = (&input_plan, &file_path) {
-            if let Err(e) = tokio::fs::write(path, plan_content.as_bytes()).await {
-                tracing::warn!("Failed to persist edited plan to {path}: {e}");
-            }
+        if let (Some(plan_content), Some(path)) = (&input_plan, &file_path)
+            && let Err(e) = tokio::fs::write(path, plan_content.as_bytes()).await
+        {
+            tracing::warn!("Failed to persist edited plan to {path}: {e}");
         }
 
         let has_agent_tool = ctx
             .tools
             .get_by_name(ToolName::Agent.as_str())
-            .map_or(false, |t| t.is_enabled());
+            .is_some_and(|t| t.is_enabled());
 
         Ok(ToolResult {
             data: serde_json::json!({
@@ -351,16 +350,15 @@ impl Tool for ExitPlanModeTool {
 
         // Set exit flags in app_state for the system reminder orchestrator.
         // TS: setHasExitedPlanMode(true), setNeedsPlanModeExitAttachment(true)
-        if let Some(state) = &ctx.app_state {
-            if let Ok(mut guard) = state.try_write() {
-                if let Some(obj) = guard.as_object_mut() {
-                    obj.insert("has_exited_plan_mode".into(), serde_json::Value::Bool(true));
-                    obj.insert(
-                        "needs_plan_mode_exit_attachment".into(),
-                        serde_json::Value::Bool(true),
-                    );
-                }
-            }
+        if let Some(state) = &ctx.app_state
+            && let Ok(mut guard) = state.try_write()
+            && let Some(obj) = guard.as_object_mut()
+        {
+            obj.insert("has_exited_plan_mode".into(), serde_json::Value::Bool(true));
+            obj.insert(
+                "needs_plan_mode_exit_attachment".into(),
+                serde_json::Value::Bool(true),
+            );
         }
     }
 }
@@ -372,17 +370,17 @@ impl ExitPlanModeTool {
     pub fn build_instructions(result_data: &Value) -> String {
         let is_agent = result_data
             .get("isAgent")
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
         let plan = result_data.get("plan").and_then(|v| v.as_str());
         let file_path = result_data.get("filePath").and_then(|v| v.as_str());
         let has_task_tool = result_data
             .get("hasTaskTool")
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
         let plan_was_edited = result_data
             .get("planWasEdited")
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
 
         if is_agent {
@@ -541,6 +539,26 @@ impl Tool for EnterWorktreeTool {
 }
 
 // ── ExitWorktreeTool ──
+//
+// TS: `tools/ExitWorktreeTool/ExitWorktreeTool.ts:29-145`. The TS tool
+// tears down a worktree AND restores the session's prior state in a
+// specific order:
+//
+//   1. `setCwd(originalCwd)` — process-level current directory
+//   2. `setOriginalCwd(originalCwd)` — session's recorded origin cwd
+//   3. `setProjectRoot(previousProjectRoot)` — conditional
+//   4. `restoreHooksSnapshot()` — revert hook overrides made in worktree
+//   5. `restoreSystemPromptSections()` — rebuild system prompt
+//   6. `clearMemoryCaches()` — drop claude.md / memory caches
+//
+// Steps 3–6 live at the query-engine/app layer in coco-rs (they require
+// cross-crate access to the system prompt builder, hook registry, etc.)
+// and are out of scope for this tool alone. Step 1 (`set_current_dir`)
+// is the critical one — without it, the process cwd is left dangling
+// inside a just-removed directory and the next Bash call fails with
+// ENOENT. This implementation handles step 1 inline and emits the
+// other restoration targets in the result payload so the query engine
+// can apply them in its SessionEnd-like cleanup hook (follow-up).
 
 pub struct ExitWorktreeTool;
 
@@ -553,7 +571,11 @@ impl Tool for ExitWorktreeTool {
         ToolName::ExitWorktree.as_str()
     }
     fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
-        "Remove a git worktree and return to the main working directory.".into()
+        "Remove a git worktree and return to the previous working directory. \
+         Restores the process CWD if it was inside the worktree being removed \
+         and returns a `restoration` block describing the session state to \
+         rebuild (hooks, system prompt, memory caches)."
+            .into()
     }
     fn input_schema(&self) -> ToolInputSchema {
         let mut p = HashMap::new();
@@ -564,6 +586,15 @@ impl Tool for ExitWorktreeTool {
         p.insert(
             "force".into(),
             serde_json::json!({"type": "boolean", "description": "Force removal even with uncommitted changes"}),
+        );
+        p.insert(
+            "previous_cwd".into(),
+            serde_json::json!({
+                "type": "string",
+                "description": "Absolute path to restore as the process cwd after the \
+                               worktree is removed. If omitted, defaults to the parent \
+                               directory of the worktree."
+            }),
         );
         ToolInputSchema { properties: p }
     }
@@ -591,6 +622,25 @@ impl Tool for ExitWorktreeTool {
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
 
+        // Resolve the restoration target BEFORE we remove the worktree.
+        // Three sources in priority order:
+        //   1. Explicit `previous_cwd` parameter from the caller.
+        //   2. The parent directory of the worktree path.
+        //   3. Current process cwd — last-ditch fallback; if the process
+        //      cwd is inside the worktree this will fail step 1 below
+        //      and leave the caller in a dangling dir. Better than
+        //      panicking, though.
+        let explicit_prev = input
+            .get("previous_cwd")
+            .and_then(|v| v.as_str())
+            .map(std::path::PathBuf::from);
+
+        let worktree_path = std::path::PathBuf::from(path);
+        let parent_fallback = worktree_path.parent().map(std::path::Path::to_path_buf);
+        let restore_target = explicit_prev
+            .or(parent_fallback)
+            .or_else(|| std::env::current_dir().ok());
+
         let mut args = vec!["worktree", "remove"];
         if force {
             args.push("--force");
@@ -614,12 +664,57 @@ impl Tool for ExitWorktreeTool {
             });
         }
 
+        // Layer 1: restore process CWD. Critical: without this, if the
+        // process cwd was inside the just-removed worktree, every
+        // subsequent relative path operation fails with ENOENT.
+        //
+        // TS `ExitWorktreeTool.ts:126` calls `setCwd(originalCwd)`
+        // **unconditionally** — it always moves the cwd to the
+        // restoration target, whether or not the current cwd was inside
+        // the worktree. This is the predictable behavior: callers can
+        // rely on "after ExitWorktree, cwd is the restoration target".
+        //
+        // Previously coco-rs only chdir'd if the cwd was inside the
+        // worktree, which was a divergence from TS and risked leaving
+        // the process in an unexpected location. R5 aligns with TS by
+        // always chdiring to the restoration target.
+        let mut cwd_restored = false;
+        let mut restore_error: Option<String> = None;
+        if let Some(target) = restore_target.as_ref() {
+            match std::env::set_current_dir(target) {
+                Ok(()) => cwd_restored = true,
+                Err(e) => restore_error = Some(e.to_string()),
+            }
+        }
+
+        // Layers 2-6: report what the query-engine layer still needs to
+        // restore. These are keys the caller can use to drive its own
+        // cleanup hook — the tool itself can't touch them because they
+        // live in a higher-layer state tree that's not accessible via
+        // ToolUseContext.
         Ok(ToolResult {
             data: serde_json::json!({
                 "message": format!("Removed worktree at '{path}'"),
                 "path": path,
+                "restoration": {
+                    "cwd_target": restore_target.as_ref().and_then(|p| p.to_str()),
+                    "cwd_restored": cwd_restored,
+                    "cwd_restore_error": restore_error,
+                    // Follow-up layers for the query-engine cleanup hook:
+                    "pending_layers": [
+                        "originalCwd",
+                        "projectRoot",
+                        "hooksSnapshot",
+                        "systemPromptSections",
+                        "memoryCaches",
+                    ]
+                }
             }),
             new_messages: vec![],
         })
     }
 }
+
+#[cfg(test)]
+#[path = "plan_worktree.test.rs"]
+mod tests;

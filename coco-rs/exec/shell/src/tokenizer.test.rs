@@ -227,11 +227,11 @@ fn test_tokenize_bare_dollar() {
 #[test]
 fn test_tokenize_process_sub_in() {
     let tokens = tokenize("diff <(cat a) <(cat b)");
-    let proc_subs: Vec<&Token> = tokens
+    let proc_sub_count = tokens
         .iter()
         .filter(|t| t.kind == TokenKind::ProcessSubIn)
-        .collect();
-    assert_eq!(proc_subs.len(), 2);
+        .count();
+    assert_eq!(proc_sub_count, 2);
 }
 
 // ── Numbers ──
@@ -301,12 +301,11 @@ fn test_tokenize_backtick() {
 #[test]
 fn test_tokenize_with_context_bracket() {
     let tokens = tokenize_with_context("[[ -f file ]]");
-    let ops: Vec<&str> = tokens
+    let has_double_bracket = tokens
         .iter()
         .filter(|t| t.kind == TokenKind::Operator)
-        .map(|t| t.value.as_str())
-        .collect();
-    assert!(ops.contains(&"[["));
+        .any(|t| t.value == "[[");
+    assert!(has_double_bracket);
 }
 
 // ── Expansion detection ──

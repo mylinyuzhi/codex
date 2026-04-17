@@ -27,7 +27,7 @@ fn test_read_write_mailbox() {
 
     // Write directly to the test dir
     let path = team_dir.join("worker.json");
-    let messages = vec![msg.clone()];
+    let messages = vec![msg];
     std::fs::write(&path, serde_json::to_string_pretty(&messages).unwrap()).unwrap();
 
     // Read back

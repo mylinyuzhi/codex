@@ -25,9 +25,9 @@ fn test_extended_builtins_no_overlap_with_base() {
     let mut ext_registry = CommandRegistry::new();
     register_extended_builtins(&mut ext_registry);
 
-    // Collect names from both registries
-    let base_names: Vec<_> = base_registry.all().map(|c| c.base.name.clone()).collect();
-    let ext_names: Vec<_> = ext_registry.all().map(|c| c.base.name.clone()).collect();
+    // Count entries in both registries
+    let base_count = base_registry.all().count();
+    let ext_count = ext_registry.all().count();
 
     // Some commands exist in both (the extended set overrides/replaces them)
     // That's by design: extended handlers have real logic replacing stubs.
@@ -62,8 +62,8 @@ fn test_extended_builtins_no_overlap_with_base() {
     assert!(base_registry.get("clear").is_some());
 
     // Quick sanity: base and extended together should not panic
-    let _base_count = base_names.len();
-    let _ext_count = ext_names.len();
+    let _base_count = base_count;
+    let _ext_count = ext_count;
 }
 
 #[test]

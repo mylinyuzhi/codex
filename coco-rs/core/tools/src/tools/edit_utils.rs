@@ -21,10 +21,8 @@ const RIGHT_DOUBLE_CURLY: char = '\u{201D}';
 
 /// Normalize curly quotes to straight quotes for matching.
 pub fn normalize_quotes(s: &str) -> String {
-    s.replace(LEFT_SINGLE_CURLY, "'")
-        .replace(RIGHT_SINGLE_CURLY, "'")
-        .replace(LEFT_DOUBLE_CURLY, "\"")
-        .replace(RIGHT_DOUBLE_CURLY, "\"")
+    s.replace([LEFT_SINGLE_CURLY, RIGHT_SINGLE_CURLY], "'")
+        .replace([LEFT_DOUBLE_CURLY, RIGHT_DOUBLE_CURLY], "\"")
 }
 
 /// Find the actual string in file content that matches the search string,
@@ -367,6 +365,86 @@ pub fn desanitize_for_edit(
     }
 
     (desanitized_old, desanitized_new, true)
+}
+
+/// Input normalization for a single edit before matching.
+///
+/// TS: `FileEditTool/utils.ts:581-657` `normalizeFileEditInput`. The TS
+/// function takes a list of edits and a file path, reads the file, and
+/// for each edit:
+///
+///   1. Strip trailing whitespace from `new_string` UNLESS the file is
+///      a Markdown file (`.md` / `.mdx`). Markdown uses two trailing
+///      spaces as a hard line break, so stripping would silently
+///      change semantics.
+///
+///   2. If the raw `old_string` already matches in the file, keep it
+///      as-is with the whitespace-normalized `new_string`.
+///
+///   3. Otherwise, try desanitizing `old_string` (unescape common LLM
+///      sanitization bugs like `<fnr>` → `<function_results>`). If the
+///      desanitized version matches in the file, apply the SAME
+///      replacements to `new_string` too so the final edit is
+///      self-consistent.
+///
+///   4. Otherwise, keep the raw strings (with normalized new_string).
+///      The Edit tool's regular matching fallback chain (quote
+///      normalization, whitespace fuzzy) handles the remaining cases.
+///
+/// This wrapper operates on a single edit. The caller is responsible
+/// for reading the file and passing the content.
+///
+/// Returns `(normalized_old, normalized_new)`.
+pub fn normalize_file_edit_input(
+    file_path: &str,
+    file_content: &str,
+    old_string: &str,
+    new_string: &str,
+) -> (String, String) {
+    // Markdown trailing-space rule: two trailing spaces mean "hard line
+    // break". Stripping them would silently corrupt the diff.
+    let is_markdown = matches_markdown_extension(file_path);
+    let normalized_new = if is_markdown {
+        new_string.to_string()
+    } else {
+        strip_trailing_whitespace(new_string)
+    };
+
+    // Fast path: raw old_string already matches.
+    if file_content.contains(old_string) {
+        return (old_string.to_string(), normalized_new);
+    }
+
+    // Try desanitization. The helper already mirrors TS behavior:
+    // only returns `replaced = true` when the desanitized form
+    // actually matches in the file. On success, it has already
+    // applied the same replacements to new_string.
+    let (desanitized_old, desanitized_new, replaced) =
+        desanitize_for_edit(old_string, &normalized_new, file_content);
+    if replaced {
+        return (desanitized_old, desanitized_new);
+    }
+
+    // Neither the raw nor the desanitized form matches — return the
+    // raw old_string + normalized new_string. The caller's matching
+    // fallback chain (quote normalization, whitespace fuzzy) takes
+    // over from here.
+    (old_string.to_string(), normalized_new)
+}
+
+/// Case-insensitive check for `.md` and `.mdx` file extensions.
+///
+/// TS uses `/\.(md|mdx)$/i` (case-insensitive). We match that behavior
+/// so `Notes.MD` gets the same preservation as `notes.md`.
+fn matches_markdown_extension(file_path: &str) -> bool {
+    // Find the last `.` AFTER the last `/` (so we don't trip on
+    // `.md` in a parent directory name).
+    let file_name = file_path.rsplit(['/', '\\']).next().unwrap_or(file_path);
+    let Some(dot) = file_name.rfind('.') else {
+        return false;
+    };
+    let ext = &file_name[dot + 1..];
+    ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("mdx")
 }
 
 #[cfg(test)]

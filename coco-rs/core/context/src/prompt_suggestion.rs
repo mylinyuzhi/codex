@@ -76,15 +76,16 @@ pub fn generate_suggestions(ctx: &SuggestionContext) -> Vec<PromptSuggestion> {
                 priority: 3,
             });
         }
-        if let Some(branch) = &ctx.git_branch {
-            if branch != "main" && branch != "master" {
-                suggestions.push(PromptSuggestion {
-                    text: format!("Create a PR for the {branch} branch"),
-                    description: "Create a pull request".into(),
-                    category: PromptSuggestionCategory::GitOperation,
-                    priority: 4,
-                });
-            }
+        if let Some(branch) = &ctx.git_branch
+            && branch != "main"
+            && branch != "master"
+        {
+            suggestions.push(PromptSuggestion {
+                text: format!("Create a PR for the {branch} branch"),
+                description: "Create a pull request".into(),
+                category: PromptSuggestionCategory::GitOperation,
+                priority: 4,
+            });
         }
     }
 

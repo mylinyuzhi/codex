@@ -21,8 +21,16 @@ use serde::Serialize;
 /// TS: SwarmPermissionRequest in utils/swarm/permissionSync.ts
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolPermissionRequest {
-    /// Unique request ID.
+    /// Server-assigned correlation id for this approval request. Used by
+    /// the approval bridge to match `approval/resolve` replies and by
+    /// `control/cancelRequest` to cancel pending approvals. Fresh per
+    /// request, decoupled from any tool invocation id.
     pub id: String,
+    /// The model-assigned tool-invocation id (e.g. `toolu_01ABC...`) that
+    /// this approval corresponds to. Matches TS
+    /// `SDKControlPermissionRequestSchema.tool_use_id` — SDK clients use
+    /// it to group the approval UI with the tool-call rendering.
+    pub tool_use_id: String,
     /// Agent that needs permission.
     pub agent_id: String,
     /// Tool that needs approval.

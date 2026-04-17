@@ -22,11 +22,17 @@ fn test_app_event_with_attributes() {
         Some("BashTool")
     );
     assert_eq!(
-        event.attributes.get("duration_ms").and_then(|v| v.as_i64()),
+        event
+            .attributes
+            .get("duration_ms")
+            .and_then(serde_json::Value::as_i64),
         Some(1500)
     );
     assert_eq!(
-        event.attributes.get("success").and_then(|v| v.as_bool()),
+        event
+            .attributes
+            .get("success")
+            .and_then(serde_json::Value::as_bool),
         Some(true)
     );
 }

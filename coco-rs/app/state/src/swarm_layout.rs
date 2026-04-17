@@ -36,7 +36,9 @@ fn with_state<F, T>(f: F) -> T
 where
     F: FnOnce(&mut ColorAssignmentState) -> T,
 {
-    let mut guard = COLOR_STATE.write().unwrap_or_else(|e| e.into_inner());
+    let mut guard = COLOR_STATE
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let state = guard.get_or_insert_with(|| ColorAssignmentState {
         assignments: HashMap::new(),
         next_index: 0,
@@ -65,7 +67,9 @@ pub fn assign_teammate_color(teammate_id: &str) -> AgentColorName {
 ///
 /// TS: `getTeammateColor(teammateId?)`
 pub fn get_teammate_color(teammate_id: &str) -> Option<AgentColorName> {
-    let guard = COLOR_STATE.read().unwrap_or_else(|e| e.into_inner());
+    let guard = COLOR_STATE
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     guard
         .as_ref()
         .and_then(|s| s.assignments.get(teammate_id).copied())
@@ -75,7 +79,9 @@ pub fn get_teammate_color(teammate_id: &str) -> Option<AgentColorName> {
 ///
 /// TS: `clearTeammateColors()`
 pub fn clear_teammate_colors() {
-    let mut guard = COLOR_STATE.write().unwrap_or_else(|e| e.into_inner());
+    let mut guard = COLOR_STATE
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     *guard = None;
 }
 

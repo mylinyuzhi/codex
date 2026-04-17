@@ -1,0 +1,267 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ServerRequest",
+  "description": "Bidirectional control protocol — server-initiated requests.\n\nThe agent sends these to SDK clients when it needs a decision or input (permission approval, user question, hook callback, MCP routing). The SDK client must reply via the corresponding `ClientRequest` variant.",
+  "oneOf": [
+    {
+      "description": "Ask the SDK client to approve or deny a tool use. Matches TS `SDKControlPermissionRequestSchema` (controlSchemas.ts:108-121). Expected response: `ClientRequest::ApprovalResolve`.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "approval/askForApproval"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/AskForApprovalParams"
+        }
+      }
+    },
+    {
+      "description": "Ask the user a question via the SDK client (e.g. multiple choice). Expected response: `ClientRequest::UserInputResolve`.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "input/requestUserInput"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/RequestUserInputParams"
+        }
+      }
+    },
+    {
+      "description": "Route an MCP JSON-RPC message to the SDK-hosted MCP server. Matches TS `SDKControlMcpMessageRequestSchema` (controlSchemas.ts:377-381). Expected response: `ClientRequest::McpRouteMessageResponse`.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "mcp/routeMessage"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/McpRouteMessageParams"
+        }
+      }
+    },
+    {
+      "description": "Invoke an SDK-registered hook callback. Matches TS `SDKHookCallbackRequestSchema` (controlSchemas.ts:366-371). Expected response: `ClientRequest::HookCallbackResponse`.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "hook/callback"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/HookCallbackParams"
+        }
+      }
+    },
+    {
+      "description": "Notify the SDK that a previously-sent ServerRequest should be cancelled.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "control/cancelRequest"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/ServerCancelRequestParams"
+        }
+      }
+    }
+  ],
+  "definitions": {
+    "AskForApprovalParams": {
+      "description": "Matches TS `SDKControlPermissionRequestSchema` (controlSchemas.ts:108-121).",
+      "type": "object",
+      "required": [
+        "input",
+        "request_id",
+        "tool_name",
+        "tool_use_id"
+      ],
+      "properties": {
+        "agent_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "blocked_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "decision_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "display_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "input": true,
+        "permission_suggestions": {
+          "description": "Suggested permission updates the SDK can present to the user.",
+          "type": "array",
+          "items": true
+        },
+        "request_id": {
+          "description": "Unique correlation id (SDK must echo in `ApprovalResolve`).",
+          "type": "string"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_name": {
+          "type": "string"
+        },
+        "tool_use_id": {
+          "type": "string"
+        }
+      }
+    },
+    "HookCallbackParams": {
+      "description": "Invoke an SDK-registered hook callback. Matches TS `SDKHookCallbackRequestSchema` (controlSchemas.ts:366-371).",
+      "type": "object",
+      "required": [
+        "callback_id",
+        "input",
+        "request_id"
+      ],
+      "properties": {
+        "callback_id": {
+          "type": "string"
+        },
+        "input": {
+          "description": "Hook input payload (event-specific shape)."
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "tool_use_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "McpRouteMessageParams": {
+      "description": "Route an MCP JSON-RPC message to an SDK-hosted server.",
+      "type": "object",
+      "required": [
+        "message",
+        "request_id",
+        "server_name"
+      ],
+      "properties": {
+        "message": {
+          "description": "The raw JSON-RPC message to forward."
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "server_name": {
+          "type": "string"
+        }
+      }
+    },
+    "RequestUserInputParams": {
+      "description": "Ask the SDK to request user input (free-form or choice-list).",
+      "type": "object",
+      "required": [
+        "prompt",
+        "request_id"
+      ],
+      "properties": {
+        "choices": {
+          "description": "Optional choice list; if present, the SDK should render a picker.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "default": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "request_id": {
+          "type": "string"
+        }
+      }
+    },
+    "ServerCancelRequestParams": {
+      "description": "Cancel a previously-sent ServerRequest.",
+      "type": "object",
+      "required": [
+        "request_id"
+      ],
+      "properties": {
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_id": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

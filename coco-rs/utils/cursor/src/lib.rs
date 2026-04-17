@@ -70,11 +70,11 @@ impl Cursor {
         let mut pos = self.pos as usize;
 
         // Skip whitespace
-        while pos > 0 && chars.get(pos - 1).map_or(false, |c| c.is_whitespace()) {
+        while pos > 0 && chars.get(pos - 1).is_some_and(|c| c.is_whitespace()) {
             pos -= 1;
         }
         // Skip word characters
-        while pos > 0 && chars.get(pos - 1).map_or(false, |c| !c.is_whitespace()) {
+        while pos > 0 && chars.get(pos - 1).is_some_and(|c| !c.is_whitespace()) {
             pos -= 1;
         }
 
@@ -136,8 +136,9 @@ impl Cursor {
         }
 
         // Accumulate if consecutive kill
-        if self.last_was_kill && !self.kill_ring.is_empty() {
-            let last = self.kill_ring.last_mut().expect("kill ring not empty");
+        if let Some(last) = self.kill_ring.last_mut()
+            && self.last_was_kill
+        {
             last.push_str(&killed);
         } else {
             if self.kill_ring.len() >= KILL_RING_MAX {

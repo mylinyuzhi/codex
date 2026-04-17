@@ -140,7 +140,7 @@ pub fn filter_schemas_by_model(
 ) -> Vec<ToolSchemaSource> {
     let mut filtered: Vec<ToolSchemaSource> = schemas
         .iter()
-        .filter(|s| supported_tools.map_or(true, |supported| supported.contains(&s.name)))
+        .filter(|s| supported_tools.is_none_or(|supported| supported.contains(&s.name)))
         .cloned()
         .collect();
 

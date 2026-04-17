@@ -2,6 +2,78 @@
 
 Exhaustive comparison of all plan docs against actual TS source + cocode-rs source.
 
+## Round 9: Phase 1 Event Emission Wiring (April 12, 2026)
+
+Phase 1 of `event-system-design.md` implemented: all Phase 0 type definitions
+are now actively emitted by QueryEngine during session execution.
+
+### Gaps Resolved in Round 9
+
+| Gap | Area | What Was Done | Status |
+|-----|------|--------------|--------|
+| **SessionStarted emission** | 20_SDK / 15_State | Added `SessionBootstrap` struct in coco-query; QueryEngine emits `CoreEvent::Protocol(SessionStarted(...))` at session start with full init context (cwd, model, permission_mode, tools, version, optional slash_commands/agents/skills/mcp_servers/plugins). Matches TS `buildSystemInitMessage()`. | **RESOLVED** |
+| **SessionStateChanged Running/Idle** | 20_SDK | QueryEngine emits `Running` at session entry and `Idle` at session exit (all 3 exit paths via split `run_internal_with_messages` → `run_session_loop`). TS: `notifySessionStateChanged()` in `print.ts`. `RequiresAction` is deferred to Phase 2 (needs permission prompt wiring). | **RESOLVED** |
+| **SessionResult emission** | 20_SDK | QueryEngine emits full `SessionResult(Box<SessionResultParams>)` at session exit with `duration_ms`, `duration_api_ms`, `total_cost_usd`, `usage`, `model_usage` (per-model from `CostTracker.per_model`), `is_error`, `stop_reason`, `result`/`errors`. Matches TS `SDKResultMessage` shape. | **RESOLVED** |
+| **Hook lifecycle event wiring** | 11_Hooks / 20_SDK | Extended `orchestration::execute_pre_tool_use` and `execute_post_tool_use` to accept `event_tx: Option<&Sender<HookExecutionEvent>>`. QueryEngine spawns a detached forwarder task that translates `HookExecutionEvent::Started/Progress/Response` into `CoreEvent::Protocol(HookStarted/HookProgress/HookResponse)`. Matches TS `SDKHookStartedMessage/ProgressMessage/ResponseMessage`. | **RESOLVED** |
+| **Phase 1 test coverage** | 20_SDK | 5 new `engine.test.rs` tests verifying: bootstrap field passthrough, state transition ordering, SessionResult metadata, result-after-idle emission ordering. | **RESOLVED** |
+
+### Phase 1 Deferred to Phase 2
+
+| Item | Reason |
+|------|--------|
+| `SessionStateChanged::RequiresAction` emission | Requires permission prompt wiring into CoreEvent channel, which belongs to SDK control protocol (Phase 2) |
+| `Task` lifecycle events (task_started/progress/notification) | Requires modifying core `TaskHandle` trait and adding event sink to `TaskManager`; blocked on subagent infrastructure not yet landed. Types are defined in coco-types per TS `SDKTaskStartedMessage/ProgressMessage/NotificationMessage`, just not yet emitted. |
+| Streaming hook stdout/stderr | Current `HookExecutionEvent::Progress` emits keep-alive with empty strings; true streaming requires restructuring `execute_hook()` from `wait_with_output()` to incremental `AsyncRead`. Deferred to Phase 3. |
+| `permission_denials` accumulation | Stub in `build_session_result_params` returns empty Vec. Wiring requires tracking denials across permission checks in the session loop; candidate for Phase 2 alongside RequiresAction. |
+
+### Phase 1 Verification
+
+- 17 coco-query engine tests (+5 new Phase 1 lifecycle tests)
+- 55 coco-query lib tests total (15 StreamAccumulator + 17 engine + others)
+- 27 coco-query e2e scenarios
+- 61 coco-types lib tests
+- 117 coco-tui lib tests
+- Full `cargo check` workspace passes
+
+---
+
+## Round 8: Phase 0 Event System Implementation (April 12, 2026)
+
+Phase 0 of `event-system-design.md` fully implemented. The event system now
+matches the design's 3-layer `CoreEvent` architecture with `StreamAccumulator`
+for SDK output.
+
+### Gaps Resolved in Round 8
+
+| Gap | Area | What Was Done | Status |
+|-----|------|--------------|--------|
+| **QueryEvent interim type** | 20_SDK / 21_Steering | Deleted `QueryEvent` (13 variants); QueryEngine now emits `CoreEvent` directly. TUI consumes via `handle_core_event()`. Deleted `map_query_event()` mapping layer. | **RESOLVED** |
+| **CoreEvent envelope** | 20_SDK | Defined `CoreEvent { Protocol / Stream / Tui }` in coco-types. Consumers pattern-match on the 3 layers. | **RESOLVED** |
+| **ServerNotification (52 variants)** | 20_SDK | Moved from coco-tui (17 variants) to coco-types, expanded to 52 (43 base + 9 TS gaps) plus `HookExecuted` from cocode-rs base. Every variant has explicit `#[serde(rename = "wire/method")]`. | **RESOLVED** |
+| **AgentStreamEvent (7 variants)** | 20_SDK | Distinct from `coco_types::StreamEvent` (inference layer). Carries TextDelta/ThinkingDelta/ToolUseQueued/Started/Completed/McpToolCallBegin/End with turn-scoped item IDs. | **RESOLVED** |
+| **ThreadItem tool mapping** | 20_SDK | `ThreadItemDetails` with 9 variants: CommandExecution (Bash), FileChange (Edit/Write), WebSearch, McpToolCall (mcp__*), Subagent (Agent/Task), ToolCall (others), AgentMessage, Reasoning, Error. | **RESOLVED** |
+| **StreamAccumulator state machine** | 20_SDK | Full implementation in `coco-query/src/stream_accumulator.rs` per design §6.1. Handles text↔thinking transitions, tool lifecycle, MCP items. 15 unit tests. | **RESOLVED** |
+| **TuiOnlyEvent (20 variants)** | 02_UI | Full list from design §4.1: ApprovalRequired, QuestionAsked, ElicitationRequested, SandboxApprovalRequired, PluginDataReady, OutputStylesReady, RewindCheckpointsReady, DiffStatsReady, CompactionCircuitBreakerOpen, MicroCompactionApplied, SessionMemoryCompactApplied, SpeculativeRolledBack, SessionMemoryExtraction{Started,Completed,Failed}, CronJobDisabled, CronJobsMissed, ToolCallDelta, ToolProgress, ToolExecutionAborted + RewindCompleted (coco-rs extension). Defined in coco-types to avoid cyclic dep. | **RESOLVED** |
+| **Tool name in ToolUseCompleted** | 20_SDK | Added `name: String` field to `AgentStreamEvent::ToolUseCompleted` so consumers can reconstruct display without maintaining their own call_id→name map. | **RESOLVED** |
+
+### Phase 0 Verification
+
+- 50 coco-types unit tests (including 13 event tests)
+- 50 coco-query unit tests (including 15 StreamAccumulator tests)
+- 117 coco-tui unit tests (including snapshot tests)
+- 27 e2e scenario tests in coco-query — all passing after refactor
+
+### Known Post-Phase-0 Deviations from Design
+
+| # | Deviation | Rationale |
+|---|-----------|-----------|
+| 1 | `TuiOnlyEvent` owned by coco-types, not coco-tui | `CoreEvent::Tui(TuiOnlyEvent)` is part of the envelope; moving it to coco-tui creates cyclic deps. Design §1.7 updated in place. |
+| 2 | ~~TUI keeps internal `TuiNotification` (17 variants) as state-update type~~ | **RESOLVED** (April 2026 deep review): `TuiNotification` scheduled for deletion. 75% trivial pass-throughs; scaling to 57 variants defeats abstraction. TUI will match `CoreEvent` three layers directly with exhaustive `#[deny(non_exhaustive_omitted_patterns)]`. See `event-system-design.md` §1.7-1.8 and plan WS-2. |
+| 3 | `BudgetDecision::Nudge` mapped to `ServerNotification::Error { category: "budget" }` | No direct design equivalent; Error with category field is acceptable. |
+| 4 | Inference-layer `coco_types::StreamEvent` coexists with new `AgentStreamEvent` | Two abstraction layers (raw LLM stream vs. agent-loop-processed). Documented in crate-coco-types.md. |
+
+---
+
 ## Round 7: Documentation Gap Closure (April 6, 2026)
 
 Comprehensive gap closure across all plan docs. Focused on unmapped TS files, P0 critical gaps, P1 high-priority expansions, and P2 secondary expansions.

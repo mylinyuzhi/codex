@@ -415,6 +415,7 @@ async fn test_execute_pre_tool_use_with_prompt_hook() {
         "Bash",
         "tool-use-1",
         &serde_json::json!({"command": "rm -rf /"}),
+        /*event_tx*/ None,
     )
     .await
     .expect("should succeed");

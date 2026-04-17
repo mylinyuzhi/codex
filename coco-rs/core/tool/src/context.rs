@@ -14,6 +14,7 @@ use tokio_util::sync::CancellationToken;
 use std::path::PathBuf;
 
 use crate::agent_handle::AgentHandleRef;
+use crate::hook_handle::HookHandleRef;
 use crate::mcp_handle::McpHandleRef;
 use crate::permission_bridge::ToolPermissionBridgeRef;
 use crate::registry::ToolRegistry;
@@ -119,11 +120,32 @@ pub struct ToolUseContext {
 
     // ── Tracking Sets (session-scoped dedup) ──
     /// Paths that triggered nested memory loading.
-    pub nested_memory_attachment_triggers: HashSet<String>,
+    ///
+    /// TS `FileReadTool.ts:848,870,1038`
+    /// `context.nestedMemoryAttachmentTriggers?.add(fullFilePath)` —
+    /// every successful Read pushes the path here so
+    /// `getNestedMemoryAttachments` (TS `utils/attachments.ts:2165`)
+    /// can load any nested CLAUDE.md / memory files in the file's
+    /// ancestry on the next turn boundary.
+    ///
+    /// Wrapped in `Arc<RwLock<>>` so concurrent-safe tools sharing a
+    /// cloned context all push into the same set, mirroring the
+    /// `dynamic_skill_dir_triggers` design.
+    pub nested_memory_attachment_triggers: Arc<RwLock<HashSet<String>>>,
     /// Already-loaded nested memory file paths.
     pub loaded_nested_memory_paths: HashSet<String>,
     /// Directories that triggered dynamic skill discovery.
-    pub dynamic_skill_dir_triggers: HashSet<String>,
+    ///
+    /// TS `FileReadTool.ts:583` `context.dynamicSkillDirTriggers?.add(dir)` —
+    /// when Read/Write/Edit touch a file, we walk up to find any
+    /// `.claude/skills/` ancestor dir and record it here. The app/query
+    /// layer drains this set after the tool batch completes and asks the
+    /// SkillManager to load any newly-discovered dirs.
+    ///
+    /// Wrapped in `Arc<RwLock<>>` so concurrent-safe tools sharing a
+    /// cloned context all push into the same set, and so the app/query
+    /// drain sees everything from the just-completed batch.
+    pub dynamic_skill_dir_triggers: Arc<RwLock<HashSet<String>>>,
     /// Skill names discovered during this session.
     pub discovered_skill_names: HashSet<String>,
 
@@ -194,6 +216,15 @@ pub struct ToolUseContext {
     /// Handle for background task operations (shell tasks, agent tasks).
     /// TS: `spawnShellTask()`, `TaskOutput`, stall watchdog.
     pub task_handle: Option<TaskHandleRef>,
+
+    // ── Hook Pipeline ──
+    /// Optional callback into the hook pipeline (PreToolUse / PostToolUse /
+    /// PostToolUseFailure). When `None`, the executor skips hook invocations
+    /// entirely. The higher-layer orchestrator (`app/query`) implements this
+    /// trait by bridging to `coco_hooks::HookRegistry` + `execute_pre_tool_use()`
+    /// / `execute_post_tool_use()`.
+    /// TS: `services/tools/toolExecution.ts:800-862` hook invocation.
+    pub hook_handle: Option<HookHandleRef>,
 
     // ── File State ──
     /// Session-level file read state for @mention dedup, edit safety, changed-file detection.
@@ -284,9 +315,12 @@ impl ToolUseContext {
             agent_type: self.agent_type.clone(),
             file_reading_limits: self.file_reading_limits.clone(),
             glob_limits: self.glob_limits.clone(),
-            nested_memory_attachment_triggers: HashSet::new(),
+            // Share both trigger sets across concurrent siblings so all
+            // pushes from the batch land in one place for app/query to
+            // drain. See field docs on the struct.
+            nested_memory_attachment_triggers: self.nested_memory_attachment_triggers.clone(),
             loaded_nested_memory_paths: HashSet::new(),
-            dynamic_skill_dir_triggers: HashSet::new(),
+            dynamic_skill_dir_triggers: self.dynamic_skill_dir_triggers.clone(),
             discovered_skill_names: HashSet::new(),
             tool_decisions: HashMap::new(),
             is_teammate: self.is_teammate,
@@ -304,6 +338,7 @@ impl ToolUseContext {
             permission_bridge: self.permission_bridge.clone(),
             progress_tx: self.progress_tx.clone(),
             task_handle: self.task_handle.clone(),
+            hook_handle: self.hook_handle.clone(),
             file_read_state: self.file_read_state.clone(),
             file_history: self.file_history.clone(),
             config_home: self.config_home.clone(),
@@ -346,9 +381,9 @@ impl ToolUseContext {
             agent_type: None,
             file_reading_limits: FileReadingLimits::default(),
             glob_limits: GlobLimits::default(),
-            nested_memory_attachment_triggers: HashSet::new(),
+            nested_memory_attachment_triggers: Arc::new(RwLock::new(HashSet::new())),
             loaded_nested_memory_paths: HashSet::new(),
-            dynamic_skill_dir_triggers: HashSet::new(),
+            dynamic_skill_dir_triggers: Arc::new(RwLock::new(HashSet::new())),
             discovered_skill_names: HashSet::new(),
             tool_decisions: HashMap::new(),
             is_teammate: false,
@@ -366,6 +401,7 @@ impl ToolUseContext {
             permission_bridge: None,
             progress_tx: None,
             task_handle: None,
+            hook_handle: None,
             file_read_state: None,
             file_history: None,
             config_home: None,

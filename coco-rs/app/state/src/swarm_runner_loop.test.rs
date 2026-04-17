@@ -164,7 +164,7 @@ fn test_agent_query_config_clone() {
         fork_context_messages: vec![],
         preserve_tool_use_results: true,
     };
-    let cloned = config.clone();
+    let cloned = config;
     assert_eq!(cloned.system_prompt, "test");
     assert_eq!(cloned.max_turns, Some(5));
 }

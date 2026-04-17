@@ -94,6 +94,13 @@ impl Tool for ListMcpResourcesTool {
     fn is_read_only(&self, _: &Value) -> bool {
         true
     }
+    /// TS `ListMcpResourcesTool.ts`: `isConcurrencySafe() { return true }`.
+    /// Listing resources from one or more MCP servers is read-only and
+    /// independent across servers — the executor can fan out concurrent
+    /// listing calls.
+    fn is_concurrency_safe(&self, _: &Value) -> bool {
+        true
+    }
     async fn execute(
         &self,
         input: Value,
@@ -165,6 +172,12 @@ impl Tool for ReadMcpResourceTool {
         ToolInputSchema { properties: p }
     }
     fn is_read_only(&self, _: &Value) -> bool {
+        true
+    }
+    /// TS `ReadMcpResourceTool.ts`: `isConcurrencySafe() { return true }`.
+    /// Resource reads are side-effect-free; multiple reads to the same or
+    /// different resources can run in parallel.
+    fn is_concurrency_safe(&self, _: &Value) -> bool {
         true
     }
     async fn execute(
@@ -311,11 +324,12 @@ impl Tool for McpTool {
         input: Value,
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<Value>, ToolError> {
-        let arguments = if input.is_null() || input.as_object().is_some_and(|o| o.is_empty()) {
-            None
-        } else {
-            Some(input)
-        };
+        let arguments =
+            if input.is_null() || input.as_object().is_some_and(serde_json::Map::is_empty) {
+                None
+            } else {
+                Some(input)
+            };
 
         match ctx
             .mcp

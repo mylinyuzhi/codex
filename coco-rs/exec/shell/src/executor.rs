@@ -67,6 +67,13 @@ impl ShellExecutor {
     /// to restore the user's interactive environment without login shell overhead.
     /// When no snapshot, falls back to login shell (`-l`) so the user still
     /// gets their default environment.
+    ///
+    /// R6-T17: if `options.cancel` is set, a `tokio::select!` races the
+    /// child wait against the cancel token; when the token fires, the
+    /// child future is dropped which kills the process via
+    /// `kill_on_drop(true)`, and the return `CommandResult.interrupted`
+    /// flag is set to `true` so the caller can distinguish a cancel
+    /// from a normal completion or a timeout.
     pub async fn execute(
         &mut self,
         command: &str,
@@ -98,21 +105,72 @@ impl ShellExecutor {
         let timeout_ms = options.timeout_ms.unwrap_or(120_000);
         let timeout_duration = std::time::Duration::from_millis(timeout_ms as u64);
 
-        let output = match tokio::time::timeout(timeout_duration, child.wait_with_output()).await {
-            Ok(Ok(output)) => output,
-            Ok(Err(e)) => return Err(e.into()),
-            Err(_) => {
-                return Ok(CommandResult {
-                    exit_code: -1,
-                    stdout: String::new(),
-                    stderr: format!("Command timed out after {timeout_ms}ms"),
-                    new_cwd: None,
-                    timed_out: true,
-                });
+        // Build the wait future and race it against the cancel token
+        // (if present) plus the timeout. `wait_with_output()` consumes
+        // the child, so we spawn the future only once and drop it on
+        // cancel to trigger `kill_on_drop`.
+        let wait_future = child.wait_with_output();
+        tokio::pin!(wait_future);
+
+        let output = if let Some(cancel) = &options.cancel {
+            tokio::select! {
+                biased;
+                () = cancel.cancelled() => {
+                    // Dropping `wait_future` on the next line kills the
+                    // child via `kill_on_drop(true)`. We return a
+                    // CommandResult with `interrupted = true` so the
+                    // caller can surface that distinctly from a timeout.
+                    return Ok(CommandResult {
+                        exit_code: -1,
+                        stdout: String::new(),
+                        stdout_bytes: None,
+                        stderr: "Command interrupted".to_string(),
+                        new_cwd: None,
+                        timed_out: false,
+                        interrupted: true,
+                    });
+                }
+                result = tokio::time::timeout(timeout_duration, &mut wait_future) => {
+                    match result {
+                        Ok(Ok(output)) => output,
+                        Ok(Err(e)) => return Err(e.into()),
+                        Err(_) => {
+                            return Ok(CommandResult {
+                                exit_code: -1,
+                                stdout: String::new(),
+                                stdout_bytes: None,
+                                stderr: format!("Command timed out after {timeout_ms}ms"),
+                                new_cwd: None,
+                                timed_out: true,
+                                interrupted: false,
+                            });
+                        }
+                    }
+                }
+            }
+        } else {
+            match tokio::time::timeout(timeout_duration, wait_future).await {
+                Ok(Ok(output)) => output,
+                Ok(Err(e)) => return Err(e.into()),
+                Err(_) => {
+                    return Ok(CommandResult {
+                        exit_code: -1,
+                        stdout: String::new(),
+                        stdout_bytes: None,
+                        stderr: format!("Command timed out after {timeout_ms}ms"),
+                        new_cwd: None,
+                        timed_out: true,
+                        interrupted: false,
+                    });
+                }
             }
         };
 
-        let mut stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        // Preserve the raw stdout bytes BEFORE the lossy UTF-8 conversion
+        // so binary-aware consumers (e.g. BashTool's image-detection
+        // path) can inspect the original magic-byte signature.
+        let stdout_raw = output.stdout;
+        let mut stdout = String::from_utf8_lossy(&stdout_raw).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
         let new_cwd = if !options.prevent_cwd_changes {
@@ -128,9 +186,11 @@ impl ShellExecutor {
         Ok(CommandResult {
             exit_code: output.status.code().unwrap_or(-1),
             stdout,
+            stdout_bytes: Some(stdout_raw),
             stderr,
             new_cwd,
             timed_out: false,
+            interrupted: false,
         })
     }
 
@@ -198,17 +258,22 @@ impl ShellExecutor {
         let timeout_duration = std::time::Duration::from_millis(timeout_ms as u64);
         let start = std::time::Instant::now();
 
+        // R7-T18: stdout reader collects raw `Vec<u8>` instead of
+        // immediately UTF-8-lossy-converting each 8KB chunk. Collecting
+        // bytes lets BashTool's image detector inspect the original
+        // magic-byte signature for `cat image.png` style commands.
+        // Lossy conversion still happens at the end for the `stdout`
+        // String field.
         let stdout_counter = stdout_bytes.clone();
         let stdout_handle = tokio::spawn(async move {
-            let mut collected = String::new();
+            let mut collected: Vec<u8> = Vec::new();
             if let Some(mut pipe) = stdout_pipe {
                 let mut buf = vec![0u8; 8192];
                 loop {
                     match pipe.read(&mut buf).await {
                         Ok(0) => break,
                         Ok(n) => {
-                            let chunk = String::from_utf8_lossy(&buf[..n]);
-                            collected.push_str(&chunk);
+                            collected.extend_from_slice(&buf[..n]);
                             stdout_counter.fetch_add(n as i64, Ordering::Relaxed);
                         }
                         Err(_) => break,
@@ -218,6 +283,8 @@ impl ShellExecutor {
             collected
         });
 
+        // stderr stays String-based — image detection only inspects
+        // stdout, so we don't need to keep stderr's raw bytes.
         let stderr_counter = stderr_bytes.clone();
         let stderr_handle = tokio::spawn(async move {
             let mut collected = String::new();
@@ -239,9 +306,41 @@ impl ShellExecutor {
         });
 
         let progress_interval = std::time::Duration::from_secs(1);
+        // R6-T17: honour the cancel token inside the streaming loop so
+        // the caller can interrupt mid-stream. The `biased` selector
+        // checks cancel first, then child completion, then the progress
+        // tick — so a pending cancel always wins over a late progress
+        // update.
+        let cancel = options.cancel.clone();
         let wait_result = loop {
             tokio::select! {
                 biased;
+                () = async {
+                    if let Some(tok) = &cancel {
+                        tok.cancelled().await
+                    } else {
+                        std::future::pending::<()>().await
+                    }
+                } => {
+                    let _ = child.kill().await;
+                    // Drain whatever output was produced before cancel.
+                    let stdout_partial_bytes = stdout_handle.await.unwrap_or_default();
+                    let stdout_partial = String::from_utf8_lossy(&stdout_partial_bytes).to_string();
+                    let stderr_partial = stderr_handle.await.unwrap_or_default();
+                    return Ok(CommandResult {
+                        exit_code: -1,
+                        stdout: stdout_partial,
+                        stdout_bytes: Some(stdout_partial_bytes),
+                        stderr: if stderr_partial.is_empty() {
+                            "Command interrupted".to_string()
+                        } else {
+                            format!("{stderr_partial}\nCommand interrupted")
+                        },
+                        new_cwd: None,
+                        timed_out: false,
+                        interrupted: true,
+                    });
+                }
                 result = child.wait() => {
                     break result.map(Some);
                 }
@@ -252,9 +351,11 @@ impl ShellExecutor {
                         return Ok(CommandResult {
                             exit_code: -1,
                             stdout: String::new(),
+                            stdout_bytes: None,
                             stderr: format!("Command timed out after {timeout_ms}ms"),
                             new_cwd: None,
                             timed_out: true,
+                            interrupted: false,
                         });
                     }
                     let total = stdout_bytes.load(Ordering::Relaxed)
@@ -268,7 +369,8 @@ impl ShellExecutor {
         };
 
         let status = wait_result?;
-        let mut stdout = stdout_handle.await.unwrap_or_default();
+        let stdout_raw = stdout_handle.await.unwrap_or_default();
+        let mut stdout = String::from_utf8_lossy(&stdout_raw).to_string();
         let stderr = stderr_handle.await.unwrap_or_default();
 
         let new_cwd = if !options.prevent_cwd_changes {
@@ -286,9 +388,11 @@ impl ShellExecutor {
         Ok(CommandResult {
             exit_code,
             stdout,
+            stdout_bytes: Some(stdout_raw),
             stderr,
             new_cwd,
             timed_out: false,
+            interrupted: false,
         })
     }
 
