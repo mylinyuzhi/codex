@@ -174,19 +174,19 @@ async fn test_session_memory_preferred_over_full() {
     assert!(!sm_result.summary_messages.is_empty());
 
     // The summary should contain the session memory content
-    if let Message::User(u) = &sm_result.summary_messages[0] {
-        if let coco_types::LlmMessage::User { content, .. } = &u.message {
-            let text: String = content
-                .iter()
-                .filter_map(|c| match c {
-                    coco_types::UserContent::Text(t) => Some(t.text.as_str()),
-                    _ => None,
-                })
-                .collect();
-            assert!(
-                text.contains("Used Rust for performance"),
-                "summary should contain session memory content"
-            );
-        }
+    if let Message::User(u) = &sm_result.summary_messages[0]
+        && let coco_types::LlmMessage::User { content, .. } = &u.message
+    {
+        let text: String = content
+            .iter()
+            .filter_map(|c| match c {
+                coco_types::UserContent::Text(t) => Some(t.text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            text.contains("Used Rust for performance"),
+            "summary should contain session memory content"
+        );
     }
 }

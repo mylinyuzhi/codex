@@ -142,7 +142,7 @@ async fn add_permission_rule(action: &str, tool: &str) -> anyhow::Result<String>
         MCP_TOOL_PREFIX, // for "mcp__*" prefix matching
     ];
 
-    let is_known = valid_tools.iter().any(|t| *t == tool) || tool.starts_with(MCP_TOOL_PREFIX);
+    let is_known = valid_tools.contains(&tool) || tool.starts_with(MCP_TOOL_PREFIX);
 
     let mut out = format!("Added {action} rule for tool: {tool}\n");
     out.push_str("  Source: Session (highest priority)\n");

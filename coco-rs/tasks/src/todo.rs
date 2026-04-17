@@ -53,7 +53,9 @@ static TODO_STORE: LazyLock<Mutex<Vec<TodoItem>>> = LazyLock::new(|| Mutex::new(
 static NEXT_ID: LazyLock<Mutex<i32>> = LazyLock::new(|| Mutex::new(1));
 
 fn generate_id() -> String {
-    let mut id = NEXT_ID.lock().unwrap();
+    let mut id = NEXT_ID
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let current = *id;
     *id += 1;
     current.to_string()
@@ -81,7 +83,10 @@ pub fn create_todo(subject: &str, description: &str, active_form: Option<&str>) 
         created_at: now_ms(),
         completed_at: None,
     };
-    TODO_STORE.lock().unwrap().push(item.clone());
+    TODO_STORE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(item.clone());
     item
 }
 
@@ -89,7 +94,7 @@ pub fn create_todo(subject: &str, description: &str, active_form: Option<&str>) 
 pub fn get_todo(id: &str) -> Option<TodoItem> {
     TODO_STORE
         .lock()
-        .unwrap()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .iter()
         .find(|t| t.id == id)
         .cloned()
@@ -97,7 +102,9 @@ pub fn get_todo(id: &str) -> Option<TodoItem> {
 
 /// Update a todo's status.
 pub fn update_todo_status(id: &str, status: TodoStatus) -> Option<TodoItem> {
-    let mut store = TODO_STORE.lock().unwrap();
+    let mut store = TODO_STORE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(item) = store.iter_mut().find(|t| t.id == id) {
         item.status = status;
         if status.is_terminal() {
@@ -111,14 +118,17 @@ pub fn update_todo_status(id: &str, status: TodoStatus) -> Option<TodoItem> {
 
 /// List all todos.
 pub fn list_todos() -> Vec<TodoItem> {
-    TODO_STORE.lock().unwrap().clone()
+    TODO_STORE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
 }
 
 /// List active (non-terminal) todos.
 pub fn list_active_todos() -> Vec<TodoItem> {
     TODO_STORE
         .lock()
-        .unwrap()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .iter()
         .filter(|t| !t.status.is_terminal())
         .cloned()
@@ -127,23 +137,30 @@ pub fn list_active_todos() -> Vec<TodoItem> {
 
 /// Add a blocks relationship.
 pub fn add_blocks(blocker_id: &str, blocked_id: &str) {
-    let mut store = TODO_STORE.lock().unwrap();
-    if let Some(blocker) = store.iter_mut().find(|t| t.id == blocker_id) {
-        if !blocker.blocks.contains(&blocked_id.to_string()) {
-            blocker.blocks.push(blocked_id.to_string());
-        }
+    let mut store = TODO_STORE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(blocker) = store.iter_mut().find(|t| t.id == blocker_id)
+        && !blocker.blocks.contains(&blocked_id.to_string())
+    {
+        blocker.blocks.push(blocked_id.to_string());
     }
-    if let Some(blocked) = store.iter_mut().find(|t| t.id == blocked_id) {
-        if !blocked.blocked_by.contains(&blocker_id.to_string()) {
-            blocked.blocked_by.push(blocker_id.to_string());
-        }
+    if let Some(blocked) = store.iter_mut().find(|t| t.id == blocked_id)
+        && !blocked.blocked_by.contains(&blocker_id.to_string())
+    {
+        blocked.blocked_by.push(blocker_id.to_string());
     }
 }
 
 /// Clear all todos (for testing).
 pub fn clear_todos() {
-    TODO_STORE.lock().unwrap().clear();
-    *NEXT_ID.lock().unwrap() = 1;
+    TODO_STORE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clear();
+    *NEXT_ID
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = 1;
 }
 
 /// Format todos as markdown for display.

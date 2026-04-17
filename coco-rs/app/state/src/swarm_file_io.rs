@@ -237,10 +237,10 @@ pub fn cleanup_team_directories(team_name: &str) -> anyhow::Result<()> {
 /// TS: `cleanupSessionTeams()`
 pub fn cleanup_session_teams(session_id: &str) -> anyhow::Result<()> {
     for name in list_team_names() {
-        if let Ok(Some(tf)) = read_team_file(&name) {
-            if tf.lead_session_id.as_deref() == Some(session_id) {
-                cleanup_team_directories(&name)?;
-            }
+        if let Ok(Some(tf)) = read_team_file(&name)
+            && tf.lead_session_id.as_deref() == Some(session_id)
+        {
+            cleanup_team_directories(&name)?;
         }
     }
     Ok(())
@@ -273,7 +273,9 @@ static SESSION_TEAMS: std::sync::RwLock<Option<Vec<String>>> = std::sync::RwLock
 ///
 /// TS: `registerTeamForSessionCleanup(teamName)`
 pub fn register_team_for_session_cleanup(team_name: &str) {
-    let mut guard = SESSION_TEAMS.write().unwrap_or_else(|e| e.into_inner());
+    let mut guard = SESSION_TEAMS
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let teams = guard.get_or_insert_with(Vec::new);
     if !teams.contains(&team_name.to_string()) {
         teams.push(team_name.to_string());
@@ -284,7 +286,9 @@ pub fn register_team_for_session_cleanup(team_name: &str) {
 ///
 /// TS: `unregisterTeamForSessionCleanup(teamName)`
 pub fn unregister_team_for_session_cleanup(team_name: &str) {
-    let mut guard = SESSION_TEAMS.write().unwrap_or_else(|e| e.into_inner());
+    let mut guard = SESSION_TEAMS
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(teams) = guard.as_mut() {
         teams.retain(|t| t != team_name);
     }
@@ -294,7 +298,7 @@ pub fn unregister_team_for_session_cleanup(team_name: &str) {
 pub fn get_session_cleanup_teams() -> Vec<String> {
     SESSION_TEAMS
         .read()
-        .unwrap_or_else(|e| e.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clone()
         .unwrap_or_default()
 }

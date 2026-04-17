@@ -2,26 +2,26 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use cocode_mcp_types::ClientCapabilities;
-use cocode_mcp_types::Implementation;
-use cocode_mcp_types::InitializeRequestParams;
-use cocode_mcp_types::ListResourceTemplatesResult;
-use cocode_mcp_types::ReadResourceRequestParams;
-use cocode_mcp_types::ReadResourceResultContents;
-use cocode_mcp_types::Resource;
-use cocode_mcp_types::ResourceTemplate;
-use cocode_mcp_types::TextResourceContents;
-use cocode_rmcp_client::ElicitationAction;
-use cocode_rmcp_client::ElicitationResponse;
-use cocode_rmcp_client::RmcpClient;
-use cocode_utils_cargo_bin::CargoBinError;
+use coco_mcp_types::ClientCapabilities;
+use coco_mcp_types::Implementation;
+use coco_mcp_types::InitializeRequestParams;
+use coco_mcp_types::ListResourceTemplatesResult;
+use coco_mcp_types::ReadResourceRequestParams;
+use coco_mcp_types::ReadResourceResultContents;
+use coco_mcp_types::Resource;
+use coco_mcp_types::ResourceTemplate;
+use coco_mcp_types::TextResourceContents;
+use coco_rmcp_client::ElicitationAction;
+use coco_rmcp_client::ElicitationResponse;
+use coco_rmcp_client::RmcpClient;
+use coco_utils_cargo_bin::CargoBinError;
 use futures::FutureExt as _;
 use serde_json::json;
 
 const RESOURCE_URI: &str = "memo://codex/example-note";
 
 fn stdio_server_bin() -> Result<PathBuf, CargoBinError> {
-    cocode_utils_cargo_bin::cargo_bin("test_stdio_server")
+    coco_utils_cargo_bin::cargo_bin("test_stdio_server")
 }
 
 fn init_params() -> InitializeRequestParams {
@@ -38,7 +38,7 @@ fn init_params() -> InitializeRequestParams {
             title: Some("Codex rmcp resource test".into()),
             user_agent: None,
         },
-        protocol_version: cocode_mcp_types::MCP_SCHEMA_VERSION.to_string(),
+        protocol_version: coco_mcp_types::MCP_SCHEMA_VERSION.to_string(),
     }
 }
 

@@ -143,12 +143,20 @@ pub fn check_budget(
 
 ### QueryEngine public API
 
+QueryEngine emits `CoreEvent` (3-layer: Protocol / Stream / Tui) directly to
+consumers via mpsc channel. See `event-system-design.md` for the full event
+catalog. There is **no** `QueryEvent` intermediate type — that was an interim
+scheme that has been removed in Phase 0 of the event system refactor.
+
 ```rust
+use coco_types::CoreEvent;
+
 impl QueryEngine {
     pub fn new(config: QueryEngineConfig) -> Self;
 
-    /// Main conversation loop (async generator in TS → Stream in Rust).
-    pub async fn run(&mut self, cancel: CancellationToken, event_tx: mpsc::Sender<QueryEvent>) -> Result<(), QueryError>;
+    /// Main conversation loop (async generator in TS → emit via mpsc in Rust).
+    /// Emits CoreEvent directly; consumers pattern-match on the 3 layers.
+    pub async fn run(&mut self, cancel: CancellationToken, event_tx: mpsc::Sender<CoreEvent>) -> Result<(), QueryError>;
 
     /// Interrupt the current turn. Cancels in-flight API call and tool execution.
     pub fn interrupt(&self);
@@ -180,7 +188,7 @@ impl QueryEngine {
     pub async fn run(
         &mut self,
         cancel: CancellationToken,
-        event_tx: mpsc::Sender<QueryEvent>,
+        event_tx: mpsc::Sender<coco_types::CoreEvent>,
     ) -> Result<(), QueryError> {
         loop {
             // 1. Build system prompt
@@ -440,19 +448,77 @@ User types while LLM working
 
 ---
 
-### Query Events (emitted to UI)
+### Events Emitted (CoreEvent from `event-system-design.md`)
+
+**Phase 0 refactor removed the `QueryEvent` intermediate type.** QueryEngine
+now emits `coco_types::CoreEvent` directly via mpsc channel, giving consumers
+the full 3-layer protocol/stream/TUI dispatch.
+
+During the agent loop, QueryEngine emits the following `CoreEvent` variants:
+
+| Variant | When | Purpose |
+|---------|------|---------|
+| `Protocol(TurnStarted)` | Start of each turn | Carries turn_id and turn_number |
+| `Protocol(TurnCompleted)` | End of each turn | Carries turn_id and TokenUsage |
+| `Protocol(TurnFailed)` | On unrecoverable turn error | Emitted by agent driver on QueryEngine error |
+| `Protocol(CompactionStarted)` | Reactive compaction begins | Signals retry with compacted context |
+| `Protocol(ContextCompacted)` | Auto-compaction completes | Carries removed_messages and summary_tokens |
+| `Protocol(Error)` | Budget nudge | category = "budget"; used for BudgetDecision::Nudge |
+| `Protocol(QueueStateChanged)` | Command queue drained mid-turn | Reports remaining queue size |
+| `Stream(TextDelta)` | LLM text output streaming | Per-turn_id delta, fed into StreamAccumulator |
+| `Stream(ThinkingDelta)` | LLM reasoning output streaming | Per-turn_id delta |
+| `Stream(ToolUseQueued)` | Tool call parsed from LLM response | Carries complete input; accumulator creates ThreadItem |
+| `Stream(ToolUseCompleted)` | Tool execution result ready | Carries tool name + output + is_error |
+
+See `event-system-design.md` Sections 1.4 – 1.6 for the full type catalog.
+
+### StreamAccumulator (AgentStreamEvent → ServerNotification)
+
+Stateful converter that translates streaming deltas into semantic
+`ServerNotification::ItemStarted / ItemUpdated / ItemCompleted` events with
+ThreadItem tool mapping. Used by SDK output and optionally by TUI for
+semantic display.
 
 ```rust
-pub enum QueryEvent {
-    StreamStart { model: String },
-    TextDelta { text: String },
-    ThinkingDelta { text: String },
-    ToolUseStart { tool_id: ToolId, tool_use_id: String },
-    ToolUseEnd { tool_use_id: String },
-    ToolResult { tool_use_id: String, result: String },
-    TurnComplete { usage: TokenUsage, cost_usd: f64 },
-    CompactStart,
-    CompactEnd { tokens_before: i64, tokens_after: i64 },
-    Error { message: String },
+use coco_types::{AgentStreamEvent, ServerNotification};
+
+pub struct StreamAccumulator {
+    // Private state:
+    //   text_item_id, text_buffer
+    //   thinking_item_id, thinking_buffer
+    //   active_items: HashMap<call_id, ThreadItem>
+    //   item_counter: i64
+}
+
+impl StreamAccumulator {
+    pub fn new(turn_id: impl Into<String>) -> Self;
+    /// Process one stream event; returns zero or more notifications.
+    pub fn process(&mut self, event: AgentStreamEvent) -> Vec<ServerNotification>;
+    /// Flush pending text/thinking items at turn end.
+    pub fn flush(&mut self) -> Vec<ServerNotification>;
 }
 ```
+
+**State transitions** (see `event-system-design.md` §6.1):
+```
+ThinkingDelta* → TextDelta* → ToolUseQueued → ToolUseStarted → ToolUseCompleted
+     ↓                ↓              ↓                ↓                ↓
+ItemStarted      ItemStarted    ItemStarted     ItemUpdated     ItemCompleted
+(Reasoning)      (AgentMsg)     (tool-specific)
+```
+
+**Tool mapping** (`build_tool_details()` in `stream_accumulator.rs`):
+
+| Tool name | ThreadItemDetails variant |
+|-----------|--------------------------|
+| `Bash`, `PowerShell` | `CommandExecution { command, output, exit_code, status }` |
+| `Edit`, `Write`, `NotebookEdit` | `FileChange { changes: Vec<FileChangeInfo>, status }` |
+| `WebSearch` | `WebSearch { query, status }` |
+| `mcp__<server>__<tool>` | `McpToolCall { server, tool, arguments, result, error, status }` |
+| `Agent`, `Task` | `Subagent { agent_id, agent_type, description, is_background, result, status }` |
+| all others (Read, Glob, Grep, ...) | `ToolCall { tool, input, output, is_error, status }` |
+
+Transition rules:
+- Text/thinking items auto-flush when a tool starts or the opposite content type arrives
+- Tool errors mark `status = Failed`; success marks `Completed`
+- MCP tool events (`McpToolCallBegin/End`) create `McpToolCall` items directly

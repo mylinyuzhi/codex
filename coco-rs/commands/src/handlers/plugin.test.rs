@@ -92,9 +92,7 @@ async fn test_install_plugin() {
 
     // We test the manifest creation logic directly since install_plugin
     // uses relative paths
-    let manifest = format!(
-        "[plugin]\nname = \"test-plugin\"\nversion = \"0.1.0\"\ndescription = \"Plugin test-plugin\"\n"
-    );
+    let manifest = "[plugin]\nname = \"test-plugin\"\nversion = \"0.1.0\"\ndescription = \"Plugin test-plugin\"\n".to_string();
     tokio::fs::create_dir_all(&plugin_dir).await.unwrap();
     tokio::fs::write(plugin_dir.join("PLUGIN.toml"), &manifest)
         .await

@@ -301,19 +301,18 @@ pub struct DynamicResourceQuery {
 impl DynamicResourceQuery {
     /// Whether a discovered resource matches this query.
     pub fn matches(&self, resource: &DiscoveredResource) -> bool {
-        if let Some(prefix) = &self.uri_prefix {
-            if !resource.uri.starts_with(prefix.as_str()) {
-                return false;
-            }
+        if let Some(prefix) = &self.uri_prefix
+            && !resource.uri.starts_with(prefix.as_str())
+        {
+            return false;
         }
-        if let Some(name_filter) = &self.name_contains {
-            if !resource
+        if let Some(name_filter) = &self.name_contains
+            && !resource
                 .name
                 .to_lowercase()
                 .contains(&name_filter.to_lowercase())
-            {
-                return false;
-            }
+        {
+            return false;
         }
         if let Some(mime) = &self.mime_type {
             match &resource.mime_type {
@@ -376,7 +375,7 @@ fn convert_server_tools(server_name: &str, tools: &[McpToolDefinition]) -> Vec<D
                 .input_schema
                 .get("_meta")
                 .and_then(|m| m.get("anthropic/alwaysLoad"))
-                .and_then(|v| v.as_bool())
+                .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false);
 
             DiscoveredTool {
@@ -435,15 +434,15 @@ fn extract_annotations(schema: &serde_json::Value) -> ToolAnnotations {
     ToolAnnotations {
         read_only: annotations
             .and_then(|a| a.get("readOnlyHint"))
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false),
         destructive: annotations
             .and_then(|a| a.get("destructiveHint"))
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false),
         open_world: annotations
             .and_then(|a| a.get("openWorldHint"))
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false),
         title: annotations
             .and_then(|a| a.get("title"))

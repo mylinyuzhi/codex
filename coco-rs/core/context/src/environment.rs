@@ -151,7 +151,7 @@ fn get_os_version() -> String {
     output
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_else(|| format!("{}", Platform::current().display_name()))
+        .unwrap_or_else(|| Platform::current().display_name().to_string())
 }
 
 #[cfg(test)]

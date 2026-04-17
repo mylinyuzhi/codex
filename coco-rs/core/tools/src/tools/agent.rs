@@ -5,6 +5,28 @@
 //! The AgentTool dispatches to `ToolUseContext.agent` (AgentHandle trait)
 //! to spawn subagents, avoiding circular dependencies between tools and
 //! the spawning infrastructure.
+//!
+//! # Fork subagent (B4.1)
+//!
+//! The `agent_fork` sibling module implements the fork-subagent support
+//! infrastructure in full: `build_fork_context` for byte-identical
+//! message cloning, `is_in_fork_child` for recursive-fork prevention,
+//! `is_fork_allowed` for the permission gate, and the XML-wrapped
+//! rules + FORK_BOILERPLATE_TAG that mark fork contexts. All of this
+//! is unit-tested in `agent_fork.test.rs`.
+//!
+//! **Wiring status**: the AgentTool below does NOT yet invoke the fork
+//! path at spawn time. Doing so requires either (a) adding an
+//! `Option<ForkContext>` field to `AgentSpawnRequest` in `coco-tool` so
+//! it can be threaded to AgentHandle implementations, or (b) having the
+//! query-engine layer check `is_fork_allowed()` and construct the fork
+//! context itself before calling into AgentTool. Both are cross-crate
+//! changes and live in a follow-up commit.
+//!
+//! For now, callers can opt into fork behavior by setting the
+//! `FORK_SUBAGENT=1` env var and omitting `subagent_type` — the
+//! AgentHandle implementation at the app/query layer is responsible
+//! for detecting this and applying fork semantics.
 
 use std::collections::HashMap;
 
@@ -42,6 +64,17 @@ impl Tool for AgentTool {
          capabilities and tools available to it."
             .into()
     }
+    /// TS `AgentTool.tsx`: `isConcurrencySafe() { return true }`. Multiple
+    /// agent spawns issued in the same turn are independent — each runs in
+    /// its own context (and optionally its own worktree) — so the executor
+    /// can batch them into a single `ConcurrentSafe` partition. Without
+    /// this override they were forced into per-call `SingleUnsafe` batches,
+    /// serializing parallel exploration workflows like
+    /// `Agent(...) Agent(...) Agent(...)` and multiplying latency by N.
+    fn is_concurrency_safe(&self, _: &Value) -> bool {
+        true
+    }
+
     fn input_schema(&self) -> ToolInputSchema {
         let mut p = HashMap::new();
         p.insert(
@@ -84,8 +117,13 @@ impl Tool for AgentTool {
             "isolation".into(),
             serde_json::json!({
                 "type": "string",
-                "description": "Isolation mode: 'worktree' creates an isolated git worktree",
-                "enum": ["worktree"]
+                // TS `AgentTool.tsx:99`: ant builds expose `["worktree", "remote"]`,
+                // 3p builds expose `["worktree"]` only. coco-rs accepts both values
+                // for schema compatibility — the remote path delegates to CCR via
+                // the AgentHandle implementation, which can return an error if the
+                // current build doesn't support remote isolation.
+                "description": "Isolation mode. 'worktree' creates a temporary git worktree so the agent works on an isolated copy of the repo. 'remote' launches the agent in a remote CCR environment (always runs in background).",
+                "enum": ["worktree", "remote"]
             }),
         );
         p.insert(
@@ -151,7 +189,7 @@ impl Tool for AgentTool {
                 .map(String::from),
             run_in_background: input
                 .get("run_in_background")
-                .and_then(|v| v.as_bool())
+                .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false),
             isolation: input
                 .get("isolation")

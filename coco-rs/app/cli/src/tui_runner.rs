@@ -27,14 +27,15 @@ use coco_context::FileHistoryState;
 use coco_context::attachment::Attachment;
 use coco_inference::ApiClient;
 use coco_inference::RetryConfig;
+use coco_query::CoreEvent;
 use coco_query::QueryEngine;
 use coco_query::QueryEngineConfig;
-use coco_query::QueryEvent;
+use coco_query::ServerNotification;
 use coco_tool::ToolRegistry;
 use coco_tui::App;
-use coco_tui::ServerNotification;
 use coco_tui::UserCommand;
 use coco_tui::app::create_channels;
+use coco_types::TuiOnlyEvent;
 use tokio_util::sync::CancellationToken;
 
 use crate::Cli;
@@ -129,14 +130,16 @@ pub async fn run_tui(cli: &Cli) -> Result<()> {
     tui_result.map_err(|e| anyhow::anyhow!("TUI error: {e}"))
 }
 
-/// Agent driver — consumes UserCommands, drives QueryEngine, emits ServerNotifications.
+/// Agent driver — consumes UserCommands, drives QueryEngine, emits CoreEvents.
 ///
 /// TS: REPL.tsx's onSubmit → query() → onQueryEvent() loop.
 /// Runs as a background tokio task alongside the TUI event loop.
+///
+/// Events flow directly as `CoreEvent` from QueryEngine → TUI (no mapping layer).
 #[allow(clippy::too_many_arguments)]
 async fn run_agent_driver(
     mut command_rx: mpsc::Receiver<UserCommand>,
-    event_tx: mpsc::Sender<ServerNotification>,
+    event_tx: mpsc::Sender<CoreEvent>,
     client: Arc<ApiClient>,
     tools: Arc<ToolRegistry>,
     engine_config: QueryEngineConfig,
@@ -158,9 +161,7 @@ async fn run_agent_driver(
                     continue;
                 }
 
-                let _ = event_tx
-                    .send(ServerNotification::TurnStarted { turn_number: 1 })
-                    .await;
+                // QueryEngine emits its own TurnStarted; no need to emit here.
 
                 // Resolve @mentions into attachments.
                 let processed = coco_context::process_user_input(&content);
@@ -203,37 +204,28 @@ async fn run_agent_driver(
                     engine = engine.with_file_history(fh.clone(), config_home.clone());
                 }
 
-                // Run with event streaming
-                let (query_event_tx, mut query_event_rx) = mpsc::channel::<QueryEvent>(256);
+                // Forward CoreEvent directly from QueryEngine to TUI.
+                // No mapping layer — TUI consumes CoreEvent natively via handle_core_event().
+                let (core_event_tx, mut core_event_rx) = mpsc::channel::<CoreEvent>(256);
 
                 let event_tx_clone = event_tx.clone();
                 let forward_handle = tokio::spawn(async move {
-                    while let Some(qe) = query_event_rx.recv().await {
-                        let notification = map_query_event(qe);
-                        if let Some(n) = notification {
-                            let _ = event_tx_clone.send(n).await;
-                        }
+                    while let Some(ev) = core_event_rx.recv().await {
+                        let _ = event_tx_clone.send(ev).await;
                     }
                 });
 
-                match engine.run_with_messages(messages, query_event_tx).await {
-                    Ok(result) => {
-                        let _ = event_tx
-                            .send(ServerNotification::TurnCompleted {
-                                usage: coco_tui::state::TokenUsage {
-                                    input_tokens: result.total_usage.input_tokens,
-                                    output_tokens: result.total_usage.output_tokens,
-                                    cache_read_tokens: 0,
-                                    cache_creation_tokens: 0,
-                                },
-                            })
-                            .await;
+                match engine.run_with_messages(messages, core_event_tx).await {
+                    Ok(_result) => {
+                        // QueryEngine emitted TurnCompleted via Protocol layer.
                     }
                     Err(e) => {
                         let _ = event_tx
-                            .send(ServerNotification::TurnFailed {
-                                error: e.to_string(),
-                            })
+                            .send(CoreEvent::Protocol(ServerNotification::TurnFailed(
+                                coco_types::TurnFailedParams {
+                                    error: e.to_string(),
+                                },
+                            )))
                             .await;
                     }
                 }
@@ -259,11 +251,9 @@ async fn run_agent_driver(
             UserCommand::RequestDiffStats { message_id } => {
                 // Async diff stats computation.
                 // TS: fileHistoryGetDiffStats() in MessageSelector useEffect.
+                // Emitted as CoreEvent::Tui since this is a UI-only event.
                 if let Some(ref fh) = file_history {
                     let fh = fh.read().await;
-                    let has_changes = fh
-                        .has_any_changes(&message_id, &config_home, &session_id)
-                        .await;
                     let (files, ins, del) = match fh
                         .get_diff_stats(&message_id, &config_home, &session_id)
                         .await
@@ -276,13 +266,12 @@ async fn run_agent_driver(
                         Err(_) => (0, 0, 0),
                     };
                     let _ = event_tx
-                        .send(ServerNotification::DiffStatsLoaded {
+                        .send(CoreEvent::Tui(TuiOnlyEvent::DiffStatsReady {
                             message_id,
                             files_changed: files,
                             insertions: ins,
                             deletions: del,
-                            has_any_changes: has_changes,
-                        })
+                        }))
                         .await;
                 }
             }
@@ -293,9 +282,11 @@ async fn run_agent_driver(
 
             UserCommand::Shutdown => {
                 let _ = event_tx
-                    .send(ServerNotification::SessionEnded {
-                        reason: "User shutdown".into(),
-                    })
+                    .send(CoreEvent::Protocol(ServerNotification::SessionEnded(
+                        coco_types::SessionEndedParams {
+                            reason: "User shutdown".into(),
+                        },
+                    )))
                     .await;
                 break;
             }
@@ -322,7 +313,7 @@ async fn handle_rewind(
     file_history: &Option<Arc<RwLock<FileHistoryState>>>,
     config_home: &PathBuf,
     session_id: &str,
-    event_tx: &mpsc::Sender<ServerNotification>,
+    event_tx: &mpsc::Sender<CoreEvent>,
 ) {
     use coco_tui::state::RestoreType;
 
@@ -330,30 +321,33 @@ async fn handle_rewind(
 
     // Code rewind (file restore)
     // TS: fileHistoryRewind() in REPL.tsx onRestoreCode prop
-    if matches!(restore_type, RestoreType::Both | RestoreType::CodeOnly) {
-        if let Some(fh) = file_history {
-            let fh = fh.read().await;
-            match fh.rewind(message_id, config_home, session_id).await {
-                Ok(changed) => {
-                    files_changed = changed.len() as i32;
-                    info!(files_changed, message_id, "File history rewind completed");
-                }
-                Err(e) => {
-                    warn!("File history rewind failed: {e}");
-                    let _ = event_tx
-                        .send(ServerNotification::Error {
+    if matches!(restore_type, RestoreType::Both | RestoreType::CodeOnly)
+        && let Some(fh) = file_history
+    {
+        let fh = fh.read().await;
+        match fh.rewind(message_id, config_home, session_id).await {
+            Ok(changed) => {
+                files_changed = changed.len() as i32;
+                info!(files_changed, message_id, "File history rewind completed");
+            }
+            Err(e) => {
+                warn!("File history rewind failed: {e}");
+                let _ = event_tx
+                    .send(CoreEvent::Protocol(ServerNotification::Error(
+                        coco_types::ErrorParams {
                             message: format!("File rewind failed: {e}"),
+                            category: Some("rewind".into()),
                             retryable: false,
-                        })
-                        .await;
-                    return;
-                }
+                        },
+                    )))
+                    .await;
+                return;
             }
         }
     }
 
-    // Conversation rewind: emit RewindCompleted so TUI truncates messages,
-    // restores permission mode, and repopulates input.
+    // Conversation rewind: emit TuiOnlyEvent::RewindCompleted so TUI truncates
+    // messages, restores permission mode, and repopulates input.
     // TS: rewindConversationTo() + restoreMessageSync() in REPL.tsx
     let should_truncate = matches!(
         restore_type,
@@ -361,18 +355,17 @@ async fn handle_rewind(
     );
 
     let _ = event_tx
-        .send(ServerNotification::RewindCompleted {
+        .send(CoreEvent::Tui(TuiOnlyEvent::RewindCompleted {
             target_message_id: if should_truncate {
                 message_id.to_string()
             } else {
                 String::new()
             },
             files_changed,
-        })
+        }))
         .await;
 }
 
-/// Map a QueryEvent to a ServerNotification.
 /// Build the list of messages for a turn: user message + attachment messages.
 ///
 /// TS architecture: user message first, then separate attachment messages
@@ -492,42 +485,6 @@ fn changed_file_to_message(att: &Attachment) -> Option<coco_types::Message> {
                 &text,
             ))
         }
-        _ => None,
-    }
-}
-
-fn map_query_event(event: QueryEvent) -> Option<ServerNotification> {
-    match event {
-        QueryEvent::TextDelta { text } => Some(ServerNotification::TextDelta { delta: text }),
-        QueryEvent::ReasoningDelta { text } => {
-            Some(ServerNotification::ThinkingDelta { delta: text })
-        }
-        QueryEvent::ToolUseStart {
-            tool_use_id,
-            tool_name,
-            ..
-        } => Some(ServerNotification::ToolUseQueued {
-            call_id: tool_use_id,
-            name: tool_name,
-            input_preview: String::new(),
-        }),
-        QueryEvent::ToolUseEnd {
-            tool_use_id,
-            is_error,
-            ..
-        } => Some(ServerNotification::ToolUseCompleted {
-            call_id: tool_use_id,
-            output: String::new(),
-            is_error,
-        }),
-        QueryEvent::TurnStarted { turn } => {
-            Some(ServerNotification::TurnStarted { turn_number: turn })
-        }
-        QueryEvent::TurnCompleted { .. } => None, // Handled at run() return
-        QueryEvent::CompactionTriggered => Some(ServerNotification::ContextCompacted {
-            removed_messages: 0,
-            summary_tokens: 0,
-        }),
         _ => None,
     }
 }

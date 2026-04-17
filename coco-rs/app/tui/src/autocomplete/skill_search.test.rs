@@ -56,8 +56,7 @@ fn test_fuzzy_search_typo() {
     let results = mgr.search("compct");
 
     // Fuzzy matching should still find "compact"
-    let labels: Vec<&str> = results.iter().map(|r| r.label.as_str()).collect();
-    assert!(labels.contains(&"/compact"));
+    assert!(results.iter().any(|r| r.label == "/compact"));
 }
 
 #[test]
@@ -65,8 +64,7 @@ fn test_search_alias() {
     let mgr = SkillSearchManager::new(sample_skills());
     let results = mgr.search("h");
 
-    let labels: Vec<&str> = results.iter().map(|r| r.label.as_str()).collect();
-    assert!(labels.contains(&"/help [command]"));
+    assert!(results.iter().any(|r| r.label == "/help [command]"));
 }
 
 #[test]

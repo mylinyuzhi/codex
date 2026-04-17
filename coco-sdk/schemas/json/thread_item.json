@@ -1,0 +1,311 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ThreadItem",
+  "description": "Semantic representation of a conversation thread item. Produced by `StreamAccumulator` from `AgentStreamEvent` sequences. Used in `ServerNotification::ItemStarted / ItemUpdated / ItemCompleted`.\n\nSee `event-system-design.md` Section 1.6.",
+  "type": "object",
+  "required": [
+    "details",
+    "item_id",
+    "turn_id"
+  ],
+  "properties": {
+    "details": {
+      "$ref": "#/definitions/ThreadItemDetails"
+    },
+    "item_id": {
+      "type": "string"
+    },
+    "turn_id": {
+      "type": "string"
+    }
+  },
+  "definitions": {
+    "FileChangeInfo": {
+      "type": "object",
+      "required": [
+        "kind",
+        "path"
+      ],
+      "properties": {
+        "kind": {
+          "description": "One of: \"create\", \"modify\", \"delete\".",
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      }
+    },
+    "ItemStatus": {
+      "type": "string",
+      "enum": [
+        "in_progress",
+        "completed",
+        "failed",
+        "declined"
+      ]
+    },
+    "ThreadItemDetails": {
+      "description": "Tool-specific semantic mapping.\n\nMapping rules (from `event-system-design.md` Section 6.2): - Bash → `CommandExecution` - Edit/Write → `FileChange` - WebSearch → `WebSearch` - mcp__* → `McpToolCall` - Agent/Task → `Subagent` - all others → `ToolCall` - text content → `AgentMessage` - thinking → `Reasoning` - errors → `Error`",
+      "oneOf": [
+        {
+          "description": "Bash tool → command execution with output.",
+          "type": "object",
+          "required": [
+            "command",
+            "output",
+            "status",
+            "type"
+          ],
+          "properties": {
+            "command": {
+              "type": "string"
+            },
+            "exit_code": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32"
+            },
+            "output": {
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/definitions/ItemStatus"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "command_execution"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Edit/Write tools → file change with diff info.",
+          "type": "object",
+          "required": [
+            "changes",
+            "status",
+            "type"
+          ],
+          "properties": {
+            "changes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/FileChangeInfo"
+              }
+            },
+            "status": {
+              "$ref": "#/definitions/ItemStatus"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "file_change"
+              ]
+            }
+          }
+        },
+        {
+          "description": "WebSearch tool.",
+          "type": "object",
+          "required": [
+            "query",
+            "status",
+            "type"
+          ],
+          "properties": {
+            "query": {
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/definitions/ItemStatus"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "web_search"
+              ]
+            }
+          }
+        },
+        {
+          "description": "MCP server tool call.",
+          "type": "object",
+          "required": [
+            "arguments",
+            "server",
+            "status",
+            "tool",
+            "type"
+          ],
+          "properties": {
+            "arguments": true,
+            "error": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "result": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "server": {
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/definitions/ItemStatus"
+            },
+            "tool": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "mcp_tool_call"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Agent/Task tool → subagent lifecycle.",
+          "type": "object",
+          "required": [
+            "agent_id",
+            "agent_type",
+            "description",
+            "status",
+            "type"
+          ],
+          "properties": {
+            "agent_id": {
+              "type": "string"
+            },
+            "agent_type": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            },
+            "is_background": {
+              "default": false,
+              "type": "boolean"
+            },
+            "result": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "$ref": "#/definitions/ItemStatus"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "subagent"
+              ]
+            }
+          }
+        },
+        {
+          "description": "All other tools (Read, Glob, Grep, etc.).",
+          "type": "object",
+          "required": [
+            "input",
+            "status",
+            "tool",
+            "type"
+          ],
+          "properties": {
+            "input": true,
+            "is_error": {
+              "default": false,
+              "type": "boolean"
+            },
+            "output": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "$ref": "#/definitions/ItemStatus"
+            },
+            "tool": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "tool_call"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Assistant text content.",
+          "type": "object",
+          "required": [
+            "text",
+            "type"
+          ],
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "agent_message"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Reasoning/thinking content.",
+          "type": "object",
+          "required": [
+            "text",
+            "type"
+          ],
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "reasoning"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Error during processing.",
+          "type": "object",
+          "required": [
+            "message",
+            "type"
+          ],
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "error"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

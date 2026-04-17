@@ -107,13 +107,13 @@ pub fn detect_gateway(header_names: &[&str], base_url: Option<&str>) -> Option<K
     }
 
     // Check host suffixes by extracting hostname from URL
-    if let Some(url_str) = base_url {
-        if let Some(host) = extract_hostname(url_str) {
-            let host_lower = host.to_lowercase();
-            for (gw, suffixes) in GATEWAY_HOST_SUFFIXES {
-                if suffixes.iter().any(|s| host_lower.ends_with(s)) {
-                    return Some(*gw);
-                }
+    if let Some(url_str) = base_url
+        && let Some(host) = extract_hostname(url_str)
+    {
+        let host_lower = host.to_lowercase();
+        for (gw, suffixes) in GATEWAY_HOST_SUFFIXES {
+            if suffixes.iter().any(|s| host_lower.ends_with(s)) {
+                return Some(*gw);
             }
         }
     }

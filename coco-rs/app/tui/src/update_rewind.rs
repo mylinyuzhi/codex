@@ -226,7 +226,7 @@ pub fn messages_after_are_only_synthetic(
 
 /// Find the last selectable user message index for auto-restore.
 pub fn find_last_user_message_index(messages: &[crate::state::ChatMessage]) -> Option<usize> {
-    messages.iter().rposition(|m| is_selectable_user_message(m))
+    messages.iter().rposition(is_selectable_user_message)
 }
 
 #[cfg(test)]

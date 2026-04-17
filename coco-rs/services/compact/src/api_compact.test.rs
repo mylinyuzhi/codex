@@ -94,16 +94,16 @@ fn test_clear_tool_uses_clears_old_inputs() {
     assert!(result.tokens_saved_estimate > 0);
 
     // Recent message should be untouched
-    if let Message::Assistant(asst) = &messages[2] {
-        if let LlmMessage::Assistant { content, .. } = &asst.message {
-            for part in content {
-                if let AssistantContent::ToolCall(tc) = part {
-                    assert_ne!(
-                        tc.input,
-                        serde_json::Value::Object(serde_json::Map::new()),
-                        "recent tool call input should be preserved"
-                    );
-                }
+    if let Message::Assistant(asst) = &messages[2]
+        && let LlmMessage::Assistant { content, .. } = &asst.message
+    {
+        for part in content {
+            if let AssistantContent::ToolCall(tc) = part {
+                assert_ne!(
+                    tc.input,
+                    serde_json::Value::Object(serde_json::Map::new()),
+                    "recent tool call input should be preserved"
+                );
             }
         }
     }
@@ -163,17 +163,17 @@ fn test_clear_thinking_removes_all_reasoning() {
 
     // Verify reasoning is gone but text remains
     for msg in &messages {
-        if let Message::Assistant(asst) = msg {
-            if let LlmMessage::Assistant { content, .. } = &asst.message {
-                let has_reasoning = content
-                    .iter()
-                    .any(|c| matches!(c, AssistantContent::Reasoning(_)));
-                assert!(!has_reasoning, "reasoning blocks should be removed");
-                let has_text = content
-                    .iter()
-                    .any(|c| matches!(c, AssistantContent::Text(_)));
-                assert!(has_text, "text parts should be preserved");
-            }
+        if let Message::Assistant(asst) = msg
+            && let LlmMessage::Assistant { content, .. } = &asst.message
+        {
+            let has_reasoning = content
+                .iter()
+                .any(|c| matches!(c, AssistantContent::Reasoning(_)));
+            assert!(!has_reasoning, "reasoning blocks should be removed");
+            let has_text = content
+                .iter()
+                .any(|c| matches!(c, AssistantContent::Text(_)));
+            assert!(has_text, "text parts should be preserved");
         }
     }
 }

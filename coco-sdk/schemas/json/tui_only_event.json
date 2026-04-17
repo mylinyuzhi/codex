@@ -1,0 +1,474 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TuiOnlyEvent",
+  "description": "TUI-exclusive events.\n\nThese events are dropped by SDK and App-Server consumers. They drive overlays, toasts, and UI-only state transitions that are not part of the protocol contract.\n\nPer `event-system-design.md` Section 1.7, the design listed this type as owned by `coco-tui`. Since `CoreEvent::Tui(TuiOnlyEvent)` is part of the envelope enum defined in `coco-types`, the type itself must live in `coco-types` to avoid a cyclic dependency. The semantic contract (TUI-only, never sent to SDK) is preserved via consumer dispatch rules in `StreamAccumulator` and `handle_core_event()`.\n\nSee `event-system-design.md` Section 4.1 for the canonical 20-variant list.",
+  "oneOf": [
+    {
+      "description": "Permission approval overlay needed.",
+      "type": "object",
+      "required": [
+        "description",
+        "input_preview",
+        "request_id",
+        "tool_name",
+        "type"
+      ],
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "input_preview": {
+          "type": "string"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "tool_name": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "approval_required"
+          ]
+        }
+      }
+    },
+    {
+      "description": "AskUserQuestion overlay needed.",
+      "type": "object",
+      "required": [
+        "message",
+        "request_id",
+        "type"
+      ],
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "question_asked"
+          ]
+        }
+      }
+    },
+    {
+      "description": "MCP elicitation overlay needed.",
+      "type": "object",
+      "required": [
+        "request_id",
+        "schema",
+        "server",
+        "type"
+      ],
+      "properties": {
+        "request_id": {
+          "type": "string"
+        },
+        "schema": true,
+        "server": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "elicitation_requested"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Sandbox approval overlay needed.",
+      "type": "object",
+      "required": [
+        "operation",
+        "request_id",
+        "type"
+      ],
+      "properties": {
+        "operation": {
+          "type": "string"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "sandbox_approval_required"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Plugin picker data loaded.",
+      "type": "object",
+      "required": [
+        "plugins",
+        "type"
+      ],
+      "properties": {
+        "plugins": {
+          "type": "array",
+          "items": true
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "plugin_data_ready"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Output style picker data loaded.",
+      "type": "object",
+      "required": [
+        "styles",
+        "type"
+      ],
+      "properties": {
+        "styles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "output_styles_ready"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Rewind selector checkpoints loaded.",
+      "type": "object",
+      "required": [
+        "checkpoints",
+        "type"
+      ],
+      "properties": {
+        "checkpoints": {
+          "type": "array",
+          "items": true
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "rewind_checkpoints_ready"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Rewind diff preview loaded.",
+      "type": "object",
+      "required": [
+        "deletions",
+        "files_changed",
+        "insertions",
+        "message_id",
+        "type"
+      ],
+      "properties": {
+        "deletions": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "files_changed": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "insertions": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "message_id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "diff_stats_ready"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Compaction circuit breaker opened.",
+      "type": "object",
+      "required": [
+        "failures",
+        "type"
+      ],
+      "properties": {
+        "failures": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "compaction_circuit_breaker_open"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Micro-compaction applied notification.",
+      "type": "object",
+      "required": [
+        "removed",
+        "type"
+      ],
+      "properties": {
+        "removed": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "micro_compaction_applied"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Session memory compaction applied notification.",
+      "type": "object",
+      "required": [
+        "summary_tokens",
+        "type"
+      ],
+      "properties": {
+        "summary_tokens": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "session_memory_compact_applied"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Speculative execution rolled back.",
+      "type": "object",
+      "required": [
+        "reason",
+        "type"
+      ],
+      "properties": {
+        "reason": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "speculative_rolled_back"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Memory extraction started.",
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "session_memory_extraction_started"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Memory extraction completed.",
+      "type": "object",
+      "required": [
+        "extracted",
+        "type"
+      ],
+      "properties": {
+        "extracted": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "session_memory_extraction_completed"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Memory extraction failed.",
+      "type": "object",
+      "required": [
+        "error",
+        "type"
+      ],
+      "properties": {
+        "error": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "session_memory_extraction_failed"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Cron job disabled by circuit breaker.",
+      "type": "object",
+      "required": [
+        "job_id",
+        "reason",
+        "type"
+      ],
+      "properties": {
+        "job_id": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "cron_job_disabled"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Missed cron job fires.",
+      "type": "object",
+      "required": [
+        "count",
+        "type"
+      ],
+      "properties": {
+        "count": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "cron_jobs_missed"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Streaming tool input delta (typing effect).",
+      "type": "object",
+      "required": [
+        "call_id",
+        "delta",
+        "type"
+      ],
+      "properties": {
+        "call_id": {
+          "type": "string"
+        },
+        "delta": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "tool_call_delta"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Tool progress update (progress bar).",
+      "type": "object",
+      "required": [
+        "data",
+        "tool_use_id",
+        "type"
+      ],
+      "properties": {
+        "data": true,
+        "tool_use_id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "tool_progress"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Tool execution aborted notification.",
+      "type": "object",
+      "required": [
+        "reason",
+        "tool_use_id",
+        "type"
+      ],
+      "properties": {
+        "reason": {
+          "type": "string"
+        },
+        "tool_use_id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "tool_execution_aborted"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Rewind completed — TUI truncates messages and restores input state. coco-rs extension: UI-only because it carries TUI-specific identifiers for message truncation and input repopulation. Out-of-band from the design's `rewind/completed` ServerNotification which carries protocol metadata only.",
+      "type": "object",
+      "required": [
+        "files_changed",
+        "target_message_id",
+        "type"
+      ],
+      "properties": {
+        "files_changed": {
+          "description": "Number of files restored (0 if conversation-only).",
+          "type": "integer",
+          "format": "int32"
+        },
+        "target_message_id": {
+          "description": "UUID of the target user message. Empty = code-only rewind.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "rewind_completed"
+          ]
+        }
+      }
+    }
+  ]
+}

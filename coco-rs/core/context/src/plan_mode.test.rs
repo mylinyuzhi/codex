@@ -4,10 +4,9 @@ use serde_json::json;
 #[test]
 fn test_generate_word_slug_format() {
     let slug = generate_word_slug();
-    let parts: Vec<&str> = slug.split('-').collect();
     // At least 3 parts (adjective-verb-noun), though some words contain dashes
     assert!(
-        parts.len() >= 3,
+        slug.split('-').count() >= 3,
         "slug should have at least 3 parts: {slug}"
     );
     assert!(!slug.is_empty());

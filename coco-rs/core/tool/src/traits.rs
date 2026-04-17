@@ -87,6 +87,25 @@ pub struct McpToolInfo {
     pub tool_name: String,
 }
 
+impl McpToolInfo {
+    /// MCP-qualified tool name: `mcp__<server>__<tool>`.
+    ///
+    /// TS `toolExecution.ts:287-300` + `mcpStringUtils.ts`. This is the
+    /// canonical name registered in the `ToolRegistry` so that MCP tools
+    /// cannot accidentally shadow built-in tools — a hostile or buggy
+    /// MCP server advertising a tool named `Read` or `Bash` gets
+    /// namespaced as `mcp__foo__Read` instead of overwriting the real
+    /// one.
+    ///
+    /// Server and tool names are passed through unchanged. Sanitization
+    /// (replacing `-`/`.`/` ` with `_`) is the caller's responsibility
+    /// if the upstream MCP server uses characters that would break the
+    /// delimiter; most servers already use snake_case.
+    pub fn qualified_name(&self) -> String {
+        format!("mcp__{}__{}", self.server_name, self.tool_name)
+    }
+}
+
 /// Progress update from a tool during execution.
 ///
 /// TS: `ToolProgress<P>` — yielded immediately via onProgress callback.
@@ -239,6 +258,42 @@ pub trait Tool: Send + Sync {
     /// via mailbox instead of requiring a local permission dialog).
     fn requires_user_interaction(&self) -> bool {
         true
+    }
+
+    /// Whether this tool exhibits "open-world" behavior — i.e. its effect
+    /// depends on external state not under our control (environment,
+    /// network, external services, arbitrary user input). Used as a
+    /// metadata hint for UI rendering and telemetry; does NOT gate
+    /// permissions or execution.
+    ///
+    /// TS: `Tool.ts:434` `isOpenWorld?(input) -> boolean`. TS uses this
+    /// to tag MCP tools with an "[open-world]" label in the list view
+    /// (`components/mcp/MCPToolListView.tsx:63`) and to set a `openWorld`
+    /// field in `/print` CLI output (`cli/print.ts:1662`).
+    ///
+    /// Default is `false` — tools are closed-world unless they opt in.
+    /// Dynamic MCP wrappers (`core/tools/src/tools/mcp_tools.rs`) can
+    /// override this to forward the annotation from the MCP server.
+    fn is_open_world(&self, _input: &Value) -> bool {
+        false
+    }
+
+    /// Whether this tool is sourced from an MCP (Model Context Protocol)
+    /// server rather than being a native built-in.
+    ///
+    /// TS: `Tool.ts:436` `isMcp?: boolean`. TS uses this field to
+    /// distinguish MCP-wrapped tools from built-ins for UI labeling,
+    /// permission filtering, and the MCP list/detail views. The
+    /// `isLsp?: boolean` sibling at `Tool.ts:437` serves the same role
+    /// for LSP-backed tools — coco-rs has `is_lsp()` already; T3 adds
+    /// the MCP counterpart.
+    ///
+    /// Default derives from `mcp_info()`: any tool that advertises
+    /// `McpToolInfo` is an MCP tool. Concrete MCP wrapper
+    /// implementations may still override this if they distinguish
+    /// between pseudo-tools (e.g. MCP auth) and real MCP tools.
+    fn is_mcp(&self) -> bool {
+        self.mcp_info().is_some()
     }
 
     /// Returns information about whether this tool use is a search or read

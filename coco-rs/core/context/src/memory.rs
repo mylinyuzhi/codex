@@ -73,16 +73,16 @@ fn collect_memory_files(dir: &Path, mem_type: MemoryType, out: &mut Vec<MemoryFi
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().is_some_and(|ext| ext == "md") {
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                out.push(MemoryFileInfo {
-                    path,
-                    memory_type: mem_type,
-                    content,
-                    parent: None,
-                    globs: None,
-                });
-            }
+        if path.extension().is_some_and(|ext| ext == "md")
+            && let Ok(content) = std::fs::read_to_string(&path)
+        {
+            out.push(MemoryFileInfo {
+                path,
+                memory_type: mem_type,
+                content,
+                parent: None,
+                globs: None,
+            });
         }
     }
 }

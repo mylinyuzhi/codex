@@ -361,3 +361,298 @@ fn test_streaming_discard() {
         _ => panic!("expected Result, got Progress"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Hook pipeline integration (B1.3)
+// ---------------------------------------------------------------------------
+
+use crate::hook_handle::HookHandle;
+use crate::hook_handle::HookPermission;
+use crate::hook_handle::PostToolUseOutcome;
+use crate::hook_handle::PreToolUseOutcome;
+use std::sync::atomic::AtomicUsize;
+
+/// Hook handle that records each invocation into a shared counter so tests
+/// can verify that both PreToolUse and PostToolUse fire exactly once per
+/// tool call. Configurable to return specific outcomes for each stage.
+struct RecordingHookHandle {
+    pre_calls: Arc<AtomicUsize>,
+    post_ok_calls: Arc<AtomicUsize>,
+    post_err_calls: Arc<AtomicUsize>,
+    pre_outcome: PreToolUseOutcome,
+    post_ok_outcome: PostToolUseOutcome,
+    post_err_outcome: PostToolUseOutcome,
+}
+
+impl RecordingHookHandle {
+    fn default_recorder() -> (Self, Arc<AtomicUsize>, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+        let pre = Arc::new(AtomicUsize::new(0));
+        let post_ok = Arc::new(AtomicUsize::new(0));
+        let post_err = Arc::new(AtomicUsize::new(0));
+        (
+            Self {
+                pre_calls: pre.clone(),
+                post_ok_calls: post_ok.clone(),
+                post_err_calls: post_err.clone(),
+                pre_outcome: PreToolUseOutcome::default(),
+                post_ok_outcome: PostToolUseOutcome::default(),
+                post_err_outcome: PostToolUseOutcome::default(),
+            },
+            pre,
+            post_ok,
+            post_err,
+        )
+    }
+}
+
+#[async_trait::async_trait]
+impl HookHandle for RecordingHookHandle {
+    async fn run_pre_tool_use(
+        &self,
+        _tool_name: &str,
+        _tool_use_id: &str,
+        _tool_input: &Value,
+    ) -> PreToolUseOutcome {
+        self.pre_calls.fetch_add(1, Ordering::SeqCst);
+        self.pre_outcome.clone()
+    }
+
+    async fn run_post_tool_use(
+        &self,
+        _tool_name: &str,
+        _tool_use_id: &str,
+        _tool_input: &Value,
+        _tool_response: &Value,
+    ) -> PostToolUseOutcome {
+        self.post_ok_calls.fetch_add(1, Ordering::SeqCst);
+        self.post_ok_outcome.clone()
+    }
+
+    async fn run_post_tool_use_failure(
+        &self,
+        _tool_name: &str,
+        _tool_use_id: &str,
+        _tool_input: &Value,
+        _error_message: &str,
+    ) -> PostToolUseOutcome {
+        self.post_err_calls.fetch_add(1, Ordering::SeqCst);
+        self.post_err_outcome.clone()
+    }
+}
+
+/// PreToolUse + PostToolUse fire exactly once per single-tool execution
+/// when a hook handle is attached.
+#[tokio::test]
+async fn test_hook_pipeline_single_tool_invokes_pre_and_post() {
+    let (handle, pre, post_ok, post_err) = RecordingHookHandle::default_recorder();
+    let mut ctx = crate::context::ToolUseContext::test_default();
+    ctx.hook_handle = Some(Arc::new(handle));
+
+    let exec = StreamingToolExecutor::new();
+    let call = PendingToolCall {
+        tool_use_id: "t1".into(),
+        tool: Arc::new(UnsafeTool { name: "u".into() }),
+        input: json!({"x": 1}),
+    };
+    let result = exec.execute_single(call, &ctx).await;
+    assert!(result.result.is_ok());
+    assert_eq!(pre.load(Ordering::SeqCst), 1, "PreToolUse ran once");
+    assert_eq!(post_ok.load(Ordering::SeqCst), 1, "PostToolUse ran once");
+    assert_eq!(
+        post_err.load(Ordering::SeqCst),
+        0,
+        "failure hook did not run"
+    );
+}
+
+/// A PreToolUse hook that sets `blocking_reason` must prevent the tool
+/// from executing and the error bubbles up as PermissionDenied.
+#[tokio::test]
+async fn test_hook_pipeline_pre_reject_blocks_execution() {
+    let (mut handle, pre, post_ok, post_err) = RecordingHookHandle::default_recorder();
+    handle.pre_outcome.blocking_reason = Some("denied by test hook".into());
+    let mut ctx = crate::context::ToolUseContext::test_default();
+    ctx.hook_handle = Some(Arc::new(handle));
+
+    let exec = StreamingToolExecutor::new();
+    let call = PendingToolCall {
+        tool_use_id: "t1".into(),
+        tool: Arc::new(UnsafeTool { name: "u".into() }),
+        input: json!({"x": 1}),
+    };
+    let result = exec.execute_single(call, &ctx).await;
+
+    assert!(result.result.is_err());
+    let err = result.result.unwrap_err().to_string();
+    assert!(err.contains("denied by test hook"), "got: {err}");
+    assert_eq!(pre.load(Ordering::SeqCst), 1, "pre hook ran");
+    assert_eq!(
+        post_ok.load(Ordering::SeqCst),
+        0,
+        "tool did not run so no post"
+    );
+    assert_eq!(post_err.load(Ordering::SeqCst), 0);
+}
+
+/// PreToolUse `PermissionOverride::Deny` must also hard-block.
+#[tokio::test]
+async fn test_hook_pipeline_pre_deny_override_blocks() {
+    let (mut handle, _pre, post_ok, _post_err) = RecordingHookHandle::default_recorder();
+    handle.pre_outcome.permission_override = Some(HookPermission::Deny);
+    let mut ctx = crate::context::ToolUseContext::test_default();
+    ctx.hook_handle = Some(Arc::new(handle));
+
+    let exec = StreamingToolExecutor::new();
+    let call = PendingToolCall {
+        tool_use_id: "t1".into(),
+        tool: Arc::new(UnsafeTool { name: "u".into() }),
+        input: json!({}),
+    };
+    let result = exec.execute_single(call, &ctx).await;
+    assert!(result.result.is_err());
+    assert_eq!(post_ok.load(Ordering::SeqCst), 0);
+}
+
+/// PreToolUse `updated_input` must be forwarded to tool.execute() — the
+/// tool echoes input back as the result, so we can verify the rewrite.
+#[tokio::test]
+async fn test_hook_pipeline_pre_modify_input_is_applied() {
+    let (mut handle, _pre, _post_ok, _post_err) = RecordingHookHandle::default_recorder();
+    handle.pre_outcome.updated_input = Some(json!({"x": 99, "rewritten": true}));
+    let mut ctx = crate::context::ToolUseContext::test_default();
+    ctx.hook_handle = Some(Arc::new(handle));
+
+    let exec = StreamingToolExecutor::new();
+    let call = PendingToolCall {
+        tool_use_id: "t1".into(),
+        tool: Arc::new(UnsafeTool { name: "u".into() }),
+        input: json!({"x": 1}),
+    };
+    let result = exec.execute_single(call, &ctx).await;
+    let data = result.result.unwrap().data;
+    assert_eq!(data["x"], 99);
+    assert_eq!(data["rewritten"], true);
+}
+
+/// PostToolUse `updated_output` must replace the tool's result data.
+#[tokio::test]
+async fn test_hook_pipeline_post_modify_output_is_applied() {
+    let (mut handle, _pre, _post_ok, _post_err) = RecordingHookHandle::default_recorder();
+    handle.post_ok_outcome.updated_output = Some(json!("replaced by hook"));
+    let mut ctx = crate::context::ToolUseContext::test_default();
+    ctx.hook_handle = Some(Arc::new(handle));
+
+    let exec = StreamingToolExecutor::new();
+    let call = PendingToolCall {
+        tool_use_id: "t1".into(),
+        tool: Arc::new(UnsafeTool { name: "u".into() }),
+        input: json!({"x": 1}),
+    };
+    let result = exec.execute_single(call, &ctx).await;
+    let data = result.result.unwrap().data;
+    assert_eq!(data, json!("replaced by hook"));
+}
+
+/// When the tool errors, PostToolUseFailure fires (not PostToolUse).
+#[tokio::test]
+async fn test_hook_pipeline_post_failure_on_tool_error() {
+    struct FailingTool;
+    #[async_trait::async_trait]
+    impl crate::traits::Tool for FailingTool {
+        fn id(&self) -> ToolId {
+            ToolId::Custom("failing".into())
+        }
+        fn name(&self) -> &str {
+            "failing"
+        }
+        fn description(&self, _: &Value, _: &DescriptionOptions) -> String {
+            "".into()
+        }
+        fn input_schema(&self) -> ToolInputSchema {
+            ToolInputSchema {
+                properties: HashMap::new(),
+            }
+        }
+        async fn execute(
+            &self,
+            _input: Value,
+            _ctx: &crate::context::ToolUseContext,
+        ) -> Result<ToolResult<Value>, crate::error::ToolError> {
+            Err(crate::error::ToolError::ExecutionFailed {
+                message: "boom".into(),
+                source: None,
+            })
+        }
+    }
+
+    let (handle, pre, post_ok, post_err) = RecordingHookHandle::default_recorder();
+    let mut ctx = crate::context::ToolUseContext::test_default();
+    ctx.hook_handle = Some(Arc::new(handle));
+
+    let exec = StreamingToolExecutor::new();
+    let call = PendingToolCall {
+        tool_use_id: "t1".into(),
+        tool: Arc::new(FailingTool),
+        input: json!({}),
+    };
+    let _ = exec.execute_single(call, &ctx).await;
+
+    assert_eq!(pre.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        post_ok.load(Ordering::SeqCst),
+        0,
+        "success hook did not run"
+    );
+    assert_eq!(post_err.load(Ordering::SeqCst), 1, "failure hook ran");
+}
+
+/// Concurrent path must also invoke hooks (same contract as single path).
+#[tokio::test]
+async fn test_hook_pipeline_concurrent_tools_invoke_hooks() {
+    let (handle, pre, post_ok, _post_err) = RecordingHookHandle::default_recorder();
+    let mut ctx = crate::context::ToolUseContext::test_default();
+    ctx.hook_handle = Some(Arc::new(handle));
+
+    let exec = StreamingToolExecutor::new();
+    let calls = vec![
+        PendingToolCall {
+            tool_use_id: "a".into(),
+            tool: Arc::new(SafeTool { name: "s".into() }),
+            input: json!({"i": 1}),
+        },
+        PendingToolCall {
+            tool_use_id: "b".into(),
+            tool: Arc::new(SafeTool { name: "s".into() }),
+            input: json!({"i": 2}),
+        },
+        PendingToolCall {
+            tool_use_id: "c".into(),
+            tool: Arc::new(SafeTool { name: "s".into() }),
+            input: json!({"i": 3}),
+        },
+    ];
+    let results = exec.execute_concurrent(calls, &ctx).await;
+    assert_eq!(results.len(), 3);
+    assert!(results.iter().all(|r| r.result.is_ok()));
+    assert_eq!(pre.load(Ordering::SeqCst), 3, "pre hook per tool");
+    assert_eq!(post_ok.load(Ordering::SeqCst), 3, "post hook per tool");
+}
+
+/// Missing hook handle (None) falls through unchanged — existing tests
+/// already cover this but we assert it explicitly to nail the contract.
+#[tokio::test]
+async fn test_hook_pipeline_absent_handle_is_noop() {
+    let ctx = crate::context::ToolUseContext::test_default();
+    // Default ctx has hook_handle: None.
+    assert!(ctx.hook_handle.is_none());
+
+    let exec = StreamingToolExecutor::new();
+    let call = PendingToolCall {
+        tool_use_id: "t1".into(),
+        tool: Arc::new(UnsafeTool { name: "u".into() }),
+        input: json!({"x": 42}),
+    };
+    let result = exec.execute_single(call, &ctx).await;
+    assert!(result.result.is_ok());
+    assert_eq!(result.result.unwrap().data, json!({"x": 42}));
+}
