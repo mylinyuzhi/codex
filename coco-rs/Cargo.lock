@@ -1284,6 +1284,7 @@ dependencies = [
  "coco-hooks",
  "coco-inference",
  "coco-messages",
+ "coco-otel",
  "coco-session",
  "coco-tool",
  "coco-tools",

@@ -10,6 +10,9 @@ use crate::budget::BudgetTracker;
 use crate::command_queue::CommandQueue;
 use crate::command_queue::Inbox;
 use crate::command_queue::QueuePriority;
+use crate::emit::emit_protocol;
+use crate::emit::emit_protocol_owned;
+use crate::emit::emit_stream;
 use crate::session_state::SessionStateTracker;
 use coco_context::FileHistoryState;
 use coco_hooks::HookRegistry;
@@ -34,7 +37,6 @@ use coco_types::ToolId;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
-use tracing::debug;
 use tracing::info;
 use tracing::warn;
 use vercel_ai_provider::AssistantContentPart;
@@ -412,9 +414,9 @@ impl QueryEngine {
             Ok(qr) => self.build_session_result_params(qr, /*error_messages*/ Vec::new()),
             Err(e) => self.build_session_error_params(e.to_string()),
         };
-        Self::emit(
+        let _delivered = emit_protocol(
             &event_tx,
-            crate::CoreEvent::Protocol(crate::ServerNotification::SessionResult(Box::new(params))),
+            crate::ServerNotification::SessionResult(Box::new(params)),
         )
         .await;
 
@@ -445,28 +447,26 @@ impl QueryEngine {
         } else {
             bootstrap.tools.clone()
         };
-        Self::emit(
+        let _delivered = emit_protocol(
             event_tx,
-            crate::CoreEvent::Protocol(crate::ServerNotification::SessionStarted(
-                coco_types::SessionStartedParams {
-                    session_id: self.config.session_id.clone(),
-                    protocol_version: bootstrap.protocol_version.clone(),
-                    cwd: bootstrap.cwd.clone(),
-                    model: self.config.model_name.clone(),
-                    permission_mode,
-                    tools,
-                    slash_commands: bootstrap.slash_commands.clone(),
-                    agents: bootstrap.agents.clone(),
-                    skills: bootstrap.skills.clone(),
-                    mcp_servers: bootstrap.mcp_servers.clone(),
-                    plugins: bootstrap.plugins.clone(),
-                    api_key_source: bootstrap.api_key_source.clone(),
-                    betas: bootstrap.betas.clone(),
-                    version: bootstrap.version.clone(),
-                    output_style: bootstrap.output_style.clone(),
-                    fast_mode_state: bootstrap.fast_mode_state,
-                },
-            )),
+            crate::ServerNotification::SessionStarted(coco_types::SessionStartedParams {
+                session_id: self.config.session_id.clone(),
+                protocol_version: bootstrap.protocol_version.clone(),
+                cwd: bootstrap.cwd.clone(),
+                model: self.config.model_name.clone(),
+                permission_mode,
+                tools,
+                slash_commands: bootstrap.slash_commands.clone(),
+                agents: bootstrap.agents.clone(),
+                skills: bootstrap.skills.clone(),
+                mcp_servers: bootstrap.mcp_servers.clone(),
+                plugins: bootstrap.plugins.clone(),
+                api_key_source: bootstrap.api_key_source.clone(),
+                betas: bootstrap.betas.clone(),
+                version: bootstrap.version.clone(),
+                output_style: bootstrap.output_style.clone(),
+                fast_mode_state: bootstrap.fast_mode_state,
+            }),
         )
         .await;
     }
@@ -689,15 +689,13 @@ impl QueryEngine {
                     info!(%message, "budget nudge");
                     // No direct ServerNotification for budget nudge; emit as non-retryable Error
                     // so SDK consumers can surface the warning.
-                    Self::emit(
+                    let _delivered = emit_protocol(
                         &event_tx,
-                        crate::CoreEvent::Protocol(crate::ServerNotification::Error(
-                            coco_types::ErrorParams {
-                                message,
-                                category: Some("budget".into()),
-                                retryable: false,
-                            },
-                        )),
+                        crate::ServerNotification::Error(coco_types::ErrorParams {
+                            message,
+                            category: Some("budget".into()),
+                            retryable: false,
+                        }),
                     )
                     .await;
                 }
@@ -707,14 +705,12 @@ impl QueryEngine {
             turn += 1;
             info!(turn, "starting turn");
             let turn_id = format!("turn-{turn}");
-            Self::emit(
+            let _delivered = emit_protocol(
                 &event_tx,
-                crate::CoreEvent::Protocol(crate::ServerNotification::TurnStarted(
-                    coco_types::TurnStartedParams {
-                        turn_id: Some(turn_id.clone()),
-                        turn_number: turn,
-                    },
-                )),
+                crate::ServerNotification::TurnStarted(coco_types::TurnStartedParams {
+                    turn_id: Some(turn_id.clone()),
+                    turn_number: turn,
+                }),
             )
             .await;
 
@@ -759,13 +755,9 @@ impl QueryEngine {
                             &mut history.messages,
                             drop_target,
                         );
-                        Self::emit(
-                            &event_tx,
-                            crate::CoreEvent::Protocol(
-                                crate::ServerNotification::CompactionStarted,
-                            ),
-                        )
-                        .await;
+                        let _delivered =
+                            emit_protocol(&event_tx, crate::ServerNotification::CompactionStarted)
+                                .await;
                         last_continue_reason = Some(ContinueReason::ReactiveCompactRetry);
                         budget.reset_continuations();
                         continue;
@@ -792,12 +784,12 @@ impl QueryEngine {
                 match part {
                     AssistantContentPart::Text(t) => {
                         response_text.push_str(&t.text);
-                        Self::emit(
+                        let _delivered = emit_stream(
                             &event_tx,
-                            crate::CoreEvent::Stream(crate::AgentStreamEvent::TextDelta {
+                            crate::AgentStreamEvent::TextDelta {
                                 turn_id: turn_id.clone(),
                                 delta: t.text.clone(),
-                            }),
+                            },
                         )
                         .await;
                     }
@@ -805,12 +797,12 @@ impl QueryEngine {
                         tool_calls.push(tc.clone());
                     }
                     AssistantContentPart::Reasoning(r) => {
-                        Self::emit(
+                        let _delivered = emit_stream(
                             &event_tx,
-                            crate::CoreEvent::Stream(crate::AgentStreamEvent::ThinkingDelta {
+                            crate::AgentStreamEvent::ThinkingDelta {
                                 turn_id: turn_id.clone(),
                                 delta: r.text.clone(),
-                            }),
+                            },
                         )
                         .await;
                     }
@@ -1044,13 +1036,13 @@ impl QueryEngine {
                     }
 
                     // Emit stream event: tool queued with complete input.
-                    Self::emit(
+                    let _delivered = emit_stream(
                         &event_tx,
-                        crate::CoreEvent::Stream(crate::AgentStreamEvent::ToolUseQueued {
+                        crate::AgentStreamEvent::ToolUseQueued {
                             call_id: tc.tool_call_id.clone(),
                             name: tc.tool_name.clone(),
                             input: tc.input.clone(),
-                        }),
+                        },
                     )
                     .await;
 
@@ -1077,13 +1069,13 @@ impl QueryEngine {
                     .find(|tc| tc.tool_call_id == pc.tool_use_id)
                     .map(|tc| tc.tool_name.clone())
                     .unwrap_or_else(|| "unknown".to_string());
-                Self::emit(
+                let _delivered = emit_stream(
                     &event_tx,
-                    crate::CoreEvent::Stream(crate::AgentStreamEvent::ToolUseStarted {
+                    crate::AgentStreamEvent::ToolUseStarted {
                         call_id: pc.tool_use_id.clone(),
                         name: tool_name,
                         batch_id: None,
-                    }),
+                    },
                 )
                 .await;
             }
@@ -1109,14 +1101,14 @@ impl QueryEngine {
                     .map(|tc| tc.tool_name.clone())
                     .unwrap_or_else(|| "unknown".to_string());
 
-                Self::emit(
+                let _delivered = emit_stream(
                     &event_tx,
-                    crate::CoreEvent::Stream(crate::AgentStreamEvent::ToolUseCompleted {
+                    crate::AgentStreamEvent::ToolUseCompleted {
                         call_id: result.tool_use_id.clone(),
                         name: tool_name,
                         output: output.clone(),
                         is_error: result.result.is_err(),
-                    }),
+                    },
                 )
                 .await;
             }
@@ -1210,11 +1202,9 @@ impl QueryEngine {
                 self.command_queue.remove(&prompts_to_remove).await;
                 // Report the new queue state after draining.
                 let remaining = self.command_queue.len().await as i32;
-                Self::emit(
+                let _delivered = emit_protocol(
                     &event_tx,
-                    crate::CoreEvent::Protocol(crate::ServerNotification::QueueStateChanged {
-                        queued: remaining,
-                    }),
+                    crate::ServerNotification::QueueStateChanged { queued: remaining },
                 )
                 .await;
                 let _ = count; // count retained for future telemetry
@@ -1253,14 +1243,14 @@ impl QueryEngine {
                 coco_compact::micro_compact(&mut history.messages, /*keep_recent*/ 10);
                 info!("auto micro-compaction triggered");
                 let removed = (pre_count - history.messages.len() as i32).max(0);
-                Self::emit(
+                let _delivered = emit_protocol(
                     &event_tx,
-                    crate::CoreEvent::Protocol(crate::ServerNotification::ContextCompacted(
+                    crate::ServerNotification::ContextCompacted(
                         coco_types::ContextCompactedParams {
                             removed_messages: removed,
                             summary_tokens: 0,
                         },
-                    )),
+                    ),
                 )
                 .await;
 
@@ -1277,14 +1267,12 @@ impl QueryEngine {
             }
 
             // Emit turn completed
-            Self::emit(
+            let _delivered = emit_protocol(
                 &event_tx,
-                crate::CoreEvent::Protocol(crate::ServerNotification::TurnCompleted(
-                    coco_types::TurnCompletedParams {
-                        turn_id: Some(turn_id),
-                        usage: llm_result.usage,
-                    },
-                )),
+                crate::ServerNotification::TurnCompleted(coco_types::TurnCompletedParams {
+                    turn_id: Some(turn_id),
+                    usage: llm_result.usage,
+                }),
             )
             .await;
             let _ = tool_calls; // has_tool_calls retained for future metrics
@@ -1434,14 +1422,14 @@ impl QueryEngine {
                 new_messages.extend(result.hook_results);
                 history.messages = new_messages;
 
-                Self::emit(
+                let _delivered = emit_protocol(
                     event_tx,
-                    crate::CoreEvent::Protocol(crate::ServerNotification::ContextCompacted(
+                    crate::ServerNotification::ContextCompacted(
                         coco_types::ContextCompactedParams {
                             removed_messages: 0,
                             summary_tokens: result.post_compact_tokens as i32,
                         },
-                    )),
+                    ),
                 )
                 .await;
             }
@@ -1455,18 +1443,6 @@ impl QueryEngine {
                         frs.set(path, entry);
                     }
                 }
-            }
-        }
-    }
-
-    /// Emit a core event if a sender is available.
-    async fn emit(
-        tx: &Option<tokio::sync::mpsc::Sender<crate::CoreEvent>>,
-        event: crate::CoreEvent,
-    ) {
-        if let Some(sender) = tx {
-            if sender.send(event).await.is_err() {
-                debug!("event receiver dropped — session ending");
             }
         }
     }
@@ -1501,36 +1477,32 @@ impl QueryEngine {
                     None => break,
                 },
             };
-            let core_evt = match evt {
+            let notif = match evt {
                 coco_hooks::HookExecutionEvent::Started {
                     hook_id,
                     hook_name,
                     hook_event,
-                } => crate::CoreEvent::Protocol(crate::ServerNotification::HookStarted(
-                    coco_types::HookStartedParams {
-                        hook_id,
-                        hook_name,
-                        hook_event,
-                    },
-                )),
+                } => crate::ServerNotification::HookStarted(coco_types::HookStartedParams {
+                    hook_id,
+                    hook_name,
+                    hook_event,
+                }),
                 coco_hooks::HookExecutionEvent::Progress {
                     hook_id,
                     hook_name,
                     stdout,
                     stderr,
-                } => crate::CoreEvent::Protocol(crate::ServerNotification::HookProgress(
-                    coco_types::HookProgressParams {
-                        hook_id,
-                        hook_name,
-                        // The orchestration-layer event doesn't carry the
-                        // hook event name on Progress; consumers can correlate
-                        // via `hook_id` against the preceding Started event.
-                        hook_event: String::new(),
-                        stdout,
-                        stderr,
-                        output: String::new(),
-                    },
-                )),
+                } => crate::ServerNotification::HookProgress(coco_types::HookProgressParams {
+                    hook_id,
+                    hook_name,
+                    // The orchestration-layer event doesn't carry the
+                    // hook event name on Progress; consumers can correlate
+                    // via `hook_id` against the preceding Started event.
+                    hook_event: String::new(),
+                    stdout,
+                    stderr,
+                    output: String::new(),
+                }),
                 coco_hooks::HookExecutionEvent::Response {
                     hook_id,
                     hook_name,
@@ -1538,23 +1510,21 @@ impl QueryEngine {
                     stdout,
                     stderr,
                     outcome,
-                } => crate::CoreEvent::Protocol(crate::ServerNotification::HookResponse(
-                    coco_types::HookResponseParams {
-                        hook_id,
-                        hook_name,
-                        hook_event: String::new(),
-                        // orchestration layer merges stdout into output on
-                        // the raw event; expose both fields separately for
-                        // SDK consumers.
-                        output: stdout.clone(),
-                        stdout,
-                        stderr,
-                        exit_code,
-                        outcome: hook_outcome_to_status(outcome),
-                    },
-                )),
+                } => crate::ServerNotification::HookResponse(coco_types::HookResponseParams {
+                    hook_id,
+                    hook_name,
+                    hook_event: String::new(),
+                    // orchestration layer merges stdout into output on
+                    // the raw event; expose both fields separately for
+                    // SDK consumers.
+                    output: stdout.clone(),
+                    stdout,
+                    stderr,
+                    exit_code,
+                    outcome: hook_outcome_to_status(outcome),
+                }),
             };
-            if core_tx.send(core_evt).await.is_err() {
+            if !emit_protocol_owned(&core_tx, notif).await {
                 break;
             }
         }

@@ -992,7 +992,7 @@ The SDK wire format is ServerNotification serialized as JSON-RPC 2.0 directly.
 
 All items done: `CoreEvent` defined, `ServerNotification` moved to coco-types (57 variants), `QueryEvent` deleted, `StreamAccumulator` implemented, TUI consumes `CoreEvent` via `handle_core_event()`.
 
-### Phase 0.5: Observability + Bridge Cleanup — IN PROGRESS (April 2026)
+### Phase 0.5: Observability + Bridge Cleanup — ✅ COMPLETE
 
 | Item | Change | Effort | Status |
 |------|--------|--------|--------|
@@ -1000,9 +1000,9 @@ All items done: `CoreEvent` defined, `ServerNotification` moved to coco-types (5
 | `RequiresAction` emission on permission Ask | Tracker emits `RequiresAction` before approval bridge, `Running` after resolution | S | ✅ done (WS-4) |
 | Hook forwarder → structured child task | `JoinHandle` + `CancellationToken` + 5s drain-on-shutdown | M | ✅ done (WS-5) |
 | `TaskManager` event sink | `with_event_sink(tx)` builder; emits `TaskStarted/Progress/Completed` | M | ✅ done (WS-6) |
-| Delete `TuiNotification` bridge type | TUI matches `CoreEvent` three layers directly with exhaustive `match` | M | pending (WS-2) |
-| Delete dead `TransportEvent` + wire `StreamAccumulator` into SDK | SDK dispatcher invokes accumulator per turn; deletes `transport.rs` | M | pending (WS-1) |
-| TUI full parity with TS for all 57 variants | ~25 new widgets, ~15 `AppState` fields, insta snapshots | L | pending (WS-3) |
+| Delete `TuiNotification` bridge type | TUI matches `CoreEvent` three layers directly with exhaustive `match` | M | ✅ done (WS-2) |
+| Delete dead `TransportEvent` + wire `StreamAccumulator` into SDK | SDK dispatcher invokes accumulator per turn; deletes `transport.rs` | M | ✅ done (WS-1) |
+| TUI full parity with TS for all 57 variants | exhaustive `handle_protocol` covers all 65 ServerNotification variants | L | ✅ done (WS-3) |
 
 ### Phase 1: P0 — SDK Consumer Parity — ✅ COMPLETE
 
@@ -1015,17 +1015,22 @@ All items done: `CoreEvent` defined, `ServerNotification` moved to coco-types (5
 | `permission_denials` accumulation | Tracked across session in `Vec<PermissionDenialInfo>`, flushed to `SessionResult` | S | ✅ done |
 | `Task` lifecycle emission | `TaskManager.with_event_sink(tx)` emits `TaskStarted/Progress/Completed` | M | ✅ done (Phase 0.5 WS-6) |
 
-### Phase 2: P1 — Control Protocol Completeness
+### Phase 2: P1 — Control Protocol Completeness — ✅ COMPLETE
 
-| Item | Change | Effort |
-|------|--------|--------|
-| `mcp/status` request | Add ClientRequest variant + handler | S |
-| `context/usage` request + response | Add variant + ContextUsageResult | M |
-| `mcp/setServers` request | Add variant + hot-reload logic | M |
-| `mcp/reconnect` request | Add variant + reconnect logic | S |
-| `mcp/toggle` request | Add variant + enable/disable logic | S |
-| `plugin/reload` request | Add variant + reload logic | M |
-| `config/applyFlags` request | Add variant + flag application | S |
+All 7 ClientRequest variants are registered in `coco-types::ClientRequest`,
+dispatched in `coco-cli/src/sdk_server/handlers/mod.rs::dispatch_client_request`,
+and implemented in `handlers/mcp.rs` (MCP-family) and `handlers/runtime.rs`
+(non-MCP). Test coverage lives in `handlers/tests.rs`.
+
+| Item | Handler | Status |
+|------|---------|--------|
+| `mcp/status` request | `mcp::handle_mcp_status` | ✅ done |
+| `context/usage` request + response | `runtime::handle_context_usage` | ✅ done |
+| `mcp/setServers` request | `mcp::handle_mcp_set_servers` | ✅ done |
+| `mcp/reconnect` request | `mcp::handle_mcp_reconnect` | ✅ done |
+| `mcp/toggle` request | `mcp::handle_mcp_toggle` | ✅ done |
+| `plugin/reload` request | `runtime::handle_plugin_reload` | ✅ done |
+| `config/applyFlags` request | `runtime::handle_config_apply_flags` | ✅ done |
 
 ### Phase 3: P2 — Nice-to-Have
 
@@ -1078,8 +1083,31 @@ Transport:          channel / NDJSON / WS ✓       NDJSON only
 **Bottom line**: The coco-rs event system is architecturally superior to TS.
 
 Status (April 2026):
-1. ✅ Phase 0: CoreEvent infrastructure — complete (57 ServerNotification, StreamAccumulator, QueryEvent deleted)
+1. ✅ Phase 0: CoreEvent infrastructure — complete (65 ServerNotification, StreamAccumulator, QueryEvent deleted)
 2. ✅ Phase 1: SDK consumer parity — complete (SessionState tracker, hook child task, TaskManager sink, permission denials)
-3. 🔄 Phase 0.5: Bridge cleanup — in progress (delete TuiNotification, wire StreamAccumulator into SDK, TUI full parity with TS)
-4. 📋 Phase 2: 7 control request additions (MCP management, context usage, plugin reload, flag settings)
+3. ✅ Phase 0.5: Bridge cleanup — complete (TuiNotification deleted, StreamAccumulator wired into SDK, TUI full parity)
+4. ✅ Phase 2: 7 control request handlers — complete (MCP management, context usage, plugin reload, flag settings — see `handlers/mcp.rs` + `handlers/runtime.rs`)
 5. ✅ Phase 3: 6 P2 minor notification additions — complete (all 9 TS gaps implemented)
+
+### Best-practice hardening (post-Phase 2)
+
+Applied as incremental improvements after the design doc's initial phases:
+
+| Item | Status | Location |
+|------|--------|----------|
+| Zero-copy JSON-RPC serialization on SDK hot path | ✅ done | `SdkTransport::send_notification` |
+| `ServerNotification` size guard (≤400B) | ✅ done | `coco-types::event.rs` `const _: () = assert!(...)` |
+| TUI pre-turn defensive for stream deltas | ✅ done | `server_notification_handler/stream.rs` |
+| Typed emit helpers (`emit_protocol` / `emit_stream` / `emit_tui`) | ✅ done | `coco-query::emit` |
+| `#[must_use]` on all emit helpers | ✅ done | `coco-query::emit` |
+| OTel metric counters on emission (`coco.events.emitted_total`, `coco.events.channel_closed_total`) | ✅ done | `coco-query::emit::record_emit_metric` |
+| Structured tracing span for SDK writer task | ✅ done | `dispatcher.rs::run` |
+| Per-layer split of `server_notification_handler.rs` | ✅ done | `app/tui/src/server_notification_handler/{protocol,stream,tui_only}.rs` |
+
+### Remaining work (not best-practice; feature/scope decisions)
+
+| Item | Value | Scope | Verdict |
+|------|-------|-------|---------|
+| Bridge / App-Server WebSocket consumer | High (IDE extensions) | Large (new transport, auth, IDE adapter) | Separate feature workstream |
+| `ToolCallDelta` production wiring | Low (UX polish) | Medium (inference→engine forwarding) | Defer until consumer demand |
+| Multi-consumer broadcast fanout | Speculative | Medium | Defer until bridge exists |

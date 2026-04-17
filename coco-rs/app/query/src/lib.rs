@@ -16,6 +16,7 @@
 pub mod agent_adapter;
 pub mod budget;
 pub mod command_queue;
+pub mod emit;
 pub mod engine;
 pub mod sdk_types;
 mod session_state;

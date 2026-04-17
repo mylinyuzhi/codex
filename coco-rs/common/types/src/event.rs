@@ -19,16 +19,38 @@ use crate::TokenUsage;
 /// ordering is **not guaranteed**.
 ///
 /// Where ordering matters, all related events must be emitted from a
-/// single task:
-/// - **Item lifecycle** (`ItemStarted → ItemUpdated → ItemCompleted`):
-///   emitted by `run_session_loop` (single task). Invariant.
-/// - **Hook lifecycle** (`HookStarted → HookProgress → HookResponse`):
-///   emitted by `forward_hook_events` child task. Invariant.
-/// - **Session lifecycle** (`SessionStarted → Running → Idle → SessionResult`):
-///   emitted by `run_internal_with_messages` (single task). Invariant.
+/// single task. Current ownership (one sequence = one task):
+///
+/// - **Turn lifecycle** (`TurnStarted → Stream* → TurnCompleted|Failed|Interrupted`):
+///   emitted by `run_session_loop` in `coco-query::engine`.
+/// - **Session lifecycle** (`SessionStarted → (Running ↔ Idle ↔ RequiresAction)*
+///   → SessionResult → SessionEnded`): emitted by `run_internal_with_messages`
+///   in `coco-query::engine`; `SessionStateChanged` transitions are deduped
+///   via `SessionStateTracker` (see `coco-query::session_state`).
+/// - **Hook lifecycle** (`HookStarted → HookProgress* → HookResponse`):
+///   emitted by the `forward_hook_events` child task in `coco-query::engine`.
+///   Cancellation + 5s drain-on-shutdown protect trailing events.
+/// - **Task lifecycle** (`TaskStarted → TaskProgress* → TaskCompleted`):
+///   emitted by `TaskManager` when built with `with_event_sink(tx)`.
+///   One task manager serializes emissions for all managed tasks.
+/// - **Item lifecycle** (`ItemStarted → ItemUpdated → ItemCompleted`) and
+///   content deltas (`AgentMessageDelta`, `ReasoningDelta`):
+///   **SDK path only**. Produced by `StreamAccumulator` inside the SDK
+///   dispatcher's writer task (single task, per-turn accumulator). The
+///   TUI consumes `AgentStreamEvent` directly and never sees these.
 /// - **Wire serialization**: the SDK dispatcher's writer task is the single
-///   serializer — all events pass through one `tokio::select!` loop, so
-///   wire order matches channel-receive order.
+///   serializer — all events pass through one `tokio::select!` loop with
+///   `biased;` preferring notifications over replies, so wire order matches
+///   channel-receive order.
+///
+/// ## Known cross-sender emission sites (tolerated)
+///
+/// - `ContextCompacted` is emitted from two sites inside `run_session_loop`
+///   (reactive compaction and auto-compaction). Semantics are idempotent;
+///   consumers may see two notifications carrying the same summary.
+/// - `Error` may be emitted from budget-exhaustion and query-execution
+///   paths. Consumers MUST treat Errors as independent signals; they are
+///   not sequenced relative to other events.
 ///
 /// See `event-system-design.md` §12 and plan WS-8.
 #[derive(Debug, Clone)]
@@ -219,12 +241,12 @@ pub enum ItemStatus {
 }
 
 // ---------------------------------------------------------------------------
-// ServerNotification — protocol-layer notifications (65 variants)
+// ServerNotification — protocol-layer notifications (64 variants)
 // ---------------------------------------------------------------------------
 
 /// Protocol-level notifications visible to all consumers.
 ///
-/// 65 variants total: 52 base + 4 TS gap P1 + 4 TS gap P2 + 5 additions.
+/// 64 variants across 20 categories.
 /// Each variant has an explicit `#[serde(rename = "...")]` for its wire method.
 /// See `event-system-design.md` Section 2.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -410,13 +432,8 @@ pub enum ServerNotification {
     #[serde(rename = "agents/registered")]
     AgentsRegistered { agents: Vec<AgentInfo> },
 
-    // === Hook (4 — 1 cocode-rs base + 3 TS gap P1 added) ===
-    /// Hook executed (post-completion summary; from cocode-rs base).
-    /// Kept alongside HookStarted/Progress/Response to preserve the
-    /// 43-variant base contract.
-    #[serde(rename = "hook/executed")]
-    HookExecuted(HookExecutedParams),
-    /// Hook execution started (TS gap P1).
+    // === Hook (3 — TS lifecycle trio) ===
+    /// Hook execution started.
     #[serde(rename = "hook/started")]
     HookStarted(HookStartedParams),
     /// Hook execution progress (TS gap P1 — stdout/stderr streaming).
@@ -554,7 +571,6 @@ impl ServerNotification {
             Self::SandboxStateChanged(_) => "sandbox/stateChanged",
             Self::SandboxViolationsDetected { .. } => "sandbox/violationsDetected",
             Self::AgentsRegistered { .. } => "agents/registered",
-            Self::HookExecuted(_) => "hook/executed",
             Self::HookStarted(_) => "hook/started",
             Self::HookProgress(_) => "hook/progress",
             Self::HookResponse(_) => "hook/response",
@@ -575,6 +591,17 @@ impl ServerNotification {
         }
     }
 }
+
+// Compile-time regression guard: keep `ServerNotification` from growing
+// unbounded. The enum's size is the size of the largest variant; every
+// `CoreEvent` pays this cost (inlined in mpsc channel buffers). If a new
+// variant pushes this past the limit, either `Box<T>` the offending params
+// (like `SessionResult(Box<SessionResultParams>)`) or justify raising the
+// limit. Don't let it drift silently.
+const _: () = assert!(
+    std::mem::size_of::<ServerNotification>() <= 400,
+    "ServerNotification exceeded 400 bytes; Box<T> the largest variant"
+);
 
 // ---------------------------------------------------------------------------
 // ServerNotification param structs
@@ -1113,16 +1140,6 @@ pub struct AgentInfo {
     pub description: Option<String>,
 }
 
-/// Params for the cocode-rs-base `hook/executed` notification.
-/// Simpler than `hook/started` → `hook/response` lifecycle: this is a
-/// single post-completion summary keeping the 43-variant base contract.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HookExecutedParams {
-    pub hook_type: String,
-    pub hook_name: String,
-}
-
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HookStartedParams {
@@ -1206,7 +1223,7 @@ pub enum SessionState {
 }
 
 // ---------------------------------------------------------------------------
-// TuiOnlyEvent — TUI-exclusive events (21 variants: 20 per design §4 + 1 extension)
+// TuiOnlyEvent — TUI-exclusive events (21 variants)
 // ---------------------------------------------------------------------------
 
 /// TUI-exclusive events.
@@ -1222,7 +1239,7 @@ pub enum SessionState {
 /// (TUI-only, never sent to SDK) is preserved via consumer dispatch rules
 /// in `StreamAccumulator` and `handle_core_event()`.
 ///
-/// See `event-system-design.md` Section 4.1 for the canonical 20-variant list.
+/// 21 variants (20 from design §4.1 + 1 coco-rs extension).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -1290,6 +1307,30 @@ pub enum TuiOnlyEvent {
 
     // === Streaming tool display (3) ===
     /// Streaming tool input delta (typing effect).
+    ///
+    /// # Status: reserved scaffolding, not yet wired
+    ///
+    /// The TUI has a handler (`server_notification_handler::handle_tui_only`)
+    /// that appends the delta to `ToolExecution.streaming_input` for a
+    /// typing-effect display, but **no producer currently emits this variant**
+    /// in coco-rs.
+    ///
+    /// The inference layer's `StreamEvent::ToolCallDelta` (a different type,
+    /// internal to `coco-inference`) is fully accumulated into the complete
+    /// tool input before the engine emits `AgentStreamEvent::ToolUseQueued`
+    /// with the finalized input. Consumers see the complete input at once.
+    ///
+    /// Future work to wire this up would require the inference layer to
+    /// forward the partial JSON fragments alongside the accumulation, and
+    /// the engine to emit them here as `CoreEvent::Tui(ToolCallDelta { ... })`.
+    ///
+    /// # Why keep it in TuiOnlyEvent (not AgentStreamEvent)
+    ///
+    /// Per `event-system-design.md` §3.3: partial JSON deltas serve a purely
+    /// UI display purpose (typing effect) and the SDK does not need them —
+    /// `ToolUseQueued` already contains the complete input. Promoting to
+    /// `AgentStreamEvent` would burden SDK consumers with partial JSON they
+    /// must re-assemble, with no behavioral benefit.
     ToolCallDelta { call_id: String, delta: String },
     /// Tool progress update (progress bar).
     ToolProgress {

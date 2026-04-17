@@ -118,12 +118,20 @@ impl App {
                         needs_redraw = self.handle_event(event).await;
                     }
                 }
-                // Agent CoreEvent from core
+                // Agent CoreEvent from core — coalesce pending events before redraw.
+                // Under high throughput (e.g. 100+ TextDeltas/sec) this avoids
+                // one redraw per token by draining all ready events first.
                 Some(event) = self.notification_rx.recv() => {
                     needs_redraw = server_notification_handler::handle_core_event(
                         &mut self.state,
                         event,
                     );
+                    while let Ok(next) = self.notification_rx.try_recv() {
+                        needs_redraw |= server_notification_handler::handle_core_event(
+                            &mut self.state,
+                            next,
+                        );
+                    }
                 }
                 // Tick timer
                 _ = tick_interval.tick() => {

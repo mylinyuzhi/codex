@@ -248,3 +248,55 @@ fn test_context_compacted_toast() {
     );
     assert!(state.ui.has_toasts());
 }
+
+/// Regression: a stream delta arriving before TurnStarted must not be
+/// silently dropped. Before the fix, handle_stream would no-op when
+/// `state.ui.streaming` was None, so the first delta content was lost
+/// whenever the channel reordered emission across senders.
+#[test]
+fn test_text_delta_before_turn_started_creates_streaming_state() {
+    let mut state = AppState::new();
+    assert!(state.ui.streaming.is_none());
+
+    let changed = handle_core_event(
+        &mut state,
+        CoreEvent::Stream(AgentStreamEvent::TextDelta {
+            turn_id: "t1".into(),
+            delta: "orphan".into(),
+        }),
+    );
+
+    assert!(changed);
+    let streaming = state
+        .ui
+        .streaming
+        .as_ref()
+        .expect("streaming state must be created lazily");
+    assert_eq!(
+        streaming.content, "orphan",
+        "delta must be appended, not dropped"
+    );
+}
+
+/// Same invariant for ThinkingDelta.
+#[test]
+fn test_thinking_delta_before_turn_started_creates_streaming_state() {
+    let mut state = AppState::new();
+    assert!(state.ui.streaming.is_none());
+
+    let changed = handle_core_event(
+        &mut state,
+        CoreEvent::Stream(AgentStreamEvent::ThinkingDelta {
+            turn_id: "t1".into(),
+            delta: "early thought".into(),
+        }),
+    );
+
+    assert!(changed);
+    let streaming = state
+        .ui
+        .streaming
+        .as_ref()
+        .expect("streaming state must be created lazily");
+    assert_eq!(streaming.thinking, "early thought");
+}

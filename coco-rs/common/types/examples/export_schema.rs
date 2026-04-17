@@ -184,7 +184,6 @@ fn main() {
         bundle_entry::<coco_types::HookStartedParams>("HookStartedParams"),
         bundle_entry::<coco_types::HookProgressParams>("HookProgressParams"),
         bundle_entry::<coco_types::HookResponseParams>("HookResponseParams"),
-        bundle_entry::<coco_types::HookExecutedParams>("HookExecutedParams"),
         bundle_entry::<coco_types::HookOutcomeStatus>("HookOutcomeStatus"),
         // Worktree + summarize
         bundle_entry::<coco_types::WorktreeEnteredParams>("WorktreeEnteredParams"),

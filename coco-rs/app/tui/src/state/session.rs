@@ -140,6 +140,8 @@ impl SessionState {
             .find(|t| t.call_id == call_id)
         {
             tool.status = ToolStatus::Running;
+        } else {
+            tracing::debug!(call_id, "run_tool: tool not found in tool_executions");
         }
     }
 
@@ -155,6 +157,8 @@ impl SessionState {
             } else {
                 ToolStatus::Completed
             };
+        } else {
+            tracing::debug!(call_id, "complete_tool: tool not found in tool_executions");
         }
     }
 

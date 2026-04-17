@@ -21,6 +21,8 @@
 use std::sync::Arc;
 
 use coco_types::JsonRpcMessage;
+use coco_types::JsonRpcNotification;
+use coco_types::ServerNotification;
 use thiserror::Error;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;
@@ -67,6 +69,38 @@ pub trait SdkTransport: Send + Sync {
 
     /// Write a message to the peer.
     async fn send(&self, msg: JsonRpcMessage) -> Result<(), TransportError>;
+
+    /// Send a `ServerNotification` on the fast path.
+    ///
+    /// The default implementation round-trips through `serde_json::Value`
+    /// to extract `params` and construct a `JsonRpcNotification`, then
+    /// delegates to `send`. This is fine for in-memory transports and for
+    /// the cold path.
+    ///
+    /// Byte-based transports (stdio, WebSocket) override this to serialize
+    /// `ServerNotification` directly onto the wire with a flattened JSON-RPC
+    /// envelope, skipping the intermediate `Value` tree. This matters on the
+    /// streaming hot path (`AgentMessageDelta` / `ReasoningDelta`) where the
+    /// accumulator can emit 100+ notifications per second.
+    async fn send_notification(&self, notif: &ServerNotification) -> Result<(), TransportError> {
+        let method = notif.method().to_string();
+        // ServerNotification is `#[serde(tag = "method", content = "params")]`,
+        // so `to_value` always produces an object with those two keys. Pull
+        // params out and drop method (we use the typed `method()` accessor).
+        let params = match serde_json::to_value(notif)? {
+            serde_json::Value::Object(mut map) => {
+                map.remove("params").unwrap_or(serde_json::Value::Null)
+            }
+            // Unreachable for a well-formed ServerNotification, but don't
+            // crash — surface an empty params object.
+            _ => serde_json::Value::Null,
+        };
+        self.send(JsonRpcMessage::Notification(JsonRpcNotification {
+            method,
+            params,
+        }))
+        .await
+    }
 
     /// Close the transport. Subsequent `send()` calls return
     /// `TransportError::Closed`. Pending `recv()` may still return messages
@@ -166,6 +200,46 @@ impl SdkTransport for StdioTransport {
         writer.write_all(b"\n").await?;
         writer.flush().await?;
         trace!("stdio transport: sent {} bytes", json.len() + 1);
+        Ok(())
+    }
+
+    /// Fast-path notification send: flattens `ServerNotification` directly
+    /// into the JSON-RPC envelope without going through `serde_json::Value`.
+    ///
+    /// Wire format is identical to the default impl (same bytes on stdout),
+    /// but skips one full deserialize-into-Value allocation per notification.
+    /// Matters on the streaming hot path where `AgentMessageDelta` is emitted
+    /// once per token.
+    async fn send_notification(&self, notif: &ServerNotification) -> Result<(), TransportError> {
+        if !self.is_open() {
+            return Err(TransportError::Closed);
+        }
+
+        // Flatten the notification's `method` + `params` keys into the
+        // JSON-RPC envelope. ServerNotification is `#[serde(tag, content)]`,
+        // so flatten gives `{"method":"...","params":{...}}`; we add
+        // `"type":"notification"` on top to match `JsonRpcMessage`'s
+        // `#[serde(tag = "type")]` wire shape.
+        #[derive(serde::Serialize)]
+        struct NotificationWire<'a> {
+            #[serde(rename = "type")]
+            ty: &'static str,
+            #[serde(flatten)]
+            inner: &'a ServerNotification,
+        }
+        let wire = NotificationWire {
+            ty: "notification",
+            inner: notif,
+        };
+        let json = serde_json::to_string(&wire)?;
+        let mut writer = self.writer.lock().await;
+        writer.write_all(json.as_bytes()).await?;
+        writer.write_all(b"\n").await?;
+        writer.flush().await?;
+        trace!(
+            "stdio transport: sent notification {} bytes",
+            json.len() + 1
+        );
         Ok(())
     }
 
