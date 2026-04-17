@@ -7,9 +7,8 @@ members = [
     "common/types",
     "common/config",
 
-    # ─── utils/ (26) ── 24 from cocode-rs + 2 new ───
+    # ─── utils/ (25) ── 24 from cocode-rs + 1 new ───
     "utils/absolute-path",
-    "utils/apply-patch",
     "utils/async-utils",
     "utils/cache",
     "utils/cargo-bin",
@@ -61,10 +60,12 @@ members = [
     "core/tool",
     "core/tools",
 
-    # ─── exec/ (3) ───
+    # ─── exec/ (5) ───
     "exec/shell",
     "exec/sandbox",
     "exec/process-hardening",
+    "exec/exec-server",
+    "exec/apply-patch",
 
     # ─── root modules (7) ───
     "commands",
@@ -120,7 +121,6 @@ coco-utils-pty = { path = "utils/pty" }
 coco-utils-readiness = { path = "utils/readiness" }
 coco-utils-string = { path = "utils/string" }
 coco-stdio-to-uds = { path = "utils/stdio-to-uds" }
-coco-apply-patch = { path = "utils/apply-patch" }
 coco-shell-parser = { path = "utils/shell-parser" }
 coco-utils-rustls-provider = { path = "utils/rustls-provider" }
 coco-utils-stream-parser = { path = "utils/stream-parser" }
@@ -159,6 +159,8 @@ coco-tools = { path = "core/tools" }
 coco-shell = { path = "exec/shell" }
 coco-sandbox = { path = "exec/sandbox" }
 coco-process-hardening = { path = "exec/process-hardening" }
+coco-exec-server = { path = "exec/exec-server" }
+coco-apply-patch = { path = "exec/apply-patch" }
 
 # Internal - root modules
 coco-commands = { path = "commands" }
@@ -217,6 +219,7 @@ opentelemetry-otlp = "0.31.0"
 opentelemetry-semantic-conventions = "0.31.0"
 opentelemetry_sdk = "0.31.0"
 path-absolutize = "3.1.1"
+pdf-extract = "0.9"
 portable-pty = "0.9.0"
 pretty_assertions = "1.4.1"
 rand = "0.9"
@@ -274,6 +277,7 @@ async-stream = "0.3"
 crossbeam-channel = "0.5"
 crossterm = "0.28"
 derive_more = "2"
+dunce = "1.0.4"
 insta = "1"
 itertools = "0.14"
 ratatui = "0.29"
@@ -338,6 +342,7 @@ opt-level = 1
 
 [profile.release]
 lto = "thin"
+split-debuginfo = "off"
 strip = "symbols"
 codegen-units = 1
 

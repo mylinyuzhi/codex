@@ -59,7 +59,7 @@ pub fn load_conversation_for_resume(
         // Check for sidechain
         if entry
             .get("is_sidechain")
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false)
         {
             has_sidechain = true;
@@ -67,19 +67,19 @@ pub fn load_conversation_for_resume(
         }
 
         // Extract plan slug from messages
-        if plan_slug.is_none() {
-            if let Some(slug) = entry.get("slug").and_then(|v| v.as_str()) {
-                plan_slug = Some(slug.to_string());
-            }
+        if plan_slug.is_none()
+            && let Some(slug) = entry.get("slug").and_then(|v| v.as_str())
+        {
+            plan_slug = Some(slug.to_string());
         }
 
         // Try to parse as TranscriptEntry for structured access
         if let Ok(te) = serde_json::from_str::<TranscriptEntry>(line) {
             // Extract model (latest wins)
-            if let Some(m) = &te.model {
-                if !m.is_empty() {
-                    model.clone_from(m);
-                }
+            if let Some(m) = &te.model
+                && !m.is_empty()
+            {
+                model.clone_from(m);
             }
 
             // Sum tokens
@@ -176,10 +176,10 @@ fn extract_text_from_content(content: &serde_json::Value) -> String {
     if let Some(arr) = content.as_array() {
         let mut parts = Vec::new();
         for item in arr {
-            if item.get("type").and_then(|v| v.as_str()) == Some("text") {
-                if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
-                    parts.push(text);
-                }
+            if item.get("type").and_then(|v| v.as_str()) == Some("text")
+                && let Some(text) = item.get("text").and_then(|v| v.as_str())
+            {
+                parts.push(text);
             }
         }
         return parts.join("\n");

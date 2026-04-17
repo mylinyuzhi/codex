@@ -161,9 +161,8 @@ fn test_resolve_auth_stored_oauth_fallback() {
     let auth = resolve_auth(&options);
     assert!(matches!(auth, Some(AuthMethod::OAuth(ref t)) if t.access_token == "test-token"));
 
-    match prev {
-        Some(v) => unsafe { std::env::set_var("ANTHROPIC_API_KEY", v) },
-        None => {}
+    if let Some(v) = prev {
+        unsafe { std::env::set_var("ANTHROPIC_API_KEY", v) }
     }
 }
 

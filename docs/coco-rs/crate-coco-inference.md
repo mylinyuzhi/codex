@@ -880,7 +880,7 @@ pub async fn query_non_streaming(
 ///   StreamPart::Usage            → extract TokenUsage
 pub fn collect_stream_to_message(
     stream: impl Stream<Item = StreamPart>,
-    event_tx: &mpsc::Sender<QueryEvent>,
+    event_tx: &mpsc::Sender<coco_types::CoreEvent>,
 ) -> (AssistantMessage, TokenUsage);
 ```
 

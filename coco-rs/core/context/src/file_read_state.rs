@@ -34,12 +34,21 @@ pub struct FileReadEntry {
 /// Session-level cache of file read states.
 ///
 /// Tracks every file read by tools (`Read`, `Edit`, `Write`) and @mentions
-/// with their content and modification time for deduplication and change detection.
+/// with their content and modification time for deduplication and change
+/// detection.
+///
+/// `read_input_ranges` stores the literal `(offset, limit)` the model
+/// passed on a Read call, separately from `FileReadEntry::{offset,limit}`
+/// which store the effective truncated range. Presence in this map also
+/// serves as the "came from the Read tool" marker — Edit/Write/@mention
+/// entries are never in it, so `Read(path, limit=2000)` followed by an
+/// identical call can dedup-match exactly.
 #[derive(Debug, Default)]
 pub struct FileReadState {
     entries: HashMap<PathBuf, FileReadEntry>,
     /// LRU ordering (most-recently-accessed at end).
     access_order: Vec<PathBuf>,
+    read_input_ranges: HashMap<PathBuf, (Option<i32>, Option<i32>)>,
 }
 
 impl FileReadState {
@@ -61,20 +70,56 @@ impl FileReadState {
         self.entries.get(&path.to_path_buf())
     }
 
-    /// Record a file read (from tool or @mention).
+    /// Record a non-Read-origin entry (edit, mention, changed-file scan).
+    /// Use `set_from_read` from the Read tool so dedup gating works —
+    /// the Read tool's `file_unchanged` check skips stub-ing against
+    /// entries that lack the read-input-range marker, so a sequence of
+    /// `set_from_read → set` must clear the marker or a later Read call
+    /// would still see the path as Read-origin.
     pub fn set(&mut self, path: PathBuf, entry: FileReadEntry) {
-        let canonical = path.to_path_buf();
         self.evict_if_full();
-        self.touch_lru(&canonical);
-        self.entries.insert(canonical, entry);
+        self.touch_lru(&path);
+        self.read_input_ranges.remove(&path);
+        self.entries.insert(path, entry);
     }
 
-    /// Update after an edit/write: new content, new mtime, clear partial-read markers.
-    ///
-    /// TS: `FileEditTool` line 520-525 — clears offset/limit after write.
+    /// Record a file read entry that originated from the `Read` tool.
+    /// Stores the literal input offset/limit separately from the effective
+    /// range on `FileReadEntry` so `file_unchanged` dedup compares apples
+    /// to apples.
+    pub fn set_from_read(
+        &mut self,
+        path: PathBuf,
+        entry: FileReadEntry,
+        input_offset: Option<i32>,
+        input_limit: Option<i32>,
+    ) {
+        self.evict_if_full();
+        self.touch_lru(&path);
+        self.read_input_ranges
+            .insert(path.clone(), (input_offset, input_limit));
+        self.entries.insert(path, entry);
+    }
+
+    /// True iff the path's most recent entry was inserted via `set_from_read`.
+    pub fn is_from_read_tool(&self, path: &Path) -> bool {
+        self.read_input_ranges.contains_key(path)
+    }
+
+    /// Return the literal `(input_offset, input_limit)` the model passed when
+    /// the path was last recorded via `set_from_read`. Returns None for paths
+    /// that came from `set` / `update_after_edit` / `invalidate`.
+    pub fn read_input_range(&self, path: &Path) -> Option<(Option<i32>, Option<i32>)> {
+        self.read_input_ranges.get(&path.to_path_buf()).copied()
+    }
+
+    /// Update after an edit/write: new content, new mtime, clear partial-read
+    /// markers so a subsequent Read doesn't dedup-stub against a post-edit
+    /// entry that was never returned to the model as a Read tool result.
     pub fn update_after_edit(&mut self, path: &Path, new_content: String, new_mtime_ms: i64) {
         let canonical = path.to_path_buf();
         self.touch_lru(&canonical);
+        self.read_input_ranges.remove(&canonical);
         self.entries.insert(
             canonical,
             FileReadEntry {
@@ -101,6 +146,7 @@ impl FileReadState {
     pub fn invalidate(&mut self, path: &Path) {
         let canonical = path.to_path_buf();
         self.entries.remove(&canonical);
+        self.read_input_ranges.remove(&canonical);
         self.access_order.retain(|p| p != &canonical);
     }
 
@@ -120,6 +166,7 @@ impl FileReadState {
     pub fn clear(&mut self) {
         self.entries.clear();
         self.access_order.clear();
+        self.read_input_ranges.clear();
     }
 
     /// Snapshot all entries ordered by access recency (most recent last).
@@ -149,6 +196,7 @@ impl FileReadState {
         while self.entries.len() >= MAX_ENTRIES {
             if let Some(oldest) = self.access_order.first().cloned() {
                 self.entries.remove(&oldest);
+                self.read_input_ranges.remove(&oldest);
                 self.access_order.remove(0);
             } else {
                 break;

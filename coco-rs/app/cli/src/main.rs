@@ -20,6 +20,12 @@ use coco_cli::Commands;
 use coco_cli::ConfigAction;
 use coco_cli::McpAction;
 use coco_cli::PluginAction;
+use coco_cli::sdk_server::QueryEngineRunner;
+use coco_cli::sdk_server::SdkServer;
+use coco_cli::sdk_server::StdioTransport;
+use coco_cli::sdk_server::cli_bootstrap::CliInitializeBootstrap;
+use coco_commands::CommandRegistry;
+use coco_commands::register_extended_builtins;
 use coco_config::global_config;
 use coco_inference::ApiClient;
 use coco_inference::RetryConfig;
@@ -360,6 +366,9 @@ async fn main() -> Result<()> {
                 println!("  Session tokens: check /cost in interactive mode");
                 return Ok(());
             }
+            Commands::Sdk => {
+                return run_sdk_mode(&cli).await;
+            }
         }
     }
 
@@ -453,5 +462,155 @@ async fn run_chat(cli: &Cli, prompt: Option<&str>) -> Result<()> {
         result.turns, result.total_usage.input_tokens, result.total_usage.output_tokens
     );
 
+    Ok(())
+}
+
+/// Run in SDK mode: NDJSON-over-stdio JSON-RPC control protocol.
+///
+/// TS reference: `src/cli/structuredIO.ts` — the `StructuredIO` loop.
+/// The SDK client (Python/TS) spawns `coco sdk` as a subprocess and
+/// speaks JSON-RPC across the pipes. Phase 2.C.5 wires:
+///
+/// 1. [`StdioTransport`] — NDJSON framing on stdin/stdout
+/// 2. [`QueryEngineRunner`] — production `TurnRunner` that spawns a
+///    fresh `QueryEngine` per turn/start
+/// 3. [`SdkServer`] — dispatch loop that owns the transport + state
+///
+/// This path intentionally does NOT print banners on stdout — the SDK
+/// client expects a clean NDJSON stream. Any diagnostic output goes to
+/// stderr via `tracing`.
+async fn run_sdk_mode(cli: &Cli) -> Result<()> {
+    // Build the shared model client + tool registry once. QueryEngines
+    // created per turn will share these.
+    //
+    // `_mode` distinguishes "real Anthropic provider" from the built-in
+    // mock. When mock, the SDK's `initialize.account` must NOT report a
+    // first-party Anthropic session — otherwise clients see mock-shaped
+    // turn output while the account panel claims a real OAuth login.
+    let (model, mode) = create_model(cli.model.as_deref());
+    let is_real_anthropic = mode == "anthropic";
+    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+
+    let mut registry = ToolRegistry::new();
+    coco_tools::register_all_tools(&mut registry);
+    let tools = Arc::new(registry);
+
+    // Resolve static config. Cwd + model id are also stored on the
+    // SessionHandle at `session/start`, but we use the CLI-level values
+    // here for the system prompt + headless defaults.
+    let cwd = std::env::current_dir()?;
+    let model_id = client.model_id().to_string();
+    let system_prompt = Some(build_system_prompt(&cwd, &model_id));
+
+    // Wire a disk-backed SessionManager so session/list, session/read,
+    // and session/resume work against `~/.coco/sessions`.
+    let session_manager = Arc::new(SessionManager::new(sessions_dir()));
+
+    // Wire a FileHistoryState so control/rewindFiles can preview and
+    // apply rewinds. A fresh state is empty — snapshots will accrue
+    // as future integration code wires file-history tracking into the
+    // tool layer. Until then, `control/rewindFiles` will error with
+    // "no snapshot for user_message_id" which is the expected contract
+    // when nothing has been tracked yet.
+    let file_history = Arc::new(tokio::sync::RwLock::new(
+        coco_context::FileHistoryState::new(),
+    ));
+
+    // Wire an empty MCP connection manager so mcp/setServers,
+    // mcp/reconnect, mcp/toggle, and mcp/status work. Initial config
+    // is empty — the SDK client populates it via mcp/setServers at
+    // runtime. Server processes are spawned on first connect.
+    let mcp_manager = Arc::new(tokio::sync::Mutex::new(
+        coco_mcp::McpConnectionManager::new(global_config::config_home()),
+    ));
+
+    // Build the slash-command registry with the extended built-ins so
+    // `initialize` advertises a real commands list. Future follow-ups
+    // can splice plugin + user-directory commands in here.
+    let mut command_registry = CommandRegistry::new();
+    register_extended_builtins(&mut command_registry);
+    let command_registry = Arc::new(command_registry);
+
+    // Locate user + project output-style directories so
+    // `available_output_styles` discovers custom markdown files. Both
+    // live under the coco config home tree today; a future iteration
+    // can add `~/.claude/output-styles` for TS compatibility.
+    let output_style_dirs = vec![global_config::config_home().join("output-styles")];
+    let current_output_style = "default".to_string();
+
+    // Standard agent-definition directories — mirrors what the Agent
+    // tool walks at spawn time. `initialize` reads the same sources so
+    // clients see the same list the agent tool will actually use.
+    let agent_dirs =
+        coco_tools::tools::agent_spawn::get_agent_dirs(&global_config::config_home(), &cwd);
+
+    // Resolve auth once so `initialize.account` can report the
+    // provider / subscription. The actual credentials don't leak to SDK
+    // clients — only the structured `SdkAccountInfo` projection.
+    //
+    // **Consistency with `create_model`**: we only surface a resolved
+    // auth method when `create_model` picked the real Anthropic provider.
+    // Otherwise `create_model` fell back to a mock (no env var, no
+    // provider wired) and advertising OAuth tokens as the account would
+    // contradict the mock turn output the client is about to see. Run
+    // the resolution on the blocking pool because
+    // `load_stored_oauth_tokens` does sync disk I/O.
+    let auth_method = if is_real_anthropic {
+        let config_dir = global_config::config_home();
+        tokio::task::spawn_blocking(move || {
+            coco_inference::auth::resolve_auth(&coco_inference::auth::AuthResolveOptions {
+                config_dir: Some(config_dir),
+                ..Default::default()
+            })
+        })
+        .await
+        .ok()
+        .flatten()
+    } else {
+        None
+    };
+
+    let mut bootstrap_builder = CliInitializeBootstrap::new(current_output_style)
+        .with_command_registry(command_registry)
+        .with_output_style_dirs(output_style_dirs)
+        .with_agent_dirs(agent_dirs);
+    if let Some(auth) = auth_method {
+        bootstrap_builder = bootstrap_builder.with_auth_method(auth);
+    }
+    let bootstrap: Arc<dyn coco_cli::sdk_server::InitializeBootstrap> = Arc::new(bootstrap_builder);
+
+    // Build the server with a default runner first so we have a live
+    // `state` handle to give to the approval bridge.
+    let transport = StdioTransport::new();
+    let server = SdkServer::new(transport)
+        .with_session_manager(session_manager)
+        .with_file_history(file_history, global_config::config_home())
+        .with_mcp_manager(mcp_manager)
+        .with_initialize_bootstrap(bootstrap);
+    let state = server.state();
+
+    // Build the real runner with an SdkPermissionBridge that routes
+    // `PermissionDecision::Ask` via `approval/askForApproval` to the
+    // SDK client. Then install the runner on the live state.
+    let bridge: Arc<dyn coco_tool::ToolPermissionBridge> =
+        Arc::new(coco_cli::sdk_server::SdkPermissionBridge::new(state));
+    let runner = Arc::new(
+        QueryEngineRunner::new(
+            client,
+            tools,
+            cli.max_tokens.unwrap_or(16_384),
+            cli.max_turns.unwrap_or(30),
+            system_prompt,
+        )
+        .with_permission_bridge(bridge),
+    );
+    server.set_turn_runner(runner).await;
+
+    // Run the dispatch loop to completion. Exits on EOF, transport
+    // close, or unrecoverable I/O error.
+    if let Err(e) = server.run().await {
+        eprintln!("sdk mode: dispatch loop exited with error: {e}");
+        return Err(anyhow::anyhow!("sdk dispatch failed: {e}"));
+    }
     Ok(())
 }

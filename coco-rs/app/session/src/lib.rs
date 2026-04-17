@@ -141,7 +141,7 @@ impl SessionManager {
     }
 }
 
-fn timestamp_now() -> String {
+pub fn timestamp_now() -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();

@@ -13,7 +13,9 @@ pub mod grep;
 pub mod mcp_tools;
 pub mod plan_worktree;
 pub mod powershell;
+pub mod powershell_tool;
 pub mod read;
+pub mod read_permissions;
 pub mod scheduling;
 pub mod shell_tools;
 pub mod task_tools;
@@ -40,6 +42,20 @@ pub use agent::SendMessageTool;
 pub use agent::SkillTool;
 pub use agent::TeamCreateTool;
 pub use agent::TeamDeleteTool;
+
+// Fork subagent (B4.1) — re-exports for discoverability. The fork
+// infrastructure lives in `agent_fork` but callers (app/query layer)
+// need easy access to the top-level guard + context builder when
+// wiring the fork path into their AgentHandle implementation.
+pub use agent_fork::FORK_BOILERPLATE_TAG;
+pub use agent_fork::FORK_DIRECTIVE_PREFIX;
+pub use agent_fork::FORK_PLACEHOLDER;
+pub use agent_fork::ForkContext;
+pub use agent_fork::build_fork_child_message;
+pub use agent_fork::build_fork_context;
+pub use agent_fork::is_fork_allowed;
+pub use agent_fork::is_fork_enabled;
+pub use agent_fork::is_in_fork_child;
 
 // Task Management (7)
 pub use task_tools::TaskCreateTool;

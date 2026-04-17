@@ -7,6 +7,12 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = []
+# Enable JSON Schema generation for the protocol types. Gated so the schemars
+# transitive deps (dyn-clone, etc.) don't ship in normal builds.
+schema = ["dep:schemars"]
+
 [dependencies]
 vercel-ai-provider.workspace = true
 
@@ -14,6 +20,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 uuid = { workspace = true, features = ["v4", "serde"] }
 strum = { workspace = true, features = ["derive"] }
+schemars = { workspace = true, optional = true }
 
 [dev-dependencies]
 pretty_assertions.workspace = true

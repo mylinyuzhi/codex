@@ -496,10 +496,10 @@ fn slug_cache() -> &'static Mutex<HashMap<String, String>> {
 /// The slug is generated lazily on first access and cached for the session.
 /// If a plan file with the generated slug already exists, retries up to 10 times.
 pub fn get_plan_slug(session_id: &str, plans_dir: &Path) -> String {
-    if let Ok(cache) = slug_cache().lock() {
-        if let Some(slug) = cache.get(session_id) {
-            return slug.clone();
-        }
+    if let Ok(cache) = slug_cache().lock()
+        && let Some(slug) = cache.get(session_id)
+    {
+        return slug.clone();
     }
 
     let mut slug = String::new();
@@ -550,23 +550,22 @@ pub fn resolve_plans_directory(
     project_dir: Option<&Path>,
     plans_directory_setting: Option<&str>,
 ) -> PathBuf {
-    if let Some(setting) = plans_directory_setting {
-        if let Some(proj) = project_dir {
-            let resolved = proj.join(setting);
-            // Validate path stays within project root
-            if let (Ok(canonical_proj), Ok(canonical_resolved)) =
-                (proj.canonicalize(), resolved.canonicalize())
-            {
-                if canonical_resolved.starts_with(&canonical_proj) {
-                    return canonical_resolved;
-                }
-            }
-            // Fall back if canonicalize fails (dir doesn't exist yet) but looks safe
-            if !setting.contains("..") {
-                return resolved;
-            }
-            tracing::warn!("plansDirectory must be within project root: {setting}, using default");
+    if let Some(setting) = plans_directory_setting
+        && let Some(proj) = project_dir
+    {
+        let resolved = proj.join(setting);
+        // Validate path stays within project root
+        if let (Ok(canonical_proj), Ok(canonical_resolved)) =
+            (proj.canonicalize(), resolved.canonicalize())
+            && canonical_resolved.starts_with(&canonical_proj)
+        {
+            return canonical_resolved;
         }
+        // Fall back if canonicalize fails (dir doesn't exist yet) but looks safe
+        if !setting.contains("..") {
+            return resolved;
+        }
+        tracing::warn!("plansDirectory must be within project root: {setting}, using default");
     }
 
     config_dir.join("plans")
@@ -668,45 +667,39 @@ pub fn recover_plan_for_resume(
 fn recover_plan_from_messages(entries: &[serde_json::Value]) -> Option<String> {
     for entry in entries.iter().rev() {
         // Check for ExitPlanMode tool_use input
-        if entry.get("role").and_then(|v| v.as_str()) == Some("assistant") {
-            if let Some(content) = entry.get("content").and_then(|v| v.as_array()) {
-                for block in content {
-                    if block.get("type").and_then(|v| v.as_str()) == Some("tool_use")
-                        && block.get("name").and_then(|v| v.as_str())
-                            == Some(ToolName::ExitPlanMode.as_str())
-                    {
-                        if let Some(plan) = block
-                            .get("input")
-                            .and_then(|v| v.get("plan"))
-                            .and_then(|v| v.as_str())
-                        {
-                            if !plan.is_empty() {
-                                return Some(plan.to_string());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Check for planContent on user messages
-        if entry.get("role").and_then(|v| v.as_str()) == Some("user") {
-            if let Some(plan) = entry.get("planContent").and_then(|v| v.as_str()) {
-                if !plan.is_empty() {
+        if entry.get("role").and_then(|v| v.as_str()) == Some("assistant")
+            && let Some(content) = entry.get("content").and_then(|v| v.as_array())
+        {
+            for block in content {
+                if block.get("type").and_then(|v| v.as_str()) == Some("tool_use")
+                    && block.get("name").and_then(|v| v.as_str())
+                        == Some(ToolName::ExitPlanMode.as_str())
+                    && let Some(plan) = block
+                        .get("input")
+                        .and_then(|v| v.get("plan"))
+                        .and_then(|v| v.as_str())
+                    && !plan.is_empty()
+                {
                     return Some(plan.to_string());
                 }
             }
         }
 
+        // Check for planContent on user messages
+        if entry.get("role").and_then(|v| v.as_str()) == Some("user")
+            && let Some(plan) = entry.get("planContent").and_then(|v| v.as_str())
+            && !plan.is_empty()
+        {
+            return Some(plan.to_string());
+        }
+
         // Check for plan_file_reference attachment
-        if let Some(attachment) = entry.get("attachment") {
-            if attachment.get("type").and_then(|v| v.as_str()) == Some("plan_file_reference") {
-                if let Some(plan) = attachment.get("planContent").and_then(|v| v.as_str()) {
-                    if !plan.is_empty() {
-                        return Some(plan.to_string());
-                    }
-                }
-            }
+        if let Some(attachment) = entry.get("attachment")
+            && attachment.get("type").and_then(|v| v.as_str()) == Some("plan_file_reference")
+            && let Some(plan) = attachment.get("planContent").and_then(|v| v.as_str())
+            && !plan.is_empty()
+        {
+            return Some(plan.to_string());
         }
     }
     None

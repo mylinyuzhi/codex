@@ -42,13 +42,13 @@ pub fn truncate_description(description: &str) -> String {
 /// Prepare an MCP tool definition for the LLM (truncate description, validate schema).
 pub fn prepare_tool_for_llm(tool: &McpToolDefinition) -> McpToolDefinition {
     let mut prepared = tool.clone();
-    if let Some(ref desc) = prepared.description {
-        if desc.len() > MAX_DESCRIPTION_LENGTH {
-            prepared.description = Some(format!(
-                "{}... (truncated)",
-                &desc[..MAX_DESCRIPTION_LENGTH]
-            ));
-        }
+    if let Some(ref desc) = prepared.description
+        && desc.len() > MAX_DESCRIPTION_LENGTH
+    {
+        prepared.description = Some(format!(
+            "{}... (truncated)",
+            &desc[..MAX_DESCRIPTION_LENGTH]
+        ));
     }
     prepared
 }

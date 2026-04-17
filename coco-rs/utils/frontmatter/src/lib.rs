@@ -129,8 +129,8 @@ fn parse_yaml_simple(yaml: &str) -> HashMap<String, FrontmatterValue> {
         let trimmed = line.trim();
 
         // List item (continuation of previous key)
-        if trimmed.starts_with("- ") {
-            let item = trimmed[2..].trim().to_string();
+        if let Some(rest) = trimmed.strip_prefix("- ") {
+            let item = rest.trim().to_string();
             // Strip quotes
             let item = strip_quotes(&item);
             list_items.push(item);
@@ -164,10 +164,10 @@ fn parse_yaml_simple(yaml: &str) -> HashMap<String, FrontmatterValue> {
     }
 
     // Flush final pending list
-    if !list_items.is_empty() {
-        if let Some(ref key) = current_key {
-            map.insert(key.clone(), FrontmatterValue::StringList(list_items));
-        }
+    if !list_items.is_empty()
+        && let Some(ref key) = current_key
+    {
+        map.insert(key.clone(), FrontmatterValue::StringList(list_items));
     }
 
     map

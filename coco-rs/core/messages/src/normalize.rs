@@ -196,8 +196,8 @@ pub fn merge_consecutive_user_messages(messages: &mut Vec<Message>) {
         if both_user {
             // Take the read message, merge its LlmMessage user content into write.
             let taken = std::mem::replace(&mut messages[read], placeholder_tombstone());
-            if let (Message::User(dest), Message::User(src)) = (&mut messages[write], taken) {
-                if let (
+            if let (Message::User(dest), Message::User(src)) = (&mut messages[write], taken)
+                && let (
                     LlmMessage::User {
                         content: dest_content,
                         ..
@@ -207,9 +207,8 @@ pub fn merge_consecutive_user_messages(messages: &mut Vec<Message>) {
                         ..
                     },
                 ) = (&mut dest.message, src.message)
-                {
-                    dest_content.extend(src_content);
-                }
+            {
+                dest_content.extend(src_content);
             }
         } else {
             write += 1;
@@ -239,8 +238,7 @@ pub fn merge_consecutive_assistant_messages(messages: &mut Vec<Message>) {
             let taken = std::mem::replace(&mut messages[read], placeholder_tombstone());
             if let (Message::Assistant(dest), Message::Assistant(src)) =
                 (&mut messages[write], taken)
-            {
-                if let (
+                && let (
                     LlmMessage::Assistant {
                         content: dest_content,
                         ..
@@ -250,9 +248,8 @@ pub fn merge_consecutive_assistant_messages(messages: &mut Vec<Message>) {
                         ..
                     },
                 ) = (&mut dest.message, src.message)
-                {
-                    dest_content.extend(src_content);
-                }
+            {
+                dest_content.extend(src_content);
             }
         } else {
             write += 1;
@@ -270,18 +267,18 @@ pub fn merge_consecutive_assistant_messages(messages: &mut Vec<Message>) {
 /// If a User message becomes empty after stripping, it is removed entirely.
 pub fn strip_images_from_messages(messages: &mut Vec<Message>) {
     for msg in messages.iter_mut() {
-        if let Message::User(user) = msg {
-            if let LlmMessage::User { content, .. } = &mut user.message {
-                content.retain(|part| matches!(part, coco_types::UserContent::Text(_)));
-            }
+        if let Message::User(user) = msg
+            && let LlmMessage::User { content, .. } = &mut user.message
+        {
+            content.retain(|part| matches!(part, coco_types::UserContent::Text(_)));
         }
     }
     // Remove User messages that have become empty.
     messages.retain(|msg| {
-        if let Message::User(user) = msg {
-            if let LlmMessage::User { content, .. } = &user.message {
-                return !content.is_empty();
-            }
+        if let Message::User(user) = msg
+            && let LlmMessage::User { content, .. } = &user.message
+        {
+            return !content.is_empty();
         }
         true
     });
@@ -293,15 +290,15 @@ pub fn strip_images_from_messages(messages: &mut Vec<Message>) {
 /// at the end of text content parts.
 pub fn strip_signature_blocks(messages: &mut Vec<Message>) {
     for msg in messages.iter_mut() {
-        if let Message::User(user) = msg {
-            if let LlmMessage::User { content, .. } = &mut user.message {
-                for part in content.iter_mut() {
-                    if let coco_types::UserContent::Text(text_part) = part {
-                        if let Some(pos) = text_part.text.find("\n-- \n") {
-                            text_part.text.truncate(pos);
-                        } else if text_part.text.starts_with("-- \n") {
-                            text_part.text.clear();
-                        }
+        if let Message::User(user) = msg
+            && let LlmMessage::User { content, .. } = &mut user.message
+        {
+            for part in content.iter_mut() {
+                if let coco_types::UserContent::Text(text_part) = part {
+                    if let Some(pos) = text_part.text.find("\n-- \n") {
+                        text_part.text.truncate(pos);
+                    } else if text_part.text.starts_with("-- \n") {
+                        text_part.text.clear();
                     }
                 }
             }

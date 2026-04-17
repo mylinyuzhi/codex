@@ -1,0 +1,196 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AgentStreamEvent",
+  "description": "Agent-loop stream events. Higher-level than `coco_types::StreamEvent` (which represents raw LLM inference deltas). Adds: - Tool lifecycle states (Queued → Started → Completed) - MCP tool call tracking - Turn-scoped item IDs\n\nInput to `StreamAccumulator`. See `event-system-design.md` Section 1.5.",
+  "oneOf": [
+    {
+      "description": "Text content delta from assistant response.",
+      "type": "object",
+      "required": [
+        "delta",
+        "turn_id",
+        "type"
+      ],
+      "properties": {
+        "delta": {
+          "type": "string"
+        },
+        "turn_id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "text_delta"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Thinking/reasoning delta from extended thinking.",
+      "type": "object",
+      "required": [
+        "delta",
+        "turn_id",
+        "type"
+      ],
+      "properties": {
+        "delta": {
+          "type": "string"
+        },
+        "turn_id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "thinking_delta"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Tool use block received from API (input complete). Creates a ThreadItem.",
+      "type": "object",
+      "required": [
+        "call_id",
+        "input",
+        "name",
+        "type"
+      ],
+      "properties": {
+        "call_id": {
+          "type": "string"
+        },
+        "input": true,
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "tool_use_queued"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Tool execution has begun (after permission check).",
+      "type": "object",
+      "required": [
+        "call_id",
+        "name",
+        "type"
+      ],
+      "properties": {
+        "batch_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "call_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "tool_use_started"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Tool execution completed with result.\n\n`name` is carried here so StreamAccumulator and TUI consumers can reconstruct display state without maintaining their own call_id → name map.",
+      "type": "object",
+      "required": [
+        "call_id",
+        "is_error",
+        "name",
+        "output",
+        "type"
+      ],
+      "properties": {
+        "call_id": {
+          "type": "string"
+        },
+        "is_error": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "output": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "tool_use_completed"
+          ]
+        }
+      }
+    },
+    {
+      "description": "MCP tool call initiated (separate from builtin tools).",
+      "type": "object",
+      "required": [
+        "call_id",
+        "server",
+        "tool",
+        "type"
+      ],
+      "properties": {
+        "call_id": {
+          "type": "string"
+        },
+        "server": {
+          "type": "string"
+        },
+        "tool": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "mcp_tool_call_begin"
+          ]
+        }
+      }
+    },
+    {
+      "description": "MCP tool call completed.",
+      "type": "object",
+      "required": [
+        "call_id",
+        "is_error",
+        "server",
+        "tool",
+        "type"
+      ],
+      "properties": {
+        "call_id": {
+          "type": "string"
+        },
+        "is_error": {
+          "type": "boolean"
+        },
+        "server": {
+          "type": "string"
+        },
+        "tool": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "mcp_tool_call_end"
+          ]
+        }
+      }
+    }
+  ]
+}

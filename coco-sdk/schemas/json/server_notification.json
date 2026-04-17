@@ -1,0 +1,3118 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ServerNotification",
+  "description": "Protocol-level notifications visible to all consumers.\n\n43 base variants from cocode-rs design + 9 TS gap additions = 52 total. Each variant has an explicit `#[serde(rename = \"...\")]` for its wire method. See `event-system-design.md` Section 2.",
+  "oneOf": [
+    {
+      "description": "New session started.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "session/started"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/SessionStartedParams"
+        }
+      }
+    },
+    {
+      "description": "Session result (final usage, cost, stop reason).",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "session/result"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/SessionResultParams"
+        }
+      }
+    },
+    {
+      "description": "Session ended.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "session/ended"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/SessionEndedParams"
+        }
+      }
+    },
+    {
+      "description": "Agent turn started.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "turn/started"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/TurnStartedParams"
+        }
+      }
+    },
+    {
+      "description": "Agent turn completed successfully.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "turn/completed"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/TurnCompletedParams"
+        }
+      }
+    },
+    {
+      "description": "Agent turn failed with error.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "turn/failed"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/TurnFailedParams"
+        }
+      }
+    },
+    {
+      "description": "Turn interrupted by user.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "turn/interrupted"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/TurnInterruptedParams"
+        }
+      }
+    },
+    {
+      "description": "Thread item started (from StreamAccumulator).",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "item/started"
+          ]
+        },
+        "params": {
+          "type": "object",
+          "required": [
+            "item"
+          ],
+          "properties": {
+            "item": {
+              "$ref": "#/definitions/ThreadItem"
+            }
+          }
+        }
+      }
+    },
+    {
+      "description": "Thread item updated (e.g. tool execution began).",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "item/updated"
+          ]
+        },
+        "params": {
+          "type": "object",
+          "required": [
+            "item"
+          ],
+          "properties": {
+            "item": {
+              "$ref": "#/definitions/ThreadItem"
+            }
+          }
+        }
+      }
+    },
+    {
+      "description": "Thread item completed.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "item/completed"
+          ]
+        },
+        "params": {
+          "type": "object",
+          "required": [
+            "item"
+          ],
+          "properties": {
+            "item": {
+              "$ref": "#/definitions/ThreadItem"
+            }
+          }
+        }
+      }
+    },
+    {
+      "description": "Text content delta from assistant.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "agentMessage/delta"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/ContentDeltaParams"
+        }
+      }
+    },
+    {
+      "description": "Reasoning/thinking delta.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "reasoning/delta"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/ContentDeltaParams"
+        }
+      }
+    },
+    {
+      "description": "Subagent spawned.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "subagent/spawned"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/SubagentSpawnedParams"
+        }
+      }
+    },
+    {
+      "description": "Subagent completed.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "subagent/completed"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/SubagentCompletedParams"
+        }
+      }
+    },
+    {
+      "description": "Subagent moved to background.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "subagent/backgrounded"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/SubagentBackgroundedParams"
+        }
+      }
+    },
+    {
+      "description": "Subagent progress update.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "subagent/progress"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/SubagentProgressParams"
+        }
+      }
+    },
+    {
+      "description": "MCP server startup status.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "mcp/startupStatus"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/McpStartupStatusParams"
+        }
+      }
+    },
+    {
+      "description": "All MCP servers finished startup.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "mcp/startupComplete"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/McpStartupCompleteParams"
+        }
+      }
+    },
+    {
+      "description": "Context compacted.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "context/compacted"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/ContextCompactedParams"
+        }
+      }
+    },
+    {
+      "description": "Context usage warning.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "context/usageWarning"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/ContextUsageWarningParams"
+        }
+      }
+    },
+    {
+      "description": "Compaction started.",
+      "type": "object",
+      "required": [
+        "method"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "context/compactionStarted"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Compaction failed.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "context/compactionFailed"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/CompactionFailedParams"
+        }
+      }
+    },
+    {
+      "description": "Context cleared (e.g. new mode).",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "context/cleared"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/ContextClearedParams"
+        }
+      }
+    },
+    {
+      "description": "Background task started.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "task/started"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/TaskStartedParams"
+        }
+      }
+    },
+    {
+      "description": "Background task completed.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "task/completed"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/TaskCompletedParams"
+        }
+      }
+    },
+    {
+      "description": "Background task progress.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "task/progress"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/TaskProgressParams"
+        }
+      }
+    },
+    {
+      "description": "Agents killed.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "agents/killed"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/AgentsKilledParams"
+        }
+      }
+    },
+    {
+      "description": "Model fallback started.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "model/fallbackStarted"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/ModelFallbackParams"
+        }
+      }
+    },
+    {
+      "description": "Model fallback completed.",
+      "type": "object",
+      "required": [
+        "method"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "model/fallbackCompleted"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Fast mode state changed.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "model/fastModeChanged"
+          ]
+        },
+        "params": {
+          "type": "object",
+          "required": [
+            "active"
+          ],
+          "properties": {
+            "active": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    {
+      "description": "Permission mode changed.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "permission/modeChanged"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/PermissionModeChangedParams"
+        }
+      }
+    },
+    {
+      "description": "Prompt suggestions.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "prompt/suggestion"
+          ]
+        },
+        "params": {
+          "type": "object",
+          "required": [
+            "suggestions"
+          ],
+          "properties": {
+            "suggestions": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "description": "Error notification.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "error"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/ErrorParams"
+        }
+      }
+    },
+    {
+      "description": "Rate limit notification.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "rateLimit"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/RateLimitParams"
+        }
+      }
+    },
+    {
+      "description": "Keep-alive heartbeat.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "keepAlive"
+          ]
+        },
+        "params": {
+          "type": "object",
+          "required": [
+            "timestamp"
+          ],
+          "properties": {
+            "timestamp": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        }
+      }
+    },
+    {
+      "description": "IDE selection changed.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "ide/selectionChanged"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/IdeSelectionChangedParams"
+        }
+      }
+    },
+    {
+      "description": "IDE diagnostics updated.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "ide/diagnosticsUpdated"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/IdeDiagnosticsUpdatedParams"
+        }
+      }
+    },
+    {
+      "description": "Plan mode changed.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "plan/modeChanged"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/PlanModeChangedParams"
+        }
+      }
+    },
+    {
+      "description": "Command queue state changed.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "queue/stateChanged"
+          ]
+        },
+        "params": {
+          "type": "object",
+          "required": [
+            "queued"
+          ],
+          "properties": {
+            "queued": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        }
+      }
+    },
+    {
+      "description": "Command queued.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "queue/commandQueued"
+          ]
+        },
+        "params": {
+          "type": "object",
+          "required": [
+            "id",
+            "preview"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "preview": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    {
+      "description": "Command dequeued.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "queue/commandDequeued"
+          ]
+        },
+        "params": {
+          "type": "object",
+          "required": [
+            "id"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    {
+      "description": "File rewind completed.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "rewind/completed"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/RewindCompletedParams"
+        }
+      }
+    },
+    {
+      "description": "File rewind failed.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "rewind/failed"
+          ]
+        },
+        "params": {
+          "type": "object",
+          "required": [
+            "error"
+          ],
+          "properties": {
+            "error": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    {
+      "description": "Cost threshold warning.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "cost/warning"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/CostWarningParams"
+        }
+      }
+    },
+    {
+      "description": "Sandbox state changed.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "sandbox/stateChanged"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/SandboxStateChangedParams"
+        }
+      }
+    },
+    {
+      "description": "Sandbox violations detected.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "sandbox/violationsDetected"
+          ]
+        },
+        "params": {
+          "type": "object",
+          "required": [
+            "count"
+          ],
+          "properties": {
+            "count": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        }
+      }
+    },
+    {
+      "description": "Agents registered.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "agents/registered"
+          ]
+        },
+        "params": {
+          "type": "object",
+          "required": [
+            "agents"
+          ],
+          "properties": {
+            "agents": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/AgentInfo"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "description": "Hook executed (post-completion summary; from cocode-rs base). Kept alongside HookStarted/Progress/Response to preserve the 43-variant base contract.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "hook/executed"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/HookExecutedParams"
+        }
+      }
+    },
+    {
+      "description": "Hook execution started (TS gap P1).",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "hook/started"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/HookStartedParams"
+        }
+      }
+    },
+    {
+      "description": "Hook execution progress (TS gap P1 — stdout/stderr streaming).",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "hook/progress"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/HookProgressParams"
+        }
+      }
+    },
+    {
+      "description": "Hook execution completed (TS gap P1).",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "hook/response"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/HookResponseParams"
+        }
+      }
+    },
+    {
+      "description": "Entered a worktree.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "worktree/entered"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/WorktreeEnteredParams"
+        }
+      }
+    },
+    {
+      "description": "Exited a worktree.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "worktree/exited"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/WorktreeExitedParams"
+        }
+      }
+    },
+    {
+      "description": "Summarization completed.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "summarize/completed"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/SummarizeCompletedParams"
+        }
+      }
+    },
+    {
+      "description": "Summarization failed.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "summarize/failed"
+          ]
+        },
+        "params": {
+          "type": "object",
+          "required": [
+            "error"
+          ],
+          "properties": {
+            "error": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    {
+      "description": "Stream stall detected.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "stream/stallDetected"
+          ]
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "turn_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "description": "Stream watchdog warning.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "stream/watchdogWarning"
+          ]
+        },
+        "params": {
+          "type": "object",
+          "required": [
+            "elapsed_secs"
+          ],
+          "properties": {
+            "elapsed_secs": {
+              "type": "number",
+              "format": "double"
+            }
+          }
+        }
+      }
+    },
+    {
+      "description": "Stream request ended (with usage).",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "stream/requestEnd"
+          ]
+        },
+        "params": {
+          "type": "object",
+          "required": [
+            "usage"
+          ],
+          "properties": {
+            "usage": {
+              "$ref": "#/definitions/TokenUsage"
+            }
+          }
+        }
+      }
+    },
+    {
+      "description": "Session state changed (idle/running/requires_action).",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "session/stateChanged"
+          ]
+        },
+        "params": {
+          "type": "object",
+          "required": [
+            "state"
+          ],
+          "properties": {
+            "state": {
+              "$ref": "#/definitions/SessionState"
+            }
+          }
+        }
+      }
+    },
+    {
+      "description": "Max turns reached.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "turn/maxReached"
+          ]
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "max_turns": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32"
+            }
+          }
+        }
+      }
+    },
+    {
+      "description": "Output from a user-executed local command (REPL `!` prefix). Matches TS `SDKLocalCommandOutputMessage` (coreSchemas.ts:1590-1602).",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "localCommand/output"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/LocalCommandOutputParams"
+        }
+      }
+    },
+    {
+      "description": "Files persisted to disk (file upload/snapshot completion). Matches TS `SDKFilesPersistedEvent` (coreSchemas.ts:1672-1692).",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "files/persisted"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/FilesPersistedParams"
+        }
+      }
+    },
+    {
+      "description": "MCP elicitation completed (form submission or cancellation). Matches TS `SDKElicitationCompleteMessage` (coreSchemas.ts:1779-1792).",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "elicitation/complete"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/ElicitationCompleteParams"
+        }
+      }
+    },
+    {
+      "description": "Tool use summary from background haiku summarization. Matches TS `SDKToolUseSummaryMessage` (coreSchemas.ts:1769-1777).",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "tool/useSummary"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/ToolUseSummaryParams"
+        }
+      }
+    },
+    {
+      "description": "Tool execution progress (bash/powershell long-running). Matches TS `SDKToolProgressMessage` (coreSchemas.ts:1648-1659). Sent at most once per 30 seconds per `parent_tool_use_id`.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "tool/progress"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/ToolProgressParams"
+        }
+      }
+    }
+  ],
+  "definitions": {
+    "AgentInfo": {
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "AgentsKilledParams": {
+      "type": "object",
+      "required": [
+        "count"
+      ],
+      "properties": {
+        "agent_ids": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "count": {
+          "type": "integer",
+          "format": "int32"
+        }
+      }
+    },
+    "CompactionFailedParams": {
+      "type": "object",
+      "required": [
+        "error"
+      ],
+      "properties": {
+        "attempts": {
+          "default": 0,
+          "type": "integer",
+          "format": "int32"
+        },
+        "error": {
+          "type": "string"
+        }
+      }
+    },
+    "ContentDeltaParams": {
+      "type": "object",
+      "required": [
+        "delta"
+      ],
+      "properties": {
+        "delta": {
+          "type": "string"
+        },
+        "item_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "turn_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "ContextClearedParams": {
+      "type": "object",
+      "properties": {
+        "new_mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "ContextCompactedParams": {
+      "type": "object",
+      "required": [
+        "removed_messages",
+        "summary_tokens"
+      ],
+      "properties": {
+        "removed_messages": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "summary_tokens": {
+          "type": "integer",
+          "format": "int32"
+        }
+      }
+    },
+    "ContextUsageWarningParams": {
+      "type": "object",
+      "required": [
+        "estimated_tokens",
+        "percent_left",
+        "warning_threshold"
+      ],
+      "properties": {
+        "estimated_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "percent_left": {
+          "type": "number",
+          "format": "double"
+        },
+        "warning_threshold": {
+          "type": "integer",
+          "format": "int64"
+        }
+      }
+    },
+    "CostWarningParams": {
+      "type": "object",
+      "required": [
+        "current_cost_cents",
+        "threshold_cents"
+      ],
+      "properties": {
+        "budget_cents": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "current_cost_cents": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "threshold_cents": {
+          "type": "integer",
+          "format": "int64"
+        }
+      }
+    },
+    "ElicitationCompleteParams": {
+      "description": "Matches TS `SDKElicitationCompleteMessage` (coreSchemas.ts:1779-1792).\n\nEmitted after an MCP server's elicitation request is resolved (either submitted or cancelled).",
+      "type": "object",
+      "required": [
+        "elicitation_id",
+        "mcp_server_name"
+      ],
+      "properties": {
+        "elicitation_id": {
+          "type": "string"
+        },
+        "mcp_server_name": {
+          "type": "string"
+        }
+      }
+    },
+    "ErrorParams": {
+      "type": "object",
+      "required": [
+        "message"
+      ],
+      "properties": {
+        "category": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "retryable": {
+          "default": false,
+          "type": "boolean"
+        }
+      }
+    },
+    "FastModeState": {
+      "description": "Matches TS `FastModeStateSchema` (coreSchemas.ts:1883-1889).",
+      "type": "string",
+      "enum": [
+        "off",
+        "cooldown",
+        "on"
+      ]
+    },
+    "FileChangeInfo": {
+      "type": "object",
+      "required": [
+        "kind",
+        "path"
+      ],
+      "properties": {
+        "kind": {
+          "description": "One of: \"create\", \"modify\", \"delete\".",
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      }
+    },
+    "FilesPersistedParams": {
+      "description": "Matches TS `SDKFilesPersistedEvent` (coreSchemas.ts:1672-1692).\n\nTS emits this when files are uploaded or persisted (e.g. after a successful `filesApi` operation).",
+      "type": "object",
+      "required": [
+        "files",
+        "processed_at"
+      ],
+      "properties": {
+        "failed": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PersistedFileError"
+          }
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PersistedFileInfo"
+          }
+        },
+        "processed_at": {
+          "type": "string"
+        }
+      }
+    },
+    "HookExecutedParams": {
+      "description": "Params for the cocode-rs-base `hook/executed` notification. Simpler than `hook/started` → `hook/response` lifecycle: this is a single post-completion summary keeping the 43-variant base contract.",
+      "type": "object",
+      "required": [
+        "hook_name",
+        "hook_type"
+      ],
+      "properties": {
+        "hook_name": {
+          "type": "string"
+        },
+        "hook_type": {
+          "type": "string"
+        }
+      }
+    },
+    "HookOutcomeStatus": {
+      "type": "string",
+      "enum": [
+        "success",
+        "error",
+        "cancelled"
+      ]
+    },
+    "HookProgressParams": {
+      "description": "Matches TS `SDKHookProgressMessage` (coreSchemas.ts:1616-1629).",
+      "type": "object",
+      "required": [
+        "hook_event",
+        "hook_id",
+        "hook_name"
+      ],
+      "properties": {
+        "hook_event": {
+          "type": "string"
+        },
+        "hook_id": {
+          "type": "string"
+        },
+        "hook_name": {
+          "type": "string"
+        },
+        "output": {
+          "default": "",
+          "type": "string"
+        },
+        "stderr": {
+          "default": "",
+          "type": "string"
+        },
+        "stdout": {
+          "default": "",
+          "type": "string"
+        }
+      }
+    },
+    "HookResponseParams": {
+      "description": "Matches TS `SDKHookResponseMessage` (coreSchemas.ts:1631-1646).",
+      "type": "object",
+      "required": [
+        "hook_event",
+        "hook_id",
+        "hook_name",
+        "outcome",
+        "output"
+      ],
+      "properties": {
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "hook_event": {
+          "type": "string"
+        },
+        "hook_id": {
+          "type": "string"
+        },
+        "hook_name": {
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/definitions/HookOutcomeStatus"
+        },
+        "output": {
+          "type": "string"
+        },
+        "stderr": {
+          "default": "",
+          "type": "string"
+        },
+        "stdout": {
+          "default": "",
+          "type": "string"
+        }
+      }
+    },
+    "HookStartedParams": {
+      "type": "object",
+      "required": [
+        "hook_event",
+        "hook_id",
+        "hook_name"
+      ],
+      "properties": {
+        "hook_event": {
+          "type": "string"
+        },
+        "hook_id": {
+          "type": "string"
+        },
+        "hook_name": {
+          "type": "string"
+        }
+      }
+    },
+    "IdeDiagnosticsUpdatedParams": {
+      "type": "object",
+      "required": [
+        "file_path",
+        "new_count"
+      ],
+      "properties": {
+        "diagnostics": {
+          "default": [],
+          "type": "array",
+          "items": true
+        },
+        "file_path": {
+          "type": "string"
+        },
+        "new_count": {
+          "type": "integer",
+          "format": "int32"
+        }
+      }
+    },
+    "IdeSelectionChangedParams": {
+      "type": "object",
+      "required": [
+        "end_line",
+        "file_path",
+        "selected_text",
+        "start_line"
+      ],
+      "properties": {
+        "end_line": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "file_path": {
+          "type": "string"
+        },
+        "selected_text": {
+          "type": "string"
+        },
+        "start_line": {
+          "type": "integer",
+          "format": "int32"
+        }
+      }
+    },
+    "ItemStatus": {
+      "type": "string",
+      "enum": [
+        "in_progress",
+        "completed",
+        "failed",
+        "declined"
+      ]
+    },
+    "LocalCommandOutputParams": {
+      "description": "Matches TS `SDKLocalCommandOutputMessage` (coreSchemas.ts:1590-1602).\n\nTS emits this when the user runs a local bash command via the REPL `!` prefix (not a tool call). The `content` field is the command output; TS types it as the raw output structure (typically stdout/stderr).",
+      "type": "object",
+      "required": [
+        "content"
+      ],
+      "properties": {
+        "content": true
+      }
+    },
+    "McpConnectionStatus": {
+      "description": "MCP server connection state on the wire.\n\nMatches the TS `McpServerStatusSchema` enum at `coreSchemas.ts:167-173`: `'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled'`. `Disconnected` is a coco-rs extension used when the connection manager has no record of a named server.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "connected",
+            "pending",
+            "failed",
+            "needs-auth",
+            "disabled"
+          ]
+        },
+        {
+          "description": "coco-rs extension: server name unknown to the connection manager.",
+          "type": "string",
+          "enum": [
+            "disconnected"
+          ]
+        }
+      ]
+    },
+    "McpServerInit": {
+      "description": "MCP server init entry (inline struct in TS).",
+      "type": "object",
+      "required": [
+        "name",
+        "status"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/definitions/McpConnectionStatus"
+        }
+      }
+    },
+    "McpStartupCompleteParams": {
+      "type": "object",
+      "required": [
+        "servers"
+      ],
+      "properties": {
+        "failed": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "servers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "McpStartupStatusParams": {
+      "type": "object",
+      "required": [
+        "server",
+        "status"
+      ],
+      "properties": {
+        "server": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/definitions/McpConnectionStatus"
+        }
+      }
+    },
+    "ModelFallbackParams": {
+      "type": "object",
+      "required": [
+        "from_model",
+        "reason",
+        "to_model"
+      ],
+      "properties": {
+        "from_model": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "to_model": {
+          "type": "string"
+        }
+      }
+    },
+    "PermissionDenialInfo": {
+      "description": "Matches TS `SDKPermissionDenialSchema` (coreSchemas.ts:1399-1405).",
+      "type": "object",
+      "required": [
+        "tool_input",
+        "tool_name",
+        "tool_use_id"
+      ],
+      "properties": {
+        "tool_input": true,
+        "tool_name": {
+          "type": "string"
+        },
+        "tool_use_id": {
+          "type": "string"
+        }
+      }
+    },
+    "PermissionModeChangedParams": {
+      "type": "object",
+      "required": [
+        "mode"
+      ],
+      "properties": {
+        "bypass_available": {
+          "default": false,
+          "type": "boolean"
+        },
+        "mode": {
+          "type": "string"
+        }
+      }
+    },
+    "PersistedFileError": {
+      "type": "object",
+      "required": [
+        "error",
+        "filename"
+      ],
+      "properties": {
+        "error": {
+          "type": "string"
+        },
+        "filename": {
+          "type": "string"
+        }
+      }
+    },
+    "PersistedFileInfo": {
+      "type": "object",
+      "required": [
+        "file_id",
+        "filename"
+      ],
+      "properties": {
+        "file_id": {
+          "type": "string"
+        },
+        "filename": {
+          "type": "string"
+        }
+      }
+    },
+    "PlanModeChangedParams": {
+      "type": "object",
+      "required": [
+        "entered"
+      ],
+      "properties": {
+        "approved": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "entered": {
+          "type": "boolean"
+        },
+        "plan_file": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "PluginInit": {
+      "description": "Plugin init entry (inline struct in TS).",
+      "type": "object",
+      "required": [
+        "name",
+        "path"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "RateLimitParams": {
+      "type": "object",
+      "properties": {
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "provider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rate_limit_type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "remaining": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "reset_at": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RateLimitStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "utilization": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      }
+    },
+    "RateLimitStatus": {
+      "type": "string",
+      "enum": [
+        "allowed",
+        "allowed_warning",
+        "rejected"
+      ]
+    },
+    "RewindCompletedParams": {
+      "type": "object",
+      "required": [
+        "messages_removed",
+        "restored_files",
+        "rewound_turn"
+      ],
+      "properties": {
+        "messages_removed": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "restored_files": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "rewound_turn": {
+          "type": "integer",
+          "format": "int32"
+        }
+      }
+    },
+    "SandboxStateChangedParams": {
+      "type": "object",
+      "required": [
+        "active",
+        "enforcement"
+      ],
+      "properties": {
+        "active": {
+          "type": "boolean"
+        },
+        "enforcement": {
+          "type": "string"
+        }
+      }
+    },
+    "SessionEndedParams": {
+      "type": "object",
+      "required": [
+        "reason"
+      ],
+      "properties": {
+        "reason": {
+          "type": "string"
+        }
+      }
+    },
+    "SessionModelUsage": {
+      "description": "Matches TS `ModelUsageSchema` (coreSchemas.ts:17-28).",
+      "type": "object",
+      "required": [
+        "cache_creation_input_tokens",
+        "cache_read_input_tokens",
+        "context_window",
+        "cost_usd",
+        "input_tokens",
+        "max_output_tokens",
+        "output_tokens",
+        "web_search_requests"
+      ],
+      "properties": {
+        "cache_creation_input_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "cache_read_input_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "context_window": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "cost_usd": {
+          "type": "number",
+          "format": "double"
+        },
+        "input_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "max_output_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "output_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "web_search_requests": {
+          "type": "integer",
+          "format": "int64"
+        }
+      }
+    },
+    "SessionResultParams": {
+      "description": "Matches TS `SDKResultMessageSchema` (coreSchemas.ts:1407-1451). TS has two subtype variants (success/error) unified here with `is_error` flag.",
+      "type": "object",
+      "required": [
+        "duration_api_ms",
+        "duration_ms",
+        "session_id",
+        "stop_reason",
+        "total_cost_usd",
+        "total_turns",
+        "usage"
+      ],
+      "properties": {
+        "duration_api_ms": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "duration_ms": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "errors": {
+          "description": "Error variant: list of error strings.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "fast_mode_state": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/FastModeState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "is_error": {
+          "default": false,
+          "type": "boolean"
+        },
+        "model_usage": {
+          "description": "Per-model usage breakdown (TS `modelUsage: Record<string, ModelUsage>`).",
+          "default": {},
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/SessionModelUsage"
+          }
+        },
+        "num_api_calls": {
+          "description": "coco-rs extension: num_api_calls for observability (not in TS).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "permission_denials": {
+          "description": "Permission denials accumulated during the session.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PermissionDenialInfo"
+          }
+        },
+        "result": {
+          "description": "Success variant: the agent's final result text.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "stop_reason": {
+          "type": "string"
+        },
+        "structured_output": true,
+        "total_cost_usd": {
+          "type": "number",
+          "format": "double"
+        },
+        "total_turns": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "usage": {
+          "$ref": "#/definitions/TokenUsage"
+        }
+      }
+    },
+    "SessionStartedParams": {
+      "description": "Matches TS `SDKSystemMessageSchema` with subtype 'init' (coreSchemas.ts:1457-1494). Sent once at session startup; carries the full bootstrap context the SDK consumer needs to render a UI.",
+      "type": "object",
+      "required": [
+        "cwd",
+        "model",
+        "permission_mode",
+        "protocol_version",
+        "session_id",
+        "version"
+      ],
+      "properties": {
+        "agents": {
+          "description": "Agent type names available for Agent tool spawning.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "api_key_source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "betas": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "fast_mode_state": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/FastModeState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mcp_servers": {
+          "description": "MCP server status at initialization.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/McpServerInit"
+          }
+        },
+        "model": {
+          "type": "string"
+        },
+        "output_style": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "permission_mode": {
+          "type": "string"
+        },
+        "plugins": {
+          "description": "Loaded plugin metadata.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PluginInit"
+          }
+        },
+        "protocol_version": {
+          "description": "coco-rs extension: protocol version negotiation.",
+          "type": "string"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "skills": {
+          "description": "Skill names loaded.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "slash_commands": {
+          "description": "Slash commands available in this session.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tools": {
+          "description": "Builtin + MCP tool names.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "version": {
+          "description": "Release version of the coco-rs binary.",
+          "type": "string"
+        }
+      }
+    },
+    "SessionState": {
+      "oneOf": [
+        {
+          "description": "Turn completed, waiting for user input.",
+          "type": "string",
+          "enum": [
+            "idle"
+          ]
+        },
+        {
+          "description": "Agent is actively processing.",
+          "type": "string",
+          "enum": [
+            "running"
+          ]
+        },
+        {
+          "description": "Waiting for user action (approval, question, elicitation).",
+          "type": "string",
+          "enum": [
+            "requires_action"
+          ]
+        }
+      ]
+    },
+    "SubagentBackgroundedParams": {
+      "type": "object",
+      "required": [
+        "agent_id",
+        "output_file"
+      ],
+      "properties": {
+        "agent_id": {
+          "type": "string"
+        },
+        "output_file": {
+          "type": "string"
+        }
+      }
+    },
+    "SubagentCompletedParams": {
+      "type": "object",
+      "required": [
+        "agent_id",
+        "result"
+      ],
+      "properties": {
+        "agent_id": {
+          "type": "string"
+        },
+        "is_error": {
+          "default": false,
+          "type": "boolean"
+        },
+        "result": {
+          "type": "string"
+        }
+      }
+    },
+    "SubagentProgressParams": {
+      "type": "object",
+      "required": [
+        "agent_id"
+      ],
+      "properties": {
+        "agent_id": {
+          "type": "string"
+        },
+        "current_step": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "total_steps": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        }
+      }
+    },
+    "SubagentSpawnedParams": {
+      "type": "object",
+      "required": [
+        "agent_id",
+        "agent_type",
+        "description"
+      ],
+      "properties": {
+        "agent_id": {
+          "type": "string"
+        },
+        "agent_type": {
+          "type": "string"
+        },
+        "color": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "type": "string"
+        }
+      }
+    },
+    "SummarizeCompletedParams": {
+      "type": "object",
+      "required": [
+        "from_turn",
+        "summary_tokens"
+      ],
+      "properties": {
+        "from_turn": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "summary_tokens": {
+          "type": "integer",
+          "format": "int32"
+        }
+      }
+    },
+    "TaskCompletedParams": {
+      "description": "Matches TS `SDKTaskNotificationMessage` (coreSchemas.ts:1694-1713). TS calls this `task/notification`; coco-rs uses `task/completed` as the wire method for brevity, but fields match TS exactly.",
+      "type": "object",
+      "required": [
+        "output_file",
+        "status",
+        "summary",
+        "task_id"
+      ],
+      "properties": {
+        "output_file": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/definitions/TaskCompletionStatus"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "tool_use_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TaskUsage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "TaskCompletionStatus": {
+      "description": "Matches TS `z.enum(['completed', 'failed', 'stopped'])` for task_notification status.",
+      "type": "string",
+      "enum": [
+        "completed",
+        "failed",
+        "stopped"
+      ]
+    },
+    "TaskProgressParams": {
+      "description": "Matches TS `SDKTaskProgressMessage` (coreSchemas.ts:1750-1767). In TS, `description` and `usage` are required; other fields optional. The `workflow_progress` field carries the streaming state of local_workflow tasks — a delta batch of workflow state changes.",
+      "type": "object",
+      "required": [
+        "description",
+        "task_id",
+        "usage"
+      ],
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "last_tool_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "tool_use_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "usage": {
+          "$ref": "#/definitions/TaskUsage"
+        },
+        "workflow_progress": {
+          "type": "array",
+          "items": true
+        }
+      }
+    },
+    "TaskStartedParams": {
+      "description": "Matches TS `SDKTaskStartedMessage` (coreSchemas.ts:1715-1733). TS has `description` required and `task_type` optional.",
+      "type": "object",
+      "required": [
+        "description",
+        "task_id"
+      ],
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "prompt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "task_type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_use_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workflow_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "TaskUsage": {
+      "type": "object",
+      "required": [
+        "duration_ms",
+        "tool_uses",
+        "total_tokens"
+      ],
+      "properties": {
+        "duration_ms": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "tool_uses": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "total_tokens": {
+          "type": "integer",
+          "format": "int64"
+        }
+      }
+    },
+    "ThreadItem": {
+      "description": "Semantic representation of a conversation thread item. Produced by `StreamAccumulator` from `AgentStreamEvent` sequences. Used in `ServerNotification::ItemStarted / ItemUpdated / ItemCompleted`.\n\nSee `event-system-design.md` Section 1.6.",
+      "type": "object",
+      "required": [
+        "details",
+        "item_id",
+        "turn_id"
+      ],
+      "properties": {
+        "details": {
+          "$ref": "#/definitions/ThreadItemDetails"
+        },
+        "item_id": {
+          "type": "string"
+        },
+        "turn_id": {
+          "type": "string"
+        }
+      }
+    },
+    "ThreadItemDetails": {
+      "description": "Tool-specific semantic mapping.\n\nMapping rules (from `event-system-design.md` Section 6.2): - Bash → `CommandExecution` - Edit/Write → `FileChange` - WebSearch → `WebSearch` - mcp__* → `McpToolCall` - Agent/Task → `Subagent` - all others → `ToolCall` - text content → `AgentMessage` - thinking → `Reasoning` - errors → `Error`",
+      "oneOf": [
+        {
+          "description": "Bash tool → command execution with output.",
+          "type": "object",
+          "required": [
+            "command",
+            "output",
+            "status",
+            "type"
+          ],
+          "properties": {
+            "command": {
+              "type": "string"
+            },
+            "exit_code": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32"
+            },
+            "output": {
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/definitions/ItemStatus"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "command_execution"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Edit/Write tools → file change with diff info.",
+          "type": "object",
+          "required": [
+            "changes",
+            "status",
+            "type"
+          ],
+          "properties": {
+            "changes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/FileChangeInfo"
+              }
+            },
+            "status": {
+              "$ref": "#/definitions/ItemStatus"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "file_change"
+              ]
+            }
+          }
+        },
+        {
+          "description": "WebSearch tool.",
+          "type": "object",
+          "required": [
+            "query",
+            "status",
+            "type"
+          ],
+          "properties": {
+            "query": {
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/definitions/ItemStatus"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "web_search"
+              ]
+            }
+          }
+        },
+        {
+          "description": "MCP server tool call.",
+          "type": "object",
+          "required": [
+            "arguments",
+            "server",
+            "status",
+            "tool",
+            "type"
+          ],
+          "properties": {
+            "arguments": true,
+            "error": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "result": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "server": {
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/definitions/ItemStatus"
+            },
+            "tool": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "mcp_tool_call"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Agent/Task tool → subagent lifecycle.",
+          "type": "object",
+          "required": [
+            "agent_id",
+            "agent_type",
+            "description",
+            "status",
+            "type"
+          ],
+          "properties": {
+            "agent_id": {
+              "type": "string"
+            },
+            "agent_type": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            },
+            "is_background": {
+              "default": false,
+              "type": "boolean"
+            },
+            "result": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "$ref": "#/definitions/ItemStatus"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "subagent"
+              ]
+            }
+          }
+        },
+        {
+          "description": "All other tools (Read, Glob, Grep, etc.).",
+          "type": "object",
+          "required": [
+            "input",
+            "status",
+            "tool",
+            "type"
+          ],
+          "properties": {
+            "input": true,
+            "is_error": {
+              "default": false,
+              "type": "boolean"
+            },
+            "output": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "$ref": "#/definitions/ItemStatus"
+            },
+            "tool": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "tool_call"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Assistant text content.",
+          "type": "object",
+          "required": [
+            "text",
+            "type"
+          ],
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "agent_message"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Reasoning/thinking content.",
+          "type": "object",
+          "required": [
+            "text",
+            "type"
+          ],
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "reasoning"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Error during processing.",
+          "type": "object",
+          "required": [
+            "message",
+            "type"
+          ],
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "error"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "TokenUsage": {
+      "description": "Per-request token counts (returned by LLM API).",
+      "type": "object",
+      "required": [
+        "input_tokens",
+        "output_tokens"
+      ],
+      "properties": {
+        "cache_creation_input_tokens": {
+          "default": 0,
+          "type": "integer",
+          "format": "int64"
+        },
+        "cache_read_input_tokens": {
+          "default": 0,
+          "type": "integer",
+          "format": "int64"
+        },
+        "input_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "output_tokens": {
+          "type": "integer",
+          "format": "int64"
+        }
+      }
+    },
+    "ToolProgressParams": {
+      "description": "Matches TS `SDKToolProgressMessage` (coreSchemas.ts:1648-1659).\n\nLong-running tool progress (Bash, PowerShell). TS throttles emission to ≤1 per 30 seconds per `parent_tool_use_id`. coco-rs StreamAccumulator may emit this independently from `AgentStreamEvent::ToolUseStarted`.",
+      "type": "object",
+      "required": [
+        "elapsed_time_seconds",
+        "tool_name",
+        "tool_use_id"
+      ],
+      "properties": {
+        "elapsed_time_seconds": {
+          "type": "number",
+          "format": "double"
+        },
+        "parent_tool_use_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "task_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_name": {
+          "type": "string"
+        },
+        "tool_use_id": {
+          "type": "string"
+        }
+      }
+    },
+    "ToolUseSummaryParams": {
+      "description": "Matches TS `SDKToolUseSummaryMessage` (coreSchemas.ts:1769-1777).\n\nBackground Haiku-based summary of a batch of tool uses. TS uses this to compress verbose tool output before it's displayed or archived.",
+      "type": "object",
+      "required": [
+        "preceding_tool_use_ids",
+        "summary"
+      ],
+      "properties": {
+        "preceding_tool_use_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "summary": {
+          "type": "string"
+        }
+      }
+    },
+    "TurnCompletedParams": {
+      "type": "object",
+      "required": [
+        "usage"
+      ],
+      "properties": {
+        "turn_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "usage": {
+          "$ref": "#/definitions/TokenUsage"
+        }
+      }
+    },
+    "TurnFailedParams": {
+      "type": "object",
+      "required": [
+        "error"
+      ],
+      "properties": {
+        "error": {
+          "type": "string"
+        }
+      }
+    },
+    "TurnInterruptedParams": {
+      "type": "object",
+      "properties": {
+        "turn_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "TurnStartedParams": {
+      "type": "object",
+      "required": [
+        "turn_number"
+      ],
+      "properties": {
+        "turn_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "turn_number": {
+          "type": "integer",
+          "format": "int32"
+        }
+      }
+    },
+    "WorktreeEnteredParams": {
+      "type": "object",
+      "required": [
+        "branch",
+        "worktree_path"
+      ],
+      "properties": {
+        "branch": {
+          "type": "string"
+        },
+        "worktree_path": {
+          "type": "string"
+        }
+      }
+    },
+    "WorktreeExitedParams": {
+      "type": "object",
+      "required": [
+        "action",
+        "worktree_path"
+      ],
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "worktree_path": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

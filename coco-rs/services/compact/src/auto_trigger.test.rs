@@ -46,7 +46,7 @@ fn test_zero_context_window() {
 fn test_calculate_token_warning_state() {
     let state =
         calculate_token_warning_state(170_000, CTX, MAX_OUT, /*auto_compact_enabled*/ true);
-    let effective = effective_context_window(CTX, MAX_OUT);
+    let _effective = effective_context_window(CTX, MAX_OUT);
     // 170K is close to effective (~184K)
     assert!(state.percent_left < 10, "should have <10% left");
     assert!(state.is_above_warning_threshold, "above warning threshold");

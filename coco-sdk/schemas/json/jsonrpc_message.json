@@ -1,0 +1,128 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "JsonRpcMessage",
+  "description": "Top-level wire message. SDK clients send these over stdin; coco-rs writes these to stdout. Consumers dispatch on the `type` discriminator (NOT `method` — JSON-RPC's `method` field is inside the inner payload).",
+  "oneOf": [
+    {
+      "description": "Request expecting a response. Correlates via `request_id`.",
+      "type": "object",
+      "required": [
+        "method",
+        "request_id",
+        "type"
+      ],
+      "properties": {
+        "method": {
+          "description": "Dispatch key (e.g. \"turn/start\", \"mcp/status\").",
+          "type": "string"
+        },
+        "params": {
+          "description": "Method-specific parameters.",
+          "default": null
+        },
+        "request_id": {
+          "description": "Unique identifier for correlating the response.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/RequestId"
+            }
+          ]
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "request"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Response to a previously-sent request.",
+      "type": "object",
+      "required": [
+        "request_id",
+        "type"
+      ],
+      "properties": {
+        "request_id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "result": {
+          "description": "Method-specific result value.",
+          "default": null
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "response"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Fire-and-forget notification (no response expected). `ServerNotification` is the usual payload in coco-rs.",
+      "type": "object",
+      "required": [
+        "method",
+        "type"
+      ],
+      "properties": {
+        "method": {
+          "type": "string"
+        },
+        "params": {
+          "default": null
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "notification"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Error reply (alternative to `Response` for failures).",
+      "type": "object",
+      "required": [
+        "code",
+        "message",
+        "request_id",
+        "type"
+      ],
+      "properties": {
+        "code": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "data": true,
+        "message": {
+          "type": "string"
+        },
+        "request_id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "error"
+          ]
+        }
+      }
+    }
+  ],
+  "definitions": {
+    "RequestId": {
+      "description": "Request identifier. Can be a string or integer per JSON-RPC 2.0. SDK clients typically use integers; coco-rs accepts both.",
+      "anyOf": [
+        {
+          "type": "integer",
+          "format": "int64"
+        },
+        {
+          "type": "string"
+        }
+      ]
+    }
+  }
+}

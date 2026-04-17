@@ -144,7 +144,10 @@ fn test_filter_schemas_by_model_supported_set() {
         make_source("ComputerUse", "Use computer", ToolSchemaOrigin::Builtin),
     ];
 
-    let supported: HashSet<String> = ["Read", "Write"].iter().map(|s| s.to_string()).collect();
+    let supported: HashSet<String> = ["Read", "Write"]
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect();
     let filtered = filter_schemas_by_model(&schemas, Some(&supported), None);
     assert_eq!(filtered.len(), 2);
     assert!(filtered.iter().all(|s| s.name != "ComputerUse"));

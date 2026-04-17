@@ -3,7 +3,6 @@
 use crate::state::AppState;
 use crate::state::session::ChatMessage;
 use crate::state::session::ChatRole;
-use crate::state::session::MessageContent;
 use crate::state::session::TokenUsage;
 use crate::state::ui::Overlay;
 use crate::state::ui::PermissionDetail;
@@ -85,6 +84,12 @@ fn test_tool_execution_lifecycle() {
         .session
         .start_tool("call-1".to_string(), "Bash".to_string());
     assert_eq!(state.session.tool_executions.len(), 1);
+    assert_eq!(
+        state.session.tool_executions[0].status,
+        crate::state::session::ToolStatus::Queued
+    );
+
+    state.session.run_tool("call-1");
     assert_eq!(
         state.session.tool_executions[0].status,
         crate::state::session::ToolStatus::Running

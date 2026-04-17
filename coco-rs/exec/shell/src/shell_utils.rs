@@ -179,9 +179,7 @@ pub fn rewrite_windows_null_redirect(command: &str) -> String {
 
     while i < bytes.len() {
         // Look for redirect operators followed by "nul"
-        if (bytes[i] == b'>' || (i > 0 && bytes[i - 1].is_ascii_digit() && bytes[i] == b'>'))
-            || (bytes[i] == b'&' && i + 1 < bytes.len() && bytes[i + 1] == b'>')
-        {
+        if bytes[i] == b'>' || (bytes[i] == b'&' && i + 1 < bytes.len() && bytes[i + 1] == b'>') {
             let redir_start = i;
             // Skip past the redirect operator
             if bytes[i] == b'&' {
@@ -199,9 +197,9 @@ pub fn rewrite_windows_null_redirect(command: &str) -> String {
             }
             // Check for "nul" (case-insensitive) not followed by identifier chars
             if i + 2 < bytes.len()
-                && bytes[i].to_ascii_lowercase() == b'n'
-                && bytes[i + 1].to_ascii_lowercase() == b'u'
-                && bytes[i + 2].to_ascii_lowercase() == b'l'
+                && bytes[i].eq_ignore_ascii_case(&b'n')
+                && bytes[i + 1].eq_ignore_ascii_case(&b'u')
+                && bytes[i + 2].eq_ignore_ascii_case(&b'l')
             {
                 let after = if i + 3 < bytes.len() {
                     bytes[i + 3]
