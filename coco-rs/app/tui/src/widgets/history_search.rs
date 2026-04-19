@@ -14,6 +14,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
 
+use crate::i18n::t;
 use crate::state::session::ChatMessage;
 use crate::state::session::ChatRole;
 use crate::theme::Theme;
@@ -141,7 +142,7 @@ impl Widget for HistorySearchWidget<'_> {
         lines.push(Line::from(vec![
             Span::raw("  🔍 ").fg(self.theme.accent),
             if self.state.query.is_empty() {
-                Span::raw("Type to search...").fg(self.theme.text_dim)
+                Span::raw(t!("history_search.type_to_search").to_string()).fg(self.theme.text_dim)
             } else {
                 Span::raw(&self.state.query).fg(self.theme.text)
             },
@@ -152,7 +153,7 @@ impl Widget for HistorySearchWidget<'_> {
         // Results
         if self.state.matches.is_empty() && !self.state.query.is_empty() {
             lines.push(Line::from(
-                Span::raw("  No matches found").fg(self.theme.text_dim),
+                Span::raw(format!("  {}", t!("history_search.no_matches"))).fg(self.theme.text_dim),
             ));
         }
 
@@ -174,24 +175,27 @@ impl Widget for HistorySearchWidget<'_> {
 
         if self.state.matches.len() > 15 {
             lines.push(Line::from(
-                Span::raw(format!(
-                    "  ... {} more matches",
-                    self.state.matches.len() - 15
-                ))
+                Span::raw(
+                    t!(
+                        "history_search.more_matches",
+                        count = self.state.matches.len() - 15
+                    )
+                    .to_string(),
+                )
                 .fg(self.theme.text_dim),
             ));
         }
 
         lines.push(Line::default());
         lines.push(Line::from(vec![
-            Span::raw("  [Enter] Jump  ").fg(self.theme.text_dim),
-            Span::raw("[↑↓] Navigate  ").fg(self.theme.text_dim),
-            Span::raw("[Esc] Close").fg(self.theme.text_dim),
+            Span::raw(format!("  {}", t!("history_search.hint_jump"))).fg(self.theme.text_dim),
+            Span::raw(t!("history_search.hint_navigate").to_string()).fg(self.theme.text_dim),
+            Span::raw(t!("history_search.hint_close").to_string()).fg(self.theme.text_dim),
         ]));
 
         let block = Block::default()
             .borders(Borders::ALL)
-            .title(" Search History ")
+            .title(t!("history_search.panel_title").to_string())
             .border_style(ratatui::style::Style::default().fg(self.theme.border_focused));
 
         let paragraph = Paragraph::new(lines)

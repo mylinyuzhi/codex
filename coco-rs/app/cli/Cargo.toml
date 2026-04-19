@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 coco-types.workspace = true
+coco-bridge.workspace = true
 coco-commands.workspace = true
 coco-config.workspace = true
 coco-session.workspace = true
@@ -23,9 +24,14 @@ coco-query.workspace = true
 coco-messages.workspace = true
 coco-context.workspace = true
 coco-mcp.workspace = true
+coco-permissions.workspace = true
+coco-plugins.workspace = true
+coco-state.workspace = true
 coco-tui.workspace = true
 vercel-ai-provider.workspace = true
 vercel-ai-anthropic.workspace = true
+vercel-ai-openai.workspace = true
+vercel-ai-google.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 
 dirs.workspace = true

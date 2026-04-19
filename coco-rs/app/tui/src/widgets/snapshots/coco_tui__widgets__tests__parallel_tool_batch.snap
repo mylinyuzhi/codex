@@ -1,0 +1,28 @@
+---
+source: app/tui/src/widgets/mod.test.rs
+expression: output
+---
+ | opus-4                                                                       
+> Investigate                                                                   
+                                                                                
+  ‖ 3 in parallel                                                               
+  ⏳  Bash: ls -la                                                               
+  ⏳  Read: src/main.rs                                                          
+  ⏳  Grep: TODO                                                                 
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+ Input ─────────────────────────────────────────────────────────────────────────
+> Type a message...                                                             
+                                                                                
+ opus-4 | Default | 4 msgs

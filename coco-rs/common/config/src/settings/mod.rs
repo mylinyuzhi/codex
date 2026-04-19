@@ -83,6 +83,22 @@ pub struct Settings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plans_directory: Option<String>,
 
+    // === Plan mode ===
+    /// Plan-mode workflow + Phase-4 prompt variant + per-phase agent
+    /// counts. Port of TS `planModeV2.ts` behaviors:
+    /// `isPlanModeInterviewPhaseEnabled`, `getPewterLedgerVariant`,
+    /// `getPlanModeV2AgentCount`, `getPlanModeV2ExploreAgentCount` —
+    /// but re-rooted on user-visible config instead of GrowthBook /
+    /// USER_TYPE=ant gating. See root `CLAUDE.md` "Plan Mode — Skip
+    /// Ultraplan" decision row.
+    #[serde(default)]
+    pub plan_mode: PlanModeSettings,
+
+    // === Session ===
+    /// Session-level behaviors: auto-title generation, etc.
+    #[serde(default)]
+    pub session: SessionSettings,
+
     // === Auto-Mode ===
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_mode: Option<AutoModeConfig>,
@@ -167,6 +183,102 @@ pub struct PluginConfig {
 #[serde(default)]
 pub struct WorktreeConfig {
     pub enabled: bool,
+}
+
+/// Plan-mode workflow + prompt configuration.
+///
+/// TS parity (re-rooted on user config, not GrowthBook):
+/// - `workflow` ← `isPlanModeInterviewPhaseEnabled`
+/// - `phase4_variant` ← `getPewterLedgerVariant`
+/// - `explore_agent_count` ← `getPlanModeV2ExploreAgentCount`
+/// - `plan_agent_count` ← `getPlanModeV2AgentCount`
+///
+/// All fields have sensible defaults so users who don't touch their
+/// settings.json get the canonical 5-phase workflow + standard Phase 4.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PlanModeSettings {
+    /// Which workflow the Full plan-mode reminder should emit.
+    pub workflow: PlanModeWorkflow,
+    /// Phase-4 prompt variant (five-phase workflow only).
+    /// Ignored when `workflow = interview`.
+    pub phase4_variant: PlanPhase4Variant,
+    /// How many parallel Explore agents the 5-phase prompt invites the
+    /// model to launch. TS default: 3. Valid range [1, 10].
+    #[serde(default = "default_explore_agent_count")]
+    pub explore_agent_count: i32,
+    /// How many parallel Plan agents the 5-phase prompt invites. TS
+    /// default: 1 (3 for Max/enterprise/team tiers in TS, but we don't
+    /// ship tier detection — user picks). Valid range [1, 10].
+    #[serde(default = "default_plan_agent_count")]
+    pub plan_agent_count: i32,
+    /// Advisory mtime check on plan-mode exit: compare the plan file's
+    /// mtime against the `EnterPlanMode` entry timestamp. On
+    /// `NotEdited` / `Missing`, append a non-blocking advisory note to
+    /// the `ExitPlanMode` tool_result. **Does not enforce** — the model
+    /// can ignore the advisory. Default off.
+    ///
+    /// TS parity: `VerifyPlanExecution` is a PostToolUse *hook* in TS
+    /// that can block the exit. The Rust port ships the simpler
+    /// synchronous mtime check as an advisory; if enforcement is
+    /// needed, wire a hook instead. Name kept as `verify_execution` for
+    /// settings.json backwards compatibility.
+    #[serde(default)]
+    pub verify_execution: bool,
+}
+
+fn default_explore_agent_count() -> i32 {
+    3
+}
+fn default_plan_agent_count() -> i32 {
+    1
+}
+
+/// The plan-mode Full reminder workflow variant.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanModeWorkflow {
+    /// Original 5-phase workflow: Understand → Explore → Design → Final
+    /// Plan → ExitPlanMode. Heavy agent parallelism in Phase 1 + 2.
+    /// TS: `getPlanModeV2MainAgentInstructions`.
+    #[default]
+    FivePhase,
+    /// Iterative ask-as-you-go workflow: read a little, ask, update the
+    /// plan file, repeat. TS: `getPlanModeInterviewInstructions`.
+    Interview,
+}
+
+/// Session-level auto-behavior configuration.
+///
+/// Toggles for features that run across the session lifecycle, not tied
+/// to any single prompt or turn.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SessionSettings {
+    /// Auto-generate a session title from the approved plan text the
+    /// first time `ExitPlanMode` is approved and a plan file is
+    /// non-empty. Uses whatever provider+model is currently bound to
+    /// `ModelRole::Fast` — if no Fast role is configured, the feature
+    /// silently stays off. TS: `sessionTitle.ts::generateSessionTitle`
+    /// + `initReplBridge.ts::onUserMessage` lifecycle hook.
+    pub auto_title: bool,
+}
+
+/// Phase-4 "Final Plan" prompt strictness (5-phase workflow only).
+/// TS: `PewterLedgerVariant` — four arms with progressively stricter
+/// guidance on plan-file length.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanPhase4Variant {
+    /// Standard detailed plan with Context + Verification sections.
+    #[default]
+    Standard,
+    /// One-line Context, single verification command.
+    Trim,
+    /// No Context / Background; one line per file. Soft 40-line guidance.
+    Cut,
+    /// Hardest: no prose, bullet per file, **hard 40-line limit**.
+    Cap,
 }
 
 /// Settings snapshot with per-source tracking.

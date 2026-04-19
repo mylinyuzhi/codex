@@ -110,11 +110,20 @@ impl TurnRunner for QueryEngineRunner {
                 "QueryEngineRunner: run_turn"
             );
 
-            // Resolve the permission mode from the turn params if
-            // provided, otherwise fall back to the session's default
-            // (Default permission mode) — same behavior as the TS
-            // headless flow.
-            let permission_mode = params.permission_mode.unwrap_or_default();
+            // Resolve the permission mode. Priority order (most
+            // specific first):
+            //   1. `params.permission_mode` — turn-scoped override
+            //      from the `turn/start` request. TS parity:
+            //      `SDKTurnStartRequest.permissionMode`.
+            //   2. `handoff.permission_mode` — session-scoped override
+            //      set by `control/setPermissionMode`. Previously this
+            //      field was dead (no reader). Now it's the bridge
+            //      between the SDK control API and the engine.
+            //   3. `PermissionMode::default()` — factory default.
+            let permission_mode = params
+                .permission_mode
+                .or(handoff.permission_mode)
+                .unwrap_or_default();
 
             let config = QueryEngineConfig {
                 model_name: handoff.model.clone(),
@@ -127,7 +136,13 @@ impl TurnRunner for QueryEngineRunner {
                 ..Default::default()
             };
 
-            let mut engine = QueryEngine::new(config, client, tools, cancel, /*hooks*/ None);
+            let mut engine = QueryEngine::new(config, client, tools, cancel, /*hooks*/ None)
+                // Attach the session's shared `ToolAppState` so
+                // plan-mode cadence + live permission mode persist
+                // across turns and mid-session `setPermissionMode`
+                // calls propagate to the engine live. TS parity:
+                // `appState` is session-lifetime.
+                .with_app_state(handoff.app_state.clone());
             if let Some(bridge) = permission_bridge {
                 engine = engine.with_permission_bridge(bridge);
             }

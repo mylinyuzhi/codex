@@ -14,6 +14,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
 
+use crate::i18n::t;
 use crate::theme::Theme;
 
 /// A task entry for the task list display.
@@ -73,7 +74,7 @@ impl Widget for TaskListWidget<'_> {
 
         if self.tasks.is_empty() {
             lines.push(Line::from(
-                Span::raw("  No background tasks").fg(self.theme.text_dim),
+                Span::raw(format!("  {}", t!("task.none"))).fg(self.theme.text_dim),
             ));
         }
 
@@ -89,10 +90,10 @@ impl Widget for TaskListWidget<'_> {
             };
 
             let type_label = match task.task_type {
-                TaskDisplayType::Shell => "shell",
-                TaskDisplayType::Agent => "agent",
-                TaskDisplayType::Dream => "dream",
-                TaskDisplayType::Remote => "remote",
+                TaskDisplayType::Shell => t!("task.type_shell"),
+                TaskDisplayType::Agent => t!("task.type_agent"),
+                TaskDisplayType::Dream => t!("task.type_dream"),
+                TaskDisplayType::Remote => t!("task.type_remote"),
             };
 
             let elapsed = format_elapsed(task.elapsed_ms);
@@ -118,14 +119,14 @@ impl Widget for TaskListWidget<'_> {
 
         lines.push(Line::default());
         lines.push(Line::from(vec![
-            Span::raw("  [Enter] View  ").fg(self.theme.text_dim),
-            Span::raw("[K] Kill  ").fg(self.theme.text_dim),
-            Span::raw("[Esc] Close").fg(self.theme.text_dim),
+            Span::raw(format!("  {}", t!("task.hint_view"))).fg(self.theme.text_dim),
+            Span::raw(t!("task.hint_kill").to_string()).fg(self.theme.text_dim),
+            Span::raw(t!("task.hint_close").to_string()).fg(self.theme.text_dim),
         ]));
 
         let block = Block::default()
             .borders(Borders::ALL)
-            .title(" Background Tasks ")
+            .title(t!("task.panel_title").to_string())
             .border_style(ratatui::style::Style::default().fg(self.theme.border_focused));
 
         let paragraph = Paragraph::new(lines)

@@ -14,6 +14,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
 
+use crate::i18n::t;
 use crate::theme::Theme;
 use crate::theme::ThemeName;
 
@@ -105,14 +106,23 @@ impl Widget for SettingsPanelWidget<'_> {
         let mut lines: Vec<Line> = Vec::new();
 
         // Tab bar
-        let tabs: Vec<(&str, bool)> = vec![
-            ("Theme", self.state.active_tab == SettingsTab::Theme),
-            ("Output", self.state.active_tab == SettingsTab::OutputStyle),
+        let tabs: Vec<(String, bool)> = vec![
             (
-                "Permissions",
+                t!("settings.tab_theme").to_string(),
+                self.state.active_tab == SettingsTab::Theme,
+            ),
+            (
+                t!("settings.tab_output").to_string(),
+                self.state.active_tab == SettingsTab::OutputStyle,
+            ),
+            (
+                t!("settings.tab_permissions").to_string(),
                 self.state.active_tab == SettingsTab::Permissions,
             ),
-            ("About", self.state.active_tab == SettingsTab::About),
+            (
+                t!("settings.tab_about").to_string(),
+                self.state.active_tab == SettingsTab::About,
+            ),
         ];
 
         let tab_spans: Vec<Span> = tabs
@@ -154,10 +164,11 @@ impl Widget for SettingsPanelWidget<'_> {
             SettingsTab::OutputStyle => {
                 if self.state.output_styles.is_empty() {
                     lines.push(Line::from(
-                        Span::raw("  No custom output styles").fg(self.theme.text_dim),
+                        Span::raw(format!("  {}", t!("settings.no_output_styles")))
+                            .fg(self.theme.text_dim),
                     ));
                     lines.push(Line::from(
-                        Span::raw("  Add .md files to .claude/output-styles/")
+                        Span::raw(format!("  {}", t!("settings.add_output_styles_hint")))
                             .fg(self.theme.text_dim),
                     ));
                 } else {
@@ -177,7 +188,8 @@ impl Widget for SettingsPanelWidget<'_> {
             SettingsTab::Permissions => {
                 if self.state.permission_rules.is_empty() {
                     lines.push(Line::from(
-                        Span::raw("  No permission rules configured").fg(self.theme.text_dim),
+                        Span::raw(format!("  {}", t!("settings.no_permission_rules")))
+                            .fg(self.theme.text_dim),
                     ));
                 } else {
                     for rule in &self.state.permission_rules {
@@ -191,30 +203,31 @@ impl Widget for SettingsPanelWidget<'_> {
             }
             SettingsTab::About => {
                 lines.push(Line::from(
-                    Span::raw("  coco-rs — Terminal UI")
+                    Span::raw(t!("dialog.settings_about_title").to_string())
                         .fg(self.theme.primary)
                         .bold(),
                 ));
                 lines.push(Line::from(
-                    Span::raw("  Built with ratatui + crossterm").fg(self.theme.text_dim),
+                    Span::raw(t!("dialog.settings_about_built").to_string())
+                        .fg(self.theme.text_dim),
                 ));
                 lines.push(Line::from(
-                    Span::raw("  Architecture: The Elm Architecture (TEA)").fg(self.theme.text_dim),
+                    Span::raw(t!("dialog.settings_about_arch").to_string()).fg(self.theme.text_dim),
                 ));
             }
         }
 
         lines.push(Line::default());
         lines.push(Line::from(vec![
-            Span::raw("  [Tab] Switch tab  ").fg(self.theme.text_dim),
-            Span::raw("[↑↓] Navigate  ").fg(self.theme.text_dim),
-            Span::raw("[Enter] Select  ").fg(self.theme.text_dim),
-            Span::raw("[Esc] Close").fg(self.theme.text_dim),
+            Span::raw(format!("  {}", t!("settings.hint_switch_tab"))).fg(self.theme.text_dim),
+            Span::raw(t!("settings.hint_navigate").to_string()).fg(self.theme.text_dim),
+            Span::raw(t!("settings.hint_select").to_string()).fg(self.theme.text_dim),
+            Span::raw(t!("settings.hint_close").to_string()).fg(self.theme.text_dim),
         ]));
 
         let block = Block::default()
             .borders(Borders::ALL)
-            .title(" Settings ")
+            .title(t!("dialog.title_settings").to_string())
             .border_style(ratatui::style::Style::default().fg(self.theme.border_focused));
 
         let paragraph = Paragraph::new(lines)

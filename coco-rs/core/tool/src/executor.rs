@@ -12,6 +12,7 @@ use coco_types::ToolName;
 use coco_types::ToolResult;
 use serde_json::Value;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 use tokio::sync::Semaphore;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -133,6 +134,15 @@ pub struct StreamingToolExecutor {
     update_tx: mpsc::UnboundedSender<StreamingToolUpdate>,
     /// Receive end of the update channel.
     update_rx: mpsc::UnboundedReceiver<StreamingToolUpdate>,
+    /// Shared app_state write handle — the executor owns the **only
+    /// write-capable reference** visible from the tool pipeline.
+    /// Tools see `ctx.app_state` as an `AppStateReadHandle` (no
+    /// write method); they return mutations via
+    /// `ToolResult::app_state_patch` which we apply here, under a
+    /// single write lock per batch. TS parity:
+    /// `orchestration.ts:queuedContextModifiers` applied after the
+    /// concurrent batch finishes.
+    app_state: Option<Arc<RwLock<coco_types::ToolAppState>>>,
 }
 
 impl StreamingToolExecutor {
@@ -149,7 +159,17 @@ impl StreamingToolExecutor {
             sibling_cancel: CancellationToken::new(),
             update_tx,
             update_rx,
+            app_state: None,
         }
+    }
+
+    /// Attach the shared app_state write handle. Must match the Arc
+    /// wrapped inside `ToolUseContext.app_state` (a read-only view
+    /// of the same store). Without this, patches returned by tools
+    /// are silently dropped (the executor has nowhere to apply them).
+    pub fn with_app_state(mut self, arc: Arc<RwLock<coco_types::ToolAppState>>) -> Self {
+        self.app_state = Some(arc);
+        self
     }
 
     pub fn with_max_concurrency(max_concurrency: usize) -> Self {
@@ -161,6 +181,7 @@ impl StreamingToolExecutor {
             sibling_cancel: CancellationToken::new(),
             update_tx,
             update_rx,
+            app_state: None,
         }
     }
 
@@ -433,6 +454,31 @@ impl StreamingToolExecutor {
             exec_result
         };
 
+        // Apply queued app_state patch (if any) under a write lock
+        // before returning. This is the serial-tool equivalent of
+        // TS's "`currentContext = update.newContext(currentContext)`"
+        // reassign-between-tools pattern — because serial unsafe
+        // tools run one-per-batch, we can apply immediately and the
+        // next batch's `create_tool_context` sees the update.
+        // Patches also get stripped from the ToolCallResult so the
+        // engine's downstream code (which flows the result across
+        // `.await` points) doesn't need `Sync` on `AppStatePatch`.
+        let result = match result {
+            Ok(mut tr) => {
+                if let Some(patch) = tr.app_state_patch.take() {
+                    if let Some(state) = self.app_state.as_ref() {
+                        let mut guard = state.write().await;
+                        patch(&mut guard);
+                    }
+                    // else: patch returned but no shared state wired
+                    //   — drop silently (test / SDK path without
+                    //   app_state attached).
+                }
+                Ok(tr)
+            }
+            Err(e) => Err(e),
+        };
+
         let duration_ms = start.elapsed().as_millis() as i64;
 
         ToolCallResult {
@@ -447,6 +493,16 @@ impl StreamingToolExecutor {
     ///
     /// Uses sibling abort: if any tool fails, siblings are cancelled.
     /// Results are collected in submission order (not completion order).
+    ///
+    /// **app_state invariant**: tools that return
+    /// `is_concurrency_safe == true` MUST NOT write `ctx.app_state`
+    /// during `execute` — see the `Tool::is_concurrency_safe`
+    /// contract. `shared_ctx` is an `Arc<ToolUseContext>` holding the
+    /// SAME `Arc<RwLock<ToolAppState>>` as every sibling, so any write
+    /// would be visible mid-batch to the others (vs. TS which queues
+    /// writes until batch-end). Rust relies on convention: concurrent
+    /// tools are read-only (Read/Glob/Grep/LSP). Serial unsafe tools
+    /// — the only writers — never hit this path.
     async fn execute_concurrent(
         &self,
         calls: Vec<PendingToolCall>,
@@ -609,6 +665,41 @@ impl StreamingToolExecutor {
                         }),
                         duration_ms: 0,
                     });
+                }
+            }
+        }
+
+        // Apply any queued app_state patches in submission order
+        // under a single write lock. Concurrent tools by convention
+        // don't return patches (they're read-only), but the plumbing
+        // exists uniformly so Tool authors don't have to special-case
+        // which path their tool is on. TS parity:
+        // `orchestration.ts:queuedContextModifiers` applied after the
+        // concurrent batch finishes — exact same timing + ordering.
+        //
+        // Patches also get stripped here so the returned
+        // `ToolCallResult` values don't carry a `FnOnce` across
+        // `.await` points in the engine (which would require `Sync`).
+        if let Some(state) = self.app_state.as_ref() {
+            let any_patch = results
+                .iter()
+                .any(|r| matches!(&r.result, Ok(tr) if tr.app_state_patch.is_some()));
+            if any_patch {
+                let mut guard = state.write().await;
+                for r in results.iter_mut() {
+                    if let Ok(tr) = r.result.as_mut() {
+                        if let Some(patch) = tr.app_state_patch.take() {
+                            patch(&mut guard);
+                        }
+                    }
+                }
+            }
+        } else {
+            // No shared state → drop any patches silently to strip
+            // `FnOnce` from the result for Sync-safety downstream.
+            for r in results.iter_mut() {
+                if let Ok(tr) = r.result.as_mut() {
+                    tr.app_state_patch = None;
                 }
             }
         }

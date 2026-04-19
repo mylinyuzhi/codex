@@ -5,6 +5,7 @@
 pub mod history;
 pub mod recovery;
 pub mod storage;
+pub mod title_generator;
 
 pub use history::HistoryEntry;
 pub use history::PromptHistory;

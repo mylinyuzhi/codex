@@ -1042,15 +1042,214 @@ async fn set_permission_mode_updates_session_field() {
         ))
         .await
         .unwrap();
-    let reply = client.recv().await.unwrap().unwrap();
+    // Drain notifications until we see the request response.
+    // `control/setPermissionMode` now emits `permission/modeChanged`
+    // so attached clients stay in sync — notification may arrive
+    // before the response on the same transport.
+    let mut saw_notification = false;
+    let reply = loop {
+        let msg = client.recv().await.unwrap().unwrap();
+        match msg {
+            JsonRpcMessage::Notification(n) if n.method == "permission/modeChanged" => {
+                saw_notification = true;
+                assert_eq!(n.params.get("mode"), Some(&serde_json::json!("plan")));
+            }
+            JsonRpcMessage::Response(_) | JsonRpcMessage::Error(_) => break msg,
+            other => panic!("unexpected message before response: {other:?}"),
+        }
+    };
     assert!(matches!(reply, JsonRpcMessage::Response(_)));
+    assert!(
+        saw_notification,
+        "permission/modeChanged notification must be emitted"
+    );
 
     let slot = state.session.read().await;
+    let session = slot.as_ref().unwrap();
     assert!(matches!(
-        slot.as_ref().unwrap().permission_mode,
+        session.permission_mode,
         Some(coco_types::PermissionMode::Plan)
     ));
+    // Regression guard for G2: `control/setPermissionMode` must
+    // propagate to `app_state.permission_mode` — the engine's live
+    // source of truth. Before the wire-up, only the SessionHandle
+    // field was written (dead API, no reader).
+    assert_eq!(
+        session.app_state.read().await.permission_mode,
+        Some(coco_types::PermissionMode::Plan),
+        "control/setPermissionMode must write app_state.permission_mode"
+    );
 
+    drop(client);
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn set_permission_mode_rejects_bypass_without_capability() {
+    // TS parity: cli/print.ts:4588-4600. An SDK client cannot
+    // escalate into `BypassPermissions` mid-session when the session
+    // was not launched with `--dangerously-skip-permissions` (or
+    // `--allow-dangerously-skip-permissions`). The server replies
+    // with `PERMISSION_DENIED` and leaves the session mode untouched.
+    let (server_task, client, state) = spawn_server_with_state().await;
+
+    // Startup capability defaults to `false` — spawn_server_with_state
+    // does not set it, matching a session launched without the flags.
+    assert!(
+        !state
+            .bypass_permissions_available
+            .load(std::sync::atomic::Ordering::Relaxed)
+    );
+
+    start_session(&client).await;
+
+    client
+        .send(req(
+            2,
+            "control/setPermissionMode",
+            serde_json::json!({ "mode": "bypassPermissions" }),
+        ))
+        .await
+        .unwrap();
+
+    // The rejection path must NOT emit a permission/modeChanged
+    // notification — the mode never actually changed. Expect the
+    // first message on the wire to be the JSON-RPC Error response
+    // directly (no preceding notification).
+    let reply = client.recv().await.unwrap().unwrap();
+    let err = match reply {
+        JsonRpcMessage::Error(e) => e,
+        JsonRpcMessage::Notification(n) if n.method == "permission/modeChanged" => {
+            panic!("guard must not emit permission/modeChanged on reject");
+        }
+        other => panic!("expected JsonRpcError for rejected bypass, got {other:?}"),
+    };
+    assert_eq!(err.code, coco_types::error_codes::PERMISSION_DENIED);
+    assert!(
+        err.message.contains("bypassPermissions"),
+        "error message should identify the rejected mode, got: {msg:?}",
+        msg = err.message
+    );
+
+    // Session mode was NOT mutated.
+    let slot = state.session.read().await;
+    let session = slot.as_ref().unwrap();
+    assert!(
+        !matches!(
+            session.permission_mode,
+            Some(coco_types::PermissionMode::BypassPermissions)
+        ),
+        "rejected request must not write session.permission_mode"
+    );
+    let app_state_guard = session.app_state.read().await;
+    assert!(
+        !matches!(
+            app_state_guard.permission_mode,
+            Some(coco_types::PermissionMode::BypassPermissions)
+        ),
+        "rejected request must not write app_state.permission_mode"
+    );
+
+    drop(app_state_guard);
+    drop(slot);
+    drop(client);
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn set_permission_mode_allows_bypass_when_capability_on() {
+    // Complement of the rejection test: same request succeeds when
+    // the session's startup capability was authorized. Verifies the
+    // guard keys on the runtime AtomicBool, not on the request
+    // payload.
+    let (server_task, client, state) = spawn_server_with_state().await;
+    state
+        .bypass_permissions_available
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+
+    start_session(&client).await;
+
+    client
+        .send(req(
+            2,
+            "control/setPermissionMode",
+            serde_json::json!({ "mode": "bypassPermissions" }),
+        ))
+        .await
+        .unwrap();
+
+    // Drain the notification-then-response sequence.
+    let mut saw_notification = false;
+    let reply = loop {
+        let msg = client.recv().await.unwrap().unwrap();
+        match msg {
+            JsonRpcMessage::Notification(n) if n.method == "permission/modeChanged" => {
+                saw_notification = true;
+                assert_eq!(
+                    n.params.get("mode"),
+                    Some(&serde_json::json!("bypassPermissions"))
+                );
+                assert_eq!(
+                    n.params.get("bypass_available"),
+                    Some(&serde_json::json!(true))
+                );
+            }
+            JsonRpcMessage::Response(_) | JsonRpcMessage::Error(_) => break msg,
+            other => panic!("unexpected message: {other:?}"),
+        }
+    };
+    assert!(matches!(reply, JsonRpcMessage::Response(_)));
+    assert!(saw_notification);
+
+    drop(client);
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn set_permission_mode_auto_to_default_clears_stripped_rules() {
+    // G3 regression guard: leaving Auto clears the
+    // `stripped_dangerous_rules` stash on app_state so a later ctx
+    // rebuild doesn't carry it into a non-Auto mode. TS parity:
+    // `restoreDangerousPermissions` is called when leaving the
+    // classifier (permissionSetup.ts:627-637).
+    let (server_task, client, state) = spawn_server_with_state().await;
+
+    start_session(&client).await;
+
+    // Pre-populate app_state as if Auto was active.
+    {
+        let slot = state.session.read().await;
+        let session = slot.as_ref().unwrap();
+        let mut guard = session.app_state.write().await;
+        guard.permission_mode = Some(coco_types::PermissionMode::Auto);
+        guard.stripped_dangerous_rules = Some(coco_types::PermissionRulesBySource::default());
+    }
+
+    // Cycle Auto → Default.
+    client
+        .send(req(
+            2,
+            "control/setPermissionMode",
+            serde_json::json!({ "mode": "default" }),
+        ))
+        .await
+        .unwrap();
+    let _ = client.recv().await.unwrap().unwrap();
+
+    let slot = state.session.read().await;
+    let session = slot.as_ref().unwrap();
+    let guard = session.app_state.read().await;
+    assert_eq!(
+        guard.permission_mode,
+        Some(coco_types::PermissionMode::Default)
+    );
+    assert!(
+        guard.stripped_dangerous_rules.is_none(),
+        "Auto→Default must clear stripped_dangerous_rules stash"
+    );
+
+    drop(guard);
+    drop(slot);
     drop(client);
     server_task.await.unwrap();
 }

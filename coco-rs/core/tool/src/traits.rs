@@ -129,7 +129,7 @@ pub type ProgressReceiver = tokio::sync::mpsc::UnboundedReceiver<ToolProgress>;
 /// The core Tool trait. All 41+ built-in tools implement this.
 ///
 /// Maps to TS Tool interface. Execution follows:
-/// validate_input -> check_permissions -> execute -> modify_context_after.
+/// validate_input -> check_permissions -> execute.
 ///
 /// Progress reporting: Tools send progress via `ctx.progress_tx` channel
 /// during execute(). The StreamingToolExecutor yields these immediately
@@ -209,6 +209,18 @@ pub trait Tool: Send + Sync {
 
     /// Whether multiple instances can safely run concurrently.
     /// Critical for batch partitioning in StreamingToolExecutor.
+    ///
+    /// **Invariant**: tools returning `true` MUST NOT mutate
+    /// `ctx.app_state` during `execute`. Concurrent tools share a
+    /// single `Arc<RwLock<ToolAppState>>`; live writes would race
+    /// with sibling reads. TS parity: `orchestration.ts:30-62` runs
+    /// concurrent tools against a shared `currentContext` snapshot
+    /// and *queues* `setAppState` calls to apply after the batch.
+    /// Rust relies on convention (concurrent tools are read-only —
+    /// Read/Glob/Grep/LSP/etc.) instead of implementing the queue;
+    /// this comment is the contract. Serial unsafe tools
+    /// (`is_concurrency_safe == false`) are the only code path that
+    /// writes `ctx.app_state`.
     fn is_concurrency_safe(&self, _input: &Value) -> bool {
         false
     }
@@ -406,10 +418,6 @@ pub trait Tool: Send + Sync {
         input: Value,
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<Value>, ToolError>;
-
-    /// Post-execution context modification.
-    /// Called after execute() returns, before results are yielded.
-    fn modify_context_after(&self, _result: &ToolResult<Value>, _ctx: &mut ToolUseContext) {}
 
     // -- File Path --
 

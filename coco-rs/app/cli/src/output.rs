@@ -15,15 +15,13 @@ pub enum OutputMode {
     Text,
     /// NDJSON structured output (SDK mode).
     Json,
-    /// Streaming text (for piped output).
-    Stream,
 }
 
 /// Render a message for CLI output.
 pub fn render_message(msg: &Message, mode: OutputMode) -> String {
     match mode {
         OutputMode::Json => render_json(msg),
-        OutputMode::Text | OutputMode::Stream => render_text(msg),
+        OutputMode::Text => render_text(msg),
     }
 }
 

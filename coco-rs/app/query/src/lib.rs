@@ -16,8 +16,11 @@
 pub mod agent_adapter;
 pub mod budget;
 pub mod command_queue;
+pub mod config;
 pub mod emit;
 pub mod engine;
+mod helpers;
+pub mod plan_mode_reminder;
 pub mod sdk_types;
 mod session_state;
 pub mod single_turn;
@@ -32,10 +35,11 @@ pub use command_queue::QueryGuard;
 pub use command_queue::QueryGuardStatus;
 pub use command_queue::QueuePriority;
 pub use command_queue::QueuedCommand;
-pub use engine::ContinueReason;
+pub use config::ContinueReason;
+pub use config::QueryEngineConfig;
+pub use config::QueryResult;
+pub use config::SessionBootstrap;
 pub use engine::QueryEngine;
-pub use engine::QueryEngineConfig;
-pub use engine::QueryResult;
 
 // Re-export CoreEvent from coco-types for consumers of run_with_events().
 // The old QueryEvent enum has been deleted per event-system-design.md Phase 0:

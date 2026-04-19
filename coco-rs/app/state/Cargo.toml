@@ -20,6 +20,7 @@ tokio = { workspace = true, features = ["sync", "process", "time"] }
 uuid = { workspace = true, features = ["v4"] }
 dirs.workspace = true
 chrono.workspace = true
+fs2.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

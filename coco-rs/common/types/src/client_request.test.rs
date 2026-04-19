@@ -100,15 +100,14 @@ fn context_usage_is_unit_variant() {
 }
 
 #[test]
-fn set_permission_mode_carries_mode_and_ultraplan() {
+fn set_permission_mode_carries_mode() {
     let req = ClientRequest::SetPermissionMode(SetPermissionModeParams {
         mode: crate::PermissionMode::Plan,
-        ultraplan: Some(true),
     });
     let j = serde_json::to_value(&req).unwrap();
     assert_eq!(j["method"], "control/setPermissionMode");
     assert_eq!(j["params"]["mode"], "plan");
-    assert_eq!(j["params"]["ultraplan"], true);
+    assert!(j["params"].get("ultraplan").is_none());
 }
 
 #[test]

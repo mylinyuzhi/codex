@@ -356,6 +356,7 @@ impl Tool for ReadTool {
                         "file": { "filePath": file_path },
                     }),
                     new_messages: vec![],
+                    app_state_patch: None,
                 });
             }
         }
@@ -396,6 +397,7 @@ impl Tool for ReadTool {
                         1,
                     ),
                     new_messages: vec![],
+                    app_state_patch: None,
                 });
             }
 
@@ -418,6 +420,7 @@ impl Tool for ReadTool {
                 return Ok(ToolResult {
                     data: text_output(file_path, &format!("[binary file: {ext_lower}]"), 1, 1, 1),
                     new_messages: vec![],
+                    app_state_patch: None,
                 });
             }
         }
@@ -448,6 +451,7 @@ impl Tool for ReadTool {
             return Ok(ToolResult {
                 data: text_output(file_path, "[file is empty]", 0, 1, 0),
                 new_messages: vec![],
+                app_state_patch: None,
             });
         }
 
@@ -492,6 +496,7 @@ impl Tool for ReadTool {
                     total_lines,
                 ),
                 new_messages: vec![],
+                app_state_patch: None,
             });
         }
 
@@ -592,6 +597,7 @@ impl Tool for ReadTool {
             // startLine, totalLines }`.
             data: text_output(file_path, &output, num_lines, start_line, total_lines),
             new_messages: vec![],
+            app_state_patch: None,
         })
     }
 }
@@ -694,6 +700,7 @@ fn read_notebook(file_path: &str) -> Result<ToolResult<Value>, ToolError> {
             }
         }),
         new_messages: vec![],
+        app_state_patch: None,
     })
 }
 
@@ -1008,6 +1015,7 @@ async fn read_image_as_base64(
             }
         }),
         new_messages: vec![],
+        app_state_patch: None,
     })
 }
 
@@ -1087,6 +1095,7 @@ fn read_pdf(file_path: &str, pages: Option<&str>) -> Result<ToolResult<Value>, T
                 }
             }),
             new_messages: vec![],
+            app_state_patch: None,
         });
     }
     // Enforce the per-read page cap even when the user passes a bigger
@@ -1138,6 +1147,7 @@ fn read_pdf(file_path: &str, pages: Option<&str>) -> Result<ToolResult<Value>, T
             }
         }),
         new_messages: vec![],
+        app_state_patch: None,
     })
 }
 

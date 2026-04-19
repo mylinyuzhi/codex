@@ -280,3 +280,134 @@ async fn test_repl_bridge_send_result() {
         _ => panic!("expected Result"),
     }
 }
+
+// ── Control request dispatch ──
+
+/// Stub handler that records the last dispatched request and returns
+/// a preset outcome. Lets us verify dispatch routing + response
+/// shaping without pulling in a real session.
+struct StubHandler {
+    outcome: Result<serde_json::Value, ControlError>,
+    last: tokio::sync::Mutex<Option<ControlRequest>>,
+}
+
+impl StubHandler {
+    fn new(outcome: Result<serde_json::Value, ControlError>) -> Self {
+        Self {
+            outcome,
+            last: tokio::sync::Mutex::new(None),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl ControlRequestHandler for StubHandler {
+    async fn handle(&self, request: ControlRequest) -> Result<serde_json::Value, ControlError> {
+        *self.last.lock().await = Some(request);
+        self.outcome.clone()
+    }
+}
+
+#[tokio::test]
+async fn set_permission_mode_serializes_as_typed_enum() {
+    // Wire format: `mode` serialized per `PermissionMode`'s camelCase
+    // rename. The bridge defines the shape, the handler receives an
+    // already-parsed enum — no ad-hoc string parsing.
+    let msg = ReplInMessage::ControlRequest {
+        request_id: "req-1".to_string(),
+        request: ControlRequest::SetPermissionMode {
+            mode: coco_types::PermissionMode::BypassPermissions,
+        },
+    };
+    let json = serde_json::to_string(&msg).unwrap();
+    assert!(json.contains("\"subtype\":\"set_permission_mode\""));
+    assert!(json.contains("\"mode\":\"bypassPermissions\""));
+
+    let decoded: ReplInMessage = serde_json::from_str(&json).unwrap();
+    match decoded {
+        ReplInMessage::ControlRequest { request, .. } => match request {
+            ControlRequest::SetPermissionMode { mode } => {
+                assert_eq!(mode, coco_types::PermissionMode::BypassPermissions);
+            }
+            other => panic!("expected SetPermissionMode, got {other:?}"),
+        },
+        _ => panic!("expected ControlRequest"),
+    }
+}
+
+#[tokio::test]
+async fn rejecting_handler_refuses_every_request() {
+    // Safe baseline: an un-wired bridge must never silently accept a
+    // privileged request like bypass escalation.
+    let handler = RejectingControlHandler;
+    let err = handler
+        .handle(ControlRequest::SetPermissionMode {
+            mode: coco_types::PermissionMode::BypassPermissions,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, coco_types::error_codes::METHOD_NOT_FOUND);
+    assert!(err.message.contains("not wired"));
+}
+
+#[tokio::test]
+async fn dispatch_control_shapes_success_response() {
+    let handler = StubHandler::new(Ok(serde_json::json!({"ok": true})));
+    let out = dispatch_control(
+        &handler,
+        "req-1".into(),
+        ControlRequest::SetPermissionMode {
+            mode: coco_types::PermissionMode::Plan,
+        },
+    )
+    .await;
+    match out {
+        ReplOutMessage::ControlResponse {
+            request_id,
+            response,
+        } => {
+            assert_eq!(request_id, "req-1");
+            assert_eq!(response, serde_json::json!({"ok": true}));
+        }
+        other => panic!("expected ControlResponse, got {other:?}"),
+    }
+    let last = handler.last.lock().await;
+    assert!(matches!(
+        last.as_ref(),
+        Some(ControlRequest::SetPermissionMode { mode })
+            if *mode == coco_types::PermissionMode::Plan
+    ));
+}
+
+#[tokio::test]
+async fn dispatch_control_shapes_error_inside_control_response() {
+    // Errors travel on the same `ControlResponse` envelope as success
+    // so clients correlate by request_id. The bridge-level
+    // `Error { message }` variant is reserved for transport faults.
+    let handler = StubHandler::new(Err(ControlError::new(
+        coco_types::error_codes::PERMISSION_DENIED,
+        "bypass gate off",
+    )));
+    let out = dispatch_control(
+        &handler,
+        "req-7".into(),
+        ControlRequest::SetPermissionMode {
+            mode: coco_types::PermissionMode::BypassPermissions,
+        },
+    )
+    .await;
+    match out {
+        ReplOutMessage::ControlResponse {
+            request_id,
+            response,
+        } => {
+            assert_eq!(request_id, "req-7");
+            assert_eq!(
+                response["error"]["code"],
+                serde_json::json!(coco_types::error_codes::PERMISSION_DENIED),
+            );
+            assert_eq!(response["error"]["message"], "bypass gate off");
+        }
+        other => panic!("expected ControlResponse, got {other:?}"),
+    }
+}

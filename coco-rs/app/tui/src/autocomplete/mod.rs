@@ -12,6 +12,7 @@ pub mod agent_search;
 pub mod file_search;
 pub mod skill_search;
 pub mod symbol_search;
+pub mod trigger;
 
 pub use agent_search::AgentInfo;
 pub use agent_search::AgentSearchManager;
@@ -22,6 +23,8 @@ pub use skill_search::SkillSearchEvent;
 pub use skill_search::SkillSearchManager;
 pub use symbol_search::SymbolSearchEvent;
 pub use symbol_search::SymbolSearchManager;
+pub use trigger::apply_async_result;
+pub use trigger::refresh_suggestions;
 
 use crate::widgets::suggestion_popup::SuggestionItem;
 

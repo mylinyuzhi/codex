@@ -14,41 +14,16 @@ use crate::dangerous_rules::strip_dangerous_rules;
 
 /// Determine the next permission mode when cycling (Shift+Tab).
 ///
-/// TS: `getNextPermissionMode()` in getNextPermissionMode.ts
-///
-/// Normal cycle: default → acceptEdits → plan → bypass/auto → default
-/// If bypass is unavailable, skip it. If auto is unavailable, skip it.
+/// Thin wrapper around [`PermissionMode::next_in_cycle`] that reads the
+/// gate flags off the [`ToolPermissionContext`]. Kept for call sites
+/// that already hold a full context.
 pub fn get_next_permission_mode(
     context: &ToolPermissionContext,
     is_auto_available: bool,
 ) -> PermissionMode {
-    match context.mode {
-        PermissionMode::Default => PermissionMode::AcceptEdits,
-
-        PermissionMode::AcceptEdits => PermissionMode::Plan,
-
-        PermissionMode::Plan => {
-            if context.bypass_available {
-                return PermissionMode::BypassPermissions;
-            }
-            if is_auto_available {
-                return PermissionMode::Auto;
-            }
-            PermissionMode::Default
-        }
-
-        PermissionMode::BypassPermissions => {
-            if is_auto_available {
-                return PermissionMode::Auto;
-            }
-            PermissionMode::Default
-        }
-
-        PermissionMode::Auto | PermissionMode::DontAsk => PermissionMode::Default,
-
-        // Bubble and any future mode → default
-        _ => PermissionMode::Default,
-    }
+    context
+        .mode
+        .next_in_cycle(context.bypass_available, is_auto_available)
 }
 
 /// Resolve the initial permission mode from CLI flags and settings.
@@ -61,6 +36,35 @@ pub fn resolve_predefined_mode(
     cli_mode
         .or(settings_default)
         .unwrap_or(PermissionMode::Default)
+}
+
+/// Compute a subagent's effective permission mode from the parent's mode
+/// and the agent-definition-level request.
+///
+/// TS parity: `runAgent.ts:412-434` `agentGetAppState` override logic.
+///
+/// Rules:
+/// - If the parent is in a **trust mode** (`BypassPermissions`,
+///   `AcceptEdits`, or `Auto`), the child **always inherits** the parent's
+///   mode — the agent's own declaration is ignored. The idea: if the user
+///   granted parent broad permissions, don't let a nested agent quietly
+///   downgrade and re-ask.
+/// - Otherwise, if the agent definition declares a mode
+///   (`agent_requested`), that wins.
+/// - Otherwise, inherit parent.
+pub fn resolve_subagent_mode(
+    parent: PermissionMode,
+    agent_requested: Option<PermissionMode>,
+) -> PermissionMode {
+    let trust = matches!(
+        parent,
+        PermissionMode::BypassPermissions | PermissionMode::AcceptEdits | PermissionMode::Auto
+    );
+    if trust {
+        parent
+    } else {
+        agent_requested.unwrap_or(parent)
+    }
 }
 
 /// Prepare context for a mode transition (simple — no auto-mode state).
@@ -80,6 +84,40 @@ pub fn transition_context(
     // Leaving plan mode: restore (but don't clear — caller manages lifecycle)
     context.mode = to;
     context
+}
+
+/// Apply the Auto-mode side-effects of a mode transition directly to a
+/// shared [`ToolAppState`]. Called by the TUI and SDK mode-toggle
+/// handlers so the engine's live state reflects the same stash/clear
+/// logic that `transition_context_with_auto` applies to a per-batch
+/// context.
+///
+/// **Current scope** (minimum viable TS parity for Auto boundary):
+/// - Leaving Auto: clear `stripped_dangerous_rules` stash so the next
+///   `create_tool_context` rebuild doesn't carry a stale stash into a
+///   non-Auto mode.
+/// - Entering Auto: no-op on the stash (full rule-stashing is
+///   follow-up: needs a central rules store to snapshot `allow_rules`
+///   → `stripped_dangerous_rules`; Rust config doesn't expose rules
+///   as a shared resource yet).
+///
+/// TS parity: `permissionSetup.ts:627-637` — this is the app_state-
+/// shaped slice of `transitionPermissionMode`.
+///
+/// Returns `true` if the stash was modified (useful for logging /
+/// regression tests).
+pub fn apply_auto_transition_to_app_state(
+    guard: &mut coco_types::ToolAppState,
+    from: PermissionMode,
+    to: PermissionMode,
+) -> bool {
+    let from_auto = from == PermissionMode::Auto;
+    let to_auto = to == PermissionMode::Auto;
+    if from_auto && !to_auto && guard.stripped_dangerous_rules.is_some() {
+        guard.stripped_dangerous_rules = None;
+        return true;
+    }
+    false
 }
 
 /// Prepare context for a mode transition with auto-mode state management.

@@ -60,9 +60,14 @@ impl LanguageModelV4 for TextMock {
     }
     async fn do_stream(
         &self,
-        _options: LanguageModelV4CallOptions,
+        options: LanguageModelV4CallOptions,
     ) -> Result<LanguageModelV4StreamResult, AISdkError> {
-        Err(AISdkError::new("not supported"))
+        let result = self.do_generate(options).await?;
+        Ok(coco_inference::synthetic_stream_from_content(
+            result.content,
+            result.usage,
+            result.finish_reason,
+        ))
     }
 }
 
@@ -129,9 +134,14 @@ impl LanguageModelV4 for ToolCallThenTextMock {
 
     async fn do_stream(
         &self,
-        _options: LanguageModelV4CallOptions,
+        options: LanguageModelV4CallOptions,
     ) -> Result<LanguageModelV4StreamResult, AISdkError> {
-        Err(AISdkError::new("not supported"))
+        let result = self.do_generate(options).await?;
+        Ok(coco_inference::synthetic_stream_from_content(
+            result.content,
+            result.usage,
+            result.finish_reason,
+        ))
     }
 }
 
@@ -200,9 +210,14 @@ impl LanguageModelV4 for MultiToolMock {
 
     async fn do_stream(
         &self,
-        _options: LanguageModelV4CallOptions,
+        options: LanguageModelV4CallOptions,
     ) -> Result<LanguageModelV4StreamResult, AISdkError> {
-        Err(AISdkError::new("not supported"))
+        let result = self.do_generate(options).await?;
+        Ok(coco_inference::synthetic_stream_from_content(
+            result.content,
+            result.usage,
+            result.finish_reason,
+        ))
     }
 }
 
@@ -418,9 +433,14 @@ async fn test_tool_execution_with_real_tools() {
         }
         async fn do_stream(
             &self,
-            _: LanguageModelV4CallOptions,
+            options: LanguageModelV4CallOptions,
         ) -> Result<LanguageModelV4StreamResult, AISdkError> {
-            Err(AISdkError::new("not supported"))
+            let result = self.do_generate(options).await?;
+            Ok(coco_inference::synthetic_stream_from_content(
+                result.content,
+                result.usage,
+                result.finish_reason,
+            ))
         }
     }
 
@@ -440,6 +460,146 @@ async fn test_tool_execution_with_real_tools() {
 
     assert_eq!(result.turns, 2);
     assert_eq!(result.response_text, "File read successfully.");
+}
+
+/// PR-E1 Phase 2: concurrency-safe tools dispatched during the stream emit
+/// their lifecycle events (`ToolUseQueued` → `ToolUseStarted` → `ToolUseCompleted`)
+/// and the tool actually runs. Asserts the full event stream + final history.
+///
+/// This test reuses `ReadRealFileMock` shape (Read tool is `is_concurrency_safe`)
+/// but observes the `CoreEvent` channel to prove eager dispatch fires all three
+/// AgentStreamEvent lifecycle phases for the read call. If Phase 2 regressed
+/// back to the post-stream batch path, the events would still fire but the
+/// `tool_use_queued` event's ordering relative to the stream's `Finish`
+/// wouldn't differ in a way this test can cheaply observe — so the stronger
+/// check here is that the end-to-end read actually returns the file content.
+#[tokio::test]
+async fn test_eager_dispatch_emits_full_tool_lifecycle() {
+    let dir = tempfile::tempdir().unwrap();
+    let test_file = dir.path().join("sample.txt");
+    std::fs::write(&test_file, "eager-payload").unwrap();
+
+    struct SingleReadMock {
+        call_count: AtomicI32,
+        file_path: String,
+    }
+
+    #[async_trait::async_trait]
+    impl LanguageModelV4 for SingleReadMock {
+        fn provider(&self) -> &str {
+            "mock"
+        }
+        fn model_id(&self) -> &str {
+            "mock-eager"
+        }
+        async fn do_generate(
+            &self,
+            _options: LanguageModelV4CallOptions,
+        ) -> Result<LanguageModelV4GenerateResult, AISdkError> {
+            let call = self.call_count.fetch_add(1, Ordering::SeqCst);
+            if call == 0 {
+                Ok(LanguageModelV4GenerateResult {
+                    content: vec![AssistantContentPart::ToolCall(ToolCallPart {
+                        tool_call_id: "eager_1".into(),
+                        tool_name: "Read".into(),
+                        input: serde_json::json!({"file_path": self.file_path}),
+                        provider_executed: None,
+                        provider_metadata: None,
+                    })],
+                    usage: Usage::new(8, 4),
+                    finish_reason: FinishReason::new(UnifiedFinishReason::ToolCalls),
+                    warnings: vec![],
+                    provider_metadata: None,
+                    request: None,
+                    response: None,
+                })
+            } else {
+                Ok(LanguageModelV4GenerateResult {
+                    content: vec![AssistantContentPart::Text(TextPart {
+                        text: "done".into(),
+                        provider_metadata: None,
+                    })],
+                    usage: Usage::new(5, 3),
+                    finish_reason: FinishReason::new(UnifiedFinishReason::Stop),
+                    warnings: vec![],
+                    provider_metadata: None,
+                    request: None,
+                    response: None,
+                })
+            }
+        }
+        async fn do_stream(
+            &self,
+            options: LanguageModelV4CallOptions,
+        ) -> Result<LanguageModelV4StreamResult, AISdkError> {
+            let result = self.do_generate(options).await?;
+            Ok(coco_inference::synthetic_stream_from_content(
+                result.content,
+                result.usage,
+                result.finish_reason,
+            ))
+        }
+    }
+
+    let model = Arc::new(SingleReadMock {
+        call_count: AtomicI32::new(0),
+        file_path: test_file.to_str().unwrap().to_string(),
+    });
+    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(ReadTool));
+    let tools = Arc::new(registry);
+    let cancel = CancellationToken::new();
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<CoreEvent>(256);
+
+    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None);
+
+    let result = engine
+        .run_with_events("please read it", event_tx)
+        .await
+        .expect("ok");
+    assert_eq!(result.response_text, "done");
+
+    // Drain the event channel. Eager dispatch must emit Queued + Started
+    // during the stream loop, and Completed during post-stream processing.
+    drop(engine);
+    let mut saw_queued = false;
+    let mut saw_started = false;
+    let mut saw_completed_with_payload = false;
+    while let Some(evt) = event_rx.recv().await {
+        if let CoreEvent::Stream(stream_evt) = evt {
+            match stream_evt {
+                crate::AgentStreamEvent::ToolUseQueued { call_id, .. } if call_id == "eager_1" => {
+                    saw_queued = true;
+                }
+                crate::AgentStreamEvent::ToolUseStarted { call_id, .. } if call_id == "eager_1" => {
+                    saw_started = true;
+                }
+                crate::AgentStreamEvent::ToolUseCompleted {
+                    call_id,
+                    output,
+                    is_error,
+                    ..
+                } if call_id == "eager_1" => {
+                    assert!(!is_error, "read must succeed");
+                    assert!(
+                        output.contains("eager-payload"),
+                        "output should contain file content, got: {output}"
+                    );
+                    saw_completed_with_payload = true;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    assert!(saw_queued, "ToolUseQueued must fire");
+    assert!(saw_started, "ToolUseStarted must fire");
+    assert!(
+        saw_completed_with_payload,
+        "ToolUseCompleted must carry the file payload"
+    );
 }
 
 #[tokio::test]
@@ -800,10 +960,9 @@ impl coco_tool::Tool for AskingTool {
         _input: serde_json::Value,
         _ctx: &coco_tool::ToolUseContext,
     ) -> Result<coco_types::ToolResult<serde_json::Value>, coco_tool::ToolError> {
-        Ok(coco_types::ToolResult {
-            data: serde_json::json!({ "ok": true }),
-            new_messages: Vec::new(),
-        })
+        Ok(coco_types::ToolResult::data(
+            serde_json::json!({ "ok": true }),
+        ))
     }
 }
 
@@ -858,9 +1017,14 @@ impl LanguageModelV4 for AskingToolCallMock {
     }
     async fn do_stream(
         &self,
-        _options: LanguageModelV4CallOptions,
+        options: LanguageModelV4CallOptions,
     ) -> Result<LanguageModelV4StreamResult, AISdkError> {
-        Err(AISdkError::new("not supported"))
+        let result = self.do_generate(options).await?;
+        Ok(coco_inference::synthetic_stream_from_content(
+            result.content,
+            result.usage,
+            result.finish_reason,
+        ))
     }
 }
 
@@ -1041,10 +1205,7 @@ impl Tool for AskingMockTool {
         _input: Value,
         _ctx: &coco_tool::ToolUseContext,
     ) -> Result<CocoToolResult<Value>, ToolError> {
-        Ok(CocoToolResult {
-            data: serde_json::json!({"ok": true}),
-            new_messages: Vec::new(),
-        })
+        Ok(CocoToolResult::data(serde_json::json!({"ok": true})))
     }
 }
 
@@ -1134,9 +1295,14 @@ impl LanguageModelV4 for AskingToolThenTextMock {
     }
     async fn do_stream(
         &self,
-        _options: LanguageModelV4CallOptions,
+        options: LanguageModelV4CallOptions,
     ) -> Result<LanguageModelV4StreamResult, AISdkError> {
-        Err(AISdkError::new("not supported"))
+        let result = self.do_generate(options).await?;
+        Ok(coco_inference::synthetic_stream_from_content(
+            result.content,
+            result.usage,
+            result.finish_reason,
+        ))
     }
 }
 

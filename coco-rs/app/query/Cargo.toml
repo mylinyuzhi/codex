@@ -17,6 +17,7 @@ coco-context.workspace = true
 coco-compact.workspace = true
 coco-hooks.workspace = true
 coco-otel.workspace = true
+coco-permissions.workspace = true
 vercel-ai-provider.workspace = true
 
 serde = { workspace = true, features = ["derive"] }

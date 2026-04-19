@@ -58,10 +58,12 @@ impl Tool for McpAuthTool {
             Ok(msg) => Ok(ToolResult {
                 data: serde_json::json!(msg),
                 new_messages: vec![],
+                app_state_patch: None,
             }),
             Err(e) => Ok(ToolResult {
                 data: serde_json::json!(format!("Authentication failed for {server_name}: {e}")),
                 new_messages: vec![],
+                app_state_patch: None,
             }),
         }
     }
@@ -114,6 +116,7 @@ impl Tool for ListMcpResourcesTool {
                     return Ok(ToolResult {
                         data: serde_json::json!("No MCP resources available"),
                         new_messages: vec![],
+                        app_state_patch: None,
                     });
                 }
                 let items: Vec<Value> = resources
@@ -130,11 +133,13 @@ impl Tool for ListMcpResourcesTool {
                 Ok(ToolResult {
                     data: serde_json::json!(items),
                     new_messages: vec![],
+                    app_state_patch: None,
                 })
             }
             Err(e) => Ok(ToolResult {
                 data: serde_json::json!(format!("Failed to list resources: {e}")),
                 new_messages: vec![],
+                app_state_patch: None,
             }),
         }
     }
@@ -225,6 +230,7 @@ impl Tool for ReadMcpResourceTool {
                 Ok(ToolResult {
                     data,
                     new_messages: vec![],
+                    app_state_patch: None,
                 })
             }
             Err(e) => Ok(ToolResult {
@@ -232,6 +238,7 @@ impl Tool for ReadMcpResourceTool {
                     "Failed to read resource {resource_uri} from {server_name}: {e}"
                 )),
                 new_messages: vec![],
+                app_state_patch: None,
             }),
         }
     }
@@ -359,6 +366,7 @@ impl Tool for McpTool {
                 Ok(ToolResult {
                     data,
                     new_messages: vec![],
+                    app_state_patch: None,
                 })
             }
             Err(e) => Err(ToolError::ExecutionFailed {

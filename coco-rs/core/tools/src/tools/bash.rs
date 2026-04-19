@@ -574,6 +574,7 @@ impl Tool for BashTool {
                             "assistantAutoBackgrounded": true,
                         }),
                         new_messages: vec![],
+                        app_state_patch: None,
                     });
                 }
                 Err(ToolError::ExecutionFailed {
@@ -636,6 +637,7 @@ async fn execute_background(
             "message": format!("Command is running in the background. Task ID: {task_id}. You will be notified when it completes.")
         }),
         new_messages: vec![],
+        app_state_patch: None,
     })
 }
 
@@ -839,6 +841,7 @@ async fn execute_foreground(
     Ok(ToolResult {
         data: result_obj,
         new_messages: vec![],
+        app_state_patch: None,
     })
 }
 
@@ -1019,6 +1022,7 @@ async fn apply_sed_edit(
                 "interrupted": false,
             }),
             new_messages: vec![],
+            app_state_patch: None,
         });
     }
 
@@ -1036,6 +1040,7 @@ async fn apply_sed_edit(
                     "interrupted": false,
                 }),
                 new_messages: vec![],
+                app_state_patch: None,
             });
         }
     };
@@ -1070,6 +1075,7 @@ async fn apply_sed_edit(
             "interrupted": false,
         }),
         new_messages: vec![],
+        app_state_patch: None,
     })
 }
 

@@ -139,6 +139,11 @@ impl BudgetTracker {
         self.consumed_tokens
     }
 
+    /// Number of forced continuations recorded so far.
+    pub fn continuation_count(&self) -> i32 {
+        self.continuation_count
+    }
+
     /// Remaining tokens (if max is set).
     pub fn remaining(&self) -> Option<i64> {
         self.max_tokens.map(|max| max - self.consumed_tokens)

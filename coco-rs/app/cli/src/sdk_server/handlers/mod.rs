@@ -174,6 +174,17 @@ pub struct TurnHandoff {
     pub cwd: String,
     pub model: String,
     pub history: Arc<Mutex<Vec<coco_types::Message>>>,
+    /// Session-scoped shared state. Attached to every turn's engine
+    /// via `with_app_state` so plan-mode cadence + live permission
+    /// mode propagate across turns AND mid-session mode toggles
+    /// reach the engine. TS parity: `appState` is session-lifetime.
+    pub app_state: Arc<RwLock<coco_types::ToolAppState>>,
+    /// Session-scoped permission-mode override set by
+    /// `control/setPermissionMode`. Used by `sdk_runner::run_turn`
+    /// as a fallback when the `turn/start` params don't carry an
+    /// explicit mode — before this wire-up the SessionHandle field
+    /// was dead (no reader).
+    pub permission_mode: Option<coco_types::PermissionMode>,
 }
 
 // ---------------------------------------------------------------------------
@@ -301,6 +312,18 @@ pub struct SdkServerState {
     /// When `None`, the handler returns empty / default values for those
     /// fields so the wire format stays TS-conformant.
     pub initialize_bootstrap: RwLock<Option<Arc<dyn InitializeBootstrap>>>,
+    /// Whether the process was authorized to transition into
+    /// `BypassPermissions` at CLI startup (either via
+    /// `--dangerously-skip-permissions` or
+    /// `--allow-dangerously-skip-permissions`, subject to the policy
+    /// killswitch). Consulted by `handle_set_permission_mode` to
+    /// reject SDK-originated bypass requests mid-session when the
+    /// flag was not passed.
+    ///
+    /// TS parity: `cli/print.ts:4588-4600` — mid-session SDK switches
+    /// to `bypassPermissions` are rejected with an explicit error
+    /// when `isBypassPermissionsModeAvailable` is false.
+    pub bypass_permissions_available: std::sync::atomic::AtomicBool,
 }
 
 impl Default for SdkServerState {
@@ -324,6 +347,7 @@ impl Default for SdkServerState {
             file_history_config_home: RwLock::new(None),
             mcp_manager: RwLock::new(None),
             initialize_bootstrap: RwLock::new(None),
+            bypass_permissions_available: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }
@@ -568,6 +592,17 @@ pub struct SessionHandle {
     /// lets the runner's detached turn task mutate it without holding
     /// the session write-lock for the whole turn.
     pub history: Arc<Mutex<Vec<coco_types::Message>>>,
+
+    /// Session-scoped `ToolAppState` — TS parity:
+    /// `appState.toolPermissionContext` and the plan-mode latches.
+    /// Created once at session/start, attached to every turn's engine
+    /// via `with_app_state`, and mutated by
+    /// `control/setPermissionMode` so Shift+Tab / SDK mode toggles
+    /// propagate to the engine's next `create_tool_context` read.
+    /// Before this wiring, `control/setPermissionMode` was a dead
+    /// API (wrote only `SessionHandle.permission_mode`, which no
+    /// reader consumed).
+    pub app_state: Arc<RwLock<coco_types::ToolAppState>>,
 }
 
 impl SessionHandle {
@@ -586,6 +621,7 @@ impl SessionHandle {
             started_at: std::time::Instant::now(),
             stats: SessionStats::default(),
             history: Arc::new(Mutex::new(Vec::new())),
+            app_state: Arc::new(RwLock::new(coco_types::ToolAppState::default())),
         }
     }
 
@@ -598,6 +634,8 @@ impl SessionHandle {
             cwd: self.cwd.clone(),
             model: self.model.clone(),
             history: Arc::clone(&self.history),
+            app_state: Arc::clone(&self.app_state),
+            permission_mode: self.permission_mode,
         }
     }
 }

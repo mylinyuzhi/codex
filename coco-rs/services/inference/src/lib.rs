@@ -34,6 +34,7 @@ pub use options_merge::merge_provider_options;
 pub use options_merge::provider_base_options;
 pub use retry::RetryConfig;
 pub use stream::StreamEvent;
+pub use stream::synthetic_stream_from_content;
 pub use tool_schemas::GeneratedSchemas;
 pub use tool_schemas::ToolSchemaOrigin;
 pub use tool_schemas::ToolSchemaSource;

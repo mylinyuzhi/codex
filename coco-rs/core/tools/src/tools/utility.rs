@@ -109,6 +109,7 @@ impl Tool for AskUserQuestionTool {
         Ok(ToolResult {
             data: serde_json::json!({"questions": questions}),
             new_messages: vec![],
+            app_state_patch: None,
         })
     }
 }
@@ -274,6 +275,7 @@ impl Tool for ToolSearchTool {
                     "total_deferred_tools": total_deferred_tools,
                 }),
                 new_messages: vec![],
+                app_state_patch: None,
             });
         }
 
@@ -291,11 +293,18 @@ impl Tool for ToolSearchTool {
 
         let mut matches: Vec<String> = Vec::new();
 
+        // Pass the current permission context so tools can tailor their
+        // descriptions to the mode — matches TS `getToolPermissionContext()`.
+        let tool_names: Vec<String> = ctx.tools.all().map(|t| t.name().to_string()).collect();
+        let desc_opts = DescriptionOptions {
+            is_non_interactive: false,
+            tool_names,
+            permission_context: Some(ctx.permission_context.clone()),
+        };
+
         for tool in ctx.tools.all() {
             let name_lower = tool.name().to_lowercase();
-            let desc_lower = tool
-                .description(&Value::Null, &DescriptionOptions::default())
-                .to_lowercase();
+            let desc_lower = tool.description(&Value::Null, &desc_opts).to_lowercase();
             let hint_lower = tool
                 .search_hint()
                 .map(str::to_lowercase)
@@ -325,6 +334,7 @@ impl Tool for ToolSearchTool {
                 "total_deferred_tools": total_deferred_tools,
             }),
             new_messages: vec![],
+            app_state_patch: None,
         })
     }
 }
@@ -451,6 +461,7 @@ impl Tool for ConfigTool {
         Ok(ToolResult {
             data: result,
             new_messages: vec![],
+            app_state_patch: None,
         })
     }
 }
@@ -579,6 +590,7 @@ impl Tool for BriefTool {
                 "timestamp": timestamp,
             }),
             new_messages: vec![],
+            app_state_patch: None,
         })
     }
 }
@@ -949,6 +961,7 @@ impl Tool for NotebookEditTool {
         Ok(ToolResult {
             data,
             new_messages: vec![],
+            app_state_patch: None,
         })
     }
 }

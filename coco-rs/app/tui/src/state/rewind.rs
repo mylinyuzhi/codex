@@ -32,6 +32,17 @@ pub enum RestoreType {
     CodeOnly,
 }
 
+impl RestoreType {
+    /// Localized label resolved against the active locale at render time.
+    pub fn label(self) -> std::borrow::Cow<'static, str> {
+        match self {
+            Self::Both => crate::i18n::t!("rewind.option_code_and_conv"),
+            Self::ConversationOnly => crate::i18n::t!("rewind.option_conv_only"),
+            Self::CodeOnly => crate::i18n::t!("rewind.option_code_only"),
+        }
+    }
+}
+
 /// A user message that can be rewound to.
 ///
 /// TS: MessageSelector shows user messages with truncated content,
@@ -65,22 +76,13 @@ pub struct RewindOverlay {
     /// Selected restore option index (RestoreOptions phase).
     pub option_selected: i32,
     /// Available restore options for the selected message.
-    pub available_options: Vec<RestoreOptionItem>,
+    pub available_options: Vec<RestoreType>,
     /// Diff stats preview for the selected message.
     pub diff_stats: Option<DiffStatsPreview>,
     /// Whether file history is enabled for this session.
     pub file_history_enabled: bool,
     /// Whether file history has changes for selected message.
     pub has_file_changes: bool,
-}
-
-/// A restore option shown in the restore options list.
-///
-/// TS: getRestoreOptions() in MessageSelector.tsx
-#[derive(Debug, Clone)]
-pub struct RestoreOptionItem {
-    pub restore_type: RestoreType,
-    pub label: &'static str,
 }
 
 /// Preview of what file rewind would change.
@@ -99,30 +101,16 @@ pub struct DiffStatsPreview {
 pub fn build_restore_options(
     file_history_enabled: bool,
     has_file_changes: bool,
-) -> Vec<RestoreOptionItem> {
-    let mut opts = Vec::new();
-
+) -> Vec<RestoreType> {
     if file_history_enabled && has_file_changes {
-        opts.push(RestoreOptionItem {
-            restore_type: RestoreType::Both,
-            label: "Restore code and conversation",
-        });
-        opts.push(RestoreOptionItem {
-            restore_type: RestoreType::ConversationOnly,
-            label: "Restore conversation only",
-        });
-        opts.push(RestoreOptionItem {
-            restore_type: RestoreType::CodeOnly,
-            label: "Restore code only",
-        });
+        vec![
+            RestoreType::Both,
+            RestoreType::ConversationOnly,
+            RestoreType::CodeOnly,
+        ]
     } else {
-        opts.push(RestoreOptionItem {
-            restore_type: RestoreType::ConversationOnly,
-            label: "Restore conversation",
-        });
+        vec![RestoreType::ConversationOnly]
     }
-
-    opts
 }
 
 #[cfg(test)]

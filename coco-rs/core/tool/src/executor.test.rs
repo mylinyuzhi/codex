@@ -43,6 +43,7 @@ impl crate::traits::Tool for SafeTool {
         Ok(ToolResult {
             data: input,
             new_messages: vec![],
+            app_state_patch: None,
         })
     }
 }
@@ -79,6 +80,7 @@ impl crate::traits::Tool for UnsafeTool {
         Ok(ToolResult {
             data: input,
             new_messages: vec![],
+            app_state_patch: None,
         })
     }
 }
@@ -204,6 +206,7 @@ impl crate::traits::Tool for SlowSafeTool {
         Ok(ToolResult {
             data: json!({"tool": self.name}),
             new_messages: vec![],
+            app_state_patch: None,
         })
     }
 }

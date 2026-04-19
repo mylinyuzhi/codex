@@ -143,50 +143,108 @@ pub struct UiState {
 }
 ```
 
-### TuiCommand Enum (40+ variants)
+### TuiCommand Enum
+
+Canonical source: `app/tui/src/events.rs`. Grouped by category (matches the
+`update.rs` dispatch sections):
 
 ```rust
 pub enum TuiCommand {
-    // Mode
-    TogglePlanMode, CycleThinkingLevel, CycleModel, ShowModelPicker,
-    CyclePermissionMode, ToggleFastMode,
-    // Input
-    SubmitInput, Interrupt, Cancel, ClearScreen,
-    InsertChar(char), InsertNewline, DeleteBackward, DeleteWordBackward,
+    // Mode toggles
+    TogglePlanMode, CyclePermissionMode, CycleThinkingLevel, ToggleThinking,
+    CycleModel, ToggleFastMode,
+
+    // Input actions
+    SubmitInput, QueueInput, Interrupt, Cancel, ClearScreen,
+
+    // Text editing (Emacs-flavored)
+    InsertChar(char), InsertNewline,
+    DeleteBackward, DeleteForward, DeleteWordBackward, DeleteWordForward,
+    KillToEndOfLine, Yank,
+
+    // Cursor movement
     CursorLeft, CursorRight, CursorUp, CursorDown,
-    // Navigation
-    ScrollUp, ScrollDown, PageUp, PageDown, FocusNext, FocusPrevious,
-    // Suggestions (×4 types)
-    SelectNextSuggestion, AcceptSuggestion, DismissSuggestions,
-    // Overlays
+    CursorHome, CursorEnd, WordLeft, WordRight,
+
+    // Scrolling
+    ScrollUp, ScrollDown, PageUp, PageDown,
+
+    // Focus
+    FocusNext, FocusPrevious, FocusNextAgent, FocusPrevAgent,
+
+    // Overlay actions
     Approve, Deny, ApproveAll,
-    // Commands
-    ExecuteSkill(String), ShowHelp, ShowCommandPalette, ShowSessionBrowser,
+    ClassifierAutoApprove { request_id: String, matched_rule: Option<String> },
+
+    // Overlay navigation — generic across pickers/scrollables/suggestions
+    OverlayFilter(char), OverlayFilterBackspace,
+    OverlayNext, OverlayPrev, OverlayConfirm,
+
+    // Commands & overlays
+    ExecuteSkill(String),
+    ShowHelp, ShowCommandPalette, ShowSessionBrowser,
+    ShowGlobalSearch, ShowQuickOpen, ShowExport,
+    ShowContextViz, ShowRewind, ShowDoctor,
+    ShowSettings, SettingsNextTab, SettingsPrevTab,
+
+    // Mouse
+    MouseScroll(i32), MouseClick { col: u16, row: u16 },
+
+    // Task management
     BackgroundAllTasks, KillAllAgents,
-    OpenExternalEditor, OpenPlanEditor,
+
+    // External editor / clipboard
+    OpenExternalEditor, OpenPlanEditor, PasteFromClipboard, CopyLastMessage,
+
+    // Display toggles
     ToggleToolCollapse, ToggleSystemReminders,
+
+    // Application
     Quit,
 }
 ```
 
+Autocomplete dispatch uses the generic `OverlayFilter*` / `Overlay{Next,Prev,
+Confirm}` variants — context (`KeybindingContext::Autocomplete`) is resolved
+in `keybinding_bridge.rs`. There is no per-suggestion-type context enum;
+Skill/Agent/Symbol/File suggestions share the same Tab/Up/Down/Esc handling.
+
 ### UserCommand Enum (TUI → Core)
+
+Canonical source: `app/tui/src/command.rs`.
 
 ```rust
 pub enum UserCommand {
-    SubmitInput { content: String, display_text: Option<String> },
+    SubmitInput { content: String, display_text: Option<String>, images: Vec<ImageData> },
     Interrupt,
     SetPlanMode { active: bool },
     SetPermissionMode { mode: PermissionMode },
-    SetThinkingLevel { level: ThinkingLevel },
-    SetModel { selection: RoleSelection },
-    ApprovalResponse { request_id: String, decision: PermissionDecision, feedback: Option<String> },
-    QuestionResponse { request_id: String, answers: Vec<String> },
-    ElicitationResponse { request_id: String, action: ElicitAction, content: Option<Value> },
+    SetThinkingLevel { level: String },
+    SetModel { model: String },
+    ApprovalResponse {
+        request_id: String,
+        approved: bool,
+        always_allow: bool,
+        feedback: Option<String>,
+        updated_input: Option<Value>,
+        permission_updates: Vec<PermissionUpdate>,
+    },
     ExecuteSkill { name: String, args: Option<String> },
     QueueCommand { prompt: String },
-    // ...
+    BackgroundAllTasks,
+    KillAllAgents,
+    ToggleFastMode,
+    Compact,
+    Rewind { message_id: String, restore_type: RestoreType },
+    RequestDiffStats { message_id: String },
+    Shutdown,
 }
 ```
+
+The TS-side `QuestionResponse` / `ElicitationResponse` flow through
+`ApprovalResponse` with `feedback: Some(chosen_option)` — the overlay's
+`handle_overlay_confirm` packs the selection into the `feedback` field
+rather than introducing dedicated variants.
 
 ## Layout
 
@@ -331,12 +389,13 @@ pub enum Overlay {
     RewindSelector(RewindSelectorOverlay),
     OutputStylePicker(OutputStylePickerOverlay),
 
-    // New (from TS dialog types — add as needed)
-    ThemePicker(ThemePickerOverlay),
+    // Added (v1 implementation)
+    Settings(SettingsPanelState),   // tabbed: Theme / OutputStyle / Permissions / About
+
+    // Future (from TS dialog types — add as needed)
     AgentEditor(AgentEditorOverlay),
     McpSettings(McpSettingsOverlay),
     BackgroundTasks(BackgroundTasksOverlay),
-    Settings(SettingsOverlay),
     // ...
 }
 
@@ -376,20 +435,41 @@ pub enum PermissionDetail {
 
 ## Notification Backends
 
+Implemented in `app/tui/src/widgets/notification.rs`. Detects the terminal from
+`$TERM_PROGRAM` / `$LC_TERMINAL` / `$TERM` and emits the appropriate OSC
+sequence. Auto-wraps outputs for tmux (`ESC P tmux; … ESC \`) and GNU screen
+DCS passthrough when `$TMUX` / `$STY` is set.
+
 ```rust
-/// Terminal notification system — detects terminal type and sends native notifications.
 pub enum NotificationBackend {
-    ITerm2,              // OSC proprietary protocol
-    ITerm2WithBell,      // OSC + BEL character
-    Kitty,               // Kitty terminal protocol (random ID)
-    Ghostty,             // Ghostty terminal protocol
-    TerminalBell,        // Simple BEL character (Apple Terminal fallback)
+    ITerm2,          // OSC 9;1;<payload>ST
+    ITerm2WithBell,  // OSC 9;1 + BEL (tmux bell-action fallback)
+    Kitty,           // OSC 99 title + body + focus frames (3 writes, shared id)
+    Ghostty,         // OSC 777;notify;<title>;<body>ST
+    TerminalBell,    // raw BEL (\x07)
+    Disabled,        // no supported channel for current terminal
 }
 
-/// Auto-detect from $TERM_PROGRAM or config.preferred_notif_channel.
-pub fn detect_notification_backend() -> NotificationBackend;
-pub fn send_notification(backend: &NotificationBackend, title: &str, body: &str);
+impl NotificationBackend {
+    pub fn detect() -> Self;
+    pub fn send(self, writer: &mut impl Write, title: &str, message: &str) -> io::Result<()>;
+}
+
+/// Convenience: detect + send to stdout, best-effort.
+pub fn notify(title: &str, message: &str);
 ```
+
+The BEL character is always emitted raw (never DCS-wrapped) so tmux's own
+`bell-action` handler fires and the visual cue propagates to the outer
+terminal.
+
+### Turn-complete gating
+
+`server_notification_handler::protocol::on_turn_completed` calls
+`notification::notify("coco", "Turn complete")` when `state.ui.terminal_focused`
+is false. `TuiEvent::FocusChanged` (from crossterm's focus-change mode) sets
+this flag. Focused terminals never see a notification — the user is already
+looking.
 
 ## Streaming Display
 
@@ -409,21 +489,52 @@ pub struct StreamingState {
 pub enum StreamMode { Text, ThinkingText, ToolUse }
 ```
 
-## Autocomplete Systems (4 parallel async)
+## Autocomplete Systems (4 parallel — sync + async)
+
+Single unified state: `UiState.active_suggestions: Option<ActiveSuggestions>`.
+A pure `detect(text, cursor) -> Option<Trigger>` recognises four triggers:
+
+| Trigger   | Kind          | Data source                   | Mode     |
+|-----------|---------------|-------------------------------|----------|
+| `/foo`    | SlashCommand  | `session.available_commands`  | Sync     |
+| `@agent-` | Agent         | `session.available_agents`    | Sync     |
+| `@path`   | File          | `FileSearchManager` (mpsc)    | Async    |
+| `@#sym`   | Symbol        | `SymbolSearchManager` (mpsc)  | Async    |
+
+Sync kinds populate `items` inline in `autocomplete::refresh_suggestions`.
+Async kinds install the trigger with empty `items` so the App loop can see
+the query and call `manager.search(query, pos)`; results arrive through a
+dedicated mpsc arm and are applied via `autocomplete::apply_async_result`,
+which discards stale results (different kind or different query).
 
 ```rust
-/// Each system follows the same debounced pattern:
-/// 1. User types trigger character (@, /, @agent-, @#)
-/// 2. Query sent to background tokio task (100ms debounce)
-/// 3. Results arrive via dedicated mpsc channel
-/// 4. SuggestionPopup renders filtered results
-/// 5. Tab/Enter accepts, Esc dismisses
+pub enum SuggestionKind { SlashCommand, File, Agent, Symbol }
 
-pub struct FileSuggestionState { /* fuzzy file search via nucleo */ }
-pub struct SkillSuggestionState { /* skill catalog lookup */ }
-pub struct AgentSuggestionState { /* agent definition search */ }
-pub struct SymbolSuggestionState { /* LSP symbol search */ }
+pub struct ActiveSuggestions {
+    pub kind: SuggestionKind,
+    pub items: Vec<SuggestionItem>,
+    pub selected: i32,
+    pub query: String,
+    pub trigger_pos: i32,
+}
 ```
+
+**Keybinding gate**: `active_context()` returns `Autocomplete` only when
+`items` is non-empty. Async triggers therefore don't hijack arrow keys
+before results arrive — the user can still navigate history while the
+search is in flight.
+
+**Lifecycle** (App event loop):
+1. User types — `update::handle_command` calls `refresh_suggestions` after
+   detecting text/cursor change.
+2. For async triggers, `App::dispatch_pending_search` fires manager.search
+   if `(kind, query)` differs from the last dispatch. Previous searches
+   are aborted by the manager's internal JoinHandle cancel.
+3. Results arrive on `file_search_rx` / `symbol_search_rx` → `apply_async_result`
+   updates `items` if the query still matches.
+4. Tab or Enter → `accept_suggestion` splices the selected label back into
+   the input at `trigger_pos` (with a trailing space) and dismisses the
+   popup. Esc dismisses without applying.
 
 ## Output Styles
 
@@ -548,7 +659,12 @@ pub struct HistoryEntry {
 - `Alt+B/F` → word left/right
 - `Alt+Backspace` → delete word backward
 
-**History:** frecency scoring = `ln(frequency) * recency_factor` (entries >24h penalized), max 200 entries
+**History:** implemented as `Vec<HistoryEntry { text, frequency, last_used_secs }>`
+sorted by `HistoryEntry::frecency(now) = ln(freq + 1) * recency_factor`. Recency
+factor is `1.0` for entries younger than 24h and decays with a 7-day half-life
+afterward. Up arrow walks the most-relevant entry first; Down cycles back and
+clears the input on exit. Capped at `MAX_HISTORY_ENTRIES` by dropping the
+lowest-scoring tail.
 
 ## Streaming Display Pacing
 
@@ -663,9 +779,14 @@ pub enum ThemeName { Default, Dark, Light, Dracula, Nord }
 | `Ctrl+S` | Chat | Session browser |
 | `Ctrl+Q` | Global | Quit |
 | `Ctrl+V` / `Alt+V` | Chat | Paste (image + text) |
+| `Ctrl+O` | Chat | Copy last agent response to clipboard |
+| `Ctrl+Shift+O` | Chat | Quick Open file picker |
 | `Ctrl+Shift+E` | Chat | Toggle tool collapse |
 | `Ctrl+Shift+R` | Chat | Toggle system reminders |
 | `Ctrl+Shift+F` | Chat | Toggle fast mode |
+| `Ctrl+,` | Chat | Open Settings overlay |
+| `Tab` | Settings | Next tab |
+| `Shift+Tab` | Settings | Previous tab |
 | `?` / `F1` | Chat | Show help |
 | `Esc` | Overlay/Autocomplete | Cancel/dismiss |
 | `PageUp/Down` | Chat | Scroll history |
@@ -678,28 +799,43 @@ pub enum ThemeName { Default, Dark, Light, Dracula, Nord }
 | `Y/N` | Permission | Approve/Deny |
 | `A` | Permission | Approve all (always allow) |
 
-**Context resolution priority:** Overlay > Skill suggestions > Agent suggestions > Symbol suggestions > File suggestions > Global keys > Input keys
+**Context resolution priority** (as implemented in `keybinding_bridge.rs`):
+
+```
+Overlay (Confirmation | Picker | Scrollable) > Autocomplete > Global keys > Input keys
+```
+
+Autocomplete is a single shared context covering skill / agent / symbol / file
+suggestions (they share Tab/Up/Down/Esc handling). Per-type contexts would
+only matter if suggestion types had divergent keymaps — they don't today.
 
 ## Overlay Priority System
 
-```rust
-/// Lower number = higher priority. Agent-driven overlays queue if a higher-priority
-/// overlay is active. User-triggered overlays displace agent overlays.
-pub fn overlay_priority(overlay: &Overlay) -> i32 {
-    match overlay {
-        Overlay::SandboxPermission(_) => 0,  // security-critical
-        Overlay::Permission(_) | Overlay::PlanExit(_) => 1,  // blocks execution
-        Overlay::Question(_) | Overlay::Elicitation(_) => 2,  // tool needs input
-        Overlay::CostWarning(_) => 3,
-        Overlay::Error(_) => 4,
-        Overlay::RewindSelector(_) => 5,
-        Overlay::PluginManager(_) => 6,
-        Overlay::ModelPicker(_) | Overlay::OutputStylePicker(_)
-            | Overlay::CommandPalette(_) | Overlay::SessionBrowser(_) => 7,
-        Overlay::Help => 8,
-    }
-}
-```
+Implemented as `Overlay::priority(&self) -> i32` in `app/tui/src/state/ui.rs`.
+Lower number wins.
+
+| Tier | Overlay variants | Meaning |
+|------|------------------|---------|
+| 0 | `SandboxPermission` | security-critical |
+| 1 | `Permission`, `PlanExit`, `PlanEntry` | blocks agent execution |
+| 2 | `Question`, `Elicitation`, `McpServerApproval`, `IdleReturn` | awaiting structured input |
+| 3 | `CostWarning`, `BypassPermissions`, `WorktreeExit` | high-stakes confirmation |
+| 4 | `Error`, `InvalidConfig` | error surface |
+| 5 | `Rewind`, `DiffView` | content review |
+| 6 | `AutoModeOptIn`, `Trust`, `Bridge`, `McpServerSelect` | settings confirmation |
+| 7 | `ModelPicker`, `CommandPalette`, `SessionBrowser`, `GlobalSearch`, `QuickOpen`, `Export`, `Feedback`, `TaskDetail`, `Doctor`, `ContextVisualization` | user-triggered pickers |
+| 8 | `Help` | read-only reference |
+
+`UiState::set_overlay` rules:
+
+1. No active overlay → install directly.
+2. New overlay has strictly higher priority (lower number) than the current one
+   → displace current back into the queue, install the new one.
+3. Otherwise → insert into the queue at its priority position. Same priority
+   preserves insertion order (stable within a tier).
+
+Queue overflow (past `MAX_OVERLAY_QUEUE`) drops the lowest-priority tail entry
+so a security-critical overlay can still enqueue.
 
 ## Toast System
 
@@ -724,6 +860,76 @@ pub enum ToastSeverity {
 /// Rendered top-right corner, stacked vertically.
 /// remaining_percent() drives progress bar animation.
 ```
+
+## Clipboard & Mouse
+
+**Mouse**: coco-tui deliberately does **not** call `EnableMouseCapture` in
+`terminal.rs`. The terminal keeps ownership of mouse events, so native
+drag-to-select + Cmd/Ctrl+C work exactly as they do in `vim` / `less`.
+Same choice as codex-rs. `TuiEvent` has no `Mouse` variant; `app.rs` drops
+any stray `Event::Mouse` defensively.
+
+**Copy**: the `/copy` slash command and `Ctrl+O` hotkey both dispatch
+`TuiCommand::CopyLastMessage`, which calls `clipboard_copy::copy_to_clipboard`
+and surfaces a success / info / error toast.
+
+`clipboard_copy.rs` is a direct port of codex-rs (≈350 LoC impl + 12 unit
+tests). Selection order:
+
+1. **SSH** (`SSH_TTY` / `SSH_CONNECTION` set) → OSC 52 only. Remote
+   X11/Wayland clipboard is useless; OSC 52 tunnels to the local terminal.
+2. **Local** → `arboard` native clipboard.
+   - Linux: returns a `ClipboardLease` stored on `UiState::clipboard_lease`
+     so the X11/Wayland clipboard keeps serving the copied text until the
+     TUI exits (dropping the handle erases the selection).
+   - macOS: `SuppressStderr` RAII guard redirects fd 2 around
+     `arboard::Clipboard::new()` so `NSPasteboard`'s `os_log` chatter
+     doesn't corrupt the TUI display. Serialized through a `OnceLock<Mutex>`.
+3. **WSL fallback** (only if arboard fails): spawn `powershell.exe`
+   `Set-Clipboard -Value` with UTF-8 stdin.
+4. **OSC 52 fallback** (last resort, or if WSL path also fails).
+
+Payload cap: **100 KB raw** before base64 encoding for OSC 52 — larger
+payloads fail fast to avoid DOSing the terminal. Encoded sequences are
+wrapped in tmux DCS passthrough (`\x1bPtmux;\x1b…\x1b\\`) when `$TMUX` is
+set, same as the notification backends.
+
+State tracking (`SessionState`):
+- `last_agent_markdown: Option<String>` — populated in `on_turn_completed`
+  when streaming content is flushed; cleared on `SessionStarted`.
+- `record_agent_markdown(text)` — shared entrypoint that skips empty input.
+
+Deliberate divergences from codex-rs:
+- `saw_copy_source_this_turn` precedence flag is skipped for v1 (coco-rs
+  only has one capture source, so there's nothing to arbitrate).
+- Success/error feedback is surfaced as `Toast` instead of
+  `history_cell::new_info_event` — coco-rs has no persistent info-cell
+  history pattern; toasts are idiomatic.
+
+Keybinding: `Ctrl+O` → copy. `Ctrl+Shift+O` still opens Quick Open (the
+previous Ctrl+O binding) — Shift is the power-user escape hatch.
+
+## ratatui 0.30 Migration Notes
+
+Upgraded from ratatui 0.29 → 0.30 in Apr 2026. Workspace crossterm bumped to
+0.29 at the same time so `ratatui-crossterm` selects a single `crossterm`
+version (avoids duplicate 0.28+0.29 in the dep tree).
+
+Code-side changes:
+
+- `Stylize` is no longer required for inherent `Style` methods — `Style::bold`,
+  `Style::italic`, etc. are now direct. Import `Stylize` only when you need
+  the trait-based `.red()` / `.bold()` methods on `Span` and `Line`.
+- Manual overlay centering (compute `x = (area.width - width) / 2`, etc.)
+  replaced with `Rect::centered(Constraint::Length(w), Constraint::Length(h))`.
+- Layout splits rewritten from `Layout::default().direction(..).constraints(..).split(area)`
+  returning `Rc<[Rect]>` to `area.layout(&Layout::vertical([..]))` returning
+  `[Rect; N]` that can be destructured directly. Compiler enforces the slot
+  count at compile time.
+
+Still missing: **OSC 8 hyperlinks**. ratatui 0.30 cell buffer still has no
+native `Span::hyperlink` primitive and still strips raw escape sequences
+embedded in spans. Deferred until upstream support lands.
 
 ## Ink → ratatui Migration Guide
 
@@ -810,69 +1016,100 @@ fn test_chat_with_messages() {
 app/tui/src/
   lib.rs                      # crate root, re-exports
   app.rs                      # TEA event loop (tokio::select!)
+  events.rs                   # TuiEvent (low-level) + TuiCommand (high-level) enums
   render.rs                   # main render function (layout hierarchy)
-  update.rs                   # TuiCommand → state mutations
+  update.rs                   # TuiCommand → state mutations (top-level dispatch)
+  update/
+    edit.rs                   # text editing, history, word movement
+    overlay.rs                # approve/deny/filter/nav/confirm + filter helpers
+    show.rs                   # Show* overlay constructors
+    clipboard.rs              # Paste + copy-last integration
   command.rs                  # UserCommand enum (TUI → Core)
   terminal.rs                 # Terminal setup/teardown, panic hook
   theme.rs                    # 5 named themes, color palette
   animation.rs                # Spinner frames, time-based
   constants.rs                # Layout breakpoints, timing constants
   keybinding_bridge.rs        # KeyEvent → TuiCommand via KeybindingsManager
-  tui_event_handler.rs        # TuiEvent → TuiCommand mapping
-  stream_event_handler.rs     # StreamEvent → streaming display
-  server_notification_handler/    # CoreEvent → state changes (exhaustive match, no TuiNotification bridge)
-    mod.rs                      # handle_core_event → dispatch to handle_protocol/handle_stream/handle_tui_only
-    session.rs                  # SessionStarted, SessionResult, SessionEnded, SessionStateChanged
-    turn.rs                     # TurnStarted, TurnCompleted, TurnFailed, TurnInterrupted, MaxTurnsReached
-    tool.rs                     # ToolUseQueued/Completed, ToolProgress, ToolUseSummary, ItemStarted/Updated/Completed
-    mcp.rs                      # McpStartupStatus, McpStartupComplete
-    system.rs                   # Error, RateLimit, KeepAlive, CostWarning, ContextCompacted/UsageWarning/Cleared/Compaction*
-    hook.rs                     # HookExecuted, HookStarted, HookProgress, HookResponse
-    sandbox.rs                  # SandboxStateChanged, SandboxViolationsDetected
-    stream.rs                   # AgentStreamEvent (TextDelta, ThinkingDelta, ToolUse*, McpToolCall*)
-    tui_only.rs                 # TuiOnlyEvent (ApprovalRequired, QuestionAsked, Elicitation*, Rewind*, DiffStats*)
+  server_notification_handler/ # CoreEvent → state changes
+    mod.rs                      # handle_core_event dispatch
+    protocol.rs                 # ServerNotification arms (session/turn/tool/mcp/system/hook/sandbox)
+    stream.rs                   # AgentStreamEvent (TextDelta, ThinkingDelta, …)
+    tui_only.rs                 # TuiOnlyEvent (ApprovalRequired, QuestionAsked, Elicitation*, Rewind*, …)
   state/
-    mod.rs                    # AppState composite
+    mod.rs                    # AppState composite + RunningState
     session.rs                # SessionState (agent-synchronized)
-    ui.rs                     # UiState (local: input, overlay, scroll, toast)
-  event/
-    mod.rs                    # TuiEvent, TuiCommand enums
-    stream.rs                 # TuiEventStream (terminal + tick multiplexing)
-    broker.rs                 # EventBroker (pause/resume for external editor)
+    ui.rs                     # UiState + InputState + Streaming + Toast + FocusTarget
+    overlay.rs                # Overlay enum + priority() + PermissionDetail + all overlay payload structs
+    rewind.rs                 # RewindOverlay + RewindPhase + RewindableMessage
+  render_overlays/            # per-category overlay content renderers
+    mod.rs                      # render_overlay + overlay_content dispatch
+    permission.rs               # permission_content (12 PermissionDetail variants)
+    pickers.rs                  # filterable lists (model, command, session, quick open, export, mcp-select)
+    search.rs                   # global search (ripgrep streaming)
+    help.rs                     # keybinding help lines
+    question.rs                 # AskUserQuestion overlay
+    diff.rs                     # full-screen diff view
+    context_viz.rs              # context window usage bar
+    rewind.rs                   # rewind message-select + restore-options
+    settings.rs                 # tabbed settings (theme/output style/permissions/about)
+    confirm.rs                  # small confirmation dialogs (cost, plan, sandbox, trust, etc.)
   widgets/
     mod.rs                    # widget re-exports
-    chat.rs                   # ChatWidget (message rendering, markdown)
+    chat/                       # ChatWidget (message rendering, markdown)
+      mod.rs                      # ChatWidget struct + builder + build_lines + render
+      render_user.rs              # user variants (text, image, bash, plan, memory, teammate, …)
+      render_assistant.rs         # assistant variants (text, thinking, tool_use, advisor)
+      render_tool.rs              # tool-result variants (success/error/rejected/diff/write)
+      render_system.rs            # system variants (API error, rate limit, shutdown, hook*, plan, …)
     input.rs                  # InputWidget (multi-line, syntax highlighting)
     status_bar.rs             # StatusBar (model, tokens, plan mode)
     header_bar.rs             # HeaderBar (session, cwd, branch)
-    tool_panel.rs             # ToolPanel (running/completed/failed)
     subagent_panel.rs         # SubagentPanel (status, focus)
-    team_panel.rs             # TeamPanel (coordinator)
-    toast.rs                  # ToastWidget (auto-expire, severity)
-    queued_list.rs            # QueuedListWidget (steering queue)
+    coordinator_panel.rs      # Team coordinator display
+    toast.rs                  # (via lifecycle_banner — auto-expire)
+    queue_status_widget.rs    # Queued steering commands
     suggestion_popup.rs       # Shared popup infrastructure
-    file_suggestion.rs        # @path autocomplete
-    skill_suggestion.rs       # /command autocomplete
-    agent_suggestion.rs       # @agent-* autocomplete
-    symbol_suggestion.rs      # @#symbol autocomplete
-    diff.rs                   # DiffDisplay (code diff)
-    markdown.rs               # Markdown → ratatui Lines
-    spinner.rs                # Animated spinner
-    permission.rs             # PermissionOverlay rendering (12 tool types)
-    notification.rs           # NotificationBackend (5 terminal types)
+    diff_display.rs           # DiffDisplay (code diff, gutter + content)
+    markdown.rs               # Markdown → ratatui Lines (tables, code blocks, lists, …)
+    notification.rs           # NotificationBackend (5 terminal types + tmux/screen DCS wrap)
+    lifecycle_banner.rs       # shared render_banner_row for single-row banners
+    context_warning_banner.rs # Context-usage warning strip
+    rate_limit_panel.rs       # Rate-limit status banner
+    stream_stall_indicator.rs # Stream stall indicator
+    interrupt_banner.rs       # Interrupt in progress
+    model_fallback_banner.rs  # Model fallback notice
+    permission_mode_banner.rs # Current permission mode strip
+    mcp_status_panel.rs       # MCP server status
+    hook_status_panel.rs      # Hook execution summary
+    local_command_log.rs      # Recent local commands
+    history_search.rs         # Frecency history typeahead
+    task_list.rs              # Background task list
+    team_status.rs            # Teammate status
+    teammate_spinner.rs       # Teammate activity indicator
+    teammate_view_header.rs   # Teammate view chrome
+    ide_dialog.rs             # IDE bridge dialog
+    error_dialog.rs           # Error dialog body formatter
+    progress_bar.rs           # Shared progress bar primitive
+    context_viz.rs            # Context visualization widget
+    plugin_manager.rs         # Plugin manager overlay body
+    settings_panel.rs         # SettingsPanelState + tabs
   streaming/
     mod.rs                    # StreamingState, display pacing
+    chunking.rs               # AdaptiveChunkingPolicy (Smooth/CatchUp hysteresis)
   autocomplete/
+    mod.rs                    # SuggestionState (shared)
     file_search.rs            # Async fuzzy file search
     skill_search.rs           # Skill catalog lookup
     agent_search.rs           # Agent definition search
     symbol_search.rs          # LSP symbol search
   paste.rs                    # Paste handling (text + image)
-  clipboard_paste.rs          # Clipboard integration
-  editor.rs                   # External editor ($EDITOR)
+  clipboard.rs                # Clipboard read helpers
+  clipboard_copy.rs           # Clipboard write (arboard + OSC 52 + WSL fallback)
   i18n/
-    en.yaml                   # English strings
-    zh-CN.yaml                # Chinese strings
+    mod.rs                    # Locale detection (COCO_LANG → LANG → LC_ALL)
+  locales/
+    en.yaml                   # English strings (495 keys)
+    zh-CN.yaml                # Simplified Chinese strings (495 keys)
 ```
 
 ## Key Design Decisions

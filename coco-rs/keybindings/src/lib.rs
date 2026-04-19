@@ -2,6 +2,19 @@
 //!
 //! TS: keybindings/ (context-based resolution, chord support, platform defaults)
 
+pub mod parser;
+pub mod resolver;
+pub mod validator;
+
+pub use parser::KeyChord;
+pub use parser::KeyCombo;
+pub use parser::parse_chord;
+pub use parser::parse_combo;
+pub use resolver::ChordResolver;
+pub use resolver::ResolveOutcome;
+pub use validator::ValidationIssue;
+pub use validator::validate;
+
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;

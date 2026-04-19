@@ -7,10 +7,16 @@
 //!
 //! TS: components/ + screens/ + ink/ + outputStyles/ + services/notifier.ts
 
+// Load locale files at the crate root so the generated `_rust_i18n_t` symbol
+// is visible to every `t!()` call across the crate. See `i18n` module for the
+// init / locale-detection helpers.
+rust_i18n::i18n!("locales", fallback = "en");
+
 pub mod animation;
 pub mod app;
 pub mod autocomplete;
 pub mod clipboard;
+pub mod clipboard_copy;
 pub mod command;
 pub mod constants;
 pub mod editor;
@@ -37,6 +43,7 @@ pub mod model;
 pub use animation::Animation;
 pub use app::App;
 pub use app::create_channels;
+pub use command::ClearScope;
 pub use command::UserCommand;
 pub use events::TuiCommand;
 pub use events::TuiEvent;

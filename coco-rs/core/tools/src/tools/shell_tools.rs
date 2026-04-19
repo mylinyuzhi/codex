@@ -67,6 +67,7 @@ impl Tool for SleepTool {
                 "seconds": capped,
             }),
             new_messages: vec![],
+            app_state_patch: None,
         })
     }
 }
@@ -166,6 +167,7 @@ impl Tool for SyntheticOutputTool {
         Ok(ToolResult {
             data: serde_json::json!(output),
             new_messages: vec![],
+            app_state_patch: None,
         })
     }
 }

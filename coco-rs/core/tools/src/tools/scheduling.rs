@@ -225,6 +225,7 @@ impl Tool for CronCreateTool {
                     "status": "created",
                 }),
                 new_messages: vec![],
+                app_state_patch: None,
             }),
             Err(e) => Err(ToolError::ExecutionFailed {
                 message: format!("Failed to create schedule: {e}"),
@@ -274,6 +275,7 @@ impl Tool for CronDeleteTool {
             Ok(()) => Ok(ToolResult {
                 data: serde_json::json!({"id": id, "status": "deleted"}),
                 new_messages: vec![],
+                app_state_patch: None,
             }),
             Err(e) => Err(ToolError::ExecutionFailed {
                 message: format!("Failed to delete schedule {id}: {e}"),
@@ -349,6 +351,7 @@ impl Tool for CronListTool {
                 Ok(ToolResult {
                     data: serde_json::json!({ "jobs": jobs }),
                     new_messages: vec![],
+                    app_state_patch: None,
                 })
             }
             Err(e) => Err(ToolError::ExecutionFailed {
@@ -456,6 +459,7 @@ impl Tool for RemoteTriggerTool {
                 Ok(triggers) => Ok(ToolResult {
                     data: serde_json::to_value(&triggers).unwrap_or_default(),
                     new_messages: vec![],
+                    app_state_patch: None,
                 }),
                 Err(e) => Err(ToolError::ExecutionFailed {
                     message: format!("Failed to list triggers: {e}"),
@@ -468,6 +472,7 @@ impl Tool for RemoteTriggerTool {
                     Ok(trigger) => Ok(ToolResult {
                         data: serde_json::to_value(&trigger).unwrap_or_default(),
                         new_messages: vec![],
+                        app_state_patch: None,
                     }),
                     Err(e) => Err(ToolError::ExecutionFailed {
                         message: format!("Failed to get trigger {id}: {e}"),
@@ -491,6 +496,7 @@ impl Tool for RemoteTriggerTool {
                             "status": "created",
                         }),
                         new_messages: vec![],
+                        app_state_patch: None,
                     }),
                     Err(e) => Err(ToolError::ExecutionFailed {
                         message: format!("Failed to create trigger: {e}"),
@@ -508,6 +514,7 @@ impl Tool for RemoteTriggerTool {
                     Ok(trigger) => Ok(ToolResult {
                         data: serde_json::to_value(&trigger).unwrap_or_default(),
                         new_messages: vec![],
+                        app_state_patch: None,
                     }),
                     Err(e) => Err(ToolError::ExecutionFailed {
                         message: format!("Failed to update trigger {id}: {e}"),
@@ -525,6 +532,7 @@ impl Tool for RemoteTriggerTool {
                             "result": result,
                         }),
                         new_messages: vec![],
+                        app_state_patch: None,
                     }),
                     Err(e) => Err(ToolError::ExecutionFailed {
                         message: format!("Failed to run trigger {id}: {e}"),

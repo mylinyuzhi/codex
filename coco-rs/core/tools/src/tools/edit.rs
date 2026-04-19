@@ -334,6 +334,7 @@ impl Tool for EditTool {
         Ok(ToolResult {
             data: serde_json::json!(result_msg),
             new_messages: vec![],
+            app_state_patch: None,
         })
     }
 }

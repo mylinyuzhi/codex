@@ -1,8 +1,8 @@
-//! Tests for ExitWorktreeTool (B4.4). These tests focus on the input
-//! validation and restoration-target resolution paths that don't
-//! require a real git worktree. The happy-path end-to-end test would
-//! need `git worktree add`/`remove` against a real repo, which is out
-//! of scope for unit tests — integration coverage lives separately.
+//! Tests for ExitWorktreeTool. These focus on input validation and
+//! restoration-target resolution paths that don't require a real git
+//! worktree. The happy-path end-to-end test would need `git worktree
+//! add`/`remove` against a real repo, which is out of scope for unit
+//! tests — integration coverage lives separately.
 
 use super::ExitWorktreeTool;
 use coco_tool::Tool;

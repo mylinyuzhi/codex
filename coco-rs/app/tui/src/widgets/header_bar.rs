@@ -9,6 +9,7 @@ use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
+use crate::i18n::t;
 use crate::state::AppState;
 use crate::theme::Theme;
 
@@ -41,22 +42,30 @@ impl Widget for HeaderBar<'_> {
         }
 
         // Plan mode
-        if self.state.session.plan_mode {
+        if self.state.is_plan_mode() {
             parts.push(Span::raw(" | ").fg(self.theme.border));
-            parts.push(Span::raw("PLAN").fg(self.theme.plan_mode).bold());
+            parts.push(
+                Span::raw(t!("status.plan").to_string())
+                    .fg(self.theme.plan_mode)
+                    .bold(),
+            );
         }
 
         // Compacting indicator
         if self.state.session.is_compacting {
             parts.push(Span::raw(" | ").fg(self.theme.border));
-            parts.push(Span::raw("compacting...").fg(self.theme.warning).italic());
+            parts.push(
+                Span::raw(t!("status.compacting").to_string())
+                    .fg(self.theme.warning)
+                    .italic(),
+            );
         }
 
         // Turn count
         if self.state.session.turn_count > 0 {
             parts.push(Span::raw(" | ").fg(self.theme.border));
             parts.push(
-                Span::raw(format!("turn {}", self.state.session.turn_count))
+                Span::raw(t!("status.turn_short", n = self.state.session.turn_count).to_string())
                     .fg(self.theme.text_dim),
             );
         }

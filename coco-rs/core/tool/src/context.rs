@@ -162,6 +162,35 @@ pub struct ToolUseContext {
     /// Set by the team spawner; tools check this for teammate-specific behavior
     /// (e.g., ExitPlanMode bypasses permission UI for teammates).
     pub is_teammate: bool,
+
+    /// When `true`, this teammate MUST request plan approval from the
+    /// team lead before exiting plan mode. TS: `isPlanModeRequired()` —
+    /// tied to the role definition in the team file or the
+    /// `COCO_PLAN_MODE_REQUIRED` env var. When `false`,
+    /// teammates in plan mode can exit "voluntarily" without leader
+    /// approval (the tool skips the mailbox write and restores mode
+    /// locally like a non-swarm session).
+    ///
+    /// Only meaningful when `is_teammate == true`. Non-teammate
+    /// contexts ignore this field.
+    pub plan_mode_required: bool,
+
+    /// This teammate's own agent name (swarm identity). Pre-resolved by
+    /// the engine from its configured identity + env fallback so tools
+    /// don't each re-read process env. TS: `getAgentName()`.
+    /// `None` in non-swarm sessions.
+    pub agent_name: Option<String>,
+
+    /// The team name this teammate belongs to. Same rationale as
+    /// [`Self::agent_name`]. TS: `getTeamName()`.
+    pub team_name: Option<String>,
+
+    /// When `true`, ExitPlanMode compares the plan-file mtime against
+    /// `plan_mode_entry_ms` and appends a soft advisory note if the
+    /// model called Exit without actually editing the plan file.
+    /// Enabled via `settings.plan_mode.verify_execution` or the
+    /// `COCO_VERIFY_PLAN` env var.
+    pub plan_verify_execution: bool,
     /// Whether user modified input during permission prompt.
     pub user_modified: bool,
     /// Require can_use_tool check before execution.
@@ -194,6 +223,14 @@ pub struct ToolUseContext {
     // ── Agent Operations ──
     /// Handle for agent spawning, messaging, and team management.
     pub agent: AgentHandleRef,
+
+    // ── Swarm Mailbox ──
+    /// Handle for writing protocol messages to swarm mailboxes.
+    /// Used by ExitPlanModeTool (teammate plan_approval_request) and
+    /// SendMessageTool (generic team-to-team messages). `NoOpMailboxHandle`
+    /// in non-swarm contexts so tool calls fail fast with a clear error
+    /// rather than silently dropping the message.
+    pub mailbox: crate::MailboxHandleRef,
 
     // ── Working Directory Override ──
     /// CWD override for worktree-isolated agents.
@@ -240,9 +277,29 @@ pub struct ToolUseContext {
     /// Session ID for file history backup naming.
     pub session_id_for_history: Option<String>,
 
+    // ── Plan mode ──
+    /// Resolved plans directory for plan-mode file I/O. Pre-computed by
+    /// the engine from `config_home` + project root + `plansDirectory`
+    /// setting, so tools can locate the plan file without re-deriving.
+    /// TS: `getPlanFilePath(agentId)` reads the session-level setting.
+    pub plans_dir: Option<PathBuf>,
+
     // ── App State ──
-    /// Shared application state.
-    pub app_state: Option<Arc<RwLock<serde_json::Value>>>,
+    /// Read-only handle to the shared cross-turn application state
+    /// (plan-mode latches, reminder throttle counters, pending
+    /// teammate approvals, live permission mode). Typed struct — see
+    /// [`coco_types::ToolAppState`] for the field catalog.
+    ///
+    /// **Write access is deliberately not exposed** — tools cannot
+    /// call `.write()` on this handle. Mutations route through
+    /// [`coco_types::ToolResult::app_state_patch`], applied
+    /// post-execute by the executor. TS parity:
+    /// `orchestration.ts:queuedContextModifiers` — tools return a
+    /// `(ctx) => newCtx` modifier; the orchestrator applies them
+    /// after the concurrent batch finishes. Rust encodes the same
+    /// discipline in the type system so a tool that tries to
+    /// mutate shared state simply won't compile.
+    pub app_state: Option<coco_types::AppStateReadHandle>,
 
     // ── Denial Tracking ──
     /// Local denial tracking state for auto-mode fail-safe.
@@ -324,6 +381,10 @@ impl ToolUseContext {
             discovered_skill_names: HashSet::new(),
             tool_decisions: HashMap::new(),
             is_teammate: self.is_teammate,
+            plan_mode_required: self.plan_mode_required,
+            agent_name: self.agent_name.clone(),
+            team_name: self.team_name.clone(),
+            plan_verify_execution: self.plan_verify_execution,
             user_modified: false,
             require_can_use_tool: self.require_can_use_tool,
             preserve_tool_use_results: self.preserve_tool_use_results,
@@ -334,6 +395,7 @@ impl ToolUseContext {
             mcp: self.mcp.clone(),
             schedules: self.schedules.clone(),
             agent: self.agent.clone(),
+            mailbox: self.mailbox.clone(),
             cwd_override: self.cwd_override.clone(),
             permission_bridge: self.permission_bridge.clone(),
             progress_tx: self.progress_tx.clone(),
@@ -343,6 +405,7 @@ impl ToolUseContext {
             file_history: self.file_history.clone(),
             config_home: self.config_home.clone(),
             session_id_for_history: self.session_id_for_history.clone(),
+            plans_dir: self.plans_dir.clone(),
             app_state: self.app_state.clone(),
             local_denial_tracking: self.local_denial_tracking.clone(),
             query_chain_id: self.query_chain_id.clone(),
@@ -374,6 +437,7 @@ impl ToolUseContext {
                 bypass_available: true,
                 pre_plan_mode: None,
                 stripped_dangerous_rules: None,
+                session_plan_file: None,
             },
             tool_use_id: None,
             user_message_id: None,
@@ -387,6 +451,10 @@ impl ToolUseContext {
             discovered_skill_names: HashSet::new(),
             tool_decisions: HashMap::new(),
             is_teammate: false,
+            plan_mode_required: false,
+            agent_name: None,
+            team_name: None,
+            plan_verify_execution: false,
             user_modified: false,
             require_can_use_tool: false,
             preserve_tool_use_results: false,
@@ -397,6 +465,7 @@ impl ToolUseContext {
             mcp: Arc::new(crate::mcp_handle::NoOpMcpHandle),
             schedules: Arc::new(crate::schedule_store::NoOpScheduleStore),
             agent: Arc::new(crate::agent_handle::NoOpAgentHandle),
+            mailbox: Arc::new(crate::NoOpMailboxHandle),
             cwd_override: None,
             permission_bridge: None,
             progress_tx: None,
@@ -406,6 +475,7 @@ impl ToolUseContext {
             file_history: None,
             config_home: None,
             session_id_for_history: None,
+            plans_dir: None,
             app_state: None,
             local_denial_tracking: None,
             query_chain_id: None,

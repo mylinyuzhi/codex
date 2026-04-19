@@ -12,6 +12,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
 use crate::constants;
+use crate::i18n::t;
 use crate::state::session::ToolExecution;
 use crate::state::session::ToolStatus;
 use crate::theme::Theme;
@@ -72,14 +73,14 @@ impl Widget for ToolPanel<'_> {
 
         if lines.is_empty() {
             lines.push(Line::from(
-                Span::raw("  No active tools").fg(self.theme.text_dim),
+                Span::raw(format!("  {}", t!("tool.no_active"))).fg(self.theme.text_dim),
             ));
         }
 
         let panel = Paragraph::new(lines).block(
             Block::default()
                 .borders(Borders::LEFT)
-                .title(" Tools ")
+                .title(format!(" {} ", t!("tool.title")))
                 .border_style(Style::default().fg(self.theme.border)),
         );
         panel.render(area, buf);

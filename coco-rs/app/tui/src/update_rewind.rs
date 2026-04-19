@@ -140,16 +140,16 @@ pub fn handle_rewind_confirm(overlay: &mut RewindOverlay) -> Option<(String, Res
         }
         RewindPhase::RestoreOptions => {
             let msg = overlay.messages.get(overlay.selected as usize)?;
-            let opt = overlay
+            let opt = *overlay
                 .available_options
                 .get(overlay.option_selected as usize)?;
             // TS: tengu_message_selector_restore_option_selected
             tracing::info!(
                 target: "rewind",
                 event = "restore_option_selected",
-                option = ?opt.restore_type,
+                option = ?opt,
             );
-            Some((msg.message_id.clone(), opt.restore_type))
+            Some((msg.message_id.clone(), opt))
         }
         RewindPhase::Confirming => None,
     }
