@@ -1,217 +1,120 @@
-# CLAUDE.md
+# coco-retrieval
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Code retrieval subsystem: BM25 full-text + vector semantic + AST symbol
+extraction + PageRank repo-map. Single `RetrievalFacade` entry point for
+agents, TUI, and CLI.
 
-## Crate Overview
-
-**coco-retrieval** - Code retrieval system providing intelligent code search for coco-rs. Combines BM25 full-text search, vector semantic search, and AST-aware symbol extraction.
-
-**IMPORTANT:** This crate is part of the coco-rs workspace. Read `../CLAUDE.md` (or `codex/CLAUDE.md`) for workspace-wide conventions before making changes.
-
-## Important Note
-
-**This crate does NOT follow the `*_ext.rs` extension pattern.** Direct modifications to existing files are allowed and preferred for this directory.
-
-## Build and Test Commands
-
-```bash
-# From coco-rs/ directory (required)
-cargo build -p coco-retrieval                    # Standard build
-cargo build -p coco-retrieval --features local   # With local embeddings + reranking
-cargo test -p coco-retrieval                     # Run tests
-cargo check -p coco-retrieval                    # Quick check
-
-# Run CLI/TUI for testing
-cargo run -p coco-retrieval --bin retrieval -- --help
-cargo run -p coco-retrieval --bin retrieval -- /path/to/project              # TUI mode (default)
-cargo run -p coco-retrieval --bin retrieval -- /path/to/project --no-tui build
-cargo run -p coco-retrieval --bin retrieval -- /path/to/project --no-tui search "query"
-```
+**Note**: This crate is **not** ported from claude-code TS. TS has a small
+related helper (`utils/codeIndexing.ts`) that drives background `git grep` /
+file-listing and is not a full retrieval engine. `coco-retrieval` is a new
+subsystem. It predates the TS-port direction and is owned by coco-rs directly
+(see `../CLAUDE.md` for workspace conventions).
 
 ## Feature Flags
 
 | Feature | Description | Dependencies |
 |---------|-------------|--------------|
-| `local-embeddings` | Local embeddings via fastembed (ONNX) | fastembed |
-| `neural-reranker` | Local neural reranking via fastembed | fastembed |
-| `local` | All local features | fastembed |
+| `local-embeddings` | Local embeddings via fastembed (ONNX: nomic-embed-text, bge-*, MiniLM-*) | `fastembed` |
+| `neural-reranker` | Local neural reranker via fastembed (bge-reranker, jina-reranker) | `fastembed` |
+| `local` | Both of the above | `fastembed` |
+
+Default build is lightweight — BM25 + OpenAI embeddings / reranker API only.
 
 ## Architecture
 
 ```
 src/
-├── service.rs          # RetrievalService - main entry point, cached instances
-├── config.rs           # RetrievalConfig (from ~/.codex/retrieval.toml)
-├── error.rs            # RetrievalErr - structured errors with context
-├── traits.rs           # Core traits: Indexer, Searcher, EmbeddingProvider, ChunkStore
-├── types.rs            # Core types: CodeChunk, SearchResult, SourceFileId
+├── facade.rs              RetrievalFacade — primary entry point (build_index, search, generate_repomap)
+├── config.rs              RetrievalConfig — ~/.coco/retrieval.toml + workdir overrides
+├── context.rs             RetrievalContext + RetrievalFeatures (presets: NONE/MINIMAL/STANDARD/FULL)
+├── error.rs               RetrievalErr (structured; is_retryable, suggested_retry_delay_ms)
+├── traits.rs              Indexer, Searcher, EmbeddingProvider, ChunkStore (all Send+Sync, #[async_trait])
+├── types.rs               CodeChunk, SearchResult, SearchQuery, SourceFileId, ScoreType
+├── events.rs              RetrievalEvent (isolated from CoreEvent — see below)
+├── event_emitter.rs       EventEmitter + ScopedEventCollector
+├── metrics.rs             CodeMetrics
+├── health.rs              Health probes
 │
-├── indexing/           # Index management
-│   ├── manager.rs      # IndexManager - orchestrates rebuild/update
-│   ├── walker.rs       # File walker with gitignore support
-│   ├── watcher.rs      # FileWatcher for incremental updates
-│   └── change_detector.rs  # SHA256 content hash change detection
-│
-├── chunking/           # Code splitting
-│   ├── splitter.rs     # AST-aware chunking (tree-sitter) + fallback
-│   └── collapser.rs    # Token budget collapsing
-│
-├── embeddings/         # Embedding providers
-│   ├── fastembed.rs    # Local ONNX (nomic-embed-text, bge-*, MiniLM-*)
-│   ├── openai.rs       # OpenAI API (text-embedding-3-small/large)
-│   └── queue.rs        # Batched embedding queue
-│
-├── search/             # Search engines
-│   ├── bm25.rs         # BM25 full-text (k1=0.8, b=0.5)
-│   ├── hybrid.rs       # HybridSearcher - combines BM25 + vector + snippet
-│   ├── fusion.rs       # Reciprocal Rank Fusion (RRF)
-│   └── recent.rs       # RecentFilesCache for recency boost
-│
-├── storage/            # Persistence
-│   ├── sqlite.rs       # SqliteStore - metadata, FTS5
-│   ├── lancedb.rs      # LanceDbStore - vector storage
-│   └── snippets.rs     # Symbol/snippet storage
-│
-├── query/              # Query processing
-│   ├── rewriter.rs     # LLM-based query rewriting
-│   ├── preprocessor.rs # Tokenization, stemming
-│   └── llm_provider.rs # OpenAI/Ollama for query rewrite
-│
-├── reranker/           # Result reranking
-│   ├── rule_based.rs   # Heuristic reranking
-│   ├── local.rs        # fastembed reranker (bge-reranker, jina-reranker)
-│   └── remote.rs       # Cohere/Voyage AI API
-│
-├── repomap/            # PageRank context generation
-│   ├── graph.rs        # Dependency graph from AST
-│   ├── pagerank.rs     # PageRank algorithm
-│   └── renderer.rs     # Token-budgeted output
-│
-└── tags/               # Symbol extraction
-    ├── extractor.rs    # tree-sitter-tags based
-    └── languages.rs    # Language configs (Go, Rust, Python, Java)
+├── indexing/              IndexManager, FileWatcher, walker, change_detector (SHA256)
+├── chunking/              AST-aware splitter (tree-sitter) + fallback + token-budget collapser
+├── embeddings/            fastembed (local ONNX) + openai + batched queue
+├── search/                BM25 (k1=0.8, b=0.5), HybridSearcher, RRF fusion, RecentFilesCache, SnippetSearcher
+├── storage/               SqliteStore (metadata + FTS5), SqliteVecStore / LanceDbStore (vectors), snippet storage
+├── query/                 LLM-based query rewrite (CN/EN bilingual) + preprocessor
+├── reranker/              RuleBasedReranker + local (fastembed) + remote (Cohere/Voyage)
+├── repomap/               Dependency graph + PageRank + token-budgeted renderer
+├── tags/                  tree-sitter symbol extraction
+├── services/              IndexService, SearchService, RecentFilesService, SearchRequest builder
+├── tui/                   Stand-alone TUI for `retrieval` binary
+└── bin/                   `retrieval` binary (build/search/tui)
 ```
 
-## Event integration
+## Primary API
 
-`RetrievalEvent` (see `src/events.rs`) is **intentionally isolated** from the
-main agent `CoreEvent` stream. See the module doc block and
-`event-system-design.md` §1.7 / plan WS-7 for rationale. Subscribe to
-retrieval events via `EventEmitter::subscribe()`; do not bridge the full
-taxonomy into `coco_types::ServerNotification`. If a slash command ever
-needs retrieval progress in the agent stream, add a single aggregate
-`RetrievalProgress { phase, percent_done }` variant via an optional sink
-(pattern: `TaskManager::with_event_sink()`).
+```rust
+use coco_retrieval::{RetrievalFacade, FacadeBuilder, RetrievalFeatures, SearchRequest};
+
+// Create facade for a workspace
+let facade = FacadeBuilder::new(config)
+    .features(RetrievalFeatures::STANDARD)
+    .workspace(workdir)
+    .build()
+    .await?;
+
+// Simple search (hybrid mode)
+let results = facade.search("query").await?;
+
+// Fluent builder for advanced modes
+let results = facade.search_service().execute(
+    SearchRequest::new("query").bm25().limit(10)
+).await?;
+
+// Or: .vector(), .hybrid(), .snippet()
+
+// Operations
+facade.build_index(mode, cancel_token).await?;    // Receiver<IndexProgress>
+facade.generate_repomap(request).await?;           // RepoMapResult
+```
+
+Convenience: `create_manager(cwd, coco_home) -> Option<Arc<RetrievalFacade>>`
+(honors `config.enabled`).
+
+## Event Integration
+
+`RetrievalEvent` is **intentionally isolated** from the main agent `CoreEvent`
+stream (see `event-system-design.md` §1.7 and plan WS-7). Subscribe via
+`EventEmitter::subscribe()`; do not bridge the full taxonomy into
+`coco_types::ServerNotification`. If a slash command ever needs retrieval
+progress in the agent stream, add a single aggregate variant via an optional
+sink (pattern: `TaskManager::with_event_sink()`).
 
 ## Error Handling
 
 Uses `RetrievalErr` (not `anyhow`). Key variants:
-- `NotEnabled` - retrieval not configured
-- `NotReady` - index building (retryable)
-- `SqliteLockedTimeout` - concurrent access (retryable)
-- `EmbeddingFailed`, `SearchFailed` - operation failures
+- `NotEnabled` — retrieval not configured
+- `NotReady` — index building (retryable)
+- `SqliteLockedTimeout` — concurrent access (retryable)
+- `EmbeddingFailed`, `SearchFailed` — operation failures
 
-Check `is_retryable()` and `suggested_retry_delay_ms()` for transient errors.
-
-## Key Patterns
-
-### Trait Bounds
-All async traits use `Send + Sync`:
-```rust
-#[async_trait]
-pub trait EmbeddingProvider: Send + Sync + std::fmt::Debug {
-    fn name(&self) -> &str;
-    async fn embed(&self, text: &str) -> Result<Vec<f32>>;
-}
-```
-
-### Integer Types
-Use `i32`/`i64` (never unsigned) per workspace convention:
-```rust
-pub start_line: i32,   // ✅
-pub limit: i32,        // ✅
-```
-
-### Configuration Defaults
-Use `#[serde(default)]` for optional fields:
-```rust
-#[serde(default)]
-pub watch_enabled: bool,
-
-#[serde(default = "default_batch_size")]
-pub batch_size: i32,
-```
-
-### Service Caching
-`RetrievalService` instances are cached per workdir with LRU eviction:
-```rust
-static INSTANCES: Lazy<BlockingLruCache<PathBuf, Arc<RetrievalService>>> = ...;
-```
-
-### Service API (Facade Pattern)
-`RetrievalFacade` is the single entry point for all retrieval operations:
-
-```rust
-// Search API (unified via SearchRequest)
-use coco_retrieval::SearchRequest;
-
-// Simple search (hybrid mode, default limit)
-facade.search("query").await?;
-
-// Advanced: use SearchRequest builder
-facade.search_service().execute(
-    SearchRequest::new("query")
-        .bm25()      // or .vector(), .hybrid(), .snippet()
-        .limit(10)
-).await?;
-
-// Operations API
-facade.build_index(mode, cancel_token).await?;  // Returns Receiver<IndexProgress>
-facade.generate_repomap(request).await?;        // Returns RepoMapResult
-```
-
-### Feature Presets
-```rust
-RetrievalFeatures::NONE      // All disabled
-RetrievalFeatures::MINIMAL   // BM25 only (for testing)
-RetrievalFeatures::STANDARD  // BM25 + query rewrite
-RetrievalFeatures::FULL      // All features enabled
-```
-
-CLI and TUI both use this service API - no direct access to `IndexManager`, `SqliteStore`, or `FileWatcher`.
+Always check `is_retryable()` / `suggested_retry_delay_ms()` for transient errors.
 
 ## Supported Languages (AST)
 
 | Language | Symbol Extraction | Chunking |
 |----------|-------------------|----------|
-| Go | ✅ | ✅ |
-| Rust | ✅ | ✅ |
-| Python | ✅ | ✅ |
-| Java | ✅ | ✅ |
+| Go | yes | yes |
+| Rust | yes | yes |
+| Python | yes | yes |
+| Java | yes | yes |
 
-TypeScript, JavaScript, C++ are NOT yet supported for AST features.
+TypeScript / JavaScript / C++ are not yet supported for AST features (BM25
++ vector still work on any language).
 
 ## Configuration
 
-Config file locations (in priority order):
-1. `{workdir}/.codex/retrieval.toml`
-2. `~/.codex/retrieval.toml`
+`{workdir}/.codex/retrieval.toml` → `~/.codex/retrieval.toml` (workdir wins).
+Sections: `indexing`, `chunking`, `search`, `embedding`, `query_rewrite`,
+`extended_reranker`, `repo_map`.
 
-Key sections: `indexing`, `chunking`, `search`, `embedding`, `query_rewrite`, `extended_reranker`, `repo_map`
-
-## Testing
-
-```bash
-# Unit tests
-cargo test -p coco-retrieval
-
-# Integration tests
-cargo test -p coco-retrieval --test cli_test
-cargo test -p coco-retrieval --test indexing_test
-cargo test -p coco-retrieval --test vector_search_test
-
-# With local features
-cargo test -p coco-retrieval --features local
-```
-
-Test helpers use `tempfile::TempDir` for isolated test environments.
+CLI and TUI both use the facade — no direct access to `IndexManager`,
+`SqliteStore`, or `FileWatcher`.
