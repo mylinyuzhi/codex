@@ -2,7 +2,7 @@
 
 import asyncio
 
-from coco_sdk import AgentDefinitionConfig, CocoClient
+from coco_sdk import AgentDefinitionConfig, CocoClient, NotificationMethod
 
 
 async def main():
@@ -20,19 +20,19 @@ async def main():
         agents={"researcher": researcher},
     ) as client:
         async for event in client.events():
-            if event.method == "agentMessage/delta":
+            if event.method == NotificationMethod.AGENT_MESSAGE_DELTA:
                 delta = event.as_agent_message_delta()
                 if delta:
                     print(delta.delta, end="", flush=True)
-            elif event.method == "subagent/spawned":
+            elif event.method == NotificationMethod.SUBAGENT_SPAWNED:
                 spawned = event.as_subagent_spawned()
                 if spawned:
                     print(f"\n[Agent spawned: {spawned.agent_type}]")
-            elif event.method == "subagent/completed":
+            elif event.method == NotificationMethod.SUBAGENT_COMPLETED:
                 completed = event.as_subagent_completed()
                 if completed:
                     print(f"\n[Agent completed: {completed.result[:100]}...]")
-            elif event.method == "turn/completed":
+            elif event.method == NotificationMethod.TURN_COMPLETED:
                 print()
 
 

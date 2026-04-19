@@ -10,41 +10,41 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 
-/// Bidirectional control protocol — server-initiated requests.
-///
-/// The agent sends these to SDK clients when it needs a decision or input
-/// (permission approval, user question, hook callback, MCP routing). The
-/// SDK client must reply via the corresponding `ClientRequest` variant.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "method", content = "params")]
-pub enum ServerRequest {
-    /// Ask the SDK client to approve or deny a tool use.
-    /// Matches TS `SDKControlPermissionRequestSchema` (controlSchemas.ts:108-121).
-    /// Expected response: `ClientRequest::ApprovalResolve`.
-    #[serde(rename = "approval/askForApproval")]
-    AskForApproval(AskForApprovalParams),
+use crate::wire_tagged::wire_tagged_enum;
 
-    /// Ask the user a question via the SDK client (e.g. multiple choice).
-    /// Expected response: `ClientRequest::UserInputResolve`.
-    #[serde(rename = "input/requestUserInput")]
-    RequestUserInput(RequestUserInputParams),
-
-    /// Route an MCP JSON-RPC message to the SDK-hosted MCP server.
-    /// Matches TS `SDKControlMcpMessageRequestSchema` (controlSchemas.ts:377-381).
-    /// Expected response: `ClientRequest::McpRouteMessageResponse`.
-    #[serde(rename = "mcp/routeMessage")]
-    McpRouteMessage(McpRouteMessageParams),
-
-    /// Invoke an SDK-registered hook callback.
-    /// Matches TS `SDKHookCallbackRequestSchema` (controlSchemas.ts:366-371).
-    /// Expected response: `ClientRequest::HookCallbackResponse`.
-    #[serde(rename = "hook/callback")]
-    HookCallback(HookCallbackParams),
-
-    /// Notify the SDK that a previously-sent ServerRequest should be cancelled.
-    #[serde(rename = "control/cancelRequest")]
-    CancelRequest(ServerCancelRequestParams),
+wire_tagged_enum! {
+    method_enum = ServerRequestMethod,
+    tagged_enum = ServerRequest,
+    method_doc = "\
+Wire-method identifier for every `ServerRequest` variant.\n\n\
+Cross-language protocol constant exported to the JSON schema bundle so \
+Python / other SDK codegens obtain the same vocabulary. Consumers should \
+reference `ServerRequestMethod::HookCallback` rather than compare against \
+raw wire strings.",
+    tagged_doc = "\
+Bidirectional control protocol — server-initiated requests.\n\n\
+The agent sends these to SDK clients when it needs a decision or input \
+(permission approval, user question, hook callback, MCP routing). The \
+SDK client must reply via the corresponding `ClientRequest` variant.",
+    variants = {
+        /// Ask the SDK client to approve or deny a tool use.
+        /// Matches TS `SDKControlPermissionRequestSchema` (controlSchemas.ts:108-121).
+        /// Expected response: `ClientRequest::ApprovalResolve`.
+        "approval/askForApproval" => AskForApproval(AskForApprovalParams),
+        /// Ask the user a question via the SDK client (e.g. multiple choice).
+        /// Expected response: `ClientRequest::UserInputResolve`.
+        "input/requestUserInput" => RequestUserInput(RequestUserInputParams),
+        /// Route an MCP JSON-RPC message to the SDK-hosted MCP server.
+        /// Matches TS `SDKControlMcpMessageRequestSchema` (controlSchemas.ts:377-381).
+        /// Expected response: `ClientRequest::McpRouteMessageResponse`.
+        "mcp/routeMessage" => McpRouteMessage(McpRouteMessageParams),
+        /// Invoke an SDK-registered hook callback.
+        /// Matches TS `SDKHookCallbackRequestSchema` (controlSchemas.ts:366-371).
+        /// Expected response: `ClientRequest::HookCallbackResponse`.
+        "hook/callback" => HookCallback(HookCallbackParams),
+        /// Notify the SDK that a previously-sent ServerRequest should be cancelled.
+        "control/cancelRequest" => CancelRequest(ServerCancelRequestParams),
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -40,6 +40,7 @@ mod task_list;
 mod thinking;
 mod token;
 mod tool;
+mod wire_tagged;
 
 // === Re-exports ===
 
@@ -86,6 +87,7 @@ pub use event::McpServerInit;
 pub use event::McpStartupCompleteParams;
 pub use event::McpStartupStatusParams;
 pub use event::ModelFallbackParams;
+pub use event::NotificationMethod;
 pub use event::PermissionDenialInfo;
 pub use event::PermissionModeChangedParams;
 pub use event::PersistedFileError;
@@ -131,6 +133,7 @@ pub use client_request::ApprovalDecision;
 pub use client_request::ApprovalResolveParams;
 pub use client_request::CancelRequestParams;
 pub use client_request::ClientRequest;
+pub use client_request::ClientRequestMethod;
 pub use client_request::ConfigApplyFlagsParams;
 pub use client_request::ConfigWriteParams;
 pub use client_request::ElicitationResolveParams;
@@ -179,6 +182,7 @@ pub use server_request::SdkSessionSummary;
 pub use server_request::SdkSlashCommand;
 pub use server_request::ServerCancelRequestParams;
 pub use server_request::ServerRequest;
+pub use server_request::ServerRequestMethod;
 pub use server_request::SessionListResult;
 pub use server_request::SessionReadResult;
 pub use server_request::SessionResumeResult;

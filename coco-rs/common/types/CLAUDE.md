@@ -21,9 +21,19 @@ Provider / Model: `ProviderApi`, `ModelRole`, `ModelSpec`, `Capability`, `Capabi
 
 Thinking / Token / ID / Sandbox: `ThinkingLevel { effort, budget_tokens, options }`, `ReasoningEffort` (6 levels), `TokenUsage`, `ModelUsage`, `SessionId`, `AgentId`, `TaskId`, `SandboxMode`.
 
-Event envelope (owned here — see `event-system-design.md`): `CoreEvent` (3-layer), `ServerNotification` (52 variants), `AgentStreamEvent`, `TuiOnlyEvent`, `ThreadItem`, plus 50+ event param structs.
+Event envelope (owned here — see `event-system-design.md`): `CoreEvent` (3-layer), `ServerNotification` (66 variants) + `NotificationMethod` (typed wire-method enum), `AgentStreamEvent`, `TuiOnlyEvent`, `ThreadItem`, plus 50+ event param structs.
 
-Wire protocol: `ClientRequest`, `ServerRequest`, `JsonRpcMessage` family, `RequestId`, `error_codes`.
+Wire protocol: `ClientRequest` + `ClientRequestMethod` (30 variants), `ServerRequest` + `ServerRequestMethod` (5 variants), `JsonRpcMessage` family, `RequestId`, `error_codes`.
+
+### Wire-tagged-enum macro
+
+`ServerNotification`, `ClientRequest`, and `ServerRequest` are emitted via the `wire_tagged_enum!` macro (`src/wire_tagged.rs`). From a single `"wire-string" => Variant` table the macro derives:
+
+1. The tagged union (`#[serde(tag = "method", content = "params")]`) with per-variant `#[serde(rename = "wire/method")]`.
+2. A companion `FooMethod` Copy enum with `serde` + `strum::Display` + `strum::IntoStaticStr` + `JsonSchema`.
+3. A `pub const fn method(&self) -> FooMethod` accessor on the tagged union.
+
+The same `$wire` literal drives `#[serde(rename)]` **and** `#[strum(serialize)]`, so the wire string cannot drift across accessors, schema, or cross-language codegens that consume `notification_method.json` / `client_request_method.json` / `server_request_method.json`.
 
 App-state: `ToolAppState`, `AppStatePatch`, `AppStateReadHandle` (typed cross-turn state, formerly `serde_json::Value`).
 

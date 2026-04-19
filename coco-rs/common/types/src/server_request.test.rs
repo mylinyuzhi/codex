@@ -22,6 +22,10 @@ fn ask_for_approval_wire_method() {
     assert_eq!(j["method"], "approval/askForApproval");
     assert_eq!(j["params"]["tool_name"], "Bash");
     assert_eq!(j["params"]["tool_use_id"], "tu-1");
+
+    // Typed discriminator agrees with serde wire tag.
+    assert_eq!(req.method(), ServerRequestMethod::AskForApproval);
+    assert_eq!(ServerRequestMethod::AskForApproval.as_str(), "approval/askForApproval");
 }
 
 #[test]

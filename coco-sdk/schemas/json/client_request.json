@@ -1224,7 +1224,7 @@
       }
     },
     "SetPermissionModeParams": {
-      "description": "Matches TS `SDKControlSetPermissionModeRequestSchema` (controlSchemas.ts:127-134).",
+      "description": "Matches TS `SDKControlSetPermissionModeRequestSchema` (controlSchemas.ts:127-134).\n\nTS carries an additional `ultraplan: boolean` field for the CCR web-UI refinement flow. coco-rs intentionally skips Ultraplan (see CLAUDE.md \"Plan Mode — Skip Ultraplan (CCR Web UI) Only\"), so that field is omitted here — SDK clients targeting coco-rs should not send it.",
       "type": "object",
       "required": [
         "mode"
@@ -1232,13 +1232,6 @@
       "properties": {
         "mode": {
           "$ref": "#/definitions/PermissionMode"
-        },
-        "ultraplan": {
-          "description": "TS `ultraplan` — enables ultraplan mode within Plan (feature flag).",
-          "type": [
-            "boolean",
-            "null"
-          ]
         }
       }
     },

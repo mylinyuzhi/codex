@@ -2,6 +2,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::TokenUsage;
+use crate::wire_tagged::wire_tagged_enum;
 
 /// Three-layer event envelope.
 ///
@@ -241,368 +242,251 @@ pub enum ItemStatus {
 }
 
 // ---------------------------------------------------------------------------
-// ServerNotification — protocol-layer notifications (64 variants)
+// NotificationMethod + ServerNotification — protocol-layer notifications (66 variants)
 // ---------------------------------------------------------------------------
 
-/// Protocol-level notifications visible to all consumers.
-///
-/// 64 variants across 20 categories.
-/// Each variant has an explicit `#[serde(rename = "...")]` for its wire method.
-/// See `event-system-design.md` Section 2.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "method", content = "params")]
-pub enum ServerNotification {
+wire_tagged_enum! {
+    method_enum = NotificationMethod,
+    tagged_enum = ServerNotification,
+    method_doc = "\
+Wire-method identifier for every `ServerNotification` variant.\n\n\
+Cross-language protocol constant exported to the JSON schema bundle so \
+Python / other SDK codegens obtain the same vocabulary. Consumers should \
+reference `NotificationMethod::SessionStarted` rather than compare against \
+raw wire strings.",
+    tagged_doc = "\
+Protocol-level notifications visible to all consumers.\n\n\
+66 variants across 20 categories. See `event-system-design.md` Section 2. \
+Each variant's wire method is generated together with the matching \
+`NotificationMethod` discriminant.",
+    variants = {
     // === Session lifecycle (3) ===
+
     /// New session started.
-    #[serde(rename = "session/started")]
-    SessionStarted(SessionStartedParams),
+    "session/started" => SessionStarted(SessionStartedParams),
     /// Session result (final usage, cost, stop reason).
-    #[serde(rename = "session/result")]
-    SessionResult(Box<SessionResultParams>),
+    "session/result" => SessionResult(Box<SessionResultParams>),
     /// Session ended.
-    #[serde(rename = "session/ended")]
-    SessionEnded(SessionEndedParams),
+    "session/ended" => SessionEnded(SessionEndedParams),
 
     // === Turn lifecycle (4) ===
+
     /// Agent turn started.
-    #[serde(rename = "turn/started")]
-    TurnStarted(TurnStartedParams),
+    "turn/started" => TurnStarted(TurnStartedParams),
     /// Agent turn completed successfully.
-    #[serde(rename = "turn/completed")]
-    TurnCompleted(TurnCompletedParams),
+    "turn/completed" => TurnCompleted(TurnCompletedParams),
     /// Agent turn failed with error.
-    #[serde(rename = "turn/failed")]
-    TurnFailed(TurnFailedParams),
+    "turn/failed" => TurnFailed(TurnFailedParams),
     /// Turn interrupted by user.
-    #[serde(rename = "turn/interrupted")]
-    TurnInterrupted(TurnInterruptedParams),
+    "turn/interrupted" => TurnInterrupted(TurnInterruptedParams),
 
     // === Item lifecycle (3) ===
+
     /// Thread item started (from StreamAccumulator).
-    #[serde(rename = "item/started")]
-    ItemStarted { item: ThreadItem },
+    "item/started" => ItemStarted { item: ThreadItem },
     /// Thread item updated (e.g. tool execution began).
-    #[serde(rename = "item/updated")]
-    ItemUpdated { item: ThreadItem },
+    "item/updated" => ItemUpdated { item: ThreadItem },
     /// Thread item completed.
-    #[serde(rename = "item/completed")]
-    ItemCompleted { item: ThreadItem },
+    "item/completed" => ItemCompleted { item: ThreadItem },
 
     // === Content deltas (2) ===
+
     /// Text content delta from assistant.
-    #[serde(rename = "agentMessage/delta")]
-    AgentMessageDelta(ContentDeltaParams),
+    "agentMessage/delta" => AgentMessageDelta(ContentDeltaParams),
     /// Reasoning/thinking delta.
-    #[serde(rename = "reasoning/delta")]
-    ReasoningDelta(ContentDeltaParams),
+    "reasoning/delta" => ReasoningDelta(ContentDeltaParams),
 
     // === Subagent (4) ===
+
     /// Subagent spawned.
-    #[serde(rename = "subagent/spawned")]
-    SubagentSpawned(SubagentSpawnedParams),
+    "subagent/spawned" => SubagentSpawned(SubagentSpawnedParams),
     /// Subagent completed.
-    #[serde(rename = "subagent/completed")]
-    SubagentCompleted(SubagentCompletedParams),
+    "subagent/completed" => SubagentCompleted(SubagentCompletedParams),
     /// Subagent moved to background.
-    #[serde(rename = "subagent/backgrounded")]
-    SubagentBackgrounded(SubagentBackgroundedParams),
+    "subagent/backgrounded" => SubagentBackgrounded(SubagentBackgroundedParams),
     /// Subagent progress update.
-    #[serde(rename = "subagent/progress")]
-    SubagentProgress(SubagentProgressParams),
+    "subagent/progress" => SubagentProgress(SubagentProgressParams),
 
     // === MCP (2) ===
+
     /// MCP server startup status.
-    #[serde(rename = "mcp/startupStatus")]
-    McpStartupStatus(McpStartupStatusParams),
+    "mcp/startupStatus" => McpStartupStatus(McpStartupStatusParams),
     /// All MCP servers finished startup.
-    #[serde(rename = "mcp/startupComplete")]
-    McpStartupComplete(McpStartupCompleteParams),
+    "mcp/startupComplete" => McpStartupComplete(McpStartupCompleteParams),
 
     // === Context (5) ===
-    /// Context compacted.
-    #[serde(rename = "context/compacted")]
-    ContextCompacted(ContextCompactedParams),
-    /// Context usage warning.
-    #[serde(rename = "context/usageWarning")]
-    ContextUsageWarning(ContextUsageWarningParams),
-    /// Compaction started.
-    #[serde(rename = "context/compactionStarted")]
-    CompactionStarted,
-    /// Compaction failed.
-    #[serde(rename = "context/compactionFailed")]
-    CompactionFailed(CompactionFailedParams),
-    /// Context cleared (e.g. new mode).
-    #[serde(rename = "context/cleared")]
-    ContextCleared(ContextClearedParams),
 
-    // === Task (4) ===
+    /// Context compacted.
+    "context/compacted" => ContextCompacted(ContextCompactedParams),
+    /// Context usage warning.
+    "context/usageWarning" => ContextUsageWarning(ContextUsageWarningParams),
+    /// Compaction started.
+    "context/compactionStarted" => CompactionStarted,
+    /// Compaction failed.
+    "context/compactionFailed" => CompactionFailed(CompactionFailedParams),
+    /// Context cleared (e.g. new mode).
+    "context/cleared" => ContextCleared(ContextClearedParams),
+
+    // === Task (6) ===
+
     /// Background task started.
-    #[serde(rename = "task/started")]
-    TaskStarted(TaskStartedParams),
+    "task/started" => TaskStarted(TaskStartedParams),
     /// Background task completed.
-    #[serde(rename = "task/completed")]
-    TaskCompleted(TaskCompletedParams),
+    "task/completed" => TaskCompleted(TaskCompletedParams),
     /// Background task progress.
-    #[serde(rename = "task/progress")]
-    TaskProgress(TaskProgressParams),
+    "task/progress" => TaskProgress(TaskProgressParams),
     /// Durable plan-item / V1 todo snapshot — emitted after
     /// `TaskCreate`/`TaskUpdate`/`TodoWrite` tools mutate state so
     /// the TUI can refresh its panel without pulling the store
     /// directly. TS parity: `notifyTasksUpdated` subscriber callback
     /// in `utils/tasks.ts`.
-    #[serde(rename = "task_panel/changed")]
-    TaskPanelChanged(TaskPanelChangedParams),
+    "task_panel/changed" => TaskPanelChanged(TaskPanelChangedParams),
     /// Team lead received a plan-approval request from a teammate
     /// (via mailbox). The TUI surfaces this as a modal overlay.
     /// TS parity: `ExitPlanModeV2Tool.ts:137-141` teammate request flow.
-    #[serde(rename = "plan_approval/requested")]
-    PlanApprovalRequested(PlanApprovalRequestedParams),
+    "plan_approval/requested" => PlanApprovalRequested(PlanApprovalRequestedParams),
     /// Agents killed.
-    #[serde(rename = "agents/killed")]
-    AgentsKilled(AgentsKilledParams),
+    "agents/killed" => AgentsKilled(AgentsKilledParams),
 
     // === Model (3) ===
+
     /// Model fallback started.
-    #[serde(rename = "model/fallbackStarted")]
-    ModelFallbackStarted(ModelFallbackParams),
+    "model/fallbackStarted" => ModelFallbackStarted(ModelFallbackParams),
     /// Model fallback completed.
-    #[serde(rename = "model/fallbackCompleted")]
-    ModelFallbackCompleted,
+    "model/fallbackCompleted" => ModelFallbackCompleted,
     /// Fast mode state changed.
-    #[serde(rename = "model/fastModeChanged")]
-    FastModeChanged { active: bool },
+    "model/fastModeChanged" => FastModeChanged { active: bool },
 
     // === Permission (1) ===
+
     /// Permission mode changed.
-    #[serde(rename = "permission/modeChanged")]
-    PermissionModeChanged(PermissionModeChangedParams),
+    "permission/modeChanged" => PermissionModeChanged(PermissionModeChangedParams),
 
     // === Prompt (1) ===
+
     /// Prompt suggestions.
-    #[serde(rename = "prompt/suggestion")]
-    PromptSuggestion { suggestions: Vec<String> },
+    "prompt/suggestion" => PromptSuggestion { suggestions: Vec<String> },
 
     // === System (3) ===
+
     /// Error notification.
-    #[serde(rename = "error")]
-    Error(ErrorParams),
+    "error" => Error(ErrorParams),
     /// Rate limit notification.
-    #[serde(rename = "rateLimit")]
-    RateLimit(RateLimitParams),
+    "rateLimit" => RateLimit(RateLimitParams),
     /// Keep-alive heartbeat.
-    #[serde(rename = "keepAlive")]
-    KeepAlive { timestamp: i64 },
+    "keepAlive" => KeepAlive { timestamp: i64 },
 
     // === IDE (2) ===
+
     /// IDE selection changed.
-    #[serde(rename = "ide/selectionChanged")]
-    IdeSelectionChanged(IdeSelectionChangedParams),
+    "ide/selectionChanged" => IdeSelectionChanged(IdeSelectionChangedParams),
     /// IDE diagnostics updated.
-    #[serde(rename = "ide/diagnosticsUpdated")]
-    IdeDiagnosticsUpdated(IdeDiagnosticsUpdatedParams),
+    "ide/diagnosticsUpdated" => IdeDiagnosticsUpdated(IdeDiagnosticsUpdatedParams),
 
     // === Plan (1) ===
+
     /// Plan mode changed.
-    #[serde(rename = "plan/modeChanged")]
-    PlanModeChanged(PlanModeChangedParams),
+    "plan/modeChanged" => PlanModeChanged(PlanModeChangedParams),
 
     // === Queue (3) ===
+
     /// Command queue state changed.
-    #[serde(rename = "queue/stateChanged")]
-    QueueStateChanged { queued: i32 },
+    "queue/stateChanged" => QueueStateChanged { queued: i32 },
     /// Command queued.
-    #[serde(rename = "queue/commandQueued")]
-    CommandQueued { id: String, preview: String },
+    "queue/commandQueued" => CommandQueued { id: String, preview: String },
     /// Command dequeued.
-    #[serde(rename = "queue/commandDequeued")]
-    CommandDequeued { id: String },
+    "queue/commandDequeued" => CommandDequeued { id: String },
 
     // === Rewind (2) ===
+
     /// File rewind completed.
-    #[serde(rename = "rewind/completed")]
-    RewindCompleted(RewindCompletedParams),
+    "rewind/completed" => RewindCompleted(RewindCompletedParams),
     /// File rewind failed.
-    #[serde(rename = "rewind/failed")]
-    RewindFailed { error: String },
+    "rewind/failed" => RewindFailed { error: String },
 
     // === Cost (1) ===
+
     /// Cost threshold warning.
-    #[serde(rename = "cost/warning")]
-    CostWarning(CostWarningParams),
+    "cost/warning" => CostWarning(CostWarningParams),
 
     // === Sandbox (2) ===
+
     /// Sandbox state changed.
-    #[serde(rename = "sandbox/stateChanged")]
-    SandboxStateChanged(SandboxStateChangedParams),
+    "sandbox/stateChanged" => SandboxStateChanged(SandboxStateChangedParams),
     /// Sandbox violations detected.
-    #[serde(rename = "sandbox/violationsDetected")]
-    SandboxViolationsDetected { count: i32 },
+    "sandbox/violationsDetected" => SandboxViolationsDetected { count: i32 },
 
     // === Agent (1) ===
+
     /// Agents registered.
-    #[serde(rename = "agents/registered")]
-    AgentsRegistered { agents: Vec<AgentInfo> },
+    "agents/registered" => AgentsRegistered { agents: Vec<AgentInfo> },
 
     // === Hook (3 — TS lifecycle trio) ===
+
     /// Hook execution started.
-    #[serde(rename = "hook/started")]
-    HookStarted(HookStartedParams),
+    "hook/started" => HookStarted(HookStartedParams),
     /// Hook execution progress (TS gap P1 — stdout/stderr streaming).
-    #[serde(rename = "hook/progress")]
-    HookProgress(HookProgressParams),
+    "hook/progress" => HookProgress(HookProgressParams),
     /// Hook execution completed (TS gap P1).
-    #[serde(rename = "hook/response")]
-    HookResponse(HookResponseParams),
+    "hook/response" => HookResponse(HookResponseParams),
 
     // === Worktree (2) ===
+
     /// Entered a worktree.
-    #[serde(rename = "worktree/entered")]
-    WorktreeEntered(WorktreeEnteredParams),
+    "worktree/entered" => WorktreeEntered(WorktreeEnteredParams),
     /// Exited a worktree.
-    #[serde(rename = "worktree/exited")]
-    WorktreeExited(WorktreeExitedParams),
+    "worktree/exited" => WorktreeExited(WorktreeExitedParams),
 
     // === Summarize (2) ===
+
     /// Summarization completed.
-    #[serde(rename = "summarize/completed")]
-    SummarizeCompleted(SummarizeCompletedParams),
+    "summarize/completed" => SummarizeCompleted(SummarizeCompletedParams),
     /// Summarization failed.
-    #[serde(rename = "summarize/failed")]
-    SummarizeFailed { error: String },
+    "summarize/failed" => SummarizeFailed { error: String },
 
     // === Stream health (3) ===
+
     /// Stream stall detected.
-    #[serde(rename = "stream/stallDetected")]
-    StreamStallDetected {
+    "stream/stallDetected" => StreamStallDetected {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         turn_id: Option<String>,
     },
     /// Stream watchdog warning.
-    #[serde(rename = "stream/watchdogWarning")]
-    StreamWatchdogWarning { elapsed_secs: f64 },
+    "stream/watchdogWarning" => StreamWatchdogWarning { elapsed_secs: f64 },
     /// Stream request ended (with usage).
-    #[serde(rename = "stream/requestEnd")]
-    StreamRequestEnd { usage: TokenUsage },
+    "stream/requestEnd" => StreamRequestEnd { usage: TokenUsage },
 
     // === TS Gap P1: Session state (1) ===
+
     /// Session state changed (idle/running/requires_action).
-    #[serde(rename = "session/stateChanged")]
-    SessionStateChanged { state: SessionState },
+    "session/stateChanged" => SessionStateChanged { state: SessionState },
 
     // === Max turns (1) ===
+
     /// Max turns reached.
-    #[serde(rename = "turn/maxReached")]
-    MaxTurnsReached {
+    "turn/maxReached" => MaxTurnsReached {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_turns: Option<i32>,
     },
 
     // === TS gap P2: additional SDK notifications (5) ===
+
     /// Output from a user-executed local command (REPL `!` prefix).
     /// Matches TS `SDKLocalCommandOutputMessage` (coreSchemas.ts:1590-1602).
-    #[serde(rename = "localCommand/output")]
-    LocalCommandOutput(LocalCommandOutputParams),
-
+    "localCommand/output" => LocalCommandOutput(LocalCommandOutputParams),
     /// Files persisted to disk (file upload/snapshot completion).
     /// Matches TS `SDKFilesPersistedEvent` (coreSchemas.ts:1672-1692).
-    #[serde(rename = "files/persisted")]
-    FilesPersisted(FilesPersistedParams),
-
+    "files/persisted" => FilesPersisted(FilesPersistedParams),
     /// MCP elicitation completed (form submission or cancellation).
     /// Matches TS `SDKElicitationCompleteMessage` (coreSchemas.ts:1779-1792).
-    #[serde(rename = "elicitation/complete")]
-    ElicitationComplete(ElicitationCompleteParams),
-
+    "elicitation/complete" => ElicitationComplete(ElicitationCompleteParams),
     /// Tool use summary from background haiku summarization.
     /// Matches TS `SDKToolUseSummaryMessage` (coreSchemas.ts:1769-1777).
-    #[serde(rename = "tool/useSummary")]
-    ToolUseSummary(ToolUseSummaryParams),
-
+    "tool/useSummary" => ToolUseSummary(ToolUseSummaryParams),
     /// Tool execution progress (bash/powershell long-running).
     /// Matches TS `SDKToolProgressMessage` (coreSchemas.ts:1648-1659).
     /// Sent at most once per 30 seconds per `parent_tool_use_id`.
-    #[serde(rename = "tool/progress")]
-    ToolProgress(ToolProgressParams),
-}
-
-impl ServerNotification {
-    /// Return the JSON-RPC wire method for this notification variant.
-    ///
-    /// Mirrors the `#[serde(rename = "...")]` attribute on each variant and
-    /// is exhaustive — adding a new variant without updating this method
-    /// fails compilation. Used by the SDK dispatcher to build
-    /// `JsonRpcNotification` envelopes without round-tripping through a
-    /// `serde_json::Value` just to pull out the tag.
-    pub const fn method(&self) -> &'static str {
-        match self {
-            Self::SessionStarted(_) => "session/started",
-            Self::SessionResult(_) => "session/result",
-            Self::SessionEnded(_) => "session/ended",
-            Self::TurnStarted(_) => "turn/started",
-            Self::TurnCompleted(_) => "turn/completed",
-            Self::TurnFailed(_) => "turn/failed",
-            Self::TurnInterrupted(_) => "turn/interrupted",
-            Self::ItemStarted { .. } => "item/started",
-            Self::ItemUpdated { .. } => "item/updated",
-            Self::ItemCompleted { .. } => "item/completed",
-            Self::AgentMessageDelta(_) => "agentMessage/delta",
-            Self::ReasoningDelta(_) => "reasoning/delta",
-            Self::SubagentSpawned(_) => "subagent/spawned",
-            Self::SubagentCompleted(_) => "subagent/completed",
-            Self::SubagentBackgrounded(_) => "subagent/backgrounded",
-            Self::SubagentProgress(_) => "subagent/progress",
-            Self::McpStartupStatus(_) => "mcp/startupStatus",
-            Self::McpStartupComplete(_) => "mcp/startupComplete",
-            Self::ContextCompacted(_) => "context/compacted",
-            Self::ContextUsageWarning(_) => "context/usageWarning",
-            Self::CompactionStarted => "context/compactionStarted",
-            Self::CompactionFailed(_) => "context/compactionFailed",
-            Self::ContextCleared(_) => "context/cleared",
-            Self::TaskStarted(_) => "task/started",
-            Self::TaskCompleted(_) => "task/completed",
-            Self::TaskProgress(_) => "task/progress",
-            Self::TaskPanelChanged(_) => "task_panel/changed",
-            Self::PlanApprovalRequested(_) => "plan_approval/requested",
-            Self::AgentsKilled(_) => "agents/killed",
-            Self::ModelFallbackStarted(_) => "model/fallbackStarted",
-            Self::ModelFallbackCompleted => "model/fallbackCompleted",
-            Self::FastModeChanged { .. } => "model/fastModeChanged",
-            Self::PermissionModeChanged(_) => "permission/modeChanged",
-            Self::PromptSuggestion { .. } => "prompt/suggestion",
-            Self::Error(_) => "error",
-            Self::RateLimit(_) => "rateLimit",
-            Self::KeepAlive { .. } => "keepAlive",
-            Self::IdeSelectionChanged(_) => "ide/selectionChanged",
-            Self::IdeDiagnosticsUpdated(_) => "ide/diagnosticsUpdated",
-            Self::PlanModeChanged(_) => "plan/modeChanged",
-            Self::QueueStateChanged { .. } => "queue/stateChanged",
-            Self::CommandQueued { .. } => "queue/commandQueued",
-            Self::CommandDequeued { .. } => "queue/commandDequeued",
-            Self::RewindCompleted(_) => "rewind/completed",
-            Self::RewindFailed { .. } => "rewind/failed",
-            Self::CostWarning(_) => "cost/warning",
-            Self::SandboxStateChanged(_) => "sandbox/stateChanged",
-            Self::SandboxViolationsDetected { .. } => "sandbox/violationsDetected",
-            Self::AgentsRegistered { .. } => "agents/registered",
-            Self::HookStarted(_) => "hook/started",
-            Self::HookProgress(_) => "hook/progress",
-            Self::HookResponse(_) => "hook/response",
-            Self::WorktreeEntered(_) => "worktree/entered",
-            Self::WorktreeExited(_) => "worktree/exited",
-            Self::SummarizeCompleted(_) => "summarize/completed",
-            Self::SummarizeFailed { .. } => "summarize/failed",
-            Self::StreamStallDetected { .. } => "stream/stallDetected",
-            Self::StreamWatchdogWarning { .. } => "stream/watchdogWarning",
-            Self::StreamRequestEnd { .. } => "stream/requestEnd",
-            Self::SessionStateChanged { .. } => "session/stateChanged",
-            Self::MaxTurnsReached { .. } => "turn/maxReached",
-            Self::LocalCommandOutput(_) => "localCommand/output",
-            Self::FilesPersisted(_) => "files/persisted",
-            Self::ElicitationComplete(_) => "elicitation/complete",
-            Self::ToolUseSummary(_) => "tool/useSummary",
-            Self::ToolProgress(_) => "tool/progress",
-        }
+    "tool/progress" => ToolProgress(ToolProgressParams),
     }
 }
 
