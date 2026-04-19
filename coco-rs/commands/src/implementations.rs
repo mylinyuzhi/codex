@@ -114,6 +114,18 @@ pub mod names {
     pub const ADVISOR: &str = "advisor";
     pub const CONTEXT_NON_INTERACTIVE: &str = "context-non-interactive";
     pub const EXTRA_USAGE_NON_INTERACTIVE: &str = "extra-usage-non-interactive";
+
+    // ── PR-G4 batch 1: dev tooling + AI features + integrations ──
+    pub const BRIEF: &str = "brief";
+    pub const ENV: &str = "env";
+    pub const BUG_REPORT: &str = "bug-report";
+    pub const DEBUG_TOOL_CALL: &str = "debug-tool-call";
+    pub const ANT_TRACE: &str = "ant-trace";
+    pub const VOICE: &str = "voice";
+    pub const ISSUE: &str = "issue";
+    pub const PERF_ISSUE: &str = "perf-issue";
+    pub const AUTOFIX_PR: &str = "autofix-pr";
+    pub const BUGHUNTER: &str = "bughunter";
 }
 
 /// (name, description, aliases, handler, is_overlay, safety, argument_hint)
@@ -612,6 +624,97 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
             false,
             LocalOnly,
             None,
+        ),
+        // ── PR-G4 batch 1 ──
+        (
+            names::BRIEF,
+            "Summarize the current session so far",
+            &[],
+            brief_handler,
+            false,
+            AlwaysSafe,
+            None,
+        ),
+        (
+            names::ENV,
+            "Show runtime environment (cwd, model, shell, version)",
+            &["environment"],
+            env_handler,
+            false,
+            AlwaysSafe,
+            None,
+        ),
+        (
+            names::BUG_REPORT,
+            "Open a bug report for coco-rs",
+            &[],
+            bug_report_handler,
+            false,
+            AlwaysSafe,
+            Some("[title]"),
+        ),
+        (
+            names::DEBUG_TOOL_CALL,
+            "Emit debug info for a pending tool call",
+            &[],
+            debug_tool_call_handler,
+            false,
+            LocalOnly,
+            Some("[call-id]"),
+        ),
+        (
+            names::ANT_TRACE,
+            "Toggle internal tracing (debug-only)",
+            &[],
+            ant_trace_handler,
+            false,
+            LocalOnly,
+            Some("[on|off]"),
+        ),
+        (
+            names::VOICE,
+            "Toggle voice input",
+            &[],
+            voice_handler,
+            false,
+            LocalOnly,
+            Some("[on|off]"),
+        ),
+        (
+            names::ISSUE,
+            "Open a GitHub issue for the repo",
+            &[],
+            issue_handler,
+            false,
+            AlwaysSafe,
+            Some("[title]"),
+        ),
+        (
+            names::PERF_ISSUE,
+            "Report a performance issue with a trace attached",
+            &[],
+            perf_issue_handler,
+            false,
+            LocalOnly,
+            None,
+        ),
+        (
+            names::AUTOFIX_PR,
+            "AI-powered PR autofixer (stub)",
+            &[],
+            autofix_pr_handler,
+            false,
+            LocalOnly,
+            Some("<pr-number>"),
+        ),
+        (
+            names::BUGHUNTER,
+            "AI-assisted bug search across the repo (stub)",
+            &[],
+            bughunter_handler,
+            false,
+            LocalOnly,
+            Some("[symptom]"),
         ),
     ];
 
@@ -1800,6 +1903,225 @@ fn review_handler_async(
 }
 
 // ── Moved-to-plugin command factory ─────────────────────────────────────
+
+// ── PR-G4 batch-1 sync handlers ──────────────────────────────────────
+
+/// `/brief` — emit a brief session summary cue that the next turn
+/// should respond to. The actual summarization runs on the agent side;
+/// this handler just expands into a canonical user prompt.
+fn brief_handler(_args: &str) -> String {
+    "Briefly summarize the work done in this session so far in 3-5 bullet \
+     points. Include key decisions, files changed, and any blockers."
+        .to_string()
+}
+
+/// `/env` — dump runtime environment (cwd, shell, platform, version).
+/// Local-only: the output is printed in the TUI and not sent to the
+/// agent.
+fn env_handler(_args: &str) -> String {
+    let cwd = std::env::current_dir()
+        .ok()
+        .and_then(|p| p.to_str().map(str::to_string))
+        .unwrap_or_else(|| "?".into());
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "unknown".into());
+    let version = option_env!("CARGO_PKG_VERSION").unwrap_or("dev");
+    format!(
+        "cwd:     {cwd}\nshell:   {shell}\nplatform: {}\nversion:  {version}",
+        std::env::consts::OS
+    )
+}
+
+/// `/bug-report` — open a bug template URL with optional prefilled title.
+fn bug_report_handler(args: &str) -> String {
+    let title = args.trim();
+    let url = if title.is_empty() {
+        "https://github.com/anthropics/claude-code/issues/new?template=bug.md".to_string()
+    } else {
+        // The GitHub issue URL doesn't support a single 'title' field via
+        // query for the template-new page, but GitHub accepts `?title=`
+        // on the generic new-issue path.
+        format!(
+            "https://github.com/anthropics/claude-code/issues/new?title={}",
+            urlencode_basic(title)
+        )
+    };
+    format!("Open this URL to file a bug report:\n{url}")
+}
+
+/// `/debug-tool-call` — local debug dump for a tool-call by id. Without
+/// backend wiring, emits a helpful placeholder.
+fn debug_tool_call_handler(args: &str) -> String {
+    let id = args.trim();
+    if id.is_empty() {
+        "Usage: /debug-tool-call <tool-call-id>\n\n\
+         The tool-call id is visible in the tool panel next to each entry."
+            .to_string()
+    } else {
+        format!(
+            "Debug info for tool call `{id}`: (no active session context in \
+             this local handler — run from within a live session to get full \
+             state. The id is echoed back so you can confirm routing works.)"
+        )
+    }
+}
+
+/// `/ant-trace` — toggle the internal coco trace (debug-only telemetry).
+/// Persists via a well-known env var so subsequent turns see it.
+fn ant_trace_handler(args: &str) -> String {
+    let arg = args.trim().to_ascii_lowercase();
+    match arg.as_str() {
+        "on" => {
+            unsafe {
+                std::env::set_var("COCO_ANT_TRACE", "1");
+            }
+            "ant-trace enabled for this session (COCO_ANT_TRACE=1)".into()
+        }
+        "off" => {
+            unsafe {
+                std::env::remove_var("COCO_ANT_TRACE");
+            }
+            "ant-trace disabled".into()
+        }
+        _ => format!(
+            "Usage: /ant-trace [on|off]\nCurrent: {}",
+            if std::env::var("COCO_ANT_TRACE").ok().as_deref() == Some("1") {
+                "on"
+            } else {
+                "off"
+            }
+        ),
+    }
+}
+
+/// `/voice` — voice input toggle. Stub: voice recording isn't wired
+/// into the TUI yet; the command is here so scripts and `/help` show it.
+fn voice_handler(args: &str) -> String {
+    let arg = args.trim().to_ascii_lowercase();
+    match arg.as_str() {
+        "on" | "off" | "" => "Voice input is not wired into this build. Track progress at \
+             https://github.com/anthropics/claude-code (coco-voice crate)."
+            .into(),
+        _ => "Usage: /voice [on|off]".into(),
+    }
+}
+
+/// `/issue` — open a new GitHub issue for the CURRENT repo (detected
+/// via `git remote get-url origin`).
+fn issue_handler(args: &str) -> String {
+    let title = args.trim();
+    let cmd = std::process::Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .output();
+    let repo_slug = cmd
+        .ok()
+        .and_then(|out| String::from_utf8(out.stdout).ok())
+        .and_then(|url| parse_github_slug(url.trim()));
+
+    match repo_slug {
+        Some(slug) => {
+            let url = if title.is_empty() {
+                format!("https://github.com/{slug}/issues/new")
+            } else {
+                format!(
+                    "https://github.com/{slug}/issues/new?title={}",
+                    urlencode_basic(title)
+                )
+            };
+            format!("Open this URL to file an issue:\n{url}")
+        }
+        None => "Couldn't determine GitHub repo from `git remote`. Use \
+             /bug-report for coco-rs itself, or run this command in a \
+             directory whose `origin` points at github.com."
+            .into(),
+    }
+}
+
+/// `/perf-issue` — report a performance issue. Captures basic metadata
+/// but doesn't auto-submit (avoids accidental reports).
+fn perf_issue_handler(_args: &str) -> String {
+    "Performance issue flow: run `/ant-trace on`, reproduce the slow \
+     behavior, then run `/ant-trace off`. Attach the trace log from \
+     `~/.coco/trace/` to a new issue via /issue."
+        .into()
+}
+
+/// `/autofix-pr` — AI-powered PR autofixer. Currently a stub routing to
+/// the relevant TS documentation.
+fn autofix_pr_handler(args: &str) -> String {
+    let pr = args.trim();
+    if pr.is_empty() {
+        "Usage: /autofix-pr <pr-number>\n\n\
+         The autofix flow is not yet wired in coco-rs. Use the standard \
+         /review + manual edits workflow for now."
+            .into()
+    } else {
+        format!(
+            "Autofix for PR #{pr} is not yet implemented. Fall back to \
+             /review {pr} followed by targeted edits."
+        )
+    }
+}
+
+/// `/bughunter` — AI-assisted bug search. Expands into a user prompt
+/// that the agent can act on.
+fn bughunter_handler(args: &str) -> String {
+    let symptom = args.trim();
+    if symptom.is_empty() {
+        "Scan the repository for bugs matching common patterns (null \
+         derefs, off-by-one, missing error handling, unvalidated input). \
+         Prioritize by blast radius and report the top 5 with file:line \
+         pointers and suggested fixes."
+            .into()
+    } else {
+        format!(
+            "Search the codebase for the root cause of this symptom: \
+             {symptom}\n\nTrace the flow from the symptom back to the \
+             originating call site. Report the suspected cause and a \
+             proposed fix."
+        )
+    }
+}
+
+/// Minimal URL-encoder for title-style strings — replaces spaces with
+/// `+` and percent-encodes chars outside `[A-Za-z0-9-._~]`. Keeps the
+/// commands crate free of an extra `urlencoding` dep.
+fn urlencode_basic(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '.' | '_' | '~' => out.push(ch),
+            ' ' => out.push('+'),
+            _ => {
+                let mut buf = [0u8; 4];
+                for b in ch.encode_utf8(&mut buf).bytes() {
+                    out.push_str(&format!("%{b:02X}"));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Parse `git@github.com:owner/repo.git` or
+/// `https://github.com/owner/repo[.git]` into `owner/repo`.
+fn parse_github_slug(remote: &str) -> Option<String> {
+    let mut rest = if let Some(r) = remote.strip_prefix("git@github.com:") {
+        r.to_string()
+    } else if let Some(r) = remote.strip_prefix("https://github.com/") {
+        r.to_string()
+    } else if let Some(r) = remote.strip_prefix("http://github.com/") {
+        r.to_string()
+    } else {
+        return None;
+    };
+    rest = rest.trim_end_matches(".git").to_string();
+    // Must be exactly owner/repo
+    let slashes = rest.matches('/').count();
+    if slashes != 1 || rest.starts_with('/') || rest.ends_with('/') {
+        return None;
+    }
+    Some(rest)
+}
 
 /// Handler for commands that have been moved to plugins.
 ///

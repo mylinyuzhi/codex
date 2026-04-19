@@ -92,6 +92,17 @@ src/
     └── languages.rs    # Language configs (Go, Rust, Python, Java)
 ```
 
+## Event integration
+
+`RetrievalEvent` (see `src/events.rs`) is **intentionally isolated** from the
+main agent `CoreEvent` stream. See the module doc block and
+`event-system-design.md` §1.7 / plan WS-7 for rationale. Subscribe to
+retrieval events via `EventEmitter::subscribe()`; do not bridge the full
+taxonomy into `coco_types::ServerNotification`. If a slash command ever
+needs retrieval progress in the agent stream, add a single aggregate
+`RetrievalProgress { phase, percent_done }` variant via an optional sink
+(pattern: `TaskManager::with_event_sink()`).
+
 ## Error Handling
 
 Uses `RetrievalErr` (not `anyhow`). Key variants:

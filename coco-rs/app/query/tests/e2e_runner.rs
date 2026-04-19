@@ -205,10 +205,13 @@ impl LanguageModelV4 for JsonScriptedMock {
 
     async fn do_stream(
         &self,
-        _: LanguageModelV4CallOptions,
+        options: LanguageModelV4CallOptions,
     ) -> Result<LanguageModelV4StreamResult, AISdkError> {
-        Err(AISdkError::new(
-            "streaming not supported in json scripted mock",
+        let result = self.do_generate(options).await?;
+        Ok(coco_inference::synthetic_stream_from_content(
+            result.content,
+            result.usage,
+            result.finish_reason,
         ))
     }
 }

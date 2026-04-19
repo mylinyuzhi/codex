@@ -11,6 +11,7 @@ use ratatui::widgets::Borders;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
+use crate::i18n::t;
 use crate::state::session::SubagentInstance;
 use crate::state::session::SubagentStatus;
 use crate::theme::Theme;
@@ -62,13 +63,15 @@ impl Widget for SubagentPanel<'_> {
         }
 
         if lines.is_empty() {
-            lines.push(Line::from(Span::raw("  No agents").fg(self.theme.text_dim)));
+            lines.push(Line::from(
+                Span::raw(format!("  {}", t!("subagent.no_agents"))).fg(self.theme.text_dim),
+            ));
         }
 
         let panel = Paragraph::new(lines).block(
             Block::default()
                 .borders(Borders::LEFT | Borders::TOP)
-                .title(" Agents ")
+                .title(format!(" {} ", t!("subagent.title")))
                 .border_style(Style::default().fg(self.theme.border)),
         );
         panel.render(area, buf);

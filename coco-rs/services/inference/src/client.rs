@@ -178,15 +178,22 @@ impl ApiClient {
     ///
     /// Events are sent as they arrive from the model. The caller should
     /// consume events until the channel closes or a Finish/Error event is received.
+    ///
+    /// Matches `do_query`'s option surface: forwards `prompt`, `max_tokens`,
+    /// and `tools`. Tools must be passed so the model can emit
+    /// `ToolInputStart/Delta/End` events for client-side tool execution.
     pub async fn query_stream(
         &self,
         params: &QueryParams,
     ) -> Result<tokio::sync::mpsc::Receiver<crate::stream::StreamEvent>, InferenceError> {
-        let options = LanguageModelV4CallOptions {
+        let mut options = LanguageModelV4CallOptions {
             prompt: params.prompt.clone(),
             max_output_tokens: params.max_tokens.map(|t| t as u64),
             ..Default::default()
         };
+        if let Some(ref tools) = params.tools {
+            options.tools = Some(tools.clone());
+        }
 
         let result =
             self.model

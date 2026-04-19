@@ -4,10 +4,49 @@
 //! - [`SessionState`]: agent-synchronized data (model, messages, tools, subagents)
 //! - [`UiState`]: local TUI state (input, scroll, overlay, streaming, theme)
 
+pub mod overlay;
 pub mod rewind;
 pub mod session;
 pub mod ui;
 
+pub use overlay::AutoModeOptInOverlay;
+pub use overlay::BridgeOverlay;
+pub use overlay::BypassPermissionsOverlay;
+pub use overlay::CommandOption;
+pub use overlay::CommandPaletteOverlay;
+pub use overlay::CostWarningOverlay;
+pub use overlay::DiffViewOverlay;
+pub use overlay::DoctorCheck;
+pub use overlay::DoctorOverlay;
+pub use overlay::ElicitationField;
+pub use overlay::ElicitationOverlay;
+pub use overlay::ExportFormat;
+pub use overlay::ExportOverlay;
+pub use overlay::FeedbackOverlay;
+pub use overlay::GlobalSearchOverlay;
+pub use overlay::IdleReturnOverlay;
+pub use overlay::InvalidConfigOverlay;
+pub use overlay::McpServerApprovalOverlay;
+pub use overlay::McpServerOption;
+pub use overlay::McpServerSelectOverlay;
+pub use overlay::ModelOption;
+pub use overlay::ModelPickerOverlay;
+pub use overlay::Overlay;
+pub use overlay::PermissionDetail;
+pub use overlay::PermissionOverlay;
+pub use overlay::PlanEntryOverlay;
+pub use overlay::PlanExitOverlay;
+pub use overlay::PlanExitTarget;
+pub use overlay::QuestionOverlay;
+pub use overlay::QuickOpenOverlay;
+pub use overlay::RiskLevel;
+pub use overlay::SandboxPermissionOverlay;
+pub use overlay::SearchResult;
+pub use overlay::SessionBrowserOverlay;
+pub use overlay::SessionOption;
+pub use overlay::TaskDetailOverlay;
+pub use overlay::TrustOverlay;
+pub use overlay::WorktreeExitOverlay;
 pub use rewind::DiffStatsPreview;
 pub use rewind::RestoreType;
 pub use rewind::RewindOverlay;
@@ -26,38 +65,16 @@ pub use session::TokenUsage;
 pub use session::ToolExecution;
 pub use session::ToolStatus;
 pub use session::ToolUseStatus;
-pub use ui::AutoModeOptInOverlay;
-pub use ui::BridgeOverlay;
-pub use ui::BypassPermissionsOverlay;
-pub use ui::CommandPaletteOverlay;
-pub use ui::DiffViewOverlay;
-pub use ui::DoctorOverlay;
-pub use ui::ElicitationOverlay;
-pub use ui::ExportOverlay;
-pub use ui::FeedbackOverlay;
+pub use ui::ActiveSuggestions;
 pub use ui::FocusTarget;
-pub use ui::GlobalSearchOverlay;
-pub use ui::IdleReturnOverlay;
+pub use ui::HistoryEntry;
 pub use ui::InputState;
-pub use ui::InvalidConfigOverlay;
-pub use ui::McpServerApprovalOverlay;
-pub use ui::McpServerSelectOverlay;
-pub use ui::ModelPickerOverlay;
-pub use ui::Overlay;
-pub use ui::PermissionOverlay;
-pub use ui::PlanEntryOverlay;
-pub use ui::QuestionOverlay;
-pub use ui::QuickOpenOverlay;
-pub use ui::SandboxPermissionOverlay;
-pub use ui::SessionBrowserOverlay;
 pub use ui::StreamMode;
 pub use ui::StreamingState;
-pub use ui::TaskDetailOverlay;
+pub use ui::SuggestionKind;
 pub use ui::Toast;
 pub use ui::ToastSeverity;
-pub use ui::TrustOverlay;
 pub use ui::UiState;
-pub use ui::WorktreeExitOverlay;
 
 use coco_types::PermissionMode;
 
@@ -115,13 +132,36 @@ impl AppState {
         self.is_streaming() || self.session.is_busy()
     }
 
-    /// Cycle permission mode: default → plan → acceptEdits → default.
+    /// Cycle permission mode (Shift+Tab).
+    ///
+    /// Delegates to [`PermissionMode::next_in_cycle`] so the TUI cycle
+    /// stays aligned with `core/permissions::get_next_permission_mode`
+    /// and the TS reference. Bypass/auto gate flags are forwarded from
+    /// the session.
     pub fn cycle_permission_mode(&mut self) {
-        self.session.permission_mode = match self.session.permission_mode {
-            PermissionMode::Default => PermissionMode::Plan,
-            PermissionMode::Plan => PermissionMode::AcceptEdits,
-            _ => PermissionMode::Default,
+        self.session.permission_mode = self.session.permission_mode.next_in_cycle(
+            self.session.bypass_permissions_available,
+            self.session.auto_mode_available,
+        );
+    }
+
+    /// Toggle plan mode on/off (Tab).
+    ///
+    /// Quick shortcut distinct from the full cycle: flips between
+    /// `Plan` and `Default`, preserving nothing. Callers that need to
+    /// return to an earlier elevated mode should use the full cycle.
+    pub fn toggle_plan_mode(&mut self) {
+        self.session.permission_mode = if self.session.permission_mode == PermissionMode::Plan {
+            PermissionMode::Default
+        } else {
+            PermissionMode::Plan
         };
+    }
+
+    /// Whether the current session is in plan mode. Derived from
+    /// [`SessionState::permission_mode`] — there is no separate bool.
+    pub fn is_plan_mode(&self) -> bool {
+        self.session.permission_mode == PermissionMode::Plan
     }
 }
 

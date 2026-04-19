@@ -35,6 +35,7 @@ use coco_tool::ToolRegistry;
 use coco_tui::App;
 use coco_tui::UserCommand;
 use coco_tui::app::create_channels;
+use coco_types::ToolAppState;
 use coco_types::TuiOnlyEvent;
 use tokio_util::sync::CancellationToken;
 
@@ -47,7 +48,16 @@ use crate::Cli;
 pub async fn run_tui(cli: &Cli) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let settings = coco_config::settings::load_settings(&cwd, None)?;
-    let permission_mode = settings.merged.permissions.default_mode.unwrap_or_default();
+
+    // Resolve initial mode + bypass capability + run sudo/sandbox guard
+    // in one shot. TS parity: `initialPermissionModeFromCLI` +
+    // `isBypassPermissionsModeAvailable` + `setup.ts:395-442`.
+    let startup = crate::resolve_startup_permission_state(cli, &settings.merged)?;
+    let permission_mode = startup.mode;
+    let bypass_permissions_available = startup.bypass_available;
+    // `startup.notification` is surfaced in the TUI as a toast below,
+    // once `app.state` exists. Headless paths (run_chat, run_sdk_mode)
+    // eprintln it instead.
 
     // Model + client
     let (model, mode) = crate::create_model(cli.model.as_deref());
@@ -93,18 +103,70 @@ pub async fn run_tui(cli: &Cli) -> Result<()> {
     // overlay knows whether to show code restore options.
     app.state_mut().session.file_history_enabled = file_history.is_some();
 
+    // Seed the capability gate that controls both Shift+Tab cycle
+    // (`PermissionMode::next_in_cycle`) and the plan-mode exit
+    // overlay's "Bypass" option. Matches engine_config below so the
+    // engine and TUI share one truth. Static for session lifetime.
+    app.state_mut().session.bypass_permissions_available = bypass_permissions_available;
+    app.state_mut().session.permission_mode = permission_mode;
+
+    // Surface the startup downgrade notification (if any) as a toast
+    // so interactive users see it. Headless paths eprintln it; the
+    // TUI swallows stderr.
+    if let Some(msg) = startup.notification {
+        app.state_mut()
+            .ui
+            .add_toast(coco_tui::state::ui::Toast::warning(msg));
+    }
+
     // Build engine config
     let engine_config = QueryEngineConfig {
         model_name: model_id.clone(),
         permission_mode,
+        bypass_permissions_available,
         context_window: 200_000,
         max_output_tokens: 16_384,
         max_turns: 30,
         max_tokens: cli.max_tokens,
         system_prompt: Some(system_prompt),
         session_id: session_id.clone(),
+        plan_mode_settings: settings.merged.plan_mode.clone(),
         ..Default::default()
     };
+
+    // Shared app_state — persists across turns so PlanModeReminder's
+    // throttle counters + has_exited_plan_mode flag survive the
+    // per-turn engine construction. Lives in the driver; engines are
+    // built with `.with_app_state(app_state.clone())` per turn.
+    let app_state: Arc<RwLock<ToolAppState>> = Arc::new(RwLock::new(ToolAppState::default()));
+
+    // Session manager for auto-title persistence (F5).
+    let sessions_dir = dirs::home_dir()
+        .map(|h| h.join(".cocode").join("sessions"))
+        .unwrap_or_else(|| PathBuf::from("/tmp/.cocode/sessions"));
+    let session_manager = Arc::new(coco_session::SessionManager::new(sessions_dir));
+    // Create or load the session record so `auto_title` has a canonical
+    // row to write into. Silently swallow failures — title gen is a
+    // best-effort advisory feature.
+    let _ = session_manager.create(&model_id, &cwd);
+
+    // Fast-role ModelSpec for auto-title generation (F5). TS:
+    // `queryHaiku()` path. We synthesize a Haiku spec when an Anthropic
+    // key is available — full `ModelRoles` resolution (provider/alias
+    // layering) is a follow-up once the `coco-config::ResolvedConfig`
+    // pipeline is wired into the TUI path. Users who run other
+    // providers won't get auto-title until that lands.
+    let fast_model_spec = if std::env::var("ANTHROPIC_API_KEY").is_ok() {
+        Some(coco_types::ModelSpec {
+            provider: "anthropic".to_string(),
+            api: coco_types::ProviderApi::Anthropic,
+            model_id: "claude-haiku-4-5-20251001".to_string(),
+            display_name: "Claude Haiku 4.5".to_string(),
+        })
+    } else {
+        None
+    };
+    let auto_title_enabled = settings.merged.session.auto_title;
 
     // Spawn agent driver
     let driver_handle = tokio::spawn(run_agent_driver(
@@ -117,6 +179,10 @@ pub async fn run_tui(cli: &Cli) -> Result<()> {
         file_history.clone(),
         config_home,
         session_id,
+        app_state,
+        session_manager,
+        fast_model_spec,
+        auto_title_enabled,
     ));
 
     eprintln!("coco-rs TUI ({mode} mode) — model: {model_id}\n");
@@ -142,12 +208,20 @@ async fn run_agent_driver(
     event_tx: mpsc::Sender<CoreEvent>,
     client: Arc<ApiClient>,
     tools: Arc<ToolRegistry>,
-    engine_config: QueryEngineConfig,
+    mut engine_config: QueryEngineConfig,
     file_read_state: Arc<RwLock<coco_context::FileReadState>>,
     file_history: Option<Arc<RwLock<FileHistoryState>>>,
     config_home: PathBuf,
     session_id: String,
+    app_state: Arc<RwLock<ToolAppState>>,
+    session_manager: Arc<coco_session::SessionManager>,
+    fast_model_spec: Option<coco_types::ModelSpec>,
+    auto_title_enabled: bool,
 ) {
+    // One-shot gate: title gen runs at most once per driver instance.
+    // If the first attempt fails (no plan, LLM error), we don't retry —
+    // the user can always /rename manually.
+    let mut title_gen_attempted = false;
     info!("Agent driver started");
 
     let cancel = CancellationToken::new();
@@ -200,6 +274,12 @@ async fn run_agent_driver(
                     /*hooks*/ None,
                 );
                 engine = engine.with_file_read_state(file_read_state.clone());
+                engine = engine.with_app_state(app_state.clone());
+                // Swarm mailbox handle enables ExitPlanMode teammate
+                // branch + approval-response polling + leader pending
+                // attachment. Harmless no-op in single-agent sessions.
+                engine =
+                    engine.with_mailbox(Arc::new(coco_state::swarm_mailbox::SwarmMailboxHandle));
                 if let Some(ref fh) = file_history {
                     engine = engine.with_file_history(fh.clone(), config_home.clone());
                 }
@@ -231,6 +311,37 @@ async fn run_agent_driver(
                 }
 
                 let _ = forward_handle.await;
+
+                // ── F5: auto-title generation post-turn ──
+                //
+                // Check all five gate conditions; fire-and-forget a
+                // title-gen task on the first turn that matches.
+                // Subsequent turns are no-ops (`title_gen_attempted`
+                // latches). The task is fully decoupled from the turn
+                // loop — next turn is unblocked regardless of outcome.
+                let plan_exited = app_state.read().await.has_exited_plan_mode;
+                let plans_dir = coco_context::resolve_plans_directory(
+                    &config_home,
+                    /*project_dir*/ None,
+                    /*setting*/ None,
+                );
+                let plan_text =
+                    coco_context::get_plan(&session_id, &plans_dir, /*agent_id*/ None);
+                let plan_non_empty = plan_text
+                    .as_deref()
+                    .map(|t| !t.trim().is_empty())
+                    .unwrap_or(false);
+                if should_trigger_title_gen(
+                    auto_title_enabled,
+                    title_gen_attempted,
+                    fast_model_spec.is_some(),
+                    plan_exited,
+                    plan_non_empty,
+                ) && let (Some(spec), Some(text)) = (fast_model_spec.clone(), plan_text)
+                {
+                    title_gen_attempted = true;
+                    spawn_auto_title_task(spec, text, session_manager.clone(), session_id.clone());
+                }
             }
 
             UserCommand::Rewind {
@@ -278,6 +389,84 @@ async fn run_agent_driver(
 
             UserCommand::Interrupt => {
                 cancel.cancel();
+            }
+
+            UserCommand::SetPermissionMode { mode } => {
+                // TS parity: user toggles mode via Shift+Tab →
+                // `setAppState(prev => ({ ...prev, toolPermissionContext:
+                // { ...prepared, mode } }))` (PromptInput.tsx:1537-1547).
+                // Rust's equivalent single-source-of-truth is
+                // `Arc<RwLock<ToolAppState>>` — update it live so any
+                // in-flight engine's next `create_tool_context` sees
+                // the new mode. Also update `engine_config` so fresh
+                // engines built for subsequent turns start in the
+                // right mode. Auto-boundary side-effects (strip stash
+                // management) go through the shared
+                // `apply_auto_transition_to_app_state` helper.
+                //
+                // Defense-in-depth: the overlay + Shift+Tab cycle
+                // already gate BypassPermissions on the capability,
+                // but a UI bug that bypasses the gate could escalate
+                // here silently. Re-validate against the startup
+                // capability and the runtime killswitch; drop the
+                // mutation if the transition is illegitimate.
+                if mode == coco_types::PermissionMode::BypassPermissions
+                    && !engine_config.bypass_permissions_available
+                {
+                    warn!(
+                        session_id = %session_id,
+                        requested = ?mode,
+                        "TUI SetPermissionMode denied: bypass capability gate is off"
+                    );
+                    continue;
+                }
+                let prev_mode = engine_config.permission_mode;
+                engine_config.permission_mode = mode;
+                {
+                    let mut guard = app_state.write().await;
+                    guard.permission_mode = Some(mode);
+                    coco_permissions::apply_auto_transition_to_app_state(
+                        &mut guard, prev_mode, mode,
+                    );
+                }
+                info!(
+                    session_id = %session_id,
+                    from = ?prev_mode,
+                    to = ?mode,
+                    "TUI SetPermissionMode propagated to engine_config + app_state",
+                );
+            }
+
+            UserCommand::ClearConversation { scope } => {
+                // TS parity: `clearConversation` resets the engine's
+                // in-process state on top of whatever the TUI already
+                // cleared locally. The shared `app_state` is the
+                // canonical home for plan-mode cross-turn flags, so the
+                // reset is mostly a JSON clear.
+                // Always clear plan-mode reminder state so the next
+                // Plan-mode turn starts with Full (not Reentry) and a
+                // fresh attachment counter. `Default` resets every
+                // field in one shot — no risk of forgetting one.
+                *app_state.write().await = ToolAppState::default();
+
+                // Aggressive scope: slug cache + file history
+                // snapshots. Plan files on disk are already removed by
+                // the TUI side before sending this command.
+                if matches!(scope, coco_tui::command::ClearScope::All) {
+                    coco_context::clear_plan_slug(&session_id);
+                    {
+                        let mut frs = file_read_state.write().await;
+                        frs.clear();
+                    }
+                    if let Some(ref fh) = file_history {
+                        let mut fh = fh.write().await;
+                        // Clear file-history snapshots so subsequent
+                        // /rewind can't reach back across the clear.
+                        *fh = coco_context::FileHistoryState::default();
+                    }
+                }
+                // Conversation / History scope: keep file_history so
+                // `/resume` can still restore pre-clear file snapshots.
             }
 
             UserCommand::Shutdown => {
@@ -468,6 +657,87 @@ fn attachment_to_message(att: &Attachment) -> Option<coco_types::Message> {
 
 /// Convert a changed-file attachment into a notification message.
 ///
+/// Decide whether the driver should fire an auto-title task this turn.
+///
+/// Pure gate function factored out of the driver loop so we can unit
+/// test the precedence without spinning up a real engine. All five
+/// conditions must hold; missing any single one short-circuits.
+fn should_trigger_title_gen(
+    auto_title_enabled: bool,
+    already_attempted: bool,
+    fast_spec_present: bool,
+    plan_has_exited: bool,
+    plan_text_non_empty: bool,
+) -> bool {
+    auto_title_enabled
+        && !already_attempted
+        && fast_spec_present
+        && plan_has_exited
+        && plan_text_non_empty
+}
+
+/// Spawn a detached tokio task that generates a session title from the
+/// approved plan text via the Fast-role model, then persists it.
+///
+/// TS parity: `sessionTitle.ts::generateSessionTitle` + the REPL's
+/// post-ExitPlanMode fire-and-forget invocation. Silent on any failure
+/// (no Fast model, LLM error, schema mismatch) — the user can always
+/// rename manually with `/rename`.
+fn spawn_auto_title_task(
+    spec: coco_types::ModelSpec,
+    plan_text: String,
+    session_manager: Arc<coco_session::SessionManager>,
+    session_id: String,
+) {
+    use coco_inference::ApiClient;
+    use coco_inference::QueryParams;
+    use coco_inference::RetryConfig;
+    use coco_types::AssistantContent;
+    use coco_types::LlmMessage;
+
+    tokio::spawn(async move {
+        let Ok(model) = crate::build_language_model_from_spec(&spec) else {
+            // Provider dispatch failed (e.g. missing API key) — silently
+            // abandon; `auto_title` is an advisory feature.
+            return;
+        };
+        let client = ApiClient::new(model, RetryConfig::default());
+
+        let (system, user) = coco_session::title_generator::build_title_prompt(&plan_text);
+        // Compose prompt as a single user message with the system text
+        // appended. LlmMessage::System exists but the provider-agnostic
+        // query path accepts user text most reliably across providers.
+        let combined = format!("{system}\n\n{user}");
+        let params = QueryParams {
+            prompt: vec![LlmMessage::user_text(&combined)],
+            max_tokens: Some(150),
+            thinking_level: None,
+            fast_mode: false,
+            tools: None,
+        };
+
+        let raw = match client.query(&params).await {
+            Ok(result) => result
+                .content
+                .iter()
+                .filter_map(|c| match c {
+                    AssistantContent::Text(t) => Some(t.text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(""),
+            Err(_) => return,
+        };
+
+        let Some(title) = coco_session::title_generator::parse_title_response(&raw) else {
+            return;
+        };
+        // `apply_title` is idempotent + refuses to overwrite a
+        // user-set title — safe to always call.
+        let _ = coco_session::title_generator::apply_title(&session_manager, &session_id, title);
+    });
+}
+
 /// TS: `normalizeAttachmentForAPI()` for `edited_text_file` type — sends a
 /// note explaining the file was modified externally, with a diff snippet.
 fn changed_file_to_message(att: &Attachment) -> Option<coco_types::Message> {
@@ -488,3 +758,7 @@ fn changed_file_to_message(att: &Attachment) -> Option<coco_types::Message> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+#[path = "tui_runner.test.rs"]
+mod tests;

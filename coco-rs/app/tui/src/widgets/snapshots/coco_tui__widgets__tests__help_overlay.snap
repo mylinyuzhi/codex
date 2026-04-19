@@ -15,14 +15,14 @@ expression: output
             │Ctrl+E        External editor                         │            
             │Ctrl+P        Command palette                         │            
             │Ctrl+S        Session browser                         │            
-            │Ctrl+Shift+F  Global search                           │            
+            │Ctrl+F        Kill all agents                         │            
+            │Ctrl+Shift+F  Toggle fast mode                        │            
             │Ctrl+O        Quick open file                         │            
             │Ctrl+W        Context window                          │            
             │F6            Focus next panel                        │            
             │Ctrl+Q        Quit                                    │            
             │?/F1          This help                               │            
-            │Esc           Close overlay                           │            
- Input ─────│PageUp/Down   Scroll                                  │────────────
-> Type a mes│                                                      │            
+ Input ─────│Esc           Close overlay                           │────────────
+> Type a mes│PageUp/Down   Scroll                                  │            
             └──────────────────────────────────────────────────────┘            
  opus-4 | Default | 0 msgs

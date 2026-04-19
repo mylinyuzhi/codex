@@ -130,9 +130,14 @@ impl LanguageModelV4 for FullPathMock {
 
     async fn do_stream(
         &self,
-        _options: LanguageModelV4CallOptions,
+        options: LanguageModelV4CallOptions,
     ) -> Result<LanguageModelV4StreamResult, AISdkError> {
-        Err(AISdkError::new("streaming not supported in mock"))
+        let result = self.do_generate(options).await?;
+        Ok(coco_inference::synthetic_stream_from_content(
+            result.content,
+            result.usage,
+            result.finish_reason,
+        ))
     }
 }
 
@@ -312,9 +317,14 @@ async fn test_full_path_with_bash_safety() {
 
         async fn do_stream(
             &self,
-            _: LanguageModelV4CallOptions,
+            options: LanguageModelV4CallOptions,
         ) -> Result<LanguageModelV4StreamResult, AISdkError> {
-            Err(AISdkError::new("not supported"))
+            let result = self.do_generate(options).await?;
+            Ok(coco_inference::synthetic_stream_from_content(
+                result.content,
+                result.usage,
+                result.finish_reason,
+            ))
         }
     }
 
@@ -459,9 +469,14 @@ async fn test_full_path_glob_and_grep() {
         }
         async fn do_stream(
             &self,
-            _: LanguageModelV4CallOptions,
+            options: LanguageModelV4CallOptions,
         ) -> Result<LanguageModelV4StreamResult, AISdkError> {
-            Err(AISdkError::new("not supported"))
+            let result = self.do_generate(options).await?;
+            Ok(coco_inference::synthetic_stream_from_content(
+                result.content,
+                result.usage,
+                result.finish_reason,
+            ))
         }
     }
 

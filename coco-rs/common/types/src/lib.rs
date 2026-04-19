@@ -18,6 +18,7 @@ pub use vercel_ai_provider::UserContentPart as UserContent;
 
 // === Modules ===
 mod agent;
+mod app_state;
 mod client_request;
 mod command;
 mod event;
@@ -40,6 +41,11 @@ mod token;
 mod tool;
 
 // === Re-exports ===
+
+// App-state (cross-turn shared state carried on ToolUseContext)
+pub use app_state::AppStatePatch;
+pub use app_state::AppStateReadHandle;
+pub use app_state::ToolAppState;
 
 // Agent types
 pub use agent::AgentDefinition;
@@ -388,4 +394,37 @@ pub enum PermissionMode {
     Auto,
     /// Internal: escalate to parent agent.
     Bubble,
+}
+
+impl PermissionMode {
+    /// Next mode when the user presses Shift+Tab.
+    ///
+    /// TS: `getNextPermissionMode()` in utils/permissions/getNextPermissionMode.ts
+    ///
+    /// Cycle: `Default → AcceptEdits → Plan → [BypassPermissions] → [Auto] → Default`.
+    /// Optional modes are skipped when their gate flag is false.
+    pub fn next_in_cycle(self, bypass_available: bool, auto_available: bool) -> Self {
+        match self {
+            Self::Default => Self::AcceptEdits,
+            Self::AcceptEdits => Self::Plan,
+            Self::Plan => {
+                if bypass_available {
+                    Self::BypassPermissions
+                } else if auto_available {
+                    Self::Auto
+                } else {
+                    Self::Default
+                }
+            }
+            Self::BypassPermissions => {
+                if auto_available {
+                    Self::Auto
+                } else {
+                    Self::Default
+                }
+            }
+            // Auto, DontAsk, Bubble, and any future mode fall back to Default.
+            Self::Auto | Self::DontAsk | Self::Bubble => Self::Default,
+        }
+    }
 }

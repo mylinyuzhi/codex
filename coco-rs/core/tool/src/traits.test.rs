@@ -47,6 +47,7 @@ impl Tool for EchoTool {
         Ok(ToolResult {
             data: input,
             new_messages: vec![],
+            app_state_patch: None,
         })
     }
 }

@@ -44,6 +44,44 @@ pub struct AgentQueryConfig {
     /// Whether to preserve tool use results across compaction.
     #[serde(default)]
     pub preserve_tool_use_results: bool,
+    /// Permission mode resolved by the parent (main agent) via the TS
+    /// inheritance rule: `agent.permission_mode if set and parent ∉
+    /// {bypass, acceptEdits, auto} else parent.permission_mode`. When
+    /// `None`, the adapter defaults to `PermissionMode::Default`.
+    /// TS: runAgent.ts:412-434 agentGetAppState override.
+    #[serde(default)]
+    pub permission_mode: Option<String>,
+    /// Branded agent ID (TS: `context.agentId`). Subagents get per-agent
+    /// plan files `{slug}-agent-{id}.md`; setting this flows through to
+    /// `ToolUseContext::agent_id` and `session_plan_file` so the Plan-mode
+    /// auto-allow + SubAgent reminder variant trigger correctly.
+    #[serde(default)]
+    pub agent_id: Option<String>,
+    /// Whether this agent runs as a swarm teammate (spawned via
+    /// `TeamCreate`). TS: `isTeammate()`. Controls ExitPlanMode teammate
+    /// branch + bypass-permission behavior.
+    #[serde(default)]
+    pub is_teammate: bool,
+    /// Per-role `plan_mode_required` flag. TS: `isPlanModeRequired()`.
+    /// Controls whether this teammate's ExitPlanMode sends an approval
+    /// request to the leader (required) or exits locally (voluntary).
+    #[serde(default)]
+    pub plan_mode_required: bool,
+    /// Session ID for plan file + history scoping. Subagents share the
+    /// parent's session_id so `{slug}-agent-{id}.md` resolves against the
+    /// same slug cache.
+    #[serde(default)]
+    pub session_id: Option<String>,
+    /// Parent session's bypass-permissions capability. TS parity:
+    /// `spawnUtils.ts:53` / `spawnMultiAgent.ts:223` forward
+    /// `--dangerously-skip-permissions` to spawned child processes.
+    /// In-process subagents inherit the parent's capability through
+    /// this field instead of argv forwarding — the engine threads it
+    /// into `ToolPermissionContext.bypass_available` so child plan-mode
+    /// auto-allow and Shift+Tab cycle behave consistently with the
+    /// parent. Defaults to `false` so legacy callers stay safe.
+    #[serde(default)]
+    pub bypass_permissions_available: bool,
 }
 
 /// Result of a multi-turn agent query.

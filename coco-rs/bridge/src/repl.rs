@@ -8,12 +8,20 @@
 //! The REPL bridge sits between the agent loop and a transport
 //! (WebSocket, SSE, or NDJSON) and handles bidirectional message
 //! serialization, keepalive, and reconnection awareness.
+//!
+//! Control requests (`ReplInMessage::ControlRequest`) are dispatched
+//! through the [`ControlRequestHandler`] trait. Bridge consumers wire
+//! a concrete handler at session startup; the bridge supplies the
+//! [`dispatch_control`] helper so the ReplOutMessage shaping stays in
+//! one place. The default [`RejectingControlHandler`] fails closed so
+//! an un-wired bridge never silently accepts a privileged request.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
 
+use coco_types::PermissionMode;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::Mutex;
@@ -116,7 +124,16 @@ pub enum ControlRequest {
         model: Option<String>,
     },
     /// Set permission mode.
-    SetPermissionMode { mode: String },
+    ///
+    /// Runtime dispatch goes through [`ControlRequestHandler::handle`].
+    /// The production handler (`app/cli`) must reject
+    /// `BypassPermissions` when the session's startup capability gate
+    /// is off — matching the SDK `handle_set_permission_mode` guard
+    /// (`app/cli/src/sdk_server/handlers/runtime.rs`) and the TUI
+    /// `UserCommand::SetPermissionMode` guard (`tui_runner.rs`).
+    /// The default [`RejectingControlHandler`] fails closed so an
+    /// un-wired bridge never silently grants bypass.
+    SetPermissionMode { mode: PermissionMode },
     /// Query MCP server status.
     McpStatus,
     /// Get context window usage.
@@ -379,6 +396,100 @@ pub fn decode_repl_ndjson(line: &str) -> anyhow::Result<ReplInMessage> {
 pub fn encode_repl_ndjson(msg: &ReplOutMessage) -> anyhow::Result<String> {
     let json = serde_json::to_string(msg)?;
     Ok(format!("{json}\n"))
+}
+
+// ---------------------------------------------------------------------------
+// Control request dispatch
+// ---------------------------------------------------------------------------
+
+/// Error returned from a control handler. The `code` is a JSON-RPC
+/// application error code (negative integer in the `-32000..=-32099`
+/// range conventionally, but any i32 works on the wire); the
+/// `message` is surfaced back to the SDK client.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ControlError {
+    pub code: i32,
+    pub message: String,
+}
+
+impl ControlError {
+    pub fn new(code: i32, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+}
+
+/// Dispatcher for inbound [`ControlRequest`] payloads.
+///
+/// Implementors hold whatever session state the specific control
+/// request needs (permission gate, model registry, session handle,
+/// etc.) and translate the request into a side-effect + response
+/// payload. The bridge itself is transport-only and does NOT embed
+/// any policy — policy lives in the handler.
+///
+/// **Security contract for `SetPermissionMode`:** the handler MUST
+/// check the session's startup bypass capability before accepting a
+/// transition into `PermissionMode::BypassPermissions`. Reject with
+/// [`ControlError`] carrying
+/// `coco_types::error_codes::PERMISSION_DENIED` when the gate is off.
+/// This matches the SDK `handle_set_permission_mode` and TUI
+/// `UserCommand::SetPermissionMode` guards — all three bypass-origin
+/// sites enforce the same rule.
+#[async_trait::async_trait]
+pub trait ControlRequestHandler: Send + Sync {
+    async fn handle(&self, request: ControlRequest) -> Result<serde_json::Value, ControlError>;
+}
+
+/// Fail-closed default handler: every control request returns
+/// `METHOD_NOT_FOUND`.
+///
+/// Use this when wiring the bridge in a context that doesn't yet own
+/// session state. It's the safe baseline — an un-wired bridge never
+/// silently accepts a privileged request like bypass escalation.
+/// Replace with a real handler once the session layer is available.
+pub struct RejectingControlHandler;
+
+#[async_trait::async_trait]
+impl ControlRequestHandler for RejectingControlHandler {
+    async fn handle(&self, request: ControlRequest) -> Result<serde_json::Value, ControlError> {
+        Err(ControlError::new(
+            coco_types::error_codes::METHOD_NOT_FOUND,
+            format!("bridge control handler not wired; request {request:?} rejected"),
+        ))
+    }
+}
+
+/// Dispatch a single control request through the handler and shape
+/// the result into the appropriate [`ReplOutMessage`].
+///
+/// Success → `ControlResponse { request_id, response }`.
+/// Failure → `ControlResponse` with an `{ error: { code, message } }`
+/// payload (JSON-RPC-style error within the result envelope). The
+/// bridge-level `Error { message }` variant is reserved for
+/// transport-level faults, not application errors; keeping the
+/// request_id on the response lets the client correlate.
+pub async fn dispatch_control<H: ControlRequestHandler + ?Sized>(
+    handler: &H,
+    request_id: String,
+    request: ControlRequest,
+) -> ReplOutMessage {
+    match handler.handle(request).await {
+        Ok(value) => ReplOutMessage::ControlResponse {
+            request_id,
+            response: value,
+        },
+        Err(err) => ReplOutMessage::ControlResponse {
+            request_id,
+            response: serde_json::json!({
+                "error": {
+                    "code": err.code,
+                    "message": err.message,
+                }
+            }),
+        },
+    }
 }
 
 #[cfg(test)]

@@ -15,6 +15,7 @@ use ratatui::widgets::Borders;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
+use crate::i18n::t;
 use crate::theme::Theme;
 
 /// A background agent task for the coordinator panel.
@@ -95,13 +96,15 @@ impl Widget for CoordinatorPanel<'_> {
         }
 
         if lines.is_empty() {
-            lines.push(Line::from(Span::raw("  No background agents").dim()));
+            lines.push(Line::from(
+                Span::raw(format!("  {}", t!("coordinator.none"))).dim(),
+            ));
         }
 
         let panel = Paragraph::new(lines).block(
             Block::default()
                 .borders(Borders::TOP)
-                .title(" Background Agents ")
+                .title(format!(" {} ", t!("coordinator.title")))
                 .border_style(ratatui::style::Style::default().fg(self.theme.border)),
         );
         panel.render(area, buf);

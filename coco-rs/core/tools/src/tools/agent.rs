@@ -173,6 +173,21 @@ impl Tool for AgentTool {
             });
         }
 
+        // Apply TS parent→child permission-mode inheritance rule
+        // (runAgent.ts:412-434): trust modes on the parent override the
+        // agent's declared mode; otherwise the declaration wins.
+        let requested_mode_str = input.get("mode").and_then(|v| v.as_str()).map(String::from);
+        let requested_mode_enum = requested_mode_str.as_deref().and_then(|s| {
+            serde_json::from_value::<coco_types::PermissionMode>(serde_json::json!(s)).ok()
+        });
+        let effective_mode = coco_permissions::resolve_subagent_mode(
+            ctx.permission_context.mode,
+            requested_mode_enum,
+        );
+        let effective_mode_str = serde_json::to_value(effective_mode)
+            .ok()
+            .and_then(|v| v.as_str().map(String::from));
+
         let request = AgentSpawnRequest {
             prompt: prompt.to_string(),
             description: input
@@ -200,7 +215,7 @@ impl Tool for AgentTool {
                 .get("team_name")
                 .and_then(|v| v.as_str())
                 .map(String::from),
-            mode: input.get("mode").and_then(|v| v.as_str()).map(String::from),
+            mode: effective_mode_str,
             cwd: input
                 .get("cwd")
                 .and_then(|v| v.as_str())
@@ -266,6 +281,7 @@ impl Tool for AgentTool {
         Ok(ToolResult {
             data,
             new_messages: vec![],
+            app_state_patch: None,
         })
     }
 }
@@ -345,6 +361,7 @@ impl Tool for SkillTool {
         Ok(ToolResult {
             data: serde_json::json!(result),
             new_messages: vec![],
+            app_state_patch: None,
         })
     }
 }
@@ -453,6 +470,7 @@ impl Tool for SendMessageTool {
         Ok(ToolResult {
             data: serde_json::json!(result),
             new_messages: vec![],
+            app_state_patch: None,
         })
     }
 }
@@ -529,6 +547,7 @@ impl Tool for TeamCreateTool {
         Ok(ToolResult {
             data: serde_json::json!(result),
             new_messages: vec![],
+            app_state_patch: None,
         })
     }
 }
@@ -591,6 +610,7 @@ impl Tool for TeamDeleteTool {
         Ok(ToolResult {
             data: serde_json::json!(result),
             new_messages: vec![],
+            app_state_patch: None,
         })
     }
 }

@@ -65,6 +65,7 @@ fn make_config(cancelled: Arc<AtomicBool>) -> InProcessRunnerConfig {
         max_turns: Some(1),
         cancelled,
         auto_compact_threshold: 100_000,
+        bypass_permissions_available: false,
     }
 }
 
@@ -163,6 +164,7 @@ fn test_agent_query_config_clone() {
         allowed_tools: vec!["Read".into()],
         fork_context_messages: vec![],
         preserve_tool_use_results: true,
+        bypass_permissions_available: false,
     };
     let cloned = config;
     assert_eq!(cloned.system_prompt, "test");

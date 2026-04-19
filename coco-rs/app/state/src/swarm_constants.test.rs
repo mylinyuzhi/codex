@@ -7,9 +7,17 @@ fn test_team_lead_name() {
 
 #[test]
 fn test_env_var_names() {
-    assert_eq!(TEAMMATE_COLOR_ENV_VAR, "CLAUDE_CODE_AGENT_COLOR");
-    assert_eq!(PLAN_MODE_REQUIRED_ENV_VAR, "CLAUDE_CODE_PLAN_MODE_REQUIRED");
-    assert_eq!(AGENT_TEAMS_ENV_VAR, "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS");
+    // coco-rs env namespace — no CLAUDE_ prefix (those belong to the
+    // Anthropic provider SDKs, which live in vercel-ai-*).
+    assert_eq!(TEAMMATE_COMMAND_ENV_VAR, "COCO_TEAMMATE_COMMAND");
+    assert_eq!(TEAMMATE_COLOR_ENV_VAR, "COCO_AGENT_COLOR");
+    assert_eq!(PLAN_MODE_REQUIRED_ENV_VAR, "COCO_PLAN_MODE_REQUIRED");
+    assert_eq!(AGENT_TEAMS_ENV_VAR, "COCO_EXPERIMENTAL_AGENT_TEAMS");
+    assert_eq!(AGENT_ID_ENV_VAR, "COCO_AGENT_ID");
+    assert_eq!(AGENT_NAME_ENV_VAR, "COCO_AGENT_NAME");
+    assert_eq!(TEAM_NAME_ENV_VAR, "COCO_TEAM_NAME");
+    assert_eq!(PARENT_SESSION_ID_ENV_VAR, "COCO_PARENT_SESSION_ID");
+    assert_eq!(VERIFY_PLAN_ENV_VAR, "COCO_VERIFY_PLAN");
 }
 
 #[test]

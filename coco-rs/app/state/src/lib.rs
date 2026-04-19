@@ -186,12 +186,6 @@ pub struct AppState {
     #[serde(default)]
     pub view_selection_mode: bool,
 
-    // ── Ultraplan ──
-    #[serde(default)]
-    pub ultraplan_launching: bool,
-    #[serde(default)]
-    pub is_ultraplan_mode: bool,
-
     // ── Elicitation ──
     #[serde(default)]
     pub elicitation_queue: Vec<ElicitationEntry>,

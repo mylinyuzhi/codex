@@ -13,6 +13,8 @@
 //! assert_eq!(result.turns, 2);
 //! ```
 
+#![allow(clippy::unwrap_used, clippy::expect_used, dead_code)]
+
 use std::sync::Arc;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
@@ -22,14 +24,23 @@ use coco_inference::RetryConfig;
 use coco_query::QueryEngine;
 use coco_query::QueryEngineConfig;
 use coco_query::QueryResult;
+use coco_tool::ToolPermissionBridge;
+use coco_tool::ToolPermissionBridgeRef;
+use coco_tool::ToolPermissionDecision;
+use coco_tool::ToolPermissionRequest;
+use coco_tool::ToolPermissionResolution;
 use coco_tool::ToolRegistry;
 use coco_tools::BashTool;
 use coco_tools::EditTool;
+use coco_tools::EnterPlanModeTool;
+use coco_tools::ExitPlanModeTool;
 use coco_tools::GlobTool;
 use coco_tools::GrepTool;
 use coco_tools::ReadTool;
 use coco_tools::WriteTool;
 use coco_types::PermissionMode;
+use coco_types::ToolAppState;
+use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use vercel_ai_provider::AISdkError;
 use vercel_ai_provider::AssistantContentPart;
@@ -185,9 +196,14 @@ impl LanguageModelV4 for ScriptedMock {
     }
     async fn do_stream(
         &self,
-        _: LanguageModelV4CallOptions,
+        options: LanguageModelV4CallOptions,
     ) -> Result<LanguageModelV4StreamResult, AISdkError> {
-        Err(AISdkError::new("streaming not supported in scripted mock"))
+        let result = self.do_generate(options).await?;
+        Ok(coco_inference::synthetic_stream_from_content(
+            result.content,
+            result.usage,
+            result.finish_reason,
+        ))
     }
 }
 
@@ -244,6 +260,33 @@ impl MockModelBuilder {
     }
 }
 
+// ─── AllowAllPermissionBridge ───
+
+/// Permission bridge that auto-approves every request. Used in
+/// integration tests to let the mock model drive tools that return
+/// `PermissionDecision::Ask` (e.g. `ExitPlanMode`) without an
+/// interactive user. The real `NoOpPermissionBridge` rejects by
+/// default, which is wrong for tests whose purpose is to exercise
+/// the tool itself.
+pub struct AllowAllPermissionBridge;
+
+#[async_trait::async_trait]
+impl ToolPermissionBridge for AllowAllPermissionBridge {
+    async fn request_permission(
+        &self,
+        _request: ToolPermissionRequest,
+    ) -> Result<ToolPermissionResolution, String> {
+        Ok(ToolPermissionResolution {
+            decision: ToolPermissionDecision::Approved,
+            feedback: None,
+        })
+    }
+}
+
+pub fn allow_all_bridge() -> ToolPermissionBridgeRef {
+    Arc::new(AllowAllPermissionBridge)
+}
+
 // ─── Convenience runners ───
 
 /// Register all 6 core tools.
@@ -256,6 +299,129 @@ pub fn core_tools() -> Arc<ToolRegistry> {
     registry.register(Arc::new(GlobTool));
     registry.register(Arc::new(GrepTool));
     Arc::new(registry)
+}
+
+/// Core tools + EnterPlanMode + ExitPlanMode for plan-mode integration
+/// tests. Built on top of [`core_tools`] so Read/Write/Grep/etc. are
+/// available inside plan mode (model "explores the codebase").
+pub fn tools_with_plan_mode() -> Arc<ToolRegistry> {
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(BashTool));
+    registry.register(Arc::new(ReadTool));
+    registry.register(Arc::new(WriteTool));
+    registry.register(Arc::new(EditTool));
+    registry.register(Arc::new(GlobTool));
+    registry.register(Arc::new(GrepTool));
+    registry.register(Arc::new(EnterPlanModeTool));
+    registry.register(Arc::new(ExitPlanModeTool));
+    Arc::new(registry)
+}
+
+/// Configuration knobs for [`run_plan_mode_turn`]. Wires the shared
+/// `ToolAppState` + `config_home` (needed for plan-file I/O) into the
+/// engine, and lets the caller drive multi-turn scenarios by threading
+/// `final_messages` from the previous turn back in.
+pub struct PlanModeTurnParams {
+    pub session_id: String,
+    pub config_home: std::path::PathBuf,
+    pub app_state: Arc<RwLock<ToolAppState>>,
+    pub tools: Arc<ToolRegistry>,
+    /// Messages from prior turns (plus the new user prompt). When empty
+    /// the helper creates a fresh user message from `prompt_if_empty`.
+    pub messages: Vec<coco_types::Message>,
+    /// Fallback prompt when `messages` is empty (first turn case).
+    pub prompt_if_empty: String,
+    /// Raise this for scenarios that need more than the default 10
+    /// tool-iteration budget (e.g. tool_rounds_do_not_advance_cadence).
+    pub max_turns: i32,
+    /// Engine starting mode. Plan-mode tests start here as
+    /// [`PermissionMode::Plan`] directly: the engine's plan-mode
+    /// reminder snapshots `config.permission_mode` at construction
+    /// time, so a model-driven `EnterPlanMode` mid-run wouldn't flip
+    /// the reminder on. Matches how real sessions enter plan mode
+    /// (Shift+Tab toggle BEFORE `engine.run`).
+    pub permission_mode: PermissionMode,
+}
+
+impl PlanModeTurnParams {
+    /// Convenience: turn 1 from scratch in Plan mode.
+    pub fn plan_turn(
+        session_id: impl Into<String>,
+        config_home: std::path::PathBuf,
+        app_state: Arc<RwLock<ToolAppState>>,
+        tools: Arc<ToolRegistry>,
+        prompt: impl Into<String>,
+    ) -> Self {
+        Self {
+            session_id: session_id.into(),
+            config_home,
+            app_state,
+            tools,
+            messages: Vec::new(),
+            prompt_if_empty: prompt.into(),
+            max_turns: 20,
+            permission_mode: PermissionMode::Plan,
+        }
+    }
+
+    /// Override the starting mode (used for Reentry tests where the
+    /// first run exits back to Default and the second run re-enters
+    /// Plan).
+    pub fn with_permission_mode(mut self, mode: PermissionMode) -> Self {
+        self.permission_mode = mode;
+        self
+    }
+
+    /// Feed the prior turn's `final_messages` + a new user message into
+    /// the next run.
+    pub fn next_turn(mut self, prev_messages: Vec<coco_types::Message>, prompt: &str) -> Self {
+        self.messages = prev_messages;
+        self.messages
+            .push(coco_messages::create_user_message(prompt));
+        self
+    }
+}
+
+/// Drive one engine run scripted for plan-mode integration tests.
+///
+/// Wires `app_state` (cross-turn plan cadence + exit flags) and
+/// `config_home` (plan-file path resolution), registers the passed
+/// tool set, and starts in the caller-specified permission mode.
+pub async fn run_plan_mode_turn(
+    model: Arc<dyn LanguageModelV4>,
+    params: PlanModeTurnParams,
+) -> QueryResult {
+    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let cancel = CancellationToken::new();
+    let config = QueryEngineConfig {
+        model_name: "scripted-mock".into(),
+        permission_mode: params.permission_mode,
+        max_turns: params.max_turns,
+        session_id: params.session_id,
+        ..Default::default()
+    };
+    let engine = QueryEngine::new(config, client, params.tools, cancel, None)
+        .with_app_state(params.app_state)
+        .with_config_home(params.config_home)
+        // Auto-approve any `Ask` decision (ExitPlanMode, etc.) — tests
+        // script the model flow, not user interaction.
+        .with_permission_bridge(allow_all_bridge());
+
+    if params.messages.is_empty() {
+        engine
+            .run(&params.prompt_if_empty)
+            .await
+            .expect("mock engine run failed")
+    } else {
+        // `run_with_messages` requires at least one `user` message at
+        // the tail; callers that want a fresh turn should use
+        // `next_turn()` which pushes one before handing off.
+        let (tx, _rx) = tokio::sync::mpsc::channel(16);
+        engine
+            .run_with_messages(params.messages, tx)
+            .await
+            .expect("mock engine run_with_messages failed")
+    }
 }
 
 /// Run the query engine with a mock model and default config.

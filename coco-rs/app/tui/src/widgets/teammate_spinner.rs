@@ -15,6 +15,7 @@ use ratatui::widgets::Borders;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
+use crate::i18n::t;
 use crate::theme::Theme;
 
 /// A teammate entry for spinner display.
@@ -128,13 +129,15 @@ impl Widget for TeammateSpinnerTree<'_> {
         }
 
         if lines.is_empty() {
-            lines.push(Line::from(Span::raw("  No teammates").dim()));
+            lines.push(Line::from(
+                Span::raw(format!("  {}", t!("teammate_spinner.none"))).dim(),
+            ));
         }
 
         let panel = Paragraph::new(lines).block(
             Block::default()
                 .borders(Borders::TOP)
-                .title(" Team ")
+                .title(t!("teammate_spinner.panel_title").to_string())
                 .border_style(ratatui::style::Style::default().fg(self.theme.border)),
         );
         panel.render(area, buf);
