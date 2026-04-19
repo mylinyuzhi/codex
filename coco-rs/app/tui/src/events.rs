@@ -4,18 +4,19 @@
 //! - [`TuiCommand`]: high-level user actions derived from events
 
 use crossterm::event::KeyEvent;
-use crossterm::event::MouseEvent;
 
 /// Low-level TUI events from all sources.
 ///
 /// The main event loop receives these via `tokio::select!` multiplexing.
+///
+/// Note: no mouse events. coco-tui deliberately leaves mouse input to the
+/// terminal emulator so the native drag-to-select / Cmd+C flow keeps working
+/// (same choice as codex-rs). `terminal.rs` never calls `EnableMouseCapture`.
 #[derive(Debug)]
 pub enum TuiEvent {
     // ── Terminal events ──
     /// Keyboard input.
     Key(KeyEvent),
-    /// Mouse input.
-    Mouse(MouseEvent),
     /// Terminal resized.
     Resize { width: u16, height: u16 },
     /// Terminal focus changed.
@@ -171,6 +172,12 @@ pub enum TuiCommand {
     ShowRewind,
     /// Show doctor/diagnostics.
     ShowDoctor,
+    /// Show the tabbed settings panel.
+    ShowSettings,
+    /// Switch to the next Settings tab (Tab in settings overlay).
+    SettingsNextTab,
+    /// Switch to the previous Settings tab (Shift+Tab in settings overlay).
+    SettingsPrevTab,
 
     // ── Overlay navigation ──
     /// Filter text in active filterable overlay.
@@ -183,12 +190,6 @@ pub enum TuiCommand {
     OverlayPrev,
     /// Confirm selection in overlay.
     OverlayConfirm,
-
-    // ── Mouse ──
-    /// Mouse scroll (positive = up).
-    MouseScroll(i32),
-    /// Mouse click at (col, row).
-    MouseClick { col: u16, row: u16 },
 
     // ── Task management ──
     /// Background all foreground tasks.
@@ -211,6 +212,9 @@ pub enum TuiCommand {
     // ── Clipboard ──
     /// Paste from clipboard (image first, text fallback).
     PasteFromClipboard,
+    /// Copy the last agent response to the system clipboard (Ctrl+O / /copy).
+    /// Mirrors codex-rs's `ChatWidget::copy_last_agent_markdown`.
+    CopyLastMessage,
 
     // ── Application ──
     /// Quit the application.

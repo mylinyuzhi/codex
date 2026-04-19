@@ -313,4 +313,10 @@ pub struct ToolPermissionContext {
     /// TS: `strippedDangerousRules` field on ToolPermissionContext.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stripped_dangerous_rules: Option<PermissionRulesBySource>,
+    /// Pre-resolved session plan file path — pushed in by the engine so
+    /// the permission evaluator can auto-allow writes to it in Plan mode
+    /// without re-deriving the slug. TS parity: `isSessionPlanFile` in
+    /// `utils/permissions/filesystem.ts:245-255`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_plan_file: Option<std::path::PathBuf>,
 }

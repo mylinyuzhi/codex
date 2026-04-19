@@ -20,10 +20,20 @@ use crate::discover_skills_with_format;
 const SKILL_DEBOUNCE_MS: u64 = 300;
 
 /// Event emitted when skill files change.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SkillsChanged {
     /// Paths of files that changed (for diagnostics).
     pub changed_paths: Vec<PathBuf>,
+    /// Hook declarations from the reloaded skill set: `(skill_name, hooks_json)`.
+    /// Populated post-reload so subscribers (the hooks layer) can re-register
+    /// skill-declared hooks without a session restart.
+    ///
+    /// TS: `skillChangeDetector.ts` triggers both skill reload AND
+    /// `hooksConfigSnapshot` invalidation. In Rust the snapshot refresh is the
+    /// subscriber's responsibility — this field carries the minimum data
+    /// needed (opaque hook JSON) for coco-hooks to rebuild its skill-scope
+    /// entries.
+    pub skill_hook_declarations: Vec<(String, serde_json::Value)>,
 }
 
 /// Watches skill directories and reloads the SkillManager on changes.
@@ -68,6 +78,7 @@ impl SkillChangeDetector {
                     } else {
                         Some(SkillsChanged {
                             changed_paths: md_paths,
+                            skill_hook_declarations: Vec::new(),
                         })
                     }
                 },
@@ -88,7 +99,7 @@ impl SkillChangeDetector {
         // Spawn background task to handle change events
         let mut rx = watcher.subscribe();
         tokio::spawn(async move {
-            while let Ok(event) = rx.recv().await {
+            while let Ok(mut event) = rx.recv().await {
                 tracing::info!(
                     paths = ?event.changed_paths,
                     "skill files changed, reloading"
@@ -107,10 +118,19 @@ impl SkillChangeDetector {
                         discover_skills_with_format(std::slice::from_ref(dir), format)
                     })
                     .collect();
+
+                // Harvest hook declarations from the reloaded set so downstream
+                // hooks infrastructure can refresh its skill-scope entries.
+                event.skill_hook_declarations = new_skills
+                    .iter()
+                    .filter_map(|s| s.hooks.as_ref().map(|h| (s.name.clone(), h.clone())))
+                    .collect();
+
                 let mut mgr = manager_clone.lock().await;
                 reload_manager(&mut mgr, new_skills);
+                drop(mgr); // release before broadcasting so subscribers don't deadlock
 
-                // Notify subscribers
+                // Notify subscribers (hooks layer consumes skill_hook_declarations).
                 let _ = change_tx_clone.send(event);
             }
         });

@@ -10,7 +10,11 @@
 use std::sync::RwLock;
 
 use super::TeamContext;
+use super::swarm_constants::AGENT_ID_ENV_VAR;
+use super::swarm_constants::AGENT_NAME_ENV_VAR;
+use super::swarm_constants::PARENT_SESSION_ID_ENV_VAR;
 use super::swarm_constants::PLAN_MODE_REQUIRED_ENV_VAR;
+use super::swarm_constants::TEAM_NAME_ENV_VAR;
 use super::swarm_constants::TEAMMATE_COLOR_ENV_VAR;
 
 // ── Thread-local Context (tier 1) ──
@@ -115,8 +119,8 @@ pub fn get_agent_id() -> Option<String> {
     if let Some(ctx) = get_dynamic_team_context() {
         return Some(ctx.agent_id);
     }
-    // Tier 3: env var (not standard, but fallback)
-    std::env::var("CLAUDE_CODE_AGENT_ID").ok()
+    // Tier 3: env var (cross-process fallback).
+    std::env::var(AGENT_ID_ENV_VAR).ok()
 }
 
 /// Get the current agent display name (3-tier priority).
@@ -129,7 +133,7 @@ pub fn get_agent_name() -> Option<String> {
     if let Some(ctx) = get_dynamic_team_context() {
         return Some(ctx.agent_name);
     }
-    std::env::var("CLAUDE_CODE_AGENT_NAME").ok()
+    std::env::var(AGENT_NAME_ENV_VAR).ok()
 }
 
 /// Get the current team name (3-tier priority).
@@ -145,7 +149,7 @@ pub fn get_team_name(team_context: Option<&TeamContext>) -> Option<String> {
     if let Some(tc) = team_context {
         return Some(tc.team_name.clone());
     }
-    std::env::var("CLAUDE_CODE_TEAM_NAME").ok()
+    std::env::var(TEAM_NAME_ENV_VAR).ok()
 }
 
 /// Get the parent session ID.
@@ -158,7 +162,7 @@ pub fn get_parent_session_id() -> Option<String> {
     if let Some(ctx) = get_dynamic_team_context() {
         return ctx.parent_session_id;
     }
-    std::env::var("CLAUDE_CODE_PARENT_SESSION_ID").ok()
+    std::env::var(PARENT_SESSION_ID_ENV_VAR).ok()
 }
 
 /// Check if currently running as a teammate (not leader).

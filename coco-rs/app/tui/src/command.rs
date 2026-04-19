@@ -6,6 +6,25 @@
 use coco_types::PermissionMode;
 use coco_types::PermissionUpdate;
 
+/// Which parts of the session to wipe on `/clear`.
+///
+/// TS: `clearConversation({ removeTasks, removeHooks, ... })` — we
+/// collapse the per-subsystem flags into three user-visible scopes that
+/// match the slash command variants. `All` is the most aggressive
+/// (touches plan state + slug cache + regenerates session id).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClearScope {
+    /// `/clear` — drop conversation transcript, keep session alive for
+    /// `/resume`, keep plan mode state, keep model usage.
+    Conversation,
+    /// `/clear history` — alias of `Conversation` today; kept as a
+    /// distinct variant so future refinement can diverge.
+    History,
+    /// `/clear all` — drop everything session-scoped (transcript +
+    /// plan files + slug cache + plan-mode flags on app_state).
+    All,
+}
+
 /// Commands sent from TUI to the core agent loop.
 #[derive(Debug, Clone)]
 pub enum UserCommand {
@@ -20,9 +39,8 @@ pub enum UserCommand {
     },
     /// Interrupt current operation (Ctrl+C).
     Interrupt,
-    /// Set plan mode active/inactive.
-    SetPlanMode { active: bool },
-    /// Set permission mode.
+    /// Set permission mode. Replaces the legacy `SetPlanMode { bool }`
+    /// — plan-mode activation is just `SetPermissionMode { mode: Plan }`.
     SetPermissionMode { mode: PermissionMode },
     /// Set thinking level.
     SetThinkingLevel { level: String },
@@ -67,6 +85,11 @@ pub enum UserCommand {
     /// Request diff stats for a message (async, response via ServerNotification).
     /// TS: fileHistoryGetDiffStats() called from MessageSelector useEffect.
     RequestDiffStats { message_id: String },
+    /// Clear conversation state — TUI has already wiped its local
+    /// transcript; this tells the engine to reset its matching
+    /// in-process state (plan-mode flags, attachment counters, slug
+    /// cache) so the next turn starts clean. TS: `clearConversation()`.
+    ClearConversation { scope: ClearScope },
     /// Shutdown the application.
     Shutdown,
 }

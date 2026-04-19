@@ -245,6 +245,7 @@ impl Tool for GlobTool {
         Ok(ToolResult {
             data: serde_json::json!(output),
             new_messages: vec![],
+            app_state_patch: None,
         })
     }
 }

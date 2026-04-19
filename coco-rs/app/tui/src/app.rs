@@ -4,22 +4,28 @@
 //! terminal events, agent events, and timer ticks.
 
 use std::io;
+use std::path::PathBuf;
 
 use crossterm::event::Event;
 use crossterm::event::EventStream;
 use crossterm::event::KeyEventKind;
-use crossterm::event::MouseEventKind;
 use tokio::sync::mpsc;
 use tokio::time::interval;
 use tokio_stream::StreamExt;
 
+use crate::autocomplete::FileSearchEvent;
+use crate::autocomplete::FileSearchManager;
+use crate::autocomplete::SymbolSearchEvent;
+use crate::autocomplete::SymbolSearchManager;
+use crate::autocomplete::file_search::create_file_search_channel;
+use crate::autocomplete::symbol_search::create_symbol_search_channel;
 use crate::command::UserCommand;
 use crate::constants;
-use crate::events::TuiCommand;
 use crate::events::TuiEvent;
 use crate::keybinding_bridge;
 use crate::render;
 use crate::state::AppState;
+use crate::state::SuggestionKind;
 use crate::terminal::Tui;
 use crate::update::handle_command;
 
@@ -50,6 +56,14 @@ pub struct App {
     command_tx: mpsc::Sender<UserCommand>,
     /// Receives CoreEvent (3-layer: Protocol/Stream/Tui) from the agent loop.
     notification_rx: mpsc::Receiver<CoreEvent>,
+    file_search: FileSearchManager,
+    file_search_rx: mpsc::Receiver<FileSearchEvent>,
+    symbol_search: SymbolSearchManager,
+    symbol_search_rx: mpsc::Receiver<SymbolSearchEvent>,
+    /// Last (kind, query) dispatched to a search manager. Guards against
+    /// firing a duplicate search when only the cursor moved within the
+    /// same query window.
+    last_dispatched: Option<(SuggestionKind, String)>,
 }
 
 impl App {
@@ -58,14 +72,23 @@ impl App {
         command_tx: mpsc::Sender<UserCommand>,
         notification_rx: mpsc::Receiver<CoreEvent>,
     ) -> io::Result<Self> {
+        crate::i18n::init();
         let tui = Tui::new()?;
         let state = AppState::new();
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let (file_tx, file_rx) = create_file_search_channel();
+        let (sym_tx, sym_rx) = create_symbol_search_channel();
 
         Ok(Self {
             tui,
             state,
             command_tx,
             notification_rx,
+            file_search: FileSearchManager::new(cwd, file_tx),
+            file_search_rx: file_rx,
+            symbol_search: SymbolSearchManager::new(sym_tx),
+            symbol_search_rx: sym_rx,
+            last_dispatched: None,
         })
     }
 
@@ -75,11 +98,19 @@ impl App {
         command_tx: mpsc::Sender<UserCommand>,
         notification_rx: mpsc::Receiver<CoreEvent>,
     ) -> Self {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let (file_tx, file_rx) = create_file_search_channel();
+        let (sym_tx, sym_rx) = create_symbol_search_channel();
         Self {
             tui,
             state: AppState::new(),
             command_tx,
             notification_rx,
+            file_search: FileSearchManager::new(cwd, file_tx),
+            file_search_rx: file_rx,
+            symbol_search: SymbolSearchManager::new(sym_tx),
+            symbol_search_rx: sym_rx,
+            last_dispatched: None,
         }
     }
 
@@ -133,6 +164,14 @@ impl App {
                         );
                     }
                 }
+                // Async file-search results (from @path triggers).
+                Some(evt) = self.file_search_rx.recv() => {
+                    needs_redraw = handle_file_search_event(&mut self.state, evt);
+                }
+                // Async symbol-search results (from @#symbol triggers).
+                Some(evt) = self.symbol_search_rx.recv() => {
+                    needs_redraw = handle_symbol_search_event(&mut self.state, evt);
+                }
                 // Tick timer
                 _ = tick_interval.tick() => {
                     needs_redraw = self.handle_event(TuiEvent::Tick).await;
@@ -142,6 +181,11 @@ impl App {
                     needs_redraw = self.handle_event(TuiEvent::SpinnerTick).await;
                 }
             };
+
+            // After every iteration, refresh async autocomplete dispatches
+            // based on the current trigger. Cheap no-op when the query is
+            // unchanged since the last dispatch.
+            self.dispatch_pending_search();
 
             if needs_redraw {
                 let state = &self.state;
@@ -156,6 +200,48 @@ impl App {
         Ok(())
     }
 
+    /// Fire a file/symbol search if the active trigger's (kind, query) pair
+    /// has changed since the last dispatch. Clears pending when no async
+    /// trigger is active.
+    fn dispatch_pending_search(&mut self) {
+        let next = match self.state.ui.active_suggestions {
+            Some(ref sug) if matches!(sug.kind, SuggestionKind::File | SuggestionKind::Symbol) => {
+                Some((sug.kind, sug.query.clone(), sug.trigger_pos))
+            }
+            _ => None,
+        };
+        let (kind, query, pos) = match next {
+            Some(v) => v,
+            None => {
+                if self.last_dispatched.is_some() {
+                    self.file_search.cancel();
+                    self.symbol_search.cancel();
+                    self.last_dispatched = None;
+                }
+                return;
+            }
+        };
+        let unchanged = self
+            .last_dispatched
+            .as_ref()
+            .is_some_and(|(k, q)| *k == kind && q == &query);
+        if unchanged {
+            return;
+        }
+        match kind {
+            SuggestionKind::File => {
+                self.symbol_search.cancel();
+                self.file_search.search(query.clone(), pos);
+            }
+            SuggestionKind::Symbol => {
+                self.file_search.cancel();
+                self.symbol_search.search(query.clone(), pos);
+            }
+            _ => return,
+        }
+        self.last_dispatched = Some((kind, query));
+    }
+
     /// Convert a crossterm event to a TuiEvent.
     fn convert_crossterm_event(&self, event: Event) -> Option<TuiEvent> {
         match event {
@@ -166,7 +252,9 @@ impl App {
                 }
                 Some(TuiEvent::Key(key))
             }
-            Event::Mouse(mouse) => Some(TuiEvent::Mouse(mouse)),
+            // We never call EnableMouseCapture, so crossterm shouldn't deliver
+            // Event::Mouse in practice — drop it defensively if it ever arrives.
+            Event::Mouse(_) => None,
             Event::Resize(w, h) => Some(TuiEvent::Resize {
                 width: w,
                 height: h,
@@ -193,36 +281,6 @@ impl App {
                     false
                 }
             }
-            TuiEvent::Mouse(mouse) => match mouse.kind {
-                MouseEventKind::ScrollUp => {
-                    handle_command(
-                        &mut self.state,
-                        TuiCommand::MouseScroll(/*up*/ 1),
-                        &self.command_tx,
-                    )
-                    .await
-                }
-                MouseEventKind::ScrollDown => {
-                    handle_command(
-                        &mut self.state,
-                        TuiCommand::MouseScroll(/*down*/ -1),
-                        &self.command_tx,
-                    )
-                    .await
-                }
-                MouseEventKind::Down(_) => {
-                    handle_command(
-                        &mut self.state,
-                        TuiCommand::MouseClick {
-                            col: mouse.column,
-                            row: mouse.row,
-                        },
-                        &self.command_tx,
-                    )
-                    .await
-                }
-                _ => false,
-            },
             TuiEvent::Tick => {
                 let had_toasts = self.state.ui.has_toasts();
                 self.state.ui.expire_toasts();
@@ -239,10 +297,17 @@ impl App {
                 for c in text.chars() {
                     self.state.ui.input.insert_char(c);
                 }
+                // Paste bypasses update::handle_command, so refresh the
+                // autocomplete state directly here.
+                crate::autocomplete::refresh_suggestions(&mut self.state);
                 true
             }
             TuiEvent::Resize { .. } => true,
-            TuiEvent::FocusChanged { .. } => false,
+            TuiEvent::FocusChanged { focused } => {
+                // Track focus for turn-complete notification gating.
+                self.state.ui.terminal_focused = focused;
+                false
+            }
             TuiEvent::Draw => true,
             TuiEvent::ClassifierApproved {
                 request_id,
@@ -267,3 +332,27 @@ impl App {
         }
     }
 }
+
+/// Apply a file-search result to `active_suggestions`.
+///
+/// Drops the result when the user has moved on to a different query,
+/// different trigger kind, or dismissed the popup altogether. That
+/// guarantees a slow search started when the user typed `@src` doesn't
+/// clobber the state after they've backspaced past the trigger.
+fn handle_file_search_event(state: &mut AppState, evt: FileSearchEvent) -> bool {
+    match evt {
+        FileSearchEvent::SearchResult {
+            query, suggestions, ..
+        } => apply_async_result(state, SuggestionKind::File, &query, suggestions),
+    }
+}
+
+fn handle_symbol_search_event(state: &mut AppState, evt: SymbolSearchEvent) -> bool {
+    match evt {
+        SymbolSearchEvent::SearchResult {
+            query, suggestions, ..
+        } => apply_async_result(state, SuggestionKind::Symbol, &query, suggestions),
+    }
+}
+
+use crate::autocomplete::apply_async_result;

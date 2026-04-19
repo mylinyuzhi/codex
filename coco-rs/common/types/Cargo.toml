@@ -21,6 +21,10 @@ serde_json.workspace = true
 uuid = { workspace = true, features = ["v4", "serde"] }
 strum = { workspace = true, features = ["derive"] }
 schemars = { workspace = true, optional = true }
+# `AppStateReadHandle` wraps `Arc<tokio::sync::RwLock<ToolAppState>>`.
+# The shared store + async read path lives on the tool-facing `ctx`
+# surface, so tokio's sync primitives are a direct dependency.
+tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
 pretty_assertions.workspace = true

@@ -160,3 +160,60 @@ fn test_teammate_message_serde_roundtrip() {
     assert_eq!(parsed.from, "agent-1");
     assert!(parsed.read);
 }
+
+// ── Concurrent write serialization (F1) ──
+
+/// 20 writers racing to append to the same inbox file must all land.
+/// Without the lock, the last-writer-wins semantic of `std::fs::write`
+/// would drop 19 messages. With `fs2` advisory lock + RMW-inside-lock,
+/// all 20 appends complete.
+#[test]
+fn concurrent_writes_are_serialized() {
+    use std::sync::Arc;
+    use std::sync::Barrier;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let inbox = tmp.path().join("inbox.json");
+
+    let barrier = Arc::new(Barrier::new(20));
+    let mut handles = Vec::new();
+    for i in 0..20 {
+        let inbox = inbox.clone();
+        let barrier = barrier.clone();
+        handles.push(std::thread::spawn(move || {
+            barrier.wait();
+            super::with_inbox_lock(&inbox, |path| {
+                let mut msgs = super::read_messages_no_lock(path).unwrap_or_default();
+                msgs.push(TeammateMessage {
+                    from: format!("writer-{i}"),
+                    text: format!("msg-{i}"),
+                    timestamp: "t".into(),
+                    read: false,
+                    color: None,
+                    summary: None,
+                });
+                std::fs::write(path, serde_json::to_string_pretty(&msgs).unwrap())?;
+                Ok(())
+            })
+            .unwrap();
+        }));
+    }
+    for h in handles {
+        h.join().unwrap();
+    }
+
+    let content = std::fs::read_to_string(&inbox).unwrap();
+    let msgs: Vec<TeammateMessage> = serde_json::from_str(&content).unwrap();
+    assert_eq!(
+        msgs.len(),
+        20,
+        "all 20 concurrent writes must land; got {}",
+        msgs.len()
+    );
+    let mut ids: Vec<i32> = msgs
+        .iter()
+        .filter_map(|m| m.from.strip_prefix("writer-").and_then(|s| s.parse().ok()))
+        .collect();
+    ids.sort();
+    assert_eq!(ids, (0..20).collect::<Vec<_>>());
+}

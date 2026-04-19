@@ -12,6 +12,12 @@ async fn test_no_op_engine_returns_error() {
         max_output_tokens: None,
         allowed_tools: Vec::new(),
         preserve_tool_use_results: false,
+        permission_mode: None,
+        agent_id: None,
+        is_teammate: false,
+        plan_mode_required: false,
+        session_id: None,
+        bypass_permissions_available: false,
     };
     let result = engine.execute_query("hello", config).await;
     assert!(result.is_err());

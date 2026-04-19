@@ -21,6 +21,7 @@ fn empty_context() -> ToolPermissionContext {
         bypass_available: false,
         pre_plan_mode: None,
         stripped_dangerous_rules: None,
+        session_plan_file: None,
     }
 }
 

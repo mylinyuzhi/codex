@@ -13,6 +13,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
 
+use crate::i18n::t;
 use crate::theme::Theme;
 
 /// IDE connection state.
@@ -62,10 +63,10 @@ impl Widget for IdeDialogWidget<'_> {
 
         // Connection status
         let (icon, color, label) = match self.state.status {
-            IdeConnectionStatus::Disconnected => ("○", self.theme.text_dim, "Disconnected"),
-            IdeConnectionStatus::Connecting => ("◌", self.theme.warning, "Connecting..."),
-            IdeConnectionStatus::Connected => ("●", self.theme.success, "Connected"),
-            IdeConnectionStatus::Error => ("✗", self.theme.error, "Error"),
+            IdeConnectionStatus::Disconnected => ("○", self.theme.text_dim, t!("ide.disconnected")),
+            IdeConnectionStatus::Connecting => ("◌", self.theme.warning, t!("ide.connecting")),
+            IdeConnectionStatus::Connected => ("●", self.theme.success, t!("ide.connected")),
+            IdeConnectionStatus::Error => ("✗", self.theme.error, t!("ide.error")),
         };
 
         lines.push(Line::from(vec![
@@ -78,7 +79,8 @@ impl Widget for IdeDialogWidget<'_> {
 
         if let Some(port) = self.state.port {
             lines.push(Line::from(
-                Span::raw(format!("  Port: {port}")).fg(self.theme.text_dim),
+                Span::raw(format!("  {}", t!("ide.port_prefix", port = port)))
+                    .fg(self.theme.text_dim),
             ));
         }
 
@@ -87,7 +89,7 @@ impl Widget for IdeDialogWidget<'_> {
         // Available tools
         if !self.state.tools_available.is_empty() {
             lines.push(Line::from(
-                Span::raw("  Available IDE tools:").fg(self.theme.text_dim),
+                Span::raw(format!("  {}", t!("ide.available_tools"))).fg(self.theme.text_dim),
             ));
             for tool in &self.state.tools_available {
                 lines.push(Line::from(
@@ -98,11 +100,11 @@ impl Widget for IdeDialogWidget<'_> {
 
         // IDE type info
         let type_desc = match self.state.ide_type {
-            IdeType::VsCode => "VS Code extension detected",
-            IdeType::Cursor => "Cursor editor detected",
-            IdeType::Windsurf => "Windsurf editor detected",
-            IdeType::JetBrains => "JetBrains plugin detected",
-            IdeType::Other => "IDE extension detected",
+            IdeType::VsCode => t!("ide.vscode_detected"),
+            IdeType::Cursor => t!("ide.cursor_detected"),
+            IdeType::Windsurf => t!("ide.windsurf_detected"),
+            IdeType::JetBrains => t!("ide.jetbrains_detected"),
+            IdeType::Other => t!("ide.generic_detected"),
         };
         lines.push(Line::default());
         lines.push(Line::from(
@@ -113,12 +115,12 @@ impl Widget for IdeDialogWidget<'_> {
 
         lines.push(Line::default());
         lines.push(Line::from(
-            Span::raw("  [Esc] Close").fg(self.theme.text_dim),
+            Span::raw(format!("  {}", t!("ide.hint_close"))).fg(self.theme.text_dim),
         ));
 
         let block = Block::default()
             .borders(Borders::ALL)
-            .title(" IDE Connection ")
+            .title(t!("ide.dialog_title").to_string())
             .border_style(ratatui::style::Style::default().fg(self.theme.border_focused));
 
         let paragraph = Paragraph::new(lines)

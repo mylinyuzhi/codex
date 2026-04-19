@@ -1,0 +1,28 @@
+---
+source: app/tui/src/widgets/mod.test.rs
+expression: output
+---
+ | sonnet-4-6                                                                   
+ ⟳ Model fallback: opus-4-7 → sonnet-4-6                                        
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+ Input ─────────────────────────────────────────────────────────────────────────
+> Type a message...                                                             
+                                                                                
+ sonnet-4-6 | Default | 0 msgs

@@ -45,13 +45,48 @@ pub(super) async fn handle_set_model(
 
 /// `control/setPermissionMode` — mutate the session's permission mode.
 ///
-/// Stored on the [`super::SessionHandle`]; the production `TurnRunner`
-/// reads it when constructing per-turn `QueryEngineConfig` (falling
-/// through to the turn-scoped override from `TurnStartParams` if set).
+/// TS parity: `cyclePermissionMode` → `setAppState(prev => ({ ...prev,
+/// toolPermissionContext: { ...preparedContext, mode: nextMode } }))`
+/// (`PromptInput.tsx:1537-1547`). Writes:
+/// 1. [`SessionHandle::permission_mode`] — session-scoped override read
+///    by `sdk_runner::run_turn` as a fallback when the turn params
+///    don't carry an explicit mode.
+/// 2. [`SessionHandle::app_state`] `permission_mode` — the engine's
+///    live mode source of truth. Updating it mid-session propagates
+///    to any in-flight engine's next `create_tool_context` read,
+///    mirroring TS's `getAppState()` live-read semantics. Without
+///    this write, mid-session toggles are invisible to the plan-mode
+///    reminder + permission evaluator.
+/// 3. On Auto↔non-Auto transitions, also manages
+///    `app_state.stripped_dangerous_rules` stash (cleared on leaving
+///    Auto so the next ctx rebuild doesn't carry a stale stash into
+///    a non-Auto mode). TS parity: `permissionSetup.ts:627-637`.
 pub(super) async fn handle_set_permission_mode(
     params: coco_types::SetPermissionModeParams,
     ctx: &HandlerContext,
 ) -> HandlerResult {
+    // Mid-session bypass guard — TS parity: cli/print.ts:4588-4600.
+    // Reject any attempt to escalate into `BypassPermissions` when the
+    // session was not launched with one of the authorization flags.
+    // Catches accidental SDK clients and closes the ungated-bypass
+    // surface exposed by the TUI plan-exit overlay before its fix.
+    if params.mode == coco_types::PermissionMode::BypassPermissions
+        && !ctx
+            .state
+            .bypass_permissions_available
+            .load(std::sync::atomic::Ordering::Relaxed)
+    {
+        return HandlerResult::Err {
+            code: coco_types::error_codes::PERMISSION_DENIED,
+            message: "Cannot set permission mode to bypassPermissions because \
+                      the session was not launched with \
+                      --dangerously-skip-permissions (or \
+                      --allow-dangerously-skip-permissions)."
+                .into(),
+            data: None,
+        };
+    }
+
     let mut slot = ctx.state.session.write().await;
     let Some(session) = slot.as_mut() else {
         return HandlerResult::Err {
@@ -66,6 +101,43 @@ pub(super) async fn handle_set_permission_mode(
         "SdkServer: control/setPermissionMode"
     );
     session.permission_mode = Some(params.mode);
+
+    // Propagate to app_state so the engine sees the new mode live.
+    let app_state = session.app_state.clone();
+    // Drop the session write lock before taking app_state's lock to
+    // keep lock order consistent (session → app_state never inverted).
+    drop(slot);
+    let mut guard = app_state.write().await;
+    let prev_mode = guard
+        .permission_mode
+        .unwrap_or(coco_types::PermissionMode::Default);
+    guard.permission_mode = Some(params.mode);
+    // Auto-boundary strip-stash management lives in the shared helper
+    // so TUI + SDK paths stay in sync.
+    coco_permissions::apply_auto_transition_to_app_state(&mut guard, prev_mode, params.mode);
+    drop(guard);
+
+    // Broadcast the change to any attached client (TUI / SDK
+    // subscribers). TS parity: `notifyPermissionModeChanged` in
+    // `state/onChangeAppState.ts`. The `bypass_available` field is a
+    // snapshot of the (static) session capability — readers that rely
+    // on the gate stay consistent without needing a separate event.
+    let bypass_available = ctx
+        .state
+        .bypass_permissions_available
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let _ = ctx
+        .notif_tx
+        .send(coco_query::CoreEvent::Protocol(
+            coco_types::ServerNotification::PermissionModeChanged(
+                coco_types::PermissionModeChangedParams {
+                    mode: params.mode,
+                    bypass_available,
+                },
+            ),
+        ))
+        .await;
+
     HandlerResult::ok_empty()
 }
 

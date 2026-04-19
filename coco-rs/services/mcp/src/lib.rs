@@ -16,6 +16,8 @@ pub mod elicitation;
 pub mod naming;
 pub mod tool_call;
 pub mod types;
+pub mod xaa;
+pub mod xaa_idp_login;
 
 pub use auth::OAuthConfig;
 pub use auth::OAuthTokenStore;

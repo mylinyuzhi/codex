@@ -15,6 +15,7 @@ fn make_context(mode: PermissionMode, bypass: bool) -> ToolPermissionContext {
         bypass_available: bypass,
         pre_plan_mode: None,
         stripped_dangerous_rules: None,
+        session_plan_file: None,
     }
 }
 
@@ -139,4 +140,122 @@ fn test_transition_plan_to_plan_no_stash() {
     let result = transition_context(ctx, PermissionMode::Plan, PermissionMode::Plan);
     // Should NOT overwrite the stash
     assert_eq!(result.pre_plan_mode, Some(PermissionMode::Default));
+}
+
+// ── resolve_subagent_mode (TS runAgent.ts:412-434 parity) ──
+
+#[test]
+fn subagent_inherits_parent_default_when_no_request() {
+    assert_eq!(
+        resolve_subagent_mode(PermissionMode::Default, None),
+        PermissionMode::Default
+    );
+}
+
+#[test]
+fn subagent_inherits_parent_plan_when_no_request() {
+    assert_eq!(
+        resolve_subagent_mode(PermissionMode::Plan, None),
+        PermissionMode::Plan
+    );
+}
+
+#[test]
+fn subagent_request_wins_over_non_trust_parent() {
+    // Parent Default, agent requests Plan → child uses Plan.
+    assert_eq!(
+        resolve_subagent_mode(PermissionMode::Default, Some(PermissionMode::Plan)),
+        PermissionMode::Plan
+    );
+}
+
+#[test]
+fn subagent_request_ignored_when_parent_accept_edits() {
+    // Trust mode — child always inherits parent, declaration ignored.
+    assert_eq!(
+        resolve_subagent_mode(PermissionMode::AcceptEdits, Some(PermissionMode::Plan)),
+        PermissionMode::AcceptEdits
+    );
+}
+
+#[test]
+fn subagent_request_ignored_when_parent_bypass() {
+    assert_eq!(
+        resolve_subagent_mode(
+            PermissionMode::BypassPermissions,
+            Some(PermissionMode::Plan),
+        ),
+        PermissionMode::BypassPermissions
+    );
+}
+
+#[test]
+fn subagent_request_ignored_when_parent_auto() {
+    assert_eq!(
+        resolve_subagent_mode(PermissionMode::Auto, Some(PermissionMode::Default)),
+        PermissionMode::Auto
+    );
+}
+
+// ── apply_auto_transition_to_app_state ──
+
+#[test]
+fn auto_transition_clears_stash_on_leaving_auto() {
+    // TS parity: `permissionSetup.ts:627-637` restores dangerous
+    // permissions (clears the stash) when the classifier exits.
+    let mut state = coco_types::ToolAppState {
+        stripped_dangerous_rules: Some(coco_types::PermissionRulesBySource::default()),
+        ..Default::default()
+    };
+    let modified = apply_auto_transition_to_app_state(
+        &mut state,
+        PermissionMode::Auto,
+        PermissionMode::Default,
+    );
+    assert!(modified, "Auto→Default with stash should report modified");
+    assert!(state.stripped_dangerous_rules.is_none());
+}
+
+#[test]
+fn auto_transition_noop_when_entering_auto() {
+    // Entering Auto: full rule-stashing is deferred (needs central
+    // rules store). Helper returns false and leaves stash alone.
+    let mut state = coco_types::ToolAppState::default();
+    let modified = apply_auto_transition_to_app_state(
+        &mut state,
+        PermissionMode::Default,
+        PermissionMode::Auto,
+    );
+    assert!(!modified);
+    assert!(state.stripped_dangerous_rules.is_none());
+}
+
+#[test]
+fn auto_transition_noop_when_no_stash_to_clear() {
+    // Leaving Auto but no stash present (e.g. Auto was purely a mode
+    // label with no rules stashed) → no-op.
+    let mut state = coco_types::ToolAppState::default();
+    let modified = apply_auto_transition_to_app_state(
+        &mut state,
+        PermissionMode::Auto,
+        PermissionMode::Default,
+    );
+    assert!(!modified);
+}
+
+#[test]
+fn auto_transition_noop_for_non_auto_boundary() {
+    // Default → Plan shouldn't touch the stash either way.
+    let mut state = coco_types::ToolAppState {
+        stripped_dangerous_rules: Some(coco_types::PermissionRulesBySource::default()),
+        ..Default::default()
+    };
+    let modified = apply_auto_transition_to_app_state(
+        &mut state,
+        PermissionMode::Default,
+        PermissionMode::Plan,
+    );
+    assert!(!modified);
+    // Stash preserved — non-Auto transitions don't manage it.
+    assert!(state.stripped_dangerous_rules.is_some());
 }

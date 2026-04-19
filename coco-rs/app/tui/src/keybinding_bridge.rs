@@ -26,6 +26,8 @@ pub enum KeybindingContext {
     Scrollable,
     /// Autocomplete suggestions visible.
     Autocomplete,
+    /// Tabbed settings overlay — Tab/Shift+Tab cycle tabs, Up/Down nav.
+    Settings,
     /// Default chat input context.
     Chat,
 }
@@ -52,9 +54,27 @@ pub fn active_context(state: &AppState) -> KeybindingContext {
             | Overlay::Doctor(_)
             | Overlay::ContextVisualization => KeybindingContext::Scrollable,
 
+            // Tabbed settings overlay
+            Overlay::Settings(_) => KeybindingContext::Settings,
+
             // All others are confirmation/approval overlays
             _ => KeybindingContext::Confirmation,
         };
+    }
+
+    // Autocomplete popup active: Up/Down/Tab/Esc route to suggestion
+    // navigation; all other keys fall through to normal input editing.
+    //
+    // Gate on non-empty items — async triggers (File/Symbol) install the
+    // query before search results arrive, and we must not hijack arrow
+    // keys during that window.
+    if state
+        .ui
+        .active_suggestions
+        .as_ref()
+        .is_some_and(|s| !s.items.is_empty())
+    {
+        return KeybindingContext::Autocomplete;
     }
 
     KeybindingContext::Chat
@@ -68,8 +88,31 @@ pub fn map_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
         KeybindingContext::Confirmation => map_confirmation_key(key),
         KeybindingContext::Picker => map_picker_key(key),
         KeybindingContext::Scrollable => map_scrollable_key(key),
-        KeybindingContext::Autocomplete => map_autocomplete_key(key),
+        // Autocomplete intercepts navigation keys only; other keys fall
+        // through to input editing so the user keeps typing and the
+        // suggestion popup refreshes reactively.
+        KeybindingContext::Autocomplete => map_autocomplete_key(key)
+            .or_else(|| map_global_key(state, key))
+            .or_else(|| map_input_key(state, key)),
+        KeybindingContext::Settings => map_settings_key(key),
         KeybindingContext::Chat => map_global_key(state, key).or_else(|| map_input_key(state, key)),
+    }
+}
+
+/// Keys for the tabbed Settings overlay: Tab cycles tabs, Up/Down nav,
+/// Enter selects, Esc closes.
+fn map_settings_key(key: KeyEvent) -> Option<TuiCommand> {
+    match key.code {
+        KeyCode::Tab => Some(TuiCommand::SettingsNextTab),
+        KeyCode::BackTab => Some(TuiCommand::SettingsPrevTab),
+        KeyCode::Up => Some(TuiCommand::OverlayPrev),
+        KeyCode::Down => Some(TuiCommand::OverlayNext),
+        KeyCode::Enter => Some(TuiCommand::OverlayConfirm),
+        KeyCode::Esc => Some(TuiCommand::Cancel),
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(TuiCommand::Cancel)
+        }
+        _ => None,
     }
 }
 
@@ -79,6 +122,11 @@ fn map_confirmation_key(key: KeyEvent) -> Option<TuiCommand> {
         KeyCode::Char('y' | 'Y') => Some(TuiCommand::Approve),
         KeyCode::Char('n' | 'N') => Some(TuiCommand::Deny),
         KeyCode::Char('a' | 'A') => Some(TuiCommand::ApproveAll),
+        // Tab cycles multi-option confirmations (PlanExit approval
+        // target: Restore / AcceptEdits / Bypass). For simple Y/N
+        // dialogs the handler is a no-op.
+        KeyCode::Tab => Some(TuiCommand::OverlayNext),
+        KeyCode::BackTab => Some(TuiCommand::OverlayPrev),
         KeyCode::Up | KeyCode::Char('k') => Some(TuiCommand::OverlayPrev),
         KeyCode::Down | KeyCode::Char('j') => Some(TuiCommand::OverlayNext),
         KeyCode::Enter => Some(TuiCommand::OverlayConfirm),
@@ -136,6 +184,7 @@ fn map_autocomplete_key(key: KeyEvent) -> Option<TuiCommand> {
 fn map_global_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
 
     match key.code {
         // Ctrl shortcuts
@@ -147,16 +196,24 @@ fn map_global_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
         KeyCode::Char('e') if ctrl && shift => Some(TuiCommand::ToggleToolCollapse),
         KeyCode::Char('e') if ctrl => Some(TuiCommand::OpenExternalEditor),
         KeyCode::Char('r') if ctrl && shift => Some(TuiCommand::ToggleSystemReminders),
-        KeyCode::Char('f') if ctrl && shift => Some(TuiCommand::ShowGlobalSearch),
-        KeyCode::Char('f') if ctrl => Some(TuiCommand::ToggleFastMode),
+        // Spec (crate-coco-tui.md §Keyboard Shortcuts): Ctrl+F = kill all agents,
+        // Ctrl+Shift+F = toggle fast mode. Global search is reached via
+        // /search in the command palette — no dedicated hotkey.
+        KeyCode::Char('f') if ctrl && shift => Some(TuiCommand::ToggleFastMode),
+        KeyCode::Char('f') if ctrl => Some(TuiCommand::KillAllAgents),
         KeyCode::Char('p') if ctrl => Some(TuiCommand::ShowCommandPalette),
         KeyCode::Char('s') if ctrl => Some(TuiCommand::ShowSessionBrowser),
-        KeyCode::Char('o') if ctrl => Some(TuiCommand::ShowQuickOpen),
+        // Ctrl+O: copy the last agent response (codex-rs parity). Fallback
+        // to Quick Open when Shift is also held so power users still have
+        // access to it — Shift+Ctrl+O = open, Ctrl+O = copy.
+        KeyCode::Char('o') if ctrl && shift => Some(TuiCommand::ShowQuickOpen),
+        KeyCode::Char('o') if ctrl => Some(TuiCommand::CopyLastMessage),
         KeyCode::Char('b') if ctrl => Some(TuiCommand::BackgroundAllTasks),
-        KeyCode::Char('v') if ctrl => Some(TuiCommand::PasteFromClipboard),
+        KeyCode::Char('v') if ctrl || alt => Some(TuiCommand::PasteFromClipboard),
         KeyCode::Char('m') if ctrl => Some(TuiCommand::CycleModel),
         KeyCode::Char('g') if ctrl => Some(TuiCommand::OpenPlanEditor),
         KeyCode::Char('w') if ctrl => Some(TuiCommand::ShowContextViz),
+        KeyCode::Char(',') if ctrl => Some(TuiCommand::ShowSettings),
 
         // Tab
         KeyCode::Tab => Some(TuiCommand::TogglePlanMode),
@@ -214,6 +271,9 @@ fn map_input_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
         KeyCode::Char('k') if ctrl => Some(TuiCommand::KillToEndOfLine),
         KeyCode::Char('y') if ctrl => Some(TuiCommand::Yank),
         KeyCode::Char('j') if ctrl => Some(TuiCommand::InsertNewline),
+        // Emacs word-nav: Alt+b / Alt+f (TS PromptInput.tsx)
+        KeyCode::Char('b') if alt => Some(TuiCommand::WordLeft),
+        KeyCode::Char('f') if alt => Some(TuiCommand::WordRight),
 
         // Escape — double-Esc opens rewind when input is empty + messages exist.
         // TS: useDoublePress() in PromptInput.tsx

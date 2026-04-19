@@ -22,6 +22,7 @@ fn make_context_with_rules(rules: Vec<PermissionRule>) -> ToolPermissionContext 
         bypass_available: false,
         pre_plan_mode: None,
         stripped_dangerous_rules: None,
+        session_plan_file: None,
     }
 }
 

@@ -218,7 +218,7 @@ fn test_session_ended_quits() {
 #[test]
 fn test_plan_mode_changed() {
     let mut state = AppState::new();
-    assert!(!state.session.plan_mode);
+    assert!(!state.is_plan_mode());
 
     handle_core_event(
         &mut state,
@@ -230,7 +230,20 @@ fn test_plan_mode_changed() {
             },
         )),
     );
-    assert!(state.session.plan_mode);
+    assert!(state.is_plan_mode());
+
+    // Exit path: entered=false flips Plan back to Default.
+    handle_core_event(
+        &mut state,
+        CoreEvent::Protocol(ServerNotification::PlanModeChanged(
+            coco_types::PlanModeChangedParams {
+                entered: false,
+                plan_file: None,
+                approved: None,
+            },
+        )),
+    );
+    assert!(!state.is_plan_mode());
 }
 
 #[test]

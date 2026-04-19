@@ -9,6 +9,9 @@
 
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::HashMap;
+use std::sync::LazyLock;
+use std::sync::Mutex;
 
 /// A parsed shell permission rule.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -109,6 +112,21 @@ impl ShellPermissionRule {
     }
 }
 
+/// Process-wide cache of compiled wildcard regexes keyed by raw rule pattern.
+///
+/// Permission checks run on the hot path (every bash invocation); recompiling
+/// the regex each time adds up. `None` is cached for patterns that fail to
+/// compile so we don't retry.
+///
+/// Bounded at `WILDCARD_REGEX_CACHE_MAX` entries. Once full, new patterns are
+/// compiled on-demand but NOT cached — this caps memory at O(cap × avg regex
+/// size) even if a compromised plugin feeds unbounded unique patterns. In
+/// practice rule sets are small (~dozens), so the cap is rarely hit.
+static WILDCARD_REGEX_CACHE: LazyLock<Mutex<HashMap<String, Option<regex::Regex>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+const WILDCARD_REGEX_CACHE_MAX: usize = 1024;
+
 /// Match a command against a wildcard pattern with escape support.
 ///
 /// TS: `matchWildcardPattern()` in shellRuleMatching.ts
@@ -118,6 +136,34 @@ impl ShellPermissionRule {
 /// - `\\` matches a literal `\`
 /// - Trailing ` *` (space + single wildcard) is optional — `git *` matches bare `git`
 fn match_wildcard_pattern(pattern: &str, command: &str) -> bool {
+    // PoisonError handling: if a thread panicked while holding the cache lock,
+    // the cache contents are still consistent (we only store Option<Regex> and
+    // never break invariants mid-write). Recover via `into_inner()`.
+    {
+        let cache = WILDCARD_REGEX_CACHE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(entry) = cache.get(pattern) {
+            return entry.as_ref().is_some_and(|re| re.is_match(command));
+        }
+    }
+
+    let compiled = compile_wildcard_regex(pattern);
+    let result = compiled.as_ref().is_some_and(|re| re.is_match(command));
+    let mut cache = WILDCARD_REGEX_CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if cache.len() < WILDCARD_REGEX_CACHE_MAX {
+        cache.insert(pattern.to_string(), compiled);
+    }
+    // Cache full: skip insertion — the pattern will be recompiled on each call,
+    // which is acceptable degradation compared to unbounded memory growth.
+    result
+}
+
+/// Build a regex from a wildcard rule pattern. Returns `None` if compilation
+/// fails (invalid pattern — we log once and treat as no-match).
+fn compile_wildcard_regex(pattern: &str) -> Option<regex::Regex> {
     let trimmed = pattern.trim();
 
     // Phase 1: Process escape sequences, collecting regex-ready segments
@@ -174,13 +220,13 @@ fn match_wildcard_pattern(pattern: &str, command: &str) -> bool {
     // Phase 6: Match entire string with dotAll semantics
     let full_pattern = format!("(?s)^{regex_pattern}$");
     match regex::Regex::new(&full_pattern) {
-        Ok(re) => re.is_match(command),
+        Ok(re) => Some(re),
         Err(e) => {
             tracing::warn!(
                 pattern = %pattern,
                 "invalid wildcard pattern, regex compilation failed: {e}"
             );
-            false
+            None
         }
     }
 }

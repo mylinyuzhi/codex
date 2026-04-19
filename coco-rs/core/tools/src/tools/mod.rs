@@ -11,7 +11,7 @@ pub mod edit_utils;
 pub mod glob;
 pub mod grep;
 pub mod mcp_tools;
-pub mod plan_worktree;
+pub mod plan_mode;
 pub mod powershell;
 pub mod powershell_tool;
 pub mod read;
@@ -21,6 +21,7 @@ pub mod shell_tools;
 pub mod task_tools;
 pub mod utility;
 pub mod web;
+pub mod worktree;
 pub mod write;
 
 // File I/O (7)
@@ -66,11 +67,13 @@ pub use task_tools::TaskStopTool;
 pub use task_tools::TaskUpdateTool;
 pub use task_tools::TodoWriteTool;
 
-// Plan & Worktree (4)
-pub use plan_worktree::EnterPlanModeTool;
-pub use plan_worktree::EnterWorktreeTool;
-pub use plan_worktree::ExitPlanModeTool;
-pub use plan_worktree::ExitWorktreeTool;
+// Plan mode (2)
+pub use plan_mode::EnterPlanModeTool;
+pub use plan_mode::ExitPlanModeTool;
+
+// Worktree (2)
+pub use worktree::EnterWorktreeTool;
+pub use worktree::ExitWorktreeTool;
 
 // Utility (5)
 pub use utility::AskUserQuestionTool;

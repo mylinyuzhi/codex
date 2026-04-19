@@ -5,6 +5,7 @@
 pub mod auto_mode;
 pub mod auto_mode_decision;
 pub mod auto_mode_state;
+pub mod bypass_permissions_killswitch;
 pub mod classifier;
 pub mod dangerous_rules;
 pub mod denial_tracking;
@@ -19,6 +20,12 @@ pub mod settings_store;
 pub mod setup;
 pub mod shadowed_rules;
 pub mod shell_rules;
+
+pub use bypass_permissions_killswitch::InitialPermissionMode;
+pub use bypass_permissions_killswitch::KillswitchCheck;
+pub use bypass_permissions_killswitch::check_transition as check_bypass_killswitch_transition;
+pub use bypass_permissions_killswitch::compute_bypass_capability;
+pub use bypass_permissions_killswitch::resolve_initial_permission_mode;
 
 pub use auto_mode::AutoModeDecision;
 pub use auto_mode::AutoModeInput;
@@ -55,8 +62,10 @@ pub use filesystem::is_dangerous_removal_path;
 pub use filesystem::is_editable_internal_path;
 pub use filesystem::is_readable_internal_path;
 pub use filesystem::path_in_working_path;
+pub use mode_transition::apply_auto_transition_to_app_state;
 pub use mode_transition::get_next_permission_mode;
 pub use mode_transition::resolve_predefined_mode;
+pub use mode_transition::resolve_subagent_mode;
 pub use mode_transition::transition_context_with_auto;
 pub use permission_updates::apply_permission_update;
 pub use permission_updates::apply_permission_updates;
