@@ -1,56 +1,33 @@
-# vercel-ai-provider Development Guide
+# vercel-ai-provider
 
-## Overview
+Standalone type definitions matching `@ai-sdk/provider` v4. Zero dependencies on other coco crates.
 
-This crate provides Rust type definitions matching `@ai-sdk/provider` v4 specification. It is a standalone types crate with no dependencies on other coco crates.
+## TS Source
 
-## Key Differences from hyper-sdk
+Ports `@ai-sdk/provider` v4 spec (not from `claude-code/src/`).
 
-1. **Method Naming**: Uses `do_generate`, `do_stream`, `do_embed` prefix (Vercel v4 convention)
-2. **Prompt Types**: More granular `LanguageModelV4Prompt` with typed message variants
-3. **Content Parts**: Separate `UserContentPart`, `AssistantContentPart`, `ToolContentPart` enums
-4. **Stream Events**: Granular events with IDs (text-start, text-delta, text-end, etc.)
-5. **Provider Extensibility**: `ProviderOptions`/`ProviderMetadata` for provider-specific data
+## Key Types
 
-## Module Structure
+Model traits: `LanguageModelV4`, `EmbeddingModelV4`, `ImageModelV4`, `SpeechModelV4`, `TranscriptionModelV4`, `RerankingModelV4`, `VideoModelV4`, `ProviderV4`, `SimpleProvider`.
 
-| Module | Purpose |
-|--------|---------|
-| `language_model` | `LanguageModelV4` trait + call options + results |
-| `embedding_model` | `EmbeddingModelV4` trait + types |
-| `image_model` | `ImageModelV4` trait + types |
-| `provider` | `ProviderV4` trait |
-| `prompt` | `LanguageModelV4Prompt`, message types |
-| `content` | Content part enums (Text, File, Reasoning, ToolCall, etc.) |
-| `tool` | Tool definitions, tool choice, tool call/result |
-| `usage` | Token usage types |
-| `stream` | Stream part types for streaming responses |
-| `errors` | Error type hierarchy (AISdkError, etc.) |
-| `shared` | ProviderOptions, ProviderMetadata, Warning |
+Language model API: `LanguageModelV4CallOptions`, `LanguageModelV4GenerateResult`, `LanguageModelV4StreamResult`, `LanguageModelV4StreamResponse`, `LanguageModelV4StreamPart`, `LanguageModelV4Request`, `LanguageModelV4Response`, `LanguageModelV4Tool`, `LanguageModelV4ToolChoice`, `LanguageModelV4ProviderTool`, `ReasoningLevel`, `ResponseFormat`, `Source`, `SourceType`, `StreamError`, `ToolApprovalRequest`, `UnifiedFinishReason`, `FinishReason`, `Usage`, `InputTokens`, `OutputTokens`.
 
-## Type Mapping (TypeScript → Rust)
+Prompt / message: `LanguageModelV4Prompt` (= `Vec<LanguageModelV4Message>`), `LanguageModelV4Message`.
 
-| TypeScript | Rust |
-|------------|------|
-| Union types | Enums with variants |
-| Optional fields | `Option<T>` |
-| Record<string, T> | `HashMap<String, T>` |
-| AbortSignal | `CancellationToken` |
-| ReadableStream | `futures::Stream` |
-| JSONValue | `serde_json::Value` (type alias) |
+Content parts: `UserContentPart`, `AssistantContentPart`, `ToolContentPart`, `TextPart`, `FilePart`, `ReasoningPart`, `ReasoningFilePart`, `ToolCallPart`, `ToolResultPart`, `ToolResultContent`, `ToolResultContentPart`, `CustomPart`, `FileIdReference`, `DataContent`.
 
-## Design Principles
+Embedding / image / speech / transcription / reranking / video: `EmbeddingModelV4CallOptions`, `EmbeddingModelV4EmbedResult`, `EmbeddingType`, `EmbeddingUsage`, `EmbeddingValue`, `ImageModelV4CallOptions`, `ImageModelV4GenerateResult`, `ImageModelV4File`, `ImageModelV4Response`, `ImageModelV4Usage`, `GeneratedImage`, `ImageData`, `ImageFileData`, `ImageQuality`, `ImageResponseFormat`, `ImageSize`, `ImageStyle`, `SpeechModelV4CallOptions`, `SpeechModelV4Result`, `TranscriptionModelV4CallOptions`, `TranscriptionModelV4Result`, `TranscriptionSegmentV4`, `RerankingModelV4CallOptions`, `RerankingModelV4Result`, `RankedItem`, `RerankDocuments`, `VideoModelV4CallOptions`, `VideoModelV4Result`, `VideoData`, `VideoDuration`, `VideoSize`.
 
-1. **Standalone**: No dependencies on other coco crates
-2. **Type-safe**: Strongly typed with enums for discriminated unions
-3. **Async**: Use `async-trait` for async trait methods
-4. **Error chaining**: Proper error types with `thiserror`
+Middleware: `LanguageModelV4Middleware`, `EmbeddingModelV4Middleware`, `ImageModelV4Middleware`.
 
-## Testing
+Shared / JSON / metadata: `ProviderOptions`, `ProviderMetadata`, `Warning`, `JSONSchema`, `JSONValue`, `JSONArray`, `JSONObject`, `ResponseMetadata`, `ToolInvocation`, `ToolInputExample`, `ToolDefinitionV4` (alias), `ToolChoice` (alias).
 
-```bash
-# From coco-rs directory
-cargo test -p vercel-ai-provider
-cargo check -p vercel-ai-provider
-cargo clippy -p vercel-ai-provider
-```
+Errors: `AISdkError`, `APICallError`, `EmptyResponseBodyError`, `InvalidArgumentError`, `InvalidPromptError`, `InvalidResponseDataError`, `JSONParseError`, `LoadAPIKeyError`, `LoadSettingError`, `NoContentGeneratedError`, `NoSuchModelError`, `ProviderError`, `TooManyEmbeddingValuesForCallError`, `TypeValidationContext`, `TypeValidationError`, `UnsupportedFunctionalityError`.
+
+## v4 Conventions
+
+- Method naming: `do_generate`, `do_stream`, `do_embed` (v4 prefix).
+- Prompt: `LanguageModelV4Prompt` = `Vec<LanguageModelV4Message>` with typed `User` / `Assistant` / `Tool` / `System` variants.
+- Streaming: granular events with IDs — `TextStart` / `TextDelta` / `TextEnd`, `ReasoningStart` / `ReasoningDelta` / `ReasoningEnd`, `ToolInputStart` / `ToolInputDelta` / `ToolInputEnd`, `ToolCall`, `ToolResult`.
+- Provider extensibility: `ProviderOptions` / `ProviderMetadata` carry `serde_json::Value` — intentional extension point for unknown provider fields (the one `Value` use that does NOT violate the "typed structs over JSON values" rule).
+- Errors use `thiserror` (standalone — this crate has no `coco-error` dep).

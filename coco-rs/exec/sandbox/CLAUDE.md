@@ -1,14 +1,9 @@
 # coco-sandbox
 
-Sandbox configuration and enforcement. Copied from cocode-rs (Rust superior).
-
-## Source
-Copied from cocode-rs `exec/sandbox`. Rust superior: seccomp filtering, Seatbelt/bubblewrap enforcement, violation ring buffer. TS equivalent is just an adapter around npm package.
+Sandbox configuration and enforcement. Rust-native: seccomp filtering, Seatbelt (macOS), bubblewrap (Linux), violation ring buffer. TS has no real equivalent (thin adapter around npm sandboxing).
 
 ## Key Types
-- `SandboxMode` (None/ReadOnly/Strict) — defined in coco-types
-- `SandboxConfig`, `SandboxSettings`
-- `PermissionChecker`, `SandboxPlatform` trait (Unix/Windows stubs)
 
-## Dependencies
-coco-types (SandboxMode)
+- `SandboxMode` (None / ReadOnly / Strict) — defined in `coco-types`
+- `SandboxConfig`, `SandboxSettings`
+- `PermissionChecker`, `SandboxPlatform` trait (Unix / Windows stubs)

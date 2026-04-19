@@ -1,5 +1,10 @@
 # coco-async-utils
 
-Async runtime utilities and cancellation helpers. Copied from cocode-rs.
+Async cancellation helpers built on `tokio_util::CancellationToken`.
 
-CancellationToken integration, async task spawning helpers.
+## Key Types
+
+| Type | Purpose |
+|------|---------|
+| `OrCancelExt` | Extension trait: `future.or_cancel(&token)` races a future against cancellation |
+| `CancelErr::Cancelled` | Returned when the token fires before the future completes |

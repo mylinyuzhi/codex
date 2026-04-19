@@ -1,6 +1,10 @@
 # coco-utils-sleep-inhibitor
 
-Prevent machine sleep during long-running operations. Copied from cocode-rs.
+Prevent machine idle sleep while a turn is running. Per-platform backend; no-op on unsupported OSes.
 
-## TS Source (partial overlap)
-- `src/services/preventSleep.ts` (165 LOC)
+## Key Types
+
+- `SleepInhibitor::new(enabled: bool)` — constructor
+- `set_turn_running(bool)` — acquire / release on transition
+- `is_turn_running() -> bool`
+- Platform modules: `macos` (IOKit `PowerCreateRequest`), `linux_inhibitor` (`systemd-inhibit` / `gnome-session-inhibit`), `windows_inhibitor` (`PowerSetRequest`), `dummy` (other)
