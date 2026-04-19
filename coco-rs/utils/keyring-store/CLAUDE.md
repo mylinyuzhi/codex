@@ -1,8 +1,9 @@
 # coco-keyring-store
 
-Secure credential storage using system keyring (macOS Keychain, etc.). Copied from cocode-rs.
+Cross-platform credential storage via the `keyring` crate (macOS Keychain, Linux Secret Service, Windows Credential Manager).
 
-Rust-only: OS keyring integration via platform APIs.
+## Key Types
 
-## TS Source (partial overlap)
-- `src/utils/secureStorage/` (6 files, 629 LOC — macOS Keychain, fallback storage)
+- `KeyringStore` trait — `load` / `save` / `delete` over `(service, account)`
+- `DefaultKeyringStore` — `keyring::Entry` implementation
+- `CredentialStoreError` — wraps `keyring::Error`

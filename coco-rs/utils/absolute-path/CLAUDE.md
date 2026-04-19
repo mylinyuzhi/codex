@@ -1,5 +1,11 @@
 # coco-utils-absolute-path
 
-Absolute path types with deserialization support. Copied from cocode-rs.
+Absolute, normalized path type with home-directory expansion and serde support.
 
-No TS equivalent. Rust-only path abstraction.
+## Key Types
+| Type | Purpose |
+|------|---------|
+| `AbsolutePathBuf` | Guaranteed-absolute `PathBuf` wrapper (Serialize/Deserialize/JsonSchema/TS) |
+| `AbsolutePathBufGuard` | Thread-local base path for relative-path deserialization |
+| `canonicalize_preserving_symlinks` | Canonicalize but keep logical path through symlinks |
+| `test_support::PathExt` / `PathBufExt` | Test helpers (`.abs()`) |

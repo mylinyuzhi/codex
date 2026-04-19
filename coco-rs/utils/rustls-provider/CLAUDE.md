@@ -1,5 +1,6 @@
 # coco-utils-rustls-provider
 
-TLS provider for reqwest using rustls. Copied from cocode-rs.
+Process-wide `rustls` crypto provider installer. Resolves ambiguity when both `ring` and `aws-lc-rs` features are enabled in the dep graph.
 
-Rust-only: TLS library integration.
+## Key Types
+- `ensure_rustls_crypto_provider()` — idempotent install of `rustls::crypto::ring::default_provider()` via `Once`.
