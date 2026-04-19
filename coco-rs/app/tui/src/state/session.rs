@@ -5,6 +5,8 @@
 use std::collections::VecDeque;
 use std::time::Instant;
 
+use coco_types::IdeDiagnosticsUpdatedParams;
+use coco_types::IdeSelectionChangedParams;
 use coco_types::PermissionMode;
 
 /// Agent-synchronized session state.
@@ -14,10 +16,17 @@ pub struct SessionState {
     pub messages: Vec<ChatMessage>,
     /// Active model name.
     pub model: String,
-    /// Whether plan mode is active.
-    pub plan_mode: bool,
-    /// Current permission mode.
+    /// Current permission mode. Plan-mode status is derived from this
+    /// (`permission_mode == Plan`) — no separate bool.
     pub permission_mode: PermissionMode,
+    /// Whether the current session may cycle into `BypassPermissions`.
+    /// Gate flag for [`PermissionMode::next_in_cycle`]; set by the
+    /// runtime based on auth + settings.
+    pub bypass_permissions_available: bool,
+    /// Whether the classifier-backed `Auto` mode is available.
+    /// Gate flag for [`PermissionMode::next_in_cycle`]; set by the
+    /// runtime based on feature flags.
+    pub auto_mode_available: bool,
     /// Active tool executions.
     pub tool_executions: Vec<ToolExecution>,
     /// Subagent instances.
@@ -62,6 +71,10 @@ pub struct SessionState {
     pub was_interrupted: bool,
     /// Available slash commands for command palette.
     pub available_commands: Vec<(String, Option<String>)>,
+    /// Available agents for `@agent-*` autocomplete. Populated by the
+    /// session handler when the agent registry is loaded; used synchronously
+    /// by `autocomplete::refresh_suggestions` for the Agent trigger.
+    pub available_agents: Vec<crate::autocomplete::AgentInfo>,
     /// Saved sessions for session browser.
     pub saved_sessions: Vec<SavedSession>,
 
@@ -92,6 +105,14 @@ pub struct SessionState {
     pub available_output_styles: Vec<String>,
     /// Available plugins for picker (set by PluginDataReady).
     pub available_plugins: Vec<serde_json::Value>,
+    /// Raw markdown of the most recent completed agent response. Populated on
+    /// `TurnCompleted` and consumed by the `/copy` / Ctrl+O flow. Cleared when
+    /// a new session is configured. See `record_agent_markdown()`.
+    pub last_agent_markdown: Option<String>,
+    /// Latest IDE selection (set by IdeSelectionChanged, replaces prior value).
+    pub ide_selection: Option<IdeSelectionChangedParams>,
+    /// Latest IDE diagnostics update (set by IdeDiagnosticsUpdated, replaces prior value).
+    pub ide_diagnostics: Option<IdeDiagnosticsUpdatedParams>,
 }
 
 impl SessionState {
@@ -115,6 +136,15 @@ impl SessionState {
         self.busy = busy;
     }
 
+    /// Record the raw markdown of the current agent turn for the `/copy`
+    /// / Ctrl+O flow. Mirrors codex-rs `record_agent_markdown()`.
+    pub fn record_agent_markdown(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        self.last_agent_markdown = Some(text.to_string());
+    }
+
     /// Update token usage.
     pub fn update_tokens(&mut self, usage: TokenUsage) {
         self.token_usage = usage;
@@ -127,6 +157,7 @@ impl SessionState {
             name,
             status: ToolStatus::Queued,
             started_at: Instant::now(),
+            completed_at: None,
             description: None,
             streaming_input: None,
         });
@@ -157,6 +188,7 @@ impl SessionState {
             } else {
                 ToolStatus::Completed
             };
+            tool.completed_at = Some(Instant::now());
         } else {
             tracing::debug!(call_id, "complete_tool: tool not found in tool_executions");
         }
@@ -173,8 +205,9 @@ impl Default for SessionState {
         Self {
             messages: Vec::new(),
             model: String::new(),
-            plan_mode: false,
             permission_mode: PermissionMode::Default,
+            bypass_permissions_available: false,
+            auto_mode_available: false,
             tool_executions: Vec::new(),
             subagents: Vec::new(),
             token_usage: TokenUsage::default(),
@@ -196,6 +229,7 @@ impl Default for SessionState {
             file_history_enabled: false,
             was_interrupted: false,
             available_commands: Vec::new(),
+            available_agents: Vec::new(),
             saved_sessions: Vec::new(),
             session_state: coco_types::SessionState::Idle,
             worktree_path: None,
@@ -210,6 +244,9 @@ impl Default for SessionState {
             local_command_output: VecDeque::new(),
             available_output_styles: Vec::new(),
             available_plugins: Vec::new(),
+            last_agent_markdown: None,
+            ide_selection: None,
+            ide_diagnostics: None,
         }
     }
 }
@@ -262,6 +299,22 @@ pub enum MessageContent {
     Attachment {
         attachment_type: String,
         preview: String,
+    },
+    /// Channel-scoped message (e.g., a plugin Slack/Discord bridge).
+    /// TS: UserChannelMessage.tsx — parses `<channel source user>body</channel>`.
+    ChannelMessage {
+        source: String,
+        user: Option<String>,
+        content: String,
+    },
+    /// MCP resource or tool-polling update notification.
+    /// TS: UserResourceUpdateMessage.tsx — parses `<mcp-resource-update ...>`
+    /// and `<mcp-polling-update ...>` blocks.
+    ResourceUpdate {
+        kind: ResourceUpdateKind,
+        server: String,
+        target: String,
+        reason: Option<String>,
     },
 
     // ── Assistant messages (TS: 5 types) ──
@@ -363,6 +416,19 @@ pub enum MessageContent {
 pub enum PlanAction {
     Enter,
     Exit,
+}
+
+/// MCP update notification kind.
+///
+/// TS: UserResourceUpdateMessage.tsx distinguishes `<mcp-resource-update>`
+/// (resource content changed — e.g. a file or DB row) from
+/// `<mcp-polling-update>` (a polled tool's output changed).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResourceUpdateKind {
+    /// Resource changed (URI-addressed).
+    Resource,
+    /// Polled tool output changed.
+    Polling,
 }
 
 /// Tool use inline status.
@@ -484,6 +550,8 @@ impl ChatMessage {
             MessageContent::CompactBoundary => "---",
             MessageContent::Advisor { content, .. } => content,
             MessageContent::TaskAssignment { description, .. } => description,
+            MessageContent::ChannelMessage { content, .. } => content,
+            MessageContent::ResourceUpdate { target, .. } => target,
         }
     }
 }
@@ -495,15 +563,22 @@ pub struct ToolExecution {
     pub name: String,
     pub status: ToolStatus,
     pub started_at: Instant,
+    /// When the tool reached a terminal status (Completed or Failed). Set by
+    /// `complete_tool()` so `elapsed()` freezes after completion instead of
+    /// continuing to grow while the message stays in the transcript.
+    pub completed_at: Option<Instant>,
     pub description: Option<String>,
     /// Streaming tool input delta (typing effect for bash/powershell).
     pub streaming_input: Option<String>,
 }
 
 impl ToolExecution {
-    /// Elapsed time since tool started.
+    /// Elapsed time between start and terminal status (or now, if still running).
     pub fn elapsed(&self) -> std::time::Duration {
-        self.started_at.elapsed()
+        match self.completed_at {
+            Some(end) => end.duration_since(self.started_at),
+            None => self.started_at.elapsed(),
+        }
     }
 }
 

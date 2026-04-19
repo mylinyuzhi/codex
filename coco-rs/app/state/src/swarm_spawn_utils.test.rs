@@ -78,9 +78,9 @@ fn test_build_inherited_env_vars() {
     };
 
     let env = build_inherited_env_vars(&config);
-    assert!(env.contains("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1"));
-    assert!(env.contains("CLAUDE_CODE_AGENT_COLOR=red"));
-    assert!(env.contains("CLAUDE_CODE_PLAN_MODE_REQUIRED=1"));
+    assert!(env.contains("COCO_EXPERIMENTAL_AGENT_TEAMS=1"));
+    assert!(env.contains("COCO_AGENT_COLOR=red"));
+    assert!(env.contains("COCO_PLAN_MODE_REQUIRED=1"));
 }
 
 #[test]

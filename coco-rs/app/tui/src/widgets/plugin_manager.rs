@@ -13,6 +13,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
 
+use crate::i18n::t;
 use crate::theme::Theme;
 
 /// Plugin entry for the manager display.
@@ -126,9 +127,9 @@ impl Widget for PluginManagerWidget<'_> {
         };
 
         lines.push(Line::from(vec![
-            Span::styled(" Installed ", installed_style),
+            Span::styled(t!("plugin.tab_installed").to_string(), installed_style),
             Span::raw("│").fg(self.theme.border),
-            Span::styled(" Available ", available_style),
+            Span::styled(t!("plugin.tab_available").to_string(), available_style),
         ]));
 
         // Filter
@@ -144,7 +145,7 @@ impl Widget for PluginManagerWidget<'_> {
         let filtered = self.state.filtered();
         if filtered.is_empty() {
             lines.push(Line::from(
-                Span::raw("  No plugins found").fg(self.theme.text_dim),
+                Span::raw(format!("  {}", t!("plugin.none_found"))).fg(self.theme.text_dim),
             ));
         }
 
@@ -161,10 +162,10 @@ impl Widget for PluginManagerWidget<'_> {
             };
 
             let source_label = match plugin.source {
-                PluginSource::Managed => "managed",
-                PluginSource::User => "user",
-                PluginSource::Project => "project",
-                PluginSource::Builtin => "builtin",
+                PluginSource::Managed => t!("plugin.source_managed"),
+                PluginSource::User => t!("plugin.source_user"),
+                PluginSource::Project => t!("plugin.source_project"),
+                PluginSource::Builtin => t!("plugin.source_builtin"),
             };
 
             let mut spans = vec![
@@ -181,7 +182,11 @@ impl Widget for PluginManagerWidget<'_> {
 
             if plugin.tool_count > 0 {
                 spans.push(
-                    Span::raw(format!(" ({} tools)", plugin.tool_count)).fg(self.theme.text_dim),
+                    Span::raw(format!(
+                        " {}",
+                        t!("plugin.tools_suffix", count = plugin.tool_count)
+                    ))
+                    .fg(self.theme.text_dim),
                 );
             }
 
@@ -202,14 +207,14 @@ impl Widget for PluginManagerWidget<'_> {
 
         lines.push(Line::default());
         lines.push(Line::from(vec![
-            Span::raw("  [Tab] Switch tab  ").fg(self.theme.text_dim),
-            Span::raw("[Enter] Toggle  ").fg(self.theme.text_dim),
-            Span::raw("[Esc] Close").fg(self.theme.text_dim),
+            Span::raw(format!("  {}", t!("plugin.hint_switch_tab"))).fg(self.theme.text_dim),
+            Span::raw(t!("plugin.hint_toggle").to_string()).fg(self.theme.text_dim),
+            Span::raw(t!("plugin.hint_close").to_string()).fg(self.theme.text_dim),
         ]));
 
         let block = Block::default()
             .borders(Borders::ALL)
-            .title(" Plugins ")
+            .title(t!("plugin.panel_title").to_string())
             .border_style(ratatui::style::Style::default().fg(self.theme.border_focused));
 
         let paragraph = Paragraph::new(lines)

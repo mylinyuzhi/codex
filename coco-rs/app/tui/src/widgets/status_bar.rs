@@ -9,6 +9,7 @@ use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
+use crate::i18n::t;
 use crate::state::AppState;
 use crate::theme::Theme;
 
@@ -53,10 +54,20 @@ impl Widget for StatusBar<'_> {
             parts.push(Span::raw(" | ").fg(self.theme.border));
             if total >= 1000 {
                 parts.push(
-                    Span::raw(format!("{:.1}k tok", total as f64 / 1000.0)).fg(self.theme.text_dim),
+                    Span::raw(
+                        t!(
+                            "status.tokens_k",
+                            value = format!("{:.1}", total as f64 / 1000.0)
+                        )
+                        .to_string(),
+                    )
+                    .fg(self.theme.text_dim),
                 );
             } else {
-                parts.push(Span::raw(format!("{total} tok")).fg(self.theme.text_dim));
+                parts.push(
+                    Span::raw(t!("status.tokens_total", count = total).to_string())
+                        .fg(self.theme.text_dim),
+                );
             }
         }
 
@@ -71,7 +82,9 @@ impl Widget for StatusBar<'_> {
         let mcp_count = self.state.session.connected_mcp_count();
         if mcp_count > 0 {
             parts.push(Span::raw(" | ").fg(self.theme.border));
-            parts.push(Span::raw(format!("{mcp_count} MCP")).fg(self.theme.text_dim));
+            parts.push(
+                Span::raw(t!("status.mcp", count = mcp_count).to_string()).fg(self.theme.text_dim),
+            );
         }
 
         // Cost
@@ -84,7 +97,7 @@ impl Widget for StatusBar<'_> {
         // Message count
         parts.push(Span::raw(" | ").fg(self.theme.border));
         parts.push(
-            Span::raw(format!("{} msgs", self.state.session.messages.len()))
+            Span::raw(t!("status.msgs", count = self.state.session.messages.len()).to_string())
                 .fg(self.theme.text_dim),
         );
 

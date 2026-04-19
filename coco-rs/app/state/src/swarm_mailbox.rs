@@ -76,7 +76,12 @@ pub fn read_unread_messages(
 
 /// Write a message to a recipient's inbox.
 ///
-/// TS: `writeToMailbox(recipientName, message, teamName)`
+/// TS: `writeToMailbox(recipientName, message, teamName)` — uses
+/// `proper-lockfile` with 10 retries and 5-100ms exponential backoff.
+/// We mirror that with `fs2`'s advisory exclusive lock on a sidecar
+/// `.lock` file; concurrent writers spin with backoff until they acquire
+/// it. Read-after-lock prevents the classic TOCTOU of "read-mailbox →
+/// append → write" losing a concurrent peer's message.
 pub fn write_to_mailbox(
     recipient_name: &str,
     message: TeammateMessage,
@@ -87,11 +92,86 @@ pub fn write_to_mailbox(
         std::fs::create_dir_all(parent)?;
     }
 
-    let mut messages = read_mailbox(recipient_name, team_name).unwrap_or_default();
-    messages.push(message);
-    let content = serde_json::to_string_pretty(&messages)?;
-    std::fs::write(&path, content)?;
-    Ok(())
+    with_inbox_lock(&path, |path| {
+        // Inside the lock: read-current, append, write. The outer lock
+        // serializes this RMW cycle against concurrent writers.
+        let mut messages = read_messages_no_lock(path).unwrap_or_default();
+        messages.push(message.clone());
+        let content = serde_json::to_string_pretty(&messages)?;
+        std::fs::write(path, content)?;
+        Ok(())
+    })
+}
+
+/// Run `body` while holding an exclusive advisory lock on a sidecar
+/// `{path}.lock` file, retrying acquisition on contention.
+///
+/// 10 retries with 5→100ms backoff (mirrors TS `proper-lockfile`
+/// defaults). After exhaustion we bubble the error so the caller can
+/// surface a clear failure rather than silently dropping the message.
+fn with_inbox_lock<F>(path: &std::path::Path, body: F) -> anyhow::Result<()>
+where
+    F: FnOnce(&std::path::Path) -> anyhow::Result<()>,
+{
+    use fs2::FileExt;
+    let lock_path = path.with_extension("json.lock");
+    // `create(true)` so the lockfile can be created on first access to
+    // an inbox that doesn't yet exist. We don't write anything into it;
+    // it's purely the lock target.
+    let lock_file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&lock_path)?;
+
+    // 30 retries × up to 50ms = ~1.5s upper bound under contention.
+    // Jitter scales each backoff by [0.5, 1.5) to break thundering-herd
+    // wakeups when many writers contend at once (pure exponential
+    // backoff syncs all retry-waves across threads).
+    const MAX_RETRIES: u32 = 30;
+    let mut delay_ms: u64 = 2;
+    for attempt in 0..MAX_RETRIES {
+        match lock_file.try_lock_exclusive() {
+            Ok(()) => {
+                let result = body(path);
+                let _ = lock_file.unlock();
+                return result;
+            }
+            Err(_) if attempt + 1 < MAX_RETRIES => {
+                let jitter_bits = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.subsec_nanos())
+                    .unwrap_or(0);
+                let jitter_pct = 50 + (jitter_bits % 100) as u64; // [50, 150)
+                let jittered = delay_ms * jitter_pct / 100;
+                std::thread::sleep(std::time::Duration::from_millis(jittered.max(1)));
+                delay_ms = (delay_ms * 2).min(50);
+            }
+            Err(e) => {
+                return Err(anyhow::anyhow!(
+                    "failed to acquire mailbox lock at {} after {MAX_RETRIES} retries: {e}",
+                    lock_path.display()
+                ));
+            }
+        }
+    }
+    unreachable!("retry loop always returns")
+}
+
+/// Read the mailbox file without acquiring the lock. Callers that need
+/// lock-protected read-modify-write should use this from inside
+/// `with_inbox_lock` to avoid recursive locking. Callers that just want
+/// a point-in-time read can use the public [`read_mailbox`] which is
+/// lock-free (readers accept slight staleness).
+fn read_messages_no_lock(path: &std::path::Path) -> anyhow::Result<Vec<TeammateMessage>> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let content = std::fs::read_to_string(path)?;
+    if content.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(serde_json::from_str(&content)?)
 }
 
 /// Mark all messages as read.
@@ -845,6 +925,81 @@ pub fn is_swarm_worker() -> bool {
 /// TS: `getLeaderName(teamName?)`
 pub fn get_leader_name(_team_name: &str) -> String {
     super::swarm_constants::TEAM_LEAD_NAME.to_string()
+}
+
+// ── Protocol-message helpers (TS parity) ──
+
+/// Generate a deterministic-by-agent-identity-but-unique-per-call
+/// request ID for plan_approval.
+///
+/// TS: `generateRequestId('plan_approval', formatAgentId(agentName, teamName))`
+pub fn generate_plan_approval_request_id(agent_name: &str, team_name: &str) -> String {
+    // Short random suffix — collisions within a session are astronomically
+    // unlikely and the correlation is handled by the leader matching on
+    // the full string anyway.
+    let rand: String = uuid::Uuid::new_v4().simple().to_string();
+    let rand8: String = rand.chars().take(8).collect();
+    format!("plan_approval-{agent_name}-{team_name}-{rand8}")
+}
+
+// ── MailboxHandle impl for ToolUseContext plumbing (`coco-tool` trait) ──
+
+/// Concrete `MailboxHandle` implementation that writes via
+/// [`write_to_mailbox`]. Engines and spawn paths install one of these
+/// on the teammate's `ToolUseContext` so ExitPlanMode + SendMessage can
+/// reach the leader's inbox without crossing layer boundaries directly.
+#[derive(Debug, Default)]
+pub struct SwarmMailboxHandle;
+
+#[async_trait::async_trait]
+impl coco_tool::MailboxHandle for SwarmMailboxHandle {
+    async fn write_to_mailbox(
+        &self,
+        recipient: &str,
+        team_name: &str,
+        message: coco_tool::MailboxEnvelope,
+    ) -> anyhow::Result<()> {
+        let msg = TeammateMessage {
+            from: message.from,
+            text: message.text,
+            timestamp: message.timestamp,
+            read: false,
+            color: None,
+            summary: None,
+        };
+        write_to_mailbox(recipient, msg, team_name)
+    }
+
+    async fn read_unread(
+        &self,
+        agent_name: &str,
+        team_name: &str,
+    ) -> anyhow::Result<Vec<coco_tool::InboxMessage>> {
+        // We need indices from the FULL mailbox (to support
+        // `mark_read(index)`), so read the full list and filter to
+        // unread in-place.
+        let all = read_mailbox(agent_name, team_name).unwrap_or_default();
+        Ok(all
+            .into_iter()
+            .enumerate()
+            .filter(|(_, m)| !m.read)
+            .map(|(index, m)| coco_tool::InboxMessage {
+                index,
+                from: m.from,
+                text: m.text,
+                timestamp: m.timestamp,
+            })
+            .collect())
+    }
+
+    async fn mark_read(
+        &self,
+        agent_name: &str,
+        team_name: &str,
+        index: usize,
+    ) -> anyhow::Result<()> {
+        mark_message_as_read_by_index(agent_name, team_name, index)
+    }
 }
 
 #[cfg(test)]

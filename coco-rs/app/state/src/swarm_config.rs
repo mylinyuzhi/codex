@@ -85,7 +85,7 @@ impl Default for TeamConfig {
 /// TS: `isAgentSwarmsEnabled()` in `utils/agentSwarmsEnabled.ts`.
 ///
 /// Checks:
-/// 1. `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` env var
+/// 1. `COCO_EXPERIMENTAL_AGENT_TEAMS` env var
 /// 2. `--agent-teams` CLI flag (via config)
 /// 3. GrowthBook gate `tengu_amber_flint` (not yet implemented, always passes)
 pub fn is_agent_teams_enabled(config: &TeamConfig, cli_flag: bool) -> bool {

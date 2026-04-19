@@ -99,7 +99,10 @@ impl LanguageModelV4 for MockModel {
 }
 
 /// Create the LLM model -- real Anthropic if API key available, else mock.
+mod model_factory;
 mod tui_runner;
+
+pub(crate) use model_factory::build_language_model_from_spec;
 
 pub(crate) fn create_model(model_id: Option<&str>) -> (Arc<dyn LanguageModelV4>, &'static str) {
     if std::env::var("ANTHROPIC_API_KEY").is_ok() {
@@ -299,12 +302,10 @@ async fn main() -> Result<()> {
                 return Ok(());
             }
             Commands::Plugin { action } => {
-                match action {
-                    PluginAction::List => println!("Installed plugins: (none)"),
-                    PluginAction::Install { name } => println!("Installing plugin: {name}"),
-                    PluginAction::Uninstall { name } => println!("Uninstalling plugin: {name}"),
-                }
-                return Ok(());
+                return run_plugin_subcommand(action).await;
+            }
+            Commands::Agents => {
+                return run_agents_subcommand().await;
             }
             Commands::AutoMode { subcmd } => {
                 match subcmd.as_deref() {
@@ -419,6 +420,189 @@ pub(crate) fn build_system_prompt(cwd: &std::path::Path, model_id: &str) -> Stri
     system_prompt
 }
 
+/// Handle `coco plugin <action>`.
+///
+/// TS: `src/cli/handlers/plugins.ts` — full handler is ~878 lines covering
+/// marketplace integration, scopes, lockfiles. Rust currently implements the
+/// local-disk subset: list, install-from-path, uninstall, validate.
+/// URL/marketplace installs require porting the marketplace module.
+async fn run_plugin_subcommand(action: &PluginAction) -> Result<()> {
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let config_home = global_config::config_home();
+    let plugin_dirs = coco_plugins::get_plugin_dirs(&config_home, &cwd);
+
+    match action {
+        PluginAction::List => {
+            let mut manager = coco_plugins::PluginManager::new();
+            manager.load_from_dirs(&plugin_dirs);
+            if manager.is_empty() {
+                println!("No plugins installed.");
+                return Ok(());
+            }
+            println!("Installed plugins:");
+            let mut plugins: Vec<_> = manager.enabled();
+            plugins.sort_by_key(|p| p.name.clone());
+            for plugin in plugins {
+                let version = plugin.manifest.version.as_deref().unwrap_or("—");
+                let source = match &plugin.source {
+                    coco_plugins::PluginSource::Builtin => "builtin".into(),
+                    coco_plugins::PluginSource::User => "user".into(),
+                    coco_plugins::PluginSource::Project => "project".into(),
+                    coco_plugins::PluginSource::Repository { url } => format!("repo {url}"),
+                };
+                println!(
+                    "  {name} {version} ({source})  — {desc}",
+                    name = plugin.name,
+                    desc = plugin.manifest.description,
+                );
+            }
+            Ok(())
+        }
+        PluginAction::Install { name } => {
+            let src = std::path::Path::new(name);
+            if !src.is_dir() {
+                anyhow::bail!(
+                    "plugin source '{name}' is not a local directory; \
+                     marketplace/URL installs are not yet implemented"
+                );
+            }
+            if !src.join("PLUGIN.toml").is_file() {
+                anyhow::bail!("'{name}' does not contain a PLUGIN.toml manifest");
+            }
+            let manifest = coco_plugins::load_plugin_manifest(&src.join("PLUGIN.toml"))?;
+            // Reject manifest names that could traverse the install root.
+            // `Path::join` treats "../" literally and does not escape the root on
+            // disk, but a normalized `..` chain can still confuse audit tooling.
+            if manifest.name.is_empty()
+                || manifest.name.contains('/')
+                || manifest.name.contains('\\')
+                || manifest.name == ".."
+                || manifest.name == "."
+            {
+                anyhow::bail!(
+                    "plugin manifest name '{}' contains path separators or reserved \
+                     component; refusing to install",
+                    manifest.name
+                );
+            }
+            let dest_root = config_home.join("plugins");
+            std::fs::create_dir_all(&dest_root)?;
+            let dest = dest_root.join(&manifest.name);
+            if dest.exists() {
+                anyhow::bail!(
+                    "plugin '{}' already installed at {}; uninstall first",
+                    manifest.name,
+                    dest.display()
+                );
+            }
+            copy_dir_recursive(src, &dest)?;
+            println!("Installed plugin '{}' → {}", manifest.name, dest.display());
+            Ok(())
+        }
+        PluginAction::Uninstall { name } => {
+            let dest = config_home.join("plugins").join(name);
+            if !dest.is_dir() {
+                anyhow::bail!("plugin '{name}' is not installed at {}", dest.display());
+            }
+            std::fs::remove_dir_all(&dest)?;
+            println!("Uninstalled plugin '{name}'");
+            Ok(())
+        }
+        PluginAction::Validate { path } => {
+            let path = std::path::Path::new(path);
+            let manifest_path = if path.is_file() {
+                path.to_path_buf()
+            } else {
+                path.join("PLUGIN.toml")
+            };
+            if !manifest_path.is_file() {
+                anyhow::bail!("no PLUGIN.toml found at {}", manifest_path.display());
+            }
+            let manifest = coco_plugins::load_plugin_manifest(&manifest_path)?;
+            println!(
+                "✓ {} v{}",
+                manifest.name,
+                manifest.version.as_deref().unwrap_or("—")
+            );
+            println!("  {}", manifest.description);
+            if !manifest.skills.is_empty() {
+                println!("  skills: {}", manifest.skills.join(", "));
+            }
+            if !manifest.hooks.is_empty() {
+                println!("  hooks: {} event(s)", manifest.hooks.len());
+            }
+            if !manifest.mcp_servers.is_empty() {
+                println!("  mcp_servers: {}", manifest.mcp_servers.len());
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Recursively copy `src` into `dst`. Used by plugin install.
+///
+/// Symlinks are skipped with a warning — following them lets a hostile plugin
+/// exfiltrate host files (e.g. `~/.ssh/id_rsa`) into the install tree. Use
+/// `symlink_metadata()` so the check doesn't follow; `file_type().is_dir()`
+/// and `is_file()` otherwise follow by default.
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        // symlink_metadata does NOT follow — so a symlink is reported as a symlink.
+        let meta = std::fs::symlink_metadata(&src_path)?;
+        let ty = meta.file_type();
+        if ty.is_symlink() {
+            eprintln!(
+                "warning: skipping symlink in plugin source: {}",
+                src_path.display()
+            );
+            continue;
+        }
+        let dest_path = dst.join(entry.file_name());
+        if ty.is_dir() {
+            copy_dir_recursive(&src_path, &dest_path)?;
+        } else if ty.is_file() {
+            std::fs::copy(&src_path, &dest_path)?;
+        }
+    }
+    Ok(())
+}
+
+/// Handle `coco agents` — list discovered agent definitions.
+///
+/// TS: `src/cli/handlers/agents.ts` — walks the standard agent dirs and
+/// prints a flat list. Rust mirrors the same discovery sources.
+async fn run_agents_subcommand() -> Result<()> {
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let config_home = global_config::config_home();
+    let agent_dirs = coco_tools::tools::agent_spawn::get_agent_dirs(&config_home, &cwd);
+    let mut agents = coco_tools::tools::agent_spawn::load_agents_from_dirs(&agent_dirs);
+
+    if agents.is_empty() {
+        println!("No agents found.");
+        println!(
+            "Searched: {}",
+            agent_dirs
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        return Ok(());
+    }
+
+    agents.sort_by(|a, b| a.name.cmp(&b.name));
+    println!("{} agent(s):", agents.len());
+    for agent in &agents {
+        let model = agent.model.as_deref().unwrap_or("inherit");
+        let desc = agent.description.as_deref().unwrap_or("(no description)");
+        println!("  {} · {model}  — {desc}", agent.name);
+    }
+    Ok(())
+}
+
 /// Run a single-turn print mode (--print / piped stdout).
 ///
 /// TS: runHeadless() in cli/print.ts
@@ -435,18 +619,29 @@ async fn run_chat(cli: &Cli, prompt: Option<&str>) -> Result<()> {
 
     let cwd = std::env::current_dir()?;
     let settings = coco_config::settings::load_settings(&cwd, None)?;
-    let permission_mode = settings.merged.permissions.default_mode.unwrap_or_default();
+
+    let startup = resolve_startup_permission_state(cli, &settings.merged)?;
+    // Headless path — surface the downgrade notification on stderr.
+    if let Some(msg) = &startup.notification {
+        eprintln!("warning: {msg}");
+    }
+    let permission_mode = startup.mode;
+    let bypass_permissions_available = startup.bypass_available;
 
     let system_prompt = build_system_prompt(&cwd, &model_id);
 
     let config = QueryEngineConfig {
         model_name: model_id.clone(),
         permission_mode,
+        bypass_permissions_available,
         context_window: 200_000,
         max_output_tokens: 16_384,
         max_turns: 30,
         max_tokens: cli.max_tokens,
         system_prompt: Some(system_prompt),
+        project_dir: Some(cwd.clone()),
+        plans_directory: settings.merged.plans_directory.clone(),
+        plan_mode_settings: settings.merged.plan_mode.clone(),
         ..Default::default()
     };
 
@@ -579,6 +774,18 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     }
     let bootstrap: Arc<dyn coco_cli::sdk_server::InitializeBootstrap> = Arc::new(bootstrap_builder);
 
+    // Startup safety + capability gate (parity with run_tui / run_chat).
+    let settings = coco_config::settings::load_settings(&cwd, None)?;
+    // SDK mode doesn't surface an initial mode via this path — the SDK
+    // client sets mode per-session through turn/start or
+    // `control/setPermissionMode`. We still resolve to run the killswitch
+    // downgrade + safety guard consistently.
+    let startup = resolve_startup_permission_state(cli, &settings.merged)?;
+    if let Some(msg) = &startup.notification {
+        eprintln!("warning: {msg}");
+    }
+    let bypass_permissions_available = startup.bypass_available;
+
     // Build the server with a default runner first so we have a live
     // `state` handle to give to the approval bridge.
     let transport = StdioTransport::new();
@@ -588,6 +795,12 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
         .with_mcp_manager(mcp_manager)
         .with_initialize_bootstrap(bootstrap);
     let state = server.state();
+    // Seed the bypass capability so `handle_set_permission_mode` can
+    // enforce the mid-session guard. Static for the process lifetime.
+    state.bypass_permissions_available.store(
+        bypass_permissions_available,
+        std::sync::atomic::Ordering::Relaxed,
+    );
 
     // Build the real runner with an SdkPermissionBridge that routes
     // `PermissionDecision::Ask` via `approval/askForApproval` to the
@@ -613,4 +826,141 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
         return Err(anyhow::anyhow!("sdk dispatch failed: {e}"));
     }
     Ok(())
+}
+
+/// Output of startup permission resolution. Contains everything the
+/// session needs to bootstrap with consistent bypass semantics.
+pub(crate) struct StartupPermissionState {
+    /// Resolved initial permission mode (after CLI + settings merge
+    /// + killswitch downgrade).
+    pub mode: coco_types::PermissionMode,
+    /// Whether the session may transition into `BypassPermissions`.
+    pub bypass_available: bool,
+    /// Optional user-visible notification explaining a downgrade
+    /// (e.g. killswitch forced Bypass → AcceptEdits). Callers should
+    /// surface it via stderr (headless) or a TUI toast (interactive)
+    /// so users understand why they didn't land in the mode they
+    /// asked for. `None` when no downgrade occurred.
+    pub notification: Option<String>,
+}
+
+/// Resolve the session's initial `PermissionMode` and the bypass
+/// capability in one pass, and run the sudo/sandbox safety guard.
+///
+/// This mirrors TS's startup sequence:
+/// 1. `initialPermissionModeFromCLI` — pick a mode from
+///    `--dangerously-skip-permissions` → `--permission-mode` →
+///    `settings.permissions.defaultMode`, walking the list and
+///    skipping `bypassPermissions` when the killswitch is engaged.
+/// 2. `isBypassPermissionsModeAvailable` — capability derived from
+///    `(resolved_mode == Bypass || --allow-dangerously-skip-permissions)
+///     && !killswitch`.
+/// 3. `setup.ts:395-442` — root/sandbox guard when the session will
+///    start in bypass OR the allow flag is set.
+pub(crate) fn resolve_startup_permission_state(
+    cli: &Cli,
+    settings: &coco_config::Settings,
+) -> Result<StartupPermissionState> {
+    use coco_types::PermissionMode;
+
+    let policy_flag = Some(settings.permissions.disable_bypass_mode);
+
+    // Parse --permission-mode once so the walk resolver sees a typed
+    // value; invalid strings print one warning here and are ignored
+    // (TS `permissionModeFromString` returns 'default' on unknown
+    // input — we treat the slot as absent, which is equivalent under
+    // the walk semantics).
+    let permission_mode_cli = cli.permission_mode.as_deref().and_then(|raw| {
+        match serde_json::from_value::<PermissionMode>(serde_json::json!(raw)) {
+            Ok(m) => Some(m),
+            Err(e) => {
+                eprintln!("warning: invalid --permission-mode {raw:?}: {e}; ignoring");
+                None
+            }
+        }
+    });
+
+    // TS `initialPermissionModeFromCLI`: walk ordered candidates,
+    // skip Bypass when killswitch engaged, first non-blocked wins.
+    let resolved = coco_permissions::resolve_initial_permission_mode(
+        cli.dangerously_skip_permissions,
+        permission_mode_cli,
+        settings.permissions.default_mode,
+        policy_flag,
+    );
+    let mode = resolved.mode;
+
+    // TS `isBypassPermissionsModeAvailable`: key on the resolved mode,
+    // not the raw CLI flag, so `--permission-mode bypassPermissions`
+    // also unlocks the capability.
+    let bypass_available = coco_permissions::compute_bypass_capability(
+        mode == PermissionMode::BypassPermissions,
+        cli.allow_dangerously_skip_permissions,
+        policy_flag,
+    );
+
+    // TS `setup.ts:395-442`: sudo/sandbox guard fires whenever bypass
+    // is requested (resolved mode is Bypass OR allow-flag set).
+    let requesting_bypass =
+        mode == PermissionMode::BypassPermissions || cli.allow_dangerously_skip_permissions;
+    enforce_dangerous_skip_safety(requesting_bypass)?;
+
+    Ok(StartupPermissionState {
+        mode,
+        bypass_available,
+        notification: resolved.notification,
+    })
+}
+
+/// Reject requesting bypass when the host is not a sandbox.
+///
+/// TS parity: `setup.ts:395-442`. Fires when the session will *start*
+/// in `BypassPermissions` or when `--allow-dangerously-skip-permissions`
+/// merely unlocks the capability. Detect root/sudo via env-var
+/// heuristics (safe — no `unsafe { libc::getuid() }`) and refuse
+/// unless one of the known sandbox markers is set. Known sandbox
+/// markers: `IS_SANDBOX=1`, `COCO_CODE_BUBBLEWRAP` truthy,
+/// `CLAUDE_CODE_BUBBLEWRAP` truthy (for direct TS-port compatibility).
+fn enforce_dangerous_skip_safety(requesting_bypass: bool) -> Result<()> {
+    if !requesting_bypass {
+        return Ok(());
+    }
+    if is_root_like_env() && !is_sandboxed_env() {
+        return Err(anyhow::anyhow!(
+            "Bypass permissions refuses to run as root/sudo outside a \
+             sandbox. Set IS_SANDBOX=1 (or run under bubblewrap) if you \
+             know what you're doing."
+        ));
+    }
+    Ok(())
+}
+
+/// Heuristic root-or-sudo detection via env vars. Accurate enough for
+/// a safety guard — a malicious local actor can already override
+/// anything, but the common accidental-sudo case is caught.
+fn is_root_like_env() -> bool {
+    // `SUDO_*` present = invoked via sudo.
+    if std::env::var_os("SUDO_USER").is_some() || std::env::var_os("SUDO_UID").is_some() {
+        return true;
+    }
+    let is_root_name = |var: &str| -> bool {
+        std::env::var(var)
+            .map(|v| v.trim() == "root")
+            .unwrap_or(false)
+    };
+    is_root_name("USER") || is_root_name("LOGNAME") || is_root_name("USERNAME")
+}
+
+fn is_sandboxed_env() -> bool {
+    let truthy = |var: &str| -> bool {
+        std::env::var(var)
+            .map(|v| {
+                matches!(
+                    v.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
+            })
+            .unwrap_or(false)
+    };
+    truthy("IS_SANDBOX") || truthy("COCO_CODE_BUBBLEWRAP") || truthy("CLAUDE_CODE_BUBBLEWRAP")
 }

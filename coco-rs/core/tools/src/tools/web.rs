@@ -698,6 +698,7 @@ Usage notes:
                                 ),
                             }),
                             new_messages: vec![],
+                            app_state_patch: None,
                         });
                     }
                     Err(e) => {
@@ -789,6 +790,7 @@ Usage notes:
                         "extraction_mode": "raw",
                     }),
                     new_messages: vec![],
+                    app_state_patch: None,
                 });
             }
         };
@@ -802,6 +804,7 @@ Usage notes:
                 "extraction_mode": "llm",
             }),
             new_messages: vec![],
+            app_state_patch: None,
         })
     }
 }
@@ -1349,6 +1352,7 @@ IMPORTANT - Use the correct year in search queries:
                 "formatted": formatted,
             }),
             new_messages: vec![],
+            app_state_patch: None,
         })
     }
 }

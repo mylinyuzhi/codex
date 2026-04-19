@@ -50,6 +50,16 @@ impl AgentQueryEngine for QueryEngineAdapter {
         prompt: &str,
         config: AgentQueryConfig,
     ) -> anyhow::Result<AgentQueryResult> {
+        // Resolve the subagent's permission mode. Parent is expected to
+        // have applied the TS inheritance rule before calling; we just
+        // parse/fall back. TS: runAgent.ts:412-434.
+        let permission_mode = config
+            .permission_mode
+            .as_deref()
+            .and_then(|s| {
+                serde_json::from_value::<coco_types::PermissionMode>(serde_json::json!(s)).ok()
+            })
+            .unwrap_or(coco_types::PermissionMode::Default);
         let engine_config = QueryEngineConfig {
             max_turns: config.max_turns.unwrap_or(30),
             max_tokens: None,
@@ -57,16 +67,27 @@ impl AgentQueryEngine for QueryEngineAdapter {
             append_system_prompt: None,
             model_name: config.model,
             fallback_model: None,
-            permission_mode: coco_types::PermissionMode::Default,
+            permission_mode,
+            // Inherit the parent session's bypass capability. TS
+            // parity: `spawnUtils.ts:53` / `spawnMultiAgent.ts:223`
+            // forward `--dangerously-skip-permissions` to spawned
+            // child processes; the in-process analog is this field.
+            bypass_permissions_available: config.bypass_permissions_available,
             context_window: config.context_window.unwrap_or(200_000),
             max_output_tokens: config.max_output_tokens.unwrap_or(16_384),
             max_budget_usd: None,
             streaming_tool_execution: true,
             is_non_interactive: true,
-            session_id: String::new(),
+            session_id: config.session_id.unwrap_or_default(),
             project_dir: None,
+            plans_directory: None,
+            agent_id: config.agent_id,
+            is_teammate: config.is_teammate,
+            plan_mode_required: config.plan_mode_required,
+            plan_mode_settings: coco_config::PlanModeSettings::default(),
             disable_all_hooks: false,
             allow_managed_hooks_only: false,
+            enable_token_budget_continuation: false,
         };
 
         let engine = (self.engine_factory)(engine_config);

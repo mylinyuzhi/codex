@@ -552,6 +552,7 @@ impl Tool for GrepTool {
         Ok(ToolResult {
             data: serde_json::json!(result_text),
             new_messages: vec![],
+            app_state_patch: None,
         })
     }
 }

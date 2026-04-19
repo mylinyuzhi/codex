@@ -294,17 +294,74 @@ pub struct McpInstructionsDeltaAttachment {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanModeAttachment {
     pub reminder_type: ReminderType,
+    /// Which workflow the Full variant should use.
+    /// Ignored for Sparse / Reentry (they share one text across workflows).
+    #[serde(default)]
+    pub workflow: PlanWorkflow,
+    /// Phase-4 "Final Plan" prompt strictness.
+    /// Only relevant for `(Full, FivePhase, main-agent)`.
+    #[serde(default)]
+    pub phase4_variant: Phase4Variant,
+    /// Number of parallel Explore agents referenced by the 5-phase Full.
+    /// Default 3. Ignored for non-5phase.
+    #[serde(default = "default_explore_count")]
+    pub explore_agent_count: i32,
+    /// Number of parallel Plan agents referenced by the 5-phase Full.
+    /// Default 1. Ignored for non-5phase.
+    #[serde(default = "default_plan_count")]
+    pub plan_agent_count: i32,
     #[serde(default)]
     pub is_sub_agent: bool,
     pub plan_file_path: String,
     pub plan_exists: bool,
 }
 
+fn default_explore_count() -> i32 {
+    3
+}
+fn default_plan_count() -> i32 {
+    1
+}
+
+/// Which plan-mode Full-reminder workflow to render.
+///
+/// Mirrors `coco_config::PlanModeWorkflow` but lives here to avoid
+/// `core/context` depending on `coco-config` (would invert the dep
+/// layering). The engine converts settings → attachment at build time.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanWorkflow {
+    #[default]
+    FivePhase,
+    Interview,
+}
+
+/// Phase-4 prompt variant — only affects 5-phase Full.
+///
+/// Mirrors `coco_config::PlanPhase4Variant`. Same layering rationale as
+/// `PlanWorkflow`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Phase4Variant {
+    #[default]
+    Standard,
+    Trim,
+    Cut,
+    Cap,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReminderType {
+    /// First plan-mode turn: full workflow instructions.
     Full,
+    /// Subsequent plan-mode turns: short reminder (prompt-cache friendly).
     Sparse,
+    /// Returning to plan mode after previously exiting in this session.
+    /// TS: `plan_mode_reentry` case in `normalizeAttachmentForAPI`.
+    /// Instructs the model to evaluate the existing plan file against
+    /// the new request before refining or overwriting it.
+    Reentry,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

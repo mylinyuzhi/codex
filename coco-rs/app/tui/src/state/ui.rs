@@ -1,4 +1,8 @@
 //! UI state — local TUI state, never sent to the agent.
+//!
+//! Overlay types live in `state::overlay`. This file keeps only the UiState
+//! plus the pieces tightly coupled to it: input + history, focus, streaming,
+//! and toasts.
 
 use std::collections::HashSet;
 use std::collections::VecDeque;
@@ -6,7 +10,9 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::constants;
+use crate::state::overlay::Overlay;
 use crate::theme::Theme;
+use crate::widgets::suggestion_popup::SuggestionItem;
 
 /// UI-only local state.
 #[derive(Debug)]
@@ -43,6 +49,21 @@ pub struct UiState {
     pub kill_ring: String,
     /// Timestamp of last Esc press (for double-Esc rewind detection).
     pub last_esc_time: Option<Instant>,
+    /// Whether the terminal window currently has focus. Used to gate
+    /// turn-complete notifications so they only fire when the user has
+    /// switched away — matches TS `ink::focus` semantics.
+    pub terminal_focused: bool,
+    /// Platform clipboard lease held alive for the lifetime of the TUI. On
+    /// Linux/X11 and some Wayland setups the clipboard is served by the
+    /// process that wrote it, so dropping the `arboard::Clipboard` handle
+    /// would wipe the copied text. The lease is `None` on other platforms
+    /// and on the OSC 52 path where no in-process ownership is required.
+    pub clipboard_lease: Option<crate::clipboard_copy::ClipboardLease>,
+    /// Active autocomplete suggestions (slash commands, @-mentions, etc.).
+    /// `Some(_)` drives the keybinding bridge into `Autocomplete` context
+    /// and renders a popup above the input. Recomputed after every input
+    /// mutation in `autocomplete::refresh_suggestions`.
+    pub active_suggestions: Option<ActiveSuggestions>,
 }
 
 impl UiState {
@@ -65,17 +86,55 @@ impl UiState {
             help_scroll: 0,
             kill_ring: String::new(),
             last_esc_time: None,
+            terminal_focused: true,
+            clipboard_lease: None,
+            active_suggestions: None,
         }
     }
 
-    /// Set the active overlay, queueing if one is already active.
+    /// Set the active overlay using the [`Overlay::priority`] ranking.
+    ///
+    /// Rules (see `crate-coco-tui.md` §Overlay Priority):
+    /// - No active overlay: install directly.
+    /// - New overlay has strictly higher priority (lower number): displace
+    ///   the current overlay back into the queue and install the new one.
+    /// - Otherwise: insert into the queue at its priority position. Same
+    ///   priority keeps insertion order (stable within a tier).
+    ///
+    /// Queue overflow drops the lowest-priority tail entry to make room so a
+    /// security-critical overlay can still enqueue.
     pub fn set_overlay(&mut self, overlay: Overlay) {
-        if self.overlay.is_some() {
-            if self.overlay_queue.len() < constants::MAX_OVERLAY_QUEUE as usize {
-                self.overlay_queue.push_back(overlay);
+        match self.overlay.take() {
+            None => {
+                self.overlay = Some(overlay);
             }
-        } else {
-            self.overlay = Some(overlay);
+            Some(current) => {
+                if overlay.priority() < current.priority() {
+                    // New overlay has higher priority — displace current.
+                    self.overlay = Some(overlay);
+                    self.enqueue_overlay(current);
+                } else {
+                    // Same-or-lower priority: keep current, queue the new one.
+                    self.overlay = Some(current);
+                    self.enqueue_overlay(overlay);
+                }
+            }
+        }
+    }
+
+    /// Insert `overlay` into the priority-ordered queue. Drops the
+    /// lowest-priority entry on overflow to keep more important overlays in.
+    fn enqueue_overlay(&mut self, overlay: Overlay) {
+        let max = constants::MAX_OVERLAY_QUEUE as usize;
+        let prio = overlay.priority();
+        let pos = self
+            .overlay_queue
+            .iter()
+            .position(|o| o.priority() > prio)
+            .unwrap_or(self.overlay_queue.len());
+        self.overlay_queue.insert(pos, overlay);
+        while self.overlay_queue.len() > max {
+            self.overlay_queue.pop_back();
         }
     }
 
@@ -117,6 +176,89 @@ pub enum FocusTarget {
     Chat,
 }
 
+/// Which autocomplete trigger produced the active suggestions.
+///
+/// Determines the popup title, the source of suggestion items, and how the
+/// accepted item is substituted back into the input. Kinds map to TS's four
+/// mention triggers plus the leading `/` slash-command trigger.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SuggestionKind {
+    /// Leading `/` — populated from `session.available_commands`.
+    SlashCommand,
+    /// `@path` — populated asynchronously by `FileSearchManager`.
+    File,
+    /// `@agent-name` — populated from the session's agent registry.
+    Agent,
+    /// `@#symbol` — populated asynchronously by `SymbolSearchManager` (LSP).
+    Symbol,
+}
+
+impl SuggestionKind {
+    /// Popup title shown at the top of the suggestion list.
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::SlashCommand => "Commands",
+            Self::File => "Files",
+            Self::Agent => "Agents",
+            Self::Symbol => "Symbols",
+        }
+    }
+}
+
+/// Active autocomplete session: popup rendered above input, intercepts
+/// `Up/Down/Tab/Esc` while letting regular typing pass through.
+#[derive(Debug, Clone)]
+pub struct ActiveSuggestions {
+    pub kind: SuggestionKind,
+    /// Items to show in the popup — filtered by `query` before display.
+    pub items: Vec<SuggestionItem>,
+    /// Currently selected index into the filtered list.
+    pub selected: i32,
+    /// The filter text the user has typed after the trigger.
+    pub query: String,
+    /// Character offset in `input.text` where the trigger started (the `/`
+    /// or `@`). Used when accepting a suggestion to splice the selection
+    /// back into the input.
+    pub trigger_pos: i32,
+}
+
+/// A single history entry with frecency metadata.
+///
+/// TS: `frequencyMap` in PromptInput.tsx — each entry tracks how often it was
+/// used and when it was last entered. Navigation sorts by a frecency score
+/// (`ln(frequency) * recency_factor`) rather than raw insertion order, so a
+/// command typed ten times last week floats above a one-off from yesterday.
+#[derive(Debug, Clone)]
+pub struct HistoryEntry {
+    pub text: String,
+    /// How many times this exact text has been submitted.
+    pub frequency: i32,
+    /// Unix-epoch seconds of the most recent submission.
+    pub last_used_secs: i64,
+}
+
+impl HistoryEntry {
+    /// Frecency score — higher is more relevant. Returns `f64` so the caller
+    /// can sort_by on the raw value without losing ordering granularity.
+    ///
+    /// Formula: `ln(frequency + 1) * recency_factor`, where
+    /// `recency_factor = 1.0` for entries less than 24h old and decays
+    /// exponentially with 7-day half-life for older entries. This matches
+    /// the TS weighting and guards `ln(0)` by adding 1 to frequency.
+    pub fn frecency(&self, now_secs: i64) -> f64 {
+        let freq = ((self.frequency.max(0) + 1) as f64).ln();
+        let age = (now_secs - self.last_used_secs).max(0) as f64;
+        let day = 86_400.0_f64;
+        let recency = if age < day {
+            1.0
+        } else {
+            let weeks = (age - day) / (7.0 * day);
+            0.5_f64.powf(weeks)
+        };
+        freq * recency
+    }
+}
+
 /// Multi-line input state.
 #[derive(Debug)]
 pub struct InputState {
@@ -124,8 +266,8 @@ pub struct InputState {
     pub text: String,
     /// Cursor position (character index, NOT byte).
     pub cursor: i32,
-    /// Command history.
-    pub history: Vec<String>,
+    /// Command history ordered by frecency (most-relevant first).
+    pub history: Vec<HistoryEntry>,
     /// Current history navigation index.
     pub history_index: Option<i32>,
 }
@@ -205,15 +347,35 @@ impl InputState {
         self.text.is_empty()
     }
 
-    /// Add text to history.
+    /// Record a submitted text into history using frecency scoring.
+    ///
+    /// If the text already exists, bump its frequency and update `last_used`.
+    /// Otherwise append a new entry. After insertion the vector is sorted
+    /// descending by [`HistoryEntry::frecency`] so that up-arrow navigation
+    /// walks the most relevant entries first. Capped at
+    /// `constants::MAX_HISTORY_ENTRIES` by dropping the lowest-scoring tail.
     pub fn add_to_history(&mut self, text: String) {
-        if !text.is_empty() {
-            // Remove duplicate if exists
-            self.history.retain(|h| h != &text);
-            self.history.push(text);
-            if self.history.len() > constants::MAX_HISTORY_ENTRIES as usize {
-                self.history.remove(0);
-            }
+        if text.is_empty() {
+            return;
+        }
+        let now = now_unix_secs();
+        if let Some(entry) = self.history.iter_mut().find(|h| h.text == text) {
+            entry.frequency = entry.frequency.saturating_add(1);
+            entry.last_used_secs = now;
+        } else {
+            self.history.push(HistoryEntry {
+                text,
+                frequency: 1,
+                last_used_secs: now,
+            });
+        }
+        // Sort by frecency desc; ties keep recent-first (stable sort on
+        // original order where the most-recent append naturally sits last).
+        self.history
+            .sort_by(|a, b| b.frecency(now).total_cmp(&a.frecency(now)));
+        let max = constants::MAX_HISTORY_ENTRIES as usize;
+        if self.history.len() > max {
+            self.history.truncate(max);
         }
     }
 
@@ -227,438 +389,20 @@ impl InputState {
     }
 }
 
+/// Unix-epoch seconds for the frecency timestamp. Clock skew or a pre-epoch
+/// system date falls back to 0, which dampens the recency factor but keeps
+/// the history useful rather than panicking.
+fn now_unix_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 impl Default for InputState {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// Modal overlay variants.
-#[derive(Debug, Clone)]
-pub enum Overlay {
-    /// Tool permission approval (Y/N/A).
-    Permission(PermissionOverlay),
-    /// Help display (keyboard shortcuts).
-    Help,
-    /// Error message.
-    Error(String),
-    /// Plan mode exit approval.
-    PlanExit(PlanExitOverlay),
-    /// Plan mode entry approval.
-    PlanEntry(PlanEntryOverlay),
-    /// Cost warning.
-    CostWarning(CostWarningOverlay),
-    /// Model picker (Ctrl+M).
-    ModelPicker(ModelPickerOverlay),
-    /// Command palette (Ctrl+P).
-    CommandPalette(CommandPaletteOverlay),
-    /// Session browser (Ctrl+S).
-    SessionBrowser(SessionBrowserOverlay),
-    /// Question from agent (AskUserQuestion tool).
-    Question(QuestionOverlay),
-    /// MCP elicitation form.
-    Elicitation(ElicitationOverlay),
-    /// Sandbox permission.
-    SandboxPermission(SandboxPermissionOverlay),
-    /// Global search (ripgrep streaming).
-    GlobalSearch(GlobalSearchOverlay),
-    /// Quick file open (Ctrl+O).
-    QuickOpen(QuickOpenOverlay),
-    /// Transcript export.
-    Export(ExportOverlay),
-    /// Full-screen diff view.
-    DiffView(DiffViewOverlay),
-    /// MCP server approval.
-    McpServerApproval(McpServerApprovalOverlay),
-    /// Worktree exit confirmation.
-    WorktreeExit(WorktreeExitOverlay),
-    /// Doctor/diagnostics.
-    Doctor(DoctorOverlay),
-    /// Bridge dialog (IDE/REPL).
-    Bridge(BridgeOverlay),
-    /// Invalid config warning.
-    InvalidConfig(InvalidConfigOverlay),
-    /// Idle return confirmation.
-    IdleReturn(IdleReturnOverlay),
-    /// Trust dialog.
-    Trust(TrustOverlay),
-    /// Auto mode opt-in.
-    AutoModeOptIn(AutoModeOptInOverlay),
-    /// Bypass permissions confirmation.
-    BypassPermissions(BypassPermissionsOverlay),
-    /// Background task detail.
-    TaskDetail(TaskDetailOverlay),
-    /// Feedback survey.
-    Feedback(FeedbackOverlay),
-    /// MCP server multi-select.
-    McpServerSelect(McpServerSelectOverlay),
-    /// Context window visualization.
-    ContextVisualization,
-    /// Rewind overlay (message selector + restore options).
-    /// TS: MessageSelector component.
-    Rewind(crate::state::rewind::RewindOverlay),
-}
-
-/// Permission approval overlay with tool-specific detail.
-///
-/// TS: src/components/permissions/ (51 files, 12K LOC)
-/// Each tool type has a specialized review UI.
-#[derive(Debug, Clone)]
-pub struct PermissionOverlay {
-    pub request_id: String,
-    pub tool_name: String,
-    pub description: String,
-    pub detail: PermissionDetail,
-    /// Risk level badge from the permission explainer.
-    /// TS: PermissionRequestTitle shows color-coded LOW/MEDIUM/HIGH badge.
-    pub risk_level: Option<RiskLevel>,
-    /// Whether "Always Allow" option should be shown (gated by policy).
-    /// TS: shouldShowAlwaysAllowOptions() in permissionsLoader.ts
-    pub show_always_allow: bool,
-    /// Whether a background classifier check is in progress.
-    /// TS: `classifierCheckInProgress` in ToolUseConfirm.
-    pub classifier_checking: bool,
-    /// Set when classifier auto-approved; shows checkmark before dismissal.
-    /// TS: `classifierAutoApproved` + `classifierMatchedRule` in ToolUseConfirm.
-    pub classifier_auto_approved: Option<String>,
-}
-
-/// Risk level for permission explainer badge.
-///
-/// TS: types/permissions.ts — RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH'
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RiskLevel {
-    Low,
-    Medium,
-    High,
-}
-
-/// Tool-specific permission review content.
-///
-/// Matches TS's 12 specialized permission request components.
-#[derive(Debug, Clone)]
-pub enum PermissionDetail {
-    /// Bash command — show command, risk level, working directory.
-    /// TS: BashPermissionRequest/ (108KB)
-    Bash {
-        command: String,
-        risk_description: Option<String>,
-        working_dir: Option<String>,
-    },
-    /// File edit — show path and unified diff.
-    /// TS: FileEditPermissionRequest/ (16KB)
-    FileEdit { path: String, diff: String },
-    /// File write — show path and content preview.
-    /// TS: FileWritePermissionRequest/ (40KB)
-    FileWrite {
-        path: String,
-        content_preview: String,
-        is_new_file: bool,
-    },
-    /// Filesystem operation (mkdir, rm, mv, cp).
-    /// TS: FilesystemPermissionRequest/ (13KB)
-    Filesystem { operation: String, path: String },
-    /// Web fetch — show URL.
-    /// TS: WebFetchPermissionRequest/ (32KB)
-    WebFetch { url: String, method: String },
-    /// Skill execution — show skill name and description.
-    /// TS: SkillPermissionRequest/ (36KB)
-    Skill {
-        skill_name: String,
-        skill_description: Option<String>,
-    },
-    /// Sed in-place edit — show pattern and replacement.
-    /// TS: SedEditPermissionRequest/ (32KB)
-    SedEdit {
-        path: String,
-        pattern: String,
-        replacement: String,
-    },
-    /// Notebook cell edit — show path, cell, and change.
-    /// TS: NotebookEditPermissionRequest/ (56KB)
-    NotebookEdit {
-        path: String,
-        cell_id: String,
-        change_preview: String,
-    },
-    /// MCP tool call — show server and tool.
-    McpTool {
-        server_name: String,
-        tool_name: String,
-        input_preview: String,
-    },
-    /// PowerShell command approval.
-    PowerShell {
-        command: String,
-        risk_description: Option<String>,
-        working_dir: Option<String>,
-    },
-    /// Computer use (screen/mouse/keyboard) approval.
-    ComputerUse { action: String, description: String },
-    /// Generic fallback — plain text description.
-    Generic { input_preview: String },
-}
-
-/// Plan mode exit overlay.
-#[derive(Debug, Clone)]
-pub struct PlanExitOverlay {
-    pub plan_content: Option<String>,
-}
-
-/// Cost warning overlay.
-#[derive(Debug, Clone)]
-pub struct CostWarningOverlay {
-    pub current_cost_cents: i64,
-    pub threshold_cents: i64,
-}
-
-/// Model picker overlay (filterable list).
-#[derive(Debug, Clone)]
-pub struct ModelPickerOverlay {
-    pub models: Vec<ModelOption>,
-    pub filter: String,
-    pub selected: i32,
-}
-
-/// A selectable model option.
-#[derive(Debug, Clone)]
-pub struct ModelOption {
-    pub id: String,
-    pub label: String,
-    pub description: Option<String>,
-}
-
-/// Command palette overlay (filterable list of /commands).
-#[derive(Debug, Clone)]
-pub struct CommandPaletteOverlay {
-    pub commands: Vec<CommandOption>,
-    pub filter: String,
-    pub selected: i32,
-}
-
-/// A selectable command option.
-#[derive(Debug, Clone)]
-pub struct CommandOption {
-    pub name: String,
-    pub description: Option<String>,
-}
-
-/// Session browser overlay (list of saved sessions).
-#[derive(Debug, Clone)]
-pub struct SessionBrowserOverlay {
-    pub sessions: Vec<SessionOption>,
-    pub filter: String,
-    pub selected: i32,
-}
-
-/// A selectable session option.
-#[derive(Debug, Clone)]
-pub struct SessionOption {
-    pub id: String,
-    pub label: String,
-    pub message_count: i32,
-    pub created_at: String,
-}
-
-/// Question overlay (AskUserQuestion tool).
-#[derive(Debug, Clone)]
-pub struct QuestionOverlay {
-    pub request_id: String,
-    pub question: String,
-    pub options: Vec<String>,
-    pub selected: i32,
-}
-
-/// MCP elicitation form overlay.
-#[derive(Debug, Clone)]
-pub struct ElicitationOverlay {
-    pub request_id: String,
-    pub server_name: String,
-    pub message: String,
-    pub fields: Vec<ElicitationField>,
-}
-
-/// A field in an elicitation form.
-#[derive(Debug, Clone)]
-pub struct ElicitationField {
-    pub name: String,
-    pub description: Option<String>,
-    pub value: String,
-}
-
-/// Sandbox permission overlay.
-#[derive(Debug, Clone)]
-pub struct SandboxPermissionOverlay {
-    pub request_id: String,
-    pub description: String,
-}
-
-/// Plan mode entry overlay.
-#[derive(Debug, Clone)]
-pub struct PlanEntryOverlay {
-    pub description: String,
-}
-
-/// Global search overlay (ripgrep streaming).
-#[derive(Debug, Clone)]
-pub struct GlobalSearchOverlay {
-    pub query: String,
-    pub results: Vec<SearchResult>,
-    pub selected: i32,
-    pub is_searching: bool,
-}
-
-/// A global search result entry.
-#[derive(Debug, Clone)]
-pub struct SearchResult {
-    pub file: String,
-    pub line_number: i32,
-    pub content: String,
-}
-
-/// Quick file open overlay.
-#[derive(Debug, Clone)]
-pub struct QuickOpenOverlay {
-    pub filter: String,
-    pub files: Vec<String>,
-    pub selected: i32,
-}
-
-/// Export dialog overlay.
-#[derive(Debug, Clone)]
-pub struct ExportOverlay {
-    pub formats: Vec<ExportFormat>,
-    pub selected: i32,
-}
-
-/// Supported export formats.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExportFormat {
-    Markdown,
-    Json,
-    Text,
-}
-
-impl ExportFormat {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Markdown => "Markdown (.md)",
-            Self::Json => "JSON (.json)",
-            Self::Text => "Plain Text (.txt)",
-        }
-    }
-}
-
-/// Full-screen diff view overlay.
-#[derive(Debug, Clone)]
-pub struct DiffViewOverlay {
-    pub path: String,
-    pub diff: String,
-    pub scroll: i32,
-}
-
-/// MCP server approval overlay.
-#[derive(Debug, Clone)]
-pub struct McpServerApprovalOverlay {
-    pub server_name: String,
-    pub server_url: Option<String>,
-    pub tools: Vec<String>,
-    pub request_id: String,
-}
-
-/// Worktree exit confirmation overlay.
-#[derive(Debug, Clone)]
-pub struct WorktreeExitOverlay {
-    pub branch: String,
-    pub has_uncommitted: bool,
-    pub changed_files: Vec<String>,
-}
-
-/// Doctor/diagnostics overlay.
-#[derive(Debug, Clone)]
-pub struct DoctorOverlay {
-    pub checks: Vec<DoctorCheck>,
-}
-
-/// A single doctor check result.
-#[derive(Debug, Clone)]
-pub struct DoctorCheck {
-    pub name: String,
-    pub passed: bool,
-    pub message: String,
-}
-
-/// Bridge dialog overlay (IDE/REPL).
-#[derive(Debug, Clone)]
-pub struct BridgeOverlay {
-    pub bridge_type: String,
-    pub status: String,
-    pub details: String,
-}
-
-/// Invalid config warning overlay.
-#[derive(Debug, Clone)]
-pub struct InvalidConfigOverlay {
-    pub errors: Vec<String>,
-}
-
-/// Idle return confirmation overlay.
-#[derive(Debug, Clone)]
-pub struct IdleReturnOverlay {
-    pub idle_duration_secs: i64,
-}
-
-/// Trust dialog overlay.
-#[derive(Debug, Clone)]
-pub struct TrustOverlay {
-    pub path: String,
-    pub description: String,
-}
-
-/// Auto mode opt-in overlay.
-#[derive(Debug, Clone)]
-pub struct AutoModeOptInOverlay {
-    pub description: String,
-}
-
-/// Bypass permissions confirmation overlay.
-#[derive(Debug, Clone)]
-pub struct BypassPermissionsOverlay {
-    pub current_mode: String,
-}
-
-/// Background task detail overlay.
-#[derive(Debug, Clone)]
-pub struct TaskDetailOverlay {
-    pub task_id: String,
-    pub task_type: String,
-    pub description: String,
-    pub output: String,
-    pub status: String,
-    pub scroll: i32,
-}
-
-/// Feedback survey overlay.
-#[derive(Debug, Clone)]
-pub struct FeedbackOverlay {
-    pub prompt: String,
-    pub options: Vec<String>,
-    pub selected: i32,
-}
-
-/// MCP server multi-select overlay.
-#[derive(Debug, Clone)]
-pub struct McpServerSelectOverlay {
-    pub servers: Vec<McpServerOption>,
-    pub filter: String,
-}
-
-/// Selectable MCP server option.
-#[derive(Debug, Clone)]
-pub struct McpServerOption {
-    pub name: String,
-    pub selected: bool,
-    pub tool_count: i32,
 }
 
 /// Streaming display state.

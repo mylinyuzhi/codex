@@ -15,6 +15,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
 
+use crate::i18n::t;
 use crate::state::ui::InputState;
 use crate::theme::Theme;
 
@@ -170,13 +171,14 @@ impl Widget for InputWidget<'_> {
             self.theme.border
         };
 
-        let title = if self.plan_mode {
-            " Plan Mode "
+        let title_text = if self.plan_mode {
+            t!("input.title_plan_mode")
         } else if self.is_streaming {
-            " Queue Input "
+            t!("input.title_queue")
         } else {
-            " Input "
+            t!("input.title")
         };
+        let title = format!(" {title_text} ");
 
         let block = Block::default()
             .borders(Borders::TOP)
@@ -184,8 +186,10 @@ impl Widget for InputWidget<'_> {
             .border_style(Style::default().fg(border_color));
 
         if self.input.is_empty() {
-            let placeholder =
-                Paragraph::new(Span::raw("Type a message...").fg(self.theme.text_dim)).block(block);
+            let placeholder = Paragraph::new(
+                Span::raw(t!("input.placeholder").to_string()).fg(self.theme.text_dim),
+            )
+            .block(block);
             placeholder.render(area, buf);
             return;
         }

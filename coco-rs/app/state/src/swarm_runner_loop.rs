@@ -42,6 +42,13 @@ pub struct AgentQueryConfig {
     pub fork_context_messages: Vec<serde_json::Value>,
     /// Whether to preserve full tool results (not previews).
     pub preserve_tool_use_results: bool,
+    /// Parent session's bypass-permissions capability. Forwarded to the
+    /// teammate's `ToolPermissionContext.bypass_available` so in-process
+    /// teammates observe the same cycle + plan-exit gate as the leader.
+    /// TS parity: `spawnUtils.ts:53` forwards
+    /// `--dangerously-skip-permissions` to spawned children; the
+    /// in-process analog is this field.
+    pub bypass_permissions_available: bool,
 }
 
 /// Result from running a single query/turn.
@@ -109,6 +116,9 @@ pub struct InProcessRunnerConfig {
     pub cancelled: Arc<AtomicBool>,
     /// Auto-compact threshold (token count).
     pub auto_compact_threshold: i64,
+    /// Parent session's bypass-permissions capability (forwarded on
+    /// every query). Defaults to `false` so legacy callers stay safe.
+    pub bypass_permissions_available: bool,
 }
 
 /// Result from running an in-process teammate to completion.
@@ -200,6 +210,7 @@ pub async fn run_in_process_teammate(
             allowed_tools: config.allowed_tools.clone(),
             fork_context_messages: all_messages.clone(),
             preserve_tool_use_results: true,
+            bypass_permissions_available: config.bypass_permissions_available,
         };
 
         // Run query

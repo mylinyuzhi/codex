@@ -33,6 +33,7 @@
 //! wire types.
 
 pub mod approval_bridge;
+pub mod bridge_control;
 pub mod cli_bootstrap;
 pub mod dispatcher;
 pub mod handlers;
@@ -41,6 +42,7 @@ pub mod sdk_runner;
 pub mod transport;
 
 pub use approval_bridge::SdkPermissionBridge;
+pub use bridge_control::SdkBridgeControlHandler;
 pub use cli_bootstrap::CliInitializeBootstrap;
 pub use dispatcher::SdkServer;
 pub use dispatcher::server_notification_to_jsonrpc;

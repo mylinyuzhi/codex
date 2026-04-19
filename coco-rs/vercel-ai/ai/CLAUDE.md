@@ -47,6 +47,17 @@ let result = generate_text(GenerateTextOptions {
 }).await?;
 ```
 
+## Event integration
+
+Callbacks in `src/generate_text/callback.rs` (`OnStartEvent`,
+`OnStepFinishEvent`, `OnFinishEvent`, `OnErrorEvent`) fire at the
+**provider boundary** and are **NOT** bridged into
+`coco_types::CoreEvent`. The agent loop (`QueryEngine`) consumes them
+internally and emits `AgentStreamEvent` / `ServerNotification`
+accordingly. Trace correlation uses shared `session_id`/`turn_id`
+context, not data-flow bridging. See `event-system-design.md` §1.7 and
+plan WS-9.
+
 ## Testing
 
 ```bash

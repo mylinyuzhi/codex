@@ -12,6 +12,7 @@ use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
+use crate::i18n::t;
 use crate::theme::Theme;
 
 /// Teammate view header widget.
@@ -51,12 +52,12 @@ impl Widget for TeammateViewHeader<'_> {
             .unwrap_or(self.theme.primary);
 
         let mut lines = vec![Line::from(vec![
-            Span::raw("Viewing ").dim(),
+            Span::raw(t!("team.viewing_prefix").to_string()).dim(),
             Span::raw(format!("@{}", self.agent_name))
                 .fg(name_color)
                 .bold(),
-            Span::raw(" · ").dim(),
-            Span::raw("[esc to return]").dim(),
+            Span::raw(t!("team.viewing_separator").to_string()).dim(),
+            Span::raw(t!("team.esc_return").to_string()).dim(),
         ])];
 
         if let Some(desc) = self.description {

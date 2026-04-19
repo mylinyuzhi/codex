@@ -315,13 +315,15 @@ pub struct SetModelParams {
 }
 
 /// Matches TS `SDKControlSetPermissionModeRequestSchema` (controlSchemas.ts:127-134).
+///
+/// TS carries an additional `ultraplan: boolean` field for the CCR web-UI
+/// refinement flow. coco-rs intentionally skips Ultraplan (see CLAUDE.md
+/// "Plan Mode — Skip Ultraplan (CCR Web UI) Only"), so that field is
+/// omitted here — SDK clients targeting coco-rs should not send it.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SetPermissionModeParams {
     pub mode: PermissionMode,
-    /// TS `ultraplan` — enables ultraplan mode within Plan (feature flag).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ultraplan: Option<bool>,
 }
 
 /// Matches TS `SDKControlSetMaxThinkingTokensRequestSchema` + ThinkingConfig.

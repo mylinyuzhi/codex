@@ -36,6 +36,11 @@ pub struct Theme {
 
     // ── Messages ──
     pub user_message: Color,
+    /// Optional background tint applied to user-message lines.
+    /// TS: components/messages/UserMessage draws a terminal-adaptive subtle
+    /// tint so user prompts separate visually from assistant prose. None =
+    /// inherit terminal background.
+    pub user_message_bg: Option<Color>,
     pub assistant_message: Color,
     pub thinking: Color,
     pub system_message: Color,
@@ -97,6 +102,7 @@ impl Theme {
             text_bold: Color::Reset,
 
             user_message: Color::Green,
+            user_message_bg: None,
             assistant_message: Color::Cyan,
             thinking: Color::Magenta,
             system_message: Color::DarkGray,
@@ -142,6 +148,7 @@ impl Theme {
             text_bold: Color::Reset,
 
             user_message: Color::LightGreen,
+            user_message_bg: None,
             assistant_message: Color::LightCyan,
             thinking: Color::LightMagenta,
             system_message: Color::DarkGray,
@@ -187,6 +194,7 @@ impl Theme {
             text_bold: Color::Reset,
 
             user_message: Color::Green,
+            user_message_bg: None,
             assistant_message: Color::Cyan,
             thinking: Color::Magenta,
             system_message: Color::DarkGray,
@@ -232,6 +240,7 @@ impl Theme {
             text_bold: Color::Reset,
 
             user_message: Color::Rgb(80, 250, 123), // green
+            user_message_bg: None,
             assistant_message: Color::Rgb(139, 233, 253),
             thinking: Color::Rgb(189, 147, 249), // purple
             system_message: Color::DarkGray,
@@ -277,6 +286,7 @@ impl Theme {
             text_bold: Color::Reset,
 
             user_message: Color::Rgb(163, 190, 140), // nord14
+            user_message_bg: None,
             assistant_message: Color::Rgb(136, 192, 208),
             thinking: Color::Rgb(180, 142, 173),
             system_message: Color::DarkGray,

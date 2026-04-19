@@ -11,6 +11,7 @@ workspace = true
 coco-types.workspace = true
 coco-tool.workspace = true
 coco-context.workspace = true
+coco-permissions.workspace = true
 coco-shell.workspace = true
 coco-skills.workspace = true
 coco-memory.workspace = true
@@ -35,6 +36,7 @@ grep-searcher.workspace = true
 pdf-extract.workspace = true
 regex.workspace = true
 walkdir.workspace = true
+uuid = { workspace = true, features = ["v4"] }
 tokio = { workspace = true, features = ["process", "time", "fs"] }
 tokio-util.workspace = true
 tracing.workspace = true

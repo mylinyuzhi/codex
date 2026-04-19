@@ -10,6 +10,7 @@ use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 
 use crate::constants;
+use crate::i18n::t;
 use crate::render_overlays;
 use crate::state::AppState;
 use crate::state::FocusTarget;
@@ -22,18 +23,115 @@ pub fn render(frame: &mut Frame, state: &AppState) {
     let area = frame.area();
     let theme = &state.ui.theme;
 
-    let main_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1), // header
-            Constraint::Min(1),    // main area
-            Constraint::Length(1), // status bar
-        ])
-        .split(area);
+    // Lifecycle banners (PR-F1 P0 + PR-F2 P1): shown between the header
+    // and main area while their session state is populated. Each banner
+    // occupies a single row and stacks vertically. Order: fallback →
+    // rate-limit → permission-mode → context-warning → stream-stall →
+    // interrupt. The stacking preserves the "severity first" reading
+    // order (most urgent banners stay near the header where the eye
+    // naturally lands after glancing away from the main area).
+    let fallback_rows: u16 = if crate::widgets::ModelFallbackBanner::should_display(
+        state.session.model_fallback_banner.as_deref(),
+    ) {
+        1
+    } else {
+        0
+    };
+    let rate_limit_rows: u16 =
+        if crate::widgets::RateLimitPanel::should_display(state.session.rate_limit_info.as_ref()) {
+            1
+        } else {
+            0
+        };
+    let permission_mode_rows: u16 =
+        if crate::widgets::PermissionModeBanner::should_display(state.session.permission_mode) {
+            1
+        } else {
+            0
+        };
+    let context_warning_rows: u16 = if crate::widgets::ContextWarningBanner::should_display(
+        state.session.context_usage_percent,
+    ) {
+        1
+    } else {
+        0
+    };
+    let stream_stall_rows: u16 =
+        if crate::widgets::StreamStallIndicator::should_display(state.session.stream_stall) {
+            1
+        } else {
+            0
+        };
+    let interrupt_rows: u16 =
+        if crate::widgets::InterruptBanner::should_display(state.session.was_interrupted) {
+            1
+        } else {
+            0
+        };
 
-    render_header_bar(frame, main_chunks[0], state, theme);
-    render_main_area(frame, main_chunks[1], state, theme);
-    render_status_bar(frame, main_chunks[2], state, theme);
+    // ratatui 0.30: `Rect::layout()` returns a fixed-size array so we can
+    // destructure directly — no runtime bounds check when reading each slot.
+    let [
+        header,
+        fallback,
+        rate_limit,
+        permission_mode,
+        context_warning,
+        stream_stall,
+        interrupt,
+        main,
+        status,
+    ] = area.layout(&Layout::vertical([
+        Constraint::Length(1),                    // header
+        Constraint::Length(fallback_rows),        // model fallback
+        Constraint::Length(rate_limit_rows),      // rate limit
+        Constraint::Length(permission_mode_rows), // permission mode
+        Constraint::Length(context_warning_rows), // context warning
+        Constraint::Length(stream_stall_rows),    // stream stall
+        Constraint::Length(interrupt_rows),       // interrupt
+        Constraint::Min(1),                       // main area
+        Constraint::Length(1),                    // status bar
+    ]));
+
+    render_header_bar(frame, header, state, theme);
+    if fallback_rows > 0
+        && let Some(desc) = state.session.model_fallback_banner.as_deref()
+    {
+        frame.render_widget(
+            crate::widgets::ModelFallbackBanner::new(desc, theme),
+            fallback,
+        );
+    }
+    if rate_limit_rows > 0
+        && let Some(info) = state.session.rate_limit_info.as_ref()
+    {
+        frame.render_widget(crate::widgets::RateLimitPanel::new(info, theme), rate_limit);
+    }
+    if permission_mode_rows > 0 {
+        frame.render_widget(
+            crate::widgets::PermissionModeBanner::new(state.session.permission_mode, theme),
+            permission_mode,
+        );
+    }
+    if context_warning_rows > 0
+        && let Some(pct) = state.session.context_usage_percent
+    {
+        frame.render_widget(
+            crate::widgets::ContextWarningBanner::new(pct, theme),
+            context_warning,
+        );
+    }
+    if stream_stall_rows > 0 {
+        frame.render_widget(
+            crate::widgets::StreamStallIndicator::new(theme),
+            stream_stall,
+        );
+    }
+    if interrupt_rows > 0 {
+        frame.render_widget(crate::widgets::InterruptBanner::new(theme), interrupt);
+    }
+    render_main_area(frame, main, state, theme);
+    render_status_bar(frame, status, state, theme);
 
     // Overlays on top
     if let Some(ref overlay) = state.ui.overlay {
@@ -74,10 +172,10 @@ fn render_header_bar(frame: &mut Frame, area: Rect, state: &AppState, theme: &Th
     }
 
     // Plan mode indicator
-    if state.session.plan_mode {
+    if state.is_plan_mode() {
         parts.push(Span::styled(" | ", Style::default().fg(theme.border)));
         parts.push(Span::styled(
-            "PLAN",
+            t!("status.plan").to_string(),
             Style::default().fg(theme.plan_mode).bold(),
         ));
     }
@@ -86,7 +184,7 @@ fn render_header_bar(frame: &mut Frame, area: Rect, state: &AppState, theme: &Th
     if state.session.turn_count > 0 {
         parts.push(Span::styled(" | ", Style::default().fg(theme.border)));
         parts.push(Span::styled(
-            format!("turn {}", state.session.turn_count),
+            t!("status.turn_short", n = state.session.turn_count).to_string(),
             Style::default().fg(theme.text_dim),
         ));
     }
@@ -101,7 +199,7 @@ fn render_header_bar(frame: &mut Frame, area: Rect, state: &AppState, theme: &Th
             theme.text_dim
         };
         parts.push(Span::styled(
-            format!("ctx {pct}%"),
+            t!("status.context_short", percent = pct).to_string(),
             Style::default().fg(color),
         ));
     }
@@ -111,7 +209,7 @@ fn render_header_bar(frame: &mut Frame, area: Rect, state: &AppState, theme: &Th
         let count = state.session.queued_commands.len();
         parts.push(Span::styled(" | ", Style::default().fg(theme.border)));
         parts.push(Span::styled(
-            format!("{count} queued"),
+            t!("status.queued", count = count).to_string(),
             Style::default().fg(theme.accent),
         ));
     }
@@ -140,16 +238,13 @@ fn render_main_area(frame: &mut Frame, area: Rect, state: &AppState, theme: &The
             )
         };
 
-        let horiz = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(main_pct as u16),
-                Constraint::Percentage(side_pct as u16),
-            ])
-            .split(area);
+        let [main, side] = area.layout(&Layout::horizontal([
+            Constraint::Percentage(main_pct as u16),
+            Constraint::Percentage(side_pct as u16),
+        ]));
 
-        render_chat_and_input(frame, horiz[0], state, theme);
-        render_side_panel(frame, horiz[1], state, theme);
+        render_chat_and_input(frame, main, state, theme);
+        render_side_panel(frame, side, state, theme);
     } else {
         render_chat_and_input(frame, area, state, theme);
     }
@@ -159,16 +254,22 @@ fn render_main_area(frame: &mut Frame, area: Rect, state: &AppState, theme: &The
 fn render_chat_and_input(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
     let input_height = 3.min(constants::MAX_INPUT_HEIGHT as u16);
 
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(1),               // chat
-            Constraint::Length(input_height), // input
-        ])
-        .split(area);
+    let [chat, input] = area.layout(&Layout::vertical([
+        Constraint::Min(1),               // chat
+        Constraint::Length(input_height), // input
+    ]));
 
-    render_conversation(frame, state, chunks[0], theme);
-    render_input(frame, state, chunks[1], theme);
+    render_conversation(frame, state, chat, theme);
+    render_input(frame, state, input, theme);
+
+    // Autocomplete popup sits above the input area. The widget computes its
+    // own Y offset upward from the supplied rect, so passing the input area
+    // puts it correctly floated over the chat tail.
+    if let Some(ref sug) = state.ui.active_suggestions {
+        let popup = crate::widgets::SuggestionPopup::new(&sug.items, sug.kind.title(), theme)
+            .selected(sug.selected);
+        frame.render_widget(popup, input);
+    }
 }
 
 /// Render conversation history using the ChatWidget.
@@ -202,14 +303,14 @@ fn render_input(frame: &mut Frame, state: &AppState, area: Rect, theme: &Theme) 
     // Use ASCII chars to ensure consistent 2-column width across all terminals.
     let indicator = if is_streaming {
         Span::styled("~ ", Style::default().fg(theme.warning))
-    } else if state.session.plan_mode {
+    } else if state.is_plan_mode() {
         Span::styled("! ", Style::default().fg(theme.plan_mode).bold())
     } else {
         Span::styled("> ", Style::default().fg(theme.primary))
     };
 
     let display_text = if state.ui.input.is_empty() {
-        "Type a message...".to_string()
+        t!("input.placeholder").to_string()
     } else {
         state.ui.input.text.clone()
     };
@@ -220,12 +321,12 @@ fn render_input(frame: &mut Frame, state: &AppState, area: Rect, theme: &Theme) 
         Style::default().fg(theme.text)
     };
 
-    let title = if state.session.plan_mode {
-        " Plan Mode "
+    let title = if state.is_plan_mode() {
+        format!(" {} ", t!("input.title_plan_mode"))
     } else if is_streaming {
-        " Queue Input "
+        format!(" {} ", t!("input.title_queue"))
     } else {
-        " Input "
+        format!(" {} ", t!("input.title"))
     };
 
     let input_line = Line::from(vec![indicator, Span::styled(display_text, text_style)]);
@@ -253,13 +354,13 @@ fn render_side_panel(frame: &mut Frame, area: Rect, state: &AppState, theme: &Th
     let has_subagents = !state.session.subagents.is_empty();
 
     if has_subagents {
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
-            .split(area);
+        let [tools, subagents] = area.layout(&Layout::vertical([
+            Constraint::Percentage(60),
+            Constraint::Percentage(40),
+        ]));
 
-        render_tool_panel(frame, chunks[0], state, theme);
-        render_subagent_panel(frame, chunks[1], state, theme);
+        render_tool_panel(frame, tools, state, theme);
+        render_subagent_panel(frame, subagents, state, theme);
     } else {
         render_tool_panel(frame, area, state, theme);
     }
@@ -309,7 +410,11 @@ fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState, theme: &Th
         parts.push(Span::styled(formatted, Style::default().fg(theme.text_dim)));
         if tokens.cache_read_tokens > 0 {
             parts.push(Span::styled(
-                format!(" ({}cached)", format_token_count(tokens.cache_read_tokens)),
+                t!(
+                    "status.cache_suffix",
+                    tokens = format_token_count(tokens.cache_read_tokens)
+                )
+                .to_string(),
                 Style::default().fg(theme.text_dim),
             ));
         }
@@ -330,7 +435,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState, theme: &Th
     if mcp_count > 0 {
         parts.push(Span::styled(" | ", Style::default().fg(theme.border)));
         parts.push(Span::styled(
-            format!("{mcp_count} MCP"),
+            t!("status.mcp", count = mcp_count).to_string(),
             Style::default().fg(theme.text_dim),
         ));
     }
@@ -338,7 +443,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState, theme: &Th
     // Message count
     parts.push(Span::styled(" | ", Style::default().fg(theme.border)));
     parts.push(Span::styled(
-        format!("{} msgs", state.session.messages.len()),
+        t!("status.msgs", count = state.session.messages.len()).to_string(),
         Style::default().fg(theme.text_dim),
     ));
 

@@ -11,6 +11,7 @@ use ratatui::widgets::Borders;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
+use crate::i18n::t;
 use crate::theme::Theme;
 
 /// Context window visualization showing token usage as a horizontal bar.
@@ -71,25 +72,25 @@ impl Widget for ContextVizWidget<'_> {
         ));
 
         // Line 2: breakdown
-        let breakdown = format!(
-            "Input: {} | Output: {} | Cache: {}",
-            format_number(self.input),
-            format_number(self.output),
-            format_number(self.cache_read),
+        let breakdown = t!(
+            "context_viz.breakdown",
+            input = format_number(self.input),
+            output = format_number(self.output),
+            cache = format_number(self.cache_read)
         );
-        lines.push(Line::from(Span::raw(breakdown).dim()));
+        lines.push(Line::from(Span::raw(breakdown.to_string()).dim()));
 
         // Line 3: total
-        let total_line = format!(
-            "Used: {} / {}",
-            format_number(self.used as i64),
-            format_number(self.total as i64),
+        let total_line = t!(
+            "context_viz.total",
+            used = format_number(self.used as i64),
+            total = format_number(self.total as i64)
         );
-        lines.push(Line::from(Span::raw(total_line).dim()));
+        lines.push(Line::from(Span::raw(total_line.to_string()).dim()));
 
         let block = Block::default()
             .borders(Borders::ALL)
-            .title(" Context Window ")
+            .title(t!("context_viz.panel_title").to_string())
             .border_style(Style::default().fg(self.theme.border));
 
         Paragraph::new(lines).block(block).render(area, buf);

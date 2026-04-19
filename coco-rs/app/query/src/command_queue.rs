@@ -84,11 +84,14 @@ impl CommandQueue {
         }
     }
 
-    /// Enqueue a command.
+    /// Enqueue a command, maintaining priority order with FIFO within same priority.
+    ///
+    /// Uses `partition_point` binary search to find the insertion slot in O(log n)
+    /// comparisons + O(n) shift, rather than re-sorting the full Vec on every push.
     pub async fn enqueue(&self, command: QueuedCommand) {
         let mut queue = self.inner.lock().await;
-        queue.push(command);
-        queue.sort_by_key(|c| c.priority);
+        let pos = queue.partition_point(|c| c.priority <= command.priority);
+        queue.insert(pos, command);
         self.changed.notify_waiters();
     }
 
