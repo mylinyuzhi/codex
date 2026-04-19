@@ -1,17 +1,13 @@
 # coco-exec-server
 
-Minimal filesystem abstraction ported from codex-rs so `coco-apply-patch`
-can consume the same `ExecutorFileSystem` trait and `LOCAL_FS` static that
-codex-rs uses.
+Minimal filesystem abstraction so `coco-apply-patch` can consume the same `ExecutorFileSystem` trait + `LOCAL_FS` static that `codex-rs` uses.
 
-Only the file-system subset of codex-rs `codex-exec-server` is ported here:
+## Source
 
-- `ExecutorFileSystem` trait (async, tokio-backed)
-- `LocalFileSystem` + `LOCAL_FS` static
-- Companion types (`CreateDirectoryOptions`, `RemoveOptions`, `CopyOptions`,
-  `FileMetadata`, `ReadDirectoryEntry`, `FileSystemResult`)
+Ported from `codex-rs/exec-server` (NOT from claude-code TS). Only the filesystem subset is ported — the process-execution RPC and sandbox-policy-aware variants from codex-rs are intentionally omitted. coco-rs has its own sandbox stack (`coco-sandbox`); the only current consumer (`coco-apply-patch`) uses the non-sandbox methods exclusively.
 
-The process-execution RPC and sandbox-policy-aware variants that codex-rs
-provides are intentionally not ported — coco-rs has its own sandbox stack
-(`coco-sandbox`) and the only current consumer is `coco-apply-patch`, which
-exclusively uses the non-sandbox file-system methods.
+## Key Types
+
+- `ExecutorFileSystem` trait — async, tokio-backed
+- `LocalFileSystem`, `LOCAL_FS` static
+- Companion types: `CreateDirectoryOptions`, `RemoveOptions`, `CopyOptions`, `FileMetadata`, `ReadDirectoryEntry`, `FileSystemResult`

@@ -1,73 +1,42 @@
-# vercel-ai Development Guide
+# vercel-ai
 
-## Overview
+High-level SDK matching `@ai-sdk/ai` v4 (generate_text / stream_text / generate_object / embed / rerank / generate_image / generate_speech / generate_video / transcribe). Builds on `vercel-ai-provider` types + `vercel-ai-provider-utils` helpers.
 
-This crate provides high-level API functions for LLM interactions, matching `@ai-sdk/ai` TypeScript package. It builds on top of `vercel-ai-provider` types and `vercel-ai-provider-utils` utilities.
+## TS Source
 
-## Core Functions
+Ports `@ai-sdk/ai` v4 spec (not from `claude-code/src/`). Anthropic-specific concerns (OAuth, policy limits, 529 retry, etc.) belong in `vercel-ai-anthropic`, not here — see the "Multi-Provider SDK" design decision in the workspace `CLAUDE.md`.
 
-| Function | Description |
-|----------|-------------|
-| `generate_text` | Generate text from a prompt (non-streaming) |
-| `stream_text` | Stream text generation |
-| `generate_object` | Generate structured output matching a JSON schema |
-| `stream_object` | Stream structured output generation |
-| `embed` | Generate embeddings for text |
-| `embed_many` | Generate embeddings for multiple texts |
+## Key Types
 
-## Module Structure
+Core functions: `generate_text`, `stream_text`, `generate_object`, `stream_object`, `embed`, `embed_many`, `rerank`, `generate_image`, `generate_speech`, `generate_video`, `transcribe`.
 
-| Module | Purpose |
-|--------|---------|
-| `generate_text` | `generate_text`, `stream_text`, result types |
-| `generate_object` | `generate_object`, `stream_object`, result types |
-| `embed` | `embed`, `embed_many`, result types |
-| `prompt` | `Prompt` type, `CallSettings` |
-| `model` | Model resolution functions |
-| `provider` | Global default provider pattern |
-| `types` | Re-exports from provider crate |
-| `error` | Error types specific to high-level API |
+Options / results: `GenerateTextOptions`, `GenerateTextResult`, `StreamTextOptions`, `StreamTextResult`, `GenerateObjectOptions`, `GenerateObjectResult`, `StreamObjectOptions`, `EmbedOptions`, `EmbedManyOptions`, `RerankOptions`, `GenerateImageOptions`, `GenerateSpeechOptions`, `GenerateVideoOptions`, `TranscribeOptions`.
 
-## Global Provider Pattern
+Callbacks: `GenerateTextCallbacks`, `StreamTextCallbacks`, `OnStartEvent`, `OnStepStartEvent`, `OnStepFinishEvent`, `OnFinishEvent`, `OnChunkEvent`, `OnToolCallStartEvent`, `OnToolCallFinishEvent`, `OnErrorEvent` (via error module).
 
-The crate supports a global default provider that can be set once and used for all model resolution:
+Output strategies: `Output`, `OutputMode`, `OutputStrategy`, `OutputSpec`, `text_output`, `object_output`, `array_output`, `choice_output`, `json_output`.
 
-```rust,ignore
-use vercel_ai::{set_default_provider, generate_text};
-use std::sync::Arc;
+Prompt / content: `Prompt`, `PromptMessage`, `PromptUserMessage`, `PromptAssistantMessage`, `PromptToolMessage`, `PromptSystemMessage`, `PromptContent`, `PromptUserContent`, `PromptAssistantContent`, `PromptToolContentPart`, `PromptTextPart`, `PromptImagePart`, `PromptFilePart`, `PromptReasoningPart`, `PromptToolCallPart`, `PromptToolResultPart`, `PromptToolResultOutput`, `CallSettings`, `SystemPrompt`, `StandardizedPrompt`, `TimeoutConfiguration`.
 
-// Set a default provider
-set_default_provider(Arc::new(my_provider));
+Model handles: `LanguageModel`, `EmbeddingModel`, `ImageModelRef`, `SpeechModelRef`, `TranscriptionModelRef`, `VideoModelRef`, `RerankingModelRef` + `resolve_*_model[_with_provider]` functions.
 
-// Now generate_text can use string model IDs
-let result = generate_text(GenerateTextOptions {
-    model: "claude-3-sonnet".into(), // Resolved via default provider
-    prompt: Prompt::user("Hello"),
-    ..Default::default()
-}).await?;
-```
+Middleware: `wrap_language_model`, `wrap_embedding_model`, `wrap_image_model`, `wrap_provider`, `default_settings_middleware`, `default_embedding_settings_middleware`, `extract_json_middleware`, `extract_reasoning_middleware`, `simulate_streaming_middleware`, `add_tool_input_examples_middleware`, `DefaultSettings`, `DefaultEmbeddingSettings`, `EmbeddingMiddleware`, `ImageMiddleware`.
 
-## Event integration
+Registry / provider: `ProviderRegistry`, `ProviderRegistryOptions`, `create_provider_registry`, `custom_provider`, `CustomProviderOptions`, `set_default_provider` / `get_default_provider` / `clear_default_provider` / `has_default_provider`.
 
-Callbacks in `src/generate_text/callback.rs` (`OnStartEvent`,
-`OnStepFinishEvent`, `OnFinishEvent`, `OnErrorEvent`) fire at the
-**provider boundary** and are **NOT** bridged into
-`coco_types::CoreEvent`. The agent loop (`QueryEngine`) consumes them
-internally and emits `AgentStreamEvent` / `ServerNotification`
-accordingly. Trace correlation uses shared `session_id`/`turn_id`
-context, not data-flow bridging. See `event-system-design.md` §1.7 and
-plan WS-9.
+Stream processing: `StreamProcessor`, `StreamProcessorConfig`, `StreamSnapshot`, `FileSnapshot`, `ReasoningSnapshot`, `SourceSnapshot`, `ToolCallSnapshot`, `TextStreamPart`.
 
-## Testing
+Tool results / errors: `ToolCall`, `ToolResult`, `ToolOutput`, `ToolError`, `ToolCallOutcome`, `DynamicToolCall` / `DynamicToolResult`, `StaticToolCall` / `StaticToolResult`, `TypedToolCall` / `TypedToolResult`, `ToolCallRepairFunction`, `SmoothStream`.
 
-```bash
-# From coco-rs directory
-cargo test -p vercel-ai
-cargo check -p vercel-ai
-cargo clippy -p vercel-ai
-```
+Utilities: `RetryConfig`, `with_retry`, `RetryableError`, `RetrySettings`, `CancellationManager`, `SerialJobExecutor`, `SimulatedStream`, `consume_stream`, `cosine_similarity`, `create_download`, `merge_headers`, `prepare_headers`, `prepare_provider_headers`, `complete_partial_json`, `parse_partial_json[_with_repair]`, `extract_partial_value`, `is_deep_equal`, `DeepPartial`, `LogWarningsFunction`, `TelemetryIntegration`, `TelemetrySettings`.
 
-## Type Mappings from TypeScript
+Errors: `AIError`, `RetryError`, `NoObjectGeneratedError`, `NoImageGeneratedError`, `NoSpeechGeneratedError`, `NoVideoGeneratedError`, `NoTranscriptGeneratedError`, `NoSuchToolError`, `InvalidToolInputError`, `InvalidToolApprovalError`, `MissingToolResultsError`, `SchemaValidationError`, `UnsupportedModelVersionError`, `ToolCallRepairError`.
+
+## Callbacks vs CoreEvent
+
+Callbacks in `generate_text/callback.rs` fire at the **provider boundary** and are NOT bridged into `coco_types::CoreEvent`. The agent loop (`QueryEngine`) consumes them internally and re-emits `AgentStreamEvent` / `ServerNotification`. Trace correlation uses shared `session_id` / `turn_id` context. See `docs/coco-rs/event-system-design.md` §1.7 and plan WS-9.
+
+## TS → Rust Idiom Mapping
 
 | TypeScript | Rust |
 |------------|------|
@@ -76,3 +45,4 @@ cargo clippy -p vercel-ai
 | `TOOLS extends ToolSet` | `TOOLS: ToolSet` trait bound |
 | Union types | Enums |
 | `Record<string, T>` | `HashMap<String, T>` |
+| `AbortSignal` | `CancellationToken` |

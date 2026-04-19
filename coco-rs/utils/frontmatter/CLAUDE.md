@@ -1,10 +1,16 @@
 # coco-frontmatter
 
-YAML frontmatter parser for markdown files (skills, memories, CLAUDE.md).
+Minimal YAML frontmatter parser for markdown files (skills, commands, agents, memories, output styles).
 
 ## TS Source
-- `src/utils/frontmatterParser.ts`
-- `src/utils/json.ts`, `src/utils/markdown.ts` (markdown parsing utilities)
+- `utils/frontmatterParser.ts` (~370 LOC)
+- `utils/yaml.ts` — general YAML helper
 
 ## Key Types
-Frontmatter, FrontmatterParser
+| Type | Purpose |
+|------|---------|
+| `parse(input)` | Strip leading `---` block and parse to `Frontmatter { data, content }` |
+| `Frontmatter` | `data: HashMap<String, FrontmatterValue>`, remaining markdown `content` |
+| `FrontmatterValue` | `String` / `Bool` / `Int` / `StringList` / `Null` with `as_str` / `as_bool` / `as_string_list` |
+
+Supports only flat scalar keys + `- item` lists. Quoted strings, boolean aliases (`yes`/`no`), and integers are recognized; nested objects are not.

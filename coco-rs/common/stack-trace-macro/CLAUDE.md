@@ -1,12 +1,18 @@
 # coco-stack-trace-macro
 
-Proc macro for snafu error enums with virtual stack traces. Copied from cocode-rs.
+Proc macro `#[stack_trace_debug]` for snafu error enums. Generates `StackError` + `Debug` impls that render a virtual stack trace from per-variant `location` (`#[snafu(implicit)]`), `source`, and `error` fields.
 
-## Source
-Copied from cocode-rs `common/stack-trace-macro`. Rust-only: proc-macro attribute.
+## Key API
 
-## Key Types
-- `#[stack_trace_debug]` proc macro attribute
+- `#[stack_trace_debug]` — attribute placed **before** `#[derive(Snafu)]` on an enum.
+
+Each variant is analyzed for:
+- `location: Location` — captured at error creation via `#[snafu(implicit)]`
+- `source: T` — internal source that also implements `StackError` (recursive)
+- `error: T` — external `std::error::Error` cause
+
+Generated `Debug` produces one stack frame per layer, showing the correct file:line from error creation site.
 
 ## Dependencies
-None. Used by coco-error.
+
+None (used by `coco-error` which re-exports it).
