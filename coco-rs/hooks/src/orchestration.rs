@@ -50,6 +50,7 @@ pub use crate::inputs::PreToolUseInput;
 pub use crate::inputs::SessionEndInput;
 pub use crate::inputs::SessionStartInput;
 pub use crate::inputs::StopFailureInput;
+pub use crate::inputs::StopInput;
 pub use crate::inputs::base_from_ctx;
 
 // ---------------------------------------------------------------------------
@@ -1348,6 +1349,52 @@ pub async fn execute_session_end(
 /// Execute StopFailure hooks.
 ///
 /// TS: executeStopFailureHooks()
+/// Execute `Stop` hooks and return the aggregated result.
+///
+/// Stop hooks fire when a turn ends naturally (no tool calls, `end_turn` stop).
+/// A blocking Stop hook's feedback is injected back into the conversation and
+/// the loop continues — matching TS `query.ts` `handleStopHooks()` behavior.
+///
+/// TS: `services/tools/stopHooks.ts` + `handleStopHooks()` in query.ts.
+pub async fn execute_stop(
+    registry: &HookRegistry,
+    ctx: &OrchestrationContext,
+    reason: Option<&str>,
+    event_tx: Option<&tokio::sync::mpsc::Sender<crate::HookExecutionEvent>>,
+) -> anyhow::Result<AggregatedHookResult> {
+    if ctx.disable_all_hooks {
+        return Ok(AggregatedHookResult::default());
+    }
+    let input = StopInput {
+        base: base_from_ctx(ctx),
+        hook_event_name: "Stop".to_string(),
+        reason: reason.map(String::from),
+    };
+    let json_input = serde_json::to_string(&input)?;
+    let env = build_hook_env(
+        &ctx.session_id,
+        &ctx.cwd.to_string_lossy(),
+        None,
+        "Stop",
+        ctx.project_dir.as_deref().and_then(|p| p.to_str()),
+    );
+
+    let results = execute_hooks_parallel_filtered(
+        registry,
+        HookEventType::Stop,
+        None,
+        &json_input,
+        &env,
+        &ctx.cancel,
+        DEFAULT_HOOK_TIMEOUT,
+        event_tx,
+        ctx.allow_managed_hooks_only,
+    )
+    .await;
+
+    Ok(aggregate_results(&results))
+}
+
 pub async fn execute_stop_failure(
     registry: &HookRegistry,
     ctx: &OrchestrationContext,

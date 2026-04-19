@@ -114,8 +114,20 @@ pub struct Cli {
     pub name: Option<String>,
 
     /// Bypass all permission checks (dangerous).
+    ///
+    /// Starts the session directly in `BypassPermissions` mode AND
+    /// unlocks it as a reachable target for Shift+Tab / plan-mode exit.
     #[arg(long)]
     pub dangerously_skip_permissions: bool,
+
+    /// Unlock `BypassPermissions` as an option without entering it at
+    /// startup.
+    ///
+    /// TS parity: `--allow-dangerously-skip-permissions`. The user still
+    /// starts in the default (or `--permission-mode`) mode, but can
+    /// later cycle into bypass via Shift+Tab or plan-mode exit.
+    #[arg(long)]
+    pub allow_dangerously_skip_permissions: bool,
 
     /// Print response and exit (non-interactive mode).
     #[arg(long, alias = "print")]
@@ -140,6 +152,102 @@ pub struct Cli {
     /// Disable session persistence.
     #[arg(long)]
     pub no_session_persistence: bool,
+
+    // ── PR-E3: TS-parity SDK/scripting flags ──
+    /// Structured input format for non-interactive mode.
+    ///
+    /// TS: `--input-format <text|stream-json>` — pairs with `--output-format`
+    /// to drive scripted pipelines over stdio.
+    #[arg(long)]
+    pub input_format: Option<String>,
+
+    /// Path to a JSON schema file that validates structured output.
+    ///
+    /// TS: `--json-schema <file>` — applied to the final response when
+    /// `output_format == stream-json`.
+    #[arg(long)]
+    pub json_schema: Option<String>,
+
+    /// Replay user messages on resume (includes them in the transcript replay).
+    ///
+    /// TS: `--replay-user-messages` — useful for fixture-driven tests.
+    #[arg(long)]
+    pub replay_user_messages: bool,
+
+    /// Emit hook lifecycle events in the stream-json output.
+    ///
+    /// TS: `--include-hook-events` — gates `HookStarted/Progress/Response`
+    /// in the wire stream.
+    #[arg(long)]
+    pub include_hook_events: bool,
+
+    /// Emit partial (incomplete) assistant messages in the stream-json output.
+    ///
+    /// TS: `--include-partial-messages` — exposes in-flight streaming
+    /// content for clients that render mid-turn.
+    #[arg(long)]
+    pub include_partial_messages: bool,
+
+    /// Thinking mode: enabled, adaptive, or disabled.
+    ///
+    /// TS: `--thinking <mode>` — orthogonal to `--thinking-budget` (which
+    /// sets the token ceiling when enabled).
+    #[arg(long)]
+    pub thinking: Option<String>,
+
+    /// Max tokens for extended thinking.
+    ///
+    /// TS: `--max-thinking-tokens <N>` — cap on reasoning tokens per turn.
+    #[arg(long)]
+    pub max_thinking_tokens: Option<i64>,
+
+    /// File containing instructions to append to the system prompt.
+    ///
+    /// TS: `--append-system-prompt-file <path>` — reads the file and
+    /// appends its contents to the default system prompt.
+    #[arg(long)]
+    pub append_system_prompt_file: Option<String>,
+
+    /// Fail fast on invalid MCP config rather than best-effort loading.
+    ///
+    /// TS: `--strict-mcp-config` — if set, any malformed server entry
+    /// aborts startup.
+    #[arg(long)]
+    pub strict_mcp_config: bool,
+
+    /// Comma-separated list of setting sources to load (user, project, local).
+    ///
+    /// TS: `--setting-sources <csv>` — restrict which layers participate.
+    #[arg(long)]
+    pub setting_sources: Option<String>,
+
+    /// Fork a new session from the provided session ID.
+    ///
+    /// TS: `--fork-session` — copies history from `--resume <id>` into a
+    /// fresh session rather than continuing it.
+    #[arg(long)]
+    pub fork_session: bool,
+
+    /// Comma-separated list of provider beta headers to opt into.
+    ///
+    /// TS: `--betas <csv>` — e.g. `prompt-caching-2024-07-31`.
+    #[arg(long)]
+    pub betas: Option<String>,
+
+    /// Explicit session ID to use for this run.
+    ///
+    /// TS: `--session-id <uuid>` — for deterministic session IDs in
+    /// automation. Distinct from `--resume` (continue existing) and
+    /// `--fork-session` (copy existing).
+    #[arg(long)]
+    pub session_id: Option<String>,
+
+    /// MCP tool name to delegate permission prompts to.
+    ///
+    /// TS: `--permission-prompt-tool <name>` — routes `Ask` decisions to
+    /// the named tool instead of the built-in TUI / SDK bridge.
+    #[arg(long)]
+    pub permission_prompt_tool: Option<String>,
 
     #[command(subcommand)]
     pub command: Option<Commands>,
@@ -192,6 +300,11 @@ pub enum Commands {
         #[command(subcommand)]
         action: PluginAction,
     },
+    /// List discovered agent definitions.
+    ///
+    /// TS: `src/cli/handlers/agents.ts` — walks `~/.coco/agents/` and
+    /// `.claude/agents/` for markdown frontmatter agent specs.
+    Agents,
     /// Show auto-mode defaults.
     #[command(name = "auto-mode")]
     AutoMode {
@@ -308,14 +421,26 @@ pub enum McpAction {
 pub enum PluginAction {
     /// List installed plugins.
     List,
-    /// Install a plugin.
+    /// Install a plugin from a local path (copies into user plugin dir).
+    /// URL-based install (marketplace/git) is not yet implemented.
     Install {
-        /// Plugin name or URL.
+        /// Local directory containing `PLUGIN.toml`, or plugin URL.
         name: String,
     },
-    /// Uninstall a plugin.
+    /// Uninstall a plugin by name.
     Uninstall {
         /// Plugin name.
         name: String,
     },
+    /// Validate a plugin manifest at the given path.
+    ///
+    /// TS: `pluginValidateHandler` — checks PLUGIN.toml structure.
+    Validate {
+        /// Path to plugin directory (must contain `PLUGIN.toml`).
+        path: String,
+    },
 }
+
+#[cfg(test)]
+#[path = "lib.test.rs"]
+mod tests;

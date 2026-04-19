@@ -369,6 +369,7 @@ impl Tool for TaskCreateTool {
         Ok(ToolResult {
             data: task_create_output(&task),
             new_messages: vec![],
+            app_state_patch: None,
         })
     }
 }
@@ -423,6 +424,7 @@ impl Tool for TaskGetTool {
         Ok(ToolResult {
             data: task_get_output(store.get(task_id)),
             new_messages: vec![],
+            app_state_patch: None,
         })
     }
 }
@@ -473,6 +475,7 @@ impl Tool for TaskListTool {
         Ok(ToolResult {
             data: serde_json::json!({ "tasks": tasks }),
             new_messages: vec![],
+            app_state_patch: None,
         })
     }
 }
@@ -563,6 +566,7 @@ impl Tool for TaskUpdateTool {
             return Ok(ToolResult {
                 data: task_update_error_output(task_id, &format!("Task '{task_id}' not found")),
                 new_messages: vec![],
+                app_state_patch: None,
             });
         };
 
@@ -662,6 +666,7 @@ impl Tool for TaskUpdateTool {
         Ok(ToolResult {
             data: task_update_output(task_id, updated_fields, status_change),
             new_messages: vec![],
+            app_state_patch: None,
         })
     }
 }
@@ -823,6 +828,7 @@ impl Tool for TaskStopTool {
                     "task_type": "background",
                 }),
                 new_messages: vec![],
+                app_state_patch: None,
             }),
             // TODO task was marked Stopped (and background task was
             // either not registered or the TaskHandle was absent).
@@ -833,6 +839,7 @@ impl Tool for TaskStopTool {
                     "task_type": "todo",
                 }),
                 new_messages: vec![],
+                app_state_patch: None,
             }),
             // Neither stage found the task. Surface as a tool error so
             // the model knows to check its task ID and retry.
@@ -1003,6 +1010,7 @@ impl Tool for TaskOutputTool {
                         retrieval,
                     ),
                     new_messages: vec![],
+                    app_state_patch: None,
                 });
             }
         }
@@ -1026,6 +1034,7 @@ impl Tool for TaskOutputTool {
                 Ok(ToolResult {
                     data: task_output_todo(task, retrieval),
                     new_messages: vec![],
+                    app_state_patch: None,
                 })
             }
             None => Ok(ToolResult {
@@ -1037,6 +1046,7 @@ impl Tool for TaskOutputTool {
                     "error": format!("Task '{task_id}' not found"),
                 }),
                 new_messages: vec![],
+                app_state_patch: None,
             }),
         }
     }
@@ -1231,6 +1241,7 @@ impl Tool for TodoWriteTool {
                 "verificationNudgeNeeded": false,
             }),
             new_messages: vec![],
+            app_state_patch: None,
         })
     }
 }

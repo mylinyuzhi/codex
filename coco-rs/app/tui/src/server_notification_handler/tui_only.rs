@@ -11,6 +11,7 @@
 
 use coco_types::TuiOnlyEvent;
 
+use crate::i18n::t;
 use crate::state::AppState;
 use crate::state::ui::Toast;
 
@@ -27,7 +28,7 @@ pub(super) fn handle(state: &mut AppState, event: TuiOnlyEvent) -> bool {
                     request_id,
                     tool_name,
                     description,
-                    detail: crate::state::ui::PermissionDetail::Generic { input_preview },
+                    detail: crate::state::PermissionDetail::Generic { input_preview },
                     risk_level: None,
                     show_always_allow: true,
                     classifier_checking: false,
@@ -53,7 +54,7 @@ pub(super) fn handle(state: &mut AppState, event: TuiOnlyEvent) -> bool {
             message,
         } => {
             state.ui.set_overlay(crate::state::Overlay::Question(
-                crate::state::ui::QuestionOverlay {
+                crate::state::QuestionOverlay {
                     request_id,
                     question: message,
                     options: Vec::new(),
@@ -69,7 +70,7 @@ pub(super) fn handle(state: &mut AppState, event: TuiOnlyEvent) -> bool {
         } => {
             let fields = parse_elicitation_fields(&schema);
             state.ui.set_overlay(crate::state::Overlay::Elicitation(
-                crate::state::ui::ElicitationOverlay {
+                crate::state::ElicitationOverlay {
                     request_id,
                     server_name: server,
                     message: String::new(),
@@ -85,7 +86,7 @@ pub(super) fn handle(state: &mut AppState, event: TuiOnlyEvent) -> bool {
             state
                 .ui
                 .set_overlay(crate::state::Overlay::SandboxPermission(
-                    crate::state::ui::SandboxPermissionOverlay {
+                    crate::state::SandboxPermissionOverlay {
                         request_id,
                         description: operation,
                     },
@@ -107,27 +108,27 @@ pub(super) fn handle(state: &mut AppState, event: TuiOnlyEvent) -> bool {
 
         // === Compaction / speculation toasts ===
         TuiOnlyEvent::CompactionCircuitBreakerOpen { failures } => {
-            state.ui.add_toast(Toast::warning(format!(
-                "Compaction circuit breaker open ({failures} failures)"
-            )));
+            state.ui.add_toast(Toast::warning(
+                t!("toast.compaction_breaker", failures = failures).to_string(),
+            ));
             true
         }
         TuiOnlyEvent::MicroCompactionApplied { removed } => {
-            state.ui.add_toast(Toast::info(format!(
-                "Micro-compaction: {removed} messages removed"
-            )));
+            state.ui.add_toast(Toast::info(
+                t!("toast.micro_compaction", removed = removed).to_string(),
+            ));
             true
         }
         TuiOnlyEvent::SessionMemoryCompactApplied { summary_tokens } => {
-            state.ui.add_toast(Toast::info(format!(
-                "Session memory compacted ({summary_tokens} tokens)"
-            )));
+            state.ui.add_toast(Toast::info(
+                t!("toast.session_memory_compacted", tokens = summary_tokens).to_string(),
+            ));
             true
         }
         TuiOnlyEvent::SpeculativeRolledBack { reason } => {
-            state
-                .ui
-                .add_toast(Toast::warning(format!("Speculation rolled back: {reason}")));
+            state.ui.add_toast(Toast::warning(
+                t!("toast.speculation_rolled_back", reason = reason.as_str()).to_string(),
+            ));
             true
         }
 
@@ -135,33 +136,33 @@ pub(super) fn handle(state: &mut AppState, event: TuiOnlyEvent) -> bool {
         TuiOnlyEvent::SessionMemoryExtractionStarted => {
             state
                 .ui
-                .add_toast(Toast::info("Extracting session memories...".to_string()));
+                .add_toast(Toast::info(t!("toast.extracting_memories").to_string()));
             true
         }
         TuiOnlyEvent::SessionMemoryExtractionCompleted { extracted } => {
-            state
-                .ui
-                .add_toast(Toast::success(format!("{extracted} memories extracted")));
+            state.ui.add_toast(Toast::success(
+                t!("toast.memories_extracted_count", count = extracted).to_string(),
+            ));
             true
         }
         TuiOnlyEvent::SessionMemoryExtractionFailed { error } => {
-            state
-                .ui
-                .add_toast(Toast::error(format!("Memory extraction failed: {error}")));
+            state.ui.add_toast(Toast::error(
+                t!("toast.memory_extract_failed_full", error = error.as_str()).to_string(),
+            ));
             true
         }
 
         // === Cron toasts ===
         TuiOnlyEvent::CronJobDisabled { job_id: _, reason } => {
-            state
-                .ui
-                .add_toast(Toast::warning(format!("Cron job disabled: {reason}")));
+            state.ui.add_toast(Toast::warning(
+                t!("toast.cron_disabled_full", reason = reason.as_str()).to_string(),
+            ));
             true
         }
         TuiOnlyEvent::CronJobsMissed { count } => {
-            state
-                .ui
-                .add_toast(Toast::warning(format!("{count} cron jobs missed")));
+            state.ui.add_toast(Toast::warning(
+                t!("toast.cron_missed_count", count = count).to_string(),
+            ));
             true
         }
 
@@ -198,9 +199,9 @@ pub(super) fn handle(state: &mut AppState, event: TuiOnlyEvent) -> bool {
             tool_use_id: _,
             reason,
         } => {
-            state
-                .ui
-                .add_toast(Toast::warning(format!("Tool aborted: {reason}")));
+            state.ui.add_toast(Toast::warning(
+                t!("toast.tool_aborted_full", reason = reason.as_str()).to_string(),
+            ));
             true
         }
     }
@@ -278,22 +279,22 @@ fn on_rewind_completed(
     state.ui.dismiss_overlay();
 
     let msg = if files_changed > 0 {
-        format!("Rewound to checkpoint. {files_changed} files restored.")
+        t!("toast.rewound_checkpoint", count = files_changed).to_string()
     } else {
-        "Conversation rewound to checkpoint.".to_string()
+        t!("toast.conversation_rewound_checkpoint").to_string()
     };
     state.ui.add_toast(Toast::success(msg));
     true
 }
 
 /// Extract elicitation fields from a JSON Schema object.
-fn parse_elicitation_fields(schema: &serde_json::Value) -> Vec<crate::state::ui::ElicitationField> {
+fn parse_elicitation_fields(schema: &serde_json::Value) -> Vec<crate::state::ElicitationField> {
     let Some(props) = schema.get("properties").and_then(|p| p.as_object()) else {
         return Vec::new();
     };
     props
         .iter()
-        .map(|(name, prop)| crate::state::ui::ElicitationField {
+        .map(|(name, prop)| crate::state::ElicitationField {
             name: name.clone(),
             description: prop
                 .get("description")

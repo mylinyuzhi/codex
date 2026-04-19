@@ -12,6 +12,7 @@ use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
+use crate::i18n::t;
 use crate::theme::Theme;
 
 /// Team status indicator for the status bar.
@@ -50,15 +51,15 @@ impl Widget for TeamStatusWidget<'_> {
         }
 
         let label = if self.teammate_count == 1 {
-            "1 teammate".to_string()
+            t!("team.teammate_one").to_string()
         } else {
-            format!("{} teammates", self.teammate_count)
+            t!("team.teammates_other", count = self.teammate_count).to_string()
         };
 
         let mut spans = vec![Span::raw(label).fg(self.theme.accent)];
 
         if self.selected && self.show_hint {
-            spans.push(Span::raw(" · Enter to view").dim());
+            spans.push(Span::raw(t!("team.hint_enter_view").to_string()).dim());
         }
 
         let line = Line::from(spans);

@@ -250,6 +250,7 @@ async fn execute_background(
             ),
         }),
         new_messages: vec![],
+        app_state_patch: None,
     })
 }
 
@@ -293,6 +294,7 @@ async fn execute_foreground(command: &str, input: &Value) -> Result<ToolResult<V
                     "interrupted": false,
                 }),
                 new_messages: vec![],
+                app_state_patch: None,
             })
         }
         Ok(Err(e)) => Err(ToolError::ExecutionFailed {
