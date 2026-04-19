@@ -128,6 +128,11 @@ pub struct PlanModeReminder {
     /// Set when this engine runs AS a teammate whose role requires
     /// leader approval. Enables approval-response polling.
     is_teammate_awaiting: bool,
+    /// Optional protocol-event sink for surfacing plan-approval requests
+    /// to the leader's TUI as `ServerNotification::PlanApprovalRequested`.
+    /// `None` in SDK-only sessions or tests; the LLM-prompt attachment
+    /// path continues regardless.
+    event_tx: Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
     /// Which Full-variant workflow to render. Configured via
     /// `settings.plan_mode.workflow`. Defaults to `FivePhase`.
     workflow: PlanWorkflow,
@@ -158,6 +163,7 @@ impl PlanModeReminder {
             agent_name: None,
             team_name: None,
             is_teammate_awaiting: false,
+            event_tx: None,
             workflow: PlanWorkflow::default(),
             phase4_variant: Phase4Variant::default(),
             explore_agent_count: AgentCount::new(3),
@@ -197,6 +203,18 @@ impl PlanModeReminder {
         self.agent_name = Some(agent_name);
         self.team_name = Some(team_name);
         self.is_teammate_awaiting = is_teammate_awaiting;
+        self
+    }
+
+    /// Builder: install a protocol-event sink so leader-pending-approval
+    /// polling can surface each request to the TUI as a
+    /// `ServerNotification::PlanApprovalRequested`. Leaves the
+    /// LLM-prompt attachment path unchanged.
+    pub fn with_event_sink(
+        mut self,
+        event_tx: tokio::sync::mpsc::Sender<coco_types::CoreEvent>,
+    ) -> Self {
+        self.event_tx = Some(event_tx);
         self
     }
 
@@ -783,6 +801,27 @@ impl PlanModeReminder {
              feedback: \"<why>\"}})`.",
         );
         history.push(Self::raw_reminder_message(&body));
+
+        // Surface each pending request to the TUI as a modal approval
+        // overlay. The event sink is optional: SDK-only sessions skip
+        // this while still receiving the LLM-prompt attachment above.
+        // One notification per request — the overlay priority-queues
+        // multiple arrivals.
+        if let Some(tx) = self.event_tx.as_ref() {
+            for (_idx, req) in &pending {
+                let params = coco_types::PlanApprovalRequestedParams {
+                    request_id: req.request_id.clone(),
+                    from: req.from.clone(),
+                    plan_file_path: Some(req.plan_file_path.clone()),
+                    plan_content: req.plan_content.clone(),
+                };
+                let _ = tx
+                    .send(coco_types::CoreEvent::Protocol(
+                        coco_types::ServerNotification::PlanApprovalRequested(params),
+                    ))
+                    .await;
+            }
+        }
 
         // Mark all seen requests as read so we don't re-inject next turn.
         // TS keeps them unread until the leader responds, but we dedup

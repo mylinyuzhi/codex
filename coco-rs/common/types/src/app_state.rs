@@ -131,6 +131,33 @@ pub struct ToolAppState {
     /// Outstanding `plan_approval-<teammate>-<team>-<nonce>` correlation id
     /// for the current pending approval.
     pub awaiting_plan_approval_request_id: Option<String>,
+
+    // ── Task / Todo snapshots ────────────────────────────────────────
+    //
+    // Task tools emit `app_state_patch` closures that refresh these
+    // fields after every mutation — the TUI reads them directly to
+    // render the unified task panel. Matches TS `AppState.tasks` +
+    // `AppState.todos[agentId]` mirrored across turns.
+    /// Latest snapshot of the durable V2 plan-item list (visible
+    /// entries only — `_internal` metadata items are filtered out by
+    /// the tool before patching).
+    pub plan_tasks: Vec<crate::TaskRecord>,
+
+    /// V1 per-agent/per-session TodoWrite lists, keyed by
+    /// `agent_id.unwrap_or(session_id)`. Empty until TodoWrite is used.
+    pub todos_by_agent: std::collections::HashMap<String, Vec<crate::TodoRecord>>,
+
+    /// Which panel the TUI should show expanded (task / teammates /
+    /// none). Tools set this to [`ExpandedView::Tasks`] after create /
+    /// update, matching TS `TaskCreateTool.ts:116-119` and
+    /// `TaskUpdateTool.ts:140-143`.
+    pub expanded_view: crate::ExpandedView,
+
+    /// When `true`, the TUI should surface a "spawn verification agent"
+    /// banner above the input area. Set by `TaskUpdate` + `TodoWrite`
+    /// when all items are completed, ≥3 items exist, and none match
+    /// `/verif/i`. Cleared on acknowledgement or next TodoWrite cycle.
+    pub verification_nudge_pending: bool,
 }
 
 // ────────────────────────────────────────────────────────────────

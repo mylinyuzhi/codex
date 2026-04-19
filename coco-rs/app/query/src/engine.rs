@@ -105,6 +105,14 @@ pub struct QueryEngine {
     /// `NoOpMailboxHandle` in `create_tool_context`; swarm spawn paths
     /// install a real handle via [`Self::with_mailbox`].
     mailbox: Option<coco_tool::MailboxHandleRef>,
+    /// Persistent task-list store (V2, `TaskCreate`/`TaskUpdate`/etc.).
+    /// `None` resolves to `NoOpTaskListHandle` — the V2 tools then
+    /// return errors on write, matching TS's "no store configured"
+    /// behavior. Install via [`Self::with_task_list`].
+    task_list: Option<coco_tool::TaskListHandleRef>,
+    /// Per-agent ephemeral todo store (V1, `TodoWrite`). Defaults to
+    /// an in-memory instance when absent.
+    todo_list: Option<coco_tool::TodoListHandleRef>,
 }
 
 impl QueryEngine {
@@ -133,12 +141,26 @@ impl QueryEngine {
             auto_mode_rules: coco_permissions::AutoModeRules::default(),
             app_state: None,
             mailbox: None,
+            task_list: None,
+            todo_list: None,
         }
     }
 
     /// Install a mailbox handle for swarm teammate messaging.
     pub fn with_mailbox(mut self, mailbox: coco_tool::MailboxHandleRef) -> Self {
         self.mailbox = Some(mailbox);
+        self
+    }
+
+    /// Install the durable task-list store (V2 task tools).
+    pub fn with_task_list(mut self, handle: coco_tool::TaskListHandleRef) -> Self {
+        self.task_list = Some(handle);
+        self
+    }
+
+    /// Install the ephemeral per-agent todo store (V1 TodoWrite).
+    pub fn with_todo_list(mut self, handle: coco_tool::TodoListHandleRef) -> Self {
+        self.todo_list = Some(handle);
         self
     }
 
@@ -627,6 +649,13 @@ impl QueryEngine {
                 team,
                 self.config.is_teammate && self.config.plan_mode_required,
             );
+        }
+        // Install the protocol-event sink so leader-pending-approval
+        // polling can surface `PlanApprovalRequested` to the TUI in
+        // addition to injecting the LLM-prompt attachment. Absent sink
+        // (SDK-only / headless) means the overlay simply never fires.
+        if let Some(tx) = event_tx.clone() {
+            plan_reminder = plan_reminder.with_event_sink(tx);
         }
 
         let make_result = |response_text: String,
@@ -1211,11 +1240,26 @@ impl QueryEngine {
                     // `orchestration.ts` applies `queuedContext
                     // Modifiers` once per batch regardless of when
                     // individual tools actually dispatched.
-                    if let (Ok(tr), Some(arc)) = (exec_outcome.as_mut(), self.app_state.as_ref()) {
-                        if let Some(patch) = tr.app_state_patch.take() {
+                    if let (Ok(tr), Some(arc)) = (exec_outcome.as_mut(), self.app_state.as_ref())
+                        && let Some(patch) = tr.app_state_patch.take()
+                    {
+                        let snapshot = {
                             let mut guard = arc.write().await;
                             patch(&mut guard);
-                        }
+                            // Always emit after patch; the TUI reconciles
+                            // via diff. Matches TS `notifyTasksUpdated`.
+                            coco_types::TaskPanelChangedParams {
+                                plan_tasks: guard.plan_tasks.clone(),
+                                todos_by_agent: guard.todos_by_agent.clone(),
+                                expanded_view: guard.expanded_view,
+                                verification_nudge_pending: guard.verification_nudge_pending,
+                            }
+                        };
+                        let _ = emit_protocol(
+                            &event_tx,
+                            coco_types::ServerNotification::TaskPanelChanged(snapshot),
+                        )
+                        .await;
                     }
                     let output = match &exec_outcome {
                         Ok(r) => serde_json::to_string(&r.data).unwrap_or_default(),
@@ -2263,6 +2307,14 @@ impl QueryEngine {
             permission_bridge: self.permission_bridge.clone(),
             progress_tx: None,
             task_handle: None,
+            task_list: self
+                .task_list
+                .clone()
+                .unwrap_or_else(|| Arc::new(coco_tool::NoOpTaskListHandle)),
+            todo_list: self
+                .todo_list
+                .clone()
+                .unwrap_or_else(|| Arc::new(coco_tool::InMemoryTodoListHandle::new())),
             // TODO(B1.3 follow-up): bridge app/query hook registry into
             // HookHandle impl to wire PreToolUse/PostToolUse hooks through
             // the executor. For now the executor treats None as a no-op.

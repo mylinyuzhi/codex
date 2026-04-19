@@ -346,6 +346,18 @@ pub enum ServerNotification {
     /// Background task progress.
     #[serde(rename = "task/progress")]
     TaskProgress(TaskProgressParams),
+    /// Durable plan-item / V1 todo snapshot — emitted after
+    /// `TaskCreate`/`TaskUpdate`/`TodoWrite` tools mutate state so
+    /// the TUI can refresh its panel without pulling the store
+    /// directly. TS parity: `notifyTasksUpdated` subscriber callback
+    /// in `utils/tasks.ts`.
+    #[serde(rename = "task_panel/changed")]
+    TaskPanelChanged(TaskPanelChangedParams),
+    /// Team lead received a plan-approval request from a teammate
+    /// (via mailbox). The TUI surfaces this as a modal overlay.
+    /// TS parity: `ExitPlanModeV2Tool.ts:137-141` teammate request flow.
+    #[serde(rename = "plan_approval/requested")]
+    PlanApprovalRequested(PlanApprovalRequestedParams),
     /// Agents killed.
     #[serde(rename = "agents/killed")]
     AgentsKilled(AgentsKilledParams),
@@ -550,6 +562,8 @@ impl ServerNotification {
             Self::TaskStarted(_) => "task/started",
             Self::TaskCompleted(_) => "task/completed",
             Self::TaskProgress(_) => "task/progress",
+            Self::TaskPanelChanged(_) => "task_panel/changed",
+            Self::PlanApprovalRequested(_) => "plan_approval/requested",
             Self::AgentsKilled(_) => "agents/killed",
             Self::ModelFallbackStarted(_) => "model/fallbackStarted",
             Self::ModelFallbackCompleted => "model/fallbackCompleted",
@@ -1015,6 +1029,35 @@ pub struct TaskUsage {
     pub total_tokens: i64,
     pub tool_uses: i32,
     pub duration_ms: i64,
+}
+
+/// A teammate's plan-approval request, surfaced to the team lead's
+/// TUI for approve/deny. Payload byte-matches TS
+/// `PlanApprovalRequestSchema` — see `tools/ExitPlanModeTool/`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanApprovalRequestedParams {
+    /// Correlation id carried back in the response envelope.
+    pub request_id: String,
+    /// Teammate agent name.
+    pub from: String,
+    /// Optional on-disk plan file path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_file_path: Option<String>,
+    /// Plan text rendered from the teammate's plan file.
+    pub plan_content: String,
+}
+
+/// Snapshot of the task panel state — tools emit this post-mutation
+/// so the TUI can redraw without reaching into `ToolAppState` directly.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskPanelChangedParams {
+    pub plan_tasks: Vec<crate::TaskRecord>,
+    #[serde(default)]
+    pub todos_by_agent: std::collections::HashMap<String, Vec<crate::TodoRecord>>,
+    pub expanded_view: crate::ExpandedView,
+    pub verification_nudge_pending: bool,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

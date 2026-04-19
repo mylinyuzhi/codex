@@ -469,6 +469,60 @@ async fn run_agent_driver(
                 // `/resume` can still restore pre-clear file snapshots.
             }
 
+            UserCommand::PlanApprovalResponse {
+                request_id,
+                teammate_agent,
+                approved,
+                feedback,
+            } => {
+                // Leader responding to a teammate's plan-approval
+                // request. Write a `PlanApprovalResponse` envelope into
+                // the teammate's inbox; their `poll_teammate_approval`
+                // picks it up on the next turn boundary. TS parity:
+                // leader-side resolution of `ExitPlanModeV2Tool.ts:137-141`.
+                let team_name = match std::env::var("COCO_TEAM_NAME") {
+                    Ok(t) if !t.is_empty() => t,
+                    _ => {
+                        info!(%request_id, "PlanApprovalResponse: no COCO_TEAM_NAME; dropping");
+                        continue;
+                    }
+                };
+                let agent_name =
+                    std::env::var("COCO_AGENT_NAME").unwrap_or_else(|_| "team-lead".to_string());
+                let mailbox: coco_tool::MailboxHandleRef =
+                    Arc::new(coco_state::swarm_mailbox::SwarmMailboxHandle);
+
+                let response = coco_tool::PlanApprovalMessage::PlanApprovalResponse(
+                    coco_tool::PlanApprovalResponse {
+                        request_id: request_id.clone(),
+                        approved,
+                        feedback: feedback.clone(),
+                        permission_mode: None,
+                    },
+                );
+                let envelope = coco_tool::MailboxEnvelope {
+                    text: serde_json::to_string(&response).unwrap_or_default(),
+                    from: agent_name.clone(),
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                };
+                if let Err(e) = mailbox
+                    .write_to_mailbox(&teammate_agent, &team_name, envelope)
+                    .await
+                {
+                    info!(%request_id, error = %e, "failed to write PlanApprovalResponse");
+                } else {
+                    // Clear the leader-side awaiting flag so the
+                    // reminder can stop nagging about this request.
+                    let mut guard = app_state.write().await;
+                    if guard.awaiting_plan_approval_request_id.as_deref()
+                        == Some(request_id.as_str())
+                    {
+                        guard.awaiting_plan_approval = false;
+                        guard.awaiting_plan_approval_request_id = None;
+                    }
+                }
+            }
+
             UserCommand::Shutdown => {
                 let _ = event_tx
                     .send(CoreEvent::Protocol(ServerNotification::SessionEnded(

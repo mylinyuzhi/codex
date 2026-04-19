@@ -143,6 +143,10 @@ pub struct StreamingToolExecutor {
     /// `orchestration.ts:queuedContextModifiers` applied after the
     /// concurrent batch finishes.
     app_state: Option<Arc<RwLock<coco_types::ToolAppState>>>,
+    /// Optional protocol-event sink used to broadcast
+    /// `TaskPanelChanged` after every applied `app_state_patch`. Keeps
+    /// the TUI in sync with V2 plan-item and V1 todo snapshots.
+    event_tx: Option<mpsc::Sender<coco_types::CoreEvent>>,
 }
 
 impl StreamingToolExecutor {
@@ -160,6 +164,7 @@ impl StreamingToolExecutor {
             update_tx,
             update_rx,
             app_state: None,
+            event_tx: None,
         }
     }
 
@@ -169,6 +174,15 @@ impl StreamingToolExecutor {
     /// are silently dropped (the executor has nowhere to apply them).
     pub fn with_app_state(mut self, arc: Arc<RwLock<coco_types::ToolAppState>>) -> Self {
         self.app_state = Some(arc);
+        self
+    }
+
+    /// Install a protocol-event sink so the executor can emit
+    /// `TaskPanelChanged` after applying task-related `app_state_patch`
+    /// closures. Optional; omission drops the notifications silently
+    /// (tests + SDK-only paths don't need UI refreshes).
+    pub fn with_event_sink(mut self, tx: mpsc::Sender<coco_types::CoreEvent>) -> Self {
+        self.event_tx = Some(tx);
         self
     }
 
@@ -182,6 +196,7 @@ impl StreamingToolExecutor {
             update_tx,
             update_rx,
             app_state: None,
+            event_tx: None,
         }
     }
 
@@ -467,8 +482,23 @@ impl StreamingToolExecutor {
             Ok(mut tr) => {
                 if let Some(patch) = tr.app_state_patch.take() {
                     if let Some(state) = self.app_state.as_ref() {
-                        let mut guard = state.write().await;
-                        patch(&mut guard);
+                        let snapshot = {
+                            let mut guard = state.write().await;
+                            patch(&mut guard);
+                            coco_types::TaskPanelChangedParams {
+                                plan_tasks: guard.plan_tasks.clone(),
+                                todos_by_agent: guard.todos_by_agent.clone(),
+                                expanded_view: guard.expanded_view,
+                                verification_nudge_pending: guard.verification_nudge_pending,
+                            }
+                        };
+                        if let Some(tx) = self.event_tx.as_ref() {
+                            let _ = tx
+                                .send(coco_types::CoreEvent::Protocol(
+                                    coco_types::ServerNotification::TaskPanelChanged(snapshot),
+                                ))
+                                .await;
+                        }
                     }
                     // else: patch returned but no shared state wired
                     //   — drop silently (test / SDK path without
@@ -685,13 +715,28 @@ impl StreamingToolExecutor {
                 .iter()
                 .any(|r| matches!(&r.result, Ok(tr) if tr.app_state_patch.is_some()));
             if any_patch {
-                let mut guard = state.write().await;
-                for r in results.iter_mut() {
-                    if let Ok(tr) = r.result.as_mut() {
-                        if let Some(patch) = tr.app_state_patch.take() {
+                let snapshot = {
+                    let mut guard = state.write().await;
+                    for r in results.iter_mut() {
+                        if let Ok(tr) = r.result.as_mut()
+                            && let Some(patch) = tr.app_state_patch.take()
+                        {
                             patch(&mut guard);
                         }
                     }
+                    coco_types::TaskPanelChangedParams {
+                        plan_tasks: guard.plan_tasks.clone(),
+                        todos_by_agent: guard.todos_by_agent.clone(),
+                        expanded_view: guard.expanded_view,
+                        verification_nudge_pending: guard.verification_nudge_pending,
+                    }
+                };
+                if let Some(tx) = self.event_tx.as_ref() {
+                    let _ = tx
+                        .send(coco_types::CoreEvent::Protocol(
+                            coco_types::ServerNotification::TaskPanelChanged(snapshot),
+                        ))
+                        .await;
                 }
             }
         } else {

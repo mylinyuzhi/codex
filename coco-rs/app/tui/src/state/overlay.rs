@@ -71,6 +71,10 @@ pub enum Overlay {
     /// Tabbed settings panel (theme, output style, permissions, about).
     /// TS: src/components/Settings/.
     Settings(crate::widgets::settings_panel::SettingsPanelState),
+    /// Team lead approval for a teammate's plan (received via mailbox).
+    /// TS: `planApprovalOverlay` + `PlanApprovalRequest` flow in
+    /// `tools/ExitPlanModeTool/ExitPlanModeV2Tool.ts`.
+    PlanApproval(PlanApprovalOverlay),
 }
 
 impl Overlay {
@@ -89,7 +93,8 @@ impl Overlay {
             Self::Question(_)
             | Self::Elicitation(_)
             | Self::McpServerApproval(_)
-            | Self::IdleReturn(_) => 2,
+            | Self::IdleReturn(_)
+            | Self::PlanApproval(_) => 2,
             // 3 — high-stakes confirmation
             Self::CostWarning(_) | Self::BypassPermissions(_) | Self::WorktreeExit(_) => 3,
             // 4 — error surface
@@ -532,3 +537,56 @@ pub struct McpServerOption {
     pub selected: bool,
     pub tool_count: i32,
 }
+
+/// Plan-approval overlay shown to the team lead when a teammate sends
+/// a `plan_approval_request` via mailbox. The leader picks approve /
+/// deny (+ optional feedback); the TUI dispatches
+/// `UserCommand::PlanApprovalResponse` which the engine writes back to
+/// the teammate's inbox.
+///
+/// TS source: `tools/ExitPlanModeTool/ExitPlanModeV2Tool.ts:137-141`
+/// builds the request; leader side surfaces via an ink modal.
+#[derive(Debug, Clone)]
+pub struct PlanApprovalOverlay {
+    /// Correlation id that will travel back in the response.
+    pub request_id: String,
+    /// Teammate agent name (who sent the request).
+    pub from: String,
+    /// Optional plan-file path on disk (.claude/plans/...). `None` when
+    /// the request embeds the content inline instead.
+    pub plan_file_path: Option<String>,
+    /// The plan text itself (rendered markdown) — always present so the
+    /// leader can review without opening a file.
+    pub plan_content: String,
+    /// Focused button index: 0 = Approve, 1 = Deny.
+    pub focused: u8,
+}
+
+impl PlanApprovalOverlay {
+    pub fn new(
+        request_id: String,
+        from: String,
+        plan_file_path: Option<String>,
+        plan_content: String,
+    ) -> Self {
+        Self {
+            request_id,
+            from,
+            plan_file_path,
+            plan_content,
+            focused: 0,
+        }
+    }
+
+    pub fn toggle_focus(&mut self) {
+        self.focused = if self.focused == 0 { 1 } else { 0 };
+    }
+
+    pub fn is_approve_focused(&self) -> bool {
+        self.focused == 0
+    }
+}
+
+#[cfg(test)]
+#[path = "overlay.test.rs"]
+mod tests;

@@ -21,6 +21,8 @@ use crate::registry::ToolRegistry;
 use crate::schedule_store::ScheduleStoreRef;
 use crate::side_query::SideQueryHandle;
 use crate::task_handle::TaskHandleRef;
+use crate::task_list_handle::TaskListHandleRef;
+use crate::task_list_handle::TodoListHandleRef;
 use crate::traits::ProgressSender;
 
 /// Local denial tracking state for auto-mode fail-safe.
@@ -254,6 +256,20 @@ pub struct ToolUseContext {
     /// TS: `spawnShellTask()`, `TaskOutput`, stall watchdog.
     pub task_handle: Option<TaskHandleRef>,
 
+    // ── Persistent Task List (V2) ──
+    /// Shared disk-backed plan-item store used by `TaskCreate`/`TaskGet`/
+    /// `TaskList`/`TaskUpdate`/`TaskStop` (when operating on todo tasks)
+    /// and `TaskOutput` (todo tasks). `NoOpTaskListHandle` in test
+    /// contexts or sessions lacking a resolved config-home path.
+    /// TS: `utils/tasks.ts`.
+    pub task_list: TaskListHandleRef,
+
+    // ── Per-Agent TodoWrite (V1) ──
+    /// In-memory per-agent checklist store used by `TodoWriteTool`.
+    /// Keyed by `agent_id.unwrap_or(session_id)`. Lives for the
+    /// process lifetime — TS never persists this to disk.
+    pub todo_list: TodoListHandleRef,
+
     // ── Hook Pipeline ──
     /// Optional callback into the hook pipeline (PreToolUse / PostToolUse /
     /// PostToolUseFailure). When `None`, the executor skips hook invocations
@@ -400,6 +416,8 @@ impl ToolUseContext {
             permission_bridge: self.permission_bridge.clone(),
             progress_tx: self.progress_tx.clone(),
             task_handle: self.task_handle.clone(),
+            task_list: self.task_list.clone(),
+            todo_list: self.todo_list.clone(),
             hook_handle: self.hook_handle.clone(),
             file_read_state: self.file_read_state.clone(),
             file_history: self.file_history.clone(),
@@ -470,6 +488,8 @@ impl ToolUseContext {
             permission_bridge: None,
             progress_tx: None,
             task_handle: None,
+            task_list: Arc::new(crate::task_list_handle::InMemoryTaskListHandle::new()),
+            todo_list: Arc::new(crate::task_list_handle::InMemoryTodoListHandle::new()),
             hook_handle: None,
             file_read_state: None,
             file_history: None,

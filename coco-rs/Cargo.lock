@@ -924,6 +924,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "chrono",
  "clap",
  "coco-bridge",
  "coco-commands",
@@ -1599,11 +1600,15 @@ name = "coco-tasks"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-trait",
+ "coco-tool",
  "coco-types",
+ "fs2",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
