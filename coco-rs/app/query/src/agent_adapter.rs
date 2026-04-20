@@ -88,6 +88,12 @@ impl AgentQueryEngine for QueryEngineAdapter {
             disable_all_hooks: false,
             allow_managed_hooks_only: false,
             enable_token_budget_continuation: false,
+            tool_config: coco_config::ToolConfig::default(),
+            sandbox_config: coco_config::SandboxConfig::default(),
+            memory_config: coco_config::MemoryConfig::default(),
+            shell_config: coco_config::ShellConfig::default(),
+            web_fetch_config: coco_config::WebFetchConfig::default(),
+            web_search_config: coco_config::WebSearchConfig::default(),
         };
 
         let engine = (self.engine_factory)(engine_config);

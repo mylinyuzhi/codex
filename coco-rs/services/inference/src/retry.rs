@@ -26,6 +26,22 @@ impl Default for RetryConfig {
     }
 }
 
+/// Lift `coco_config::ApiRetryConfig` (settings-sourced, already
+/// finalized / clamped by `ApiConfig::resolve`) into the inference
+/// crate's `RetryConfig`. Fields are 1:1 — the two structs mirror each
+/// other so callers can pipe `runtime_config.api.retry.clone().into()`
+/// directly into `ApiClient::new`.
+impl From<coco_config::ApiRetryConfig> for RetryConfig {
+    fn from(cfg: coco_config::ApiRetryConfig) -> Self {
+        Self {
+            max_retries: cfg.max_retries,
+            base_delay_ms: cfg.base_delay_ms,
+            max_delay_ms: cfg.max_delay_ms,
+            jitter_factor: cfg.jitter_factor,
+        }
+    }
+}
+
 impl RetryConfig {
     /// Calculate delay for a given attempt number.
     /// Uses server-specified retry-after if available, else exponential backoff.

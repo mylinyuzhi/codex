@@ -25,7 +25,10 @@ fn ask_for_approval_wire_method() {
 
     // Typed discriminator agrees with serde wire tag.
     assert_eq!(req.method(), ServerRequestMethod::AskForApproval);
-    assert_eq!(ServerRequestMethod::AskForApproval.as_str(), "approval/askForApproval");
+    assert_eq!(
+        ServerRequestMethod::AskForApproval.as_str(),
+        "approval/askForApproval"
+    );
 }
 
 #[test]

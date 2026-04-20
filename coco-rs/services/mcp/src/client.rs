@@ -51,18 +51,24 @@ pub struct McpConnectionManager {
 
 impl McpConnectionManager {
     pub fn new(config_home: PathBuf) -> Self {
-        let tool_timeout = std::env::var("MCP_TOOL_TIMEOUT_MS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(DEFAULT_TOOL_TIMEOUT_MS);
-
         Self {
             configs: HashMap::new(),
             connections: Arc::new(RwLock::new(HashMap::new())),
             rmcp_clients: Arc::new(RwLock::new(HashMap::new())),
-            tool_timeout_ms: tool_timeout,
+            tool_timeout_ms: DEFAULT_TOOL_TIMEOUT_MS,
             config_home,
         }
+    }
+
+    pub fn new_with_runtime_config(
+        config_home: PathBuf,
+        config: &coco_config::McpRuntimeConfig,
+    ) -> Self {
+        let mut manager = Self::new(config_home);
+        if let Some(tool_timeout_ms) = config.tool_timeout_ms {
+            manager.tool_timeout_ms = tool_timeout_ms.max(1) as u64;
+        }
+        manager
     }
 
     /// Register a server configuration.

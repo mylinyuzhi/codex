@@ -4,13 +4,12 @@ use coco_types::ApplyPatchToolType;
 use coco_types::Capability;
 use coco_types::ModelRole;
 use coco_types::ModelSpec;
+use coco_types::ProviderApi;
 use coco_types::ReasoningEffort;
 use coco_types::ThinkingLevel;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
-
-use crate::ResolvedConfig;
 
 /// Rich per-model configuration. All optional fields for layered merging.
 ///
@@ -176,57 +175,44 @@ impl ModelRoles {
     }
 }
 
-/// Model selection: priority-based resolution.
-/// 1. RuntimeOverrides.model_override (/model command)
-/// 2. EnvOnlyConfig.model_override (ANTHROPIC_MODEL env)
-/// 3. Settings.model (merged config file field)
-/// 4. Default by provider
-pub fn get_main_loop_model(config: &ResolvedConfig) -> String {
-    if let Some(ref m) = config.overrides.model_override {
-        return m.clone();
-    }
-    if let Some(ref m) = config.env.model_override {
-        return m.clone();
-    }
-    if let Some(ref m) = config.settings.merged.model {
-        return m.clone();
-    }
-    // Default: Claude Sonnet
-    "claude-sonnet-4-6-20250514".into()
+/// JSON-facing role model selection.
+///
+/// This mirrors the selectable identity fields of `ModelSpec` without exposing
+/// runtime dispatch or display fields; `RuntimeConfigBuilder` resolves provider
+/// API from the provider catalog.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ModelSelection {
+    pub provider: String,
+    pub model_id: String,
 }
 
-/// Subagent model resolution.
-/// Priority: CLAUDE_CODE_SUBAGENT_MODEL env > tool_model > agent_model > parent.
-/// TS: getAgentModel() in model.ts
-pub fn get_agent_model(
-    agent_model: Option<&str>,
-    parent_spec: &ModelSpec,
-    tool_model: Option<&str>,
-    config: &ResolvedConfig,
-) -> ModelSpec {
-    // 1. Env override
-    if let Some(ref m) = config.env.subagent_model {
-        return ModelSpec {
-            model_id: m.clone(),
-            ..parent_spec.clone()
-        };
+impl ModelSelection {
+    pub fn into_model_spec(self, api: ProviderApi) -> ModelSpec {
+        ModelSpec {
+            provider: self.provider,
+            api,
+            display_name: self.model_id.clone(),
+            model_id: self.model_id,
+        }
     }
-    // 2. Tool-specific model
-    if let Some(m) = tool_model {
-        return ModelSpec {
-            model_id: m.to_string(),
-            ..parent_spec.clone()
-        };
-    }
-    // 3. Agent-specific model
-    if let Some(m) = agent_model {
-        return ModelSpec {
-            model_id: m.to_string(),
-            ..parent_spec.clone()
-        };
-    }
-    // 4. Inherit from parent
-    parent_spec.clone()
+}
+
+/// JSON-facing role model selections.
+///
+/// Each role must name a provider explicitly instead of relying on an implicit
+/// provider default.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ModelSelectionSettings {
+    pub main: Option<ModelSelection>,
+    pub fast: Option<ModelSelection>,
+    pub compact: Option<ModelSelection>,
+    pub plan: Option<ModelSelection>,
+    pub explore: Option<ModelSelection>,
+    pub review: Option<ModelSelection>,
+    pub hook_agent: Option<ModelSelection>,
+    pub memory: Option<ModelSelection>,
 }
 
 #[cfg(test)]

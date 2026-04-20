@@ -14,6 +14,8 @@ use crate::emit::emit_protocol;
 use crate::emit::emit_protocol_owned;
 use crate::emit::emit_stream;
 use crate::session_state::SessionStateTracker;
+use coco_config::EnvKey;
+use coco_config::env;
 use coco_context::FileHistoryState;
 use coco_hooks::HookRegistry;
 use coco_hooks::orchestration;
@@ -225,10 +227,10 @@ impl QueryEngine {
         // Bootstrap the live mode on first attach. This is a one-shot
         // write — subsequent runs that reuse the same app_state see
         // the preserved value rather than an overwrite.
-        if let Ok(mut guard) = app_state.try_write() {
-            if guard.permission_mode.is_none() {
-                guard.permission_mode = Some(self.config.permission_mode);
-            }
+        if let Ok(mut guard) = app_state.try_write()
+            && guard.permission_mode.is_none()
+        {
+            guard.permission_mode = Some(self.config.permission_mode);
         }
         self.app_state = Some(app_state);
         self
@@ -638,8 +640,8 @@ impl QueryEngine {
         // env fallback. We keep the env read here rather than threading
         // via ctx because the reminder is engine-level (no ToolUseContext).
         // Env namespace is `COCO_*` — see swarm_constants.
-        let agent_name_env = std::env::var("COCO_AGENT_NAME").ok();
-        let team_name_env = std::env::var("COCO_TEAM_NAME").ok();
+        let agent_name_env = env::env_opt(EnvKey::CocoAgentName);
+        let team_name_env = env::env_opt(EnvKey::CocoTeamName);
         if let (Some(mbox), Some(agent), Some(team)) =
             (self.mailbox.clone(), agent_name_env, team_name_env)
         {
@@ -2230,16 +2232,21 @@ impl QueryEngine {
             append_system_prompt: None,
             debug: false,
             verbose: false,
+            tool_config: self.config.tool_config.clone(),
+            sandbox_config: self.config.sandbox_config.clone(),
+            memory_config: self.config.memory_config.clone(),
+            shell_config: self.config.shell_config.clone(),
+            web_fetch_config: self.config.web_fetch_config.clone(),
+            web_search_config: self.config.web_search_config.clone(),
             is_teammate: self.config.is_teammate,
             plan_mode_required: self.config.plan_mode_required,
             // Pre-resolve swarm identity once, so tools read from ctx
             // instead of process env. Falls back to env vars set by the
             // teammate spawner for cross-process scenarios. Env namespace
             // is `COCO_*` (coco-rs native) — see swarm_constants.
-            agent_name: std::env::var("COCO_AGENT_NAME")
-                .ok()
+            agent_name: env::env_opt(EnvKey::CocoAgentName)
                 .or_else(|| self.config.agent_id.clone()),
-            team_name: std::env::var("COCO_TEAM_NAME").ok(),
+            team_name: env::env_opt(EnvKey::CocoTeamName),
             plan_verify_execution: self.config.plan_mode_settings.verify_execution,
             cancel: self.cancel.clone(),
             messages: Arc::new(RwLock::new(Vec::new())),

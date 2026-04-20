@@ -93,6 +93,22 @@ pub struct ToolUseContext {
     pub debug: bool,
     /// Verbose mode.
     pub verbose: bool,
+    /// Resolved tool runtime configuration.
+    pub tool_config: coco_config::ToolConfig,
+    /// Resolved sandbox runtime configuration.
+    pub sandbox_config: coco_config::SandboxConfig,
+    /// Resolved memory runtime configuration.
+    pub memory_config: coco_config::MemoryConfig,
+    /// Resolved shell runtime configuration. Consumed by Bash tool
+    /// (`ShellExecutor::new_with_config`) for shell-override + snapshot
+    /// gating.
+    pub shell_config: coco_config::ShellConfig,
+    /// Resolved web-fetch runtime configuration. Consumed by the
+    /// `WebFetchTool` for timeout / max-content-length / user-agent.
+    pub web_fetch_config: coco_config::WebFetchConfig,
+    /// Resolved web-search runtime configuration. Consumed by the
+    /// `WebSearchTool` for max-results.
+    pub web_search_config: coco_config::WebSearchConfig,
 
     // ── Core State ──
     /// Cancellation token for aborting tool execution.
@@ -379,6 +395,12 @@ impl ToolUseContext {
             append_system_prompt: self.append_system_prompt.clone(),
             debug: self.debug,
             verbose: self.verbose,
+            tool_config: self.tool_config.clone(),
+            sandbox_config: self.sandbox_config.clone(),
+            memory_config: self.memory_config.clone(),
+            shell_config: self.shell_config.clone(),
+            web_fetch_config: self.web_fetch_config.clone(),
+            web_search_config: self.web_search_config.clone(),
             cancel: self.cancel.clone(),
             messages: self.messages.clone(),
             permission_context: self.permission_context.clone(),
@@ -444,6 +466,12 @@ impl ToolUseContext {
             append_system_prompt: None,
             debug: false,
             verbose: false,
+            tool_config: coco_config::ToolConfig::default(),
+            sandbox_config: coco_config::SandboxConfig::default(),
+            memory_config: coco_config::MemoryConfig::default(),
+            shell_config: coco_config::ShellConfig::default(),
+            web_fetch_config: coco_config::WebFetchConfig::default(),
+            web_search_config: coco_config::WebSearchConfig::default(),
             cancel: CancellationToken::new(),
             messages: Arc::new(RwLock::new(Vec::new())),
             permission_context: ToolPermissionContext {

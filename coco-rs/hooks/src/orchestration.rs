@@ -20,13 +20,16 @@ use serde::Serialize;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use coco_config::EnvKey;
+use coco_config::env;
+use coco_types::HookEventType;
+use coco_types::HookOutcome;
+use coco_types::PermissionBehavior;
+
 use crate::HookExecutionResult;
 use crate::HookHandler;
 use crate::HookRegistry;
 use crate::execute_hook;
-use coco_types::HookEventType;
-use coco_types::HookOutcome;
-use coco_types::PermissionBehavior;
 
 /// Default timeout for tool-related hook execution (10 minutes).
 ///
@@ -1525,8 +1528,7 @@ fn process_execution_result(exec: HookExecutionResult, label: &str) -> SingleHoo
 ///
 /// TS: getSessionEndHookTimeoutMs()
 fn session_end_timeout() -> Duration {
-    std::env::var("COCODE_SESSIONEND_HOOKS_TIMEOUT_MS")
-        .ok()
+    env::env_opt(EnvKey::CocoSessionEndHooksTimeoutMs)
         .and_then(|raw| raw.parse::<u64>().ok())
         .filter(|&ms| ms > 0)
         .map(Duration::from_millis)

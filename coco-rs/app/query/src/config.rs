@@ -3,7 +3,13 @@
 //! Extracted from `engine.rs` so the orchestration module stays focused on the
 //! session loop. Pure data types — no behavior lives here.
 
+use coco_config::MemoryConfig;
 use coco_config::PlanModeSettings;
+use coco_config::SandboxConfig;
+use coco_config::ShellConfig;
+use coco_config::ToolConfig;
+use coco_config::WebFetchConfig;
+use coco_config::WebSearchConfig;
 use coco_messages::CostTracker;
 use coco_types::Message;
 use coco_types::PermissionMode;
@@ -120,6 +126,18 @@ pub struct QueryEngineConfig {
     /// `max_tokens` budget, inject a nudge meta message and continue.
     /// TS: `query.ts:1308-1340` feature('TOKEN_BUDGET').
     pub enable_token_budget_continuation: bool,
+    /// Resolved tool runtime configuration.
+    pub tool_config: ToolConfig,
+    /// Resolved sandbox runtime configuration.
+    pub sandbox_config: SandboxConfig,
+    /// Resolved memory runtime configuration.
+    pub memory_config: MemoryConfig,
+    /// Resolved shell runtime configuration (bash-tool path).
+    pub shell_config: ShellConfig,
+    /// Resolved web-fetch runtime configuration (WebFetchTool).
+    pub web_fetch_config: WebFetchConfig,
+    /// Resolved web-search runtime configuration (WebSearchTool).
+    pub web_search_config: WebSearchConfig,
 }
 
 impl Default for QueryEngineConfig {
@@ -148,6 +166,12 @@ impl Default for QueryEngineConfig {
             disable_all_hooks: false,
             allow_managed_hooks_only: false,
             enable_token_budget_continuation: false,
+            tool_config: ToolConfig::default(),
+            sandbox_config: SandboxConfig::default(),
+            memory_config: MemoryConfig::default(),
+            shell_config: ShellConfig::default(),
+            web_fetch_config: WebFetchConfig::default(),
+            web_search_config: WebSearchConfig::default(),
         }
     }
 }

@@ -7,6 +7,8 @@
 //! start executing while the API is still streaming. Results and
 //! progress messages are yielded in real-time.
 
+use coco_config::EnvKey;
+use coco_config::env;
 use coco_types::ToolId;
 use coco_types::ToolName;
 use coco_types::ToolResult;
@@ -151,8 +153,7 @@ pub struct StreamingToolExecutor {
 
 impl StreamingToolExecutor {
     pub fn new() -> Self {
-        let max_concurrency = std::env::var("CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY")
-            .ok()
+        let max_concurrency = env::env_opt(EnvKey::CocoMaxToolUseConcurrency)
             .and_then(|v| v.parse().ok())
             .unwrap_or(DEFAULT_MAX_CONCURRENCY);
         let (update_tx, update_rx) = mpsc::unbounded_channel();
@@ -480,30 +481,28 @@ impl StreamingToolExecutor {
         // `.await` points) doesn't need `Sync` on `AppStatePatch`.
         let result = match result {
             Ok(mut tr) => {
-                if let Some(patch) = tr.app_state_patch.take() {
-                    if let Some(state) = self.app_state.as_ref() {
-                        let snapshot = {
-                            let mut guard = state.write().await;
-                            patch(&mut guard);
-                            coco_types::TaskPanelChangedParams {
-                                plan_tasks: guard.plan_tasks.clone(),
-                                todos_by_agent: guard.todos_by_agent.clone(),
-                                expanded_view: guard.expanded_view,
-                                verification_nudge_pending: guard.verification_nudge_pending,
-                            }
-                        };
-                        if let Some(tx) = self.event_tx.as_ref() {
-                            let _ = tx
-                                .send(coco_types::CoreEvent::Protocol(
-                                    coco_types::ServerNotification::TaskPanelChanged(snapshot),
-                                ))
-                                .await;
+                if let Some(patch) = tr.app_state_patch.take()
+                    && let Some(state) = self.app_state.as_ref()
+                {
+                    let snapshot = {
+                        let mut guard = state.write().await;
+                        patch(&mut guard);
+                        coco_types::TaskPanelChangedParams {
+                            plan_tasks: guard.plan_tasks.clone(),
+                            todos_by_agent: guard.todos_by_agent.clone(),
+                            expanded_view: guard.expanded_view,
+                            verification_nudge_pending: guard.verification_nudge_pending,
                         }
+                    };
+                    if let Some(tx) = self.event_tx.as_ref() {
+                        let _ = tx
+                            .send(coco_types::CoreEvent::Protocol(
+                                coco_types::ServerNotification::TaskPanelChanged(snapshot),
+                            ))
+                            .await;
                     }
-                    // else: patch returned but no shared state wired
-                    //   — drop silently (test / SDK path without
-                    //   app_state attached).
                 }
+                // No patch or no shared state wired: nothing to emit.
                 Ok(tr)
             }
             Err(e) => Err(e),

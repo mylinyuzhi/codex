@@ -17,6 +17,8 @@
 //! for per-task updates / claims. 30-retry backoff matches the TS
 //! `proper-lockfile` budget (~2.6s on a 10-way race).
 
+use coco_config::EnvKey;
+use coco_config::env;
 use coco_types::HookEventType;
 use fs2::FileExt;
 use serde::Deserialize;
@@ -121,9 +123,9 @@ const LOCK_MAX_BACKOFF_MS: u64 = 100;
 /// Resolve the task-list-id for the current process, matching TS
 /// `getTaskListId()` precedence (`utils/tasks.ts:199-210`):
 ///
-/// 1. `CLAUDE_CODE_TASK_LIST_ID` env (explicit override)
+/// 1. `COCO_TASK_LIST_ID` env (explicit override)
 /// 2. In-process teammate's team name
-/// 3. `CLAUDE_CODE_TEAM_NAME` env (process-based teammate)
+/// 3. `COCO_TEAM_NAME` env (process-based teammate)
 /// 4. Leader team name (set via `TeamCreateTool`)
 /// 5. Session id fallback
 pub fn resolve_task_list_id(
@@ -131,7 +133,7 @@ pub fn resolve_task_list_id(
     leader_team: Option<&str>,
     session_id: &str,
 ) -> String {
-    if let Ok(v) = std::env::var("CLAUDE_CODE_TASK_LIST_ID")
+    if let Some(v) = env::env_opt(EnvKey::CocoTaskListId)
         && !v.is_empty()
     {
         return v;
@@ -141,7 +143,7 @@ pub fn resolve_task_list_id(
     {
         return v.to_string();
     }
-    if let Ok(v) = std::env::var("CLAUDE_CODE_TEAM_NAME")
+    if let Some(v) = env::env_opt(EnvKey::CocoTeamName)
         && !v.is_empty()
     {
         return v;

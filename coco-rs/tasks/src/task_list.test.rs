@@ -10,19 +10,17 @@ fn fresh_store() -> (TempDir, Arc<TaskListStore>) {
 #[tokio::test]
 async fn test_resolve_task_list_id_precedence() {
     // Env var wins.
-    // SAFETY: Tests run serially for env-mutating cases; this suite is
-    // gated to a single test that reads the var.
     // SAFETY: set_var/remove_var are unsafe in Rust 2024; this test is
     // single-threaded and the var is restored at the end.
     unsafe {
-        std::env::set_var("CLAUDE_CODE_TASK_LIST_ID", "from-env");
+        std::env::set_var(EnvKey::CocoTaskListId, "from-env");
     }
     assert_eq!(
         resolve_task_list_id(Some("teammate"), Some("leader"), "session"),
         "from-env"
     );
     unsafe {
-        std::env::remove_var("CLAUDE_CODE_TASK_LIST_ID");
+        std::env::remove_var(EnvKey::CocoTaskListId);
     }
 
     // Teammate > leader > session.

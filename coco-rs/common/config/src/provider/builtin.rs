@@ -1,5 +1,7 @@
 use coco_types::ProviderApi;
 
+use crate::EnvKey;
+
 use super::ProviderConfig;
 
 /// Built-in providers with their env_key and base URL.
@@ -8,7 +10,7 @@ pub fn builtin_providers() -> Vec<ProviderConfig> {
         ProviderConfig {
             name: "anthropic".into(),
             api: ProviderApi::Anthropic,
-            env_key: "ANTHROPIC_API_KEY".into(),
+            env_key: EnvKey::AnthropicApiKey.to_string(),
             base_url: "https://api.anthropic.com".into(),
             default_model: Some("claude-sonnet-4-6-20250514".into()),
             ..Default::default()

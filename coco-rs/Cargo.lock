@@ -964,6 +964,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "coco-config",
  "coco-plugins",
  "coco-types",
  "dirs 6.0.0",
@@ -1000,9 +1001,12 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "coco-types",
+ "coco-utils-common",
+ "dirs 6.0.0",
  "pretty_assertions",
  "serde",
  "serde_json",
+ "strum",
 ]
 
 [[package]]
@@ -1119,6 +1123,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "coco-config",
  "coco-types",
  "globset",
  "regex",
@@ -1230,6 +1235,7 @@ name = "coco-memory"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "coco-config",
  "coco-types",
  "filetime",
  "libc",
@@ -1490,6 +1496,7 @@ name = "coco-shell"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "coco-config",
  "coco-types",
  "dirs 6.0.0",
  "pretty_assertions",
@@ -1601,6 +1608,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "coco-config",
  "coco-tool",
  "coco-types",
  "fs2",
@@ -1647,6 +1655,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "chrono",
+ "coco-config",
  "coco-context",
  "coco-file-encoding",
  "coco-file-ignore",
@@ -1687,6 +1696,7 @@ dependencies = [
  "anyhow",
  "arboard",
  "base64 0.22.1",
+ "coco-config",
  "coco-context",
  "coco-types",
  "crossterm",

@@ -10,6 +10,19 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 
+use crate::model::ModelSelectionSettings;
+use crate::provider::ProviderConfig;
+use crate::sections::PartialApiSettings;
+use crate::sections::PartialLoopSettings;
+use crate::sections::PartialMcpRuntimeSettings;
+use crate::sections::PartialMemorySettings;
+use crate::sections::PartialPathSettings;
+use crate::sections::PartialSandboxSettings;
+use crate::sections::PartialShellSettings;
+use crate::sections::PartialToolSettings;
+use crate::sections::PartialWebFetchSettings;
+use crate::sections::PartialWebSearchSettings;
+
 pub use source::SettingSource;
 
 /// The merged settings snapshot. Immutable after loading.
@@ -18,10 +31,11 @@ pub use source::SettingSource;
 #[serde(default)]
 pub struct Settings {
     // === Auth ===
+    /// Shell command that prints an API key on stdout. Consumed by
+    /// `coco_inference::auth::resolve_auth` when env vars and stored
+    /// tokens don't resolve.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_key_helper: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub force_login_method: Option<String>,
 
     // === Permissions ===
     pub permissions: PermissionsConfig,
@@ -32,17 +46,41 @@ pub struct Settings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub available_models: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub model_overrides: Option<HashMap<String, String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking_level: Option<ThinkingLevel>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fast_mode: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub always_thinking_enabled: Option<bool>,
+    /// JSON-first provider catalog overrides. Secrets should normally stay in
+    /// provider `env_key` env vars rather than `api_key`.
+    #[serde(default)]
+    pub providers: HashMap<String, ProviderConfig>,
+    #[serde(default)]
+    pub models: ModelSelectionSettings,
 
     // === Environment ===
     #[serde(default)]
     pub env: HashMap<String, String>,
+
+    // === Runtime components ===
+    #[serde(default)]
+    pub api: PartialApiSettings,
+    #[serde(default, rename = "loop")]
+    pub loop_config: PartialLoopSettings,
+    #[serde(default)]
+    pub tool: PartialToolSettings,
+    #[serde(default)]
+    pub shell: PartialShellSettings,
+    #[serde(default)]
+    pub sandbox: PartialSandboxSettings,
+    #[serde(default)]
+    pub memory: PartialMemorySettings,
+    #[serde(default, rename = "mcp")]
+    pub mcp_runtime: PartialMcpRuntimeSettings,
+    #[serde(default)]
+    pub web_fetch: PartialWebFetchSettings,
+    #[serde(default)]
+    pub web_search: PartialWebSearchSettings,
+    #[serde(default)]
+    pub paths: PartialPathSettings,
 
     // === Hooks ===
     /// Deserialized by coco-hooks, kept as Value here (avoids L1→L4 dep).
@@ -58,10 +96,6 @@ pub struct Settings {
     pub denied_mcp_servers: Vec<DeniedMcpServerEntry>,
     #[serde(default)]
     pub enable_all_project_mcp_servers: bool,
-
-    // === Shell ===
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_shell: Option<String>,
 
     // === Display ===
     #[serde(skip_serializing_if = "Option::is_none")]

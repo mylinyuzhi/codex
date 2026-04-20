@@ -22,8 +22,16 @@ fn client_request_method_accessor_matches_serde_tag() {
             ClientRequestMethod::Initialize,
             "initialize",
         ),
-        (ClientRequest::TurnInterrupt, ClientRequestMethod::TurnInterrupt, "turn/interrupt"),
-        (ClientRequest::McpStatus, ClientRequestMethod::McpStatus, "mcp/status"),
+        (
+            ClientRequest::TurnInterrupt,
+            ClientRequestMethod::TurnInterrupt,
+            "turn/interrupt",
+        ),
+        (
+            ClientRequest::McpStatus,
+            ClientRequestMethod::McpStatus,
+            "mcp/status",
+        ),
     ];
     for (req, expected, wire) in cases {
         assert_eq!(req.method(), *expected);
