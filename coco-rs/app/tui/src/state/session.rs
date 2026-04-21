@@ -95,6 +95,16 @@ pub struct SessionState {
     pub stream_stall: bool,
     /// Active background tasks (set by TaskStarted, updated by TaskProgress/Completed).
     pub active_tasks: Vec<TaskEntry>,
+    /// Durable V2 plan-item snapshot, mirrored from `ToolAppState`
+    /// via `ServerNotification::TaskPanelChanged`. Read by
+    /// [`crate::widgets::PlanPanel`] when expanded_view == Tasks.
+    pub plan_tasks: Vec<coco_types::TaskRecord>,
+    /// V1 per-agent TodoWrite snapshots, keyed by agent_id or session_id.
+    pub todos_by_agent: std::collections::HashMap<String, Vec<coco_types::TodoRecord>>,
+    /// Which task panel is expanded. Defaults to `None`.
+    pub expanded_view: coco_types::ExpandedView,
+    /// Verification-nudge banner flag.
+    pub verification_nudge_pending: bool,
     /// Active hook executions (set by HookStarted, updated by HookProgress/Response).
     pub active_hooks: Vec<HookEntry>,
     /// Prompt suggestions from the model (set by PromptSuggestion).
@@ -239,6 +249,10 @@ impl Default for SessionState {
             sandbox_active: false,
             stream_stall: false,
             active_tasks: Vec::new(),
+            plan_tasks: Vec::new(),
+            todos_by_agent: std::collections::HashMap::new(),
+            expanded_view: coco_types::ExpandedView::None,
+            verification_nudge_pending: false,
             active_hooks: Vec::new(),
             prompt_suggestions: Vec::new(),
             local_command_output: VecDeque::new(),

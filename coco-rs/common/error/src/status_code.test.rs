@@ -98,6 +98,7 @@ fn test_metadata_consistency() {
             StatusCategory::Config => assert!((10_000..11_000).contains(&value)),
             StatusCategory::Provider => assert!((11_000..12_000).contains(&value)),
             StatusCategory::Resource => assert!((12_000..13_000).contains(&value)),
+            StatusCategory::SystemReminder => assert!((13_000..14_000).contains(&value)),
         }
     }
 }

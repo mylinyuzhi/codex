@@ -23,10 +23,11 @@ use tokio::sync::mpsc;
 use tracing::info;
 use tracing::warn;
 
+use coco_config::EnvKey;
+use coco_config::env;
 use coco_context::FileHistoryState;
 use coco_context::attachment::Attachment;
 use coco_inference::ApiClient;
-use coco_inference::RetryConfig;
 use coco_query::CoreEvent;
 use coco_query::QueryEngine;
 use coco_query::QueryEngineConfig;
@@ -47,7 +48,8 @@ use crate::Cli;
 /// Rust: spawns agent_driver as background task, runs TUI in foreground.
 pub async fn run_tui(cli: &Cli) -> Result<()> {
     let cwd = std::env::current_dir()?;
-    let settings = coco_config::settings::load_settings(&cwd, None)?;
+    let runtime_config = crate::build_runtime_config_for_cli(cli, &cwd)?;
+    let settings = &runtime_config.settings;
 
     // Resolve initial mode + bypass capability + run sudo/sandbox guard
     // in one shot. TS parity: `initialPermissionModeFromCLI` +
@@ -60,9 +62,12 @@ pub async fn run_tui(cli: &Cli) -> Result<()> {
     // eprintln it instead.
 
     // Model + client
-    let (model, mode) = crate::create_model(cli.model.as_deref());
+    let (model, mode) = crate::create_model(cli.model.as_deref(), &runtime_config);
     let model_id = model.model_id().to_string();
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::new(
+        model,
+        runtime_config.api.retry.clone().into(),
+    ));
 
     // Tools
     let mut registry = ToolRegistry::new();
@@ -72,10 +77,9 @@ pub async fn run_tui(cli: &Cli) -> Result<()> {
     // System prompt
     let system_prompt = crate::build_system_prompt(&cwd, &model_id);
 
-    // Config home for file history
-    let config_home = dirs::home_dir()
-        .map(|h| h.join(".coco"))
-        .unwrap_or_else(|| PathBuf::from("/tmp/.coco"));
+    // Config home for file history — delegated to global_config so
+    // `COCO_CONFIG_DIR` moves everything in lockstep.
+    let config_home = coco_config::global_config::config_home();
 
     // Session ID
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -119,18 +123,34 @@ pub async fn run_tui(cli: &Cli) -> Result<()> {
             .add_toast(coco_tui::state::ui::Toast::warning(msg));
     }
 
-    // Build engine config
+    // Build engine config — threads LoopConfig from the runtime so
+    // max_turns / max_tokens / streaming flags flow from settings.json.
     let engine_config = QueryEngineConfig {
         model_name: model_id.clone(),
         permission_mode,
         bypass_permissions_available,
         context_window: 200_000,
         max_output_tokens: 16_384,
-        max_turns: 30,
-        max_tokens: cli.max_tokens,
+        max_turns: runtime_config.loop_config.max_turns.unwrap_or(30),
+        max_tokens: cli
+            .max_tokens
+            .or_else(|| runtime_config.loop_config.max_tokens.map(i64::from)),
         system_prompt: Some(system_prompt),
+        streaming_tool_execution: runtime_config.loop_config.enable_streaming_tools,
         session_id: session_id.clone(),
+        project_dir: runtime_config
+            .paths
+            .project_dir
+            .clone()
+            .or_else(|| Some(cwd.clone())),
         plan_mode_settings: settings.merged.plan_mode.clone(),
+        system_reminder: settings.merged.system_reminder.clone(),
+        tool_config: runtime_config.tool.clone(),
+        sandbox_config: runtime_config.sandbox.clone(),
+        memory_config: runtime_config.memory.clone(),
+        shell_config: runtime_config.shell.clone(),
+        web_fetch_config: runtime_config.web_fetch.clone(),
+        web_search_config: runtime_config.web_search.clone(),
         ..Default::default()
     };
 
@@ -140,32 +160,62 @@ pub async fn run_tui(cli: &Cli) -> Result<()> {
     // built with `.with_app_state(app_state.clone())` per turn.
     let app_state: Arc<RwLock<ToolAppState>> = Arc::new(RwLock::new(ToolAppState::default()));
 
-    // Session manager for auto-title persistence (F5).
-    let sessions_dir = dirs::home_dir()
-        .map(|h| h.join(".cocode").join("sessions"))
-        .unwrap_or_else(|| PathBuf::from("/tmp/.cocode/sessions"));
+    // Session manager for auto-title persistence (F5). Shares the same
+    // `~/.coco/sessions` path as non-TUI entry points (`main::sessions_dir`).
+    let sessions_dir = coco_config::global_config::config_home().join("sessions");
     let session_manager = Arc::new(coco_session::SessionManager::new(sessions_dir));
     // Create or load the session record so `auto_title` has a canonical
     // row to write into. Silently swallow failures — title gen is a
     // best-effort advisory feature.
     let _ = session_manager.create(&model_id, &cwd);
 
-    // Fast-role ModelSpec for auto-title generation (F5). TS:
-    // `queryHaiku()` path. We synthesize a Haiku spec when an Anthropic
-    // key is available — full `ModelRoles` resolution (provider/alias
-    // layering) is a follow-up once the `coco-config::ResolvedConfig`
-    // pipeline is wired into the TUI path. Users who run other
-    // providers won't get auto-title until that lands.
-    let fast_model_spec = if std::env::var("ANTHROPIC_API_KEY").is_ok() {
-        Some(coco_types::ModelSpec {
-            provider: "anthropic".to_string(),
-            api: coco_types::ProviderApi::Anthropic,
-            model_id: "claude-haiku-4-5-20251001".to_string(),
-            display_name: "Claude Haiku 4.5".to_string(),
-        })
-    } else {
-        None
-    };
+    // Background housekeeping: prune session files older than the
+    // default retention period. Mirrors TS `utils/cleanup.ts`
+    // `DEFAULT_CLEANUP_PERIOD_DAYS = 30`. Fire-and-forget: cleanup
+    // failures never block startup.
+    {
+        let mgr = session_manager.clone();
+        tokio::spawn(async move {
+            let period = coco_session::default_cleanup_period();
+            match tokio::task::spawn_blocking(move || mgr.cleanup_older_than(period)).await {
+                Ok(Ok(n)) if n > 0 => {
+                    tracing::info!(
+                        target: "coco::session::cleanup",
+                        removed = n,
+                        "pruned old session files"
+                    );
+                }
+                Ok(Err(e)) => tracing::warn!(
+                    target: "coco::session::cleanup",
+                    error = %e,
+                    "cleanup_older_than failed"
+                ),
+                _ => {}
+            }
+        });
+    }
+
+    // Fast-role ModelSpec for auto-title generation (F5). Prefer the
+    // JSON-first runtime config; keep the Anthropic Haiku fallback for
+    // users who only configured an API key. Credential check goes
+    // through `ProviderConfig::resolve_api_key` so both env and
+    // `settings.providers.anthropic.api_key` are honored.
+    let fast_model_spec = runtime_config
+        .model_roles
+        .get(coco_types::ModelRole::Fast)
+        .cloned()
+        .or_else(|| {
+            runtime_config
+                .providers
+                .get("anthropic")
+                .and_then(coco_config::ProviderConfig::resolve_api_key)
+                .map(|_| coco_types::ModelSpec {
+                    provider: "anthropic".to_string(),
+                    api: coco_types::ProviderApi::Anthropic,
+                    model_id: "claude-haiku-4-5-20251001".to_string(),
+                    display_name: "Claude Haiku 4.5".to_string(),
+                })
+        });
     let auto_title_enabled = settings.merged.session.auto_title;
 
     // Spawn agent driver
@@ -467,6 +517,60 @@ async fn run_agent_driver(
                 }
                 // Conversation / History scope: keep file_history so
                 // `/resume` can still restore pre-clear file snapshots.
+            }
+
+            UserCommand::PlanApprovalResponse {
+                request_id,
+                teammate_agent,
+                approved,
+                feedback,
+            } => {
+                // Leader responding to a teammate's plan-approval
+                // request. Write a `PlanApprovalResponse` envelope into
+                // the teammate's inbox; their `poll_teammate_approval`
+                // picks it up on the next turn boundary. TS parity:
+                // leader-side resolution of `ExitPlanModeV2Tool.ts:137-141`.
+                let team_name = match env::var(EnvKey::CocoTeamName) {
+                    Ok(t) if !t.is_empty() => t,
+                    _ => {
+                        info!(%request_id, "PlanApprovalResponse: no COCO_TEAM_NAME; dropping");
+                        continue;
+                    }
+                };
+                let agent_name =
+                    env::var(EnvKey::CocoAgentName).unwrap_or_else(|_| "team-lead".to_string());
+                let mailbox: coco_tool::MailboxHandleRef =
+                    Arc::new(coco_state::swarm_mailbox::SwarmMailboxHandle);
+
+                let response = coco_tool::PlanApprovalMessage::PlanApprovalResponse(
+                    coco_tool::PlanApprovalResponse {
+                        request_id: request_id.clone(),
+                        approved,
+                        feedback: feedback.clone(),
+                        permission_mode: None,
+                    },
+                );
+                let envelope = coco_tool::MailboxEnvelope {
+                    text: serde_json::to_string(&response).unwrap_or_default(),
+                    from: agent_name.clone(),
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                };
+                if let Err(e) = mailbox
+                    .write_to_mailbox(&teammate_agent, &team_name, envelope)
+                    .await
+                {
+                    info!(%request_id, error = %e, "failed to write PlanApprovalResponse");
+                } else {
+                    // Clear the leader-side awaiting flag so the
+                    // reminder can stop nagging about this request.
+                    let mut guard = app_state.write().await;
+                    if guard.awaiting_plan_approval_request_id.as_deref()
+                        == Some(request_id.as_str())
+                    {
+                        guard.awaiting_plan_approval = false;
+                        guard.awaiting_plan_approval_request_id = None;
+                    }
+                }
             }
 
             UserCommand::Shutdown => {

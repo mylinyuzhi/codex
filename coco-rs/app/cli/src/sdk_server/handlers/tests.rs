@@ -14,6 +14,7 @@ use std::time::Duration;
 use coco_types::CoreEvent;
 use coco_types::JsonRpcMessage;
 use coco_types::JsonRpcRequest;
+use coco_types::NotificationMethod;
 use coco_types::RequestId;
 use coco_types::ServerNotification;
 use coco_types::TurnCompletedParams;
@@ -1050,7 +1051,9 @@ async fn set_permission_mode_updates_session_field() {
     let reply = loop {
         let msg = client.recv().await.unwrap().unwrap();
         match msg {
-            JsonRpcMessage::Notification(n) if n.method == "permission/modeChanged" => {
+            JsonRpcMessage::Notification(n)
+                if n.method == NotificationMethod::PermissionModeChanged.as_str() =>
+            {
                 saw_notification = true;
                 assert_eq!(n.params.get("mode"), Some(&serde_json::json!("plan")));
             }
@@ -1119,7 +1122,9 @@ async fn set_permission_mode_rejects_bypass_without_capability() {
     let reply = client.recv().await.unwrap().unwrap();
     let err = match reply {
         JsonRpcMessage::Error(e) => e,
-        JsonRpcMessage::Notification(n) if n.method == "permission/modeChanged" => {
+        JsonRpcMessage::Notification(n)
+            if n.method == NotificationMethod::PermissionModeChanged.as_str() =>
+        {
             panic!("guard must not emit permission/modeChanged on reject");
         }
         other => panic!("expected JsonRpcError for rejected bypass, got {other:?}"),
@@ -1183,7 +1188,9 @@ async fn set_permission_mode_allows_bypass_when_capability_on() {
     let reply = loop {
         let msg = client.recv().await.unwrap().unwrap();
         match msg {
-            JsonRpcMessage::Notification(n) if n.method == "permission/modeChanged" => {
+            JsonRpcMessage::Notification(n)
+                if n.method == NotificationMethod::PermissionModeChanged.as_str() =>
+            {
                 saw_notification = true;
                 assert_eq!(
                     n.params.get("mode"),
@@ -1655,10 +1662,10 @@ async fn session_archive_flushes_late_events_before_aggregate() {
         let msg = client.recv().await.unwrap().unwrap();
         match msg {
             JsonRpcMessage::Notification(n) => {
-                if n.method == "turn/failed" {
-                    observed_kinds.push("turn/failed");
-                } else if n.method == "session/result" {
-                    observed_kinds.push("session/result");
+                if n.method == NotificationMethod::TurnFailed.as_str() {
+                    observed_kinds.push(NotificationMethod::TurnFailed.as_str());
+                } else if n.method == NotificationMethod::SessionResult.as_str() {
+                    observed_kinds.push(NotificationMethod::SessionResult.as_str());
                 }
             }
             JsonRpcMessage::Response(r) if r.request_id == RequestId::Integer(3) => break,
@@ -2479,7 +2486,7 @@ async fn engine_error_is_recorded_in_session_stats() {
     for _ in 0..2 {
         let msg = client.recv().await.unwrap().unwrap();
         if let JsonRpcMessage::Notification(n) = msg
-            && n.method == "session/result"
+            && n.method == NotificationMethod::SessionResult.as_str()
         {
             assert_eq!(n.params["is_error"], true);
             assert_eq!(n.params["errors"][0], "fake engine crash");

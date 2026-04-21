@@ -58,7 +58,7 @@ pub struct AsyncHookResponse {
 /// Registry for managing pending async hooks.
 ///
 /// Thread-safe via `Arc<Mutex<_>>` — can be shared across tasks.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct AsyncHookRegistry {
     pending: Arc<Mutex<HashMap<String, PendingAsyncHook>>>,
 }

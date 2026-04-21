@@ -5,7 +5,11 @@ from __future__ import annotations
 from typing import AsyncIterator
 
 from coco_sdk._internal.transport.subprocess_cli import SubprocessCLITransport
-from coco_sdk.generated.protocol import ServerNotification, SessionStartRequest
+from coco_sdk.generated.protocol import (
+    NotificationMethod,
+    ServerNotification,
+    SessionStartRequest,
+)
 
 
 async def query(
@@ -30,9 +34,9 @@ async def query(
 
         async def main():
             async for event in query("List all Python files"):
-                if event.method == "agentMessage/delta":
+                if event.method == NotificationMethod.AGENT_MESSAGE_DELTA:
                     print(event.params.get("delta", ""), end="")
-                elif event.method == "turn/completed":
+                elif event.method == NotificationMethod.TURN_COMPLETED:
                     print()  # Done
 
         asyncio.run(main())

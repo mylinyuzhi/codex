@@ -1,8 +1,8 @@
 //! `ClientRequest` — SDK-to-agent protocol requests.
 //!
 //! TS source: `src/entrypoints/sdk/controlSchemas.ts` (21 control request
-//! subtypes). coco-rs extends this to 29 variants: 22 from the cocode-rs
-//! base + 7 P1 gap additions from the TS control protocol.
+//! subtypes). coco-rs extends this to 30 variants: 22 cocode-rs base +
+//! `elicitation/resolve` (TS-aligned) + 7 P1 gap additions.
 //!
 //! See `event-system-design.md` §5.
 
@@ -14,117 +14,88 @@ use crate::HookEventType;
 use crate::PermissionMode;
 use crate::PermissionUpdate;
 use crate::ThinkingLevel;
+use crate::wire_tagged::wire_tagged_enum;
 
-/// Bidirectional control protocol — client-initiated requests.
-///
-/// Each variant carries a unique `method` string used on the wire.
-/// The method is the discriminator; params are the variant-specific payload.
-///
-/// See `event-system-design.md` §5.1 for the 22 base variants and §5.4 for
-/// the 7 gap additions. 29 total.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "method", content = "params")]
-pub enum ClientRequest {
-    // === Session lifecycle (6) ===
-    #[serde(rename = "initialize")]
-    Initialize(InitializeParams),
-    #[serde(rename = "session/start")]
-    SessionStart(Box<SessionStartParams>),
-    #[serde(rename = "session/resume")]
-    SessionResume(SessionResumeParams),
-    #[serde(rename = "session/list")]
-    SessionList,
-    #[serde(rename = "session/read")]
-    SessionRead(SessionReadParams),
-    #[serde(rename = "session/archive")]
-    SessionArchive(SessionArchiveParams),
+wire_tagged_enum! {
+    method_enum = ClientRequestMethod,
+    tagged_enum = ClientRequest,
+    method_doc = "\
+Wire-method identifier for every `ClientRequest` variant.\n\n\
+Cross-language protocol constant exported to the JSON schema bundle so \
+Python / other SDK codegens obtain the same vocabulary. Consumers should \
+reference `ClientRequestMethod::SessionStart` rather than compare against \
+raw wire strings.",
+    tagged_doc = "\
+Bidirectional control protocol — client-initiated requests.\n\n\
+Each variant carries a unique `method` string used on the wire. \
+The method is the discriminator; params are the variant-specific payload.\n\n\
+See `event-system-design.md` §5.1 for the 22 base variants and §5.4 for \
+the 7 gap additions (`elicitation/resolve` is TS-aligned). 30 total.",
+    variants = {
+        // === Session lifecycle (6) ===
+        "initialize" => Initialize(InitializeParams),
+        "session/start" => SessionStart(Box<SessionStartParams>),
+        "session/resume" => SessionResume(SessionResumeParams),
+        "session/list" => SessionList,
+        "session/read" => SessionRead(SessionReadParams),
+        "session/archive" => SessionArchive(SessionArchiveParams),
 
-    // === Turn control (2) ===
-    #[serde(rename = "turn/start")]
-    TurnStart(TurnStartParams),
-    #[serde(rename = "turn/interrupt")]
-    TurnInterrupt,
+        // === Turn control (2) ===
+        "turn/start" => TurnStart(TurnStartParams),
+        "turn/interrupt" => TurnInterrupt,
 
-    // === Approval + user input resolution (3) ===
-    #[serde(rename = "approval/resolve")]
-    ApprovalResolve(ApprovalResolveParams),
-    #[serde(rename = "input/resolveUserInput")]
-    UserInputResolve(UserInputResolveParams),
-    /// Resolve a pending MCP elicitation request. Counterpart to the
-    /// `ServerRequest` the agent sends when an MCP server needs
-    /// structured user input (form values, OAuth tokens, etc.).
-    ///
-    /// TS: `SDKControlElicitationRequestSchema` — documented as a
-    /// planned addition in `event-system-design.md` §5.4.
-    #[serde(rename = "elicitation/resolve")]
-    ElicitationResolve(ElicitationResolveParams),
+        // === Approval + user input resolution (3) ===
+        "approval/resolve" => ApprovalResolve(ApprovalResolveParams),
+        "input/resolveUserInput" => UserInputResolve(UserInputResolveParams),
+        /// Resolve a pending MCP elicitation request. Counterpart to the
+        /// `ServerRequest` the agent sends when an MCP server needs
+        /// structured user input (form values, OAuth tokens, etc.).
+        ///
+        /// TS: `SDKControlElicitationRequestSchema` — documented as a
+        /// planned addition in `event-system-design.md` §5.4.
+        "elicitation/resolve" => ElicitationResolve(ElicitationResolveParams),
 
-    // === Runtime control (8) ===
-    #[serde(rename = "control/setModel")]
-    SetModel(SetModelParams),
-    #[serde(rename = "control/setPermissionMode")]
-    SetPermissionMode(SetPermissionModeParams),
-    #[serde(rename = "control/setThinking")]
-    SetThinking(SetThinkingParams),
-    #[serde(rename = "control/stopTask")]
-    StopTask(StopTaskParams),
-    #[serde(rename = "control/rewindFiles")]
-    RewindFiles(RewindFilesParams),
-    #[serde(rename = "control/updateEnv")]
-    UpdateEnv(UpdateEnvParams),
-    #[serde(rename = "control/keepAlive")]
-    KeepAlive,
-    #[serde(rename = "control/cancelRequest")]
-    CancelRequest(CancelRequestParams),
+        // === Runtime control (8) ===
+        "control/setModel" => SetModel(SetModelParams),
+        "control/setPermissionMode" => SetPermissionMode(SetPermissionModeParams),
+        "control/setThinking" => SetThinking(SetThinkingParams),
+        "control/stopTask" => StopTask(StopTaskParams),
+        "control/rewindFiles" => RewindFiles(RewindFilesParams),
+        "control/updateEnv" => UpdateEnv(UpdateEnvParams),
+        "control/keepAlive" => KeepAlive,
+        "control/cancelRequest" => CancelRequest(CancelRequestParams),
 
-    // === Config (2) ===
-    #[serde(rename = "config/read")]
-    ConfigRead,
-    #[serde(rename = "config/value/write")]
-    ConfigWrite(ConfigWriteParams),
+        // === Config (2) ===
+        "config/read" => ConfigRead,
+        "config/value/write" => ConfigWrite(ConfigWriteParams),
 
-    // === Hook + MCP message routing responses (2) ===
-    #[serde(rename = "hook/callbackResponse")]
-    HookCallbackResponse(HookCallbackResponseParams),
-    #[serde(rename = "mcp/routeMessageResponse")]
-    McpRouteMessageResponse(McpRouteMessageResponseParams),
+        // === Hook + MCP message routing responses (2) ===
+        "hook/callbackResponse" => HookCallbackResponse(HookCallbackResponseParams),
+        "mcp/routeMessageResponse" => McpRouteMessageResponse(McpRouteMessageResponseParams),
 
-    // === TS P1 gap additions (7) — event-system-design §5.4 ===
-    /// Query MCP server connection status.
-    /// TS: `SDKControlMcpStatusRequestSchema`
-    #[serde(rename = "mcp/status")]
-    McpStatus,
-
-    /// Get context window usage breakdown.
-    /// TS: `SDKControlGetContextUsageRequestSchema`
-    #[serde(rename = "context/usage")]
-    ContextUsage,
-
-    /// Hot-reload MCP server configurations.
-    /// TS: `SDKControlMcpSetServersRequestSchema`
-    #[serde(rename = "mcp/setServers")]
-    McpSetServers(McpSetServersParams),
-
-    /// Reconnect a specific MCP server.
-    /// TS: `SDKControlMcpReconnectRequestSchema`
-    #[serde(rename = "mcp/reconnect")]
-    McpReconnect(McpReconnectParams),
-
-    /// Enable/disable a specific MCP server.
-    /// TS: `SDKControlMcpToggleRequestSchema`
-    #[serde(rename = "mcp/toggle")]
-    McpToggle(McpToggleParams),
-
-    /// Reload all plugins from disk.
-    /// TS: `SDKControlReloadPluginsRequestSchema`
-    #[serde(rename = "plugin/reload")]
-    PluginReload,
-
-    /// Apply feature flag settings at runtime.
-    /// TS: `SDKControlApplyFlagSettingsRequestSchema`
-    #[serde(rename = "config/applyFlags")]
-    ConfigApplyFlags(ConfigApplyFlagsParams),
+        // === TS P1 gap additions (7) — event-system-design §5.4 ===
+        /// Query MCP server connection status.
+        /// TS: `SDKControlMcpStatusRequestSchema`
+        "mcp/status" => McpStatus,
+        /// Get context window usage breakdown.
+        /// TS: `SDKControlGetContextUsageRequestSchema`
+        "context/usage" => ContextUsage,
+        /// Hot-reload MCP server configurations.
+        /// TS: `SDKControlMcpSetServersRequestSchema`
+        "mcp/setServers" => McpSetServers(McpSetServersParams),
+        /// Reconnect a specific MCP server.
+        /// TS: `SDKControlMcpReconnectRequestSchema`
+        "mcp/reconnect" => McpReconnect(McpReconnectParams),
+        /// Enable/disable a specific MCP server.
+        /// TS: `SDKControlMcpToggleRequestSchema`
+        "mcp/toggle" => McpToggle(McpToggleParams),
+        /// Reload all plugins from disk.
+        /// TS: `SDKControlReloadPluginsRequestSchema`
+        "plugin/reload" => PluginReload,
+        /// Apply feature flag settings at runtime.
+        /// TS: `SDKControlApplyFlagSettingsRequestSchema`
+        "config/applyFlags" => ConfigApplyFlags(ConfigApplyFlagsParams),
+    }
 }
 
 // ---------------------------------------------------------------------------

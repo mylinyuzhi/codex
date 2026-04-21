@@ -3,6 +3,9 @@ use serde::Serialize;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 
+use crate::env;
+use crate::env::EnvKey;
+
 /// Fast mode state.
 /// Fast mode: same model (Opus 4.6), faster output speed. NOT a model switch.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -195,20 +198,23 @@ pub fn is_session_opted_in() -> bool {
 /// Full availability check chain. Returns `(available, reason_if_not)`.
 ///
 /// TS: fastMode.ts availability checks (in order):
-/// 1. Env: CLAUDE_CODE_DISABLE_FAST_MODE
+/// 1. Env: COCO_DISABLE_FAST_MODE
 /// 2. Auth: 1P only (not Bedrock/Vertex/Foundry)
 /// 3. Org status: must be Enabled (not Pending/Disabled)
 /// 4. Per-session opt-in: if fastModePerSessionOptIn setting is true, check session flag
+///
+/// Note: this intentionally reads live env rather than going through an
+/// `EnvSnapshot`. Fast mode is a runtime toggle that an operator may
+/// flip mid-session (via a manual `export`); the snapshot is captured
+/// at startup and would miss such flips. All other env reads in
+/// `coco-config` are snapshot-based — see `RuntimeConfig`.
 pub fn check_fast_mode_availability(
     is_first_party: bool,
     per_session_opt_in_setting: bool,
 ) -> (bool, Option<String>) {
     // 1. Environment disable
-    if std::env::var("CLAUDE_CODE_DISABLE_FAST_MODE").is_ok() {
-        return (
-            false,
-            Some("Disabled by CLAUDE_CODE_DISABLE_FAST_MODE".into()),
-        );
+    if env::is_env_truthy(EnvKey::CocoDisableFastMode) {
+        return (false, Some("Disabled by COCO_DISABLE_FAST_MODE".into()));
     }
 
     // 2. Auth provider check

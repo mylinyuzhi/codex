@@ -3,6 +3,7 @@
 //! TS: skills/ (SkillDefinition, SkillManager, bundled + user + project + plugin skills)
 
 pub mod bundled;
+pub mod reminder_source;
 pub mod shell_exec;
 pub mod watcher;
 
@@ -136,7 +137,7 @@ pub enum SkillSource {
 }
 
 /// Skill manager — discovery, loading, deduplication.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct SkillManager {
     skills: HashMap<String, SkillDefinition>,
 }

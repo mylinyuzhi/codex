@@ -143,6 +143,24 @@ impl FileReadState {
         }
     }
 
+    /// Subset of `candidates` whose cached mtime still matches disk —
+    /// i.e. the model already has the current content and a re-inject
+    /// would be redundant. Feeds `AlreadyReadFileGenerator` in
+    /// `coco-system-reminder` for Part 1 silent-dedup reminders.
+    ///
+    /// Paths not in the cache are excluded (no way to prove "already
+    /// read" without a prior read). Paths whose mtime diverges are also
+    /// excluded (content changed → content loader should re-inject).
+    pub async fn unchanged_paths(&self, candidates: &[PathBuf]) -> Vec<PathBuf> {
+        let mut result = Vec::new();
+        for path in candidates {
+            if self.is_unchanged(path).await {
+                result.push(path.clone());
+            }
+        }
+        result
+    }
+
     pub fn invalidate(&mut self, path: &Path) {
         let canonical = path.to_path_buf();
         self.entries.remove(&canonical);

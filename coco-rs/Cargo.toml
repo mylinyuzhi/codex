@@ -53,12 +53,13 @@ members = [
     "services/lsp",
     "services/compact",
 
-    # ─── core/ (5) ───
+    # ─── core/ (6) ───
     "core/messages",
     "core/context",
     "core/permissions",
     "core/tool",
     "core/tools",
+    "core/system-reminder",
 
     # ─── exec/ (5) ───
     "exec/shell",
@@ -154,6 +155,7 @@ coco-context = { path = "core/context" }
 coco-permissions = { path = "core/permissions" }
 coco-tool = { path = "core/tool" }
 coco-tools = { path = "core/tools" }
+coco-system-reminder = { path = "core/system-reminder" }
 
 # Internal - exec
 coco-shell = { path = "exec/shell" }

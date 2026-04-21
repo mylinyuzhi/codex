@@ -12,6 +12,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::watch;
 
+use coco_config::ShellConfig;
+
 use crate::snapshot::ShellSnapshot;
 
 /// Supported shell types.
@@ -126,24 +128,39 @@ pub fn detect_shell_type(shell_path: &Path) -> Option<ShellType> {
 /// Returns the user's default shell.
 ///
 /// Priority (TS alignment — `Shell.ts:findSuitableShell`):
-/// 1. `$COCO_SHELL` override (must be bash or zsh, must be executable)
-/// 2. `$SHELL` environment variable
-/// 3. Platform-specific discovery (which + fallback paths)
+/// 1. `$SHELL` environment variable
+/// 2. Platform-specific discovery (which + fallback paths)
+///
+/// The `COCO_SHELL` override now lives on the resolved [`ShellConfig`];
+/// use [`shell_from_config`] when you have one, or pre-set the override
+/// via `settings.shell.default_shell`. This fn is kept as the
+/// unconfigured default for tests and pre-runtime-config callsites.
 pub fn default_user_shell() -> Shell {
-    // TS: CLAUDE_CODE_SHELL override, only bash/zsh accepted
-    if let Ok(override_path) = std::env::var("COCO_SHELL") {
-        let path = PathBuf::from(&override_path);
+    let user_shell = std::env::var("SHELL").ok().map(PathBuf::from);
+    default_user_shell_from_path(user_shell)
+}
+
+/// Resolve the active shell from a [`ShellConfig`].
+///
+/// Priority:
+/// 1. `shell_config.default_shell` (must parse as bash/zsh; non-supported
+///    overrides log a warning and fall through — preserves the existing
+///    consumption-time validation invariant).
+/// 2. Platform default via [`default_user_shell`].
+pub fn shell_from_config(shell_config: &ShellConfig) -> Shell {
+    if let Some(override_path) = shell_config.default_shell.as_deref() {
+        let path = PathBuf::from(override_path);
         if let Some(st) = detect_shell_type(&path)
             && matches!(st, ShellType::Bash | ShellType::Zsh)
             && let Some(shell) = get_shell(st, Some(&path))
         {
             return shell;
         }
-        tracing::warn!("COCO_SHELL={override_path} is not a supported shell (bash/zsh), ignoring");
+        tracing::warn!(
+            "shell.default_shell={override_path} is not a supported shell (bash/zsh), ignoring"
+        );
     }
-
-    let user_shell = std::env::var("SHELL").ok().map(PathBuf::from);
-    default_user_shell_from_path(user_shell)
+    default_user_shell()
 }
 
 fn default_user_shell_from_path(user_shell_path: Option<PathBuf>) -> Shell {

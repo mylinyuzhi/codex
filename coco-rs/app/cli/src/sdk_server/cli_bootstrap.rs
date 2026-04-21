@@ -204,8 +204,7 @@ fn def_to_sdk_agent_info(def: AgentDefinition) -> SdkAgentInfo {
 ///   `subscription_type` from the token, `organization` is the raw
 ///   `org_uuid` (TS fetches the human-readable name via a separate API
 ///   call we don't make yet). `token_source` is intentionally `None`
-///   because TS's canonical token-source strings
-///   (`CLAUDE_CODE_OAUTH_TOKEN`, `claude.ai`, etc.) don't map cleanly
+///   because TS's canonical token-source strings don't map cleanly
 ///   from the coco-rs `AuthMethod::OAuth` variant — sending an
 ///   incompatible string would mislead TS SDK consumers that key on
 ///   those values. `email` is always `None` (OAuth token doesn't embed

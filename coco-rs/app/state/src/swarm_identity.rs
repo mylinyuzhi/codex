@@ -16,6 +16,7 @@ use super::swarm_constants::PARENT_SESSION_ID_ENV_VAR;
 use super::swarm_constants::PLAN_MODE_REQUIRED_ENV_VAR;
 use super::swarm_constants::TEAM_NAME_ENV_VAR;
 use super::swarm_constants::TEAMMATE_COLOR_ENV_VAR;
+use coco_config::env;
 
 // ── Thread-local Context (tier 1) ──
 
@@ -120,7 +121,7 @@ pub fn get_agent_id() -> Option<String> {
         return Some(ctx.agent_id);
     }
     // Tier 3: env var (cross-process fallback).
-    std::env::var(AGENT_ID_ENV_VAR).ok()
+    env::env_opt(AGENT_ID_ENV_VAR)
 }
 
 /// Get the current agent display name (3-tier priority).
@@ -133,7 +134,7 @@ pub fn get_agent_name() -> Option<String> {
     if let Some(ctx) = get_dynamic_team_context() {
         return Some(ctx.agent_name);
     }
-    std::env::var(AGENT_NAME_ENV_VAR).ok()
+    env::env_opt(AGENT_NAME_ENV_VAR)
 }
 
 /// Get the current team name (3-tier priority).
@@ -149,7 +150,7 @@ pub fn get_team_name(team_context: Option<&TeamContext>) -> Option<String> {
     if let Some(tc) = team_context {
         return Some(tc.team_name.clone());
     }
-    std::env::var(TEAM_NAME_ENV_VAR).ok()
+    env::env_opt(TEAM_NAME_ENV_VAR)
 }
 
 /// Get the parent session ID.
@@ -162,7 +163,7 @@ pub fn get_parent_session_id() -> Option<String> {
     if let Some(ctx) = get_dynamic_team_context() {
         return ctx.parent_session_id;
     }
-    std::env::var(PARENT_SESSION_ID_ENV_VAR).ok()
+    env::env_opt(PARENT_SESSION_ID_ENV_VAR)
 }
 
 /// Check if currently running as a teammate (not leader).
@@ -182,7 +183,7 @@ pub fn get_teammate_color() -> Option<String> {
     if let Some(ctx) = get_dynamic_team_context() {
         return ctx.color;
     }
-    std::env::var(TEAMMATE_COLOR_ENV_VAR).ok()
+    env::env_opt(TEAMMATE_COLOR_ENV_VAR)
 }
 
 /// Check if plan mode is required.
@@ -195,9 +196,7 @@ pub fn is_plan_mode_required() -> bool {
     if let Some(ctx) = get_dynamic_team_context() {
         return ctx.plan_mode_required;
     }
-    std::env::var(PLAN_MODE_REQUIRED_ENV_VAR)
-        .ok()
-        .is_some_and(|v| v == "1" || v == "true")
+    env::is_env_truthy(PLAN_MODE_REQUIRED_ENV_VAR)
 }
 
 /// Check if this session is the team leader.

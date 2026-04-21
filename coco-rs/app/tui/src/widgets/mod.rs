@@ -23,6 +23,7 @@ mod mcp_status_panel;
 mod model_fallback_banner;
 pub mod notification;
 mod permission_mode_banner;
+mod plan_panel;
 pub mod plugin_manager;
 mod progress_bar;
 mod queue_status_widget;
@@ -38,6 +39,7 @@ mod teammate_spinner;
 mod teammate_view_header;
 mod toast;
 mod tool_panel;
+mod verification_nudge_banner;
 
 #[cfg(test)]
 #[path = "mod.test.rs"]
@@ -56,6 +58,7 @@ pub use local_command_log::LocalCommandLog;
 pub use mcp_status_panel::McpStatusPanel;
 pub use model_fallback_banner::ModelFallbackBanner;
 pub use permission_mode_banner::PermissionModeBanner;
+pub use plan_panel::PlanPanel;
 pub use progress_bar::ProgressBarWidget;
 pub use queue_status_widget::QueueStatusWidget;
 pub use rate_limit_panel::RateLimitPanel;
@@ -69,3 +72,4 @@ pub use teammate_spinner::TeammateSpinnerTree;
 pub use teammate_view_header::TeammateViewHeader;
 pub use toast::ToastWidget;
 pub use tool_panel::ToolPanel;
+pub use verification_nudge_banner::VerificationNudgeBanner;

@@ -201,16 +201,23 @@ impl Tool for ReadTool {
 
     /// R6-T20: file-read permission gate. TS routes every Read through
     /// `checkReadPermissionForTool`; coco-rs matches by consulting the
-    /// env-var-driven `COCO_FILE_READ_IGNORE_PATTERNS` matcher. Paths
-    /// matching any deny glob are rejected before disk access.
-    async fn check_permissions(&self, input: &Value, _ctx: &ToolUseContext) -> PermissionDecision {
+    /// resolved `ctx.tool_config.file_read_ignore_patterns` matcher
+    /// (JSON-first, env override via `COCO_FILE_READ_IGNORE_PATTERNS`).
+    /// Paths matching any deny glob are rejected before disk access.
+    async fn check_permissions(&self, input: &Value, ctx: &ToolUseContext) -> PermissionDecision {
         let Some(file_path) = input.get("file_path").and_then(|v| v.as_str()) else {
             return PermissionDecision::Allow {
                 updated_input: None,
                 feedback: None,
             };
         };
-        crate::tools::read_permissions::check_read_permission(Path::new(file_path))
+        let matcher = crate::tools::read_permissions::file_read_ignore_matcher_from_patterns(
+            &ctx.tool_config.file_read_ignore_patterns,
+        );
+        crate::tools::read_permissions::check_read_permission_with_matcher(
+            Path::new(file_path),
+            &matcher,
+        )
     }
 
     fn validate_input(&self, input: &Value, _ctx: &ToolUseContext) -> ValidationResult {

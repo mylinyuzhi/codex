@@ -91,10 +91,13 @@ fn main() {
     // The three child enums are the actual wire types.
     println!("Individual schemas:");
     write_schema::<coco_types::ServerNotification>(&out_dir, "server_notification");
+    write_schema::<coco_types::NotificationMethod>(&out_dir, "notification_method");
     write_schema::<coco_types::AgentStreamEvent>(&out_dir, "agent_stream_event");
     write_schema::<coco_types::TuiOnlyEvent>(&out_dir, "tui_only_event");
     write_schema::<coco_types::ClientRequest>(&out_dir, "client_request");
+    write_schema::<coco_types::ClientRequestMethod>(&out_dir, "client_request_method");
     write_schema::<coco_types::ServerRequest>(&out_dir, "server_request");
+    write_schema::<coco_types::ServerRequestMethod>(&out_dir, "server_request_method");
     write_schema::<coco_types::JsonRpcMessage>(&out_dir, "jsonrpc_message");
     write_schema::<coco_types::ThreadItem>(&out_dir, "thread_item");
     write_schema::<coco_types::SessionStartParams>(&out_dir, "session_start_request");
@@ -107,6 +110,7 @@ fn main() {
     let type_schemas: Vec<(String, RootSchema)> = vec![
         // 3-layer CoreEvent sub-enums (the envelope itself is in-process only).
         bundle_entry::<coco_types::ServerNotification>("ServerNotification"),
+        bundle_entry::<coco_types::NotificationMethod>("NotificationMethod"),
         bundle_entry::<coco_types::AgentStreamEvent>("AgentStreamEvent"),
         bundle_entry::<coco_types::TuiOnlyEvent>("TuiOnlyEvent"),
         // ThreadItem + ItemStatus
@@ -116,7 +120,9 @@ fn main() {
         bundle_entry::<coco_types::FileChangeInfo>("FileChangeInfo"),
         // Control protocol
         bundle_entry::<coco_types::ClientRequest>("ClientRequest"),
+        bundle_entry::<coco_types::ClientRequestMethod>("ClientRequestMethod"),
         bundle_entry::<coco_types::ServerRequest>("ServerRequest"),
+        bundle_entry::<coco_types::ServerRequestMethod>("ServerRequestMethod"),
         bundle_entry::<coco_types::JsonRpcMessage>("JsonRpcMessage"),
         bundle_entry::<coco_types::JsonRpcRequest>("JsonRpcRequest"),
         bundle_entry::<coco_types::JsonRpcResponse>("JsonRpcResponse"),

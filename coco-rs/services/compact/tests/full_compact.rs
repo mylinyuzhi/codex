@@ -208,11 +208,10 @@ async fn test_attachment_callback() {
 
     let attachment_fn: coco_compact::compact::PostCompactAttachmentFn =
         Box::new(|_result: &coco_compact::CompactResult| {
-            vec![coco_types::AttachmentMessage {
-                uuid: uuid::Uuid::new_v4(),
-                message: coco_types::LlmMessage::user_text("restored file content"),
-                is_meta: true,
-            }]
+            vec![coco_types::AttachmentMessage::api(
+                coco_types::AttachmentKind::CompactFileReference,
+                coco_types::LlmMessage::user_text("restored file content"),
+            )]
         });
 
     let result = compact_conversation(

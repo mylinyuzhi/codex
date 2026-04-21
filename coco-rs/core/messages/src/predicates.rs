@@ -32,10 +32,14 @@ pub fn is_tombstone(msg: &Message) -> bool {
 }
 
 /// Whether the message is hidden from UI but visible to model.
+///
+/// Post-Phase-2: `UserMessage` no longer carries `is_meta` — all
+/// reminder-injected user content lives in `Message::Attachment`
+/// with kind = `CriticalSystemReminder` (or a more specific reminder
+/// kind). "Meta" is now purely an `Attachment`-layer concept.
 pub fn is_meta_message(msg: &Message) -> bool {
     match msg {
-        Message::User(m) => m.is_meta,
-        Message::Attachment(m) => m.is_meta,
+        Message::Attachment(m) => m.kind.is_api_visible() && !m.kind.renders_in_transcript(),
         _ => false,
     }
 }

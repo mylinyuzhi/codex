@@ -29,12 +29,10 @@ pub fn render_message(msg: &Message, mode: OutputMode) -> String {
 fn render_text(msg: &Message) -> String {
     match msg {
         Message::User(u) => {
+            // Post-Phase-2: all `Message::User` are genuine human input.
+            // Meta / reminder text lives in `Message::Attachment`.
             let text = extract_text(&u.message);
-            if u.is_meta {
-                String::new() // Hide meta messages in text mode
-            } else {
-                format!("\x1b[1;36m> {text}\x1b[0m\n")
-            }
+            format!("\x1b[1;36m> {text}\x1b[0m\n")
         }
         Message::Assistant(a) => {
             let text = extract_text(&a.message);

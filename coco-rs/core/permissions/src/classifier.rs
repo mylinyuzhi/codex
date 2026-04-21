@@ -133,8 +133,11 @@ pub fn build_transcript_entries(messages: &[coco_types::Message]) -> Vec<Transcr
     for msg in messages {
         match msg {
             coco_types::Message::User(u) => {
+                // Post-Phase-2: every `Message::User` is genuine human
+                // input; reminder-injected content lives in
+                // `Message::Attachment`.
                 let text = extract_user_text(&u.message);
-                if !text.is_empty() && !u.is_meta {
+                if !text.is_empty() {
                     entries.push(TranscriptEntry {
                         role: TranscriptRole::User,
                         content: vec![TranscriptBlock::Text(truncate(&text, 2000))],
