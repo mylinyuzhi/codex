@@ -3,6 +3,7 @@
 //! TS: configConstants.ts `TEAMMATE_MODES`, config.ts `ConfigOptions`.
 
 use super::swarm_constants::AGENT_TEAMS_ENV_VAR;
+use coco_config::env;
 
 /// How teammates are spawned.
 ///
@@ -94,9 +95,7 @@ pub fn is_agent_teams_enabled(config: &TeamConfig, cli_flag: bool) -> bool {
     }
 
     // Env var override
-    if std::env::var(AGENT_TEAMS_ENV_VAR)
-        .ok()
-        .is_some_and(|v| !v.is_empty() && v != "0" && v != "false")
+    if env::env_opt(AGENT_TEAMS_ENV_VAR).is_some_and(|v| !v.is_empty() && v != "0" && v != "false")
     {
         return true;
     }

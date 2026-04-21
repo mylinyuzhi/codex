@@ -168,93 +168,40 @@ async fn test_bash_read_only_skips_security_checks() {
 }
 
 // ---------------------------------------------------------------------------
-// B4.3: BASH_DEFAULT_TIMEOUT_MS / BASH_MAX_TIMEOUT_MS env vars
+// B4.3: resolved Bash timeout config
 // ---------------------------------------------------------------------------
-//
-// NOTE: these tests mutate process-wide env vars. The CLAUDE.md guidance
-// says "avoid mutating process environment in tests", but for env-var-
-// specific functionality there's no other way to exercise the contract.
-// Each test scopes its var mutation to unique names where possible and
-// restores state at the end.
 
-use super::env_default_timeout_ms;
-use super::env_max_timeout_ms;
-
-/// Guard that restores an env var to its prior state on drop, so a
-/// panicking or early-return test doesn't leak state into siblings.
-struct EnvGuard {
-    key: &'static str,
-    prior: Option<String>,
-}
-
-impl EnvGuard {
-    fn set(key: &'static str, value: &str) -> Self {
-        let prior = std::env::var(key).ok();
-        // SAFETY: we immediately restore on drop and each test uses a
-        // distinct key pair. The tests are run single-threaded within
-        // one #[tokio::test] so there's no cross-test race.
-        unsafe {
-            std::env::set_var(key, value);
-        }
-        Self { key, prior }
-    }
-}
-
-impl Drop for EnvGuard {
-    fn drop(&mut self) {
-        unsafe {
-            match &self.prior {
-                Some(v) => std::env::set_var(self.key, v),
-                None => std::env::remove_var(self.key),
-            }
-        }
-    }
+#[test]
+fn test_bash_default_timeout_from_default_config() {
+    let config = coco_config::ToolConfig::default();
+    assert_eq!(super::default_timeout_ms(&config), 120_000);
 }
 
 #[test]
-fn test_bash_env_default_timeout_fallback() {
-    // Ensure the env var is unset so we exercise the fallback path.
-    let _g = EnvGuard::set("BASH_DEFAULT_TIMEOUT_MS", "");
-    unsafe {
-        std::env::remove_var("BASH_DEFAULT_TIMEOUT_MS");
-    }
-    // Fallback is 2 minutes (120000ms).
-    assert_eq!(env_default_timeout_ms(), 120_000);
+fn test_bash_default_timeout_from_runtime_config() {
+    let mut config = coco_config::ToolConfig::default();
+    config.bash.default_timeout_ms = 30_000;
+    assert_eq!(super::default_timeout_ms(&config), 30_000);
 }
 
 #[test]
-fn test_bash_env_default_timeout_override() {
-    let _g = EnvGuard::set("BASH_DEFAULT_TIMEOUT_MS", "30000");
-    assert_eq!(env_default_timeout_ms(), 30_000);
+fn test_bash_default_timeout_zero_clamps_to_one() {
+    let mut config = coco_config::ToolConfig::default();
+    config.bash.default_timeout_ms = 0;
+    assert_eq!(super::default_timeout_ms(&config), 1);
 }
 
 #[test]
-fn test_bash_env_default_timeout_invalid_falls_back() {
-    let _g = EnvGuard::set("BASH_DEFAULT_TIMEOUT_MS", "not-a-number");
-    assert_eq!(env_default_timeout_ms(), 120_000);
+fn test_bash_max_timeout_from_default_config() {
+    let config = coco_config::ToolConfig::default();
+    assert_eq!(super::max_timeout_ms(&config), 600_000);
 }
 
 #[test]
-fn test_bash_env_default_timeout_zero_falls_back() {
-    // Zero is explicitly filtered out — a 0ms timeout would make Bash
-    // useless and is almost certainly a typo.
-    let _g = EnvGuard::set("BASH_DEFAULT_TIMEOUT_MS", "0");
-    assert_eq!(env_default_timeout_ms(), 120_000);
-}
-
-#[test]
-fn test_bash_env_max_timeout_fallback() {
-    unsafe {
-        std::env::remove_var("BASH_MAX_TIMEOUT_MS");
-    }
-    // Fallback is 10 minutes (600000ms).
-    assert_eq!(env_max_timeout_ms(), 600_000);
-}
-
-#[test]
-fn test_bash_env_max_timeout_override() {
-    let _g = EnvGuard::set("BASH_MAX_TIMEOUT_MS", "900000");
-    assert_eq!(env_max_timeout_ms(), 900_000);
+fn test_bash_max_timeout_from_runtime_config() {
+    let mut config = coco_config::ToolConfig::default();
+    config.bash.max_timeout_ms = 900_000;
+    assert_eq!(super::max_timeout_ms(&config), 900_000);
 }
 
 // ---------------------------------------------------------------------------
@@ -382,64 +329,20 @@ fn test_bash_max_result_size_chars_matches_ts() {
     assert_eq!(BashTool.max_result_size_chars(), 30_000);
 }
 
-/// TS `outputLimits.ts::getMaxOutputLength` reads `BASH_MAX_OUTPUT_LENGTH`
-/// from the env, clamps it to `[0, BASH_MAX_OUTPUT_UPPER_LIMIT]`, and falls
-/// back to 30_000 on parse errors. The helper is the coco-rs counterpart;
-/// test all three paths.
-///
-/// NOTE: `env::set_var` is unsafe in multi-threaded contexts but this
-/// test is single-threaded and does not race with other tests because
-/// each subtest unsets the var immediately after reading it. The
-/// `#[serial_test::serial]` attribute is not used because the crate does
-/// not depend on `serial_test`; instead, each case uses a unique env
-/// snapshot and restores it.
+/// The bash-side helper is a plain cast; upper clamping lives in
+/// `coco_config::BashConfig::finalize()` (verified in sections.test.rs).
+/// This test just pins the pass-through semantics.
 #[test]
-fn test_bash_env_max_output_bytes_clamps_and_falls_back() {
-    use super::env_max_output_bytes;
-    // Default when unset.
-    // SAFETY: single-threaded test; the guard restores state before return.
-    unsafe {
-        std::env::remove_var("BASH_MAX_OUTPUT_LENGTH");
-    }
-    assert_eq!(env_max_output_bytes(), 30_000, "default should be 30K");
+fn test_bash_max_output_bytes_pass_through() {
+    let mut config = coco_config::ToolConfig::default();
+    assert_eq!(super::max_output_bytes(&config), 30_000);
 
-    // Valid override under the cap.
-    // SAFETY: single-threaded test.
-    unsafe {
-        std::env::set_var("BASH_MAX_OUTPUT_LENGTH", "50000");
-    }
-    assert_eq!(
-        env_max_output_bytes(),
-        50_000,
-        "env override should pass through under cap"
-    );
+    config.bash.max_output_bytes = 50_000;
+    assert_eq!(super::max_output_bytes(&config), 50_000);
 
-    // Above-cap override clamped to 150_000.
-    // SAFETY: single-threaded test.
-    unsafe {
-        std::env::set_var("BASH_MAX_OUTPUT_LENGTH", "999999");
-    }
-    assert_eq!(
-        env_max_output_bytes(),
-        150_000,
-        "env override should clamp to upper limit 150_000"
-    );
-
-    // Invalid → falls back to default.
-    // SAFETY: single-threaded test.
-    unsafe {
-        std::env::set_var("BASH_MAX_OUTPUT_LENGTH", "not-a-number");
-    }
-    assert_eq!(
-        env_max_output_bytes(),
-        30_000,
-        "invalid env should fall back to default"
-    );
-
-    // SAFETY: single-threaded test.
-    unsafe {
-        std::env::remove_var("BASH_MAX_OUTPUT_LENGTH");
-    }
+    // Negative values are normalized to 0 by the cast guard.
+    config.bash.max_output_bytes = -1;
+    assert_eq!(super::max_output_bytes(&config), 0);
 }
 
 /// TS `BashTool.tsx:643-649` swaps the shell's cwd via `getCwd()` which the
@@ -524,83 +427,58 @@ async fn test_bash_with_progress_channel() {
 }
 
 // ---------------------------------------------------------------------------
-// R6-T18: sandbox decision (load_sandbox_config + should_sandbox_command)
+// R6-T18: sandbox decision
 // ---------------------------------------------------------------------------
 
-use super::load_sandbox_config;
+use super::shell_sandbox_config_from_runtime;
 
-/// Default (no env vars): sandbox is disabled, mode=None.
 #[test]
-fn test_load_sandbox_config_disabled_by_default() {
-    // SAFETY: single-threaded test; env is restored before return.
-    unsafe {
-        std::env::remove_var("COCO_SANDBOX_ENABLED");
-        std::env::remove_var("COCO_SANDBOX_MODE");
-        std::env::remove_var("COCO_SANDBOX_EXCLUDED_COMMANDS");
-    }
-    let cfg = load_sandbox_config();
+fn test_shell_sandbox_config_disabled_by_default() {
+    let cfg = shell_sandbox_config_from_runtime(&coco_config::SandboxConfig::default());
     assert!(
         !cfg.mode.is_active(),
         "sandbox should be disabled by default"
     );
 }
 
-/// Setting COCO_SANDBOX_ENABLED=1 flips the mode to ReadOnly by default.
 #[test]
-fn test_load_sandbox_config_enabled_defaults_readonly() {
-    // SAFETY: single-threaded test.
-    unsafe {
-        std::env::set_var("COCO_SANDBOX_ENABLED", "1");
-        std::env::remove_var("COCO_SANDBOX_MODE");
-    }
-    let cfg = load_sandbox_config();
+fn test_shell_sandbox_config_enabled_defaults_readonly() {
+    let runtime = coco_config::SandboxConfig {
+        enabled: true,
+        ..Default::default()
+    };
+    let cfg = shell_sandbox_config_from_runtime(&runtime);
     assert!(cfg.mode.is_active());
     assert_eq!(
         cfg.mode,
         coco_shell::sandbox::SandboxMode::ReadOnly,
         "default enabled mode should be ReadOnly"
     );
-    // SAFETY: single-threaded test.
-    unsafe {
-        std::env::remove_var("COCO_SANDBOX_ENABLED");
-    }
 }
 
-/// COCO_SANDBOX_MODE=strict picks Strict.
 #[test]
-fn test_load_sandbox_config_mode_strict() {
-    // SAFETY: single-threaded test.
-    unsafe {
-        std::env::set_var("COCO_SANDBOX_ENABLED", "true");
-        std::env::set_var("COCO_SANDBOX_MODE", "strict");
-    }
-    let cfg = load_sandbox_config();
+fn test_shell_sandbox_config_mode_workspace_write_maps_to_strict() {
+    let runtime = coco_config::SandboxConfig {
+        enabled: true,
+        mode: coco_types::SandboxMode::WorkspaceWrite,
+        ..Default::default()
+    };
+    let cfg = shell_sandbox_config_from_runtime(&runtime);
     assert_eq!(cfg.mode, coco_shell::sandbox::SandboxMode::Strict);
-    // SAFETY: single-threaded test.
-    unsafe {
-        std::env::remove_var("COCO_SANDBOX_ENABLED");
-        std::env::remove_var("COCO_SANDBOX_MODE");
-    }
 }
 
-/// COCO_SANDBOX_EXCLUDED_COMMANDS is parsed as a colon-separated list.
 #[test]
-fn test_load_sandbox_config_excluded_commands_parsed() {
-    // SAFETY: single-threaded test.
-    unsafe {
-        std::env::set_var("COCO_SANDBOX_ENABLED", "1");
-        std::env::set_var("COCO_SANDBOX_EXCLUDED_COMMANDS", "git:npm:cargo");
-    }
-    let cfg = load_sandbox_config();
+fn test_shell_sandbox_config_excluded_commands_preserved() {
+    let runtime = coco_config::SandboxConfig {
+        enabled: true,
+        excluded_commands: vec!["git".into(), "npm".into(), "cargo".into()],
+        ..Default::default()
+    };
+    let cfg = shell_sandbox_config_from_runtime(&runtime);
     assert_eq!(
         cfg.excluded_commands,
         vec!["git".to_string(), "npm".to_string(), "cargo".to_string()]
     );
-    // SAFETY: single-threaded test.
-    unsafe {
-        std::env::remove_var("COCO_SANDBOX_ENABLED");
-        std::env::remove_var("COCO_SANDBOX_EXCLUDED_COMMANDS");
-    }
 }
 
 /// With sandbox enabled, a non-excluded command is sandboxed.
@@ -608,21 +486,16 @@ fn test_load_sandbox_config_excluded_commands_parsed() {
 fn test_sandbox_decision_non_excluded_command() {
     use coco_shell::sandbox::BypassRequest;
     use coco_shell::sandbox::should_sandbox_command;
-    // SAFETY: single-threaded test.
-    unsafe {
-        std::env::set_var("COCO_SANDBOX_ENABLED", "1");
-        std::env::remove_var("COCO_SANDBOX_EXCLUDED_COMMANDS");
-    }
-    let cfg = load_sandbox_config();
+    let runtime = coco_config::SandboxConfig {
+        enabled: true,
+        ..Default::default()
+    };
+    let cfg = shell_sandbox_config_from_runtime(&runtime);
     let decision = should_sandbox_command(&cfg, "ls -la", BypassRequest::No);
     assert!(
         decision.is_sandboxed(),
         "enabled + non-excluded → sandboxed"
     );
-    // SAFETY: single-threaded test.
-    unsafe {
-        std::env::remove_var("COCO_SANDBOX_ENABLED");
-    }
 }
 
 /// With sandbox enabled, an excluded command bypasses the sandbox.
@@ -630,22 +503,17 @@ fn test_sandbox_decision_non_excluded_command() {
 fn test_sandbox_decision_excluded_command() {
     use coco_shell::sandbox::BypassRequest;
     use coco_shell::sandbox::should_sandbox_command;
-    // SAFETY: single-threaded test.
-    unsafe {
-        std::env::set_var("COCO_SANDBOX_ENABLED", "1");
-        std::env::set_var("COCO_SANDBOX_EXCLUDED_COMMANDS", "git");
-    }
-    let cfg = load_sandbox_config();
+    let runtime = coco_config::SandboxConfig {
+        enabled: true,
+        excluded_commands: vec!["git".into()],
+        ..Default::default()
+    };
+    let cfg = shell_sandbox_config_from_runtime(&runtime);
     let decision = should_sandbox_command(&cfg, "git status", BypassRequest::No);
     assert!(
         !decision.is_sandboxed(),
         "excluded command must be unsandboxed"
     );
-    // SAFETY: single-threaded test.
-    unsafe {
-        std::env::remove_var("COCO_SANDBOX_ENABLED");
-        std::env::remove_var("COCO_SANDBOX_EXCLUDED_COMMANDS");
-    }
 }
 
 /// `dangerouslyDisableSandbox` → bypass is requested → unsandboxed.
@@ -653,64 +521,29 @@ fn test_sandbox_decision_excluded_command() {
 fn test_sandbox_decision_bypass_respected() {
     use coco_shell::sandbox::BypassRequest;
     use coco_shell::sandbox::should_sandbox_command;
-    // SAFETY: single-threaded test.
-    unsafe {
-        std::env::set_var("COCO_SANDBOX_ENABLED", "1");
-    }
-    let cfg = load_sandbox_config();
+    let runtime = coco_config::SandboxConfig {
+        enabled: true,
+        ..Default::default()
+    };
+    let cfg = shell_sandbox_config_from_runtime(&runtime);
     let decision = should_sandbox_command(&cfg, "rm -rf /", BypassRequest::Requested);
     assert!(
         !decision.is_sandboxed(),
         "bypass should unsandbox (allow_bypass=true in our config)"
     );
-    // SAFETY: single-threaded test.
-    unsafe {
-        std::env::remove_var("COCO_SANDBOX_ENABLED");
-    }
 }
 
-/// R6-T19: env-var gate for auto-background-on-timeout.
+/// R6-T19: runtime-config gate for auto-background-on-timeout.
 #[test]
-fn test_auto_background_on_timeout_env_gate() {
-    use super::auto_background_on_timeout_enabled;
-    // SAFETY: single-threaded test; env is restored before return.
-    unsafe {
-        std::env::remove_var("COCO_BASH_AUTO_BACKGROUND_ON_TIMEOUT");
-    }
-    assert!(!auto_background_on_timeout_enabled(), "default disabled");
-
-    // SAFETY: single-threaded test.
-    unsafe {
-        std::env::set_var("COCO_BASH_AUTO_BACKGROUND_ON_TIMEOUT", "1");
-    }
-    assert!(auto_background_on_timeout_enabled());
-
-    // SAFETY: single-threaded test.
-    unsafe {
-        std::env::set_var("COCO_BASH_AUTO_BACKGROUND_ON_TIMEOUT", "yes");
-    }
-    assert!(auto_background_on_timeout_enabled());
-
-    // SAFETY: single-threaded test.
-    unsafe {
-        std::env::set_var("COCO_BASH_AUTO_BACKGROUND_ON_TIMEOUT", "nope");
-    }
-    assert!(!auto_background_on_timeout_enabled());
-
-    // SAFETY: single-threaded test.
-    unsafe {
-        std::env::remove_var("COCO_BASH_AUTO_BACKGROUND_ON_TIMEOUT");
-    }
+fn test_auto_background_on_timeout_default_disabled() {
+    let config = coco_config::ToolConfig::default();
+    assert!(!config.bash.auto_background_on_timeout);
 }
 
 /// With auto-background opted out (default), a timeout still surfaces
 /// as an ExecutionFailed error — existing behavior.
 #[tokio::test]
 async fn test_bash_timeout_without_auto_background_errors() {
-    // SAFETY: single-threaded test.
-    unsafe {
-        std::env::remove_var("COCO_BASH_AUTO_BACKGROUND_ON_TIMEOUT");
-    }
     let ctx = ToolUseContext::test_default();
     let result = BashTool
         .execute(json!({"command": "sleep 10", "timeout": 100}), &ctx)

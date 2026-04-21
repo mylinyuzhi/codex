@@ -410,8 +410,8 @@ fn contains_multiline_string(command: &str) -> bool {
 // ── Working directory tracking ──
 
 /// CWD marker delimiters used to track working directory changes in shell output.
-pub const CWD_MARKER_PREFIX: &str = "__COCODE_CWD__:";
-pub const CWD_MARKER_SUFFIX: &str = ":__COCODE_CWD_END__";
+pub const CWD_MARKER_PREFIX: &str = "__COCO_CWD__:";
+pub const CWD_MARKER_SUFFIX: &str = ":__COCO_CWD_END__";
 
 /// Generate a shell command that prints the current working directory
 /// wrapped in CWD tracking markers.

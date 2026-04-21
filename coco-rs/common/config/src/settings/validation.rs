@@ -116,6 +116,45 @@ pub fn validate_settings(settings: &Settings) -> Vec<ValidationError> {
     // Validate MCP configs
     errors.extend(validate_mcp_configs(settings));
 
+    // Validate provider configs — flag plaintext api_key leaks.
+    errors.extend(validate_providers(settings));
+
+    errors
+}
+
+/// Validate provider configurations for safe secret handling.
+///
+/// Flags any provider entry that stores `api_key` in plaintext in
+/// settings.json. Per `ProviderConfig` docstring, secrets should live in
+/// the provider's `env_key` env var, not in the config file.
+pub fn validate_providers(settings: &Settings) -> Vec<ValidationError> {
+    let mut errors = Vec::new();
+    for (name, provider) in &settings.providers {
+        if let Some(key) = &provider.api_key
+            && !key.is_empty()
+        {
+            errors.push(ValidationError {
+                file: None,
+                path: format!("providers.{name}.api_key"),
+                message: format!(
+                    "Provider '{name}' stores api_key in plaintext — \
+                     move it to the `{}` environment variable instead.",
+                    provider.env_key
+                ),
+                expected: Some("api_key unset; use env var".into()),
+                invalid_value: Some("<redacted>".into()),
+                suggestion: Some(format!(
+                    "Unset `providers.{name}.api_key` and export the key \
+                     via `{}=...` in your shell.",
+                    if provider.env_key.is_empty() {
+                        "<provider env_key>"
+                    } else {
+                        provider.env_key.as_str()
+                    }
+                )),
+            });
+        }
+    }
     errors
 }
 
@@ -530,32 +569,43 @@ pub fn validate_hooks(settings: &Settings) -> Vec<ValidationError> {
 /// All known top-level setting field names.
 const KNOWN_SETTINGS_FIELDS: &[&str] = &[
     "api_key_helper",
-    "force_login_method",
     "permissions",
     "model",
+    "models",
     "available_models",
-    "model_overrides",
     "thinking_level",
     "fast_mode",
-    "always_thinking_enabled",
+    "providers",
     "env",
+    "api",
+    "loop",
+    "tool",
+    "shell",
+    "sandbox",
+    "memory",
+    "mcp",
+    "web_fetch",
+    "web_search",
+    "paths",
     "hooks",
     "disable_all_hooks",
     "allowed_mcp_servers",
     "denied_mcp_servers",
     "enable_all_project_mcp_servers",
-    "default_shell",
     "output_style",
     "language",
     "syntax_highlighting_disabled",
     "enabled_plugins",
     "worktree",
     "plans_directory",
+    "plan_mode",
+    "session",
     "auto_mode",
     "include_co_authored_by",
     "include_git_instructions",
     "allow_managed_hooks_only",
     "strict_plugin_only_customization",
+    "file_checkpointing_enabled",
 ];
 
 /// Check if a setting field name is a known field.

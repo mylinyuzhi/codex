@@ -131,6 +131,78 @@ pub struct ToolAppState {
     /// Outstanding `plan_approval-<teammate>-<team>-<nonce>` correlation id
     /// for the current pending approval.
     pub awaiting_plan_approval_request_id: Option<String>,
+
+    // ── Task / Todo snapshots ────────────────────────────────────────
+    //
+    // Task tools emit `app_state_patch` closures that refresh these
+    // fields after every mutation — the TUI reads them directly to
+    // render the unified task panel. Matches TS `AppState.tasks` +
+    // `AppState.todos[agentId]` mirrored across turns.
+    /// Latest snapshot of the durable V2 plan-item list (visible
+    /// entries only — `_internal` metadata items are filtered out by
+    /// the tool before patching).
+    pub plan_tasks: Vec<crate::TaskRecord>,
+
+    /// V1 per-agent/per-session TodoWrite lists, keyed by
+    /// `agent_id.unwrap_or(session_id)`. Empty until TodoWrite is used.
+    pub todos_by_agent: std::collections::HashMap<String, Vec<crate::TodoRecord>>,
+
+    /// Which panel the TUI should show expanded (task / teammates /
+    /// none). Tools set this to [`ExpandedView::Tasks`] after create /
+    /// update, matching TS `TaskCreateTool.ts:116-119` and
+    /// `TaskUpdateTool.ts:140-143`.
+    pub expanded_view: crate::ExpandedView,
+
+    /// When `true`, the TUI should surface a "spawn verification agent"
+    /// banner above the input area. Set by `TaskUpdate` + `TodoWrite`
+    /// when all items are completed, ≥3 items exist, and none match
+    /// `/verif/i`. Cleared on acknowledgement or next TodoWrite cycle.
+    pub verification_nudge_pending: bool,
+
+    // ── Date-change latch ────────────────────────────────────────────
+    /// Most recent local ISO date (`YYYY-MM-DD`) the engine emitted a
+    /// `date_change` system-reminder for. The reminder subsystem fires
+    /// when the current local date differs from this value and updates
+    /// the latch atomically. `None` means no reminder has fired yet in
+    /// this session — the first turn seeds the latch without emitting.
+    ///
+    /// TS parity: `appState.lastEmittedDate` in `bootstrap/state.ts`,
+    /// consumed by `getDateChangeAttachments` (`attachments.ts:1415`).
+    pub last_emitted_date: Option<String>,
+
+    // ── Plan verification ────────────────────────────────────────────
+    /// Tracks a plan exit that has not yet been verified via
+    /// `VerifyPlanExecution`. Set by `ExitPlanModeTool`; cleared when the
+    /// verification tool completes (future work — the reminder fires in
+    /// the meantime). TS parity: simplified projection of
+    /// `appState.pendingPlanVerification` (we collapse the nested
+    /// `verificationStarted`/`Completed` fields into a single
+    /// pending-or-not bool — coco-rs doesn't expose mid-tool progress
+    /// state on app_state, so the two-bit TS encoding degenerates to
+    /// one bit for reminder-gating purposes).
+    pub pending_plan_verification: bool,
+
+    // ── Phase 2 delta-reminder announce state ────────────────────────
+    /// The set of tool wire-names announced to the agent via the most
+    /// recent `deferred_tools_delta` reminder. Engine diffs this
+    /// against the current `ToolUseContext.options.tools` each turn
+    /// to compute Added / Removed; post-emit, engine replaces this
+    /// with the current set. TS parity: reconstructed by scanning
+    /// `deferred_tools_delta` attachments in history (`attachments.ts`
+    /// `getDeferredToolsDelta`); coco-rs persists the announced set
+    /// directly on app_state so the diff is O(1) instead of
+    /// O(history-length) per turn.
+    pub last_announced_tools: std::collections::HashSet<String>,
+
+    /// Agent types announced via the most recent `agent_listing_delta`
+    /// reminder. TS parity: reconstructed from prior delta attachments.
+    pub last_announced_agents: std::collections::HashSet<String>,
+
+    /// Per-server MCP instructions announced via the most recent
+    /// `mcp_instructions_delta` reminder. Keyed by server name;
+    /// value is the instruction text (hashable on content). TS parity:
+    /// reconstructed from prior delta attachments.
+    pub last_announced_mcp_instructions: std::collections::HashMap<String, String>,
 }
 
 // ────────────────────────────────────────────────────────────────

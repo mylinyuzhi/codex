@@ -96,13 +96,12 @@ impl McpConfigLoader {
         }
     }
 
-    /// Resolve the config home directory (~/.claude/ or CLAUDE_CONFIG_DIR).
+    /// Resolve the config home directory (~/.coco/ or `COCO_CONFIG_DIR`).
+    ///
+    /// Delegates to `coco_config::global_config::config_home` so MCP and
+    /// the rest of the config surface always agree on the same path.
     pub fn config_home() -> PathBuf {
-        if let Ok(dir) = std::env::var("CLAUDE_CONFIG_DIR") {
-            return PathBuf::from(dir);
-        }
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-        PathBuf::from(home).join(".claude")
+        coco_config::global_config::config_home()
     }
 }
 

@@ -24,19 +24,94 @@ from pydantic import BaseModel, Field
 # Enums
 # ---------------------------------------------------------------------------
 
+class ApprovalDecision(str, Enum):
+    allow = 'allow'
+    deny = 'deny'
+
+class ExpandedView(str, Enum):
+    none = 'none'
+    tasks = 'tasks'
+    teammates = 'teammates'
+
+class FastModeState(str, Enum):
+    off = 'off'
+    cooldown = 'cooldown'
+    on = 'on'
+
+class FileChangeKind(str, Enum):
+    create = 'create'
+    modify = 'modify'
+    delete = 'delete'
+
+class HookOutcomeStatus(str, Enum):
+    success = 'success'
+    error = 'error'
+    cancelled = 'cancelled'
+
+class ItemStatus(str, Enum):
+    in_progress = 'in_progress'
+    completed = 'completed'
+    failed = 'failed'
+    declined = 'declined'
+
 class McpConnectionStatus(str, Enum):
     connected = 'connected'
     disconnected = 'disconnected'
+
+class PermissionBehavior(str, Enum):
+    allow = 'allow'
+    deny = 'deny'
+    ask = 'ask'
 
 class PermissionMode(str, Enum):
     default = 'default'
     auto = 'auto'
     bubble = 'bubble'
 
+class PermissionRuleSource(str, Enum):
+    user_settings = 'user_settings'
+    project_settings = 'project_settings'
+    local_settings = 'local_settings'
+    flag_settings = 'flag_settings'
+    policy_settings = 'policy_settings'
+    cli_arg = 'cli_arg'
+    command = 'command'
+    session = 'session'
+
+class PermissionUpdateDestination(str, Enum):
+    user_settings = 'user_settings'
+    project_settings = 'project_settings'
+    local_settings = 'local_settings'
+    session = 'session'
+    cli_arg = 'cli_arg'
+
+class RateLimitStatus(str, Enum):
+    allowed = 'allowed'
+    allowed_warning = 'allowed_warning'
+    rejected = 'rejected'
+
+class ReasoningEffort(str, Enum):
+    none = 'none'
+    minimal = 'minimal'
+    low = 'low'
+    medium = 'medium'
+    high = 'high'
+    x_high = 'x_high'
+
 class SessionState(str, Enum):
     idle = 'idle'
     running = 'running'
     requires_action = 'requires_action'
+
+class TaskCompletionStatus(str, Enum):
+    completed = 'completed'
+    failed = 'failed'
+    stopped = 'stopped'
+
+class TaskListStatus(str, Enum):
+    pending = 'pending'
+    in_progress = 'in_progress'
+    completed = 'completed'
 
 
 # ---------------------------------------------------------------------------
@@ -105,92 +180,21 @@ class ThreadItem(BaseModel):
 # Server notification params
 # ---------------------------------------------------------------------------
 
-class SessionStartedParams(BaseModel):
-    cwd: str
-    model: str
-    permission_mode: str
-    protocol_version: str
-    session_id: str
-    version: str
-    agents: list[str] = []
-    api_key_source: str | None = None
-    betas: list[str] | None = None
-    fast_mode_state: FastModeState | None = None
-    mcp_servers: list[McpServerInit] = []
-    output_style: str | None = None
-    plugins: list[PluginInit] = []
-    skills: list[str] = []
-    slash_commands: list[str] = []
-    tools: list[str] = []
+class AgentsKilledParams(BaseModel):
+    count: int
+    agent_ids: list[str] = []
 
-class SessionResultParams(BaseModel):
-    duration_api_ms: int
-    duration_ms: int
-    session_id: str
-    stop_reason: str
-    total_cost_usd: float
-    total_turns: int
-    usage: TokenUsage
-    errors: list[str] | None = None
-    fast_mode_state: FastModeState | None = None
-    is_error: bool = False
-    model_usage: dict[str, SessionModelUsage] = {}
-    num_api_calls: int | None = None
-    permission_denials: list[PermissionDenialInfo] = []
-    result: str | None = None
-    structured_output: Any = None
-
-class SessionEndedParams(BaseModel):
-    reason: str
-
-class TurnStartedParams(BaseModel):
-    turn_number: int
-    turn_id: str | None = None
-
-class TurnCompletedParams(BaseModel):
-    usage: TokenUsage
-    turn_id: str | None = None
-
-class TurnFailedParams(BaseModel):
+class CompactionFailedParams(BaseModel):
     error: str
-
-class TurnInterruptedNotifParams(BaseModel):
-    turn_id: str | None = None
+    attempts: int = 0
 
 class ContentDeltaParams(BaseModel):
     delta: str
     item_id: str | None = None
     turn_id: str | None = None
 
-class SubagentSpawnedParams(BaseModel):
-    agent_id: str
-    agent_type: str
-    description: str
-    color: str | None = None
-
-class SubagentCompletedParams(BaseModel):
-    agent_id: str
-    result: str
-    is_error: bool = False
-
-class SubagentBackgroundedParams(BaseModel):
-    agent_id: str
-    output_file: str
-
-class SubagentProgressParams(BaseModel):
-    agent_id: str
-    current_step: int | None = None
-    message: str | None = None
-    summary: str | None = None
-    total_steps: int | None = None
-
-class McpStartupStatusParams(BaseModel):
-    server: str
-    status: McpConnectionStatus
-
-class McpStartupCompleteParams(BaseModel):
-    servers: list[str]
-    failed: list[str] = []
+class ContextClearedParams(BaseModel):
+    new_mode: str | None = None
 
 class ContextCompactedParams(BaseModel):
     removed_messages: int
@@ -201,103 +205,24 @@ class ContextUsageWarningParams(BaseModel):
     percent_left: float
     warning_threshold: int
 
-class CompactionFailedParams(BaseModel):
-    error: str
-    attempts: int = 0
+class CostWarningParams(BaseModel):
+    current_cost_cents: int
+    threshold_cents: int
+    budget_cents: int | None = None
 
-class ContextClearedParams(BaseModel):
-    new_mode: str | None = None
-
-class TaskStartedParams(BaseModel):
-    description: str
-    task_id: str
-    prompt: str | None = None
-    task_type: str | None = None
-    tool_use_id: str | None = None
-    workflow_name: str | None = None
-
-class TaskCompletedParams(BaseModel):
-    output_file: str
-    status: TaskCompletionStatus
-    summary: str
-    task_id: str
-    tool_use_id: str | None = None
-    usage: TaskUsage | None = None
-
-class TaskProgressParams(BaseModel):
-    description: str
-    task_id: str
-    usage: TaskUsage
-    last_tool_name: str | None = None
-    summary: str | None = None
-    tool_use_id: str | None = None
-    workflow_progress: list[Any] | None = None
-
-class AgentsKilledParams(BaseModel):
-    count: int
-    agent_ids: list[str] = []
-
-class ModelFallbackParams(BaseModel):
-    from_model: str
-    reason: str
-    to_model: str
-
-class PermissionModeChangedParams(BaseModel):
-    mode: str
-    bypass_available: bool = False
+class ElicitationCompleteParams(BaseModel):
+    elicitation_id: str
+    mcp_server_name: str
 
 class ErrorParams(BaseModel):
     message: str
     category: str | None = None
     retryable: bool = False
 
-class RateLimitParams(BaseModel):
-    limit: int | None = None
-    provider: str | None = None
-    rate_limit_type: str | None = None
-    remaining: int | None = None
-    reset_at: int | None = None
-    status: RateLimitStatus | None = None
-    utilization: float | None = None
-
-class IdeSelectionChangedParams(BaseModel):
-    end_line: int
-    file_path: str
-    selected_text: str
-    start_line: int
-
-class IdeDiagnosticsUpdatedParams(BaseModel):
-    file_path: str
-    new_count: int
-    diagnostics: list[Any] = []
-
-class PlanModeChangedParams(BaseModel):
-    entered: bool
-    approved: bool | None = None
-    plan_file: str | None = None
-
-class RewindCompletedParams(BaseModel):
-    messages_removed: int
-    restored_files: int
-    rewound_turn: int
-
-class CostWarningParams(BaseModel):
-    current_cost_cents: int
-    threshold_cents: int
-    budget_cents: int | None = None
-
-class SandboxStateChangedParams(BaseModel):
-    active: bool
-    enforcement: str
-
-class HookExecutedParams(BaseModel):
-    hook_name: str
-    hook_type: str
-
-class HookStartedParams(BaseModel):
-    hook_event: str
-    hook_id: str
-    hook_name: str
+class FilesPersistedParams(BaseModel):
+    files: list[PersistedFileInfo]
+    processed_at: str
+    failed: list[PersistedFileError] = []
 
 class HookProgressParams(BaseModel):
     hook_event: str
@@ -317,6 +242,191 @@ class HookResponseParams(BaseModel):
     stderr: str = ''
     stdout: str = ''
 
+class HookStartedParams(BaseModel):
+    hook_event: str
+    hook_id: str
+    hook_name: str
+
+class IdeDiagnosticsUpdatedParams(BaseModel):
+    file_path: str
+    new_count: int
+    diagnostics: list[Any] = []
+
+class IdeSelectionChangedParams(BaseModel):
+    end_line: int
+    file_path: str
+    selected_text: str
+    start_line: int
+
+class LocalCommandOutputParams(BaseModel):
+    content: Any
+
+class McpStartupCompleteParams(BaseModel):
+    servers: list[str]
+    failed: list[str] = []
+
+class McpStartupStatusParams(BaseModel):
+    server: str
+    status: McpConnectionStatus
+
+class ModelFallbackParams(BaseModel):
+    from_model: str
+    reason: str
+    to_model: str
+
+class PermissionModeChangedParams(BaseModel):
+    mode: PermissionMode
+    bypass_available: bool = False
+
+class PlanApprovalRequestedParams(BaseModel):
+    from_: str = Field(alias='from')
+    plan_content: str
+    request_id: str
+    plan_file_path: str | None = None
+
+class PlanModeChangedParams(BaseModel):
+    entered: bool
+    approved: bool | None = None
+    plan_file: str | None = None
+
+class RateLimitParams(BaseModel):
+    limit: int | None = None
+    provider: str | None = None
+    rate_limit_type: str | None = None
+    remaining: int | None = None
+    reset_at: int | None = None
+    status: RateLimitStatus | None = None
+    utilization: float | None = None
+
+class RewindCompletedParams(BaseModel):
+    messages_removed: int
+    restored_files: int
+    rewound_turn: int
+
+class SandboxStateChangedParams(BaseModel):
+    active: bool
+    enforcement: str
+
+class SessionEndedParams(BaseModel):
+    reason: str
+
+class SessionResultParams(BaseModel):
+    duration_api_ms: int
+    duration_ms: int
+    session_id: str
+    stop_reason: str
+    total_cost_usd: float
+    total_turns: int
+    usage: TokenUsage
+    errors: list[str] | None = None
+    fast_mode_state: FastModeState | None = None
+    is_error: bool = False
+    model_usage: dict[str, SessionModelUsage] = {}
+    num_api_calls: int | None = None
+    permission_denials: list[PermissionDenialInfo] = []
+    result: str | None = None
+    structured_output: Any = None
+
+class SessionStartedParams(BaseModel):
+    cwd: str
+    model: str
+    permission_mode: str
+    protocol_version: str
+    session_id: str
+    version: str
+    agents: list[str] = []
+    api_key_source: str | None = None
+    betas: list[str] | None = None
+    fast_mode_state: FastModeState | None = None
+    mcp_servers: list[McpServerInit] = []
+    output_style: str | None = None
+    plugins: list[PluginInit] = []
+    skills: list[str] = []
+    slash_commands: list[str] = []
+    tools: list[str] = []
+
+class SubagentBackgroundedParams(BaseModel):
+    agent_id: str
+    output_file: str
+
+class SubagentCompletedParams(BaseModel):
+    agent_id: str
+    result: str
+    is_error: bool = False
+
+class SubagentProgressParams(BaseModel):
+    agent_id: str
+    current_step: int | None = None
+    message: str | None = None
+    summary: str | None = None
+    total_steps: int | None = None
+
+class SubagentSpawnedParams(BaseModel):
+    agent_id: str
+    agent_type: str
+    description: str
+    color: str | None = None
+
+class SummarizeCompletedParams(BaseModel):
+    from_turn: int
+    summary_tokens: int
+
+class TaskCompletedParams(BaseModel):
+    output_file: str
+    status: TaskCompletionStatus
+    summary: str
+    task_id: str
+    tool_use_id: str | None = None
+    usage: TaskUsage | None = None
+
+class TaskPanelChangedParams(BaseModel):
+    expanded_view: ExpandedView
+    plan_tasks: list[TaskRecord]
+    verification_nudge_pending: bool
+    todos_by_agent: dict[str, list[TodoRecord]] = {}
+
+class TaskProgressParams(BaseModel):
+    description: str
+    task_id: str
+    usage: TaskUsage
+    last_tool_name: str | None = None
+    summary: str | None = None
+    tool_use_id: str | None = None
+    workflow_progress: list[Any] | None = None
+
+class TaskStartedParams(BaseModel):
+    description: str
+    task_id: str
+    prompt: str | None = None
+    task_type: str | None = None
+    tool_use_id: str | None = None
+    workflow_name: str | None = None
+
+class ToolProgressParams(BaseModel):
+    elapsed_time_seconds: float
+    tool_name: str
+    tool_use_id: str
+    parent_tool_use_id: str | None = None
+    task_id: str | None = None
+
+class ToolUseSummaryParams(BaseModel):
+    preceding_tool_use_ids: list[str]
+    summary: str
+
+class TurnCompletedParams(BaseModel):
+    usage: TokenUsage
+    turn_id: str | None = None
+
+class TurnFailedParams(BaseModel):
+    error: str
+
+class TurnInterruptedNotifParams(BaseModel):
+    turn_id: str | None = None
+
+class TurnStartedParams(BaseModel):
+    turn_number: int
+    turn_id: str | None = None
+
 class WorktreeEnteredParams(BaseModel):
     branch: str
     worktree_path: str
@@ -325,32 +435,145 @@ class WorktreeExitedParams(BaseModel):
     action: str
     worktree_path: str
 
-class SummarizeCompletedParams(BaseModel):
-    from_turn: int
-    summary_tokens: int
+class ItemStartedParams(BaseModel):
+    item: ThreadItem
 
-class LocalCommandOutputParams(BaseModel):
-    content: Any
+class ItemUpdatedParams(BaseModel):
+    item: ThreadItem
 
-class FilesPersistedParams(BaseModel):
-    files: list[PersistedFileInfo]
-    processed_at: str
-    failed: list[PersistedFileError] = []
+class ItemCompletedParams(BaseModel):
+    item: ThreadItem
 
-class ElicitationCompleteParams(BaseModel):
-    elicitation_id: str
-    mcp_server_name: str
+class ContextCompactionStartedParams(BaseModel):
+    """Empty params for the wire-method `context/compactionStarted`."""
 
-class ToolUseSummaryParams(BaseModel):
-    preceding_tool_use_ids: list[str]
-    summary: str
+    model_config = {"extra": "allow"}
 
-class ToolProgressParams(BaseModel):
-    elapsed_time_seconds: float
-    tool_name: str
-    tool_use_id: str
-    parent_tool_use_id: str | None = None
-    task_id: str | None = None
+class ModelFallbackCompletedParams(BaseModel):
+    """Empty params for the wire-method `model/fallbackCompleted`."""
+
+    model_config = {"extra": "allow"}
+
+class ModelFastModeChangedParams(BaseModel):
+    active: bool
+
+class PromptSuggestionParams(BaseModel):
+    suggestions: list[str]
+
+class KeepAliveNotifParams(BaseModel):
+    timestamp: int
+
+class QueueStateChangedParams(BaseModel):
+    queued: int
+
+class QueueCommandQueuedParams(BaseModel):
+    id: str
+    preview: str
+
+class QueueCommandDequeuedParams(BaseModel):
+    id: str
+
+class RewindFailedParams(BaseModel):
+    error: str
+
+class SandboxViolationsDetectedParams(BaseModel):
+    count: int
+
+class AgentsRegisteredParams(BaseModel):
+    agents: list[AgentInfo]
+
+class SummarizeFailedParams(BaseModel):
+    error: str
+
+class StreamStallDetectedParams(BaseModel):
+    turn_id: str | None = None
+
+class StreamWatchdogWarningParams(BaseModel):
+    elapsed_secs: float
+
+class StreamRequestEndParams(BaseModel):
+    usage: TokenUsage
+
+class SessionStateChangedParams(BaseModel):
+    state: SessionState
+
+class TurnMaxReachedParams(BaseModel):
+    max_turns: int | None = None
+
+
+# ---------------------------------------------------------------------------
+# Notification wire-method constants
+# ---------------------------------------------------------------------------
+
+class NotificationMethod(str, Enum):
+    """Wire-method identifier for every `ServerNotification` variant. Mirrors the Rust `NotificationMethod` enum. Members inherit from `str`, so equality with raw wire strings Just Works."""
+
+    SESSION_STARTED = 'session/started'
+    SESSION_RESULT = 'session/result'
+    SESSION_ENDED = 'session/ended'
+    TURN_STARTED = 'turn/started'
+    TURN_COMPLETED = 'turn/completed'
+    TURN_FAILED = 'turn/failed'
+    TURN_INTERRUPTED = 'turn/interrupted'
+    ITEM_STARTED = 'item/started'
+    ITEM_UPDATED = 'item/updated'
+    ITEM_COMPLETED = 'item/completed'
+    AGENT_MESSAGE_DELTA = 'agentMessage/delta'
+    REASONING_DELTA = 'reasoning/delta'
+    SUBAGENT_SPAWNED = 'subagent/spawned'
+    SUBAGENT_COMPLETED = 'subagent/completed'
+    SUBAGENT_BACKGROUNDED = 'subagent/backgrounded'
+    SUBAGENT_PROGRESS = 'subagent/progress'
+    MCP_STARTUP_STATUS = 'mcp/startupStatus'
+    MCP_STARTUP_COMPLETE = 'mcp/startupComplete'
+    CONTEXT_COMPACTED = 'context/compacted'
+    CONTEXT_USAGE_WARNING = 'context/usageWarning'
+    CONTEXT_COMPACTION_STARTED = 'context/compactionStarted'
+    CONTEXT_COMPACTION_FAILED = 'context/compactionFailed'
+    CONTEXT_CLEARED = 'context/cleared'
+    TASK_STARTED = 'task/started'
+    TASK_COMPLETED = 'task/completed'
+    TASK_PROGRESS = 'task/progress'
+    TASK_PANEL_CHANGED = 'task_panel/changed'
+    PLAN_APPROVAL_REQUESTED = 'plan_approval/requested'
+    AGENTS_KILLED = 'agents/killed'
+    MODEL_FALLBACK_STARTED = 'model/fallbackStarted'
+    MODEL_FALLBACK_COMPLETED = 'model/fallbackCompleted'
+    MODEL_FAST_MODE_CHANGED = 'model/fastModeChanged'
+    PERMISSION_MODE_CHANGED = 'permission/modeChanged'
+    PROMPT_SUGGESTION = 'prompt/suggestion'
+    ERROR = 'error'
+    RATE_LIMIT = 'rateLimit'
+    KEEP_ALIVE = 'keepAlive'
+    IDE_SELECTION_CHANGED = 'ide/selectionChanged'
+    IDE_DIAGNOSTICS_UPDATED = 'ide/diagnosticsUpdated'
+    PLAN_MODE_CHANGED = 'plan/modeChanged'
+    QUEUE_STATE_CHANGED = 'queue/stateChanged'
+    QUEUE_COMMAND_QUEUED = 'queue/commandQueued'
+    QUEUE_COMMAND_DEQUEUED = 'queue/commandDequeued'
+    REWIND_COMPLETED = 'rewind/completed'
+    REWIND_FAILED = 'rewind/failed'
+    COST_WARNING = 'cost/warning'
+    SANDBOX_STATE_CHANGED = 'sandbox/stateChanged'
+    SANDBOX_VIOLATIONS_DETECTED = 'sandbox/violationsDetected'
+    AGENTS_REGISTERED = 'agents/registered'
+    HOOK_STARTED = 'hook/started'
+    HOOK_PROGRESS = 'hook/progress'
+    HOOK_RESPONSE = 'hook/response'
+    WORKTREE_ENTERED = 'worktree/entered'
+    WORKTREE_EXITED = 'worktree/exited'
+    SUMMARIZE_COMPLETED = 'summarize/completed'
+    SUMMARIZE_FAILED = 'summarize/failed'
+    STREAM_STALL_DETECTED = 'stream/stallDetected'
+    STREAM_WATCHDOG_WARNING = 'stream/watchdogWarning'
+    STREAM_REQUEST_END = 'stream/requestEnd'
+    SESSION_STATE_CHANGED = 'session/stateChanged'
+    TURN_MAX_REACHED = 'turn/maxReached'
+    LOCAL_COMMAND_OUTPUT = 'localCommand/output'
+    FILES_PERSISTED = 'files/persisted'
+    ELICITATION_COMPLETE = 'elicitation/complete'
+    TOOL_USE_SUMMARY = 'tool/useSummary'
+    TOOL_PROGRESS = 'tool/progress'
 
 
 # ---------------------------------------------------------------------------
@@ -398,39 +621,29 @@ class ServerNotification(BaseModel):
             return TurnInterruptedNotifParams.model_validate(self.params)
         return None
 
-    def as_max_turns_reached(self) -> MaxTurnsReachedParams | None:
-        if self.method == 'turn/maxReached':
-            return MaxTurnsReachedParams.model_validate(self.params)
-        return None
-
-    def as_turn_retry(self) -> TurnRetryParams | None:
-        if self.method == 'turn/retry':
-            return TurnRetryParams.model_validate(self.params)
-        return None
-
-    def as_item_started(self) -> ItemEventParams | None:
+    def as_item_started(self) -> ItemStartedParams | None:
         if self.method == 'item/started':
-            return ItemEventParams.model_validate(self.params)
+            return ItemStartedParams.model_validate(self.params)
         return None
 
-    def as_item_updated(self) -> ItemEventParams | None:
+    def as_item_updated(self) -> ItemUpdatedParams | None:
         if self.method == 'item/updated':
-            return ItemEventParams.model_validate(self.params)
+            return ItemUpdatedParams.model_validate(self.params)
         return None
 
-    def as_item_completed(self) -> ItemEventParams | None:
+    def as_item_completed(self) -> ItemCompletedParams | None:
         if self.method == 'item/completed':
-            return ItemEventParams.model_validate(self.params)
+            return ItemCompletedParams.model_validate(self.params)
         return None
 
-    def as_agent_message_delta(self) -> AgentMessageDeltaParams | None:
+    def as_agent_message_delta(self) -> ContentDeltaParams | None:
         if self.method == 'agentMessage/delta':
-            return AgentMessageDeltaParams.model_validate(self.params)
+            return ContentDeltaParams.model_validate(self.params)
         return None
 
-    def as_reasoning_delta(self) -> ReasoningDeltaParams | None:
+    def as_reasoning_delta(self) -> ContentDeltaParams | None:
         if self.method == 'reasoning/delta':
-            return ReasoningDeltaParams.model_validate(self.params)
+            return ContentDeltaParams.model_validate(self.params)
         return None
 
     def as_subagent_spawned(self) -> SubagentSpawnedParams | None:
@@ -473,12 +686,12 @@ class ServerNotification(BaseModel):
             return ContextUsageWarningParams.model_validate(self.params)
         return None
 
-    def as_compaction_started(self) -> CompactionStartedParams | None:
+    def as_context_compaction_started(self) -> ContextCompactionStartedParams | None:
         if self.method == 'context/compactionStarted':
-            return CompactionStartedParams.model_validate(self.params)
+            return ContextCompactionStartedParams.model_validate(self.params)
         return None
 
-    def as_compaction_failed(self) -> CompactionFailedParams | None:
+    def as_context_compaction_failed(self) -> CompactionFailedParams | None:
         if self.method == 'context/compactionFailed':
             return CompactionFailedParams.model_validate(self.params)
         return None
@@ -503,14 +716,24 @@ class ServerNotification(BaseModel):
             return TaskProgressParams.model_validate(self.params)
         return None
 
+    def as_task_panel_changed(self) -> TaskPanelChangedParams | None:
+        if self.method == 'task_panel/changed':
+            return TaskPanelChangedParams.model_validate(self.params)
+        return None
+
+    def as_plan_approval_requested(self) -> PlanApprovalRequestedParams | None:
+        if self.method == 'plan_approval/requested':
+            return PlanApprovalRequestedParams.model_validate(self.params)
+        return None
+
     def as_agents_killed(self) -> AgentsKilledParams | None:
         if self.method == 'agents/killed':
             return AgentsKilledParams.model_validate(self.params)
         return None
 
-    def as_model_fallback_started(self) -> ModelFallbackStartedParams | None:
+    def as_model_fallback_started(self) -> ModelFallbackParams | None:
         if self.method == 'model/fallbackStarted':
-            return ModelFallbackStartedParams.model_validate(self.params)
+            return ModelFallbackParams.model_validate(self.params)
         return None
 
     def as_model_fallback_completed(self) -> ModelFallbackCompletedParams | None:
@@ -518,9 +741,9 @@ class ServerNotification(BaseModel):
             return ModelFallbackCompletedParams.model_validate(self.params)
         return None
 
-    def as_fast_mode_changed(self) -> FastModeChangedParams | None:
+    def as_model_fast_mode_changed(self) -> ModelFastModeChangedParams | None:
         if self.method == 'model/fastModeChanged':
-            return FastModeChangedParams.model_validate(self.params)
+            return ModelFastModeChangedParams.model_validate(self.params)
         return None
 
     def as_permission_mode_changed(self) -> PermissionModeChangedParams | None:
@@ -533,9 +756,9 @@ class ServerNotification(BaseModel):
             return PromptSuggestionParams.model_validate(self.params)
         return None
 
-    def as_error(self) -> ErrorNotificationParams | None:
+    def as_error(self) -> ErrorParams | None:
         if self.method == 'error':
-            return ErrorNotificationParams.model_validate(self.params)
+            return ErrorParams.model_validate(self.params)
         return None
 
     def as_rate_limit(self) -> RateLimitParams | None:
@@ -543,9 +766,9 @@ class ServerNotification(BaseModel):
             return RateLimitParams.model_validate(self.params)
         return None
 
-    def as_keep_alive(self) -> KeepAliveNotifParams | None:
+    def as_keep_alive(self) -> KeepAliveParams | None:
         if self.method == 'keepAlive':
-            return KeepAliveNotifParams.model_validate(self.params)
+            return KeepAliveParams.model_validate(self.params)
         return None
 
     def as_ide_selection_changed(self) -> IdeSelectionChangedParams | None:
@@ -568,14 +791,14 @@ class ServerNotification(BaseModel):
             return QueueStateChangedParams.model_validate(self.params)
         return None
 
-    def as_command_queued(self) -> CommandQueuedParams | None:
+    def as_queue_command_queued(self) -> QueueCommandQueuedParams | None:
         if self.method == 'queue/commandQueued':
-            return CommandQueuedParams.model_validate(self.params)
+            return QueueCommandQueuedParams.model_validate(self.params)
         return None
 
-    def as_command_dequeued(self) -> CommandDequeuedParams | None:
+    def as_queue_command_dequeued(self) -> QueueCommandDequeuedParams | None:
         if self.method == 'queue/commandDequeued':
-            return CommandDequeuedParams.model_validate(self.params)
+            return QueueCommandDequeuedParams.model_validate(self.params)
         return None
 
     def as_rewind_completed(self) -> RewindCompletedParams | None:
@@ -608,9 +831,19 @@ class ServerNotification(BaseModel):
             return AgentsRegisteredParams.model_validate(self.params)
         return None
 
-    def as_hook_executed(self) -> HookExecutedParams | None:
-        if self.method == 'hook/executed':
-            return HookExecutedParams.model_validate(self.params)
+    def as_hook_started(self) -> HookStartedParams | None:
+        if self.method == 'hook/started':
+            return HookStartedParams.model_validate(self.params)
+        return None
+
+    def as_hook_progress(self) -> HookProgressParams | None:
+        if self.method == 'hook/progress':
+            return HookProgressParams.model_validate(self.params)
+        return None
+
+    def as_hook_response(self) -> HookResponseParams | None:
+        if self.method == 'hook/response':
+            return HookResponseParams.model_validate(self.params)
         return None
 
     def as_worktree_entered(self) -> WorktreeEnteredParams | None:
@@ -648,24 +881,14 @@ class ServerNotification(BaseModel):
             return StreamRequestEndParams.model_validate(self.params)
         return None
 
-    def as_hook_started(self) -> HookStartedParams | None:
-        if self.method == 'hook/started':
-            return HookStartedParams.model_validate(self.params)
-        return None
-
-    def as_hook_progress(self) -> HookProgressParams | None:
-        if self.method == 'hook/progress':
-            return HookProgressParams.model_validate(self.params)
-        return None
-
-    def as_hook_response(self) -> HookResponseParams | None:
-        if self.method == 'hook/response':
-            return HookResponseParams.model_validate(self.params)
-        return None
-
     def as_session_state_changed(self) -> SessionStateChangedParams | None:
         if self.method == 'session/stateChanged':
             return SessionStateChangedParams.model_validate(self.params)
+        return None
+
+    def as_turn_max_reached(self) -> TurnMaxReachedParams | None:
+        if self.method == 'turn/maxReached':
+            return TurnMaxReachedParams.model_validate(self.params)
         return None
 
     def as_local_command_output(self) -> LocalCommandOutputParams | None:
@@ -711,6 +934,17 @@ class AskForApprovalParams(BaseModel):
     permission_suggestions: list[Any] | None = None
     title: str | None = None
 
+class HookCallbackParams(BaseModel):
+    callback_id: str
+    input: Any
+    request_id: str
+    tool_use_id: str | None = None
+
+class McpRouteMessageParams(BaseModel):
+    message: Any
+    request_id: str
+    server_name: str
+
 class RequestUserInputParams(BaseModel):
     prompt: str
     request_id: str
@@ -718,20 +952,19 @@ class RequestUserInputParams(BaseModel):
     default: str | None = None
     description: str | None = None
 
-class McpRouteMessageParams(BaseModel):
-    message: Any
-    request_id: str
-    server_name: str
-
-class HookCallbackParams(BaseModel):
-    callback_id: str
-    input: Any
-    request_id: str
-    tool_use_id: str | None = None
-
 class ServerCancelRequestParams(BaseModel):
     request_id: str
     reason: str | None = None
+
+
+class ServerRequestMethod(str, Enum):
+    """Wire-method identifier for every `ServerRequest` variant. Mirrors the Rust `ServerRequestMethod` enum."""
+
+    APPROVAL_ASK_FOR_APPROVAL = 'approval/askForApproval'
+    INPUT_REQUEST_USER_INPUT = 'input/requestUserInput'
+    MCP_ROUTE_MESSAGE = 'mcp/routeMessage'
+    HOOK_CALLBACK = 'hook/callback'
+    CONTROL_CANCEL_REQUEST = 'control/cancelRequest'
 
 
 class ServerRequest(BaseModel):
@@ -740,19 +973,14 @@ class ServerRequest(BaseModel):
     method: str
     params: dict[str, Any] = {}
 
-    def as_ask_for_approval(self) -> AskForApprovalParams | None:
+    def as_approval_ask_for_approval(self) -> AskForApprovalParams | None:
         if self.method == 'approval/askForApproval':
             return AskForApprovalParams.model_validate(self.params)
         return None
 
-    def as_request_user_input(self) -> RequestUserInputParams | None:
+    def as_input_request_user_input(self) -> RequestUserInputParams | None:
         if self.method == 'input/requestUserInput':
             return RequestUserInputParams.model_validate(self.params)
-        return None
-
-    def as_hook_callback(self) -> HookCallbackParams | None:
-        if self.method == 'hook/callback':
-            return HookCallbackParams.model_validate(self.params)
         return None
 
     def as_mcp_route_message(self) -> McpRouteMessageParams | None:
@@ -760,7 +988,12 @@ class ServerRequest(BaseModel):
             return McpRouteMessageParams.model_validate(self.params)
         return None
 
-    def as_cancel_request(self) -> ServerCancelRequestParams | None:
+    def as_hook_callback(self) -> HookCallbackParams | None:
+        if self.method == 'hook/callback':
+            return HookCallbackParams.model_validate(self.params)
+        return None
+
+    def as_control_cancel_request(self) -> ServerCancelRequestParams | None:
         if self.method == 'control/cancelRequest':
             return ServerCancelRequestParams.model_validate(self.params)
         return None
@@ -799,6 +1032,9 @@ McpServerConfig = StdioMcpServerConfig | SseMcpServerConfig | HttpMcpServerConfi
 # Config types
 # ---------------------------------------------------------------------------
 
+# Union type: see Rust source for variants
+PermissionUpdate = Any
+
 
 # ---------------------------------------------------------------------------
 # Hook input/output types
@@ -808,6 +1044,35 @@ McpServerConfig = StdioMcpServerConfig | SseMcpServerConfig | HttpMcpServerConfi
 # ---------------------------------------------------------------------------
 # Client request params
 # ---------------------------------------------------------------------------
+
+class ApprovalResolveParams(BaseModel):
+    decision: ApprovalDecision
+    request_id: str
+    feedback: str | None = None
+    permission_update: PermissionUpdate | None = None
+    updated_input: Any = None
+
+class CancelRequestParams(BaseModel):
+    request_id: str
+    reason: str | None = None
+
+class ConfigApplyFlagsParams(BaseModel):
+    settings: dict[str, Any]
+
+class ConfigWriteParams(BaseModel):
+    key: str
+    value: Any
+    scope: str | None = None
+
+class ElicitationResolveParams(BaseModel):
+    approved: bool
+    mcp_server_name: str
+    request_id: str
+    values: dict[str, Any] = {}
+
+class HookCallbackResponseParams(BaseModel):
+    callback_id: str
+    output: Any
 
 class InitializeParams(BaseModel):
     agent_progress_summaries: bool | None = None
@@ -819,6 +1084,35 @@ class InitializeParams(BaseModel):
     sdk_mcp_servers: list[str] | None = None
     system_prompt: str | None = None
 
+class McpReconnectParams(BaseModel):
+    server_name: str
+
+class McpRouteMessageResponseParams(BaseModel):
+    message: Any
+    request_id: str
+
+class McpSetServersParams(BaseModel):
+    servers: dict[str, Any]
+
+class McpToggleParams(BaseModel):
+    enabled: bool
+    server_name: str
+
+class RewindFilesParams(BaseModel):
+    user_message_id: str
+    dry_run: bool = False
+
+class SessionArchiveParams(BaseModel):
+    session_id: str
+
+class SessionReadParams(BaseModel):
+    session_id: str
+    cursor: str | None = None
+    limit: int | None = None
+
+class SessionResumeParams(BaseModel):
+    session_id: str
+
 class SessionStartParams(BaseModel):
     append_system_prompt: str | None = None
     cwd: str | None = None
@@ -829,45 +1123,11 @@ class SessionStartParams(BaseModel):
     permission_mode: PermissionMode | None = None
     system_prompt: str | None = None
 
-class SessionResumeParams(BaseModel):
-    session_id: str
-
-class SessionReadParams(BaseModel):
-    session_id: str
-    cursor: str | None = None
-    limit: int | None = None
-
-class SessionArchiveParams(BaseModel):
-    session_id: str
-
-class TurnStartParams(BaseModel):
-    prompt: str
-    permission_mode: PermissionMode | None = None
-    thinking_level: ThinkingLevel | None = None
-
-class ApprovalResolveParams(BaseModel):
-    decision: ApprovalDecision
-    request_id: str
-    feedback: str | None = None
-    permission_update: PermissionUpdate | None = None
-    updated_input: Any = None
-
-class UserInputResolveParams(BaseModel):
-    answer: str
-    request_id: str
-
-class ElicitationResolveParams(BaseModel):
-    approved: bool
-    mcp_server_name: str
-    request_id: str
-    values: dict[str, Any] = {}
-
 class SetModelParams(BaseModel):
     model: str | None = None
 
 class SetPermissionModeParams(BaseModel):
     mode: PermissionMode
-    ultraplan: bool | None = None
 
 class SetThinkingParams(BaseModel):
     thinking_level: ThinkingLevel | None = None
@@ -875,42 +1135,56 @@ class SetThinkingParams(BaseModel):
 class StopTaskParams(BaseModel):
     task_id: str
 
-class RewindFilesParams(BaseModel):
-    user_message_id: str
-    dry_run: bool = False
+class TurnStartParams(BaseModel):
+    prompt: str
+    permission_mode: PermissionMode | None = None
+    thinking_level: ThinkingLevel | None = None
 
 class UpdateEnvParams(BaseModel):
     env: dict[str, str]
 
-class CancelRequestParams(BaseModel):
-    request_id: str
-    reason: str | None = None
-
-class ConfigWriteParams(BaseModel):
-    key: str
-    value: Any
-    scope: str | None = None
-
-class HookCallbackResponseParams(BaseModel):
-    callback_id: str
-    output: Any
-
-class McpRouteMessageResponseParams(BaseModel):
-    message: Any
+class UserInputResolveParams(BaseModel):
+    answer: str
     request_id: str
 
-class McpSetServersParams(BaseModel):
-    servers: dict[str, Any]
 
-class McpReconnectParams(BaseModel):
-    server_name: str
+# ---------------------------------------------------------------------------
+# Client request wire-method constants
+# ---------------------------------------------------------------------------
 
-class McpToggleParams(BaseModel):
-    enabled: bool
-    server_name: str
+class ClientRequestMethod(str, Enum):
+    """Wire-method identifier for every `ClientRequest` variant. Mirrors the Rust `ClientRequestMethod` enum."""
 
-class ConfigApplyFlagsParams(BaseModel):
-    settings: dict[str, Any]
+    INITIALIZE = 'initialize'
+    SESSION_START = 'session/start'
+    SESSION_RESUME = 'session/resume'
+    SESSION_LIST = 'session/list'
+    SESSION_READ = 'session/read'
+    SESSION_ARCHIVE = 'session/archive'
+    TURN_START = 'turn/start'
+    TURN_INTERRUPT = 'turn/interrupt'
+    APPROVAL_RESOLVE = 'approval/resolve'
+    INPUT_RESOLVE_USER_INPUT = 'input/resolveUserInput'
+    ELICITATION_RESOLVE = 'elicitation/resolve'
+    CONTROL_SET_MODEL = 'control/setModel'
+    CONTROL_SET_PERMISSION_MODE = 'control/setPermissionMode'
+    CONTROL_SET_THINKING = 'control/setThinking'
+    CONTROL_STOP_TASK = 'control/stopTask'
+    CONTROL_REWIND_FILES = 'control/rewindFiles'
+    CONTROL_UPDATE_ENV = 'control/updateEnv'
+    CONTROL_KEEP_ALIVE = 'control/keepAlive'
+    CONTROL_CANCEL_REQUEST = 'control/cancelRequest'
+    CONFIG_READ = 'config/read'
+    CONFIG_VALUE_WRITE = 'config/value/write'
+    HOOK_CALLBACK_RESPONSE = 'hook/callbackResponse'
+    MCP_ROUTE_MESSAGE_RESPONSE = 'mcp/routeMessageResponse'
+    MCP_STATUS = 'mcp/status'
+    CONTEXT_USAGE = 'context/usage'
+    MCP_SET_SERVERS = 'mcp/setServers'
+    MCP_RECONNECT = 'mcp/reconnect'
+    MCP_TOGGLE = 'mcp/toggle'
+    PLUGIN_RELOAD = 'plugin/reload'
+    CONFIG_APPLY_FLAGS = 'config/applyFlags'
 
 
 # ---------------------------------------------------------------------------
@@ -944,6 +1218,15 @@ class SessionResumeRequest(BaseModel):
 
 SessionResumeRequestParams = SessionResumeRequest.SessionResumeRequestParams
 
+class SessionListRequest(BaseModel):
+    method: str = 'session/list'
+    params: SessionListRequestParams
+
+    class SessionListRequestParams(BaseModel):
+        model_config = {"extra": "allow"}
+
+SessionListRequestParams = SessionListRequest.SessionListRequestParams
+
 class SessionReadRequest(BaseModel):
     method: str = 'session/read'
     params: SessionReadRequestParams
@@ -971,6 +1254,15 @@ class TurnStartRequest(BaseModel):
 
 TurnStartRequestParams = TurnStartRequest.TurnStartRequestParams
 
+class TurnInterruptRequest(BaseModel):
+    method: str = 'turn/interrupt'
+    params: TurnInterruptRequestParams
+
+    class TurnInterruptRequestParams(BaseModel):
+        model_config = {"extra": "allow"}
+
+TurnInterruptRequestParams = TurnInterruptRequest.TurnInterruptRequestParams
+
 class ApprovalResolveRequest(BaseModel):
     method: str = 'approval/resolve'
     params: ApprovalResolveRequestParams
@@ -988,6 +1280,15 @@ class UserInputResolveRequest(BaseModel):
         pass
 
 UserInputResolveRequestParams = UserInputResolveRequest.UserInputResolveRequestParams
+
+class ElicitationResolveRequest(BaseModel):
+    method: str = 'elicitation/resolve'
+    params: ElicitationResolveRequestParams
+
+    class ElicitationResolveRequestParams(ElicitationResolveParams):
+        pass
+
+ElicitationResolveRequestParams = ElicitationResolveRequest.ElicitationResolveRequestParams
 
 class SetModelRequest(BaseModel):
     method: str = 'control/setModel'
@@ -1043,6 +1344,15 @@ class UpdateEnvRequest(BaseModel):
 
 UpdateEnvRequestParams = UpdateEnvRequest.UpdateEnvRequestParams
 
+class KeepAliveRequest(BaseModel):
+    method: str = 'control/keepAlive'
+    params: KeepAliveRequestParams
+
+    class KeepAliveRequestParams(BaseModel):
+        model_config = {"extra": "allow"}
+
+KeepAliveRequestParams = KeepAliveRequest.KeepAliveRequestParams
+
 class CancelRequest(BaseModel):
     method: str = 'control/cancelRequest'
     params: CancelRequestParams
@@ -1051,6 +1361,15 @@ class CancelRequest(BaseModel):
         pass
 
 CancelRequestParams = CancelRequest.CancelRequestParams
+
+class ConfigReadRequest(BaseModel):
+    method: str = 'config/read'
+    params: ConfigReadRequestParams
+
+    class ConfigReadRequestParams(BaseModel):
+        model_config = {"extra": "allow"}
+
+ConfigReadRequestParams = ConfigReadRequest.ConfigReadRequestParams
 
 class ConfigWriteRequest(BaseModel):
     method: str = 'config/value/write'
@@ -1079,6 +1398,24 @@ class McpRouteMessageResponseRequest(BaseModel):
 
 McpRouteMessageResponseRequestParams = McpRouteMessageResponseRequest.McpRouteMessageResponseRequestParams
 
+class McpStatusRequest(BaseModel):
+    method: str = 'mcp/status'
+    params: McpStatusRequestParams
+
+    class McpStatusRequestParams(BaseModel):
+        model_config = {"extra": "allow"}
+
+McpStatusRequestParams = McpStatusRequest.McpStatusRequestParams
+
+class ContextUsageRequest(BaseModel):
+    method: str = 'context/usage'
+    params: ContextUsageRequestParams
+
+    class ContextUsageRequestParams(BaseModel):
+        model_config = {"extra": "allow"}
+
+ContextUsageRequestParams = ContextUsageRequest.ContextUsageRequestParams
+
 class McpSetServersRequest(BaseModel):
     method: str = 'mcp/setServers'
     params: McpSetServersRequestParams
@@ -1105,6 +1442,15 @@ class McpToggleRequest(BaseModel):
         pass
 
 McpToggleRequestParams = McpToggleRequest.McpToggleRequestParams
+
+class PluginReloadRequest(BaseModel):
+    method: str = 'plugin/reload'
+    params: PluginReloadRequestParams
+
+    class PluginReloadRequestParams(BaseModel):
+        model_config = {"extra": "allow"}
+
+PluginReloadRequestParams = PluginReloadRequest.PluginReloadRequestParams
 
 class ConfigApplyFlagsRequest(BaseModel):
     method: str = 'config/applyFlags'
@@ -1148,7 +1494,7 @@ class ContextUsageResult(BaseModel):
     message_breakdown: MessageBreakdown | None = None
 
 class FileChangeInfo(BaseModel):
-    kind: str
+    kind: FileChangeKind
     path: str
 
 class HookCallbackMatcher(BaseModel):
@@ -1274,6 +1620,17 @@ class SessionModelUsage(BaseModel):
     output_tokens: int
     web_search_requests: int
 
+class TaskRecord(BaseModel):
+    id: str
+    status: TaskListStatus
+    subject: str
+    activeForm: str | None = None
+    blockedBy: list[str] = []
+    blocks: list[str] = []
+    description: str = ''
+    metadata: dict[str, Any] | None = None
+    owner: str | None = None
+
 class TaskUsage(BaseModel):
     duration_ms: int
     tool_uses: int
@@ -1283,6 +1640,11 @@ class ThinkingLevel(BaseModel):
     effort: ReasoningEffort
     budget_tokens: int | None = None
     options: dict[str, Any] | None = None
+
+class TodoRecord(BaseModel):
+    activeForm: str
+    content: str
+    status: str
 
 class TokenUsage(BaseModel):
     input_tokens: int
@@ -1308,18 +1670,8 @@ class AgentMessageDeltaParams(BaseModel):
     model_config = {"extra": "allow"}
 
 
-class ApprovalDecision(BaseModel):
-    """Stub for ApprovalDecision pending coco-rs schema emission."""
-    model_config = {"extra": "allow"}
-
-
 class CommandExecutionItem(BaseModel):
     """Stub for CommandExecutionItem pending coco-rs schema emission."""
-    model_config = {"extra": "allow"}
-
-
-class ConfigReadRequest(BaseModel):
-    """Stub for ConfigReadRequest pending coco-rs schema emission."""
     model_config = {"extra": "allow"}
 
 
@@ -1338,13 +1690,8 @@ class HookCallbackOutput(BaseModel):
     model_config = {"extra": "allow"}
 
 
-class ItemStatus(BaseModel):
-    """Stub for ItemStatus pending coco-rs schema emission."""
-    model_config = {"extra": "allow"}
-
-
-class KeepAliveRequest(BaseModel):
-    """Stub for KeepAliveRequest pending coco-rs schema emission."""
+class HookExecutedParams(BaseModel):
+    """Stub for HookExecutedParams pending coco-rs schema emission."""
     model_config = {"extra": "allow"}
 
 
@@ -1365,16 +1712,6 @@ class PreToolUseHookInput(BaseModel):
 
 class SessionEndedReason(BaseModel):
     """Stub for SessionEndedReason pending coco-rs schema emission."""
-    model_config = {"extra": "allow"}
-
-
-class SessionListRequest(BaseModel):
-    """Stub for SessionListRequest pending coco-rs schema emission."""
-    model_config = {"extra": "allow"}
-
-
-class TurnInterruptRequest(BaseModel):
-    """Stub for TurnInterruptRequest pending coco-rs schema emission."""
     model_config = {"extra": "allow"}
 
 

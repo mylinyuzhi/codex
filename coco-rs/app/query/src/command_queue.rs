@@ -153,6 +153,32 @@ impl CommandQueue {
             .cloned()
     }
 
+    /// Snapshot queued commands for the `queued_command` system-reminder.
+    ///
+    /// TS `getQueuedCommandAttachments` (`attachments.ts:829`) surfaces
+    /// drained queue items so the model sees mid-turn injections as
+    /// part of its input. coco-rs maps each queue entry to a typed
+    /// `QueuedCommandInfo`; entries tagged with a `source` (`task-
+    /// notification` and friends) are flagged as `origin_system: true`
+    /// so the reminder generator can scope its rendering.
+    ///
+    /// Slash commands are excluded — they're processed post-turn and
+    /// never become reminders.
+    pub async fn snapshot_for_reminder(
+        &self,
+        agent_id: Option<&str>,
+    ) -> Vec<coco_system_reminder::QueuedCommandInfo> {
+        let queue = self.inner.lock().await;
+        queue
+            .iter()
+            .filter(|c| !c.is_slash_command && c.agent_id.as_deref() == agent_id)
+            .map(|c| coco_system_reminder::QueuedCommandInfo {
+                content: c.prompt.clone(),
+                origin_system: c.source.is_some(),
+            })
+            .collect()
+    }
+
     /// Remove all commands matching a predicate.
     pub async fn dequeue_matching<F>(&self, predicate: F) -> Vec<QueuedCommand>
     where

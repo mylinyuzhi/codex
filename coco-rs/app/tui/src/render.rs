@@ -68,6 +68,13 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         } else {
             0
         };
+    let verification_nudge_rows: u16 = if crate::widgets::VerificationNudgeBanner::should_display(
+        state.session.verification_nudge_pending,
+    ) {
+        1
+    } else {
+        0
+    };
 
     // ratatui 0.30: `Rect::layout()` returns a fixed-size array so we can
     // destructure directly — no runtime bounds check when reading each slot.
@@ -79,18 +86,20 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         context_warning,
         stream_stall,
         interrupt,
+        verification_nudge,
         main,
         status,
     ] = area.layout(&Layout::vertical([
-        Constraint::Length(1),                    // header
-        Constraint::Length(fallback_rows),        // model fallback
-        Constraint::Length(rate_limit_rows),      // rate limit
-        Constraint::Length(permission_mode_rows), // permission mode
-        Constraint::Length(context_warning_rows), // context warning
-        Constraint::Length(stream_stall_rows),    // stream stall
-        Constraint::Length(interrupt_rows),       // interrupt
-        Constraint::Min(1),                       // main area
-        Constraint::Length(1),                    // status bar
+        Constraint::Length(1),                       // header
+        Constraint::Length(fallback_rows),           // model fallback
+        Constraint::Length(rate_limit_rows),         // rate limit
+        Constraint::Length(permission_mode_rows),    // permission mode
+        Constraint::Length(context_warning_rows),    // context warning
+        Constraint::Length(stream_stall_rows),       // stream stall
+        Constraint::Length(interrupt_rows),          // interrupt
+        Constraint::Length(verification_nudge_rows), // verification nudge
+        Constraint::Min(1),                          // main area
+        Constraint::Length(1),                       // status bar
     ]));
 
     render_header_bar(frame, header, state, theme);
@@ -129,6 +138,12 @@ pub fn render(frame: &mut Frame, state: &AppState) {
     }
     if interrupt_rows > 0 {
         frame.render_widget(crate::widgets::InterruptBanner::new(theme), interrupt);
+    }
+    if verification_nudge_rows > 0 {
+        frame.render_widget(
+            crate::widgets::VerificationNudgeBanner::new(theme),
+            verification_nudge,
+        );
     }
     render_main_area(frame, main, state, theme);
     render_status_bar(frame, status, state, theme);
@@ -225,7 +240,28 @@ fn render_main_area(frame: &mut Frame, area: Rect, state: &AppState, theme: &The
         !state.session.tool_executions.is_empty() || !state.session.subagents.is_empty();
     let wide_enough = area.width >= constants::SIDE_PANEL_MIN_WIDTH as u16;
 
-    if has_tools && wide_enough {
+    // Task panel takes precedence over the tool side panel when the
+    // user / a tool just auto-expanded it. Mirrors TS
+    // `AppState.expandedView == 'tasks'` driving the right-rail layout.
+    let show_plan_panel = matches!(state.session.expanded_view, coco_types::ExpandedView::Tasks)
+        && wide_enough
+        && (!state.session.plan_tasks.is_empty() || !state.session.todos_by_agent.is_empty());
+
+    if show_plan_panel {
+        let [main, side] = area.layout(&Layout::horizontal([
+            Constraint::Percentage(constants::NORMAL_TERMINAL_MAIN_PCT as u16),
+            Constraint::Percentage(constants::NORMAL_TERMINAL_SIDE_PCT as u16),
+        ]));
+        render_chat_and_input(frame, main, state, theme);
+        let running_entries = running_tasks_as_entries(&state.session.active_tasks);
+        let panel = crate::widgets::PlanPanel::new(
+            &state.session.plan_tasks,
+            &state.session.todos_by_agent,
+            &running_entries,
+            theme,
+        );
+        frame.render_widget(panel, side);
+    } else if has_tools && wide_enough {
         let (main_pct, side_pct) = if area.width >= constants::WIDE_TERMINAL_WIDTH as u16 {
             (
                 constants::WIDE_TERMINAL_MAIN_PCT,
@@ -248,6 +284,34 @@ fn render_main_area(frame: &mut Frame, area: Rect, state: &AppState, theme: &The
     } else {
         render_chat_and_input(frame, area, state, theme);
     }
+}
+
+/// Convert `SessionState::active_tasks` (server-notification-driven
+/// running-task entries) to the shape the `PlanPanel` widget expects.
+/// Keeps widget code type-stable and the session state shape the same.
+fn running_tasks_as_entries(
+    entries: &[crate::state::session::TaskEntry],
+) -> Vec<crate::widgets::task_list::TaskEntry> {
+    use crate::state::session::TaskEntryStatus;
+    use crate::widgets::task_list::TaskDisplayStatus;
+    use crate::widgets::task_list::TaskDisplayType;
+    use crate::widgets::task_list::TaskEntry as WidgetEntry;
+    entries
+        .iter()
+        .map(|e| WidgetEntry {
+            id: e.task_id.clone(),
+            name: e.description.clone(),
+            status: match e.status {
+                TaskEntryStatus::Running => TaskDisplayStatus::Running,
+                TaskEntryStatus::Completed => TaskDisplayStatus::Completed,
+                TaskEntryStatus::Failed => TaskDisplayStatus::Failed,
+                TaskEntryStatus::Stopped => TaskDisplayStatus::Backgrounded,
+            },
+            task_type: TaskDisplayType::Agent,
+            progress: None,
+            elapsed_ms: 0,
+        })
+        .collect()
 }
 
 /// Chat area + input area (vertical split).

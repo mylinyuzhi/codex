@@ -24,7 +24,11 @@ logger = logging.getLogger(__name__)
 
 from coco_sdk._internal.transport import Transport
 from coco_sdk._internal.transport.subprocess_cli import SubprocessCLITransport
-from coco_sdk.generated.protocol import ServerNotification
+from coco_sdk.generated.protocol import (
+    ClientRequestMethod,
+    NotificationMethod,
+    ServerNotification,
+)
 
 
 class ReconnectingTransport(Transport):
@@ -74,7 +78,7 @@ class ReconnectingTransport(Transport):
             try:
                 async for line_data in self._base.read_lines():
                     # Track session_id for resume
-                    if line_data.get("method") == "session/started":
+                    if line_data.get("method") == NotificationMethod.SESSION_STARTED:
                         params = line_data.get("params", {})
                         self._session_id = params.get("session_id")
 
@@ -115,7 +119,7 @@ class ReconnectingTransport(Transport):
                     await self._base.start()
 
                     resume = {
-                        "method": "session/resume",
+                        "method": ClientRequestMethod.SESSION_RESUME.value,
                         "params": {
                             "session_id": self._session_id,
                         },

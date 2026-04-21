@@ -65,7 +65,7 @@ pub struct CommandSandboxSnapshot {
     pub proxy_env: HashMap<String, String>,
     /// Full sandbox config (only populated when `should_wrap` is true).
     pub config: Option<SandboxConfig>,
-    /// Whether network is allowed (for COCODE_SANDBOX_NETWORK_DISABLED signal).
+    /// Whether network is allowed.
     pub allow_network: bool,
     /// Current enforcement level (for tracing).
     pub enforcement: EnforcementLevel,

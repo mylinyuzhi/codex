@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 /// Per-user global config. Separate from Settings.
 /// TS: GlobalConfig type in utils/config.ts, stored at ~/.claude.json
-/// Rust: stored at ~/.coco.json (or COCO_CONFIG_DIR/.coco.json)
+/// Rust: stored at ~/.coco.json (or $COCO_CONFIG_DIR/global.json when set)
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GlobalConfig {
@@ -57,25 +57,32 @@ pub struct CompanionConfig {
 }
 
 /// Get the config home directory.
-/// Respects COCO_CONFIG_DIR env var, defaults to ~/.coco
+///
+/// Respects `COCO_CONFIG_DIR` env var, defaults to `~/.coco`. Delegates to
+/// `coco_utils_common::find_coco_home` so MCP and every other consumer
+/// agree on one implementation (empty-string filtering, cross-platform
+/// `dirs::home_dir()` fallback, last-resort cwd fallback).
 pub fn config_home() -> PathBuf {
-    if let Ok(dir) = std::env::var("COCO_CONFIG_DIR") {
-        return PathBuf::from(dir);
-    }
-    dirs_home().join(".coco")
+    coco_utils_common::find_coco_home()
 }
 
-/// Get the global config file path (~/.coco.json).
+/// Get the global config file path.
+///
+/// Priority:
+/// 1. If `COCO_CONFIG_DIR` is set, put `global.json` inside that dir so
+///    the whole coco workspace (settings + global state + sessions)
+///    moves as a unit. Useful for sandboxed / per-project setups.
+/// 2. Otherwise, fall back to `~/.coco.json` — TS parity with
+///    `~/.claude.json`, a sibling of `~/.coco/`.
 pub fn global_config_path() -> PathBuf {
-    dirs_home().join(".coco.json")
-}
-
-fn dirs_home() -> PathBuf {
-    // Simple home dir detection
-    std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/tmp"))
+    if let Some(custom) =
+        std::env::var_os(coco_utils_common::COCO_CONFIG_DIR_ENV).filter(|s| !s.is_empty())
+    {
+        return PathBuf::from(custom).join("global.json");
+    }
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".coco.json")
 }
 
 /// Load global config from disk.

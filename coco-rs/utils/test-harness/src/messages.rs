@@ -14,7 +14,6 @@ pub fn user(text: &str) -> Message {
         message: LlmMessage::user_text(text),
         uuid: Uuid::new_v4(),
         timestamp: String::new(),
-        is_meta: false,
         is_visible_in_transcript_only: false,
         is_virtual: false,
         is_compact_summary: false,
@@ -24,18 +23,13 @@ pub fn user(text: &str) -> Message {
 }
 
 /// Meta user message (hidden from UI, visible to model).
+/// Lands as `Message::Attachment` (kind = CriticalSystemReminder) — same
+/// behavior as `coco_messages::create_meta_message`.
 pub fn user_meta(text: &str) -> Message {
-    Message::User(UserMessage {
-        message: LlmMessage::user_text(text),
-        uuid: Uuid::new_v4(),
-        timestamp: String::new(),
-        is_meta: true,
-        is_visible_in_transcript_only: false,
-        is_virtual: false,
-        is_compact_summary: false,
-        permission_mode: None,
-        origin: None,
-    })
+    Message::Attachment(coco_types::AttachmentMessage::api(
+        coco_types::AttachmentKind::CriticalSystemReminder,
+        LlmMessage::user_text(text),
+    ))
 }
 
 /// User message with an image file part (for image stripping tests).
@@ -55,7 +49,6 @@ pub fn image_user() -> Message {
         },
         uuid: Uuid::new_v4(),
         timestamp: String::new(),
-        is_meta: false,
         is_visible_in_transcript_only: false,
         is_virtual: false,
         is_compact_summary: false,

@@ -2,10 +2,23 @@ use serde::Deserialize;
 use serde::Serialize;
 use uuid::Uuid;
 
+use crate::AttachmentBody;
+use crate::AttachmentKind;
 use crate::LlmMessage;
 use crate::PermissionMode;
+use crate::SilentPayload;
 use crate::TokenUsage;
 use crate::ToolId;
+use crate::attachment_body::AlreadyReadFilePayload;
+use crate::attachment_body::CommandPermissionsPayload;
+use crate::attachment_body::DynamicSkillPayload;
+use crate::attachment_body::EditedImageFilePayload;
+use crate::attachment_body::HookCancelledPayload;
+use crate::attachment_body::HookErrorDuringExecutionPayload;
+use crate::attachment_body::HookNonBlockingErrorPayload;
+use crate::attachment_body::HookPermissionDecisionPayload;
+use crate::attachment_body::HookSystemMessagePayload;
+use crate::attachment_body::StructuredOutputPayload;
 
 /// Top-level message enum.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -21,6 +34,37 @@ pub enum Message {
     ToolUseSummary(ToolUseSummaryMessage),
 }
 
+/// Visibility axes for a [`Message`] — orthogonal API × UI flags.
+///
+/// Mirrors the two-axis filter pattern: `normalizeAttachmentForAPI`
+/// controls `api`, `nullRenderingAttachments.ts` controls `ui`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Visibility {
+    /// Does this message's content reach the LLM API?
+    pub api: bool,
+    /// Does this message render in the user-visible UI transcript?
+    pub ui: bool,
+}
+
+impl Visibility {
+    pub const BOTH: Self = Self {
+        api: true,
+        ui: true,
+    };
+    pub const API_ONLY: Self = Self {
+        api: true,
+        ui: false,
+    };
+    pub const UI_ONLY: Self = Self {
+        api: false,
+        ui: true,
+    };
+    pub const NEITHER: Self = Self {
+        api: false,
+        ui: false,
+    };
+}
+
 impl Message {
     pub fn uuid(&self) -> Option<&Uuid> {
         match self {
@@ -32,6 +76,32 @@ impl Message {
             Self::Progress(_) => None,
             Self::Tombstone(m) => Some(&m.uuid),
             Self::ToolUseSummary(m) => Some(&m.uuid),
+        }
+    }
+
+    /// Single source of truth for API × UI filtering.
+    ///
+    /// - `User`/`Assistant`/`ToolResult` — both axes true unless the user
+    ///   message is meta (hidden from UI only).
+    /// - `System` — API-only (rendered as meta user on API, hidden from UI).
+    /// - `Attachment` — derived from [`AttachmentKind`] predicates
+    ///   ([`is_api_visible`](AttachmentKind::is_api_visible) +
+    ///   [`renders_in_transcript`](AttachmentKind::renders_in_transcript)).
+    /// - `Progress`/`ToolUseSummary` — UI-only.
+    /// - `Tombstone` — neither (filtered in normalization).
+    pub fn visibility(&self) -> Visibility {
+        match self {
+            // Human-typed user input is always both API-visible and
+            // UI-visible. Reminder-injected "meta" user content lives in
+            // `Message::Attachment` with an appropriate `AttachmentKind`.
+            Self::User(_) | Self::Assistant(_) | Self::ToolResult(_) => Visibility::BOTH,
+            Self::System(_) => Visibility::API_ONLY,
+            Self::Attachment(a) => Visibility {
+                api: a.kind.is_api_visible(),
+                ui: a.kind.renders_in_transcript(),
+            },
+            Self::Progress(_) | Self::ToolUseSummary(_) => Visibility::UI_ONLY,
+            Self::Tombstone(_) => Visibility::NEITHER,
         }
     }
 
@@ -56,9 +126,6 @@ pub struct UserMessage {
     pub uuid: Uuid,
     #[serde(default)]
     pub timestamp: String,
-    /// Hidden from UI, visible to model.
-    #[serde(default)]
-    pub is_meta: bool,
     #[serde(default)]
     pub is_visible_in_transcript_only: bool,
     /// Not sent to API.
@@ -107,12 +174,177 @@ pub struct ApiError {
     pub status_code: Option<i32>,
 }
 
+/// Attachment message: `kind` carries the TS-parity discriminant (60 variants),
+/// `body` carries the typed payload.
+///
+/// **Invariant**: `kind` and `body` must agree — e.g. `kind = HookCancelled`
+/// must come with `body = Silent(SilentPayload::HookCancelled(..))`. Do **not**
+/// construct via struct literal; use the typed constructor helpers below.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttachmentMessage {
     pub uuid: Uuid,
-    pub message: LlmMessage,
-    #[serde(default)]
-    pub is_meta: bool,
+    pub kind: AttachmentKind,
+    pub body: AttachmentBody,
+}
+
+impl AttachmentMessage {
+    /// Build an API-bound attachment (body is a pre-rendered `LlmMessage`).
+    ///
+    /// Covers reminder-produced text (in-crate) and outside-reminder text
+    /// re-injections (compact / plan file reference). Caller picks the
+    /// `kind`; `debug_assert` rejects kinds whose coverage is explicitly
+    /// not API-visible.
+    pub fn api(kind: AttachmentKind, message: LlmMessage) -> Self {
+        debug_assert!(
+            kind.is_api_visible(),
+            "AttachmentMessage::api called with non-API-visible kind {kind:?}",
+        );
+        Self {
+            uuid: Uuid::new_v4(),
+            kind,
+            body: AttachmentBody::Api(message),
+        }
+    }
+
+    /// Build a unit attachment for feature-gated / runtime-bookkeeping kinds
+    /// (no payload data).
+    pub fn unit(kind: AttachmentKind) -> Self {
+        debug_assert!(
+            matches!(
+                kind.coverage(),
+                crate::Coverage::FeatureGated { .. } | crate::Coverage::RuntimeBookkeeping { .. }
+            ),
+            "AttachmentMessage::unit called with non-unit kind {kind:?}"
+        );
+        Self {
+            uuid: Uuid::new_v4(),
+            kind,
+            body: AttachmentBody::Unit,
+        }
+    }
+
+    // ── Silent constructors (one per SilentPayload variant) ──
+    // Pattern: kind is fixed per helper, payload type-enforced.
+
+    pub fn silent_hook_cancelled(payload: HookCancelledPayload) -> Self {
+        Self::silent(
+            AttachmentKind::HookCancelled,
+            SilentPayload::HookCancelled(payload),
+        )
+    }
+    pub fn silent_hook_error_during_execution(payload: HookErrorDuringExecutionPayload) -> Self {
+        Self::silent(
+            AttachmentKind::HookErrorDuringExecution,
+            SilentPayload::HookErrorDuringExecution(payload),
+        )
+    }
+    pub fn silent_hook_non_blocking_error(payload: HookNonBlockingErrorPayload) -> Self {
+        Self::silent(
+            AttachmentKind::HookNonBlockingError,
+            SilentPayload::HookNonBlockingError(payload),
+        )
+    }
+    pub fn silent_hook_system_message(payload: HookSystemMessagePayload) -> Self {
+        Self::silent(
+            AttachmentKind::HookSystemMessage,
+            SilentPayload::HookSystemMessage(payload),
+        )
+    }
+    pub fn silent_hook_permission_decision(payload: HookPermissionDecisionPayload) -> Self {
+        Self::silent(
+            AttachmentKind::HookPermissionDecision,
+            SilentPayload::HookPermissionDecision(payload),
+        )
+    }
+    pub fn silent_command_permissions(payload: CommandPermissionsPayload) -> Self {
+        Self::silent(
+            AttachmentKind::CommandPermissions,
+            SilentPayload::CommandPermissions(payload),
+        )
+    }
+    pub fn silent_structured_output(payload: StructuredOutputPayload) -> Self {
+        Self::silent(
+            AttachmentKind::StructuredOutput,
+            SilentPayload::StructuredOutput(payload),
+        )
+    }
+    pub fn silent_dynamic_skill(payload: DynamicSkillPayload) -> Self {
+        Self::silent(
+            AttachmentKind::DynamicSkill,
+            SilentPayload::DynamicSkill(payload),
+        )
+    }
+    pub fn silent_already_read_file(payload: AlreadyReadFilePayload) -> Self {
+        Self::silent(
+            AttachmentKind::AlreadyReadFile,
+            SilentPayload::AlreadyReadFile(payload),
+        )
+    }
+    pub fn silent_edited_image_file(payload: EditedImageFilePayload) -> Self {
+        Self::silent(
+            AttachmentKind::EditedImageFile,
+            SilentPayload::EditedImageFile(payload),
+        )
+    }
+
+    /// Internal — callers use the typed silent_* helpers above.
+    fn silent(kind: AttachmentKind, payload: SilentPayload) -> Self {
+        Self {
+            uuid: Uuid::new_v4(),
+            kind,
+            body: AttachmentBody::Silent(payload),
+        }
+    }
+
+    /// API-bound `LlmMessage` if this attachment carries one.
+    /// Returns `Some` only for [`AttachmentBody::Api`] bodies;
+    /// `Silent` / `Unit` bodies never reach the API.
+    pub fn as_api_message(&self) -> Option<&LlmMessage> {
+        match &self.body {
+            AttachmentBody::Api(m) => Some(m),
+            AttachmentBody::Silent(_) | AttachmentBody::Unit => None,
+        }
+    }
+
+    /// UI-facing text rendering of this attachment.
+    ///
+    /// Used by transcript / log extraction helpers. Returns empty string
+    /// for bodies that have no textual representation (structured silent
+    /// payloads rely on dedicated renderers).
+    pub fn as_text_for_display(&self) -> String {
+        match &self.body {
+            AttachmentBody::Api(m) => llm_message_text(m),
+            AttachmentBody::Silent(_) | AttachmentBody::Unit => String::new(),
+        }
+    }
+}
+
+/// Extract text content from an `LlmMessage` (simple concatenation of any
+/// `TextContent` parts). Lives here so `AttachmentMessage::as_text_for_display`
+/// can reuse it without pulling in `coco_messages`.
+fn llm_message_text(msg: &LlmMessage) -> String {
+    use crate::AssistantContent;
+    use crate::LlmMessage as L;
+    use crate::UserContent;
+    match msg {
+        L::User { content, .. } => content
+            .iter()
+            .filter_map(|p| match p {
+                UserContent::Text(t) => Some(t.text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join(""),
+        L::Assistant { content, .. } => content
+            .iter()
+            .filter_map(|p| match p {
+                AssistantContent::Text(t) => Some(t.text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join(""),
+        _ => String::new(),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

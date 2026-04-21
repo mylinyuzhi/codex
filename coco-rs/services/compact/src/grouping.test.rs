@@ -8,7 +8,6 @@ fn user_msg() -> Message {
         message: LlmMessage::user_text("hello"),
         uuid: Uuid::new_v4(),
         timestamp: String::new(),
-        is_meta: false,
         is_visible_in_transcript_only: false,
         is_virtual: false,
         is_compact_summary: false,

@@ -26,9 +26,10 @@ use coco_cli::sdk_server::StdioTransport;
 use coco_cli::sdk_server::cli_bootstrap::CliInitializeBootstrap;
 use coco_commands::CommandRegistry;
 use coco_commands::register_extended_builtins;
+use coco_config::EnvKey;
+use coco_config::env;
 use coco_config::global_config;
 use coco_inference::ApiClient;
-use coco_inference::RetryConfig;
 use coco_query::QueryEngine;
 use coco_query::QueryEngineConfig;
 use coco_session::SessionManager;
@@ -98,27 +99,106 @@ impl LanguageModelV4 for MockModel {
     }
 }
 
-/// Create the LLM model -- real Anthropic if API key available, else mock.
+/// Create the LLM model from the resolved `RuntimeConfig`.
+///
+/// Priority:
+///   1. CLI `--model <bare-id>` (legacy Anthropic-first interpretation;
+///      slash-qualified `provider/id` flows through `RuntimeOverrides`
+///      and surfaces here via `runtime_config.model_roles`).
+///   2. `runtime_config.model_roles.get(Main)` — the JSON-first role,
+///      resolved from Settings / env / overrides by the config builder.
+///   3. Mock model (no credentials available).
 mod model_factory;
 mod tui_runner;
 
 pub(crate) use model_factory::build_language_model_from_spec;
 
-pub(crate) fn create_model(model_id: Option<&str>) -> (Arc<dyn LanguageModelV4>, &'static str) {
-    if std::env::var("ANTHROPIC_API_KEY").is_ok() {
+pub(crate) fn create_model(
+    cli_model_override: Option<&str>,
+    runtime_config: &coco_config::RuntimeConfig,
+) -> (Arc<dyn LanguageModelV4>, &'static str) {
+    use vercel_ai_provider::ProviderV4;
+
+    // Legacy CLI bare-id path: `coco --model claude-sonnet-4-5-20250514`
+    // still routes to Anthropic when the API key is configured.
+    if let Some(raw) = cli_model_override
+        && !raw.contains('/')
+        && runtime_config
+            .providers
+            .get("anthropic")
+            .and_then(coco_config::ProviderConfig::resolve_api_key)
+            .is_some()
+    {
         let provider = vercel_ai_anthropic::anthropic();
-        let model_name = model_id.unwrap_or("claude-sonnet-4-5-20250514");
-        let model = provider.messages(model_name);
-        return (Arc::new(model), "anthropic");
+        if let Ok(model) = provider.language_model(raw) {
+            return (model, "anthropic");
+        }
     }
 
-    // Fallback to mock
+    if let Some(main_spec) = runtime_config.model_roles.get(coco_types::ModelRole::Main)
+        && runtime_config
+            .providers
+            .get(&main_spec.provider)
+            .and_then(coco_config::ProviderConfig::resolve_api_key)
+            .is_some()
+        && let Ok(model) = build_language_model_from_spec(main_spec)
+    {
+        return (model, provider_api_mode(main_spec.api));
+    }
+
     (
         Arc::new(MockModel {
             call_count: AtomicI32::new(0),
         }),
         "mock",
     )
+}
+
+fn provider_api_mode(api: coco_types::ProviderApi) -> &'static str {
+    match api {
+        coco_types::ProviderApi::Anthropic => "anthropic",
+        coco_types::ProviderApi::Openai => "openai",
+        coco_types::ProviderApi::Gemini => "google",
+        coco_types::ProviderApi::Volcengine => "volcengine",
+        coco_types::ProviderApi::Zai => "zai",
+        coco_types::ProviderApi::OpenaiCompat => "openai-compat",
+    }
+}
+
+/// Derive `RuntimeOverrides` from the parsed CLI flags.
+///
+/// Only slash-qualified `--model provider/id` flows through as a model
+/// override — bare ids keep the legacy Anthropic-first interpretation in
+/// [`create_model`] so existing `coco --model claude-sonnet-...`
+/// invocations continue to work.
+pub(crate) fn cli_runtime_overrides(cli: &Cli) -> coco_config::RuntimeOverrides {
+    let mut overrides = coco_config::RuntimeOverrides::default();
+    if let Some(model) = cli.model.as_deref()
+        && model.contains('/')
+    {
+        overrides.model_override = Some(model.to_string());
+    }
+    if let Some(mode) = cli.permission_mode.as_deref()
+        && let Ok(pm) = serde_json::from_value::<coco_types::PermissionMode>(
+            serde_json::Value::String(mode.to_string()),
+        )
+    {
+        overrides.permission_mode_override = Some(pm);
+    }
+    overrides
+}
+
+/// Build a `RuntimeConfig` honoring CLI-level overrides.
+pub(crate) fn build_runtime_config_for_cli(
+    cli: &Cli,
+    cwd: &std::path::Path,
+) -> Result<coco_config::RuntimeConfig> {
+    let mut builder = coco_config::RuntimeConfigBuilder::from_process(cwd)
+        .with_overrides(cli_runtime_overrides(cli));
+    if let Some(path) = cli.settings.as_deref() {
+        builder = builder.with_flag_settings(path);
+    }
+    builder.build()
 }
 
 fn sessions_dir() -> std::path::PathBuf {
@@ -237,7 +317,9 @@ async fn main() -> Result<()> {
     if let Some(cmd) = &cli.command {
         match cmd {
             Commands::Status => {
-                let (model, mode) = create_model(None);
+                let cwd = std::env::current_dir()?;
+                let runtime_config = build_runtime_config_for_cli(&cli, &cwd)?;
+                let (model, mode) = create_model(cli.model.as_deref(), &runtime_config);
                 println!("coco-rs v0.0.0 ({mode} mode)");
                 println!("model: {}", model.model_id());
                 println!("provider: {}", model.provider());
@@ -260,7 +342,9 @@ async fn main() -> Result<()> {
                 println!("Running diagnostics...");
                 println!("[ok] Shell: available");
                 println!("[ok] Config: loaded");
-                let (model, mode) = create_model(None);
+                let cwd = std::env::current_dir()?;
+                let runtime_config = build_runtime_config_for_cli(&cli, &cwd)?;
+                let (model, mode) = create_model(cli.model.as_deref(), &runtime_config);
                 println!("[ok] Model: {} ({mode})", model.model_id());
                 return Ok(());
             }
@@ -608,17 +692,21 @@ async fn run_agents_subcommand() -> Result<()> {
 /// TS: runHeadless() in cli/print.ts
 async fn run_chat(cli: &Cli, prompt: Option<&str>) -> Result<()> {
     let prompt = prompt.unwrap_or("Hello!");
-    let (model, mode) = create_model(cli.model.as_deref());
+    let cwd = std::env::current_dir()?;
+    let runtime_config = build_runtime_config_for_cli(cli, &cwd)?;
+    let settings = &runtime_config.settings;
+
+    let (model, mode) = create_model(cli.model.as_deref(), &runtime_config);
     let model_id = model.model_id().to_string();
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::new(
+        model,
+        runtime_config.api.retry.clone().into(),
+    ));
 
     let mut registry = ToolRegistry::new();
     coco_tools::register_all_tools(&mut registry);
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
-
-    let cwd = std::env::current_dir()?;
-    let settings = coco_config::settings::load_settings(&cwd, None)?;
 
     let startup = resolve_startup_permission_state(cli, &settings.merged)?;
     // Headless path — surface the downgrade notification on stderr.
@@ -636,12 +724,31 @@ async fn run_chat(cli: &Cli, prompt: Option<&str>) -> Result<()> {
         bypass_permissions_available,
         context_window: 200_000,
         max_output_tokens: 16_384,
-        max_turns: 30,
-        max_tokens: cli.max_tokens,
+        max_turns: runtime_config.loop_config.max_turns.unwrap_or(30),
+        max_tokens: cli
+            .max_tokens
+            .or_else(|| runtime_config.loop_config.max_tokens.map(i64::from)),
         system_prompt: Some(system_prompt),
-        project_dir: Some(cwd.clone()),
+        streaming_tool_execution: runtime_config.loop_config.enable_streaming_tools,
+        // `paths.project_dir` in settings.json can pin the project root to
+        // something other than the launch cwd (handy for agents run from
+        // subdirectories). Falls back to `cwd`.
+        project_dir: Some(
+            runtime_config
+                .paths
+                .project_dir
+                .clone()
+                .unwrap_or_else(|| cwd.clone()),
+        ),
         plans_directory: settings.merged.plans_directory.clone(),
         plan_mode_settings: settings.merged.plan_mode.clone(),
+        system_reminder: settings.merged.system_reminder.clone(),
+        tool_config: runtime_config.tool.clone(),
+        sandbox_config: runtime_config.sandbox.clone(),
+        memory_config: runtime_config.memory.clone(),
+        shell_config: runtime_config.shell.clone(),
+        web_fetch_config: runtime_config.web_fetch.clone(),
+        web_search_config: runtime_config.web_search.clone(),
         ..Default::default()
     };
 
@@ -682,9 +789,15 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     // mock. When mock, the SDK's `initialize.account` must NOT report a
     // first-party Anthropic session — otherwise clients see mock-shaped
     // turn output while the account panel claims a real OAuth login.
-    let (model, mode) = create_model(cli.model.as_deref());
+    let cwd = std::env::current_dir()?;
+    let runtime_config = build_runtime_config_for_cli(cli, &cwd)?;
+
+    let (model, mode) = create_model(cli.model.as_deref(), &runtime_config);
     let is_real_anthropic = mode == "anthropic";
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::new(
+        model,
+        runtime_config.api.retry.clone().into(),
+    ));
 
     let mut registry = ToolRegistry::new();
     coco_tools::register_all_tools(&mut registry);
@@ -693,7 +806,6 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     // Resolve static config. Cwd + model id are also stored on the
     // SessionHandle at `session/start`, but we use the CLI-level values
     // here for the system prompt + headless defaults.
-    let cwd = std::env::current_dir()?;
     let model_id = client.model_id().to_string();
     let system_prompt = Some(build_system_prompt(&cwd, &model_id));
 
@@ -716,7 +828,10 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     // is empty — the SDK client populates it via mcp/setServers at
     // runtime. Server processes are spawned on first connect.
     let mcp_manager = Arc::new(tokio::sync::Mutex::new(
-        coco_mcp::McpConnectionManager::new(global_config::config_home()),
+        coco_mcp::McpConnectionManager::new_with_runtime_config(
+            global_config::config_home(),
+            &runtime_config.mcp,
+        ),
     ));
 
     // Build the slash-command registry with the extended built-ins so
@@ -752,9 +867,13 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     // `load_stored_oauth_tokens` does sync disk I/O.
     let auth_method = if is_real_anthropic {
         let config_dir = global_config::config_home();
+        let api_key_helper = runtime_config.settings.merged.api_key_helper.clone();
+        let bare_mode = runtime_config.env_only.bare_mode;
         tokio::task::spawn_blocking(move || {
             coco_inference::auth::resolve_auth(&coco_inference::auth::AuthResolveOptions {
                 config_dir: Some(config_dir),
+                api_key_helper,
+                bare_mode,
                 ..Default::default()
             })
         })
@@ -775,12 +894,11 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     let bootstrap: Arc<dyn coco_cli::sdk_server::InitializeBootstrap> = Arc::new(bootstrap_builder);
 
     // Startup safety + capability gate (parity with run_tui / run_chat).
-    let settings = coco_config::settings::load_settings(&cwd, None)?;
     // SDK mode doesn't surface an initial mode via this path — the SDK
     // client sets mode per-session through turn/start or
     // `control/setPermissionMode`. We still resolve to run the killswitch
     // downgrade + safety guard consistently.
-    let startup = resolve_startup_permission_state(cli, &settings.merged)?;
+    let startup = resolve_startup_permission_state(cli, &runtime_config.settings.merged)?;
     if let Some(msg) = &startup.notification {
         eprintln!("warning: {msg}");
     }
@@ -919,8 +1037,7 @@ pub(crate) fn resolve_startup_permission_state(
 /// merely unlocks the capability. Detect root/sudo via env-var
 /// heuristics (safe — no `unsafe { libc::getuid() }`) and refuse
 /// unless one of the known sandbox markers is set. Known sandbox
-/// markers: `IS_SANDBOX=1`, `COCO_CODE_BUBBLEWRAP` truthy,
-/// `CLAUDE_CODE_BUBBLEWRAP` truthy (for direct TS-port compatibility).
+/// markers: `IS_SANDBOX=1`, `COCO_BUBBLEWRAP` truthy.
 fn enforce_dangerous_skip_safety(requesting_bypass: bool) -> Result<()> {
     if !requesting_bypass {
         return Ok(());
@@ -962,5 +1079,5 @@ fn is_sandboxed_env() -> bool {
             })
             .unwrap_or(false)
     };
-    truthy("IS_SANDBOX") || truthy("COCO_CODE_BUBBLEWRAP") || truthy("CLAUDE_CODE_BUBBLEWRAP")
+    truthy("IS_SANDBOX") || env::is_env_truthy(EnvKey::CocoBubblewrap)
 }

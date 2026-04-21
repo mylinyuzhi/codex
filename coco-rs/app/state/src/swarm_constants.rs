@@ -1,5 +1,7 @@
 //! Swarm constants matching TS `utils/swarm/constants.ts`.
 
+use coco_config::EnvKey;
+
 /// Name used for the team leader agent.
 ///
 /// TS: `TEAM_LEAD_NAME = 'team-lead'`
@@ -26,57 +28,35 @@ pub const HIDDEN_SESSION_NAME: &str = "claude-hidden";
 pub const TMUX_COMMAND: &str = "tmux";
 
 // Swarm + plan-mode env vars use the `COCO_` prefix (coco-rs native).
-// TS equivalents (`CLAUDE_CODE_*`) are Anthropic-owned and not forwarded
-// verbatim — coco-rs owns its own env namespace. Provider-specific flags
-// like `CLAUDE_CODE_USE_BEDROCK` in the SDK env passthrough stay as-is
-// because they belong to the vercel-ai provider crates.
 
 /// Env var: override command used to spawn teammates.
-///
-/// TS analogue: `CLAUDE_CODE_TEAMMATE_COMMAND`.
-pub const TEAMMATE_COMMAND_ENV_VAR: &str = "COCO_TEAMMATE_COMMAND";
+pub const TEAMMATE_COMMAND_ENV_VAR: EnvKey = EnvKey::CocoTeammateCommand;
 
 /// Env var: teammate's assigned UI color.
-///
-/// TS analogue: `CLAUDE_CODE_AGENT_COLOR`.
-pub const TEAMMATE_COLOR_ENV_VAR: &str = "COCO_AGENT_COLOR";
+pub const TEAMMATE_COLOR_ENV_VAR: EnvKey = EnvKey::CocoAgentColor;
 
 /// Env var: force plan mode for teammates.
-///
-/// TS analogue: `CLAUDE_CODE_PLAN_MODE_REQUIRED`.
-pub const PLAN_MODE_REQUIRED_ENV_VAR: &str = "COCO_PLAN_MODE_REQUIRED";
+pub const PLAN_MODE_REQUIRED_ENV_VAR: EnvKey = EnvKey::CocoPlanModeRequired;
 
 /// Env var: enable experimental agent teams feature.
-///
-/// TS analogue: `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS`.
-pub const AGENT_TEAMS_ENV_VAR: &str = "COCO_EXPERIMENTAL_AGENT_TEAMS";
+pub const AGENT_TEAMS_ENV_VAR: EnvKey = EnvKey::CocoExperimentalAgentTeams;
 
 /// Env var: teammate's agent ID (cross-process identity fallback).
-///
-/// TS analogue: `CLAUDE_CODE_AGENT_ID`.
-pub const AGENT_ID_ENV_VAR: &str = "COCO_AGENT_ID";
+pub const AGENT_ID_ENV_VAR: EnvKey = EnvKey::CocoAgentId;
 
 /// Env var: teammate's human-facing agent name.
-///
-/// TS analogue: `CLAUDE_CODE_AGENT_NAME`.
-pub const AGENT_NAME_ENV_VAR: &str = "COCO_AGENT_NAME";
+pub const AGENT_NAME_ENV_VAR: EnvKey = EnvKey::CocoAgentName;
 
 /// Env var: teammate's team name.
-///
-/// TS analogue: `CLAUDE_CODE_TEAM_NAME`.
-pub const TEAM_NAME_ENV_VAR: &str = "COCO_TEAM_NAME";
+pub const TEAM_NAME_ENV_VAR: EnvKey = EnvKey::CocoTeamName;
 
 /// Env var: parent session ID, piped from the leader so teammates can
 /// correlate cross-process logs + replay.
-///
-/// TS analogue: `CLAUDE_CODE_PARENT_SESSION_ID`.
-pub const PARENT_SESSION_ID_ENV_VAR: &str = "COCO_PARENT_SESSION_ID";
+pub const PARENT_SESSION_ID_ENV_VAR: EnvKey = EnvKey::CocoParentSessionId;
 
 /// Env var: opt into the VerifyPlanExecution PostToolUse hook that
 /// compares plan-file mtime vs `plan_mode_entry_ms`.
-///
-/// TS analogue: `CLAUDE_CODE_VERIFY_PLAN`.
-pub const VERIFY_PLAN_ENV_VAR: &str = "COCO_VERIFY_PLAN";
+pub const VERIFY_PLAN_ENV_VAR: EnvKey = EnvKey::CocoVerifyPlan;
 
 /// Generate a swarm socket name based on the current PID.
 ///

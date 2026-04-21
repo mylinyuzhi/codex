@@ -391,6 +391,12 @@ pub(super) fn nav(state: &mut AppState, delta: i32) {
         Some(Overlay::TaskDetail(t)) => {
             t.scroll = (t.scroll + delta * constants::SCROLL_LINE_STEP).max(0);
         }
+        Some(Overlay::PlanApproval(p)) => {
+            // Left/right (nav delta) toggles between Approve and Deny.
+            if delta != 0 {
+                p.toggle_focus();
+            }
+        }
         Some(Overlay::Settings(s)) => {
             let count = settings_item_count(s) as i32;
             s.selected = (s.selected + delta).clamp(0, (count - 1).max(0));
@@ -519,6 +525,23 @@ pub(super) async fn confirm(state: &mut AppState, command_tx: &mpsc::Sender<User
             // Keep settings open after selection — user may want to try
             // themes successively.
             state.ui.overlay = Some(Overlay::Settings(s));
+            return;
+        }
+        // Plan-approval (team-lead side): Enter sends the response
+        // keyed to the currently-focused button (Approve / Deny). The
+        // engine translates this into a mailbox envelope back to the
+        // teammate. TS parity: `ExitPlanModeV2Tool.ts:137-141` request
+        // flow, leader-end resolution.
+        Some(Overlay::PlanApproval(p)) => {
+            let _ = command_tx
+                .send(UserCommand::PlanApprovalResponse {
+                    request_id: p.request_id.clone(),
+                    teammate_agent: p.from.clone(),
+                    approved: p.is_approve_focused(),
+                    feedback: None,
+                })
+                .await;
+            state.ui.dismiss_overlay();
             return;
         }
         // PlanExit confirm delegates to the approval handler so Enter

@@ -18,6 +18,7 @@ use crate::state::FeedbackOverlay;
 use crate::state::IdleReturnOverlay;
 use crate::state::InvalidConfigOverlay;
 use crate::state::McpServerApprovalOverlay;
+use crate::state::PlanApprovalOverlay;
 use crate::state::PlanEntryOverlay;
 use crate::state::PlanExitOverlay;
 use crate::state::SandboxPermissionOverlay;
@@ -291,6 +292,59 @@ pub(super) fn task_detail_content(
             t!("dialog.scroll_close_hints"),
         ),
         theme.primary,
+    )
+}
+
+pub(super) fn plan_approval_content(
+    p: &PlanApprovalOverlay,
+    theme: &Theme,
+) -> (String, String, Color) {
+    // Cap the plan preview so the overlay stays readable when the plan
+    // body is very long. Full content is still on disk at
+    // `p.plan_file_path` for the leader to inspect outside the overlay.
+    const MAX_PREVIEW_LINES: usize = 18;
+    let preview: String = p
+        .plan_content
+        .lines()
+        .take(MAX_PREVIEW_LINES)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let truncated = p.plan_content.lines().count() > MAX_PREVIEW_LINES;
+    let preview_block = if truncated {
+        format!(
+            "{preview}\n… {}",
+            t!("dialog.plan_approval_truncated").to_string()
+        )
+    } else {
+        preview
+    };
+
+    let approve_marker = if p.is_approve_focused() { "▸ " } else { "  " };
+    let deny_marker = if p.is_approve_focused() { "  " } else { "▸ " };
+    let buttons = format!(
+        "{approve_marker}{}    {deny_marker}{}",
+        t!("dialog.plan_approval_approve").to_string(),
+        t!("dialog.plan_approval_deny").to_string(),
+    );
+
+    let path_line = p
+        .plan_file_path
+        .as_deref()
+        .map(|p| {
+            format!(
+                "{}\n\n",
+                t!("dialog.plan_approval_file", path = p).to_string()
+            )
+        })
+        .unwrap_or_default();
+
+    (
+        t!("dialog.plan_approval_title", from = p.from.as_str()).to_string(),
+        format!(
+            "{path_line}{preview_block}\n\n{buttons}\n\n{}",
+            t!("dialog.plan_approval_hints").to_string()
+        ),
+        theme.plan_mode,
     )
 }
 

@@ -40,7 +40,13 @@ pub fn extract_message_text(msg: &Message) -> Option<String> {
         Message::Assistant(a) => extract_llm_message_text(&a.message),
         Message::ToolResult(tr) => extract_llm_message_text(&tr.message),
         Message::System(_) => Some("[system]".to_string()),
-        Message::Attachment(a) => extract_llm_message_text(&a.message),
+        Message::Attachment(a) => a
+            .as_api_message()
+            .and_then(extract_llm_message_text)
+            .or_else(|| {
+                let text = a.as_text_for_display();
+                if text.is_empty() { None } else { Some(text) }
+            }),
         _ => None,
     }
 }
@@ -63,7 +69,10 @@ fn message_char_count(msg: &Message) -> i64 {
         Message::User(u) => llm_message_char_count(&u.message),
         Message::Assistant(a) => llm_message_char_count(&a.message),
         Message::ToolResult(tr) => llm_message_char_count(&tr.message),
-        Message::Attachment(a) => llm_message_char_count(&a.message),
+        Message::Attachment(a) => a
+            .as_api_message()
+            .map(llm_message_char_count)
+            .unwrap_or_else(|| a.as_text_for_display().len() as i64),
         Message::System(_) => 20, // minimal overhead
         Message::Progress(_) | Message::Tombstone(_) | Message::ToolUseSummary(_) => 0,
     }

@@ -65,7 +65,6 @@ pub fn compact_session_memory(
         message: coco_types::LlmMessage::user_text(&summary),
         uuid: uuid::Uuid::new_v4(),
         timestamp: String::new(),
-        is_meta: false,
         is_visible_in_transcript_only: true,
         is_virtual: false,
         is_compact_summary: true,

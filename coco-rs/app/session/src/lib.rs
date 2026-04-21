@@ -118,10 +118,11 @@ impl SessionManager {
     /// Delete a session.
     pub fn delete(&self, id: &str) -> anyhow::Result<()> {
         let session_file = self.sessions_dir.join(format!("{id}.json"));
-        if session_file.exists() {
-            std::fs::remove_file(session_file)?;
+        match std::fs::remove_file(session_file) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e.into()),
         }
-        Ok(())
     }
 
     /// Get the most recent session.
@@ -140,6 +141,51 @@ impl SessionManager {
         }
         Ok(removed)
     }
+
+    /// TS-aligned mtime-based retention: delete every session file whose
+    /// on-disk mtime is older than `older_than`. Mirrors TS
+    /// `utils/cleanup.ts` behavior (`DEFAULT_CLEANUP_PERIOD_DAYS = 30`).
+    ///
+    /// Walks the sessions dir directly (stat-only, no JSON parsing) so a
+    /// corrupt session file doesn't prevent cleanup.
+    ///
+    /// Returns the number of sessions removed.
+    pub fn cleanup_older_than(&self, older_than: std::time::Duration) -> anyhow::Result<i32> {
+        let cutoff = std::time::SystemTime::now()
+            .checked_sub(older_than)
+            .ok_or_else(|| anyhow::anyhow!("duration exceeds current time"))?;
+        if !self.sessions_dir.exists() {
+            return Ok(0);
+        }
+        let mut removed = 0;
+        for entry in std::fs::read_dir(&self.sessions_dir)? {
+            let Ok(entry) = entry else { continue };
+            let path = entry.path();
+            if path.extension().is_none_or(|e| e != "json") {
+                continue;
+            }
+            let Ok(meta) = entry.metadata() else { continue };
+            let Ok(mtime) = meta.modified() else { continue };
+            if mtime >= cutoff {
+                continue;
+            }
+            match std::fs::remove_file(&path) {
+                Ok(()) => removed += 1,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
+        Ok(removed)
+    }
+}
+
+/// Default cleanup retention period — matches TS
+/// `utils/cleanup.ts:DEFAULT_CLEANUP_PERIOD_DAYS = 30`.
+pub const DEFAULT_CLEANUP_PERIOD_DAYS: u64 = 30;
+
+/// [`DEFAULT_CLEANUP_PERIOD_DAYS`] as a `Duration` (convenience).
+pub const fn default_cleanup_period() -> std::time::Duration {
+    std::time::Duration::from_secs(DEFAULT_CLEANUP_PERIOD_DAYS * 24 * 60 * 60)
 }
 
 pub fn timestamp_now() -> String {

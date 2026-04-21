@@ -21,6 +21,7 @@ pub mod emit;
 pub mod engine;
 mod helpers;
 pub mod plan_mode_reminder;
+pub mod reminder_adapters;
 pub mod sdk_types;
 mod session_state;
 pub mod single_turn;

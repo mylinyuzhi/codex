@@ -6,8 +6,8 @@ fn test_default_config_is_enabled() {
     assert!(config.enabled);
     assert!(config.extraction_enabled);
     assert!(!config.team_memory_enabled);
-    assert!(!config.kairos_enabled);
-    assert_eq!(config.max_relevant_memories, 5);
+    assert!(!config.skip_index);
+    assert_eq!(config.extraction_throttle, 1);
 }
 
 #[test]
@@ -15,7 +15,6 @@ fn test_disabled_config() {
     let config = MemoryConfig::disabled();
     assert!(!config.enabled);
     assert!(!config.extraction_enabled);
-    assert!(!config.auto_dream_enabled);
 }
 
 #[test]

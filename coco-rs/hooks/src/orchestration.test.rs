@@ -20,6 +20,7 @@ fn test_ctx() -> OrchestrationContext {
         cancel: CancellationToken::new(),
         disable_all_hooks: false,
         allow_managed_hooks_only: false,
+        attachment_emitter: coco_types::AttachmentEmitter::noop(),
     }
 }
 
@@ -252,6 +253,7 @@ async fn test_parallel_execution_multiple_hooks() {
         &cancel,
         Duration::from_secs(10),
         /*event_tx*/ None,
+        &coco_types::AttachmentEmitter::noop(),
     )
     .await;
 
@@ -301,6 +303,7 @@ async fn test_parallel_execution_cancellation() {
         &cancel,
         Duration::from_secs(1),
         /*event_tx*/ None,
+        &coco_types::AttachmentEmitter::noop(),
     )
     .await;
 
@@ -339,6 +342,7 @@ async fn test_parallel_execution_timeout() {
         &cancel,
         Duration::from_millis(100),
         /*event_tx*/ None,
+        &coco_types::AttachmentEmitter::noop(),
     )
     .await;
 
@@ -377,6 +381,7 @@ async fn test_parallel_execution_exit_code_2_is_blocking() {
         &cancel,
         Duration::from_secs(5),
         /*event_tx*/ None,
+        &coco_types::AttachmentEmitter::noop(),
     )
     .await;
 
@@ -555,6 +560,7 @@ async fn test_http_hooks_filtered_for_session_start() {
         &cancel,
         Duration::from_secs(5),
         /*event_tx*/ None,
+        &coco_types::AttachmentEmitter::noop(),
     )
     .await;
 
@@ -595,6 +601,7 @@ async fn test_http_hooks_filtered_for_setup() {
         &cancel,
         Duration::from_secs(5),
         /*event_tx*/ None,
+        &coco_types::AttachmentEmitter::noop(),
     )
     .await;
 
@@ -634,6 +641,7 @@ async fn test_http_hooks_allowed_for_other_events() {
         &cancel,
         Duration::from_secs(5),
         /*event_tx*/ None,
+        &coco_types::AttachmentEmitter::noop(),
     )
     .await;
 

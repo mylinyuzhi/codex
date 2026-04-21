@@ -21,7 +21,7 @@
 //! tool, the CPU-bound walk + regex search runs inside
 //! [`tokio::task::spawn_blocking`] so the async executor thread is not blocked.
 //! A [`tokio::time::timeout`] wraps the blocking future to enforce the
-//! 20-second (configurable via `CLAUDE_CODE_GLOB_TIMEOUT_SECONDS`) budget.
+//! 20-second (configurable via `COCO_GLOB_TIMEOUT_SECONDS`) budget.
 //!
 //! # Cancellation
 //!
@@ -73,9 +73,6 @@ use crate::input_types::GrepOutputMode;
 
 /// Default head_limit when unspecified (TS: DEFAULT_HEAD_LIMIT = 250).
 const DEFAULT_HEAD_LIMIT: usize = 250;
-
-/// Search timeout in seconds (TS: 20s default).
-const DEFAULT_TIMEOUT_SECS: u64 = 20;
 
 /// Maximum column width for content lines (TS: --max-columns 500).
 const MAX_COLUMN_WIDTH: usize = 500;
@@ -367,7 +364,7 @@ impl Tool for GrepTool {
 
     /// Safe to run in parallel with other concurrency-safe tools. The
     /// `StreamingToolExecutor` batches consecutive safe tools and dispatches
-    /// them via `tokio::spawn` up to `CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY`
+    /// them via `tokio::spawn` up to `COCO_MAX_TOOL_USE_CONCURRENCY`
     /// (default 10). TS: `isConcurrencySafe() = true`.
     fn is_concurrency_safe(&self, _input: &Value) -> bool {
         true
@@ -392,16 +389,21 @@ impl Tool for GrepTool {
 
     /// R6-T20: refuse to search a root the user has marked as ignored.
     /// Individual files under the root are filtered during the walk by
-    /// `crate::tools::read_permissions::is_read_ignored` inside
-    /// `search_one_file`.
-    async fn check_permissions(&self, input: &Value, _ctx: &ToolUseContext) -> PermissionDecision {
+    /// `is_read_ignored_with_matcher` inside `search_one_file`.
+    async fn check_permissions(&self, input: &Value, ctx: &ToolUseContext) -> PermissionDecision {
         let Some(path) = input.get("path").and_then(|v| v.as_str()) else {
             return PermissionDecision::Allow {
                 updated_input: None,
                 feedback: None,
             };
         };
-        crate::tools::read_permissions::check_read_permission(Path::new(path))
+        let matcher = crate::tools::read_permissions::file_read_ignore_matcher_from_patterns(
+            &ctx.tool_config.file_read_ignore_patterns,
+        );
+        crate::tools::read_permissions::check_read_permission_with_matcher(
+            Path::new(path),
+            &matcher,
+        )
     }
 
     fn validate_input(&self, input: &Value, _ctx: &ToolUseContext) -> ValidationResult {
@@ -522,15 +524,16 @@ impl Tool for GrepTool {
             base_dir: cwd,
         };
 
-        // Timeout from env or default
-        let timeout_secs = std::env::var("CLAUDE_CODE_GLOB_TIMEOUT_SECONDS")
-            .ok()
-            .and_then(|s| s.parse::<u64>().ok())
-            .filter(|&v| v > 0)
-            .unwrap_or(DEFAULT_TIMEOUT_SECS);
+        let timeout_secs = ctx.tool_config.glob_timeout_seconds.max(1) as u64;
 
         let cancel = ctx.cancel.clone();
-        let search_future = tokio::task::spawn_blocking(move || run_grep_search(&params, &cancel));
+        let read_ignore_matcher =
+            crate::tools::read_permissions::file_read_ignore_matcher_from_patterns(
+                &ctx.tool_config.file_read_ignore_patterns,
+            );
+        let search_future = tokio::task::spawn_blocking(move || {
+            run_grep_search(&params, &cancel, &read_ignore_matcher)
+        });
 
         let result = tokio::time::timeout(Duration::from_secs(timeout_secs), search_future)
             .await
@@ -573,6 +576,7 @@ struct GrepSearchResult {
 fn run_grep_search(
     params: &GrepSearchParams,
     cancel: &CancellationToken,
+    read_ignore_matcher: &globset::GlobSet,
 ) -> Result<GrepSearchResult, String> {
     // Build regex matcher via grep-regex (ripgrep's core library)
     let mut matcher_builder = RegexMatcherBuilder::new();
@@ -627,7 +631,10 @@ fn run_grep_search(
             // via `--glob '!...'`; coco-rs filters them per-entry here
             // so we don't have to round-trip through the globset/walker
             // override system.
-            if crate::tools::read_permissions::is_read_ignored(entry.path()) {
+            if crate::tools::read_permissions::is_read_ignored_with_matcher(
+                entry.path(),
+                read_ignore_matcher,
+            ) {
                 continue;
             }
 

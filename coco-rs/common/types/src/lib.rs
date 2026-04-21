@@ -19,6 +19,9 @@ pub use vercel_ai_provider::UserContentPart as UserContent;
 // === Modules ===
 mod agent;
 mod app_state;
+pub mod attachment_body;
+mod attachment_emitter;
+mod attachment_kind;
 mod client_request;
 mod command;
 mod event;
@@ -36,9 +39,11 @@ mod server_request;
 pub mod side_query;
 mod stream;
 mod task;
+mod task_list;
 mod thinking;
 mod token;
 mod tool;
+mod wire_tagged;
 
 // === Re-exports ===
 
@@ -46,6 +51,21 @@ mod tool;
 pub use app_state::AppStatePatch;
 pub use app_state::AppStateReadHandle;
 pub use app_state::ToolAppState;
+
+// Message visibility (API × UI axes)
+pub use message::Visibility;
+
+// Cross-crate attachment sink
+pub use attachment_emitter::AttachmentEmitter;
+
+// Attachment taxonomy (full TS `Attachment.type` catalog + coverage)
+pub use attachment_body::AttachmentBody;
+pub use attachment_body::HookPermissionDecision;
+pub use attachment_body::SilentPayload;
+pub use attachment_kind::AttachmentEvent;
+pub use attachment_kind::AttachmentKind;
+pub use attachment_kind::Coverage;
+pub use attachment_kind::coverage_of;
 
 // Agent types
 pub use agent::AgentDefinition;
@@ -85,10 +105,12 @@ pub use event::McpServerInit;
 pub use event::McpStartupCompleteParams;
 pub use event::McpStartupStatusParams;
 pub use event::ModelFallbackParams;
+pub use event::NotificationMethod;
 pub use event::PermissionDenialInfo;
 pub use event::PermissionModeChangedParams;
 pub use event::PersistedFileError;
 pub use event::PersistedFileInfo;
+pub use event::PlanApprovalRequestedParams;
 pub use event::PlanModeChangedParams;
 pub use event::PluginInit;
 pub use event::RateLimitParams;
@@ -108,6 +130,7 @@ pub use event::SubagentSpawnedParams;
 pub use event::SummarizeCompletedParams;
 pub use event::TaskCompletedParams;
 pub use event::TaskCompletionStatus;
+pub use event::TaskPanelChangedParams;
 pub use event::TaskProgressParams;
 pub use event::TaskStartedParams;
 pub use event::TaskUsage;
@@ -128,6 +151,7 @@ pub use client_request::ApprovalDecision;
 pub use client_request::ApprovalResolveParams;
 pub use client_request::CancelRequestParams;
 pub use client_request::ClientRequest;
+pub use client_request::ClientRequestMethod;
 pub use client_request::ConfigApplyFlagsParams;
 pub use client_request::ConfigWriteParams;
 pub use client_request::ElicitationResolveParams;
@@ -176,6 +200,7 @@ pub use server_request::SdkSessionSummary;
 pub use server_request::SdkSlashCommand;
 pub use server_request::ServerCancelRequestParams;
 pub use server_request::ServerRequest;
+pub use server_request::ServerRequestMethod;
 pub use server_request::SessionListResult;
 pub use server_request::SessionReadResult;
 pub use server_request::SessionResumeResult;
@@ -309,6 +334,12 @@ pub use task::TaskStateBase;
 pub use task::TaskStatus;
 pub use task::TaskType;
 pub use task::generate_task_id;
+pub use task_list::ExpandedView;
+pub use task_list::TaskClaimOutcome;
+pub use task_list::TaskListStatus;
+pub use task_list::TaskRecord;
+pub use task_list::TaskRecordUpdate;
+pub use task_list::TodoRecord;
 
 // Thinking types
 pub use thinking::ReasoningEffort;

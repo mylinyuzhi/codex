@@ -261,6 +261,26 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
             }
             true
         }
+        ServerNotification::TaskPanelChanged(p) => {
+            // Unified snapshot refresh — mirrors TS `notifyTasksUpdated`.
+            state.session.plan_tasks = p.plan_tasks;
+            state.session.todos_by_agent = p.todos_by_agent;
+            state.session.expanded_view = p.expanded_view;
+            state.session.verification_nudge_pending = p.verification_nudge_pending;
+            true
+        }
+        ServerNotification::PlanApprovalRequested(p) => {
+            let overlay = crate::state::PlanApprovalOverlay::new(
+                p.request_id,
+                p.from,
+                p.plan_file_path,
+                p.plan_content,
+            );
+            state
+                .ui
+                .set_overlay(crate::state::Overlay::PlanApproval(overlay));
+            true
+        }
         ServerNotification::AgentsKilled(p) => {
             state
                 .ui

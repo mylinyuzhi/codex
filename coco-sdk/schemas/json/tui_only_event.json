@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "TuiOnlyEvent",
-  "description": "TUI-exclusive events.\n\nThese events are dropped by SDK and App-Server consumers. They drive overlays, toasts, and UI-only state transitions that are not part of the protocol contract.\n\nPer `event-system-design.md` Section 1.7, the design listed this type as owned by `coco-tui`. Since `CoreEvent::Tui(TuiOnlyEvent)` is part of the envelope enum defined in `coco-types`, the type itself must live in `coco-types` to avoid a cyclic dependency. The semantic contract (TUI-only, never sent to SDK) is preserved via consumer dispatch rules in `StreamAccumulator` and `handle_core_event()`.\n\nSee `event-system-design.md` Section 4.1 for the canonical 20-variant list.",
+  "description": "TUI-exclusive events.\n\nThese events are dropped by SDK and App-Server consumers. They drive overlays, toasts, and UI-only state transitions that are not part of the protocol contract.\n\nPer `event-system-design.md` Section 1.7, the design listed this type as owned by `coco-tui`. Since `CoreEvent::Tui(TuiOnlyEvent)` is part of the envelope enum defined in `coco-types`, the type itself must live in `coco-types` to avoid a cyclic dependency. The semantic contract (TUI-only, never sent to SDK) is preserved via consumer dispatch rules in `StreamAccumulator` and `handle_core_event()`.\n\n21 variants (20 from design §4.1 + 1 coco-rs extension).",
   "oneOf": [
     {
       "description": "Permission approval overlay needed.",
@@ -378,7 +378,7 @@
       }
     },
     {
-      "description": "Streaming tool input delta (typing effect).",
+      "description": "Streaming tool input delta (typing effect).\n\n# Status: reserved scaffolding, not yet wired\n\nThe TUI has a handler (`server_notification_handler::handle_tui_only`) that appends the delta to `ToolExecution.streaming_input` for a typing-effect display, but **no producer currently emits this variant** in coco-rs.\n\nThe inference layer's `StreamEvent::ToolCallDelta` (a different type, internal to `coco-inference`) is fully accumulated into the complete tool input before the engine emits `AgentStreamEvent::ToolUseQueued` with the finalized input. Consumers see the complete input at once.\n\nFuture work to wire this up would require the inference layer to forward the partial JSON fragments alongside the accumulation, and the engine to emit them here as `CoreEvent::Tui(ToolCallDelta { ... })`.\n\n# Why keep it in TuiOnlyEvent (not AgentStreamEvent)\n\nPer `event-system-design.md` §3.3: partial JSON deltas serve a purely UI display purpose (typing effect) and the SDK does not need them — `ToolUseQueued` already contains the complete input. Promoting to `AgentStreamEvent` would burden SDK consumers with partial JSON they must re-assemble, with no behavioral benefit.",
       "type": "object",
       "required": [
         "call_id",

@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "ServerNotification",
-  "description": "Protocol-level notifications visible to all consumers.\n\n43 base variants from cocode-rs design + 9 TS gap additions = 52 total. Each variant has an explicit `#[serde(rename = \"...\")]` for its wire method. See `event-system-design.md` Section 2.",
+  "description": "Protocol-level notifications visible to all consumers.\n\n66 variants across 20 categories. See `event-system-design.md` Section 2. Each variant's wire method is generated together with the matching `NotificationMethod` discriminant.",
   "oneOf": [
     {
       "description": "New session started.",
@@ -518,6 +518,44 @@
       }
     },
     {
+      "description": "Durable plan-item / V1 todo snapshot — emitted after `TaskCreate`/`TaskUpdate`/`TodoWrite` tools mutate state so the TUI can refresh its panel without pulling the store directly. TS parity: `notifyTasksUpdated` subscriber callback in `utils/tasks.ts`.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "task_panel/changed"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/TaskPanelChangedParams"
+        }
+      }
+    },
+    {
+      "description": "Team lead received a plan-approval request from a teammate (via mailbox). The TUI surfaces this as a modal overlay. TS parity: `ExitPlanModeV2Tool.ts:137-141` teammate request flow.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "plan_approval/requested"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/PlanApprovalRequestedParams"
+        }
+      }
+    },
+    {
       "description": "Agents killed.",
       "type": "object",
       "required": [
@@ -998,26 +1036,7 @@
       }
     },
     {
-      "description": "Hook executed (post-completion summary; from cocode-rs base). Kept alongside HookStarted/Progress/Response to preserve the 43-variant base contract.",
-      "type": "object",
-      "required": [
-        "method",
-        "params"
-      ],
-      "properties": {
-        "method": {
-          "type": "string",
-          "enum": [
-            "hook/executed"
-          ]
-        },
-        "params": {
-          "$ref": "#/definitions/HookExecutedParams"
-        }
-      }
-    },
-    {
-      "description": "Hook execution started (TS gap P1).",
+      "description": "Hook execution started.",
       "type": "object",
       "required": [
         "method",
@@ -1577,6 +1596,15 @@
         }
       }
     },
+    "ExpandedView": {
+      "description": "Which panel the TUI should have expanded in the task area. TS parity: `AppState.expandedView` in `AppStateStore.ts` (3 variants: `'none' | 'tasks' | 'teammates'`).",
+      "type": "string",
+      "enum": [
+        "none",
+        "tasks",
+        "teammates"
+      ]
+    },
     "FastModeState": {
       "description": "Matches TS `FastModeStateSchema` (coreSchemas.ts:1883-1889).",
       "type": "string",
@@ -1594,13 +1622,20 @@
       ],
       "properties": {
         "kind": {
-          "description": "One of: \"create\", \"modify\", \"delete\".",
-          "type": "string"
+          "$ref": "#/definitions/FileChangeKind"
         },
         "path": {
           "type": "string"
         }
       }
+    },
+    "FileChangeKind": {
+      "type": "string",
+      "enum": [
+        "create",
+        "modify",
+        "delete"
+      ]
     },
     "FilesPersistedParams": {
       "description": "Matches TS `SDKFilesPersistedEvent` (coreSchemas.ts:1672-1692).\n\nTS emits this when files are uploaded or persisted (e.g. after a successful `filesApi` operation).",
@@ -1624,22 +1659,6 @@
           }
         },
         "processed_at": {
-          "type": "string"
-        }
-      }
-    },
-    "HookExecutedParams": {
-      "description": "Params for the cocode-rs-base `hook/executed` notification. Simpler than `hook/started` → `hook/response` lifecycle: this is a single post-completion summary keeping the 43-variant base contract.",
-      "type": "object",
-      "required": [
-        "hook_name",
-        "hook_type"
-      ],
-      "properties": {
-        "hook_name": {
-          "type": "string"
-        },
-        "hook_type": {
           "type": "string"
         }
       }
@@ -1922,6 +1941,35 @@
         }
       }
     },
+    "PermissionMode": {
+      "description": "Permission mode (top-level because it's used by both message and permission modules).\n\nWire format is camelCase to match TS `PermissionModeSchema` at `coreSchemas.ts:337-347`: `z.enum(['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk'])`. The serde aliases on the drifting variants accept legacy snake_case input so old session transcripts deserialize cleanly.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "default",
+            "plan",
+            "bypassPermissions",
+            "dontAsk",
+            "acceptEdits"
+          ]
+        },
+        {
+          "description": "Feature-gated auto mode.",
+          "type": "string",
+          "enum": [
+            "auto"
+          ]
+        },
+        {
+          "description": "Internal: escalate to parent agent.",
+          "type": "string",
+          "enum": [
+            "bubble"
+          ]
+        }
+      ]
+    },
     "PermissionModeChangedParams": {
       "type": "object",
       "required": [
@@ -1933,7 +1981,7 @@
           "type": "boolean"
         },
         "mode": {
-          "type": "string"
+          "$ref": "#/definitions/PermissionMode"
         }
       }
     },
@@ -1963,6 +2011,36 @@
           "type": "string"
         },
         "filename": {
+          "type": "string"
+        }
+      }
+    },
+    "PlanApprovalRequestedParams": {
+      "description": "A teammate's plan-approval request, surfaced to the team lead's TUI for approve/deny. Payload byte-matches TS `PlanApprovalRequestSchema` — see `tools/ExitPlanModeTool/`.",
+      "type": "object",
+      "required": [
+        "from",
+        "plan_content",
+        "request_id"
+      ],
+      "properties": {
+        "from": {
+          "description": "Teammate agent name.",
+          "type": "string"
+        },
+        "plan_content": {
+          "description": "Plan text rendered from the teammate's plan file.",
+          "type": "string"
+        },
+        "plan_file_path": {
+          "description": "Optional on-disk plan file path.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_id": {
+          "description": "Correlation id carried back in the response envelope.",
           "type": "string"
         }
       }
@@ -2561,6 +2639,48 @@
         "stopped"
       ]
     },
+    "TaskListStatus": {
+      "description": "Task status wire format — matches TS `TaskStatusSchema` (`utils/tasks.ts:69-74`). **Distinct** from [`crate::TaskStatus`], which is the 6-variant running-task lifecycle enum.",
+      "type": "string",
+      "enum": [
+        "pending",
+        "in_progress",
+        "completed"
+      ]
+    },
+    "TaskPanelChangedParams": {
+      "description": "Snapshot of the task panel state — tools emit this post-mutation so the TUI can redraw without reaching into `ToolAppState` directly.",
+      "type": "object",
+      "required": [
+        "expanded_view",
+        "plan_tasks",
+        "verification_nudge_pending"
+      ],
+      "properties": {
+        "expanded_view": {
+          "$ref": "#/definitions/ExpandedView"
+        },
+        "plan_tasks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/TaskRecord"
+          }
+        },
+        "todos_by_agent": {
+          "default": {},
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/definitions/TodoRecord"
+            }
+          }
+        },
+        "verification_nudge_pending": {
+          "type": "boolean"
+        }
+      }
+    },
     "TaskProgressParams": {
       "description": "Matches TS `SDKTaskProgressMessage` (coreSchemas.ts:1750-1767). In TS, `description` and `usage` are required; other fields optional. The `workflow_progress` field carries the streaming state of local_workflow tasks — a delta batch of workflow state changes.",
       "type": "object",
@@ -2600,6 +2720,63 @@
         "workflow_progress": {
           "type": "array",
           "items": true
+        }
+      }
+    },
+    "TaskRecord": {
+      "description": "A durable plan-item, matching TS `TaskSchema` (`utils/tasks.ts:76-89`).",
+      "type": "object",
+      "required": [
+        "id",
+        "status",
+        "subject"
+      ],
+      "properties": {
+        "activeForm": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "blockedBy": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "blocks": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "description": {
+          "default": "",
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "owner": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/definitions/TaskListStatus"
+        },
+        "subject": {
+          "type": "string"
         }
       }
     },
@@ -2946,6 +3123,26 @@
           }
         }
       ]
+    },
+    "TodoRecord": {
+      "description": "A TodoWrite item — byte-matches TS `TodoItemSchema` (no `id` field, positional identity).",
+      "type": "object",
+      "required": [
+        "activeForm",
+        "content",
+        "status"
+      ],
+      "properties": {
+        "activeForm": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      }
     },
     "TokenUsage": {
       "description": "Per-request token counts (returned by LLM API).",

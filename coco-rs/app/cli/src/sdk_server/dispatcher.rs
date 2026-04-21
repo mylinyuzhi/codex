@@ -574,18 +574,21 @@ fn core_event_to_notification(event: CoreEvent) -> Option<JsonRpcNotification> {
 /// Exposed for handlers that want to emit synthetic protocol notifications
 /// without going through CoreEvent.
 ///
-/// Uses `ServerNotification::method()` for the wire method and moves the
-/// params subtree out of the intermediate `Value` object so the hot path
-/// (per-token `AgentMessageDelta` / `ReasoningDelta`) doesn't deep-clone
-/// the params payload on every emission.
+/// Extracts both `method` and `params` from the serde-serialized `Value`
+/// so serde's `#[serde(tag = "method")]` stays the single source of truth
+/// for the wire envelope.
 pub fn server_notification_to_jsonrpc(notif: ServerNotification) -> Option<JsonRpcNotification> {
-    let method = notif.method().to_string();
-    let value = serde_json::to_value(&notif).ok()?;
-    let params = match value {
-        Value::Object(mut map) => map.remove("params").unwrap_or(Value::Null),
-        _ => return None,
-    };
-    Some(JsonRpcNotification { method, params })
+    match serde_json::to_value(notif).ok()? {
+        Value::Object(mut map) => {
+            let method = match map.remove("method")? {
+                Value::String(s) => s,
+                _ => return None,
+            };
+            let params = map.remove("params").unwrap_or(Value::Null);
+            Some(JsonRpcNotification { method, params })
+        }
+        _ => None,
+    }
 }
 
 #[cfg(test)]

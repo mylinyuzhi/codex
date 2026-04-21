@@ -2,18 +2,22 @@
 
 use std::path::PathBuf;
 
-/// Environment variable for custom coco home directory.
-pub const COCODE_HOME_ENV: &str = "COCODE_HOME";
+/// Environment variable for overriding the coco config / home directory.
+///
+/// Kept in sync with `coco_config::EnvKey::CocoConfigDir`, but duplicated
+/// as a literal here because `coco-utils-common` sits below `coco-config`
+/// in the dependency graph and cannot reach back up.
+pub const COCO_CONFIG_DIR_ENV: &str = "COCO_CONFIG_DIR";
 
 /// Default coco directory name.
 const DEFAULT_DIR: &str = ".coco";
 
 /// Resolve the coco home directory.
 ///
-/// Checks `COCODE_HOME` env var first, falls back to `~/.coco`.
+/// Checks `COCO_CONFIG_DIR` env var first, falls back to `~/.coco`.
 /// If no home directory can be determined, falls back to `./.coco`.
 pub fn find_coco_home() -> PathBuf {
-    std::env::var(COCODE_HOME_ENV)
+    std::env::var(COCO_CONFIG_DIR_ENV)
         .ok()
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)

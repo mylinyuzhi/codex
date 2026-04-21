@@ -2,7 +2,7 @@
 
 import asyncio
 
-from coco_sdk import CocoClient, tool
+from coco_sdk import CocoClient, NotificationMethod, tool
 
 
 @tool()
@@ -29,11 +29,11 @@ async def main():
         permission_mode="bypassPermissions",
     ) as client:
         async for event in client.events():
-            if event.method == "agentMessage/delta":
+            if event.method == NotificationMethod.AGENT_MESSAGE_DELTA:
                 delta = event.as_agent_message_delta()
                 if delta:
                     print(delta.delta, end="", flush=True)
-            elif event.method == "turn/completed":
+            elif event.method == NotificationMethod.TURN_COMPLETED:
                 print()
 
 
