@@ -26,7 +26,7 @@ Paths relative to `/lyz/codespace/3rd/claude-code/src/`.
 - `SESSION_HOOK_EVENTS` — 10 session-level event names
 
 ## Key Functions
-- `execute_hook()` — dispatch across handler types with env injection + stdin piping, CRLF-sanitized HTTP headers, `$VAR` interpolation, SSRF gate for HTTP, shell prefix via `CLAUDE_CODE_SHELL_PREFIX`
+- `execute_hook()` — dispatch across handler types with env injection + stdin piping, CRLF-sanitized HTTP headers, `$VAR` interpolation, SSRF gate for HTTP, shell prefix via `COCO_SHELL_PREFIX`
 - `load_hooks_from_config()` — deserialize snake_case event-keyed JSON, apply top-level `timeout` seconds to handler ms
 - `matcher_matches()` — TS parity: `None` all, `"*"` needs value, simple alnum/`_`/`|`, else regex with glob fallback
 

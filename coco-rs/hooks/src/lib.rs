@@ -5,8 +5,11 @@
 pub mod async_registry;
 pub mod inputs;
 pub mod orchestration;
+pub mod reminder_source;
 pub mod ssrf;
 
+use coco_config::EnvKey;
+use coco_config::env;
 use coco_types::HookEventType;
 use coco_types::HookOutcome;
 use coco_types::HookScope;
@@ -422,8 +425,8 @@ pub async fn execute_hook(
         } => {
             let shell_bin = shell.as_deref().unwrap_or("sh");
 
-            // Shell prefix support (TS: CLAUDE_CODE_SHELL_PREFIX).
-            let final_command = match std::env::var("CLAUDE_CODE_SHELL_PREFIX") {
+            // Optional shell prefix support.
+            let final_command = match env::var(EnvKey::CocoShellPrefix) {
                 Ok(prefix) if !prefix.is_empty() => format!("{prefix} {command}"),
                 _ => command.clone(),
             };

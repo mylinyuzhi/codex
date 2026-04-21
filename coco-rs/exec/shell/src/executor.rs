@@ -2,12 +2,15 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use coco_config::ShellConfig;
+
 use crate::result::CommandResult;
 use crate::result::ExecOptions;
 use crate::safety::SafetyResult;
 use crate::shell_types::Shell;
 use crate::shell_types::ShellType;
 use crate::shell_types::default_user_shell;
+use crate::shell_types::shell_from_config;
 use crate::snapshot::ShellSnapshot;
 use crate::snapshot::SnapshotConfig;
 
@@ -20,13 +23,33 @@ pub struct ShellExecutor {
     cwd: PathBuf,
     /// Shell configuration with type, path, and optional snapshot.
     shell: Shell,
+    /// Resolved user settings — controls snapshot disable, shell-prefix, etc.
+    ///
+    /// `None` keeps legacy behavior for callers constructed via `new()`
+    /// before the config pipeline existed (tests + pre-runtime paths).
+    shell_config: Option<ShellConfig>,
 }
 
 impl ShellExecutor {
+    /// Construct an executor that auto-detects the shell from `$SHELL`
+    /// + platform defaults. No user settings applied.
     pub fn new(cwd: &Path) -> Self {
         Self {
             cwd: cwd.to_path_buf(),
             shell: default_user_shell(),
+            shell_config: None,
+        }
+    }
+
+    /// Construct an executor that honors a resolved [`ShellConfig`]:
+    ///   - `default_shell` acts as the bash/zsh override
+    ///   - `disable_snapshot` gates [`start_snapshotting`]
+    ///   - `shell_prefix` is reserved for future consumption (logged today)
+    pub fn new_with_config(cwd: &Path, shell_config: &ShellConfig) -> Self {
+        Self {
+            cwd: cwd.to_path_buf(),
+            shell: shell_from_config(shell_config),
+            shell_config: Some(shell_config.clone()),
         }
     }
 
@@ -53,8 +76,16 @@ impl ShellExecutor {
     /// The snapshot captures the user's shell environment (functions, aliases,
     /// options, exports) and sources it before each command, avoiding login
     /// shell overhead while preserving the user's interactive environment.
+    ///
+    /// When `shell_config.disable_snapshot` is true (via settings.json or
+    /// `COCO_DISABLE_SHELL_SNAPSHOT` folded into the config at resolve time),
+    /// this is a no-op.
     pub fn start_snapshotting(&mut self, coco_home: PathBuf, session_id: &str) {
-        if std::env::var("COCO_DISABLE_SHELL_SNAPSHOT").is_ok() {
+        if self
+            .shell_config
+            .as_ref()
+            .is_some_and(|c| c.disable_snapshot)
+        {
             return;
         }
         let config = SnapshotConfig::new(&coco_home);
@@ -401,6 +432,7 @@ impl ShellExecutor {
         Self {
             cwd: self.cwd.clone(),
             shell: self.shell.clone(),
+            shell_config: self.shell_config.clone(),
         }
     }
 
@@ -442,7 +474,7 @@ fn disable_extglob_command(shell_type: &ShellType) -> &'static str {
     match shell_type {
         ShellType::Bash => "shopt -u extglob 2>/dev/null || true",
         ShellType::Zsh => "setopt NO_EXTENDED_GLOB 2>/dev/null || true",
-        // For unknown or sh, try both (TS does this when CLAUDE_CODE_SHELL_PREFIX is set)
+        // For unknown or sh, try both.
         _ => "{ shopt -u extglob || setopt NO_EXTENDED_GLOB; } >/dev/null 2>&1 || true",
     }
 }

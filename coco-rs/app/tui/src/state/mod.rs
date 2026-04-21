@@ -34,6 +34,7 @@ pub use overlay::ModelPickerOverlay;
 pub use overlay::Overlay;
 pub use overlay::PermissionDetail;
 pub use overlay::PermissionOverlay;
+pub use overlay::PlanApprovalOverlay;
 pub use overlay::PlanEntryOverlay;
 pub use overlay::PlanExitOverlay;
 pub use overlay::PlanExitTarget;

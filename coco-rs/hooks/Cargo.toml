@@ -8,7 +8,9 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+coco-config.workspace = true
 coco-types.workspace = true
+coco-system-reminder.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 anyhow.workspace = true

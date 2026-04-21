@@ -22,9 +22,12 @@ from coco_sdk.generated.protocol import (
     ConfigWriteRequest,
     HookCallbackConfig,
     HookCallbackResponseRequest,
+    ClientRequestMethod,
     McpServerConfig,
+    NotificationMethod,
     RewindFilesRequest,
     ServerNotification,
+    ServerRequestMethod,
     ServerRequest,
     SessionArchiveRequest,
     SessionListRequest,
@@ -166,14 +169,17 @@ class CocoClient:
                 name, config = tool_def.to_sdk_mcp_config()
                 mcp_servers[name] = config
 
-        # Send session/start request
+        # Send session/start request. Only the fields present in the Rust
+        # `SessionStartParams` schema make it onto the wire; everything else
+        # (legacy cocode-sdk knobs like `env`, `sandbox`, `output_format`) is
+        # silently dropped by pydantic's default unknown-field handling.
         request = SessionStartRequest(
             params=SessionStartRequest.SessionStartRequestParams(
-                prompt=self._initial_prompt,
+                initial_prompt=self._initial_prompt,
                 model=self._model,
                 max_turns=self._max_turns,
                 cwd=self._cwd,
-                system_prompt_suffix=self._system_prompt_suffix,
+                append_system_prompt=self._system_prompt_suffix,
                 system_prompt=self._system_prompt,
                 permission_mode=self._permission_mode,
                 env=self._env,
@@ -205,7 +211,7 @@ class CocoClient:
             method = line_data.get("method", "")
 
             # Detect ServerRequest (approval/question) vs ServerNotification
-            if method == "approval/askForApproval":
+            if method == ServerRequestMethod.APPROVAL_ASK_FOR_APPROVAL:
                 if self._can_use_tool:
                     params = line_data.get("params", {})
                     decision = await self._can_use_tool(
@@ -218,7 +224,7 @@ class CocoClient:
                 yield _safe_parse_notification(line_data)
                 continue
 
-            if method == "hook/callback":
+            if method == ServerRequestMethod.HOOK_CALLBACK:
                 params = line_data.get("params", {})
                 cb_id = params.get("callback_id", "")
                 handler = self._hook_handlers.get(cb_id)
@@ -248,7 +254,7 @@ class CocoClient:
                 yield _safe_parse_notification(line_data)
                 continue
 
-            if method == "mcp/routeMessage":
+            if method == ServerRequestMethod.MCP_ROUTE_MESSAGE:  # wire unchanged
                 params = line_data.get("params", {})
                 server_name = params.get("server_name", "")
                 request_id = params.get("request_id", "")
@@ -271,7 +277,7 @@ class CocoClient:
                 yield _safe_parse_notification(line_data)
                 continue
 
-            if method == "input/requestUserInput":
+            if method == ServerRequestMethod.INPUT_REQUEST_USER_INPUT:
                 # Always yield for manual handling (no auto-response)
                 yield _safe_parse_notification(line_data)
                 continue
@@ -281,13 +287,13 @@ class CocoClient:
             yield event
 
             # Stop after turn completion or failure
-            if method in ("turn/completed", "turn/failed"):
+            if method in (NotificationMethod.TURN_COMPLETED, NotificationMethod.TURN_FAILED):
                 break
 
     async def send(self, text: str) -> AsyncIterator[ServerNotification]:
         """Send a follow-up message and yield events from the new turn."""
         request = TurnStartRequest(
-            params=TurnStartRequest.TurnStartRequestParams(text=text)
+            params=TurnStartRequest.TurnStartRequestParams(prompt=text)
         )
         await self._transport.send_line(request.model_dump_json())
         async for event in self.events():
@@ -466,7 +472,7 @@ class CocoClient:
     ) -> None:
         """Respond to an mcp/routeMessage server request."""
         msg = {
-            "method": "mcp/routeMessageResponse",
+            "method": ClientRequestMethod.MCP_ROUTE_MESSAGE_RESPONSE.value,
             "params": {
                 "request_id": request_id,
                 "response": response if response is not None else {},
@@ -519,7 +525,7 @@ class CocoClient:
     async def stream_text(self) -> AsyncIterator[str]:
         """Yield only text deltas from the current turn."""
         async for event in self.events():
-            if event.method == "agentMessage/delta":
+            if event.method == NotificationMethod.AGENT_MESSAGE_DELTA:
                 delta = event.as_agent_message_delta()
                 if delta:
                     yield delta.delta
@@ -536,7 +542,7 @@ class CocoClient:
         """Consume all events and return the accumulated assistant text."""
         parts: list[str] = []
         async for event in self.events():
-            if event.method == "agentMessage/delta":
+            if event.method == NotificationMethod.AGENT_MESSAGE_DELTA:
                 parts.append(event.params.get("delta", ""))
         return "".join(parts)
 

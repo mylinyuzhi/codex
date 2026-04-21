@@ -83,17 +83,22 @@ pub trait SdkTransport: Send + Sync {
     /// streaming hot path (`AgentMessageDelta` / `ReasoningDelta`) where the
     /// accumulator can emit 100+ notifications per second.
     async fn send_notification(&self, notif: &ServerNotification) -> Result<(), TransportError> {
-        let method = notif.method().to_string();
         // ServerNotification is `#[serde(tag = "method", content = "params")]`,
-        // so `to_value` always produces an object with those two keys. Pull
-        // params out and drop method (we use the typed `method()` accessor).
-        let params = match serde_json::to_value(notif)? {
+        // so `to_value` always produces `{"method": "...", "params": ...}`.
+        // Pull both fields from the same serialization pass to keep serde as
+        // the single source of truth for the wire envelope.
+        let (method, params) = match serde_json::to_value(notif)? {
             serde_json::Value::Object(mut map) => {
-                map.remove("params").unwrap_or(serde_json::Value::Null)
+                let method = match map.remove("method") {
+                    Some(serde_json::Value::String(s)) => s,
+                    _ => notif.method().as_str().to_string(),
+                };
+                let params = map.remove("params").unwrap_or(serde_json::Value::Null);
+                (method, params)
             }
             // Unreachable for a well-formed ServerNotification, but don't
-            // crash — surface an empty params object.
-            _ => serde_json::Value::Null,
+            // crash — fall back to the typed accessor + null params.
+            _ => (notif.method().as_str().to_string(), serde_json::Value::Null),
         };
         self.send(JsonRpcMessage::Notification(JsonRpcNotification {
             method,

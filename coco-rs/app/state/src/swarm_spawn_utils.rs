@@ -6,12 +6,14 @@ use super::swarm_backend::TeammateSpawnConfig;
 use super::swarm_constants::AGENT_TEAMS_ENV_VAR;
 use super::swarm_constants::PLAN_MODE_REQUIRED_ENV_VAR;
 use super::swarm_constants::TEAMMATE_COLOR_ENV_VAR;
+use coco_config::EnvKey;
+use coco_config::env;
 
 /// Get the command used to spawn teammates.
 ///
 /// TS: `getTeammateCommand()` — TEAMMATE_COMMAND env var or process executable.
 pub fn get_teammate_command() -> String {
-    std::env::var(super::swarm_constants::TEAMMATE_COMMAND_ENV_VAR).unwrap_or_else(|_| {
+    env::var(super::swarm_constants::TEAMMATE_COMMAND_ENV_VAR).unwrap_or_else(|_| {
         std::env::current_exe()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|_| "claude".to_string())
@@ -111,17 +113,22 @@ pub fn build_inherited_env_vars(config: &TeammateSpawnConfig) -> String {
         vars.push(format!("{PLAN_MODE_REQUIRED_ENV_VAR}=1"));
     }
 
-    // Inherit all teammate env vars (TS: TEAMMATE_ENV_VARS array)
+    // Inherit coco runtime env vars. Bedrock / Vertex / Foundry
+    // routing vars were removed — re-add here alongside the provider
+    // crate when those providers ship.
     for var in &[
-        // API provider selection
-        "CLAUDE_CODE_USE_BEDROCK",
-        "CLAUDE_CODE_USE_VERTEX",
-        "CLAUDE_CODE_USE_FOUNDRY",
-        "ANTHROPIC_BASE_URL",
-        // Config & remote
-        "CLAUDE_CONFIG_DIR",
-        "CLAUDE_CODE_REMOTE",
-        "CLAUDE_CODE_REMOTE_MEMORY_DIR",
+        EnvKey::AnthropicBaseUrl,
+        EnvKey::CocoConfigDir,
+        EnvKey::CocoRemote,
+        EnvKey::CocoRemoteMemoryDir,
+    ] {
+        if let Ok(val) = env::var(*var) {
+            vars.push(format!("{var}={val}"));
+        }
+    }
+
+    // Inherit external provider, proxy, and certificate env vars.
+    for var in &[
         // AWS
         "AWS_REGION",
         "AWS_PROFILE",

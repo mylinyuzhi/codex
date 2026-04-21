@@ -12,8 +12,8 @@ Layered config resolution: settings files, model/provider selection, effort/thin
 
 - `Settings`, `SettingsWithSource`, `SettingSource` (6 layers: Plugin < User < Project < Local < Flag < Policy)
 - `SettingsWatcher` (debounced file watcher via `utils/file-watch`)
-- `GlobalConfig` (~/.coco.json), `BootstrapConfig`, `SessionState`, `SessionSettings`
-- `ModelInfo`, `ModelRoles`, `ModelAlias`, `ResolvedConfig`, `RuntimeOverrides`
+- `GlobalConfig` (~/.coco.json), `SessionSettings`
+- `ModelInfo`, `ModelRoles`, `ModelAlias`, `RuntimeConfig`, `RuntimeOverrides`
 - `ProviderConfig`, `ProviderInfo`
 - `EnvOnlyConfig` (env-only overrides: Bedrock/Vertex/Foundry routing, model overrides, limits)
 - `FastModeState` + `CooldownReason`

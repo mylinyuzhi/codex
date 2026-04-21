@@ -10,6 +10,8 @@ workspace = true
 [dependencies]
 coco-types.workspace = true
 coco-file-watch.workspace = true
+coco-system-reminder.workspace = true
+async-trait.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 anyhow.workspace = true

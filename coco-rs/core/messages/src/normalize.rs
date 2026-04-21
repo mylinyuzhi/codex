@@ -2,11 +2,113 @@
 //!
 //! TS: normalizeMessagesForAPI() — 10-step pipeline that transforms
 //! internal messages into the format expected by the LLM API.
+//!
+//! Port from cocode-rs: [`NormalizationOptions`] presets
+//! ([`for_api`](NormalizationOptions::for_api) /
+//! [`for_ui`](NormalizationOptions::for_ui) /
+//! [`for_persist`](NormalizationOptions::for_persist)) expose the same
+//! pipeline under different axis filters, so callers don't re-derive
+//! predicates per use case.
 
 use coco_types::LlmMessage;
 use coco_types::Message;
+use coco_types::Visibility;
 
 use crate::predicates;
+
+/// Configurable filter knobs for the normalization pipeline.
+///
+/// Callers pick a preset via the constructors below. Fields are public so
+/// one-offs can override a single flag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NormalizationOptions {
+    /// Drop messages where `Visibility::api == false` (silent / UI-only).
+    pub require_api_visible: bool,
+    /// Drop messages where `Visibility::ui == false` (API-only / hidden).
+    pub require_ui_visible: bool,
+    /// Drop `is_virtual=true` user messages (never sent anywhere).
+    pub skip_virtual: bool,
+    /// Drop tombstoned messages (summary markers, etc.).
+    pub skip_tombstones: bool,
+    /// Drop whitespace-only user messages (unless `is_meta=true`).
+    pub skip_whitespace_user: bool,
+}
+
+impl NormalizationOptions {
+    /// Preset for outgoing API requests: strip anything API-hidden, keep
+    /// is_meta user messages, enforce tool-result pairing + ordering.
+    pub const fn for_api() -> Self {
+        Self {
+            require_api_visible: true,
+            require_ui_visible: false,
+            skip_virtual: true,
+            skip_tombstones: true,
+            skip_whitespace_user: true,
+        }
+    }
+
+    /// Preset for UI rendering: strip anything UI-hidden (silent events,
+    /// meta user messages, API-only system messages).
+    pub const fn for_ui() -> Self {
+        Self {
+            require_api_visible: false,
+            require_ui_visible: true,
+            skip_virtual: true,
+            skip_tombstones: true,
+            skip_whitespace_user: false,
+        }
+    }
+
+    /// Preset for transcript persistence: keep everything the session
+    /// history carried, drop nothing — mirrors TS's unfiltered
+    /// `appendEntryToFile`.
+    pub const fn for_persist() -> Self {
+        Self {
+            require_api_visible: false,
+            require_ui_visible: false,
+            skip_virtual: false,
+            skip_tombstones: false,
+            skip_whitespace_user: false,
+        }
+    }
+}
+
+/// Apply visibility / virtual / tombstone / whitespace filters per `opts`.
+///
+/// Returns borrowed references preserving original message order. Callers
+/// that need further API-specific steps (tool-result pairing, consecutive
+/// merging, role-first enforcement) use [`normalize_messages_for_api`];
+/// callers that want a pre-filter for UI / persistence use this directly.
+pub fn filter_by_options<'a>(
+    messages: &'a [Message],
+    opts: NormalizationOptions,
+) -> Vec<&'a Message> {
+    messages
+        .iter()
+        .filter(|m| {
+            if opts.skip_virtual && predicates::is_virtual_message(m) {
+                return false;
+            }
+            if opts.skip_tombstones && predicates::is_tombstone(m) {
+                return false;
+            }
+            let Visibility { api, ui } = m.visibility();
+            if opts.require_api_visible && !api {
+                return false;
+            }
+            if opts.require_ui_visible && !ui {
+                return false;
+            }
+            if opts.skip_whitespace_user && predicates::is_user_message(m) {
+                let has_content = predicates::has_text_content(m) || predicates::is_meta_message(m);
+                if !has_content {
+                    return false;
+                }
+            }
+            true
+        })
+        .collect()
+}
 
 /// Normalize messages for API consumption.
 ///
@@ -22,25 +124,17 @@ use crate::predicates;
 /// 9. Ensure conversation starts with user message
 /// 10. Extract LlmMessage from each surviving message
 pub fn normalize_messages_for_api(messages: &[Message]) -> Vec<LlmMessage> {
-    let mut filtered: Vec<&Message> = messages
-        .iter()
-        // Step 1: Filter virtual
-        .filter(|m| !predicates::is_virtual_message(m))
-        // Step 2: Filter tombstones
-        .filter(|m| !predicates::is_tombstone(m))
-        // Step 3: Filter progress
-        .filter(|m| !predicates::is_progress_message(m))
-        // Step 4: Filter tool use summaries
-        .filter(|m| !predicates::is_tool_use_summary(m))
-        .collect();
-
-    // Step 5: Filter whitespace-only user messages
-    filtered.retain(|m| {
-        if !predicates::is_user_message(m) {
-            return true;
-        }
-        predicates::has_text_content(m) || predicates::is_meta_message(m)
-    });
+    // Steps 1–5 collapse into one visibility-driven filter.
+    //
+    // - `require_api_visible` covers steps 3 (progress — UI_ONLY) and 4
+    //   (tool-use-summary — UI_ONLY) via their Visibility mapping. Any
+    //   `Message::Attachment` whose kind is API-hidden (silent events,
+    //   `AlreadyReadFile`, feature-gated kinds, etc.) is stripped too —
+    //   which is new correct behavior post-Phase-1.
+    // - `skip_virtual` covers step 1.
+    // - `skip_tombstones` covers step 2.
+    // - `skip_whitespace_user` covers step 5.
+    let mut filtered: Vec<&Message> = filter_by_options(messages, NormalizationOptions::for_api());
 
     // Step 6: Ensure tool result pairing
     // Collect tool_use_ids from assistant messages
@@ -109,7 +203,7 @@ fn extract_llm_message(msg: &Message) -> Option<LlmMessage> {
     match msg {
         Message::User(m) => Some(m.message.clone()),
         Message::Assistant(m) => Some(m.message.clone()),
-        Message::Attachment(m) => Some(m.message.clone()),
+        Message::Attachment(m) => m.as_api_message().cloned(),
         Message::ToolResult(m) => Some(m.message.clone()),
         Message::System(_) => {
             // System messages are sent as user messages with is_meta=true
@@ -321,7 +415,6 @@ pub fn ensure_user_first(messages: &mut Vec<Message>) {
                 message: LlmMessage::user_text(""),
                 uuid: uuid::Uuid::new_v4(),
                 timestamp: String::new(),
-                is_meta: true,
                 is_visible_in_transcript_only: false,
                 is_virtual: false,
                 is_compact_summary: false,

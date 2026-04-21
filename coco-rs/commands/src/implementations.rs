@@ -12,6 +12,8 @@ use crate::CommandRegistry;
 use crate::RegisteredCommand;
 use crate::builtin_base_ext;
 use crate::handlers;
+use coco_config::EnvKey;
+use coco_config::env;
 use coco_types::CommandSafety;
 use coco_types::CommandType;
 use coco_types::LocalCommandData;
@@ -1971,20 +1973,21 @@ fn ant_trace_handler(args: &str) -> String {
     let arg = args.trim().to_ascii_lowercase();
     match arg.as_str() {
         "on" => {
+            // SAFETY: slash commands run on the single-threaded UI task.
             unsafe {
-                std::env::set_var("COCO_ANT_TRACE", "1");
+                std::env::set_var(EnvKey::CocoAntTrace, "1");
             }
             "ant-trace enabled for this session (COCO_ANT_TRACE=1)".into()
         }
         "off" => {
             unsafe {
-                std::env::remove_var("COCO_ANT_TRACE");
+                std::env::remove_var(EnvKey::CocoAntTrace);
             }
             "ant-trace disabled".into()
         }
         _ => format!(
             "Usage: /ant-trace [on|off]\nCurrent: {}",
-            if std::env::var("COCO_ANT_TRACE").ok().as_deref() == Some("1") {
+            if env::var(EnvKey::CocoAntTrace).ok().as_deref() == Some("1") {
                 "on"
             } else {
                 "off"

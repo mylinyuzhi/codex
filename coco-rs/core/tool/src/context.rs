@@ -21,6 +21,8 @@ use crate::registry::ToolRegistry;
 use crate::schedule_store::ScheduleStoreRef;
 use crate::side_query::SideQueryHandle;
 use crate::task_handle::TaskHandleRef;
+use crate::task_list_handle::TaskListHandleRef;
+use crate::task_list_handle::TodoListHandleRef;
 use crate::traits::ProgressSender;
 
 /// Local denial tracking state for auto-mode fail-safe.
@@ -91,6 +93,22 @@ pub struct ToolUseContext {
     pub debug: bool,
     /// Verbose mode.
     pub verbose: bool,
+    /// Resolved tool runtime configuration.
+    pub tool_config: coco_config::ToolConfig,
+    /// Resolved sandbox runtime configuration.
+    pub sandbox_config: coco_config::SandboxConfig,
+    /// Resolved memory runtime configuration.
+    pub memory_config: coco_config::MemoryConfig,
+    /// Resolved shell runtime configuration. Consumed by Bash tool
+    /// (`ShellExecutor::new_with_config`) for shell-override + snapshot
+    /// gating.
+    pub shell_config: coco_config::ShellConfig,
+    /// Resolved web-fetch runtime configuration. Consumed by the
+    /// `WebFetchTool` for timeout / max-content-length / user-agent.
+    pub web_fetch_config: coco_config::WebFetchConfig,
+    /// Resolved web-search runtime configuration. Consumed by the
+    /// `WebSearchTool` for max-results.
+    pub web_search_config: coco_config::WebSearchConfig,
 
     // ── Core State ──
     /// Cancellation token for aborting tool execution.
@@ -254,6 +272,20 @@ pub struct ToolUseContext {
     /// TS: `spawnShellTask()`, `TaskOutput`, stall watchdog.
     pub task_handle: Option<TaskHandleRef>,
 
+    // ── Persistent Task List (V2) ──
+    /// Shared disk-backed plan-item store used by `TaskCreate`/`TaskGet`/
+    /// `TaskList`/`TaskUpdate`/`TaskStop` (when operating on todo tasks)
+    /// and `TaskOutput` (todo tasks). `NoOpTaskListHandle` in test
+    /// contexts or sessions lacking a resolved config-home path.
+    /// TS: `utils/tasks.ts`.
+    pub task_list: TaskListHandleRef,
+
+    // ── Per-Agent TodoWrite (V1) ──
+    /// In-memory per-agent checklist store used by `TodoWriteTool`.
+    /// Keyed by `agent_id.unwrap_or(session_id)`. Lives for the
+    /// process lifetime — TS never persists this to disk.
+    pub todo_list: TodoListHandleRef,
+
     // ── Hook Pipeline ──
     /// Optional callback into the hook pipeline (PreToolUse / PostToolUse /
     /// PostToolUseFailure). When `None`, the executor skips hook invocations
@@ -363,6 +395,12 @@ impl ToolUseContext {
             append_system_prompt: self.append_system_prompt.clone(),
             debug: self.debug,
             verbose: self.verbose,
+            tool_config: self.tool_config.clone(),
+            sandbox_config: self.sandbox_config.clone(),
+            memory_config: self.memory_config.clone(),
+            shell_config: self.shell_config.clone(),
+            web_fetch_config: self.web_fetch_config.clone(),
+            web_search_config: self.web_search_config.clone(),
             cancel: self.cancel.clone(),
             messages: self.messages.clone(),
             permission_context: self.permission_context.clone(),
@@ -400,6 +438,8 @@ impl ToolUseContext {
             permission_bridge: self.permission_bridge.clone(),
             progress_tx: self.progress_tx.clone(),
             task_handle: self.task_handle.clone(),
+            task_list: self.task_list.clone(),
+            todo_list: self.todo_list.clone(),
             hook_handle: self.hook_handle.clone(),
             file_read_state: self.file_read_state.clone(),
             file_history: self.file_history.clone(),
@@ -426,6 +466,12 @@ impl ToolUseContext {
             append_system_prompt: None,
             debug: false,
             verbose: false,
+            tool_config: coco_config::ToolConfig::default(),
+            sandbox_config: coco_config::SandboxConfig::default(),
+            memory_config: coco_config::MemoryConfig::default(),
+            shell_config: coco_config::ShellConfig::default(),
+            web_fetch_config: coco_config::WebFetchConfig::default(),
+            web_search_config: coco_config::WebSearchConfig::default(),
             cancel: CancellationToken::new(),
             messages: Arc::new(RwLock::new(Vec::new())),
             permission_context: ToolPermissionContext {
@@ -470,6 +516,8 @@ impl ToolUseContext {
             permission_bridge: None,
             progress_tx: None,
             task_handle: None,
+            task_list: Arc::new(crate::task_list_handle::InMemoryTaskListHandle::new()),
+            todo_list: Arc::new(crate::task_list_handle::InMemoryTodoListHandle::new()),
             hook_handle: None,
             file_read_state: None,
             file_history: None,

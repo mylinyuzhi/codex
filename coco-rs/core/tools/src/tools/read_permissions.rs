@@ -6,17 +6,14 @@
 //! resulting glob patterns as ripgrep `--glob '!...'` arguments plus
 //! hard-fails direct Read calls against blocked paths.
 //!
-//! coco-rs doesn't yet have a persistent permission context, so this
-//! module reads the patterns from a single environment variable:
-//!
-//! ```text
-//! COCO_FILE_READ_IGNORE_PATTERNS=".env:secrets/*:*.key"
-//! ```
-//!
-//! The value is a colon-separated list of glob patterns (per
-//! `globset::Glob::new`). Matches against any path component are
-//! blocked. When unset, no patterns are applied — matches current
-//! coco-rs behavior.
+//! coco-rs resolves the deny patterns ahead of time in
+//! `coco_config::ToolConfig::file_read_ignore_patterns` (JSON-first,
+//! env override via `COCO_FILE_READ_IGNORE_PATTERNS`). Tools build a
+//! matcher from `ctx.tool_config.file_read_ignore_patterns` and pass
+//! it into the helpers below. There is intentionally **no** global
+//! env-only matcher — keeping a single source of truth prevents
+//! JSON-configured patterns from silently disagreeing with a cached
+//! env-only snapshot.
 //!
 //! Wiring:
 //!
@@ -24,7 +21,7 @@
 //!   matches any pattern.
 //! * `GrepTool::check_permissions` rejects the `path` argument if it
 //!   matches; the walker also skips individual files that match during
-//!   traversal (via `file_read_ignore_matcher`).
+//!   traversal via `is_read_ignored_with_matcher`.
 //! * `GlobTool::check_permissions` mirrors Grep.
 //!
 //! Not a security boundary. TS explicitly notes the same thing in
@@ -37,53 +34,43 @@ use globset::Glob;
 use globset::GlobSet;
 use globset::GlobSetBuilder;
 use std::path::Path;
-use std::sync::OnceLock;
 
-/// Cached compiled matcher. Built once from the env var at first use;
-/// unset env var → empty matcher (matches nothing).
-static READ_IGNORE_MATCHER: OnceLock<GlobSet> = OnceLock::new();
-
-/// Return the compiled matcher. The first call parses
-/// `COCO_FILE_READ_IGNORE_PATTERNS` and caches the result.
+/// Compile a `GlobSet` matcher from a list of patterns.
 ///
-/// R6-T20.
-pub fn file_read_ignore_matcher() -> &'static GlobSet {
-    READ_IGNORE_MATCHER.get_or_init(|| {
-        let raw = std::env::var("COCO_FILE_READ_IGNORE_PATTERNS").unwrap_or_default();
-        let mut builder = GlobSetBuilder::new();
-        for pattern in raw.split(':').map(str::trim).filter(|s| !s.is_empty()) {
-            if let Ok(glob) = Glob::new(pattern) {
-                builder.add(glob);
-            } else {
-                tracing::warn!(
-                    pattern = %pattern,
-                    "COCO_FILE_READ_IGNORE_PATTERNS contains an invalid glob; skipping"
-                );
-            }
-            // Also add an any-ancestor version so `.env` matches
-            // `foo/.env`, `a/b/.env`, etc. Users expect `.env` to
-            // exclude every `.env` in the tree, not just one at the
-            // root. Add `**/.env` alongside the literal pattern.
-            if !pattern.contains('/')
-                && !pattern.contains('*')
-                && let Ok(glob) = Glob::new(&format!("**/{pattern}"))
-            {
-                builder.add(glob);
-            }
+/// Unqualified literal patterns (e.g. `.env`) are automatically expanded
+/// with an any-ancestor variant (`**/.env`) so a pattern matches every
+/// `.env` in the tree, not just one at the root.
+pub fn file_read_ignore_matcher_from_patterns(patterns: &[String]) -> GlobSet {
+    let mut builder = GlobSetBuilder::new();
+    for pattern in patterns.iter().map(String::as_str) {
+        if let Ok(glob) = Glob::new(pattern) {
+            builder.add(glob);
+        } else {
+            tracing::warn!(
+                pattern = %pattern,
+                "file_read_ignore_patterns contains an invalid glob; skipping"
+            );
         }
-        builder.build().unwrap_or_else(|_| GlobSet::empty())
-    })
+        // Also add an any-ancestor version so `.env` matches
+        // `foo/.env`, `a/b/.env`, etc.
+        if !pattern.contains('/')
+            && !pattern.contains('*')
+            && let Ok(glob) = Glob::new(&format!("**/{pattern}"))
+        {
+            builder.add(glob);
+        }
+    }
+    builder.build().unwrap_or_else(|_| GlobSet::empty())
 }
 
-/// Test a path against the configured ignore matcher.
+/// Test a path against a caller-supplied matcher.
 ///
 /// Returns `true` if the path matches any ignore pattern and should be
 /// blocked. Accepts both absolute and relative paths. Matches against
 /// the raw path, the file name, and the path with leading `./` stripped
 /// so a pattern like `".env"` catches `/abs/path/.env`, `.env`, and
 /// `./.env`.
-pub fn is_read_ignored(path: &Path) -> bool {
-    let matcher = file_read_ignore_matcher();
+pub fn is_read_ignored_with_matcher(path: &Path, matcher: &GlobSet) -> bool {
     if matcher.is_empty() {
         return false;
     }
@@ -108,19 +95,20 @@ pub fn is_read_ignored(path: &Path) -> bool {
 /// in the ignore list, else `Allow`.
 ///
 /// R6-T20. Used by `Tool::check_permissions` overrides in Read/Grep/Glob.
-pub fn check_read_permission(path: &Path) -> PermissionDecision {
-    if is_read_ignored(path) {
+pub fn check_read_permission_with_matcher(path: &Path, matcher: &GlobSet) -> PermissionDecision {
+    if is_read_ignored_with_matcher(path, matcher) {
         PermissionDecision::Deny {
             message: format!(
-                "Path `{}` is blocked by file-read ignore patterns \
-                 (COCO_FILE_READ_IGNORE_PATTERNS). This is a session-level \
-                 filter intended to keep sensitive files out of the \
-                 model's view; adjust the env var if you need access.",
+                "Path `{}` is blocked by file-read ignore patterns. \
+                 This is a session-level filter intended to keep \
+                 sensitive files out of the model's view; adjust \
+                 `tool.file_read_ignore_patterns` in settings (or \
+                 `COCO_FILE_READ_IGNORE_PATTERNS`) if you need access.",
                 path.display()
             ),
             reason: PermissionDecisionReason::Classifier {
                 classifier: "file_read_ignore".into(),
-                reason: "path matches COCO_FILE_READ_IGNORE_PATTERNS".into(),
+                reason: "path matches file_read_ignore_patterns".into(),
             },
         }
     } else {

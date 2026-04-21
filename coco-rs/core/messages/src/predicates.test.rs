@@ -4,17 +4,24 @@ use uuid::Uuid;
 use super::*;
 
 fn make_user_msg(text: &str, meta: bool, virtual_flag: bool) -> Message {
-    Message::User(UserMessage {
-        message: LlmMessage::user_text(text),
-        uuid: Uuid::new_v4(),
-        timestamp: String::new(),
-        is_meta: meta,
-        is_visible_in_transcript_only: false,
-        is_virtual: virtual_flag,
-        is_compact_summary: false,
-        permission_mode: None,
-        origin: None,
-    })
+    // Post-Phase-2: meta=true → Message::Attachment; meta=false → regular User.
+    if meta {
+        Message::Attachment(coco_types::AttachmentMessage::api(
+            coco_types::AttachmentKind::CriticalSystemReminder,
+            LlmMessage::user_text(text),
+        ))
+    } else {
+        Message::User(UserMessage {
+            message: LlmMessage::user_text(text),
+            uuid: Uuid::new_v4(),
+            timestamp: String::new(),
+            is_visible_in_transcript_only: false,
+            is_virtual: virtual_flag,
+            is_compact_summary: false,
+            permission_mode: None,
+            origin: None,
+        })
+    }
 }
 
 fn make_assistant_msg(stop: Option<StopReason>) -> Message {

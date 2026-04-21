@@ -96,5 +96,6 @@ fn overlay_content(overlay: &Overlay, state: &AppState, theme: &Theme) -> (Strin
         Overlay::ContextVisualization => context_viz::context_viz_content(state, theme),
         Overlay::Rewind(r) => rewind::rewind_overlay_content(r, theme),
         Overlay::Settings(s) => settings::settings_overlay_content(s, theme),
+        Overlay::PlanApproval(p) => confirm::plan_approval_content(p, theme),
     }
 }

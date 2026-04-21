@@ -1,7 +1,20 @@
 [build]
 rustc-wrapper = "sccache"
 
+[env]
+SCCACHE_CACHE_SIZE = "20G"
+SCCACHE_IDLE_TIMEOUT = "0"
+
 [profile.dev]
+incremental = false
+
+[profile.test]
+incremental = false
+
+[profile.ci]
+incremental = false
+
+[profile.ci-test]
 incremental = false
 
 [target.'cfg(all(windows, target_env = "msvc"))']

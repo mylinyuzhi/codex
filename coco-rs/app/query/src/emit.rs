@@ -84,7 +84,7 @@ pub async fn emit(tx: &Option<Sender<CoreEvent>>, event: CoreEvent) -> bool {
 /// emission patterns without parsing the full event payload.
 #[must_use = "ignoring the delivery result hides a closed event channel; bind to `_delivered` if intentional"]
 pub async fn emit_protocol(tx: &Option<Sender<CoreEvent>>, notif: ServerNotification) -> bool {
-    let method = notif.method();
+    let method = notif.method().as_str();
     tracing::trace!(layer = LAYER_PROTOCOL, method, "emit");
     let headless = tx.is_none();
     let delivered = emit(tx, CoreEvent::Protocol(notif)).await;
@@ -131,7 +131,7 @@ pub async fn emit_tui(tx: &Option<Sender<CoreEvent>>, evt: TuiOnlyEvent) -> bool
 /// already unwrapped the optional sender at task-spawn time.
 #[must_use = "ignoring the delivery result hides a closed event channel; bind to `_delivered` if intentional"]
 pub async fn emit_protocol_owned(tx: &Sender<CoreEvent>, notif: ServerNotification) -> bool {
-    let method = notif.method();
+    let method = notif.method().as_str();
     tracing::trace!(layer = LAYER_PROTOCOL, method, "emit");
     let delivered = tx.send(CoreEvent::Protocol(notif)).await.is_ok();
     record_emit_metric(LAYER_PROTOCOL, method, delivered);

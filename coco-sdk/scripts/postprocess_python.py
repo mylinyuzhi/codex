@@ -17,114 +17,15 @@ Usage:
 from __future__ import annotations
 
 import json
+import re
 import sys
 import textwrap
 from pathlib import Path
 
-# ── Accessor maps for tagged unions ──────────────────────────────────────
-
-NOTIFICATION_ACCESSORS = {
-    # ── Session lifecycle ──────────────────────────────────────────────
-    "session/started": ("as_session_started", "SessionStartedParams"),
-    "session/result": ("as_session_result", "SessionResultParams"),
-    "session/ended": ("as_session_ended", "SessionEndedParams"),
-    # ── Turn lifecycle ─────────────────────────────────────────────────
-    "turn/started": ("as_turn_started", "TurnStartedParams"),
-    "turn/completed": ("as_turn_completed", "TurnCompletedParams"),
-    "turn/failed": ("as_turn_failed", "TurnFailedParams"),
-    "turn/interrupted": ("as_turn_interrupted", "TurnInterruptedNotifParams"),
-    "turn/maxReached": ("as_max_turns_reached", "MaxTurnsReachedParams"),
-    "turn/retry": ("as_turn_retry", "TurnRetryParams"),
-    # ── Item lifecycle ─────────────────────────────────────────────────
-    "item/started": ("as_item_started", "ItemEventParams"),
-    "item/updated": ("as_item_updated", "ItemEventParams"),
-    "item/completed": ("as_item_completed", "ItemEventParams"),
-    # ── Content streaming ──────────────────────────────────────────────
-    "agentMessage/delta": ("as_agent_message_delta", "AgentMessageDeltaParams"),
-    "reasoning/delta": ("as_reasoning_delta", "ReasoningDeltaParams"),
-    # ── Sub-agent events ───────────────────────────────────────────────
-    "subagent/spawned": ("as_subagent_spawned", "SubagentSpawnedParams"),
-    "subagent/completed": ("as_subagent_completed", "SubagentCompletedParams"),
-    "subagent/backgrounded": ("as_subagent_backgrounded", "SubagentBackgroundedParams"),
-    "subagent/progress": ("as_subagent_progress", "SubagentProgressParams"),
-    # ── MCP events ─────────────────────────────────────────────────────
-    "mcp/startupStatus": ("as_mcp_startup_status", "McpStartupStatusParams"),
-    "mcp/startupComplete": ("as_mcp_startup_complete", "McpStartupCompleteParams"),
-    # ── Context management ─────────────────────────────────────────────
-    "context/compacted": ("as_context_compacted", "ContextCompactedParams"),
-    "context/usageWarning": ("as_context_usage_warning", "ContextUsageWarningParams"),
-    "context/compactionStarted": ("as_compaction_started", "CompactionStartedParams"),
-    "context/compactionFailed": ("as_compaction_failed", "CompactionFailedParams"),
-    "context/cleared": ("as_context_cleared", "ContextClearedParams"),
-    # ── Background task events ─────────────────────────────────────────
-    "task/started": ("as_task_started", "TaskStartedParams"),
-    "task/completed": ("as_task_completed", "TaskCompletedParams"),
-    "task/progress": ("as_task_progress", "TaskProgressParams"),
-    "agents/killed": ("as_agents_killed", "AgentsKilledParams"),
-    # ── Model events ───────────────────────────────────────────────────
-    "model/fallbackStarted": ("as_model_fallback_started", "ModelFallbackStartedParams"),
-    "model/fallbackCompleted": ("as_model_fallback_completed", "ModelFallbackCompletedParams"),
-    "model/fastModeChanged": ("as_fast_mode_changed", "FastModeChangedParams"),
-    # ── Permission events ──────────────────────────────────────────────
-    "permission/modeChanged": ("as_permission_mode_changed", "PermissionModeChangedParams"),
-    # ── Prompt suggestions ─────────────────────────────────────────────
-    "prompt/suggestion": ("as_prompt_suggestion", "PromptSuggestionParams"),
-    # ── System-level events ────────────────────────────────────────────
-    "error": ("as_error", "ErrorNotificationParams"),
-    "rateLimit": ("as_rate_limit", "RateLimitParams"),
-    "keepAlive": ("as_keep_alive", "KeepAliveNotifParams"),
-    # ── IDE integration events ─────────────────────────────────────────
-    "ide/selectionChanged": ("as_ide_selection_changed", "IdeSelectionChangedParams"),
-    "ide/diagnosticsUpdated": ("as_ide_diagnostics_updated", "IdeDiagnosticsUpdatedParams"),
-    # ── Plan mode ──────────────────────────────────────────────────────
-    "plan/modeChanged": ("as_plan_mode_changed", "PlanModeChangedParams"),
-    # ── Queue ──────────────────────────────────────────────────────────
-    "queue/stateChanged": ("as_queue_state_changed", "QueueStateChangedParams"),
-    "queue/commandQueued": ("as_command_queued", "CommandQueuedParams"),
-    "queue/commandDequeued": ("as_command_dequeued", "CommandDequeuedParams"),
-    # ── Rewind ─────────────────────────────────────────────────────────
-    "rewind/completed": ("as_rewind_completed", "RewindCompletedParams"),
-    "rewind/failed": ("as_rewind_failed", "RewindFailedParams"),
-    # ── Cost ───────────────────────────────────────────────────────────
-    "cost/warning": ("as_cost_warning", "CostWarningParams"),
-    # ── Sandbox ────────────────────────────────────────────────────────
-    "sandbox/stateChanged": ("as_sandbox_state_changed", "SandboxStateChangedParams"),
-    "sandbox/violationsDetected": ("as_sandbox_violations_detected", "SandboxViolationsDetectedParams"),
-    # ── Agent registry ─────────────────────────────────────────────────
-    "agents/registered": ("as_agents_registered", "AgentsRegisteredParams"),
-    # ── Hook ───────────────────────────────────────────────────────────
-    "hook/executed": ("as_hook_executed", "HookExecutedParams"),
-    # ── Worktree events ───────────────────────────────────────────────
-    "worktree/entered": ("as_worktree_entered", "WorktreeEnteredParams"),
-    "worktree/exited": ("as_worktree_exited", "WorktreeExitedParams"),
-    # ── Summarize ──────────────────────────────────────────────────────
-    "summarize/completed": ("as_summarize_completed", "SummarizeCompletedParams"),
-    "summarize/failed": ("as_summarize_failed", "SummarizeFailedParams"),
-    # ── Stream health ──────────────────────────────────────────────────
-    "stream/stallDetected": ("as_stream_stall_detected", "StreamStallDetectedParams"),
-    "stream/watchdogWarning": ("as_stream_watchdog_warning", "StreamWatchdogWarningParams"),
-    # ── Stream lifecycle ───────────────────────────────────────────────
-    "stream/requestEnd": ("as_stream_request_end", "StreamRequestEndParams"),
-    # ── Hook lifecycle (coco-rs 3-phase replacement for hook/executed) ──
-    "hook/started": ("as_hook_started", "HookStartedParams"),
-    "hook/progress": ("as_hook_progress", "HookProgressParams"),
-    "hook/response": ("as_hook_response", "HookResponseParams"),
-    # ── TS gap additions ───────────────────────────────────────────────
-    "session/stateChanged": ("as_session_state_changed", "SessionStateChangedParams"),
-    "localCommand/output": ("as_local_command_output", "LocalCommandOutputParams"),
-    "files/persisted": ("as_files_persisted", "FilesPersistedParams"),
-    "elicitation/complete": ("as_elicitation_complete", "ElicitationCompleteParams"),
-    "tool/useSummary": ("as_tool_use_summary", "ToolUseSummaryParams"),
-    "tool/progress": ("as_tool_progress", "ToolProgressParams"),
-}
-
-SERVER_REQUEST_ACCESSORS = {
-    "approval/askForApproval": ("as_ask_for_approval", "AskForApprovalParams"),
-    "input/requestUserInput": ("as_request_user_input", "RequestUserInputParams"),
-    "hook/callback": ("as_hook_callback", "HookCallbackParams"),
-    "mcp/routeMessage": ("as_mcp_route_message", "McpRouteMessageParams"),
-    "control/cancelRequest": ("as_cancel_request", "ServerCancelRequestParams"),
-}
+# NOTIFICATION_ACCESSORS, SERVER_REQUEST_ACCESSORS, and CLIENT_REQUEST_WRAPPERS
+# are derived from the JSON schema at generation time. The schema — emitted
+# from the Rust `wire_tagged_enum!` macro — is the single source of truth
+# for every wire method, so no hand-maintained dict can drift.
 
 THREAD_ITEM_ACCESSORS = {
     "agent_message": ("as_agent_message", "AgentMessageItem"),
@@ -138,41 +39,10 @@ THREAD_ITEM_ACCESSORS = {
     "error": ("as_error_item", "ErrorItem"),
 }
 
-# Maps for ClientRequest wrapper generation: method -> (class_name, params_type)
-CLIENT_REQUEST_WRAPPERS = {
-    "initialize": ("InitializeRequest", "InitializeRequestParams"),
-    "session/start": ("SessionStartRequest", "SessionStartRequestParams"),
-    "session/resume": ("SessionResumeRequest", "SessionResumeRequestParams"),
-    "turn/start": ("TurnStartRequest", "TurnStartRequestParams"),
-    "turn/interrupt": ("TurnInterruptRequest", "TurnInterruptRequestParams"),
-    "approval/resolve": ("ApprovalResolveRequest", "ApprovalResolveRequestParams"),
-    "input/resolveUserInput": ("UserInputResolveRequest", "UserInputResolveRequestParams"),
-    "control/setModel": ("SetModelRequest", "SetModelRequestParams"),
-    "control/setPermissionMode": ("SetPermissionModeRequest", "SetPermissionModeRequestParams"),
-    "control/stopTask": ("StopTaskRequest", "StopTaskRequestParams"),
-    "hook/callbackResponse": ("HookCallbackResponseRequest", "HookCallbackResponseRequestParams"),
-    "control/setThinking": ("SetThinkingRequest", "SetThinkingRequestParams"),
-    "control/rewindFiles": ("RewindFilesRequest", "RewindFilesRequestParams"),
-    "control/updateEnv": ("UpdateEnvRequest", "UpdateEnvRequestParams"),
-    "control/keepAlive": ("KeepAliveRequest", "KeepAliveRequestParams"),
-    "session/list": ("SessionListRequest", "SessionListRequestParams"),
-    "session/read": ("SessionReadRequest", "SessionReadRequestParams"),
-    "session/archive": ("SessionArchiveRequest", "SessionArchiveRequestParams"),
-    "config/read": ("ConfigReadRequest", "ConfigReadRequestParams"),
-    "config/value/write": ("ConfigWriteRequest", "ConfigWriteRequestParams"),
-    "mcp/routeMessageResponse": ("McpRouteMessageResponseRequest", "McpRouteMessageResponseParams"),
-    "control/cancelRequest": ("CancelRequest", "CancelRequestParams"),
-    # TS P1 gap additions (no params on the request line — empty wrappers)
-    "mcp/status": ("McpStatusRequest", None),
-    "context/usage": ("ContextUsageRequest", None),
-    "plugin/reload": ("PluginReloadRequest", None),
-    "mcp/setServers": ("McpSetServersRequest", "McpSetServersParams"),
-    "mcp/reconnect": ("McpReconnectRequest", "McpReconnectParams"),
-    "mcp/toggle": ("McpToggleRequest", "McpToggleParams"),
-    "config/applyFlags": ("ConfigApplyFlagsRequest", "ConfigApplyFlagsParams"),
-}
-
-# Rename map: Rust type name -> Python type name (where they differ)
+# Rename map: Rust type name -> Python type name. Applied when the Rust-side
+# name would collide with an existing Python class (e.g. TurnInterruptedParams
+# vs ClientRequest's TurnInterrupt) or where a pre-existing public API uses
+# a different name.
 TYPE_RENAMES = {
     "TurnInterruptedParams": "TurnInterruptedNotifParams",
     "KeepAliveParams": "KeepAliveNotifParams",
@@ -283,14 +153,21 @@ def make_optional(py_type: str) -> str:
 
 
 def generate_enum(name: str, schema: dict) -> str:
-    """Generate a str Enum class from a oneOf-of-strings schema."""
+    """Generate a str Enum class from either
+    - `{oneOf: [{type: string, enum: [v]}]}` schemars-tagged variants, or
+    - `{type: string, enum: [v, ...]}` flat string enums.
+    """
     py_name = TYPE_RENAMES.get(name, name)
     lines = [f"class {py_name}(str, Enum):"]
-    for variant in schema["oneOf"]:
-        value = variant["enum"][0]
-        # Python identifier: replace non-alphanumeric with _
-        ident = value.replace("/", "_").replace("-", "_")
-        lines.append(f"    {ident} = {value!r}")
+    if "oneOf" in schema:
+        for variant in schema["oneOf"]:
+            value = variant["enum"][0]
+            ident = value.replace("/", "_").replace("-", "_")
+            lines.append(f"    {ident} = {value!r}")
+    else:
+        for value in schema.get("enum", []):
+            ident = str(value).replace("/", "_").replace("-", "_")
+            lines.append(f"    {ident} = {value!r}")
     return "\n".join(lines)
 
 
@@ -307,7 +184,10 @@ def generate_model(name: str, schema: dict, all_defs: dict) -> str:
         return "\n".join(lines)
 
     # Fields that shadow BaseModel attributes and need aliases
-    FIELD_ALIASES = {"schema": "schema_"}
+    # Python reserved / soft-keyword aliases: field_name -> python_name.
+    # Pydantic re-serializes via the `Field(alias=...)` round-trip so the
+    # wire name is preserved.
+    FIELD_ALIASES = {"schema": "schema_", "from": "from_"}
 
     # Sort: required fields first, then optional
     req_props = [(k, v) for k, v in properties.items() if k in required_fields]
@@ -423,13 +303,17 @@ def generate_client_request_wrapper(
 
 
 def is_enum_schema(schema: dict) -> bool:
-    """Check if a schema defines a string enum."""
+    """Check if a schema defines a string enum.
+
+    Handles both the schemars-tagged form (`oneOf: [{type: string, enum: [v]}]`)
+    used for variant-typed enums and the plain form (`type: string, enum: [...]`)
+    used for simple closed vocabularies like `ReasoningEffort`.
+    """
     if "oneOf" in schema:
         return all(
-            v.get("type") == "string" and "enum" in v
-            for v in schema["oneOf"]
+            v.get("type") == "string" and "enum" in v for v in schema["oneOf"]
         )
-    return False
+    return schema.get("type") == "string" and "enum" in schema
 
 
 def collect_definitions(schema_dir: Path) -> dict[str, dict]:
@@ -509,34 +393,218 @@ def _type_to_item_class(type_val: str) -> str | None:
     return _ITEM_CLASS_MAP.get(type_val)
 
 
-def extract_notification_methods(schema_dir: Path) -> list[tuple[str, str]]:
-    """Extract (method, params_ref) from ServerNotification schema."""
-    with open(schema_dir / "server_notification.json") as f:
-        schema = json.load(f)
-    result = []
+def extract_variants(schema: dict) -> list[dict]:
+    """Extract full variant metadata from a wire-tagged-union schema.
+
+    Each result dict has:
+      - wire: wire-method string (e.g. "session/started")
+      - description: human-readable doc from the variant
+      - params_ref: `$ref`-resolved type name, or None
+      - params_inline: inline params schema object, or None
+      - has_params: whether the variant carries any params at all
+    """
+    variants: list[dict] = []
     for variant in schema.get("oneOf", []):
         props = variant.get("properties", {})
-        method_val = props.get("method", {}).get("enum", [None])[0]
-        params_ref = props.get("params", {}).get("$ref", "")
-        params_type = resolve_ref(params_ref) if params_ref else None
-        if method_val and params_type:
-            result.append((method_val, params_type))
-    return result
+        wire = props.get("method", {}).get("enum", [None])[0]
+        if not wire:
+            continue
+        params = props.get("params")
+        entry: dict = {
+            "wire": wire,
+            "description": variant.get("description", ""),
+            "params_ref": None,
+            "params_inline": None,
+            "has_params": False,
+        }
+        if params is None:
+            pass  # unit variant
+        elif "$ref" in params:
+            entry["params_ref"] = resolve_ref(params["$ref"])
+            entry["has_params"] = True
+        elif params.get("type") == "object":
+            entry["params_inline"] = params
+            entry["has_params"] = True
+        variants.append(entry)
+    return variants
+
+
+def load_schema(schema_dir: Path, name: str) -> dict:
+    """Read a single top-level schema file by name (without .json)."""
+    with open(schema_dir / f"{name}.json") as f:
+        return json.load(f)
+
+
+def extract_notification_methods(schema_dir: Path) -> list[tuple[str, str]]:
+    """Legacy extractor kept for back-compat: (method, params_ref) pairs for
+    variants with external `$ref` params. Prefer `extract_variants()`."""
+    variants = extract_variants(load_schema(schema_dir, "server_notification"))
+    return [(v["wire"], v["params_ref"]) for v in variants if v["params_ref"]]
 
 
 def extract_client_request_methods(schema_dir: Path) -> list[tuple[str, str]]:
-    """Extract (method, params_ref) from ClientRequest schema."""
-    with open(schema_dir / "client_request.json") as f:
-        schema = json.load(f)
-    result = []
-    for variant in schema.get("oneOf", []):
-        props = variant.get("properties", {})
-        method_val = props.get("method", {}).get("enum", [None])[0]
-        params_ref = props.get("params", {}).get("$ref", "")
-        params_type = resolve_ref(params_ref) if params_ref else None
-        if method_val and params_type:
-            result.append((method_val, params_type))
+    """Legacy extractor kept for back-compat; see `extract_variants`."""
+    variants = extract_variants(load_schema(schema_dir, "client_request"))
+    return [(v["wire"], v["params_ref"]) for v in variants if v["params_ref"]]
+
+
+def _wire_words(wire: str) -> list[str]:
+    """Split a wire string into lowercase component words.
+
+        session/stateChanged    -> ["session", "state", "changed"]
+        plan_approval/requested -> ["plan", "approval", "requested"]
+        rateLimit               -> ["rate", "limit"]
+        error                   -> ["error"]
+    """
+    s = wire.replace("/", "_")
+    s = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", s)
+    return [part.lower() for part in s.split("_") if part]
+
+
+def wire_to_enum_member(wire: str) -> str:
+    """Wire string -> Python Enum member name (SCREAMING_SNAKE_CASE)."""
+    return "_".join(_wire_words(wire)).upper()
+
+
+def wire_to_accessor(wire: str) -> str:
+    """Wire string -> `as_x_y_z` accessor method name."""
+    return "as_" + "_".join(_wire_words(wire))
+
+
+def _pascal_case(words: list[str]) -> str:
+    return "".join(w[:1].upper() + w[1:] for w in words)
+
+
+def _accessor_to_params_class(accessor: str) -> str:
+    """`as_session_state_changed` -> `SessionStateChangedParams`."""
+    base = accessor.removeprefix("as_")
+    return _pascal_case(base.split("_")) + "Params"
+
+
+def _derive_request_wrapper_name(variant: dict) -> str:
+    """Derive the ClientRequest wrapper class name for a variant.
+
+    Rule:
+      1. If the variant has a `$ref` params type, strip `Params` from the
+         type name and use that as the base.
+      2. Otherwise (unit or inline) PascalCase the wire string with the
+         leading `control/` prefix stripped.
+      3. Append `Request` unless the base already ends in `Request` (avoids
+         `CancelRequestRequest`).
+    """
+    params_ref = variant.get("params_ref")
+    if params_ref:
+        base = params_ref.removesuffix("Params")
+    else:
+        wire = variant["wire"]
+        if wire.startswith("control/"):
+            wire = wire[len("control/") :]
+        base = _pascal_case(_wire_words(wire))
+    if not base.endswith("Request"):
+        base = base + "Request"
+    return base
+
+
+def derive_accessors(variants: list[dict]) -> dict[str, tuple[str, str]]:
+    """Build `{wire: (accessor_name, params_class)}` from variant metadata.
+
+    Variants without params still get accessor entries pointing at a
+    synthesised empty Pydantic model (so the `as_x() -> Params | None`
+    idiom works uniformly). Renames in `TYPE_RENAMES` are applied to the
+    `$ref`-based class names.
+    """
+    result: dict[str, tuple[str, str]] = {}
+    for v in variants:
+        wire = v["wire"]
+        accessor = wire_to_accessor(wire)
+        if v["params_ref"]:
+            params_class = TYPE_RENAMES.get(v["params_ref"], v["params_ref"])
+        else:
+            params_class = _accessor_to_params_class(accessor)
+        result[wire] = (accessor, params_class)
     return result
+
+
+def generate_inline_params_models(
+    variants: list[dict],
+    all_defs: dict,
+    emitted: set[str],
+) -> str:
+    """Emit synthesized Pydantic models for inline-params / unit variants.
+
+    `emitted` tracks class names already produced this run to avoid
+    duplicates when a synthesized name collides with an existing type.
+    """
+    blocks: list[str] = []
+    for v in variants:
+        if v["params_ref"]:
+            continue
+        class_name = _accessor_to_params_class(wire_to_accessor(v["wire"]))
+        if class_name in emitted or class_name in all_defs:
+            continue
+        emitted.add(class_name)
+        if v["params_inline"]:
+            blocks.append(generate_model(class_name, v["params_inline"], all_defs))
+        else:
+            # Unit variant — empty params model with `extra='allow'` so it
+            # round-trips any stray fields without validation errors.
+            blocks.append(
+                textwrap.dedent(
+                    f'''\
+                    class {class_name}(BaseModel):
+                        """Empty params for the wire-method `{v["wire"]}`."""
+
+                        model_config = {{"extra": "allow"}}
+                    '''
+                ).rstrip()
+            )
+        blocks.append("")
+    return "\n".join(blocks)
+
+
+def _method_enum_block(
+    schema_dir: Path,
+    schema_name: str,
+    class_name: str,
+    doc: str,
+) -> str:
+    """Emit `class X(str, Enum)` from a method-enum schema file."""
+    schema = load_schema(schema_dir, schema_name)
+    lines = [f"class {class_name}(str, Enum):", f'    """{doc}"""', ""]
+    for wire in schema.get("enum", []):
+        lines.append(f"    {wire_to_enum_member(wire)} = {wire!r}")
+    return "\n".join(lines)
+
+
+def generate_notification_method_enum(schema_dir: Path) -> str:
+    return _method_enum_block(
+        schema_dir,
+        "notification_method",
+        "NotificationMethod",
+        "Wire-method identifier for every `ServerNotification` variant. "
+        "Mirrors the Rust `NotificationMethod` enum. Members inherit from "
+        "`str`, so equality with raw wire strings Just Works.",
+    )
+
+
+def generate_client_request_method_enum(schema_dir: Path) -> str:
+    return _method_enum_block(
+        schema_dir,
+        "client_request_method",
+        "ClientRequestMethod",
+        "Wire-method identifier for every `ClientRequest` variant. "
+        "Mirrors the Rust `ClientRequestMethod` enum.",
+    )
+
+
+def generate_server_request_method_enum(schema_dir: Path) -> str:
+    return _method_enum_block(
+        schema_dir,
+        "server_request_method",
+        "ServerRequestMethod",
+        "Wire-method identifier for every `ServerRequest` variant. "
+        "Mirrors the Rust `ServerRequestMethod` enum.",
+    )
 
 
 def main() -> None:
@@ -644,26 +712,48 @@ def main() -> None:
     sections.append("")
     sections.append("")
 
-    # ── Section: Notification params ──
-    notif_methods = extract_notification_methods(schema_dir)
-    notif_param_types = {params for _, params in notif_methods}
+    # Parse all three wire-tagged unions once so we can derive params models,
+    # accessor maps, and wrapper classes from the same variant lists.
+    notif_variants = extract_variants(load_schema(schema_dir, "server_notification"))
+    sr_variants = extract_variants(load_schema(schema_dir, "server_request"))
+    cr_variants = extract_variants(load_schema(schema_dir, "client_request"))
 
+    notif_param_types = {v["params_ref"] for v in notif_variants if v["params_ref"]}
+    sr_param_types = {v["params_ref"] for v in sr_variants if v["params_ref"]}
+    emitted_synth: set[str] = set()
+    generated_params: set[str] = set()
+
+    def emit_ref_params(types: set[str]) -> None:
+        for params_type in sorted(types):
+            if params_type in generated_params:
+                continue
+            generated_params.add(params_type)
+            if params_type in all_defs and params_type not in enum_names:
+                sections.append(generate_model(params_type, all_defs[params_type], all_defs))
+                sections.append("")
+                model_names.discard(params_type)
+
+    # ── Section: Notification params ──
     sections.append("# " + "-" * 75)
     sections.append("# Server notification params")
     sections.append("# " + "-" * 75)
     sections.append("")
-    generated_params: set[str] = set()
-    for _, params_type in notif_methods:
-        if params_type in generated_params:
-            continue
-        generated_params.add(params_type)
-        if params_type in all_defs and params_type not in enum_names:
-            sections.append(generate_model(params_type, all_defs[params_type], all_defs))
-            sections.append("")
-            model_names.discard(params_type)
+    emit_ref_params(notif_param_types)
+    synth = generate_inline_params_models(notif_variants, all_defs, emitted_synth)
+    if synth:
+        sections.append(synth)
     sections.append("")
 
-    # ── Section: ServerNotification ──
+    # ── Section: NotificationMethod enum (protocol constants) ──
+    sections.append("# " + "-" * 75)
+    sections.append("# Notification wire-method constants")
+    sections.append("# " + "-" * 75)
+    sections.append("")
+    sections.append(generate_notification_method_enum(schema_dir))
+    sections.append("")
+    sections.append("")
+
+    # ── Section: ServerNotification (tagged union with auto-derived accessors) ──
     sections.append("# " + "-" * 75)
     sections.append("# Server notifications (tagged union)")
     sections.append("# " + "-" * 75)
@@ -673,7 +763,7 @@ def main() -> None:
         "An event from the server. Use `method` to determine the event type.",
         "method",
         "params",
-        NOTIFICATION_ACCESSORS,
+        derive_accessors(notif_variants),
     ))
     sections.append("")
     sections.append("")
@@ -683,24 +773,20 @@ def main() -> None:
     sections.append("# Server requests (server -> client, require response)")
     sections.append("# " + "-" * 75)
     sections.append("")
-    sr_param_types = set()
-    with open(schema_dir / "server_request.json") as f:
-        sr_schema = json.load(f)
-    for variant in sr_schema.get("oneOf", []):
-        params_ref = variant.get("properties", {}).get("params", {}).get("$ref", "")
-        params_type = resolve_ref(params_ref) if params_ref else None
-        if params_type and params_type in all_defs and params_type not in enum_names:
-            sections.append(generate_model(params_type, all_defs[params_type], all_defs))
-            sections.append("")
-            sr_param_types.add(params_type)
-            model_names.discard(params_type)
+    emit_ref_params(sr_param_types)
+    synth = generate_inline_params_models(sr_variants, all_defs, emitted_synth)
+    if synth:
+        sections.append(synth)
+    sections.append("")
+    sections.append(generate_server_request_method_enum(schema_dir))
+    sections.append("")
     sections.append("")
     sections.append(generate_tagged_union(
         "ServerRequest",
         "A request from the server that requires a client response.",
         "method",
         "params",
-        SERVER_REQUEST_ACCESSORS,
+        derive_accessors(sr_variants),
     ))
     sections.append("")
     sections.append("")
@@ -761,8 +847,16 @@ def main() -> None:
 
     # Union-type aliases (oneOf types that aren't enums or objects)
     # These need to be defined as `Any` since they're complex unions
-    # (e.g., SystemPromptConfig = str | {preset, append})
-    union_types = ["SystemPromptConfig", "ToolsConfig", "ErrorInfo"]
+    # (e.g., SystemPromptConfig = str | {preset, append}).
+    union_types = [
+        "SystemPromptConfig",
+        "ToolsConfig",
+        "ErrorInfo",
+        # PermissionUpdate is a oneOf tagged union of action objects; no
+        # Pydantic-class generation yet, fall back to `Any` so ApprovalResolve
+        # request params resolve without a forward-ref error.
+        "PermissionUpdate",
+    ]
     for name in union_types:
         if name in all_defs and name not in model_names and name not in enum_names:
             sections.append(f"# Union type: see Rust source for variants")
@@ -791,12 +885,12 @@ def main() -> None:
     sections.append("")
 
     # ── Section: Client request params ──
-    cr_methods = extract_client_request_methods(schema_dir)
+    cr_param_types = {v["params_ref"] for v in cr_variants if v["params_ref"]}
     sections.append("# " + "-" * 75)
     sections.append("# Client request params")
     sections.append("# " + "-" * 75)
     sections.append("")
-    for method, params_type in cr_methods:
+    for params_type in sorted(cr_param_types):
         if params_type in generated_params:
             continue
         generated_params.add(params_type)
@@ -807,25 +901,43 @@ def main() -> None:
                 model_names.discard(params_type)
     sections.append("")
 
-    # ── Section: Client request wrappers ──
+    # ── Section: ClientRequestMethod enum (protocol constants) ──
+    sections.append("# " + "-" * 75)
+    sections.append("# Client request wire-method constants")
+    sections.append("# " + "-" * 75)
+    sections.append("")
+    sections.append(generate_client_request_method_enum(schema_dir))
+    sections.append("")
+    sections.append("")
+
+    # ── Section: Client request wrappers (auto-derived from schema) ──
     sections.append("# " + "-" * 75)
     sections.append("# Client request wrappers")
     sections.append("# " + "-" * 75)
     sections.append("")
-    for method, params_type in cr_methods:
-        if method in CLIENT_REQUEST_WRAPPERS:
-            class_name, _ = CLIENT_REQUEST_WRAPPERS[method]
-            py_params = TYPE_RENAMES.get(params_type, params_type)
-            lines = [f"class {class_name}(BaseModel):"]
-            lines.append(f"    method: str = {method!r}")
-            lines.append(f"    params: {class_name}Params")
-            lines.append("")
+    for variant in cr_variants:
+        method = variant["wire"]
+        class_name = _derive_request_wrapper_name(variant)
+        params_ref = variant.get("params_ref")
+        py_params = TYPE_RENAMES.get(params_ref, params_ref) if params_ref else None
+        lines = [
+            f"class {class_name}(BaseModel):",
+            f"    method: str = {method!r}",
+            f"    params: {class_name}Params",
+            "",
+        ]
+        if py_params:
             lines.append(f"    class {class_name}Params({py_params}):")
             lines.append("        pass")
-            sections.append("\n".join(lines))
-            sections.append("")
-            sections.append(f"{class_name}Params = {class_name}.{class_name}Params")
-            sections.append("")
+        else:
+            # Unit variant — keep the nested Params class for caller API
+            # symmetry; `extra='allow'` tolerates any stray fields.
+            lines.append(f"    class {class_name}Params(BaseModel):")
+            lines.append('        model_config = {"extra": "allow"}')
+        sections.append("\n".join(lines))
+        sections.append("")
+        sections.append(f"{class_name}Params = {class_name}.{class_name}Params")
+        sections.append("")
     sections.append("")
 
     # ── Section: Remaining types (PermissionSuggestion, etc.) ──
@@ -839,60 +951,10 @@ def main() -> None:
                 sections.append(generate_model(name, all_defs[name], all_defs))
                 sections.append("")
 
-    # ── Validation: ensure accessor maps cover all schema variants ──
+    # Schema-driven derivation is exhaustive by construction, so the prior
+    # hand-maintained dicts no longer exist. Keep a lightweight summary
+    # print for visibility.
     validation_errors: list[str] = []
-
-    # Validate ServerNotification coverage
-    schema_notif_methods = {m for m, _ in notif_methods}
-    accessor_notif_methods = set(NOTIFICATION_ACCESSORS.keys())
-    missing_notif = schema_notif_methods - accessor_notif_methods
-    extra_notif = accessor_notif_methods - schema_notif_methods
-    if missing_notif:
-        validation_errors.append(
-            f"NOTIFICATION_ACCESSORS missing {len(missing_notif)} methods "
-            f"from schema: {sorted(missing_notif)}"
-        )
-    if extra_notif:
-        validation_errors.append(
-            f"NOTIFICATION_ACCESSORS has {len(extra_notif)} methods "
-            f"not in schema: {sorted(extra_notif)}"
-        )
-
-    # Validate ServerRequest coverage
-    sr_methods_from_schema: set[str] = set()
-    for variant in sr_schema.get("oneOf", []):
-        method_val = variant.get("properties", {}).get("method", {}).get("enum", [None])[0]
-        if method_val:
-            sr_methods_from_schema.add(method_val)
-    accessor_sr_methods = set(SERVER_REQUEST_ACCESSORS.keys())
-    missing_sr = sr_methods_from_schema - accessor_sr_methods
-    extra_sr = accessor_sr_methods - sr_methods_from_schema
-    if missing_sr:
-        validation_errors.append(
-            f"SERVER_REQUEST_ACCESSORS missing {len(missing_sr)} methods "
-            f"from schema: {sorted(missing_sr)}"
-        )
-    if extra_sr:
-        validation_errors.append(
-            f"SERVER_REQUEST_ACCESSORS has {len(extra_sr)} methods "
-            f"not in schema: {sorted(extra_sr)}"
-        )
-
-    # Validate ClientRequest coverage
-    schema_cr_methods = {m for m, _ in cr_methods}
-    wrapper_cr_methods = set(CLIENT_REQUEST_WRAPPERS.keys())
-    missing_cr = schema_cr_methods - wrapper_cr_methods
-    extra_cr = wrapper_cr_methods - schema_cr_methods
-    if missing_cr:
-        validation_errors.append(
-            f"CLIENT_REQUEST_WRAPPERS missing {len(missing_cr)} methods "
-            f"from schema: {sorted(missing_cr)}"
-        )
-    if extra_cr:
-        validation_errors.append(
-            f"CLIENT_REQUEST_WRAPPERS has {len(extra_cr)} methods "
-            f"not in schema: {sorted(extra_cr)}"
-        )
 
     if validation_errors:
         # Warn, don't fail. The accessor maps are hand-written and may
@@ -910,9 +972,9 @@ def main() -> None:
         )
 
     print(
-        f"Validated: {len(NOTIFICATION_ACCESSORS)} notifications, "
-        f"{len(SERVER_REQUEST_ACCESSORS)} server requests, "
-        f"{len(CLIENT_REQUEST_WRAPPERS)} client requests"
+        f"Generated: {len(notif_variants)} notifications, "
+        f"{len(sr_variants)} server requests, "
+        f"{len(cr_variants)} client requests"
     )
 
     # Write output

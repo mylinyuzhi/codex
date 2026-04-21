@@ -227,8 +227,7 @@ async fn account_api_key_maps_to_first_party() {
     let account = boot.account().await;
     assert_eq!(account.api_provider, Some(SdkApiProvider::FirstParty));
     // `token_source` is intentionally None — coco-rs doesn't track TS's
-    // canonical token-source strings (CLAUDE_CODE_OAUTH_TOKEN / claude.ai
-    // / etc.), so we leave the field absent rather than send a string
+    // canonical token-source strings, so we leave the field absent rather than send a string
     // TS clients won't recognize.
     assert!(account.token_source.is_none());
     assert!(account.email.is_none());

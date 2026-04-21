@@ -18,7 +18,11 @@ coco-compact.workspace = true
 coco-hooks.workspace = true
 coco-otel.workspace = true
 coco-permissions.workspace = true
+coco-system-reminder.workspace = true
+coco-lsp.workspace = true
+coco-mcp.workspace = true
 vercel-ai-provider.workspace = true
+chrono.workspace = true
 
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
