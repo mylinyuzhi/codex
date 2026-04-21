@@ -1124,6 +1124,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "coco-config",
+ "coco-system-reminder",
  "coco-types",
  "globset",
  "regex",
@@ -1330,15 +1331,19 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "chrono",
  "coco-compact",
  "coco-config",
  "coco-context",
  "coco-hooks",
  "coco-inference",
+ "coco-lsp",
+ "coco-mcp",
  "coco-messages",
  "coco-otel",
  "coco-permissions",
  "coco-session",
+ "coco-system-reminder",
  "coco-tool",
  "coco-tools",
  "coco-types",
@@ -1531,7 +1536,9 @@ name = "coco-skills"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "coco-file-watch",
+ "coco-system-reminder",
  "coco-types",
  "serde",
  "serde_json",
@@ -1603,12 +1610,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "coco-system-reminder"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "coco-config",
+ "coco-context",
+ "coco-error",
+ "coco-messages",
+ "coco-stack-trace-macro",
+ "coco-types",
+ "futures",
+ "pretty_assertions",
+ "regex-lite",
+ "serde",
+ "serde_json",
+ "snafu",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "coco-tasks"
 version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
  "coco-config",
+ "coco-system-reminder",
  "coco-tool",
  "coco-types",
  "fs2",

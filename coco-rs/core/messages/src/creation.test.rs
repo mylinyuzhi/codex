@@ -19,19 +19,18 @@ fn test_create_user_message() {
         panic!("expected User variant");
     };
     assert_eq!(msg.kind(), MessageKind::User);
-    assert!(!u.is_meta);
     assert_eq!(u.origin, Some(MessageOrigin::UserInput));
     assert!(msg.uuid().is_some());
 }
 
 #[test]
 fn test_create_meta_message() {
+    // Post-Phase-2: meta messages land as Message::Attachment with kind.
     let msg = create_meta_message("system context");
-    let Message::User(u) = &msg else {
-        panic!("expected User variant");
+    let Message::Attachment(a) = &msg else {
+        panic!("expected Attachment variant");
     };
-    assert!(u.is_meta);
-    assert_eq!(u.origin, Some(MessageOrigin::SystemInjected));
+    assert_eq!(a.kind, coco_types::AttachmentKind::CriticalSystemReminder);
 }
 
 #[test]

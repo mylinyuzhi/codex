@@ -19,6 +19,9 @@ pub use vercel_ai_provider::UserContentPart as UserContent;
 // === Modules ===
 mod agent;
 mod app_state;
+pub mod attachment_body;
+mod attachment_emitter;
+mod attachment_kind;
 mod client_request;
 mod command;
 mod event;
@@ -48,6 +51,21 @@ mod wire_tagged;
 pub use app_state::AppStatePatch;
 pub use app_state::AppStateReadHandle;
 pub use app_state::ToolAppState;
+
+// Message visibility (API × UI axes)
+pub use message::Visibility;
+
+// Cross-crate attachment sink
+pub use attachment_emitter::AttachmentEmitter;
+
+// Attachment taxonomy (full TS `Attachment.type` catalog + coverage)
+pub use attachment_body::AttachmentBody;
+pub use attachment_body::HookPermissionDecision;
+pub use attachment_body::SilentPayload;
+pub use attachment_kind::AttachmentEvent;
+pub use attachment_kind::AttachmentKind;
+pub use attachment_kind::Coverage;
+pub use attachment_kind::coverage_of;
 
 // Agent types
 pub use agent::AgentDefinition;

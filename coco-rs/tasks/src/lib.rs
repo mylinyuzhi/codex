@@ -17,6 +17,7 @@
 //! are orthogonal and always on.
 
 pub mod handle_impls;
+pub mod reminder_source;
 pub mod running;
 pub mod task_list;
 pub mod todos;

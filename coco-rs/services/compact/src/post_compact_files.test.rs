@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use coco_context::file_read_state::FileReadEntry;
 use pretty_assertions::assert_eq;
+use uuid::Uuid;
 
 use vercel_ai_provider::ToolCallPart;
 
@@ -126,9 +127,12 @@ fn test_create_post_compact_file_attachments_basic() {
 
     let atts = create_post_compact_file_attachments(&snapshot, &[], dir.path(), /*plan*/ None);
     assert_eq!(atts.len(), 2, "should restore both files");
-    assert!(atts[0].is_meta);
+    assert_eq!(
+        atts[0].kind,
+        coco_types::AttachmentKind::CompactFileReference
+    );
     // Most recent (b.rs, last in snapshot) should come first in result
-    let text0 = format!("{:?}", atts[0].message);
+    let text0 = format!("{:?}", atts[0].as_api_message().expect("api body"));
     assert!(
         text0.contains("b.rs"),
         "most recent file should be first: {text0}"

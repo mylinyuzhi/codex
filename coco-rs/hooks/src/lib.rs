@@ -5,6 +5,7 @@
 pub mod async_registry;
 pub mod inputs;
 pub mod orchestration;
+pub mod reminder_source;
 pub mod ssrf;
 
 use coco_config::EnvKey;

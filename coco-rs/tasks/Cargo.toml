@@ -9,6 +9,7 @@ workspace = true
 
 [dependencies]
 coco-config.workspace = true
+coco-system-reminder.workspace = true
 coco-tool.workspace = true
 coco-types.workspace = true
 serde = { workspace = true, features = ["derive"] }

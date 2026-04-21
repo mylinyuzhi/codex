@@ -742,6 +742,7 @@ async fn run_chat(cli: &Cli, prompt: Option<&str>) -> Result<()> {
         ),
         plans_directory: settings.merged.plans_directory.clone(),
         plan_mode_settings: settings.merged.plan_mode.clone(),
+        system_reminder: settings.merged.system_reminder.clone(),
         tool_config: runtime_config.tool.clone(),
         sandbox_config: runtime_config.sandbox.clone(),
         memory_config: runtime_config.memory.clone(),

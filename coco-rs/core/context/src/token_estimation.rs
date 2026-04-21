@@ -35,7 +35,11 @@ pub fn estimate_tokens_for_messages(messages: &[Message]) -> i64 {
                 total += estimate_llm_message_tokens(&t.message);
             }
             Message::Attachment(a) => {
-                total += estimate_llm_message_tokens(&a.message);
+                // Only API-bound attachments consume token budget; silent /
+                // file / unit bodies don't reach the LLM.
+                if let Some(msg) = a.as_api_message() {
+                    total += estimate_llm_message_tokens(msg);
+                }
             }
             _ => {
                 total += 10; // Small overhead for system/progress/tombstone

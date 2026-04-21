@@ -88,6 +88,8 @@ impl AgentQueryEngine for QueryEngineAdapter {
             disable_all_hooks: false,
             allow_managed_hooks_only: false,
             enable_token_budget_continuation: false,
+            auto_compact_enabled: true,
+            system_reminder: coco_config::SystemReminderConfig::default(),
             tool_config: coco_config::ToolConfig::default(),
             sandbox_config: coco_config::SandboxConfig::default(),
             memory_config: coco_config::MemoryConfig::default(),

@@ -125,7 +125,6 @@ fn reconstruct_message(entry: &TranscriptEntry) -> Option<Message> {
                 message: llm_message,
                 uuid,
                 timestamp: entry.timestamp.clone(),
-                is_meta: false,
                 is_visible_in_transcript_only: false,
                 is_virtual: false,
                 is_compact_summary: false,
@@ -153,13 +152,19 @@ fn reconstruct_message(entry: &TranscriptEntry) -> Option<Message> {
             }))
         }
         "system" | "attachment" => {
+            // Crash recovery path: reconstruct a generic reminder-shaped
+            // attachment from partial transcript content. The original
+            // `kind` discriminant is lost in this reconstruction path;
+            // `CriticalSystemReminder` is the closest generic carrier
+            // (always API-visible, always UI-visible, unrestricted body).
             let text = extract_text_from_content(content);
             let llm_message = coco_types::LlmMessage::user_text(text);
-            Some(Message::Attachment(coco_types::AttachmentMessage {
-                uuid,
-                message: llm_message,
-                is_meta: true,
-            }))
+            let mut msg = coco_types::AttachmentMessage::api(
+                coco_types::AttachmentKind::CriticalSystemReminder,
+                llm_message,
+            );
+            msg.uuid = uuid;
+            Some(Message::Attachment(msg))
         }
         _ => None,
     }

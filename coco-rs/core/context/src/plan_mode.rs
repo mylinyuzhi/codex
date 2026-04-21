@@ -861,16 +861,29 @@ pub fn render_plan_mode_reminder(attachment: &PlanModeAttachment) -> String {
 }
 
 fn plan_file_info(attachment: &PlanModeAttachment) -> String {
+    plan_file_info_impl(attachment, /*sub_agent*/ false)
+}
+
+/// Sub-agent plan-file info carries an extra "if you need to" softener on
+/// both branches — TS `getPlanModeV2SubAgentInstructions` (`messages.ts:3404-3405`)
+/// differentiates sub-agent prose from the 5-phase / interview versions
+/// (`messages.ts:3224-3225` / `:3328-3329`) this way.
+fn plan_file_info_sub_agent(attachment: &PlanModeAttachment) -> String {
+    plan_file_info_impl(attachment, /*sub_agent*/ true)
+}
+
+fn plan_file_info_impl(attachment: &PlanModeAttachment, sub_agent: bool) -> String {
     let file_edit = ToolName::Edit.as_str();
     let file_write = ToolName::Write.as_str();
+    let softener = if sub_agent { " if you need to" } else { "" };
     if attachment.plan_exists {
         format!(
-            "A plan file already exists at {path}. You can read it and make incremental edits using the {file_edit} tool.",
+            "A plan file already exists at {path}. You can read it and make incremental edits using the {file_edit} tool{softener}.",
             path = attachment.plan_file_path,
         )
     } else {
         format!(
-            "No plan file exists yet. You should create your plan at {path} using the {file_write} tool.",
+            "No plan file exists yet. You should create your plan at {path} using the {file_write} tool{softener}.",
             path = attachment.plan_file_path,
         )
     }
@@ -912,12 +925,12 @@ fn render_reentry(attachment: &PlanModeAttachment, exit_plan_mode: &str) -> Stri
          1. Read the existing plan file to understand what was previously planned\n\
          2. Evaluate the user's current request against that plan\n\
          3. Decide how to proceed:\n\
-         \t- **Different task**: If the user's request is for a different task — even \
-         if it's similar or related — start fresh by overwriting the existing plan\n\
+         \t- **Different task**: If the user's request is for a different task—even \
+         if it's similar or related—start fresh by overwriting the existing plan\n\
          \t- **Same task, continuing**: If this is explicitly a continuation or \
          refinement of the exact same task, modify the existing plan while cleaning \
          up outdated or irrelevant sections\n\
-         4. Continue on with the plan process, and most importantly you should always \
+         4. Continue on with the plan process and most importantly you should always \
          edit the plan file one way or the other before calling {exit_plan_mode}\n\n\
          Treat this as a fresh planning session. Do not assume the existing plan is \
          relevant without evaluating it first."
@@ -939,7 +952,7 @@ fn render_full_sub_agent(attachment: &PlanModeAttachment, ask_user_question: &st
          tool if you need to ask the user clarifying questions. If you do use \
          the {ask_user_question}, make sure to ask all clarifying questions \
          you need to fully understand the user's intent before proceeding.",
-        file_info = plan_file_info(attachment),
+        file_info = plan_file_info_sub_agent(attachment),
     )
 }
 
@@ -1130,9 +1143,9 @@ fn render_full_interview(
          Repeat this cycle until the plan is complete:\n\n\
          1. **Explore** — Use Read, Glob, Grep, LSP, and other read-only tools \
          to read code. Look for existing functions, utilities, and patterns to \
-         reuse. You can use the Agent tool to parallelize complex searches \
-         without filling your context, though for straightforward queries direct \
-         tools are simpler.\n\
+         reuse. You can use the `Explore` agent type to parallelize complex \
+         searches without filling your context, though for straightforward \
+         queries direct tools are simpler.\n\
          2. **Update the plan file** — After each discovery, immediately capture \
          what you learned. Don't wait until the end.\n\
          3. **Ask the user** — When you hit an ambiguity or decision you can't \

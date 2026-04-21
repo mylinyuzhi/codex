@@ -128,6 +128,13 @@ pub struct Settings {
     #[serde(default)]
     pub plan_mode: PlanModeSettings,
 
+    // === System reminder ===
+    /// Per-reminder enable flags + orchestrator timeout + user-supplied
+    /// critical instruction. Consumed by `coco-system-reminder` via a
+    /// `coco-config` dependency; there is no parallel config struct.
+    #[serde(default)]
+    pub system_reminder: crate::system_reminder::SystemReminderConfig,
+
     // === Session ===
     /// Session-level behaviors: auto-title generation, etc.
     #[serde(default)]

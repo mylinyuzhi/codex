@@ -60,8 +60,8 @@ fn count_attachments_containing(messages: &[Message], needle: &str) -> usize {
     messages
         .iter()
         .filter_map(|m| match m {
-            Message::Attachment(a) => match &a.message {
-                coco_types::LlmMessage::User { content, .. } => {
+            Message::Attachment(a) => match a.as_api_message() {
+                Some(coco_types::LlmMessage::User { content, .. }) => {
                     content.iter().find_map(|c| match c {
                         coco_types::UserContent::Text(t) => Some(t.text.clone()),
                         _ => None,

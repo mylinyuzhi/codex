@@ -10,8 +10,13 @@ fn test_wrap_in_system_reminder() {
 
 #[test]
 fn test_create_system_reminder_message() {
+    // Post-Phase-2: system reminders land as Message::Attachment.
     let msg = create_system_reminder_message("test reminder");
-    assert!(matches!(msg, Message::User(ref m) if m.is_meta));
+    assert!(matches!(
+        msg,
+        Message::Attachment(ref a)
+            if a.kind == coco_types::AttachmentKind::CriticalSystemReminder
+    ));
     let text = extract_text_from_message(&msg);
     assert!(text.contains("test reminder"));
 }

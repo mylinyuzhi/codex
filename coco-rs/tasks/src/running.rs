@@ -49,6 +49,14 @@ pub struct TaskManager {
     event_tx: Option<mpsc::Sender<CoreEvent>>,
 }
 
+impl std::fmt::Debug for TaskManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TaskManager")
+            .field("event_sink", &self.event_tx.is_some())
+            .finish()
+    }
+}
+
 impl TaskManager {
     pub fn new() -> Self {
         Self {

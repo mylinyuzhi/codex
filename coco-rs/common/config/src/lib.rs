@@ -14,6 +14,7 @@ pub mod provider;
 pub mod runtime;
 pub mod sections;
 pub mod settings;
+pub mod system_reminder;
 pub mod telemetry;
 
 // Re-export key types for convenience
@@ -60,3 +61,6 @@ pub use settings::SettingsWithSource;
 pub use settings::policy::load_policy_settings;
 pub use settings::source::SettingSource;
 pub use settings::watcher::SettingsWatcher;
+pub use system_reminder::AttachmentSettings as SystemReminderAttachmentSettings;
+pub use system_reminder::DEFAULT_TIMEOUT_MS as SYSTEM_REMINDER_DEFAULT_TIMEOUT_MS;
+pub use system_reminder::SystemReminderConfig;

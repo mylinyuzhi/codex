@@ -126,6 +126,18 @@ pub struct QueryEngineConfig {
     /// `max_tokens` budget, inject a nudge meta message and continue.
     /// TS: `query.ts:1308-1340` feature('TOKEN_BUDGET').
     pub enable_token_budget_continuation: bool,
+    /// User preference for auto-compaction. When false, the
+    /// `compaction_reminder` system-reminder is suppressed and
+    /// `services/compact::should_auto_compact` is bypassed. TS:
+    /// `isAutoCompactEnabled()` — mapped to `settings.json` in coco-rs.
+    /// Defaults to `true` to match TS default behavior.
+    pub auto_compact_enabled: bool,
+    /// System-reminder subsystem configuration (per-generator toggles,
+    /// timeout, critical-instruction payload). Bootstrap reads
+    /// `settings.system_reminder` from `coco-config::Settings` and
+    /// threads it through here so the engine can run `settings.json`
+    /// through to every reminder generator without extra glue code.
+    pub system_reminder: coco_config::SystemReminderConfig,
     /// Resolved tool runtime configuration.
     pub tool_config: ToolConfig,
     /// Resolved sandbox runtime configuration.
@@ -166,6 +178,8 @@ impl Default for QueryEngineConfig {
             disable_all_hooks: false,
             allow_managed_hooks_only: false,
             enable_token_budget_continuation: false,
+            auto_compact_enabled: true,
+            system_reminder: coco_config::SystemReminderConfig::default(),
             tool_config: ToolConfig::default(),
             sandbox_config: SandboxConfig::default(),
             memory_config: MemoryConfig::default(),

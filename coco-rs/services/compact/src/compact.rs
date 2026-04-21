@@ -134,7 +134,6 @@ where
         message: coco_types::LlmMessage::user_text(&summary_user_msg),
         uuid: uuid::Uuid::new_v4(),
         timestamp: String::new(),
-        is_meta: false,
         is_visible_in_transcript_only: true,
         is_virtual: false,
         is_compact_summary: true,
@@ -220,11 +219,18 @@ pub fn strip_images_from_messages(messages: &[Message]) -> Vec<Message> {
 
 /// Strip re-injectable attachment messages (skills, agents, etc.).
 ///
-/// These will be re-injected as post-compact attachments if needed.
+/// Attachments whose `AttachmentKind::survives_compaction()` returns true
+/// are preserved (audit trail, UI-visible silent events, post-compact
+/// file references). The rest are stripped — reminders regenerate per-turn,
+/// silent dedup markers are ephemeral, and file content re-injection is
+/// handled separately by [`create_post_compact_file_attachments`].
 pub fn strip_reinjected_attachments(messages: &[Message]) -> Vec<Message> {
     messages
         .iter()
-        .filter(|msg| !matches!(msg, Message::Attachment(_)))
+        .filter(|msg| match msg {
+            Message::Attachment(a) => a.kind.survives_compaction(),
+            _ => true,
+        })
         .cloned()
         .collect()
 }

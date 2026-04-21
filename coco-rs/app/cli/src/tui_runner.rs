@@ -144,6 +144,7 @@ pub async fn run_tui(cli: &Cli) -> Result<()> {
             .clone()
             .or_else(|| Some(cwd.clone())),
         plan_mode_settings: settings.merged.plan_mode.clone(),
+        system_reminder: settings.merged.system_reminder.clone(),
         tool_config: runtime_config.tool.clone(),
         sandbox_config: runtime_config.sandbox.clone(),
         memory_config: runtime_config.memory.clone(),
@@ -167,6 +168,32 @@ pub async fn run_tui(cli: &Cli) -> Result<()> {
     // row to write into. Silently swallow failures — title gen is a
     // best-effort advisory feature.
     let _ = session_manager.create(&model_id, &cwd);
+
+    // Background housekeeping: prune session files older than the
+    // default retention period. Mirrors TS `utils/cleanup.ts`
+    // `DEFAULT_CLEANUP_PERIOD_DAYS = 30`. Fire-and-forget: cleanup
+    // failures never block startup.
+    {
+        let mgr = session_manager.clone();
+        tokio::spawn(async move {
+            let period = coco_session::default_cleanup_period();
+            match tokio::task::spawn_blocking(move || mgr.cleanup_older_than(period)).await {
+                Ok(Ok(n)) if n > 0 => {
+                    tracing::info!(
+                        target: "coco::session::cleanup",
+                        removed = n,
+                        "pruned old session files"
+                    );
+                }
+                Ok(Err(e)) => tracing::warn!(
+                    target: "coco::session::cleanup",
+                    error = %e,
+                    "cleanup_older_than failed"
+                ),
+                _ => {}
+            }
+        });
+    }
 
     // Fast-role ModelSpec for auto-title generation (F5). Prefer the
     // JSON-first runtime config; keep the Anthropic Haiku fallback for
