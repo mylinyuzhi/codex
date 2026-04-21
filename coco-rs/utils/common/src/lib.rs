@@ -9,7 +9,7 @@ pub mod format_env_display;
 pub mod fuzzy_match;
 pub mod logging;
 
-pub use coco_home::COCODE_HOME_ENV;
+pub use coco_home::COCO_CONFIG_DIR_ENV;
 pub use coco_home::find_coco_home;
 pub use elapsed::format_duration;
 pub use elapsed::format_elapsed;

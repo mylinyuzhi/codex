@@ -6,7 +6,7 @@
 //!
 //! Category layout:
 //! - General/Core (01-09): Common, Input, IO, Network, Auth
-//! - Business (10-19): Config, Provider, Resource
+//! - Business (10-19): Config, Provider, Resource, SystemReminder
 
 use strum::AsRefStr;
 use strum::EnumIter;
@@ -37,13 +37,15 @@ pub enum StatusCategory {
     /// Authentication/authorization errors (05_xxx)
     Auth,
 
-    // ====== Business (10-12) ======
+    // ====== Business (10-13) ======
     /// Configuration errors (10_xxx)
     Config,
     /// LLM provider/model errors (11_xxx)
     Provider,
     /// Resource limits (12_xxx)
     Resource,
+    /// System reminder infrastructure errors (13_xxx)
+    SystemReminder,
 }
 
 macro_rules! define_status_codes {
@@ -71,6 +73,7 @@ macro_rules! define_status_codes {
         /// - 10_xxx: Config errors
         /// - 11_xxx: Provider/Model errors
         /// - 12_xxx: Resource/Limit errors
+        /// - 13_xxx: System reminder infrastructure errors
         #[derive(Debug, Clone, Copy, PartialEq, Eq, AsRefStr, EnumIter, FromRepr)]
         #[repr(i32)]
         pub enum StatusCode {
@@ -202,6 +205,16 @@ define_status_codes! {
     Timeout = 12_003 => { retryable: true, log_error: false, category: Resource },
     /// Deadline exceeded.
     DeadlineExceeded = 12_004 => { retryable: false, log_error: false, category: Resource },
+
+    // ====== System reminder errors (13_xxx) ======
+    /// A reminder generator exceeded its per-turn timeout.
+    ReminderGeneratorTimeout = 13_000 => { retryable: false, log_error: false, category: SystemReminder },
+    /// A reminder generator returned an error from `generate()`.
+    ReminderGeneratorFailed = 13_001 => { retryable: false, log_error: true, category: SystemReminder },
+    /// The throttle manager lock was poisoned (another task panicked while holding it).
+    ReminderThrottlePoisoned = 13_002 => { retryable: false, log_error: true, category: SystemReminder },
+    /// The generator context was missing required fields for this generator.
+    ReminderInvalidContext = 13_003 => { retryable: false, log_error: false, category: SystemReminder },
 }
 
 impl StatusCode {

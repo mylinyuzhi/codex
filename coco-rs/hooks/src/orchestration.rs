@@ -20,13 +20,21 @@ use serde::Serialize;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use coco_config::EnvKey;
+use coco_config::env;
+use coco_types::AttachmentEmitter;
+use coco_types::AttachmentMessage;
+use coco_types::HookEventType;
+use coco_types::HookOutcome;
+use coco_types::PermissionBehavior;
+use coco_types::attachment_body::HookCancelledPayload;
+use coco_types::attachment_body::HookErrorDuringExecutionPayload;
+use coco_types::attachment_body::HookNonBlockingErrorPayload;
+
 use crate::HookExecutionResult;
 use crate::HookHandler;
 use crate::HookRegistry;
 use crate::execute_hook;
-use coco_types::HookEventType;
-use coco_types::HookOutcome;
-use coco_types::PermissionBehavior;
 
 /// Default timeout for tool-related hook execution (10 minutes).
 ///
@@ -449,6 +457,7 @@ pub async fn execute_hooks_parallel(
     cancel: &CancellationToken,
     default_timeout: Duration,
     event_tx: Option<&tokio::sync::mpsc::Sender<crate::HookExecutionEvent>>,
+    attachment_emitter: &AttachmentEmitter,
 ) -> Vec<SingleHookResult> {
     execute_hooks_parallel_filtered(
         registry,
@@ -459,6 +468,7 @@ pub async fn execute_hooks_parallel(
         cancel,
         default_timeout,
         event_tx,
+        attachment_emitter,
         /*allow_managed_hooks_only*/ false,
     )
     .await
@@ -475,6 +485,7 @@ async fn execute_hooks_parallel_filtered(
     cancel: &CancellationToken,
     default_timeout: Duration,
     event_tx: Option<&tokio::sync::mpsc::Sender<crate::HookExecutionEvent>>,
+    attachment_emitter: &AttachmentEmitter,
     allow_managed_hooks_only: bool,
 ) -> Vec<SingleHookResult> {
     let matching = registry.find_matching(event, tool_name);
@@ -527,6 +538,7 @@ async fn execute_hooks_parallel_filtered(
         let hook_id = format!("hook-{idx}");
         let hook_event_str = format!("{event:?}");
         let event_tx = event_tx.cloned();
+        let emitter = attachment_emitter.clone();
         let is_async = hook.is_async;
         // Only clone sender for sync hooks — async hooks are fire-and-forget.
         let tx = if is_async { None } else { Some(tx.clone()) };
@@ -572,6 +584,18 @@ async fn execute_hooks_parallel_filtered(
 
             let result = tokio::select! {
                 _ = cancel.cancelled() => {
+                    // TS `hook_cancelled` (`utils/attachments.ts:397`,
+                    // API-hidden, UI surfaces cancel + command metadata).
+                    let attachment = AttachmentMessage::silent_hook_cancelled(
+                        HookCancelledPayload {
+                            hook_name: command_label.clone(),
+                            tool_use_id: String::new(),
+                            hook_event: event,
+                            command: Some(command_label.clone()),
+                            duration_ms: None,
+                        },
+                    );
+                    emitter.emit(attachment);
                     SingleHookResult {
                         command: command_label.clone(),
                         succeeded: false,
@@ -585,24 +609,53 @@ async fn execute_hooks_parallel_filtered(
                 res = tokio::time::timeout(timeout, execute_hook(&handler, &env, Some(&input_json))) => {
                     match res {
                         Ok(Ok(exec_result)) => process_execution_result(exec_result, &command_label),
-                        Ok(Err(e)) => SingleHookResult {
-                            command: command_label.clone(),
-                            succeeded: false,
-                            output: format!("{e}"),
-                            blocked: false,
-                            outcome: HookOutcome::NonBlockingError,
-                            status_message: None,
-                            async_rewake: false,
-                        },
-                        Err(_elapsed) => SingleHookResult {
-                            command: command_label.clone(),
-                            succeeded: false,
-                            output: format!("hook timed out after {timeout:?}"),
-                            blocked: false,
-                            outcome: HookOutcome::NonBlockingError,
-                            status_message: None,
-                            async_rewake: false,
-                        },
+                        Ok(Err(e)) => {
+                            // TS `hook_error_during_execution`
+                            // (`utils/attachments.ts:405-414`, API-hidden,
+                            // UI-visible): the hook itself crashed.
+                            let err_msg = format!("{e}");
+                            let attachment = AttachmentMessage::silent_hook_error_during_execution(
+                                HookErrorDuringExecutionPayload {
+                                    content: err_msg.clone(),
+                                    hook_name: command_label.clone(),
+                                    tool_use_id: String::new(),
+                                    hook_event: event,
+                                },
+                            );
+                            emitter.emit(attachment);
+                            SingleHookResult {
+                                command: command_label.clone(),
+                                succeeded: false,
+                                output: err_msg,
+                                blocked: false,
+                                outcome: HookOutcome::NonBlockingError,
+                                status_message: None,
+                                async_rewake: false,
+                            }
+                        }
+                        Err(_elapsed) => {
+                            // Timeout is a non-blocking error in TS terms;
+                            // emit `hook_non_blocking_error` for UI / audit.
+                            let err_msg = format!("hook timed out after {timeout:?}");
+                            let attachment = AttachmentMessage::silent_hook_non_blocking_error(
+                                HookNonBlockingErrorPayload {
+                                    error: err_msg.clone(),
+                                    hook_name: command_label.clone(),
+                                    tool_use_id: String::new(),
+                                    hook_event: event,
+                                },
+                            );
+                            emitter.emit(attachment);
+                            SingleHookResult {
+                                command: command_label.clone(),
+                                succeeded: false,
+                                output: err_msg,
+                                blocked: false,
+                                outcome: HookOutcome::NonBlockingError,
+                                status_message: None,
+                                async_rewake: false,
+                            }
+                        }
                     }
                 }
             };
@@ -720,6 +773,11 @@ pub fn aggregate_results(results: &[SingleHookResult]) -> AggregatedHookResult {
                     }
                     _ => {}
                 }
+                // Silent `hook_permission_decision` attachment is deferred —
+                // emitting it requires `tool_use_id` + `hook_event`, which
+                // `aggregate_results` doesn't currently receive. Thread them
+                // through before re-enabling; shipping placeholder values
+                // would poison audit data.
 
                 if let Some(reason) = &json.reason
                     && agg.permission_behavior.is_some()
@@ -741,6 +799,9 @@ pub fn aggregate_results(results: &[SingleHookResult]) -> AggregatedHookResult {
 
                 if json.system_message.is_some() {
                     agg.system_message = json.system_message.clone();
+                    // `hook_system_message` silent attachment deferred —
+                    // needs `event` + `hook_name` threaded into
+                    // `aggregate_results` alongside `hook_permission_decision`.
                 }
 
                 if json.status_message.is_some() {
@@ -972,6 +1033,10 @@ pub struct OrchestrationContext {
     pub disable_all_hooks: bool,
     /// When true, only managed (policy-level) hooks are allowed.
     pub allow_managed_hooks_only: bool,
+    /// Sink for silent `AttachmentMessage`s produced by hook execution
+    /// (cancel / error / timeout). Use [`AttachmentEmitter::noop`] in tests
+    /// or when no session-scoped sink is available.
+    pub attachment_emitter: AttachmentEmitter,
 }
 
 /// Generic event execution — builds env, runs hooks in parallel, aggregates.
@@ -1008,6 +1073,7 @@ pub async fn execute_event(
         &ctx.cancel,
         timeout,
         /*event_tx*/ None,
+        &ctx.attachment_emitter,
         ctx.allow_managed_hooks_only,
     )
     .await;
@@ -1052,6 +1118,7 @@ pub async fn execute_pre_tool_use(
         &ctx.cancel,
         DEFAULT_HOOK_TIMEOUT,
         event_tx,
+        &ctx.attachment_emitter,
         ctx.allow_managed_hooks_only,
     )
     .await;
@@ -1098,6 +1165,7 @@ pub async fn execute_post_tool_use(
         &ctx.cancel,
         DEFAULT_HOOK_TIMEOUT,
         event_tx,
+        &ctx.attachment_emitter,
         ctx.allow_managed_hooks_only,
     )
     .await;
@@ -1140,6 +1208,7 @@ pub async fn execute_pre_compact(
         &ctx.cancel,
         DEFAULT_HOOK_TIMEOUT,
         /*event_tx*/ None,
+        &ctx.attachment_emitter,
         ctx.allow_managed_hooks_only,
     )
     .await;
@@ -1222,6 +1291,7 @@ pub async fn execute_post_compact(
         &ctx.cancel,
         DEFAULT_HOOK_TIMEOUT,
         /*event_tx*/ None,
+        &ctx.attachment_emitter,
         ctx.allow_managed_hooks_only,
     )
     .await;
@@ -1299,6 +1369,7 @@ pub async fn execute_session_start(
         &ctx.cancel,
         DEFAULT_HOOK_TIMEOUT,
         /*event_tx*/ None,
+        &ctx.attachment_emitter,
         ctx.allow_managed_hooks_only,
     )
     .await;
@@ -1339,6 +1410,7 @@ pub async fn execute_session_end(
         &ctx.cancel,
         timeout,
         /*event_tx*/ None,
+        &ctx.attachment_emitter,
         ctx.allow_managed_hooks_only,
     )
     .await;
@@ -1388,6 +1460,7 @@ pub async fn execute_stop(
         &ctx.cancel,
         DEFAULT_HOOK_TIMEOUT,
         event_tx,
+        &ctx.attachment_emitter,
         ctx.allow_managed_hooks_only,
     )
     .await;
@@ -1428,6 +1501,7 @@ pub async fn execute_stop_failure(
         &ctx.cancel,
         DEFAULT_HOOK_TIMEOUT,
         /*event_tx*/ None,
+        &ctx.attachment_emitter,
         ctx.allow_managed_hooks_only,
     )
     .await;
@@ -1525,8 +1599,7 @@ fn process_execution_result(exec: HookExecutionResult, label: &str) -> SingleHoo
 ///
 /// TS: getSessionEndHookTimeoutMs()
 fn session_end_timeout() -> Duration {
-    std::env::var("COCODE_SESSIONEND_HOOKS_TIMEOUT_MS")
-        .ok()
+    env::env_opt(EnvKey::CocoSessionEndHooksTimeoutMs)
         .and_then(|raw| raw.parse::<u64>().ok())
         .filter(|&ms| ms > 0)
         .map(Duration::from_millis)

@@ -124,6 +124,63 @@ fn server_notification_turn_started_wire_method() {
 }
 
 #[test]
+fn notification_method_matches_server_notification_wire_tag() {
+    // The macro drives `#[serde(rename)]` and `NotificationMethod::as_str()`
+    // off the same `$wire` literal, so they cannot drift. Spot-check a mix
+    // of tuple / struct / unit / Box<T> variants to lock this down.
+    let cases: &[(ServerNotification, NotificationMethod)] = &[
+        (
+            ServerNotification::TurnStarted(TurnStartedParams {
+                turn_id: None,
+                turn_number: 0,
+            }),
+            NotificationMethod::TurnStarted,
+        ),
+        (
+            ServerNotification::SessionStateChanged {
+                state: SessionState::Running,
+            },
+            NotificationMethod::SessionStateChanged,
+        ),
+        (
+            ServerNotification::CompactionStarted,
+            NotificationMethod::CompactionStarted,
+        ),
+        (
+            ServerNotification::ModelFallbackCompleted,
+            NotificationMethod::ModelFallbackCompleted,
+        ),
+    ];
+
+    for (notif, expected) in cases {
+        assert_eq!(notif.method(), *expected);
+        let json = serde_json::to_value(notif).unwrap();
+        assert_eq!(json["method"], expected.as_str());
+    }
+}
+
+#[test]
+fn notification_method_serialization_roundtrip() {
+    let m = NotificationMethod::PlanApprovalRequested;
+    assert_eq!(m.as_str(), "plan_approval/requested");
+    assert_eq!(m.to_string(), "plan_approval/requested");
+
+    // serde round-trip
+    let s = serde_json::to_value(m).unwrap();
+    assert_eq!(s, json!("plan_approval/requested"));
+    let back: NotificationMethod = serde_json::from_value(s).unwrap();
+    assert_eq!(back, NotificationMethod::PlanApprovalRequested);
+}
+
+#[test]
+fn notification_method_into_static_str() {
+    // strum's IntoStaticStr uses the same `$wire` literal as serde rename,
+    // so `Into<&'static str>` yields the wire string.
+    let s: &'static str = NotificationMethod::SessionStarted.into();
+    assert_eq!(s, "session/started");
+}
+
+#[test]
 fn server_notification_session_state_changed_wire_method() {
     let notif = ServerNotification::SessionStateChanged {
         state: SessionState::Running,

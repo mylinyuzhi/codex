@@ -181,8 +181,8 @@ pub(crate) async fn record_file_edit(
 ///
 /// Path detection is layered: first the authoritative resolution via
 /// `coco_memory::team_paths::is_team_mem_path` (using
-/// `MemoryConfig::resolve_memory_dir(project_root)` with `cwd_override`
-/// or the process cwd as the project root), then a substring fallback
+/// `MemoryConfig::resolve_memory_dir(project_root)` from the resolved
+/// tool context config, then a substring fallback
 /// for paths that don't match the resolved layout. See
 /// `is_team_memory_path` for the gating logic.
 ///
@@ -226,13 +226,12 @@ pub(crate) fn check_team_mem_secret(
 
 /// Layered team-memory path detection.
 ///
-///  1. **Resolved-path check** — query `MemoryConfig::from_env()` for
-///     the active memory dir for this project root (cwd override or
-///     process cwd) and call
+///  1. **Resolved-path check** — use the resolved memory config from
+///     `ToolUseContext` for this project root (cwd override or process
+///     cwd) and call
 ///     `coco_memory::team_paths::is_team_mem_path`. This is the
 ///     authoritative TS-aligned path that handles custom memory dirs
-///     set via `CLAUDE_CODE_REMOTE_MEMORY_DIR` or
-///     `CLAUDE_COWORK_MEMORY_PATH_OVERRIDE`.
+///     set via `COCO_REMOTE_MEMORY_DIR` or `COCO_MEMORY_PATH_OVERRIDE`.
 ///  2. **Substring fallback** — match `**/.claude/memory/team/**` as
 ///     a heuristic for paths whose resolved memory dir doesn't match
 ///     the on-disk path (custom mount points, symlinks, mid-session
@@ -247,7 +246,7 @@ fn is_team_memory_path(ctx: &coco_tool::ToolUseContext, path: &std::path::Path) 
         .clone()
         .or_else(|| std::env::current_dir().ok());
     if let Some(root) = project_root {
-        let memory_config = coco_memory::config::MemoryConfig::from_env();
+        let memory_config = coco_memory::config::MemoryConfig::from(ctx.memory_config.clone());
         let memory_dir = memory_config.resolve_memory_dir(&root);
         if coco_memory::team_paths::is_team_mem_path(path, &memory_dir) {
             return true;

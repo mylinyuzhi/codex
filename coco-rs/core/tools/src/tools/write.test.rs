@@ -382,55 +382,19 @@ async fn test_write_allows_clean_content_in_team_memory_path() {
     assert!(file.exists());
 }
 
-/// Custom memory dir via env var: when CLAUDE_COWORK_MEMORY_PATH_OVERRIDE
-/// points to an unusual location, the secret guard should resolve via
-/// coco_memory::config and still detect team-memory writes there. This
-/// exercises the Stage 1 (resolved) branch of `is_team_memory_path`.
+/// Custom memory dir via resolved config should still detect
+/// team-memory writes in unusual locations. This exercises the Stage 1
+/// (resolved) branch of `is_team_memory_path`.
 #[tokio::test]
-async fn test_write_secret_guard_respects_custom_memory_dir_env() {
-    use std::sync::Mutex;
-    // Serialize env-mutating tests to avoid races with other tests
-    // running in the same process.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-    let _guard = ENV_LOCK.lock().unwrap();
-
+async fn test_write_secret_guard_respects_custom_memory_dir_config() {
     let dir = tempfile::tempdir().unwrap();
     let custom_memory_dir = dir.path().join("custom-memory");
     let team_dir = custom_memory_dir.join("team");
     std::fs::create_dir_all(&team_dir).unwrap();
     let file = team_dir.join("token.md");
 
-    // RAII-style env restore so the test never leaks state into other
-    // tests in the same process.
-    struct EnvGuard {
-        key: &'static str,
-        prev: Option<String>,
-    }
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            unsafe {
-                match &self.prev {
-                    Some(v) => std::env::set_var(self.key, v),
-                    None => std::env::remove_var(self.key),
-                }
-            }
-        }
-    }
-    let prev = std::env::var("CLAUDE_COWORK_MEMORY_PATH_OVERRIDE").ok();
-    let _env_guard = EnvGuard {
-        key: "CLAUDE_COWORK_MEMORY_PATH_OVERRIDE",
-        prev,
-    };
-    // SAFETY: env-mutating in a test guarded by ENV_LOCK; restored by
-    // the EnvGuard's Drop impl above.
-    unsafe {
-        std::env::set_var(
-            "CLAUDE_COWORK_MEMORY_PATH_OVERRIDE",
-            custom_memory_dir.to_str().unwrap(),
-        );
-    }
-
-    let ctx = ToolUseContext::test_default();
+    let mut ctx = ToolUseContext::test_default();
+    ctx.memory_config.directory = Some(custom_memory_dir);
     let result = WriteTool
         .execute(
             json!({

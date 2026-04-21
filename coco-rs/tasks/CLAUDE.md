@@ -1,37 +1,58 @@
 # coco-tasks
 
-Background task system: LocalBash / LocalAgent / LocalWorkflow / RemoteAgent / InProcessTeammate / MonitorMcp / Dream. Lifecycle tracking, output persistence, dependency graph, optional event-stream emission for SDK clients, TodoV2 checklists.
+Three distinct kinds of task state — deliberately separated because
+their lifecycles differ:
+
+| Module | TS source | Purpose |
+|--------|-----------|---------|
+| [`running`](src/running.rs) | `Task.ts` + `tasks/` | Running background tasks (shell / agent / workflow). `TaskManager` emits `CoreEvent::Protocol(TaskStarted/Progress/Completed)` via an optional `with_event_sink(tx)` channel. |
+| [`task_list`](src/task_list.rs) | `utils/tasks.ts` | Durable plan items stored on disk per task-list-id with `fs2` file locking + high-water-mark. Shared across a team. |
+| [`todos`](src/todos.rs) | `utils/todo/types.ts` + `AppState.todos[agentId]` | Ephemeral per-agent TodoWrite (V1) checklist. In-memory only — TS never persists this to disk. |
+
+V1 (`TodoWrite`) and V2 (`Task*` tools) are gated by `is_todo_v2_enabled()` at the CLI layer — never both at once. Running-task state is orthogonal and always on.
 
 ## TS Source
-- `Task.ts` — canonical TaskStateBase + manager logic
-- `tasks/types.ts` — task variant types
-- `tasks/LocalShellTask/` — background bash
-- `tasks/LocalAgentTask/` — foreground/background sub-agents
-- `tasks/RemoteAgentTask/` — CCR remote agents
-- `tasks/DreamTask/` — auto-dream consolidation
-- `tasks/InProcessTeammateTask/` — v2 team-mate tasks
-- `tasks/LocalMainSessionTask.ts`, `stopTask.ts`, `pillLabel.ts`
-- `utils/task/TaskOutput.ts`, `diskOutput.ts`, `framework.ts`, `outputFormatting.ts`, `sdkProgress.ts`
-- `utils/todo/types.ts` — TodoV2
+- `Task.ts` — `TaskStateBase`, `TaskHandle`, `TaskType`, `TaskStatus`
+- `utils/tasks.ts` — durable task-list CRUD, file locking, claim semantics
+- `utils/todo/types.ts` — `TodoItem` V1 schema
+- `tasks/LocalShellTask/`, `LocalAgentTask/`, `RemoteAgentTask/`, `DreamTask/` — running-task variants
 
 Paths relative to `/lyz/codespace/3rd/claude-code/src/`.
 
 ## Key Types
-- `TaskManager` — `Arc<RwLock<HashMap<id, TaskStateBase>>>` + outputs map, optional `mpsc::Sender<CoreEvent>` sink (SDK NDJSON parity); `create` / `get` / `update_status` / `stop` / `set_output` / `get_output` / `list` / `remove_completed`
-- `TaskOutput` — `{stdout, stderr, exit_code}`
-- `TaskDependencies` — `blocks` / `blocked_by` ID arrays
-- `PersistentTaskManager` — wraps `TaskManager` with JSON persistence + `add_blocks` / `get_deps` / `is_blocked` / `save` / `load`
 
-Re-exports from `coco_types`: `TaskStateBase`, `TaskStatus` (6 variants), `TaskType` (7 variants: `LocalBash`, `LocalAgent`, `LocalWorkflow`, `RemoteAgent`, `InProcessTeammate`, `MonitorMcp`, `Dream`), `TaskUsage`, `TaskCompletionStatus`, `generate_task_id`.
+### running
+- `TaskManager` — `Arc<RwLock<HashMap<id, TaskStateBase>>>` + outputs map; optional `mpsc::Sender<CoreEvent>` sink for SDK NDJSON parity. `create` / `get` / `update_status` / `stop` / `set_output` / `get_output` / `list` / `remove_completed`.
+- `TaskOutput` — `{stdout, stderr, exit_code}`.
+- Event-emission coverage: `TaskStarted` on `create`, `TaskProgress` on non-terminal transitions, `TaskCompleted` on terminal (with `TaskCompletionStatus` mapping: Completed→Completed, Failed→Failed, Killed|Cancelled→Stopped).
 
-## Event Emission (WS-6)
-When `TaskManager` is constructed with `with_event_sink(tx)`, every lifecycle transition emits:
-- `CoreEvent::Protocol(ServerNotification::TaskStarted)` on `create`
-- `CoreEvent::Protocol(ServerNotification::TaskProgress)` on non-terminal status updates
-- `CoreEvent::Protocol(ServerNotification::TaskCompleted)` on terminal status (with `TaskCompletionStatus` mapping: Completed→Completed, Failed→Failed, Killed|Cancelled→Stopped)
+### task_list
+- `Task` — id, subject, description, active_form, owner, status, blocks, blockedBy, metadata (byte-matches TS `TaskSchema`).
+- `TaskStatus` — 3 variants: `Pending`, `InProgress`, `Completed` (not the 6-variant `coco_types::TaskStatus` which is for running tasks).
+- `TaskUpdate` — partial update struct; `metadata_merge` supports null-deletion.
+- `TaskListStore` — disk-backed store. API: `create_task`, `get_task`, `list_tasks`, `update_task`, `delete_task`, `block_task`, `claim_task` (with optional agent-busy check), `unassign_teammate_tasks`, `should_nudge_verification_after_update`.
+- `ClaimResult` — `Success` / `TaskNotFound` / `AlreadyClaimed` / `AlreadyResolved` / `Blocked` / `AgentBusy`.
+- `resolve_task_list_id(teammate_team, leader_team, session_id)` — 5-level precedence matching TS `getTaskListId()`.
+- `TaskHookSink` trait — app layer implements this to fire `HookEventType::TaskCreated` / `::TaskCompleted`; avoids depending on `coco-hooks` from this crate.
 
-TS parity: `utils/sdkEventQueue.ts` drain pattern.
+### todos
+- `TodoItem` — `{content, status, activeForm}`, byte-matches TS `TodoItemSchema`. **No id field** (TS uses positional identity).
+- `TodoStore` — per-agent `HashMap<String, Vec<TodoItem>>` keyed by `agent_id.unwrap_or(session_id)`.
+- `should_nudge_verification(&[&str])` — shared verification-nudge helper used by both V1 `TodoWrite` and V2 `TaskUpdate`.
 
-## Modules
-- `output` — task output file handling
-- `todo` — TodoV2 checklist item types
+### handle_impls
+- `impl TaskListHandle for TaskListStore` — bridges the crate to `coco_tool::TaskListHandleRef`.
+- `impl TodoListHandle for TodoStore` — bridges to `coco_tool::TodoListHandleRef`.
+
+## Disk Layout (task_list)
+
+```
+{config_home}/tasks/{sanitize(list_id)}/
+├── .lock                # fs2 file-lock sentinel
+├── .highwatermark       # max task id ever assigned; prevents reuse
+├── 1.json
+├── 2.json
+└── ...
+```
+
+Locking: list-level lock (`.lock`) for create / reset / agent-busy claim; per-task lock (`{id}.json`) for updates / claims. 30-retry backoff (5–100ms) gives ~2.6s budget on a 10-way race, matching TS `proper-lockfile`.

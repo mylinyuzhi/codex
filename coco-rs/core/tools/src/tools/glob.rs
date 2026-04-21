@@ -17,7 +17,7 @@
 //! TS `--hidden`). File discovery, compiled-glob matching, and mtime
 //! collection all run inside [`tokio::task::spawn_blocking`], wrapped in
 //! [`tokio::time::timeout`] for a bounded 20-second budget (overridable via
-//! the `CLAUDE_CODE_GLOB_TIMEOUT_SECONDS` env var).
+//! the `COCO_GLOB_TIMEOUT_SECONDS` env var).
 //!
 //! # Sort order
 //!
@@ -54,9 +54,6 @@ use tokio_util::sync::CancellationToken;
 
 /// Default max results when glob_limits.max_results is None (TS: 100).
 const DEFAULT_MAX_RESULTS: usize = 100;
-
-/// Timeout seconds for glob operations.
-const DEFAULT_TIMEOUT_SECS: u64 = 20;
 
 /// Tool description shown to the model. Byte-for-byte copy of TS Claude Code
 /// `tools/GlobTool/prompt.ts::DESCRIPTION`.
@@ -137,14 +134,20 @@ impl Tool for GlobTool {
     /// R6-T20: block globbing under a path that's in the ignore list.
     /// Individual results matching an ignore glob are also filtered
     /// inside `run_glob_search`.
-    async fn check_permissions(&self, input: &Value, _ctx: &ToolUseContext) -> PermissionDecision {
+    async fn check_permissions(&self, input: &Value, ctx: &ToolUseContext) -> PermissionDecision {
         let Some(path) = input.get("path").and_then(|v| v.as_str()) else {
             return PermissionDecision::Allow {
                 updated_input: None,
                 feedback: None,
             };
         };
-        crate::tools::read_permissions::check_read_permission(Path::new(path))
+        let matcher = crate::tools::read_permissions::file_read_ignore_matcher_from_patterns(
+            &ctx.tool_config.file_read_ignore_patterns,
+        );
+        crate::tools::read_permissions::check_read_permission_with_matcher(
+            Path::new(path),
+            &matcher,
+        )
     }
 
     fn validate_input(&self, input: &Value, _ctx: &ToolUseContext) -> ValidationResult {
@@ -202,17 +205,24 @@ impl Tool for GlobTool {
             .map(|n| n as usize)
             .unwrap_or(DEFAULT_MAX_RESULTS);
 
-        let timeout_secs = std::env::var("CLAUDE_CODE_GLOB_TIMEOUT_SECONDS")
-            .ok()
-            .and_then(|s| s.parse::<u64>().ok())
-            .filter(|&v| v > 0)
-            .unwrap_or(DEFAULT_TIMEOUT_SECS);
+        let timeout_secs = ctx.tool_config.glob_timeout_seconds.max(1) as u64;
 
         // Move owned values into the blocking closure — no redundant clones.
         let cancel = ctx.cancel.clone();
         let pattern_owned = pattern.to_string();
+        let read_ignore_matcher =
+            crate::tools::read_permissions::file_read_ignore_matcher_from_patterns(
+                &ctx.tool_config.file_read_ignore_patterns,
+            );
         let search_future = tokio::task::spawn_blocking(move || {
-            run_glob_search(&pattern_owned, &search_path, &cwd, max_results, &cancel)
+            run_glob_search(
+                &pattern_owned,
+                &search_path,
+                &cwd,
+                max_results,
+                &cancel,
+                &read_ignore_matcher,
+            )
         });
 
         let (paths, truncated) =
@@ -260,6 +270,7 @@ fn run_glob_search(
     base_dir: &Path,
     max_results: usize,
     cancel: &CancellationToken,
+    read_ignore_matcher: &globset::GlobSet,
 ) -> Result<(Vec<String>, bool), String> {
     // Build the glob matcher
     let glob = globset::GlobBuilder::new(pattern)
@@ -290,7 +301,7 @@ fn run_glob_search(
         // R6-T20: hide files that match the file-read ignore patterns
         // from the result list. Matches TS `GlobTool` which pipes its
         // result through `checkReadPermissionForTool` before emitting.
-        if crate::tools::read_permissions::is_read_ignored(path) {
+        if crate::tools::read_permissions::is_read_ignored_with_matcher(path, read_ignore_matcher) {
             continue;
         }
 

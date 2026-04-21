@@ -14,6 +14,8 @@ use crate::emit::emit_protocol;
 use crate::emit::emit_protocol_owned;
 use crate::emit::emit_stream;
 use crate::session_state::SessionStateTracker;
+use coco_config::EnvKey;
+use coco_config::env;
 use coco_context::FileHistoryState;
 use coco_hooks::HookRegistry;
 use coco_hooks::orchestration;
@@ -23,6 +25,12 @@ use coco_inference::QueryParams;
 use coco_inference::StreamEvent;
 use coco_messages::CostTracker;
 use coco_messages::MessageHistory;
+use coco_system_reminder::AttachmentType as ReminderAttachmentType;
+use coco_system_reminder::SystemReminderOrchestrator;
+use coco_system_reminder::TurnReminderInput;
+use coco_system_reminder::count_human_turns;
+use coco_system_reminder::inject_reminders;
+use coco_system_reminder::run_turn_reminders;
 use coco_tool::PendingToolCall;
 use coco_tool::StreamingToolExecutor;
 use coco_tool::ToolRegistry;
@@ -105,6 +113,30 @@ pub struct QueryEngine {
     /// `NoOpMailboxHandle` in `create_tool_context`; swarm spawn paths
     /// install a real handle via [`Self::with_mailbox`].
     mailbox: Option<coco_tool::MailboxHandleRef>,
+    /// Persistent task-list store (V2, `TaskCreate`/`TaskUpdate`/etc.).
+    /// `None` resolves to `NoOpTaskListHandle` — the V2 tools then
+    /// return errors on write, matching TS's "no store configured"
+    /// behavior. Install via [`Self::with_task_list`].
+    task_list: Option<coco_tool::TaskListHandleRef>,
+    /// Per-agent ephemeral todo store (V1, `TodoWrite`). Defaults to
+    /// an in-memory instance when absent.
+    todo_list: Option<coco_tool::TodoListHandleRef>,
+    /// Bundle of per-subsystem reminder sources. Populated by CLI /
+    /// SDK callers via [`Self::with_reminder_sources`]. Empty default
+    /// ⇒ cross-crate reminders silently skip (matches TS behavior
+    /// when the corresponding manager isn't initialized).
+    reminder_sources: coco_system_reminder::ReminderSources,
+    /// Channel for silent attachment events produced by owner crates
+    /// (hooks, permissions, commands, core/tool, skills). Drained at the
+    /// head of each outer-loop iteration so the `Message::Attachment`
+    /// entries land in history before prompt build.
+    ///
+    /// Sender cloned to [`Self::attachment_emitter`] for plumbing into
+    /// owner crates; receiver is drained by `drain_attachment_inbox`.
+    attachment_tx: tokio::sync::mpsc::UnboundedSender<coco_types::AttachmentMessage>,
+    attachment_rx: Arc<
+        tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<coco_types::AttachmentMessage>>,
+    >,
 }
 
 impl QueryEngine {
@@ -115,6 +147,7 @@ impl QueryEngine {
         cancel: CancellationToken,
         hooks: Option<Arc<HookRegistry>>,
     ) -> Self {
+        let (attachment_tx, attachment_rx) = tokio::sync::mpsc::unbounded_channel();
         Self {
             config,
             client,
@@ -133,12 +166,63 @@ impl QueryEngine {
             auto_mode_rules: coco_permissions::AutoModeRules::default(),
             app_state: None,
             mailbox: None,
+            task_list: None,
+            todo_list: None,
+            reminder_sources: coco_system_reminder::ReminderSources::default(),
+            attachment_tx,
+            attachment_rx: Arc::new(tokio::sync::Mutex::new(attachment_rx)),
         }
+    }
+
+    /// A clone-friendly emitter handle for owning crates (hooks /
+    /// permissions / commands / core/tool / skills) so they can push
+    /// `Message::Attachment` entries into this session's history without
+    /// direct access to the engine. Drained once per outer-loop turn.
+    pub fn attachment_emitter(&self) -> coco_types::AttachmentEmitter {
+        coco_types::AttachmentEmitter::new(self.attachment_tx.clone())
+    }
+
+    /// Drain any silent attachments emitted since the last turn into
+    /// `history`. Called at the head of each outer-loop iteration.
+    /// Returns the number of drained attachments for telemetry.
+    async fn drain_attachment_inbox(&self, history: &mut coco_messages::MessageHistory) -> usize {
+        let mut count = 0;
+        let mut rx = self.attachment_rx.lock().await;
+        while let Ok(att) = rx.try_recv() {
+            history.messages.push(coco_types::Message::Attachment(att));
+            count += 1;
+        }
+        count
+    }
+
+    /// Install the per-subsystem reminder source bundle. Each
+    /// `Some(Arc<dyn XxxSource>)` field powers a category of
+    /// system-reminders that needs state from an owning crate
+    /// (hooks, LSP, tasks, skills, MCP, swarm, bridge, memory).
+    /// Omitted sources → corresponding reminders silently skip.
+    ///
+    /// TS parity: this is the analog of `toolUseContext.options.*`
+    /// that TS's `getAttachments` reads from.
+    pub fn with_reminder_sources(mut self, sources: coco_system_reminder::ReminderSources) -> Self {
+        self.reminder_sources = sources;
+        self
     }
 
     /// Install a mailbox handle for swarm teammate messaging.
     pub fn with_mailbox(mut self, mailbox: coco_tool::MailboxHandleRef) -> Self {
         self.mailbox = Some(mailbox);
+        self
+    }
+
+    /// Install the durable task-list store (V2 task tools).
+    pub fn with_task_list(mut self, handle: coco_tool::TaskListHandleRef) -> Self {
+        self.task_list = Some(handle);
+        self
+    }
+
+    /// Install the ephemeral per-agent todo store (V1 TodoWrite).
+    pub fn with_todo_list(mut self, handle: coco_tool::TodoListHandleRef) -> Self {
+        self.todo_list = Some(handle);
         self
     }
 
@@ -203,10 +287,10 @@ impl QueryEngine {
         // Bootstrap the live mode on first attach. This is a one-shot
         // write — subsequent runs that reuse the same app_state see
         // the preserved value rather than an overwrite.
-        if let Ok(mut guard) = app_state.try_write() {
-            if guard.permission_mode.is_none() {
-                guard.permission_mode = Some(self.config.permission_mode);
-            }
+        if let Ok(mut guard) = app_state.try_write()
+            && guard.permission_mode.is_none()
+        {
+            guard.permission_mode = Some(self.config.permission_mode);
         }
         self.app_state = Some(app_state);
         self
@@ -525,6 +609,12 @@ impl QueryEngine {
         let mut history = MessageHistory::new();
         let mut total_usage = TokenUsage::default();
         let mut cost_tracker = CostTracker::new();
+        // TS `input`-parameter parity: tracks the UUID of the last user
+        // message that has already been handed to the UserPrompt-tier
+        // reminders. Prevents duplicate `at_mentioned_files` /
+        // `agent_mentions` / `ultrathink_effort` emissions across
+        // tool-result iterations of the same human turn.
+        let mut reminder_last_user_input_uuid: Option<uuid::Uuid> = None;
         let mut turn = 0;
         let mut last_continue_reason: Option<ContinueReason> = None;
         // max-output-tokens recovery state (TS: query.ts State.maxOutputTokensOverride + maxOutputTokensRecoveryCount)
@@ -584,40 +674,31 @@ impl QueryEngine {
         // start of every turn while plan mode is active and on the turn
         // following an ExitPlanMode approval. TS: normalizeAttachmentForAPI
         // cases `plan_mode` / `plan_mode_exit` / `plan_mode_reentry`.
+        // Plan/workflow / phase-4 / agent-count values are fed into the
+        // orchestrator's `TurnReminderInput` below. `PlanModeReminder` is
+        // now the per-turn side-effect driver (mode reconcile + mailbox
+        // polling + leader-pending-approvals) and no longer owns
+        // workflow state.
         let plans_dir = crate::plan_mode_reminder::PlanModeReminder::resolve_plans_dir(
             self.config_home.as_deref(),
             self.config.project_dir.as_deref(),
             self.config.plans_directory.as_deref(),
         );
-        let pm = &self.config.plan_mode_settings;
-        let workflow = match pm.workflow {
-            coco_config::PlanModeWorkflow::FivePhase => coco_context::PlanWorkflow::FivePhase,
-            coco_config::PlanModeWorkflow::Interview => coco_context::PlanWorkflow::Interview,
-        };
-        let phase4 = match pm.phase4_variant {
-            coco_config::PlanPhase4Variant::Standard => coco_context::Phase4Variant::Standard,
-            coco_config::PlanPhase4Variant::Trim => coco_context::Phase4Variant::Trim,
-            coco_config::PlanPhase4Variant::Cut => coco_context::Phase4Variant::Cut,
-            coco_config::PlanPhase4Variant::Cap => coco_context::Phase4Variant::Cap,
-        };
         let mut plan_reminder = crate::plan_mode_reminder::PlanModeReminder::new(
             self.config.permission_mode,
             Some(self.config.session_id.clone()),
             self.config.agent_id.clone(),
             plans_dir,
             self.app_state.clone(),
-        )
-        .with_workflow(workflow)
-        .with_phase4_variant(phase4)
-        .with_agent_counts(pm.explore_agent_count, pm.plan_agent_count);
+        );
         // Wire mailbox for swarm polling if identity is set and a mailbox
         // handle is installed. Agent + team names come from env vars
         // (set by the swarm spawner); mirror `swarm_identity::get_agent_name`
         // env fallback. We keep the env read here rather than threading
         // via ctx because the reminder is engine-level (no ToolUseContext).
         // Env namespace is `COCO_*` — see swarm_constants.
-        let agent_name_env = std::env::var("COCO_AGENT_NAME").ok();
-        let team_name_env = std::env::var("COCO_TEAM_NAME").ok();
+        let agent_name_env = env::env_opt(EnvKey::CocoAgentName);
+        let team_name_env = env::env_opt(EnvKey::CocoTeamName);
         if let (Some(mbox), Some(agent), Some(team)) =
             (self.mailbox.clone(), agent_name_env, team_name_env)
         {
@@ -628,6 +709,42 @@ impl QueryEngine {
                 self.config.is_teammate && self.config.plan_mode_required,
             );
         }
+        // Install the protocol-event sink so leader-pending-approval
+        // polling can surface `PlanApprovalRequested` to the TUI in
+        // addition to injecting the LLM-prompt attachment. Absent sink
+        // (SDK-only / headless) means the overlay simply never fires.
+        if let Some(tx) = event_tx.clone() {
+            plan_reminder = plan_reminder.with_event_sink(tx);
+        }
+
+        // System-reminder orchestrator — owns reminder emission for the
+        // whole session. The orchestrator is Send+Sync and accumulates
+        // per-attachment throttle state across turns.
+        //
+        // `plan_reminder` above is retained for non-reminder side effects
+        // (mode reconciliation, teammate mailbox polling, leader-pending-
+        // approvals), called per turn via `turn_start_side_effects_only`.
+        // The reminder emission itself (plan/auto/todo/task/critical/
+        // compaction/date-change) moves here.
+        // Settings-driven reminder config (TS `settings.json` →
+        // `coco_config::Settings.system_reminder`). Cloned because the
+        // orchestrator owns its own copy for the session — subsequent
+        // settings reloads won't retroactively disable reminders until
+        // the next engine build.
+        let reminder_config = self.config.system_reminder.clone();
+        let reminder_orchestrator =
+            SystemReminderOrchestrator::new(reminder_config).with_default_generators();
+        // Todo-list lookup key: TS `agentId ?? sessionId`.
+        let reminder_todo_key = self
+            .config
+            .agent_id
+            .clone()
+            .unwrap_or_else(|| self.config.session_id.clone());
+        // Model context window — exposed to the compaction reminder
+        // generator. Effective = 90% of window (reserve 10% for output),
+        // matching the same approximation `coco-compact` uses.
+        let reminder_context_window = self.config.context_window;
+        let reminder_effective_window = (reminder_context_window * 9) / 10;
 
         let make_result = |response_text: String,
                            turns: i32,
@@ -724,10 +841,484 @@ impl QueryEngine {
             )
             .await;
 
-            // Inject plan-mode / plan-mode-exit reminder before building
-            // the LLM prompt. No-op when the engine isn't in plan mode
-            // and the exit flag isn't set.
-            plan_reminder.turn_start(&mut history).await;
+            // Turn-start reminder pipeline (Phase D.3):
+            //
+            // 1. Run non-reminder side effects (mode reconciliation +
+            //    mailbox polling + leader pending-approvals) — these
+            //    MUTATE app_state (setting `needs_plan_mode_exit_attachment`
+            //    / `has_exited_plan_mode` when detecting unannounced mode
+            //    transitions). Must run BEFORE the orchestrator reads
+            //    app_state below.
+            plan_reminder
+                .turn_start_side_effects_only(&mut history)
+                .await;
+
+            // 2. Build orchestrator input from engine state + current
+            //    app_state snapshot.
+            //
+            // `turn_number` uses **human turns** (non-meta user messages)
+            // so plan-mode / auto-mode throttle cadence matches TS
+            // (counts human turns, not LLM iterations). Tool-result
+            // rounds within one human turn share the same counter value
+            // so reminders don't spam mid-turn.
+            let reminder_tools: Vec<String> = self
+                .tools
+                .loaded_tools()
+                .iter()
+                .map(|t| t.name().to_string())
+                .collect();
+            let pm_settings = &self.config.plan_mode_settings;
+            let workflow_rm = match pm_settings.workflow {
+                coco_config::PlanModeWorkflow::FivePhase => coco_context::PlanWorkflow::FivePhase,
+                coco_config::PlanModeWorkflow::Interview => coco_context::PlanWorkflow::Interview,
+            };
+            let phase4_rm = match pm_settings.phase4_variant {
+                coco_config::PlanPhase4Variant::Standard => coco_context::Phase4Variant::Standard,
+                coco_config::PlanPhase4Variant::Trim => coco_context::Phase4Variant::Trim,
+                coco_config::PlanPhase4Variant::Cut => coco_context::Phase4Variant::Cut,
+                coco_config::PlanPhase4Variant::Cap => coco_context::Phase4Variant::Cap,
+            };
+            // Plan file path / existence — same resolver the deprecated
+            // emission path uses, so both paths agree on the filesystem state.
+            let (reminder_plan_path, reminder_plan_exists) =
+                match (self.config_home.as_deref(), &self.config.session_id) {
+                    (Some(ch), sid) if !sid.is_empty() => {
+                        let plans_dir = coco_context::resolve_plans_directory(
+                            ch,
+                            self.config.project_dir.as_deref(),
+                            self.config.plans_directory.as_deref(),
+                        );
+                        let path = coco_context::get_plan_file_path(
+                            sid,
+                            &plans_dir,
+                            self.config.agent_id.as_deref(),
+                        );
+                        let exists = path.exists();
+                        (Some(path), exists)
+                    }
+                    _ => (None, false),
+                };
+
+            let reminder_human_turn_number = count_human_turns(&history.messages);
+
+            // Take an app_state snapshot so the input struct holds an
+            // immutable borrow; any post-emit clearing happens after the
+            // orchestrator returns.
+            let app_state_snapshot = match self.app_state.as_ref() {
+                Some(state) => state.read().await.clone(),
+                None => ToolAppState::default(),
+            };
+
+            // Seed the orchestrator's throttle state from `app_state` so
+            // reminder cadence survives across `run_session_loop`
+            // invocations. Each `run_plan_mode_turn` / `run_internal`
+            // call constructs a fresh orchestrator but `app_state`
+            // persists — without seeding, turn 2 of a multi-turn test
+            // would see an empty throttle and fire a second reminder.
+            //
+            // Implied `last_generated_turn`: the current human-turn
+            // counter minus the stored gap. Tool-result rounds within
+            // the same human turn keep the same value, so the throttle
+            // correctly blocks within-turn re-firing.
+            if app_state_snapshot.plan_mode_attachment_count > 0 {
+                let gap = i32::try_from(app_state_snapshot.plan_mode_turns_since_last_attachment)
+                    .unwrap_or(i32::MAX);
+                let last_gen_turn = reminder_human_turn_number.saturating_sub(gap);
+                reminder_orchestrator.throttle().seed_state(
+                    ReminderAttachmentType::PlanMode,
+                    coco_system_reminder::ThrottleState {
+                        last_generated_turn: Some(last_gen_turn),
+                        session_count: i32::try_from(app_state_snapshot.plan_mode_attachment_count)
+                            .unwrap_or(i32::MAX),
+                        trigger_turn: None,
+                    },
+                );
+            }
+
+            // TS `autoModeStateModule?.isAutoModeActive()`. `None` means the
+            // engine was built without a permissions auto-mode state — auto
+            // mode is therefore inactive, matching TS's `?? false` fallback.
+            let reminder_auto_classifier_active = self
+                .auto_mode_state
+                .as_ref()
+                .map(|s| s.is_active())
+                .unwrap_or(false);
+            // TS `isTodoV2Enabled()` — coco-rs derives this from whether the
+            // V2 task mutation tools are actually loaded into the session.
+            // `TASK_MANAGEMENT_TOOLS` is the `[TaskCreate, TaskUpdate]` set
+            // (matches TS `getTaskReminderTurnCounts`); V2 is active when
+            // either mutation tool is wired into the current registry —
+            // read-only task tools alone aren't enough.
+            let reminder_task_v2_enabled =
+                coco_system_reminder::TASK_MANAGEMENT_TOOLS.iter().any(|t| {
+                    let wire = t.as_str();
+                    reminder_tools.iter().any(|name| name == wire)
+                });
+            // TS `isAutoCompactEnabled()` — a user-facing toggle. coco-rs
+            // surfaces it on `QueryEngineConfig::auto_compact_enabled` so
+            // the SDK / CLI / TUI can control it per session without
+            // re-reading settings from disk.
+            let reminder_auto_compact_enabled = self.config.auto_compact_enabled;
+            // TS `getDeferredToolsDelta` — diff current tools against the
+            // last announced set stored on app_state. Non-empty added or
+            // removed triggers the `deferred_tools_delta` reminder.
+            let reminder_deferred_tools_delta =
+                compute_tools_delta(&reminder_tools, &app_state_snapshot.last_announced_tools);
+            // Clone the tool list for post-emit bookkeeping (the main
+            // `reminder_tools` is moved into `TurnReminderInput::tools`).
+            let reminder_tools_clone = reminder_tools.clone();
+            // TS `getAgentListingDeltaAttachment` — diff the current
+            // agent-type set (from `SessionBootstrap`) against the
+            // last-announced set on app_state.
+            let reminder_current_agents: Vec<String> = self
+                .session_bootstrap
+                .as_ref()
+                .map(|b| b.agents.clone())
+                .unwrap_or_default();
+            let reminder_agent_listing_delta = compute_agents_delta(
+                &reminder_current_agents,
+                &app_state_snapshot.last_announced_agents,
+            );
+            // TS date-change latch: current local ISO date vs. the one
+            // stored on `ToolAppState.last_emitted_date`. When they
+            // differ, emit once + update the latch. Runs at turn start
+            // so the reminder sees today's date even for long-running
+            // sessions that cross midnight.
+            let reminder_new_date = self.observe_date_change().await;
+
+            // TS `getAttachments(input, ...)` — the user's raw prompt
+            // text for this turn. Extract from the most-recent non-meta
+            // user message's text content; used by both the
+            // ultrathink-keyword gate and mention-based reminders.
+            //
+            // TS parity: `input` is non-null only on the first tool-loop
+            // iteration of a human turn, not on subsequent tool-result
+            // rounds (query.ts nulls it out). coco-rs tracks the last
+            // user-message UUID that has already been reminder-scanned
+            // and skips re-parsing it so the user-input tier fires once
+            // per human turn, not once per tool-result iteration.
+            let reminder_current_user_uuid = history.messages.iter().rev().find_map(|m| match m {
+                Message::User(u) => Some(u.uuid),
+                _ => None,
+            });
+            let reminder_is_new_human_turn =
+                reminder_current_user_uuid != reminder_last_user_input_uuid;
+            let reminder_user_input: Option<String> = if reminder_is_new_human_turn {
+                reminder_last_user_input_uuid = reminder_current_user_uuid;
+                latest_user_input_text(&history)
+            } else {
+                None
+            };
+            let reminder_mentions: Vec<coco_context::user_input::Mention> = reminder_user_input
+                .as_deref()
+                .map(|raw| coco_context::user_input::process_user_input(raw).mentions)
+                .unwrap_or_default();
+            let reminder_at_mentioned_files: Vec<coco_system_reminder::MentionedFileEntry> =
+                reminder_mentions
+                    .iter()
+                    .filter(|m| {
+                        matches!(
+                            m.mention_type,
+                            coco_context::user_input::MentionType::FilePath
+                        )
+                    })
+                    .map(|m| coco_system_reminder::MentionedFileEntry {
+                        filename: m.text.clone(),
+                        display_path: m.text.clone(),
+                    })
+                    .collect();
+            let reminder_agent_mentions: Vec<coco_system_reminder::AgentMentionEntry> =
+                reminder_mentions
+                    .iter()
+                    .filter(|m| {
+                        matches!(m.mention_type, coco_context::user_input::MentionType::Agent)
+                    })
+                    .map(|m| coco_system_reminder::AgentMentionEntry {
+                        agent_type: m.text.clone(),
+                    })
+                    .collect();
+
+            // TS `toolUseContext.options.*` bag analog — fan-out to every
+            // per-subsystem source (hooks / LSP / tasks / skills / MCP /
+            // swarm / IDE / memory) in parallel, with per-source timeout
+            // + error-to-default. Empty `ReminderSources` → all defaults.
+            let reminder_mentioned_paths: Vec<std::path::PathBuf> = reminder_mentions
+                .iter()
+                .filter(|m| {
+                    matches!(
+                        m.mention_type,
+                        coco_context::user_input::MentionType::FilePath
+                    )
+                })
+                .map(|m| std::path::PathBuf::from(&m.text))
+                .collect();
+
+            let reminder_source_timeout = std::time::Duration::from_millis(
+                if reminder_orchestrator.config().timeout_ms > 0 {
+                    reminder_orchestrator.config().timeout_ms as u64
+                } else {
+                    coco_system_reminder::DEFAULT_TIMEOUT_MS as u64
+                },
+            );
+            let materialized = self
+                .reminder_sources
+                .materialize(coco_system_reminder::MaterializeContext {
+                    config: reminder_orchestrator.config(),
+                    agent_id: self.config.agent_id.as_deref(),
+                    user_input: reminder_user_input.as_deref(),
+                    mentioned_paths: &reminder_mentioned_paths,
+                    // `just_compacted` is wired in P3 when services/compact
+                    // exposes the per-turn boundary signal.
+                    just_compacted: false,
+                    per_source_timeout: reminder_source_timeout,
+                })
+                .await;
+
+            // Part 1 silent reminder: intersect every path this turn
+            // might try to load (@-mentions + nested memory + relevant
+            // memory prefetch) with the session file-read cache. Paths
+            // whose mtime still matches disk are "already loaded into
+            // context" — we emit a silent dedup marker so downstream
+            // tooling (transcript, telemetry) knows the model has current
+            // content for those paths. Mirrors TS `already_read_file`
+            // emission surface area (`utils/attachments.ts:3100`).
+            let reminder_already_read_file_paths: Vec<std::path::PathBuf> =
+                if let Some(frs) = &self.file_read_state {
+                    let mut candidates: Vec<std::path::PathBuf> = reminder_mentioned_paths.clone();
+                    candidates.extend(
+                        materialized
+                            .nested_memories
+                            .iter()
+                            .map(|m| std::path::PathBuf::from(&m.path)),
+                    );
+                    candidates.extend(
+                        materialized
+                            .relevant_memories
+                            .iter()
+                            .map(|m| std::path::PathBuf::from(&m.path)),
+                    );
+                    if candidates.is_empty() {
+                        Vec::new()
+                    } else {
+                        // Dedup while preserving first-seen order so the
+                        // resulting list is deterministic across turns.
+                        let mut seen = std::collections::HashSet::new();
+                        candidates.retain(|p| seen.insert(p.clone()));
+                        let guard = frs.read().await;
+                        guard.unchanged_paths(&candidates).await
+                    }
+                } else {
+                    Vec::new()
+                };
+
+            let reminder_input = TurnReminderInput {
+                config: reminder_orchestrator.config(),
+                turn_number: reminder_human_turn_number,
+                agent_id: self.config.agent_id.clone(),
+                user_input: reminder_user_input.clone(),
+                last_human_turn_uuid: history.messages.iter().rev().find_map(|m| match m {
+                    Message::User(u) => Some(u.uuid),
+                    _ => None,
+                }),
+                plan_file_path: reminder_plan_path,
+                plan_exists: reminder_plan_exists,
+                plan_workflow: workflow_rm,
+                phase4_variant: phase4_rm,
+                explore_agent_count: pm_settings.explore_agent_count,
+                plan_agent_count: pm_settings.plan_agent_count,
+                is_plan_interview_phase: false,
+                app_state: &app_state_snapshot,
+                fallback_permission_mode: self.config.permission_mode,
+                is_auto_classifier_active: reminder_auto_classifier_active,
+                tools: reminder_tools,
+                is_task_v2_enabled: reminder_task_v2_enabled,
+                history: &history,
+                todo_key: reminder_todo_key.clone(),
+                is_auto_compact_enabled: reminder_auto_compact_enabled,
+                context_window: reminder_context_window,
+                effective_context_window: reminder_effective_window,
+                used_tokens: total_usage.input_tokens,
+                new_date: reminder_new_date,
+                has_pending_plan_verification: app_state_snapshot.pending_plan_verification,
+                // Phase 1 engine-local inputs.
+                total_cost_usd: cost_tracker.total_cost_usd(),
+                max_budget_usd: self.config.max_budget_usd,
+                // Injected at turn start — TS `getTurnOutputTokens()` is zero
+                // at this point; cumulative session count comes from usage.
+                output_tokens_turn: 0,
+                output_tokens_session: total_usage.output_tokens,
+                // Not yet wired (requires feature('TOKEN_BUDGET')-equivalent).
+                output_token_budget: None,
+                // Companion subsystem lives in a future Buddy crate; for now
+                // suppress the reminder by leaving these unset.
+                companion_name: None,
+                companion_species: None,
+                has_prior_companion_intro: false,
+                deferred_tools_delta: reminder_deferred_tools_delta.clone(),
+                agent_listing_delta: reminder_agent_listing_delta.clone(),
+                // McpSource.instructions() returns the current per-server
+                // map; engine diffs against `last_announced_mcp_instructions`
+                // to produce the delta (same pattern as deferred_tools_delta).
+                mcp_instructions_delta: compute_mcp_instructions_delta(
+                    &materialized.mcp_instructions_current,
+                    &app_state_snapshot.last_announced_mcp_instructions,
+                ),
+                // Phase 3: cross-crate state flows via `ReminderSources`.
+                // Sources that aren't wired → default output → generator skips.
+                hook_events: materialized.hook_events,
+                diagnostics: materialized.diagnostics,
+                // TS `getOutputStyleAttachment` — reads style name from
+                // `SessionBootstrap` (CLI-resolved from `settings.output_style`).
+                // This is a simple read, not cross-crate state, so no Source
+                // trait is needed.
+                output_style: self
+                    .session_bootstrap
+                    .as_ref()
+                    .and_then(|b| b.output_style.as_ref())
+                    .filter(|s| !s.is_empty())
+                    .map(|name| coco_system_reminder::OutputStyleSnapshot { name: name.clone() }),
+                queued_commands: self
+                    .command_queue
+                    .snapshot_for_reminder(self.config.agent_id.as_deref())
+                    .await,
+                task_statuses: materialized.task_statuses,
+                // SkillsSource wins when present; else fall back to
+                // SessionBootstrap names-only listing.
+                skill_listing: materialized.skill_listing.or_else(|| {
+                    self.session_bootstrap
+                        .as_ref()
+                        .filter(|b| !b.skills.is_empty())
+                        .map(|b| {
+                            b.skills
+                                .iter()
+                                .map(|s| format!("- {s}"))
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        })
+                }),
+                invoked_skills: materialized.invoked_skills,
+                teammate_mailbox: materialized.teammate_mailbox,
+                team_context: materialized.team_context,
+                agent_pending_messages: materialized.agent_pending_messages,
+                // Phase 4: mention-based reminders are populated from
+                // `process_user_input`. MCP resources + IDE state come
+                // from their sources when wired.
+                at_mentioned_files: reminder_at_mentioned_files,
+                mcp_resources: materialized.mcp_resources,
+                agent_mentions: reminder_agent_mentions,
+                ide_selection: materialized.ide_selection,
+                ide_opened_file: materialized.ide_opened_file,
+                // Memory reminders from MemorySource.
+                nested_memories: materialized.nested_memories,
+                relevant_memories: materialized.relevant_memories,
+                // Silent reminder-native attachments (Part 1).
+                // `already_read_file_paths`: intersection of this turn's
+                // @-mentioned paths with the `FileReadState` cache where
+                // mtime still matches disk — computed above via
+                // `FileReadState::unchanged_paths`.
+                // `edited_image_file_paths`: reserved for a future image-
+                // mtime tracker. Text `FileReadState` is text-only; image
+                // drift detection would need a parallel cache.
+                already_read_file_paths: reminder_already_read_file_paths,
+                edited_image_file_paths: Vec::new(),
+            };
+            let reminders = run_turn_reminders(&reminder_orchestrator, reminder_input).await;
+
+            // 3. Post-emit bookkeeping on app_state. Writing AFTER the
+            //    orchestrator read ensures we don't clear a flag whose
+            //    reminder got throttled (so it can fire next turn).
+            //
+            //    Covers three concerns:
+            //    - One-shot flags consumed by the generators that fired
+            //      (PlanModeExit / AutoModeExit / PlanModeReentry).
+            //    - Cadence counters the TUI / tests observe via app_state
+            //      (`plan_mode_attachment_count` +
+            //      `plan_mode_turns_since_last_attachment`). These mirror
+            //      the ThrottleManager state but are exposed on app_state
+            //      for TS parity with `getAppState().planModeAttachmentCount`.
+            if !reminders.is_empty() && self.app_state.is_some() {
+                let fired_types: std::collections::HashSet<ReminderAttachmentType> =
+                    reminders.iter().map(|r| r.attachment_type).collect();
+                if let Some(state) = self.app_state.as_ref() {
+                    let mut guard = state.write().await;
+                    if fired_types.contains(&ReminderAttachmentType::PlanModeExit) {
+                        guard.needs_plan_mode_exit_attachment = false;
+                        // TS: exit resets the plan-mode cadence cycle.
+                        guard.plan_mode_attachment_count = 0;
+                        guard.plan_mode_turns_since_last_attachment = 0;
+                        guard.last_human_turn_uuid_seen = None;
+                    }
+                    if fired_types.contains(&ReminderAttachmentType::AutoModeExit) {
+                        guard.needs_auto_mode_exit_attachment = false;
+                    }
+                    if fired_types.contains(&ReminderAttachmentType::PlanModeReentry) {
+                        guard.has_exited_plan_mode = false;
+                    }
+                    if fired_types.contains(&ReminderAttachmentType::PlanMode) {
+                        // Bump the TS-parity cadence counter + reset the
+                        // "turns since last attachment" counter so the TUI
+                        // and integration tests observe the same cadence
+                        // state as the pre-Phase-D PlanModeReminder flow.
+                        guard.plan_mode_attachment_count =
+                            guard.plan_mode_attachment_count.saturating_add(1);
+                        guard.plan_mode_turns_since_last_attachment = 0;
+                        // Stamp the current human-turn UUID so subsequent
+                        // tool-result rounds sharing the same UUID don't
+                        // advance the counter (mirror of the old
+                        // `observe_turn_and_count` behavior).
+                        if let Some(uuid) = history.messages.iter().rev().find_map(|m| match m {
+                            Message::User(u) => Some(u.uuid),
+                            _ => None,
+                        }) {
+                            guard.last_human_turn_uuid_seen = Some(uuid);
+                        }
+                    }
+                    // TS `getDeferredToolsDelta` replaces the announced
+                    // set with the current tool list after successful
+                    // emission. Subsequent turns then diff against the
+                    // fresh baseline.
+                    if fired_types.contains(&ReminderAttachmentType::DeferredToolsDelta) {
+                        guard.last_announced_tools = reminder_tools_clone.iter().cloned().collect();
+                    }
+                    // Same pattern for the agent-listing delta.
+                    if fired_types.contains(&ReminderAttachmentType::AgentListingDelta) {
+                        guard.last_announced_agents =
+                            reminder_current_agents.iter().cloned().collect();
+                    }
+                    // Same pattern for the MCP-instructions delta.
+                    if fired_types.contains(&ReminderAttachmentType::McpInstructionsDelta) {
+                        guard.last_announced_mcp_instructions =
+                            materialized.mcp_instructions_current.clone();
+                    }
+                }
+            }
+
+            // 4. Inject reminder messages into history. Model-visible
+            //    reminders append to `history`; silent reminders
+            //    (`Coverage::SilentReminder` + `ReminderOutput::Silent*`)
+            //    come back as `display_only` so they never leak into the
+            //    API call but stay observable for UI / telemetry.
+            // Drain any silent attachments queued by owner crates
+            // (hooks / permissions / tools / etc.) since the prior turn.
+            // Must happen BEFORE inject_reminders so the reminder pipeline
+            // sees any cross-crate-produced attachments in history.
+            let drained = self.drain_attachment_inbox(&mut history).await;
+            if drained > 0 {
+                tracing::debug!(
+                    target: "coco::attachment_inbox",
+                    drained,
+                    "drained silent attachments into history"
+                );
+            }
+
+            let display_only = inject_reminders(reminders, &mut history.messages);
+            for msg in &display_only {
+                tracing::debug!(
+                    target: "coco::system_reminder::display_only",
+                    injected = ?msg,
+                    "silent reminder routed to display-only sink"
+                );
+            }
 
             // Build prompt from history
             let prompt = self.build_prompt(&history);
@@ -1211,11 +1802,26 @@ impl QueryEngine {
                     // `orchestration.ts` applies `queuedContext
                     // Modifiers` once per batch regardless of when
                     // individual tools actually dispatched.
-                    if let (Ok(tr), Some(arc)) = (exec_outcome.as_mut(), self.app_state.as_ref()) {
-                        if let Some(patch) = tr.app_state_patch.take() {
+                    if let (Ok(tr), Some(arc)) = (exec_outcome.as_mut(), self.app_state.as_ref())
+                        && let Some(patch) = tr.app_state_patch.take()
+                    {
+                        let snapshot = {
                             let mut guard = arc.write().await;
                             patch(&mut guard);
-                        }
+                            // Always emit after patch; the TUI reconciles
+                            // via diff. Matches TS `notifyTasksUpdated`.
+                            coco_types::TaskPanelChangedParams {
+                                plan_tasks: guard.plan_tasks.clone(),
+                                todos_by_agent: guard.todos_by_agent.clone(),
+                                expanded_view: guard.expanded_view,
+                                verification_nudge_pending: guard.verification_nudge_pending,
+                            }
+                        };
+                        let _ = emit_protocol(
+                            &event_tx,
+                            coco_types::ServerNotification::TaskPanelChanged(snapshot),
+                        )
+                        .await;
                     }
                     let output = match &exec_outcome {
                         Ok(r) => serde_json::to_string(&r.data).unwrap_or_default(),
@@ -1872,40 +2478,29 @@ impl QueryEngine {
                     plan_file.as_deref(),
                 );
 
-                // TS: `createPlanAttachmentIfNeeded()` — re-inject plan
-                // if it exists so it survives the compaction boundary.
-                // Wrap the plan body in `<plan>` XML tags so the model
-                // can distinguish plan content from ambient context
-                // (TS `plan_file_reference` attachment format at
-                // `messages.ts:3636-3642`).
+                // TS: `createPlanAttachmentIfNeeded()` (`compact.ts:1470`)
+                // — re-inject the plan file's content so it survives the
+                // compaction boundary. Body uses the verbatim
+                // `plan_file_reference` text template from
+                // `messages.ts:3636-3642`.
                 if let Some(ref ch) = config_home {
                     let plans_dir = coco_context::resolve_plans_directory(
                         ch,
                         project_dir.as_deref(),
                         plans_directory_setting.as_deref(),
                     );
-                    if let Some(plan_content) =
-                        coco_context::get_plan(&session_id, &plans_dir, /*agent_id*/ None)
-                    {
-                        let plan_path = coco_context::get_plan_file_path(
-                            &session_id,
-                            &plans_dir,
-                            /*agent_id*/ None,
-                        );
-                        let text = format!(
-                            "A plan file exists from plan mode at: {path}\n\n\
-                             <plan>\n{plan_content}\n</plan>\n\n\
-                             If this plan is relevant to the current work and not \
-                             already complete, continue working on it.",
-                            path = plan_path.display(),
-                        );
-                        atts.push(coco_types::AttachmentMessage {
-                            uuid: uuid::Uuid::new_v4(),
-                            message: LlmMessage::user_text(
-                                coco_messages::wrapping::wrap_in_system_reminder(&text),
-                            ),
-                            is_meta: true,
-                        });
+                    let plan_path = coco_context::get_plan_file_path(
+                        &session_id,
+                        &plans_dir,
+                        /*agent_id*/ None,
+                    );
+                    let plan_content =
+                        coco_context::get_plan(&session_id, &plans_dir, /*agent_id*/ None);
+                    if let Some(att) = coco_compact::create_plan_attachment_if_needed(
+                        &plan_path,
+                        plan_content.as_deref(),
+                    ) {
+                        atts.push(att);
                     }
                 }
 
@@ -2095,6 +2690,7 @@ impl QueryEngine {
             cancel: self.cancel.clone(),
             disable_all_hooks: self.config.disable_all_hooks,
             allow_managed_hooks_only: self.config.allow_managed_hooks_only,
+            attachment_emitter: self.attachment_emitter(),
         }
     }
 
@@ -2186,16 +2782,21 @@ impl QueryEngine {
             append_system_prompt: None,
             debug: false,
             verbose: false,
+            tool_config: self.config.tool_config.clone(),
+            sandbox_config: self.config.sandbox_config.clone(),
+            memory_config: self.config.memory_config.clone(),
+            shell_config: self.config.shell_config.clone(),
+            web_fetch_config: self.config.web_fetch_config.clone(),
+            web_search_config: self.config.web_search_config.clone(),
             is_teammate: self.config.is_teammate,
             plan_mode_required: self.config.plan_mode_required,
             // Pre-resolve swarm identity once, so tools read from ctx
             // instead of process env. Falls back to env vars set by the
             // teammate spawner for cross-process scenarios. Env namespace
             // is `COCO_*` (coco-rs native) — see swarm_constants.
-            agent_name: std::env::var("COCO_AGENT_NAME")
-                .ok()
+            agent_name: env::env_opt(EnvKey::CocoAgentName)
                 .or_else(|| self.config.agent_id.clone()),
-            team_name: std::env::var("COCO_TEAM_NAME").ok(),
+            team_name: env::env_opt(EnvKey::CocoTeamName),
             plan_verify_execution: self.config.plan_mode_settings.verify_execution,
             cancel: self.cancel.clone(),
             messages: Arc::new(RwLock::new(Vec::new())),
@@ -2263,6 +2864,14 @@ impl QueryEngine {
             permission_bridge: self.permission_bridge.clone(),
             progress_tx: None,
             task_handle: None,
+            task_list: self
+                .task_list
+                .clone()
+                .unwrap_or_else(|| Arc::new(coco_tool::NoOpTaskListHandle)),
+            todo_list: self
+                .todo_list
+                .clone()
+                .unwrap_or_else(|| Arc::new(coco_tool::InMemoryTodoListHandle::new())),
             // TODO(B1.3 follow-up): bridge app/query hook registry into
             // HookHandle impl to wire PreToolUse/PostToolUse hooks through
             // the executor. For now the executor treats None as a no-op.
@@ -2291,6 +2900,38 @@ impl QueryEngine {
             query_depth: 0,
         }
     }
+
+    /// Detect local-date rollover for the `date_change` system reminder.
+    ///
+    /// Reads `ToolAppState::last_emitted_date`, compares it to today's
+    /// local ISO date, and:
+    ///
+    /// - seeds the latch on first observation, returning `None`
+    ///   (no reminder — TS `getDateChangeAttachments` matches: the first
+    ///   turn of a session never emits because there's no prior date);
+    /// - returns `Some(today)` and updates the latch on a mismatch
+    ///   (engine passes it to `TurnReminderInput.new_date` and the
+    ///   `DateChangeGenerator` emits once);
+    /// - returns `None` when the latch already matches today.
+    ///
+    /// No-op (returns `None`) when `self.app_state` is `None`.
+    async fn observe_date_change(&self) -> Option<String> {
+        let state = self.app_state.as_ref()?;
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let mut guard = state.write().await;
+        match guard.last_emitted_date.as_deref() {
+            Some(prev) if prev == today => None,
+            Some(_) => {
+                guard.last_emitted_date = Some(today.clone());
+                Some(today)
+            }
+            None => {
+                // First observation: seed without emitting.
+                guard.last_emitted_date = Some(today);
+                None
+            }
+        }
+    }
 }
 
 /// Per-call buffer used while consuming `StreamEvent`s for a single turn.
@@ -2304,6 +2945,140 @@ struct StreamingToolCallBuffer {
 
 // Helpers moved to `crate::helpers`; engine only hosts the session-loop
 // orchestration. Re-import from `helpers` at module top.
+
+/// Compute the TS-parity `deferred_tools_delta` between the current tool
+/// set and the last-announced set stored on `ToolAppState`.
+///
+/// Returns `None` when the sets are equal (nothing to announce); returns
+/// `Some(info)` with `added_lines` / `removed_names` when they differ.
+///
+/// TS `getDeferredToolsDelta` at `attachments.ts:1472` reconstructs the
+/// announced set by scanning history for prior delta attachments;
+/// coco-rs persists the set directly on app_state, so this diff is
+/// O(|current ∪ announced|).
+fn compute_tools_delta(
+    current_tools: &[String],
+    last_announced: &std::collections::HashSet<String>,
+) -> Option<coco_system_reminder::DeferredToolsDeltaInfo> {
+    let current_set: std::collections::HashSet<&String> = current_tools.iter().collect();
+
+    let mut added_lines: Vec<String> = current_tools
+        .iter()
+        .filter(|t| !last_announced.contains(t.as_str()))
+        .map(|t| format!("- {t}"))
+        .collect();
+    let mut removed_names: Vec<String> = last_announced
+        .iter()
+        .filter(|t| !current_set.contains(*t))
+        .cloned()
+        .collect();
+
+    if added_lines.is_empty() && removed_names.is_empty() {
+        return None;
+    }
+    // Stable ordering so consecutive emissions with the same delta
+    // produce byte-identical reminders (simpler to diff in tests + logs).
+    added_lines.sort();
+    removed_names.sort();
+    Some(coco_system_reminder::DeferredToolsDeltaInfo {
+        added_lines,
+        removed_names,
+    })
+}
+
+/// Extract the raw user-input text from the most-recent non-meta user
+/// message in history. Mirrors TS `getAttachments(input, ...)` where
+/// `input` is the user's prompt string (not a structured message).
+/// Returns `None` when there's no plain-text user message (e.g. the
+/// session opened with a compacted summary).
+fn latest_user_input_text(history: &coco_messages::MessageHistory) -> Option<String> {
+    for msg in history.messages.iter().rev() {
+        let coco_types::Message::User(u) = msg else {
+            continue;
+        };
+        if let coco_types::LlmMessage::User { content, .. } = &u.message {
+            for part in content {
+                if let vercel_ai_provider::UserContentPart::Text(tp) = part {
+                    return Some(tp.text.clone());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Compute the TS-parity `mcp_instructions_delta` between the current
+/// server-instruction set and the last-announced set on `ToolAppState`.
+///
+/// TS: `getMcpInstructionsDeltaAttachment` reconstructs the announced
+/// set by scanning prior delta attachments in history; coco-rs
+/// persists the announced map on `app_state.last_announced_mcp_instructions`
+/// so the diff is O(|current ∪ announced|).
+fn compute_mcp_instructions_delta(
+    current: &std::collections::HashMap<String, String>,
+    last_announced: &std::collections::HashMap<String, String>,
+) -> Option<coco_system_reminder::McpInstructionsDeltaInfo> {
+    let mut added_blocks: Vec<String> = current
+        .iter()
+        .filter(|(name, text)| {
+            last_announced
+                .get(name.as_str())
+                .is_none_or(|prev| prev != *text)
+        })
+        .map(|(name, text)| format!("## {name}\n\n{text}"))
+        .collect();
+    let mut removed_names: Vec<String> = last_announced
+        .keys()
+        .filter(|name| !current.contains_key(name.as_str()))
+        .cloned()
+        .collect();
+
+    if added_blocks.is_empty() && removed_names.is_empty() {
+        return None;
+    }
+    added_blocks.sort();
+    removed_names.sort();
+    Some(coco_system_reminder::McpInstructionsDeltaInfo {
+        added_blocks,
+        removed_names,
+    })
+}
+
+/// Compute the TS-parity `agent_listing_delta` between the current agent
+/// types and the last-announced set on `ToolAppState`. `is_initial` is
+/// true when no agents have been announced yet (first emission of the
+/// session); that flips the TS "Available agent types" header (vs
+/// "New agent types are now available").
+fn compute_agents_delta(
+    current_agents: &[String],
+    last_announced: &std::collections::HashSet<String>,
+) -> Option<coco_system_reminder::AgentListingDeltaInfo> {
+    let current_set: std::collections::HashSet<&String> = current_agents.iter().collect();
+
+    let mut added_lines: Vec<String> = current_agents
+        .iter()
+        .filter(|t| !last_announced.contains(t.as_str()))
+        .map(|t| format!("- {t}"))
+        .collect();
+    let mut removed_types: Vec<String> = last_announced
+        .iter()
+        .filter(|t| !current_set.contains(*t))
+        .cloned()
+        .collect();
+
+    if added_lines.is_empty() && removed_types.is_empty() {
+        return None;
+    }
+    added_lines.sort();
+    removed_types.sort();
+    let is_initial = last_announced.is_empty();
+    Some(coco_system_reminder::AgentListingDeltaInfo {
+        added_lines,
+        removed_types,
+        is_initial,
+        show_concurrency_note: is_initial,
+    })
+}
 
 #[cfg(test)]
 #[path = "engine.test.rs"]

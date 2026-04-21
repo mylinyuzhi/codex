@@ -10,12 +10,12 @@ use coco_types::ToolResult;
 use serde_json::Value;
 use std::collections::HashMap;
 
-/// Maximum markdown length passed to the extraction side-query.
-///
-/// TS: `WebFetchTool/utils.ts:128` `MAX_MARKDOWN_LENGTH = 100_000`.
-/// We truncate the html2text output to this size before handing it to
-/// the extraction model to keep side-query token cost bounded.
-const MAX_FETCH_LENGTH: usize = 100_000;
+// Max-fetch-length (100K chars), fetch timeout (60s), and user-agent
+// now live on `coco_config::WebFetchConfig` — consumed from
+// `ctx.web_fetch_config` in [`WebFetchTool::execute`]. The crate-local
+// constants below are extraction-pipeline invariants that aren't
+// user-configurable (HTTP body byte cap, html2text line width, the
+// extraction prompt, etc.).
 
 /// Max width in columns for html2text's line wrapping.
 ///
@@ -43,11 +43,6 @@ say so clearly rather than guessing. Be concise.";
 /// misbehaving server from flooding memory via a huge response.
 const MAX_HTTP_CONTENT_LENGTH: u64 = 10 * 1024 * 1024;
 
-/// Fetch timeout for the primary request. TS: `utils.ts:116`
-/// `FETCH_TIMEOUT_MS = 60_000`. Long enough for slow origin servers,
-/// short enough that the model doesn't stall forever on a stuck fetch.
-const WEB_FETCH_TIMEOUT_SECS: u64 = 60;
-
 /// WebFetch URL cache TTL: 15 minutes. Matches TS
 /// `WebFetchTool/utils.ts:63` `CACHE_TTL_MS = 15 * 60 * 1000`.
 const WEB_FETCH_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(15 * 60);
@@ -67,7 +62,7 @@ struct CachedWebFetch {
     markdown: String,
     /// Content-Type from the upstream response.
     content_type: String,
-    /// Whether the markdown was truncated at MAX_FETCH_LENGTH.
+    /// Whether the markdown was truncated at `web_fetch.max_content_length`.
     was_truncated: bool,
     /// When the entry was inserted — used for TTL check.
     inserted_at: std::time::Instant,
@@ -122,13 +117,9 @@ pub(super) fn clear_web_fetch_cache() {
 /// site operators match this in robots.txt to distinguish CLI traffic
 /// from server-side automation.
 ///
-/// We mirror the exact format so robots.txt rules targeting
-/// `Claude-User` apply identically to coco-rs fetches. The version
-/// string uses the coco-rs release version rather than the TS
-/// claude-code version, which is fine because the prefix is what
-/// site operators match against.
-const WEB_FETCH_USER_AGENT: &str =
-    "Claude-User (claude-code/coco-rs; +https://support.anthropic.com/)";
+// User agent now lives on `WebFetchConfig::user_agent` (default matches
+// TS `Claude-User (...)`). Callers can override via settings.json when
+// they need a different robots.txt contract.
 
 /// Preapproved hosts — URLs whose (hostname, pathname) match this list
 /// skip the optional permission gate. Byte-for-byte port of TS
@@ -658,6 +649,11 @@ Usage notes:
             });
         }
 
+        // Resolve the per-fetch config once so Stage 1 + Stage 3 see
+        // the same values.
+        let fetch_config = &ctx.web_fetch_config;
+        let max_fetch_len = fetch_config.max_content_length.max(0) as usize;
+
         // Stage 0: cache lookup. TS `WebFetchTool/utils.ts:356-366`
         // checks `URL_CACHE.get(url)` first and short-circuits if a
         // fresh entry exists. This prevents redundant network + LLM
@@ -681,7 +677,7 @@ Usage notes:
                 //     allowlist; we surface this to the model so it can
                 //     decide whether to fetch the new URL. Matches TS
                 //     `WebFetchTool.tsx:227-235` SSRF guard.
-                let (body, content_type) = match fetch_url(url).await {
+                let (body, content_type) = match fetch_url(url, fetch_config).await {
                     Ok(FetchOutcome::Body { body, content_type }) => (body, content_type),
                     Ok(FetchOutcome::CrossOriginRedirect { new_url }) => {
                         return Ok(ToolResult {
@@ -721,13 +717,14 @@ Usage notes:
                     body
                 };
 
-                // Stage 3: truncate to the extraction budget (100K chars).
-                // TS: `utils.ts:128` `MAX_MARKDOWN_LENGTH = 100_000`.
-                let (extraction_input, was_truncated) = if markdown.len() > MAX_FETCH_LENGTH {
+                // Stage 3: truncate to the extraction budget (100K chars
+                // by default; configurable via `web_fetch.max_content_length`).
+                // TS parity: `utils.ts:128 MAX_MARKDOWN_LENGTH = 100_000`.
+                let (extraction_input, was_truncated) = if markdown.len() > max_fetch_len {
                     // char_indices-safe truncation to avoid splitting mid-UTF-8.
                     let cut = markdown
                         .char_indices()
-                        .take(MAX_FETCH_LENGTH)
+                        .take(max_fetch_len)
                         .last()
                         .map(|(i, c)| i + c.len_utf8())
                         .unwrap_or(markdown.len());
@@ -844,17 +841,21 @@ enum FetchOutcome {
 }
 
 /// Fetch URL content using reqwest. Applies:
-/// - 60s timeout (TS `FETCH_TIMEOUT_MS`)
-/// - Custom User-Agent (TS `getWebFetchUserAgent`)
+/// - `config.timeout_secs` (default 60s; TS `FETCH_TIMEOUT_MS`)
+/// - `config.user_agent` (default matches TS `getWebFetchUserAgent`)
 /// - Manual redirect policy (TS explicit SSRF guard — no auto-follow,
 ///   same-origin allowed, cross-origin surfaces to the model)
 /// - 10MB Content-Length pre-check (TS `MAX_HTTP_CONTENT_LENGTH`)
 /// - Binary MIME rejection (TS keeps these and runs Haiku; we defer that
 ///   to a follow-up and return a clear error instead)
-async fn fetch_url(url: &str) -> Result<FetchOutcome, String> {
+async fn fetch_url(
+    url: &str,
+    config: &coco_config::WebFetchConfig,
+) -> Result<FetchOutcome, String> {
+    let timeout_secs = config.timeout_secs.max(1) as u64;
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(WEB_FETCH_TIMEOUT_SECS))
-        .user_agent(WEB_FETCH_USER_AGENT)
+        .timeout(std::time::Duration::from_secs(timeout_secs))
+        .user_agent(config.user_agent.as_str())
         // Critical SSRF guard: disable automatic redirect following.
         // We handle redirects manually via `check_redirect` so cross-
         // origin hops go back through the model's decision loop.
@@ -1281,7 +1282,7 @@ IMPORTANT - Use the correct year in search queries:
     async fn execute(
         &self,
         input: Value,
-        _ctx: &ToolUseContext,
+        ctx: &ToolUseContext,
     ) -> Result<ToolResult<Value>, ToolError> {
         let query = input
             .get("query")
@@ -1329,6 +1330,7 @@ IMPORTANT - Use the correct year in search queries:
 
         // Apply domain filters. Matches host suffix so "github.com" blocks
         // both github.com/foo and gist.github.com/foo.
+        let max_results = (ctx.web_search_config.max_results.max(1)) as usize;
         let filtered: Vec<SearchResult> = results
             .into_iter()
             .filter(|r| {
@@ -1341,7 +1343,7 @@ IMPORTANT - Use the correct year in search queries:
                 }
                 true
             })
-            .take(SEARCH_MAX_RESULTS)
+            .take(max_results)
             .collect();
 
         let formatted = format_results(&query, &filtered);

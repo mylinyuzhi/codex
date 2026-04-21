@@ -591,6 +591,13 @@ impl Tool for ExitPlanModeTool {
             state.pre_plan_mode = None;
             state.has_exited_plan_mode = true;
             state.needs_plan_mode_exit_attachment = true;
+            // Mark the plan as awaiting `VerifyPlanExecution`. Cleared
+            // when (future work) that tool runs or the user resets it.
+            // Drives the `verify_plan_reminder` system reminder — so a
+            // plan exit always leaves a durable signal behind, not just
+            // the one-shot `needs_plan_mode_exit_attachment` that the
+            // reminder subsystem consumes on the next turn.
+            state.pending_plan_verification = true;
             if needs_auto_exit {
                 state.needs_auto_mode_exit_attachment = true;
             }

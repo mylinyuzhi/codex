@@ -90,6 +90,22 @@ pub enum UserCommand {
     /// in-process state (plan-mode flags, attachment counters, slug
     /// cache) so the next turn starts clean. TS: `clearConversation()`.
     ClearConversation { scope: ClearScope },
+    /// Team lead responding to a teammate's plan-approval request.
+    /// The engine routes this to the teammate's mailbox as a
+    /// `plan_approval_response` envelope. TS: the response side of
+    /// `ExitPlanModeV2Tool.ts:137-141` request flow.
+    PlanApprovalResponse {
+        request_id: String,
+        /// Teammate agent name to address the response envelope to —
+        /// carried in from `PlanApprovalOverlay.from` so we don't have
+        /// to re-scan mailbox state to correlate the request_id.
+        teammate_agent: String,
+        approved: bool,
+        /// Optional feedback the leader attached (e.g. "good, but please
+        /// add tests"). `None` when the user just approved/denied
+        /// without typing anything.
+        feedback: Option<String>,
+    },
     /// Shutdown the application.
     Shutdown,
 }

@@ -28,13 +28,20 @@
       ],
       "properties": {
         "kind": {
-          "description": "One of: \"create\", \"modify\", \"delete\".",
-          "type": "string"
+          "$ref": "#/definitions/FileChangeKind"
         },
         "path": {
           "type": "string"
         }
       }
+    },
+    "FileChangeKind": {
+      "type": "string",
+      "enum": [
+        "create",
+        "modify",
+        "delete"
+      ]
     },
     "ItemStatus": {
       "type": "string",

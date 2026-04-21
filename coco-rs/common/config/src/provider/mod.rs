@@ -10,6 +10,7 @@ use crate::env;
 
 /// Per-provider configuration for API key resolution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ProviderConfig {
     pub name: String,
     pub api: ProviderApi,
@@ -41,6 +42,36 @@ impl ProviderConfig {
     /// Priority: env var > config file api_key.
     pub fn resolve_api_key(&self) -> Option<String> {
         env::env_opt(&self.env_key).or_else(|| self.api_key.clone())
+    }
+
+    /// Layer `override_cfg` onto `self`: every non-empty / Some field in
+    /// `override_cfg` wins, every empty / None field leaves `self`
+    /// untouched so builtin defaults (e.g. `default_model`) are preserved
+    /// when the user only overrides a subset.
+    ///
+    /// Note: `api` is always taken from the override because it's a non-
+    /// optional enum with no "unset" sentinel — users who partially
+    /// override a builtin (e.g. just changing `base_url`) but forget to
+    /// set `api` will get `ProviderApi::Anthropic` by serde default. For
+    /// the five builtins this happens to match; for unknown providers
+    /// users should set `api` explicitly.
+    pub fn merge_from(&mut self, override_cfg: &Self) {
+        if !override_cfg.name.is_empty() {
+            self.name.clone_from(&override_cfg.name);
+        }
+        self.api = override_cfg.api;
+        if !override_cfg.env_key.is_empty() {
+            self.env_key.clone_from(&override_cfg.env_key);
+        }
+        if override_cfg.api_key.is_some() {
+            self.api_key.clone_from(&override_cfg.api_key);
+        }
+        if !override_cfg.base_url.is_empty() {
+            self.base_url.clone_from(&override_cfg.base_url);
+        }
+        if override_cfg.default_model.is_some() {
+            self.default_model.clone_from(&override_cfg.default_model);
+        }
     }
 }
 

@@ -11,6 +11,37 @@ fn initialize_has_method_tag() {
 }
 
 #[test]
+fn client_request_method_accessor_matches_serde_tag() {
+    // Typed discriminator accessor must agree with the serde wire tag for
+    // representative tuple / unit / boxed variants. The macro drives both
+    // from the same `$wire` literal, so any drift here is a bug in the
+    // macro itself.
+    let cases: &[(ClientRequest, ClientRequestMethod, &str)] = &[
+        (
+            ClientRequest::Initialize(InitializeParams::default()),
+            ClientRequestMethod::Initialize,
+            "initialize",
+        ),
+        (
+            ClientRequest::TurnInterrupt,
+            ClientRequestMethod::TurnInterrupt,
+            "turn/interrupt",
+        ),
+        (
+            ClientRequest::McpStatus,
+            ClientRequestMethod::McpStatus,
+            "mcp/status",
+        ),
+    ];
+    for (req, expected, wire) in cases {
+        assert_eq!(req.method(), *expected);
+        assert_eq!(expected.as_str(), *wire);
+        let j = serde_json::to_value(req).unwrap();
+        assert_eq!(j["method"], *wire);
+    }
+}
+
+#[test]
 fn turn_interrupt_is_unit_variant() {
     let req = ClientRequest::TurnInterrupt;
     let j = serde_json::to_value(&req).unwrap();

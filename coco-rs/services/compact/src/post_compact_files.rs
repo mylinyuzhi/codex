@@ -23,7 +23,6 @@ use coco_types::AttachmentMessage;
 use coco_types::LlmMessage;
 use coco_types::Message;
 use coco_types::ToolName;
-use uuid::Uuid;
 use vercel_ai_provider::AssistantContentPart;
 
 use crate::tokens;
@@ -103,11 +102,10 @@ pub fn create_post_compact_file_attachments(
         }
         used_tokens += att_tokens;
 
-        result.push(AttachmentMessage {
-            uuid: Uuid::new_v4(),
-            message: LlmMessage::user_text(coco_messages::wrapping::wrap_in_system_reminder(&text)),
-            is_meta: true,
-        });
+        result.push(AttachmentMessage::api(
+            coco_types::AttachmentKind::CompactFileReference,
+            LlmMessage::user_text(coco_messages::wrapping::wrap_in_system_reminder(&text)),
+        ));
     }
 
     result

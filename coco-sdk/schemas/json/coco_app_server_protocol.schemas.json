@@ -1265,17 +1265,10 @@
           "type": "object"
         },
         "SetPermissionModeParams": {
-          "description": "Matches TS `SDKControlSetPermissionModeRequestSchema` (controlSchemas.ts:127-134).",
+          "description": "Matches TS `SDKControlSetPermissionModeRequestSchema` (controlSchemas.ts:127-134).\n\nTS carries an additional `ultraplan: boolean` field for the CCR web-UI refinement flow. coco-rs intentionally skips Ultraplan (see CLAUDE.md \"Plan Mode — Skip Ultraplan (CCR Web UI) Only\"), so that field is omitted here — SDK clients targeting coco-rs should not send it.",
           "properties": {
             "mode": {
               "$ref": "#/definitions/PermissionMode"
-            },
-            "ultraplan": {
-              "description": "TS `ultraplan` — enables ultraplan mode within Plan (feature flag).",
-              "type": [
-                "boolean",
-                "null"
-              ]
             }
           },
           "required": [
@@ -1933,6 +1926,44 @@
       ],
       "title": "ClientRequest"
     },
+    "ClientRequestMethod": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Wire-method identifier for every `ClientRequest` variant.\n\nCross-language protocol constant exported to the JSON schema bundle so Python / other SDK codegens obtain the same vocabulary. Consumers should reference `ClientRequestMethod::SessionStart` rather than compare against raw wire strings.",
+      "enum": [
+        "initialize",
+        "session/start",
+        "session/resume",
+        "session/list",
+        "session/read",
+        "session/archive",
+        "turn/start",
+        "turn/interrupt",
+        "approval/resolve",
+        "input/resolveUserInput",
+        "elicitation/resolve",
+        "control/setModel",
+        "control/setPermissionMode",
+        "control/setThinking",
+        "control/stopTask",
+        "control/rewindFiles",
+        "control/updateEnv",
+        "control/keepAlive",
+        "control/cancelRequest",
+        "config/read",
+        "config/value/write",
+        "hook/callbackResponse",
+        "mcp/routeMessageResponse",
+        "mcp/status",
+        "context/usage",
+        "mcp/setServers",
+        "mcp/reconnect",
+        "mcp/toggle",
+        "plugin/reload",
+        "config/applyFlags"
+      ],
+      "title": "ClientRequestMethod",
+      "type": "string"
+    },
     "CompactionFailedParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -2301,10 +2332,19 @@
     },
     "FileChangeInfo": {
       "$schema": "http://json-schema.org/draft-07/schema#",
+      "definitions": {
+        "FileChangeKind": {
+          "enum": [
+            "create",
+            "modify",
+            "delete"
+          ],
+          "type": "string"
+        }
+      },
       "properties": {
         "kind": {
-          "description": "One of: \"create\", \"modify\", \"delete\".",
-          "type": "string"
+          "$ref": "#/definitions/FileChangeKind"
         },
         "path": {
           "type": "string"
@@ -2405,24 +2445,6 @@
         "hook_callback_ids"
       ],
       "title": "HookCallbackMatcher",
-      "type": "object"
-    },
-    "HookExecutedParams": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "description": "Params for the cocode-rs-base `hook/executed` notification. Simpler than `hook/started` → `hook/response` lifecycle: this is a single post-completion summary keeping the 43-variant base contract.",
-      "properties": {
-        "hook_name": {
-          "type": "string"
-        },
-        "hook_type": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "hook_name",
-        "hook_type"
-      ],
-      "title": "HookExecutedParams",
       "type": "object"
     },
     "HookOutcomeStatus": {
@@ -3352,6 +3374,80 @@
       "title": "ModelFallbackParams",
       "type": "object"
     },
+    "NotificationMethod": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Wire-method identifier for every `ServerNotification` variant.\n\nCross-language protocol constant exported to the JSON schema bundle so Python / other SDK codegens obtain the same vocabulary. Consumers should reference `NotificationMethod::SessionStarted` rather than compare against raw wire strings.",
+      "enum": [
+        "session/started",
+        "session/result",
+        "session/ended",
+        "turn/started",
+        "turn/completed",
+        "turn/failed",
+        "turn/interrupted",
+        "item/started",
+        "item/updated",
+        "item/completed",
+        "agentMessage/delta",
+        "reasoning/delta",
+        "subagent/spawned",
+        "subagent/completed",
+        "subagent/backgrounded",
+        "subagent/progress",
+        "mcp/startupStatus",
+        "mcp/startupComplete",
+        "context/compacted",
+        "context/usageWarning",
+        "context/compactionStarted",
+        "context/compactionFailed",
+        "context/cleared",
+        "task/started",
+        "task/completed",
+        "task/progress",
+        "task_panel/changed",
+        "plan_approval/requested",
+        "agents/killed",
+        "model/fallbackStarted",
+        "model/fallbackCompleted",
+        "model/fastModeChanged",
+        "permission/modeChanged",
+        "prompt/suggestion",
+        "error",
+        "rateLimit",
+        "keepAlive",
+        "ide/selectionChanged",
+        "ide/diagnosticsUpdated",
+        "plan/modeChanged",
+        "queue/stateChanged",
+        "queue/commandQueued",
+        "queue/commandDequeued",
+        "rewind/completed",
+        "rewind/failed",
+        "cost/warning",
+        "sandbox/stateChanged",
+        "sandbox/violationsDetected",
+        "agents/registered",
+        "hook/started",
+        "hook/progress",
+        "hook/response",
+        "worktree/entered",
+        "worktree/exited",
+        "summarize/completed",
+        "summarize/failed",
+        "stream/stallDetected",
+        "stream/watchdogWarning",
+        "stream/requestEnd",
+        "session/stateChanged",
+        "turn/maxReached",
+        "localCommand/output",
+        "files/persisted",
+        "elicitation/complete",
+        "tool/useSummary",
+        "tool/progress"
+      ],
+      "title": "NotificationMethod",
+      "type": "string"
+    },
     "PermissionDenialInfo": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "Matches TS `SDKPermissionDenialSchema` (coreSchemas.ts:1399-1405).",
@@ -3405,13 +3501,44 @@
     },
     "PermissionModeChangedParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
+      "definitions": {
+        "PermissionMode": {
+          "description": "Permission mode (top-level because it's used by both message and permission modules).\n\nWire format is camelCase to match TS `PermissionModeSchema` at `coreSchemas.ts:337-347`: `z.enum(['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk'])`. The serde aliases on the drifting variants accept legacy snake_case input so old session transcripts deserialize cleanly.",
+          "oneOf": [
+            {
+              "enum": [
+                "default",
+                "plan",
+                "bypassPermissions",
+                "dontAsk",
+                "acceptEdits"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Feature-gated auto mode.",
+              "enum": [
+                "auto"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Internal: escalate to parent agent.",
+              "enum": [
+                "bubble"
+              ],
+              "type": "string"
+            }
+          ]
+        }
+      },
       "properties": {
         "bypass_available": {
           "default": false,
           "type": "boolean"
         },
         "mode": {
-          "type": "string"
+          "$ref": "#/definitions/PermissionMode"
         }
       },
       "required": [
@@ -4014,6 +4141,15 @@
           ],
           "type": "object"
         },
+        "ExpandedView": {
+          "description": "Which panel the TUI should have expanded in the task area. TS parity: `AppState.expandedView` in `AppStateStore.ts` (3 variants: `'none' | 'tasks' | 'teammates'`).",
+          "enum": [
+            "none",
+            "tasks",
+            "teammates"
+          ],
+          "type": "string"
+        },
         "FastModeState": {
           "description": "Matches TS `FastModeStateSchema` (coreSchemas.ts:1883-1889).",
           "enum": [
@@ -4026,8 +4162,7 @@
         "FileChangeInfo": {
           "properties": {
             "kind": {
-              "description": "One of: \"create\", \"modify\", \"delete\".",
-              "type": "string"
+              "$ref": "#/definitions/FileChangeKind"
             },
             "path": {
               "type": "string"
@@ -4038,6 +4173,14 @@
             "path"
           ],
           "type": "object"
+        },
+        "FileChangeKind": {
+          "enum": [
+            "create",
+            "modify",
+            "delete"
+          ],
+          "type": "string"
         },
         "FilesPersistedParams": {
           "description": "Matches TS `SDKFilesPersistedEvent` (coreSchemas.ts:1672-1692).\n\nTS emits this when files are uploaded or persisted (e.g. after a successful `filesApi` operation).",
@@ -4062,22 +4205,6 @@
           "required": [
             "files",
             "processed_at"
-          ],
-          "type": "object"
-        },
-        "HookExecutedParams": {
-          "description": "Params for the cocode-rs-base `hook/executed` notification. Simpler than `hook/started` → `hook/response` lifecycle: this is a single post-completion summary keeping the 43-variant base contract.",
-          "properties": {
-            "hook_name": {
-              "type": "string"
-            },
-            "hook_type": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "hook_name",
-            "hook_type"
           ],
           "type": "object"
         },
@@ -4359,6 +4486,35 @@
           ],
           "type": "object"
         },
+        "PermissionMode": {
+          "description": "Permission mode (top-level because it's used by both message and permission modules).\n\nWire format is camelCase to match TS `PermissionModeSchema` at `coreSchemas.ts:337-347`: `z.enum(['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk'])`. The serde aliases on the drifting variants accept legacy snake_case input so old session transcripts deserialize cleanly.",
+          "oneOf": [
+            {
+              "enum": [
+                "default",
+                "plan",
+                "bypassPermissions",
+                "dontAsk",
+                "acceptEdits"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Feature-gated auto mode.",
+              "enum": [
+                "auto"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Internal: escalate to parent agent.",
+              "enum": [
+                "bubble"
+              ],
+              "type": "string"
+            }
+          ]
+        },
         "PermissionModeChangedParams": {
           "properties": {
             "bypass_available": {
@@ -4366,7 +4522,7 @@
               "type": "boolean"
             },
             "mode": {
-              "type": "string"
+              "$ref": "#/definitions/PermissionMode"
             }
           },
           "required": [
@@ -4401,6 +4557,36 @@
           "required": [
             "file_id",
             "filename"
+          ],
+          "type": "object"
+        },
+        "PlanApprovalRequestedParams": {
+          "description": "A teammate's plan-approval request, surfaced to the team lead's TUI for approve/deny. Payload byte-matches TS `PlanApprovalRequestSchema` — see `tools/ExitPlanModeTool/`.",
+          "properties": {
+            "from": {
+              "description": "Teammate agent name.",
+              "type": "string"
+            },
+            "plan_content": {
+              "description": "Plan text rendered from the teammate's plan file.",
+              "type": "string"
+            },
+            "plan_file_path": {
+              "description": "Optional on-disk plan file path.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "request_id": {
+              "description": "Correlation id carried back in the response envelope.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "from",
+            "plan_content",
+            "request_id"
           ],
           "type": "object"
         },
@@ -4998,6 +5184,48 @@
           ],
           "type": "string"
         },
+        "TaskListStatus": {
+          "description": "Task status wire format — matches TS `TaskStatusSchema` (`utils/tasks.ts:69-74`). **Distinct** from [`crate::TaskStatus`], which is the 6-variant running-task lifecycle enum.",
+          "enum": [
+            "pending",
+            "in_progress",
+            "completed"
+          ],
+          "type": "string"
+        },
+        "TaskPanelChangedParams": {
+          "description": "Snapshot of the task panel state — tools emit this post-mutation so the TUI can redraw without reaching into `ToolAppState` directly.",
+          "properties": {
+            "expanded_view": {
+              "$ref": "#/definitions/ExpandedView"
+            },
+            "plan_tasks": {
+              "items": {
+                "$ref": "#/definitions/TaskRecord"
+              },
+              "type": "array"
+            },
+            "todos_by_agent": {
+              "additionalProperties": {
+                "items": {
+                  "$ref": "#/definitions/TodoRecord"
+                },
+                "type": "array"
+              },
+              "default": {},
+              "type": "object"
+            },
+            "verification_nudge_pending": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "expanded_view",
+            "plan_tasks",
+            "verification_nudge_pending"
+          ],
+          "type": "object"
+        },
         "TaskProgressParams": {
           "description": "Matches TS `SDKTaskProgressMessage` (coreSchemas.ts:1750-1767). In TS, `description` and `usage` are required; other fields optional. The `workflow_progress` field carries the streaming state of local_workflow tasks — a delta batch of workflow state changes.",
           "properties": {
@@ -5037,6 +5265,63 @@
             "description",
             "task_id",
             "usage"
+          ],
+          "type": "object"
+        },
+        "TaskRecord": {
+          "description": "A durable plan-item, matching TS `TaskSchema` (`utils/tasks.ts:76-89`).",
+          "properties": {
+            "activeForm": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "blockedBy": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "blocks": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "description": {
+              "default": "",
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "metadata": {
+              "additionalProperties": true,
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "owner": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "$ref": "#/definitions/TaskListStatus"
+            },
+            "subject": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "status",
+            "subject"
           ],
           "type": "object"
         },
@@ -5384,6 +5669,26 @@
             }
           ]
         },
+        "TodoRecord": {
+          "description": "A TodoWrite item — byte-matches TS `TodoItemSchema` (no `id` field, positional identity).",
+          "properties": {
+            "activeForm": {
+              "type": "string"
+            },
+            "content": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "activeForm",
+            "content",
+            "status"
+          ],
+          "type": "object"
+        },
         "TokenUsage": {
           "description": "Per-request token counts (returned by LLM API).",
           "properties": {
@@ -5552,7 +5857,7 @@
           "type": "object"
         }
       },
-      "description": "Protocol-level notifications visible to all consumers.\n\n43 base variants from cocode-rs design + 9 TS gap additions = 52 total. Each variant has an explicit `#[serde(rename = \"...\")]` for its wire method. See `event-system-design.md` Section 2.",
+      "description": "Protocol-level notifications visible to all consumers.\n\n66 variants across 20 categories. See `event-system-design.md` Section 2. Each variant's wire method is generated together with the matching `NotificationMethod` discriminant.",
       "oneOf": [
         {
           "description": "New session started.",
@@ -6069,6 +6374,44 @@
           "type": "object"
         },
         {
+          "description": "Durable plan-item / V1 todo snapshot — emitted after `TaskCreate`/`TaskUpdate`/`TodoWrite` tools mutate state so the TUI can refresh its panel without pulling the store directly. TS parity: `notifyTasksUpdated` subscriber callback in `utils/tasks.ts`.",
+          "properties": {
+            "method": {
+              "enum": [
+                "task_panel/changed"
+              ],
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/TaskPanelChangedParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Team lead received a plan-approval request from a teammate (via mailbox). The TUI surfaces this as a modal overlay. TS parity: `ExitPlanModeV2Tool.ts:137-141` teammate request flow.",
+          "properties": {
+            "method": {
+              "enum": [
+                "plan_approval/requested"
+              ],
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/PlanApprovalRequestedParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
           "description": "Agents killed.",
           "properties": {
             "method": {
@@ -6549,26 +6892,7 @@
           "type": "object"
         },
         {
-          "description": "Hook executed (post-completion summary; from cocode-rs base). Kept alongside HookStarted/Progress/Response to preserve the 43-variant base contract.",
-          "properties": {
-            "method": {
-              "enum": [
-                "hook/executed"
-              ],
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/HookExecutedParams"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "Hook execution started (TS gap P1).",
+          "description": "Hook execution started.",
           "properties": {
             "method": {
               "enum": [
@@ -7209,6 +7533,19 @@
         }
       ],
       "title": "ServerRequest"
+    },
+    "ServerRequestMethod": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Wire-method identifier for every `ServerRequest` variant.\n\nCross-language protocol constant exported to the JSON schema bundle so Python / other SDK codegens obtain the same vocabulary. Consumers should reference `ServerRequestMethod::HookCallback` rather than compare against raw wire strings.",
+      "enum": [
+        "approval/askForApproval",
+        "input/requestUserInput",
+        "mcp/routeMessage",
+        "hook/callback",
+        "control/cancelRequest"
+      ],
+      "title": "ServerRequestMethod",
+      "type": "string"
     },
     "ServerRequestUserInputParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -7918,17 +8255,10 @@
           ]
         }
       },
-      "description": "Matches TS `SDKControlSetPermissionModeRequestSchema` (controlSchemas.ts:127-134).",
+      "description": "Matches TS `SDKControlSetPermissionModeRequestSchema` (controlSchemas.ts:127-134).\n\nTS carries an additional `ultraplan: boolean` field for the CCR web-UI refinement flow. coco-rs intentionally skips Ultraplan (see CLAUDE.md \"Plan Mode — Skip Ultraplan (CCR Web UI) Only\"), so that field is omitted here — SDK clients targeting coco-rs should not send it.",
       "properties": {
         "mode": {
           "$ref": "#/definitions/PermissionMode"
-        },
-        "ultraplan": {
-          "description": "TS `ultraplan` — enables ultraplan mode within Plan (feature flag).",
-          "type": [
-            "boolean",
-            "null"
-          ]
         }
       },
       "required": [
@@ -8408,8 +8738,7 @@
         "FileChangeInfo": {
           "properties": {
             "kind": {
-              "description": "One of: \"create\", \"modify\", \"delete\".",
-              "type": "string"
+              "$ref": "#/definitions/FileChangeKind"
             },
             "path": {
               "type": "string"
@@ -8420,6 +8749,14 @@
             "path"
           ],
           "type": "object"
+        },
+        "FileChangeKind": {
+          "enum": [
+            "create",
+            "modify",
+            "delete"
+          ],
+          "type": "string"
         },
         "ItemStatus": {
           "enum": [
@@ -8719,8 +9056,7 @@
         "FileChangeInfo": {
           "properties": {
             "kind": {
-              "description": "One of: \"create\", \"modify\", \"delete\".",
-              "type": "string"
+              "$ref": "#/definitions/FileChangeKind"
             },
             "path": {
               "type": "string"
@@ -8731,6 +9067,14 @@
             "path"
           ],
           "type": "object"
+        },
+        "FileChangeKind": {
+          "enum": [
+            "create",
+            "modify",
+            "delete"
+          ],
+          "type": "string"
         },
         "ItemStatus": {
           "enum": [
@@ -9092,7 +9436,7 @@
     },
     "TuiOnlyEvent": {
       "$schema": "http://json-schema.org/draft-07/schema#",
-      "description": "TUI-exclusive events.\n\nThese events are dropped by SDK and App-Server consumers. They drive overlays, toasts, and UI-only state transitions that are not part of the protocol contract.\n\nPer `event-system-design.md` Section 1.7, the design listed this type as owned by `coco-tui`. Since `CoreEvent::Tui(TuiOnlyEvent)` is part of the envelope enum defined in `coco-types`, the type itself must live in `coco-types` to avoid a cyclic dependency. The semantic contract (TUI-only, never sent to SDK) is preserved via consumer dispatch rules in `StreamAccumulator` and `handle_core_event()`.\n\nSee `event-system-design.md` Section 4.1 for the canonical 20-variant list.",
+      "description": "TUI-exclusive events.\n\nThese events are dropped by SDK and App-Server consumers. They drive overlays, toasts, and UI-only state transitions that are not part of the protocol contract.\n\nPer `event-system-design.md` Section 1.7, the design listed this type as owned by `coco-tui`. Since `CoreEvent::Tui(TuiOnlyEvent)` is part of the envelope enum defined in `coco-types`, the type itself must live in `coco-types` to avoid a cyclic dependency. The semantic contract (TUI-only, never sent to SDK) is preserved via consumer dispatch rules in `StreamAccumulator` and `handle_core_event()`.\n\n21 variants (20 from design §4.1 + 1 coco-rs extension).",
       "oneOf": [
         {
           "description": "Permission approval overlay needed.",
@@ -9469,7 +9813,7 @@
           "type": "object"
         },
         {
-          "description": "Streaming tool input delta (typing effect).",
+          "description": "Streaming tool input delta (typing effect).\n\n# Status: reserved scaffolding, not yet wired\n\nThe TUI has a handler (`server_notification_handler::handle_tui_only`) that appends the delta to `ToolExecution.streaming_input` for a typing-effect display, but **no producer currently emits this variant** in coco-rs.\n\nThe inference layer's `StreamEvent::ToolCallDelta` (a different type, internal to `coco-inference`) is fully accumulated into the complete tool input before the engine emits `AgentStreamEvent::ToolUseQueued` with the finalized input. Consumers see the complete input at once.\n\nFuture work to wire this up would require the inference layer to forward the partial JSON fragments alongside the accumulation, and the engine to emit them here as `CoreEvent::Tui(ToolCallDelta { ... })`.\n\n# Why keep it in TuiOnlyEvent (not AgentStreamEvent)\n\nPer `event-system-design.md` §3.3: partial JSON deltas serve a purely UI display purpose (typing effect) and the SDK does not need them — `ToolUseQueued` already contains the complete input. Promoting to `AgentStreamEvent` would burden SDK consumers with partial JSON they must re-assemble, with no behavioral benefit.",
           "properties": {
             "call_id": {
               "type": "string"

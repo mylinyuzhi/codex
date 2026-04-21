@@ -8,11 +8,17 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+coco-config.workspace = true
+coco-system-reminder.workspace = true
+coco-tool.workspace = true
 coco-types.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 anyhow.workspace = true
-tokio = { workspace = true, features = ["sync"] }
+async-trait.workspace = true
+fs2.workspace = true
+tokio = { workspace = true, features = ["sync", "time"] }
+tracing.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros"] }

@@ -1,0 +1,90 @@
+//! TS `output_token_usage` generator.
+//!
+//! Mirrors `getOutputTokenUsageAttachment` (`attachments.ts:3828`) +
+//! `normalizeAttachmentForAPI` `case 'output_token_usage':`
+//! (`messages.ts:4076`). Main-thread-only per-turn output-token report
+//! with optional turn budget.
+//!
+//! Gate chain:
+//!
+//! 1. `ctx.config.attachments.output_token_usage` — opt-in (TS gates
+//!    on `feature('TOKEN_BUDGET')`; external builds default off).
+//! 2. `ctx.output_token_budget` is `Some(n)` with `n > 0` — TS
+//!    `getCurrentTurnTokenBudget() !== null && > 0`. `None` or
+//!    non-positive suppresses emission.
+//!
+//! Content is the TS literal at `messages.ts:4084`.
+
+use async_trait::async_trait;
+
+use crate::error::Result;
+use crate::generator::AttachmentGenerator;
+use crate::generator::GeneratorContext;
+use crate::types::AttachmentType;
+use crate::types::SystemReminder;
+use coco_config::SystemReminderConfig;
+
+#[derive(Debug, Default)]
+pub struct OutputTokenUsageGenerator;
+
+#[async_trait]
+impl AttachmentGenerator for OutputTokenUsageGenerator {
+    fn name(&self) -> &str {
+        "OutputTokenUsageGenerator"
+    }
+
+    fn attachment_type(&self) -> AttachmentType {
+        AttachmentType::OutputTokenUsage
+    }
+
+    fn is_enabled(&self, config: &SystemReminderConfig) -> bool {
+        config.attachments.output_token_usage
+    }
+
+    async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
+        let Some(budget) = ctx.output_token_budget else {
+            return Ok(None);
+        };
+        if budget <= 0 {
+            return Ok(None);
+        }
+        let turn = format_number(ctx.output_tokens_turn);
+        let budget_str = format_number(budget);
+        let session = format_number(ctx.output_tokens_session);
+        // TS `messages.ts:4084`: `Output tokens — turn: ${turn}/${budget} · session: ${session}`.
+        // The em-dash and middle-dot are verbatim from TS (`\u2014` / `\u00b7`).
+        let body = format!(
+            "Output tokens \u{2014} turn: {turn} / {budget_str} \u{00b7} session: {session}"
+        );
+        Ok(Some(SystemReminder::new(
+            AttachmentType::OutputTokenUsage,
+            body,
+        )))
+    }
+}
+
+/// Mirrors TS `formatNumber` (comma-separated thousands) for i64.
+/// TS uses `Intl.NumberFormat('en-US')` which produces fixed-comma output.
+fn format_number(n: i64) -> String {
+    let digits = n.unsigned_abs().to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3 + 1);
+    if n < 0 {
+        out.push('-');
+    }
+    let len = digits.len();
+    let first_group = match len % 3 {
+        0 => 3,
+        r => r,
+    };
+    for (idx, ch) in digits.chars().enumerate() {
+        if idx == first_group || (idx > first_group && (idx - first_group) % 3 == 0) {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+#[cfg(test)]
+#[path = "output_token_usage.test.rs"]
+mod tests;

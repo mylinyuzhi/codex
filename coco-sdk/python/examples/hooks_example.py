@@ -2,7 +2,7 @@
 
 import asyncio
 
-from coco_sdk import CocoClient, hook
+from coco_sdk import CocoClient, NotificationMethod, hook
 
 
 @hook(event="PreToolUse", matcher="Bash")
@@ -26,11 +26,11 @@ async def main():
         )
 
         async for event in client.events():
-            if event.method == "agentMessage/delta":
+            if event.method == NotificationMethod.AGENT_MESSAGE_DELTA:
                 delta = event.as_agent_message_delta()
                 if delta:
                     print(delta.delta, end="", flush=True)
-            elif event.method == "turn/completed":
+            elif event.method == NotificationMethod.TURN_COMPLETED:
                 print()
 
 

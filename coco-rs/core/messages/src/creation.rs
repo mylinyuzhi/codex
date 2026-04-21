@@ -24,7 +24,6 @@ pub fn create_user_message(text: &str) -> Message {
         message: LlmMessage::user_text(text),
         uuid: Uuid::new_v4(),
         timestamp: String::new(),
-        is_meta: false,
         is_visible_in_transcript_only: false,
         is_virtual: false,
         is_compact_summary: false,
@@ -43,7 +42,6 @@ pub fn create_user_message_with_parts(parts: Vec<UserContentPart>) -> Message {
         message: LlmMessage::user(parts),
         uuid: Uuid::new_v4(),
         timestamp: String::new(),
-        is_meta: false,
         is_visible_in_transcript_only: false,
         is_virtual: false,
         is_compact_summary: false,
@@ -53,18 +51,15 @@ pub fn create_user_message_with_parts(parts: Vec<UserContentPart>) -> Message {
 }
 
 /// Create a system-injected meta message (hidden from UI, visible to model).
+///
+/// Lands as `Message::Attachment` with [`CriticalSystemReminder`] kind —
+/// the generic carrier for system-injected text whose content goes to the
+/// model but shouldn't surface in the UI transcript as a "user" message.
 pub fn create_meta_message(text: &str) -> Message {
-    Message::User(UserMessage {
-        message: LlmMessage::user_text(text),
-        uuid: Uuid::new_v4(),
-        timestamp: String::new(),
-        is_meta: true,
-        is_visible_in_transcript_only: false,
-        is_virtual: false,
-        is_compact_summary: false,
-        permission_mode: None,
-        origin: Some(MessageOrigin::SystemInjected),
-    })
+    Message::Attachment(coco_types::AttachmentMessage::api(
+        coco_types::AttachmentKind::CriticalSystemReminder,
+        LlmMessage::user_text(text),
+    ))
 }
 
 /// Create an informational system message.

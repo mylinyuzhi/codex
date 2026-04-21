@@ -15,8 +15,7 @@
 //! slash command, CLI flag, or SDK control) is rejected with a clear
 //! reason and the session stays in its current mode.
 
-use std::env;
-
+use coco_config::env;
 use coco_types::PermissionMode;
 
 /// Env var name that activates the killswitch when set to a truthy value.
@@ -65,7 +64,7 @@ impl KillswitchCheck {
 /// `policy_flag` is the managed-settings `bypassPermissionsKillswitch`
 /// value at the policy scope (`None` when unset).
 pub fn check(policy_flag: Option<bool>) -> KillswitchCheck {
-    if is_env_truthy(env::var(KILLSWITCH_ENV).ok().as_deref()) {
+    if env::is_env_truthy(KILLSWITCH_ENV) {
         return KillswitchCheck::BlockedByEnv;
     }
     if policy_flag == Some(true) {
@@ -198,15 +197,6 @@ pub fn resolve_initial_permission_mode(
     InitialPermissionMode {
         mode: PermissionMode::Default,
         notification,
-    }
-}
-
-/// Match TS `isTruthyEnvValue`: accept `1`, `true`, `yes`, `on`
-/// (case-insensitive) as truthy. Anything else is false.
-fn is_env_truthy(value: Option<&str>) -> bool {
-    match value.map(str::trim) {
-        Some(v) => matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"),
-        None => false,
     }
 }
 

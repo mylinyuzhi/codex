@@ -124,15 +124,32 @@ impl TurnRunner for QueryEngineRunner {
                 .permission_mode
                 .or(handoff.permission_mode)
                 .unwrap_or_default();
+            let runtime_config =
+                coco_config::RuntimeConfigBuilder::from_process(handoff.cwd.as_str()).build()?;
 
             let config = QueryEngineConfig {
                 model_name: handoff.model.clone(),
                 permission_mode,
                 context_window: 200_000,
                 max_output_tokens,
-                max_turns,
-                max_tokens: None,
+                // SDK callers already pass a scalar `max_turns` via the
+                // runner config, so prefer that and fall back to the
+                // resolved `LoopConfig` value when the caller didn't
+                // pin it.
+                max_turns: if max_turns > 0 {
+                    max_turns
+                } else {
+                    runtime_config.loop_config.max_turns.unwrap_or(max_turns)
+                },
+                max_tokens: runtime_config.loop_config.max_tokens.map(i64::from),
                 system_prompt,
+                streaming_tool_execution: runtime_config.loop_config.enable_streaming_tools,
+                tool_config: runtime_config.tool,
+                sandbox_config: runtime_config.sandbox,
+                memory_config: runtime_config.memory,
+                shell_config: runtime_config.shell,
+                web_fetch_config: runtime_config.web_fetch,
+                web_search_config: runtime_config.web_search,
                 ..Default::default()
             };
 

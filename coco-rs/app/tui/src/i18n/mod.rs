@@ -17,6 +17,9 @@
 
 pub use rust_i18n::t;
 
+use coco_config::EnvKey;
+use coco_config::env;
+
 /// Initialize the i18n system with locale detection from env vars.
 pub fn init() {
     let locale = detect_locale();
@@ -35,7 +38,12 @@ pub fn set_locale(locale: &str) {
 }
 
 fn detect_locale() -> &'static str {
-    for var in ["COCO_LANG", "LANG", "LC_ALL"] {
+    if let Some(value) = env::env_opt(EnvKey::CocoLang)
+        && let Some(locale) = parse_locale(&value)
+    {
+        return locale;
+    }
+    for var in ["LANG", "LC_ALL"] {
         if let Ok(value) = std::env::var(var)
             && let Some(locale) = parse_locale(&value)
         {

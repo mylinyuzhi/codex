@@ -10,7 +10,6 @@ fn make_user_message(text: &str) -> Message {
         },
         uuid: uuid::Uuid::new_v4(),
         timestamp: String::new(),
-        is_meta: false,
         is_visible_in_transcript_only: false,
         is_virtual: false,
         is_compact_summary: false,

@@ -1,6 +1,31 @@
 use super::*;
 
 #[test]
+fn test_env_key_as_str() {
+    assert_eq!(EnvKey::CocoAgentName.as_str(), "COCO_AGENT_NAME");
+    assert_eq!(
+        EnvKey::CocoMaxToolUseConcurrency.as_str(),
+        "COCO_MAX_TOOL_USE_CONCURRENCY"
+    );
+    assert_eq!(
+        EnvKey::CocoMcpToolTimeoutMs.as_str(),
+        "COCO_MCP_TOOL_TIMEOUT_MS"
+    );
+}
+
+#[test]
+fn test_std_env_var_accepts_env_key() {
+    // SAFETY: tests run single-threaded for env-mutating cases.
+    unsafe {
+        std::env::set_var(EnvKey::CocoAntTrace, "1");
+    }
+    assert_eq!(var(EnvKey::CocoAntTrace).ok().as_deref(), Some("1"));
+    unsafe {
+        std::env::remove_var(EnvKey::CocoAntTrace);
+    }
+}
+
+#[test]
 fn test_is_env_truthy_values() {
     for (val, expected) in [
         ("1", true),
@@ -49,4 +74,29 @@ fn test_is_env_falsy_values() {
         );
     }
     unsafe { std::env::remove_var("_COCO_TEST_FALSY") };
+}
+
+#[test]
+fn test_env_snapshot_from_pairs() {
+    let env = EnvSnapshot::from_pairs([
+        (EnvKey::CocoMaxToolUseConcurrency, "7"),
+        (EnvKey::CocoSimple, "true"),
+    ]);
+
+    assert_eq!(env.get_i32(EnvKey::CocoMaxToolUseConcurrency), Some(7));
+    assert!(env.is_truthy(EnvKey::CocoSimple));
+    assert_eq!(env.get(EnvKey::CocoModel), None);
+}
+
+#[test]
+fn test_env_only_config_from_snapshot() {
+    let env = EnvSnapshot::from_pairs([
+        (EnvKey::CocoModel, "openai/gpt-5"),
+        (EnvKey::CocoSimple, "true"),
+    ]);
+
+    let config = EnvOnlyConfig::from_snapshot(&env);
+
+    assert_eq!(config.model_override.as_deref(), Some("openai/gpt-5"));
+    assert!(config.bare_mode);
 }

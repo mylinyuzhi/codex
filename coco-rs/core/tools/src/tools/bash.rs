@@ -1,8 +1,8 @@
 use coco_shell::read_only::is_read_only_command;
 use coco_shell::sandbox::BypassRequest;
-use coco_shell::sandbox::SandboxConfig;
+use coco_shell::sandbox::SandboxConfig as ShellSandboxConfig;
 use coco_shell::sandbox::SandboxDecision;
-use coco_shell::sandbox::SandboxMode;
+use coco_shell::sandbox::SandboxMode as ShellSandboxMode;
 use coco_shell::sandbox::should_sandbox_command;
 use coco_shell::security::SecuritySeverity;
 use coco_shell::security::check_security;
@@ -21,49 +21,17 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-/// Hardcoded fallback default timeout: 2 minutes (120,000 ms).
-///
-/// TS: `timeouts.ts` `DEFAULT_TIMEOUT_MS = 2 * 60 * 1000`.
-const DEFAULT_TIMEOUT_MS_FALLBACK: u64 = 120_000;
-
-/// Hardcoded fallback maximum timeout: 10 minutes (600,000 ms).
-///
-/// TS: `timeouts.ts` `MAX_TIMEOUT_MS = 10 * 60 * 1000`.
-const MAX_TIMEOUT_MS_FALLBACK: u64 = 600_000;
-
-/// Resolve the effective default timeout from the environment.
-///
-/// TS `tools/BashTool/BashTool.tsx:229` + `timeouts.ts`: reads
-/// `BASH_DEFAULT_TIMEOUT_MS` env var and falls back to 2 minutes. We
-/// match that name + fallback exactly so existing TS-Claude-Code users
-/// can set the env var once and have it work in both runtimes.
-///
-/// Invalid / unparseable values fall back silently — we don't want the
-/// Bash tool to hard-fail at startup because of a typo in `.bashrc`.
-fn env_default_timeout_ms() -> u64 {
-    std::env::var("BASH_DEFAULT_TIMEOUT_MS")
-        .ok()
-        .and_then(|s| s.parse::<u64>().ok())
-        .filter(|&v| v > 0)
-        .unwrap_or(DEFAULT_TIMEOUT_MS_FALLBACK)
+fn default_timeout_ms(config: &coco_config::ToolConfig) -> u64 {
+    config.bash.default_timeout_ms.max(1) as u64
 }
 
-/// Resolve the effective max timeout from the environment.
-///
-/// TS: `BASH_MAX_TIMEOUT_MS` env var, fallback 10 minutes.
-fn env_max_timeout_ms() -> u64 {
-    std::env::var("BASH_MAX_TIMEOUT_MS")
-        .ok()
-        .and_then(|s| s.parse::<u64>().ok())
-        .filter(|&v| v > 0)
-        .unwrap_or(MAX_TIMEOUT_MS_FALLBACK)
+fn max_timeout_ms(config: &coco_config::ToolConfig) -> u64 {
+    config
+        .bash
+        .max_timeout_ms
+        .max(config.bash.default_timeout_ms)
+        .max(1) as u64
 }
-
-/// Default maximum output size in bytes before truncation.
-///
-/// TS: `utils/shell/outputLimits.ts` — `BASH_MAX_OUTPUT_DEFAULT = 30_000`.
-/// The env var `BASH_MAX_OUTPUT_LENGTH` overrides this up to [`MAX_OUTPUT_BYTES_UPPER`].
-const MAX_OUTPUT_BYTES_DEFAULT: usize = 30_000;
 
 /// Long-form tool description shown to the model.
 ///
@@ -190,11 +158,6 @@ Important:
 # Other common operations
 - View comments on a Github PR: gh api repos/foo/bar/pulls/123/comments";
 
-/// Upper cap on `BASH_MAX_OUTPUT_LENGTH` — larger values are clamped down.
-///
-/// TS: `utils/shell/outputLimits.ts` — `BASH_MAX_OUTPUT_UPPER_LIMIT = 150_000`.
-const MAX_OUTPUT_BYTES_UPPER: usize = 150_000;
-
 /// Build a `SandboxConfig` from environment variables, matching the
 /// TS `SandboxManager.isSandboxingEnabled()` + settings pipeline as
 /// close as we can without a full config/settings system.
@@ -211,62 +174,33 @@ const MAX_OUTPUT_BYTES_UPPER: usize = 150_000;
 ///
 /// TS `shouldUseSandbox.ts` uses similar logic: enable check → bypass
 /// check → exclusion list → sandbox decision.
-fn load_sandbox_config() -> SandboxConfig {
-    let enabled = std::env::var("COCO_SANDBOX_ENABLED")
-        .ok()
-        .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
-        .unwrap_or(false);
-    if !enabled {
-        return SandboxConfig::default();
+fn shell_sandbox_config_from_runtime(config: &coco_config::SandboxConfig) -> ShellSandboxConfig {
+    if !config.enabled {
+        return ShellSandboxConfig::default();
     }
-    let mode = match std::env::var("COCO_SANDBOX_MODE")
-        .ok()
-        .as_deref()
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Some("strict") => SandboxMode::Strict,
-        Some("external") => SandboxMode::External,
-        Some("none") => SandboxMode::None,
-        _ => SandboxMode::ReadOnly,
+    let mode = match config.mode {
+        coco_types::SandboxMode::ReadOnly => ShellSandboxMode::ReadOnly,
+        coco_types::SandboxMode::WorkspaceWrite => ShellSandboxMode::Strict,
+        coco_types::SandboxMode::FullAccess => ShellSandboxMode::None,
+        coco_types::SandboxMode::ExternalSandbox => ShellSandboxMode::External,
     };
-    let excluded_commands: Vec<String> = std::env::var("COCO_SANDBOX_EXCLUDED_COMMANDS")
-        .ok()
-        .map(|raw| {
-            raw.split(':')
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(String::from)
-                .collect()
-        })
-        .unwrap_or_default();
-    let allow_network = std::env::var("COCO_SANDBOX_ALLOW_NETWORK")
-        .ok()
-        .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
-        .unwrap_or(false);
 
-    SandboxConfig {
+    ShellSandboxConfig {
         mode,
-        excluded_commands,
+        excluded_commands: config.excluded_commands.clone(),
         allow_bypass: true,
-        allow_network,
+        allow_network: config.allow_network,
         ..Default::default()
     }
 }
 
-/// Resolve the effective max Bash output byte budget.
+/// Effective max Bash output byte budget.
 ///
-/// TS: `utils/shell/outputLimits.ts::getMaxOutputLength()` clamps the env var
-/// to `[0, BASH_MAX_OUTPUT_UPPER_LIMIT]` and falls back to the default on
-/// parse errors. We match both the default and the clamp so that a user
-/// setting `BASH_MAX_OUTPUT_LENGTH=500000` in their shell profile gets the
-/// same effective 150_000-byte budget across runtimes.
-fn env_max_output_bytes() -> usize {
-    std::env::var("BASH_MAX_OUTPUT_LENGTH")
-        .ok()
-        .and_then(|s| s.parse::<usize>().ok())
-        .map(|v| v.min(MAX_OUTPUT_BYTES_UPPER))
-        .unwrap_or(MAX_OUTPUT_BYTES_DEFAULT)
+/// Clamp to `[0, BASH_MAX_OUTPUT_BYTES_UPPER]` is enforced by
+/// `BashConfig::finalize()` at config-resolution time — this helper
+/// just normalizes the (already non-negative) value to `usize`.
+fn max_output_bytes(config: &coco_config::ToolConfig) -> usize {
+    config.bash.max_output_bytes.max(0) as usize
 }
 
 /// Bash tool -- executes shell commands via bash -c.
@@ -304,9 +238,8 @@ impl Tool for BashTool {
             "timeout".into(),
             serde_json::json!({
                 "type": "number",
-                "description": "Optional timeout in milliseconds. Defaults to 120000 (2 min) \
-                                and cannot exceed 600000 (10 min). Both bounds can be overridden \
-                                via BASH_DEFAULT_TIMEOUT_MS and BASH_MAX_TIMEOUT_MS env vars."
+                "description": "Optional timeout in milliseconds. Defaults to the resolved \
+                                Bash tool config and cannot exceed its configured max timeout."
             }),
         );
         props.insert(
@@ -385,11 +318,11 @@ impl Tool for BashTool {
         30_000
     }
 
-    fn validate_input(&self, input: &Value, _ctx: &ToolUseContext) -> ValidationResult {
+    fn validate_input(&self, input: &Value, ctx: &ToolUseContext) -> ValidationResult {
         if input.get("command").and_then(|v| v.as_str()).is_none() {
             return ValidationResult::invalid("missing required field: command");
         }
-        let max_timeout_ms = env_max_timeout_ms();
+        let max_timeout_ms = max_timeout_ms(&ctx.tool_config);
         if let Some(timeout) = input.get("timeout").and_then(serde_json::Value::as_u64)
             && timeout > max_timeout_ms
         {
@@ -439,11 +372,8 @@ impl Tool for BashTool {
                 error_code: None,
             })?;
 
-        // Resolve env-overridable timeout bounds each call so that the
-        // env var can be toggled at runtime (e.g. test-time `set_var`).
-        // TS: `timeouts.ts` reads these on every invocation too.
-        let default_timeout_ms = env_default_timeout_ms();
-        let max_timeout_ms = env_max_timeout_ms();
+        let default_timeout_ms = default_timeout_ms(&ctx.tool_config);
+        let max_timeout_ms = max_timeout_ms(&ctx.tool_config);
         let timeout_ms = input
             .get("timeout")
             .and_then(serde_json::Value::as_u64)
@@ -462,9 +392,7 @@ impl Tool for BashTool {
         //   3. If command matches an excluded pattern → unsandboxed
         //   4. Otherwise → sandboxed
         //
-        // coco-rs drives the config from env vars (see `load_sandbox_config`)
-        // because there is no persistent settings file yet.
-        let sandbox_config = load_sandbox_config();
+        let sandbox_config = shell_sandbox_config_from_runtime(&ctx.sandbox_config);
         let bypass = if input
             .get("dangerouslyDisableSandbox")
             .and_then(serde_json::Value::as_bool)
@@ -552,12 +480,12 @@ impl Tool for BashTool {
         // than transferring the process handle — a true handle-transfer
         // requires a ShellExecutor API change that's out of scope here.
         // The re-run is only triggered for commands that explicitly
-        // opt in via `COCO_BASH_AUTO_BACKGROUND_ON_TIMEOUT=1` so
+        // opt in via resolved runtime config so
         // side-effectful commands aren't duplicated unexpectedly.
         match execute_foreground(command, timeout_ms, ctx, sandbox_decision.is_sandboxed()).await {
             Ok(result) => Ok(result),
             Err(ToolError::ExecutionFailed { message, .. }) if message.contains("timed out") => {
-                if auto_background_on_timeout_enabled() && ctx.task_handle.is_some() {
+                if ctx.tool_config.bash.auto_background_on_timeout && ctx.task_handle.is_some() {
                     // Spawn a fresh bg task. The fg child was already
                     // killed by the watchdog, so this is a re-run — TS
                     // transfers the handle instead, but we document the
@@ -585,18 +513,6 @@ impl Tool for BashTool {
             Err(other) => Err(other),
         }
     }
-}
-
-/// Whether auto-background-on-timeout is enabled. Opt-in via env var
-/// so side-effectful commands (npm install, git push) don't get silently
-/// re-run when a command times out.
-///
-/// R6-T19.
-fn auto_background_on_timeout_enabled() -> bool {
-    std::env::var("COCO_BASH_AUTO_BACKGROUND_ON_TIMEOUT")
-        .ok()
-        .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
-        .unwrap_or(false)
 }
 
 /// Execute a command in the background via TaskHandle.
@@ -663,7 +579,7 @@ async fn execute_foreground(
         .clone()
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| PathBuf::from("/tmp"));
-    let mut executor = coco_shell::ShellExecutor::new(&cwd);
+    let mut executor = coco_shell::ShellExecutor::new_with_config(&cwd, &ctx.shell_config);
 
     // R6-T17 + R6-T18: thread the ctx cancel token and the sandbox
     // decision through to the shell executor. The `should_use_sandbox`
@@ -756,10 +672,7 @@ async fn execute_foreground(
         });
     }
 
-    // Format output. Resolve the byte budget on every call so env var
-    // changes take effect at runtime — matches TS `getMaxOutputLength()`
-    // which reads `process.env.BASH_MAX_OUTPUT_LENGTH` on each invocation.
-    let max_bytes = env_max_output_bytes();
+    let max_bytes = max_output_bytes(&ctx.tool_config);
     // The `stdout` String field comes from `cmd_result.stdout`, which
     // the executor has already cleaned up (CWD-marker stripped via
     // `extract_cwd_from_output`). Truncate that for the inline view.
@@ -1087,7 +1000,7 @@ async fn apply_sed_edit(
 /// most actionable information (error messages, exit status) so
 /// preserving both halves beats a pure head-truncation for debuggability.
 /// Still TS-compatible at the byte-budget level: the caller passes the
-/// env-resolved `max_bytes` from [`env_max_output_bytes`].
+/// resolved `max_bytes` from [`max_output_bytes`].
 ///
 /// Char boundaries are respected so the truncation never yields invalid
 /// UTF-8. If `max_bytes` is odd, the first half is one byte smaller than
