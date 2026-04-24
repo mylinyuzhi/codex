@@ -64,10 +64,24 @@ pub async fn run_tui(cli: &Cli) -> Result<()> {
     // Model + client
     let (model, mode) = crate::create_model(cli.model.as_deref(), &runtime_config);
     let model_id = model.model_id().to_string();
-    let client = Arc::new(ApiClient::new(
-        model,
-        runtime_config.api.retry.clone().into(),
-    ));
+    let retry: coco_inference::RetryConfig = runtime_config.api.retry.clone().into();
+    let client = Arc::new(ApiClient::new(model, retry.clone()));
+
+    // Main role fallback chain — populated from CLI `--fallback-model`
+    // flags (repeatable) OR settings.models.main.fallbacks, whichever
+    // the resolver produced. Fail-fast on any tier that can't build:
+    // silently dropping a fallback would only surface under outage.
+    let fallback_clients = crate::build_fallback_clients_for_role(
+        &runtime_config,
+        coco_types::ModelRole::Main,
+        retry,
+    )?;
+    // Optional half-open recovery policy for Main. Defaults to
+    // None (sticky fallback) unless settings.models.main.recovery
+    // is configured.
+    let recovery_policy = runtime_config
+        .model_roles
+        .recovery(coco_types::ModelRole::Main);
 
     // Tools
     let mut registry = ToolRegistry::new();
@@ -223,6 +237,8 @@ pub async fn run_tui(cli: &Cli) -> Result<()> {
         command_rx,
         notification_tx,
         client,
+        fallback_clients,
+        recovery_policy,
         tools,
         engine_config,
         file_read_state,
@@ -257,6 +273,8 @@ async fn run_agent_driver(
     mut command_rx: mpsc::Receiver<UserCommand>,
     event_tx: mpsc::Sender<CoreEvent>,
     client: Arc<ApiClient>,
+    fallback_clients: Vec<Arc<ApiClient>>,
+    recovery_policy: Option<coco_config::FallbackRecoveryPolicy>,
     tools: Arc<ToolRegistry>,
     mut engine_config: QueryEngineConfig,
     file_read_state: Arc<RwLock<coco_context::FileReadState>>,
@@ -323,6 +341,15 @@ async fn run_agent_driver(
                     cancel.clone(),
                     /*hooks*/ None,
                 );
+                // Install the Main-role fallback chain (may be empty).
+                // Empty chain → single-slot ModelRuntime; no behavior
+                // change from the pre-fallback baseline.
+                if !fallback_clients.is_empty() {
+                    engine = engine.with_fallback_clients(fallback_clients.clone());
+                }
+                if let Some(policy) = recovery_policy {
+                    engine = engine.with_recovery_policy(policy);
+                }
                 engine = engine.with_file_read_state(file_read_state.clone());
                 engine = engine.with_app_state(app_state.clone());
                 // Swarm mailbox handle enables ExitPlanMode teammate

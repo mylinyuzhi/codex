@@ -139,6 +139,7 @@ where
         is_compact_summary: true,
         permission_mode: None,
         origin: None,
+        parent_tool_use_id: None,
     });
 
     let post_tokens = tokens::estimate_text_tokens(&summary_user_msg)

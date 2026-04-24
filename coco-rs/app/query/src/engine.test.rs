@@ -16,6 +16,7 @@ use vercel_ai_provider::LanguageModelV4GenerateResult;
 use vercel_ai_provider::LanguageModelV4StreamResult;
 use vercel_ai_provider::TextPart;
 use vercel_ai_provider::ToolCallPart;
+use vercel_ai_provider::ToolResultContent;
 use vercel_ai_provider::UnifiedFinishReason;
 use vercel_ai_provider::Usage;
 
@@ -221,6 +222,75 @@ impl LanguageModelV4 for MultiToolMock {
     }
 }
 
+// ─── Single tool-call mock: first call returns one tool, second returns text ───
+
+struct OneToolThenTextMock {
+    call_count: AtomicI32,
+    tool_call_id: String,
+    tool_name: String,
+    input: serde_json::Value,
+    final_text: String,
+}
+
+#[async_trait::async_trait]
+impl LanguageModelV4 for OneToolThenTextMock {
+    fn provider(&self) -> &str {
+        "mock"
+    }
+    fn model_id(&self) -> &str {
+        "mock-one-tool-then-text"
+    }
+
+    async fn do_generate(
+        &self,
+        _options: LanguageModelV4CallOptions,
+    ) -> Result<LanguageModelV4GenerateResult, AISdkError> {
+        let call = self.call_count.fetch_add(1, Ordering::SeqCst);
+        if call == 0 {
+            Ok(LanguageModelV4GenerateResult {
+                content: vec![AssistantContentPart::ToolCall(ToolCallPart {
+                    tool_call_id: self.tool_call_id.clone(),
+                    tool_name: self.tool_name.clone(),
+                    input: self.input.clone(),
+                    provider_executed: None,
+                    provider_metadata: None,
+                })],
+                usage: Usage::new(5, 5),
+                finish_reason: FinishReason::new(UnifiedFinishReason::ToolCalls),
+                warnings: vec![],
+                provider_metadata: None,
+                request: None,
+                response: None,
+            })
+        } else {
+            Ok(LanguageModelV4GenerateResult {
+                content: vec![AssistantContentPart::Text(TextPart {
+                    text: self.final_text.clone(),
+                    provider_metadata: None,
+                })],
+                usage: Usage::new(5, 5),
+                finish_reason: FinishReason::new(UnifiedFinishReason::Stop),
+                warnings: vec![],
+                provider_metadata: None,
+                request: None,
+                response: None,
+            })
+        }
+    }
+
+    async fn do_stream(
+        &self,
+        options: LanguageModelV4CallOptions,
+    ) -> Result<LanguageModelV4StreamResult, AISdkError> {
+        let result = self.do_generate(options).await?;
+        Ok(coco_inference::synthetic_stream_from_content(
+            result.content,
+            result.usage,
+            result.finish_reason,
+        ))
+    }
+}
+
 // ─── Tests ───
 
 #[tokio::test]
@@ -238,6 +308,33 @@ async fn test_single_turn_text_only() {
     assert_eq!(result.response_text, "Hello!");
     assert_eq!(result.turns, 1);
     assert!(!result.cancelled);
+}
+
+#[tokio::test]
+async fn test_with_fallback_client_does_not_break_primary_path() {
+    // Phase 8-β sanity: installing a fallback client via the
+    // builder must NOT change behavior when the primary succeeds.
+    // The per-session ModelRuntime stays on the primary; the
+    // fallback is just available. We confirm the normal text
+    // response comes back unchanged.
+    let primary_model = Arc::new(TextMock {
+        text: "primary-answer".into(),
+    });
+    let fallback_model = Arc::new(TextMock {
+        text: "fallback-answer".into(),
+    });
+    let primary = Arc::new(ApiClient::new(primary_model, RetryConfig::default()));
+    let fallback = Arc::new(ApiClient::new(fallback_model, RetryConfig::default()));
+    let tools = Arc::new(ToolRegistry::new());
+    let cancel = CancellationToken::new();
+
+    let engine = QueryEngine::new(QueryEngineConfig::default(), primary, tools, cancel, None)
+        .with_fallback_client(fallback);
+    let result = engine.run("hi").await.expect("should succeed");
+
+    // Primary succeeded ⇒ fallback never activates; response comes
+    // from the primary.
+    assert_eq!(result.response_text, "primary-answer");
 }
 
 #[tokio::test]
@@ -462,19 +559,15 @@ async fn test_tool_execution_with_real_tools() {
     assert_eq!(result.response_text, "File read successfully.");
 }
 
-/// PR-E1 Phase 2: concurrency-safe tools dispatched during the stream emit
-/// their lifecycle events (`ToolUseQueued` → `ToolUseStarted` → `ToolUseCompleted`)
-/// and the tool actually runs. Asserts the full event stream + final history.
+/// Concurrency-safe tools still emit their lifecycle events
+/// (`ToolUseQueued` → `ToolUseStarted` → `ToolUseCompleted`) and execute
+/// through the normal post-commit tool path.
 ///
 /// This test reuses `ReadRealFileMock` shape (Read tool is `is_concurrency_safe`)
-/// but observes the `CoreEvent` channel to prove eager dispatch fires all three
-/// AgentStreamEvent lifecycle phases for the read call. If Phase 2 regressed
-/// back to the post-stream batch path, the events would still fire but the
-/// `tool_use_queued` event's ordering relative to the stream's `Finish`
-/// wouldn't differ in a way this test can cheaply observe — so the stronger
-/// check here is that the end-to-end read actually returns the file content.
+/// but observes the `CoreEvent` channel to prove the standard executor path
+/// fires all three AgentStreamEvent lifecycle phases for the read call.
 #[tokio::test]
-async fn test_eager_dispatch_emits_full_tool_lifecycle() {
+async fn test_read_tool_emits_full_tool_lifecycle() {
     let dir = tempfile::tempdir().unwrap();
     let test_file = dir.path().join("sample.txt");
     std::fs::write(&test_file, "eager-payload").unwrap();
@@ -720,6 +813,1153 @@ async fn collect_events_from_run(
         .expect("engine run should succeed");
     let events = collector.await.unwrap();
     (result, events)
+}
+
+fn tool_result_error_text(messages: &[coco_types::Message], tool_use_id: &str) -> Option<String> {
+    messages.iter().find_map(|message| {
+        let coco_types::Message::ToolResult(result) = message else {
+            return None;
+        };
+        if result.tool_use_id != tool_use_id {
+            return None;
+        }
+        let coco_types::LlmMessage::Tool { content, .. } = &result.message else {
+            return None;
+        };
+        content.iter().find_map(|part| {
+            let coco_types::ToolContent::ToolResult(content) = part else {
+                return None;
+            };
+            if content.tool_call_id != tool_use_id || !content.is_error {
+                return None;
+            }
+            match &content.output {
+                ToolResultContent::ErrorText { value, .. } => Some(value.clone()),
+                ToolResultContent::Text { value, .. } => Some(value.clone()),
+                _ => None,
+            }
+        })
+    })
+}
+
+fn tool_result_text(messages: &[coco_types::Message], tool_use_id: &str) -> Option<String> {
+    messages.iter().find_map(|message| {
+        let coco_types::Message::ToolResult(result) = message else {
+            return None;
+        };
+        if result.tool_use_id != tool_use_id {
+            return None;
+        }
+        let coco_types::LlmMessage::Tool { content, .. } = &result.message else {
+            return None;
+        };
+        content.iter().find_map(|part| {
+            let coco_types::ToolContent::ToolResult(content) = part else {
+                return None;
+            };
+            if content.tool_call_id != tool_use_id || content.is_error {
+                return None;
+            }
+            match &content.output {
+                ToolResultContent::Text { value, .. } => Some(value.clone()),
+                _ => None,
+            }
+        })
+    })
+}
+
+fn attachment_text_by_kind(
+    messages: &[coco_types::Message],
+    kind: coco_types::AttachmentKind,
+) -> Option<String> {
+    messages.iter().find_map(|message| {
+        let coco_types::Message::Attachment(attachment) = message else {
+            return None;
+        };
+        if attachment.kind != kind {
+            return None;
+        }
+        let coco_types::AttachmentBody::Api(coco_types::LlmMessage::User { content, .. }) =
+            &attachment.body
+        else {
+            return None;
+        };
+        content.iter().find_map(|part| match part {
+            vercel_ai_provider::UserContentPart::Text(text) => Some(text.text.clone()),
+            _ => None,
+        })
+    })
+}
+
+fn tool_result_index(messages: &[coco_types::Message], tool_use_id: &str) -> Option<usize> {
+    messages.iter().position(|message| {
+        let coco_types::Message::ToolResult(result) = message else {
+            return false;
+        };
+        result.tool_use_id == tool_use_id
+    })
+}
+
+fn attachment_index_by_kind_and_text(
+    messages: &[coco_types::Message],
+    kind: coco_types::AttachmentKind,
+    needle: &str,
+) -> Option<usize> {
+    messages.iter().position(|message| {
+        let coco_types::Message::Attachment(attachment) = message else {
+            return false;
+        };
+        if attachment.kind != kind {
+            return false;
+        }
+        let coco_types::AttachmentBody::Api(coco_types::LlmMessage::User { content, .. }) =
+            &attachment.body
+        else {
+            return false;
+        };
+        content.iter().any(|part| match part {
+            vercel_ai_provider::UserContentPart::Text(text) => text.text.contains(needle),
+            _ => false,
+        })
+    })
+}
+
+fn user_message_index_containing(messages: &[coco_types::Message], needle: &str) -> Option<usize> {
+    messages.iter().position(|message| {
+        let coco_types::Message::User(user) = message else {
+            return false;
+        };
+        let coco_types::LlmMessage::User { content, .. } = &user.message else {
+            return false;
+        };
+        content.iter().any(|part| match part {
+            vercel_ai_provider::UserContentPart::Text(text) => text.text.contains(needle),
+            _ => false,
+        })
+    })
+}
+
+fn tool_lifecycle_counts(
+    events: &[CoreEvent],
+    tool_use_id: &str,
+) -> (usize, usize, usize, Option<bool>) {
+    let mut queued = 0;
+    let mut started = 0;
+    let mut completed = 0;
+    let mut completed_is_error = None;
+    for event in events {
+        let CoreEvent::Stream(stream) = event else {
+            continue;
+        };
+        match stream {
+            crate::AgentStreamEvent::ToolUseQueued { call_id, .. } if call_id == tool_use_id => {
+                queued += 1;
+            }
+            crate::AgentStreamEvent::ToolUseStarted { call_id, .. } if call_id == tool_use_id => {
+                started += 1;
+            }
+            crate::AgentStreamEvent::ToolUseCompleted {
+                call_id, is_error, ..
+            } if call_id == tool_use_id => {
+                completed += 1;
+                completed_is_error = Some(*is_error);
+            }
+            _ => {}
+        }
+    }
+    (queued, started, completed, completed_is_error)
+}
+
+fn completed_event_output(events: &[CoreEvent], tool_use_id: &str) -> Option<String> {
+    events.iter().find_map(|event| {
+        let CoreEvent::Stream(stream) = event else {
+            return None;
+        };
+        match stream {
+            crate::AgentStreamEvent::ToolUseCompleted {
+                call_id, output, ..
+            } if call_id == tool_use_id => Some(output.clone()),
+            _ => None,
+        }
+    })
+}
+
+#[tokio::test]
+async fn unknown_tool_call_gets_error_result_and_completed_event() {
+    let model = Arc::new(OneToolThenTextMock {
+        call_count: AtomicI32::new(0),
+        tool_call_id: "unknown_1".into(),
+        tool_name: "MissingTool".into(),
+        input: serde_json::json!({}),
+        final_text: "done".into(),
+    });
+    let tools = Arc::new(ToolRegistry::new());
+    let config = QueryEngineConfig::default();
+    let (result, events) = collect_events_from_run(model, tools, config, None, "run it").await;
+
+    assert_eq!(result.response_text, "done");
+    assert_eq!(result.turns, 2);
+    let output = tool_result_error_text(&result.final_messages, "unknown_1")
+        .expect("unknown tool should produce an error tool result");
+    assert!(output.contains("Unknown tool: MissingTool"));
+
+    let (queued, started, completed, completed_is_error) =
+        tool_lifecycle_counts(&events, "unknown_1");
+    assert_eq!(queued, 1, "committed unknown tool call must be queued");
+    assert_eq!(started, 0, "unknown tool call is never runnable");
+    assert_eq!(completed, 1, "queued unknown tool call must complete");
+    assert_eq!(completed_is_error, Some(true));
+}
+
+#[tokio::test]
+async fn invalid_tool_input_gets_error_result_and_completed_event() {
+    let model = Arc::new(OneToolThenTextMock {
+        call_count: AtomicI32::new(0),
+        tool_call_id: "invalid_read_1".into(),
+        tool_name: "Read".into(),
+        input: serde_json::json!({}),
+        final_text: "done".into(),
+    });
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(ReadTool));
+    let tools = Arc::new(registry);
+    let config = QueryEngineConfig::default();
+    let (result, events) = collect_events_from_run(model, tools, config, None, "read it").await;
+
+    assert_eq!(result.response_text, "done");
+    assert_eq!(result.turns, 2);
+    let output = tool_result_error_text(&result.final_messages, "invalid_read_1")
+        .expect("invalid input should produce an error tool result");
+    assert!(output.contains("Invalid input"));
+    assert!(output.contains("file_path"));
+
+    let (queued, started, completed, completed_is_error) =
+        tool_lifecycle_counts(&events, "invalid_read_1");
+    assert_eq!(queued, 1, "committed invalid tool call must be queued");
+    assert_eq!(started, 0, "validation failure is never runnable");
+    assert_eq!(completed, 1, "queued invalid tool call must complete");
+    assert_eq!(completed_is_error, Some(true));
+}
+
+struct PermissionRewriteTool;
+
+#[async_trait::async_trait]
+impl coco_tool::Tool for PermissionRewriteTool {
+    fn id(&self) -> coco_types::ToolId {
+        coco_types::ToolId::Custom("permission_rewrite".into())
+    }
+
+    fn name(&self) -> &str {
+        "permission_rewrite"
+    }
+
+    fn input_schema(&self) -> coco_types::ToolInputSchema {
+        coco_types::ToolInputSchema::default()
+    }
+
+    fn description(
+        &self,
+        _input: &serde_json::Value,
+        _options: &coco_tool::DescriptionOptions,
+    ) -> String {
+        "permission rewrite test tool".into()
+    }
+
+    async fn check_permissions(
+        &self,
+        _input: &serde_json::Value,
+        _ctx: &coco_tool::ToolUseContext,
+    ) -> coco_types::PermissionDecision {
+        coco_types::PermissionDecision::Allow {
+            updated_input: Some(serde_json::json!({"value": "rewritten"})),
+            feedback: None,
+        }
+    }
+
+    async fn execute(
+        &self,
+        input: serde_json::Value,
+        _ctx: &coco_tool::ToolUseContext,
+    ) -> Result<coco_types::ToolResult<serde_json::Value>, coco_tool::ToolError> {
+        Ok(coco_types::ToolResult::data(input))
+    }
+}
+
+struct HookEchoTool;
+
+#[async_trait::async_trait]
+impl coco_tool::Tool for HookEchoTool {
+    fn id(&self) -> coco_types::ToolId {
+        coco_types::ToolId::Custom("hook_echo".into())
+    }
+
+    fn name(&self) -> &str {
+        "hook_echo"
+    }
+
+    fn input_schema(&self) -> coco_types::ToolInputSchema {
+        coco_types::ToolInputSchema::default()
+    }
+
+    fn description(
+        &self,
+        _input: &serde_json::Value,
+        _options: &coco_tool::DescriptionOptions,
+    ) -> String {
+        "hook echo test tool".into()
+    }
+
+    async fn execute(
+        &self,
+        input: serde_json::Value,
+        _ctx: &coco_tool::ToolUseContext,
+    ) -> Result<coco_types::ToolResult<serde_json::Value>, coco_tool::ToolError> {
+        Ok(coco_types::ToolResult::data(input))
+    }
+}
+
+struct HookMcpTool;
+
+#[async_trait::async_trait]
+impl coco_tool::Tool for HookMcpTool {
+    fn id(&self) -> coco_types::ToolId {
+        coco_types::ToolId::Mcp {
+            server: "test-server".into(),
+            tool: "hook_mcp".into(),
+        }
+    }
+
+    fn name(&self) -> &str {
+        "hook_mcp"
+    }
+
+    fn input_schema(&self) -> coco_types::ToolInputSchema {
+        coco_types::ToolInputSchema::default()
+    }
+
+    fn description(
+        &self,
+        _input: &serde_json::Value,
+        _options: &coco_tool::DescriptionOptions,
+    ) -> String {
+        "hook mcp test tool".into()
+    }
+
+    fn mcp_info(&self) -> Option<&coco_tool::McpToolInfo> {
+        static INFO: std::sync::LazyLock<coco_tool::McpToolInfo> =
+            std::sync::LazyLock::new(|| coco_tool::McpToolInfo {
+                server_name: "test-server".into(),
+                tool_name: "hook_mcp".into(),
+            });
+        Some(&INFO)
+    }
+
+    async fn execute(
+        &self,
+        _input: serde_json::Value,
+        _ctx: &coco_tool::ToolUseContext,
+    ) -> Result<coco_types::ToolResult<serde_json::Value>, coco_tool::ToolError> {
+        Ok(coco_types::ToolResult::data(serde_json::json!({
+            "value": "original-mcp-output"
+        })))
+    }
+}
+
+struct HookOrderingTool;
+
+#[async_trait::async_trait]
+impl coco_tool::Tool for HookOrderingTool {
+    fn id(&self) -> coco_types::ToolId {
+        coco_types::ToolId::Custom("hook_ordering".into())
+    }
+
+    fn name(&self) -> &str {
+        "hook_ordering"
+    }
+
+    fn input_schema(&self) -> coco_types::ToolInputSchema {
+        coco_types::ToolInputSchema::default()
+    }
+
+    fn description(
+        &self,
+        _input: &serde_json::Value,
+        _options: &coco_tool::DescriptionOptions,
+    ) -> String {
+        "hook ordering test tool".into()
+    }
+
+    async fn execute(
+        &self,
+        _input: serde_json::Value,
+        _ctx: &coco_tool::ToolUseContext,
+    ) -> Result<coco_types::ToolResult<serde_json::Value>, coco_tool::ToolError> {
+        Ok(coco_types::ToolResult {
+            data: serde_json::json!({"value": "ordering"}),
+            new_messages: vec![coco_messages::create_user_message("tool new message")],
+            app_state_patch: None,
+        })
+    }
+}
+
+struct HookOrderingMcpTool;
+
+#[async_trait::async_trait]
+impl coco_tool::Tool for HookOrderingMcpTool {
+    fn id(&self) -> coco_types::ToolId {
+        coco_types::ToolId::Mcp {
+            server: "test-server".into(),
+            tool: "hook_ordering_mcp".into(),
+        }
+    }
+
+    fn name(&self) -> &str {
+        "hook_ordering_mcp"
+    }
+
+    fn input_schema(&self) -> coco_types::ToolInputSchema {
+        coco_types::ToolInputSchema::default()
+    }
+
+    fn description(
+        &self,
+        _input: &serde_json::Value,
+        _options: &coco_tool::DescriptionOptions,
+    ) -> String {
+        "hook ordering mcp test tool".into()
+    }
+
+    fn mcp_info(&self) -> Option<&coco_tool::McpToolInfo> {
+        static INFO: std::sync::LazyLock<coco_tool::McpToolInfo> =
+            std::sync::LazyLock::new(|| coco_tool::McpToolInfo {
+                server_name: "test-server".into(),
+                tool_name: "hook_ordering_mcp".into(),
+            });
+        Some(&INFO)
+    }
+
+    async fn execute(
+        &self,
+        _input: serde_json::Value,
+        _ctx: &coco_tool::ToolUseContext,
+    ) -> Result<coco_types::ToolResult<serde_json::Value>, coco_tool::ToolError> {
+        Ok(coco_types::ToolResult {
+            data: serde_json::json!({"value": "ordering-mcp"}),
+            new_messages: vec![coco_messages::create_user_message("tool new message")],
+            app_state_patch: None,
+        })
+    }
+}
+
+struct HookFailTool;
+
+#[async_trait::async_trait]
+impl coco_tool::Tool for HookFailTool {
+    fn id(&self) -> coco_types::ToolId {
+        coco_types::ToolId::Custom("hook_fail".into())
+    }
+
+    fn name(&self) -> &str {
+        "hook_fail"
+    }
+
+    fn input_schema(&self) -> coco_types::ToolInputSchema {
+        coco_types::ToolInputSchema::default()
+    }
+
+    fn description(
+        &self,
+        _input: &serde_json::Value,
+        _options: &coco_tool::DescriptionOptions,
+    ) -> String {
+        "hook failure test tool".into()
+    }
+
+    async fn execute(
+        &self,
+        _input: serde_json::Value,
+        _ctx: &coco_tool::ToolUseContext,
+    ) -> Result<coco_types::ToolResult<serde_json::Value>, coco_tool::ToolError> {
+        Err(coco_tool::ToolError::ExecutionFailed {
+            message: "kaboom".into(),
+            source: None,
+        })
+    }
+}
+
+#[tokio::test]
+async fn permission_allow_updated_input_reaches_execution() {
+    let model = Arc::new(OneToolThenTextMock {
+        call_count: AtomicI32::new(0),
+        tool_call_id: "rewrite_1".into(),
+        tool_name: "permission_rewrite".into(),
+        input: serde_json::json!({"value": "original"}),
+        final_text: "done".into(),
+    });
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(PermissionRewriteTool));
+    let tools = Arc::new(registry);
+    let config = QueryEngineConfig::default();
+    let (result, events) = collect_events_from_run(model, tools, config, None, "rewrite it").await;
+
+    assert_eq!(result.response_text, "done");
+    let output = tool_result_text(&result.final_messages, "rewrite_1")
+        .expect("rewritten tool should produce a successful tool result");
+    assert!(output.contains("rewritten"), "output: {output}");
+    assert!(!output.contains("original"), "output: {output}");
+
+    let (queued, started, completed, completed_is_error) =
+        tool_lifecycle_counts(&events, "rewrite_1");
+    assert_eq!(queued, 1);
+    assert_eq!(started, 1);
+    assert_eq!(completed, 1);
+    assert_eq!(completed_is_error, Some(false));
+}
+
+#[tokio::test]
+async fn pre_tool_use_updated_input_reaches_execution() {
+    let model = Arc::new(OneToolThenTextMock {
+        call_count: AtomicI32::new(0),
+        tool_call_id: "hook_rewrite_1".into(),
+        tool_name: "hook_echo".into(),
+        input: serde_json::json!({"value": "original"}),
+        final_text: "done".into(),
+    });
+    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(HookEchoTool));
+    let tools = Arc::new(registry);
+    let cancel = CancellationToken::new();
+
+    let mut hooks = coco_hooks::HookRegistry::new();
+    hooks.register(coco_hooks::HookDefinition {
+        event: coco_types::HookEventType::PreToolUse,
+        matcher: Some("hook_echo".into()),
+        handler: coco_hooks::HookHandler::Command {
+            command: "printf '%s\\n' '{\"updatedInput\":{\"value\":\"hooked\"}}'".into(),
+            timeout_ms: Some(1000),
+            shell: None,
+        },
+        priority: 0,
+        scope: coco_types::HookScope::default(),
+        if_condition: None,
+        once: false,
+        is_async: false,
+        async_rewake: false,
+        shell: None,
+        status_message: None,
+    });
+
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        client,
+        tools,
+        cancel,
+        Some(Arc::new(hooks)),
+    );
+    let result = engine.run("rewrite through hook").await.expect("ok");
+
+    let output = tool_result_text(&result.final_messages, "hook_rewrite_1")
+        .expect("hook-rewritten tool should produce a successful tool result");
+    assert!(output.contains("hooked"), "output: {output}");
+    assert!(!output.contains("original"), "output: {output}");
+}
+
+#[tokio::test]
+async fn post_tool_use_receives_effective_input() {
+    let marker_dir = tempfile::tempdir().unwrap();
+    let marker = marker_dir.path().join("post_hook_saw_effective_input");
+    let marker_path = marker.to_str().unwrap().to_string();
+
+    let model = Arc::new(OneToolThenTextMock {
+        call_count: AtomicI32::new(0),
+        tool_call_id: "post_hook_input_1".into(),
+        tool_name: "hook_echo".into(),
+        input: serde_json::json!({"value": "original"}),
+        final_text: "done".into(),
+    });
+    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(HookEchoTool));
+    let tools = Arc::new(registry);
+    let cancel = CancellationToken::new();
+
+    let mut hooks = coco_hooks::HookRegistry::new();
+    hooks.register(coco_hooks::HookDefinition {
+        event: coco_types::HookEventType::PreToolUse,
+        matcher: Some("hook_echo".into()),
+        handler: coco_hooks::HookHandler::Command {
+            command: "printf '%s\\n' '{\"updatedInput\":{\"value\":\"hooked\"}}'".into(),
+            timeout_ms: Some(1000),
+            shell: None,
+        },
+        priority: 0,
+        scope: coco_types::HookScope::default(),
+        if_condition: None,
+        once: false,
+        is_async: false,
+        async_rewake: false,
+        shell: None,
+        status_message: None,
+    });
+    hooks.register(coco_hooks::HookDefinition {
+        event: coco_types::HookEventType::PostToolUse,
+        matcher: Some("hook_echo".into()),
+        handler: coco_hooks::HookHandler::Command {
+            command: format!("if grep -q hooked; then touch '{marker_path}'; fi"),
+            timeout_ms: Some(1000),
+            shell: None,
+        },
+        priority: 0,
+        scope: coco_types::HookScope::default(),
+        if_condition: None,
+        once: false,
+        is_async: false,
+        async_rewake: false,
+        shell: None,
+        status_message: None,
+    });
+
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        client,
+        tools,
+        cancel,
+        Some(Arc::new(hooks)),
+    );
+    let result = engine.run("rewrite and post-hook").await.expect("ok");
+
+    assert_eq!(result.response_text, "done");
+    assert!(
+        marker.exists(),
+        "PostToolUse hook should receive the rewritten effective input"
+    );
+}
+
+#[tokio::test]
+async fn post_tool_use_updated_mcp_output_rewrites_mcp_result() {
+    let model = Arc::new(OneToolThenTextMock {
+        call_count: AtomicI32::new(0),
+        tool_call_id: "post_hook_mcp_rewrite_1".into(),
+        tool_name: "hook_mcp".into(),
+        input: serde_json::json!({}),
+        final_text: "done".into(),
+    });
+    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(HookMcpTool));
+    let tools = Arc::new(registry);
+    let cancel = CancellationToken::new();
+
+    let mut hooks = coco_hooks::HookRegistry::new();
+    hooks.register(coco_hooks::HookDefinition {
+        event: coco_types::HookEventType::PostToolUse,
+        matcher: Some("hook_mcp".into()),
+        handler: coco_hooks::HookHandler::Command {
+            command:
+                "printf '%s\\n' '{\"updatedMCPToolOutput\":{\"value\":\"rewritten-mcp-output\"}}'"
+                    .into(),
+            timeout_ms: Some(1000),
+            shell: None,
+        },
+        priority: 0,
+        scope: coco_types::HookScope::default(),
+        if_condition: None,
+        once: false,
+        is_async: false,
+        async_rewake: false,
+        shell: None,
+        status_message: None,
+    });
+
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        client,
+        tools,
+        cancel,
+        Some(Arc::new(hooks)),
+    );
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<CoreEvent>(256);
+    let collector = tokio::spawn(async move {
+        let mut events = Vec::new();
+        while let Some(ev) = event_rx.recv().await {
+            events.push(ev);
+        }
+        events
+    });
+    let result = engine
+        .run_with_events("rewrite mcp output", event_tx)
+        .await
+        .expect("ok");
+    let events = collector.await.expect("collector should join");
+
+    let output = tool_result_text(&result.final_messages, "post_hook_mcp_rewrite_1")
+        .expect("mcp tool should produce a successful tool result");
+    assert!(output.contains("rewritten-mcp-output"), "output: {output}");
+    assert!(!output.contains("original-mcp-output"), "output: {output}");
+    let event_output = completed_event_output(&events, "post_hook_mcp_rewrite_1")
+        .expect("tool completed event should be emitted");
+    assert!(
+        event_output.contains("rewritten-mcp-output"),
+        "event output: {event_output}"
+    );
+    assert!(
+        !event_output.contains("original-mcp-output"),
+        "event output: {event_output}"
+    );
+}
+
+#[tokio::test]
+async fn post_tool_use_updated_mcp_output_is_ignored_for_non_mcp_tool() {
+    let model = Arc::new(OneToolThenTextMock {
+        call_count: AtomicI32::new(0),
+        tool_call_id: "post_hook_non_mcp_rewrite_1".into(),
+        tool_name: "hook_echo".into(),
+        input: serde_json::json!({"value": "original"}),
+        final_text: "done".into(),
+    });
+    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(HookEchoTool));
+    let tools = Arc::new(registry);
+    let cancel = CancellationToken::new();
+
+    let mut hooks = coco_hooks::HookRegistry::new();
+    hooks.register(coco_hooks::HookDefinition {
+        event: coco_types::HookEventType::PostToolUse,
+        matcher: Some("hook_echo".into()),
+        handler: coco_hooks::HookHandler::Command {
+            command:
+                "printf '%s\\n' '{\"updatedMCPToolOutput\":{\"value\":\"rewritten-non-mcp\"}}'"
+                    .into(),
+            timeout_ms: Some(1000),
+            shell: None,
+        },
+        priority: 0,
+        scope: coco_types::HookScope::default(),
+        if_condition: None,
+        once: false,
+        is_async: false,
+        async_rewake: false,
+        shell: None,
+        status_message: None,
+    });
+
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        client,
+        tools,
+        cancel,
+        Some(Arc::new(hooks)),
+    );
+    let result = engine
+        .run("do not rewrite non-mcp output")
+        .await
+        .expect("ok");
+
+    let output = tool_result_text(&result.final_messages, "post_hook_non_mcp_rewrite_1")
+        .expect("non-mcp tool should produce a successful tool result");
+    assert!(output.contains("original"), "output: {output}");
+    assert!(!output.contains("rewritten-non-mcp"), "output: {output}");
+}
+
+#[tokio::test]
+async fn post_tool_use_additional_context_is_injected() {
+    let model = Arc::new(OneToolThenTextMock {
+        call_count: AtomicI32::new(0),
+        tool_call_id: "post_hook_context_1".into(),
+        tool_name: "hook_echo".into(),
+        input: serde_json::json!({"value": "original"}),
+        final_text: "done".into(),
+    });
+    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(HookEchoTool));
+    let tools = Arc::new(registry);
+    let cancel = CancellationToken::new();
+
+    let mut hooks = coco_hooks::HookRegistry::new();
+    hooks.register(coco_hooks::HookDefinition {
+        event: coco_types::HookEventType::PostToolUse,
+        matcher: Some("hook_echo".into()),
+        handler: coco_hooks::HookHandler::Command {
+            command: "printf '%s\\n' '{\"additionalContext\":\"post hook context\"}'".into(),
+            timeout_ms: Some(1000),
+            shell: None,
+        },
+        priority: 0,
+        scope: coco_types::HookScope::default(),
+        if_condition: None,
+        once: false,
+        is_async: false,
+        async_rewake: false,
+        shell: None,
+        status_message: None,
+    });
+
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        client,
+        tools,
+        cancel,
+        Some(Arc::new(hooks)),
+    );
+    let result = engine
+        .run("post-hook additional context")
+        .await
+        .expect("ok");
+
+    let attachment = attachment_text_by_kind(
+        &result.final_messages,
+        coco_types::AttachmentKind::HookAdditionalContext,
+    )
+    .expect("post-tool-use hook should inject additional context");
+    assert!(attachment.contains("hook_echo hook additional context: post hook context"));
+}
+
+#[tokio::test]
+async fn post_tool_use_prevent_continuation_stops_next_turn() {
+    let model = Arc::new(OneToolThenTextMock {
+        call_count: AtomicI32::new(0),
+        tool_call_id: "post_hook_stop_1".into(),
+        tool_name: "hook_echo".into(),
+        input: serde_json::json!({"value": "original"}),
+        final_text: "should not happen".into(),
+    });
+    let model_for_client: Arc<dyn LanguageModelV4> = model.clone();
+    let client = Arc::new(ApiClient::new(model_for_client, RetryConfig::default()));
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(HookEchoTool));
+    let tools = Arc::new(registry);
+    let cancel = CancellationToken::new();
+
+    let mut hooks = coco_hooks::HookRegistry::new();
+    hooks.register(coco_hooks::HookDefinition {
+        event: coco_types::HookEventType::PostToolUse,
+        matcher: Some("hook_echo".into()),
+        handler: coco_hooks::HookHandler::Command {
+            command: "printf '%s\\n' '{\"continue\":false,\"stopReason\":\"stop after tool\"}'"
+                .into(),
+            timeout_ms: Some(1000),
+            shell: None,
+        },
+        priority: 0,
+        scope: coco_types::HookScope::default(),
+        if_condition: None,
+        once: false,
+        is_async: false,
+        async_rewake: false,
+        shell: None,
+        status_message: None,
+    });
+
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        client,
+        tools,
+        cancel,
+        Some(Arc::new(hooks)),
+    );
+    let result = engine.run("post-hook stop continuation").await.expect("ok");
+
+    assert_eq!(model.call_count.load(Ordering::SeqCst), 1);
+    assert_eq!(result.stop_reason.as_deref(), Some("stop after tool"));
+    assert_eq!(result.last_continue_reason, None);
+    let attachment = attachment_text_by_kind(
+        &result.final_messages,
+        coco_types::AttachmentKind::HookStoppedContinuation,
+    )
+    .expect("post-tool-use hook should inject stopped-continuation attachment");
+    assert!(attachment.contains("hook_echo hook stopped continuation: stop after tool"));
+}
+
+#[tokio::test]
+async fn non_mcp_success_path_orders_post_hook_messages_before_new_messages() {
+    let model = Arc::new(OneToolThenTextMock {
+        call_count: AtomicI32::new(0),
+        tool_call_id: "ordering_non_mcp_1".into(),
+        tool_name: "hook_ordering".into(),
+        input: serde_json::json!({}),
+        final_text: "should not happen".into(),
+    });
+    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(HookOrderingTool));
+    let tools = Arc::new(registry);
+    let cancel = CancellationToken::new();
+
+    let mut hooks = coco_hooks::HookRegistry::new();
+    hooks.register(coco_hooks::HookDefinition {
+        event: coco_types::HookEventType::PostToolUse,
+        matcher: Some("hook_ordering".into()),
+        handler: coco_hooks::HookHandler::Command {
+            command: "printf '%s\\n' '{\"additionalContext\":\"hook context\",\"continue\":false,\"stopReason\":\"stop ordering\"}'".into(),
+            timeout_ms: Some(1000),
+            shell: None,
+        },
+        priority: 0,
+        scope: coco_types::HookScope::default(),
+        if_condition: None,
+        once: false,
+        is_async: false,
+        async_rewake: false,
+        shell: None,
+        status_message: None,
+    });
+
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        client,
+        tools,
+        cancel,
+        Some(Arc::new(hooks)),
+    );
+    let result = engine.run("check non-mcp ordering").await.expect("ok");
+
+    let tool_result_idx =
+        tool_result_index(&result.final_messages, "ordering_non_mcp_1").expect("tool result");
+    let additional_idx = attachment_index_by_kind_and_text(
+        &result.final_messages,
+        coco_types::AttachmentKind::HookAdditionalContext,
+        "hook context",
+    )
+    .expect("hook additional context");
+    let new_message_idx =
+        user_message_index_containing(&result.final_messages, "tool new message").expect("new msg");
+    let prevent_idx = attachment_index_by_kind_and_text(
+        &result.final_messages,
+        coco_types::AttachmentKind::HookStoppedContinuation,
+        "stop ordering",
+    )
+    .expect("prevent attachment");
+
+    assert!(tool_result_idx < additional_idx);
+    assert!(additional_idx < new_message_idx);
+    assert!(new_message_idx < prevent_idx);
+}
+
+#[tokio::test]
+async fn mcp_success_path_defers_post_hook_messages_until_after_prevent() {
+    let model = Arc::new(OneToolThenTextMock {
+        call_count: AtomicI32::new(0),
+        tool_call_id: "ordering_mcp_1".into(),
+        tool_name: "hook_ordering_mcp".into(),
+        input: serde_json::json!({}),
+        final_text: "should not happen".into(),
+    });
+    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(HookOrderingMcpTool));
+    let tools = Arc::new(registry);
+    let cancel = CancellationToken::new();
+
+    let mut hooks = coco_hooks::HookRegistry::new();
+    hooks.register(coco_hooks::HookDefinition {
+        event: coco_types::HookEventType::PostToolUse,
+        matcher: Some("hook_ordering_mcp".into()),
+        handler: coco_hooks::HookHandler::Command {
+            command: "printf '%s\\n' '{\"additionalContext\":\"hook context\",\"continue\":false,\"stopReason\":\"stop ordering\"}'".into(),
+            timeout_ms: Some(1000),
+            shell: None,
+        },
+        priority: 0,
+        scope: coco_types::HookScope::default(),
+        if_condition: None,
+        once: false,
+        is_async: false,
+        async_rewake: false,
+        shell: None,
+        status_message: None,
+    });
+
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        client,
+        tools,
+        cancel,
+        Some(Arc::new(hooks)),
+    );
+    let result = engine.run("check mcp ordering").await.expect("ok");
+
+    let tool_result_idx =
+        tool_result_index(&result.final_messages, "ordering_mcp_1").expect("tool result");
+    let new_message_idx =
+        user_message_index_containing(&result.final_messages, "tool new message").expect("new msg");
+    let prevent_idx = attachment_index_by_kind_and_text(
+        &result.final_messages,
+        coco_types::AttachmentKind::HookStoppedContinuation,
+        "stop ordering",
+    )
+    .expect("prevent attachment");
+    let additional_idx = attachment_index_by_kind_and_text(
+        &result.final_messages,
+        coco_types::AttachmentKind::HookAdditionalContext,
+        "hook context",
+    )
+    .expect("hook additional context");
+
+    assert!(tool_result_idx < new_message_idx);
+    assert!(new_message_idx < prevent_idx);
+    assert!(prevent_idx < additional_idx);
+}
+
+#[tokio::test]
+async fn failure_path_orders_error_result_before_post_tool_use_failure_context() {
+    let model = Arc::new(OneToolThenTextMock {
+        call_count: AtomicI32::new(0),
+        tool_call_id: "failure_ordering_1".into(),
+        tool_name: "hook_fail".into(),
+        input: serde_json::json!({}),
+        final_text: "done".into(),
+    });
+    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(HookFailTool));
+    let tools = Arc::new(registry);
+    let cancel = CancellationToken::new();
+
+    let mut hooks = coco_hooks::HookRegistry::new();
+    hooks.register(coco_hooks::HookDefinition {
+        event: coco_types::HookEventType::PostToolUseFailure,
+        matcher: Some("hook_fail".into()),
+        handler: coco_hooks::HookHandler::Command {
+            command: "printf '%s\\n' '{\"additionalContext\":\"failure context\",\"continue\":false,\"stopReason\":\"ignored stop\"}'".into(),
+            timeout_ms: Some(1000),
+            shell: None,
+        },
+        priority: 0,
+        scope: coco_types::HookScope::default(),
+        if_condition: None,
+        once: false,
+        is_async: false,
+        async_rewake: false,
+        shell: None,
+        status_message: None,
+    });
+
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        client,
+        tools,
+        cancel,
+        Some(Arc::new(hooks)),
+    );
+    let result = engine.run("check failure ordering").await.expect("ok");
+
+    let error_output = tool_result_error_text(&result.final_messages, "failure_ordering_1")
+        .expect("failure tool should produce an error tool result");
+    assert!(error_output.contains("kaboom"), "output: {error_output}");
+    let tool_result_idx =
+        tool_result_index(&result.final_messages, "failure_ordering_1").expect("tool result");
+    let additional_idx = attachment_index_by_kind_and_text(
+        &result.final_messages,
+        coco_types::AttachmentKind::HookAdditionalContext,
+        "failure context",
+    )
+    .expect("failure additional context");
+    assert!(tool_result_idx < additional_idx);
+    assert!(
+        attachment_index_by_kind_and_text(
+            &result.final_messages,
+            coco_types::AttachmentKind::HookStoppedContinuation,
+            "ignored stop",
+        )
+        .is_none(),
+        "failure path must not emit prevent_continuation attachments"
+    );
+}
+
+#[tokio::test]
+async fn failure_path_completed_event_matches_error_tool_result_text() {
+    let model = Arc::new(OneToolThenTextMock {
+        call_count: AtomicI32::new(0),
+        tool_call_id: "failure_event_1".into(),
+        tool_name: "hook_fail".into(),
+        input: serde_json::json!({}),
+        final_text: "done".into(),
+    });
+    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(HookFailTool));
+    let tools = Arc::new(registry);
+    let cancel = CancellationToken::new();
+
+    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None);
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<CoreEvent>(256);
+    let collector = tokio::spawn(async move {
+        let mut events = Vec::new();
+        while let Some(ev) = event_rx.recv().await {
+            events.push(ev);
+        }
+        events
+    });
+    let result = engine
+        .run_with_events("check failure event output", event_tx)
+        .await
+        .expect("ok");
+    let events = collector.await.expect("collector should join");
+
+    let tool_result_output = tool_result_error_text(&result.final_messages, "failure_event_1")
+        .expect("failure tool should produce an error tool result");
+    let event_output = completed_event_output(&events, "failure_event_1")
+        .expect("tool completed event should be emitted");
+    assert_eq!(event_output, tool_result_output);
+}
+
+#[tokio::test]
+async fn pre_tool_use_permission_deny_records_denial() {
+    let model = Arc::new(OneToolThenTextMock {
+        call_count: AtomicI32::new(0),
+        tool_call_id: "hook_deny_1".into(),
+        tool_name: "hook_echo".into(),
+        input: serde_json::json!({"value": "original"}),
+        final_text: "done".into(),
+    });
+    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(HookEchoTool));
+    let tools = Arc::new(registry);
+    let cancel = CancellationToken::new();
+
+    let mut hooks = coco_hooks::HookRegistry::new();
+    hooks.register(coco_hooks::HookDefinition {
+        event: coco_types::HookEventType::PreToolUse,
+        matcher: Some("hook_echo".into()),
+        handler: coco_hooks::HookHandler::Command {
+            command:
+                "printf '%s\\n' '{\"permissionDecision\":\"deny\",\"reason\":\"hook says no\"}'"
+                    .into(),
+            timeout_ms: Some(1000),
+            shell: None,
+        },
+        priority: 0,
+        scope: coco_types::HookScope::default(),
+        if_condition: None,
+        once: false,
+        is_async: false,
+        async_rewake: false,
+        shell: None,
+        status_message: None,
+    });
+
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        client,
+        tools,
+        cancel,
+        Some(Arc::new(hooks)),
+    );
+    let result = engine.run("deny through hook").await.expect("ok");
+
+    assert_eq!(result.permission_denials.len(), 1);
+    assert_eq!(result.permission_denials[0].tool_name, "hook_echo");
+    assert_eq!(
+        result.permission_denials[0].tool_input,
+        serde_json::json!({"value": "original"})
+    );
+    let output = tool_result_error_text(&result.final_messages, "hook_deny_1")
+        .expect("hook permission denial should produce an error tool result");
+    assert!(output.contains("hook says no"), "output: {output}");
 }
 
 #[tokio::test]
@@ -1369,6 +2609,64 @@ async fn ask_branch_consults_bridge_and_records_denial_on_rejected() {
 }
 
 #[tokio::test]
+async fn pre_tool_use_block_runs_before_permission_ask() {
+    let model = Arc::new(AskingToolThenTextMock {
+        call_count: AtomicI32::new(0),
+    });
+    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(AskingMockTool));
+    let tools = Arc::new(registry);
+    let cancel = CancellationToken::new();
+
+    let bridge = Arc::new(RecordingBridge::new(ToolPermissionDecision::Approved));
+    let mut hooks = coco_hooks::HookRegistry::new();
+    hooks.register(coco_hooks::HookDefinition {
+        event: coco_types::HookEventType::PreToolUse,
+        matcher: Some("asking_mock".into()),
+        handler: coco_hooks::HookHandler::Command {
+            command: "echo blocked by hook; exit 2".into(),
+            timeout_ms: Some(1000),
+            shell: None,
+        },
+        priority: 0,
+        scope: coco_types::HookScope::default(),
+        if_condition: None,
+        once: false,
+        is_async: false,
+        async_rewake: false,
+        shell: None,
+        status_message: None,
+    });
+
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        client,
+        tools,
+        cancel,
+        Some(Arc::new(hooks)),
+    )
+    .with_permission_bridge(bridge.clone() as Arc<dyn ToolPermissionBridge>);
+
+    let result = engine
+        .run("please run asking_mock")
+        .await
+        .expect("should succeed");
+
+    assert_eq!(
+        bridge.calls().len(),
+        0,
+        "PreToolUse block should short-circuit before permission bridge"
+    );
+    assert!(result.permission_denials.is_empty());
+    let output = tool_result_error_text(&result.final_messages, "ask_call_1")
+        .expect("hook block should produce an error tool result");
+    assert!(output.contains("blocked by hook"), "output: {output}");
+    assert_eq!(result.response_text, "done");
+}
+
+#[tokio::test]
 async fn ask_branch_without_bridge_falls_back_to_auto_allow() {
     // Sanity: existing (pre-2.C.9) behavior still works when no bridge
     // is installed. The tool auto-executes despite returning Ask.
@@ -1660,6 +2958,292 @@ async fn test_hook_forwarder_drains_on_sender_drop() {
         forwarded[2],
         CoreEvent::Protocol(ServerNotification::HookResponse(_))
     ));
+}
+
+// ── Progress-event forwarder (protocol + TUI fan-out + throttle) ──
+
+#[test]
+fn test_classify_progress_payload_recognizes_bash_and_powershell() {
+    let bash = serde_json::json!({
+        "type": "bash_progress",
+        "status": "running",
+        "elapsedTimeSeconds": 4.5,
+        "taskId": "t-1",
+    });
+    let (tool_name, elapsed, task_id) =
+        super::classify_progress_payload(&bash).expect("bash must classify");
+    assert_eq!(tool_name, "Bash");
+    assert_eq!(elapsed, 4.5);
+    assert_eq!(task_id.as_deref(), Some("t-1"));
+
+    let ps = serde_json::json!({"type": "powershell_progress"});
+    let (tool_name, elapsed, task_id) =
+        super::classify_progress_payload(&ps).expect("powershell must classify");
+    assert_eq!(tool_name, "PowerShell");
+    assert_eq!(elapsed, 0.0);
+    assert_eq!(task_id, None);
+}
+
+#[test]
+fn test_classify_progress_payload_rejects_unrelated_types() {
+    // agent_progress and skill_progress follow different propagation
+    // in TS — they must NOT produce a protocol ToolProgress here.
+    for t in ["agent_progress", "skill_progress", "other"] {
+        let v = serde_json::json!({"type": t});
+        assert!(
+            super::classify_progress_payload(&v).is_none(),
+            "type {t} must not classify"
+        );
+    }
+    // Missing `type` field → None.
+    assert!(super::classify_progress_payload(&serde_json::json!({})).is_none());
+    // Non-object payload → None.
+    assert!(super::classify_progress_payload(&serde_json::json!("str")).is_none());
+}
+
+#[test]
+fn test_progress_throttle_blocks_second_emission_within_window() {
+    // 1-second window is enough for the test to never have to wait:
+    // the two `now` values we pass are synthetic `Instant`s.
+    let mut th = super::ProgressThrottle::with_params(std::time::Duration::from_secs(1), 100);
+    let t0 = std::time::Instant::now();
+    assert!(th.allow("parent-A", t0), "first call must pass");
+    let t1 = t0 + std::time::Duration::from_millis(500);
+    assert!(
+        !th.allow("parent-A", t1),
+        "within-window call must be blocked"
+    );
+    let t2 = t0 + std::time::Duration::from_millis(1200);
+    assert!(th.allow("parent-A", t2), "post-window call must pass");
+}
+
+#[test]
+fn test_progress_throttle_lru_evicts_oldest_key() {
+    // Tiny max (2 entries) so the LRU path is exercised in one call.
+    let mut th = super::ProgressThrottle::with_params(std::time::Duration::from_secs(60), 2);
+    let t = std::time::Instant::now();
+    assert!(th.allow("A", t));
+    assert!(th.allow("B", t + std::time::Duration::from_secs(1)));
+    // Adding "C" must evict "A" (oldest).
+    assert!(th.allow("C", t + std::time::Duration::from_secs(2)));
+    // "A" re-appears: since it was evicted, the next emission for it
+    // should pass (within-window blocking would have kept it).
+    assert!(
+        th.allow("A", t + std::time::Duration::from_secs(3)),
+        "A was evicted so it should re-pass"
+    );
+}
+
+#[tokio::test]
+async fn test_drain_one_progress_emits_both_tui_and_protocol_when_qualifying() {
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<CoreEvent>(8);
+    let mut throttle = super::ProgressThrottle::new();
+    let progress = coco_tool::ToolProgress {
+        tool_use_id: "tu-1".into(),
+        parent_tool_use_id: Some("parent-1".into()),
+        data: serde_json::json!({
+            "type": "bash_progress",
+            "status": "running",
+            "elapsedTimeSeconds": 2.0,
+        }),
+    };
+    super::drain_one_progress(&Some(tx), progress, &mut throttle).await;
+
+    // Event 1: TUI-only ToolProgress (raw data passthrough).
+    let tui_evt = rx.recv().await.expect("first event");
+    match tui_evt {
+        CoreEvent::Tui(coco_types::TuiOnlyEvent::ToolProgress { tool_use_id, .. }) => {
+            assert_eq!(tool_use_id, "tu-1");
+        }
+        other => panic!("expected Tui ToolProgress, got {other:?}"),
+    }
+    // Event 2: protocol ToolProgress.
+    let proto_evt = rx.recv().await.expect("second event");
+    match proto_evt {
+        CoreEvent::Protocol(coco_types::ServerNotification::ToolProgress(p)) => {
+            assert_eq!(p.tool_use_id, "tu-1");
+            assert_eq!(p.tool_name, "Bash");
+            assert_eq!(p.parent_tool_use_id.as_deref(), Some("parent-1"));
+            assert_eq!(p.elapsed_time_seconds, 2.0);
+        }
+        other => panic!("expected Protocol ToolProgress, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_drain_one_progress_suppresses_protocol_for_non_bash_payload() {
+    // `agent_progress` is a valid tool progress shape but must not
+    // surface a protocol `ToolProgress` wire event — only TUI.
+    // Keep an owning `Some(tx)` across the call so the channel
+    // doesn't close when the drain returns — otherwise `rx.recv()`
+    // yields `Ok(None)` instead of pending.
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<CoreEvent>(8);
+    let sender = Some(tx);
+    let mut throttle = super::ProgressThrottle::new();
+    let progress = coco_tool::ToolProgress {
+        tool_use_id: "tu-agent".into(),
+        parent_tool_use_id: None,
+        data: serde_json::json!({"type": "agent_progress"}),
+    };
+    super::drain_one_progress(&sender, progress, &mut throttle).await;
+    // Only the TUI event is delivered; the next recv blocks.
+    let evt = rx.recv().await.expect("TUI event");
+    assert!(matches!(
+        evt,
+        CoreEvent::Tui(coco_types::TuiOnlyEvent::ToolProgress { .. })
+    ));
+    let res = tokio::time::timeout(std::time::Duration::from_millis(50), rx.recv()).await;
+    assert!(
+        res.is_err(),
+        "no protocol event must be delivered, got: {res:?}"
+    );
+    drop(sender);
+}
+
+#[tokio::test]
+async fn test_drain_one_progress_throttles_bursts() {
+    // Two back-to-back bash progress events share a parent id — the
+    // second protocol emission must be throttled.
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<CoreEvent>(16);
+    let mut throttle = super::ProgressThrottle::new();
+    let make = |tu: &str| coco_tool::ToolProgress {
+        tool_use_id: tu.into(),
+        parent_tool_use_id: Some("parent-X".into()),
+        data: serde_json::json!({"type": "bash_progress"}),
+    };
+    super::drain_one_progress(&Some(tx.clone()), make("tu-1"), &mut throttle).await;
+    super::drain_one_progress(&Some(tx), make("tu-2"), &mut throttle).await;
+
+    // Four events max (two calls × {TUI, Protocol}) — but the second
+    // protocol emission is throttled, so exactly 3 events arrive.
+    let mut tui = 0;
+    let mut proto = 0;
+    while let Ok(Some(evt)) =
+        tokio::time::timeout(std::time::Duration::from_millis(20), rx.recv()).await
+    {
+        match evt {
+            CoreEvent::Tui(coco_types::TuiOnlyEvent::ToolProgress { .. }) => tui += 1,
+            CoreEvent::Protocol(coco_types::ServerNotification::ToolProgress(_)) => proto += 1,
+            other => panic!("unexpected event {other:?}"),
+        }
+    }
+    assert_eq!(tui, 2, "TUI must see both events");
+    assert_eq!(proto, 1, "Protocol emission must be throttled to one");
+}
+
+// ── Fallback classifier (I13 trigger) ──
+
+#[test]
+fn test_is_capacity_error_message_classifies_overloaded_variants() {
+    // Covers: Rust `InferenceError::Overloaded` Display, Rust rate-limit
+    // Display, raw Anthropic 529 text, raw 503, status prefixes, and
+    // case insensitivity.
+    assert!(super::is_capacity_error_message("provider overloaded"));
+    assert!(super::is_capacity_error_message(
+        "API Error: overloaded_error on request"
+    ));
+    assert!(super::is_capacity_error_message(
+        "rate limited: retry later"
+    ));
+    assert!(super::is_capacity_error_message("status: 529 from gateway"));
+    assert!(super::is_capacity_error_message("HTTP (503) upstream"));
+    assert!(super::is_capacity_error_message(
+        "Provider Overloaded: high demand"
+    ));
+}
+
+#[test]
+fn test_is_capacity_error_message_rejects_unrelated_errors() {
+    // Non-capacity errors must not accidentally trigger the fallback.
+    assert!(!super::is_capacity_error_message("authentication failed"));
+    assert!(!super::is_capacity_error_message("prompt_too_long"));
+    assert!(!super::is_capacity_error_message("network error: timeout"));
+    assert!(!super::is_capacity_error_message(
+        "provider error (500): internal"
+    ));
+}
+
+#[tokio::test]
+async fn test_emit_model_fallback_notice_capacity_degrade_template() {
+    // Capacity-degrade: "Switched to {new} due to high demand for {original}".
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<CoreEvent>(4);
+    super::emit_model_fallback_notice(
+        &Some(tx),
+        /*original*/ "claude-opus",
+        /*new_model*/ "claude-sonnet",
+        /*session_id*/ "s-1",
+        crate::model_runtime::ModelFallbackReason::CapacityDegrade {
+            consecutive_errors: 3,
+        },
+    )
+    .await;
+    let evt = rx.recv().await.expect("one event emitted");
+    match evt {
+        CoreEvent::Stream(crate::AgentStreamEvent::TextDelta { delta, turn_id }) => {
+            assert_eq!(turn_id, "s-1");
+            assert!(delta.contains("Switched to claude-sonnet"));
+            assert!(delta.contains("claude-opus"));
+            assert!(
+                delta.contains("high demand"),
+                "capacity-degrade template missing: {delta}"
+            );
+        }
+        other => panic!("expected Stream(TextDelta), got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_emit_model_fallback_notice_probe_recovery_template() {
+    // Probe recovery must NOT describe primary as a "fallback model".
+    // Direction-aware template: "Recovered to primary {new} after probe".
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<CoreEvent>(4);
+    super::emit_model_fallback_notice(
+        &Some(tx),
+        /*original*/ "",
+        /*new_model*/ "claude-opus",
+        /*session_id*/ "s-2",
+        crate::model_runtime::ModelFallbackReason::ProbeRecovery,
+    )
+    .await;
+    let evt = rx.recv().await.expect("one event emitted");
+    match evt {
+        CoreEvent::Stream(crate::AgentStreamEvent::TextDelta { delta, .. }) => {
+            assert!(
+                delta.contains("Recovered to primary claude-opus"),
+                "probe-recovery template missing: {delta}"
+            );
+            assert!(
+                !delta.contains("fallback model"),
+                "must NOT describe primary as a fallback: {delta}"
+            );
+        }
+        other => panic!("expected Stream(TextDelta), got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_emit_model_fallback_notice_chain_exhausted_template() {
+    // ChainExhausted is terminal — announces no successor model.
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<CoreEvent>(4);
+    super::emit_model_fallback_notice(
+        &Some(tx),
+        /*original*/ "gpt-5",
+        /*new_model*/ "",
+        /*session_id*/ "s-3",
+        crate::model_runtime::ModelFallbackReason::ChainExhausted,
+    )
+    .await;
+    let evt = rx.recv().await.expect("one event emitted");
+    match evt {
+        CoreEvent::Stream(crate::AgentStreamEvent::TextDelta { delta, .. }) => {
+            assert!(
+                delta.contains("exhausted"),
+                "chain-exhausted template missing: {delta}"
+            );
+            assert!(delta.contains("gpt-5"), "last-tried model missing: {delta}");
+        }
+        other => panic!("expected Stream(TextDelta), got {other:?}"),
+    }
 }
 
 #[tokio::test]

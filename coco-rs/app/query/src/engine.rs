@@ -14,6 +14,7 @@ use crate::emit::emit_protocol;
 use crate::emit::emit_protocol_owned;
 use crate::emit::emit_stream;
 use crate::session_state::SessionStateTracker;
+use crate::tool_call_runner::ToolCallRunner;
 use coco_config::EnvKey;
 use coco_config::env;
 use coco_context::FileHistoryState;
@@ -31,25 +32,20 @@ use coco_system_reminder::TurnReminderInput;
 use coco_system_reminder::count_human_turns;
 use coco_system_reminder::inject_reminders;
 use coco_system_reminder::run_turn_reminders;
-use coco_tool::PendingToolCall;
-use coco_tool::StreamingToolExecutor;
 use coco_tool::ToolRegistry;
 use coco_tool::ToolUseContext;
 use coco_types::AssistantContent;
-use coco_types::HookEventType;
 use coco_types::LlmMessage;
 use coco_types::Message;
-use coco_types::PermissionDecision;
+use coco_types::PermissionMode;
 use coco_types::TokenUsage;
 use coco_types::ToolAppState;
-use coco_types::ToolId;
 
 use crate::helpers::budget_pct_used;
 use crate::helpers::convert_to_assistant_content;
 use crate::helpers::drain_command_queue_into_history;
 use crate::helpers::extract_last_assistant_text;
 use crate::helpers::hook_outcome_to_status;
-use crate::helpers::make_tool_error_message;
 use crate::helpers::parse_stop_reason;
 use crate::helpers::should_continue_for_budget;
 use std::sync::Arc;
@@ -62,7 +58,6 @@ use vercel_ai_provider::LanguageModelV4Tool;
 use vercel_ai_provider::ReasoningPart;
 use vercel_ai_provider::TextPart;
 use vercel_ai_provider::ToolCallPart;
-use vercel_ai_provider::ToolResultContent;
 use vercel_ai_provider::language_model::v4::LanguageModelV4FunctionTool;
 
 pub use crate::config::ContinueReason;
@@ -76,6 +71,19 @@ pub use crate::config::SessionBootstrap;
 pub struct QueryEngine {
     config: QueryEngineConfig,
     client: Arc<ApiClient>,
+    /// Ordered fallback `ApiClient` chain. When non-empty,
+    /// [`run_session_loop`](Self::run_session_loop) builds a
+    /// per-session multi-slot [`ModelRuntime`] that walks slots in
+    /// order on capacity-error streaks. Install via
+    /// [`Self::with_fallback_client`] (one tier) or
+    /// [`Self::with_fallback_clients`] (chain).
+    fallback_clients: Vec<Arc<ApiClient>>,
+    /// Optional half-open recovery policy. Empty = sticky
+    /// fallback (post-switch the session stays on the fallback
+    /// for the remainder). When set, the engine periodically
+    /// probes the primary at turn entry and switches back on
+    /// success. Install via [`Self::with_recovery_policy`].
+    recovery_policy: Option<coco_config::FallbackRecoveryPolicy>,
     tools: Arc<ToolRegistry>,
     cancel: CancellationToken,
     hooks: Option<Arc<HookRegistry>>,
@@ -110,9 +118,30 @@ pub struct QueryEngine {
     /// don't need this signalling.
     app_state: Option<Arc<RwLock<ToolAppState>>>,
     /// Mailbox handle for swarm teammate messaging. `None` resolves to
-    /// `NoOpMailboxHandle` in `create_tool_context`; swarm spawn paths
+    /// `NoOpMailboxHandle` in [`ToolContextFactory::build`]; swarm spawn paths
     /// install a real handle via [`Self::with_mailbox`].
     mailbox: Option<coco_tool::MailboxHandleRef>,
+    /// Agent-runtime handle for `AgentTool` (subagent spawn / team
+    /// management / background signalling). `None` resolves to
+    /// `NoOpAgentHandle` in [`ToolContextFactory::build`]; the CLI /
+    /// SDK / TUI runners install a real handle via
+    /// [`Self::with_agent_handle`] so `AgentTool` calls reach the
+    /// swarm runtime. TS parity: `runAgent.ts` is reachable from any
+    /// model call; Rust sessions that skip installation intentionally
+    /// restrict Agent tools to model-visible errors.
+    agent_handle: Option<coco_tool::AgentHandleRef>,
+    /// Session-scoped tool-input schema validator. One instance per
+    /// engine so compiled validators cache across turns. Plan I3's
+    /// Rust-side tightening — preparer runs this on both model
+    /// input and any PreToolUse hook-rewritten input.
+    tool_schema_validator: coco_tool::ToolSchemaValidator,
+    /// Skill-runtime handle for `SkillTool`. Phase 7 routed skills
+    /// off `AgentHandle::resolve_skill` onto this dedicated trait.
+    /// `None` resolves to `NoOpSkillHandle` in the factory, which
+    /// returns `SkillInvocationError::Unavailable` — the runner
+    /// surfaces that as a clean model-visible error rather than
+    /// panicking.
+    skill_handle: Option<coco_tool::SkillHandleRef>,
     /// Persistent task-list store (V2, `TaskCreate`/`TaskUpdate`/etc.).
     /// `None` resolves to `NoOpTaskListHandle` — the V2 tools then
     /// return errors on write, matching TS's "no store configured"
@@ -151,6 +180,8 @@ impl QueryEngine {
         Self {
             config,
             client,
+            fallback_clients: Vec::new(),
+            recovery_policy: None,
             tools,
             cancel,
             hooks,
@@ -166,6 +197,9 @@ impl QueryEngine {
             auto_mode_rules: coco_permissions::AutoModeRules::default(),
             app_state: None,
             mailbox: None,
+            agent_handle: None,
+            skill_handle: None,
+            tool_schema_validator: coco_tool::ToolSchemaValidator::new(),
             task_list: None,
             todo_list: None,
             reminder_sources: coco_system_reminder::ReminderSources::default(),
@@ -211,6 +245,54 @@ impl QueryEngine {
     /// Install a mailbox handle for swarm teammate messaging.
     pub fn with_mailbox(mut self, mailbox: coco_tool::MailboxHandleRef) -> Self {
         self.mailbox = Some(mailbox);
+        self
+    }
+
+    /// Install the real [`AgentHandle`](coco_tool::AgentHandle) so
+    /// `AgentTool` invocations route to the swarm / subagent
+    /// runtime. Without this the factory defaults to
+    /// `NoOpAgentHandle` and every `AgentTool` call returns a clean
+    /// "not available in this context" error — fine for tests, but
+    /// CLI / SDK / TUI runners should install a real handle at
+    /// bootstrap.
+    pub fn with_agent_handle(mut self, handle: coco_tool::AgentHandleRef) -> Self {
+        self.agent_handle = Some(handle);
+        self
+    }
+
+    /// Install a single fallback [`ApiClient`]. Convenience wrapper
+    /// for the common one-tier case; equivalent to
+    /// `.with_fallback_clients(vec![client])`.
+    pub fn with_fallback_client(mut self, client: Arc<ApiClient>) -> Self {
+        self.fallback_clients = vec![client];
+        self
+    }
+
+    /// Install an ordered chain of fallback [`ApiClient`]s. The
+    /// engine walks slot 0 → slot 1 → … on capacity-error streaks
+    /// via [`ModelRuntime::advance`]. Empty input = no fallback.
+    pub fn with_fallback_clients(mut self, clients: Vec<Arc<ApiClient>>) -> Self {
+        self.fallback_clients = clients;
+        self
+    }
+
+    /// Install a half-open recovery policy for the session. Enables
+    /// periodic probes back to primary after a fallback switch;
+    /// see [`coco_config::FallbackRecoveryPolicy`]. Omitting this
+    /// call keeps the default sticky-fallback behavior.
+    pub fn with_recovery_policy(mut self, policy: coco_config::FallbackRecoveryPolicy) -> Self {
+        self.recovery_policy = Some(policy);
+        self
+    }
+
+    /// Install the real [`SkillHandle`](coco_tool::SkillHandle) so
+    /// `SkillTool` invocations route to the skill runtime (inline
+    /// expansion or forked subagent). Without this the factory
+    /// defaults to `NoOpSkillHandle` and every skill call returns
+    /// `SkillInvocationError::Unavailable` — the runner surfaces
+    /// that as a model-visible error.
+    pub fn with_skill_handle(mut self, handle: coco_tool::SkillHandleRef) -> Self {
+        self.skill_handle = Some(handle);
         self
     }
 
@@ -277,7 +359,7 @@ impl QueryEngine {
     ///
     /// **Bootstrap**: if `app_state.permission_mode` is `None` (fresh
     /// state), it's seeded from `self.config.permission_mode` so the
-    /// first batch's `create_tool_context` sees a concrete mode. If
+    /// first batch's [`ToolContextFactory::build`] sees a concrete mode. If
     /// already `Some(_)` (e.g. session resumed, prior-run state
     /// carried), the existing value is preserved — user + tool
     /// intent trumps config. TS parity: `appState` is
@@ -609,6 +691,29 @@ impl QueryEngine {
         let mut history = MessageHistory::new();
         let mut total_usage = TokenUsage::default();
         let mut cost_tracker = CostTracker::new();
+
+        // Build the per-session ModelRuntime. When the caller
+        // installed fallback clients via `with_fallback_client(s)`,
+        // the runtime holds a multi-slot chain and walks it on
+        // capacity-error streaks via `advance()`.
+        //
+        // Fallback trigger (TS parity, `services/api/withRetry.ts:335`):
+        // after `MAX_529_RETRIES` consecutive `Overloaded` (529/503)
+        // responses from the active slot, the next turn advances to
+        // the next slot. The engine tracks consecutive capacity
+        // errors because provider-layer retries are internal to the
+        // vercel-ai crates — this counter only ticks when the retry
+        // layer gives up and surfaces an error to us.
+        let mut model_runtime = crate::model_runtime::ModelRuntime::new(
+            self.client.clone(),
+            self.fallback_clients.clone(),
+        );
+        if let Some(policy) = self.recovery_policy {
+            model_runtime = model_runtime.with_recovery_policy(policy);
+        }
+        /// TS: `MAX_529_RETRIES = 3` in `services/api/withRetry.ts:54`.
+        const MAX_CONSECUTIVE_CAPACITY_ERRORS: u32 = 3;
+        let mut consecutive_capacity_errors: u32 = 0;
         // TS `input`-parameter parity: tracks the UUID of the last user
         // message that has already been handed to the UserPrompt-tier
         // reminders. Prevents duplicate `at_mentioned_files` /
@@ -650,6 +755,43 @@ impl QueryEngine {
         // SDK consumers see them even if the session loop errors out
         // before its first turn. See TS `runHeadless()` which initializes
         // the init message at the very top of the entry function.
+
+        // ── Progress-event forwarder ──
+        //
+        // Spawn one drain task per session. Tools send `ToolProgress`
+        // updates through `ctx.progress_tx`; the drain fans them out
+        // to:
+        //
+        //   1. `TuiOnlyEvent::ToolProgress { tool_use_id, data }` —
+        //      every event, unthrottled, carries the raw payload for
+        //      the TUI to render progress bars or byte counts.
+        //
+        //   2. `ServerNotification::ToolProgress(ToolProgressParams)` —
+        //      TS-parity wire event. Only emitted for
+        //      `bash_progress` / `powershell_progress` payload types
+        //      and throttled to ≤1 per 30 s per
+        //      `parent_tool_use_id` (or `tool_use_id` if the parent
+        //      is absent), matching `utils/queryHelpers.ts:99-189`.
+        //
+        // TS parity: `onProgress` in `StreamingToolExecutor` loops
+        // progress yielded from the tool generator back to the
+        // streaming UI; `normalizeMessage` throttles the SDK-facing
+        // version separately. Rust collapses both into one drain
+        // task because there's no separate normalization stage.
+        //
+        // Lifecycle: the tx is cloned into every `ToolUseContext`
+        // built for this session. When the session loop exits, the
+        // last tx clone (owned here) drops, the rx closes, and the
+        // drain task finishes naturally — no explicit await needed.
+        let (progress_tx_session, mut progress_rx_session) =
+            tokio::sync::mpsc::unbounded_channel::<coco_tool::ToolProgress>();
+        let progress_event_tx = event_tx.clone();
+        let _progress_drain = tokio::spawn(async move {
+            let mut throttle = ProgressThrottle::new();
+            while let Some(progress) = progress_rx_session.recv().await {
+                drain_one_progress(&progress_event_tx, progress, &mut throttle).await;
+            }
+        });
 
         // Create file history snapshot for this user message.
         // TS: fileHistoryMakeSnapshot() in handlePromptSubmit.ts + QueryEngine.ts
@@ -943,6 +1085,13 @@ impl QueryEngine {
                 .as_ref()
                 .map(|s| s.is_active())
                 .unwrap_or(false);
+            let reminder_permission_mode = app_state_snapshot
+                .permission_mode
+                .unwrap_or(self.config.permission_mode);
+            let reminder_is_plan_mode = reminder_permission_mode == PermissionMode::Plan;
+            let reminder_is_auto_mode = reminder_permission_mode == PermissionMode::Auto
+                || (reminder_permission_mode == PermissionMode::Plan
+                    && reminder_auto_classifier_active);
             // TS `isTodoV2Enabled()` — coco-rs derives this from whether the
             // V2 task mutation tools are actually loaded into the session.
             // `TASK_MANAGEMENT_TOOLS` is the `[TaskCreate, TaskUpdate]` set
@@ -1201,8 +1350,8 @@ impl QueryEngine {
                 team_context: materialized.team_context,
                 agent_pending_messages: materialized.agent_pending_messages,
                 // Phase 4: mention-based reminders are populated from
-                // `process_user_input`. MCP resources + IDE state come
-                // from their sources when wired.
+                // `process_user_input`. MCP resources come from the MCP
+                // source; IDE state is a main-thread reminder source.
                 at_mentioned_files: reminder_at_mentioned_files,
                 mcp_resources: materialized.mcp_resources,
                 agent_mentions: reminder_agent_mentions,
@@ -1236,11 +1385,26 @@ impl QueryEngine {
             //      `plan_mode_turns_since_last_attachment`). These mirror
             //      the ThrottleManager state but are exposed on app_state
             //      for TS parity with `getAppState().planModeAttachmentCount`.
-            if !reminders.is_empty() && self.app_state.is_some() {
+            let stale_plan_exit_flag =
+                app_state_snapshot.needs_plan_mode_exit_attachment && reminder_is_plan_mode;
+            let stale_auto_exit_flag =
+                app_state_snapshot.needs_auto_mode_exit_attachment && reminder_is_auto_mode;
+            let needs_reminder_bookkeeping =
+                !reminders.is_empty() || stale_plan_exit_flag || stale_auto_exit_flag;
+            if needs_reminder_bookkeeping && self.app_state.is_some() {
                 let fired_types: std::collections::HashSet<ReminderAttachmentType> =
                     reminders.iter().map(|r| r.attachment_type).collect();
                 if let Some(state) = self.app_state.as_ref() {
                     let mut guard = state.write().await;
+                    // TS clears stale one-shot exit flags when the engine is
+                    // still in the matching mode instead of preserving them
+                    // for a later, unrelated turn.
+                    if stale_plan_exit_flag {
+                        guard.needs_plan_mode_exit_attachment = false;
+                    }
+                    if stale_auto_exit_flag {
+                        guard.needs_auto_mode_exit_attachment = false;
+                    }
                     if fired_types.contains(&ReminderAttachmentType::PlanModeExit) {
                         guard.needs_plan_mode_exit_attachment = false;
                         // TS: exit resets the plan-mode cadence cycle.
@@ -1322,7 +1486,7 @@ impl QueryEngine {
 
             // Build prompt from history
             let prompt = self.build_prompt(&history);
-            let tool_defs = self.build_tool_definitions();
+            let tool_defs = self.build_tool_definitions(&app_state_snapshot).await;
 
             // StreamRequestStart has no direct protocol equivalent; it was
             // previously only used for test classification. The model_name is
@@ -1355,17 +1519,215 @@ impl QueryEngine {
                 },
             };
 
+            // ── Phase 9: Streaming tool scheduling ──
+            //
+            // When `config.streaming_tool_execution = true`, safe
+            // tools start executing the moment their input buffer
+            // completes, rather than waiting for the whole stream
+            // to finish. The `StreamingHandle` owns the inflight
+            // JoinSet and the gate that preserves TS parity
+            // (`canExecuteTool`: no safe-during-unsafe mid-stream).
+            //
+            // We build the shared ctx (Arc'd so spawned tasks can
+            // hold owned clones) + `StreamingHandle` here, ahead of
+            // the stream loop. When streaming is off, the whole
+            // block is an unused `None` and the legacy batch path
+            // below handles execution post-Finish.
+            let streaming_enabled = self.config.streaming_tool_execution;
+            let streaming_ctx: Option<Arc<ToolUseContext>> = if streaming_enabled {
+                let base = self
+                    .tool_context_factory(hook_tx_opt.as_ref())
+                    .build(crate::tool_context::ToolContextOverrides {
+                        user_message_id: Some(user_msg_uuid.clone()),
+                        progress_tx: Some(progress_tx_session.clone()),
+                        current_model_name: Some(model_runtime.current_model_name().to_string()),
+                    })
+                    .await;
+                Some(Arc::new(base))
+            } else {
+                None
+            };
+            let mut streaming_handle = streaming_ctx.as_ref().map(|ctx_arc| {
+                let executor_base = coco_tool::StreamingToolExecutor::new();
+                let executor = Arc::new(match self.app_state.as_ref() {
+                    Some(state) => executor_base.with_app_state(state.clone()),
+                    None => executor_base,
+                });
+                let ctx_for_closure = ctx_arc.clone();
+                let hooks_for_closure = self.hooks.clone();
+                let orchestration_for_closure = self.orchestration_ctx();
+                let hook_tx_for_closure = hook_tx_opt.clone();
+                executor.streaming_handle(move |prepared, _runtime| {
+                    let ctx = ctx_for_closure.clone();
+                    let hooks = hooks_for_closure.clone();
+                    let orchestration_ctx = orchestration_for_closure.clone();
+                    let hook_tx = hook_tx_for_closure.clone();
+                    Box::pin(async move {
+                        let effective_input = prepared.parsed_input.clone();
+                        let execute_result = tokio::select! {
+                            r = prepared.tool.execute(effective_input.clone(), &ctx) => r,
+                            () = ctx.cancel.cancelled() => Err(coco_tool::ToolError::Cancelled),
+                        };
+                        crate::tool_outcome_builder::build_outcome_from_execution(
+                            crate::tool_outcome_builder::RunOneTail {
+                                tool_use_id: prepared.tool_use_id.clone(),
+                                tool_id: prepared.tool_id.clone(),
+                                tool_name: prepared.tool.name().to_string(),
+                                model_index: prepared.model_index,
+                                tool: prepared.tool,
+                                effective_input,
+                                execute_result,
+                                hooks: hooks.as_ref(),
+                                orchestration_ctx,
+                                hook_tx: hook_tx.as_ref(),
+                            },
+                        )
+                        .await
+                    })
+                        as std::pin::Pin<
+                            Box<
+                                dyn std::future::Future<
+                                        Output = coco_tool::UnstampedToolCallOutcome,
+                                    > + Send,
+                            >,
+                        >
+                })
+            });
+            let mut streaming_model_index: usize = 0;
+
             let api_start = std::time::Instant::now();
-            let mut rx = match self.client.query_stream(&params).await {
-                Ok(rx) => rx,
+            // Half-open recovery probe: if a policy is configured
+            // and the backoff window elapsed since the last
+            // fallback switch, swap to primary for this turn. The
+            // probe uses the same call path as a normal turn — no
+            // side-channel ping — so success keeps the response
+            // AND any cache-warming the provider did. Probe state
+            // is owned by ModelRuntime (see `probe_in_flight`),
+            // not here — the engine only decides when to start
+            // and when to finalize.
+            match model_runtime.attempt_probe_if_due(std::time::Instant::now()) {
+                crate::model_runtime::ProbeDecision::Skip => {}
+                crate::model_runtime::ProbeDecision::Probe => {
+                    tracing::info!(
+                        probe_target = model_runtime.current_model_name(),
+                        "probing primary via half-open recovery",
+                    );
+                }
+            }
+            let was_probing = model_runtime.probe_in_flight();
+            // Route through ModelRuntime so post-fallback / probe
+            // calls reach the active provider. When no fallback is
+            // configured this is identical to `self.client.query_stream`.
+            let active_client = model_runtime.current_client();
+            let mut rx = match active_client.query_stream(&params).await {
+                Ok(rx) => {
+                    // Success resets the capacity-error streak —
+                    // isolated 529s must not accumulate across turns.
+                    consecutive_capacity_errors = 0;
+                    // Probe succeeded at stream-open — clear
+                    // recovery state and announce the switch-back.
+                    if was_probing {
+                        let recovered = model_runtime.current_model_name().to_string();
+                        model_runtime.finalize_probe(
+                            crate::model_runtime::ProbeOutcome::Success,
+                            std::time::Instant::now(),
+                        );
+                        emit_model_fallback_notice(
+                            &event_tx,
+                            /*original*/ "",
+                            &recovered,
+                            &self.config.session_id,
+                            crate::model_runtime::ModelFallbackReason::ProbeRecovery,
+                        )
+                        .await;
+                    }
+                    rx
+                }
                 Err(e) => {
                     let err_msg = e.to_string();
+                    // Probe failure: transparently revert to the
+                    // fallback, then retry the turn. A probe is
+                    // OPTIONAL — failing one must NOT surface as
+                    // a user-visible error; the session behaves
+                    // exactly as if no probe had been attempted.
+                    if was_probing {
+                        model_runtime.finalize_probe(
+                            crate::model_runtime::ProbeOutcome::Failure,
+                            std::time::Instant::now(),
+                        );
+                        tracing::warn!(
+                            active = model_runtime.current_model_name(),
+                            error = %err_msg,
+                            "probe failed at stream-open; reverting to fallback and retrying",
+                        );
+                        // Don't tick the capacity streak — probe
+                        // and streak are independent signals.
+                        // `continue` reruns the turn from the top
+                        // using the reverted fallback slot.
+                        continue;
+                    }
                     if err_msg.contains("prompt_too_long") || err_msg.contains("context_length") {
                         warn!("prompt too long (stream open), attempting reactive compaction");
                         self.do_reactive_compact(&mut history, &event_tx).await;
                         last_continue_reason = Some(ContinueReason::ReactiveCompactRetry);
                         budget.reset_continuations();
                         continue;
+                    }
+                    if is_capacity_error_message(&err_msg) {
+                        consecutive_capacity_errors += 1;
+                        if consecutive_capacity_errors < MAX_CONSECUTIVE_CAPACITY_ERRORS {
+                            // Below threshold: log and retry the
+                            // turn on the same slot. The streak
+                            // counter accumulates across
+                            // iterations until `advance()` fires.
+                            warn!(
+                                consecutive = consecutive_capacity_errors,
+                                threshold = MAX_CONSECUTIVE_CAPACITY_ERRORS,
+                                active = model_runtime.current_model_name(),
+                                "capacity error below threshold; retrying on same slot",
+                            );
+                            continue;
+                        }
+                        if model_runtime.has_fallback() {
+                            let original = model_runtime.current_model_name().to_string();
+                            match model_runtime.advance() {
+                                crate::model_runtime::AdvanceOutcome::Switched(new_model) => {
+                                    warn!(
+                                        original,
+                                        fallback = new_model,
+                                        consecutive = consecutive_capacity_errors,
+                                        "advanced to next fallback slot after \
+                                         capacity streak",
+                                    );
+                                    consecutive_capacity_errors = 0;
+                                    emit_model_fallback_notice(
+                                        &event_tx,
+                                        &original,
+                                        &new_model,
+                                        &self.config.session_id,
+                                        crate::model_runtime::ModelFallbackReason::CapacityDegrade {
+                                            consecutive_errors: MAX_CONSECUTIVE_CAPACITY_ERRORS,
+                                        },
+                                    )
+                                    .await;
+                                    continue;
+                                }
+                                crate::model_runtime::AdvanceOutcome::Exhausted => {
+                                    warn!(
+                                        active = original,
+                                        "fallback chain exhausted on stream-open error",
+                                    );
+                                    emit_model_fallback_notice(
+                                        &event_tx,
+                                        &original,
+                                        /*new_model*/ "",
+                                        &self.config.session_id,
+                                        crate::model_runtime::ModelFallbackReason::ChainExhausted,
+                                    )
+                                    .await;
+                                }
+                            }
+                        }
                     }
                     return Err(anyhow::anyhow!("LLM stream open failed: {e}"));
                 }
@@ -1375,13 +1737,6 @@ impl QueryEngine {
             // calls first appeared (by `ToolInputStart`) so the downstream
             // exec path keeps the same ordering contract as the blocking path.
             //
-            // `early_handles` carries concurrency-safe tool executions that
-            // were dispatched mid-stream (see `try_eager_dispatch`). The
-            // post-stream tool-exec loop awaits these before running the
-            // batch executor for the remaining tools. This is PR-E1 Phase 2:
-            // overlap tool execution with API streaming for hook-free
-            // sessions. TS: `query.ts:710-845` dispatches into
-            // `StreamingToolExecutor` as tool_use blocks arrive.
             let mut response_text = String::new();
             let mut reasoning_text = String::new();
             let mut tool_order: Vec<String> = Vec::new();
@@ -1391,26 +1746,20 @@ impl QueryEngine {
             let mut stream_stop_reason: Option<String> = None;
             let mut stream_error: Option<String> = None;
 
-            // Eager-dispatch context: shared across all tasks spawned from
-            // within the stream loop. Hook-free sessions get parallelism;
-            // hook-configured sessions fall through to the existing batch
-            // path to keep PreToolUse/PostToolUse ordering intact.
-            let mut stream_ctx_owned = self.create_tool_context().await;
-            stream_ctx_owned.user_message_id = Some(user_msg_uuid.clone());
-            let stream_ctx: Arc<ToolUseContext> = Arc::new(stream_ctx_owned.clone_for_concurrent());
-            let mut early_handles: std::collections::HashMap<
-                String,
-                tokio::task::JoinHandle<
-                    Result<coco_types::ToolResult<serde_json::Value>, coco_tool::ToolError>,
-                >,
-            > = std::collections::HashMap::new();
-            let eager_enabled = self.hooks.is_none();
-
             loop {
                 let event = tokio::select! {
                     _ = self.cancel.cancelled() => {
+                        // Cancellation mid-stream: drop the stream
+                        // and fall through to the top-of-loop
+                        // `is_cancelled()` check which returns a
+                        // proper `Ok(QueryResult { cancelled: true })`.
+                        // With streaming_tool_execution enabled, the
+                        // StreamingHandle's JoinSet aborts any
+                        // inflight safe tools when dropped
+                        // (transitively via streaming_handle going
+                        // out of scope as this function unwinds).
                         drop(rx);
-                        return Err(anyhow::anyhow!("query cancelled during stream"));
+                        break;
                     }
                     ev = rx.recv() => ev,
                 };
@@ -1466,58 +1815,105 @@ impl QueryEngine {
                         if let Some(buf) = tool_buffers.get_mut(&id) {
                             buf.complete = true;
                         }
-                        // PR-E1 Phase 2: try to dispatch this tool mid-stream
-                        // so safe read-only tools overlap with the API stream.
-                        if eager_enabled
+                        // Streaming mode: parse the freshly-completed
+                        // input, run full per-tool preparation
+                        // (validate → pre-hook → permission →
+                        // re-validate), and feed the resulting plan
+                        // to the StreamingHandle. Safe tools start
+                        // executing immediately via tokio::spawn;
+                        // unsafe tools queue for commit_flush.
+                        //
+                        // Errors from preparation (unknown tool,
+                        // schema fail, permission deny, hook block)
+                        // already push an error tool_result to
+                        // history via the preparer's shared
+                        // `complete_tool_call_with_error` helper, so
+                        // the handle-path stays consistent without
+                        // needing a separate fallback.
+                        if let (Some(handle), Some(ctx_arc)) =
+                            (streaming_handle.as_mut(), streaming_ctx.as_ref())
                             && let Some(buf) = tool_buffers.get(&id)
                             && buf.complete
                         {
-                            let input_result: Result<serde_json::Value, _> =
-                                if buf.input_json.trim().is_empty() {
-                                    Ok(serde_json::Value::Object(Default::default()))
-                                } else {
-                                    serde_json::from_str(&buf.input_json)
-                                };
-                            if let Ok(input) = input_result {
-                                let tool_name = buf.tool_name.clone();
-                                let tool_id: ToolId = tool_name
-                                    .parse()
-                                    .unwrap_or_else(|_| ToolId::Custom(tool_name.clone()));
-                                if let Some(tool) = self.tools.get(&tool_id).cloned()
-                                    && tool.is_concurrency_safe(&input)
-                                {
-                                    let decision =
-                                        tool.check_permissions(&input, &stream_ctx).await;
-                                    if let PermissionDecision::Allow { .. } = decision {
-                                        // Emit Queued + Started now so the
-                                        // consumer sees the lifecycle begin
-                                        // during the stream.
-                                        let _ = emit_stream(
-                                            &event_tx,
-                                            crate::AgentStreamEvent::ToolUseQueued {
-                                                call_id: id.clone(),
-                                                name: tool_name.clone(),
-                                                input: input.clone(),
-                                            },
-                                        )
-                                        .await;
-                                        let _ = emit_stream(
-                                            &event_tx,
-                                            crate::AgentStreamEvent::ToolUseStarted {
-                                                call_id: id.clone(),
-                                                name: tool_name.clone(),
-                                                batch_id: None,
-                                            },
-                                        )
-                                        .await;
-                                        let ctx_arc = stream_ctx.clone();
-                                        let input_clone = input.clone();
-                                        let handle = tokio::spawn(async move {
-                                            tool.execute(input_clone, &ctx_arc).await
-                                        });
-                                        early_handles.insert(id.clone(), handle);
+                            let input: serde_json::Value = if buf.input_json.trim().is_empty() {
+                                serde_json::Value::Object(Default::default())
+                            } else {
+                                match serde_json::from_str(&buf.input_json) {
+                                    Ok(v) => v,
+                                    Err(e) => {
+                                        warn!(
+                                            tool_call_id = %id,
+                                            tool_name = %buf.tool_name,
+                                            error = %e,
+                                            "streaming tool input JSON parse failed; dropping call"
+                                        );
+                                        continue;
                                     }
                                 }
+                            };
+                            let tcp = ToolCallPart {
+                                tool_call_id: id.clone(),
+                                tool_name: buf.tool_name.clone(),
+                                input,
+                                provider_executed: None,
+                                provider_metadata: None,
+                            };
+                            let slice = std::slice::from_ref(&tcp);
+                            let mut prep_args = crate::tool_call_preparer::PendingToolPreparation {
+                                event_tx: &event_tx,
+                                history: &mut history,
+                                ctx: ctx_arc.as_ref(),
+                                tool_calls: slice,
+                                tools: &self.tools,
+                                hooks: self.hooks.as_ref(),
+                                orchestration_ctx: self.orchestration_ctx(),
+                                hook_tx_opt: hook_tx_opt.as_ref(),
+                                permission_denials: &mut permission_denials,
+                                state_tracker,
+                                permission_bridge: self.permission_bridge.as_ref(),
+                                session_id: &self.config.session_id,
+                                cancel: &self.cancel,
+                                auto_mode_state: self.auto_mode_state.as_ref(),
+                                denial_tracker: self.denial_tracker.as_ref(),
+                                client: &self.client,
+                                auto_mode_rules: &self.auto_mode_rules,
+                            };
+                            if let Some((pending, _ctx)) =
+                                crate::tool_call_preparer::prepare_one_pending_tool_call(
+                                    &mut prep_args,
+                                    &tcp,
+                                )
+                                .await
+                            {
+                                // Emit ToolUseStarted now that the
+                                // call has passed pre-hook +
+                                // permission and is about to be
+                                // spawned. Non-streaming path emits
+                                // this in tool_call_runner.rs:145;
+                                // we mirror that here so SDK
+                                // consumers see the same event
+                                // sequence regardless of path.
+                                let _ = emit_stream(
+                                    &event_tx,
+                                    crate::AgentStreamEvent::ToolUseStarted {
+                                        call_id: pending.tool_use_id.clone(),
+                                        name: pending.tool.name().to_string(),
+                                        batch_id: None,
+                                    },
+                                )
+                                .await;
+
+                                let model_index = streaming_model_index;
+                                streaming_model_index += 1;
+                                handle.feed_plan(coco_tool::ToolCallPlan::Runnable(
+                                    coco_tool::PreparedToolCall {
+                                        tool_use_id: pending.tool_use_id,
+                                        tool_id: pending.tool.id(),
+                                        tool: pending.tool,
+                                        parsed_input: pending.input,
+                                        model_index,
+                                    },
+                                ));
                             }
                         }
                     }
@@ -1536,7 +1932,33 @@ impl QueryEngine {
             let api_elapsed_ms = api_start.elapsed().as_millis() as i64;
             api_time_ms += api_elapsed_ms;
 
+            // Cancellation mid-stream: skip the rest of turn
+            // processing and let the top-of-loop cancel check build
+            // the proper `QueryResult { cancelled: true }`. Any
+            // streaming handle in-flight is implicitly aborted when
+            // this function unwinds (JoinSet drops cancel pending
+            // tasks).
+            if self.cancel.is_cancelled() {
+                continue;
+            }
+
             if let Some(err_msg) = stream_error {
+                // Probe failure mid-stream: transparently revert
+                // and retry — same rule as stream-open. Probes
+                // are optional; their failures must never be
+                // user-visible.
+                if model_runtime.probe_in_flight() {
+                    model_runtime.finalize_probe(
+                        crate::model_runtime::ProbeOutcome::Failure,
+                        std::time::Instant::now(),
+                    );
+                    tracing::warn!(
+                        active = model_runtime.current_model_name(),
+                        error = %err_msg,
+                        "probe failed mid-stream; reverting to fallback and retrying",
+                    );
+                    continue;
+                }
                 if err_msg.contains("prompt_too_long") || err_msg.contains("context_length") {
                     warn!("prompt too long (stream), attempting reactive compaction");
                     self.do_reactive_compact(&mut history, &event_tx).await;
@@ -1544,13 +1966,68 @@ impl QueryEngine {
                     budget.reset_continuations();
                     continue;
                 }
+                if is_capacity_error_message(&err_msg) {
+                    consecutive_capacity_errors += 1;
+                    if consecutive_capacity_errors < MAX_CONSECUTIVE_CAPACITY_ERRORS {
+                        warn!(
+                            consecutive = consecutive_capacity_errors,
+                            threshold = MAX_CONSECUTIVE_CAPACITY_ERRORS,
+                            active = model_runtime.current_model_name(),
+                            "capacity error mid-stream below threshold; retrying on same slot",
+                        );
+                        continue;
+                    }
+                    if model_runtime.has_fallback() {
+                        let original = model_runtime.current_model_name().to_string();
+                        match model_runtime.advance() {
+                            crate::model_runtime::AdvanceOutcome::Switched(new_model) => {
+                                warn!(
+                                    original,
+                                    fallback = new_model,
+                                    consecutive = consecutive_capacity_errors,
+                                    "advanced to next fallback slot after \
+                                     capacity streak (mid-stream)",
+                                );
+                                consecutive_capacity_errors = 0;
+                                emit_model_fallback_notice(
+                                    &event_tx,
+                                    &original,
+                                    &new_model,
+                                    &self.config.session_id,
+                                    crate::model_runtime::ModelFallbackReason::CapacityDegrade {
+                                        consecutive_errors: MAX_CONSECUTIVE_CAPACITY_ERRORS,
+                                    },
+                                )
+                                .await;
+                                continue;
+                            }
+                            crate::model_runtime::AdvanceOutcome::Exhausted => {
+                                warn!(active = original, "fallback chain exhausted mid-stream",);
+                                emit_model_fallback_notice(
+                                    &event_tx,
+                                    &original,
+                                    /*new_model*/ "",
+                                    &self.config.session_id,
+                                    crate::model_runtime::ModelFallbackReason::ChainExhausted,
+                                )
+                                .await;
+                            }
+                        }
+                    }
+                }
                 return Err(anyhow::anyhow!("LLM stream failed: {err_msg}"));
             }
+            // Stream closed without error — reset the capacity streak
+            // so an isolated failure followed by a successful turn
+            // doesn't carry forward.
+            consecutive_capacity_errors = 0;
 
             let usage = stream_usage.unwrap_or_default();
             total_usage += usage;
             budget.record_usage(&usage);
-            let model_id = self.client.model_id().to_string();
+            // Record usage against the currently-active model id
+            // (post-fallback value if a switch has happened).
+            let model_id = model_runtime.current_model_name().to_string();
             cost_tracker.record(&model_id, usage, /*cost_usd*/ 0.0, api_elapsed_ms);
 
             // Re-materialize `tool_calls` from buffers in arrival order.
@@ -1683,6 +2160,67 @@ impl QueryEngine {
 
             history.push(assistant_msg);
 
+            // Streaming commit point: flush the StreamingHandle to
+            // drain inflight safe tools, run queued unsafe tools
+            // serially, apply patches in model-index order, and
+            // push each outcome's ordered_messages into history.
+            //
+            // I12 note: outcomes surface in real completion order —
+            // a slow earlier tool doesn't block a fast later one —
+            // but `app_state_patch` apply is post-batch in
+            // model-index order under one write lock (matches TS
+            // `toolOrchestration.ts:54-62`).
+            //
+            // `streaming_executed` is the control-flow signal for
+            // "this turn's tools all ran via streaming": we still
+            // go through `finalize_turn_post_tools` + loop to the
+            // next LLM call (unless the model produced no
+            // tool_calls at all, in which case we fall through to
+            // the `tool_calls.is_empty()` branch as before).
+            let streaming_executed = streaming_ctx.is_some() && !tool_calls.is_empty();
+            let mut streaming_control_prevent: Option<String> = None;
+            // Collect ToolUseCompleted events to emit AFTER
+            // commit_flush returns — the on_outcome callback is
+            // synchronous (FnMut) and can't `.await`.
+            let mut streaming_completed_events: Vec<(String, String, String, bool)> = Vec::new();
+            if let Some(handle) = streaming_handle.take()
+                && streaming_executed
+            {
+                let history_ref = &mut history;
+                let prevent_slot = &mut streaming_control_prevent;
+                let events_ref = &mut streaming_completed_events;
+                handle
+                    .commit_flush(0, |outcome| {
+                        let call_id = outcome.tool_use_id().to_string();
+                        let tool_name_str = outcome.tool_id().to_string();
+                        let is_error = outcome.error_kind().is_some();
+                        let output_text = extract_streaming_result_text(outcome.ordered_messages());
+                        events_ref.push((call_id, tool_name_str, output_text, is_error));
+                        if let Some(reason) = outcome.prevent_continuation()
+                            && prevent_slot.is_none()
+                        {
+                            *prevent_slot = Some(reason.to_string());
+                        }
+                        let parts = outcome.into_parts();
+                        for msg in parts.ordered_messages {
+                            history_ref.push(msg);
+                        }
+                    })
+                    .await;
+            }
+            for (call_id, tool_name, output, is_error) in streaming_completed_events {
+                let _ = emit_stream(
+                    &event_tx,
+                    crate::AgentStreamEvent::ToolUseCompleted {
+                        call_id,
+                        name: tool_name,
+                        output,
+                        is_error,
+                    },
+                )
+                .await;
+            }
+
             // If no tool calls, we're done — unless token-budget-continuation
             // is enabled and we're well under budget: inject a nudge and loop.
             // TS: `query.ts:1308-1340` `feature('TOKEN_BUDGET')` path.
@@ -1760,561 +2298,95 @@ impl QueryEngine {
             )
             .await;
 
-            // Execute tool calls via StreamingToolExecutor (batch partitioning)
-            info!(turn, tool_count = tool_calls.len(), "executing tool calls");
-            let mut ctx = self.create_tool_context().await;
-            ctx.user_message_id = Some(user_msg_uuid.clone());
-
-            // Phase 1: Permission checks + build PendingToolCalls
-            let mut pending: Vec<PendingToolCall> = Vec::new();
-            for tc in &tool_calls {
-                let tool_id: ToolId = tc
-                    .tool_name
-                    .parse()
-                    .unwrap_or_else(|_| ToolId::Custom(tc.tool_name.clone()));
-
-                // PR-E1 Phase 2: if this tool was eagerly dispatched during
-                // the stream, await its result and push to history without
-                // running the full Phase 1/2/3 pipeline. Queued + Started
-                // were already emitted from the stream loop; we only need
-                // Completed + history here.
-                if let Some(handle) = early_handles.remove(&tc.tool_call_id) {
-                    let mut exec_outcome: Result<
-                        coco_types::ToolResult<serde_json::Value>,
-                        coco_tool::ToolError,
-                    > = match handle.await {
-                        Ok(res) => res,
-                        Err(join_err) => {
-                            warn!(
-                                tool = tc.tool_name,
-                                error = %join_err,
-                                "eager tool task join failed"
-                            );
-                            Err(coco_tool::ToolError::Cancelled)
-                        }
-                    };
-                    // Eager-dispatched tools bypass the executor —
-                    // apply their queued `app_state_patch` here so the
-                    // shared store sees the mutation. Without this,
-                    // any patch returned from a concurrency-safe tool
-                    // that was eagerly dispatched during the stream
-                    // would be silently dropped. TS parity:
-                    // `orchestration.ts` applies `queuedContext
-                    // Modifiers` once per batch regardless of when
-                    // individual tools actually dispatched.
-                    if let (Ok(tr), Some(arc)) = (exec_outcome.as_mut(), self.app_state.as_ref())
-                        && let Some(patch) = tr.app_state_patch.take()
-                    {
-                        let snapshot = {
-                            let mut guard = arc.write().await;
-                            patch(&mut guard);
-                            // Always emit after patch; the TUI reconciles
-                            // via diff. Matches TS `notifyTasksUpdated`.
-                            coco_types::TaskPanelChangedParams {
-                                plan_tasks: guard.plan_tasks.clone(),
-                                todos_by_agent: guard.todos_by_agent.clone(),
-                                expanded_view: guard.expanded_view,
-                                verification_nudge_pending: guard.verification_nudge_pending,
-                            }
-                        };
-                        let _ = emit_protocol(
-                            &event_tx,
-                            coco_types::ServerNotification::TaskPanelChanged(snapshot),
-                        )
-                        .await;
-                    }
-                    let output = match &exec_outcome {
-                        Ok(r) => serde_json::to_string(&r.data).unwrap_or_default(),
-                        Err(e) => e.to_string(),
-                    };
-                    let _ = emit_stream(
-                        &event_tx,
-                        crate::AgentStreamEvent::ToolUseCompleted {
-                            call_id: tc.tool_call_id.clone(),
-                            name: tc.tool_name.clone(),
-                            output: output.clone(),
-                            is_error: exec_outcome.is_err(),
-                        },
-                    )
+            // Streaming-executed fast path: the StreamingHandle
+            // already ran every tool and pushed their
+            // ordered_messages into history. Skip the non-streaming
+            // runner, but still run finalize_turn_post_tools so
+            // the command-queue drain / auto-compact / TurnCompleted
+            // emission happens, then continue the loop.
+            if streaming_executed {
+                self.finalize_turn_post_tools(&mut history, &event_tx, turn_id, usage)
                     .await;
-                    match exec_outcome {
-                        Ok(_) => {
-                            let result_msg = Message::ToolResult(coco_types::ToolResultMessage {
-                                uuid: uuid::Uuid::new_v4(),
-                                message: LlmMessage::Tool {
-                                    content: vec![coco_types::ToolContent::ToolResult(
-                                        coco_types::ToolResultContent {
-                                            tool_call_id: tc.tool_call_id.clone(),
-                                            tool_name: tc.tool_name.clone(),
-                                            output: ToolResultContent::text(output),
-                                            is_error: false,
-                                            provider_metadata: None,
-                                        },
-                                    )],
-                                    provider_options: None,
-                                },
-                                tool_use_id: tc.tool_call_id.clone(),
-                                tool_id: tool_id.clone(),
-                                is_error: false,
-                            });
-                            history.push(result_msg);
-                        }
-                        Err(e) => {
-                            warn!(tool = tc.tool_name, error = %e, "eager tool execution failed");
-                            history.push(make_tool_error_message(
-                                &tc.tool_call_id,
-                                &tc.tool_name,
-                                &tool_id,
-                                &format!("Error: {e}"),
-                            ));
-                        }
-                    }
-                    continue;
+                if let Some(stop_reason) = streaming_control_prevent {
+                    return Ok(make_result(
+                        response_text,
+                        turn,
+                        total_usage,
+                        cost_tracker,
+                        /*cancelled*/ false,
+                        /*budget_exhausted*/ false,
+                        last_continue_reason,
+                        start_time,
+                        api_time_ms,
+                        Some(stop_reason),
+                        permission_denials,
+                        history.messages.clone(),
+                    ));
                 }
-
-                if let Some(tool) = self.tools.get(&tool_id) {
-                    let mut decision = tool.check_permissions(&tc.input, &ctx).await;
-
-                    // Auto-mode classifier: for `Ask` outcomes, run the 2-stage
-                    // LLM sidequery BEFORE falling through to the interactive
-                    // permission bridge. If the classifier allows or blocks,
-                    // short-circuit; otherwise (None), drop to the bridge path.
-                    // TS: `classifierDecision.ts` `canUseToolInAutoMode()`.
-                    if matches!(decision, PermissionDecision::Ask { .. })
-                        && let (Some(state), Some(tracker)) =
-                            (self.auto_mode_state.as_ref(), self.denial_tracker.as_ref())
-                        && state.is_active()
-                    {
-                        let is_read_only = tool.is_read_only(&tc.input);
-                        let mut tracker_guard = tracker.lock().await;
-                        let classifier_decision = self
-                            .try_classify_in_auto_mode(
-                                &tc.tool_name,
-                                &tc.input,
-                                is_read_only,
-                                state,
-                                &mut tracker_guard,
-                                &history.messages,
-                            )
-                            .await;
-                        drop(tracker_guard);
-                        if let Some(d) = classifier_decision {
-                            decision = d;
-                        }
-                    }
-
-                    match decision {
-                        PermissionDecision::Deny { message, .. } => {
-                            warn!(tool = tc.tool_name, %message, "tool permission denied");
-                            // Accumulate the denial for the session result.
-                            // TS: QueryEngine.permissionDenials.push(...) wrapper
-                            // around canUseTool() in QueryEngine.ts:244-271.
-                            permission_denials.push(coco_types::PermissionDenialInfo {
-                                tool_name: tc.tool_name.clone(),
-                                tool_use_id: tc.tool_call_id.clone(),
-                                tool_input: tc.input.clone(),
-                            });
-                            history.push(make_tool_error_message(
-                                &tc.tool_call_id,
-                                &tc.tool_name,
-                                &tool_id,
-                                &format!("Permission denied: {message}"),
-                            ));
-                            continue;
-                        }
-                        PermissionDecision::Ask { .. } => {
-                            // Route the ask to the permission bridge if one
-                            // is installed (e.g. `SdkPermissionBridge` issuing
-                            // `approval/askForApproval` to the SDK client).
-                            // Fall back to the previous auto-allow behavior
-                            // if no bridge is configured — tests and headless
-                            // CLI mode still work unchanged.
-                            //
-                            // TS reference: notifySessionStateChanged(
-                            //     'requires_action') in print.ts:818 on
-                            // can_use_tool entry, then transition back to
-                            // 'running' after the approval resolves.
-                            state_tracker
-                                .transition_to(coco_types::SessionState::RequiresAction, &event_tx)
-                                .await;
-
-                            if let Some(bridge) = self.permission_bridge.as_ref() {
-                                // `id` is a fresh correlation id for this
-                                // approval request; `tool_use_id` is the
-                                // model-assigned tool-call id that the SDK
-                                // client uses to group the approval UI with
-                                // the tool-call rendering.
-                                let request = coco_tool::ToolPermissionRequest {
-                                    id: format!("approval-{}", uuid::Uuid::new_v4()),
-                                    tool_use_id: tc.tool_call_id.clone(),
-                                    agent_id: self.config.session_id.clone(),
-                                    tool_name: tc.tool_name.clone(),
-                                    description: format!("Approval required for {}", tc.tool_name),
-                                    input: tc.input.clone(),
-                                };
-                                // Make the bridge await cancellation-aware:
-                                // if the turn is interrupted while waiting for
-                                // the SDK client's approval response, the
-                                // oneshot inside `send_server_request` isn't
-                                // cancel-aware and would otherwise hang the
-                                // engine indefinitely. `select!` lets the
-                                // cancel token abort the await and treat it
-                                // as a rejection with feedback (same path as
-                                // an infrastructure error).
-                                let bridge_result = tokio::select! {
-                                    biased;
-                                    _ = self.cancel.cancelled() => {
-                                        Err("Turn cancelled while waiting for \
-                                             permission approval".to_string())
-                                    }
-                                    r = bridge.request_permission(request) => r,
-                                };
-                                match bridge_result {
-                                    Ok(resolution) => match resolution.decision {
-                                        coco_tool::ToolPermissionDecision::Rejected => {
-                                            let feedback =
-                                                resolution.feedback.unwrap_or_else(|| {
-                                                    "Permission denied by client".into()
-                                                });
-                                            warn!(tool = tc.tool_name, "approval bridge: rejected");
-                                            permission_denials.push(
-                                                coco_types::PermissionDenialInfo {
-                                                    tool_name: tc.tool_name.clone(),
-                                                    tool_use_id: tc.tool_call_id.clone(),
-                                                    tool_input: tc.input.clone(),
-                                                },
-                                            );
-                                            history.push(make_tool_error_message(
-                                                &tc.tool_call_id,
-                                                &tc.tool_name,
-                                                &tool_id,
-                                                &format!("Permission denied: {feedback}"),
-                                            ));
-                                            state_tracker
-                                                .transition_to(
-                                                    coco_types::SessionState::Running,
-                                                    &event_tx,
-                                                )
-                                                .await;
-                                            continue;
-                                        }
-                                        coco_tool::ToolPermissionDecision::Approved => {
-                                            // fall through to execute
-                                        }
-                                    },
-                                    Err(e) => {
-                                        warn!(
-                                            error = %e,
-                                            tool = tc.tool_name,
-                                            "approval bridge failed; auto-denying"
-                                        );
-                                        permission_denials.push(coco_types::PermissionDenialInfo {
-                                            tool_name: tc.tool_name.clone(),
-                                            tool_use_id: tc.tool_call_id.clone(),
-                                            tool_input: tc.input.clone(),
-                                        });
-                                        history.push(make_tool_error_message(
-                                            &tc.tool_call_id,
-                                            &tc.tool_name,
-                                            &tool_id,
-                                            &format!("Approval bridge error: {e}"),
-                                        ));
-                                        state_tracker
-                                            .transition_to(
-                                                coco_types::SessionState::Running,
-                                                &event_tx,
-                                            )
-                                            .await;
-                                        continue;
-                                    }
-                                }
-                            }
-                            // Back to running whether we consulted a bridge or
-                            // fell through to auto-allow.
-                            state_tracker
-                                .transition_to(coco_types::SessionState::Running, &event_tx)
-                                .await;
-                        }
-                        PermissionDecision::Allow { .. } => {}
-                    }
-
-                    // Pre-tool hook (orchestrated with env injection + aggregation)
-                    if let Some(hooks) = &self.hooks {
-                        let ctx = self.orchestration_ctx();
-                        match orchestration::execute_pre_tool_use(
-                            hooks,
-                            &ctx,
-                            &tc.tool_name,
-                            &tc.tool_call_id,
-                            &tc.input,
-                            hook_tx_opt.as_ref(),
-                        )
-                        .await
-                        {
-                            Ok(agg) if agg.is_blocked() => {
-                                warn!(
-                                    tool = tc.tool_name,
-                                    "PreToolUse hook blocked tool execution"
-                                );
-                                continue;
-                            }
-                            Ok(_agg) => {
-                                // Future: apply agg.updated_input, permission_behavior
-                            }
-                            Err(e) => {
-                                warn!(
-                                    error = %e,
-                                    tool = tc.tool_name,
-                                    "PreToolUse hook failed (non-blocking)"
-                                );
-                            }
-                        }
-                    }
-
-                    // Emit stream event: tool queued with complete input.
-                    let _delivered = emit_stream(
-                        &event_tx,
-                        crate::AgentStreamEvent::ToolUseQueued {
-                            call_id: tc.tool_call_id.clone(),
-                            name: tc.tool_name.clone(),
-                            input: tc.input.clone(),
-                        },
-                    )
-                    .await;
-
-                    pending.push(PendingToolCall {
-                        tool_use_id: tc.tool_call_id.clone(),
-                        tool: tool.clone(),
-                        input: tc.input.clone(),
-                    });
-                } else {
-                    warn!(tool = tc.tool_name, "tool not found in registry");
-                }
+                last_continue_reason = Some(ContinueReason::NextTurn);
+                continue;
             }
 
-            // Phase 2: Execute via StreamingToolExecutor (concurrent-safe tools
-            // run in parallel, non-concurrent tools run sequentially).
-            //
-            // Emit ToolUseStarted for every pending tool so the TUI can
-            // transition queued items to "running" state before execution
-            // begins. TS has no distinct event for this — coco-rs adds it for
-            // richer display.
-            for pc in &pending {
-                let tool_name = tool_calls
-                    .iter()
-                    .find(|tc| tc.tool_call_id == pc.tool_use_id)
-                    .map(|tc| tc.tool_name.clone())
-                    .unwrap_or_else(|| "unknown".to_string());
-                let _delivered = emit_stream(
-                    &event_tx,
-                    crate::AgentStreamEvent::ToolUseStarted {
-                        call_id: pc.tool_use_id.clone(),
-                        name: tool_name,
-                        batch_id: None,
-                    },
-                )
-                .await;
-            }
-
-            // Wire the executor with the engine's write-capable
-            // Arc so it can apply `ToolResult::app_state_patch` after
-            // each batch. Tools see `ctx.app_state` as a read-only
-            // `AppStateReadHandle`; the executor is the only path
-            // through which their returned patches reach the shared
-            // store. TS parity: the orchestrator owns the "queue and
-            // apply post-batch" responsibility.
-            let executor = match self.app_state.as_ref() {
-                Some(arc) => StreamingToolExecutor::new().with_app_state(arc.clone()),
-                None => StreamingToolExecutor::new(),
-            };
-            let results = executor.execute_all(pending, &ctx).await;
-
-            // Pre-serialize successful outputs once so the stream-emit pass and
-            // the history-append pass don't re-serialize the same JSON value.
-            let output_strs: Vec<String> = results
-                .iter()
-                .map(|result| match &result.result {
-                    Ok(r) => serde_json::to_string(&r.data).unwrap_or_default(),
-                    Err(e) => e.to_string(),
+            // Execute tool calls via StreamingToolExecutor (batch partitioning).
+            // User-message id flows through the factory so the file-history
+            // snapshot keys on the turn's triggering message, not a later
+            // tool result. The factory installs a `QueryHookHandle` into
+            // `ToolUseContext` when hooks are configured so tool callbacks
+            // that need PreToolUse/PostToolUse use the same pipeline as the
+            // runner.
+            let ctx = self
+                .tool_context_factory(hook_tx_opt.as_ref())
+                .build(crate::tool_context::ToolContextOverrides {
+                    user_message_id: Some(user_msg_uuid.clone()),
+                    progress_tx: Some(progress_tx_session.clone()),
+                    current_model_name: Some(model_runtime.current_model_name().to_string()),
                 })
-                .collect();
-
-            // Phase 3: Emit stream events in arrival order, then process into history.
-            for (result, output) in results.iter().zip(output_strs.iter()) {
-                let tool_name = tool_calls
-                    .iter()
-                    .find(|tc| tc.tool_call_id == result.tool_use_id)
-                    .map(|tc| tc.tool_name.clone())
-                    .unwrap_or_else(|| "unknown".to_string());
-
-                let _delivered = emit_stream(
-                    &event_tx,
-                    crate::AgentStreamEvent::ToolUseCompleted {
-                        call_id: result.tool_use_id.clone(),
-                        name: tool_name,
-                        output: output.clone(),
-                        is_error: result.result.is_err(),
-                    },
-                )
                 .await;
+
+            let tool_run_outcome = ToolCallRunner {
+                event_tx: &event_tx,
+                history: &mut history,
+                ctx: &ctx,
+                tool_calls: &tool_calls,
+                turn,
+                tools: &self.tools,
+                hooks: self.hooks.as_ref(),
+                orchestration_ctx: self.orchestration_ctx(),
+                hook_tx_opt: hook_tx_opt.as_ref(),
+                permission_denials: &mut permission_denials,
+                state_tracker,
+                permission_bridge: self.permission_bridge.as_ref(),
+                session_id: &self.config.session_id,
+                cancel: &self.cancel,
+                auto_mode_state: self.auto_mode_state.as_ref(),
+                denial_tracker: self.denial_tracker.as_ref(),
+                client: &self.client,
+                auto_mode_rules: &self.auto_mode_rules,
+                app_state: self.app_state.as_ref(),
             }
-
-            for (result, output) in results.into_iter().zip(output_strs.into_iter()) {
-                let tool_name = tool_calls
-                    .iter()
-                    .find(|tc| tc.tool_call_id == result.tool_use_id)
-                    .map(|tc| tc.tool_name.as_str())
-                    .unwrap_or("unknown");
-
-                match result.result {
-                    Ok(tool_result) => {
-                        // Post-tool hook (orchestrated)
-                        if let Some(hooks) = &self.hooks {
-                            let ctx = self.orchestration_ctx();
-                            if let Err(e) = orchestration::execute_post_tool_use(
-                                hooks,
-                                &ctx,
-                                tool_name,
-                                &result.tool_use_id,
-                                &serde_json::Value::Null,
-                                &tool_result.data,
-                                hook_tx_opt.as_ref(),
-                            )
-                            .await
-                            {
-                                warn!(
-                                    error = %e,
-                                    tool = tool_name,
-                                    "PostToolUse hook failed (non-blocking)"
-                                );
-                            }
-                        }
-
-                        let result_msg = Message::ToolResult(coco_types::ToolResultMessage {
-                            uuid: uuid::Uuid::new_v4(),
-                            message: LlmMessage::Tool {
-                                content: vec![coco_types::ToolContent::ToolResult(
-                                    coco_types::ToolResultContent {
-                                        tool_call_id: result.tool_use_id.clone(),
-                                        tool_name: tool_name.to_string(),
-                                        output: ToolResultContent::text(output),
-                                        is_error: false,
-                                        provider_metadata: None,
-                                    },
-                                )],
-                                provider_options: None,
-                            },
-                            tool_use_id: result.tool_use_id,
-                            tool_id: result.tool_id,
-                            is_error: false,
-                        });
-                        history.push(result_msg);
-                    }
-                    Err(e) => {
-                        // Post-tool failure hook (orchestrated)
-                        if let Some(hooks) = &self.hooks {
-                            let ctx = self.orchestration_ctx();
-                            let _ = hooks
-                                .execute_hooks(HookEventType::PostToolUseFailure, Some(tool_name))
-                                .await;
-                            drop(ctx);
-                        }
-
-                        warn!(tool = tool_name, error = %e, "tool execution failed");
-                        history.push(make_tool_error_message(
-                            &result.tool_use_id,
-                            tool_name,
-                            &result.tool_id,
-                            &format!("Error: {e}"),
-                        ));
-                    }
-                }
-            }
-
+            .run()
+            .await;
             self.finalize_turn_post_tools(&mut history, &event_tx, turn_id, usage)
                 .await;
+            if !tool_run_outcome.continue_after_tools {
+                return Ok(make_result(
+                    response_text,
+                    turn,
+                    total_usage,
+                    cost_tracker,
+                    /*cancelled*/ false,
+                    /*budget_exhausted*/ false,
+                    last_continue_reason,
+                    start_time,
+                    api_time_ms,
+                    tool_run_outcome.stop_reason_override,
+                    permission_denials,
+                    history.messages.clone(),
+                ));
+            }
             last_continue_reason = Some(ContinueReason::NextTurn);
             let _ = tool_calls; // has_tool_calls retained for future metrics
         }
-    }
-
-    /// Run the auto-mode 2-stage LLM classifier for a tool call that returned
-    /// `Ask`. Returns `Some(decision)` when the classifier decided, or `None`
-    /// when the caller should fall through to interactive approval.
-    ///
-    /// TS: `classifierDecision.ts` `canUseToolInAutoMode()`.
-    async fn try_classify_in_auto_mode(
-        &self,
-        tool_name: &str,
-        input: &serde_json::Value,
-        is_read_only: bool,
-        state: &coco_permissions::AutoModeState,
-        tracker: &mut coco_permissions::DenialTracker,
-        messages: &[Message],
-    ) -> Option<PermissionDecision> {
-        let client = Arc::clone(&self.client);
-        // `classify_fn` runs the 2-stage LLM call. Each stage issues a fresh
-        // one-shot request with (system, user) content — no tools, no streaming.
-        let classify_fn = move |req: coco_permissions::ClassifyRequest| {
-            let client = Arc::clone(&client);
-            async move {
-                let prompt: vercel_ai_provider::LanguageModelV4Prompt = vec![
-                    vercel_ai_provider::LanguageModelV4Message::System {
-                        content: req.system_prompt,
-                        provider_options: None,
-                    },
-                    vercel_ai_provider::LanguageModelV4Message::User {
-                        content: vec![vercel_ai_provider::UserContentPart::Text(
-                            vercel_ai_provider::TextPart {
-                                text: req.user_prompt,
-                                provider_metadata: None,
-                            },
-                        )],
-                        provider_options: None,
-                    },
-                ];
-                // Stage 1 (256 tokens, triage) benefits from fast mode — lower
-                // latency on the hot path. Stage 2 (4k tokens, extended
-                // reasoning) needs the full-capability model, so don't force
-                // the fast variant there.
-                let params = coco_inference::QueryParams {
-                    prompt,
-                    max_tokens: Some(req.max_tokens),
-                    thinking_level: None,
-                    fast_mode: req.stage == 1,
-                    tools: None,
-                };
-                match client.query(&params).await {
-                    Ok(result) => {
-                        let text: String = result
-                            .content
-                            .iter()
-                            .filter_map(|p| match p {
-                                vercel_ai_provider::AssistantContentPart::Text(t) => {
-                                    Some(t.text.as_str())
-                                }
-                                _ => None,
-                            })
-                            .collect::<Vec<_>>()
-                            .join("");
-                        Ok(text)
-                    }
-                    Err(e) => Err(e.to_string()),
-                }
-            }
-        };
-
-        coco_permissions::can_use_tool_in_auto_mode(
-            tool_name,
-            input,
-            is_read_only,
-            state,
-            tracker,
-            messages,
-            &self.auto_mode_rules,
-            classify_fn,
-        )
-        .await
     }
 
     /// Shrink `history` with a reactive microcompact and emit the paired
@@ -2388,12 +2460,19 @@ impl QueryEngine {
 
         // Auto-compaction check: micro first, then full LLM if still over.
         // TS: `compactConversation()` — micro-compact, then full summarize.
+        //
+        // TS `isAutoCompactEnabled()` short-circuits the trigger (not just
+        // the reminder) — matching that parity keeps `auto_compact_enabled
+        // = false` from silently rewriting history. Gate both call sites on
+        // the same flag so a post-micro re-check stays consistent.
         let estimated_tokens = coco_compact::estimate_tokens(&history.messages);
-        if coco_compact::should_auto_compact(
-            estimated_tokens,
-            self.config.context_window,
-            self.config.max_output_tokens,
-        ) {
+        if self.config.auto_compact_enabled
+            && coco_compact::should_auto_compact(
+                estimated_tokens,
+                self.config.context_window,
+                self.config.max_output_tokens,
+            )
+        {
             let pre_count = history.messages.len() as i32;
             coco_compact::micro_compact(&mut history.messages, /*keep_recent*/ 10);
             info!("auto micro-compaction triggered");
@@ -2408,11 +2487,13 @@ impl QueryEngine {
             .await;
 
             let post_micro_tokens = coco_compact::estimate_tokens(&history.messages);
-            if coco_compact::should_auto_compact(
-                post_micro_tokens,
-                self.config.context_window,
-                self.config.max_output_tokens,
-            ) {
+            if self.config.auto_compact_enabled
+                && coco_compact::should_auto_compact(
+                    post_micro_tokens,
+                    self.config.context_window,
+                    self.config.max_output_tokens,
+                )
+            {
                 self.try_full_compact(history, event_tx).await;
             }
         }
@@ -2721,183 +2802,133 @@ impl QueryEngine {
     }
 
     /// Build tool definitions for the LLM (function tool schemas).
-    fn build_tool_definitions(&self) -> Vec<vercel_ai_provider::LanguageModelV4Tool> {
-        self.tools
-            .loaded_tools()
-            .iter()
-            .map(|tool| {
-                let schema = tool.input_schema();
-                let json_schema = tool
-                    .input_json_schema()
-                    .unwrap_or_else(|| serde_json::to_value(&schema).unwrap_or_default());
-                LanguageModelV4Tool::Function(LanguageModelV4FunctionTool {
-                    name: tool.name().to_string(),
-                    description: Some(tool.description(
-                        &serde_json::Value::Null,
-                        &coco_tool::DescriptionOptions::default(),
-                    )),
-                    input_schema: json_schema,
-                    input_examples: None,
-                    strict: None,
-                    provider_options: None,
-                })
-            })
-            .collect()
+    ///
+    /// TS parity: each `Tool::prompt(&PromptOptions)` call returns the
+    /// description the model sees that turn. Agent/Skill tools use
+    /// this hook to inject live runtime state (current agent / skill
+    /// listings) into their description. For tools that don't
+    /// override `prompt`, the trait default delegates to
+    /// `description()`, preserving the legacy behavior.
+    async fn build_tool_definitions(
+        &self,
+        app_state: &ToolAppState,
+    ) -> Vec<vercel_ai_provider::LanguageModelV4Tool> {
+        let loaded = self.tools.loaded_tools();
+        let tool_names: Vec<String> = loaded.iter().map(|t| t.name().to_string()).collect();
+
+        let agent_names: Vec<String> = self
+            .session_bootstrap
+            .as_ref()
+            .map(|b| b.agents.clone())
+            .unwrap_or_default();
+        let skill_names: Vec<String> = {
+            let mut names = self
+                .session_bootstrap
+                .as_ref()
+                .map(|b| b.skills.clone())
+                .unwrap_or_default();
+            names.sort();
+            names
+        };
+
+        let permission_mode = app_state
+            .permission_mode
+            .unwrap_or(self.config.permission_mode);
+        let permission_context = coco_types::ToolPermissionContext {
+            mode: permission_mode,
+            additional_dirs: std::collections::HashMap::new(),
+            allow_rules: std::collections::HashMap::new(),
+            deny_rules: std::collections::HashMap::new(),
+            ask_rules: std::collections::HashMap::new(),
+            bypass_available: self.config.bypass_permissions_available,
+            pre_plan_mode: app_state.pre_plan_mode,
+            stripped_dangerous_rules: app_state.stripped_dangerous_rules.clone(),
+            session_plan_file: None,
+        };
+        let prompt_options = coco_tool::PromptOptions {
+            is_non_interactive: self.config.is_non_interactive,
+            tool_names,
+            agent_names,
+            allowed_agent_types: None,
+            skill_names,
+            permission_context: Some(permission_context),
+        };
+
+        let mut out = Vec::with_capacity(loaded.len());
+        for tool in loaded {
+            let schema = tool.input_schema();
+            let json_schema = tool
+                .input_json_schema()
+                .unwrap_or_else(|| serde_json::to_value(&schema).unwrap_or_default());
+            let description = tool.prompt(&prompt_options).await;
+            out.push(LanguageModelV4Tool::Function(LanguageModelV4FunctionTool {
+                name: tool.name().to_string(),
+                description: Some(description),
+                input_schema: json_schema,
+                input_examples: None,
+                strict: None,
+                provider_options: None,
+            }));
+        }
+        out
     }
 
-    /// Create tool execution context from engine config + live
-    /// [`ToolAppState`]. The permission-mode-related fields
-    /// (`mode`, `pre_plan_mode`, `stripped_dangerous_rules`) are
-    /// seeded from `app_state` when present so mutations made by prior
-    /// tool batches (e.g. `EnterPlanMode` setting mode → Plan) are
-    /// visible on the next batch. TS parity: every tool-side access
-    /// goes through `context.getAppState().toolPermissionContext` —
-    /// Rust rebuilds the ctx snapshot per batch from the same shared
-    /// store to match that semantic.
+    /// Build a factory that knows how to construct [`ToolUseContext`]
+    /// snapshots from the engine's current config + shared handles.
     ///
-    /// `config.permission_mode` is used only as a fallback when
-    /// `app_state` is absent (single-shot SDK callers, tests without a
-    /// shared state). Callers wiring `with_app_state` are expected to
-    /// seed `app_state.permission_mode` from `config.permission_mode`
-    /// once at session bootstrap.
-    async fn create_tool_context(&self) -> ToolUseContext {
-        let (live_mode, live_pre_plan, live_stripped) = match self.app_state.as_ref() {
-            Some(state) => {
-                let guard = state.read().await;
-                (
-                    guard.permission_mode.unwrap_or(self.config.permission_mode),
-                    guard.pre_plan_mode,
-                    guard.stripped_dangerous_rules.clone(),
-                )
-            }
-            None => (self.config.permission_mode, None, None),
-        };
-        ToolUseContext {
+    /// Each turn calls `factory.build(...)` to get a fresh context; the
+    /// factory re-reads live `ToolAppState` per call so permission-mode
+    /// mutations from a prior batch (e.g. `EnterPlanMode`) propagate
+    /// without a config reload.
+    ///
+    /// The field mapping itself — including the five previously-hardcoded
+    /// fields (`thinking_level`, `is_non_interactive`, `max_budget_usd`,
+    /// `custom_system_prompt`, `append_system_prompt`) — is verified in
+    /// `tool_context.test.rs`.
+    fn tool_context_factory(
+        &self,
+        hook_tx: Option<&tokio::sync::mpsc::Sender<coco_hooks::HookExecutionEvent>>,
+    ) -> crate::tool_context::ToolContextFactory {
+        // Build the structured hook handle here — every tool call built
+        // through this factory gets the same `QueryHookHandle`, so
+        // PreToolUse/PostToolUse/PostToolUseFailure fire consistently
+        // regardless of the call site. When the session has no hook
+        // registry (tests / single-turn helpers) we pass `None` and the
+        // `ToolUseContext` receives no handle — executor treats that as
+        // a no-op, matching legacy behavior.
+        let hook_handle = self.hooks.as_ref().map(|registry| {
+            let handle: coco_tool::HookHandleRef =
+                std::sync::Arc::new(crate::hook_adapter::QueryHookHandle::new(
+                    registry.clone(),
+                    self.orchestration_ctx(),
+                    hook_tx.cloned(),
+                ));
+            handle
+        });
+        crate::tool_context::ToolContextFactory {
+            config: self.config.clone(),
             tools: self.tools.clone(),
-            main_loop_model: self.config.model_name.clone(),
-            thinking_level: None,
-            is_non_interactive: false,
-            max_budget_usd: None,
-            custom_system_prompt: None,
-            append_system_prompt: None,
-            debug: false,
-            verbose: false,
-            tool_config: self.config.tool_config.clone(),
-            sandbox_config: self.config.sandbox_config.clone(),
-            memory_config: self.config.memory_config.clone(),
-            shell_config: self.config.shell_config.clone(),
-            web_fetch_config: self.config.web_fetch_config.clone(),
-            web_search_config: self.config.web_search_config.clone(),
-            is_teammate: self.config.is_teammate,
-            plan_mode_required: self.config.plan_mode_required,
-            // Pre-resolve swarm identity once, so tools read from ctx
-            // instead of process env. Falls back to env vars set by the
-            // teammate spawner for cross-process scenarios. Env namespace
-            // is `COCO_*` (coco-rs native) — see swarm_constants.
-            agent_name: env::env_opt(EnvKey::CocoAgentName)
-                .or_else(|| self.config.agent_id.clone()),
-            team_name: env::env_opt(EnvKey::CocoTeamName),
-            plan_verify_execution: self.config.plan_mode_settings.verify_execution,
             cancel: self.cancel.clone(),
-            messages: Arc::new(RwLock::new(Vec::new())),
-            permission_context: coco_types::ToolPermissionContext {
-                mode: live_mode,
-                additional_dirs: std::collections::HashMap::new(),
-                allow_rules: std::collections::HashMap::new(),
-                deny_rules: std::collections::HashMap::new(),
-                ask_rules: std::collections::HashMap::new(),
-                // Startup-derived capability (NOT a per-turn echo of the
-                // live mode). Set once at bootstrap from the CLI
-                // `--dangerously-skip-permissions` /
-                // `--allow-dangerously-skip-permissions` flags plus
-                // policy killswitch. Determines whether Plan-mode
-                // auto-allow (evaluate.rs) and Shift+Tab cycle
-                // (PermissionMode::next_in_cycle) can escalate into
-                // `BypassPermissions`.
-                bypass_available: self.config.bypass_permissions_available,
-                pre_plan_mode: live_pre_plan,
-                stripped_dangerous_rules: live_stripped,
-                // Pre-resolved so the Plan-mode fallthrough can auto-allow
-                // writes targeting the session plan file (TS parity:
-                // `checkEditableInternalPath` + `isSessionPlanFile`).
-                // For subagents this points at `{slug}-agent-{id}.md` so
-                // the subagent's own plan file is auto-allowed.
-                session_plan_file: self.config_home.as_ref().map(|ch| {
-                    let plans_dir = coco_context::resolve_plans_directory(
-                        ch,
-                        self.config.project_dir.as_deref(),
-                        self.config.plans_directory.as_deref(),
-                    );
-                    coco_context::get_plan_file_path(
-                        &self.config.session_id,
-                        &plans_dir,
-                        self.config.agent_id.as_deref(),
-                    )
-                }),
-            },
-            tool_use_id: None,
-            user_message_id: None,
-            agent_id: self.config.agent_id.as_ref().map(coco_types::AgentId::new),
-            agent_type: None,
-            file_reading_limits: Default::default(),
-            glob_limits: Default::default(),
-            nested_memory_attachment_triggers: Arc::new(RwLock::new(Default::default())),
-            loaded_nested_memory_paths: Default::default(),
-            dynamic_skill_dir_triggers: Arc::new(RwLock::new(Default::default())),
-            discovered_skill_names: Default::default(),
-            tool_decisions: Default::default(),
-            user_modified: false,
-            require_can_use_tool: false,
-            preserve_tool_use_results: false,
-            rendered_system_prompt: None,
-            critical_system_reminder: None,
-            in_progress_tool_use_ids: Arc::new(RwLock::new(Default::default())),
-            side_query: Arc::new(coco_tool::NoOpSideQuery),
-            mcp: Arc::new(coco_tool::NoOpMcpHandle),
-            schedules: Arc::new(coco_tool::NoOpScheduleStore),
-            agent: Arc::new(coco_tool::NoOpAgentHandle),
-            mailbox: self
-                .mailbox
-                .clone()
-                .unwrap_or_else(|| Arc::new(coco_tool::NoOpMailboxHandle)),
-            cwd_override: None,
+            mailbox: self.mailbox.clone(),
+            task_list: self.task_list.clone(),
+            todo_list: self.todo_list.clone(),
             permission_bridge: self.permission_bridge.clone(),
-            progress_tx: None,
-            task_handle: None,
-            task_list: self
-                .task_list
-                .clone()
-                .unwrap_or_else(|| Arc::new(coco_tool::NoOpTaskListHandle)),
-            todo_list: self
-                .todo_list
-                .clone()
-                .unwrap_or_else(|| Arc::new(coco_tool::InMemoryTodoListHandle::new())),
-            // TODO(B1.3 follow-up): bridge app/query hook registry into
-            // HookHandle impl to wire PreToolUse/PostToolUse hooks through
-            // the executor. For now the executor treats None as a no-op.
-            hook_handle: None,
+            app_state: self.app_state.clone(),
             file_read_state: self.file_read_state.clone(),
             file_history: self.file_history.clone(),
             config_home: self.config_home.clone(),
-            session_id_for_history: Some(self.config.session_id.clone()),
-            plans_dir: self.config_home.as_ref().map(|ch| {
-                coco_context::resolve_plans_directory(
-                    ch,
-                    self.config.project_dir.as_deref(),
-                    self.config.plans_directory.as_deref(),
-                )
-            }),
-            // Wrap the Arc in an `AppStateReadHandle` so tools can
-            // only `.read()`. Writes go via `ToolResult::app_state_patch`
-            // applied by the executor post-batch — a structural
-            // guarantee that TS matches with queued context modifiers.
-            app_state: self
-                .app_state
-                .as_ref()
-                .map(|arc| coco_types::AppStateReadHandle::new(arc.clone())),
-            local_denial_tracking: None,
-            query_chain_id: None,
-            query_depth: 0,
+            hook_handle,
+            // Real `AgentHandle` when the CLI / SDK / TUI installed
+            // one via `with_agent_handle`; otherwise fall back to
+            // `NoOpAgentHandle`.
+            agent_handle: self.agent_handle.clone(),
+            // `SkillHandle` same pattern — real handle when
+            // installed, `NoOpSkillHandle` otherwise.
+            skill_handle: self.skill_handle.clone(),
+            // Session-scoped schema validator. Clone is cheap —
+            // inner state is `Arc<RwLock<HashMap>>` shared across
+            // per-turn ctx rebuilds so the compile cache persists.
+            tool_schema_validator: Some(self.tool_schema_validator.clone()),
         }
     }
 
@@ -2956,6 +2987,228 @@ struct StreamingToolCallBuffer {
 /// announced set by scanning history for prior delta attachments;
 /// coco-rs persists the set directly on app_state, so this diff is
 /// O(|current ∪ announced|).
+/// Extract the first `ToolResult` text payload from a run of
+/// `ordered_messages` so the streaming path can populate
+/// `ToolUseCompleted.output` with the same string the SDK expects.
+/// Mirrors the non-streaming runner's `render_completed_output`
+/// helper in `tool_call_runner.rs`.
+/// LRU + time-window throttle for protocol-level tool-progress events.
+///
+/// TS parity: `utils/queryHelpers.ts:99-188` — one throttle per
+/// `parent_tool_use_id`, ≤1 emission / 30 s, LRU-bound to 100 keys.
+pub(crate) struct ProgressThrottle {
+    last_sent: std::collections::HashMap<String, std::time::Instant>,
+    throttle: std::time::Duration,
+    max_tracking: usize,
+}
+
+impl ProgressThrottle {
+    /// Matches TS defaults (30 s window, 100-key LRU).
+    pub(crate) fn new() -> Self {
+        Self::with_params(std::time::Duration::from_secs(30), 100)
+    }
+
+    /// Test-only constructor that takes an explicit window + LRU
+    /// size. The tests use a 1 ms window so they don't need to sleep.
+    pub(crate) fn with_params(throttle: std::time::Duration, max_tracking: usize) -> Self {
+        Self {
+            last_sent: std::collections::HashMap::new(),
+            throttle,
+            max_tracking,
+        }
+    }
+
+    /// Returns `true` if a protocol event for `key` should be
+    /// emitted now and stamps the send time. Returns `false` (skip)
+    /// when a prior emission fell inside the throttle window.
+    pub(crate) fn allow(&mut self, key: &str, now: std::time::Instant) -> bool {
+        if let Some(prev) = self.last_sent.get(key)
+            && now.duration_since(*prev) < self.throttle
+        {
+            return false;
+        }
+        if self.last_sent.len() >= self.max_tracking
+            && let Some(oldest) = self
+                .last_sent
+                .iter()
+                .min_by_key(|&(_, t)| *t)
+                .map(|(k, _)| k.clone())
+        {
+            self.last_sent.remove(&oldest);
+        }
+        self.last_sent.insert(key.to_string(), now);
+        true
+    }
+}
+
+/// Extract `(tool_name, elapsed_seconds, task_id)` from a
+/// `ToolProgress.data` payload IF it matches a TS-parity
+/// bash/powershell shape. Returns `None` for unrelated payload
+/// types (e.g. agent/skill progress) — those follow different
+/// propagation rules and are not currently surfaced as
+/// `ServerNotification::ToolProgress`.
+pub(crate) fn classify_progress_payload(
+    data: &serde_json::Value,
+) -> Option<(&'static str, f64, Option<String>)> {
+    let obj = data.as_object()?;
+    let ptype = obj.get("type").and_then(serde_json::Value::as_str)?;
+    let tool_name = match ptype {
+        "bash_progress" => "Bash",
+        "powershell_progress" => "PowerShell",
+        _ => return None,
+    };
+    let elapsed = obj
+        .get("elapsedTimeSeconds")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.0);
+    let task_id = obj
+        .get("taskId")
+        .and_then(serde_json::Value::as_str)
+        .map(ToString::to_string);
+    Some((tool_name, elapsed, task_id))
+}
+
+/// Fan out a single `ToolProgress` event to both TUI and protocol
+/// layers, applying the throttle to the protocol layer. Extracted
+/// from the session drain loop so it can be unit-tested without
+/// standing up a full engine.
+pub(crate) async fn drain_one_progress(
+    event_tx: &Option<tokio::sync::mpsc::Sender<crate::CoreEvent>>,
+    progress: coco_tool::ToolProgress,
+    throttle: &mut ProgressThrottle,
+) {
+    // Fan-out #1: raw TUI event, always emitted.
+    let tool_use_id = progress.tool_use_id.clone();
+    let _ = crate::emit::emit_tui(
+        event_tx,
+        coco_types::TuiOnlyEvent::ToolProgress {
+            tool_use_id: tool_use_id.clone(),
+            data: progress.data.clone(),
+        },
+    )
+    .await;
+
+    // Fan-out #2: protocol ToolProgress. Only bash/powershell
+    // progress qualifies (TS `queryHelpers.ts:158-199`).
+    let Some((tool_name, elapsed, task_id)) = classify_progress_payload(&progress.data) else {
+        return;
+    };
+
+    // Throttle key: TS uses `parentToolUseID` because `toolUseID`
+    // rotates per progress event in its world. Rust's tool_use_id
+    // is stable, so it's a safe fallback when parent is absent.
+    let key = progress
+        .parent_tool_use_id
+        .clone()
+        .unwrap_or_else(|| tool_use_id.clone());
+    if !throttle.allow(&key, std::time::Instant::now()) {
+        return;
+    }
+
+    let _ = crate::emit::emit_protocol(
+        event_tx,
+        coco_types::ServerNotification::ToolProgress(coco_types::ToolProgressParams {
+            tool_use_id,
+            tool_name: tool_name.to_string(),
+            parent_tool_use_id: progress.parent_tool_use_id,
+            elapsed_time_seconds: elapsed,
+            task_id,
+        }),
+    )
+    .await;
+}
+
+/// Classify an error message as a transient capacity error.
+///
+/// TS parity: `is529Error` + 429 clauses in `services/api/withRetry.ts`.
+/// Rust's [`coco_inference::InferenceError::Overloaded`] Display formats
+/// as `"provider overloaded"`; rate-limit as `"rate limited"`. Raw HTTP
+/// status codes appear in messages bubbled from provider crates. Match
+/// any of these.
+fn is_capacity_error_message(msg: &str) -> bool {
+    let m = msg.to_ascii_lowercase();
+    m.contains("provider overloaded")
+        || m.contains("overloaded_error")
+        || m.contains("rate limited")
+        || m.contains("rate_limit")
+        || m.contains("status: 529")
+        || m.contains("status: 503")
+        || m.contains("(529)")
+        || m.contains("(503)")
+}
+
+/// Announce a model fallback / recovery transition as an inline
+/// stream notice. TS parity: `query.ts:946` writes a system-tagged
+/// line into the transcript so SDK consumers + the TUI see it
+/// alongside the agent's response.
+///
+/// Templates are direction-aware:
+/// - `CapacityDegrade` → "Switched to {new} due to high demand for {original}."
+/// - `ProbeRecovery`   → "Recovered to primary {new} after probe."
+/// - `ChainExhausted`  → "All provider slots exhausted (last tried: {original})."
+///
+/// `original` may be empty if the previous slot never identified
+/// itself — the message degrades gracefully on each branch.
+async fn emit_model_fallback_notice(
+    event_tx: &Option<tokio::sync::mpsc::Sender<crate::CoreEvent>>,
+    original: &str,
+    new_model: &str,
+    session_id: &str,
+    reason: crate::model_runtime::ModelFallbackReason,
+) {
+    use crate::model_runtime::ModelFallbackReason;
+    let notice = match reason {
+        ModelFallbackReason::CapacityDegrade { .. } => {
+            if original.is_empty() {
+                format!("[system] Switched to fallback model {new_model} due to high demand.\n")
+            } else {
+                format!("[system] Switched to {new_model} due to high demand for {original}.\n")
+            }
+        }
+        ModelFallbackReason::ProbeRecovery => {
+            format!("[system] Recovered to primary {new_model} after probe.\n")
+        }
+        ModelFallbackReason::ChainExhausted => {
+            if original.is_empty() {
+                "[system] All provider slots exhausted.\n".to_string()
+            } else {
+                format!("[system] All provider slots exhausted (last tried: {original}).\n")
+            }
+        }
+    };
+    let _ = crate::emit::emit_stream(
+        event_tx,
+        crate::AgentStreamEvent::TextDelta {
+            turn_id: session_id.to_string(),
+            delta: notice,
+        },
+    )
+    .await;
+}
+
+fn extract_streaming_result_text(ordered: &[Message]) -> String {
+    for msg in ordered {
+        if let Message::ToolResult(tr) = msg
+            && let coco_types::LlmMessage::Tool { content, .. } = &tr.message
+        {
+            for part in content {
+                if let coco_types::ToolContent::ToolResult(r) = part {
+                    match &r.output {
+                        vercel_ai_provider::ToolResultContent::Text { value, .. } => {
+                            return value.clone();
+                        }
+                        vercel_ai_provider::ToolResultContent::ErrorText { value, .. } => {
+                            return value.clone();
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    String::new()
+}
+
 fn compute_tools_delta(
     current_tools: &[String],
     last_announced: &std::collections::HashSet<String>,

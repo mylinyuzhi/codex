@@ -77,5 +77,41 @@ fn pr_e3_defaults_leave_existing_flags_untouched() {
     assert!(!cli.fork_session);
     assert!(cli.betas.is_none());
     assert!(cli.session_id.is_none());
+    assert!(
+        cli.fallback_model.is_empty(),
+        "no-arg invocation must leave fallback_model empty"
+    );
+}
+
+#[test]
+fn parses_repeated_fallback_model_flags_into_ordered_vec() {
+    let cli = Cli::try_parse_from([
+        "coco",
+        "--fallback-model",
+        "anthropic/claude-sonnet-4-6",
+        "--fallback-model",
+        "openai/gpt-5",
+        "--fallback-model",
+        "google/gemini-2.5-pro",
+    ])
+    .expect("parse repeated fallback flags");
+    assert_eq!(
+        cli.fallback_model,
+        vec![
+            "anthropic/claude-sonnet-4-6".to_string(),
+            "openai/gpt-5".to_string(),
+            "google/gemini-2.5-pro".to_string(),
+        ],
+        "flag order must be preserved for chain priority",
+    );
+}
+
+#[test]
+fn parses_single_fallback_model_flag_as_one_tier_chain() {
+    // Legacy usage: a single `--fallback-model` remains a valid
+    // one-tier chain, preserving existing muscle memory.
+    let cli = Cli::try_parse_from(["coco", "--fallback-model", "anthropic/claude-sonnet-4-6"])
+        .expect("parse single fallback flag");
+    assert_eq!(cli.fallback_model, vec!["anthropic/claude-sonnet-4-6"]);
     assert!(cli.permission_prompt_tool.is_none());
 }

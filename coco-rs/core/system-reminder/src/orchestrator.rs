@@ -68,18 +68,17 @@ impl SystemReminderOrchestrator {
         }
     }
 
-    /// Register a generator. Registration order doesn't affect output order
-    /// (generators run in parallel); it only affects iteration order in
-    /// diagnostic traces.
+    /// Register a generator. Generators run in parallel, but `join_all`
+    /// returns results in registration order, so the registry order is also
+    /// the injection order for reminders that fire on the same turn.
     pub fn add_generator(&mut self, g: Arc<dyn AttachmentGenerator>) {
         self.generators.push(g);
     }
 
-    /// Register all Phase-B built-in generators: `PlanModeEnter`, `PlanModeExit`,
-    /// `PlanModeReentry`, `AutoModeExit`.
+    /// Register all built-in generators in TS return order:
+    /// user-input batch, all-thread batch, then main-thread batch.
     ///
     /// Engine callers use this in preference to hand-wiring each generator.
-    /// Phase C extends this list as new generators land.
     pub fn with_default_generators(mut self) -> Self {
         self.register_default_generators();
         self
@@ -87,104 +86,75 @@ impl SystemReminderOrchestrator {
 
     /// In-place variant of [`with_default_generators`](Self::with_default_generators).
     pub fn register_default_generators(&mut self) {
-        use crate::generators::AgentListingDeltaGenerator;
-        use crate::generators::AutoModeEnterGenerator;
-        use crate::generators::AutoModeExitGenerator;
-        use crate::generators::BudgetUsdGenerator;
-        use crate::generators::CompactionReminderGenerator;
-        use crate::generators::CompanionIntroGenerator;
-        use crate::generators::CriticalSystemReminderGenerator;
-        use crate::generators::DateChangeGenerator;
-        use crate::generators::DeferredToolsDeltaGenerator;
-        use crate::generators::McpInstructionsDeltaGenerator;
-        use crate::generators::OutputTokenUsageGenerator;
-        use crate::generators::PlanModeEnterGenerator;
-        use crate::generators::PlanModeExitGenerator;
-        use crate::generators::PlanModeReentryGenerator;
-        use crate::generators::TaskRemindersGenerator;
-        use crate::generators::TodoRemindersGenerator;
-        use crate::generators::TokenUsageGenerator;
-        use crate::generators::UltrathinkEffortGenerator;
-        use crate::generators::VerifyPlanReminderGenerator;
+        use crate::generators::{
+            AgentListingDeltaGenerator, AgentMentionsGenerator, AgentPendingMessagesGenerator,
+            AlreadyReadFileGenerator, AsyncHookResponseGenerator, AtMentionedFilesGenerator,
+            AutoModeEnterGenerator, AutoModeExitGenerator, BudgetUsdGenerator,
+            CompactionReminderGenerator, CompanionIntroGenerator, CriticalSystemReminderGenerator,
+            DateChangeGenerator, DeferredToolsDeltaGenerator, DiagnosticsGenerator,
+            EditedImageFileGenerator, HookAdditionalContextGenerator, HookBlockingErrorGenerator,
+            HookStoppedContinuationGenerator, HookSuccessGenerator, IdeOpenedFileGenerator,
+            IdeSelectionGenerator, InvokedSkillsGenerator, McpInstructionsDeltaGenerator,
+            McpResourcesGenerator, NestedMemoryGenerator, OutputStyleGenerator,
+            OutputTokenUsageGenerator, PlanModeEnterGenerator, PlanModeExitGenerator,
+            PlanModeReentryGenerator, QueuedCommandGenerator, RelevantMemoriesGenerator,
+            SkillListingGenerator, TaskRemindersGenerator, TaskStatusGenerator,
+            TeamContextGenerator, TeammateMailboxGenerator, TodoRemindersGenerator,
+            TokenUsageGenerator, UltrathinkEffortGenerator, VerifyPlanReminderGenerator,
+        };
+
+        // TS userInputAttachments (`attachments.ts:773-814`).
+        self.add_generator(Arc::new(AtMentionedFilesGenerator));
+        self.add_generator(Arc::new(McpResourcesGenerator));
+        self.add_generator(Arc::new(AgentMentionsGenerator));
+
+        // TS allThreadAttachments (`attachments.ts:822-941`), plus
+        // relevant_memories which TS prefetches outside getAttachments but
+        // renders through the same reminder path.
+        self.add_generator(Arc::new(QueuedCommandGenerator));
+        self.add_generator(Arc::new(DateChangeGenerator));
+        self.add_generator(Arc::new(UltrathinkEffortGenerator));
+        self.add_generator(Arc::new(DeferredToolsDeltaGenerator));
+        self.add_generator(Arc::new(AgentListingDeltaGenerator));
+        self.add_generator(Arc::new(McpInstructionsDeltaGenerator));
+        self.add_generator(Arc::new(CompanionIntroGenerator));
+        self.add_generator(Arc::new(NestedMemoryGenerator));
+        self.add_generator(Arc::new(RelevantMemoriesGenerator));
+        self.add_generator(Arc::new(SkillListingGenerator));
+        self.add_generator(Arc::new(PlanModeReentryGenerator));
         self.add_generator(Arc::new(PlanModeEnterGenerator));
         self.add_generator(Arc::new(PlanModeExitGenerator));
-        self.add_generator(Arc::new(PlanModeReentryGenerator));
         self.add_generator(Arc::new(AutoModeEnterGenerator));
         self.add_generator(Arc::new(AutoModeExitGenerator));
         self.add_generator(Arc::new(TodoRemindersGenerator));
         self.add_generator(Arc::new(TaskRemindersGenerator));
+        self.add_generator(Arc::new(TeammateMailboxGenerator));
+        self.add_generator(Arc::new(TeamContextGenerator));
+        self.add_generator(Arc::new(AgentPendingMessagesGenerator));
         self.add_generator(Arc::new(CriticalSystemReminderGenerator));
         self.add_generator(Arc::new(CompactionReminderGenerator));
-        self.add_generator(Arc::new(DateChangeGenerator));
-        self.add_generator(Arc::new(VerifyPlanReminderGenerator));
-        // Phase 1 engine-local reminders.
-        self.add_generator(Arc::new(UltrathinkEffortGenerator));
+
+        // TS mainThreadAttachments (`attachments.ts:944-995`) plus hook
+        // attachments produced by hook executors and rendered here.
+        self.add_generator(Arc::new(IdeSelectionGenerator));
+        self.add_generator(Arc::new(IdeOpenedFileGenerator));
+        self.add_generator(Arc::new(OutputStyleGenerator));
+        self.add_generator(Arc::new(DiagnosticsGenerator));
+        self.add_generator(Arc::new(TaskStatusGenerator));
+        self.add_generator(Arc::new(HookSuccessGenerator));
+        self.add_generator(Arc::new(HookBlockingErrorGenerator));
+        self.add_generator(Arc::new(HookAdditionalContextGenerator));
+        self.add_generator(Arc::new(HookStoppedContinuationGenerator));
+        self.add_generator(Arc::new(AsyncHookResponseGenerator));
         self.add_generator(Arc::new(TokenUsageGenerator));
         self.add_generator(Arc::new(BudgetUsdGenerator));
         self.add_generator(Arc::new(OutputTokenUsageGenerator));
-        self.add_generator(Arc::new(CompanionIntroGenerator));
-        // Phase 2 history-diff delta reminders.
-        self.add_generator(Arc::new(DeferredToolsDeltaGenerator));
-        self.add_generator(Arc::new(AgentListingDeltaGenerator));
-        self.add_generator(Arc::new(McpInstructionsDeltaGenerator));
-        // Phase 3 cross-crate state reminders.
-        {
-            use crate::generators::AgentPendingMessagesGenerator;
-            use crate::generators::AsyncHookResponseGenerator;
-            use crate::generators::DiagnosticsGenerator;
-            use crate::generators::HookAdditionalContextGenerator;
-            use crate::generators::HookBlockingErrorGenerator;
-            use crate::generators::HookStoppedContinuationGenerator;
-            use crate::generators::HookSuccessGenerator;
-            use crate::generators::InvokedSkillsGenerator;
-            use crate::generators::OutputStyleGenerator;
-            use crate::generators::QueuedCommandGenerator;
-            use crate::generators::SkillListingGenerator;
-            use crate::generators::TaskStatusGenerator;
-            use crate::generators::TeamContextGenerator;
-            use crate::generators::TeammateMailboxGenerator;
-            self.add_generator(Arc::new(HookSuccessGenerator));
-            self.add_generator(Arc::new(HookBlockingErrorGenerator));
-            self.add_generator(Arc::new(HookAdditionalContextGenerator));
-            self.add_generator(Arc::new(HookStoppedContinuationGenerator));
-            self.add_generator(Arc::new(AsyncHookResponseGenerator));
-            self.add_generator(Arc::new(DiagnosticsGenerator));
-            self.add_generator(Arc::new(OutputStyleGenerator));
-            self.add_generator(Arc::new(QueuedCommandGenerator));
-            self.add_generator(Arc::new(TaskStatusGenerator));
-            self.add_generator(Arc::new(SkillListingGenerator));
-            self.add_generator(Arc::new(InvokedSkillsGenerator));
-            self.add_generator(Arc::new(TeammateMailboxGenerator));
-            self.add_generator(Arc::new(TeamContextGenerator));
-            self.add_generator(Arc::new(AgentPendingMessagesGenerator));
-        }
-        // Phase 4 user-input tier reminders.
-        {
-            use crate::generators::AgentMentionsGenerator;
-            use crate::generators::AtMentionedFilesGenerator;
-            use crate::generators::IdeOpenedFileGenerator;
-            use crate::generators::IdeSelectionGenerator;
-            use crate::generators::McpResourcesGenerator;
-            self.add_generator(Arc::new(AtMentionedFilesGenerator));
-            self.add_generator(Arc::new(McpResourcesGenerator));
-            self.add_generator(Arc::new(AgentMentionsGenerator));
-            self.add_generator(Arc::new(IdeSelectionGenerator));
-            self.add_generator(Arc::new(IdeOpenedFileGenerator));
-        }
-        // Memory reminders (TS nested_memory + relevant_memories).
-        {
-            use crate::generators::NestedMemoryGenerator;
-            use crate::generators::RelevantMemoriesGenerator;
-            self.add_generator(Arc::new(NestedMemoryGenerator));
-            self.add_generator(Arc::new(RelevantMemoriesGenerator));
-        }
-        // Silent reminder-native attachments (Part 1).
-        {
-            use crate::generators::AlreadyReadFileGenerator;
-            use crate::generators::EditedImageFileGenerator;
-            self.add_generator(Arc::new(AlreadyReadFileGenerator));
-            self.add_generator(Arc::new(EditedImageFileGenerator));
-        }
+        self.add_generator(Arc::new(VerifyPlanReminderGenerator));
+        self.add_generator(Arc::new(InvokedSkillsGenerator));
+
+        // Silent reminder-native attachments: display/transcript only.
+        self.add_generator(Arc::new(AlreadyReadFileGenerator));
+        self.add_generator(Arc::new(EditedImageFileGenerator));
     }
 
     /// Borrow the throttle manager. Exposed so the engine can inject external

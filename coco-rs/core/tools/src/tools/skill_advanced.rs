@@ -6,18 +6,18 @@
 //! context fork vs inline execution, and skill validation.
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::collections::HashSet;
 
 // ── Skill execution mode ──
 
 /// How a skill is executed: inline (in the current agent context) or
 /// forked (in an isolated sub-agent with its own token budget).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SkillExecutionMode {
     /// Inline: the skill prompt is injected into the current conversation.
     /// The model processes it as part of the main agent's turn.
+    #[default]
     Inline,
     /// Forked: the skill runs in an isolated sub-agent with its own
     /// message history, token budget, and tool access.
@@ -93,12 +93,6 @@ pub struct SkillOutput {
     pub model: Option<String>,
 }
 
-impl Default for SkillExecutionMode {
-    fn default() -> Self {
-        Self::Inline
-    }
-}
-
 // ── Argument substitution ──
 
 /// Options for expanding a skill prompt template.
@@ -156,7 +150,9 @@ pub fn expand_skill_prompt(template: &str, opts: &ExpandOptions<'_>) -> String {
 
     // Prepend base directory if provided (TS: prependBaseDir)
     let mut result = match opts.base_dir {
-        Some(dir) if !dir.is_empty() => format!("Base directory for this skill: {dir}\n\n{template}"),
+        Some(dir) if !dir.is_empty() => {
+            format!("Base directory for this skill: {dir}\n\n{template}")
+        }
         _ => template.to_string(),
     };
 
@@ -225,16 +221,20 @@ pub fn expand_skill_prompt(template: &str, opts: &ExpandOptions<'_>) -> String {
         }
     }
 
-    // 3. Positional shorthand: $0, $1, ${1} (TS: shorthand $N)
-    let has_positional = (0..=20).any(|i| {
-        result.contains(&format!("${i}")) || result.contains(&format!("${{{i}}}"))
-    });
+    // 3. Positional shorthand: $0, $1, ${0}, ${1} (TS: shorthand $N).
+    //    Per TS `argumentSubstitution.ts:7` the shorthand is a
+    //    zero-indexed alias for `$ARGUMENTS[N]`: `$0` = first arg,
+    //    `$1` = second arg. This mirrors JS array indexing rather
+    //    than shell positional parameters — deliberate TS choice
+    //    (see doc comment on `substituteArguments`).
+    let has_positional = (0..=20)
+        .any(|i| result.contains(&format!("${i}")) || result.contains(&format!("${{{i}}}")));
     if has_positional {
         for (i, part) in parts.iter().enumerate() {
             result = result.replace(&format!("${{{i}}}"), part);
             result = result.replace(&format!("${i}"), part);
         }
-        // Clear remaining positional placeholders
+        // Clear remaining positional placeholders (0..=20).
         for idx in 0..=20 {
             result = result.replace(&format!("${{{idx}}}"), "");
             result = result.replace(&format!("${idx}"), "");
@@ -316,10 +316,7 @@ pub fn skill_matches_rule(skill_name: &str, rule: &str) -> bool {
 ///
 /// Starts with the skill's allowed_tools list, removes disallowed_tools,
 /// then intersects with the globally available tools.
-pub fn compute_effective_tools(
-    skill: &ResolvedSkill,
-    available_tools: &[String],
-) -> Vec<String> {
+pub fn compute_effective_tools(skill: &ResolvedSkill, available_tools: &[String]) -> Vec<String> {
     let available_set: HashSet<&str> = available_tools.iter().map(String::as_str).collect();
 
     if skill.allowed_tools.is_empty() {
@@ -369,11 +366,7 @@ pub fn build_inline_output(skill: &ResolvedSkill) -> SkillOutput {
 }
 
 /// Build the skill invocation output for forked execution.
-pub fn build_forked_output(
-    skill_name: &str,
-    agent_id: &str,
-    result_text: &str,
-) -> SkillOutput {
+pub fn build_forked_output(skill_name: &str, agent_id: &str, result_text: &str) -> SkillOutput {
     SkillOutput {
         success: true,
         command_name: skill_name.to_string(),

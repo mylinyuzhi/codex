@@ -420,6 +420,7 @@ pub fn ensure_user_first(messages: &mut Vec<Message>) {
                 is_compact_summary: false,
                 permission_mode: None,
                 origin: None,
+                parent_tool_use_id: None,
             }),
         );
     }

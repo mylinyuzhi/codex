@@ -434,6 +434,42 @@ async fn test_execute_pre_tool_use_with_prompt_hook() {
 }
 
 #[tokio::test]
+async fn test_execute_post_tool_use_failure_with_prompt_hook() {
+    let registry = make_registry(vec![HookDefinition {
+        event: HookEventType::PostToolUseFailure,
+        matcher: Some("Bash".to_string()),
+        handler: HookHandler::Prompt {
+            prompt: "Recover from failed command".to_string(),
+        },
+        priority: 0,
+        scope: HookScope::default(),
+        if_condition: None,
+        once: false,
+        is_async: false,
+        async_rewake: false,
+        shell: None,
+        status_message: None,
+    }]);
+
+    let ctx = test_ctx();
+    let result = execute_post_tool_use_failure(
+        &registry,
+        &ctx,
+        "Bash",
+        &serde_json::json!({"command": "false"}),
+        "exit code 1",
+        Some("execution_error"),
+        /*event_tx*/ None,
+    )
+    .await
+    .expect("should succeed");
+
+    assert!(!result.is_blocked());
+    assert_eq!(result.additional_contexts.len(), 1);
+    assert_eq!(result.additional_contexts[0], "Recover from failed command");
+}
+
+#[tokio::test]
 async fn test_execute_session_start() {
     let registry = make_registry(vec![HookDefinition {
         event: HookEventType::SessionStart,

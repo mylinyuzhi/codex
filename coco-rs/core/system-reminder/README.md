@@ -2,7 +2,7 @@
 
 Per-turn `<system-reminder>` injection. **TS-first**: ports Claude Code's `src/utils/attachments.ts` + `src/utils/messages.ts`. If the Rust port and TS disagree on cadence, text, or trigger, follow TS.
 
-Scope note: this crate owns the 40 `coco-system-reminder` generators below. Claude Code's TS `Attachment` union is broader: file/context attachments, UI-only attachments, hook bookkeeping, slash-command metadata, and direct tool-result `<system-reminder>` strings live outside this crate. Those are covered in the scan sections after the catalog.
+Scope note: this crate owns the 42 `coco-system-reminder` generators below (40 model-visible, 2 silent/display-only). Claude Code's TS `Attachment` union is broader: file/context attachments, UI-only attachments, hook bookkeeping, slash-command metadata, and direct tool-result `<system-reminder>` strings live outside this crate. Those are covered in the scan sections after the catalog.
 
 **TS source files** (paths relative to `/lyz/codespace/3rd/claude-code/src`):
 - `utils/attachments.ts` — `getAttachments()` orchestrator + per-reminder trigger functions
@@ -20,7 +20,30 @@ Scope note: this crate owns the 40 `coco-system-reminder` generators below. Clau
 
 Line numbers below are valid for the TS snapshot at time of writing — grep by function/case name if the file has drifted.
 
-## coco-system-reminder catalog (40 types)
+## Rust architecture
+
+The crate is intentionally split into five stages. Keep new reminder work inside
+the stage that owns that responsibility:
+
+1. **Source materialization** (`sources/`) fans out to hooks, LSP, tasks,
+   skills, MCP, swarm, IDE, and memory sources under per-source timeouts.
+   Missing or timed-out sources degrade to empty snapshots.
+2. **Turn input assembly** (`turn_runner.rs`, `context_builder.rs`,
+   `turn_counting.rs`) converts engine state and history into scalar fields on
+   `GeneratorContext`. Generators do not scan message history or call sibling
+   subsystems directly.
+3. **Pure generation** (`generators/`) owns one `AttachmentGenerator` per
+   reminder key. A generator only gates on `GeneratorContext`, renders TS-parity
+   text, and returns `Option<SystemReminder>`.
+4. **Orchestration** (`orchestrator.rs`, `throttle.rs`) applies config, tier,
+   throttle, full/sparse cadence, and timeout policy. Generators run in
+   parallel, while injection order follows the TS batch order: user-input,
+   all-thread, then main-thread.
+5. **Injection** (`inject.rs`, `xml.rs`) converts `SystemReminder` values into
+   `coco_types::Message` entries and routes silent reminders to the display-only
+   sink so they never reach the model.
+
+## coco-system-reminder catalog (42 generators)
 
 Columns:
 - **ID** — `coco-system-reminder` attachment/settings key. Most IDs match TS `Attachment.type`; a few are coco-rs synthetic grouping keys where TS emits more concrete attachment types (`file`, `mcp_resource`, `agent_mention`, `selected_lines_in_ide`, `opened_file_in_ide`, or `queued_command`). The TS columns name the exact upstream mapping.
@@ -99,7 +122,7 @@ All share one drain of pending hook events per turn.
 | `output_style` | Main | Reminds the agent to follow the active output-style guidelines | Active output-style name set | `output_style` (**true**) | `getOutputStyleAttachment` (`:1597`) | `case 'output_style':` (`:3797`) |
 | `queued_command` | Core | Replays drained system-generated commands (task-notification etc.) mid-turn | Queue has system-origin entries | `queued_command` (**true**) | `getQueuedCommandAttachments` (`:1046`) | `case 'queued_command':` (`:3739`) |
 | `task_status` | Main | Warns against duplicate background-task spawns; reports running/completed/killed tasks | Inline main-thread task snapshot from `getUnifiedTaskAttachments()` when `generateTaskAttachments()` returns task deltas; post-compaction async-agent snapshot is also re-injected | `task_status` (**true**) | `getUnifiedTaskAttachments` (`:3439`) / `compact.ts:createAsyncAgentAttachmentsIfNeeded` (`:1569`) | `case 'task_status':` (`:3954`) |
-| `skill_listing` | Main | Lists available skills for the `Skill` tool | Active skill set non-empty (1% context-window budget in TS) | `skill_listing` (**true**) | `getSkillListingAttachments` (`:2661`) | `case 'skill_listing':` (`:3728`) |
+| `skill_listing` | Core | Lists available skills for the `Skill` tool | Active skill set non-empty (1% context-window budget in TS) | `skill_listing` (**true**) | `getSkillListingAttachments` (`:2661`) | `case 'skill_listing':` (`:3728`) |
 | `invoked_skills` | Main | Re-surfaces the content of skills invoked in this session so guidelines persist after compaction | Session has invoked skills with cached content | `invoked_skills` (**true**) | `compact.ts:getInvokedSkillsForAgent` (`:1497`) | `case 'invoked_skills':` (`:3644`) |
 
 ### Swarm (3) — `agentSwarms` feature-gated upstream
@@ -110,7 +133,7 @@ All share one drain of pending hook events per turn.
 | `team_context` | Core | One-shot first-turn team identity + member list for teammates | First turn as a teammate; not team lead; team registered | `team_context` (**true**) | `getTeamContextAttachment` (`:3775`) | TS handles before switch — no `normalizeAttachmentForAPI` case |
 | `agent_pending_messages` | Core | Lists inter-agent inbox messages the agent hasn't seen yet | Pending-messages inbox non-empty | `agent_pending_messages` (**true**) | `getAgentPendingMessageAttachments` (`:1085`) | TS emits `queued_command` attachments with coordinator origin (`case 'queued_command':` `:3739`) |
 
-### User-input tier (5)
+### User-input tier (3)
 
 All gated on the user submitting input this turn. UUID-dedup ensures one fire per human turn across multi-iteration tool loops.
 
@@ -119,8 +142,15 @@ All gated on the user submitting input this turn. UUID-dedup ensures one fire pe
 | `at_mentioned_files` | User | Announces `@path` files the user mentioned in their prompt | User prompt contains parseable `@file` tokens | `at_mentioned_files` (**true**) | `processAtMentionedFiles` | TS emits concrete `file` / `directory` / `pdf_reference` / `already_read_file` attachments; coco-rs consolidates path notice. Render cases: `file` (`:3545`), `directory` (`:3525`), `pdf_reference` (`:3600`), `already_read_file` (`:4252`, returns `[]`) |
 | `mcp_resources` | User | Announces `@server:uri` MCP resource references the user mentioned | User prompt contains `@server:uri` tokens matching a registered server | `mcp_resources` (**true**) | `processMcpResourceAttachments` | TS concrete type `mcp_resource` (`case 'mcp_resource':` `:3877`) |
 | `agent_mentions` | User | Hints the agent to invoke an `@agent-type` the user referenced | User prompt contains `@agent-type` mentions | `agent_mentions` (**true**) | `processAgentMentions` | TS concrete type `agent_mention` (`case 'agent_mention':` `:3946`) |
-| `ide_selection` | User | Surfaces the user's IDE text selection with a 2000-char truncation cap | IDE bridge reports a non-empty selection for a known filename | `ide_selection` (**true**) | `getSelectedLinesFromIDE` | TS concrete type `selected_lines_in_ide` (`case 'selected_lines_in_ide':` `:3613`) |
-| `ide_opened_file` | User | Notes which file the user just opened in the IDE | IDE bridge reports a non-empty opened filename | `ide_opened_file` (**true**) | `getOpenedFileFromIDE` | TS concrete type `opened_file_in_ide` (`case 'opened_file_in_ide':` `:3628`) |
+
+### Main-thread IDE (2)
+
+TS places these in `mainThreadAttachments`, not `userInputAttachments`; they are main-agent-only and can fire even when no new user prompt arrived.
+
+| ID | Tier | What it does | Trigger | Settings | TS `attachments.ts` | TS `messages.ts` |
+|---|---|---|---|---|---|---|
+| `ide_selection` | Main | Surfaces the user's IDE text selection with a 2000-char truncation cap | IDE bridge reports a non-empty selection for a known filename | `ide_selection` (**true**) | `getSelectedLinesFromIDE` | TS concrete type `selected_lines_in_ide` (`case 'selected_lines_in_ide':` `:3613`) |
+| `ide_opened_file` | Main | Notes which file the user just opened in the IDE | IDE bridge reports a non-empty opened filename | `ide_opened_file` (**true**) | `getOpenedFileFromIDE` | TS concrete type `opened_file_in_ide` (`case 'opened_file_in_ide':` `:3628`) |
 
 ### Memory (2)
 
@@ -152,7 +182,7 @@ snapshot, even when the type is UI-only or not implemented by
 | `file` | `utils/attachments.ts:296` | `processAtMentionedFiles` (`utils/attachments.ts:1900`) -> `generateFileAttachment` (`utils/attachments.ts:3159`, `utils/attachments.ts:3181`); legacy resume transform in `utils/conversationRecovery.ts:93` | `utils/messages.ts:3545` | Outside this crate; represented by `at_mentioned_files` grouping. |
 | `compact_file_reference` | `utils/attachments.ts:308` | `services/compact/compact.ts:createPostCompactFileAttachments`; `generateFileAttachment` compact branch (`utils/attachments.ts:3136`) | `utils/messages.ts:3592` | Outside this crate; post-compact file reference. |
 | `pdf_reference` | `utils/attachments.ts:315` | `tryGetPDFReference` (`utils/attachments.ts:3007`) | `utils/messages.ts:3600` | Outside this crate; represented by `at_mentioned_files` grouping. |
-| `already_read_file` | `utils/attachments.ts:324` | `generateFileAttachment` (`utils/attachments.ts:3100`) | `utils/messages.ts:4252` -> `[]` | Silent / UI-only. |
+| `already_read_file` | `utils/attachments.ts:324` | `generateFileAttachment` (`utils/attachments.ts:3100`) | `utils/messages.ts:4252` -> `[]` | Ported as silent/display-only. |
 | `agent_mention` | `utils/attachments.ts:336` | `processAgentMentions` (`utils/attachments.ts:1985`) | `utils/messages.ts:3946` | Ported as `agent_mentions`. |
 | `async_hook_response` | `utils/attachments.ts:341` | `getAsyncHookResponseAttachments` (`utils/attachments.ts:3491`) | `utils/messages.ts:4026` | Ported. |
 | `hook_blocking_error` | `utils/attachments.ts:355` | `utils/hooks.ts:714`; `services/tools/toolHooks.ts:108`, `services/tools/toolHooks.ts:260` | `utils/messages.ts:4090` | Ported. |
@@ -165,7 +195,7 @@ snapshot, even when the type is UI-only or not implemented by
 | `hook_success` | `utils/attachments.ts:416` | `utils/hooks.ts:721`, `utils/hooks.ts:2581`, `utils/hooks.ts:2630`; `utils/hooks/execPromptHook.ts:176`; `utils/hooks/execAgentHook.ts:297` | `utils/messages.ts:4099` (only `SessionStart` / `UserPromptSubmit`) | Ported with TS event filter. |
 | `hook_non_blocking_error` | `utils/attachments.ts:429` | `utils/hooks.ts:2349`, `utils/hooks.ts:2380`, `utils/hooks.ts:2517`, `utils/hooks.ts:2684`, `utils/hooks.ts:2716`; `utils/hooks/execPromptHook.ts:122`, `utils/hooks/execPromptHook.ts:142`, `utils/hooks/execPromptHook.ts:201`; `utils/hooks/execAgentHook.ts:329` | `utils/messages.ts:4252` -> `[]` | Silent / UI-only. |
 | `edited_text_file` | `utils/attachments.ts:452` | `getChangedFiles` (`utils/attachments.ts:2118`) | `utils/messages.ts:3538` | Outside this crate; coco-rs handles changed-file context elsewhere. |
-| `edited_image_file` | `utils/attachments.ts:457` | `getChangedFiles` (`utils/attachments.ts:2129`) | `utils/messages.ts:4252` -> `[]` | Silent / UI-only. |
+| `edited_image_file` | `utils/attachments.ts:457` | `getChangedFiles` (`utils/attachments.ts:2129`) | `utils/messages.ts:4252` -> `[]` | Ported as silent/display-only. |
 | `directory` | `utils/attachments.ts:462` | `processAtMentionedFiles` (`utils/attachments.ts:1934`); legacy resume transform in `utils/conversationRecovery.ts:104` | `utils/messages.ts:3525` | Outside this crate; represented by `at_mentioned_files` grouping. |
 | `selected_lines_in_ide` | `utils/attachments.ts:469` | `getSelectedLinesFromIDE` (`utils/attachments.ts:1635`) | `utils/messages.ts:3613` | Ported as `ide_selection`. |
 | `opened_file_in_ide` | `utils/attachments.ts:479` | `getOpenedFileFromIDE` (`utils/attachments.ts:1888`) | `utils/messages.ts:3628` | Ported as `ide_opened_file`. |
@@ -217,7 +247,7 @@ snapshot, even when the type is UI-only or not implemented by
 | `context_efficiency` (HISTORY_SNIP) | TS snip-compact nudge behind `feature('HISTORY_SNIP')`; port only if coco-rs ships the matching snip runtime/tool. |
 | `skill_discovery` | TS `EXPERIMENTAL_SKILL_SEARCH` feature-gated and rendered outside the `switch`; port when the feature lands. |
 | `security_guidelines` | Zero matches in TS — cocode-rs Phase-2 invention, not TS-sourced. |
-| `hook_cancelled` / `hook_error_during_execution` / `hook_non_blocking_error` / `hook_permission_decision` / `hook_system_message` / `structured_output` / `dynamic_skill` / `bagel_console` / `command_permissions` / `already_read_file` / `edited_image_file` | TS `return []` in `normalizeAttachmentForAPI` — silent / UI-only, produce zero API text. |
+| `hook_cancelled` / `hook_error_during_execution` / `hook_non_blocking_error` / `hook_permission_decision` / `hook_system_message` / `structured_output` / `dynamic_skill` / `bagel_console` / `command_permissions` | TS `return []` in `normalizeAttachmentForAPI` — silent / UI-only, produce zero API text. |
 | `max_turns_reached` / `current_session_memory` / `teammate_shutdown_batch` | TS runtime/UI bookkeeping. They are in the TS `Attachment` union, but `normalizeAttachmentForAPI()` has no API-text case for them in this snapshot. |
 | `image` | Content block subtype, not a reminder attachment. |
 
@@ -327,7 +357,7 @@ This section covers reminder execution mechanics, not new reminder types.
 |---|---|---|
 | Entry point | `getAttachments()` is the batch producer (`utils/attachments.ts:743`). `getAttachmentMessages()` then yields one `AttachmentMessage` per returned attachment (`utils/attachments.ts:2937`, `utils/attachments.ts:2968`). | `QueryEngine` creates one session-scoped `SystemReminderOrchestrator` (`app/query/src/engine.rs:699`, `app/query/src/engine.rs:701`), builds `TurnReminderInput`, calls `run_turn_reminders()`, then appends the results with `inject_reminders()` (`app/query/src/engine.rs:1213`, `app/query/src/engine.rs:1214`). |
 | Disabled / simple mode | If `CLAUDE_CODE_DISABLE_ATTACHMENTS` or `CLAUDE_CODE_SIMPLE` is set, TS skips normal attachments but still returns `queued_command` attachments so drained queued commands are not lost (`utils/attachments.ts:752`-`760`). | The Rust crate has a master `system_reminder.enabled` switch. When false, `SystemReminderOrchestrator::generate_all()` returns no reminders (`core/system-reminder/src/orchestrator.rs:227`-`230`). It does not have the TS env-var special case that preserves queued commands. |
-| Batch ordering | TS runs user-input attachments first (`utils/attachments.ts:817`-`819`) because `@file` processing seeds nested-memory triggers. It then builds `allThreadAttachments` (`utils/attachments.ts:821`-`941`) and `mainThreadAttachments` (`utils/attachments.ts:943`-`987`). Final output order is user-input results, then all-thread results, then main-thread results (`utils/attachments.ts:998`-`1002`). | Rust parses the latest user input before source materialization, passes mentioned paths into `MemorySource`, materializes cross-crate sources, then runs generators in registry order. `join_all` preserves that applicable-generator order (`core/system-reminder/src/orchestrator.rs:266`-`277`). This is deterministic but not the exact TS three-array flatten order. |
+| Batch ordering | TS runs user-input attachments first (`utils/attachments.ts:817`-`819`) because `@file` processing seeds nested-memory triggers. It then builds `allThreadAttachments` (`utils/attachments.ts:821`-`941`) and `mainThreadAttachments` (`utils/attachments.ts:943`-`987`). Final output order is user-input results, then all-thread results, then main-thread results (`utils/attachments.ts:998`-`1002`). | Rust parses the latest user input before source materialization, passes mentioned paths into `MemorySource`, materializes cross-crate sources, then registers generators in the same TS flatten order. `join_all` preserves that applicable-generator order (`core/system-reminder/src/orchestrator.rs`), and `default_registry_order_matches_ts_attachment_batches` locks it. |
 | Concurrency | TS runs all user-input attachment promises together with `Promise.all()` (`utils/attachments.ts:819`). After that, all-thread and main-thread batches run in parallel via nested `Promise.all()` (`utils/attachments.ts:989`-`993`). | Rust has two parallel stages: `ReminderSources::materialize()` fans out source calls with `tokio::join!` (`core/system-reminder/src/sources/mod.rs:281`-`311`), then `SystemReminderOrchestrator::generate_all()` runs applicable generators concurrently with `future::join_all()` (`core/system-reminder/src/orchestrator.rs:266`-`272`). |
 | Timeout | TS creates an `AbortController`, schedules `abort()` after 1000 ms, and puts it into the attachment context (`utils/attachments.ts:766`-`768`). This is cooperative cancellation: only subcalls that observe the signal stop early. `clearTimeout()` runs after the main batches settle (`utils/attachments.ts:996`). | Rust uses hard `tokio::time::timeout` wrappers. Sources use `SystemReminderConfig.timeout_ms` as `per_source_timeout` (`app/query/src/engine.rs:1020`-`1038`) and `ReminderSources::gate()` returns defaults on timeout (`core/system-reminder/src/sources/mod.rs:55`-`68`, `core/system-reminder/src/sources/mod.rs:322`-`343`). Generators are also wrapped individually (`core/system-reminder/src/orchestrator.rs:336`-`356`). Default is 1000 ms (`common/config/src/system_reminder.rs:56`). |
 | Error handling | Each TS producer is wrapped in `maybe()`: success may emit sampled telemetry; any thrown error is logged and becomes `[]` (`utils/attachments.ts:1005`-`1040`). One failed attachment producer does not poison the turn. | Source timeouts return default values. Generator errors and timeouts are logged and become `None` (`core/system-reminder/src/orchestrator.rs:345`-`356`). A failed generator does not block other generators. |

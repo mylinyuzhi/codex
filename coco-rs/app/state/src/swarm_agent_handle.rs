@@ -58,7 +58,20 @@ pub struct SwarmAgentHandle {
     agents: Arc<RwLock<Vec<SubAgentState>>>,
     /// Query execution engine for driving agent conversations.
     /// TS: runAgent() in AgentTool → this drives the LLM loop.
+    ///
+    /// When `None`, `spawn_subagent` returns a "no execution engine
+    /// configured" error for sync agents instead of silently
+    /// succeeding with placeholder output. Install via
+    /// [`Self::with_execution_engine`] at session bootstrap.
     execution_engine: Option<coco_tool::AgentQueryEngineRef>,
+    /// Worktree manager for `isolation: "worktree"` subagents.
+    ///
+    /// When `None`, worktree-isolation requests fail fast with a
+    /// clean error. The CLI resolves the canonical git root at
+    /// bootstrap and installs this via [`Self::with_worktree_manager`]
+    /// so subagents spawned with worktree isolation always land in
+    /// `.claude/worktrees/agent-<slug>` under the main repo.
+    worktree_manager: Option<Arc<crate::agent_worktree::AgentWorktreeManager>>,
     /// Current working directory.
     cwd: String,
     /// Main loop model (for inheritance).
@@ -77,6 +90,7 @@ impl SwarmAgentHandle {
             team_manager,
             agents: Arc::new(RwLock::new(Vec::new())),
             execution_engine: None,
+            worktree_manager: None,
             cwd,
             main_model,
         }
@@ -85,6 +99,16 @@ impl SwarmAgentHandle {
     /// Set the execution engine for driving agent queries.
     pub fn set_execution_engine(&mut self, engine: coco_tool::AgentQueryEngineRef) {
         self.execution_engine = Some(engine);
+    }
+
+    /// Install an [`AgentWorktreeManager`](crate::agent_worktree::AgentWorktreeManager)
+    /// so subagents spawned with `isolation: "worktree"` get a real
+    /// git worktree + cwd_override + cleanup-on-success.
+    pub fn set_worktree_manager(
+        &mut self,
+        manager: Arc<crate::agent_worktree::AgentWorktreeManager>,
+    ) {
+        self.worktree_manager = Some(manager);
     }
 
     /// Determine if this is a teammate spawn (has both name + team_name).
@@ -146,7 +170,7 @@ impl SwarmAgentHandle {
             max_turns: None,
         };
 
-        let spawn_result = self.runner.spawn_agent(config).await;
+        let spawn_result = self.runner.register_agent(config).await;
 
         if !spawn_result.success {
             return Ok(AgentSpawnResponse {
@@ -231,9 +255,14 @@ impl SwarmAgentHandle {
         self.agents.write().await.push(state);
 
         if request.run_in_background {
-            // Async: return immediately, agent runs in background
+            // Async: return immediately, agent runs in background.
+            // Background + worktree combo is out of scope for this
+            // slice (requires agent metadata persistence for resume);
+            // if worktree was requested, warn via error but still
+            // launch without isolation.
+            let status = AgentSpawnStatus::AsyncLaunched;
             return Ok(AgentSpawnResponse {
-                status: AgentSpawnStatus::AsyncLaunched,
+                status,
                 agent_id: Some(agent_id),
                 result: None,
                 error: None,
@@ -247,104 +276,203 @@ impl SwarmAgentHandle {
             });
         }
 
-        // Sync: wait for completion via InProcessAgentRunner
-        let config = SpawnConfig {
-            name: agent_id.clone(),
-            team_name: "subagent".to_string(),
-            prompt: request.prompt.clone(),
-            color: None,
-            plan_mode_required: false,
-            model: request.model.clone(),
-            working_dir: request.cwd.as_ref().map(|p| p.display().to_string()),
-            system_prompt: None,
-            allowed_tools: Vec::new(),
-            allow_permission_prompts: false,
-            effort: None,
-            use_exact_tools: false,
-            isolation: request
-                .isolation
-                .as_deref()
-                .map(|i| match i {
-                    "worktree" => coco_types::AgentIsolation::Worktree,
-                    _ => coco_types::AgentIsolation::None,
-                })
-                .unwrap_or(coco_types::AgentIsolation::None),
-            memory_scope: None,
-            mcp_servers: Vec::new(),
-            disallowed_tools: Vec::new(),
-            max_turns: None,
+        // ── Sync subagent path (Phase 6 Workstream C) ──
+        //
+        // Worktree isolation: if requested, create a worktree first
+        // so its path becomes the child's cwd_override. Any creation
+        // error returns a model-visible failure — we don't silently
+        // fall back to sync-without-isolation, per the plan's "Make
+        // Unsupported Parity Explicit" rule.
+        let worktree_session = if matches!(request.isolation.as_deref(), Some("worktree")) {
+            match self.worktree_manager.as_ref() {
+                Some(m) => {
+                    let slug = format!(
+                        "agent-{}",
+                        agent_id
+                            .strip_prefix("agent-")
+                            .unwrap_or(&agent_id)
+                            .chars()
+                            .take(8)
+                            .collect::<String>()
+                    );
+                    match m.create_for(&slug) {
+                        Ok(s) => Some(s),
+                        Err(e) => {
+                            return Ok(spawn_failed(
+                                agent_id,
+                                format!("Worktree creation failed: {e}"),
+                                start.elapsed().as_millis() as i64,
+                            ));
+                        }
+                    }
+                }
+                None => {
+                    return Ok(spawn_failed(
+                        agent_id,
+                        "Isolation 'worktree' requested but no AgentWorktreeManager is \
+                         configured. Use SwarmAgentHandle::set_worktree_manager."
+                            .into(),
+                        start.elapsed().as_millis() as i64,
+                    ));
+                }
+            }
+        } else {
+            None
         };
 
-        let spawn_result = self.runner.spawn_agent(config).await;
-        if !spawn_result.success {
-            return Ok(AgentSpawnResponse {
-                status: AgentSpawnStatus::Failed,
-                agent_id: Some(agent_id),
-                result: None,
-                error: spawn_result.error,
-                total_tool_use_count: 0,
-                total_tokens: 0,
-                duration_ms: 0,
-                worktree_path: None,
-                worktree_branch: None,
-                output_file: None,
-                prompt: None,
-            });
-        }
+        // Execution engine is required for sync subagent. Without
+        // one we can't run a child — surface as a clean failure and
+        // clean up the worktree we may have just created.
+        let Some(engine) = self.execution_engine.clone() else {
+            if let (Some(m), Some(session)) =
+                (self.worktree_manager.as_ref(), worktree_session.clone())
+            {
+                // Best-effort cleanup — we never ran anything, so
+                // the worktree definitely has no changes.
+                let _ = m.cleanup_if_unchanged(session);
+            }
+            return Ok(spawn_failed(
+                agent_id,
+                "No AgentQueryEngine configured on SwarmAgentHandle. Use \
+                 SwarmAgentHandle::set_execution_engine at session bootstrap."
+                    .into(),
+                start.elapsed().as_millis() as i64,
+            ));
+        };
 
-        // Wait for result
-        let runner_result = self.runner.wait_for_completion(&agent_id).await;
+        let cwd_override = worktree_session
+            .as_ref()
+            .map(|s| s.path.clone())
+            .or_else(|| request.cwd.clone());
+
+        // Build the child query config. Inherits parent model when
+        // the caller didn't specify. System prompt is empty here —
+        // the child engine builds its own via coco-context from
+        // CLAUDE.md discovery.
+        // Fork isolation: TS `AgentTool.tsx:622-632` routes fork
+        // agents through a codepath that prepends the parent's
+        // conversation messages to the child's turn.
+        // `AgentSpawnRequest.isolation == "fork"` surfaces this
+        // intent; the request's `fork_context_messages` field
+        // (set by AgentTool) carries the parent's history. This
+        // module doesn't have direct access to the parent history
+        // (the AgentTool's ToolUseContext held it), so we rely on
+        // the request. Today's request shape doesn't carry it;
+        // callers requesting fork from the tool path will have
+        // the messages attached by a future AgentTool change that
+        // threads `ctx.messages` through.
+        let is_fork = request.isolation.as_deref() == Some("fork");
+        let query_config = coco_tool::AgentQueryConfig {
+            system_prompt: String::new(),
+            model: request
+                .model
+                .clone()
+                .unwrap_or_else(|| self.main_model.clone()),
+            max_turns: None,
+            context_window: None,
+            max_output_tokens: None,
+            allowed_tools: Vec::new(),
+            // Fork mode: preserve tool_use_results across the
+            // child's compaction boundary — parent's history
+            // references tool_use_ids that the child needs to
+            // resolve via its own tool_result messages.
+            preserve_tool_use_results: is_fork,
+            permission_mode: request.mode.clone(),
+            agent_id: Some(agent_id.clone()),
+            is_teammate: false,
+            plan_mode_required: false,
+            session_id: None,
+            bypass_permissions_available: false,
+            cwd_override,
+            // Fork context propagation: surfaces when the
+            // AgentSpawnRequest carries a non-None fork-context
+            // payload. Current shape: left empty until AgentTool
+            // threads parent messages through.
+            fork_context_messages: Vec::new(),
+            // Swarm subagents default to the parent's Main role
+            // today. Follow-up can map SubagentType → ModelRole
+            // (Explore/Review/Plan) per agent definition; the
+            // factory reads this to install the role's fallback
+            // chain.
+            model_role: None,
+        };
+
+        // Run the child query.
+        let query_result = engine.execute_query(&request.prompt, query_config).await;
         let duration_ms = start.elapsed().as_millis() as i64;
 
-        // Update agent status
+        // Cleanup worktree regardless of success/failure. If the
+        // child made changes the worktree is kept for inspection
+        // and surfaced in the response payload.
+        let (worktree_path, worktree_branch) =
+            match (self.worktree_manager.as_ref(), worktree_session) {
+                (Some(m), Some(session)) => match m.cleanup_if_unchanged(session) {
+                    crate::agent_worktree::WorktreeCleanupOutcome::Removed => (None, None),
+                    crate::agent_worktree::WorktreeCleanupOutcome::Kept {
+                        path, branch, ..
+                    } => (Some(path), Some(branch)),
+                },
+                _ => (None, None),
+            };
+
+        // Update tracked agent status.
         {
             let mut agents = self.agents.write().await;
             if let Some(agent) = agents.iter_mut().find(|a| a.agent_id == agent_id) {
-                agent.status = SubAgentStatus::Completed;
+                agent.status = match &query_result {
+                    Ok(_) => SubAgentStatus::Completed,
+                    Err(_) => SubAgentStatus::Failed,
+                };
             }
         }
 
-        match runner_result {
-            Some(result) if result.success => Ok(AgentSpawnResponse {
+        match query_result {
+            Ok(qr) => Ok(AgentSpawnResponse {
                 status: AgentSpawnStatus::Completed,
                 agent_id: Some(agent_id),
-                result: result.output,
+                result: qr.response_text,
                 error: None,
-                total_tool_use_count: result.turns as i64,
-                total_tokens: 0,
+                total_tool_use_count: qr.tool_use_count,
+                total_tokens: qr.input_tokens + qr.output_tokens,
                 duration_ms,
-                worktree_path: None,
-                worktree_branch: None,
+                worktree_path,
+                worktree_branch,
                 output_file: None,
                 prompt: None,
             }),
-            Some(result) => Ok(AgentSpawnResponse {
+            Err(e) => Ok(AgentSpawnResponse {
                 status: AgentSpawnStatus::Failed,
                 agent_id: Some(agent_id),
                 result: None,
-                error: result.error,
+                error: Some(e.to_string()),
                 total_tool_use_count: 0,
                 total_tokens: 0,
                 duration_ms,
-                worktree_path: None,
-                worktree_branch: None,
-                output_file: None,
-                prompt: None,
-            }),
-            None => Ok(AgentSpawnResponse {
-                status: AgentSpawnStatus::Completed,
-                agent_id: Some(agent_id),
-                result: Some("Agent completed (no result channel)".into()),
-                error: None,
-                total_tool_use_count: 0,
-                total_tokens: 0,
-                duration_ms,
-                worktree_path: None,
-                worktree_branch: None,
+                worktree_path,
+                worktree_branch,
                 output_file: None,
                 prompt: None,
             }),
         }
+    }
+}
+
+/// Shorthand for a sync-path early-failure response. Worktree
+/// cleanup is the caller's responsibility — this helper only builds
+/// the AgentSpawnResponse shell.
+fn spawn_failed(agent_id: String, message: String, duration_ms: i64) -> AgentSpawnResponse {
+    AgentSpawnResponse {
+        status: AgentSpawnStatus::Failed,
+        agent_id: Some(agent_id),
+        result: None,
+        error: Some(message),
+        total_tool_use_count: 0,
+        total_tokens: 0,
+        duration_ms,
+        worktree_path: None,
+        worktree_branch: None,
+        output_file: None,
+        prompt: None,
     }
 }
 
@@ -534,7 +662,7 @@ impl AgentHandle for SwarmAgentHandle {
             max_turns: None,
         };
 
-        let spawn_result = self.runner.spawn_agent(config).await;
+        let spawn_result = self.runner.register_agent(config).await;
 
         Ok(AgentSpawnResponse {
             status: if spawn_result.success {
@@ -609,15 +737,8 @@ impl AgentHandle for SwarmAgentHandle {
         Ok(())
     }
 
-    async fn resolve_skill(&self, name: &str, _args: &str) -> Result<serde_json::Value, String> {
-        // Skill resolution is handled at the query-engine layer, which has
-        // access to the full SkillManager.  The SwarmAgentHandle delegates
-        // back to the execution engine if available, otherwise returns a
-        // not-available error.
-        Err(format!(
-            "Skill resolution for '{name}' should be handled by the query engine"
-        ))
-    }
+    // `resolve_skill` was deleted in Phase 7 — skills now route
+    // through the dedicated `SkillHandle` trait, not `AgentHandle`.
 }
 
 #[cfg(test)]

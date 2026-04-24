@@ -10,12 +10,14 @@ workspace = true
 [dependencies]
 coco-types.workspace = true
 coco-config.workspace = true
+coco-hooks.workspace = true
 coco-tool.workspace = true
 
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
+thiserror.workspace = true
 tokio = { workspace = true, features = ["sync", "process", "time"] }
 uuid = { workspace = true, features = ["v4"] }
 dirs.workspace = true
