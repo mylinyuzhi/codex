@@ -1,5 +1,5 @@
 use super::*;
-use coco_tool::check_verification_nudge;
+use coco_tool_runtime::check_verification_nudge;
 
 fn item(content: &str, status: &str, active: &str) -> TodoItem {
     TodoItem {

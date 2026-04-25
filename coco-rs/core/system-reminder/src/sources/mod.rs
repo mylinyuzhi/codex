@@ -15,7 +15,7 @@
 //!
 //! **Layering**: the trait defs live here (`core/system-reminder`);
 //! owning crates depend on this crate to `impl`. One-way edge, no
-//! cycles. Matches the established `core/tool::*Handle` pattern.
+//! cycles. Matches the established `core/tool-runtime::*Handle` pattern.
 //!
 //! **Collection semantics**: [`ReminderSources::materialize`] fan-outs
 //! all source calls via `tokio::join!`, wraps each in a per-source

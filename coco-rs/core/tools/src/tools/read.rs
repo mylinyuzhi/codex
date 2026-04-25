@@ -1,10 +1,10 @@
 use base64::Engine;
-use coco_tool::DescriptionOptions;
-use coco_tool::SearchReadInfo;
-use coco_tool::Tool;
-use coco_tool::ToolError;
-use coco_tool::ToolUseContext;
-use coco_tool::ValidationResult;
+use coco_tool_runtime::DescriptionOptions;
+use coco_tool_runtime::SearchReadInfo;
+use coco_tool_runtime::Tool;
+use coco_tool_runtime::ToolError;
+use coco_tool_runtime::ToolUseContext;
+use coco_tool_runtime::ValidationResult;
 use coco_types::PermissionDecision;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;

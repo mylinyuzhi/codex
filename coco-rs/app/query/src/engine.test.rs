@@ -4,7 +4,7 @@ use std::sync::atomic::Ordering;
 
 use coco_inference::ApiClient;
 use coco_inference::RetryConfig;
-use coco_tool::ToolRegistry;
+use coco_tool_runtime::ToolRegistry;
 use coco_tools::ReadTool;
 use tokio_util::sync::CancellationToken;
 use vercel_ai_provider::AISdkError;
@@ -698,11 +698,11 @@ async fn test_read_tool_emits_full_tool_lifecycle() {
 #[tokio::test]
 async fn test_bash_destructive_command_blocked() {
     // Test that the Bash tool blocks destructive commands
-    use coco_tool::Tool;
+    use coco_tool_runtime::Tool;
     use coco_tools::BashTool;
 
     let tool = BashTool;
-    let ctx = coco_tool::ToolUseContext::test_default();
+    let ctx = coco_tool_runtime::ToolUseContext::test_default();
 
     // "rm -rf /" should be blocked by destructive warning check
     let result = tool
@@ -716,11 +716,11 @@ async fn test_bash_destructive_command_blocked() {
 
 #[tokio::test]
 async fn test_bash_safe_command_executes() {
-    use coco_tool::Tool;
+    use coco_tool_runtime::Tool;
     use coco_tools::BashTool;
 
     let tool = BashTool;
-    let ctx = coco_tool::ToolUseContext::test_default();
+    let ctx = coco_tool_runtime::ToolUseContext::test_default();
 
     let result = tool
         .execute(
@@ -1044,7 +1044,7 @@ async fn invalid_tool_input_gets_error_result_and_completed_event() {
 struct PermissionRewriteTool;
 
 #[async_trait::async_trait]
-impl coco_tool::Tool for PermissionRewriteTool {
+impl coco_tool_runtime::Tool for PermissionRewriteTool {
     fn id(&self) -> coco_types::ToolId {
         coco_types::ToolId::Custom("permission_rewrite".into())
     }
@@ -1060,7 +1060,7 @@ impl coco_tool::Tool for PermissionRewriteTool {
     fn description(
         &self,
         _input: &serde_json::Value,
-        _options: &coco_tool::DescriptionOptions,
+        _options: &coco_tool_runtime::DescriptionOptions,
     ) -> String {
         "permission rewrite test tool".into()
     }
@@ -1068,7 +1068,7 @@ impl coco_tool::Tool for PermissionRewriteTool {
     async fn check_permissions(
         &self,
         _input: &serde_json::Value,
-        _ctx: &coco_tool::ToolUseContext,
+        _ctx: &coco_tool_runtime::ToolUseContext,
     ) -> coco_types::PermissionDecision {
         coco_types::PermissionDecision::Allow {
             updated_input: Some(serde_json::json!({"value": "rewritten"})),
@@ -1079,8 +1079,8 @@ impl coco_tool::Tool for PermissionRewriteTool {
     async fn execute(
         &self,
         input: serde_json::Value,
-        _ctx: &coco_tool::ToolUseContext,
-    ) -> Result<coco_types::ToolResult<serde_json::Value>, coco_tool::ToolError> {
+        _ctx: &coco_tool_runtime::ToolUseContext,
+    ) -> Result<coco_types::ToolResult<serde_json::Value>, coco_tool_runtime::ToolError> {
         Ok(coco_types::ToolResult::data(input))
     }
 }
@@ -1088,7 +1088,7 @@ impl coco_tool::Tool for PermissionRewriteTool {
 struct HookEchoTool;
 
 #[async_trait::async_trait]
-impl coco_tool::Tool for HookEchoTool {
+impl coco_tool_runtime::Tool for HookEchoTool {
     fn id(&self) -> coco_types::ToolId {
         coco_types::ToolId::Custom("hook_echo".into())
     }
@@ -1104,7 +1104,7 @@ impl coco_tool::Tool for HookEchoTool {
     fn description(
         &self,
         _input: &serde_json::Value,
-        _options: &coco_tool::DescriptionOptions,
+        _options: &coco_tool_runtime::DescriptionOptions,
     ) -> String {
         "hook echo test tool".into()
     }
@@ -1112,8 +1112,8 @@ impl coco_tool::Tool for HookEchoTool {
     async fn execute(
         &self,
         input: serde_json::Value,
-        _ctx: &coco_tool::ToolUseContext,
-    ) -> Result<coco_types::ToolResult<serde_json::Value>, coco_tool::ToolError> {
+        _ctx: &coco_tool_runtime::ToolUseContext,
+    ) -> Result<coco_types::ToolResult<serde_json::Value>, coco_tool_runtime::ToolError> {
         Ok(coco_types::ToolResult::data(input))
     }
 }
@@ -1121,7 +1121,7 @@ impl coco_tool::Tool for HookEchoTool {
 struct HookMcpTool;
 
 #[async_trait::async_trait]
-impl coco_tool::Tool for HookMcpTool {
+impl coco_tool_runtime::Tool for HookMcpTool {
     fn id(&self) -> coco_types::ToolId {
         coco_types::ToolId::Mcp {
             server: "test-server".into(),
@@ -1140,14 +1140,14 @@ impl coco_tool::Tool for HookMcpTool {
     fn description(
         &self,
         _input: &serde_json::Value,
-        _options: &coco_tool::DescriptionOptions,
+        _options: &coco_tool_runtime::DescriptionOptions,
     ) -> String {
         "hook mcp test tool".into()
     }
 
-    fn mcp_info(&self) -> Option<&coco_tool::McpToolInfo> {
-        static INFO: std::sync::LazyLock<coco_tool::McpToolInfo> =
-            std::sync::LazyLock::new(|| coco_tool::McpToolInfo {
+    fn mcp_info(&self) -> Option<&coco_tool_runtime::McpToolInfo> {
+        static INFO: std::sync::LazyLock<coco_tool_runtime::McpToolInfo> =
+            std::sync::LazyLock::new(|| coco_tool_runtime::McpToolInfo {
                 server_name: "test-server".into(),
                 tool_name: "hook_mcp".into(),
             });
@@ -1157,8 +1157,8 @@ impl coco_tool::Tool for HookMcpTool {
     async fn execute(
         &self,
         _input: serde_json::Value,
-        _ctx: &coco_tool::ToolUseContext,
-    ) -> Result<coco_types::ToolResult<serde_json::Value>, coco_tool::ToolError> {
+        _ctx: &coco_tool_runtime::ToolUseContext,
+    ) -> Result<coco_types::ToolResult<serde_json::Value>, coco_tool_runtime::ToolError> {
         Ok(coco_types::ToolResult::data(serde_json::json!({
             "value": "original-mcp-output"
         })))
@@ -1168,7 +1168,7 @@ impl coco_tool::Tool for HookMcpTool {
 struct HookOrderingTool;
 
 #[async_trait::async_trait]
-impl coco_tool::Tool for HookOrderingTool {
+impl coco_tool_runtime::Tool for HookOrderingTool {
     fn id(&self) -> coco_types::ToolId {
         coco_types::ToolId::Custom("hook_ordering".into())
     }
@@ -1184,7 +1184,7 @@ impl coco_tool::Tool for HookOrderingTool {
     fn description(
         &self,
         _input: &serde_json::Value,
-        _options: &coco_tool::DescriptionOptions,
+        _options: &coco_tool_runtime::DescriptionOptions,
     ) -> String {
         "hook ordering test tool".into()
     }
@@ -1192,8 +1192,8 @@ impl coco_tool::Tool for HookOrderingTool {
     async fn execute(
         &self,
         _input: serde_json::Value,
-        _ctx: &coco_tool::ToolUseContext,
-    ) -> Result<coco_types::ToolResult<serde_json::Value>, coco_tool::ToolError> {
+        _ctx: &coco_tool_runtime::ToolUseContext,
+    ) -> Result<coco_types::ToolResult<serde_json::Value>, coco_tool_runtime::ToolError> {
         Ok(coco_types::ToolResult {
             data: serde_json::json!({"value": "ordering"}),
             new_messages: vec![coco_messages::create_user_message("tool new message")],
@@ -1205,7 +1205,7 @@ impl coco_tool::Tool for HookOrderingTool {
 struct HookOrderingMcpTool;
 
 #[async_trait::async_trait]
-impl coco_tool::Tool for HookOrderingMcpTool {
+impl coco_tool_runtime::Tool for HookOrderingMcpTool {
     fn id(&self) -> coco_types::ToolId {
         coco_types::ToolId::Mcp {
             server: "test-server".into(),
@@ -1224,14 +1224,14 @@ impl coco_tool::Tool for HookOrderingMcpTool {
     fn description(
         &self,
         _input: &serde_json::Value,
-        _options: &coco_tool::DescriptionOptions,
+        _options: &coco_tool_runtime::DescriptionOptions,
     ) -> String {
         "hook ordering mcp test tool".into()
     }
 
-    fn mcp_info(&self) -> Option<&coco_tool::McpToolInfo> {
-        static INFO: std::sync::LazyLock<coco_tool::McpToolInfo> =
-            std::sync::LazyLock::new(|| coco_tool::McpToolInfo {
+    fn mcp_info(&self) -> Option<&coco_tool_runtime::McpToolInfo> {
+        static INFO: std::sync::LazyLock<coco_tool_runtime::McpToolInfo> =
+            std::sync::LazyLock::new(|| coco_tool_runtime::McpToolInfo {
                 server_name: "test-server".into(),
                 tool_name: "hook_ordering_mcp".into(),
             });
@@ -1241,8 +1241,8 @@ impl coco_tool::Tool for HookOrderingMcpTool {
     async fn execute(
         &self,
         _input: serde_json::Value,
-        _ctx: &coco_tool::ToolUseContext,
-    ) -> Result<coco_types::ToolResult<serde_json::Value>, coco_tool::ToolError> {
+        _ctx: &coco_tool_runtime::ToolUseContext,
+    ) -> Result<coco_types::ToolResult<serde_json::Value>, coco_tool_runtime::ToolError> {
         Ok(coco_types::ToolResult {
             data: serde_json::json!({"value": "ordering-mcp"}),
             new_messages: vec![coco_messages::create_user_message("tool new message")],
@@ -1254,7 +1254,7 @@ impl coco_tool::Tool for HookOrderingMcpTool {
 struct HookFailTool;
 
 #[async_trait::async_trait]
-impl coco_tool::Tool for HookFailTool {
+impl coco_tool_runtime::Tool for HookFailTool {
     fn id(&self) -> coco_types::ToolId {
         coco_types::ToolId::Custom("hook_fail".into())
     }
@@ -1270,7 +1270,7 @@ impl coco_tool::Tool for HookFailTool {
     fn description(
         &self,
         _input: &serde_json::Value,
-        _options: &coco_tool::DescriptionOptions,
+        _options: &coco_tool_runtime::DescriptionOptions,
     ) -> String {
         "hook failure test tool".into()
     }
@@ -1278,9 +1278,9 @@ impl coco_tool::Tool for HookFailTool {
     async fn execute(
         &self,
         _input: serde_json::Value,
-        _ctx: &coco_tool::ToolUseContext,
-    ) -> Result<coco_types::ToolResult<serde_json::Value>, coco_tool::ToolError> {
-        Err(coco_tool::ToolError::ExecutionFailed {
+        _ctx: &coco_tool_runtime::ToolUseContext,
+    ) -> Result<coco_types::ToolResult<serde_json::Value>, coco_tool_runtime::ToolError> {
+        Err(coco_tool_runtime::ToolError::ExecutionFailed {
             message: "kaboom".into(),
             source: None,
         })
@@ -2163,7 +2163,7 @@ async fn test_session_result_num_api_calls_populated() {
 struct AskingTool;
 
 #[async_trait::async_trait]
-impl coco_tool::Tool for AskingTool {
+impl coco_tool_runtime::Tool for AskingTool {
     fn id(&self) -> coco_types::ToolId {
         coco_types::ToolId::Custom("AskingTool".into())
     }
@@ -2178,17 +2178,17 @@ impl coco_tool::Tool for AskingTool {
     fn description(
         &self,
         _input: &serde_json::Value,
-        _options: &coco_tool::DescriptionOptions,
+        _options: &coco_tool_runtime::DescriptionOptions,
     ) -> String {
         "asking tool".into()
     }
-    async fn prompt(&self, _options: &coco_tool::PromptOptions) -> String {
+    async fn prompt(&self, _options: &coco_tool_runtime::PromptOptions) -> String {
         "asking tool".into()
     }
     async fn check_permissions(
         &self,
         _input: &serde_json::Value,
-        _ctx: &coco_tool::ToolUseContext,
+        _ctx: &coco_tool_runtime::ToolUseContext,
     ) -> coco_types::PermissionDecision {
         coco_types::PermissionDecision::Ask {
             message: "please approve".into(),
@@ -2198,8 +2198,8 @@ impl coco_tool::Tool for AskingTool {
     async fn execute(
         &self,
         _input: serde_json::Value,
-        _ctx: &coco_tool::ToolUseContext,
-    ) -> Result<coco_types::ToolResult<serde_json::Value>, coco_tool::ToolError> {
+        _ctx: &coco_tool_runtime::ToolUseContext,
+    ) -> Result<coco_types::ToolResult<serde_json::Value>, coco_tool_runtime::ToolError> {
         Ok(coco_types::ToolResult::data(
             serde_json::json!({ "ok": true }),
         ))
@@ -2394,13 +2394,13 @@ async fn test_session_result_cancelled_marks_is_error() {
 // the `QueryResult.final_messages` field (added in 2.C.10 for multi-
 // turn SDK history threading).
 
-use coco_tool::DescriptionOptions;
-use coco_tool::Tool;
-use coco_tool::ToolError;
-use coco_tool::ToolPermissionBridge;
-use coco_tool::ToolPermissionDecision;
-use coco_tool::ToolPermissionRequest;
-use coco_tool::ToolPermissionResolution;
+use coco_tool_runtime::DescriptionOptions;
+use coco_tool_runtime::Tool;
+use coco_tool_runtime::ToolError;
+use coco_tool_runtime::ToolPermissionBridge;
+use coco_tool_runtime::ToolPermissionDecision;
+use coco_tool_runtime::ToolPermissionRequest;
+use coco_tool_runtime::ToolPermissionResolution;
 use coco_types::PermissionDecision;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
@@ -2433,7 +2433,7 @@ impl Tool for AskingMockTool {
     async fn check_permissions(
         &self,
         _input: &Value,
-        _ctx: &coco_tool::ToolUseContext,
+        _ctx: &coco_tool_runtime::ToolUseContext,
     ) -> PermissionDecision {
         PermissionDecision::Ask {
             message: "Mock needs permission".into(),
@@ -2443,7 +2443,7 @@ impl Tool for AskingMockTool {
     async fn execute(
         &self,
         _input: Value,
-        _ctx: &coco_tool::ToolUseContext,
+        _ctx: &coco_tool_runtime::ToolUseContext,
     ) -> Result<CocoToolResult<Value>, ToolError> {
         Ok(CocoToolResult::data(serde_json::json!({"ok": true})))
     }
@@ -3040,7 +3040,7 @@ fn test_progress_throttle_lru_evicts_oldest_key() {
 async fn test_drain_one_progress_emits_both_tui_and_protocol_when_qualifying() {
     let (tx, mut rx) = tokio::sync::mpsc::channel::<CoreEvent>(8);
     let mut throttle = super::ProgressThrottle::new();
-    let progress = coco_tool::ToolProgress {
+    let progress = coco_tool_runtime::ToolProgress {
         tool_use_id: "tu-1".into(),
         parent_tool_use_id: Some("parent-1".into()),
         data: serde_json::json!({
@@ -3082,7 +3082,7 @@ async fn test_drain_one_progress_suppresses_protocol_for_non_bash_payload() {
     let (tx, mut rx) = tokio::sync::mpsc::channel::<CoreEvent>(8);
     let sender = Some(tx);
     let mut throttle = super::ProgressThrottle::new();
-    let progress = coco_tool::ToolProgress {
+    let progress = coco_tool_runtime::ToolProgress {
         tool_use_id: "tu-agent".into(),
         parent_tool_use_id: None,
         data: serde_json::json!({"type": "agent_progress"}),
@@ -3108,7 +3108,7 @@ async fn test_drain_one_progress_throttles_bursts() {
     // second protocol emission must be throttled.
     let (tx, mut rx) = tokio::sync::mpsc::channel::<CoreEvent>(16);
     let mut throttle = super::ProgressThrottle::new();
-    let make = |tu: &str| coco_tool::ToolProgress {
+    let make = |tu: &str| coco_tool_runtime::ToolProgress {
         tool_use_id: tu.into(),
         parent_tool_use_id: Some("parent-X".into()),
         data: serde_json::json!({"type": "bash_progress"}),

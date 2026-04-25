@@ -4,8 +4,8 @@
 //! helpers from `powershell.rs` — previously they were dead code.
 
 use super::PowerShellTool;
-use coco_tool::Tool;
-use coco_tool::ToolUseContext;
+use coco_tool_runtime::Tool;
+use coco_tool_runtime::ToolUseContext;
 use serde_json::json;
 
 /// Unsafe CLM type reference must be blocked before pwsh is spawned.
@@ -123,7 +123,7 @@ fn test_powershell_missing_command_fails_validation() {
     let result = PowerShellTool.validate_input(&json!({}), &ctx);
     assert!(matches!(
         result,
-        coco_tool::ValidationResult::Invalid { .. }
+        coco_tool_runtime::ValidationResult::Invalid { .. }
     ));
 }
 
@@ -135,7 +135,7 @@ fn test_powershell_timeout_max_enforced() {
         PowerShellTool.validate_input(&json!({"command": "Get-Process", "timeout": 700_000}), &ctx);
     assert!(matches!(
         result,
-        coco_tool::ValidationResult::Invalid { .. }
+        coco_tool_runtime::ValidationResult::Invalid { .. }
     ));
 }
 

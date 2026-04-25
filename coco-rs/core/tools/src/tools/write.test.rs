@@ -1,12 +1,12 @@
 use crate::tools::write::WriteTool;
-use coco_tool::Tool;
-use coco_tool::ToolUseContext;
+use coco_tool_runtime::Tool;
+use coco_tool_runtime::ToolUseContext;
 use serde_json::json;
 
 // ── R7-T25: write description content check ──
 #[test]
 fn test_write_description_includes_read_before_write_warning() {
-    use coco_tool::DescriptionOptions;
+    use coco_tool_runtime::DescriptionOptions;
     let desc = WriteTool.description(&serde_json::Value::Null, &DescriptionOptions::default());
     assert!(
         desc.contains("MUST use the `Read` tool first"),

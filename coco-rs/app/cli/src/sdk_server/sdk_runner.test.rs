@@ -12,7 +12,7 @@ use std::sync::atomic::AtomicI32;
 
 use coco_inference::ApiClient;
 use coco_inference::RetryConfig;
-use coco_tool::ToolRegistry;
+use coco_tool_runtime::ToolRegistry;
 use vercel_ai_provider::AISdkError;
 use vercel_ai_provider::AssistantContentPart;
 use vercel_ai_provider::FinishReason;

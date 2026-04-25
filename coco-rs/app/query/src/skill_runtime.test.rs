@@ -11,12 +11,12 @@ use coco_skills::SkillContext;
 use coco_skills::SkillDefinition;
 use coco_skills::SkillManager;
 use coco_skills::SkillSource;
-use coco_tool::AgentQueryConfig;
-use coco_tool::AgentQueryEngine;
-use coco_tool::AgentQueryResult;
-use coco_tool::SkillHandle;
-use coco_tool::SkillInvocationError;
-use coco_tool::SkillInvocationResult;
+use coco_tool_runtime::AgentQueryConfig;
+use coco_tool_runtime::AgentQueryEngine;
+use coco_tool_runtime::AgentQueryResult;
+use coco_tool_runtime::SkillHandle;
+use coco_tool_runtime::SkillInvocationError;
+use coco_tool_runtime::SkillInvocationResult;
 use pretty_assertions::assert_eq;
 use tokio::sync::RwLock;
 

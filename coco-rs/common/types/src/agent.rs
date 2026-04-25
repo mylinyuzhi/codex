@@ -6,32 +6,46 @@ use std::convert::Infallible;
 use std::fmt;
 use std::str::FromStr;
 
-/// 7 built-in subagent types (matches TS AgentTool loadAgentsDir.ts).
-/// Copy + const fn as_str() — same pattern as ToolName.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+/// TS-parity built-in subagent types.
+///
+/// **Case is part of the contract.** TS treats `Explore` / `Plan` as PascalCase
+/// (consumed by the case-sensitive one-shot set in `constants.ts`, by user
+/// permission rules like `Agent(Explore)`, and by the
+/// `tengu_agent_tool_selected` telemetry attribute). The remaining built-ins
+/// (`general-purpose`, `statusline-setup`, `verification`, `claude-code-guide`)
+/// stay lowercase. See `subagent-refactor-plan.md` § "Naming decision".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SubagentType {
+    GeneralPurpose,
+    StatusLine,
     Explore,
     Plan,
-    Review,
-    StatusLine,
+    Verification,
     ClaudeCodeGuide,
-    Fork,
-    HookAgent,
 }
 
 impl SubagentType {
+    /// Canonical TS string form. Output side must always use this exact case.
     pub const fn as_str(&self) -> &'static str {
         match self {
-            Self::Explore => "explore",
-            Self::Plan => "plan",
-            Self::Review => "review",
+            Self::GeneralPurpose => "general-purpose",
             Self::StatusLine => "statusline-setup",
+            Self::Explore => "Explore",
+            Self::Plan => "Plan",
+            Self::Verification => "verification",
             Self::ClaudeCodeGuide => "claude-code-guide",
-            Self::Fork => "fork",
-            Self::HookAgent => "hook-agent",
         }
     }
+
+    /// All built-in variants, in display order.
+    pub const ALL: &'static [SubagentType] = &[
+        Self::GeneralPurpose,
+        Self::StatusLine,
+        Self::Explore,
+        Self::Plan,
+        Self::Verification,
+        Self::ClaudeCodeGuide,
+    ];
 }
 
 impl fmt::Display for SubagentType {
@@ -43,17 +57,32 @@ impl fmt::Display for SubagentType {
 impl FromStr for SubagentType {
     type Err = String;
 
+    /// Accept TS canonical case, plus lowercase aliases for `Explore`/`Plan`
+    /// and underscore variants for the kebab-case names. Output is always
+    /// canonical via `Display`/`as_str`.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "explore" => Ok(Self::Explore),
-            "plan" => Ok(Self::Plan),
-            "review" => Ok(Self::Review),
+            "general-purpose" | "general_purpose" => Ok(Self::GeneralPurpose),
             "statusline-setup" | "statusline_setup" => Ok(Self::StatusLine),
+            "Explore" | "explore" => Ok(Self::Explore),
+            "Plan" | "plan" => Ok(Self::Plan),
+            "verification" => Ok(Self::Verification),
             "claude-code-guide" | "claude_code_guide" => Ok(Self::ClaudeCodeGuide),
-            "fork" => Ok(Self::Fork),
-            "hook-agent" | "hook_agent" => Ok(Self::HookAgent),
             _ => Err(format!("unknown subagent type: {s}")),
         }
+    }
+}
+
+impl Serialize for SubagentType {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for SubagentType {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        s.parse().map_err(serde::de::Error::custom)
     }
 }
 
@@ -102,6 +131,135 @@ impl<'de> Deserialize<'de> for AgentTypeId {
 impl From<SubagentType> for AgentTypeId {
     fn from(t: SubagentType) -> Self {
         Self::Builtin(t)
+    }
+}
+
+// ── Agent Source ──
+
+/// Where an agent definition came from. Drives precedence when the same
+/// `agent_type` is defined in multiple places: later source wins.
+///
+/// TS: source field on `BaseAgentDefinition` (`loadAgentsDir.ts:105-165`),
+/// resolution order in `getActiveAgentsFromList` (`loadAgentsDir.ts:193-221`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum AgentSource {
+    /// Bundled built-in agents.
+    #[default]
+    #[serde(rename = "built-in")]
+    BuiltIn,
+    /// Plugin contribution.
+    #[serde(rename = "plugin")]
+    Plugin,
+    /// User-level agents (`~/.coco/agents/*.md`).
+    #[serde(rename = "userSettings")]
+    UserSettings,
+    /// Project-level agents (`<project>/.coco/agents/*.md`).
+    #[serde(rename = "projectSettings")]
+    ProjectSettings,
+    /// JSON/CLI flag supplied agents.
+    #[serde(rename = "flagSettings")]
+    FlagSettings,
+    /// Managed/policy agents (highest priority).
+    #[serde(rename = "policySettings")]
+    PolicySettings,
+}
+
+impl AgentSource {
+    /// Priority for conflict resolution. Higher wins.
+    /// Mirrors TS `getActiveAgentsFromList` map-overwrite order.
+    pub const fn priority(self) -> u8 {
+        match self {
+            Self::BuiltIn => 0,
+            Self::Plugin => 1,
+            Self::UserSettings => 2,
+            Self::ProjectSettings => 3,
+            Self::FlagSettings => 4,
+            Self::PolicySettings => 5,
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::BuiltIn => "built-in",
+            Self::Plugin => "plugin",
+            Self::UserSettings => "userSettings",
+            Self::ProjectSettings => "projectSettings",
+            Self::FlagSettings => "flagSettings",
+            Self::PolicySettings => "policySettings",
+        }
+    }
+}
+
+impl fmt::Display for AgentSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+// ── Agent Color ──
+
+/// TS `AgentColorName`. Validated set; unknown values are dropped at parse
+/// time with a warning so the runtime never sees an invalid color.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentColorName {
+    Red,
+    Blue,
+    Green,
+    Yellow,
+    Purple,
+    Orange,
+    Pink,
+    Cyan,
+}
+
+impl AgentColorName {
+    pub const ALL: &'static [AgentColorName] = &[
+        Self::Red,
+        Self::Blue,
+        Self::Green,
+        Self::Yellow,
+        Self::Purple,
+        Self::Orange,
+        Self::Pink,
+        Self::Cyan,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Red => "red",
+            Self::Blue => "blue",
+            Self::Green => "green",
+            Self::Yellow => "yellow",
+            Self::Purple => "purple",
+            Self::Orange => "orange",
+            Self::Pink => "pink",
+            Self::Cyan => "cyan",
+        }
+    }
+}
+
+impl fmt::Display for AgentColorName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for AgentColorName {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "red" => Ok(Self::Red),
+            "blue" => Ok(Self::Blue),
+            "green" => Ok(Self::Green),
+            "yellow" => Ok(Self::Yellow),
+            "purple" => Ok(Self::Purple),
+            "orange" => Ok(Self::Orange),
+            "pink" => Ok(Self::Pink),
+            "cyan" => Ok(Self::Cyan),
+            other => Err(format!("unknown agent color: {other}")),
+        }
     }
 }
 
@@ -224,21 +382,47 @@ pub struct ModelInheritance {
 
 /// Complete agent definition — the declarative spec for a subagent.
 ///
-/// TS: AgentDefinition in loadAgentsDir.ts / subagent.ts
-/// Combines identity, capabilities, and configuration overrides.
+/// TS: AgentDefinition in loadAgentsDir.ts (`BaseAgentDefinition` +
+/// `BuiltInAgentDefinition` / `CustomAgentDefinition` / `PluginAgentDefinition`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentDefinition {
-    /// Agent type identity.
+    /// Agent type identity (TS `agentType`).
     pub agent_type: AgentTypeId,
 
     /// Human-readable display name.
     #[serde(default)]
     pub name: String,
 
-    /// Agent description (shown in tool listings).
-    /// TS: `whenToUse` / `description`
+    /// User-facing summary shown in the AgentTool prompt list.
+    /// TS: `whenToUse` in `BaseAgentDefinition`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when_to_use: Option<String>,
+
+    /// Free-form description (kept for back-compat; loaders should mirror it
+    /// into `when_to_use` when the source has no separate `whenToUse`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+
+    /// Where the definition came from. Drives precedence when the same
+    /// `agent_type` is defined in multiple sources.
+    #[serde(default)]
+    pub source: AgentSource,
+
+    /// Original markdown filename, for diagnostics and `/agents show`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
+
+    /// Source directory (e.g. `<project>/.coco/agents`), for diagnostics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_dir: Option<String>,
+
+    /// System prompt body (TS markdown body / JSON `prompt`). Distinct from
+    /// `initial_prompt`, which is a first-turn user-message prefix.
+    ///
+    /// Built-in agents leave this empty and provide a renderer that produces
+    /// the prompt at spawn time using the parent context.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
 
     /// Thinking/effort level override for this agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -265,7 +449,8 @@ pub struct AgentDefinition {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mcp_servers: Vec<String>,
 
-    /// Starting prompt/instructions for the agent.
+    /// Starting prompt prefix for the first user turn (TS `initialPrompt`).
+    /// **Not** the system prompt — see `system_prompt`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_prompt: Option<String>,
 
@@ -273,24 +458,22 @@ pub struct AgentDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_turns: Option<i32>,
 
-    /// Tools this agent is not allowed to use.
+    /// Tools this agent is not allowed to use (deny-list).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub disallowed_tools: Vec<String>,
 
-    /// Tools this agent is explicitly allowed to use.
-    /// Supports `"Agent(type1, type2)"` syntax for restricting subagent types.
+    /// Tools this agent is explicitly allowed to use (allow-list).
+    /// Empty means "use the default filtered set".
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_tools: Vec<String>,
 
-    /// System prompt / identity override.
+    /// System prompt / identity override (legacy — prefer `system_prompt`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity: Option<String>,
 
-    // ── Fields added for TS alignment (loadAgentsDir.ts) ──
-    /// UI color for this agent type.
-    /// TS: `color: AgentColorName`
+    /// Validated UI color for this agent type (TS `color`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub color: Option<String>,
+    pub color: Option<AgentColorName>,
 
     /// Skill names to preload when this agent starts.
     /// TS: `skills: string[]`
@@ -317,6 +500,11 @@ pub struct AgentDefinition {
     /// TS: `omitClaudeMd: boolean`
     #[serde(default)]
     pub omit_claude_md: bool,
+
+    /// Short reminder re-injected at every user turn.
+    /// TS: `criticalSystemReminder_EXPERIMENTAL`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub critical_system_reminder: Option<String>,
 }
 
 impl Default for AgentDefinition {
@@ -324,7 +512,12 @@ impl Default for AgentDefinition {
         Self {
             agent_type: AgentTypeId::Custom("default".into()),
             name: String::new(),
+            when_to_use: None,
             description: None,
+            source: AgentSource::BuiltIn,
+            filename: None,
+            base_dir: None,
+            system_prompt: None,
             effort: None,
             use_exact_tools: false,
             model: None,
@@ -342,6 +535,7 @@ impl Default for AgentDefinition {
             permission_mode: None,
             required_mcp_servers: Vec::new(),
             omit_claude_md: false,
+            critical_system_reminder: None,
         }
     }
 }

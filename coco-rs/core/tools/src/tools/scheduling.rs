@@ -4,11 +4,11 @@
 //!
 //! Uses `ctx.schedules` (ScheduleStore trait) for persistence.
 
-use coco_tool::DescriptionOptions;
-use coco_tool::Tool;
-use coco_tool::ToolError;
-use coco_tool::ToolUseContext;
-use coco_tool::ValidationResult;
+use coco_tool_runtime::DescriptionOptions;
+use coco_tool_runtime::Tool;
+use coco_tool_runtime::ToolError;
+use coco_tool_runtime::ToolUseContext;
+use coco_tool_runtime::ValidationResult;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
 use coco_types::ToolName;
@@ -417,13 +417,13 @@ impl Tool for RemoteTriggerTool {
         true
     }
 
-    fn validate_input(&self, input: &Value, _ctx: &ToolUseContext) -> coco_tool::ValidationResult {
+    fn validate_input(&self, input: &Value, _ctx: &ToolUseContext) -> coco_tool_runtime::ValidationResult {
         let action = input.get("action").and_then(|v| v.as_str()).unwrap_or("");
         if action.is_empty() {
-            return coco_tool::ValidationResult::invalid("action is required");
+            return coco_tool_runtime::ValidationResult::invalid("action is required");
         }
         if !["list", "get", "create", "update", "run"].contains(&action) {
-            return coco_tool::ValidationResult::invalid(
+            return coco_tool_runtime::ValidationResult::invalid(
                 "action must be one of: list, get, create, update, run",
             );
         }
@@ -435,11 +435,11 @@ impl Tool for RemoteTriggerTool {
                 .unwrap_or("")
                 .is_empty()
         {
-            return coco_tool::ValidationResult::invalid(
+            return coco_tool_runtime::ValidationResult::invalid(
                 "trigger_id is required for get, update, and run actions",
             );
         }
-        coco_tool::ValidationResult::Valid
+        coco_tool_runtime::ValidationResult::Valid
     }
 
     async fn execute(

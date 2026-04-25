@@ -33,7 +33,7 @@ use coco_inference::ApiClient;
 use coco_query::QueryEngine;
 use coco_query::QueryEngineConfig;
 use coco_session::SessionManager;
-use coco_tool::ToolRegistry;
+use coco_tool_runtime::ToolRegistry;
 use tokio_util::sync::CancellationToken;
 
 /// Built-in mock model for development/testing.
@@ -940,7 +940,7 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     // Build the real runner with an SdkPermissionBridge that routes
     // `PermissionDecision::Ask` via `approval/askForApproval` to the
     // SDK client. Then install the runner on the live state.
-    let bridge: Arc<dyn coco_tool::ToolPermissionBridge> =
+    let bridge: Arc<dyn coco_tool_runtime::ToolPermissionBridge> =
         Arc::new(coco_cli::sdk_server::SdkPermissionBridge::new(state));
     let mut runner_builder = QueryEngineRunner::new(
         client,

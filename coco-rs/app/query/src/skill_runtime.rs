@@ -1,5 +1,5 @@
 //! `QuerySkillRuntime` — real implementation of
-//! [`coco_tool::SkillHandle`] backed by [`coco_skills::SkillManager`].
+//! [`coco_tool_runtime::SkillHandle`] backed by [`coco_skills::SkillManager`].
 //!
 //! TS: `src/tools/SkillTool/SkillTool.ts` — skill resolution +
 //! inline vs forked routing; `src/tools/SkillTool/prompt.ts` —
@@ -39,11 +39,11 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use coco_skills::SkillContext;
 use coco_skills::SkillManager;
-use coco_tool::AgentQueryConfig;
-use coco_tool::AgentQueryEngineRef;
-use coco_tool::SkillHandle;
-use coco_tool::SkillInvocationError;
-use coco_tool::SkillInvocationResult;
+use coco_tool_runtime::AgentQueryConfig;
+use coco_tool_runtime::AgentQueryEngineRef;
+use coco_tool_runtime::SkillHandle;
+use coco_tool_runtime::SkillInvocationError;
+use coco_tool_runtime::SkillInvocationResult;
 use tokio::sync::RwLock;
 
 /// Real skill-runtime implementation.

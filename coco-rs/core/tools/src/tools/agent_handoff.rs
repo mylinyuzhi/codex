@@ -6,8 +6,8 @@
 //! potentially unsafe actions before handing results back to the parent.
 //! Uses a two-stage LLM classifier for high confidence.
 
-use coco_tool::SideQueryHandle;
-use coco_tool::SideQueryRequest;
+use coco_tool_runtime::SideQueryHandle;
+use coco_tool_runtime::SideQueryRequest;
 
 /// Result of handoff classification.
 #[derive(Debug, Clone, PartialEq, Eq)]

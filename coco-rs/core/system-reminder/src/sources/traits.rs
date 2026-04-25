@@ -7,7 +7,7 @@
 //! gains a dep on `coco-system-reminder` to `impl`, never the reverse.
 //!
 //! This is the reminder-subsystem analog of the "handle" traits in
-//! `core/tool` (`AgentHandle` / `HookHandle` / `McpHandle` / …) —
+//! `core/tool-runtime` (`AgentHandle` / `HookHandle` / `McpHandle` / …) —
 //! same pattern: core crate defines the contract, upper crates
 //! implement.
 //!

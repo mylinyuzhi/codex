@@ -16,10 +16,10 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use coco_tool::ToolPermissionBridge;
-use coco_tool::ToolPermissionDecision;
-use coco_tool::ToolPermissionRequest;
-use coco_tool::ToolPermissionResolution;
+use coco_tool_runtime::ToolPermissionBridge;
+use coco_tool_runtime::ToolPermissionDecision;
+use coco_tool_runtime::ToolPermissionRequest;
+use coco_tool_runtime::ToolPermissionResolution;
 use coco_types::ApprovalDecision;
 use coco_types::ApprovalResolveParams;
 use coco_types::JsonRpcMessage;

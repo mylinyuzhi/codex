@@ -13,7 +13,7 @@ use coco_inference::RetryConfig;
 use coco_query::QueryEngine;
 use coco_query::QueryEngineConfig;
 use coco_session::SessionManager;
-use coco_tool::ToolRegistry;
+use coco_tool_runtime::ToolRegistry;
 use coco_tools::BashTool;
 use coco_tools::EditTool;
 use coco_tools::GlobTool;
