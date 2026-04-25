@@ -139,7 +139,7 @@ TS `AgentTool` 是行为规格，不是结构模板。需要保留的行为：
 
 | 行为 | TS 位置 | Rust 目标 |
 |------|---------|-----------|
-| 输入字段 | `AgentTool.tsx` input schema | 保留 `prompt`、`description`、`subagent_type`、`model`、`run_in_background`、`name`、`team_name`、`mode`、`cwd`、`isolation` |
+| 输入字段 | `AgentTool.tsx` input schema (`AgentTool.tsx:82-125`) | 保留 `prompt`、`description`、`subagent_type`、`model`、`run_in_background`、`name`、`team_name`、`mode`、`cwd`、`isolation`。注意条件可见性：`cwd` 仅在 `feature('KAIROS')` 时暴露给模型；`run_in_background` 在后台任务关闭或 fork enabled 时被 `.omit()` |
 | 动态 prompt | `prompt({ agents, tools, allowedAgentTypes })` | `AgentTool::prompt` 使用 `AgentDefinitionStore` 快照 |
 | agent definition 过滤 | required MCP、permission denied、allowed types | runtime 和 prompt catalog 都应用同一过滤策略 |
 | teammate path | `teamName && name` | 继续由 swarm teammate 处理 |
@@ -159,7 +159,7 @@ TS `AgentDefinition` 的字段需要逐项映射，不能只保留 name/prompt/t
 |---------|------|---------------|------|
 | `agentType` | markdown `name` 或 JSON key | `agent_type` | canonical spawn id |
 | `whenToUse` | markdown `description` 或 JSON `description` | `description` 或 `when_to_use` | AgentTool prompt 中展示的用途描述 |
-| `tools` | frontmatter/JSON | `allowed_tools` | allow-list；`undefined` 或 `["*"]` 表示全部可用工具经过系统过滤后可用 |
+| `tools` | frontmatter/JSON | `allowed_tools` | allow-list；`undefined` 表示使用默认（系统过滤后的全部工具）。**`["*"]`** 在 TS `parseAgentToolsFromFrontmatter` 中并未被特殊处理为通配符（只是普通字符串），coco-rs 不应自行赋予 `*` wildcard 语义；如果未来需要 wildcard，应作为显式 extension 并文档化 |
 | `disallowedTools` | frontmatter/JSON | `disallowed_tools` | deny-list；在 allow-list 后继续过滤 |
 | `skills` | frontmatter/JSON | `skills` | child agent 启动前预加载的 skills |
 | `mcpServers` | frontmatter/JSON | `mcp_servers` | agent-scoped MCP server refs，支持 name ref 和 inline config |
@@ -222,13 +222,16 @@ TS `prompt.ts` 的 prompt 结构是行为的一部分。
 
 `color` 不是纯装饰字段。TS 在多个路径使用它：
 
-| 使用点 | 语义 |
-|--------|------|
-| loading active agents | 初始化 active agent 的 color map |
-| teammate spawn | spawn 前按 selected agent color 设置 grouped UI color |
-| normal subagent spawn | selected agent 有 color 时调用 color manager |
-| telemetry | `tengu_agent_tool_selected` 记录 color |
-| grouped UI | 同一类 agent 的进度行使用稳定颜色 |
+| 使用点 | TS 位置 | 语义 |
+|--------|---------|------|
+| loading active agents | `loadAgentsDir.ts:370` | 初始化 active agent 的 color map |
+| teammate spawn | `AgentTool.tsx:288` | spawn 前按 selected agent color 设置 grouped UI color |
+| normal subagent spawn | `AgentTool.tsx:414` | selected agent 有 color 时调用 color manager |
+| telemetry | `AgentTool.tsx:423` (`tengu_agent_tool_selected`) | 直接读取 `selectedAgent.color`（不走 `getAgentColor`），attributes 至少含 agentType/color/source/model |
+| grouped progress UI | `UI.tsx:696, 786` | 同一类 agent 的进度行使用稳定颜色 |
+| agent settings UI | `components/agents/AgentDetail.tsx:40`, `AgentEditor.tsx:71` | `/agents show` 等入口的 color 显示 |
+| swarm banner | `components/PromptInput/useSwarmBanner.ts:120` | 团队 banner 使用 agent color |
+| unified suggestions | `hooks/unifiedSuggestions.ts:92` | 自动补全列表上色 |
 
 Rust 落地要求：
 
@@ -249,8 +252,8 @@ Rust 落地要求：
 | `async_launched` | 明确“不要重复该 agent 的工作”；如果 parent 有 Read/Bash，给 `output_file` 和可读进度说明 |
 | `remote_launched` | 当前 coco-rs 不支持时显式错误；未来支持时必须返回 task/session/output file |
 | `teammate_spawned` | 返回 teammate id、name、team name、mailbox instruction |
-| empty completed content | 插入显式 marker，避免模型误判没有结果 |
-| one-shot built-ins | `explore`、`plan` 等不需要 SendMessage continuation trailer |
+| empty completed content | 插入显式 marker。**TS parity 必须使用精确字符串**：`(Subagent completed but returned no output.)` (`AgentTool.tsx:1347-1350`)，避免模型误判没有结果 |
+| one-shot built-ins | TS one-shot 集合是 **case-sensitive** `{'Explore', 'Plan'}` (`constants.ts:9-12`)，跳过 SendMessage continuation trailer。Rust 实现必须维持完全相同的大小写匹配；不可改成 `{'explore','plan'}` |
 
 TS `loadAgentsDir.ts` 需要吸收的定义加载语义：
 
@@ -275,8 +278,8 @@ TS `runAgent.ts` 需要吸收的运行语义：
 
 | 设计 | Rust 落地 |
 |------|-----------|
-| agent-specific MCP servers | runtime 启动 child 前确保 MCP ready，完成后清理 agent-scoped MCP |
-| permission inheritance | parent bypass/accept/auto 等高信任模式覆盖 child declaration |
+| agent-specific MCP servers | runtime 启动 child 前确保 MCP ready，完成后清理 agent-scoped MCP (`runAgent.ts:95-200, 818`) |
+| permission inheritance | TS 默认仅 parent `bypassPermissions` 和 `acceptEdits` 覆盖 child；`auto` 仅在 `feature('TRANSCRIPT_CLASSIFIER')` 开启时才被保留覆盖 (`runAgent.ts:421-434`)。Rust 落地需以 feature gate 表达，不可无条件继承 `auto` |
 | filtered tools | child tool list 来自 definition + background + permission |
 | system prompt 构造 | definition body、skills、memory、tool list、env 信息组合 |
 | subagent hooks | agent lifecycle 注册和卸载 hook |
@@ -364,21 +367,28 @@ TS `runAgent.ts` 需要吸收的运行语义：
 
 `cocode-rs/core/subagent` 的优秀设计点：
 
-| 设计 | 吸收方式 |
-|------|----------|
-| `AgentSource::priority` | 可作为实现来源排序的参考，但默认排序必须匹配 TS source precedence |
-| `AgentDefinition::merge_with` | 只能作为 opt-in extension 参考；TS parity 默认是同名 agent 按来源覆盖，不做 array union |
-| typed `SpawnInput` | 替代跨模块传递过多 positional/loosely typed 参数 |
-| `SubagentManager` owns instances | 管理 running/completed/failed/backgrounded/killed |
-| `AgentExecuteParams` | child query 的单一参数对象 |
-| background output file | background agent 有明确 output path |
-| cancellation token map | 支持 stop background agent |
-| `BackgroundOrigin` | 区分显式后台、signal 后台、timeout 后台 |
-| `read_deltas` | 支持增量读取 output，避免重复通知 |
-| `mark_notified` | 避免父 agent 重复收到完成通知 |
-| GC terminal instances | 控制长期 session 内存 |
-| four-layer tool filtering | system blocked、allow-list、deny-list、background safe |
-| `Agent(type)` restrictions | 可限制 nested subagent 类型；兼容层可解析 `Task(type)` |
+**重要**：本计划绝不是 port `cocode-rs/core/subagent` crate。该 crate 共 5,353 LoC，仅
+`definition.rs` (302)、`loader.rs` (375)、`filter.rs` (196) 和 `definitions/*` 的部分内容
+属于 `coco-subagent` 候选范围。`manager.rs` (1,289)、`transcript.rs`、`signal.rs`、
+`background.rs` 必须放在 `app/state`，因为它们依赖 `tokio::spawn`、`tokio::fs`、
+`mpsc::Sender<CoreEvent>` 以及一个进程级 `Lazy<RwLock<HashMap<…>>>`（`signal.rs:31-32`），
+全部违反 `coco-subagent` 的 pure-logic 约束。
+
+| 设计 | 吸收方式 | 目标 crate |
+|------|----------|------------|
+| `AgentSource::priority(self) -> u8` | 移植方法本身（cocode-rs `definition.rs:113-137`，BuiltIn=0…CliFlag=5）；默认排序必须匹配 TS source precedence | `coco-subagent` |
+| `AgentDefinition::merge_with` | 只能作为 opt-in extension 参考；TS parity 默认是同名 agent 按来源覆盖，不做 array union (`loadAgentsDir.ts:212` Map.set) | 不默认启用 |
+| typed `SpawnInput` (cocode-rs `spawn.rs:7-69`) | 替代跨模块传递过多 positional/loosely typed 参数 | `coco-state` |
+| `SubagentManager` owns instances + 5-status enum | 管理 running/completed/failed/backgrounded/killed (cocode-rs `manager.rs:26-32`) | `coco-state`（不进 `coco-subagent`） |
+| `AgentExecuteParams` (cocode-rs `manager.rs:123-187`) | child query 的单一参数对象 | `coco-state::AgentRuntime` |
+| background output file | background agent 有明确 output path | `coco-state::SubagentManager` |
+| 每实例 cancellation token | `AgentInstance.cancel_token` 字段 (cocode-rs `manager.rs:101`)。**注意**：cocode-rs 没有 manager 拥有的 token map；其 `signal.rs:31-32` 的进程级全局 `Lazy<RwLock<HashMap>>` 是反例，不要复制 | `coco-state::SubagentManager` |
+| `BackgroundOrigin` (cocode-rs `manager.rs:46-53`) | 区分显式后台、signal 后台、timeout 后台 | `coco-state` |
+| `read_deltas` (cocode-rs `manager.rs:1215-1259`) | 支持增量读取 output，避免重复通知 | `coco-state::SubagentManager` |
+| `mark_notified` (cocode-rs `manager.rs:1262-1269`) | 避免父 agent 重复收到完成通知 | `coco-state::SubagentManager` |
+| GC terminal instances (cocode-rs `manager.rs:1129-1156`) | 控制长期 session 内存 | `coco-state::SubagentManager` |
+| four-layer tool filtering (cocode-rs `filter.rs:53-153`) | system blocked、allow-list、deny-list、background safe | `coco-subagent::filter` |
+| 嵌套 agent 限制：`Agent(...)` 与 `Task(...)` 双形别名 | TS `LEGACY_AGENT_TOOL_NAME = 'Task'` 永久作为 alias (`constants.ts:3`、`AgentTool.tsx:228`)，permission spec parser 同一 regex `^([^(]+)(?:\(([^)]*)\))?$` 同时匹配 (`permissionSetup.ts:324-325`)。Rust 必须**双形并行**接受，不可单向 canonicalize 或重写用户规则 | `coco-subagent::filter` |
 
 不建议直接照搬的点：
 
@@ -386,8 +396,10 @@ TS `runAgent.ts` 需要吸收的运行语义：
 |------|----------------|-------------|
 | `cocode_protocol` 类型 | `coco-rs` 已有 `coco_types` | 映射到 `coco_types::AgentDefinition` |
 | 独立 execute callback 全部语义 | `coco-rs` 已有 `AgentQueryEngine` trait | callback 内部调用 `AgentQueryEngine` |
-| `.cocode` 路径硬编码 | `coco-rs` 使用 `~/.coco` 和 project conventions | 使用 `.coco`，兼容 `.claude` |
-| `Task` 命名 | `coco-rs` 的 tool 名称可能是 `Agent` | 语义迁移为 `Agent(type)` 或兼容 `Task(type)` |
+| `.cocode` 路径硬编码 (cocode-rs `loader.rs:325`) | `coco-rs` 使用 `~/.coco` 和 project conventions | 使用 `.coco`，兼容 `.claude` |
+| 工具名 `Task`（cocode-rs `filter.rs:13-17` 仅识别 `Task`）| `coco-rs` 工具名是 `Agent` | 双形并行：tool 主名 `Agent`，permission rule 同时支持 `Agent(...)` 与 `Task(...)`，与 TS 一致 |
+| 进程级全局 signal map (cocode-rs `signal.rs:31-32`) | 是 anti-pattern，难测试且跨 session 共享 | 用 per-session/per-runtime owned map |
+| cocode-rs 内置 `bash`、`code-simplifier`，且使用 `general` / `statusline` 简称 | 偏离 TS 命名 (`general-purpose` / `statusline-setup`)，且 TS 没有 `verification` 之外的扩展 | 不要复制 cocode-rs 的 `definitions/*` 目录；TS-parity 内置必须从 `tools/AgentTool/built-in/*.ts` 重新派生 |
 
 ## Design Decisions
 
@@ -841,19 +853,24 @@ Suggested `coco-subagent` dependencies:
 | `thiserror` or crate-local error enum | loader/validation diagnostics without pulling app errors |
 | `tracing` | load/validation diagnostics only |
 
-Avoid dependencies:
+Avoid dependencies (**hard rules — enforce in CI on the first PR**):
 
 | Dependency | Why not |
 |------------|---------|
-| `tokio` | no background task execution, watcher, cancellation, or async runtime in this crate |
+| `tokio`、`tokio-util` | 无 background task、watcher、cancellation、async runtime；任何 `tokio::spawn`/`mpsc`/`tokio::fs` 出现在该 crate 都视作回归 |
 | `coco-tool` / `coco-tools` | would invert the intended thin AgentTool boundary |
 | `coco-query` | QueryEngine execution belongs to app/query and app/state |
 | `coco-state` | AppState and lifecycle ownership stay above core |
 | `coco-commands` | commands consume catalog APIs; catalog must not know commands |
 
-Allowed side effects: `coco-subagent` may read definition files from configured paths when asked
-to load/reload. It must not own long-lived watchers, tokio tasks, background output files,
-worktree lifecycle, event sinks, or cancellation tokens.
+CI guard: 第一个 PR 即在 `coco-rs/core/subagent/Cargo.toml` 上加 `# DO NOT ADD tokio`
+注释，并增加 workspace lint（或 `cargo deny`/`cargo udeps` 集成）确保 `tokio*` 不出现
+在 `coco-subagent` 的依赖图。
+
+Allowed side effects: `coco-subagent` 可使用同步 `std::fs` 在被显式调用 `load()`/`reload()`
+时读取 definition 文件；不允许 spawn tokio task、保持 watcher、写 background output、
+管理 worktree、持有 event sink 或 cancellation token。Watcher 必须由 `app/state` 拥有，
+变化时调用 `AgentDefinitionStore::reload()`（同步）。
 
 Recommended public API surface:
 
@@ -986,6 +1003,22 @@ pub enum AgentSource {
     ProjectSettings,
     FlagSettings,
     PolicySettings,
+}
+
+impl AgentSource {
+    /// Priority for conflict resolution. Higher wins. Mirrors cocode-rs
+    /// `definition.rs:113-137` and TS `getActiveAgentsFromList` map-overwrite
+    /// order in `loadAgentsDir.ts:203-216`.
+    pub fn priority(self) -> u8 {
+        match self {
+            Self::BuiltIn => 0,
+            Self::Plugin => 1,
+            Self::UserSettings => 2,
+            Self::ProjectSettings => 3,
+            Self::FlagSettings => 4,
+            Self::PolicySettings => 5,
+        }
+    }
 }
 ```
 
@@ -1165,13 +1198,26 @@ TS parity built-ins:
 | `build` | optional extension, not TS parity | User requirement asks for build subagent; implement as a bundled `coco-rs` agent or project template, and label it as `coco-rs`-specific |
 | `review` | optional extension unless TS adds one | Useful for code review workflows, but not part of current TS `getBuiltInAgents()` list |
 
-Naming decision:
+Naming decision (TS parity is **case-sensitive**):
+
+TS 当前 built-in `agentType` 使用混合大小写：`Explore` / `Plan` 大写首字母
+(`exploreAgent.ts:65`、`planAgent.ts:74`)，其余 `general-purpose`、
+`statusline-setup`、`verification`、`claude-code-guide` 全小写。这不是历史遗留，
+而是被多处 case-sensitive 逻辑直接消费：
+
+| 影响点 | TS 位置 | 后果（如果 Rust 单方面小写化）|
+|--------|---------|-----------------------------|
+| One-shot built-ins 集合 `{'Explore','Plan'}` | `constants.ts:9-12` | SendMessage trailer 跳过逻辑失效，`explore`/`plan` 会错误地附带 continuation trailer |
+| 用户 permission 规则 `Agent(Explore)` | `permissionSetup.ts:324-325` | 用户既有规则不再匹配，规则需要迁移工具 |
+| 遥测 `tengu_agent_tool_selected.agentType` | `AgentTool.tsx:423` | 与 ant 端遥测面板的 cohort 切片不一致 |
 
 | Issue | Decision |
 |-------|----------|
-| Existing `SubagentType::as_str()` uses lowercase names | Standardize active names to lowercase kebab-case |
-| Existing helper mentions `Explore`/`Plan` uppercase | Keep aliases for compatibility, canonicalize to `explore`/`plan` |
-| Tool schema examples mention `Explore` | Update examples to lowercase or mention aliases |
+| Canonical built-in IDs | **保留 TS 大小写**：`Explore`、`Plan`、`general-purpose`、`statusline-setup`、`verification`、`claude-code-guide`。不允许单方面小写化 |
+| 现有 `SubagentType::as_str()` 全小写 | 在 Phase 1 修正为 TS-parity 大小写；为旧值保留 alias parser，但**输出端**永远输出 canonical 大小写 |
+| Alias 行为 | 输入端接受 `explore`/`plan` 等小写（向用户友好），spawn 时立即 canonicalize；输出端（result、telemetry、prompt list、permission rule 显示）始终使用 TS 大小写 |
+| Tool schema examples | 使用 TS canonical 大小写示例 (`Explore`、`Plan`)；在描述中说明小写为接受的 alias |
+| One-shot 集合 | Rust 常量必须是 `["Explore", "Plan"]` 字面量；测试断言完全相同 |
 
 ## Slash Command Integration
 
@@ -1261,6 +1307,14 @@ Invariants:
 | child allowed tools are applied | fake child registry sees only allowed tools |
 | slash command with `agent` bypasses main model | fake runtime sees spawn call |
 | normal session has real `AgentHandle` | bootstrap test checks not `NoOpAgentHandle` |
+| **TS parity invariants** (lock these on day 0) | |
+| one-shot set is case-sensitive `{"Explore","Plan"}` | Rust constant matches `constants.ts:9-12` 字节相同；小写输入不命中 |
+| empty-content marker exact text | 字面量 `(Subagent completed but returned no output.)` (`AgentTool.tsx:1347-1350`) |
+| AgentTool prompt 行格式 | `- {agentType}: {whenToUse} (Tools: {toolsDescription})` (`prompt.ts:43-46`) |
+| 工具描述格式 | "All tools" / "All tools except X, Y" / explicit list 三分支与 TS 一致 (`prompt.ts:15-37`) |
+| `Agent(...) ∪ Task(...)` regex | `^([^(]+)(?:\(([^)]*)\))?$` 同时匹配两种 tool 名 (`permissionSetup.ts:324-325`) |
+| permission inheritance 默认覆盖范围 | 仅 `bypassPermissions`、`acceptEdits`；`auto` 仅在 feature gate 开启时覆盖 |
+| schema 条件可见性 | `cwd` 仅在 `feature('KAIROS')` 暴露；`run_in_background` 在后台禁用或 fork enabled 时 omit |
 
 ### Phase 1: Unify Agent Definition Loading
 
@@ -1442,7 +1496,7 @@ Tasks:
 |------|---------|
 | Move worktree decision into runtime | `SwarmAgentHandle` no longer owns standalone worktree logic |
 | Keep foreground cleanup policy | remove unchanged worktree, keep changed worktree |
-| Define background worktree policy | likely keep until agent completion and cleanup if unchanged |
+| Background worktree policy（已定，不再 TBD） | 进入 terminal 状态前保留 worktree，path 写入 `AgentInstance` 供 `query_agent_status` 返回；进入 `Completed`/`Failed`/`Killed` 时若 worktree 无 git diff 则清理，否则保留并在 result/output 中带回路径——与 foreground 同策略，避免两套规则 |
 | Add `ForkContext` to request/config | messages plus metadata |
 | Prevent recursive fork | if already fork child, deny fork path |
 | Preserve tool result pairs | fork messages must not break provider normalization |
@@ -1644,6 +1698,33 @@ just pre-commit
 | MCP readiness blocks spawn indefinitely | medium | timeout and clear error |
 | TUI/CLI bootstrap wiring diverges | medium | shared bootstrap builder for AgentRuntime |
 
+## Deferred TS Files
+
+`tools/AgentTool/` 目录还有以下 TS 源文件，本计划范围内**不**实现，但需要登记
+以便后续阶段不被遗忘：
+
+| TS 文件 | 用途 | 处理 |
+|---------|------|------|
+| `resumeAgent.ts` | resume 已有 background agent，把它的 transcript 接回 parent 会话 | P2：在 Phase 5 实现 background lifecycle 之后；接口预留 `resume_agent(id)` |
+| `agentMemorySnapshot.ts` | spawn 时给 child 注入 parent memory 的 snapshot | P2：依赖 `coco-memory` 完成；先在 `AgentSpawnPlan` 留出 `memory_snapshot: Option<...>` |
+| `agentMemory.ts` | child agent 写回 memory 的策略 | P2：随 `agentMemorySnapshot.ts` 一并实现 |
+| `agentDisplay.ts` | TUI 端 agent 进度/标题行渲染 | P3：归属 `coco-tui`，不进入 `coco-subagent` 范围 |
+| `UI.tsx` | TUI 端 AgentTool 渲染入口 | P3：归属 `coco-tui` |
+
+## Telemetry Contract
+
+复刻 TS `tengu_agent_tool_selected` 事件 (`AgentTool.tsx:423`) 必须保留以下属性，
+否则 ant 端遥测面板的 cohort 切片会断裂：
+
+| 属性 | 来源 | 注意 |
+|------|------|------|
+| `agentType` | `selectedAgent.agentType` | 大小写敏感，使用 TS canonical（`Explore`/`Plan` 大写） |
+| `color` | `selectedAgent.color`（直接读取，**不**走 `getAgentColor`） | 验证后落 `AgentColorName` 之一；非法值不发 |
+| `source` | `AgentSource` | 使用 TS string variant，例如 `userSettings` |
+| `model` | resolved model id | spawn 后的最终值，包含 `inherit` 解析结果 |
+| `background` | `bool` | 最终 background 决策，不是请求字段 |
+| `is_teammate` | `bool` | 区分 subagent / teammate / standalone 三类 |
+
 ## Open Questions
 
 | Question | Recommendation |
@@ -1651,7 +1732,7 @@ just pre-commit
 | Should custom agent path be `.coco/agents` only or also `.claude/agents`? | Use `.coco/agents` canonical, `.claude/agents` compatibility |
 | Should `build` be built-in or project template? | Implement as `coco-rs` extension built-in or bundled template, not TS parity |
 | Should background be default for build? | Prefer `background: true` for build if output querying is solid; otherwise foreground until Phase 5 lands |
-| Should `Agent(type)` or `Task(type)` be used in tools frontmatter? | Canonicalize `Agent(type)` for coco-rs, optionally parse `Task(type)` for compatibility |
+| Should `Agent(type)` or `Task(type)` be used in tools frontmatter? | **双形并行**，与 TS 一致：`AgentTool` 注册 `Agent` 主名 + `Task` alias (`AgentTool.tsx:228`)，permission rule parser 同时接受 `Agent(...)` 与 `Task(...)`，**不重写**用户既有规则 |
 | Should plugin agents override user agents? | No; source priority should keep user/project higher than plugin |
 | Should custom agents be hot-reloaded? | Store should support reload first; watcher can be later |
 
