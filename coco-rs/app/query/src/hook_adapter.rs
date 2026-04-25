@@ -1,10 +1,10 @@
-//! `QueryHookHandle` — bridges `coco_tool::HookHandle` to
+//! `QueryHookHandle` — bridges `coco_tool_runtime::HookHandle` to
 //! `coco_hooks::orchestration`.
 //!
 //! The handle is installed into [`ToolUseContext`] by [`ToolContextFactory`]
 //! (Phase 3 of the agent-loop refactor plan). Tools that ask for a
 //! [`HookHandle`] get this implementation, which calls into the actual hook
-//! registry without `coco-tool` having to depend on `coco-hooks`.
+//! registry without `coco-tool-runtime` having to depend on `coco-hooks`.
 //!
 //! # TS parity (hook outcome mapping)
 //!
@@ -36,10 +36,10 @@ use coco_hooks::HookRegistry;
 use coco_hooks::orchestration;
 use coco_hooks::orchestration::AggregatedHookResult;
 use coco_hooks::orchestration::OrchestrationContext;
-use coco_tool::HookHandle;
-use coco_tool::HookPermission;
-use coco_tool::PostToolUseOutcome;
-use coco_tool::PreToolUseOutcome;
+use coco_tool_runtime::HookHandle;
+use coco_tool_runtime::HookPermission;
+use coco_tool_runtime::PostToolUseOutcome;
+use coco_tool_runtime::PreToolUseOutcome;
 use coco_types::PermissionBehavior;
 use serde_json::Value;
 use tokio::sync::mpsc;

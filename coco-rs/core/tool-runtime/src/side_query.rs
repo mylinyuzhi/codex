@@ -21,7 +21,7 @@
 
 use std::sync::Arc;
 
-// Re-export data types for convenience — callers can import from coco_tool
+// Re-export data types for convenience — callers can import from coco_tool_runtime
 // without adding coco-types as a direct dependency.
 pub use coco_types::SideQueryRequest;
 pub use coco_types::SideQueryResponse;

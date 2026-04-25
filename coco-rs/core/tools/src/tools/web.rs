@@ -1,8 +1,8 @@
-use coco_tool::DescriptionOptions;
-use coco_tool::SideQueryRequest;
-use coco_tool::Tool;
-use coco_tool::ToolError;
-use coco_tool::ToolUseContext;
+use coco_tool_runtime::DescriptionOptions;
+use coco_tool_runtime::SideQueryRequest;
+use coco_tool_runtime::Tool;
+use coco_tool_runtime::ToolError;
+use coco_tool_runtime::ToolUseContext;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
 use coco_types::ToolName;
@@ -1052,6 +1052,8 @@ pub(super) fn resolve_redirect_url(base: &str, location: &str) -> String {
 // `[PARSE_ERROR]`) let the model react appropriately — e.g. retrying with a
 // different query after a parse error vs. backing off on rate limits.
 
+use serde::Deserialize;
+use serde::Serialize;
 use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -1067,12 +1069,39 @@ const SEARCH_CACHE_MAX_ENTRIES: usize = 64;
 /// HTTP client timeout for search requests.
 const SEARCH_TIMEOUT_SECS: u64 = 15;
 
-/// Maximum results returned per query. Matches TS `WebSearchTool.ts:82`
-/// `max_uses: 8` — the model can always re-query if more are needed.
-const SEARCH_MAX_RESULTS: usize = 8;
+/// Hard upper bound for `max_results` accepted from the model. Matches
+/// the schema (`maximum: 20`) and the `clamp(1, 20)` in `execute()`.
+/// The over-fetch factor in `parse_duckduckgo_html` doubles this for
+/// post-filter slack — domain filters reject some results, so we want
+/// candidates left after filtering even at the schema ceiling.
+const SEARCH_MAX_RESULTS_CEILING: usize = 20;
 
 /// Minimum query length to accept. TS: `WebSearchTool.ts:25-36`.
 const SEARCH_MIN_QUERY_LEN: usize = 2;
+
+/// Truncate DuckDuckGo response bodies before regex parsing. A normal
+/// SERP is ~80–150 KB; cap at 512 KB so an adversarial or oversized
+/// response can't drive regex backtracking on megabytes of HTML.
+const DDG_HTML_PARSE_CAP: usize = 512 * 1024;
+
+/// Shared HTTP client for both backends. `LazyLock<reqwest::Client>`
+/// reuses the connection pool across calls — building a fresh client
+/// per request rebuilds TLS state for every search.
+///
+/// The User-Agent here is the DuckDuckGo browser-mimic string; Tavily
+/// is JSON-only and ignores it. If we ever need backend-specific UAs,
+/// switch to per-request `header()` overrides.
+#[allow(clippy::expect_used)]
+static SEARCH_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(SEARCH_TIMEOUT_SECS))
+        .user_agent(
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 \
+             (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        )
+        .build()
+        .expect("build static reqwest::Client for WebSearch")
+});
 
 /// Cached search entry. Stored with insertion time so expired entries are
 /// skipped on lookup.
@@ -1091,23 +1120,70 @@ struct SearchResult {
     snippet: Option<String>,
 }
 
-use serde::Deserialize;
-use serde::Serialize;
+/// Tagged error classification — `[TAG] message` lets the model
+/// distinguish retryable (`TIMEOUT`, `NETWORK_ERROR`) from non-retryable
+/// (`API_KEY_MISSING`, `PARSE_ERROR`) failures without parsing prose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WebSearchErrorType {
+    ProviderError,
+    NetworkError,
+    Timeout,
+    RateLimited,
+    ApiKeyMissing,
+    ParseError,
+}
+
+impl WebSearchErrorType {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::ProviderError => "PROVIDER_ERROR",
+            Self::NetworkError => "NETWORK_ERROR",
+            Self::Timeout => "TIMEOUT",
+            Self::RateLimited => "RATE_LIMITED",
+            Self::ApiKeyMissing => "API_KEY_MISSING",
+            Self::ParseError => "PARSE_ERROR",
+        }
+    }
+
+    fn into_tool_err(self, message: impl AsRef<str>) -> ToolError {
+        ToolError::ExecutionFailed {
+            message: format!("[{}] {}", self.as_str(), message.as_ref()),
+            source: None,
+        }
+    }
+}
+
+/// Both backends map `send()` errors the same way.
+fn classify_reqwest_err(e: &reqwest::Error) -> WebSearchErrorType {
+    if e.is_timeout() {
+        WebSearchErrorType::Timeout
+    } else {
+        WebSearchErrorType::NetworkError
+    }
+}
 
 /// In-process LRU cache. `LazyLock<Mutex<...>>` gives us a zero-config
-/// singleton that initializes on first access. Ideally we'd key on
-/// `(query, allowed_domains_hash, blocked_domains_hash)` but for simplicity
-/// we only cache the unfiltered query and apply filters at read time.
+/// singleton that initializes on first access. Cache key includes the
+/// provider + max_results so a DuckDuckGo miss doesn't poison a later
+/// Tavily hit (and vice versa). Domain filters are applied post-cache
+/// so a single fetch can serve multiple filter permutations.
 static SEARCH_CACHE: LazyLock<Mutex<Vec<(String, CachedSearch)>>> =
     LazyLock::new(|| Mutex::new(Vec::with_capacity(SEARCH_CACHE_MAX_ENTRIES)));
 
-fn cache_get(key: &str) -> Option<Vec<SearchResult>> {
-    let mut cache = SEARCH_CACHE.lock().ok()?;
-    // Expire old entries on every access (cheap since cache is small).
+fn cache_key(provider: coco_config::WebSearchProvider, max_results: usize, query: &str) -> String {
+    format!("{}:{max_results}:{query}", provider.as_str())
+}
+
+fn cache_get(
+    provider: coco_config::WebSearchProvider,
+    max_results: usize,
+    query: &str,
+) -> Option<Vec<SearchResult>> {
+    let key = cache_key(provider, max_results, query);
+    let cache = SEARCH_CACHE.lock().ok()?;
     let now = Instant::now();
-    cache.retain(|(_, entry)| now.duration_since(entry.inserted_at) < SEARCH_CACHE_TTL);
     cache.iter().find_map(|(k, v)| {
-        if k == key {
+        if k == &key && now.duration_since(v.inserted_at) < SEARCH_CACHE_TTL {
             Some(v.results.clone())
         } else {
             None
@@ -1115,9 +1191,18 @@ fn cache_get(key: &str) -> Option<Vec<SearchResult>> {
     })
 }
 
-fn cache_set(key: String, results: Vec<SearchResult>) {
+fn cache_set(
+    provider: coco_config::WebSearchProvider,
+    max_results: usize,
+    query: &str,
+    results: Vec<SearchResult>,
+) {
+    let key = cache_key(provider, max_results, query);
     if let Ok(mut cache) = SEARCH_CACHE.lock() {
-        // LRU eviction: if at capacity, drop the oldest entry.
+        let now = Instant::now();
+        // Drop entries that match the new key OR have aged out — keeps
+        // expiry work off the read path while still bounding memory.
+        cache.retain(|(k, v)| k != &key && now.duration_since(v.inserted_at) < SEARCH_CACHE_TTL);
         if cache.len() >= SEARCH_CACHE_MAX_ENTRIES {
             cache.remove(0);
         }
@@ -1125,7 +1210,7 @@ fn cache_set(key: String, results: Vec<SearchResult>) {
             key,
             CachedSearch {
                 results,
-                inserted_at: Instant::now(),
+                inserted_at: now,
             },
         ));
     }
@@ -1220,6 +1305,22 @@ IMPORTANT - Use the correct year in search queries:
                 "minLength": 2
             }),
         );
+        // Per-call override for `web_search.max_results` in settings —
+        // lets the model widen for broad surveys or narrow for
+        // precision. Clamped to `[1, SEARCH_MAX_RESULTS_CEILING]` at
+        // execute-time.
+        p.insert(
+            "max_results".into(),
+            serde_json::json!({
+                "type": "integer",
+                "description": format!(
+                    "Maximum number of results to return (1-{SEARCH_MAX_RESULTS_CEILING}). \
+                     Overrides the configured default."
+                ),
+                "minimum": 1,
+                "maximum": SEARCH_MAX_RESULTS_CEILING
+            }),
+        );
         p.insert(
             "allowed_domains".into(),
             serde_json::json!({
@@ -1245,10 +1346,10 @@ IMPORTANT - Use the correct year in search queries:
         true
     }
 
-    fn validate_input(&self, input: &Value, _ctx: &ToolUseContext) -> coco_tool::ValidationResult {
+    fn validate_input(&self, input: &Value, _ctx: &ToolUseContext) -> coco_tool_runtime::ValidationResult {
         let query = input.get("query").and_then(|v| v.as_str()).unwrap_or("");
         if query.trim().len() < SEARCH_MIN_QUERY_LEN {
-            return coco_tool::ValidationResult::invalid(
+            return coco_tool_runtime::ValidationResult::invalid(
                 "query must be at least 2 characters long",
             );
         }
@@ -1267,11 +1368,11 @@ IMPORTANT - Use the correct year in search queries:
             .map(|a| !a.is_empty())
             .unwrap_or(false);
         if has_allowed && has_blocked {
-            return coco_tool::ValidationResult::invalid(
+            return coco_tool_runtime::ValidationResult::invalid(
                 "Specify either allowed_domains or blocked_domains, not both",
             );
         }
-        coco_tool::ValidationResult::Valid
+        coco_tool_runtime::ValidationResult::Valid
     }
 
     fn get_activity_description(&self, input: &Value) -> Option<String> {
@@ -1319,18 +1420,31 @@ IMPORTANT - Use the correct year in search queries:
             })
             .unwrap_or_default();
 
+        // max_results precedence: input override > config default.
+        // Clamped to [1, 20] regardless of source so a misconfigured
+        // settings file or a hostile input can't force us to fetch
+        // thousands of pages.
+        let max_results = input
+            .get("max_results")
+            .and_then(serde_json::Value::as_i64)
+            .map(|n| n as usize)
+            .unwrap_or_else(|| ctx.web_search_config.max_results.max(1) as usize)
+            .clamp(1, SEARCH_MAX_RESULTS_CEILING);
+
+        let provider = effective_search_provider(ctx.web_search_config.provider);
+
         // Cache hit → return immediately with filters re-applied.
-        let results = if let Some(cached) = cache_get(&query) {
+        let results = if let Some(cached) = cache_get(provider, max_results, &query) {
             cached
         } else {
-            let fresh = duckduckgo_search(&query).await?;
-            cache_set(query.clone(), fresh.clone());
+            let fresh =
+                search_by_provider(provider, &query, max_results, &ctx.web_search_config).await?;
+            cache_set(provider, max_results, &query, fresh.clone());
             fresh
         };
 
         // Apply domain filters. Matches host suffix so "github.com" blocks
         // both github.com/foo and gist.github.com/foo.
-        let max_results = (ctx.web_search_config.max_results.max(1)) as usize;
         let filtered: Vec<SearchResult> = results
             .into_iter()
             .filter(|r| {
@@ -1359,6 +1473,49 @@ IMPORTANT - Use the correct year in search queries:
     }
 }
 
+/// OpenAI native search is not implemented — TS `WebSearchTool.ts:168-192`
+/// relies on the Anthropic native tool, which has no coco-rs passthrough.
+/// Fall back to DuckDuckGo so the tool stays functional, and warn once per
+/// session so the user knows the configured provider isn't being used.
+/// Resolving here (not in `search_by_provider`) keeps the cache key
+/// aligned with the backend that actually runs.
+fn effective_search_provider(
+    configured: coco_config::WebSearchProvider,
+) -> coco_config::WebSearchProvider {
+    if configured == coco_config::WebSearchProvider::OpenAi {
+        static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+        WARNED.get_or_init(|| {
+            tracing::warn!(
+                target: "coco_tools::web_search",
+                "WebSearchConfig.provider=OpenAi has no native backend in coco-rs; \
+                 falling back to DuckDuckGo. Set provider=duckduckgo or provider=tavily \
+                 explicitly to silence this warning."
+            );
+        });
+        return coco_config::WebSearchProvider::DuckDuckGo;
+    }
+    configured
+}
+
+/// Dispatch to the configured search backend. Callers must pre-resolve
+/// `OpenAi` via `effective_search_provider` — reaching that arm here is
+/// a bug, not a fallback.
+async fn search_by_provider(
+    provider: coco_config::WebSearchProvider,
+    query: &str,
+    max_results: usize,
+    config: &coco_config::WebSearchConfig,
+) -> Result<Vec<SearchResult>, ToolError> {
+    match provider {
+        coco_config::WebSearchProvider::DuckDuckGo => duckduckgo_search(query, max_results).await,
+        coco_config::WebSearchProvider::Tavily => tavily_search(query, max_results, config).await,
+        coco_config::WebSearchProvider::OpenAi => Err(WebSearchErrorType::ProviderError
+            .into_tool_err(
+                "OpenAi provider must be resolved via effective_search_provider before dispatch",
+            )),
+    }
+}
+
 /// Format results as a markdown block the model can read naturally.
 fn format_results(query: &str, results: &[SearchResult]) -> String {
     if results.is_empty() {
@@ -1368,6 +1525,9 @@ fn format_results(query: &str, results: &[SearchResult]) -> String {
         "Search results for \"{query}\" ({} hit(s)):\n\n",
         results.len()
     );
+    // No trailing reminder — `WebSearchTool::description()` already
+    // mandates the `Sources:` section as a CRITICAL REQUIREMENT;
+    // duplicating it here competes for model attention.
     for (i, r) in results.iter().enumerate() {
         out.push_str(&format!("[{}] {}\n  {}\n", i + 1, r.title, r.url));
         if let Some(snippet) = &r.snippet
@@ -1376,10 +1536,6 @@ fn format_results(query: &str, results: &[SearchResult]) -> String {
             out.push_str(&format!("  {snippet}\n"));
         }
     }
-    out.push_str(
-        "\nREMINDER: When citing information from these results, include the URL \
-         so the user can verify.",
-    );
     out
 }
 
@@ -1412,86 +1568,157 @@ fn extract_host(url: &str) -> String {
 /// uses a `<a class="result__a"` for titles, `<a class="result__snippet"`
 /// for snippets, and embeds the target URL in a `uddg=` parameter of a
 /// redirect link. We decode the redirect, not the visible `href`.
-async fn duckduckgo_search(query: &str) -> Result<Vec<SearchResult>, ToolError> {
+async fn duckduckgo_search(
+    query: &str,
+    max_results: usize,
+) -> Result<Vec<SearchResult>, ToolError> {
     // POST to html.duckduckgo.com/html with `q=<query>` — GET also works
     // but POST avoids leaking the query in any proxy logs along the path.
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(SEARCH_TIMEOUT_SECS))
-        .user_agent(
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 \
-             (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        )
-        .build()
-        .map_err(|e| ToolError::ExecutionFailed {
-            message: format!("[NETWORK_ERROR] failed to build HTTP client: {e}"),
-            source: None,
-        })?;
-
-    let response = client
+    let response = SEARCH_HTTP_CLIENT
         .post("https://html.duckduckgo.com/html/")
         .form(&[("q", query)])
         .send()
         .await
         .map_err(|e| {
-            let tag = if e.is_timeout() {
-                "[TIMEOUT]"
-            } else {
-                "[NETWORK_ERROR]"
-            };
-            ToolError::ExecutionFailed {
-                message: format!("{tag} DuckDuckGo request failed: {e}"),
-                source: None,
-            }
+            classify_reqwest_err(&e).into_tool_err(format!("DuckDuckGo request failed: {e}"))
         })?;
 
     if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
-        return Err(ToolError::ExecutionFailed {
-            message: "[RATE_LIMITED] DuckDuckGo returned HTTP 429 — back off and retry".into(),
-            source: None,
-        });
+        return Err(WebSearchErrorType::RateLimited
+            .into_tool_err("DuckDuckGo returned HTTP 429 — back off and retry"));
     }
     if !response.status().is_success() {
-        return Err(ToolError::ExecutionFailed {
-            message: format!(
-                "[NETWORK_ERROR] DuckDuckGo returned HTTP {}",
-                response.status()
-            ),
-            source: None,
-        });
+        return Err(WebSearchErrorType::ProviderError
+            .into_tool_err(format!("DuckDuckGo returned HTTP {}", response.status())));
     }
 
-    let html = response
-        .text()
-        .await
-        .map_err(|e| ToolError::ExecutionFailed {
-            message: format!("[NETWORK_ERROR] failed to read DuckDuckGo response: {e}"),
-            source: None,
+    let mut html = response.text().await.map_err(|e| {
+        WebSearchErrorType::NetworkError
+            .into_tool_err(format!("failed to read DuckDuckGo response: {e}"))
+    })?;
+
+    // Cap parser input. Bounds regex backtracking against an oversized
+    // (or adversarial) response so a hostile upstream can't burn CPU.
+    if html.len() > DDG_HTML_PARSE_CAP {
+        html.truncate(html.floor_char_boundary(DDG_HTML_PARSE_CAP));
+    }
+
+    Ok(parse_duckduckgo_html(&html, max_results))
+}
+
+/// Tavily REST search backend. Requires an API key in
+/// `WebSearchConfig.api_key` or the `TAVILY_API_KEY` environment
+/// variable. The config value wins so per-project settings don't get
+/// overridden by a stale shell env.
+async fn tavily_search(
+    query: &str,
+    max_results: usize,
+    config: &coco_config::WebSearchConfig,
+) -> Result<Vec<SearchResult>, ToolError> {
+    #[derive(Serialize)]
+    struct TavilyRequest<'a> {
+        api_key: &'a str,
+        query: &'a str,
+        max_results: usize,
+        search_depth: &'static str,
+        include_answer: bool,
+        include_raw_content: bool,
+    }
+    #[derive(Debug, Deserialize)]
+    struct TavilyResponse {
+        results: Vec<TavilyResult>,
+    }
+    #[derive(Debug, Deserialize)]
+    struct TavilyResult {
+        title: String,
+        url: String,
+        content: String,
+    }
+
+    let api_key = config
+        .api_key
+        .clone()
+        .or_else(|| std::env::var("TAVILY_API_KEY").ok())
+        .ok_or_else(|| {
+            WebSearchErrorType::ApiKeyMissing.into_tool_err(
+                "TAVILY_API_KEY not set. Configure `[web_search] api_key` in \
+                 settings.json or set the TAVILY_API_KEY env var. \
+                 Get a key at https://tavily.com",
+            )
         })?;
 
-    parse_duckduckgo_html(&html)
+    let body = TavilyRequest {
+        api_key: &api_key,
+        query,
+        max_results,
+        search_depth: "basic",
+        include_answer: false,
+        include_raw_content: false,
+    };
+
+    let response = SEARCH_HTTP_CLIENT
+        .post("https://api.tavily.com/search")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| {
+            classify_reqwest_err(&e).into_tool_err(format!("Tavily request failed: {e}"))
+        })?;
+
+    let status = response.status();
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return Err(WebSearchErrorType::RateLimited.into_tool_err("Tavily API rate limit exceeded"));
+    }
+    if !status.is_success() {
+        return Err(WebSearchErrorType::ProviderError
+            .into_tool_err(format!("Tavily API returned status {status}")));
+    }
+
+    let parsed: TavilyResponse = response.json().await.map_err(|e| {
+        WebSearchErrorType::ParseError
+            .into_tool_err(format!("failed to parse Tavily response: {e}"))
+    })?;
+
+    Ok(parsed
+        .results
+        .into_iter()
+        .map(|r| SearchResult {
+            title: r.title,
+            url: r.url,
+            snippet: (!r.content.is_empty()).then_some(r.content),
+        })
+        .collect())
 }
+
+/// `<a class="result__a" href="...">TITLE</a>` — the href is a redirect
+/// URL (decoded by `decode_ddg_redirect`). Snippets follow in a sibling
+/// `<a class="result__snippet">SNIPPET</a>`. Compiled once via
+/// `LazyLock` — both patterns are static.
+#[allow(clippy::expect_used)]
+static DDG_TITLE_PATTERN: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r#"(?s)<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>"#)
+        .expect("DDG title regex is statically valid")
+});
+#[allow(clippy::expect_used)]
+static DDG_SNIPPET_PATTERN: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r#"(?s)<a[^>]*class="result__snippet"[^>]*>(.*?)</a>"#)
+        .expect("DDG snippet regex is statically valid")
+});
 
 /// Parse DuckDuckGo HTML response into `SearchResult` list. Separated so
 /// it can be unit-tested against recorded fixtures.
-fn parse_duckduckgo_html(html: &str) -> Result<Vec<SearchResult>, ToolError> {
-    // Pattern matches each `<a class="result__a" href="...">TITLE</a>` —
-    // the href contains the redirect URL. Snippets follow in a sibling
-    // `<a class="result__snippet">SNIPPET</a>`.
-    let title_pattern =
-        regex::Regex::new(r#"(?s)<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>"#)
-            .map_err(|e| ToolError::ExecutionFailed {
-                message: format!("[PARSE_ERROR] regex compile: {e}"),
-                source: None,
-            })?;
-    let snippet_pattern = regex::Regex::new(r#"(?s)<a[^>]*class="result__snippet"[^>]*>(.*?)</a>"#)
-        .map_err(|e| ToolError::ExecutionFailed {
-            message: format!("[PARSE_ERROR] regex compile: {e}"),
-            source: None,
-        })?;
+///
+/// `max_results` is the caller's requested ceiling; we over-fetch by 2x
+/// so post-fetch domain filtering still leaves candidates after rejecting
+/// blocked hosts. Caller is responsible for the final `.take(max_results)`.
+fn parse_duckduckgo_html(html: &str, max_results: usize) -> Vec<SearchResult> {
+    let fetch_cap = max_results
+        .min(SEARCH_MAX_RESULTS_CEILING)
+        .saturating_mul(2);
 
     let mut results = Vec::new();
-    let title_matches: Vec<_> = title_pattern.captures_iter(html).collect();
-    let snippet_matches: Vec<_> = snippet_pattern.captures_iter(html).collect();
+    let title_matches: Vec<_> = DDG_TITLE_PATTERN.captures_iter(html).collect();
+    let snippet_matches: Vec<_> = DDG_SNIPPET_PATTERN.captures_iter(html).collect();
 
     for (i, title_cap) in title_matches.iter().enumerate() {
         let raw_href = title_cap.get(1).map(|m| m.as_str()).unwrap_or("");
@@ -1515,13 +1742,12 @@ fn parse_duckduckgo_html(html: &str) -> Result<Vec<SearchResult>, ToolError> {
             snippet,
         });
 
-        if results.len() >= SEARCH_MAX_RESULTS * 2 {
-            // Over-fetch slightly so post-filtering still has candidates.
+        if results.len() >= fetch_cap {
             break;
         }
     }
 
-    Ok(results)
+    results
 }
 
 /// DuckDuckGo wraps result links in a redirect of the form

@@ -5,8 +5,8 @@
 //! tests — integration coverage lives separately.
 
 use super::ExitWorktreeTool;
-use coco_tool::Tool;
-use coco_tool::ToolUseContext;
+use coco_tool_runtime::Tool;
+use coco_tool_runtime::ToolUseContext;
 use serde_json::json;
 
 // ---------------------------------------------------------------------------

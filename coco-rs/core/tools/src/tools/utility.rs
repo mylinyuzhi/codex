@@ -1,7 +1,7 @@
-use coco_tool::DescriptionOptions;
-use coco_tool::Tool;
-use coco_tool::ToolError;
-use coco_tool::ToolUseContext;
+use coco_tool_runtime::DescriptionOptions;
+use coco_tool_runtime::Tool;
+use coco_tool_runtime::ToolError;
+use coco_tool_runtime::ToolUseContext;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
 use coco_types::ToolName;
@@ -9,110 +9,9 @@ use coco_types::ToolResult;
 use serde_json::Value;
 use std::collections::HashMap;
 
-// ── AskUserQuestionTool ──
-
-pub struct AskUserQuestionTool;
-
-#[async_trait::async_trait]
-impl Tool for AskUserQuestionTool {
-    fn id(&self) -> ToolId {
-        ToolId::Builtin(ToolName::AskUserQuestion)
-    }
-    fn name(&self) -> &str {
-        ToolName::AskUserQuestion.as_str()
-    }
-    fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
-        "Ask the user a question and wait for their response. Supports \
-         structured multi-choice questions with previews."
-            .into()
-    }
-    fn input_schema(&self) -> ToolInputSchema {
-        let mut p = HashMap::new();
-        p.insert(
-            "questions".into(),
-            serde_json::json!({
-                "type": "array",
-                "description": "Questions to ask the user (1-4 questions)",
-                "minItems": 1,
-                "maxItems": 4,
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "question": {
-                            "type": "string",
-                            "description": "The question text"
-                        },
-                        "header": {
-                            "type": "string",
-                            "description": "Short label displayed as a chip/tag (max 20 chars)"
-                        },
-                        "options": {
-                            "type": "array",
-                            "description": "Available choices (2-4 options)",
-                            "minItems": 2,
-                            "maxItems": 4,
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "label": {
-                                        "type": "string",
-                                        "description": "Display text for this option (1-5 words)"
-                                    },
-                                    "description": {
-                                        "type": "string",
-                                        "description": "Explanation of what this option means"
-                                    },
-                                    "preview": {
-                                        "type": "string",
-                                        "description": "Optional preview content when option is focused"
-                                    }
-                                },
-                                "required": ["label", "description"]
-                            }
-                        },
-                        "multiSelect": {
-                            "type": "boolean",
-                            "description": "Allow multiple selections (default: false)"
-                        }
-                    },
-                    "required": ["question", "header", "options"]
-                }
-            }),
-        );
-        ToolInputSchema { properties: p }
-    }
-
-    fn requires_user_interaction(&self) -> bool {
-        true
-    }
-
-    /// TS `AskUserQuestionTool.tsx`: `isConcurrencySafe() { return true }`.
-    /// Multiple questions issued in the same turn are presented together by
-    /// the TUI, so the executor can batch them concurrently rather than
-    /// serializing.
-    fn is_concurrency_safe(&self, _: &Value) -> bool {
-        true
-    }
-
-    async fn execute(
-        &self,
-        input: Value,
-        _ctx: &ToolUseContext,
-    ) -> Result<ToolResult<Value>, ToolError> {
-        let questions = input
-            .get("questions")
-            .cloned()
-            .unwrap_or(Value::Array(vec![]));
-
-        // Return the questions as the result. The TUI/CLI layer intercepts
-        // this tool's output, presents the UI, and fills in answers.
-        Ok(ToolResult {
-            data: serde_json::json!({"questions": questions}),
-            new_messages: vec![],
-            app_state_patch: None,
-        })
-    }
-}
+// `AskUserQuestionTool` lives in its own module (`ask_user_question.rs`)
+// so the full TS prompt + preview-feature guidance stays co-located with
+// the tool implementation. Re-exported via `tools/mod.rs`.
 
 // ── ToolSearchTool ──
 //

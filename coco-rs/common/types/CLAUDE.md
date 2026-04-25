@@ -56,4 +56,4 @@ Upgrading vercel-ai only requires editing these re-exports in `lib.rs`.
 
 - `ToolId` / `AgentTypeId` serialize as flat strings via `Display` / `FromStr` (not tagged JSON). `"Read"` / `"mcp__slack__send"` / `"my_plugin_tool"`.
 - `PermissionMode` wire format is camelCase (matches TS `PermissionModeSchema`). Snake-case aliases accepted on deserialize for legacy transcripts.
-- `side_query` module contains data types for the async `SideQuery` trait (trait itself lives in `coco-tool`).
+- `side_query` module contains data types for the async `SideQuery` trait (trait itself lives in `coco-tool-runtime`).

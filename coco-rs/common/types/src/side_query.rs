@@ -3,8 +3,8 @@
 //! TS: utils/sideQuery.ts (SideQueryOptions, response types)
 //!
 //! These are pure data types (no async). The async `SideQuery` trait
-//! that uses these types lives in `coco-tool` (which has async-trait).
-//! This split lets both `coco-permissions` and `coco-tool` share the
+//! that uses these types lives in `coco-tool-runtime` (which has async-trait).
+//! This split lets both `coco-permissions` and `coco-tool-runtime` share the
 //! same request/response types without circular dependencies.
 
 use serde::Deserialize;

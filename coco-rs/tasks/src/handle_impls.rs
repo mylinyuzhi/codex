@@ -1,14 +1,14 @@
-//! Implementations of `coco_tool::TaskListHandle` / `TodoListHandle`
+//! Implementations of `coco_tool_runtime::TaskListHandle` / `TodoListHandle`
 //! over this crate's concrete stores. Kept in a separate module so
 //! the pure data types don't need to know about the handle trait.
 
-use coco_tool::TaskClaimOutcome;
-use coco_tool::TaskListHandle;
-use coco_tool::TaskListStatus;
-use coco_tool::TaskRecord;
-use coco_tool::TaskRecordUpdate;
-use coco_tool::TodoListHandle;
-use coco_tool::TodoRecord;
+use coco_tool_runtime::TaskClaimOutcome;
+use coco_tool_runtime::TaskListHandle;
+use coco_tool_runtime::TaskListStatus;
+use coco_tool_runtime::TaskRecord;
+use coco_tool_runtime::TaskRecordUpdate;
+use coco_tool_runtime::TodoListHandle;
+use coco_tool_runtime::TodoRecord;
 use std::collections::HashMap;
 
 use crate::task_list::ClaimResult;

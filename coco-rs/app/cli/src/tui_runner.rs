@@ -32,7 +32,7 @@ use coco_query::CoreEvent;
 use coco_query::QueryEngine;
 use coco_query::QueryEngineConfig;
 use coco_query::ServerNotification;
-use coco_tool::ToolRegistry;
+use coco_tool_runtime::ToolRegistry;
 use coco_tui::App;
 use coco_tui::UserCommand;
 use coco_tui::app::create_channels;
@@ -566,18 +566,18 @@ async fn run_agent_driver(
                 };
                 let agent_name =
                     env::var(EnvKey::CocoAgentName).unwrap_or_else(|_| "team-lead".to_string());
-                let mailbox: coco_tool::MailboxHandleRef =
+                let mailbox: coco_tool_runtime::MailboxHandleRef =
                     Arc::new(coco_state::swarm_mailbox::SwarmMailboxHandle);
 
-                let response = coco_tool::PlanApprovalMessage::PlanApprovalResponse(
-                    coco_tool::PlanApprovalResponse {
+                let response = coco_tool_runtime::PlanApprovalMessage::PlanApprovalResponse(
+                    coco_tool_runtime::PlanApprovalResponse {
                         request_id: request_id.clone(),
                         approved,
                         feedback: feedback.clone(),
                         permission_mode: None,
                     },
                 );
-                let envelope = coco_tool::MailboxEnvelope {
+                let envelope = coco_tool_runtime::MailboxEnvelope {
                     text: serde_json::to_string(&response).unwrap_or_default(),
                     from: agent_name.clone(),
                     timestamp: chrono::Utc::now().to_rfc3339(),

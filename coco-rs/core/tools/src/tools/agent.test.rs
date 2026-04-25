@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use coco_tool::AgentHandle;
-use coco_tool::AgentSpawnRequest;
-use coco_tool::AgentSpawnResponse;
-use coco_tool::AgentSpawnStatus;
-use coco_tool::ToolUseContext;
+use coco_tool_runtime::AgentHandle;
+use coco_tool_runtime::AgentSpawnRequest;
+use coco_tool_runtime::AgentSpawnResponse;
+use coco_tool_runtime::AgentSpawnStatus;
+use coco_tool_runtime::ToolUseContext;
 use pretty_assertions::assert_eq;
 
 use super::*;

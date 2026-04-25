@@ -1,6 +1,6 @@
 //! All 42 built-in tool implementations (41 static + MCPTool dynamic wrapper).
 //!
-//! Each tool implements the `coco_tool::Tool` trait.
+//! Each tool implements the `coco_tool_runtime::Tool` trait.
 //! This crate provides the implementations; coco-tool defines the interface.
 
 use std::path::Path;
@@ -19,7 +19,7 @@ pub use tools::*;
 ///
 /// MCPTool instances are registered separately via `register_mcp_tools()`
 /// after MCP servers connect and report their tools.
-pub fn register_all_tools(registry: &mut coco_tool::ToolRegistry) {
+pub fn register_all_tools(registry: &mut coco_tool_runtime::ToolRegistry) {
     use std::sync::Arc;
 
     // File I/O (7)
@@ -91,9 +91,9 @@ pub fn register_all_tools(registry: &mut coco_tool::ToolRegistry) {
 /// then registers the new ones. Safe to call multiple times for the
 /// same server (idempotent after deregister).
 pub fn register_mcp_tools(
-    registry: &mut coco_tool::ToolRegistry,
+    registry: &mut coco_tool_runtime::ToolRegistry,
     server_name: &str,
-    mcp_tools: Vec<coco_tool::McpToolSchema>,
+    mcp_tools: Vec<coco_tool_runtime::McpToolSchema>,
 ) {
     use std::sync::Arc;
 
@@ -114,7 +114,7 @@ pub fn register_mcp_tools(
 /// Deregister all tools from a specific MCP server.
 ///
 /// Called when an MCP server disconnects to clean up stale tools.
-pub fn deregister_mcp_server(registry: &mut coco_tool::ToolRegistry, server_name: &str) {
+pub fn deregister_mcp_server(registry: &mut coco_tool_runtime::ToolRegistry, server_name: &str) {
     registry.deregister_by_server(server_name);
 }
 
@@ -129,7 +129,7 @@ pub fn deregister_mcp_server(registry: &mut coco_tool::ToolRegistry, server_name
 /// the model passed; the dedup check matches against the model-visible
 /// inputs, not the effective ones, so the two are kept separately.
 pub(crate) async fn record_file_read(
-    ctx: &coco_tool::ToolUseContext,
+    ctx: &coco_tool_runtime::ToolUseContext,
     path: &Path,
     content: String,
     effective_offset: Option<i32>,
@@ -158,7 +158,7 @@ pub(crate) async fn record_file_read(
 
 /// Record a file edit in FileReadState (new content, new mtime, clears offset/limit).
 pub(crate) async fn record_file_edit(
-    ctx: &coco_tool::ToolUseContext,
+    ctx: &coco_tool_runtime::ToolUseContext,
     path: &Path,
     new_content: String,
 ) {
@@ -199,7 +199,7 @@ pub(crate) async fn record_file_edit(
 /// The intent matches TS: prevent the most common accident of putting
 /// `API_KEY=sk-...` into a synced memory file.
 pub(crate) fn check_team_mem_secret(
-    ctx: &coco_tool::ToolUseContext,
+    ctx: &coco_tool_runtime::ToolUseContext,
     path: &std::path::Path,
     content: &str,
 ) -> Option<String> {
@@ -239,7 +239,7 @@ pub(crate) fn check_team_mem_secret(
 ///     this branch are gated by the secret-detector second stage so
 ///     they only trigger a rejection when a secret is actually
 ///     present.
-fn is_team_memory_path(ctx: &coco_tool::ToolUseContext, path: &std::path::Path) -> bool {
+fn is_team_memory_path(ctx: &coco_tool_runtime::ToolUseContext, path: &std::path::Path) -> bool {
     // Stage 1: authoritative resolution via coco-memory.
     let project_root = ctx
         .cwd_override
@@ -272,7 +272,7 @@ fn is_team_memory_path(ctx: &coco_tool::ToolUseContext, path: &std::path::Path) 
 /// Fire-and-forget; no error path because the trigger set is purely
 /// advisory — failure to record means at worst the next turn misses
 /// a nested memory load, never a tool failure.
-pub(crate) async fn track_nested_memory_attachment(ctx: &coco_tool::ToolUseContext, path: &Path) {
+pub(crate) async fn track_nested_memory_attachment(ctx: &coco_tool_runtime::ToolUseContext, path: &Path) {
     let canonical = tokio::fs::canonicalize(path)
         .await
         .unwrap_or_else(|_| path.to_path_buf());
@@ -294,7 +294,7 @@ pub(crate) async fn track_nested_memory_attachment(ctx: &coco_tool::ToolUseConte
 /// is just the discovery + record half. Cwd resolution falls back to
 /// `ctx.cwd_override` (worktree-isolated subagents) then the process
 /// cwd; if neither is available, the call is a no-op.
-pub(crate) async fn track_skill_discovery(ctx: &coco_tool::ToolUseContext, path: &Path) {
+pub(crate) async fn track_skill_discovery(ctx: &coco_tool_runtime::ToolUseContext, path: &Path) {
     let cwd = ctx
         .cwd_override
         .clone()
@@ -321,7 +321,7 @@ pub(crate) async fn track_skill_discovery(ctx: &coco_tool::ToolUseContext, path:
 /// TS: `fileHistoryTrackEdit()` — called from FileEditTool, FileWriteTool,
 /// NotebookEditTool, BashTool before file modifications.
 /// Silently no-ops if file history is not configured on the context.
-pub(crate) async fn track_file_edit(ctx: &coco_tool::ToolUseContext, path: &Path) {
+pub(crate) async fn track_file_edit(ctx: &coco_tool_runtime::ToolUseContext, path: &Path) {
     if let (Some(fh), Some(config_home), Some(sid)) = (
         &ctx.file_history,
         &ctx.config_home,
@@ -339,7 +339,7 @@ pub(crate) async fn track_file_edit(ctx: &coco_tool::ToolUseContext, path: &Path
 }
 
 /// Register only core tools (for lightweight setups).
-pub fn register_core_tools(registry: &mut coco_tool::ToolRegistry) {
+pub fn register_core_tools(registry: &mut coco_tool_runtime::ToolRegistry) {
     use std::sync::Arc;
     registry.register(Arc::new(BashTool));
     registry.register(Arc::new(ReadTool));

@@ -10,7 +10,7 @@ workspace = true
 [dependencies]
 coco-config.workspace = true
 coco-types.workspace = true
-coco-tool.workspace = true
+coco-tool-runtime.workspace = true
 coco-context.workspace = true
 coco-permissions.workspace = true
 coco-shell.workspace = true
@@ -47,7 +47,7 @@ reqwest = { workspace = true, features = ["rustls-tls", "stream"] }
 pretty_assertions.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tempfile.workspace = true
-coco-tool = { workspace = true, features = ["testing"] }
+coco-tool-runtime = { workspace = true, features = ["testing"] }
 # Test-only image crate features — tests need to generate real 1x1
 # fixtures to exercise the FileRead → coco-utils-image pipeline.
 image = { workspace = true, features = ["jpeg", "png", "gif", "webp"] }

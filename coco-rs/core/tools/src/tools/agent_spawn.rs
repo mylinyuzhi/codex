@@ -301,14 +301,15 @@ pub fn builtin_agents() -> Vec<AgentDefinition> {
             ..Default::default()
         },
         AgentDefinition {
-            agent_type: AgentTypeId::Builtin(SubagentType::Review),
-            name: "Review".to_string(),
+            agent_type: AgentTypeId::Builtin(SubagentType::Verification),
+            name: "verification".to_string(),
             description: Some(
-                "Code review agent — inspects diffs and proposed changes for \
-                 correctness, style, and hidden regressions."
+                "Background verification agent — re-runs the most recent change \
+                 against the current build/test surface and reports regressions."
                     .to_string(),
             ),
             max_turns: Some(15),
+            background: true,
             ..Default::default()
         },
         AgentDefinition {

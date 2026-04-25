@@ -580,6 +580,11 @@ fn parse_md_agent(path: &Path) -> Option<AgentDefinition> {
         agent_type: super::agent_spawn::resolve_agent_type(&name),
         name,
         description: fm.get("description").cloned(),
+        // Disk-loaded definitions are project-scoped by convention. The
+        // legacy loader doesn't know which dir it was called with, so we
+        // pick the most common case. Phase 10 deletes this file in favor
+        // of `coco-subagent`'s loader, which threads the real source.
+        source: coco_types::AgentSource::ProjectSettings,
         initial_prompt: if body.is_empty() { None } else { Some(body) },
         allowed_tools: parse_list("tools"),
         disallowed_tools: parse_list("disallowedTools"),
@@ -587,7 +592,7 @@ fn parse_md_agent(path: &Path) -> Option<AgentDefinition> {
         required_mcp_servers: parse_list("requiredMcpServers"),
         max_turns: fm.get("maxTurns").and_then(|v| v.parse().ok()),
         model: fm.get("model").cloned(),
-        color: fm.get("color").cloned(),
+        color: fm.get("color").and_then(|v| v.parse().ok()),
         skills: parse_list("skills"),
         background: parse_bool("background"),
         permission_mode: fm.get("permissionMode").cloned(),
@@ -597,6 +602,7 @@ fn parse_md_agent(path: &Path) -> Option<AgentDefinition> {
         identity: fm.get("identity").cloned(),
         use_exact_tools: parse_bool("useExactTools"),
         omit_claude_md: parse_bool("omitClaudeMd"),
+        ..Default::default()
     })
 }
 
@@ -651,6 +657,9 @@ fn parse_json_agents(path: &Path) -> Vec<AgentDefinition> {
             agent_type: super::agent_spawn::resolve_agent_type(&agent_name),
             name: agent_name,
             description,
+            // JSON agents from disk are project-scoped by the legacy loader;
+            // see comment in `parse_md_agent` above.
+            source: coco_types::AgentSource::ProjectSettings,
             initial_prompt: prompt,
             allowed_tools: parse_str_array("tools"),
             disallowed_tools: parse_str_array("disallowedTools"),
@@ -659,7 +668,7 @@ fn parse_json_agents(path: &Path) -> Vec<AgentDefinition> {
             skills: parse_str_array("skills"),
             max_turns,
             model,
-            color: get_str("color"),
+            color: get_str("color").and_then(|v| v.parse().ok()),
             background: get_bool("background"),
             permission_mode: get_str("permissionMode"),
             effort: get_str("effort"),
@@ -670,6 +679,7 @@ fn parse_json_agents(path: &Path) -> Vec<AgentDefinition> {
                 .and_then(|v| v.parse::<coco_types::AgentIsolation>().ok())
                 .unwrap_or_default(),
             memory_scope: get_str("memory").and_then(|v| v.parse::<coco_types::MemoryScope>().ok()),
+            ..Default::default()
         });
     }
 

@@ -32,8 +32,8 @@ use coco_system_reminder::TurnReminderInput;
 use coco_system_reminder::count_human_turns;
 use coco_system_reminder::inject_reminders;
 use coco_system_reminder::run_turn_reminders;
-use coco_tool::ToolRegistry;
-use coco_tool::ToolUseContext;
+use coco_tool_runtime::ToolRegistry;
+use coco_tool_runtime::ToolUseContext;
 use coco_types::AssistantContent;
 use coco_types::LlmMessage;
 use coco_types::Message;
@@ -103,7 +103,7 @@ pub struct QueryEngine {
     /// Optional permission bridge for routing `PermissionDecision::Ask`
     /// outcomes to an external authority (swarm leader or SDK client).
     /// `None` uses the engine's fallback auto-allow behavior.
-    permission_bridge: Option<coco_tool::ToolPermissionBridgeRef>,
+    permission_bridge: Option<coco_tool_runtime::ToolPermissionBridgeRef>,
     /// Auto-mode state + rules for the 2-stage LLM classifier. When active,
     /// tool calls that return `PermissionDecision::Ask` are first run through
     /// `can_use_tool_in_auto_mode` — Allow/Deny short-circuits the permission
@@ -120,7 +120,7 @@ pub struct QueryEngine {
     /// Mailbox handle for swarm teammate messaging. `None` resolves to
     /// `NoOpMailboxHandle` in [`ToolContextFactory::build`]; swarm spawn paths
     /// install a real handle via [`Self::with_mailbox`].
-    mailbox: Option<coco_tool::MailboxHandleRef>,
+    mailbox: Option<coco_tool_runtime::MailboxHandleRef>,
     /// Agent-runtime handle for `AgentTool` (subagent spawn / team
     /// management / background signalling). `None` resolves to
     /// `NoOpAgentHandle` in [`ToolContextFactory::build`]; the CLI /
@@ -129,34 +129,34 @@ pub struct QueryEngine {
     /// swarm runtime. TS parity: `runAgent.ts` is reachable from any
     /// model call; Rust sessions that skip installation intentionally
     /// restrict Agent tools to model-visible errors.
-    agent_handle: Option<coco_tool::AgentHandleRef>,
+    agent_handle: Option<coco_tool_runtime::AgentHandleRef>,
     /// Session-scoped tool-input schema validator. One instance per
     /// engine so compiled validators cache across turns. Plan I3's
     /// Rust-side tightening — preparer runs this on both model
     /// input and any PreToolUse hook-rewritten input.
-    tool_schema_validator: coco_tool::ToolSchemaValidator,
+    tool_schema_validator: coco_tool_runtime::ToolSchemaValidator,
     /// Skill-runtime handle for `SkillTool`. Phase 7 routed skills
     /// off `AgentHandle::resolve_skill` onto this dedicated trait.
     /// `None` resolves to `NoOpSkillHandle` in the factory, which
     /// returns `SkillInvocationError::Unavailable` — the runner
     /// surfaces that as a clean model-visible error rather than
     /// panicking.
-    skill_handle: Option<coco_tool::SkillHandleRef>,
+    skill_handle: Option<coco_tool_runtime::SkillHandleRef>,
     /// Persistent task-list store (V2, `TaskCreate`/`TaskUpdate`/etc.).
     /// `None` resolves to `NoOpTaskListHandle` — the V2 tools then
     /// return errors on write, matching TS's "no store configured"
     /// behavior. Install via [`Self::with_task_list`].
-    task_list: Option<coco_tool::TaskListHandleRef>,
+    task_list: Option<coco_tool_runtime::TaskListHandleRef>,
     /// Per-agent ephemeral todo store (V1, `TodoWrite`). Defaults to
     /// an in-memory instance when absent.
-    todo_list: Option<coco_tool::TodoListHandleRef>,
+    todo_list: Option<coco_tool_runtime::TodoListHandleRef>,
     /// Bundle of per-subsystem reminder sources. Populated by CLI /
     /// SDK callers via [`Self::with_reminder_sources`]. Empty default
     /// ⇒ cross-crate reminders silently skip (matches TS behavior
     /// when the corresponding manager isn't initialized).
     reminder_sources: coco_system_reminder::ReminderSources,
     /// Channel for silent attachment events produced by owner crates
-    /// (hooks, permissions, commands, core/tool, skills). Drained at the
+    /// (hooks, permissions, commands, core/tool-runtime, skills). Drained at the
     /// head of each outer-loop iteration so the `Message::Attachment`
     /// entries land in history before prompt build.
     ///
@@ -199,7 +199,7 @@ impl QueryEngine {
             mailbox: None,
             agent_handle: None,
             skill_handle: None,
-            tool_schema_validator: coco_tool::ToolSchemaValidator::new(),
+            tool_schema_validator: coco_tool_runtime::ToolSchemaValidator::new(),
             task_list: None,
             todo_list: None,
             reminder_sources: coco_system_reminder::ReminderSources::default(),
@@ -209,7 +209,7 @@ impl QueryEngine {
     }
 
     /// A clone-friendly emitter handle for owning crates (hooks /
-    /// permissions / commands / core/tool / skills) so they can push
+    /// permissions / commands / core/tool-runtime / skills) so they can push
     /// `Message::Attachment` entries into this session's history without
     /// direct access to the engine. Drained once per outer-loop turn.
     pub fn attachment_emitter(&self) -> coco_types::AttachmentEmitter {
@@ -243,19 +243,19 @@ impl QueryEngine {
     }
 
     /// Install a mailbox handle for swarm teammate messaging.
-    pub fn with_mailbox(mut self, mailbox: coco_tool::MailboxHandleRef) -> Self {
+    pub fn with_mailbox(mut self, mailbox: coco_tool_runtime::MailboxHandleRef) -> Self {
         self.mailbox = Some(mailbox);
         self
     }
 
-    /// Install the real [`AgentHandle`](coco_tool::AgentHandle) so
+    /// Install the real [`AgentHandle`](coco_tool_runtime::AgentHandle) so
     /// `AgentTool` invocations route to the swarm / subagent
     /// runtime. Without this the factory defaults to
     /// `NoOpAgentHandle` and every `AgentTool` call returns a clean
     /// "not available in this context" error — fine for tests, but
     /// CLI / SDK / TUI runners should install a real handle at
     /// bootstrap.
-    pub fn with_agent_handle(mut self, handle: coco_tool::AgentHandleRef) -> Self {
+    pub fn with_agent_handle(mut self, handle: coco_tool_runtime::AgentHandleRef) -> Self {
         self.agent_handle = Some(handle);
         self
     }
@@ -285,25 +285,25 @@ impl QueryEngine {
         self
     }
 
-    /// Install the real [`SkillHandle`](coco_tool::SkillHandle) so
+    /// Install the real [`SkillHandle`](coco_tool_runtime::SkillHandle) so
     /// `SkillTool` invocations route to the skill runtime (inline
     /// expansion or forked subagent). Without this the factory
     /// defaults to `NoOpSkillHandle` and every skill call returns
     /// `SkillInvocationError::Unavailable` — the runner surfaces
     /// that as a model-visible error.
-    pub fn with_skill_handle(mut self, handle: coco_tool::SkillHandleRef) -> Self {
+    pub fn with_skill_handle(mut self, handle: coco_tool_runtime::SkillHandleRef) -> Self {
         self.skill_handle = Some(handle);
         self
     }
 
     /// Install the durable task-list store (V2 task tools).
-    pub fn with_task_list(mut self, handle: coco_tool::TaskListHandleRef) -> Self {
+    pub fn with_task_list(mut self, handle: coco_tool_runtime::TaskListHandleRef) -> Self {
         self.task_list = Some(handle);
         self
     }
 
     /// Install the ephemeral per-agent todo store (V1 TodoWrite).
-    pub fn with_todo_list(mut self, handle: coco_tool::TodoListHandleRef) -> Self {
+    pub fn with_todo_list(mut self, handle: coco_tool_runtime::TodoListHandleRef) -> Self {
         self.todo_list = Some(handle);
         self
     }
@@ -334,7 +334,7 @@ impl QueryEngine {
     /// Attach a permission bridge so `PermissionDecision::Ask` outcomes
     /// are forwarded to an external authority (e.g. the SDK client via
     /// `SdkPermissionBridge`) instead of auto-allowing.
-    pub fn with_permission_bridge(mut self, bridge: coco_tool::ToolPermissionBridgeRef) -> Self {
+    pub fn with_permission_bridge(mut self, bridge: coco_tool_runtime::ToolPermissionBridgeRef) -> Self {
         self.permission_bridge = Some(bridge);
         self
     }
@@ -784,7 +784,7 @@ impl QueryEngine {
         // last tx clone (owned here) drops, the rx closes, and the
         // drain task finishes naturally — no explicit await needed.
         let (progress_tx_session, mut progress_rx_session) =
-            tokio::sync::mpsc::unbounded_channel::<coco_tool::ToolProgress>();
+            tokio::sync::mpsc::unbounded_channel::<coco_tool_runtime::ToolProgress>();
         let progress_event_tx = event_tx.clone();
         let _progress_drain = tokio::spawn(async move {
             let mut throttle = ProgressThrottle::new();
@@ -1548,7 +1548,7 @@ impl QueryEngine {
                 None
             };
             let mut streaming_handle = streaming_ctx.as_ref().map(|ctx_arc| {
-                let executor_base = coco_tool::StreamingToolExecutor::new();
+                let executor_base = coco_tool_runtime::StreamingToolExecutor::new();
                 let executor = Arc::new(match self.app_state.as_ref() {
                     Some(state) => executor_base.with_app_state(state.clone()),
                     None => executor_base,
@@ -1566,7 +1566,7 @@ impl QueryEngine {
                         let effective_input = prepared.parsed_input.clone();
                         let execute_result = tokio::select! {
                             r = prepared.tool.execute(effective_input.clone(), &ctx) => r,
-                            () = ctx.cancel.cancelled() => Err(coco_tool::ToolError::Cancelled),
+                            () = ctx.cancel.cancelled() => Err(coco_tool_runtime::ToolError::Cancelled),
                         };
                         crate::tool_outcome_builder::build_outcome_from_execution(
                             crate::tool_outcome_builder::RunOneTail {
@@ -1587,7 +1587,7 @@ impl QueryEngine {
                         as std::pin::Pin<
                             Box<
                                 dyn std::future::Future<
-                                        Output = coco_tool::UnstampedToolCallOutcome,
+                                        Output = coco_tool_runtime::UnstampedToolCallOutcome,
                                     > + Send,
                             >,
                         >
@@ -1905,8 +1905,8 @@ impl QueryEngine {
 
                                 let model_index = streaming_model_index;
                                 streaming_model_index += 1;
-                                handle.feed_plan(coco_tool::ToolCallPlan::Runnable(
-                                    coco_tool::PreparedToolCall {
+                                handle.feed_plan(coco_tool_runtime::ToolCallPlan::Runnable(
+                                    coco_tool_runtime::PreparedToolCall {
                                         tool_use_id: pending.tool_use_id,
                                         tool_id: pending.tool.id(),
                                         tool: pending.tool,
@@ -2845,7 +2845,7 @@ impl QueryEngine {
             stripped_dangerous_rules: app_state.stripped_dangerous_rules.clone(),
             session_plan_file: None,
         };
-        let prompt_options = coco_tool::PromptOptions {
+        let prompt_options = coco_tool_runtime::PromptOptions {
             is_non_interactive: self.config.is_non_interactive,
             tool_names,
             agent_names,
@@ -2897,7 +2897,7 @@ impl QueryEngine {
         // `ToolUseContext` receives no handle — executor treats that as
         // a no-op, matching legacy behavior.
         let hook_handle = self.hooks.as_ref().map(|registry| {
-            let handle: coco_tool::HookHandleRef =
+            let handle: coco_tool_runtime::HookHandleRef =
                 std::sync::Arc::new(crate::hook_adapter::QueryHookHandle::new(
                     registry.clone(),
                     self.orchestration_ctx(),
@@ -3069,7 +3069,7 @@ pub(crate) fn classify_progress_payload(
 /// standing up a full engine.
 pub(crate) async fn drain_one_progress(
     event_tx: &Option<tokio::sync::mpsc::Sender<crate::CoreEvent>>,
-    progress: coco_tool::ToolProgress,
+    progress: coco_tool_runtime::ToolProgress,
     throttle: &mut ProgressThrottle,
 ) {
     // Fan-out #1: raw TUI event, always emitted.

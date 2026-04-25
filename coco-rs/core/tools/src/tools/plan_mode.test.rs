@@ -2,9 +2,9 @@
 
 use super::EnterPlanModeTool;
 use super::ExitPlanModeTool;
-use coco_tool::Tool;
-use coco_tool::ToolUseContext;
-use coco_tool::ValidationResult;
+use coco_tool_runtime::Tool;
+use coco_tool_runtime::ToolUseContext;
+use coco_tool_runtime::ValidationResult;
 use coco_types::AgentId;
 use coco_types::PermissionMode;
 use coco_types::ToolAppState;
@@ -30,7 +30,7 @@ async fn execute_and_apply_patch(
     input: Value,
     ctx: &ToolUseContext,
     state: &std::sync::Arc<tokio::sync::RwLock<ToolAppState>>,
-) -> Result<coco_types::ToolResult<Value>, coco_tool::ToolError> {
+) -> Result<coco_types::ToolResult<Value>, coco_tool_runtime::ToolError> {
     let mut result = tool.execute(input, ctx).await?;
     if let Some(patch) = result.app_state_patch.take() {
         let mut guard = state.write().await;
@@ -518,16 +518,16 @@ use tokio::sync::Mutex as TokioMutex;
 /// Capture mailbox writes for assertion without hitting disk.
 #[derive(Default)]
 struct CapturingMailbox {
-    captured: TokioMutex<Vec<(String, String, coco_tool::MailboxEnvelope)>>,
+    captured: TokioMutex<Vec<(String, String, coco_tool_runtime::MailboxEnvelope)>>,
 }
 
 #[async_trait::async_trait]
-impl coco_tool::MailboxHandle for CapturingMailbox {
+impl coco_tool_runtime::MailboxHandle for CapturingMailbox {
     async fn write_to_mailbox(
         &self,
         recipient: &str,
         team_name: &str,
-        message: coco_tool::MailboxEnvelope,
+        message: coco_tool_runtime::MailboxEnvelope,
     ) -> anyhow::Result<()> {
         self.captured
             .lock()
@@ -539,7 +539,7 @@ impl coco_tool::MailboxHandle for CapturingMailbox {
         &self,
         _agent: &str,
         _team: &str,
-    ) -> anyhow::Result<Vec<coco_tool::InboxMessage>> {
+    ) -> anyhow::Result<Vec<coco_tool_runtime::InboxMessage>> {
         Ok(Vec::new())
     }
     async fn mark_read(&self, _agent: &str, _team: &str, _index: usize) -> anyhow::Result<()> {

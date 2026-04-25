@@ -41,8 +41,8 @@ Paths relative to `/lyz/codespace/3rd/claude-code/src/`.
 - `should_nudge_verification(&[&str])` — shared verification-nudge helper used by both V1 `TodoWrite` and V2 `TaskUpdate`.
 
 ### handle_impls
-- `impl TaskListHandle for TaskListStore` — bridges the crate to `coco_tool::TaskListHandleRef`.
-- `impl TodoListHandle for TodoStore` — bridges to `coco_tool::TodoListHandleRef`.
+- `impl TaskListHandle for TaskListStore` — bridges the crate to `coco_tool_runtime::TaskListHandleRef`.
+- `impl TodoListHandle for TodoStore` — bridges to `coco_tool_runtime::TodoListHandleRef`.
 
 ## Disk Layout (task_list)
 

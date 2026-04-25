@@ -10,10 +10,10 @@
 //! (query engine) are responsible for hooks, system prompt, and memory
 //! cache restoration reported in the result payload.
 
-use coco_tool::DescriptionOptions;
-use coco_tool::Tool;
-use coco_tool::ToolError;
-use coco_tool::ToolUseContext;
+use coco_tool_runtime::DescriptionOptions;
+use coco_tool_runtime::Tool;
+use coco_tool_runtime::ToolError;
+use coco_tool_runtime::ToolUseContext;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
 use coco_types::ToolName;

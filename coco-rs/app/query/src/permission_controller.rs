@@ -1,5 +1,5 @@
 use coco_messages::MessageHistory;
-use coco_tool::ToolPermissionBridgeRef;
+use coco_tool_runtime::ToolPermissionBridgeRef;
 use coco_types::CoreEvent;
 use coco_types::PermissionDecision;
 use coco_types::PermissionDenialInfo;
@@ -106,7 +106,7 @@ impl<'a> PermissionController<'a> {
             };
         };
 
-        let request = coco_tool::ToolPermissionRequest {
+        let request = coco_tool_runtime::ToolPermissionRequest {
             id: format!("approval-{}", uuid::Uuid::new_v4()),
             tool_use_id: tool_call.tool_call_id.clone(),
             agent_id: self.session_id.to_string(),
@@ -125,7 +125,7 @@ impl<'a> PermissionController<'a> {
 
         match bridge_result {
             Ok(resolution) => match resolution.decision {
-                coco_tool::ToolPermissionDecision::Approved => {
+                coco_tool_runtime::ToolPermissionDecision::Approved => {
                     self.state_tracker
                         .transition_to(SessionState::Running, self.event_tx)
                         .await;
@@ -133,7 +133,7 @@ impl<'a> PermissionController<'a> {
                         updated_input: None,
                     }
                 }
-                coco_tool::ToolPermissionDecision::Rejected => {
+                coco_tool_runtime::ToolPermissionDecision::Rejected => {
                     let feedback = resolution
                         .feedback
                         .unwrap_or_else(|| "Permission denied by client".into());
