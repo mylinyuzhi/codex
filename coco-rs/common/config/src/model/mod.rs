@@ -1,4 +1,8 @@
 pub mod aliases;
+pub mod role_slots;
+
+pub use role_slots::FallbackRecoveryPolicy;
+pub use role_slots::RoleSlots;
 
 use coco_types::ApplyPatchToolType;
 use coco_types::Capability;
@@ -160,18 +164,52 @@ impl PartialEq for ModelInfo {
     }
 }
 
-/// Role -> model mapping.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Role -> (primary + fallback chain + recovery policy).
+///
+/// The JSON-facing side uses `RoleSlots<ModelSelection>` (see
+/// `ModelSelectionSettings`); this runtime-facing side stores the
+/// already-resolved `RoleSlots<ModelSpec>`, produced by
+/// `RuntimeConfigBuilder`.
+///
+/// Deliberately NOT `Deserialize` — it's runtime state built by the
+/// resolver, never read from JSON. The config source is
+/// `ModelSelectionSettings`.
+#[derive(Debug, Clone, Default)]
 pub struct ModelRoles {
-    pub roles: HashMap<ModelRole, ModelSpec>,
+    pub roles: HashMap<ModelRole, RoleSlots<ModelSpec>>,
 }
 
 impl ModelRoles {
-    /// Get the model spec for a role, falling back to Main.
+    /// Primary model for a role. Falls back to `Main`'s primary if
+    /// the role is unset — preserves the existing "any role without
+    /// a dedicated model uses Main" behavior.
     pub fn get(&self, role: ModelRole) -> Option<&ModelSpec> {
         self.roles
             .get(&role)
-            .or_else(|| self.roles.get(&ModelRole::Main))
+            .map(|s| &s.primary)
+            .or_else(|| self.roles.get(&ModelRole::Main).map(|s| &s.primary))
+    }
+
+    /// Ordered fallback chain for a role. Strictly per-role — never
+    /// walks to Main's fallbacks. Empty vec = no fallback configured
+    /// for this role.
+    pub fn fallbacks(&self, role: ModelRole) -> &[ModelSpec] {
+        self.roles
+            .get(&role)
+            .map(|s| s.fallbacks.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Recovery policy for a role. `None` = sticky (stay on fallback
+    /// once switched). Strictly per-role; no Main walk.
+    pub fn recovery(&self, role: ModelRole) -> Option<FallbackRecoveryPolicy> {
+        self.roles.get(&role).and_then(|s| s.recovery)
+    }
+
+    /// Full `RoleSlots` for a role. Used by the runtime-config
+    /// resolver and tests that need the whole binding.
+    pub fn role_slots(&self, role: ModelRole) -> Option<&RoleSlots<ModelSpec>> {
+        self.roles.get(&role)
     }
 }
 
@@ -180,7 +218,7 @@ impl ModelRoles {
 /// This mirrors the selectable identity fields of `ModelSpec` without exposing
 /// runtime dispatch or display fields; `RuntimeConfigBuilder` resolves provider
 /// API from the provider catalog.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct ModelSelection {
     pub provider: String,
@@ -200,19 +238,20 @@ impl ModelSelection {
 
 /// JSON-facing role model selections.
 ///
-/// Each role must name a provider explicitly instead of relying on an implicit
-/// provider default.
+/// Each role must name a provider explicitly. A role entry may also
+/// carry a fallback chain (`fallback:` / `fallbacks:`) and optional
+/// `recovery:` policy — see [`RoleSlots`] for the accepted shapes.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ModelSelectionSettings {
-    pub main: Option<ModelSelection>,
-    pub fast: Option<ModelSelection>,
-    pub compact: Option<ModelSelection>,
-    pub plan: Option<ModelSelection>,
-    pub explore: Option<ModelSelection>,
-    pub review: Option<ModelSelection>,
-    pub hook_agent: Option<ModelSelection>,
-    pub memory: Option<ModelSelection>,
+    pub main: Option<RoleSlots<ModelSelection>>,
+    pub fast: Option<RoleSlots<ModelSelection>>,
+    pub compact: Option<RoleSlots<ModelSelection>>,
+    pub plan: Option<RoleSlots<ModelSelection>>,
+    pub explore: Option<RoleSlots<ModelSelection>>,
+    pub review: Option<RoleSlots<ModelSelection>>,
+    pub hook_agent: Option<RoleSlots<ModelSelection>>,
+    pub memory: Option<RoleSlots<ModelSelection>>,
 }
 
 #[cfg(test)]

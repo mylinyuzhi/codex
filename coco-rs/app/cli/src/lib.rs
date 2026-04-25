@@ -133,9 +133,15 @@ pub struct Cli {
     #[arg(long, alias = "print")]
     pub non_interactive: bool,
 
-    /// Automatic fallback model on overload.
-    #[arg(long)]
-    pub fallback_model: Option<String>,
+    /// Automatic fallback model(s) on overload. Repeatable — each
+    /// occurrence appends one more tier to the Main role's fallback
+    /// chain. Accepted form: `provider/model_id`. The chain is
+    /// walked in flag order on capacity-error streaks.
+    ///
+    /// Legacy single-flag usage (`--fallback-model anthropic/sonnet`)
+    /// continues to work and produces a 1-tier chain.
+    #[arg(long, value_name = "PROVIDER/MODEL_ID")]
+    pub fallback_model: Vec<String>,
 
     /// Custom agent for the session.
     #[arg(long)]

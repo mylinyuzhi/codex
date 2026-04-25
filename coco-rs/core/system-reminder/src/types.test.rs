@@ -10,6 +10,36 @@ fn all_plan_and_auto_variants_are_core_tier() {
 }
 
 #[test]
+fn tiers_match_ts_attachment_batches() {
+    assert_eq!(
+        AttachmentType::AtMentionedFiles.tier(),
+        ReminderTier::UserPrompt
+    );
+    assert_eq!(
+        AttachmentType::McpResources.tier(),
+        ReminderTier::UserPrompt
+    );
+    assert_eq!(
+        AttachmentType::AgentMentions.tier(),
+        ReminderTier::UserPrompt
+    );
+
+    // TS lists skill_listing in allThreadAttachments, so sub-agents can
+    // still discover available skills.
+    assert_eq!(AttachmentType::SkillListing.tier(), ReminderTier::Core);
+
+    // TS lists IDE state in mainThreadAttachments, not userInputAttachments.
+    assert_eq!(
+        AttachmentType::IdeSelection.tier(),
+        ReminderTier::MainAgentOnly
+    );
+    assert_eq!(
+        AttachmentType::IdeOpenedFile.tier(),
+        ReminderTier::MainAgentOnly
+    );
+}
+
+#[test]
 fn all_phase_a_variants_use_system_reminder_tag() {
     for at in [
         AttachmentType::PlanMode,

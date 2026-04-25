@@ -12,6 +12,8 @@ use coco_config::env;
 use coco_types::ToolId;
 use coco_types::ToolName;
 use coco_types::ToolResult;
+use futures::StreamExt;
+use futures::stream::FuturesUnordered;
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -19,6 +21,12 @@ use tokio::sync::Semaphore;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use crate::call_plan::PreparedToolCall;
+use crate::call_plan::RunOneRuntime;
+use crate::call_plan::ToolCallOutcome;
+use crate::call_plan::ToolCallPlan;
+use crate::call_plan::ToolSideEffects;
+use crate::call_plan::UnstampedToolCallOutcome;
 use crate::context::ToolUseContext;
 use crate::error::SyntheticToolError;
 use crate::error::ToolError;
@@ -372,60 +380,24 @@ impl StreamingToolExecutor {
         all_results
     }
 
-    /// Execute a single tool call through the full lifecycle pipeline:
+    /// Execute a single tool call and apply any resulting app-state patch.
     ///
-    /// 1. PreToolUse hook — may rewrite input, override permission, or block
-    /// 2. `tool.execute()` — the actual work
-    /// 3. PostToolUse / PostToolUseFailure hook — may replace output or stop loop
-    ///
-    /// TS: `services/tools/toolExecution.ts:800-862` pipeline flow.
+    /// Hook and permission lifecycle decisions are owned by the query layer.
+    /// The executor only schedules and runs already-approved calls.
     async fn execute_single(&self, call: PendingToolCall, ctx: &ToolUseContext) -> ToolCallResult {
         let tool_id = call.tool.id();
         let tool_use_id = call.tool_use_id.clone();
-        let tool_name = call.tool.name().to_string();
         let start = std::time::Instant::now();
-        let mut input = call.input;
+        let input = call.input;
 
-        // ── Stage 1: PreToolUse hook ──
-        // Run PreToolUse hooks if a handle is configured. Hooks may rewrite
-        // the input, override permission (most-restrictive-wins: deny > ask >
-        // allow > passthrough — already aggregated in `PreToolUseOutcome`),
-        // or hard-block the call via `blocking_reason`.
-        if let Some(handle) = ctx.hook_handle.as_ref() {
-            let pre = handle
-                .run_pre_tool_use(&tool_name, &tool_use_id, &input)
-                .await;
-
-            if pre.is_blocked() {
-                let reason = pre
-                    .blocking_reason
-                    .unwrap_or_else(|| "PreToolUse hook denied tool execution".into());
-                return ToolCallResult {
-                    tool_use_id,
-                    tool_id,
-                    result: Err(ToolError::PermissionDenied { message: reason }),
-                    duration_ms: start.elapsed().as_millis() as i64,
-                };
-            }
-
-            // Apply input rewrite if the hook emitted one.
-            if let Some(updated) = pre.updated_input {
-                input = updated;
-            }
-            // Ask/Allow overrides are forwarded to the upper permission layer
-            // via the outcome; the executor doesn't re-check permissions here
-            // because `check_permissions()` was already run upstream.
-        }
-
-        // ── Stage 2: Execute ──
         // Track in-progress
         {
             let mut ids = ctx.in_progress_tool_use_ids.write().await;
             ids.insert(tool_use_id.clone());
         }
 
-        let exec_result = tokio::select! {
-            r = call.tool.execute(input.clone(), ctx) => r,
+        let result = tokio::select! {
+            r = call.tool.execute(input, ctx) => r,
             () = ctx.cancel.cancelled() => Err(ToolError::Cancelled),
         };
 
@@ -434,41 +406,6 @@ impl StreamingToolExecutor {
             let mut ids = ctx.in_progress_tool_use_ids.write().await;
             ids.remove(&tool_use_id);
         }
-
-        // ── Stage 3: PostToolUse / PostToolUseFailure hook ──
-        let result = if let Some(handle) = ctx.hook_handle.as_ref() {
-            match exec_result {
-                Ok(mut tool_result) => {
-                    let post = handle
-                        .run_post_tool_use(&tool_name, &tool_use_id, &input, &tool_result.data)
-                        .await;
-
-                    // Hard-block: replace result with error (TS: PostToolUse
-                    // Reject path, `toolHooks.ts:237-244`).
-                    if let Some(reason) = post.blocking_reason {
-                        Err(ToolError::PermissionDenied { message: reason })
-                    } else {
-                        // Output rewrite: use hook-modified data. Preserves
-                        // any `new_messages` from the original tool result.
-                        if let Some(updated) = post.updated_output {
-                            tool_result.data = updated;
-                        }
-                        Ok(tool_result)
-                    }
-                }
-                Err(e) => {
-                    // Failure path: run PostToolUseFailure hook but don't
-                    // let it rewrite the error (TS doesn't allow that either
-                    // — failure hooks can only inject context, not recover).
-                    let _ = handle
-                        .run_post_tool_use_failure(&tool_name, &tool_use_id, &input, &e.to_string())
-                        .await;
-                    Err(e)
-                }
-            }
-        } else {
-            exec_result
-        };
 
         // Apply queued app_state patch (if any) under a write lock
         // before returning. This is the serial-tool equivalent of
@@ -540,7 +477,10 @@ impl StreamingToolExecutor {
         let semaphore = Arc::new(Semaphore::new(self.max_concurrency));
         let shared_ctx = Arc::new(ctx.clone_for_concurrent());
         let sibling_cancel = CancellationToken::new();
-        let mut handles = Vec::with_capacity(calls.len());
+        let call_count = calls.len();
+        let model_order_tool_use_ids: Vec<String> =
+            calls.iter().map(|call| call.tool_use_id.clone()).collect();
+        let mut handles = FuturesUnordered::new();
 
         for call in calls {
             let sem = semaphore.clone();
@@ -567,41 +507,14 @@ impl StreamingToolExecutor {
                 };
                 let start = std::time::Instant::now();
 
-                // ── Stage 1: PreToolUse hook ──
-                // Concurrent path runs the same lifecycle hooks as single
-                // path. See `execute_single` docstring for the rationale.
-                // All three stages must run inside the spawned task so
-                // each tool gets its own hook invocation sequence.
-                let mut input = input;
-                if let Some(handle) = ctx_clone.hook_handle.as_ref() {
-                    let pre = handle
-                        .run_pre_tool_use(&tool_name, &tool_use_id, &input)
-                        .await;
-                    if pre.is_blocked() {
-                        let reason = pre
-                            .blocking_reason
-                            .unwrap_or_else(|| "PreToolUse hook denied tool execution".into());
-                        return ToolCallResult {
-                            tool_use_id,
-                            tool_id,
-                            result: Err(ToolError::PermissionDenied { message: reason }),
-                            duration_ms: start.elapsed().as_millis() as i64,
-                        };
-                    }
-                    if let Some(updated) = pre.updated_input {
-                        input = updated;
-                    }
-                }
-
-                // ── Stage 2: Execute ──
                 // Track in-progress
                 {
                     let mut ids = ctx_clone.in_progress_tool_use_ids.write().await;
                     ids.insert(tool_use_id.clone());
                 }
 
-                let exec_result = tokio::select! {
-                    r = tool.execute(input.clone(), &ctx_clone) => r,
+                let result = tokio::select! {
+                    r = tool.execute(input, &ctx_clone) => r,
                     () = ctx_clone.cancel.cancelled() => Err(ToolError::Cancelled),
                     () = sibling_tok.cancelled() => Err(ToolError::ExecutionFailed {
                         message: SyntheticToolError::SiblingError {
@@ -616,43 +529,6 @@ impl StreamingToolExecutor {
                     let mut ids = ctx_clone.in_progress_tool_use_ids.write().await;
                     ids.remove(&tool_use_id);
                 }
-
-                // ── Stage 3: PostToolUse / PostToolUseFailure hook ──
-                let result = if let Some(handle) = ctx_clone.hook_handle.as_ref() {
-                    match exec_result {
-                        Ok(mut tool_result) => {
-                            let post = handle
-                                .run_post_tool_use(
-                                    &tool_name,
-                                    &tool_use_id,
-                                    &input,
-                                    &tool_result.data,
-                                )
-                                .await;
-                            if let Some(reason) = post.blocking_reason {
-                                Err(ToolError::PermissionDenied { message: reason })
-                            } else {
-                                if let Some(updated) = post.updated_output {
-                                    tool_result.data = updated;
-                                }
-                                Ok(tool_result)
-                            }
-                        }
-                        Err(e) => {
-                            let _ = handle
-                                .run_post_tool_use_failure(
-                                    &tool_name,
-                                    &tool_use_id,
-                                    &input,
-                                    &e.to_string(),
-                                )
-                                .await;
-                            Err(e)
-                        }
-                    }
-                } else {
-                    exec_result
-                };
 
                 // If a shell tool failed, cancel siblings.
                 // TS: only Bash errors trigger sibling abort (StreamingToolExecutor.ts:354-363).
@@ -676,13 +552,14 @@ impl StreamingToolExecutor {
                 }
             });
 
-            handles.push((saved_tool_use_id, saved_tool_id, handle));
+            handles.push(async move { (saved_tool_use_id, saved_tool_id, handle.await) });
         }
 
-        // Collect in submission order for determinism
-        let mut results = Vec::with_capacity(handles.len());
-        for (saved_tool_use_id, saved_tool_id, handle) in handles {
-            match handle.await {
+        // Collect in completion order. Shared app-state patches are still
+        // applied after the batch; see the patch block below.
+        let mut results = Vec::with_capacity(call_count);
+        while let Some((saved_tool_use_id, saved_tool_id, joined)) = handles.next().await {
+            match joined {
                 Ok(result) => results.push(result),
                 Err(e) => {
                     results.push(ToolCallResult {
@@ -698,7 +575,7 @@ impl StreamingToolExecutor {
             }
         }
 
-        // Apply any queued app_state patches in submission order
+        // Apply any queued app_state patches in model/submission order
         // under a single write lock. Concurrent tools by convention
         // don't return patches (they're read-only), but the plumbing
         // exists uniformly so Tool authors don't have to special-case
@@ -716,8 +593,11 @@ impl StreamingToolExecutor {
             if any_patch {
                 let snapshot = {
                     let mut guard = state.write().await;
-                    for r in results.iter_mut() {
-                        if let Ok(tr) = r.result.as_mut()
+                    for tool_use_id in &model_order_tool_use_ids {
+                        if let Some(r) = results
+                            .iter_mut()
+                            .find(|r| r.tool_use_id.as_str() == tool_use_id)
+                            && let Ok(tr) = r.result.as_mut()
                             && let Some(patch) = tr.app_state_patch.take()
                         {
                             patch(&mut guard);
@@ -750,6 +630,283 @@ impl StreamingToolExecutor {
 
         results
     }
+
+    // -- Phase 4d Scheduler API (plans + callback-driven surfacing) --
+    //
+    // `execute_with` is the TS-parity scheduler that the refactor plan
+    // calls for: the runner hands in pre-validated `ToolCallPlan`
+    // values and a `run_one` callback, and the executor surfaces each
+    // outcome through `on_outcome` the moment it is ready. No
+    // pre-allocated result-slot vector — history grows in completion
+    // order for concurrent-safe batches, execution order for serial
+    // unsafe tools, and partition order for `EarlyOutcome` barriers.
+    //
+    // This coexists with the legacy `execute_all` / `execute_batch`
+    // API. The engine migrates call-site by call-site; the legacy
+    // path stays until every caller has been ported.
+
+    /// Drive a plan list and surface each outcome through `on_outcome`
+    /// as soon as it is available.
+    ///
+    /// Ordering contract (I12):
+    ///
+    /// - `ToolCallPlan::EarlyOutcome` acts as a single-tool barrier.
+    ///   It splits the surrounding `Runnable` plans into separate
+    ///   concurrent-safe batches (TS parity:
+    ///   `toolOrchestration.ts:91-115` where schema-invalid calls have
+    ///   `isConcurrencySafe = false`).
+    /// - Within a concurrent-safe batch, runnable plans dispatch
+    ///   through a `FuturesUnordered` so a slow earlier tool does not
+    ///   block a faster later tool. The executor stamps
+    ///   `completion_seq` at surface time and calls `on_outcome`
+    ///   immediately with the patch-free `ToolCallOutcome`.
+    /// - Within a concurrent-safe batch, queued `app_state_patch`es
+    ///   apply post-batch in **model_index** order under one write
+    ///   lock (TS `toolOrchestration.ts:54-62`).
+    /// - Serial unsafe plans apply their patch before building the
+    ///   next tool's context (TS `toolOrchestration.ts:130-141`).
+    /// - `EarlyOutcome` plans stamp when the partitioner reaches that
+    ///   plan's block — not globally before all Runnables — so the
+    ///   resulting completion sequence interleaves correctly with
+    ///   surrounding batches.
+    ///
+    /// This does **not** emit `ToolUseStarted` / `ToolUseCompleted`
+    /// yet — Phase 4d wires event emission to the runner boundary once
+    /// `ToolCallRunner::run_one` is the sole semantic lifecycle owner.
+    /// Today the engine still owns those events for the legacy path.
+    pub async fn execute_with<F, Fut, H>(
+        &self,
+        plans: Vec<ToolCallPlan>,
+        run_one: F,
+        mut on_outcome: H,
+    ) where
+        F: Fn(PreparedToolCall, RunOneRuntime) -> Fut + Sync,
+        Fut: std::future::Future<Output = UnstampedToolCallOutcome> + Send,
+        H: FnMut(ToolCallOutcome),
+    {
+        let mut completion_seq: usize = 0;
+
+        // Partition plans into blocks. Each Runnable sequence of
+        // concurrency-safe tools becomes one batch; an EarlyOutcome or
+        // unsafe Runnable breaks the batch and forms its own block.
+        let blocks = partition_plans(plans);
+
+        for block in blocks {
+            match block {
+                PlanBlock::EarlyOutcome(unstamped) => {
+                    // Pre-execution failure: no scheduling, no patch
+                    // — but still emit one Completed outcome so the
+                    // per-call invariant (one Queued → one Completed)
+                    // holds.
+                    let (outcome, _effects) = unstamped.stamp_and_extract_effects(completion_seq);
+                    completion_seq += 1;
+                    on_outcome(outcome);
+                }
+                PlanBlock::SerialUnsafe(prepared) => {
+                    let runtime = self.make_runtime(prepared.model_index);
+                    let unstamped = run_one(prepared, runtime).await;
+                    let (outcome, effects) = unstamped.stamp_and_extract_effects(completion_seq);
+                    completion_seq += 1;
+                    // Apply patch BEFORE the next tool's context build
+                    // (TS `toolOrchestration.ts:130-141`). This is the
+                    // serial-tool equivalent of "update.newContext()".
+                    self.apply_side_effects(effects).await;
+                    on_outcome(outcome);
+                }
+                PlanBlock::ConcurrentSafe(prepared_calls) => {
+                    self.run_concurrent_batch(
+                        prepared_calls,
+                        &run_one,
+                        &mut on_outcome,
+                        &mut completion_seq,
+                    )
+                    .await;
+                }
+            }
+        }
+    }
+
+    /// Build a fresh per-tool runtime for one `run_one` invocation.
+    pub(crate) fn make_runtime(&self, model_index: usize) -> RunOneRuntime {
+        RunOneRuntime {
+            // Child token of the turn cancel (the caller seeds
+            // `self.sibling_cancel` to match the current turn). Using
+            // a child keeps per-tool cancellation independent of
+            // siblings unless sibling-abort explicitly fires.
+            cancellation: self.sibling_cancel.child_token(),
+            sibling_abort: Some(self.sibling_cancel.clone()),
+            progress_tx: None,
+            model_index,
+        }
+    }
+
+    /// Run one concurrent-safe batch end-to-end.
+    ///
+    /// Surfaces each outcome through `on_outcome` the moment
+    /// `run_one` resolves (completion-order history). Queues
+    /// `app_state_patch`es keyed by `model_index` and applies them in
+    /// model-index order post-batch.
+    pub(crate) async fn run_concurrent_batch<F, Fut, H>(
+        &self,
+        prepared_calls: Vec<PreparedToolCall>,
+        run_one: &F,
+        on_outcome: &mut H,
+        completion_seq: &mut usize,
+    ) where
+        F: Fn(PreparedToolCall, RunOneRuntime) -> Fut + Sync,
+        Fut: std::future::Future<Output = UnstampedToolCallOutcome> + Send,
+        H: FnMut(ToolCallOutcome),
+    {
+        let semaphore = Arc::new(Semaphore::new(self.max_concurrency));
+        let mut pending: FuturesUnordered<_> = FuturesUnordered::new();
+
+        for prepared in prepared_calls {
+            let runtime = self.make_runtime(prepared.model_index);
+            let sem = semaphore.clone();
+            let fut = run_one(prepared, runtime);
+            pending.push(async move {
+                // Semaphore acquisition bounds the concurrent tool
+                // count but does not block the driver future from
+                // progressing — a permit holder returns the permit
+                // when it drops.
+                let _permit = sem.acquire().await.ok();
+                fut.await
+            });
+        }
+
+        let mut queued_effects: Vec<(usize, ToolSideEffects)> = Vec::new();
+
+        while let Some(unstamped) = pending.next().await {
+            let model_index = unstamped.model_index;
+            let (outcome, effects) = unstamped.stamp_and_extract_effects(*completion_seq);
+            *completion_seq += 1;
+            queued_effects.push((model_index, effects));
+            on_outcome(outcome);
+        }
+
+        // Apply queued patches in model_index order under one write
+        // lock — TS `toolOrchestration.ts:54-62`. This mirrors the
+        // legacy `execute_concurrent` post-batch apply but keys on
+        // `model_index` rather than tool_use_id.
+        queued_effects.sort_by_key(|(idx, _)| *idx);
+        let combined = ToolSideEffects {
+            app_state_patch: coalesce_patches(
+                queued_effects
+                    .into_iter()
+                    .filter_map(|(_, e)| e.app_state_patch),
+            ),
+        };
+        self.apply_side_effects(combined).await;
+    }
+
+    /// Apply a `ToolSideEffects` under one write lock, emitting a
+    /// `TaskPanelChanged` snapshot to the event sink when a patch
+    /// actually ran. Matches the existing legacy-path invariants:
+    /// patch `FnOnce` runs exactly once, event is best-effort
+    /// delivery (dropped if no sink is configured).
+    pub(crate) async fn apply_side_effects(&self, effects: ToolSideEffects) {
+        let Some(patch) = effects.app_state_patch else {
+            return;
+        };
+        let Some(state) = self.app_state.as_ref() else {
+            // No shared state → drop the patch. TS parity: the
+            // context modifier is never invoked when there's no
+            // context to modify.
+            return;
+        };
+        let snapshot = {
+            let mut guard = state.write().await;
+            patch(&mut guard);
+            coco_types::TaskPanelChangedParams {
+                plan_tasks: guard.plan_tasks.clone(),
+                todos_by_agent: guard.todos_by_agent.clone(),
+                expanded_view: guard.expanded_view,
+                verification_nudge_pending: guard.verification_nudge_pending,
+            }
+        };
+        if let Some(tx) = self.event_tx.as_ref() {
+            let _ = tx
+                .send(coco_types::CoreEvent::Protocol(
+                    coco_types::ServerNotification::TaskPanelChanged(snapshot),
+                ))
+                .await;
+        }
+    }
+}
+
+/// One block in the executor's plan-partition output.
+///
+/// `ConcurrentSafe` holds one-or-more `Runnable` plans that can run
+/// in parallel; `SerialUnsafe` holds a single non-concurrency-safe
+/// `Runnable`; `EarlyOutcome` passes a pre-built outcome straight to
+/// the stamp path. TS parity: `toolOrchestration.ts:91-115`
+/// `partitionToolCalls` returns the same shape.
+enum PlanBlock {
+    ConcurrentSafe(Vec<PreparedToolCall>),
+    SerialUnsafe(PreparedToolCall),
+    EarlyOutcome(UnstampedToolCallOutcome),
+}
+
+/// Partition a flat plan list into batches.
+///
+/// Rules (TS parity):
+///
+/// - `EarlyOutcome` is never concurrency-safe — it ends the preceding
+///   safe batch and forms its own block.
+/// - `Runnable` whose `is_concurrency_safe(input)` returns `false`
+///   forms its own `SerialUnsafe` block.
+/// - `Runnable` whose `is_concurrency_safe(input)` returns `true`
+///   accumulates into a `ConcurrentSafe` batch, flushed whenever an
+///   `EarlyOutcome` or unsafe Runnable interrupts.
+/// - If `is_concurrency_safe` panics (defensive), treat as unsafe.
+fn partition_plans(plans: Vec<ToolCallPlan>) -> Vec<PlanBlock> {
+    let mut blocks: Vec<PlanBlock> = Vec::new();
+    let mut safe_batch: Vec<PreparedToolCall> = Vec::new();
+    let flush_safe = |safe_batch: &mut Vec<PreparedToolCall>, blocks: &mut Vec<PlanBlock>| {
+        if !safe_batch.is_empty() {
+            blocks.push(PlanBlock::ConcurrentSafe(std::mem::take(safe_batch)));
+        }
+    };
+    for plan in plans {
+        match plan {
+            ToolCallPlan::Runnable(prepared) => {
+                let is_safe = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    prepared.tool.is_concurrency_safe(&prepared.parsed_input)
+                }))
+                .unwrap_or(false);
+                if is_safe {
+                    safe_batch.push(prepared);
+                } else {
+                    flush_safe(&mut safe_batch, &mut blocks);
+                    blocks.push(PlanBlock::SerialUnsafe(prepared));
+                }
+            }
+            ToolCallPlan::EarlyOutcome(unstamped) => {
+                flush_safe(&mut safe_batch, &mut blocks);
+                blocks.push(PlanBlock::EarlyOutcome(unstamped));
+            }
+        }
+    }
+    flush_safe(&mut safe_batch, &mut blocks);
+    blocks
+}
+
+/// Coalesce several `FnOnce` patches into a single one that invokes
+/// each in turn. Used so the end-of-batch apply is still exactly one
+/// `write().await` + one TaskPanelChanged snapshot, regardless of how
+/// many tools in the batch emitted patches.
+pub(crate) fn coalesce_patches(
+    patches: impl IntoIterator<Item = coco_types::AppStatePatch>,
+) -> Option<coco_types::AppStatePatch> {
+    let patches: Vec<coco_types::AppStatePatch> = patches.into_iter().collect();
+    if patches.is_empty() {
+        return None;
+    }
+    Some(Box::new(move |state| {
+        for patch in patches {
+            patch(state);
+        }
+    }))
 }
 
 impl Default for StreamingToolExecutor {

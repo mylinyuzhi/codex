@@ -20,6 +20,7 @@ fn make_user_msg(text: &str, meta: bool, virtual_flag: bool) -> Message {
             is_compact_summary: false,
             permission_mode: None,
             origin: None,
+            parent_tool_use_id: None,
         })
     }
 }

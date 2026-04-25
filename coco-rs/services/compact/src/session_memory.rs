@@ -70,6 +70,7 @@ pub fn compact_session_memory(
         is_compact_summary: true,
         permission_mode: None,
         origin: None,
+        parent_tool_use_id: None,
     });
 
     let pre_tokens = tokens::estimate_tokens_conservative(messages);

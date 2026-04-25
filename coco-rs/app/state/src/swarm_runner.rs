@@ -288,12 +288,22 @@ impl InProcessAgentRunner {
         format!("{name}@{team}")
     }
 
-    /// Spawn a new in-process agent.
+    /// Register a new in-process agent (Phase 6).
     ///
     /// Creates an isolated `AgentContext` with its own cancellation flag
     /// and registers the agent. Returns a `SpawnResult` indicating success
     /// or failure.
-    pub async fn spawn_agent(&self, config: SpawnConfig) -> SpawnResult {
+    ///
+    /// **Registration only** — execution must be started separately via
+    /// [`Self::start_agent`]. TS parity: TS has no two-phase split
+    /// (async generator spawn), but Rust's tokio-spawn pattern needs an
+    /// explicit registration step so the runner can wire a result
+    /// channel before the execution task starts emitting output. Per
+    /// the agent-loop refactor plan Phase 6, the old `spawn_agent`
+    /// name implied "spawn = run", which silently succeeded even when
+    /// the caller forgot to wire execution. The rename makes the
+    /// split explicit.
+    pub async fn register_agent(&self, config: SpawnConfig) -> SpawnResult {
         let agent_id = Self::format_agent_id(&config.name, &config.team_name);
 
         // Check capacity
@@ -430,15 +440,65 @@ impl InProcessAgentRunner {
         }
     }
 
-    /// Set a result channel for an agent (used by the execution loop).
-    pub async fn set_result_channel(
+    /// Start the execution task for a registered agent (Phase 6).
+    ///
+    /// Takes ownership of a `JoinHandle<InProcessRunnerResult>` returned
+    /// by [`crate::swarm_runner_loop::start_in_process_teammate`], spawns
+    /// a forwarder task that translates the eventual join result into
+    /// a `RunnerResult`, and atomically installs the oneshot receiver
+    /// on the registered agent entry.
+    ///
+    /// Returns `true` if the agent was found and started; `false` if
+    /// `agent_id` is not registered.
+    ///
+    /// **Why atomic**: the previous two-phase API (`set_result_channel`
+    /// + separate `start_in_process_teammate`) let callers register an
+    /// agent and forget to wire the channel — `wait_for_completion`
+    /// would then silently return `None`. By taking the `JoinHandle`
+    /// directly, this method makes it a compile-time error to skip
+    /// the execution step. TS parity: not applicable (Rust-internal API).
+    pub async fn start_agent(
         &self,
         agent_id: &str,
-        result_rx: oneshot::Receiver<RunnerResult>,
+        handle: tokio::task::JoinHandle<crate::swarm_runner_loop::InProcessRunnerResult>,
     ) -> bool {
+        let (tx, rx) = oneshot::channel::<RunnerResult>();
+
+        // Forwarder: await the execution JoinHandle, map its result into
+        // a RunnerResult, and deliver through the oneshot. If the task
+        // panics or is cancelled, produce a descriptive RunnerResult
+        // rather than propagating the JoinError.
+        tokio::spawn(async move {
+            let result = match handle.await {
+                Ok(r) => RunnerResult {
+                    success: r.success,
+                    error: r.error,
+                    output: r.output,
+                    turns: r.turns,
+                },
+                Err(e) if e.is_cancelled() => RunnerResult {
+                    success: false,
+                    error: Some("Agent execution task was cancelled".into()),
+                    output: None,
+                    turns: 0,
+                },
+                Err(e) => RunnerResult {
+                    success: false,
+                    error: Some(format!("Agent execution task panicked: {e}")),
+                    output: None,
+                    turns: 0,
+                },
+            };
+            // Best-effort delivery. If the receiver was dropped (caller
+            // never awaited `wait_for_completion` / `collect_result`),
+            // drop the result silently — it's already been observed via
+            // task-state snapshots.
+            let _ = tx.send(result);
+        });
+
         let mut agents = self.agents.write().await;
         if let Some(entry) = agents.get_mut(agent_id) {
-            entry.result_rx = Some(result_rx);
+            entry.result_rx = Some(rx);
             true
         } else {
             false

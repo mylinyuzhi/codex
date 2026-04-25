@@ -21,6 +21,11 @@ just fix -p <name>       # Auto-fix clippy warnings for a single crate
 just help         # All commands
 ```
 
+**Path conventions** (avoids the `coco-rs/coco-rs/...` mistake):
+- `just` / `cargo` commands: run from `coco-rs/`; paths are workspace-relative (`app/query/src/...`).
+- `git` commands: also fine to run from inside `coco-rs/` — paths stay workspace-relative (`app/query/src/...`), NOT prefixed with `coco-rs/`.
+- The `coco-rs/` prefix only appears when viewing output from the repo root (e.g. session-start `gitStatus`, or `git` run from the repo root). Don't copy those paths verbatim into commands run from `coco-rs/`.
+
 ## Code Style
 
 ### Format and Lint

@@ -162,6 +162,8 @@ pub struct AttachmentSettings {
     pub mcp_resources: bool,
     /// Agent mention reminder (TS `agent_mention`). On by default.
     pub agent_mentions: bool,
+
+    // ── Main-thread IDE reminders ──
     /// IDE selection reminder (TS `selected_lines_in_ide`). On by default.
     pub ide_selection: bool,
     /// IDE opened-file reminder (TS `opened_file_in_ide`). On by default.
@@ -224,11 +226,13 @@ impl Default for AttachmentSettings {
             teammate_mailbox: true,
             team_context: true,
             agent_pending_messages: true,
-            // Phase 4 user-input tier — on by default; fires only when
-            // user submitted input this turn (UserPrompt tier).
+            // Phase 4 user-input tier — on by default; these three fire only
+            // when user submitted input this turn (UserPrompt tier).
             at_mentioned_files: true,
             mcp_resources: true,
             agent_mentions: true,
+            // Main-thread IDE reminders — on by default; source returns
+            // empty when no IDE state is available.
             ide_selection: true,
             ide_opened_file: true,
             nested_memory: true,

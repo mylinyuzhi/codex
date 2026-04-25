@@ -1,5 +1,4 @@
 use tokio::sync::mpsc;
-use tokio::sync::oneshot;
 
 use std::sync::Arc;
 
@@ -37,7 +36,7 @@ fn make_spawn_config(name: &str, team: &str) -> SpawnConfig {
 async fn test_spawn_agent_success() {
     let runner = make_runner(5);
     let result = runner
-        .spawn_agent(make_spawn_config("researcher", "team-a"))
+        .register_agent(make_spawn_config("researcher", "team-a"))
         .await;
 
     assert!(result.success);
@@ -53,12 +52,12 @@ async fn test_spawn_agent_success() {
 async fn test_spawn_agent_duplicate_rejected() {
     let runner = make_runner(5);
     let r1 = runner
-        .spawn_agent(make_spawn_config("worker", "team-a"))
+        .register_agent(make_spawn_config("worker", "team-a"))
         .await;
     assert!(r1.success);
 
     let r2 = runner
-        .spawn_agent(make_spawn_config("worker", "team-a"))
+        .register_agent(make_spawn_config("worker", "team-a"))
         .await;
     assert!(!r2.success);
     assert!(
@@ -71,10 +70,10 @@ async fn test_spawn_agent_duplicate_rejected() {
 #[tokio::test]
 async fn test_spawn_agent_max_capacity() {
     let runner = make_runner(1);
-    let r1 = runner.spawn_agent(make_spawn_config("a1", "team")).await;
+    let r1 = runner.register_agent(make_spawn_config("a1", "team")).await;
     assert!(r1.success);
 
-    let r2 = runner.spawn_agent(make_spawn_config("a2", "team")).await;
+    let r2 = runner.register_agent(make_spawn_config("a2", "team")).await;
     assert!(!r2.success);
     assert!(
         r2.error
@@ -87,7 +86,7 @@ async fn test_spawn_agent_max_capacity() {
 async fn test_cancel_agent() {
     let runner = make_runner(5);
     let result = runner
-        .spawn_agent(make_spawn_config("agent-x", "team"))
+        .register_agent(make_spawn_config("agent-x", "team"))
         .await;
     assert!(result.success);
 
@@ -104,8 +103,8 @@ async fn test_cancel_agent() {
 #[tokio::test]
 async fn test_cancel_all_agents() {
     let runner = make_runner(5);
-    runner.spawn_agent(make_spawn_config("a1", "team")).await;
-    runner.spawn_agent(make_spawn_config("a2", "team")).await;
+    runner.register_agent(make_spawn_config("a1", "team")).await;
+    runner.register_agent(make_spawn_config("a2", "team")).await;
     assert_eq!(runner.active_count().await, 2);
 
     runner.cancel_all().await;
@@ -113,29 +112,32 @@ async fn test_cancel_all_agents() {
 }
 
 #[tokio::test]
-async fn test_collect_result_with_channel() {
+async fn test_start_agent_forwards_join_handle_to_collect_result() {
+    use crate::swarm_runner_loop::InProcessRunnerResult;
     let runner = make_runner(5);
     let spawn = runner
-        .spawn_agent(make_spawn_config("worker", "team"))
+        .register_agent(make_spawn_config("worker", "team"))
         .await;
     assert!(spawn.success);
 
-    let (result_tx, result_rx) = oneshot::channel::<RunnerResult>();
-
-    runner.set_result_channel("worker@team", result_rx).await;
-
-    // Simulate agent completing
-    result_tx
-        .send(RunnerResult {
+    // Simulate the execution loop: spawn a task that produces an
+    // InProcessRunnerResult. The runner's start_agent takes ownership
+    // of the JoinHandle and forwards it into the oneshot.
+    let handle = tokio::spawn(async move {
+        InProcessRunnerResult {
             success: true,
             error: None,
             output: Some("task done".into()),
             turns: 3,
-        })
-        .expect("send result");
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+        }
+    });
+
+    let started = runner.start_agent("worker@team", handle).await;
+    assert!(started, "start_agent must succeed for a registered agent");
 
     let result: Option<RunnerResult> = runner.collect_result("worker@team").await;
-    assert!(result.is_some());
     let r = result.expect("result exists");
     assert!(r.success);
     assert_eq!(r.output.as_deref(), Some("task done"));
@@ -143,10 +145,51 @@ async fn test_collect_result_with_channel() {
 }
 
 #[tokio::test]
+async fn test_start_agent_returns_false_for_unknown_id() {
+    use crate::swarm_runner_loop::InProcessRunnerResult;
+    let runner = make_runner(5);
+    let handle = tokio::spawn(async {
+        InProcessRunnerResult {
+            success: false,
+            error: Some("never registered".into()),
+            output: None,
+            turns: 0,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+        }
+    });
+    let started = runner.start_agent("does-not-exist@team", handle).await;
+    assert!(!started, "start_agent must reject unregistered agent_id");
+}
+
+#[tokio::test]
+async fn test_start_agent_panicked_handle_produces_error_result() {
+    let runner = make_runner(5);
+    let spawn = runner
+        .register_agent(make_spawn_config("worker", "team"))
+        .await;
+    assert!(spawn.success);
+
+    let handle = tokio::spawn(async { panic!("agent exploded") });
+    runner.start_agent("worker@team", handle).await;
+
+    let r = runner
+        .collect_result("worker@team")
+        .await
+        .expect("result arrives even on panic");
+    assert!(!r.success);
+    assert!(
+        r.error.as_deref().unwrap_or("").contains("panicked"),
+        "panic must be surfaced via RunnerResult::error; got: {:?}",
+        r.error
+    );
+}
+
+#[tokio::test]
 async fn test_get_context() {
     let runner = make_runner(5);
     runner
-        .spawn_agent(SpawnConfig {
+        .register_agent(SpawnConfig {
             name: "ctx-agent".into(),
             team_name: "ctx-team".into(),
             prompt: "hello".into(),
