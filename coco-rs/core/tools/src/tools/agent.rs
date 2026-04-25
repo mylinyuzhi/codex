@@ -176,6 +176,22 @@ impl Tool for AgentTool {
         // Apply TS parent→child permission-mode inheritance rule
         // (runAgent.ts:412-434): trust modes on the parent override the
         // agent's declared mode; otherwise the declaration wins.
+        // Isolation-mode early gate. Remote isolation is explicitly
+        // unsupported in the current coco-rs build — TS parity: ant
+        // builds forward to CCR, but the 3p Rust agent returns a
+        // clean model-visible error instead of silently falling back
+        // to sync mode. The refactor plan's "Make Unsupported Parity
+        // Explicit" rule mandates this rejection shape.
+        if let Some("remote") = input.get("isolation").and_then(|v| v.as_str()) {
+            return Err(ToolError::ExecutionFailed {
+                message: "Isolation mode 'remote' is not supported in this build. \
+                          Use 'worktree' for local isolation or omit the field for \
+                          no isolation."
+                    .into(),
+                source: None,
+            });
+        }
+
         let requested_mode_str = input.get("mode").and_then(|v| v.as_str()).map(String::from);
         let requested_mode_enum = requested_mode_str.as_deref().and_then(|s| {
             serde_json::from_value::<coco_types::PermissionMode>(serde_json::json!(s)).ok()
@@ -346,12 +362,14 @@ impl Tool for SkillTool {
             .and_then(|v| v.as_str())
             .unwrap_or_default();
 
-        // Resolve skill via the agent handle, which delegates to the
-        // app-level skill manager.  Returns the skill definition for the
-        // query engine to expand inline or fork.
+        // Resolve skill through the dedicated `SkillHandle`. Phase 7
+        // of the agent-loop refactor moved skill resolution off
+        // `AgentHandle` — skills are a different runtime concept,
+        // and the swarm-oriented agent handle was never the right
+        // home for expansion + forking.
         let result = ctx
-            .agent
-            .resolve_skill(skill_name, args)
+            .skill
+            .invoke_skill(skill_name, args)
             .await
             .map_err(|e| ToolError::ExecutionFailed {
                 message: format!("Failed to resolve skill '{skill_name}': {e}"),

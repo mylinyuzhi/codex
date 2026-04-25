@@ -319,7 +319,7 @@ async fn full_content_flag_is_populated_for_generator_with_full_n() {
     assert_eq!(out[0].content(), Some("full=true"), "first run = Full");
 }
 
-// ── Default registry (Phase B built-ins) ──
+// ── Default registry ──
 
 #[tokio::test]
 async fn with_default_generators_registers_all_builtins() {
@@ -328,7 +328,7 @@ async fn with_default_generators_registers_all_builtins() {
     assert_eq!(
         o.generator_count(),
         42,
-        "Phase A/B/C (11) + Phase-1 (5) + Phase-2 (3) + Phase-3 (14) + Phase-4 (5) + Memory (2) + Silent native (2: already_read_file + edited_image_file)"
+        "Phase A/B/C (11) + Phase-1 (5) + Phase-2 (3) + Phase-3 (14) + Phase-4 user-input (3) + Memory (2) + Main IDE (2) + Silent native (2)"
     );
 }
 
@@ -360,6 +360,69 @@ async fn all_attachment_type_variants_have_default_generator() {
     );
 }
 
+/// TS parity guard: registration order is injection order because generators
+/// run concurrently but are collected with `join_all`, which preserves input
+/// order. Keep this list aligned with TS `getAttachments`.
+#[tokio::test]
+async fn default_registry_order_matches_ts_attachment_batches() {
+    use AttachmentType::*;
+
+    let o =
+        SystemReminderOrchestrator::new(SystemReminderConfig::default()).with_default_generators();
+
+    assert_eq!(
+        o.registered_attachment_types(),
+        vec![
+            // userInputAttachments
+            AtMentionedFiles,
+            McpResources,
+            AgentMentions,
+            // allThreadAttachments
+            QueuedCommand,
+            DateChange,
+            UltrathinkEffort,
+            DeferredToolsDelta,
+            AgentListingDelta,
+            McpInstructionsDelta,
+            CompanionIntro,
+            NestedMemory,
+            RelevantMemories,
+            SkillListing,
+            PlanModeReentry,
+            PlanMode,
+            PlanModeExit,
+            AutoMode,
+            AutoModeExit,
+            TodoReminder,
+            TaskReminder,
+            TeammateMailbox,
+            TeamContext,
+            AgentPendingMessages,
+            CriticalSystemReminder,
+            CompactionReminder,
+            // mainThreadAttachments plus hook/invoked-skill renderers
+            IdeSelection,
+            IdeOpenedFile,
+            OutputStyle,
+            Diagnostics,
+            TaskStatus,
+            HookSuccess,
+            HookBlockingError,
+            HookAdditionalContext,
+            HookStoppedContinuation,
+            AsyncHookResponse,
+            TokenUsage,
+            BudgetUsd,
+            OutputTokenUsage,
+            VerifyPlanReminder,
+            InvokedSkills,
+            // silent reminder-native attachments
+            AlreadyReadFile,
+            EditedImageFile,
+        ]
+    );
+}
+
 #[tokio::test]
 async fn default_registry_plan_mode_enter_fires_when_in_plan() {
     use std::path::PathBuf;
@@ -379,27 +442,67 @@ async fn default_registry_plan_mode_enter_fires_when_in_plan() {
 }
 
 #[tokio::test]
-async fn default_registry_fires_all_flagged_banners_in_one_turn() {
+async fn default_registry_orders_reentry_before_plan_mode() {
     use std::path::PathBuf;
     let cfg = SystemReminderConfig::default();
     let o = SystemReminderOrchestrator::new(cfg.clone()).with_default_generators();
-    // All three one-shots set; Plan mode also active (Reentry gated by plan_exists+!is_sub_agent).
     let ctx = GeneratorContext::builder(&cfg)
         .is_plan_mode(true)
         .is_plan_reentry(true)
         .plan_exists(true)
         .plan_file_path(Some(PathBuf::from("/tmp/plan.md")))
+        .build();
+    let reminders = o.generate_all(ctx).await;
+    assert_eq!(
+        reminders
+            .iter()
+            .map(|r| r.attachment_type)
+            .collect::<Vec<_>>(),
+        vec![AttachmentType::PlanModeReentry, AttachmentType::PlanMode]
+    );
+}
+
+#[tokio::test]
+async fn default_registry_exit_banners_fire_outside_their_modes() {
+    let cfg = SystemReminderConfig::default();
+    let o = SystemReminderOrchestrator::new(cfg.clone()).with_default_generators();
+    let ctx = GeneratorContext::builder(&cfg)
         .needs_plan_mode_exit_attachment(true)
         .needs_auto_mode_exit_attachment(true)
         .build();
     let reminders = o.generate_all(ctx).await;
-    // All four generators emit this turn.
-    assert_eq!(reminders.len(), 4);
-    let types: std::collections::HashSet<_> = reminders.iter().map(|r| r.attachment_type).collect();
-    assert!(types.contains(&AttachmentType::PlanMode));
-    assert!(types.contains(&AttachmentType::PlanModeExit));
-    assert!(types.contains(&AttachmentType::PlanModeReentry));
-    assert!(types.contains(&AttachmentType::AutoModeExit));
+    assert_eq!(
+        reminders
+            .iter()
+            .map(|r| r.attachment_type)
+            .collect::<Vec<_>>(),
+        vec![AttachmentType::PlanModeExit, AttachmentType::AutoModeExit]
+    );
+}
+
+#[tokio::test]
+async fn default_registry_suppresses_stale_exit_flags_inside_modes() {
+    let cfg = SystemReminderConfig::default();
+    let o = SystemReminderOrchestrator::new(cfg.clone()).with_default_generators();
+    let ctx = GeneratorContext::builder(&cfg)
+        .is_plan_mode(true)
+        .is_auto_mode(true)
+        .needs_plan_mode_exit_attachment(true)
+        .needs_auto_mode_exit_attachment(true)
+        .build();
+    let reminders = o.generate_all(ctx).await;
+    let types = reminders
+        .iter()
+        .map(|r| r.attachment_type)
+        .collect::<Vec<_>>();
+    assert!(
+        !types.contains(&AttachmentType::PlanModeExit),
+        "got {types:?}"
+    );
+    assert!(
+        !types.contains(&AttachmentType::AutoModeExit),
+        "got {types:?}"
+    );
 }
 
 #[tokio::test]

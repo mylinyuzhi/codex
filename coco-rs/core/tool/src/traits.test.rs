@@ -142,6 +142,7 @@ fn test_prompt_options_to_description_options() {
         tool_names: vec!["Read".into(), "Write".into()],
         agent_names: vec!["Explore".into()],
         allowed_agent_types: None,
+        skill_names: vec![],
         permission_context: None,
     };
     let desc_opts = prompt_opts.as_description_options();

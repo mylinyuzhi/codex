@@ -18,15 +18,22 @@ use std::sync::Arc;
 use coco_tool::AgentQueryConfig;
 use coco_tool::AgentQueryEngine;
 use coco_tool::AgentQueryResult;
+use coco_types::ModelRole;
 
 use crate::engine::QueryEngine;
 use crate::engine::QueryEngineConfig;
 
 /// Factory function type for creating QueryEngine instances.
 ///
-/// Each agent query gets a fresh engine with its own config.
-/// The factory captures shared state (API client, tool registry, hooks).
-pub type QueryEngineFactory = Arc<dyn Fn(QueryEngineConfig) -> QueryEngine + Send + Sync>;
+/// Each agent query gets a fresh engine with its own config plus an
+/// optional `ModelRole` that the factory uses to select the right
+/// primary `ApiClient` + fallback chain. `None` defaults to the
+/// parent session's model (TS parity: `runAgent.ts` inherits the
+/// parent client unless the agent definition specifies a model).
+/// The factory captures shared state (tool registry, hooks, retry
+/// config) and resolves per-role clients from `RuntimeConfig`.
+pub type QueryEngineFactory =
+    Arc<dyn Fn(QueryEngineConfig, Option<ModelRole>) -> QueryEngine + Send + Sync>;
 
 /// Adapter that wraps QueryEngine to implement AgentQueryEngine.
 ///
@@ -66,7 +73,6 @@ impl AgentQueryEngine for QueryEngineAdapter {
             system_prompt: Some(config.system_prompt),
             append_system_prompt: None,
             model_name: config.model,
-            fallback_model: None,
             permission_mode,
             // Inherit the parent session's bypass capability. TS
             // parity: `spawnUtils.ts:53` / `spawnMultiAgent.ts:223`
@@ -78,8 +84,18 @@ impl AgentQueryEngine for QueryEngineAdapter {
             max_budget_usd: None,
             streaming_tool_execution: true,
             is_non_interactive: true,
+            thinking_level: None,
             session_id: config.session_id.unwrap_or_default(),
             project_dir: None,
+            allow_rules: Default::default(),
+            deny_rules: Default::default(),
+            ask_rules: Default::default(),
+            // Propagate the subagent's cwd_override (set by worktree
+            // isolation or explicit `cwd:` input) so the child
+            // engine's ToolContextFactory installs it onto every
+            // ToolUseContext. Absolute-path tools ignore it; Glob /
+            // Grep / Bash operate inside the override.
+            cwd_override: config.cwd_override.clone(),
             plans_directory: None,
             agent_id: config.agent_id,
             is_teammate: config.is_teammate,
@@ -98,16 +114,71 @@ impl AgentQueryEngine for QueryEngineAdapter {
             web_search_config: coco_config::WebSearchConfig::default(),
         };
 
-        let engine = (self.engine_factory)(engine_config);
-        let result = engine.run(prompt).await?;
+        // Role resolution: the adapter threads the subagent's role
+        // through to the factory so the correct primary+fallback
+        // chain is installed. `None` defers to the factory's
+        // default (typically the parent session's Main role).
+        let role = config.model_role;
+        let engine = (self.engine_factory)(engine_config, role);
+
+        // Fork mode: if the parent surfaced context messages, use
+        // `run_with_messages` so the child's first turn sees the
+        // parent's history prepended. TS parity:
+        // `AgentTool.tsx:627-630` passes `forkContextMessages:
+        // toolUseContext.messages` for `isForkPath`.
+        let result = if !config.fork_context_messages.is_empty() {
+            // Deserialize each message JSON back into typed
+            // `Message`. Any entry that fails deserialization is
+            // dropped with a warn — fork context is best-effort
+            // (the child will simply lack that message).
+            let mut messages: Vec<coco_types::Message> = Vec::new();
+            for (i, v) in config.fork_context_messages.iter().enumerate() {
+                match serde_json::from_value::<coco_types::Message>(v.clone()) {
+                    Ok(m) => messages.push(m),
+                    Err(e) => {
+                        tracing::warn!(
+                            index = i,
+                            error = %e,
+                            "fork_context_messages[i] failed to deserialize; dropping"
+                        );
+                    }
+                }
+            }
+            // Append the new user prompt after the fork history.
+            messages.push(coco_messages::create_user_message(prompt));
+            let (tx, _rx) = tokio::sync::mpsc::channel::<crate::CoreEvent>(16);
+            engine.run_with_messages(messages, tx).await?
+        } else {
+            engine.run(prompt).await?
+        };
+
+        // Count ToolResult messages as a proxy for tool_use_count —
+        // every committed tool_use produces exactly one tool_result
+        // per I1, so this tracks TS `runAgent.ts`'s
+        // `toolUseCount` increment on each assistant tool_use block.
+        let tool_use_count = result
+            .final_messages
+            .iter()
+            .filter(|m| matches!(m, coco_types::Message::ToolResult(_)))
+            .count() as i64;
+        // Serialize the final history so the caller (SwarmAgentHandle,
+        // teammate runner) can route it through transcript / audit
+        // pipelines. `serde_json::Value` is the agreed boundary type
+        // on `AgentQueryResult` because this hop crosses the
+        // `coco-tool` → `coco-state` layer.
+        let messages = result
+            .final_messages
+            .iter()
+            .map(|m| serde_json::to_value(m).unwrap_or_default())
+            .collect();
 
         Ok(AgentQueryResult {
             response_text: Some(result.response_text),
-            messages: Vec::new(),
+            messages,
             turns: result.turns,
             input_tokens: result.total_usage.input_tokens,
             output_tokens: result.total_usage.output_tokens,
-            tool_use_count: 0,
+            tool_use_count,
             cancelled: result.cancelled,
         })
     }

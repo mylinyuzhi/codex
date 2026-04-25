@@ -46,6 +46,13 @@ use crate::sdk_server::handlers::TurnRunner;
 /// providers or re-registering tools.
 pub struct QueryEngineRunner {
     client: Arc<ApiClient>,
+    /// Ordered Main-role fallback chain installed on every per-turn
+    /// engine. Empty when the session has no fallback configured.
+    fallback_clients: Vec<Arc<ApiClient>>,
+    /// Optional half-open recovery policy for Main. Installed on
+    /// every per-turn engine so probes happen consistently across
+    /// turns.
+    recovery_policy: Option<coco_config::FallbackRecoveryPolicy>,
     tools: Arc<ToolRegistry>,
     /// Max output tokens per turn. Pulled from CLI flags at startup.
     max_output_tokens: i64,
@@ -70,12 +77,30 @@ impl QueryEngineRunner {
     ) -> Self {
         Self {
             client,
+            fallback_clients: Vec::new(),
+            recovery_policy: None,
             tools,
             max_output_tokens,
             max_turns,
             system_prompt,
             permission_bridge: None,
         }
+    }
+
+    /// Install a Main-role fallback chain. Each per-turn engine
+    /// gets the same chain so the runtime can advance slots on
+    /// capacity-error streaks mid-turn.
+    pub fn with_fallback_clients(mut self, clients: Vec<Arc<ApiClient>>) -> Self {
+        self.fallback_clients = clients;
+        self
+    }
+
+    /// Install a half-open recovery policy. Each per-turn engine
+    /// probes the primary according to the same backoff schedule;
+    /// `None` = sticky fallback.
+    pub fn with_recovery_policy(mut self, policy: coco_config::FallbackRecoveryPolicy) -> Self {
+        self.recovery_policy = Some(policy);
+        self
     }
 
     /// Install a `ToolPermissionBridge` that every per-turn `QueryEngine`
@@ -99,6 +124,8 @@ impl TurnRunner for QueryEngineRunner {
         let max_output_tokens = self.max_output_tokens;
         let max_turns = self.max_turns;
         let client = self.client.clone();
+        let fallback_clients = self.fallback_clients.clone();
+        let recovery_policy = self.recovery_policy;
         let tools = self.tools.clone();
         let permission_bridge = self.permission_bridge.clone();
         let history_handle = handoff.history.clone();
@@ -160,6 +187,12 @@ impl TurnRunner for QueryEngineRunner {
                 // calls propagate to the engine live. TS parity:
                 // `appState` is session-lifetime.
                 .with_app_state(handoff.app_state.clone());
+            if !fallback_clients.is_empty() {
+                engine = engine.with_fallback_clients(fallback_clients);
+            }
+            if let Some(policy) = recovery_policy {
+                engine = engine.with_recovery_policy(policy);
+            }
             if let Some(bridge) = permission_bridge {
                 engine = engine.with_permission_bridge(bridge);
             }

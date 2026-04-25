@@ -220,6 +220,22 @@ async fn exit_emits_when_flag_set() {
 }
 
 #[tokio::test]
+async fn exit_suppressed_when_still_in_plan_mode() {
+    let c = cfg();
+    let ctx = GeneratorContext::builder(&c)
+        .is_plan_mode(true)
+        .needs_plan_mode_exit_attachment(true)
+        .build();
+    assert!(
+        PlanModeExitGenerator
+            .generate(&ctx)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn exit_omits_plan_reference_when_no_file() {
     let c = cfg();
     let ctx = GeneratorContext::builder(&c)

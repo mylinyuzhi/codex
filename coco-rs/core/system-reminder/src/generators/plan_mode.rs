@@ -95,7 +95,8 @@ impl AttachmentGenerator for PlanModeEnterGenerator {
 ///
 /// No throttle (one-shot per flag set). If the flag somehow stays set across
 /// multiple turns, the generator will keep emitting — the engine is
-/// responsible for clearing it.
+/// responsible for clearing it. A stale flag is suppressed while the engine is
+/// still in plan mode, matching TS `getPlanModeExitAttachment`.
 #[derive(Debug, Default)]
 pub struct PlanModeExitGenerator;
 
@@ -119,6 +120,9 @@ impl AttachmentGenerator for PlanModeExitGenerator {
 
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
         if !ctx.needs_plan_mode_exit_attachment {
+            return Ok(None);
+        }
+        if ctx.is_plan_mode {
             return Ok(None);
         }
 

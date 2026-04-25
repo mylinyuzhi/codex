@@ -25,7 +25,13 @@ fn create_test_handle() -> SwarmAgentHandle {
 }
 
 #[tokio::test]
-async fn test_spawn_subagent_sync() {
+async fn test_spawn_subagent_sync_without_engine_fails_cleanly() {
+    // Phase 6 Workstream C hardening: a sync subagent spawn without
+    // an installed AgentQueryEngine must surface a clean failure
+    // (not a silent "completed with placeholder" outcome). The old
+    // register-but-never-start pattern silently succeeded with
+    // "Agent completed (no result channel)" — that's a silent-bug
+    // anti-pattern.
     let handle = create_test_handle();
     let request = AgentSpawnRequest {
         prompt: "Find files".to_string(),
@@ -41,9 +47,99 @@ async fn test_spawn_subagent_sync() {
     };
 
     let response = handle.spawn_agent(request).await.unwrap();
-    // Sync agent spawns and waits — with no execution engine, it completes
-    // immediately with no result channel
+    assert_eq!(response.status, AgentSpawnStatus::Failed);
     assert!(response.agent_id.is_some());
+    assert!(
+        response
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("No AgentQueryEngine"),
+        "must surface the missing-engine error clearly; got: {:?}",
+        response.error
+    );
+}
+
+#[tokio::test]
+async fn test_spawn_subagent_sync_with_engine_routes_to_query() {
+    // Positive path: with an AgentQueryEngine installed, the subagent
+    // flow invokes execute_query and returns the child's result.
+    use async_trait::async_trait;
+    use coco_tool::AgentQueryConfig;
+    use coco_tool::AgentQueryEngine;
+    use coco_tool::AgentQueryResult;
+
+    struct StubEngine;
+    #[async_trait]
+    impl AgentQueryEngine for StubEngine {
+        async fn execute_query(
+            &self,
+            _prompt: &str,
+            _config: AgentQueryConfig,
+        ) -> anyhow::Result<AgentQueryResult> {
+            Ok(AgentQueryResult {
+                response_text: Some("child result".into()),
+                messages: Vec::new(),
+                turns: 2,
+                input_tokens: 100,
+                output_tokens: 50,
+                tool_use_count: 3,
+                cancelled: false,
+            })
+        }
+    }
+
+    let mut handle = create_test_handle();
+    handle.set_execution_engine(Arc::new(StubEngine));
+
+    let request = AgentSpawnRequest {
+        prompt: "do work".into(),
+        description: None,
+        subagent_type: Some("Explore".into()),
+        model: None,
+        run_in_background: false,
+        isolation: None,
+        name: None,
+        team_name: None,
+        mode: None,
+        cwd: None,
+    };
+    let response = handle.spawn_agent(request).await.unwrap();
+    assert_eq!(response.status, AgentSpawnStatus::Completed);
+    assert_eq!(response.result.as_deref(), Some("child result"));
+    assert_eq!(response.total_tool_use_count, 3);
+    assert_eq!(response.total_tokens, 150);
+}
+
+#[tokio::test]
+async fn test_spawn_subagent_worktree_without_manager_fails_cleanly() {
+    // `isolation: "worktree"` with no worktree manager must fail
+    // with a descriptive error — not silently run without
+    // isolation.
+    let handle = create_test_handle();
+    let request = AgentSpawnRequest {
+        prompt: "isolated work".into(),
+        description: None,
+        subagent_type: None,
+        model: None,
+        run_in_background: false,
+        isolation: Some("worktree".into()),
+        name: None,
+        team_name: None,
+        mode: None,
+        cwd: None,
+    };
+    let response = handle.spawn_agent(request).await.unwrap();
+    assert_eq!(response.status, AgentSpawnStatus::Failed);
+    assert!(
+        response
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("AgentWorktreeManager"),
+        "must explain the missing manager; got: {:?}",
+        response.error
+    );
 }
 
 #[tokio::test]

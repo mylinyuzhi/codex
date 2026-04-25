@@ -18,6 +18,7 @@ pub mod read;
 pub mod read_permissions;
 pub mod scheduling;
 pub mod shell_tools;
+pub mod skill_advanced;
 pub mod task_tools;
 pub mod utility;
 pub mod web;

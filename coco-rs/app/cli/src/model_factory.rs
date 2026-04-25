@@ -21,6 +21,9 @@
 
 use std::sync::Arc;
 
+use coco_inference::ApiClient;
+use coco_inference::RetryConfig;
+use coco_types::ModelRole;
 use coco_types::ModelSpec;
 use coco_types::ProviderApi;
 use vercel_ai_provider::LanguageModelV4;
@@ -64,6 +67,34 @@ pub fn build_language_model_from_spec(
             ))
         }
     }
+}
+
+/// Build an `ApiClient` from a `ModelSpec` with the given retry
+/// config. Shared across primary + fallback client construction so
+/// all slots in a session use the same retry policy.
+pub fn build_api_client(spec: &ModelSpec, retry: RetryConfig) -> anyhow::Result<Arc<ApiClient>> {
+    let model = build_language_model_from_spec(spec)?;
+    Ok(Arc::new(ApiClient::new(model, retry)))
+}
+
+/// Resolve the fallback chain for a role and build one `ApiClient`
+/// per tier. Returns an empty vec when the role has no configured
+/// fallbacks.
+///
+/// Fail-fast on any tier that can't construct: silently dropping a
+/// fallback would only surface under outage, which is exactly when
+/// the user can least afford to discover it.
+pub fn build_fallback_clients_for_role(
+    runtime: &coco_config::RuntimeConfig,
+    role: ModelRole,
+    retry: RetryConfig,
+) -> anyhow::Result<Vec<Arc<ApiClient>>> {
+    runtime
+        .model_roles
+        .fallbacks(role)
+        .iter()
+        .map(|spec| build_api_client(spec, retry.clone()))
+        .collect()
 }
 
 #[cfg(test)]

@@ -47,12 +47,9 @@ impl AttachmentGenerator for AutoModeExitGenerator {
         if !ctx.needs_auto_mode_exit_attachment {
             return Ok(None);
         }
-        // Suppress when still in auto mode — the flag is stale. TS parity:
-        // original `take_auto_mode_exit_flag` at
-        // `app/query/src/plan_mode_reminder.rs` suppresses the banner when
-        // `current_mode == PermissionMode::Auto`. The engine's post-emit
-        // clearing leaves the flag set in this case so it fires on the next
-        // turn where `is_auto_mode == false`.
+        // Suppress when still in auto mode — the flag is stale. TS clears
+        // stale exit flags in this branch; the engine mirrors that
+        // app-state cleanup after generation.
         if ctx.is_auto_mode {
             return Ok(None);
         }

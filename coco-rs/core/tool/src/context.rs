@@ -242,6 +242,27 @@ pub struct ToolUseContext {
     /// Handle for agent spawning, messaging, and team management.
     pub agent: AgentHandleRef,
 
+    // ── Skill Operations ──
+    /// Handle for skill invocation (inline expansion or forked
+    /// agent). Installed by the query-layer factory; defaults to
+    /// `NoOpSkillHandle` (returns `Unavailable`) so tests and
+    /// subagent sessions without a configured skill runtime fail
+    /// cleanly with a model-visible error rather than a panic.
+    ///
+    /// Phase 7 of the agent-loop refactor moved this off
+    /// `AgentHandle::resolve_skill` — skill runtime is its own
+    /// concern.
+    pub skill: crate::skill_handle::SkillHandleRef,
+
+    // ── Schema Validator ──
+    /// Cached JSON Schema validator for tool inputs. When
+    /// installed, the preparer runs model input (and any
+    /// PreToolUse-rewritten input) through the validator BEFORE
+    /// permission / execution. `None` skips schema validation and
+    /// relies solely on `Tool::validate_input`. Plan I3's
+    /// Rust-side tightening lives here.
+    pub tool_schema_validator: Option<crate::schema::ToolSchemaValidator>,
+
     // ── Swarm Mailbox ──
     /// Handle for writing protocol messages to swarm mailboxes.
     /// Used by ExitPlanModeTool (teammate plan_approval_request) and
@@ -433,6 +454,8 @@ impl ToolUseContext {
             mcp: self.mcp.clone(),
             schedules: self.schedules.clone(),
             agent: self.agent.clone(),
+            skill: self.skill.clone(),
+            tool_schema_validator: self.tool_schema_validator.clone(),
             mailbox: self.mailbox.clone(),
             cwd_override: self.cwd_override.clone(),
             permission_bridge: self.permission_bridge.clone(),
@@ -511,6 +534,8 @@ impl ToolUseContext {
             mcp: Arc::new(crate::mcp_handle::NoOpMcpHandle),
             schedules: Arc::new(crate::schedule_store::NoOpScheduleStore),
             agent: Arc::new(crate::agent_handle::NoOpAgentHandle),
+            skill: Arc::new(crate::skill_handle::NoOpSkillHandle),
+            tool_schema_validator: None,
             mailbox: Arc::new(crate::NoOpMailboxHandle),
             cwd_override: None,
             permission_bridge: None,

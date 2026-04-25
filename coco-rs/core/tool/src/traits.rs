@@ -51,7 +51,7 @@ pub struct DescriptionOptions {
 
 /// Options for generating tool prompt text.
 ///
-/// TS: `prompt({ getToolPermissionContext, tools, agents, allowedAgentTypes })`
+/// TS: `prompt({ getToolPermissionContext, tools, agents, allowedAgentTypes, skills })`
 #[derive(Debug, Clone, Default)]
 pub struct PromptOptions {
     /// Whether this is a non-interactive session.
@@ -62,6 +62,14 @@ pub struct PromptOptions {
     pub agent_names: Vec<String>,
     /// Allowed agent types (if restricted).
     pub allowed_agent_types: Option<Vec<String>>,
+    /// Names of model-invocable skills available this turn. Sorted
+    /// for deterministic prompt text so tests and cache keys are
+    /// stable. `SkillTool::prompt` consumes this to render the
+    /// dynamic skill listing — `coco-rs` deliberately injects the
+    /// list into the tool description rather than relying on system
+    /// reminders, so every turn guarantees model visibility even if
+    /// the reminder cadence skipped.
+    pub skill_names: Vec<String>,
     /// Permission context for tailoring prompt to current mode.
     /// TS: `getToolPermissionContext()` — async in TS, pre-resolved here.
     pub permission_context: Option<coco_types::ToolPermissionContext>,
@@ -102,7 +110,13 @@ impl McpToolInfo {
     /// if the upstream MCP server uses characters that would break the
     /// delimiter; most servers already use snake_case.
     pub fn qualified_name(&self) -> String {
-        format!("mcp__{}__{}", self.server_name, self.tool_name)
+        use coco_types::MCP_TOOL_PREFIX;
+        use coco_types::MCP_TOOL_SEPARATOR;
+        format!(
+            "{MCP_TOOL_PREFIX}{server}{MCP_TOOL_SEPARATOR}{tool}",
+            server = self.server_name,
+            tool = self.tool_name,
+        )
     }
 }
 

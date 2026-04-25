@@ -111,6 +111,7 @@ impl LanguageModelV4 for MockModel {
 mod model_factory;
 mod tui_runner;
 
+pub(crate) use model_factory::build_fallback_clients_for_role;
 pub(crate) use model_factory::build_language_model_from_spec;
 
 pub(crate) fn create_model(
@@ -185,6 +186,11 @@ pub(crate) fn cli_runtime_overrides(cli: &Cli) -> coco_config::RuntimeOverrides 
     {
         overrides.permission_mode_override = Some(pm);
     }
+    // --fallback-model (repeatable) accumulates into Main's fallback
+    // chain, in flag order. The resolver validates each entry against
+    // the provider catalog and rejects duplicates against primary or
+    // earlier fallbacks.
+    overrides.fallback_model_overrides = cli.fallback_model.clone();
     overrides
 }
 
@@ -698,10 +704,14 @@ async fn run_chat(cli: &Cli, prompt: Option<&str>) -> Result<()> {
 
     let (model, mode) = create_model(cli.model.as_deref(), &runtime_config);
     let model_id = model.model_id().to_string();
-    let client = Arc::new(ApiClient::new(
-        model,
-        runtime_config.api.retry.clone().into(),
-    ));
+    let retry: coco_inference::RetryConfig = runtime_config.api.retry.clone().into();
+    let client = Arc::new(ApiClient::new(model, retry.clone()));
+    // Main-role fallback chain. Empty when no fallback is configured.
+    let fallback_clients =
+        build_fallback_clients_for_role(&runtime_config, coco_types::ModelRole::Main, retry)?;
+    let recovery_policy = runtime_config
+        .model_roles
+        .recovery(coco_types::ModelRole::Main);
 
     let mut registry = ToolRegistry::new();
     coco_tools::register_all_tools(&mut registry);
@@ -752,7 +762,11 @@ async fn run_chat(cli: &Cli, prompt: Option<&str>) -> Result<()> {
         ..Default::default()
     };
 
-    let engine = QueryEngine::new(config, client, tools, cancel, /*hooks*/ None);
+    let mut engine = QueryEngine::new(config, client, tools, cancel, /*hooks*/ None)
+        .with_fallback_clients(fallback_clients);
+    if let Some(policy) = recovery_policy {
+        engine = engine.with_recovery_policy(policy);
+    }
 
     eprintln!("coco-rs ({mode} mode) — model: {model_id}\n");
 
@@ -794,10 +808,13 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
 
     let (model, mode) = create_model(cli.model.as_deref(), &runtime_config);
     let is_real_anthropic = mode == "anthropic";
-    let client = Arc::new(ApiClient::new(
-        model,
-        runtime_config.api.retry.clone().into(),
-    ));
+    let retry: coco_inference::RetryConfig = runtime_config.api.retry.clone().into();
+    let client = Arc::new(ApiClient::new(model, retry.clone()));
+    let fallback_clients =
+        build_fallback_clients_for_role(&runtime_config, coco_types::ModelRole::Main, retry)?;
+    let recovery_policy = runtime_config
+        .model_roles
+        .recovery(coco_types::ModelRole::Main);
 
     let mut registry = ToolRegistry::new();
     coco_tools::register_all_tools(&mut registry);
@@ -925,16 +942,18 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     // SDK client. Then install the runner on the live state.
     let bridge: Arc<dyn coco_tool::ToolPermissionBridge> =
         Arc::new(coco_cli::sdk_server::SdkPermissionBridge::new(state));
-    let runner = Arc::new(
-        QueryEngineRunner::new(
-            client,
-            tools,
-            cli.max_tokens.unwrap_or(16_384),
-            cli.max_turns.unwrap_or(30),
-            system_prompt,
-        )
-        .with_permission_bridge(bridge),
-    );
+    let mut runner_builder = QueryEngineRunner::new(
+        client,
+        tools,
+        cli.max_tokens.unwrap_or(16_384),
+        cli.max_turns.unwrap_or(30),
+        system_prompt,
+    )
+    .with_fallback_clients(fallback_clients);
+    if let Some(policy) = recovery_policy {
+        runner_builder = runner_builder.with_recovery_policy(policy);
+    }
+    let runner = Arc::new(runner_builder.with_permission_bridge(bridge));
     server.set_turn_runner(runner).await;
 
     // Run the dispatch loop to completion. Exits on EOF, transport
