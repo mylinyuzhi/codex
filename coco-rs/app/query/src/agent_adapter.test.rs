@@ -2,13 +2,13 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
 
-use coco_tool::AgentQueryConfig;
-use coco_tool::AgentQueryEngine;
+use coco_tool_runtime::AgentQueryConfig;
+use coco_tool_runtime::AgentQueryEngine;
 
 #[test]
 fn test_agent_query_config_fork_context_messages_field_round_trips() {
     // Lock in that fork_context_messages is serde-stable — it
-    // crosses the coco-tool → coco-query boundary as JSON via
+    // crosses the coco-tool-runtime → coco-query boundary as JSON via
     // AgentQueryConfig.
     let cfg = AgentQueryConfig {
         system_prompt: "s".into(),
@@ -36,7 +36,7 @@ fn test_agent_query_config_fork_context_messages_field_round_trips() {
 
 #[tokio::test]
 async fn test_no_op_engine_returns_error() {
-    let engine = coco_tool::NoOpAgentQueryEngine;
+    let engine = coco_tool_runtime::NoOpAgentQueryEngine;
     let config = AgentQueryConfig {
         system_prompt: "test".into(),
         model: "test-model".into(),

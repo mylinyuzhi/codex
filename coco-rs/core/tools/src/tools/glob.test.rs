@@ -1,6 +1,6 @@
 use crate::tools::glob::GlobTool;
-use coco_tool::Tool;
-use coco_tool::ToolUseContext;
+use coco_tool_runtime::Tool;
+use coco_tool_runtime::ToolUseContext;
 use serde_json::json;
 
 fn text(result: &coco_types::ToolResult<serde_json::Value>) -> &str {

@@ -9,12 +9,12 @@
 
 use super::TaskCreateTool;
 use super::TaskStopTool;
-use coco_tool::BackgroundTaskInfo;
-use coco_tool::BackgroundTaskStatus;
-use coco_tool::TaskHandle;
-use coco_tool::TaskOutputDelta;
-use coco_tool::Tool;
-use coco_tool::ToolUseContext;
+use coco_tool_runtime::BackgroundTaskInfo;
+use coco_tool_runtime::BackgroundTaskStatus;
+use coco_tool_runtime::TaskHandle;
+use coco_tool_runtime::TaskOutputDelta;
+use coco_tool_runtime::Tool;
+use coco_tool_runtime::ToolUseContext;
 use serde_json::json;
 use std::sync::Arc;
 
@@ -44,7 +44,7 @@ impl RecordingTaskHandle {
 impl TaskHandle for RecordingTaskHandle {
     async fn spawn_shell_task(
         &self,
-        _request: coco_tool::BackgroundShellRequest,
+        _request: coco_tool_runtime::BackgroundShellRequest,
     ) -> anyhow::Result<String> {
         unimplemented!("not used in these tests")
     }
@@ -830,9 +830,9 @@ async fn test_task_get_surfaces_completed_plan_item() {
 // verification nudge, mailbox notify on owner change.
 // ---------------------------------------------------------------------------
 
-use coco_tool::InboxMessage;
-use coco_tool::MailboxEnvelope;
-use coco_tool::MailboxHandle;
+use coco_tool_runtime::InboxMessage;
+use coco_tool_runtime::MailboxEnvelope;
+use coco_tool_runtime::MailboxHandle;
 
 /// `status=deleted` permanently removes the task. TS `TaskUpdateTool.ts:213-226`.
 #[tokio::test]

@@ -17,11 +17,11 @@ use coco_messages::create_tool_result_message;
 use coco_system_reminder::AttachmentType as ReminderAttachmentType;
 use coco_system_reminder::SystemReminder;
 use coco_system_reminder::inject_reminders;
-use coco_tool::Tool;
-use coco_tool::ToolCallErrorKind;
-use coco_tool::ToolMessagePath;
-use coco_tool::ToolSideEffects;
-use coco_tool::UnstampedToolCallOutcome;
+use coco_tool_runtime::Tool;
+use coco_tool_runtime::ToolCallErrorKind;
+use coco_tool_runtime::ToolMessagePath;
+use coco_tool_runtime::ToolSideEffects;
+use coco_tool_runtime::UnstampedToolCallOutcome;
 use coco_types::Message;
 use coco_types::ToolId;
 use coco_types::ToolResult;
@@ -43,7 +43,7 @@ pub(crate) struct RunOneTail<'a> {
     pub model_index: usize,
     pub tool: Arc<dyn Tool>,
     pub effective_input: Value,
-    pub execute_result: Result<ToolResult<Value>, coco_tool::ToolError>,
+    pub execute_result: Result<ToolResult<Value>, coco_tool_runtime::ToolError>,
     pub hooks: Option<&'a Arc<HookRegistry>>,
     pub orchestration_ctx: OrchestrationContext,
     pub hook_tx: Option<&'a mpsc::Sender<HookExecutionEvent>>,
@@ -186,7 +186,7 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
             // EarlyOutcome, so anything we see here is either a
             // plain execution failure or a mid-execute cancel.
             let error_kind = match &error {
-                coco_tool::ToolError::Cancelled => ToolCallErrorKind::ExecutionCancelled,
+                coco_tool_runtime::ToolError::Cancelled => ToolCallErrorKind::ExecutionCancelled,
                 _ => ToolCallErrorKind::ExecutionFailed,
             };
 

@@ -209,7 +209,7 @@ async fn default_mode_does_not_bump_plan_turn_counter() {
 #[derive(Default)]
 struct FakeMailbox {
     inboxes:
-        std::sync::Mutex<std::collections::HashMap<(String, String), Vec<coco_tool::InboxMessage>>>,
+        std::sync::Mutex<std::collections::HashMap<(String, String), Vec<coco_tool_runtime::InboxMessage>>>,
     marked: std::sync::Mutex<Vec<(String, String, usize)>>,
     next_index: std::sync::Mutex<std::collections::HashMap<(String, String), usize>>,
 }
@@ -227,7 +227,7 @@ impl FakeMailbox {
             .unwrap()
             .entry(key)
             .or_default()
-            .push(coco_tool::InboxMessage {
+            .push(coco_tool_runtime::InboxMessage {
                 index: this_idx,
                 from: from.into(),
                 text: text.into(),
@@ -237,12 +237,12 @@ impl FakeMailbox {
 }
 
 #[async_trait::async_trait]
-impl coco_tool::MailboxHandle for FakeMailbox {
+impl coco_tool_runtime::MailboxHandle for FakeMailbox {
     async fn write_to_mailbox(
         &self,
         _recipient: &str,
         _team: &str,
-        _m: coco_tool::MailboxEnvelope,
+        _m: coco_tool_runtime::MailboxEnvelope,
     ) -> anyhow::Result<()> {
         Ok(())
     }
@@ -250,7 +250,7 @@ impl coco_tool::MailboxHandle for FakeMailbox {
         &self,
         agent: &str,
         team: &str,
-    ) -> anyhow::Result<Vec<coco_tool::InboxMessage>> {
+    ) -> anyhow::Result<Vec<coco_tool_runtime::InboxMessage>> {
         Ok(self
             .inboxes
             .lock()

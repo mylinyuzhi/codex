@@ -2,11 +2,11 @@
 //!
 //! TS: AgentTool.call() dispatches to spawnMultiAgent/runAgent/forkSubagent
 //!     based on input parameters. This module provides the Rust equivalent
-//!     by implementing `coco_tool::AgentHandle` atop the swarm modules.
+//!     by implementing `coco_tool_runtime::AgentHandle` atop the swarm modules.
 //!
 //! **Dependency flow:**
 //! ```text
-//! coco-tool  (defines AgentHandle trait)
+//! coco-tool-runtime  (defines AgentHandle trait)
 //!     ↓
 //! coco-tools (AgentTool calls ctx.agent.spawn_agent())
 //!     ↓
@@ -23,10 +23,10 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use coco_tool::AgentHandle;
-use coco_tool::AgentSpawnRequest;
-use coco_tool::AgentSpawnResponse;
-use coco_tool::AgentSpawnStatus;
+use coco_tool_runtime::AgentHandle;
+use coco_tool_runtime::AgentSpawnRequest;
+use coco_tool_runtime::AgentSpawnResponse;
+use coco_tool_runtime::AgentSpawnStatus;
 use tokio::sync::RwLock;
 
 use super::SubAgentState;
@@ -63,7 +63,7 @@ pub struct SwarmAgentHandle {
     /// configured" error for sync agents instead of silently
     /// succeeding with placeholder output. Install via
     /// [`Self::with_execution_engine`] at session bootstrap.
-    execution_engine: Option<coco_tool::AgentQueryEngineRef>,
+    execution_engine: Option<coco_tool_runtime::AgentQueryEngineRef>,
     /// Worktree manager for `isolation: "worktree"` subagents.
     ///
     /// When `None`, worktree-isolation requests fail fast with a
@@ -97,7 +97,7 @@ impl SwarmAgentHandle {
     }
 
     /// Set the execution engine for driving agent queries.
-    pub fn set_execution_engine(&mut self, engine: coco_tool::AgentQueryEngineRef) {
+    pub fn set_execution_engine(&mut self, engine: coco_tool_runtime::AgentQueryEngineRef) {
         self.execution_engine = Some(engine);
     }
 
@@ -362,7 +362,7 @@ impl SwarmAgentHandle {
         // the messages attached by a future AgentTool change that
         // threads `ctx.messages` through.
         let is_fork = request.isolation.as_deref() == Some("fork");
-        let query_config = coco_tool::AgentQueryConfig {
+        let query_config = coco_tool_runtime::AgentQueryConfig {
             system_prompt: String::new(),
             model: request
                 .model

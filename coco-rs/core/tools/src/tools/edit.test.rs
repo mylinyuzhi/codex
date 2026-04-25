@@ -3,8 +3,8 @@ use crate::tools::edit::EditTool;
 // ── R7-T25: edit description content check ──
 #[test]
 fn test_edit_description_includes_uniqueness_warning() {
-    use coco_tool::DescriptionOptions;
-    use coco_tool::Tool;
+    use coco_tool_runtime::DescriptionOptions;
+    use coco_tool_runtime::Tool;
     let desc = EditTool.description(&serde_json::Value::Null, &DescriptionOptions::default());
     assert!(
         desc.contains("must use your `Read` tool"),
@@ -19,8 +19,8 @@ fn test_edit_description_includes_uniqueness_warning() {
         "Edit description should mention replace_all"
     );
 }
-use coco_tool::Tool;
-use coco_tool::ToolUseContext;
+use coco_tool_runtime::Tool;
+use coco_tool_runtime::ToolUseContext;
 use serde_json::json;
 
 #[tokio::test]
@@ -124,7 +124,7 @@ async fn test_edit_not_found_error() {
 #[tokio::test]
 async fn test_edit_same_string_error() {
     let tool = EditTool;
-    let ctx = coco_tool::ToolUseContext::test_default();
+    let ctx = coco_tool_runtime::ToolUseContext::test_default();
     let result = tool.validate_input(
         &json!({
             "file_path": "/tmp/x.txt",
@@ -136,7 +136,7 @@ async fn test_edit_same_string_error() {
 
     assert!(matches!(
         result,
-        coco_tool::ValidationResult::Invalid { .. }
+        coco_tool_runtime::ValidationResult::Invalid { .. }
     ));
 }
 

@@ -8,11 +8,11 @@ use coco_inference::ApiClient;
 use coco_inference::QueryParams;
 use coco_messages::MessageHistory;
 use coco_permissions::AutoModeRules;
-use coco_tool::PendingToolCall;
-use coco_tool::Tool;
-use coco_tool::ToolPermissionBridgeRef;
-use coco_tool::ToolRegistry;
-use coco_tool::ToolUseContext;
+use coco_tool_runtime::PendingToolCall;
+use coco_tool_runtime::Tool;
+use coco_tool_runtime::ToolPermissionBridgeRef;
+use coco_tool_runtime::ToolRegistry;
+use coco_tool_runtime::ToolUseContext;
 use coco_types::CoreEvent;
 use coco_types::Message;
 use coco_types::PermissionDecision;
@@ -426,10 +426,10 @@ async fn validate_effective_input_or_complete_error(
     }
 
     let message = match validation {
-        coco_tool::ValidationResult::Invalid { message, .. } => {
+        coco_tool_runtime::ValidationResult::Invalid { message, .. } => {
             format!("Invalid input: {message}")
         }
-        coco_tool::ValidationResult::Valid => "Invalid input".to_string(),
+        coco_tool_runtime::ValidationResult::Valid => "Invalid input".to_string(),
     };
     complete_tool_call_with_error(
         event_tx,

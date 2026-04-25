@@ -7,17 +7,17 @@
 //! (JSON envelopes like a `task` wrapper or a `tasks` array) so the model
 //! sees the same payloads as in TS.
 
-use coco_tool::DescriptionOptions;
-use coco_tool::MailboxEnvelope;
-use coco_tool::TaskListHandleRef;
-use coco_tool::TaskListStatus;
-use coco_tool::TaskRecord;
-use coco_tool::TaskRecordUpdate;
-use coco_tool::TodoListHandleRef;
-use coco_tool::TodoRecord;
-use coco_tool::Tool;
-use coco_tool::ToolError;
-use coco_tool::ToolUseContext;
+use coco_tool_runtime::DescriptionOptions;
+use coco_tool_runtime::MailboxEnvelope;
+use coco_tool_runtime::TaskListHandleRef;
+use coco_tool_runtime::TaskListStatus;
+use coco_tool_runtime::TaskRecord;
+use coco_tool_runtime::TaskRecordUpdate;
+use coco_tool_runtime::TodoListHandleRef;
+use coco_tool_runtime::TodoRecord;
+use coco_tool_runtime::Tool;
+use coco_tool_runtime::ToolError;
+use coco_tool_runtime::ToolUseContext;
 use coco_types::AppStatePatch;
 use coco_types::ExpandedView;
 use coco_types::ToolId;
@@ -964,7 +964,7 @@ impl Tool for TaskOutputTool {
         if let Some(handle) = ctx.task_handle.as_ref()
             && let Ok(initial) = handle.get_task_status(&task_id).await
         {
-            use coco_tool::BackgroundTaskStatus;
+            use coco_tool_runtime::BackgroundTaskStatus;
             let info = if block {
                 wait_for_task_completion(handle.as_ref(), &task_id, initial, timeout_ms).await
             } else {
@@ -1013,12 +1013,12 @@ impl Tool for TaskOutputTool {
 }
 
 async fn wait_for_task_completion(
-    handle: &dyn coco_tool::TaskHandle,
+    handle: &dyn coco_tool_runtime::TaskHandle,
     task_id: &str,
-    initial: coco_tool::BackgroundTaskInfo,
+    initial: coco_tool_runtime::BackgroundTaskInfo,
     timeout_ms: u64,
-) -> coco_tool::BackgroundTaskInfo {
-    use coco_tool::BackgroundTaskStatus;
+) -> coco_tool_runtime::BackgroundTaskInfo {
+    use coco_tool_runtime::BackgroundTaskStatus;
     if matches!(
         initial.status,
         BackgroundTaskStatus::Completed
@@ -1153,7 +1153,7 @@ impl Tool for TodoWriteTool {
         let is_main_thread = ctx.agent_id.is_none();
         let verification_nudge = if is_main_thread && all_done {
             let contents: Vec<&str> = incoming.iter().map(|i| i.content.as_str()).collect();
-            coco_tool::check_verification_nudge(&contents)
+            coco_tool_runtime::check_verification_nudge(&contents)
         } else {
             false
         };

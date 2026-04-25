@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use coco_messages::MessageHistory;
-use coco_tool::Tool;
-use coco_tool::ToolRegistry;
-use coco_tool::ToolUseContext;
+use coco_tool_runtime::Tool;
+use coco_tool_runtime::ToolRegistry;
+use coco_tool_runtime::ToolUseContext;
 use coco_types::CoreEvent;
 use coco_types::ToolId;
 use tokio::sync::mpsc;
@@ -65,10 +65,10 @@ pub(crate) async fn prepare_committed_tool_call(
     let validation = tool.validate_input(&tool_call.input, ctx);
     if !validation.is_valid() {
         let message = match validation {
-            coco_tool::ValidationResult::Invalid { message, .. } => {
+            coco_tool_runtime::ValidationResult::Invalid { message, .. } => {
                 format!("Invalid input: {message}")
             }
-            coco_tool::ValidationResult::Valid => "Invalid input".to_string(),
+            coco_tool_runtime::ValidationResult::Valid => "Invalid input".to_string(),
         };
         warn!(
             tool = tool_call.tool_name,

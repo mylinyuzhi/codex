@@ -12,11 +12,11 @@
 //! TS: `tools/PowerShellTool/PowerShellTool.tsx`, `powershellSecurity.ts`,
 //! `powershellPermissions.ts`, `clmTypes.ts`.
 
-use coco_tool::DescriptionOptions;
-use coco_tool::Tool;
-use coco_tool::ToolError;
-use coco_tool::ToolUseContext;
-use coco_tool::ValidationResult;
+use coco_tool_runtime::DescriptionOptions;
+use coco_tool_runtime::Tool;
+use coco_tool_runtime::ToolError;
+use coco_tool_runtime::ToolUseContext;
+use coco_tool_runtime::ValidationResult;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
 use coco_types::ToolName;
@@ -229,7 +229,7 @@ async fn execute_background(
     // the wrapped command string through.
     let wrapped = format!("pwsh -NoProfile -NonInteractive -Command {command:?}");
     let task_id = task_handle
-        .spawn_shell_task(coco_tool::BackgroundShellRequest {
+        .spawn_shell_task(coco_tool_runtime::BackgroundShellRequest {
             command: wrapped,
             timeout_ms: input.get("timeout").and_then(serde_json::Value::as_i64),
             description: Some("PowerShell background task".into()),

@@ -7,8 +7,8 @@ use super::extract_host;
 use super::parse_duckduckgo_html;
 use super::percent_decode;
 use super::strip_html_tags;
-use coco_tool::Tool;
-use coco_tool::ToolUseContext;
+use coco_tool_runtime::Tool;
+use coco_tool_runtime::ToolUseContext;
 use serde_json::json;
 
 // ---------------------------------------------------------------------------
@@ -123,7 +123,7 @@ fn test_parse_ddg_html_with_one_result() {
 </body>
 </html>"##;
 
-    let results = parse_duckduckgo_html(html).unwrap();
+    let results = parse_duckduckgo_html(html, 10);
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].url, "https://rust-lang.org/");
     assert!(results[0].title.contains("Rust"));
@@ -137,8 +137,56 @@ fn test_parse_ddg_html_with_one_result() {
 #[test]
 fn test_parse_ddg_html_empty_returns_empty() {
     let html = "<html><body>no results here</body></html>";
-    let results = parse_duckduckgo_html(html).unwrap();
+    let results = parse_duckduckgo_html(html, 10);
     assert!(results.is_empty());
+}
+
+/// Regression: the previous parser hard-capped at `SEARCH_MAX_RESULTS *
+/// 2 = 16` regardless of the caller's `max_results`. With the schema
+/// allowing up to 20, that under-fetched on requests beyond 16. The
+/// dynamic cap should now scale the over-fetch with `max_results`.
+#[test]
+fn test_parse_ddg_html_respects_max_results_above_old_cap() {
+    // 20 results in the HTML; ask for max_results=20 (schema ceiling).
+    // Parser over-fetches by 2x but is bounded by SEARCH_MAX_RESULTS_CEILING
+    // (=20) so we cap at min(20, 20) * 2 = 40 — well above 20.
+    let mut html = String::new();
+    for i in 0..20 {
+        html.push_str(&format!(
+            "<a class=\"result__a\" href=\"//duckduckgo.com/l/?uddg=https%3A%2F%2Fhost{i}.com\">Title {i}</a>\n\
+             <a class=\"result__snippet\" href=\"x\">snip {i}</a>\n"
+        ));
+    }
+    let results = parse_duckduckgo_html(&html, 20);
+    // We expect at least the requested count to make it through the parser.
+    // Caller (`execute()`) does the final `.take(max_results)`.
+    assert!(
+        results.len() >= 20,
+        "parser under-fetched: got {} results for max_results=20",
+        results.len()
+    );
+}
+
+#[test]
+fn test_parse_ddg_html_small_max_results_caps_early() {
+    // 10 results in the HTML; request max_results=2 → over-fetch cap
+    // is 4. Anything past that is wasted parsing work.
+    let mut html = String::new();
+    for i in 0..10 {
+        html.push_str(&format!(
+            "<a class=\"result__a\" href=\"//duckduckgo.com/l/?uddg=https%3A%2F%2Fhost{i}.com\">Title {i}</a>\n\
+             <a class=\"result__snippet\" href=\"x\">snip {i}</a>\n"
+        ));
+    }
+    let results = parse_duckduckgo_html(&html, 2);
+    // Over-fetch is 2x → up to 4. May be exactly 4 (loop break checks
+    // *after* push) or fewer if HTML was thin; never more than 4.
+    assert!(
+        results.len() <= 4,
+        "parser over-fetched: got {} for max_results=2",
+        results.len()
+    );
+    assert!(!results.is_empty());
 }
 
 #[test]
@@ -150,7 +198,7 @@ fn test_parse_ddg_html_multiple_results() {
 <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fb.com">Second</a>
 <a class="result__snippet" href="x">snippet two</a>
 "##;
-    let results = parse_duckduckgo_html(html).unwrap();
+    let results = parse_duckduckgo_html(html, 10);
     assert_eq!(results.len(), 2);
     assert_eq!(results[0].url, "https://a.com");
     assert_eq!(results[1].url, "https://b.com");
@@ -176,7 +224,7 @@ fn test_websearch_is_concurrency_safe() {
 async fn test_websearch_rejects_short_query() {
     let ctx = ToolUseContext::test_default();
     let vr = WebSearchTool.validate_input(&json!({"query": "a"}), &ctx);
-    assert!(matches!(vr, coco_tool::ValidationResult::Invalid { .. }));
+    assert!(matches!(vr, coco_tool_runtime::ValidationResult::Invalid { .. }));
 }
 
 #[tokio::test]
@@ -190,14 +238,14 @@ async fn test_websearch_rejects_both_filters() {
         }),
         &ctx,
     );
-    assert!(matches!(vr, coco_tool::ValidationResult::Invalid { .. }));
+    assert!(matches!(vr, coco_tool_runtime::ValidationResult::Invalid { .. }));
 }
 
 #[tokio::test]
 async fn test_websearch_accepts_valid_query() {
     let ctx = ToolUseContext::test_default();
     let vr = WebSearchTool.validate_input(&json!({"query": "rust lang"}), &ctx);
-    assert!(matches!(vr, coco_tool::ValidationResult::Valid));
+    assert!(matches!(vr, coco_tool_runtime::ValidationResult::Valid));
 }
 
 #[tokio::test]
@@ -207,7 +255,7 @@ async fn test_websearch_accepts_allowed_domains_alone() {
         &json!({"query": "rust", "allowed_domains": ["rust-lang.org"]}),
         &ctx,
     );
-    assert!(matches!(vr, coco_tool::ValidationResult::Valid));
+    assert!(matches!(vr, coco_tool_runtime::ValidationResult::Valid));
 }
 
 // ── R7-T25: websearch description content checks ──
@@ -218,7 +266,7 @@ async fn test_websearch_accepts_allowed_domains_alone() {
 // year for recent-events queries.
 #[test]
 fn test_websearch_description_includes_sources_requirement() {
-    use coco_tool::DescriptionOptions;
+    use coco_tool_runtime::DescriptionOptions;
     let desc = WebSearchTool.description(&serde_json::Value::Null, &DescriptionOptions::default());
     assert!(
         desc.contains("CRITICAL REQUIREMENT"),
@@ -236,7 +284,7 @@ fn test_websearch_description_includes_sources_requirement() {
 
 #[test]
 fn test_websearch_description_includes_current_year() {
-    use coco_tool::DescriptionOptions;
+    use coco_tool_runtime::DescriptionOptions;
     let desc = WebSearchTool.description(&serde_json::Value::Null, &DescriptionOptions::default());
     // Today's date is 2026 — the dynamic month/year injection should
     // include "2026" (or whatever year chrono::Local::now() reports).

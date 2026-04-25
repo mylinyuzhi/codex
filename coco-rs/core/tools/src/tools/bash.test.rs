@@ -1,7 +1,7 @@
 use crate::tools::bash::BashTool;
-use coco_tool::DescriptionOptions;
-use coco_tool::Tool;
-use coco_tool::ToolUseContext;
+use coco_tool_runtime::DescriptionOptions;
+use coco_tool_runtime::Tool;
+use coco_tool_runtime::ToolUseContext;
 use serde_json::json;
 
 // ── R7-T25: tool description content checks ──
@@ -219,7 +219,7 @@ async fn test_bash_timeout_error_suggests_background_when_handle_available() {
     // path fires. The no-op handle is semantically "I exist", which
     // is what the suggestion logic probes for.
     let mut ctx = ToolUseContext::test_default();
-    ctx.task_handle = Some(Arc::new(coco_tool::NoOpTaskHandle));
+    ctx.task_handle = Some(Arc::new(coco_tool_runtime::NoOpTaskHandle));
 
     let result = BashTool
         .execute(json!({"command": "sleep 10", "timeout": 100}), &ctx)
@@ -629,47 +629,47 @@ async fn test_bash_background_without_task_handle() {
 
 #[test]
 fn test_stall_prompt_yes_no() {
-    assert!(coco_tool::matches_interactive_prompt(
+    assert!(coco_tool_runtime::matches_interactive_prompt(
         "Do you want to continue? (y/n)"
     ));
-    assert!(coco_tool::matches_interactive_prompt(
+    assert!(coco_tool_runtime::matches_interactive_prompt(
         "output\nmore output\nContinue? [y/n]"
     ));
-    assert!(coco_tool::matches_interactive_prompt(
+    assert!(coco_tool_runtime::matches_interactive_prompt(
         "Are you sure? (yes/no)"
     ));
 }
 
 #[test]
 fn test_stall_prompt_password() {
-    assert!(coco_tool::matches_interactive_prompt("Enter password:"));
-    assert!(coco_tool::matches_interactive_prompt(
+    assert!(coco_tool_runtime::matches_interactive_prompt("Enter password:"));
+    assert!(coco_tool_runtime::matches_interactive_prompt(
         "[sudo] password for user:"
     ));
-    assert!(coco_tool::matches_interactive_prompt(
+    assert!(coco_tool_runtime::matches_interactive_prompt(
         "Enter passphrase for key:"
     ));
 }
 
 #[test]
 fn test_stall_prompt_question_pattern() {
-    assert!(coco_tool::matches_interactive_prompt(
+    assert!(coco_tool_runtime::matches_interactive_prompt(
         "Do you want to proceed?"
     ));
-    assert!(coco_tool::matches_interactive_prompt(
+    assert!(coco_tool_runtime::matches_interactive_prompt(
         "Would you like to overwrite?"
     ));
-    assert!(coco_tool::matches_interactive_prompt(
+    assert!(coco_tool_runtime::matches_interactive_prompt(
         "Are you sure you want to delete?"
     ));
 }
 
 #[test]
 fn test_stall_prompt_press_key() {
-    assert!(coco_tool::matches_interactive_prompt(
+    assert!(coco_tool_runtime::matches_interactive_prompt(
         "Press any key to continue"
     ));
-    assert!(coco_tool::matches_interactive_prompt(
+    assert!(coco_tool_runtime::matches_interactive_prompt(
         "Press Enter to continue"
     ));
 }
@@ -677,34 +677,34 @@ fn test_stall_prompt_press_key() {
 #[test]
 fn test_stall_no_false_positive_normal_output() {
     // Normal command output should NOT match
-    assert!(!coco_tool::matches_interactive_prompt(
+    assert!(!coco_tool_runtime::matches_interactive_prompt(
         "Compiling project..."
     ));
-    assert!(!coco_tool::matches_interactive_prompt("Build succeeded"));
-    assert!(!coco_tool::matches_interactive_prompt(
+    assert!(!coco_tool_runtime::matches_interactive_prompt("Build succeeded"));
+    assert!(!coco_tool_runtime::matches_interactive_prompt(
         "Downloaded 42 packages"
     ));
-    assert!(!coco_tool::matches_interactive_prompt("")); // empty
+    assert!(!coco_tool_runtime::matches_interactive_prompt("")); // empty
 }
 
 #[test]
 fn test_stall_only_checks_last_line() {
     // "password:" in earlier output should not trigger
     let tail = "checking password: ok\nall tests passed\nDone.";
-    assert!(!coco_tool::matches_interactive_prompt(tail));
+    assert!(!coco_tool_runtime::matches_interactive_prompt(tail));
 
     // But if last line has prompt, it should match
     let tail2 = "checking things\nEnter password:";
-    assert!(coco_tool::matches_interactive_prompt(tail2));
+    assert!(coco_tool_runtime::matches_interactive_prompt(tail2));
 }
 
 // -- Notification format tests --
 
 #[test]
 fn test_task_notification_format() {
-    let info = coco_tool::BackgroundTaskInfo {
+    let info = coco_tool_runtime::BackgroundTaskInfo {
         task_id: "task-1".into(),
-        status: coco_tool::BackgroundTaskStatus::Completed,
+        status: coco_tool_runtime::BackgroundTaskStatus::Completed,
         summary: Some("Command finished successfully".into()),
         output_file: Some("/tmp/task-1.out".into()),
         tool_use_id: Some("tu-123".into()),
@@ -712,7 +712,7 @@ fn test_task_notification_format() {
         notified: false,
     };
 
-    let xml = coco_tool::format_task_notification(&info);
+    let xml = coco_tool_runtime::format_task_notification(&info);
     assert!(xml.contains("<task-id>task-1</task-id>"));
     assert!(xml.contains("<status>completed</status>"));
     assert!(xml.contains("<tool-use-id>tu-123</tool-use-id>"));
@@ -722,13 +722,13 @@ fn test_task_notification_format() {
 
 #[test]
 fn test_stall_notification_omits_status() {
-    let stall = coco_tool::StallInfo {
+    let stall = coco_tool_runtime::StallInfo {
         task_id: "task-2".into(),
         output_tail: "Enter password:".into(),
         frozen_seconds: 45.0,
     };
 
-    let xml = coco_tool::format_stall_notification(&stall, Some("/tmp/task-2.out"));
+    let xml = coco_tool_runtime::format_stall_notification(&stall, Some("/tmp/task-2.out"));
     // Stall notifications must NOT have <status> tag (TS requirement)
     assert!(!xml.contains("<status>"));
     assert!(xml.contains("<task-id>task-2</task-id>"));
@@ -755,7 +755,7 @@ async fn test_bash_simulated_sed_edit_writes_new_content() {
     let file = dir.path().join("sample.txt");
     std::fs::write(&file, "before\n").unwrap();
 
-    let ctx = coco_tool::ToolUseContext::test_default();
+    let ctx = coco_tool_runtime::ToolUseContext::test_default();
     let result = BashTool
         .execute(
             serde_json::json!({
@@ -784,7 +784,7 @@ async fn test_bash_simulated_sed_edit_writes_new_content() {
 async fn test_bash_simulated_sed_edit_enoent_returns_sed_error() {
     use crate::tools::bash::BashTool;
 
-    let ctx = coco_tool::ToolUseContext::test_default();
+    let ctx = coco_tool_runtime::ToolUseContext::test_default();
     let result = BashTool
         .execute(
             serde_json::json!({
@@ -820,7 +820,7 @@ async fn test_bash_simulated_sed_edit_preserves_crlf_line_endings() {
     // Original file uses CRLF line endings — simulating a Windows-authored file.
     std::fs::write(&file, "alpha\r\nbeta\r\n").unwrap();
 
-    let ctx = coco_tool::ToolUseContext::test_default();
+    let ctx = coco_tool_runtime::ToolUseContext::test_default();
     let _result = BashTool
         .execute(
             serde_json::json!({
@@ -848,7 +848,7 @@ async fn test_bash_simulated_sed_edit_preserves_crlf_line_endings() {
 async fn test_bash_simulated_sed_edit_missing_file_path_errors() {
     use crate::tools::bash::BashTool;
 
-    let ctx = coco_tool::ToolUseContext::test_default();
+    let ctx = coco_tool_runtime::ToolUseContext::test_default();
     let result = BashTool
         .execute(
             serde_json::json!({
@@ -942,7 +942,7 @@ fn test_persist_oversized_writes_when_over_threshold() {
 async fn test_bash_output_includes_image_fields_when_stdout_is_image() {
     use crate::tools::bash::BashTool;
 
-    let ctx = coco_tool::ToolUseContext::test_default();
+    let ctx = coco_tool_runtime::ToolUseContext::test_default();
     // printf with explicit hex: full PNG signature
     // 89 50 4E 47 0D 0A 1A 0A — emitted via printf so the test stays
     // portable across bash versions. The trailing zero bytes are
@@ -973,7 +973,7 @@ async fn test_bash_output_includes_image_fields_when_stdout_is_image() {
 async fn test_bash_output_persists_when_oversized() {
     use crate::tools::bash::BashTool;
 
-    let ctx = coco_tool::ToolUseContext::test_default();
+    let ctx = coco_tool_runtime::ToolUseContext::test_default();
     // yes(1) emits 'y\n' indefinitely; cap with head -c to land just
     // above the 30K persistence threshold. Some platforms ship bash 3.x
     // without `head -c`, so use `printf` repeats as a portable fallback.
@@ -1011,7 +1011,7 @@ async fn test_bash_simulated_sed_edit_does_not_run_command() {
     let file = dir.path().join("guard.txt");
     std::fs::write(&file, "before\n").unwrap();
 
-    let ctx = coco_tool::ToolUseContext::test_default();
+    let ctx = coco_tool_runtime::ToolUseContext::test_default();
     let result = BashTool
         .execute(
             serde_json::json!({

@@ -1,7 +1,7 @@
 //! Cross-crate `AttachmentMessage` sink for silent-event producers.
 //!
 //! The engine (`app/query`) owns `MessageHistory`; producer crates
-//! (hooks, permissions, commands, core/tool, skills) push typed
+//! (hooks, permissions, commands, core/tool-runtime, skills) push typed
 //! `Message::Attachment` entries through an mpsc channel, drained at
 //! the head of each outer-loop turn.
 //!

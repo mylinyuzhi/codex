@@ -34,15 +34,15 @@ use std::sync::Arc;
 use coco_config::EnvKey;
 use coco_config::env;
 use coco_context::FileHistoryState;
-use coco_tool::AgentHandleRef;
-use coco_tool::HookHandleRef;
-use coco_tool::MailboxHandleRef;
-use coco_tool::SkillHandleRef;
-use coco_tool::TaskListHandleRef;
-use coco_tool::TodoListHandleRef;
-use coco_tool::ToolPermissionBridgeRef;
-use coco_tool::ToolRegistry;
-use coco_tool::ToolUseContext;
+use coco_tool_runtime::AgentHandleRef;
+use coco_tool_runtime::HookHandleRef;
+use coco_tool_runtime::MailboxHandleRef;
+use coco_tool_runtime::SkillHandleRef;
+use coco_tool_runtime::TaskListHandleRef;
+use coco_tool_runtime::TodoListHandleRef;
+use coco_tool_runtime::ToolPermissionBridgeRef;
+use coco_tool_runtime::ToolRegistry;
+use coco_tool_runtime::ToolUseContext;
 use coco_types::AgentId;
 use coco_types::AppStateReadHandle;
 use coco_types::ToolAppState;
@@ -93,7 +93,7 @@ pub(crate) struct ToolContextFactory {
     /// per `ToolId`; the preparer runs it on model input AND on
     /// PreToolUse hook-rewritten input to guarantee that
     /// malformed rewrites reject BEFORE permission / execution.
-    pub(crate) tool_schema_validator: Option<coco_tool::ToolSchemaValidator>,
+    pub(crate) tool_schema_validator: Option<coco_tool_runtime::ToolSchemaValidator>,
 }
 
 /// Per-call overrides applied on top of [`ToolContextFactory`] inputs.
@@ -110,7 +110,7 @@ pub(crate) struct ToolContextOverrides {
     /// TS parity: `onProgress` callback passed per-turn into
     /// `StreamingToolExecutor`. Absent (`None`) ⇒ tools run without
     /// progress reporting (equivalent to the pre-Phase-9 baseline).
-    pub(crate) progress_tx: Option<coco_tool::ProgressSender>,
+    pub(crate) progress_tx: Option<coco_tool_runtime::ProgressSender>,
     /// Currently-active model name. Engine passes
     /// `ModelRuntime::current_model_name()` so `main_loop_model`
     /// reflects post-fallback state; absent falls back to
@@ -224,22 +224,22 @@ impl ToolContextFactory {
             rendered_system_prompt: None,
             critical_system_reminder: None,
             in_progress_tool_use_ids: Arc::new(RwLock::new(Default::default())),
-            side_query: Arc::new(coco_tool::NoOpSideQuery),
-            mcp: Arc::new(coco_tool::NoOpMcpHandle),
-            schedules: Arc::new(coco_tool::NoOpScheduleStore),
+            side_query: Arc::new(coco_tool_runtime::NoOpSideQuery),
+            mcp: Arc::new(coco_tool_runtime::NoOpMcpHandle),
+            schedules: Arc::new(coco_tool_runtime::NoOpScheduleStore),
             agent: self
                 .agent_handle
                 .clone()
-                .unwrap_or_else(|| Arc::new(coco_tool::NoOpAgentHandle)),
+                .unwrap_or_else(|| Arc::new(coco_tool_runtime::NoOpAgentHandle)),
             skill: self
                 .skill_handle
                 .clone()
-                .unwrap_or_else(|| Arc::new(coco_tool::NoOpSkillHandle)),
+                .unwrap_or_else(|| Arc::new(coco_tool_runtime::NoOpSkillHandle)),
             tool_schema_validator: self.tool_schema_validator.clone(),
             mailbox: self
                 .mailbox
                 .clone()
-                .unwrap_or_else(|| Arc::new(coco_tool::NoOpMailboxHandle)),
+                .unwrap_or_else(|| Arc::new(coco_tool_runtime::NoOpMailboxHandle)),
             // Phase 6 Workstream C hook: worktree-isolated subagents
             // receive `cwd_override` via their child engine config so
             // relative-path-resolving tools (Glob/Grep/Bash) operate
@@ -254,11 +254,11 @@ impl ToolContextFactory {
             task_list: self
                 .task_list
                 .clone()
-                .unwrap_or_else(|| Arc::new(coco_tool::NoOpTaskListHandle)),
+                .unwrap_or_else(|| Arc::new(coco_tool_runtime::NoOpTaskListHandle)),
             todo_list: self
                 .todo_list
                 .clone()
-                .unwrap_or_else(|| Arc::new(coco_tool::InMemoryTodoListHandle::new())),
+                .unwrap_or_else(|| Arc::new(coco_tool_runtime::InMemoryTodoListHandle::new())),
             hook_handle: self.hook_handle.clone(),
             file_read_state: self.file_read_state.clone(),
             file_history: self.file_history.clone(),

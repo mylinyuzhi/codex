@@ -25,7 +25,7 @@
 //! in the next step.
 #![allow(dead_code)]
 
-use coco_tool::Tool;
+use coco_tool_runtime::Tool;
 use coco_types::Message;
 
 /// Which lifecycle path produced this bucket set.

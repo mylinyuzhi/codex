@@ -938,7 +938,7 @@ dependencies = [
  "coco-query",
  "coco-session",
  "coco-state",
- "coco-tool",
+ "coco-tool-runtime",
  "coco-tools",
  "coco-tui",
  "coco-types",
@@ -1345,7 +1345,7 @@ dependencies = [
  "coco-session",
  "coco-skills",
  "coco-system-reminder",
- "coco-tool",
+ "coco-tool-runtime",
  "coco-tools",
  "coco-types",
  "lru 0.16.3",
@@ -1569,7 +1569,7 @@ dependencies = [
  "coco-config",
  "coco-git",
  "coco-hooks",
- "coco-tool",
+ "coco-tool-runtime",
  "coco-types",
  "dirs 6.0.0",
  "fs2",
@@ -1591,6 +1591,20 @@ dependencies = [
  "pretty_assertions",
  "tempfile",
  "uds_windows",
+]
+
+[[package]]
+name = "coco-subagent"
+version = "0.0.0"
+dependencies = [
+ "coco-frontmatter",
+ "coco-types",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]
@@ -1644,7 +1658,7 @@ dependencies = [
  "async-trait",
  "coco-config",
  "coco-system-reminder",
- "coco-tool",
+ "coco-tool-runtime",
  "coco-types",
  "fs2",
  "serde",
@@ -1667,7 +1681,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "coco-tool"
+name = "coco-tool-runtime"
 version = "0.0.0"
 dependencies = [
  "anyhow",
@@ -1702,7 +1716,7 @@ dependencies = [
  "coco-secret-redact",
  "coco-shell",
  "coco-skills",
- "coco-tool",
+ "coco-tool-runtime",
  "coco-types",
  "coco-utils-image",
  "futures",

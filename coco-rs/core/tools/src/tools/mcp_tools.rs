@@ -1,8 +1,8 @@
-use coco_tool::DescriptionOptions;
-use coco_tool::McpToolInfo;
-use coco_tool::Tool;
-use coco_tool::ToolError;
-use coco_tool::ToolUseContext;
+use coco_tool_runtime::DescriptionOptions;
+use coco_tool_runtime::McpToolInfo;
+use coco_tool_runtime::Tool;
+use coco_tool_runtime::ToolError;
+use coco_tool_runtime::ToolUseContext;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
 use coco_types::ToolName;
@@ -256,7 +256,7 @@ pub struct McpTool {
     info: McpToolInfo,
     tool_description: String,
     schema: ToolInputSchema,
-    annotations: coco_tool::McpToolAnnotations,
+    annotations: coco_tool_runtime::McpToolAnnotations,
 }
 
 impl McpTool {
@@ -265,7 +265,7 @@ impl McpTool {
         tool_name: String,
         description: String,
         schema: Value,
-        annotations: coco_tool::McpToolAnnotations,
+        annotations: coco_tool_runtime::McpToolAnnotations,
     ) -> Self {
         let properties = schema
             .get("properties")
@@ -348,10 +348,10 @@ impl Tool for McpTool {
                     .content
                     .iter()
                     .map(|block| match block {
-                        coco_tool::mcp_handle::McpContentBlock::Text(text) => {
+                        coco_tool_runtime::mcp_handle::McpContentBlock::Text(text) => {
                             serde_json::json!({"type": "text", "text": text})
                         }
-                        coco_tool::mcp_handle::McpContentBlock::Image { data, mime_type } => {
+                        coco_tool_runtime::mcp_handle::McpContentBlock::Image { data, mime_type } => {
                             serde_json::json!({"type": "image", "data": data, "mime_type": mime_type})
                         }
                     })

@@ -667,7 +667,7 @@ pub const fn coverage_of(kind: AttachmentKind) -> Coverage {
             note: "hook-originated system message for UI only",
         },
         StructuredOutput => Coverage::SilentEvent {
-            owner_crate: "core/tool",
+            owner_crate: "core/tool-runtime",
             note: "structured tool-output payload; consumed via ToolResult",
         },
         DynamicSkill => Coverage::SilentEvent {
@@ -718,7 +718,7 @@ pub const fn coverage_of(kind: AttachmentKind) -> Coverage {
 ///   `HookNonBlockingError`, `HookSystemMessage`
 /// - `core/permissions`: `HookPermissionDecision`
 /// - `commands / permissions`: `CommandPermissions`
-/// - `core/tool`: `StructuredOutput`
+/// - `core/tool-runtime`: `StructuredOutput`
 /// - `skills`: `DynamicSkill`
 /// - `core/context` / `services/compact`: `File`, `Directory`,
 ///   `PdfReference`, `CompactFileReference`, `PlanFileReference`,

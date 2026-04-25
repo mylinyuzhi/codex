@@ -53,13 +53,14 @@ members = [
     "services/lsp",
     "services/compact",
 
-    # ─── core/ (6) ───
+    # ─── core/ (7) ───
     "core/messages",
     "core/context",
     "core/permissions",
-    "core/tool",
+    "core/tool-runtime",
     "core/tools",
     "core/system-reminder",
+    "core/subagent",
 
     # ─── exec/ (5) ───
     "exec/shell",
@@ -153,9 +154,10 @@ coco-test-harness = { path = "utils/test-harness" }
 coco-messages = { path = "core/messages" }
 coco-context = { path = "core/context" }
 coco-permissions = { path = "core/permissions" }
-coco-tool = { path = "core/tool" }
+coco-tool-runtime = { path = "core/tool-runtime" }
 coco-tools = { path = "core/tools" }
 coco-system-reminder = { path = "core/system-reminder" }
+coco-subagent = { path = "core/subagent" }
 
 # Internal - exec
 coco-shell = { path = "exec/shell" }

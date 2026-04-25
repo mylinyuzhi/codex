@@ -7,9 +7,9 @@
 
 use std::sync::Arc;
 
-use coco_tool::ToolPermissionBridge;
-use coco_tool::ToolPermissionDecision;
-use coco_tool::ToolPermissionRequest;
+use coco_tool_runtime::ToolPermissionBridge;
+use coco_tool_runtime::ToolPermissionDecision;
+use coco_tool_runtime::ToolPermissionRequest;
 use coco_types::JsonRpcMessage;
 use pretty_assertions::assert_eq;
 

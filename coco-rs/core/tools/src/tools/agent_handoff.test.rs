@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use coco_tool::SideQuery;
-use coco_tool::SideQueryHandle;
+use coco_tool_runtime::SideQuery;
+use coco_tool_runtime::SideQueryHandle;
 use coco_types::SideQueryRequest;
 use coco_types::SideQueryResponse;
 

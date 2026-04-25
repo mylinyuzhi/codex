@@ -1,7 +1,7 @@
 //! Shared DTOs for the persistent task list (V2) and per-agent todos
 //! (V1). Lives in `coco-types` so [`crate::app_state::ToolAppState`]
 //! can carry typed snapshots without depending on the higher-level
-//! handle/implementation crates (`coco-tool`, `coco-tasks`).
+//! handle/implementation crates (`coco-tool-runtime`, `coco-tasks`).
 //!
 //! TS parity: `utils/tasks.ts` (`TaskSchema`, `TaskStatusSchema`) +
 //! `utils/todo/types.ts` (`TodoItemSchema`).
