@@ -41,7 +41,7 @@ decisions. Emits `coco_types::CoreEvent` directly (no intermediate event enum).
 2.  Normalize messages for API                     [coco-messages]
 3.  ApiClient.query_streaming(QueryParams)         [coco-inference]
 4.  Parse response; extract tool calls             [engine.rs]
-5.  StreamingToolExecutor: safe concurrent / unsafe queued  [coco-tool]
+5.  StreamingToolExecutor: safe concurrent / unsafe queued  [coco-tool-runtime]
 6.  HookRegistry PreToolUse / PostToolUse          [coco-hooks]
 7.  Tool results → MessageHistory                  [coco-messages]
 8.  Check ContinueReason

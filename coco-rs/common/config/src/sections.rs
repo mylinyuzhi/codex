@@ -595,6 +595,16 @@ pub enum WebSearchProvider {
     OpenAi,
 }
 
+impl WebSearchProvider {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::DuckDuckGo => "duckduckgo",
+            Self::Tavily => "tavily",
+            Self::OpenAi => "openai",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WebSearchConfig {
     pub provider: WebSearchProvider,

@@ -64,7 +64,7 @@ pub struct PlanModeReminder {
     app_state: Option<Arc<RwLock<ToolAppState>>>,
     /// Mailbox handle — enables teammate approval-response polling and
     /// leader pending-approvals attachment. `None` in non-swarm sessions.
-    mailbox: Option<coco_tool::MailboxHandleRef>,
+    mailbox: Option<coco_tool_runtime::MailboxHandleRef>,
     /// Agent identity for mailbox scoping. Required for polling; if
     /// `None`, approval poll is skipped.
     agent_name: Option<String>,
@@ -119,7 +119,7 @@ impl PlanModeReminder {
     /// polling + leader pending-approvals attachment.
     pub fn with_mailbox(
         mut self,
-        mailbox: coco_tool::MailboxHandleRef,
+        mailbox: coco_tool_runtime::MailboxHandleRef,
         agent_name: String,
         team_name: String,
         is_teammate_awaiting: bool,
@@ -281,8 +281,8 @@ impl PlanModeReminder {
             return;
         };
         for msg in &unread {
-            let Ok(coco_tool::PlanApprovalMessage::PlanApprovalResponse(resp)) =
-                serde_json::from_str::<coco_tool::PlanApprovalMessage>(&msg.text)
+            let Ok(coco_tool_runtime::PlanApprovalMessage::PlanApprovalResponse(resp)) =
+                serde_json::from_str::<coco_tool_runtime::PlanApprovalMessage>(&msg.text)
             else {
                 continue;
             };
@@ -351,11 +351,11 @@ impl PlanModeReminder {
         let Ok(unread) = mailbox.read_unread(agent, team).await else {
             return;
         };
-        let pending: Vec<(usize, coco_tool::PlanApprovalRequest)> = unread
+        let pending: Vec<(usize, coco_tool_runtime::PlanApprovalRequest)> = unread
             .iter()
             .filter_map(|m| {
-                match serde_json::from_str::<coco_tool::PlanApprovalMessage>(&m.text).ok()? {
-                    coco_tool::PlanApprovalMessage::PlanApprovalRequest(req) => {
+                match serde_json::from_str::<coco_tool_runtime::PlanApprovalMessage>(&m.text).ok()? {
+                    coco_tool_runtime::PlanApprovalMessage::PlanApprovalRequest(req) => {
                         Some((m.index, req))
                     }
                     _ => None,

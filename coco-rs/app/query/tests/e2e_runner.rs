@@ -29,7 +29,7 @@ use coco_query::QueryEngine;
 use coco_query::QueryEngineConfig;
 use coco_query::QueryResult;
 use coco_query::ServerNotification;
-use coco_tool::ToolRegistry;
+use coco_tool_runtime::ToolRegistry;
 use coco_tools::AgentTool;
 use coco_tools::BashTool;
 use coco_tools::EditTool;

@@ -6,7 +6,7 @@
 //!
 //! **Dependency flow**:
 //! ```text
-//! coco-tool  (defines AgentQueryEngine trait)
+//! coco-tool-runtime  (defines AgentQueryEngine trait)
 //!     ↓
 //! coco-query (this adapter implements it via QueryEngine)
 //!     ↓
@@ -15,9 +15,9 @@
 
 use std::sync::Arc;
 
-use coco_tool::AgentQueryConfig;
-use coco_tool::AgentQueryEngine;
-use coco_tool::AgentQueryResult;
+use coco_tool_runtime::AgentQueryConfig;
+use coco_tool_runtime::AgentQueryEngine;
+use coco_tool_runtime::AgentQueryResult;
 use coco_types::ModelRole;
 
 use crate::engine::QueryEngine;
@@ -165,7 +165,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
         // teammate runner) can route it through transcript / audit
         // pipelines. `serde_json::Value` is the agreed boundary type
         // on `AgentQueryResult` because this hop crosses the
-        // `coco-tool` → `coco-state` layer.
+        // `coco-tool-runtime` → `coco-state` layer.
         let messages = result
             .final_messages
             .iter()

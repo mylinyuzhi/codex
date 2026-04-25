@@ -1,7 +1,7 @@
 use crate::tools::read::ReadTool;
-use coco_tool::DescriptionOptions;
-use coco_tool::Tool;
-use coco_tool::ToolUseContext;
+use coco_tool_runtime::DescriptionOptions;
+use coco_tool_runtime::Tool;
+use coco_tool_runtime::ToolUseContext;
 use serde_json::json;
 
 // ── R7-T25: read description content check ──

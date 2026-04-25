@@ -1,4 +1,4 @@
-use coco_tool::ToolRegistry;
+use coco_tool_runtime::ToolRegistry;
 
 #[test]
 fn test_register_all_tools_count() {

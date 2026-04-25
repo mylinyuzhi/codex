@@ -34,7 +34,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 
-use coco_tool::check_verification_nudge;
+use coco_tool_runtime::check_verification_nudge;
 
 /// Task status — 3 variants, matching TS `TaskStatusSchema` in
 /// `utils/tasks.ts:69-74`. **Not** the 6-variant `coco_types::TaskStatus`

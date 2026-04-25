@@ -2,7 +2,7 @@
 //! assistant batch.
 //!
 //! Phase 4d-β rewires this to drive
-//! [`coco_tool::StreamingToolExecutor::execute_with`] so outcomes
+//! [`coco_tool_runtime::StreamingToolExecutor::execute_with`] so outcomes
 //! surface through `on_outcome` in TS-parity I12 order:
 //!
 //! - Concurrent-safe batches surface in completion order.
@@ -31,13 +31,13 @@ use coco_hooks::orchestration::OrchestrationContext;
 use coco_inference::ApiClient;
 use coco_messages::MessageHistory;
 use coco_permissions::AutoModeRules;
-use coco_tool::PreparedToolCall;
-use coco_tool::StreamingToolExecutor;
-use coco_tool::ToolCallPlan;
-use coco_tool::ToolError;
-use coco_tool::ToolPermissionBridgeRef;
-use coco_tool::ToolRegistry;
-use coco_tool::ToolUseContext;
+use coco_tool_runtime::PreparedToolCall;
+use coco_tool_runtime::StreamingToolExecutor;
+use coco_tool_runtime::ToolCallPlan;
+use coco_tool_runtime::ToolError;
+use coco_tool_runtime::ToolPermissionBridgeRef;
+use coco_tool_runtime::ToolRegistry;
+use coco_tool_runtime::ToolUseContext;
 use coco_types::CoreEvent;
 use coco_types::PermissionDenialInfo;
 use coco_types::ToolAppState;
@@ -287,7 +287,7 @@ impl<'a> ToolCallRunner<'a> {
 ///
 /// Success paths carry the flattened tool_result text; failure /
 /// early-return paths carry the synthetic error message.
-fn render_completed_output(outcome: &coco_tool::ToolCallOutcome) -> String {
+fn render_completed_output(outcome: &coco_tool_runtime::ToolCallOutcome) -> String {
     // Extract the tool_result body from the first ordered message
     // that is a ToolResult. Matches the legacy processor which
     // serialized the tool output into the event.

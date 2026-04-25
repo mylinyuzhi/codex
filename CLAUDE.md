@@ -84,8 +84,8 @@ Add for `None` / booleans / numeric literals. Skip for string/char literals unle
 │  App:         cli, tui, session, query, state                        │
 │  Root:        commands, skills, hooks, tasks, memory, plugins,       │
 │               keybindings                                             │
-│  Core:        tool → tools, permissions, messages, context,         │
-│               system-reminder                                         │
+│  Core:        tool-runtime → tools, permissions, messages, context, │
+│               system-reminder, subagent                               │
 │  Services:    inference, compact, mcp, rmcp-client, mcp-types, lsp   │
 │  Exec:        shell, sandbox, process-hardening, exec-server,        │
 │               apply-patch                                             │
@@ -178,12 +178,13 @@ One-line purposes. For key types and details, open each crate's own `CLAUDE.md`.
 
 | Crate | Purpose |
 |-------|---------|
-| `tool` | `Tool` trait, streaming executor, registry, callback handles (interface layer) |
+| `tool-runtime` | `Tool` trait, streaming executor, registry, callback handles (interface layer) |
 | `tools` | Built-in tool impls (File I/O, Web, Agent, Task, Plan, Shell, MCP mgmt, Scheduling) |
 | `permissions` | Evaluator + 2-stage auto-mode/yolo XML-LLM classifier + bypass killswitch |
 | `messages` | MessageHistory, normalization/filtering/predicates, cost tracking |
 | `context` | System context assembly, CLAUDE.md discovery, attachments, plan-mode reminders |
 | `system-reminder` | Dynamic `<system-reminder>` injection: trait-based generators + parallel orchestrator + throttle |
+| `subagent` | Pure-logic subagent rules: definition catalog, source precedence, AgentTool prompt rendering, tool filter planning |
 
 ### Exec
 
@@ -266,10 +267,10 @@ Reusable primitives. **Check here first** before implementing any basic utility.
 | **Event-driven** | query, tui, tasks | `mpsc::Sender<CoreEvent>` sinks; `with_event_sink()` opt-in emitters |
 | **3-layer event dispatch** | types, query | `CoreEvent::Protocol`/`Stream`/`Tui` — emit once, consumers pick layer |
 | **Cancellation** | All async | `CancellationToken` threaded through all layers |
-| **Registry** | tool, commands, skills, plugins, mcp | `ToolRegistry`, `CommandRegistry`, `SkillManager`, `PluginLoader`, `DiscoveryCache` |
+| **Registry** | tool-runtime, commands, skills, plugins, mcp | `ToolRegistry`, `CommandRegistry`, `SkillManager`, `PluginLoader`, `DiscoveryCache` |
 | **State Machine** | query, permissions, mcp | `ContinueReason`, `AutoModeState`, `RmcpClient` |
-| **Callback decoupling** | core/tool | `AgentHandle`, `HookHandle`, `MailboxHandle`, `McpHandle`, `ToolPermissionBridge` — avoid tool→subsystem cycles; `NoOp*` test doubles |
-| **Permission pipeline** | permissions, tool | `check_permission()` → auto-mode/yolo XML classifier → `DenialTracker` + killswitch |
+| **Callback decoupling** | core/tool-runtime | `AgentHandle`, `HookHandle`, `MailboxHandle`, `McpHandle`, `ToolPermissionBridge` — avoid tool→subsystem cycles; `NoOp*` test doubles |
+| **Permission pipeline** | permissions, tool-runtime | `check_permission()` → auto-mode/yolo XML classifier → `DenialTracker` + killswitch |
 | **Facade** | retrieval | Single `RetrievalFacade` hides search + index + repomap + reranker |
 | **Elm (TEA)** | tui | Model (`AppState`) + Message (`TuiEvent`) + Update + View |
 | **Middleware** | vercel-ai | `FnOnce` + `BoxFuture` callbacks for `do_generate` / `do_stream` |
@@ -399,7 +400,7 @@ Every crate in `coco-rs/` has its own `CLAUDE.md` (path = `coco-rs/<layer>/<crat
 - **Common**: types, config, error ([codes](coco-rs/common/error/README.md)), otel, stack-trace-macro
 - **Vercel AI**: ai, provider, provider-utils, openai, openai-compatible, google, anthropic, bytedance
 - **Services**: inference, compact, mcp, lsp
-- **Core**: tool, tools, permissions, messages, context, system-reminder
+- **Core**: tool-runtime, tools, permissions, messages, context, system-reminder, subagent
 - **Exec**: shell, sandbox, process-hardening, exec-server, apply-patch
 - **Root**: commands, skills, hooks, tasks, memory, plugins, keybindings
 - **App**: cli, tui, query, state, session

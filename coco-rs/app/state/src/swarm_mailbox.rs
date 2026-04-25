@@ -942,7 +942,7 @@ pub fn generate_plan_approval_request_id(agent_name: &str, team_name: &str) -> S
     format!("plan_approval-{agent_name}-{team_name}-{rand8}")
 }
 
-// ── MailboxHandle impl for ToolUseContext plumbing (`coco-tool` trait) ──
+// ── MailboxHandle impl for ToolUseContext plumbing (`coco-tool-runtime` trait) ──
 
 /// Concrete `MailboxHandle` implementation that writes via
 /// [`write_to_mailbox`]. Engines and spawn paths install one of these
@@ -952,12 +952,12 @@ pub fn generate_plan_approval_request_id(agent_name: &str, team_name: &str) -> S
 pub struct SwarmMailboxHandle;
 
 #[async_trait::async_trait]
-impl coco_tool::MailboxHandle for SwarmMailboxHandle {
+impl coco_tool_runtime::MailboxHandle for SwarmMailboxHandle {
     async fn write_to_mailbox(
         &self,
         recipient: &str,
         team_name: &str,
-        message: coco_tool::MailboxEnvelope,
+        message: coco_tool_runtime::MailboxEnvelope,
     ) -> anyhow::Result<()> {
         let msg = TeammateMessage {
             from: message.from,
@@ -974,7 +974,7 @@ impl coco_tool::MailboxHandle for SwarmMailboxHandle {
         &self,
         agent_name: &str,
         team_name: &str,
-    ) -> anyhow::Result<Vec<coco_tool::InboxMessage>> {
+    ) -> anyhow::Result<Vec<coco_tool_runtime::InboxMessage>> {
         // We need indices from the FULL mailbox (to support
         // `mark_read(index)`), so read the full list and filter to
         // unread in-place.
@@ -983,7 +983,7 @@ impl coco_tool::MailboxHandle for SwarmMailboxHandle {
             .into_iter()
             .enumerate()
             .filter(|(_, m)| !m.read)
-            .map(|(index, m)| coco_tool::InboxMessage {
+            .map(|(index, m)| coco_tool_runtime::InboxMessage {
                 index,
                 from: m.from,
                 text: m.text,

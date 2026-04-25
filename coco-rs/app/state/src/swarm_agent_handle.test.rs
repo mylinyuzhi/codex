@@ -1,8 +1,8 @@
 use super::*;
 
-use coco_tool::AgentHandle;
-use coco_tool::AgentSpawnRequest;
-use coco_tool::AgentSpawnStatus;
+use coco_tool_runtime::AgentHandle;
+use coco_tool_runtime::AgentSpawnRequest;
+use coco_tool_runtime::AgentSpawnStatus;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -65,9 +65,9 @@ async fn test_spawn_subagent_sync_with_engine_routes_to_query() {
     // Positive path: with an AgentQueryEngine installed, the subagent
     // flow invokes execute_query and returns the child's result.
     use async_trait::async_trait;
-    use coco_tool::AgentQueryConfig;
-    use coco_tool::AgentQueryEngine;
-    use coco_tool::AgentQueryResult;
+    use coco_tool_runtime::AgentQueryConfig;
+    use coco_tool_runtime::AgentQueryEngine;
+    use coco_tool_runtime::AgentQueryResult;
 
     struct StubEngine;
     #[async_trait]

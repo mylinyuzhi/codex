@@ -68,8 +68,10 @@ pub use attachment_kind::Coverage;
 pub use attachment_kind::coverage_of;
 
 // Agent types
+pub use agent::AgentColorName;
 pub use agent::AgentDefinition;
 pub use agent::AgentIsolation;
+pub use agent::AgentSource;
 pub use agent::AgentTypeId;
 pub use agent::MemoryScope;
 pub use agent::ModelInheritance;
@@ -312,7 +314,7 @@ pub use provider::WireApi;
 // Sandbox types
 pub use sandbox::SandboxMode;
 
-// Side-query types (data only; async trait in coco-tool)
+// Side-query types (data only; async trait in coco-tool-runtime)
 pub use side_query::SideQueryMessage;
 pub use side_query::SideQueryRequest;
 pub use side_query::SideQueryResponse;

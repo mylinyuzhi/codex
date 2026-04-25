@@ -4,6 +4,7 @@ pub mod agent_fork;
 pub mod agent_handoff;
 pub mod agent_resume;
 pub mod agent_spawn;
+pub mod ask_user_question;
 pub mod bash;
 pub mod bash_advanced;
 pub mod edit;
@@ -77,7 +78,7 @@ pub use worktree::EnterWorktreeTool;
 pub use worktree::ExitWorktreeTool;
 
 // Utility (5)
-pub use utility::AskUserQuestionTool;
+pub use ask_user_question::AskUserQuestionTool;
 pub use utility::BriefTool;
 pub use utility::ConfigTool;
 pub use utility::LspTool;

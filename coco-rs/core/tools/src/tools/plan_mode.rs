@@ -10,14 +10,14 @@
 //! text and the permission-gate defaults live in `core/context` and
 //! `core/permissions` respectively.
 
-use coco_tool::DescriptionOptions;
-use coco_tool::PlanApprovalMessage;
-use coco_tool::PlanApprovalRequest;
-use coco_tool::PromptOptions;
-use coco_tool::Tool;
-use coco_tool::ToolError;
-use coco_tool::ToolUseContext;
-use coco_tool::ValidationResult;
+use coco_tool_runtime::DescriptionOptions;
+use coco_tool_runtime::PlanApprovalMessage;
+use coco_tool_runtime::PlanApprovalRequest;
+use coco_tool_runtime::PromptOptions;
+use coco_tool_runtime::Tool;
+use coco_tool_runtime::ToolError;
+use coco_tool_runtime::ToolUseContext;
+use coco_tool_runtime::ValidationResult;
 use coco_types::PermissionDecision;
 use coco_types::PermissionMode;
 use coco_types::ToolId;
@@ -481,7 +481,7 @@ impl Tool for ExitPlanModeTool {
             let request_id = format!("plan_approval-{agent_name}-{team_name}-{short_uuid}");
 
             // Typed protocol message (TS shape preserved via serde
-            // renames). Shared schema in `coco_tool::plan_approval`.
+            // renames). Shared schema in `coco_tool_runtime::plan_approval`.
             let approval_msg = PlanApprovalMessage::PlanApprovalRequest(PlanApprovalRequest {
                 from: agent_name.clone(),
                 timestamp: timestamp.clone(),
@@ -494,7 +494,7 @@ impl Tool for ExitPlanModeTool {
                     message: format!("failed to serialize plan_approval_request: {e}"),
                     source: None,
                 })?;
-            let envelope = coco_tool::MailboxEnvelope {
+            let envelope = coco_tool_runtime::MailboxEnvelope {
                 text: serialized,
                 from: agent_name.clone(),
                 timestamp: timestamp.clone(),

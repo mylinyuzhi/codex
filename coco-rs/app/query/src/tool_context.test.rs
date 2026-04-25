@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use coco_tool::ToolRegistry;
+use coco_tool_runtime::ToolRegistry;
 use coco_types::PermissionMode;
 use coco_types::ThinkingLevel;
 use coco_types::ToolAppState;
@@ -154,7 +154,7 @@ async fn test_factory_threads_progress_tx_override_into_context() {
     // ToolProgress`. The factory is the one-place that wires the tx
     // into the context; a test-level override verifies the plumbing
     // without standing up a full engine.
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<coco_tool::ToolProgress>();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<coco_tool_runtime::ToolProgress>();
     let ctx = factory(test_config())
         .build(ToolContextOverrides {
             progress_tx: Some(tx),
@@ -166,7 +166,7 @@ async fn test_factory_threads_progress_tx_override_into_context() {
         .clone()
         .expect("progress_tx must propagate from overrides");
     ctx_tx
-        .send(coco_tool::ToolProgress {
+        .send(coco_tool_runtime::ToolProgress {
             tool_use_id: "abc".into(),
             parent_tool_use_id: None,
             data: serde_json::json!({"status": "running"}),
@@ -194,9 +194,9 @@ async fn test_factory_defaults_agent_handle_to_noop() {
 #[tokio::test]
 async fn test_factory_installs_custom_agent_handle() {
     use async_trait::async_trait;
-    use coco_tool::AgentHandle;
-    use coco_tool::AgentSpawnRequest;
-    use coco_tool::AgentSpawnResponse;
+    use coco_tool_runtime::AgentHandle;
+    use coco_tool_runtime::AgentSpawnRequest;
+    use coco_tool_runtime::AgentSpawnResponse;
 
     struct MarkerHandle;
     #[async_trait]
@@ -338,6 +338,6 @@ async fn test_factory_defaults_skill_handle_to_noop_unavailable() {
     let err = ctx.skill.invoke_skill("any", "").await.unwrap_err();
     assert!(matches!(
         err,
-        coco_tool::SkillInvocationError::Unavailable { .. }
+        coco_tool_runtime::SkillInvocationError::Unavailable { .. }
     ));
 }
