@@ -151,7 +151,11 @@ impl SkillHandle for QuerySkillRuntime {
                             ),
                         })?;
 
-                let agent_id = format!("skill-{}-{}", skill.name, short_uuid());
+                let agent_id = format!(
+                    "skill-{}-{}",
+                    skill.name,
+                    &uuid::Uuid::new_v4().simple().to_string()[..8]
+                );
                 let config = AgentQueryConfig {
                     system_prompt: String::new(),
                     model: skill.model.clone().unwrap_or_default(),
@@ -186,12 +190,6 @@ impl SkillHandle for QuerySkillRuntime {
             }
         }
     }
-}
-
-/// Short random suffix for generated agent ids.
-fn short_uuid() -> String {
-    let u = uuid::Uuid::new_v4().to_string();
-    u.split('-').next().unwrap_or("0").to_string()
 }
 
 #[cfg(test)]

@@ -144,7 +144,7 @@ impl ToolSchemaValidator {
         let validator = Arc::new(validator);
         // Another writer may have beaten us; idempotent insert.
         let mut cache = self.cache.write().await;
-        let validator = cache.entry(tool_id).or_insert_with(|| validator).clone();
+        let validator = cache.entry(tool_id).or_insert(validator).clone();
         Self::validate_with(validator.as_ref(), input)
     }
 

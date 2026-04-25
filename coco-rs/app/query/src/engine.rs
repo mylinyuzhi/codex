@@ -712,8 +712,8 @@ impl QueryEngine {
             model_runtime = model_runtime.with_recovery_policy(policy);
         }
         /// TS: `MAX_529_RETRIES = 3` in `services/api/withRetry.ts:54`.
-        const MAX_CONSECUTIVE_CAPACITY_ERRORS: u32 = 3;
-        let mut consecutive_capacity_errors: u32 = 0;
+        const MAX_CONSECUTIVE_CAPACITY_ERRORS: i32 = 3;
+        let mut consecutive_capacity_errors: i32 = 0;
         // TS `input`-parameter parity: tracks the UUID of the last user
         // message that has already been handed to the UserPrompt-tier
         // reminders. Prevents duplicate `at_mentioned_files` /
@@ -2997,24 +2997,26 @@ struct StreamingToolCallBuffer {
 /// TS parity: `utils/queryHelpers.ts:99-188` — one throttle per
 /// `parent_tool_use_id`, ≤1 emission / 30 s, LRU-bound to 100 keys.
 pub(crate) struct ProgressThrottle {
-    last_sent: std::collections::HashMap<String, std::time::Instant>,
+    last_sent: lru::LruCache<String, std::time::Instant>,
     throttle: std::time::Duration,
-    max_tracking: usize,
 }
 
 impl ProgressThrottle {
     /// Matches TS defaults (30 s window, 100-key LRU).
     pub(crate) fn new() -> Self {
-        Self::with_params(std::time::Duration::from_secs(30), 100)
+        let cap = std::num::NonZeroUsize::new(100).unwrap_or(std::num::NonZeroUsize::MIN);
+        Self::with_params(std::time::Duration::from_secs(30), cap)
     }
 
     /// Test-only constructor that takes an explicit window + LRU
     /// size. The tests use a 1 ms window so they don't need to sleep.
-    pub(crate) fn with_params(throttle: std::time::Duration, max_tracking: usize) -> Self {
+    pub(crate) fn with_params(
+        throttle: std::time::Duration,
+        max_tracking: std::num::NonZeroUsize,
+    ) -> Self {
         Self {
-            last_sent: std::collections::HashMap::new(),
+            last_sent: lru::LruCache::new(max_tracking),
             throttle,
-            max_tracking,
         }
     }
 
@@ -3022,21 +3024,14 @@ impl ProgressThrottle {
     /// emitted now and stamps the send time. Returns `false` (skip)
     /// when a prior emission fell inside the throttle window.
     pub(crate) fn allow(&mut self, key: &str, now: std::time::Instant) -> bool {
-        if let Some(prev) = self.last_sent.get(key)
+        // `peek` (vs `get`) does not bump recency — within-window
+        // skips must not refresh the LRU position.
+        if let Some(prev) = self.last_sent.peek(key)
             && now.duration_since(*prev) < self.throttle
         {
             return false;
         }
-        if self.last_sent.len() >= self.max_tracking
-            && let Some(oldest) = self
-                .last_sent
-                .iter()
-                .min_by_key(|&(_, t)| *t)
-                .map(|(k, _)| k.clone())
-        {
-            self.last_sent.remove(&oldest);
-        }
-        self.last_sent.insert(key.to_string(), now);
+        self.last_sent.put(key.to_string(), now);
         true
     }
 }

@@ -12,6 +12,8 @@ use std::sync::Arc;
 use coco_hooks::HookExecutionEvent;
 use coco_hooks::HookRegistry;
 use coco_hooks::orchestration::OrchestrationContext;
+use coco_messages::create_error_tool_result;
+use coco_messages::create_tool_result_message;
 use coco_system_reminder::AttachmentType as ReminderAttachmentType;
 use coco_system_reminder::SystemReminder;
 use coco_system_reminder::inject_reminders;
@@ -20,16 +22,12 @@ use coco_tool::ToolCallErrorKind;
 use coco_tool::ToolMessagePath;
 use coco_tool::ToolSideEffects;
 use coco_tool::UnstampedToolCallOutcome;
-use coco_types::LlmMessage;
 use coco_types::Message;
-use coco_types::ToolContent;
 use coco_types::ToolId;
 use coco_types::ToolResult;
-use coco_types::ToolResultMessage;
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tracing::warn;
-use vercel_ai_provider::ToolResultContent as InnerToolResultContent;
 
 use crate::hook_controller::HookController;
 use crate::tool_message::ToolMessageBuckets;
@@ -95,10 +93,10 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
             }
 
             let rendered_output = serde_json::to_string(&output_data).unwrap_or_default();
-            let tool_result_msg = make_tool_result_message(
+            let tool_result_msg = create_tool_result_message(
                 &tool_use_id,
                 &tool_name,
-                &tool_id,
+                tool_id.clone(),
                 &rendered_output,
                 /*is_error*/ false,
             );
@@ -160,12 +158,11 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
                 .run_post_tool_use_failure(&tool_name, &effective_input, &error_message)
                 .await;
 
-            let tool_result_msg = make_tool_result_message(
+            let tool_result_msg = create_error_tool_result(
                 &tool_use_id,
                 &tool_name,
-                &tool_id,
+                tool_id.clone(),
                 &rendered_error,
-                /*is_error*/ true,
             );
             let post_hook_msgs = render_hook_context_messages(
                 &tool_name,
@@ -224,7 +221,7 @@ pub(crate) fn build_early_outcome(
     permission_denial: Option<coco_types::PermissionDenialInfo>,
 ) -> UnstampedToolCallOutcome {
     let tool_result_msg =
-        make_tool_result_message(&tool_use_id, tool_name, &tool_id, synthetic_message, true);
+        create_error_tool_result(&tool_use_id, tool_name, tool_id.clone(), synthetic_message);
     let buckets = ToolMessageBuckets {
         pre_hook: Vec::new(),
         tool_result: Some(tool_result_msg),
@@ -245,38 +242,6 @@ pub(crate) fn build_early_outcome(
         prevent_continuation: None,
         effects: ToolSideEffects::none(),
     }
-}
-
-fn make_tool_result_message(
-    tool_use_id: &str,
-    tool_name: &str,
-    tool_id: &ToolId,
-    text: &str,
-    is_error: bool,
-) -> Message {
-    let output = if is_error {
-        InnerToolResultContent::error_text(text)
-    } else {
-        InnerToolResultContent::text(text)
-    };
-    Message::ToolResult(ToolResultMessage {
-        uuid: uuid::Uuid::new_v4(),
-        message: LlmMessage::Tool {
-            content: vec![ToolContent::ToolResult(
-                vercel_ai_provider::ToolResultPart {
-                    tool_call_id: tool_use_id.into(),
-                    tool_name: tool_name.into(),
-                    output,
-                    is_error,
-                    provider_metadata: None,
-                },
-            )],
-            provider_options: None,
-        },
-        tool_use_id: tool_use_id.into(),
-        tool_id: tool_id.clone(),
-        is_error,
-    })
 }
 
 /// Wrap hook-provided additional_contexts into reminder-injected

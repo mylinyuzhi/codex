@@ -104,6 +104,8 @@ pub enum WorktreeError {
     InvalidSlug { slug: String, reason: String },
     #[error("git subprocess failed: {stderr}")]
     GitFailed { stderr: String },
+    #[error(transparent)]
+    Git(#[from] coco_git::GitToolingError),
     #[error("io error during worktree setup: {source}")]
     Io {
         #[from]
@@ -364,7 +366,7 @@ impl AgentWorktreeManager {
                 continue; // preserve user's work.
             }
             // Resolve the branch name from the slug.
-            let branch = format!("claude/{}", name_str.strip_prefix("").unwrap_or(&name_str));
+            let branch = format!("claude/{name_str}");
             let session = AgentWorktreeSession {
                 path: path.clone(),
                 branch,
@@ -468,35 +470,13 @@ fn validate_slug(slug: &str) -> Result<(), WorktreeError> {
 }
 
 fn get_head_commit(path: &Path) -> Result<String, WorktreeError> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .args(["rev-parse", "HEAD"])
-        .output()?;
-    if !output.status.success() {
-        return Err(WorktreeError::GitFailed {
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        });
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().into())
+    Ok(coco_git::get_head_commit(path)?)
 }
 
 fn has_worktree_changes(path: &Path, _head_commit: &str) -> Result<bool, WorktreeError> {
-    // Any non-empty `git status --porcelain` output means changes.
-    // TS's `hasWorktreeChanges` uses the same criterion (tracked +
-    // untracked). We don't need `_head_commit` for this check — TS
-    // carries it for diagnostic logging but doesn't use it either.
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .args(["status", "--porcelain"])
-        .output()?;
-    if !output.status.success() {
-        return Err(WorktreeError::GitFailed {
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        });
-    }
-    Ok(!output.stdout.is_empty())
+    // TS's `hasWorktreeChanges` carries `_head_commit` for diagnostic
+    // logging but doesn't use it; mirror that here.
+    Ok(!coco_git::get_uncommitted_changes(path)?.is_empty())
 }
 
 /// TS parity: `worktree.ts:516-534` — copies `.claude/settings.local.json`

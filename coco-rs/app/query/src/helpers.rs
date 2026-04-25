@@ -5,12 +5,12 @@
 //! drain), and easy to unit-test in isolation.
 
 use coco_messages::MessageHistory;
+use coco_messages::create_error_tool_result;
 use coco_types::AssistantContent;
 use coco_types::LlmMessage;
 use coco_types::Message;
 use coco_types::ToolId;
 use vercel_ai_provider::AssistantContentPart;
-use vercel_ai_provider::ToolResultContent;
 
 use crate::BudgetTracker;
 use crate::command_queue::CommandQueue;
@@ -124,33 +124,6 @@ pub(crate) fn extract_last_assistant_text(history: &MessageHistory) -> String {
         .unwrap_or_default()
 }
 
-/// Build a tool error message for history.
-pub(crate) fn make_tool_error_message(
-    tool_call_id: &str,
-    tool_name: &str,
-    tool_id: &ToolId,
-    message: &str,
-) -> Message {
-    Message::ToolResult(coco_types::ToolResultMessage {
-        uuid: uuid::Uuid::new_v4(),
-        message: LlmMessage::Tool {
-            content: vec![coco_types::ToolContent::ToolResult(
-                coco_types::ToolResultContent {
-                    tool_call_id: tool_call_id.to_string(),
-                    tool_name: tool_name.to_string(),
-                    output: ToolResultContent::error_text(message.to_string()),
-                    is_error: true,
-                    provider_metadata: None,
-                },
-            )],
-            provider_options: None,
-        },
-        tool_use_id: tool_call_id.to_string(),
-        tool_id: tool_id.clone(),
-        is_error: true,
-    })
-}
-
 /// Complete a committed tool call with a model-visible error result.
 ///
 /// JSON parse failures never reach this helper because they are dropped before
@@ -174,10 +147,10 @@ pub(crate) async fn complete_tool_call_with_error(
         },
     )
     .await;
-    history.push(make_tool_error_message(
+    history.push(create_error_tool_result(
         tool_call_id,
         tool_name,
-        tool_id,
+        tool_id.clone(),
         output,
     ));
 }

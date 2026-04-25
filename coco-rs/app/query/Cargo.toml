@@ -25,6 +25,7 @@ coco-lsp.workspace = true
 coco-mcp.workspace = true
 vercel-ai-provider.workspace = true
 chrono.workspace = true
+lru.workspace = true
 
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

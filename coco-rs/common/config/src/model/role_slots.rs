@@ -114,7 +114,7 @@ pub struct FallbackRecoveryPolicy {
     /// Upper bound on backoff in seconds.
     pub max_backoff_secs: u64,
     /// Maximum probe attempts per session.
-    pub max_attempts: u32,
+    pub max_attempts: i32,
 }
 
 impl Default for FallbackRecoveryPolicy {

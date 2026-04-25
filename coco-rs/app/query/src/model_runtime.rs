@@ -70,7 +70,7 @@ pub(crate) enum AdvanceOutcome {
 pub(crate) enum ModelFallbackReason {
     /// Forward hop triggered by N consecutive capacity errors in
     /// the active slot.
-    CapacityDegrade { consecutive_errors: u32 },
+    CapacityDegrade { consecutive_errors: i32 },
     /// Backward hop — half-open probe reached the primary.
     ProbeRecovery,
     /// All slots in the chain have been tried and failed. Terminal
@@ -93,7 +93,7 @@ struct RecoveryState {
     next_backoff: Duration,
     /// Total probe attempts this session. Capped by
     /// `policy.max_attempts`.
-    attempts: u32,
+    attempts: i32,
     /// When `Some(slot)`, a probe is currently in-flight. `active`
     /// has been pre-swapped to 0; `slot` is the pre-probe fallback
     /// index. `finalize_probe` clears this. Owning the probe state
@@ -310,7 +310,7 @@ impl ModelRuntime {
     /// Accessor for the recovery-state attempts counter.
     /// `None` = no recovery state (sticky or on primary).
     #[cfg(test)]
-    pub(crate) fn recovery_attempts(&self) -> Option<u32> {
+    pub(crate) fn recovery_attempts(&self) -> Option<i32> {
         self.recovery.map(|r| r.attempts)
     }
 

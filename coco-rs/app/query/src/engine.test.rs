@@ -3005,7 +3005,8 @@ fn test_classify_progress_payload_rejects_unrelated_types() {
 fn test_progress_throttle_blocks_second_emission_within_window() {
     // 1-second window is enough for the test to never have to wait:
     // the two `now` values we pass are synthetic `Instant`s.
-    let mut th = super::ProgressThrottle::with_params(std::time::Duration::from_secs(1), 100);
+    let cap = std::num::NonZeroUsize::new(100).unwrap_or(std::num::NonZeroUsize::MIN);
+    let mut th = super::ProgressThrottle::with_params(std::time::Duration::from_secs(1), cap);
     let t0 = std::time::Instant::now();
     assert!(th.allow("parent-A", t0), "first call must pass");
     let t1 = t0 + std::time::Duration::from_millis(500);
@@ -3020,7 +3021,8 @@ fn test_progress_throttle_blocks_second_emission_within_window() {
 #[test]
 fn test_progress_throttle_lru_evicts_oldest_key() {
     // Tiny max (2 entries) so the LRU path is exercised in one call.
-    let mut th = super::ProgressThrottle::with_params(std::time::Duration::from_secs(60), 2);
+    let cap = std::num::NonZeroUsize::new(2).unwrap_or(std::num::NonZeroUsize::MIN);
+    let mut th = super::ProgressThrottle::with_params(std::time::Duration::from_secs(60), cap);
     let t = std::time::Instant::now();
     assert!(th.allow("A", t));
     assert!(th.allow("B", t + std::time::Duration::from_secs(1)));
