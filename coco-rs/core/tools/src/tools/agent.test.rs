@@ -109,10 +109,6 @@ impl AgentHandle for MockAgentHandle {
     async fn background_agent(&self, _agent_id: &str) -> Result<(), String> {
         Err("not implemented in mock".into())
     }
-
-    async fn resolve_skill(&self, name: &str, _args: &str) -> Result<serde_json::Value, String> {
-        Err(format!("skill '{name}' not available in mock"))
-    }
 }
 
 fn ctx_with_agent(handle: impl AgentHandle + 'static) -> ToolUseContext {
@@ -139,6 +135,57 @@ async fn test_agent_tool_missing_prompt_rejected() {
         .execute(serde_json::json!({"description": "test"}), &ctx)
         .await;
     assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn test_agent_tool_rejects_remote_isolation_cleanly() {
+    // Phase 6 Workstream C: `isolation: "remote"` must produce a
+    // clean model-visible error rather than silently falling back
+    // to sync mode (refactor plan's "Make Unsupported Parity
+    // Explicit" rule).
+    let ctx = ToolUseContext::test_default();
+    let result = AgentTool
+        .execute(
+            serde_json::json!({
+                "prompt": "do the thing",
+                "isolation": "remote",
+            }),
+            &ctx,
+        )
+        .await;
+    let err = result.expect_err("remote isolation must be rejected");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("remote") && msg.to_lowercase().contains("not supported"),
+        "error must explain remote isolation is not supported; got: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn test_agent_tool_accepts_worktree_isolation_input_shape() {
+    // `isolation: "worktree"` must NOT be rejected by the tool's
+    // early gate — it falls through to the AgentHandle, which is
+    // responsible for the actual worktree lifecycle. This test
+    // proves the gate is remote-only, not worktree-blocking.
+    let ctx = ToolUseContext::test_default();
+    let result = AgentTool
+        .execute(
+            serde_json::json!({
+                "prompt": "isolated task",
+                "isolation": "worktree",
+            }),
+            &ctx,
+        )
+        .await;
+    // NoOpAgentHandle returns Err for spawn_agent, so we expect an
+    // error — but the error message must NOT be the
+    // remote-unsupported one.
+    let err = result.expect_err("NoOp handle returns error");
+    let msg = format!("{err}");
+    assert!(
+        !msg.to_lowercase().contains("remote"),
+        "worktree input path must not hit the remote gate; got: {msg}"
+    );
 }
 
 #[tokio::test]

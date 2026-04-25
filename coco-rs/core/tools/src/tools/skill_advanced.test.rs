@@ -28,20 +28,25 @@ fn test_expand_skill_prompt_braced_arguments() {
 
 #[test]
 fn test_expand_skill_prompt_positional_args() {
-    let result = expand_skill_prompt_simple("Compare $1 with $2", "old.rs new.rs");
+    // TS parity (argumentSubstitution.ts:129-133): $N is
+    // zero-indexed — alias for $ARGUMENTS[N]. So `$0` is the
+    // first parsed arg, `$1` is the second.
+    let result = expand_skill_prompt_simple("Compare $0 with $1", "old.rs new.rs");
     assert_eq!(result, "Compare old.rs with new.rs");
 }
 
 #[test]
 fn test_expand_skill_prompt_positional_braced() {
-    let result = expand_skill_prompt_simple("File: ${1}, line: ${2}", "main.rs 42");
+    let result = expand_skill_prompt_simple("File: ${0}, line: ${1}", "main.rs 42");
     assert_eq!(result, "File: main.rs, line: 42");
 }
 
 #[test]
 fn test_expand_skill_prompt_unused_positional_cleared() {
-    let result = expand_skill_prompt_simple("$1 and $2 and $3", "only one");
-    assert_eq!(result, "only one and  and ");
+    // args "only one" → parsedArgs = ["only", "one"]:
+    //   $0 = "only", $1 = "one", $2 = "" (out of range).
+    let result = expand_skill_prompt_simple("$0 and $1 and $2", "only one");
+    assert_eq!(result, "only and one and ");
 }
 
 // ── Variable substitution tests ──
@@ -61,10 +66,7 @@ fn test_expand_skill_prompt_claude_skill_dir() {
             user_config: None,
         },
     );
-    assert_eq!(
-        result,
-        "Run /home/user/.claude/skills/my-skill/helper.sh"
-    );
+    assert_eq!(result, "Run /home/user/.claude/skills/my-skill/helper.sh");
 }
 
 #[test]
@@ -148,10 +150,8 @@ fn test_expand_skill_prompt_named_args() {
 
 #[test]
 fn test_expand_skill_prompt_indexed_arguments() {
-    let result = expand_skill_prompt_simple(
-        "First: $ARGUMENTS[0], Second: $ARGUMENTS[1]",
-        "foo bar",
-    );
+    let result =
+        expand_skill_prompt_simple("First: $ARGUMENTS[0], Second: $ARGUMENTS[1]", "foo bar");
     assert_eq!(result, "First: foo, Second: bar");
 }
 
@@ -172,7 +172,9 @@ fn test_expand_skill_prompt_base_dir() {
             user_config: None,
         },
     );
-    assert!(result.starts_with("Base directory for this skill: /home/user/.claude/skills/my-skill\n\n"));
+    assert!(
+        result.starts_with("Base directory for this skill: /home/user/.claude/skills/my-skill\n\n")
+    );
     assert!(result.ends_with("Do stuff"));
 }
 
@@ -322,7 +324,10 @@ fn test_build_inline_output() {
     assert_eq!(output.command_name, "commit");
     assert_eq!(output.status, SkillExecutionMode::Inline);
     assert_eq!(output.model, Some("fast".into()));
-    assert_eq!(output.allowed_tools, Some(vec!["Bash".into(), "Read".into()]));
+    assert_eq!(
+        output.allowed_tools,
+        Some(vec!["Bash".into(), "Read".into()])
+    );
     assert!(output.result.is_none());
     assert!(output.agent_id.is_none());
 }

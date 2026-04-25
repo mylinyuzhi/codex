@@ -190,7 +190,10 @@ pub fn generate_unique_teammate_name(base_name: &str, existing_names: &[String])
     }
 
     // Fallback: append UUID fragment
-    format!("{base_name}-{}", &uuid::Uuid::new_v4().to_string()[..8])
+    format!(
+        "{base_name}-{}",
+        &uuid::Uuid::new_v4().simple().to_string()[..8]
+    )
 }
 
 /// Format a message as a teammate XML message.

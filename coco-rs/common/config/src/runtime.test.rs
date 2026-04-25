@@ -30,6 +30,10 @@ fn model_spec(provider: &str, api: ProviderApi, model_id: &str) -> ModelSpec {
     }
 }
 
+fn role_slots_of(provider: &str, model_id: &str) -> crate::RoleSlots<ModelSelection> {
+    crate::RoleSlots::new(model_selection(provider, model_id))
+}
+
 fn model_selection(provider: &str, model_id: &str) -> ModelSelection {
     ModelSelection {
         provider: provider.to_string(),
@@ -97,8 +101,8 @@ fn test_runtime_config_env_model_override_beats_json() {
 fn test_runtime_config_resolves_structured_model_roles() {
     let settings = settings_with(Settings {
         models: crate::ModelSelectionSettings {
-            main: Some(model_selection("openai", "gpt-5")),
-            fast: Some(model_selection("google", "gemini-2.5-flash")),
+            main: Some(role_slots_of("openai", "gpt-5")),
+            fast: Some(role_slots_of("google", "gemini-2.5-flash")),
             ..Default::default()
         },
         ..Default::default()
@@ -138,4 +142,120 @@ fn test_runtime_config_rejects_bare_env_model_override() {
         err.to_string()
             .contains("must use explicit `provider/model_id` format")
     );
+}
+
+#[test]
+fn test_cli_fallback_model_overrides_populate_main_chain_in_order() {
+    // `--fallback-model X --fallback-model Y` produces an ordered
+    // Main role fallback chain. Flag order = chain priority.
+    let settings = settings_with(Settings::default());
+    let env = EnvSnapshot::default();
+    let overrides = RuntimeOverrides {
+        fallback_model_overrides: vec![
+            "anthropic/claude-sonnet-4-6".to_string(),
+            "openai/gpt-5".to_string(),
+        ],
+        ..Default::default()
+    };
+    let runtime =
+        build_runtime_config(settings, env, overrides).expect("runtime with fallback chain");
+    let fallbacks = runtime.model_roles.fallbacks(ModelRole::Main);
+    assert_eq!(fallbacks.len(), 2);
+    assert_eq!(fallbacks[0].provider, "anthropic");
+    assert_eq!(fallbacks[0].model_id, "claude-sonnet-4-6");
+    assert_eq!(fallbacks[1].provider, "openai");
+    assert_eq!(fallbacks[1].model_id, "gpt-5");
+}
+
+#[test]
+fn test_cli_fallback_model_rejects_duplicate_of_primary() {
+    // Configuring primary + fallback to the same slug makes the
+    // fallback useless; hard-fail at startup rather than silently
+    // accept a degenerate config.
+    let settings = settings_with(Settings {
+        model: Some("anthropic/claude-opus-4-6".into()),
+        ..Default::default()
+    });
+    let env = EnvSnapshot::default();
+    let overrides = RuntimeOverrides {
+        fallback_model_overrides: vec!["anthropic/claude-opus-4-6".to_string()],
+        ..Default::default()
+    };
+    let err = build_runtime_config(settings, env, overrides)
+        .expect_err("duplicate primary+fallback must fail");
+    assert!(
+        err.to_string().contains("duplicates primary"),
+        "expected duplicate-primary error, got: {err}"
+    );
+}
+
+#[test]
+fn test_cli_fallback_model_rejects_duplicate_within_chain() {
+    let settings = settings_with(Settings::default());
+    let env = EnvSnapshot::default();
+    let overrides = RuntimeOverrides {
+        fallback_model_overrides: vec![
+            "anthropic/claude-sonnet-4-6".to_string(),
+            "anthropic/claude-sonnet-4-6".to_string(),
+        ],
+        ..Default::default()
+    };
+    let err = build_runtime_config(settings, env, overrides)
+        .expect_err("duplicate fallback within chain must fail");
+    assert!(
+        err.to_string().contains("duplicates earlier fallback"),
+        "expected duplicate-earlier-fallback error, got: {err}"
+    );
+}
+
+#[test]
+fn test_cli_fallback_model_with_unknown_provider_fails_startup() {
+    let settings = settings_with(Settings::default());
+    let env = EnvSnapshot::default();
+    let overrides = RuntimeOverrides {
+        fallback_model_overrides: vec!["nonexistent/some-model".to_string()],
+        ..Default::default()
+    };
+    let err = build_runtime_config(settings, env, overrides)
+        .expect_err("unknown provider must fail fast at startup");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("unknown provider") || msg.contains("nonexistent"),
+        "expected unknown-provider error, got: {msg}",
+    );
+}
+
+#[test]
+fn test_cli_fallback_overrides_take_precedence_over_settings_fallbacks() {
+    // When settings.models.main has fallbacks AND --fallback-model
+    // is supplied, CLI wins. Ensures users can override a config
+    // they can't edit (project/policy level) from the command line.
+    use crate::model::ModelSelection;
+    use crate::model::RoleSlots;
+    let settings = settings_with(Settings {
+        models: crate::ModelSelectionSettings {
+            main: Some(
+                RoleSlots::new(ModelSelection {
+                    provider: "anthropic".into(),
+                    model_id: "claude-opus-4-6".into(),
+                })
+                .with_fallback(ModelSelection {
+                    provider: "anthropic".into(),
+                    model_id: "claude-sonnet-4-6".into(),
+                }),
+            ),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    let overrides = RuntimeOverrides {
+        fallback_model_overrides: vec!["openai/gpt-5".into()],
+        ..Default::default()
+    };
+    let runtime = build_runtime_config(settings, EnvSnapshot::default(), overrides)
+        .expect("CLI should override settings fallbacks");
+    let fallbacks = runtime.model_roles.fallbacks(ModelRole::Main);
+    assert_eq!(fallbacks.len(), 1, "CLI replaces settings chain entirely");
+    assert_eq!(fallbacks[0].provider, "openai");
+    assert_eq!(fallbacks[0].model_id, "gpt-5");
 }

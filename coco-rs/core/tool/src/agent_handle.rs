@@ -176,15 +176,11 @@ pub trait AgentHandle: Send + Sync {
     /// TS: backgroundSignal + wasBackgrounded logic in AgentTool.tsx
     async fn background_agent(&self, agent_id: &str) -> Result<(), String>;
 
-    /// Resolve a skill by name and return its expanded content.
-    ///
-    /// Returns a JSON value with `skill_name`, `context` (inline/fork),
-    /// `prompt` (expanded content), `allowed_tools`, and optional `model`
-    /// override. The query engine uses this to either expand the skill
-    /// inline or fork a sub-agent.
-    ///
-    /// TS: SkillTool.call() → getCommands() → findCommand() → getPromptForCommand()
-    async fn resolve_skill(&self, name: &str, args: &str) -> Result<serde_json::Value, String>;
+    // Note: `resolve_skill` was removed in Phase 7 of the agent-loop
+    // refactor. Skill resolution now goes through the dedicated
+    // `SkillHandle` trait (`skill_handle.rs`); `AgentHandle` is the
+    // wrong abstraction for it. See the refactor plan's
+    // SkillRuntime section.
 }
 
 /// Shared handle type for `ToolUseContext`.
@@ -230,9 +226,5 @@ impl AgentHandle for NoOpAgentHandle {
 
     async fn background_agent(&self, _agent_id: &str) -> Result<(), String> {
         Err("Agent backgrounding not available in this context".into())
-    }
-
-    async fn resolve_skill(&self, name: &str, _args: &str) -> Result<serde_json::Value, String> {
-        Err(format!("Skill resolution not available (skill: {name})"))
     }
 }

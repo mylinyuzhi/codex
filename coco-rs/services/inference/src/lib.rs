@@ -18,6 +18,7 @@ pub mod usage;
 pub use cache_detection::CacheBreakDetector;
 pub use cache_detection::CacheBreakResult;
 pub use cache_detection::CacheState;
+pub use cache_detection::PromptStateInput;
 pub use client::ApiClient;
 pub use client::QueryParams;
 pub use client::QueryResult;

@@ -8,6 +8,7 @@ use crate::env::EnvOnlyConfig;
 use crate::env::EnvSnapshot;
 use crate::model::ModelRoles;
 use crate::model::ModelSelection;
+use crate::model::RoleSlots;
 use crate::overrides::RuntimeOverrides;
 use crate::provider::ProviderConfig;
 use crate::provider::builtin::builtin_providers;
@@ -148,19 +149,47 @@ fn resolve_model_roles(
     providers: &HashMap<String, ProviderConfig>,
 ) -> anyhow::Result<ModelRoles> {
     let mut roles = ModelRoles::default();
-    let main_model = if let Some(selection) = overrides.model_override.as_deref() {
-        model_spec_from_selection(selection, providers)?
+
+    // Main has the richest resolution precedence: CLI override > env
+    // override > settings.models.main > settings.model > default.
+    // Overrides and env only supply a bare `provider/model_id` for
+    // the primary; the chain (`settings.models.main.fallbacks`)
+    // comes from JSON unless CLI explicitly provides
+    // `fallback_model_overrides` (which wins).
+    let mut main_slots = if let Some(selection) = overrides.model_override.as_deref() {
+        RoleSlots::new(model_spec_from_selection(selection, providers)?)
     } else if let Some(selection) = env.model_override.as_deref() {
-        model_spec_from_selection(selection, providers)?
-    } else if let Some(selection) = settings.merged.models.main.clone() {
-        resolve_model_selection(selection, providers)?
+        RoleSlots::new(model_spec_from_selection(selection, providers)?)
+    } else if let Some(slots) = settings.merged.models.main.clone() {
+        resolve_role_slots(ModelRole::Main, slots, providers)?
     } else if let Some(selection) = settings.merged.model.as_deref() {
-        model_spec_from_selection(selection, providers)?
+        RoleSlots::new(model_spec_from_selection(selection, providers)?)
     } else {
-        default_main_model_spec(providers)?
+        RoleSlots::new(default_main_model_spec(providers)?)
     };
 
-    roles.roles.insert(ModelRole::Main, main_model);
+    // CLI `--fallback-model` overrides settings.json fallbacks for
+    // Main. Resolving here (after `main_slots` is built) means the
+    // CLI can swap in a completely different chain even when
+    // settings.models.main.fallbacks is populated. Per-role
+    // fallbacks for non-Main roles stay driven by settings.json.
+    if !overrides.fallback_model_overrides.is_empty() {
+        let fallbacks: Vec<coco_types::ModelSpec> = overrides
+            .fallback_model_overrides
+            .iter()
+            .map(|sel| model_spec_from_selection(sel, providers))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        // Validate against duplicates with primary + each other,
+        // matching the JSON-side chain validation.
+        main_slots = RoleSlots {
+            primary: main_slots.primary,
+            fallbacks,
+            recovery: main_slots.recovery,
+        };
+        ensure_chain_unique(ModelRole::Main, &main_slots)?;
+    }
+
+    roles.roles.insert(ModelRole::Main, main_slots);
 
     set_role_from_json(
         &mut roles,
@@ -208,13 +237,13 @@ fn resolve_model_roles(
     if let Some(model) = env.small_fast_model.as_deref() {
         roles.roles.insert(
             ModelRole::Fast,
-            model_spec_from_selection(model, providers)?,
+            RoleSlots::new(model_spec_from_selection(model, providers)?),
         );
     }
     if let Some(model) = env.subagent_model.as_deref() {
         roles.roles.insert(
             ModelRole::Explore,
-            model_spec_from_selection(model, providers)?,
+            RoleSlots::new(model_spec_from_selection(model, providers)?),
         );
     }
 
@@ -224,13 +253,61 @@ fn resolve_model_roles(
 fn set_role_from_json(
     roles: &mut ModelRoles,
     role: ModelRole,
-    selection: Option<&ModelSelection>,
+    slots: Option<&RoleSlots<ModelSelection>>,
     providers: &HashMap<String, ProviderConfig>,
 ) -> anyhow::Result<()> {
-    if let Some(selection) = selection {
+    if let Some(slots) = slots {
         roles
             .roles
-            .insert(role, resolve_model_selection(selection.clone(), providers)?);
+            .insert(role, resolve_role_slots(role, slots.clone(), providers)?);
+    }
+    Ok(())
+}
+
+/// Resolve a `RoleSlots<ModelSelection>` into `RoleSlots<ModelSpec>`
+/// and validate the chain:
+///
+/// - Every slot (primary + each fallback) must reference a known provider.
+/// - Each `model_id` must be non-empty.
+/// - No slot may duplicate another (same provider + model_id twice in
+///   the same chain is always a user mistake — silently deduping
+///   masks intent, hard-erroring prompts a fix).
+fn resolve_role_slots(
+    role: ModelRole,
+    slots: RoleSlots<ModelSelection>,
+    providers: &HashMap<String, ProviderConfig>,
+) -> anyhow::Result<RoleSlots<ModelSpec>> {
+    let resolved: RoleSlots<ModelSpec> =
+        slots.try_map(|sel| resolve_model_selection(sel, providers))?;
+    ensure_chain_unique(role, &resolved)?;
+    Ok(resolved)
+}
+
+/// Assert the chain (primary + fallbacks) has no duplicate
+/// `(provider, model_id)` pairs. A duplicate is always a user
+/// mistake — silently deduping masks intent, hard-erroring prompts a
+/// fix. Applied identically to JSON-configured and CLI-overridden
+/// chains so the error message is consistent across sources.
+fn ensure_chain_unique(role: ModelRole, slots: &RoleSlots<ModelSpec>) -> anyhow::Result<()> {
+    let mut seen: HashMap<(String, String), &'static str> = HashMap::new();
+    seen.insert(
+        (
+            slots.primary.provider.clone(),
+            slots.primary.model_id.clone(),
+        ),
+        "primary",
+    );
+    for (idx, fb) in slots.fallbacks.iter().enumerate() {
+        let key = (fb.provider.clone(), fb.model_id.clone());
+        if let Some(prev) = seen.get(&key) {
+            anyhow::bail!(
+                "role `{role:?}`: fallback[{idx}] `{}/{}` duplicates {prev} slot; \
+                 each slot in the chain must be a distinct model",
+                fb.provider,
+                fb.model_id,
+            );
+        }
+        seen.insert(key, "earlier fallback");
     }
     Ok(())
 }

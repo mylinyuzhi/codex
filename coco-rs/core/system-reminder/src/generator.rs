@@ -354,6 +354,8 @@ pub struct GeneratorContext<'a> {
     pub mcp_resources: Vec<crate::generators::user_input::McpResourceEntry>,
     /// Agent-type mentions in the prompt.
     pub agent_mentions: Vec<crate::generators::user_input::AgentMentionEntry>,
+
+    // ── Main-thread IDE snapshots ──
     /// IDE selection snapshot for this turn.
     pub ide_selection: Option<crate::generators::user_input::IdeSelectionSnapshot>,
     /// IDE opened-file snapshot for this turn.

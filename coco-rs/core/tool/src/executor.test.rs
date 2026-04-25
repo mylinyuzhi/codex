@@ -211,6 +211,48 @@ impl crate::traits::Tool for SlowSafeTool {
     }
 }
 
+struct PatchSafeTool {
+    name: String,
+    sleep_ms: u64,
+    digit: i64,
+}
+
+#[async_trait::async_trait]
+impl crate::traits::Tool for PatchSafeTool {
+    fn id(&self) -> ToolId {
+        ToolId::Custom(self.name.clone())
+    }
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
+        "patch safe".into()
+    }
+    fn input_schema(&self) -> ToolInputSchema {
+        ToolInputSchema {
+            properties: HashMap::new(),
+        }
+    }
+    fn is_concurrency_safe(&self, _: &Value) -> bool {
+        true
+    }
+    async fn execute(
+        &self,
+        _input: Value,
+        _ctx: &crate::context::ToolUseContext,
+    ) -> Result<ToolResult<Value>, crate::error::ToolError> {
+        tokio::time::sleep(tokio::time::Duration::from_millis(self.sleep_ms)).await;
+        let digit = self.digit;
+        Ok(ToolResult {
+            data: json!({"tool": self.name}),
+            new_messages: vec![],
+            app_state_patch: Some(Box::new(move |state| {
+                state.plan_mode_attachment_count = state.plan_mode_attachment_count * 10 + digit;
+            })),
+        })
+    }
+}
+
 #[tokio::test]
 async fn test_execute_concurrent_tools() {
     let executor = StreamingToolExecutor::with_max_concurrency(10);
@@ -227,10 +269,70 @@ async fn test_execute_concurrent_tools() {
     for r in &results {
         assert!(r.result.is_ok(), "concurrent tool should succeed");
     }
-    // Results returned in submission order
-    assert_eq!(results[0].tool_use_id, "read1");
-    assert_eq!(results[1].tool_use_id, "read2");
-    assert_eq!(results[2].tool_use_id, "read3");
+}
+
+#[tokio::test]
+async fn test_execute_concurrent_tools_returns_completion_order() {
+    let concurrent_count = Arc::new(AtomicI32::new(0));
+    let max_concurrent = Arc::new(AtomicI32::new(0));
+
+    let make_slow = |name: &str, sleep_ms| -> PendingToolCall {
+        PendingToolCall {
+            tool_use_id: name.into(),
+            tool: Arc::new(SlowSafeTool {
+                name: name.into(),
+                concurrent_count: concurrent_count.clone(),
+                max_concurrent: max_concurrent.clone(),
+                sleep_ms,
+            }),
+            input: json!({}),
+        }
+    };
+
+    let executor = StreamingToolExecutor::with_max_concurrency(2);
+    let ctx = crate::context::ToolUseContext::test_default();
+
+    let results = executor
+        .execute_concurrent(
+            vec![make_slow("slow_first", 80), make_slow("fast_second", 10)],
+            &ctx,
+        )
+        .await;
+
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].tool_use_id, "fast_second");
+    assert_eq!(results[1].tool_use_id, "slow_first");
+}
+
+#[tokio::test]
+async fn test_execute_concurrent_patches_apply_in_model_order() {
+    let app_state = Arc::new(tokio::sync::RwLock::new(coco_types::ToolAppState::default()));
+    let executor = StreamingToolExecutor::with_max_concurrency(2).with_app_state(app_state.clone());
+    let ctx = crate::context::ToolUseContext::test_default();
+
+    let make_patch = |name: &str, sleep_ms, digit| PendingToolCall {
+        tool_use_id: name.into(),
+        tool: Arc::new(PatchSafeTool {
+            name: name.into(),
+            sleep_ms,
+            digit,
+        }),
+        input: json!({}),
+    };
+
+    let results = executor
+        .execute_concurrent(
+            vec![
+                make_patch("slow_first", 80, 1),
+                make_patch("fast_second", 10, 2),
+            ],
+            &ctx,
+        )
+        .await;
+
+    assert_eq!(results[0].tool_use_id, "fast_second");
+    assert_eq!(results[1].tool_use_id, "slow_first");
+    assert_eq!(app_state.read().await.plan_mode_attachment_count, 12);
 }
 
 #[tokio::test]
@@ -365,59 +467,28 @@ fn test_streaming_discard() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Hook pipeline integration (B1.3)
-// ---------------------------------------------------------------------------
-
 use crate::hook_handle::HookHandle;
-use crate::hook_handle::HookPermission;
 use crate::hook_handle::PostToolUseOutcome;
 use crate::hook_handle::PreToolUseOutcome;
-use std::sync::atomic::AtomicUsize;
 
-/// Hook handle that records each invocation into a shared counter so tests
-/// can verify that both PreToolUse and PostToolUse fire exactly once per
-/// tool call. Configurable to return specific outcomes for each stage.
-struct RecordingHookHandle {
-    pre_calls: Arc<AtomicUsize>,
-    post_ok_calls: Arc<AtomicUsize>,
-    post_err_calls: Arc<AtomicUsize>,
-    pre_outcome: PreToolUseOutcome,
-    post_ok_outcome: PostToolUseOutcome,
-    post_err_outcome: PostToolUseOutcome,
-}
-
-impl RecordingHookHandle {
-    fn default_recorder() -> (Self, Arc<AtomicUsize>, Arc<AtomicUsize>, Arc<AtomicUsize>) {
-        let pre = Arc::new(AtomicUsize::new(0));
-        let post_ok = Arc::new(AtomicUsize::new(0));
-        let post_err = Arc::new(AtomicUsize::new(0));
-        (
-            Self {
-                pre_calls: pre.clone(),
-                post_ok_calls: post_ok.clone(),
-                post_err_calls: post_err.clone(),
-                pre_outcome: PreToolUseOutcome::default(),
-                post_ok_outcome: PostToolUseOutcome::default(),
-                post_err_outcome: PostToolUseOutcome::default(),
-            },
-            pre,
-            post_ok,
-            post_err,
-        )
-    }
+struct CountingHookHandle {
+    calls: Arc<AtomicI32>,
 }
 
 #[async_trait::async_trait]
-impl HookHandle for RecordingHookHandle {
+impl HookHandle for CountingHookHandle {
     async fn run_pre_tool_use(
         &self,
         _tool_name: &str,
         _tool_use_id: &str,
         _tool_input: &Value,
     ) -> PreToolUseOutcome {
-        self.pre_calls.fetch_add(1, Ordering::SeqCst);
-        self.pre_outcome.clone()
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        PreToolUseOutcome {
+            updated_input: Some(json!({"rewritten": true})),
+            blocking_reason: Some("executor should not run hooks".into()),
+            ..Default::default()
+        }
     }
 
     async fn run_post_tool_use(
@@ -427,8 +498,12 @@ impl HookHandle for RecordingHookHandle {
         _tool_input: &Value,
         _tool_response: &Value,
     ) -> PostToolUseOutcome {
-        self.post_ok_calls.fetch_add(1, Ordering::SeqCst);
-        self.post_ok_outcome.clone()
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        PostToolUseOutcome {
+            updated_output: Some(json!("rewritten by hook")),
+            blocking_reason: Some("executor should not run hooks".into()),
+            ..Default::default()
+        }
     }
 
     async fn run_post_tool_use_failure(
@@ -438,185 +513,29 @@ impl HookHandle for RecordingHookHandle {
         _tool_input: &Value,
         _error_message: &str,
     ) -> PostToolUseOutcome {
-        self.post_err_calls.fetch_add(1, Ordering::SeqCst);
-        self.post_err_outcome.clone()
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        PostToolUseOutcome::default()
     }
 }
 
-/// PreToolUse + PostToolUse fire exactly once per single-tool execution
-/// when a hook handle is attached.
 #[tokio::test]
-async fn test_hook_pipeline_single_tool_invokes_pre_and_post() {
-    let (handle, pre, post_ok, post_err) = RecordingHookHandle::default_recorder();
+async fn test_executor_does_not_run_hooks() {
+    let hook_calls = Arc::new(AtomicI32::new(0));
     let mut ctx = crate::context::ToolUseContext::test_default();
-    ctx.hook_handle = Some(Arc::new(handle));
+    ctx.hook_handle = Some(Arc::new(CountingHookHandle {
+        calls: hook_calls.clone(),
+    }));
 
     let exec = StreamingToolExecutor::new();
-    let call = PendingToolCall {
-        tool_use_id: "t1".into(),
+    let single = PendingToolCall {
+        tool_use_id: "single".into(),
         tool: Arc::new(UnsafeTool { name: "u".into() }),
-        input: json!({"x": 1}),
+        input: json!({"x": 42}),
     };
-    let result = exec.execute_single(call, &ctx).await;
-    assert!(result.result.is_ok());
-    assert_eq!(pre.load(Ordering::SeqCst), 1, "PreToolUse ran once");
-    assert_eq!(post_ok.load(Ordering::SeqCst), 1, "PostToolUse ran once");
-    assert_eq!(
-        post_err.load(Ordering::SeqCst),
-        0,
-        "failure hook did not run"
-    );
-}
+    let single_result = exec.execute_single(single, &ctx).await;
 
-/// A PreToolUse hook that sets `blocking_reason` must prevent the tool
-/// from executing and the error bubbles up as PermissionDenied.
-#[tokio::test]
-async fn test_hook_pipeline_pre_reject_blocks_execution() {
-    let (mut handle, pre, post_ok, post_err) = RecordingHookHandle::default_recorder();
-    handle.pre_outcome.blocking_reason = Some("denied by test hook".into());
-    let mut ctx = crate::context::ToolUseContext::test_default();
-    ctx.hook_handle = Some(Arc::new(handle));
+    assert_eq!(single_result.result.unwrap().data, json!({"x": 42}));
 
-    let exec = StreamingToolExecutor::new();
-    let call = PendingToolCall {
-        tool_use_id: "t1".into(),
-        tool: Arc::new(UnsafeTool { name: "u".into() }),
-        input: json!({"x": 1}),
-    };
-    let result = exec.execute_single(call, &ctx).await;
-
-    assert!(result.result.is_err());
-    let err = result.result.unwrap_err().to_string();
-    assert!(err.contains("denied by test hook"), "got: {err}");
-    assert_eq!(pre.load(Ordering::SeqCst), 1, "pre hook ran");
-    assert_eq!(
-        post_ok.load(Ordering::SeqCst),
-        0,
-        "tool did not run so no post"
-    );
-    assert_eq!(post_err.load(Ordering::SeqCst), 0);
-}
-
-/// PreToolUse `PermissionOverride::Deny` must also hard-block.
-#[tokio::test]
-async fn test_hook_pipeline_pre_deny_override_blocks() {
-    let (mut handle, _pre, post_ok, _post_err) = RecordingHookHandle::default_recorder();
-    handle.pre_outcome.permission_override = Some(HookPermission::Deny);
-    let mut ctx = crate::context::ToolUseContext::test_default();
-    ctx.hook_handle = Some(Arc::new(handle));
-
-    let exec = StreamingToolExecutor::new();
-    let call = PendingToolCall {
-        tool_use_id: "t1".into(),
-        tool: Arc::new(UnsafeTool { name: "u".into() }),
-        input: json!({}),
-    };
-    let result = exec.execute_single(call, &ctx).await;
-    assert!(result.result.is_err());
-    assert_eq!(post_ok.load(Ordering::SeqCst), 0);
-}
-
-/// PreToolUse `updated_input` must be forwarded to tool.execute() — the
-/// tool echoes input back as the result, so we can verify the rewrite.
-#[tokio::test]
-async fn test_hook_pipeline_pre_modify_input_is_applied() {
-    let (mut handle, _pre, _post_ok, _post_err) = RecordingHookHandle::default_recorder();
-    handle.pre_outcome.updated_input = Some(json!({"x": 99, "rewritten": true}));
-    let mut ctx = crate::context::ToolUseContext::test_default();
-    ctx.hook_handle = Some(Arc::new(handle));
-
-    let exec = StreamingToolExecutor::new();
-    let call = PendingToolCall {
-        tool_use_id: "t1".into(),
-        tool: Arc::new(UnsafeTool { name: "u".into() }),
-        input: json!({"x": 1}),
-    };
-    let result = exec.execute_single(call, &ctx).await;
-    let data = result.result.unwrap().data;
-    assert_eq!(data["x"], 99);
-    assert_eq!(data["rewritten"], true);
-}
-
-/// PostToolUse `updated_output` must replace the tool's result data.
-#[tokio::test]
-async fn test_hook_pipeline_post_modify_output_is_applied() {
-    let (mut handle, _pre, _post_ok, _post_err) = RecordingHookHandle::default_recorder();
-    handle.post_ok_outcome.updated_output = Some(json!("replaced by hook"));
-    let mut ctx = crate::context::ToolUseContext::test_default();
-    ctx.hook_handle = Some(Arc::new(handle));
-
-    let exec = StreamingToolExecutor::new();
-    let call = PendingToolCall {
-        tool_use_id: "t1".into(),
-        tool: Arc::new(UnsafeTool { name: "u".into() }),
-        input: json!({"x": 1}),
-    };
-    let result = exec.execute_single(call, &ctx).await;
-    let data = result.result.unwrap().data;
-    assert_eq!(data, json!("replaced by hook"));
-}
-
-/// When the tool errors, PostToolUseFailure fires (not PostToolUse).
-#[tokio::test]
-async fn test_hook_pipeline_post_failure_on_tool_error() {
-    struct FailingTool;
-    #[async_trait::async_trait]
-    impl crate::traits::Tool for FailingTool {
-        fn id(&self) -> ToolId {
-            ToolId::Custom("failing".into())
-        }
-        fn name(&self) -> &str {
-            "failing"
-        }
-        fn description(&self, _: &Value, _: &DescriptionOptions) -> String {
-            "".into()
-        }
-        fn input_schema(&self) -> ToolInputSchema {
-            ToolInputSchema {
-                properties: HashMap::new(),
-            }
-        }
-        async fn execute(
-            &self,
-            _input: Value,
-            _ctx: &crate::context::ToolUseContext,
-        ) -> Result<ToolResult<Value>, crate::error::ToolError> {
-            Err(crate::error::ToolError::ExecutionFailed {
-                message: "boom".into(),
-                source: None,
-            })
-        }
-    }
-
-    let (handle, pre, post_ok, post_err) = RecordingHookHandle::default_recorder();
-    let mut ctx = crate::context::ToolUseContext::test_default();
-    ctx.hook_handle = Some(Arc::new(handle));
-
-    let exec = StreamingToolExecutor::new();
-    let call = PendingToolCall {
-        tool_use_id: "t1".into(),
-        tool: Arc::new(FailingTool),
-        input: json!({}),
-    };
-    let _ = exec.execute_single(call, &ctx).await;
-
-    assert_eq!(pre.load(Ordering::SeqCst), 1);
-    assert_eq!(
-        post_ok.load(Ordering::SeqCst),
-        0,
-        "success hook did not run"
-    );
-    assert_eq!(post_err.load(Ordering::SeqCst), 1, "failure hook ran");
-}
-
-/// Concurrent path must also invoke hooks (same contract as single path).
-#[tokio::test]
-async fn test_hook_pipeline_concurrent_tools_invoke_hooks() {
-    let (handle, pre, post_ok, _post_err) = RecordingHookHandle::default_recorder();
-    let mut ctx = crate::context::ToolUseContext::test_default();
-    ctx.hook_handle = Some(Arc::new(handle));
-
-    let exec = StreamingToolExecutor::new();
     let calls = vec![
         PendingToolCall {
             tool_use_id: "a".into(),
@@ -635,27 +554,334 @@ async fn test_hook_pipeline_concurrent_tools_invoke_hooks() {
         },
     ];
     let results = exec.execute_concurrent(calls, &ctx).await;
+
     assert_eq!(results.len(), 3);
     assert!(results.iter().all(|r| r.result.is_ok()));
-    assert_eq!(pre.load(Ordering::SeqCst), 3, "pre hook per tool");
-    assert_eq!(post_ok.load(Ordering::SeqCst), 3, "post hook per tool");
+    assert_eq!(hook_calls.load(Ordering::SeqCst), 0);
 }
 
-/// Missing hook handle (None) falls through unchanged — existing tests
-/// already cover this but we assert it explicitly to nail the contract.
+// ══════════════════════════════════════════════════════════════════
+// Phase 4d-α: execute_with scheduler tests
+// ══════════════════════════════════════════════════════════════════
+//
+// Locks in the I12 ordering contract for the new callback-driven
+// scheduler: concurrent batches surface in completion order, serial
+// tools apply patches pre-next-tool, EarlyOutcome acts as a barrier,
+// and concurrent-batch patches apply in model_index order
+// post-batch.
+
+use crate::call_plan::PreparedToolCall;
+use crate::call_plan::ToolCallOutcome;
+use crate::call_plan::ToolCallPlan;
+use crate::call_plan::ToolMessagePath;
+use crate::call_plan::ToolSideEffects;
+use crate::call_plan::UnstampedToolCallOutcome;
+use std::sync::Mutex;
+use std::time::Duration;
+
+fn prepared_from(
+    tool: Arc<dyn crate::traits::Tool>,
+    tool_use_id: &str,
+    model_index: usize,
+) -> PreparedToolCall {
+    PreparedToolCall {
+        tool_use_id: tool_use_id.into(),
+        tool_id: tool.id(),
+        tool,
+        parsed_input: json!({}),
+        model_index,
+    }
+}
+
+fn empty_unstamped(tool_use_id: &str, model_index: usize) -> UnstampedToolCallOutcome {
+    UnstampedToolCallOutcome {
+        tool_use_id: tool_use_id.into(),
+        tool_id: ToolId::Custom(tool_use_id.into()),
+        model_index,
+        ordered_messages: vec![],
+        message_path: ToolMessagePath::Success,
+        error_kind: None,
+        permission_denial: None,
+        prevent_continuation: None,
+        effects: ToolSideEffects::none(),
+    }
+}
+
+fn unstamped_with_patch<F>(
+    tool_use_id: &str,
+    model_index: usize,
+    patch: F,
+) -> UnstampedToolCallOutcome
+where
+    F: FnOnce(&mut coco_types::ToolAppState) + Send + Sync + 'static,
+{
+    UnstampedToolCallOutcome {
+        effects: ToolSideEffects {
+            app_state_patch: Some(Box::new(patch)),
+        },
+        ..empty_unstamped(tool_use_id, model_index)
+    }
+}
+
+/// Drive `execute_with` and capture the completion-order sequence of
+/// outcomes surfaced to `on_outcome`.
+async fn drive_capture<F, Fut>(
+    exec: &StreamingToolExecutor,
+    plans: Vec<ToolCallPlan>,
+    run_one: F,
+) -> Vec<ToolCallOutcome>
+where
+    F: Fn(PreparedToolCall, crate::call_plan::RunOneRuntime) -> Fut + Sync,
+    Fut: std::future::Future<Output = UnstampedToolCallOutcome> + Send,
+{
+    let captured = Mutex::new(Vec::<ToolCallOutcome>::new());
+    exec.execute_with(plans, run_one, |o| captured.lock().unwrap().push(o))
+        .await;
+    captured.into_inner().unwrap()
+}
+
 #[tokio::test]
-async fn test_hook_pipeline_absent_handle_is_noop() {
-    let ctx = crate::context::ToolUseContext::test_default();
-    // Default ctx has hook_handle: None.
-    assert!(ctx.hook_handle.is_none());
+async fn test_execute_with_concurrent_batch_surfaces_in_completion_order() {
+    // Three safe tools: A sleeps 80ms, B sleeps 10ms, C sleeps 40ms.
+    // Completion order MUST be [B, C, A] regardless of submission.
+    let a = Arc::new(SlowSafeTool {
+        name: "a".into(),
+        concurrent_count: Arc::new(AtomicI32::new(0)),
+        max_concurrent: Arc::new(AtomicI32::new(0)),
+        sleep_ms: 80,
+    });
+    let b = Arc::new(SlowSafeTool {
+        name: "b".into(),
+        concurrent_count: Arc::new(AtomicI32::new(0)),
+        max_concurrent: Arc::new(AtomicI32::new(0)),
+        sleep_ms: 10,
+    });
+    let c = Arc::new(SlowSafeTool {
+        name: "c".into(),
+        concurrent_count: Arc::new(AtomicI32::new(0)),
+        max_concurrent: Arc::new(AtomicI32::new(0)),
+        sleep_ms: 40,
+    });
+
+    let plans = vec![
+        ToolCallPlan::Runnable(prepared_from(a, "A", 0)),
+        ToolCallPlan::Runnable(prepared_from(b, "B", 1)),
+        ToolCallPlan::Runnable(prepared_from(c, "C", 2)),
+    ];
 
     let exec = StreamingToolExecutor::new();
-    let call = PendingToolCall {
-        tool_use_id: "t1".into(),
-        tool: Arc::new(UnsafeTool { name: "u".into() }),
-        input: json!({"x": 42}),
-    };
-    let result = exec.execute_single(call, &ctx).await;
-    assert!(result.result.is_ok());
-    assert_eq!(result.result.unwrap().data, json!({"x": 42}));
+    let outcomes = drive_capture(&exec, plans, |prepared, _runtime| async move {
+        let tool_use_id = prepared.tool_use_id.clone();
+        let model_index = prepared.model_index;
+        // Simulate actual tool work via the SlowSafeTool's own sleep.
+        let ctx = crate::context::ToolUseContext::test_default();
+        let _ = prepared.tool.execute(prepared.parsed_input, &ctx).await;
+        empty_unstamped(&tool_use_id, model_index)
+    })
+    .await;
+
+    let ids: Vec<_> = outcomes
+        .iter()
+        .map(|o| o.tool_use_id().to_string())
+        .collect();
+    assert_eq!(
+        ids,
+        vec!["B".to_string(), "C".to_string(), "A".to_string()],
+        "concurrent batch must surface in completion order (fast → slow)"
+    );
+
+    // completion_seq stamped monotonically in surface order.
+    let seqs: Vec<_> = outcomes
+        .iter()
+        .map(ToolCallOutcome::completion_seq)
+        .collect();
+    assert_eq!(seqs, vec![0, 1, 2]);
+}
+
+#[tokio::test]
+async fn test_execute_with_concurrent_batch_applies_patches_in_model_order() {
+    // Two concurrent tools; A's patch sets permission_mode → Plan,
+    // B's patch sets permission_mode → Default. After the batch the
+    // state must reflect the LAST write in model order (= B, index 1),
+    // regardless of which future resolved first.
+    let app_state = Arc::new(RwLock::new(coco_types::ToolAppState::default()));
+    let exec = StreamingToolExecutor::new().with_app_state(app_state.clone());
+
+    let a = Arc::new(SafeTool { name: "a".into() });
+    let b = Arc::new(SafeTool { name: "b".into() });
+
+    let plans = vec![
+        ToolCallPlan::Runnable(prepared_from(a, "A", 0)),
+        ToolCallPlan::Runnable(prepared_from(b, "B", 1)),
+    ];
+
+    // Vary completion order: B finishes first (so completion_seq 0),
+    // A finishes second (completion_seq 1). Model-order patches still
+    // mean A applies before B — final state = B's write.
+    drive_capture(&exec, plans, |prepared, _runtime| async move {
+        let tool_use_id = prepared.tool_use_id.clone();
+        let model_index = prepared.model_index;
+        let sleep_ms = if tool_use_id == "A" { 40 } else { 5 };
+        tokio::time::sleep(Duration::from_millis(sleep_ms)).await;
+        let target_mode = if model_index == 0 {
+            coco_types::PermissionMode::Plan
+        } else {
+            coco_types::PermissionMode::Default
+        };
+        unstamped_with_patch(&tool_use_id, model_index, move |state| {
+            state.permission_mode = Some(target_mode);
+        })
+    })
+    .await;
+
+    let guard = app_state.read().await;
+    assert_eq!(
+        guard.permission_mode,
+        Some(coco_types::PermissionMode::Default),
+        "post-batch state must reflect B (model_index 1) applied AFTER A, \
+         regardless of completion order"
+    );
+}
+
+#[tokio::test]
+async fn test_execute_with_serial_tool_applies_patch_before_next_context() {
+    // A serial unsafe tool followed by another serial unsafe tool.
+    // The first tool's patch must be visible (via shared state read)
+    // by the time the second run_one is called — serial mode applies
+    // between tools per TS `toolOrchestration.ts:130-141`.
+    let app_state = Arc::new(RwLock::new(coco_types::ToolAppState::default()));
+    let exec = StreamingToolExecutor::new().with_app_state(app_state.clone());
+
+    let u1 = Arc::new(UnsafeTool { name: "u1".into() });
+    let u2 = Arc::new(UnsafeTool { name: "u2".into() });
+
+    let plans = vec![
+        ToolCallPlan::Runnable(prepared_from(u1, "u1", 0)),
+        ToolCallPlan::Runnable(prepared_from(u2, "u2", 1)),
+    ];
+
+    // u1 writes plan_mode_attachment_count = 7. When u2's run_one
+    // fires, we read shared state and capture what we saw.
+    let observed_by_u2: Arc<Mutex<Option<i64>>> = Arc::new(Mutex::new(None));
+    let observed_by_u2_clone = observed_by_u2.clone();
+    let app_state_read = app_state.clone();
+
+    exec.execute_with(
+        plans,
+        move |prepared, _runtime| {
+            let app_state_read = app_state_read.clone();
+            let observed = observed_by_u2_clone.clone();
+            async move {
+                let tool_use_id = prepared.tool_use_id.clone();
+                let model_index = prepared.model_index;
+                if tool_use_id == "u1" {
+                    unstamped_with_patch(&tool_use_id, model_index, |state| {
+                        state.plan_mode_attachment_count = 7;
+                    })
+                } else {
+                    // u2 snapshots the state it sees. Must already
+                    // reflect u1's patch.
+                    let snap = app_state_read.read().await.plan_mode_attachment_count;
+                    *observed.lock().unwrap() = Some(snap);
+                    empty_unstamped(&tool_use_id, model_index)
+                }
+            }
+        },
+        |_outcome| {},
+    )
+    .await;
+
+    assert_eq!(
+        *observed_by_u2.lock().unwrap(),
+        Some(7),
+        "u2 must observe u1's patch — serial tools apply between calls"
+    );
+}
+
+#[tokio::test]
+async fn test_execute_with_early_outcome_is_barrier_between_safe_batches() {
+    // Partition [safe_A, early_B, safe_C]:
+    //   block 0: ConcurrentSafe([safe_A])
+    //   block 1: EarlyOutcome(early_B)
+    //   block 2: ConcurrentSafe([safe_C])
+    //
+    // EarlyOutcome must NOT share a batch with safe neighbors, and
+    // its completion_seq lands between the two safe outcomes'
+    // completion_seqs in partition order — NOT globally before both
+    // (TS `toolOrchestration.ts:91-115` + plan I12).
+    let a = Arc::new(SafeTool { name: "a".into() });
+    let c = Arc::new(SafeTool { name: "c".into() });
+
+    let plans = vec![
+        ToolCallPlan::Runnable(prepared_from(a, "A", 0)),
+        ToolCallPlan::EarlyOutcome(UnstampedToolCallOutcome {
+            tool_use_id: "B".into(),
+            tool_id: ToolId::Custom("unknown".into()),
+            model_index: 1,
+            ordered_messages: vec![],
+            message_path: ToolMessagePath::EarlyReturn,
+            error_kind: Some(crate::call_plan::ToolCallErrorKind::UnknownTool),
+            permission_denial: None,
+            prevent_continuation: None,
+            effects: ToolSideEffects::none(),
+        }),
+        ToolCallPlan::Runnable(prepared_from(c, "C", 2)),
+    ];
+
+    let exec = StreamingToolExecutor::new();
+    let outcomes = drive_capture(&exec, plans, |prepared, _| async move {
+        let tool_use_id = prepared.tool_use_id.clone();
+        empty_unstamped(&tool_use_id, prepared.model_index)
+    })
+    .await;
+
+    // Partition order: A, B, C — each in its own block.
+    let ids: Vec<_> = outcomes
+        .iter()
+        .map(|o| o.tool_use_id().to_string())
+        .collect();
+    assert_eq!(ids, vec!["A", "B", "C"]);
+
+    // completion_seq stamped in partition traversal order, not
+    // "EarlyOutcome stamps first".
+    let seqs: Vec<_> = outcomes
+        .iter()
+        .map(ToolCallOutcome::completion_seq)
+        .collect();
+    assert_eq!(seqs, vec![0, 1, 2]);
+
+    // The middle outcome is the synthetic unknown-tool error.
+    assert_eq!(
+        outcomes[1].error_kind(),
+        Some(&crate::call_plan::ToolCallErrorKind::UnknownTool)
+    );
+    assert_eq!(outcomes[1].message_path(), ToolMessagePath::EarlyReturn);
+}
+
+#[tokio::test]
+async fn test_execute_with_every_plan_gets_one_outcome() {
+    // I1 / per-call invariant: one ToolUseQueued → exactly one
+    // ToolUseCompleted. Encoded here as: every plan submitted
+    // surfaces exactly one outcome.
+    let a = Arc::new(SafeTool { name: "a".into() });
+    let b = Arc::new(UnsafeTool { name: "b".into() });
+
+    let plans = vec![
+        ToolCallPlan::Runnable(prepared_from(a, "A", 0)),
+        ToolCallPlan::EarlyOutcome(empty_unstamped("B", 1)),
+        ToolCallPlan::Runnable(prepared_from(b, "C", 2)),
+    ];
+
+    let exec = StreamingToolExecutor::new();
+    let outcomes = drive_capture(&exec, plans, |prepared, _| async move {
+        empty_unstamped(&prepared.tool_use_id, prepared.model_index)
+    })
+    .await;
+
+    assert_eq!(outcomes.len(), 3);
+    let ids: Vec<_> = outcomes
+        .iter()
+        .map(|o| o.tool_use_id().to_string())
+        .collect();
+    assert_eq!(ids, vec!["A", "B", "C"]);
 }

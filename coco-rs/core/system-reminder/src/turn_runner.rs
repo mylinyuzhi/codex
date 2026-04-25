@@ -164,6 +164,8 @@ pub struct TurnReminderInput<'a> {
     pub at_mentioned_files: Vec<crate::generators::user_input::MentionedFileEntry>,
     pub mcp_resources: Vec<crate::generators::user_input::McpResourceEntry>,
     pub agent_mentions: Vec<crate::generators::user_input::AgentMentionEntry>,
+
+    // ── Main-thread IDE snapshots ──
     pub ide_selection: Option<crate::generators::user_input::IdeSelectionSnapshot>,
     pub ide_opened_file: Option<crate::generators::user_input::IdeOpenedFileSnapshot>,
 
