@@ -68,8 +68,8 @@ Add for `None` / booleans / numeric literals. Skip for string/char literals unle
 
 ### Module Size
 
-- Target Rust modules under 500 LoC (excluding tests)
-- Files > ~1400 LoC: create a new module instead of extending
+- Target Rust modules under 800 LoC (excluding tests)
+- Files > ~1600 LoC: create a new module instead of extending
 
 ### Comments
 
