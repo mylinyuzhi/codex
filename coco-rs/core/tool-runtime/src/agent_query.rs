@@ -24,7 +24,7 @@ use serde::Serialize;
 /// Configuration for a single agent query turn.
 ///
 /// TS: Parameters passed to runAgent() in runAgent.ts
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AgentQueryConfig {
     /// System prompt for the agent.
     pub system_prompt: String,
@@ -38,9 +38,35 @@ pub struct AgentQueryConfig {
     /// Maximum output tokens per turn. Defaults to model's max.
     #[serde(default)]
     pub max_output_tokens: Option<i64>,
-    /// Tools available to the agent (names).
+    /// Tools available to the agent (names). Empty = inherit parent's
+    /// filter; non-empty = subagent restricted to this set.
     #[serde(default)]
     pub allowed_tools: Vec<String>,
+    /// Tools explicitly denied to the agent regardless of allow-list.
+    /// Sourced from `AgentDefinition.disallowed_tools`.
+    #[serde(default)]
+    pub disallowed_tools: Vec<String>,
+    /// Layer 2 tool overrides inherited from the parent. The subagent
+    /// **never** widens this set — `ToolOverrides::none()` would
+    /// expose tools the active model doesn't actually accept. Skipped
+    /// at the JSON boundary; the parent fills it in-process before
+    /// handing off.
+    #[serde(skip)]
+    pub tool_overrides: Option<std::sync::Arc<coco_types::ToolOverrides>>,
+    /// Layer 1 feature gates inherited from the parent. Defaults to
+    /// `with_defaults()` only when the caller doesn't thread the
+    /// parent value through, which silently re-enables features the
+    /// user disabled at the top level. Skipped at the JSON boundary
+    /// for the same reason as `tool_overrides`.
+    #[serde(skip)]
+    pub features: Option<std::sync::Arc<coco_types::Features>>,
+    /// Parent's Layer 4 tool filter. The adapter intersects this with
+    /// the subagent's own `allowed_tools` / `disallowed_tools` via
+    /// [`coco_types::ToolFilter::narrow_with`] so the child can never
+    /// widen what the parent restricted. Skipped at the JSON boundary
+    /// for the same reason as the other inheritance fields.
+    #[serde(skip)]
+    pub parent_tool_filter: Option<coco_types::ToolFilter>,
     /// Whether to preserve tool use results across compaction.
     #[serde(default)]
     pub preserve_tool_use_results: bool,

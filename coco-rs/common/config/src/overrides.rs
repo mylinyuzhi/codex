@@ -1,3 +1,6 @@
+use std::collections::BTreeMap;
+
+use coco_types::Feature;
 use coco_types::PermissionMode;
 
 /// Mutable state that changes during a session.
@@ -21,4 +24,9 @@ pub struct RuntimeOverrides {
     /// replace any `settings.models.main.fallbacks` from JSON
     /// (CLI wins over settings for Main fallback).
     pub fallback_model_overrides: Vec<String>,
+    /// CLI `--enable <feature>` / `--disable <feature>` overrides.
+    /// Applied last in `Features::resolve()`, after settings.json + env
+    /// vars. Public field so callers can splat with
+    /// `..Default::default()`; mutate by inserting directly.
+    pub feature_overrides: BTreeMap<Feature, bool>,
 }

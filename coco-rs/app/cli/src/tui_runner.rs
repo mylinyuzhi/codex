@@ -165,6 +165,8 @@ pub async fn run_tui(cli: &Cli) -> Result<()> {
         shell_config: runtime_config.shell.clone(),
         web_fetch_config: runtime_config.web_fetch.clone(),
         web_search_config: runtime_config.web_search.clone(),
+        features: std::sync::Arc::new(runtime_config.features.clone()),
+        tool_overrides: runtime_config.tool_overrides.clone(),
         ..Default::default()
     };
 

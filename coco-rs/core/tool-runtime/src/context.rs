@@ -2,8 +2,11 @@ use coco_context::FileHistoryState;
 use coco_context::FileReadState;
 use coco_types::AgentId;
 use coco_types::AgentTypeId;
+use coco_types::Features;
 use coco_types::Message;
 use coco_types::ThinkingLevel;
+use coco_types::ToolFilter;
+use coco_types::ToolOverrides;
 use coco_types::ToolPermissionContext;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -109,6 +112,18 @@ pub struct ToolUseContext {
     /// Resolved web-search runtime configuration. Consumed by the
     /// `WebSearchTool` for max-results.
     pub web_search_config: coco_config::WebSearchConfig,
+    /// Centralized feature gates. See
+    /// `docs/coco-rs/feature-gates-and-tool-filtering.md`.
+    pub features: Arc<Features>,
+    /// Layer 2 of the tool-filter pipeline — extra tools the active
+    /// model adds beyond the baseline + baseline tools it excludes.
+    /// Resolved once at session start (or on `/model` switch).
+    pub tool_overrides: Arc<ToolOverrides>,
+    /// Layer 4 of the tool-filter pipeline — agent allow/deny.
+    /// Constructed from `AgentDefinition.allowed_tools` /
+    /// `disallowed_tools` when a subagent spawns; `unrestricted()` for
+    /// the top-level session.
+    pub tool_filter: ToolFilter,
 
     // ── Core State ──
     /// Cancellation token for aborting tool execution.
@@ -396,7 +411,6 @@ pub enum ToolDecisionKind {
     Reject,
 }
 
-#[cfg(any(test, feature = "testing"))]
 use coco_types::PermissionMode;
 
 impl ToolUseContext {
@@ -422,6 +436,9 @@ impl ToolUseContext {
             shell_config: self.shell_config.clone(),
             web_fetch_config: self.web_fetch_config.clone(),
             web_search_config: self.web_search_config.clone(),
+            features: self.features.clone(),
+            tool_overrides: self.tool_overrides.clone(),
+            tool_filter: self.tool_filter.clone(),
             cancel: self.cancel.clone(),
             messages: self.messages.clone(),
             permission_context: self.permission_context.clone(),
@@ -476,9 +493,32 @@ impl ToolUseContext {
         }
     }
 
+    /// Build a context suitable **only** for the registry filter pipeline
+    /// — system-reminder tool listings, SessionStarted bootstrap events,
+    /// and similar display-only sites that don't run the tool. All
+    /// non-filter fields use cheap stub values; do not pass this to
+    /// `Tool::execute()`.
+    pub fn stub_for_filtering(
+        features: Arc<Features>,
+        tool_overrides: Arc<ToolOverrides>,
+        tool_filter: ToolFilter,
+        permission_mode: PermissionMode,
+    ) -> Self {
+        let mut ctx = Self::test_default_inner();
+        ctx.features = features;
+        ctx.tool_overrides = tool_overrides;
+        ctx.tool_filter = tool_filter;
+        ctx.permission_context.mode = permission_mode;
+        ctx
+    }
+
     /// Create a minimal context for testing.
     #[cfg(any(test, feature = "testing"))]
     pub fn test_default() -> Self {
+        Self::test_default_inner()
+    }
+
+    fn test_default_inner() -> Self {
         Self {
             tools: Arc::new(ToolRegistry::new()),
             main_loop_model: "test-model".into(),
@@ -495,6 +535,9 @@ impl ToolUseContext {
             shell_config: coco_config::ShellConfig::default(),
             web_fetch_config: coco_config::WebFetchConfig::default(),
             web_search_config: coco_config::WebSearchConfig::default(),
+            features: Arc::new(Features::with_defaults()),
+            tool_overrides: Arc::new(ToolOverrides::none()),
+            tool_filter: ToolFilter::unrestricted(),
             cancel: CancellationToken::new(),
             messages: Arc::new(RwLock::new(Vec::new())),
             permission_context: ToolPermissionContext {

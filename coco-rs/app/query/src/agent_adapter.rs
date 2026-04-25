@@ -18,7 +18,10 @@ use std::sync::Arc;
 use coco_tool_runtime::AgentQueryConfig;
 use coco_tool_runtime::AgentQueryEngine;
 use coco_tool_runtime::AgentQueryResult;
+use coco_types::Features;
 use coco_types::ModelRole;
+use coco_types::ToolFilter;
+use coco_types::ToolOverrides;
 
 use crate::engine::QueryEngine;
 use crate::engine::QueryEngineConfig;
@@ -112,6 +115,42 @@ impl AgentQueryEngine for QueryEngineAdapter {
             shell_config: coco_config::ShellConfig::default(),
             web_fetch_config: coco_config::WebFetchConfig::default(),
             web_search_config: coco_config::WebSearchConfig::default(),
+            // Layer 1 — inherit parent's resolved features. Defaulting
+            // to `with_defaults()` would silently re-enable gates the
+            // user disabled at the top level (Sandbox, WebSearch, ...).
+            // The Option fallback only kicks in when the caller really
+            // doesn't have a parent context (no test path takes this
+            // branch in production).
+            features: config
+                .features
+                .clone()
+                .unwrap_or_else(|| Arc::new(Features::with_defaults())),
+            // Layer 2 — inherit parent's resolved tool overrides (filled
+            // in by the parent before handing off `AgentQueryConfig`).
+            // Falling back to `none()` would WIDEN the set beyond what
+            // the active model actually accepts; we'd expose tools the
+            // model can't call. The factory may replace this with
+            // role-resolved overrides when it builds the child engine.
+            tool_overrides: config
+                .tool_overrides
+                .clone()
+                .unwrap_or_else(|| Arc::new(ToolOverrides::none())),
+            // Layer 4 — derive the subagent's allow/deny from its
+            // AgentDefinition, then narrow against the parent's filter
+            // so a child's `allowed_tools` cannot widen what the parent
+            // restricted. Empty allow + deny ⇒ filter is permissive on
+            // the child side, but `narrow_with(parent)` keeps every
+            // parent-side restriction.
+            tool_filter: {
+                let child = ToolFilter::new(
+                    config.allowed_tools.clone(),
+                    config.disallowed_tools.clone(),
+                );
+                match &config.parent_tool_filter {
+                    Some(parent) => child.narrow_with(parent),
+                    None => child,
+                }
+            },
         };
 
         // Role resolution: the adapter threads the subagent's role

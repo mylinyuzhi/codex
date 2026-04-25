@@ -174,8 +174,11 @@ Important:
 ///
 /// TS `shouldUseSandbox.ts` uses similar logic: enable check → bypass
 /// check → exclusion list → sandbox decision.
-fn shell_sandbox_config_from_runtime(config: &coco_config::SandboxConfig) -> ShellSandboxConfig {
-    if !config.enabled {
+fn shell_sandbox_config_from_runtime(
+    config: &coco_config::SandboxConfig,
+    feature_enabled: bool,
+) -> ShellSandboxConfig {
+    if !feature_enabled {
         return ShellSandboxConfig::default();
     }
     let mode = match config.mode {
@@ -392,7 +395,10 @@ impl Tool for BashTool {
         //   3. If command matches an excluded pattern → unsandboxed
         //   4. Otherwise → sandboxed
         //
-        let sandbox_config = shell_sandbox_config_from_runtime(&ctx.sandbox_config);
+        let sandbox_config = shell_sandbox_config_from_runtime(
+            &ctx.sandbox_config,
+            ctx.features.enabled(coco_types::Feature::Sandbox),
+        );
         let bypass = if input
             .get("dangerouslyDisableSandbox")
             .and_then(serde_json::Value::as_bool)

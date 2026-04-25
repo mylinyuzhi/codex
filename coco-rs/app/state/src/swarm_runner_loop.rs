@@ -28,7 +28,7 @@ use super::swarm_teammate;
 // ── Trait: AgentExecutionEngine ──
 
 /// Configuration for a single query/turn within the teammate loop.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct AgentQueryConfig {
     /// System prompt (base + addendum).
     pub system_prompt: String,
@@ -38,6 +38,11 @@ pub struct AgentQueryConfig {
     pub max_turns: Option<i32>,
     /// Tools the agent is allowed to use without prompting.
     pub allowed_tools: Vec<String>,
+    /// Tools explicitly denied to the agent regardless of allow-list.
+    /// Sourced from the role's `disallowed_tools`. Threaded onward into
+    /// the engine-side `coco_tool_runtime::AgentQueryConfig` so Layer 4
+    /// of the filter pipeline narrows correctly.
+    pub disallowed_tools: Vec<String>,
     /// Prior conversation messages (for context forking).
     pub fork_context_messages: Vec<serde_json::Value>,
     /// Whether to preserve full tool results (not previews).
@@ -49,6 +54,21 @@ pub struct AgentQueryConfig {
     /// `--dangerously-skip-permissions` to spawned children; the
     /// in-process analog is this field.
     pub bypass_permissions_available: bool,
+    /// Parent session's resolved Layer 1 features. The engine bridge
+    /// must thread this into `coco_tool_runtime::AgentQueryConfig.features`
+    /// or teammates silently get registry defaults instead of the user's
+    /// runtime resolution.
+    pub features: Option<std::sync::Arc<coco_types::Features>>,
+    /// Parent session's resolved Layer 2 tool overrides. Same rationale
+    /// as `features`: a `None` here causes the engine bridge to fall
+    /// back to `ToolOverrides::none()`, widening the set the active
+    /// model accepts.
+    pub tool_overrides: Option<std::sync::Arc<coco_types::ToolOverrides>>,
+    /// Parent session's Layer 4 tool filter. The engine bridge feeds
+    /// this into `coco_tool_runtime::AgentQueryConfig.parent_tool_filter`
+    /// so the teammate's own allow/deny gets intersected via
+    /// `ToolFilter::narrow_with`.
+    pub parent_tool_filter: Option<coco_types::ToolFilter>,
 }
 
 /// Result from running a single query/turn.
@@ -119,6 +139,14 @@ pub struct InProcessRunnerConfig {
     /// Parent session's bypass-permissions capability (forwarded on
     /// every query). Defaults to `false` so legacy callers stay safe.
     pub bypass_permissions_available: bool,
+    /// Parent session's resolved Layer 1 features. Threaded into every
+    /// teammate query config so in-process teammates see the same gate
+    /// set as the leader.
+    pub features: Option<std::sync::Arc<coco_types::Features>>,
+    /// Parent session's resolved Layer 2 tool overrides. Same rationale.
+    pub tool_overrides: Option<std::sync::Arc<coco_types::ToolOverrides>>,
+    /// Parent session's Layer 4 tool filter — see `AgentQueryConfig`.
+    pub parent_tool_filter: Option<coco_types::ToolFilter>,
 }
 
 /// Result from running an in-process teammate to completion.
@@ -208,9 +236,13 @@ pub async fn run_in_process_teammate(
             model: config.model.clone(),
             max_turns: config.max_turns,
             allowed_tools: config.allowed_tools.clone(),
+            disallowed_tools: Vec::new(),
             fork_context_messages: all_messages.clone(),
             preserve_tool_use_results: true,
             bypass_permissions_available: config.bypass_permissions_available,
+            features: config.features.clone(),
+            tool_overrides: config.tool_overrides.clone(),
+            parent_tool_filter: config.parent_tool_filter.clone(),
         };
 
         // Run query

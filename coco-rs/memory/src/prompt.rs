@@ -23,12 +23,9 @@ const DIR_EXISTS_GUIDANCE: &str = "This directory already exists — write to it
 /// Load the memory section for the system prompt.
 ///
 /// Reads MEMORY.md, truncates to limits, wraps with behavior instructions.
-/// Returns `None` if auto-memory is disabled or no MEMORY.md exists.
+/// Returns `None` if no MEMORY.md exists. Callers must check
+/// `Feature::AutoMemory` upstream — this function does not gate on it.
 pub fn load_memory_prompt(config: &MemoryConfig, memory_dir: &Path) -> Option<String> {
-    if !config.enabled {
-        return None;
-    }
-
     let index_path = memory_dir.join("MEMORY.md");
     let memory_content = std::fs::read_to_string(&index_path).ok()?;
 

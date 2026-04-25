@@ -18,12 +18,12 @@ pub const MCP_TOOL_SEPARATOR: &str = "__";
 /// Branch prefix for agent worktrees created by `EnterWorktree`.
 pub const AGENT_WORKTREE_BRANCH_PREFIX: &str = "agent/task-";
 
-/// All 41 built-in tool names.
+/// All built-in tool names.
 /// Copy + const fn as_str() — zero-cost identity for builtins.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum ToolName {
-    // File I/O (7)
+    // File I/O (8)
     Bash,
     Read,
     Write,
@@ -31,6 +31,13 @@ pub enum ToolName {
     Glob,
     Grep,
     NotebookEdit,
+    /// Patch-based file edit format introduced by gpt-5. The model emits
+    /// a unified-diff-style patch and the runtime applies it. Lives in
+    /// `ToolName` (not just on the model side) because coco-rs must
+    /// register a Tool implementation to actually apply the patch.
+    /// Visible only when `ToolOverrides::is_extra(ApplyPatch)`.
+    #[serde(rename = "apply_patch")]
+    ApplyPatch,
     // Web (2)
     WebFetch,
     WebSearch,
@@ -88,6 +95,7 @@ impl ToolName {
             Self::Glob => "Glob",
             Self::Grep => "Grep",
             Self::NotebookEdit => "NotebookEdit",
+            Self::ApplyPatch => "apply_patch",
             Self::WebFetch => "WebFetch",
             Self::WebSearch => "WebSearch",
             Self::Agent => "Agent",
@@ -132,6 +140,18 @@ impl fmt::Display for ToolName {
     }
 }
 
+impl From<ToolName> for String {
+    fn from(name: ToolName) -> Self {
+        name.as_str().to_string()
+    }
+}
+
+impl AsRef<str> for ToolName {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
 impl FromStr for ToolName {
     type Err = String;
 
@@ -144,6 +164,7 @@ impl FromStr for ToolName {
             "Glob" => Ok(Self::Glob),
             "Grep" => Ok(Self::Grep),
             "NotebookEdit" => Ok(Self::NotebookEdit),
+            "apply_patch" => Ok(Self::ApplyPatch),
             "WebFetch" => Ok(Self::WebFetch),
             "WebSearch" => Ok(Self::WebSearch),
             "Agent" => Ok(Self::Agent),

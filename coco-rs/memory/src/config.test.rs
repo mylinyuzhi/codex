@@ -1,20 +1,14 @@
 use super::*;
 
 #[test]
-fn test_default_config_is_enabled() {
+fn test_default_config_sub_toggles() {
+    // Top-level enable lives on `Feature::AutoMemory`; this struct only
+    // carries internal sub-toggles + parameters.
     let config = MemoryConfig::default();
-    assert!(config.enabled);
     assert!(config.extraction_enabled);
     assert!(!config.team_memory_enabled);
     assert!(!config.skip_index);
     assert_eq!(config.extraction_throttle, 1);
-}
-
-#[test]
-fn test_disabled_config() {
-    let config = MemoryConfig::disabled();
-    assert!(!config.enabled);
-    assert!(!config.extraction_enabled);
 }
 
 #[test]

@@ -3,7 +3,6 @@
 //! TS: utils/swarm/spawnUtils.ts
 
 use super::swarm_backend::TeammateSpawnConfig;
-use super::swarm_constants::AGENT_TEAMS_ENV_VAR;
 use super::swarm_constants::PLAN_MODE_REQUIRED_ENV_VAR;
 use super::swarm_constants::TEAMMATE_COLOR_ENV_VAR;
 use coco_config::EnvKey;
@@ -100,8 +99,9 @@ pub fn build_inherited_cli_flags(config: &TeammateSpawnConfig) -> Vec<String> {
 pub fn build_inherited_env_vars(config: &TeammateSpawnConfig) -> String {
     let mut vars = Vec::new();
 
-    // Always set these
-    vars.push(format!("{AGENT_TEAMS_ENV_VAR}=1"));
+    // Inherit Feature::AgentTeams to children: setting `COCO_FEATURE_AGENT_TEAMS=1`
+    // makes spawned subprocess Features::resolve() pick up the gate.
+    vars.push("COCO_FEATURE_AGENT_TEAMS=1".to_string());
 
     // Agent color
     if let Some(color) = &config.color {

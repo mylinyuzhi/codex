@@ -1,8 +1,11 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
+use coco_types::Features;
 use coco_types::ModelRole;
 use coco_types::ModelSpec;
+use coco_types::ToolOverrides;
 
 use crate::env::EnvOnlyConfig;
 use crate::env::EnvSnapshot;
@@ -48,6 +51,14 @@ pub struct RuntimeConfig {
     pub web_fetch: WebFetchConfig,
     pub web_search: WebSearchConfig,
     pub paths: PathConfig,
+    /// Coarse-grained capability gates. See
+    /// `docs/coco-rs/feature-gates-and-tool-filtering.md`.
+    pub features: Features,
+    /// Layer 2 of the tool-filter pipeline — extra tools the active
+    /// main-loop model adds beyond the baseline + baseline tools it
+    /// excludes. Resolved once from the Main role's `model_id`;
+    /// subagents inherit this `Arc` and never widen it.
+    pub tool_overrides: Arc<ToolOverrides>,
 }
 
 #[derive(Debug, Clone)]
@@ -103,6 +114,9 @@ fn build_runtime_config(
     let model_roles = resolve_model_roles(&settings, &env_only, &overrides, &providers)?;
     let merged = &settings.merged;
 
+    let features = resolve_features(merged, &env, &overrides);
+    let tool_overrides = resolve_main_tool_overrides(&model_roles);
+
     Ok(RuntimeConfig {
         api: ApiConfig::resolve(merged),
         loop_config: LoopConfig::resolve(merged, &overrides),
@@ -114,12 +128,47 @@ fn build_runtime_config(
         web_fetch: WebFetchConfig::resolve(merged),
         web_search: WebSearchConfig::resolve(merged),
         paths: PathConfig::resolve(merged),
+        features,
+        tool_overrides,
         settings,
         env_only,
         overrides,
         providers,
         model_roles,
     })
+}
+
+fn resolve_main_tool_overrides(roles: &crate::model::ModelRoles) -> Arc<ToolOverrides> {
+    // Tool-overrides resolution keys on `model_id` alone — provider is
+    // a routing concern (URL, auth, wire API), not a capability axis.
+    // gpt-5 served by OpenAI direct, Azure, or any compat gateway
+    // returns the same diff.
+    //
+    // The user-side override path (per-model `ModelInfo.tool_overrides`
+    // from settings.json) is wired through
+    // `tool_overrides::resolve_tool_overrides`'s second arg, but
+    // `RuntimeConfig` doesn't yet plumb a live `ModelInfo` registry —
+    // that lives on the dormant `ProviderInfo`/`ProviderModel` types.
+    // Pass `None` until that plumbing lands.
+    let overrides = match roles.get(ModelRole::Main) {
+        Some(spec) => crate::tool_overrides::resolve_tool_overrides(&spec.model_id, None),
+        None => ToolOverrides::none(),
+    };
+    Arc::new(overrides)
+}
+
+fn resolve_features(
+    settings: &crate::settings::Settings,
+    env: &EnvSnapshot,
+    overrides: &RuntimeOverrides,
+) -> Features {
+    let mut features = Features::with_defaults();
+    features.apply_map(&settings.features);
+    features.apply_map(env.feature_overrides());
+    for (feat, enabled) in &overrides.feature_overrides {
+        features.set_enabled(*feat, *enabled);
+    }
+    features
 }
 
 fn resolve_providers(settings: &SettingsWithSource) -> HashMap<String, ProviderConfig> {

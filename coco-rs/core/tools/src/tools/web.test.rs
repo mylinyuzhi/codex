@@ -224,7 +224,10 @@ fn test_websearch_is_concurrency_safe() {
 async fn test_websearch_rejects_short_query() {
     let ctx = ToolUseContext::test_default();
     let vr = WebSearchTool.validate_input(&json!({"query": "a"}), &ctx);
-    assert!(matches!(vr, coco_tool_runtime::ValidationResult::Invalid { .. }));
+    assert!(matches!(
+        vr,
+        coco_tool_runtime::ValidationResult::Invalid { .. }
+    ));
 }
 
 #[tokio::test]
@@ -238,7 +241,10 @@ async fn test_websearch_rejects_both_filters() {
         }),
         &ctx,
     );
-    assert!(matches!(vr, coco_tool_runtime::ValidationResult::Invalid { .. }));
+    assert!(matches!(
+        vr,
+        coco_tool_runtime::ValidationResult::Invalid { .. }
+    ));
 }
 
 #[tokio::test]

@@ -11,6 +11,7 @@ use coco_types::ModelSpec;
 use coco_types::ProviderApi;
 use coco_types::ReasoningEffort;
 use coco_types::ThinkingLevel;
+use coco_types::ToolOverrides;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -61,8 +62,14 @@ pub struct ModelInfo {
     // === Tools ===
     #[serde(skip_serializing_if = "Option::is_none")]
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
+    /// Per-model tool-availability adjustments — what extra tools the
+    /// model adds beyond the baseline (e.g. gpt-5's `apply_patch`) and
+    /// what baseline tools the model excludes (e.g. gpt-5's `Edit`).
+    /// Layered on top of the built-in registry at config-resolve time
+    /// so users can opt custom finetunes into the same pipeline without
+    /// touching code. See `docs/coco-rs/feature-gates-and-tool-filtering.md`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub excluded_tools: Option<Vec<String>>,
+    pub tool_overrides: Option<ToolOverrides>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shell_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -149,7 +156,7 @@ impl ModelInfo {
         merge_opt!(default_thinking_level);
         merge_opt!(auto_compact_pct);
         merge_opt!(apply_patch_tool_type);
-        merge_opt!(excluded_tools);
+        merge_opt!(tool_overrides);
         merge_opt!(shell_type);
         merge_opt!(max_tool_output_chars);
         merge_opt!(base_instructions);

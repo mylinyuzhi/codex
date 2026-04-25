@@ -334,7 +334,10 @@ impl QueryEngine {
     /// Attach a permission bridge so `PermissionDecision::Ask` outcomes
     /// are forwarded to an external authority (e.g. the SDK client via
     /// `SdkPermissionBridge`) instead of auto-allowing.
-    pub fn with_permission_bridge(mut self, bridge: coco_tool_runtime::ToolPermissionBridgeRef) -> Self {
+    pub fn with_permission_bridge(
+        mut self,
+        bridge: coco_tool_runtime::ToolPermissionBridgeRef,
+    ) -> Self {
         self.permission_bridge = Some(bridge);
         self
     }
@@ -563,8 +566,14 @@ impl QueryEngine {
             .and_then(|v| v.as_str().map(str::to_owned))
             .unwrap_or_else(|| "default".into());
         let tools = if bootstrap.tools.is_empty() {
+            let stub_ctx = coco_tool_runtime::ToolUseContext::stub_for_filtering(
+                self.config.features.clone(),
+                self.config.tool_overrides.clone(),
+                self.config.tool_filter.clone(),
+                self.config.permission_mode,
+            );
             self.tools
-                .loaded_tools()
+                .loaded_tools(&stub_ctx)
                 .iter()
                 .map(|t| t.name().to_string())
                 .collect()
@@ -1003,12 +1012,19 @@ impl QueryEngine {
             // (counts human turns, not LLM iterations). Tool-result
             // rounds within one human turn share the same counter value
             // so reminders don't spam mid-turn.
-            let reminder_tools: Vec<String> = self
-                .tools
-                .loaded_tools()
-                .iter()
-                .map(|t| t.name().to_string())
-                .collect();
+            let reminder_tools: Vec<String> = {
+                let stub_ctx = coco_tool_runtime::ToolUseContext::stub_for_filtering(
+                    self.config.features.clone(),
+                    self.config.tool_overrides.clone(),
+                    self.config.tool_filter.clone(),
+                    self.config.permission_mode,
+                );
+                self.tools
+                    .loaded_tools(&stub_ctx)
+                    .iter()
+                    .map(|t| t.name().to_string())
+                    .collect()
+            };
             let pm_settings = &self.config.plan_mode_settings;
             let workflow_rm = match pm_settings.workflow {
                 coco_config::PlanModeWorkflow::FivePhase => coco_context::PlanWorkflow::FivePhase,
@@ -2813,7 +2829,13 @@ impl QueryEngine {
         &self,
         app_state: &ToolAppState,
     ) -> Vec<vercel_ai_provider::LanguageModelV4Tool> {
-        let loaded = self.tools.loaded_tools();
+        let stub_ctx = coco_tool_runtime::ToolUseContext::stub_for_filtering(
+            self.config.features.clone(),
+            self.config.tool_overrides.clone(),
+            self.config.tool_filter.clone(),
+            self.config.permission_mode,
+        );
+        let loaded = self.tools.loaded_tools(&stub_ctx);
         let tool_names: Vec<String> = loaded.iter().map(|t| t.name().to_string()).collect();
 
         let agent_names: Vec<String> = self

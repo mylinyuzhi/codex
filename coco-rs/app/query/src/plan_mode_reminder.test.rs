@@ -208,8 +208,9 @@ async fn default_mode_does_not_bump_plan_turn_counter() {
 /// In-memory mailbox handle so tests can inject messages + verify reads.
 #[derive(Default)]
 struct FakeMailbox {
-    inboxes:
-        std::sync::Mutex<std::collections::HashMap<(String, String), Vec<coco_tool_runtime::InboxMessage>>>,
+    inboxes: std::sync::Mutex<
+        std::collections::HashMap<(String, String), Vec<coco_tool_runtime::InboxMessage>>,
+    >,
     marked: std::sync::Mutex<Vec<(String, String, usize)>>,
     next_index: std::sync::Mutex<std::collections::HashMap<(String, String), usize>>,
 }
@@ -222,17 +223,14 @@ impl FakeMailbox {
         let this_idx = *idx;
         *idx += 1;
         drop(idx_guard);
-        self.inboxes
-            .lock()
-            .unwrap()
-            .entry(key)
-            .or_default()
-            .push(coco_tool_runtime::InboxMessage {
+        self.inboxes.lock().unwrap().entry(key).or_default().push(
+            coco_tool_runtime::InboxMessage {
                 index: this_idx,
                 from: from.into(),
                 text: text.into(),
                 timestamp: "t".into(),
-            });
+            },
+        );
     }
 }
 

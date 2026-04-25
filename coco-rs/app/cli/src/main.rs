@@ -759,6 +759,8 @@ async fn run_chat(cli: &Cli, prompt: Option<&str>) -> Result<()> {
         shell_config: runtime_config.shell.clone(),
         web_fetch_config: runtime_config.web_fetch.clone(),
         web_search_config: runtime_config.web_search.clone(),
+        features: std::sync::Arc::new(runtime_config.features.clone()),
+        tool_overrides: runtime_config.tool_overrides.clone(),
         ..Default::default()
     };
 
@@ -885,12 +887,12 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     let auth_method = if is_real_anthropic {
         let config_dir = global_config::config_home();
         let api_key_helper = runtime_config.settings.merged.api_key_helper.clone();
-        let bare_mode = runtime_config.env_only.bare_mode;
+        let force_env_auth = runtime_config.env_only.force_env_auth;
         tokio::task::spawn_blocking(move || {
             coco_inference::auth::resolve_auth(&coco_inference::auth::AuthResolveOptions {
                 config_dir: Some(config_dir),
                 api_key_helper,
-                bare_mode,
+                force_env_auth,
                 ..Default::default()
             })
         })

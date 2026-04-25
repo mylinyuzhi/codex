@@ -55,7 +55,8 @@ impl Tool for EchoTool {
 #[test]
 fn test_tool_default_flags() {
     let tool = EchoTool;
-    assert!(tool.is_enabled());
+    let ctx = crate::context::ToolUseContext::test_default();
+    assert!(tool.is_enabled(&ctx));
     assert!(tool.is_read_only(&json!({})));
     assert!(tool.is_concurrency_safe(&json!({})));
     assert!(!tool.is_destructive(&json!({})));

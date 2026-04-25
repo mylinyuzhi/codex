@@ -406,7 +406,7 @@ impl Tool for ExitPlanModeTool {
         let has_agent_tool = ctx
             .tools
             .get_by_name(ToolName::Agent.as_str())
-            .is_some_and(|t| t.is_enabled());
+            .is_some_and(|t| t.is_enabled(ctx));
 
         // ── Plan verification (best-effort soft check) ──
         //

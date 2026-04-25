@@ -506,6 +506,9 @@ impl Tool for LspTool {
     fn name(&self) -> &str {
         ToolName::Lsp.as_str()
     }
+    fn is_enabled(&self, ctx: &coco_tool_runtime::ToolUseContext) -> bool {
+        ctx.features.enabled(coco_types::Feature::Lsp)
+    }
     fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
         "Query the Language Server Protocol for code intelligence (definitions, references, diagnostics, symbols, hover).".into()
     }

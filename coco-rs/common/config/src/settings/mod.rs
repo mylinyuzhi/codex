@@ -8,6 +8,7 @@ use coco_types::PermissionMode;
 use coco_types::ThinkingLevel;
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 
 use crate::model::ModelSelectionSettings;
@@ -81,6 +82,13 @@ pub struct Settings {
     pub web_search: PartialWebSearchSettings,
     #[serde(default)]
     pub paths: PartialPathSettings,
+
+    // === Feature gates ===
+    /// Coarse-grained feature toggles. Each key matches `Feature::key()`;
+    /// unknown keys are silently ignored so old configs still load. See
+    /// `docs/coco-rs/feature-gates-and-tool-filtering.md`.
+    #[serde(default)]
+    pub features: BTreeMap<String, bool>,
 
     // === Hooks ===
     /// Deserialized by coco-hooks, kept as Value here (avoids L1→L4 dep).

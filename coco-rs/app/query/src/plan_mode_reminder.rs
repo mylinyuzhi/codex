@@ -354,7 +354,9 @@ impl PlanModeReminder {
         let pending: Vec<(usize, coco_tool_runtime::PlanApprovalRequest)> = unread
             .iter()
             .filter_map(|m| {
-                match serde_json::from_str::<coco_tool_runtime::PlanApprovalMessage>(&m.text).ok()? {
+                match serde_json::from_str::<coco_tool_runtime::PlanApprovalMessage>(&m.text)
+                    .ok()?
+                {
                     coco_tool_runtime::PlanApprovalMessage::PlanApprovalRequest(req) => {
                         Some((m.index, req))
                     }
