@@ -19,6 +19,7 @@ pub fn user(text: &str) -> Message {
         is_compact_summary: false,
         permission_mode: None,
         origin: None,
+        parent_tool_use_id: None,
     })
 }
 
@@ -54,6 +55,7 @@ pub fn image_user() -> Message {
         is_compact_summary: false,
         permission_mode: None,
         origin: None,
+        parent_tool_use_id: None,
     })
 }
 

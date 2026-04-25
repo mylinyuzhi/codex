@@ -217,7 +217,7 @@ impl TeammateExecutor for InProcessBackend {
             max_turns: None,
         };
 
-        let result = self.runner.spawn_agent(spawn_config).await;
+        let result = self.runner.register_agent(spawn_config).await;
         let task_id = if result.success {
             Some(format!("task-{}", result.agent_id))
         } else {

@@ -17,21 +17,23 @@ Crate layout mirrors `cocode-rs/core/system-reminder/` (same file names, same pu
 
 ## Key Types
 
-- `AttachmentType` — **38 variants**, one per TS `Attachment.type` discriminator. Grouped by port phase:
+- `AttachmentType` — **42 generator variants** (40 model-visible + 2 silent/display-only), mapped to TS `Attachment.type` discriminators or coco-rs synthetic grouping keys. Grouped by port phase:
   - **Phase A/B/C (11)**: `plan_mode` / `plan_mode_exit` / `plan_mode_reentry` / `auto_mode` / `auto_mode_exit` / `todo_reminder` / `task_reminder` / `critical_system_reminder` / `compaction_reminder` / `date_change` / `verify_plan_reminder`.
   - **Phase 1 engine-local (5)**: `ultrathink_effort` / `token_usage` / `budget_usd` / `output_token_usage` / `companion_intro`.
   - **Phase 2 history-diff (3)**: `deferred_tools_delta` / `agent_listing_delta` / `mcp_instructions_delta`.
   - **Phase 3 cross-crate (14)**: `hook_success` / `hook_blocking_error` / `hook_additional_context` / `hook_stopped_continuation` / `async_hook_response` / `diagnostics` / `output_style` / `queued_command` / `task_status` / `skill_listing` / `invoked_skills` / `teammate_mailbox` / `team_context` / `agent_pending_messages`.
-  - **Phase 4 user-input (5, UserPrompt tier)**: `at_mentioned_files` / `mcp_resources` / `agent_mentions` / `ide_selection` / `ide_opened_file`.
+  - **Phase 4 user-input (3, UserPrompt tier)**: `at_mentioned_files` / `mcp_resources` / `agent_mentions`.
+  - **Main-thread IDE (2)**: `ide_selection` / `ide_opened_file`.
+  - **Silent native (2)**: `already_read_file` / `edited_image_file`.
   - `AttachmentType::all()` returns the full catalog; the `all_attachment_type_variants_have_default_generator` parity test asserts every variant has a registered generator.
-- `ReminderTier` — `Core` (all agents), `MainAgentOnly` (main-thread only — `verify_plan_reminder`), `UserPrompt` (when user input present). Maps to TS's three parallel batches in `getAttachments`.
+- `ReminderTier` — `Core` (all agents / TS all-thread batch), `MainAgentOnly` (main-thread batch), `UserPrompt` (only when user input is present). Maps to TS's three attachment batches in `getAttachments`.
 - `XmlTag` — `SystemReminder` = `<system-reminder>`, `None` = raw.
 - `SystemReminder` — unified generator output: `{ attachment_type, output: ReminderOutput, is_meta, is_silent }`.
-- `ReminderOutput::{ Text | Messages | ModelAttachment }` — matches TS `wrapMessagesInSystemReminder` (Text) shape.
+- `ReminderOutput::{ Text | Messages | ModelAttachment | SilentAttachment }` — model-visible shapes plus silent/display-only metadata.
 - `AttachmentGenerator` trait (`async_trait`) — one impl per reminder type. 4-hook lifecycle: `is_enabled`, `tier`, `throttle_config_for_context`, `generate`.
 - `GeneratorContext<'a>` — per-turn state: permission-mode flags, tool list, turn-since-* counters, todos/plan_tasks, context-window metrics, date-change + verify-plan signals, full-content flags pre-computed by the orchestrator.
 - `ThrottleManager` / `ThrottleConfig` — central rate limiter keyed by `AttachmentType`. Fields match TS constants 1:1 (`min_turns_between` = `TURNS_BETWEEN_*`, `full_content_every_n` = `FULL_REMINDER_EVERY_N_*`). Presets: `plan_mode` / `auto_mode` / `todo_reminder` / `verify_plan_reminder` / `none`.
-- `SystemReminderOrchestrator` — parallel execution with per-generator timeout.
+- `SystemReminderOrchestrator` — parallel execution with per-generator timeout. Default registration preserves TS output order: user-input batch, all-thread batch, then main-thread batch.
 - `TurnReminderInput` + `run_turn_reminders()` — one-call engine entry point; packages every per-turn input as named struct fields.
 - `InjectedMessage` / `InjectedBlock` — post-orchestration conversion; `inject_reminders` writes `coco_types::Message::Attachment` with `is_meta=true` + `origin=SystemInjected`.
 - `SystemReminderConfig` / `AttachmentSettings` — **live in `coco-config`** (re-exported here). Wired via `Settings.system_reminder` so every reminder can be toggled from `settings.json`.
@@ -50,9 +52,9 @@ src/
 ├── context_builder.rs app_state → GeneratorContext mapping helpers
 ├── turn_counting.rs  count_assistant_turns_since_tool/any_tool, count_human_turns
 ├── turn_runner.rs    TurnReminderInput + run_turn_reminders (engine entry)
-├── generators/       plan_mode, auto_mode(_enter), todo_reminders, task_reminders,
-│                     critical_system_reminder, compaction_reminder, date_change,
-│                     verify_plan (MainAgentOnly)
+├── generators/       plan/auto modes, todo/task reminders, hook events,
+│                     deltas, memory, team/swarm, user input, IDE,
+│                     token/budget, silent markers
 └── lib.rs            module declarations + re-exports (SystemReminderConfig from coco-config)
 ```
 

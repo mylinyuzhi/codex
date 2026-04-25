@@ -13,6 +13,8 @@ use coco_config::WebSearchConfig;
 use coco_messages::CostTracker;
 use coco_types::Message;
 use coco_types::PermissionMode;
+use coco_types::PermissionRulesBySource;
+use coco_types::ThinkingLevel;
 use coco_types::TokenUsage;
 
 /// Escalated max_output_tokens on first `length` stop. TS: `utils/context.ts:25`
@@ -58,8 +60,6 @@ pub struct QueryEngineConfig {
     pub append_system_prompt: Option<String>,
     /// Model name for tool context.
     pub model_name: String,
-    /// Fallback model for error recovery.
-    pub fallback_model: Option<String>,
     /// Permission mode for tool execution.
     pub permission_mode: PermissionMode,
     /// Whether this session may transition into `BypassPermissions`.
@@ -84,10 +84,44 @@ pub struct QueryEngineConfig {
     pub streaming_tool_execution: bool,
     /// Whether this is a non-interactive (SDK/script) session.
     pub is_non_interactive: bool,
+    /// Thinking level applied to the main-loop model for this session.
+    /// Surfaced on `ToolUseContext.thinking_level` so tools (and tool-
+    /// spawned subqueries) see the same reasoning budget the engine is
+    /// currently driving the LLM with. TS: `queryConfig.thinkingLevel`
+    /// threaded through `toolUseContext.options.thinkingLevel`.
+    pub thinking_level: Option<ThinkingLevel>,
     /// Session identifier for hook orchestration context.
     pub session_id: String,
     /// Project root directory for hook orchestration context.
     pub project_dir: Option<std::path::PathBuf>,
+    /// Session-scoped permission rules loaded from settings.json
+    /// (user / project / policy layers). Populated by the CLI
+    /// layer at bootstrap; `ToolContextFactory` threads them into
+    /// every `ToolUseContext.permission_context.{allow_rules,
+    /// deny_rules, ask_rules}` so the evaluator sees the same
+    /// rule set TS's `loadPermissionRules` would produce.
+    ///
+    /// Default-empty maps preserve the pre-wiring behavior where
+    /// mode-based auto-allow (Plan / Accept / Bypass) was the only
+    /// effective permission driver.
+    pub allow_rules: PermissionRulesBySource,
+    pub deny_rules: PermissionRulesBySource,
+    pub ask_rules: PermissionRulesBySource,
+    /// Working directory override for this session's tool calls.
+    ///
+    /// When `Some(path)`, [`ToolContextFactory`](crate::tool_context::ToolContextFactory)
+    /// installs the path onto every `ToolUseContext.cwd_override` so
+    /// file/shell/search tools that honor the override (Glob, Grep,
+    /// Bash, and future worktree-aware tools) resolve relative paths
+    /// against it. Absolute-path tools (Read, Write, Edit,
+    /// NotebookEdit) are unaffected by construction — they enforce
+    /// absolute paths in their schema, matching TS.
+    ///
+    /// Phase 6 Workstream C: subagents launched with
+    /// `isolation: "worktree"` receive a `cwd_override` pointing at
+    /// the freshly-created worktree path via this field on their
+    /// child `QueryEngineConfig`.
+    pub cwd_override: Option<std::path::PathBuf>,
     /// Optional override for the plans directory, relative to the
     /// project root. Empty = use the default `~/.cocode/plans/`.
     /// TS setting: `plansDirectory` in settings.json. Validated by
@@ -160,16 +194,24 @@ impl Default for QueryEngineConfig {
             system_prompt: None,
             append_system_prompt: None,
             model_name: String::new(),
-            fallback_model: None,
             permission_mode: PermissionMode::Default,
             bypass_permissions_available: false,
             context_window: 200_000,
             max_output_tokens: 16_384,
             max_budget_usd: None,
+            // Phase 9 landed: safe tools start mid-stream via
+            // StreamingHandle, unsafe tools queue for commit_flush.
+            // Default ON — the batched-at-end fallback path stays
+            // available by setting this to `false`.
             streaming_tool_execution: true,
             is_non_interactive: false,
+            thinking_level: None,
             session_id: String::new(),
             project_dir: None,
+            allow_rules: Default::default(),
+            deny_rules: Default::default(),
+            ask_rules: Default::default(),
+            cwd_override: None,
             plans_directory: None,
             agent_id: None,
             is_teammate: false,

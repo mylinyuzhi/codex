@@ -70,19 +70,59 @@ fn test_model_info_merge() {
     assert!(base.capabilities.is_some()); // not overridden (None in overlay)
 }
 
+fn spec(provider: &str, model_id: &str) -> ModelSpec {
+    ModelSpec {
+        provider: provider.into(),
+        api: ProviderApi::Anthropic,
+        model_id: model_id.into(),
+        display_name: model_id.into(),
+    }
+}
+
 #[test]
-fn test_model_roles_fallback_to_main() {
+fn test_model_roles_primary_falls_back_to_main() {
     let mut roles = ModelRoles::default();
     roles.roles.insert(
         ModelRole::Main,
-        ModelSpec {
-            provider: "anthropic".into(),
-            api: ProviderApi::Anthropic,
-            model_id: "claude-sonnet".into(),
-            display_name: "Sonnet".into(),
-        },
+        RoleSlots::new(spec("anthropic", "claude-sonnet")),
     );
-    // Fast role not set, should fall back to Main
-    let spec = roles.get(ModelRole::Fast).unwrap();
-    assert_eq!(spec.model_id, "claude-sonnet");
+    // Fast role not set → falls back to Main's primary.
+    assert_eq!(
+        roles.get(ModelRole::Fast).unwrap().model_id,
+        "claude-sonnet"
+    );
+}
+
+#[test]
+fn test_model_roles_fallbacks_does_not_walk_to_main() {
+    let mut roles = ModelRoles::default();
+    roles.roles.insert(
+        ModelRole::Main,
+        RoleSlots::new(spec("anthropic", "opus")).with_fallback(spec("anthropic", "sonnet")),
+    );
+    // Plan has no dedicated binding → `get` (primary) walks to
+    // Main's primary, but `fallbacks` returns empty. Fallback is
+    // strictly per-role opt-in.
+    assert_eq!(roles.get(ModelRole::Plan).unwrap().model_id, "opus");
+    assert!(roles.fallbacks(ModelRole::Plan).is_empty());
+    // Main itself has one fallback.
+    assert_eq!(
+        roles.fallbacks(ModelRole::Main),
+        &[spec("anthropic", "sonnet")]
+    );
+}
+
+#[test]
+fn test_model_roles_recovery_is_per_role() {
+    let mut roles = ModelRoles::default();
+    roles.roles.insert(
+        ModelRole::Main,
+        RoleSlots::new(spec("anthropic", "opus"))
+            .with_fallback(spec("anthropic", "sonnet"))
+            .with_recovery(FallbackRecoveryPolicy::default()),
+    );
+    assert!(roles.recovery(ModelRole::Main).is_some());
+    // Plan has no binding → no recovery policy even though Main has
+    // one. Matches the "no fallback-walk to Main" contract.
+    assert!(roles.recovery(ModelRole::Plan).is_none());
 }

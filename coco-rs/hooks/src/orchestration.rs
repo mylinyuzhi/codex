@@ -53,6 +53,7 @@ const SESSION_END_HOOK_TIMEOUT: Duration = Duration::from_millis(1500);
 pub use crate::inputs::BaseHookInput;
 pub use crate::inputs::CompactHookInput;
 pub use crate::inputs::HookInput;
+pub use crate::inputs::PostToolUseFailureInput;
 pub use crate::inputs::PostToolUseInput;
 pub use crate::inputs::PreToolUseInput;
 pub use crate::inputs::SessionEndInput;
@@ -1023,6 +1024,7 @@ fn apply_hook_specific_output(
 // ---------------------------------------------------------------------------
 
 /// Context passed to all orchestration functions.
+#[derive(Debug, Clone)]
 pub struct OrchestrationContext {
     pub session_id: String,
     pub cwd: PathBuf,
@@ -1159,6 +1161,53 @@ pub async fn execute_post_tool_use(
     let results = execute_hooks_parallel_filtered(
         registry,
         HookEventType::PostToolUse,
+        Some(tool_name),
+        &json_input,
+        &env,
+        &ctx.cancel,
+        DEFAULT_HOOK_TIMEOUT,
+        event_tx,
+        &ctx.attachment_emitter,
+        ctx.allow_managed_hooks_only,
+    )
+    .await;
+
+    Ok(aggregate_results(&results))
+}
+
+/// Execute PostToolUseFailure hooks and return the aggregated result.
+///
+/// TS: executePostToolUseFailureHooks()
+pub async fn execute_post_tool_use_failure(
+    registry: &HookRegistry,
+    ctx: &OrchestrationContext,
+    tool_name: &str,
+    tool_input: &serde_json::Value,
+    error: &str,
+    error_type: Option<&str>,
+    event_tx: Option<&tokio::sync::mpsc::Sender<crate::HookExecutionEvent>>,
+) -> anyhow::Result<AggregatedHookResult> {
+    let input = PostToolUseFailureInput {
+        base: base_from_ctx(ctx),
+        hook_event_name: "PostToolUseFailure".to_string(),
+        tool_name: tool_name.to_string(),
+        tool_input: tool_input.clone(),
+        error: error.to_string(),
+        error_type: error_type.map(str::to_string),
+    };
+
+    let json_input = serde_json::to_string(&input)?;
+    let env = build_hook_env(
+        &ctx.session_id,
+        &ctx.cwd.to_string_lossy(),
+        Some(tool_name),
+        "PostToolUseFailure",
+        ctx.project_dir.as_deref().and_then(|p| p.to_str()),
+    );
+
+    let results = execute_hooks_parallel_filtered(
+        registry,
+        HookEventType::PostToolUseFailure,
         Some(tool_name),
         &json_input,
         &env,

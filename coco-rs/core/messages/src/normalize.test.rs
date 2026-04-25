@@ -19,6 +19,7 @@ fn user_msg(text: &str) -> Message {
         is_compact_summary: false,
         permission_mode: None,
         origin: None,
+        parent_tool_use_id: None,
     })
 }
 
@@ -32,6 +33,7 @@ fn virtual_msg(text: &str) -> Message {
         is_compact_summary: false,
         permission_mode: None,
         origin: None,
+        parent_tool_use_id: None,
     })
 }
 
@@ -225,6 +227,7 @@ fn user_msg_with_image() -> Message {
         is_compact_summary: false,
         permission_mode: None,
         origin: None,
+        parent_tool_use_id: None,
     })
 }
 
@@ -248,6 +251,7 @@ fn user_msg_image_only() -> Message {
         is_compact_summary: false,
         permission_mode: None,
         origin: None,
+        parent_tool_use_id: None,
     })
 }
 
@@ -301,6 +305,7 @@ fn user_msg_with_sig(text: &str) -> Message {
         is_compact_summary: false,
         permission_mode: None,
         origin: None,
+        parent_tool_use_id: None,
     })
 }
 

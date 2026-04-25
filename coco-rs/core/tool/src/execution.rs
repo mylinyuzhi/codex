@@ -82,28 +82,6 @@ pub async fn execute_tool_call(
 ) -> ToolExecutionResult {
     let start = Instant::now();
 
-    // R7-T19: defense-in-depth strip of internal-only Bash fields.
-    //
-    // TS `services/tools/toolExecution.ts:756-773` strips
-    // `_simulatedSedEdit` from any model-provided Bash input before
-    // reaching `tool.call()`. The field is internal — it must only
-    // be injected by the SedEditPermissionRequest UI dialog after
-    // user approval — and exposing it to model-controlled paths would
-    // let the model bypass permission checks and the sandbox by
-    // pairing an innocuous command with an arbitrary file write.
-    //
-    // coco-rs strips at the chokepoint between the executor and the
-    // tool implementation. The trusted-callers path that legitimately
-    // sets `_simulatedSedEdit` (the SedEditPermissionRequest dialog,
-    // not yet wired in coco-rs) bypasses this codepath by calling
-    // `BashTool::execute` directly. Everything that flows through
-    // `execute_tool_call` is model output.
-    //
-    // Underscore-prefixed convention: any input field on Bash whose
-    // key starts with `_` is treated as internal and stripped here,
-    // matching TS's approach of namespacing internal fields with `_`.
-    let input = strip_internal_bash_fields(tool_name, input);
-
     // Step 1: Resolve tool
     let tool_id: ToolId = tool_name
         .parse()
@@ -127,7 +105,7 @@ pub async fn execute_tool_call(
         }
     };
 
-    // Step 2: Validate input
+    // Step 2: Validate raw model input
     //
     // R7-T24: validation runs BEFORE permission check to match TS
     // `services/tools/toolExecution.ts:614-686` ordering. TS calls
@@ -153,7 +131,18 @@ pub async fn execute_tool_call(
         };
     }
 
-    // Step 3: Check permissions
+    // Step 3: Defense-in-depth strip of internal-only Bash fields.
+    //
+    // TS `services/tools/toolExecution.ts:756-773` strips
+    // `_simulatedSedEdit` after validation and before permission /
+    // execution. The field is internal and must only be injected by
+    // trusted UI flows, never by model-controlled traffic.
+    //
+    // Underscore-prefixed convention: any input field on Bash whose
+    // key starts with `_` is treated as internal and stripped here.
+    let input = strip_internal_bash_fields(tool_name, input);
+
+    // Step 4: Check permissions
     let decision = tool.check_permissions(&input, ctx).await;
     match decision {
         PermissionDecision::Deny { message, .. } => {
@@ -173,7 +162,7 @@ pub async fn execute_tool_call(
         PermissionDecision::Allow { .. } => {}
     }
 
-    // Step 4: Execute tool (with cancellation support)
+    // Step 5: Execute tool (with cancellation support)
     let result = tokio::select! {
         r = tool.execute(input, ctx) => r,
         () = ctx.cancel.cancelled() => Err(ToolError::Cancelled),

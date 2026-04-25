@@ -254,6 +254,8 @@ pub enum AttachmentType {
     /// TS `agent_mention` (`attachments.ts:781`). User-requested agent
     /// invocations.
     AgentMentions,
+
+    // ── Main-thread IDE reminders ──
     /// TS `selected_lines_in_ide` (`attachments.ts:946`). IDE-sourced
     /// selection context.
     IdeSelection,
@@ -301,6 +303,7 @@ impl AttachmentType {
             | Self::AgentListingDelta
             | Self::McpInstructionsDelta
             | Self::QueuedCommand
+            | Self::SkillListing
             | Self::TeammateMailbox
             | Self::TeamContext
             | Self::AgentPendingMessages
@@ -308,11 +311,9 @@ impl AttachmentType {
             | Self::RelevantMemories => ReminderTier::Core,
             // TS `userInputAttachments` batch (`attachments.ts:773-814`) —
             // only fires when the user submitted input this turn.
-            Self::AtMentionedFiles
-            | Self::McpResources
-            | Self::AgentMentions
-            | Self::IdeSelection
-            | Self::IdeOpenedFile => ReminderTier::UserPrompt,
+            Self::AtMentionedFiles | Self::McpResources | Self::AgentMentions => {
+                ReminderTier::UserPrompt
+            }
             // TS `mainThreadAttachments` batch (`attachments.ts:944`).
             Self::VerifyPlanReminder
             | Self::TokenUsage
@@ -326,8 +327,9 @@ impl AttachmentType {
             | Self::Diagnostics
             | Self::OutputStyle
             | Self::TaskStatus
-            | Self::SkillListing
             | Self::InvokedSkills
+            | Self::IdeSelection
+            | Self::IdeOpenedFile
             // Silent reminder-native types — cocode-rs places these in
             // MainAgentOnly since the dedup/change bookkeeping is
             // main-thread concern (subagents see parent context).
@@ -500,8 +502,8 @@ impl std::fmt::Display for AttachmentType {
 /// taxonomy (60 variants).
 ///
 /// `AttachmentType` is the **subset** of TS `Attachment.type` this crate
-/// owns as reminder-producing generators (38 model-visible + 2 silent =
-/// 40 variants). The full union lives in `coco-types` so every consumer
+/// owns as reminder-producing generators (40 model-visible + 2 silent =
+/// 42 variants). The full union lives in `coco-types` so every consumer
 /// crate can reference a single authoritative discriminator without
 /// pulling system-reminder as a dependency.
 ///

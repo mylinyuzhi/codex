@@ -2,6 +2,7 @@
 //!
 //! TS: state/AppState.ts + AppStateStore.ts (Zustand-like pattern)
 
+pub mod agent_worktree;
 pub mod swarm;
 pub mod swarm_agent_handle;
 pub mod swarm_backend;

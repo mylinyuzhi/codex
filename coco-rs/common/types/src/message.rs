@@ -137,6 +137,16 @@ pub struct UserMessage {
     pub permission_mode: Option<PermissionMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<MessageOrigin>,
+    /// Parent tool-use id when this message was produced by a tool
+    /// call's `new_messages` (e.g. inline skill expansion). Used by
+    /// transcript grouping + as a marker that the message is
+    /// transient until its parent tool_result resolves.
+    ///
+    /// TS parity: `SkillTool.ts:728` `tagMessagesWithToolUseID`.
+    /// The plan's Phase 7 explicitly requires this field —
+    /// inline-skill + agent `new_messages` tagging depends on it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_tool_use_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

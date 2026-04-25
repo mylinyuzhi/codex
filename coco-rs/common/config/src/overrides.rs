@@ -15,4 +15,10 @@ pub struct RuntimeOverrides {
     pub model_override: Option<String>,
     /// --permission-mode CLI override; wins over `settings.permissions.default_mode`.
     pub permission_mode_override: Option<PermissionMode>,
+    /// `--fallback-model` CLI overrides. Each entry is a slash-
+    /// qualified `provider/model_id`; the list is applied in flag
+    /// order as Main role's fallback chain. Non-empty values
+    /// replace any `settings.models.main.fallbacks` from JSON
+    /// (CLI wins over settings for Main fallback).
+    pub fallback_model_overrides: Vec<String>,
 }

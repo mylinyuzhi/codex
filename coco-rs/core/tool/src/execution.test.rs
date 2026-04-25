@@ -116,3 +116,82 @@ fn test_strip_handles_non_object_bash_input() {
     let stripped = strip_internal_bash_fields("Bash", input.clone());
     assert_eq!(stripped, input);
 }
+
+struct ValidateRawExecuteStrippedBashTool;
+
+#[async_trait::async_trait]
+impl crate::traits::Tool for ValidateRawExecuteStrippedBashTool {
+    fn id(&self) -> ToolId {
+        ToolId::Builtin(ToolName::Bash)
+    }
+
+    fn name(&self) -> &str {
+        ToolName::Bash.as_str()
+    }
+
+    fn description(&self, _: &serde_json::Value, _: &crate::traits::DescriptionOptions) -> String {
+        String::new()
+    }
+
+    fn input_schema(&self) -> coco_types::ToolInputSchema {
+        coco_types::ToolInputSchema {
+            properties: Default::default(),
+        }
+    }
+
+    fn validate_input(
+        &self,
+        input: &serde_json::Value,
+        _ctx: &ToolUseContext,
+    ) -> crate::validation::ValidationResult {
+        if input.get("_simulatedSedEdit").is_some() {
+            crate::validation::ValidationResult::Valid
+        } else {
+            crate::validation::ValidationResult::invalid("validation expected raw input")
+        }
+    }
+
+    async fn execute(
+        &self,
+        input: serde_json::Value,
+        _ctx: &ToolUseContext,
+    ) -> Result<ToolResult<serde_json::Value>, ToolError> {
+        if input.get("_simulatedSedEdit").is_some() {
+            return Err(ToolError::ExecutionFailed {
+                message: "execution received unstripped input".into(),
+                source: None,
+            });
+        }
+
+        Ok(ToolResult {
+            data: input,
+            new_messages: vec![],
+            app_state_patch: None,
+        })
+    }
+}
+
+#[tokio::test]
+async fn test_execute_tool_call_validates_raw_input_before_stripping() {
+    let mut tools = ToolRegistry::new();
+    tools.register(std::sync::Arc::new(ValidateRawExecuteStrippedBashTool));
+    let ctx = ToolUseContext::test_default();
+
+    let result = execute_tool_call(
+        "toolu_1",
+        ToolName::Bash.as_str(),
+        serde_json::json!({
+            "command": "echo ok",
+            "_simulatedSedEdit": {
+                "filePath": "/tmp/file",
+                "newContent": "content"
+            }
+        }),
+        &tools,
+        &ctx,
+    )
+    .await;
+
+    let data = result.result.unwrap().data;
+    assert_eq!(data, serde_json::json!({"command": "echo ok"}));
+}

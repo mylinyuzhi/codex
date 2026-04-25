@@ -29,6 +29,7 @@ pub fn create_user_message(text: &str) -> Message {
         is_compact_summary: false,
         permission_mode: None,
         origin: Some(MessageOrigin::UserInput),
+        parent_tool_use_id: None,
     })
 }
 
@@ -47,6 +48,7 @@ pub fn create_user_message_with_parts(parts: Vec<UserContentPart>) -> Message {
         is_compact_summary: false,
         permission_mode: None,
         origin: Some(MessageOrigin::UserInput),
+        parent_tool_use_id: None,
     })
 }
 

@@ -82,6 +82,35 @@ pub struct AgentQueryConfig {
     /// parent. Defaults to `false` so legacy callers stay safe.
     #[serde(default)]
     pub bypass_permissions_available: bool,
+    /// Working-directory override for this subagent. Set by worktree
+    /// isolation to the freshly-created worktree path, or by explicit
+    /// `cwd:` tool input. Child `ToolUseContext.cwd_override` reads
+    /// this; relative-path-resolving tools (Glob, Grep, Bash) scope
+    /// to the override, absolute-path tools ignore it — matches TS
+    /// `AsyncLocalStorage`-based behavior by construction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd_override: Option<std::path::PathBuf>,
+    /// Fork-mode context messages: parent's history prepended to
+    /// the child's turn. When non-empty, child runs with
+    /// `forkContextMessages` + this prompt. TS parity:
+    /// `AgentTool.tsx:622-632` (`isForkPath`: useExactTools,
+    /// forkContextMessages). Carried as serialized `Message` JSON
+    /// so it crosses the coco-tool → coco-query boundary without
+    /// pulling message types into coco-tool.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fork_context_messages: Vec<serde_json::Value>,
+    /// Which `ModelRole` this subagent runs under. The adapter
+    /// resolves the role's primary + fallback chain from
+    /// `ModelRoles` and installs them on the child engine so the
+    /// subagent inherits the same capacity-resilience policy its
+    /// role is configured with. `None` defers to the factory's
+    /// default (typically `ModelRole::Main` or the parent's role).
+    ///
+    /// Non-Main roles (Explore / Review / Plan) only get a
+    /// fallback chain when the role is explicitly configured in
+    /// `settings.models.{role}.fallbacks`. No Main-walk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_role: Option<coco_types::ModelRole>,
 }
 
 /// Result of a multi-turn agent query.
