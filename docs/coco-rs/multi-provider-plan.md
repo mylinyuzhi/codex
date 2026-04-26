@@ -1,533 +1,891 @@
 # Multi-LLM Provider Plan
 
-How coco-rs supports multiple LLM providers (Anthropic, OpenAI, Google, etc.) with per-model configuration, toolsets, and usage scenarios.
+> Status: Updated 2026-04-26 (full rewrite — three-layer boundary model)
+> Scope: `coco-rs/common/config/`, `coco-rs/services/inference/`, `coco-rs/app/cli/src/model_factory.rs`, `coco-rs/core/tool-runtime/src/context.rs`, `coco-rs/vercel-ai/{anthropic,openai,google,openai-compatible}/`
+> Owners: coco-config + coco-inference + cli model_factory + each vercel-ai provider crate
 
-## Design Sources
+> **Source of truth.** Enum and struct definitions live in `crate-coco-types.md` (enums) and `crate-coco-config.md` (structs). Each `vercel-ai-*` crate's `CLAUDE.md` is authoritative for its provider implementation. This doc covers cross-cutting flow only and does not redefine those types.
+>
+> **Current vs Target.** Items marked **🎯 Target** describe the intended design; the current code does not yet implement them. Items marked **✅ Implemented** are reflected in code today. Search for these markers when porting.
 
-- **TS (Claude Code)**: Model role mapping (main/fast/compact), provider detection (firstParty/bedrock/vertex/foundry), per-model capability checks, effort/thinking/fast mode
-- **cocode-rs**: `LanguageModelV4` trait, `ModelRole` enum, `ModelInfo` per-model config, `ProviderFactory`, `ModelHub` caching, `RequestBuilder` pipeline, `apply_patch` tool type
+## 1. Goals
 
-Combined: TS defines **when/why** to use different models; cocode-rs defines **how** to abstract providers.
+The architecture is shaped by three goals, in priority order:
 
----
+1. **Multi-provider** — Support Anthropic, OpenAI (Chat + Responses), Gemini, Volcengine, Z.AI, and arbitrary OpenAI-compatible gateways via the `vercel-ai-*` SDKs. Provider-specific concerns (auth, base URL, headers, beta headers, rate limit messaging, OAuth) live in their respective `vercel-ai-*` crates — `services/inference` is generic.
+2. **Per-(provider, model) configuration** — Each provider declares which models it serves; per-(provider, model) routing (`api_model_name`), `ToolOverrides`, and provider-shaped request extras attach at that level. Built-in `ModelInfo` defaults layer underneath.
+3. **User config never reverse-perceives provider namespace** — `ModelInfo` carries a flat `extra_body: HashMap<String, JSONValue>` that is provider-agnostic. The Coco boundary layer (model_factory + call-options builder) translates that to the `vercel-ai` SDK's namespaced `ProviderOptions[<provider_name>]` shape. Users never write a provider key in their config.
 
-## 1. Architecture Overview
+## 2. The Three-Layer Boundary Model
+
+Vercel AI SDK v4 (both TS upstream and the Rust port) namespaces per-call provider options by **provider instance name** — each language model implementation reverse-perceives its own namespace key (`AnthropicMessagesLanguageModel` reads `provider_options["anthropic"]`, `GoogleGenerativeAILanguageModel` reads `["google"]` or `["vertex"]`, OpenAI-compatible reads its configured `provider_options_name`). This is **upstream v4 spec** (`@ai-sdk/provider/src/shared/v4/shared-v4-provider-options.ts:13-24`) and cannot be changed without forking the SDK.
+
+That namespace is a **transport contract**, not a user concept. We isolate it inside Coco's boundary layer:
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  app/query (QueryEngine)                                │
-│    uses ModelHub to get model for current role           │
-├─────────────────────────────────────────────────────────┤
-│  services/inference (coco-inference)                     │
-│    ModelHub ── ProviderFactory ── RequestBuilder          │
-│      │              │                  │                  │
-│      │         ┌────┴────┐      5-step pipeline          │
-│      │         │ Provider │     (normalize, cache,        │
-│      │         │ Registry │      thinking, options,       │
-│      │         └────┬────┘      interceptors)            │
-│      │              │                                    │
-│  ModelRoles    ┌────┴──────────────────────────┐         │
-│  (per-role     │ vercel-ai LanguageModelV4     │         │
-│   model        │  ├─ AnthropicProvider         │         │
-│   selection)   │  ├─ OpenAIProvider            │         │
-│                │  ├─ GoogleProvider             │         │
-│                │  ├─ OpenAICompatibleProvider   │         │
-│                │  └─ ByteDanceProvider          │         │
-│                └───────────────────────────────┘         │
-├─────────────────────────────────────────────────────────┤
-│  common/config (coco-config)                             │
-│    ModelInfo ── ModelRoles ── ProviderInfo                │
-└─────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│ Layer 1 — User-facing config (provider-agnostic)                     │
+│   What this model is and what wire body it wants                     │
+│                                                                       │
+│   ModelInfo {                                                         │
+│     model_id, context_window, max_output_tokens,                      │
+│     temperature: Option<f32>,            // Lane A typed              │
+│     ...                                                               │
+│     extra_body: HashMap<String, JSONValue>,   // flat escape hatch    │
+│     tool_overrides: Option<ToolOverrides>, capabilities, ...          │
+│   }                                                                   │
+│                                                                       │
+│   ProviderConfig {                                                    │
+│     name, api: ProviderApi, base_url, env_key, client_options,        │
+│     models: HashMap<String, ProviderModelOverride>,                   │
+│   }                                                                   │
+└──────────────────────┬──────────────────────────────────────────────┘
+                       │  build_call_options(model_info, provider_name, …)
+                       │  build_language_model_from_runtime(provider_cfg, …)
+                       ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ Layer 2 — Coco boundary (translates to vercel-ai contract)           │
+│   Knows about provider namespacing; users do not                     │
+│                                                                       │
+│   call_options.temperature       = info.temperature                  │
+│   call_options.max_output_tokens = Some(info.max_output_tokens)      │
+│   call_options.provider_options  = Some(ProviderOptions(             │
+│       HashMap::from([( provider_cfg.name.clone(),                    │
+│                        info.extra_body.clone() )])                   │
+│   ))                                                                  │
+└──────────────────────┬──────────────────────────────────────────────┘
+                       │  language_model.do_generate(call_options)
+                       ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ Layer 3 — vercel-ai provider (upstream contract, untouched)          │
+│   provider_options[ self.provider() ]                                │
+│       │                                                               │
+│       ├── typed-known keys  → serde to TypedProviderOptions struct   │
+│       │     → structured wire-body mapping                           │
+│       │     (e.g. Anthropic.thinking → body["thinking"] = json!{…})  │
+│       │                                                               │
+│       └── leftover keys     → shallow-merge into wire body           │
+│             (uniform across all providers — see §7.3)                │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
----
+The three layers are decoupled:
 
-## 2. Data Definitions
+- **Layer 1 is provider-portable.** A `ModelInfo` for `gpt-5` is identical whether served by `openai-direct`, `azure-openai-east`, or `internal-gateway`. Users move models between providers by changing role bindings, not by rewriting model entries.
+- **Layer 2 owns namespace translation.** It reads `ProviderConfig.name` (the runtime instance identifier) and wraps Layer 1's flat `extra_body` into the `provider_options[<name>]` key. Users never type that name in a `ModelInfo`.
+- **Layer 3 is upstream.** Each `vercel-ai-*` crate implements its own typed-known + leftover convention; we do **not** modify the upstream call-options shape.
 
-> **Source of truth**: Enum definitions (`ProviderApi`, `ModelRole`, `Capability`, `ApplyPatchToolType`, `WireApi`) are owned by `crate-coco-types.md`. Struct definitions (`ModelInfo`, `ProviderInfo`, `ModelRoles`) are owned by `crate-coco-config.md`. The code blocks below are for architectural context — if they conflict with the crate docs, the crate docs win.
+### 2.1 Why namespace stays inside Layer 2 — not exposed to users
 
-### ModelRole (from cocode-rs, extended with TS patterns)
+| Property | Outcome |
+|---|---|
+| User config simpler | One mental model: "this model wants these wire fields." No "anthropic" / "openai" / "azure-east" key ceremony. |
+| Model-portable | Switching `gpt-5`'s Main role from `openai` to `azure-east` does not edit `models.json`. |
+| Round-trip safety | `ProviderConfig.name` is the single source for the namespace key — set in one place, used in one place. The "provider name backfill" hack in `runtime.rs:185-187` becomes a Layer 2 internal detail, not a user-facing invariant. |
+| Type clarity | `ModelInfo.extra_body: HashMap<String, JSONValue>` is one level deep. `LanguageModelV4CallOptions.provider_options: ProviderOptions(HashMap<String, HashMap<String, JSONValue>>)` is two levels deep. The shapes are deliberately different. |
+| Upstream parity preserved | We can drop in the latest `@ai-sdk/provider` v4 spec without changing config schema. |
 
-```rust
-/// Which purpose a model serves. Each role can map to a different provider/model.
-/// TS equivalent: getMainLoopModel(), getSmallFastModel(), etc. as implicit roles.
-pub enum ModelRole {
-    Main,       // Primary conversation (TS: getMainLoopModel())
-    Fast,       // Quick/cheap operations (TS: getSmallFastModel() = Haiku)
-    Compact,    // Context summarization (TS: uses main model)
-    Plan,       // Planning/architecture (TS: opusplan alias)
-    Explore,    // Codebase exploration (TS: subagent with inherit)
-    Review,     // Code review (TS: subagent with inherit)
-    HookAgent,  // Hook agent execution (TS: getSmallFastModel() default)
-    Memory,     // Memory relevance ranking (TS: getDefaultSonnetModel())
-}
+### 2.2 The `ProviderApi` enum is wire-protocol family, not instance identifier
+
+Two distinct concepts must not be confused:
+
+| Concept | Type | Cardinality | Owner | Used for |
+|---|---|---|---|---|
+| **Wire-protocol family** | `ProviderApi` enum (`Anthropic`, `Openai`, `Gemini`, `OpenaiCompat`, `Volcengine`, `Zai`) | Closed set, defined in `coco-types` | `crate-coco-types.md` | `model_factory` dispatch — picks which `vercel-ai-*` crate to instantiate |
+| **Provider instance identifier** | `String` (e.g. `"anthropic"`, `"azure-east"`, `"internal-router"`) | Open set, user-extensible | `ProviderConfig.name` field | `provider_options` namespace key in vercel-ai contract; `model.provider()` return value |
+
+A single `ProviderApi::OpenaiCompat` may back N instance identifiers (`xai`, `groq`, `azure-east`, `internal-router`, …). A single instance identifier always maps to exactly one `ProviderApi`. The vercel-ai outer namespace key is `String` (not `ProviderApi`) because the 1-to-N relation between API and instance is the explicit reason the spec admits arbitrary names.
+
+## 3. Architecture Overview
+
+```
+                  ~/.coco/  (settings.json + providers.json + models.json)
+          ┌───────────────────────────────────────────────────┐
+          │  settings.json    role bindings, features         │ 6-source layered
+          │  providers.json   provider catalog                 │ single-source
+          │  models.json      model catalog (provider-agnostic)│ single-source
+          └────────────────────────┬──────────────────────────┘
+                                   ▼ build_runtime_config()
+          ┌───────────────────────────────────────────────────┐
+          │              RuntimeConfig (Layer 1 snapshot)      │
+          │  providers      : HashMap<String, ProviderConfig>  │
+          │  model_roles    : ModelRoles                       │
+          │  features       : Features                         │
+          │  model_registry : Arc<ModelRegistry>          🎯  │
+          │  tool_overrides : Arc<ToolOverrides>          🎯  │
+          └────────────────────────┬──────────────────────────┘
+                                   │ Layer 2 boundary
+                ┌──────────────────┼──────────────────┐
+                ▼                  ▼                  ▼
+       ┌───────────────┐ ┌────────────────┐ ┌────────────────────┐
+       │ model_factory │ │ build_call_   │ │ ToolUseContext      │
+       │ Lane C build  │ │  options(...)  │ │ tool filter Layer 2 │
+       │ vercel-ai     │ │  Lane A typed +│ │ uses tool_overrides │
+       │ provider +    │ │  Lane B wrap   │ │                     │
+       │ language_model│ │  extra_body    │ │                     │
+       └───────┬───────┘ └────────┬───────┘ └────────────────────┘
+               │                  │
+               ▼                  ▼
+       Arc<dyn LanguageModelV4>   LanguageModelV4CallOptions
+                       │              │
+                       └──────┬───────┘
+                              ▼
+                 model.do_generate(call_options)   ← Layer 3 (upstream)
 ```
 
-### ModelSpec (resolved model identity)
+## 4. Configuration File Shape
 
-```rust
-/// A resolved model identity: which provider + which model ID.
-pub struct ModelSpec {
-    pub provider: ProviderApi,
-    pub model_id: String,       // provider-specific model ID
-    pub canonical_id: String,   // "claude-opus-4-6", "gpt-4o", etc.
-}
-```
+Three fixed-name sibling files under `~/.coco/`:
 
-### ProviderApi (from cocode-rs)
+| File | Owns | Mutability | Layered with `.claude/` overlay? |
+|---|---|---|---|
+| `settings.json` | Role bindings, features, hooks, permissions, user preferences. Optional partial overrides for provider entries. | per-user, per-project (`.claude/settings.{json,local.json}`) | ✅ 6-source `SettingsWithSource` |
+| `providers.json` | Provider catalog — `api`, `base_url`, `env_key`, `wire_api`, `client_options`, plus the per-(provider, model) entries (`api_model_name`, `tool_overrides`, per-entry sampling overrides) | per-machine; team / org-shareable | ❌ single-source |
+| `models.json` | ModelInfo catalog — provider-agnostic metadata (context_window, capabilities, thinking levels, default tool_overrides, base instructions, **extra_body**) | per-machine; community-shareable | ❌ single-source |
 
-```rust
-pub enum ProviderApi {
-    Anthropic,        // Anthropic Claude (direct, Bedrock, Vertex, Foundry)
-    Openai,           // OpenAI
-    Gemini,           // Google Gemini
-    Volcengine,       // Volcengine Ark
-    Zai,              // Z.AI / ZhipuAI
-    OpenaiCompat,     // Generic OpenAI-compatible endpoint
-}
-```
+Both `providers.json` and `models.json` are **optional**. When absent, only the compiled-in builtin registries are used. When present they layer between builtin and any per-user `settings.json` overrides.
 
-### ProviderInfo (runtime provider config)
+**Design intent.** Switching between configurations (work / personal / dev / prod) only edits `settings.json`. The shared `providers.json` and `models.json` carry stable infrastructure that is the same across configurations.
 
-```rust
-pub struct ProviderInfo {
-    pub name: String,
-    pub api: ProviderApi,
-    pub base_url: String,
-    pub api_key: String,
-    pub timeout_secs: i64,
-    pub streaming: bool,
-    pub wire_api: WireApi,      // Chat vs Responses (OpenAI)
-    pub options: Option<Value>, // Provider-specific SDK settings
-}
-
-pub enum WireApi {
-    Chat,       // Standard chat completions API
-    Responses,  // OpenAI responses API (o1/o3, supports apply_patch)
-}
-```
-
-### ModelInfo, Capability, ApplyPatchToolType
-
-> **Source of truth**: `crate-coco-config.md` owns ModelInfo, `crate-coco-types.md` owns Capability/ApplyPatchToolType.
-> See those docs for canonical definitions. Not redefined here.
-```
-
-### ModelRoles (role -> model mapping)
-
-```rust
-/// Maps each role to a specific model. Falls back to Main if role not configured.
-/// TS equivalent: getMainLoopModel() for Main, getSmallFastModel() for Fast, etc.
-pub struct ModelRoles {
-    pub roles: HashMap<ModelRole, ModelSpec>,
-}
-
-impl ModelRoles {
-    /// Get model for a role, falling back to Main.
-    pub fn get(&self, role: ModelRole) -> &ModelSpec {
-        self.roles.get(&role).unwrap_or_else(|| &self.roles[&ModelRole::Main])
-    }
-}
-```
-
----
-
-## 3. Model Usage Scenarios (TS patterns -> Rust abstraction)
-
-### TS usage mapped to ModelRole
-
-| TS usage | TS function | Rust ModelRole | Default model |
-|----------|-------------|----------------|---------------|
-| User conversation | `getMainLoopModel()` | `Main` | Opus 4.6 or Sonnet 4.6 |
-| API key verify, title gen, shell prefix | `getSmallFastModel()` | `Fast` | Haiku 4.5 |
-| Conversation compaction | uses main model | `Compact` | falls back to Main |
-| Plan mode (opusplan) | alias resolution | `Plan` | Opus when in plan mode |
-| Subagent (explore, review) | `getAgentModel()` | `Explore`/`Review` | inherit from Main |
-| Hook agent | hook `model` field or small fast | `HookAgent` | Haiku 4.5 |
-| Memory relevance ranking | `getDefaultSonnetModel()` | `Memory` | Sonnet |
-
-### Subagent model inheritance
-
-```rust
-/// TS: getAgentModel(agentModel, parentModel, toolSpecifiedModel, permissionMode)
-/// Priority: env override -> tool model -> agent model -> "inherit"
-pub fn resolve_agent_model(
-    agent_model: Option<&str>,
-    parent_spec: &ModelSpec,
-    tool_model: Option<&str>,
-    roles: &ModelRoles,
-) -> ModelSpec {
-    // 1. CLAUDE_CODE_SUBAGENT_MODEL env override
-    // 2. Tool-specified model (from skill frontmatter)
-    // 3. Agent-specified model
-    // 4. "inherit" -> clone parent_spec
-}
-```
-
----
-
-## 4. Per-Model Tool Set
-
-### TS finding: tools are NOT model-filtered
-
-TS filters tools by **agent type**, not model:
-- `ALL_AGENT_DISALLOWED_TOOLS` — never available to agents
-- `ASYNC_AGENT_ALLOWED_TOOLS` — subset for background agents
-- `IN_PROCESS_TEAMMATE_ALLOWED_TOOLS` — for teammates
-
-### cocode-rs addition: per-model tool exclusion
-
-cocode-rs `ModelInfo.excluded_tools` allows blacklisting tools per model. This is useful for:
-- **OpenAI models**: exclude `FileEdit`, use `apply_patch` instead
-- **Models without vision**: exclude image-related tool features
-- **Minimal models**: exclude heavy tools (WebSearch, NotebookEdit)
-
-### apply_patch — OpenAI-specific tool
-
-```rust
-/// apply_patch is OpenAI's custom tool for file editing.
-/// It uses the Responses API (WireApi::Responses) with a special tool_call format.
-/// Anthropic models use FileEdit (search-replace) instead.
-pub struct ApplyPatchTool;
-
-impl Tool for ApplyPatchTool {
-    fn name(&self) -> &str { "apply_patch" }
-    
-    /// Only enabled for OpenAI providers
-    fn is_enabled_for(&self, model_info: &ModelInfo) -> bool {
-        model_info.apply_patch_tool_type == Some(ApplyPatchToolType::CustomToolCall)
-    }
-    
-    async fn execute(&self, input: Value, ctx: &ToolUseContext, cancel: CancellationToken)
-        -> Result<ToolResult<Value>, ToolError>
-    {
-        // Uses utils/apply-patch crate (from cocode-rs) to apply unified diff
-        let patch = input["patch"].as_str().unwrap();
-        coco_apply_patch::apply(patch, &ctx.cwd)?;
-        Ok(ToolResult { data: json!({"success": true}), ..Default::default() })
-    }
-}
-```
-
-### Tool set assembly per model
-
-```rust
-/// Build tool definitions for a specific model.
-/// TS: tools are agent-filtered, not model-filtered.
-/// cocode-rs: adds model-level exclusion + provider-specific tools.
-pub fn tools_for_model(
-    registry: &ToolRegistry,
-    model_info: &ModelInfo,
-    agent_filter: Option<&AgentToolFilter>,
-) -> Vec<ToolDefinition> {
-    let mut tools: Vec<_> = registry.all()
-        .filter(|t| !model_info.excluded_tools.contains(t.name()))
-        .filter(|t| agent_filter.map_or(true, |f| f.allows(t.name())))
-        .collect();
-    
-    // Add provider-specific tools
-    if model_info.apply_patch_tool_type == Some(ApplyPatchToolType::CustomToolCall) {
-        tools.push(ApplyPatchTool.definition());
-    }
-    
-    tools.into_iter().map(|t| t.to_definition()).collect()
-}
-```
-
----
-
-## 5. Per-Model System Prompt
-
-### TS finding: system prompt is model-agnostic
-
-TS uses the **same system prompt** for all models. No model-specific prompt branching.
-
-### cocode-rs addition: `base_instructions`
-
-cocode-rs `ModelInfo` has optional `base_instructions` — additional text prepended to the system prompt for specific models. Use cases:
-- **OpenAI models**: instructions about apply_patch tool usage
-- **Smaller models**: simplified instructions, fewer tool descriptions
-- **Non-English models**: localized instructions
-
-```rust
-/// Build system prompt with optional model-specific additions.
-pub fn build_system_prompt(
-    context: &SystemContext,
-    memory_files: &[MemoryFileInfo],
-    model_info: &ModelInfo,
-    tools: &[ToolDefinition],
-) -> SystemPrompt {
-    let mut blocks = vec![];
-    
-    // Model-specific base instructions (if configured)
-    if let Some(ref instructions) = model_info.base_instructions {
-        blocks.push(SystemPromptBlock::Text(instructions.clone()));
-    }
-    
-    // Standard system prompt (same as TS, model-agnostic)
-    blocks.extend(build_standard_prompt(context, memory_files, tools));
-    
-    SystemPrompt { blocks }
-}
-```
-
----
-
-## 6. Provider-Specific Branching
-
-### Beta Headers Matrix (from TS `utils/betas.ts` — 18 headers)
-
-Source of truth for which beta features apply to which provider:
-
-| Beta Header | firstParty | foundry | bedrock | vertex | Condition |
-|-------------|-----------|---------|---------|--------|-----------|
-| `claude-code-20250219` | Y | Y | Y | Y | Not Haiku |
-| `context-1m` | Y | Y | Y | Y | 1M context models |
-| `interleaved-thinking` | Y | Y | Opus4+/Sonnet4+ | Opus4+/Sonnet4+ | ISP support |
-| `redact-thinking` | Y | Y | N | N | Thinking redaction |
-| `context-management` | Y | Y | Y | Y | Tool clearing + thinking preservation |
-| `structured-outputs` | Y | Y | N | N | Claude 4+ |
-| `token-efficient-tools` | Y | Y | N | N | Ant-only |
-| `prompt-caching-scope` | Y | N | N | N | Global cache scope (1P only) |
-| `tool-search-1p` | Y | Y | N | N | Advanced tool-use |
-| `tool-search-3p` | N | N | Y | Y | Tool search (3P variant) |
-| `web-search` | Y | Y | N | Claude 4.0+ | Web search |
-| `effort` | Y | Y | Y | Y | Effort parameter |
-| `fast-mode` | Y | N | N | N | Fast mode (1P only) |
-
-### Provider capability branching (from TS `utils/betas.ts` + `utils/thinking.ts`)
-
-```rust
-/// Provider-specific feature support.
-/// From TS: modelSupportsISP(), modelSupportsStructuredOutputs(), etc.
-pub fn provider_supports(provider: &ProviderApi, cap: Capability, model: &str) -> bool {
-    match (provider, cap) {
-        // Thinking: all providers for Claude 4+, but Bedrock/Vertex only Opus/Sonnet 4+
-        (ProviderApi::Anthropic, Capability::Thinking) => is_claude_4_plus(model),
-        
-        // Structured outputs: firstParty/foundry only
-        (ProviderApi::Openai, Capability::StructuredOutput) => true,  // OpenAI native
-        (ProviderApi::Anthropic, Capability::StructuredOutput) => {
-            // Only via firstParty/foundry, NOT bedrock/vertex
-            !is_bedrock_or_vertex(provider)
-        }
-        
-        // Prompt caching: Anthropic firstParty only (not foundry/bedrock/vertex)
-        (ProviderApi::Anthropic, Capability::PromptCaching) => is_first_party(provider),
-        
-        // Fast mode: Anthropic firstParty only
-        (ProviderApi::Anthropic, Capability::FastMode) => is_first_party(provider),
-        
-        // All providers support tool use and streaming
-        (_, Capability::ToolUse) | (_, Capability::Streaming) => true,
-        
-        _ => false,
-    }
-}
-```
-
-### Capability checks at request time (TS pattern)
-
-```rust
-/// Check model capabilities at request time, not initialization.
-/// TS: modelSupportsThinking(), modelSupportsEffort(), etc.
-impl ModelInfo {
-    pub fn supports(&self, cap: Capability) -> bool {
-        self.capabilities.contains(&cap)
-    }
-    pub fn supports_thinking(&self) -> bool { self.supports(Capability::Thinking) }
-    pub fn supports_effort(&self) -> bool { self.supports(Capability::Effort) }
-    pub fn supports_fast_mode(&self) -> bool { self.supports(Capability::FastMode) }
-    pub fn supports_vision(&self) -> bool { self.supports(Capability::Vision) }
-    pub fn supports_structured_output(&self) -> bool { self.supports(Capability::StructuredOutput) }
-}
-```
-
-### RequestBuilder pipeline (from cocode-rs, 5-step)
-
-```rust
-/// Build provider-specific request from model-agnostic InferenceContext.
-/// From cocode-rs request_builder.rs — proven pattern.
-pub fn build_request(ctx: &InferenceContext) -> LanguageModelV4CallOptions {
-    let mut options = LanguageModelV4CallOptions::default();
-    
-    // Step 1: Normalize messages (empty content, tool ID sanitization)
-    options.prompt = normalize_messages(&ctx.messages, &ctx.model_info);
-    
-    // Step 2: Prompt cache breakpoints (Anthropic-only)
-    if ctx.provider_info.api == ProviderApi::Anthropic {
-        add_cache_breakpoints(&mut options.prompt);
-    }
-    
-    // Step 3: Provider base options
-    options.max_output_tokens = ctx.model_info.max_output_tokens;
-    options.temperature = ctx.model_info.temperature;
-    
-    // Step 4: Reasoning/thinking config -> provider options
-    if ctx.model_info.supports_thinking() {
-        options.reasoning = Some(ctx.thinking_level.into());
-    }
-    
-    // Step 5: Provider-specific options (via provider_options pass-through)
-    options.provider_options = build_provider_options(&ctx.provider_info, &ctx.model_info);
-    
-    options
-}
-```
-
----
-
-## 7. ModelHub (from cocode-rs — caching + resolution)
-
-```rust
-/// Central model management. Caches providers and models.
-/// From cocode-rs model_hub.rs.
-pub struct ModelHub {
-    config: Arc<Config>,
-    providers: RwLock<HashMap<String, Arc<dyn ProviderV4>>>,
-    models: RwLock<HashMap<ModelSpec, Arc<dyn LanguageModelV4>>>,
-    factory: ProviderFactory,
-}
-
-impl ModelHub {
-    /// Get or create a LanguageModelV4 for a spec.
-    pub async fn get_model(&self, spec: &ModelSpec) -> Result<Arc<dyn LanguageModelV4>> {
-        if let Some(model) = self.models.read().get(spec) {
-            return Ok(model.clone());
-        }
-        let provider = self.get_or_create_provider(&spec.provider).await?;
-        let model = provider.language_model(&spec.model_id)?;
-        self.models.write().insert(spec.clone(), model.clone());
-        Ok(model)
-    }
-    
-    /// Resolve role to model spec using ModelRoles config.
-    pub fn resolve_role(&self, role: ModelRole) -> ModelSpec {
-        self.config.model_roles().get(role).clone()
-    }
-}
-```
-
----
-
-## 8. Configuration Example
+### 4.1 Minimal example
 
 ```jsonc
-// ~/.coco/models.json — ModelInfo definitions
+// ~/.coco/settings.json
 {
-  "claude-opus-4-6": {
-    "display_name": "Claude Opus 4.6",
-    "context_window": 200000,
-    "max_output_tokens": 128000,
-    "capabilities": ["text_generation", "streaming", "vision", "tool_calling", "extended_thinking", "fast_mode"],
-    "supported_thinking_levels": [
-      { "effort": "low" },
-      { "effort": "medium" },
-      { "effort": "high", "options": { "interleaved": true } },
-      { "effort": "xhigh", "budget_tokens": 128000, "options": { "interleaved": true } }
-    ],
-    "default_thinking_level": "medium"
-  },
-  "gpt-5": {
-    "display_name": "GPT-5",
-    "context_window": 272000,
-    "max_output_tokens": 32000,
-    "capabilities": ["text_generation", "streaming", "vision", "tool_calling", "extended_thinking", "structured_output", "reasoning_summaries"],
-    "supported_thinking_levels": [
-      { "effort": "low",    "options": { "reasoningSummary": "auto" } },
-      { "effort": "medium", "options": { "reasoningSummary": "auto" } },
-      { "effort": "high",   "options": { "reasoningSummary": "auto", "include": ["reasoning.encrypted_content"], "textVerbosity": "low" } }
-    ],
-    "default_thinking_level": "medium",
-    "apply_patch_tool_type": "shell",
-    "shell_type": "shell_command",
-    "excluded_tools": ["edit", "write"],
-    "options": { "store": false }
-  },
-  "gemini-2.5-pro": {
-    "display_name": "Gemini 2.5 Pro",
-    "context_window": 1000000,
-    "max_output_tokens": 65536,
-    "capabilities": ["text_generation", "streaming", "vision", "tool_calling", "extended_thinking"],
-    "supported_thinking_levels": [
-      { "effort": "high",  "budget_tokens": 16000, "options": { "includeThoughts": true } },
-      { "effort": "xhigh", "budget_tokens": 24576, "options": { "includeThoughts": true } }
-    ],
-    "default_thinking_level": "high"
-  }
-}
-
-// ~/.coco/providers.json — ProviderInfo definitions
-{
-  "anthropic": {
-    "api": "anthropic",
-    "base_url": "https://api.anthropic.com",
-    "env_key": "ANTHROPIC_API_KEY",
-    "models": [
-      { "model_id": "claude-opus-4-6" },
-      { "model_id": "claude-sonnet-4-6" },
-      { "model_id": "claude-haiku-4-5" }
-    ]
-  },
-  "bedrock": {
-    "api": "anthropic",
-    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
-    "models": [
-      { "model_id": "claude-opus-4-6", "api_model_name": "anthropic.claude-opus-4-6" }
-    ]
-  },
-  "openai": {
-    "api": "openai",
-    "base_url": "https://api.openai.com/v1",
-    "env_key": "OPENAI_API_KEY",
-    "wire_api": "responses",
-    "models": [
-      { "model_id": "gpt-5" },
-      { "model_id": "gpt-5.2", "model_options": { "textVerbosity": "low" } }
-    ]
-  }
-}
-
-// model_roles section
-{
-  "model_roles": {
-    "main": "anthropic/claude-opus-4-6",
-    "fast": "anthropic/claude-haiku-4-5",
-    "plan": "anthropic/claude-opus-4-6",
-    "hook_agent": "anthropic/claude-haiku-4-5",
-    "memory": "anthropic/claude-sonnet-4-6"
+  "models": {
+    "main": "anthropic/claude-sonnet-4-6",
+    "fast": "anthropic/claude-haiku-4-5"
   }
 }
 ```
 
----
+The builtin `providers` registry covers Anthropic / OpenAI / Gemini / Volcengine / Z.AI defaults; the builtin `models` registry covers well-known models. `ANTHROPIC_API_KEY` env var is read by the builtin `anthropic` provider.
 
-## 9. Crate Responsibility
+### 4.2 Shared catalogs (recommended team / org pattern)
 
-| Component | Crate | What it does |
-|-----------|-------|-------------|
-| `LanguageModelV4` trait | `vercel-ai-provider` | Provider-agnostic model interface (cp from cocode-rs) |
-| Provider implementations | `vercel-ai-anthropic`, `vercel-ai-openai`, `vercel-ai-google`, etc. | Per-provider SDK (cp from cocode-rs) |
-| `ProviderApi`, `ModelInfo`, `ModelRole`, `Capability` | `common/types` (`coco-types`) | Shared type definitions |
-| `ProviderInfo`, provider/model config loading | `common/config` (`coco-config`) | Config loading + model selection |
-| `ModelHub`, `ProviderFactory`, `RequestBuilder` | `services/inference` (`coco-inference`) | Runtime model management + request building |
-| `ApplyPatchTool` | `core/tools` (`coco-tools`) | OpenAI-specific tool (conditionally loaded) |
-| `tools_for_model()` | `core/tool` (`coco-tool`) | Model-aware tool filtering |
-| `ModelRoles` resolution | `app/query` (`coco-query`) | Role-based model selection at query time |
+```jsonc
+// ~/.coco/providers.json — shared provider catalog
+{
+  "anthropic-corp": {
+    "api": "anthropic",
+    "base_url": "https://corp-proxy.example.com/anthropic",
+    "env_key": "CORP_ANTHROPIC_KEY",
+    "client_options": { "headers": { "X-Corp-Tenant": "engineering" } },
+    "models": {
+      "claude-sonnet-4-6": {},
+      "claude-opus-4-7":   { "max_output_tokens": 64000 }
+    }
+  },
+  "azure-openai-east": {
+    "api": "openai",                 // ← Responses API path; see §6.2
+    "base_url": "https://my-azure.openai.azure.com/openai/deployments/gpt-5",
+    "env_key": "AZURE_OPENAI_KEY",
+    "client_options": {
+      "headers": { "api-version": "2024-12-01-preview" }
+    },
+    "models": {
+      "gpt-5": { "api_model_name": "gpt-5" }
+    }
+  },
+  "internal-router": {
+    "api": "openai_compat",
+    "base_url": "https://internal/v1",
+    "env_key": "INTERNAL_KEY",
+    "models": {
+      "internal/coder-v3": { "api_model_name": "ep-internal-v3-prod" }
+    }
+  }
+}
+```
 
----
+```jsonc
+// ~/.coco/models.json — provider-agnostic ModelInfo catalog
+{
+  "claude-opus-4-7": {
+    "context_window": 200000,
+    "max_output_tokens": 64000,
+    "capabilities": ["tool_calling", "vision", "extended_thinking", "fast_mode"],
+    "supported_thinking_levels": [
+      { "effort": "low" }, { "effort": "medium" },
+      { "effort": "high",  "options": { "interleaved": true } },
+      { "effort": "xhigh", "budget_tokens": 128000, "options": { "interleaved": true } }
+    ],
+    "default_thinking_level": "medium",
+    "extra_body": {
+      "cacheControl": { "type": "ephemeral" }    // ← Layer 1 sees flat keys; Layer 2 wraps
+    }
+  },
+  "gpt-5": {
+    "context_window": 272000,
+    "max_output_tokens": 16384,
+    "apply_patch_tool_type": "shell",
+    "tool_overrides": { "extra": ["apply_patch"], "excluded": ["edit"] },
+    "extra_body": {
+      "store": false,
+      "reasoning_summary": "auto"
+    }
+  },
+  "internal/coder-v3": {
+    "context_window": 128000,
+    "max_output_tokens": 8192,
+    "capabilities": ["tool_calling", "vision"],
+    "apply_patch_tool_type": "shell",
+    "base_instructions_file": "prompts/coder-v3.md"
+  }
+}
+```
 
-## 10. Key Design Decisions
+```jsonc
+// ~/.coco/settings.json — switches configurations
+{
+  "models": {
+    "main":    "anthropic-corp/claude-opus-4-7",
+    "fast":    "anthropic-corp/claude-sonnet-4-6",
+    "explore": "internal-router/internal/coder-v3"
+  },
+  "features": { "web_search": true }
+}
+```
+
+Switching `gpt-5` from `openai-direct` to `azure-openai-east` is **a one-line role binding change**. `models.json` is untouched. Layer 2 wraps `extra_body` under whichever provider name the role resolves to.
+
+### 4.3 Per-user overlay into the catalog
+
+Settings.json can override individual fields on any provider entry without forking the catalog:
+
+```jsonc
+// ~/.coco/settings.json (excerpt)
+{
+  "providers": {
+    "openai": {
+      "client_options": { "organization_id": "org-myown" }
+    }
+  }
+}
+```
+
+Settings.json values override `providers.json` values key-by-key. Unset fields in the overlay leave catalog values intact. See §5.1 for the merge semantics — overlays use `PartialProviderConfig` (every field `Option<_>`) so the overlay never silently coerces a non-set field to a default.
+
+### 4.4 Anti-pattern: writing `provider_options` directly in user config
+
+Earlier drafts allowed users to write the vercel-ai namespace verbatim:
+
+```jsonc
+// ❌ DON'T DO THIS in models.json or settings.json
+{
+  "models": {
+    "gpt-5": {
+      "provider_options": {
+        "openai": { "store": false }    // namespace key leaks into Layer 1
+      }
+    }
+  }
+}
+```
+
+This couples the model entry to a specific provider instance. If the user reroutes `gpt-5` from `openai` to `azure-east`, the `"openai"` key becomes silently inert — no error, just no effect. The flat `extra_body` form has no such failure mode.
+
+## 5. Resolution Pipeline
+
+```
+settings.json + env + CLI    ~/.coco/providers.json   ~/.coco/models.json
+       │                          │                        │
+       ▼ load_settings()          ▼ deserialize as         ▼ deserialize as
+SettingsWithSource          HashMap<String,           HashMap<String,
+(6 sources)               PartialProviderConfig>     PartialModelInfo>
+       │                          │                        │
+       └──────────────────────────┴────────┬───────────────┘
+                                           ▼ build_runtime_config()
+RuntimeConfig {
+   providers:      ← builtin ⊕ providers.json ⊕ settings.providers (3-layer merge)
+   model_roles:    ← settings.models.{main,fast,…} → ModelSpec[]
+   features:       ← apply_map(settings.features)
+   model_registry: ← three-layer ModelInfo merge per (provider, model_id)
+   tool_overrides: ← from main role's ResolvedModel, Arc-wrapped
+}
+```
+
+### 5.1 Provider resolution — three layers, Partial overlays
+
+🎯 **Target.** Current code uses non-`Option` `ProviderConfig.api` and unconditional overwrite (see `provider/mod.rs:62`). The fix splits the on-disk overlay shape from the resolved shape.
+
+```rust
+// Wire format — every field optional so omission means "inherit".
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PartialProviderConfig {
+    pub name:           Option<String>,
+    pub api:            Option<ProviderApi>,
+    pub env_key:        Option<String>,
+    pub api_key:        Option<String>,
+    pub base_url:       Option<String>,
+    pub default_model:  Option<String>,
+    pub timeout_secs:   Option<i64>,
+    pub streaming:      Option<bool>,
+    pub wire_api:       Option<WireApi>,
+    pub client_options: Option<HashMap<String, JSONValue>>,
+    pub models:         Option<HashMap<String, PartialProviderModelOverride>>,
+}
+
+// Resolved form — required fields concrete; only genuinely-optional fields stay Option.
+#[derive(Debug, Clone)]
+pub struct ProviderConfig {
+    pub name:           String,
+    pub api:            ProviderApi,
+    pub env_key:        String,
+    pub api_key:        Option<String>,
+    pub base_url:       String,
+    pub default_model:  Option<String>,
+    pub timeout_secs:   i64,
+    pub streaming:      bool,
+    pub wire_api:       WireApi,
+    pub client_options: HashMap<String, JSONValue>,
+    pub models:         HashMap<String, ProviderModelOverride>,
+}
+
+fn resolve_providers(
+    settings:     &Settings,
+    file_catalog: &HashMap<String, PartialProviderConfig>,  // ~/.coco/providers.json
+) -> Result<HashMap<String, ProviderConfig>, ConfigError> {
+    let mut result = builtin_providers();   // L0: ProviderConfig (resolved)
+    apply_partial_layer(&mut result, file_catalog)?;        // L1
+    apply_partial_layer(&mut result, &settings.providers)?; // L2
+    backfill_names(&mut result);            // §5.1.1
+    Ok(result)
+}
+
+fn apply_partial_layer(
+    base:    &mut HashMap<String, ProviderConfig>,
+    overlay: &HashMap<String, PartialProviderConfig>,
+) -> Result<(), ConfigError> {
+    for (name, partial) in overlay {
+        match base.entry(name.clone()) {
+            Entry::Occupied(mut e) => e.get_mut().merge_partial(partial),
+            Entry::Vacant(e) => {
+                let resolved = ProviderConfig::from_partial(name, partial)
+                    .ok_or_else(|| ConfigError::IncompleteProviderEntry { name: name.clone() })?;
+                e.insert(resolved);
+            }
+        }
+    }
+    Ok(())
+}
+```
+
+Two distinct merge paths:
+
+| Case | Behavior |
+|---|---|
+| Overlay matches an existing entry (builtin or earlier-layer) | `merge_partial`: each `Some` field wins; each `None` field keeps the base value. **`api` is never silently coerced.** |
+| Overlay declares a new provider | `from_partial`: required fields (`api`, `env_key`, `base_url`) must be `Some(_)` or we return `ConfigError::IncompleteProviderEntry`. |
+
+This eliminates the third-party review's claim #3 — a partial overlay (`{"openai": { "client_options": { … } } }`) cannot accidentally overwrite `api` to `ProviderApi::Anthropic` via serde default.
+
+#### 5.1.1 Provider name backfill (Layer 2 internal invariant)
+
+```rust
+fn backfill_names(providers: &mut HashMap<String, ProviderConfig>) {
+    for (key, cfg) in providers.iter_mut() {
+        if cfg.name.is_empty() {
+            cfg.name.clone_from(key);
+        }
+        debug_assert_eq!(&cfg.name, key, "provider map key must equal ProviderConfig.name");
+    }
+}
+```
+
+`ProviderConfig.name` is the **single source for the vercel-ai `provider_options` outer namespace key** (§7.2). The map key, the `.name` field, and the runtime `model.provider()` string must agree. This is an internal Layer 2 invariant — users never need to maintain it because they only ever write the map key.
+
+### 5.2 ModelRegistry build — three-layer merge with `PartialModelInfo`
+
+🎯 **Target.** Current code uses non-`Option` numeric fields with serde defaults (`context_window = 200_000`, `max_output_tokens = 16_384` — see `model/mod.rs:33-36, 89-95`), which makes the third-party review's claim #2 a real bug: missing required metadata is silently masked. The fix is the same Partial-vs-resolved split.
+
+```rust
+// Wire format — Option distinguishes "unset" from "explicitly set".
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PartialModelInfo {
+    pub model_id:                  Option<String>,
+    pub display_name:              Option<String>,
+    pub context_window:            Option<i64>,
+    pub max_output_tokens:         Option<i64>,
+    pub timeout_secs:              Option<i64>,
+    pub capabilities:              Option<Vec<Capability>>,
+    pub temperature:               Option<f32>,
+    pub top_p:                     Option<f32>,
+    pub top_k:                     Option<i64>,
+    pub supported_thinking_levels: Option<Vec<ThinkingLevel>>,
+    pub default_thinking_level:    Option<ReasoningEffort>,
+    pub auto_compact_pct:          Option<i32>,
+    pub apply_patch_tool_type:     Option<ApplyPatchToolType>,
+    pub tool_overrides:            Option<ToolOverrides>,
+    pub shell_type:                Option<String>,
+    pub max_tool_output_chars:     Option<i32>,
+    pub base_instructions:         Option<String>,
+    pub base_instructions_file:    Option<String>,
+    pub extra_body:                Option<HashMap<String, JSONValue>>,
+}
+
+// Resolved form — context_window / max_output_tokens are required-and-concrete.
+// temperature / top_p / top_k stay Option because None == "let the provider default";
+// see §7.1 for why this matters at the wire level.
+pub struct ModelInfo {
+    pub model_id:                  String,
+    pub display_name:              Option<String>,
+    pub context_window:            i64,
+    pub max_output_tokens:         i64,
+    pub timeout_secs:              Option<i64>,
+    pub capabilities:              Option<Vec<Capability>>,
+    pub temperature:               Option<f32>,
+    pub top_p:                     Option<f32>,
+    pub top_k:                     Option<i64>,
+    pub supported_thinking_levels: Option<Vec<ThinkingLevel>>,
+    pub default_thinking_level:    Option<ReasoningEffort>,
+    pub auto_compact_pct:          Option<i32>,
+    pub apply_patch_tool_type:     Option<ApplyPatchToolType>,
+    pub tool_overrides:            Option<ToolOverrides>,
+    pub shell_type:                Option<String>,
+    pub max_tool_output_chars:     Option<i32>,
+    pub base_instructions:         Option<String>,
+    pub base_instructions_file:    Option<String>,
+    /// Layer 1 escape hatch. Provider-agnostic flat keys.
+    /// Layer 2 wraps as `provider_options[<provider_name>]` at call time.
+    pub extra_body:                HashMap<String, JSONValue>,
+}
+```
+
+Build pipeline:
+
+```rust
+fn build_model_registry(
+    providers:    &HashMap<String, ProviderConfig>,
+    user_catalog: &HashMap<String, PartialModelInfo>,   // ~/.coco/models.json
+    cocode_home:  &Path,
+) -> Result<ModelRegistry, ConfigError> {
+    let mut resolved = HashMap::new();
+    for (provider_name, cfg) in providers {
+        for (model_id, entry) in &cfg.models {
+            // L0: builtin (already resolved ModelInfo)
+            let mut acc: PartialModelInfo = builtin_models()
+                .get(model_id)
+                .map(PartialModelInfo::from_resolved)
+                .unwrap_or_default();
+            acc.model_id = Some(model_id.clone());
+
+            // L1: user catalog ~/.coco/models.json
+            if let Some(user_info) = user_catalog.get(model_id) {
+                acc.merge_from(user_info);
+            }
+
+            // L2: per-(provider, model) entry overrides
+            entry.apply_to(&mut acc);
+
+            // Resolve base_instructions_file under cocode_home — propagate IO error
+            if let Some(file) = acc.base_instructions_file.take() {
+                let path = cocode_home.join(&file);
+                let content = std::fs::read_to_string(&path).map_err(|source| {
+                    ConfigError::BaseInstructionsRead { path: path.clone(), source }
+                })?;
+                acc.base_instructions = Some(content);
+            }
+
+            // Validate — `Option::None` is the "not declared" signal, NOT a 0-default sentinel.
+            let info = ModelInfo::from_partial(provider_name, model_id, acc)?;
+            resolved.insert(
+                (provider_name.clone(), model_id.clone()),
+                Arc::new(ResolvedModel { info, provider_model: entry.clone() }),
+            );
+        }
+    }
+    Ok(ModelRegistry { resolved })
+}
+
+impl ModelInfo {
+    fn from_partial(
+        provider: &str,
+        model_id: &str,
+        p: PartialModelInfo,
+    ) -> Result<Self, ConfigError> {
+        Ok(Self {
+            model_id:          model_id.to_string(),
+            context_window:    p.context_window
+                .ok_or_else(|| ConfigError::MissingContextWindow {
+                    provider: provider.into(), model: model_id.into(),
+                })?,
+            max_output_tokens: p.max_output_tokens
+                .ok_or_else(|| ConfigError::MissingMaxOutputTokens {
+                    provider: provider.into(), model: model_id.into(),
+                })?,
+            extra_body:        p.extra_body.unwrap_or_default(),
+            // ... pass-through Option fields ...
+        })
+    }
+}
+```
+
+A model declared inline in `models.json` without `context_window` now fails resolution with a precise error; it never silently runs against a 200_000 default.
+
+### 5.3 `tool_overrides` plumbing — closes the L1 dormant gap
+
+🎯 **Target.** `runtime.rs:141-156` currently passes `None` as the second arg to `resolve_tool_overrides` (the `ModelInfo` argument), with the comment "*until that plumbing lands*". With `ModelRegistry`, the lookup succeeds and the override flows through:
+
+```rust
+fn resolve_main_tool_overrides(
+    roles:    &ModelRoles,
+    registry: &ModelRegistry,
+) -> Arc<ToolOverrides> {
+    let Some(spec) = roles.get(ModelRole::Main) else {
+        return Arc::new(ToolOverrides::none());
+    };
+    let info = registry.resolve(&spec.provider, &spec.model_id).map(|r| &r.info);
+    Arc::new(crate::tool_overrides::resolve_tool_overrides(&spec.model_id, info))
+}
+```
+
+The "until that plumbing lands" comment is removed. The dormant `ProviderInfo` / `ProviderModel` types (currently in `provider/mod.rs:80, 116`) are deleted — they are unused outside `lib.rs` re-exports.
+
+## 6. Layer 2: Provider Construction (Lane C)
+
+`app/cli/src/model_factory.rs::build_language_model_from_runtime` is the **single binding point** between `RuntimeConfig` and `vercel-ai-*` crates. 🎯 **Target** — the current `build_language_model_from_spec` (`model_factory.rs:35-70`) errors out for `Volcengine`/`Zai`/`OpenaiCompat`; the rewrite plumbs `RuntimeConfig` so all six `ProviderApi` variants can be served.
+
+Pipeline:
+
+1. Look up `ProviderConfig` and `ResolvedModel` from `RuntimeConfig`.
+2. Resolve `api_model_name` (entry override → fallback to `model_id`).
+3. Resolve API key (env var via `provider.env_key` → fallback to `provider.api_key`).
+4. Build a shared `reqwest::Client` honouring `provider.timeout_secs`.
+5. Extract Lane C client-construction keys from `client_options` and pass them to the SDK's `*ProviderSettings`.
+
+### 6.1 client_options keys
+
+Each key is opt-in; missing keys mean "SDK default":
+
+| Key | Type | Provider | Effect |
+|---|---|---|---|
+| `headers` | `HashMap<String, String>` | all | Custom HTTP headers (`X-Corp-Tenant`, gateway tracking, …) |
+| `auth_token` | `String` | Anthropic | Bearer token; if set, `api_key` is ignored |
+| `organization_id` | `String` | OpenAI | Sent as `OpenAI-Organization` |
+| `project_id` | `String` | OpenAI | Sent as `OpenAI-Project` |
+| `include_usage` | `bool` | OpenAI-compat | Request `stream_options.include_usage`. **Default `false`** to match `openai_compatible_provider.rs:98`; set `true` explicitly when needed. |
+| `full_url` | `bool` | OpenAI-compat | Treat `base_url` as the complete endpoint (skip `/v1/chat/completions` suffix). For Azure-style routing where the path includes deployment + api-version. |
+| `supports_structured_outputs` | `bool` | OpenAI-compat | Enables `response_format = json_schema` shaping |
+
+### 6.2 Wire-API selection (Azure / Responses / Chat)
+
+Azure OpenAI needs special care. The vercel-ai `OpenAICompatibleProvider::language_model()` always returns the Chat Completions model (`openai_compatible_provider.rs:158-161`); pointing its `base_url` at a `/responses` endpoint produces 404 — the third-party review's claim #4.
+
+Two viable Azure setups:
+
+**(a) Azure via OpenAI direct (Responses API).** Recommended for newer Azure deployments. Uses `vercel-ai-openai`'s `provider.language_model()` which defaults to Responses.
+```jsonc
+{
+  "azure-openai-east": {
+    "api": "openai",                                     // ← NOT openai_compat
+    "wire_api": "responses",                             // explicit, default for openai
+    "base_url": "https://my-azure.openai.azure.com/openai/deployments/gpt-5",
+    "client_options": {
+      "headers": { "api-version": "2024-12-01-preview" }
+    }
+  }
+}
+```
+
+**(b) Azure via OpenAI-compat (Chat Completions).** For older deployments without Responses support.
+```jsonc
+{
+  "azure-openai-east": {
+    "api": "openai_compat",
+    "wire_api": "chat",
+    "base_url": "https://my-azure.openai.azure.com/openai/deployments/gpt-5/chat/completions?api-version=2024-08-01-preview",
+    "client_options": { "full_url": true }
+  }
+}
+```
+
+The mismatch (Responses endpoint + chat-shaped body) is **not configurable** via OpenAI-compat today; if Responses is required, use option (a).
+
+### 6.3 Sketch
+
+```rust
+pub fn build_language_model_from_runtime(
+    runtime: &RuntimeConfig,
+    spec:    &ModelSpec,
+) -> Result<Arc<dyn LanguageModelV4>, ConfigError> {
+    let provider_cfg = runtime.providers.get(&spec.provider)
+        .ok_or_else(|| ConfigError::UnknownProvider { name: spec.provider.clone() })?;
+    let resolved = runtime.model_registry.resolve(&spec.provider, &spec.model_id)
+        .ok_or_else(|| ConfigError::UnknownModel {
+            provider: spec.provider.clone(), model: spec.model_id.clone(),
+        })?;
+    let api_model = resolved.provider_model.api_model_name
+        .as_deref().unwrap_or(&spec.model_id);
+    let api_key = provider_cfg.resolve_api_key();
+    let client  = build_http_client(provider_cfg.timeout_secs);
+
+    let opts = ClientOptionsView::extract(&provider_cfg.client_options)?;
+
+    match spec.api {
+        ProviderApi::Anthropic   => build_anthropic(provider_cfg, api_model, api_key, client, opts),
+        ProviderApi::Openai      => build_openai(provider_cfg, api_model, api_key, client, opts),
+        ProviderApi::Gemini      => build_google(provider_cfg, api_model, api_key, client, opts),
+        ProviderApi::Volcengine
+        | ProviderApi::Zai
+        | ProviderApi::OpenaiCompat => build_openai_compat(provider_cfg, api_model, api_key, client, opts),
+    }
+}
+
+/// Typed view over the loose `client_options` map; rejects unknown keys early.
+struct ClientOptionsView { /* full_url, headers, auth_token, ... */ }
+```
+
+`ClientOptionsView::extract` is a typed parser over the loose `HashMap<String, JSONValue>`; using a typed view (not ad-hoc `extract_opt_str` / `extract_opt_bool`) keeps Rust's exhaustive-match guarantees.
+
+## 7. Layer 2: Per-Request Building (Lanes A and B)
+
+`services/inference/src/build_call_options.rs::build_call_options` constructs a fresh `LanguageModelV4CallOptions` per turn. This is the boundary where Layer 1's flat `extra_body` is wrapped under `ProviderConfig.name` for Layer 3.
+
+```rust
+pub fn build_call_options(
+    info:          &ModelInfo,            // already merged through L0/L1/L2
+    provider_name: &str,                  // = ProviderConfig.name (single source of truth)
+    per_call:      &PerCallOverrides,     // CLI/TUI runtime overrides for this turn
+    prompt:        LlmPrompt,
+    tools:         Option<Vec<LanguageModelV4Tool>>,
+) -> LanguageModelV4CallOptions {
+    let mut call = LanguageModelV4CallOptions::new(prompt);
+    call.tools = tools;
+
+    // Lane A: typed sampling. None == let provider default.
+    call.temperature       = per_call.temperature.or(info.temperature);
+    call.top_p             = per_call.top_p     .or(info.top_p);
+    call.top_k             = per_call.top_k     .or(info.top_k.map(|v| v as u64));
+    call.max_output_tokens = per_call.max_output_tokens
+                                .or(Some(info.max_output_tokens as u64));
+
+    // Lane A2: typed reasoning channel.
+    let thinking = per_call.thinking_level.as_ref().or(info.default_thinking());
+    if let Some(t) = thinking {
+        call.reasoning = Some(t.effort.into());
+    }
+
+    // Lane B: shallow-merge extra_body and wrap under provider_name.
+    let mut extra: HashMap<String, JSONValue> = info.extra_body.clone();
+    for (k, v) in &per_call.extra_body {
+        extra.insert(k.clone(), v.clone());      // per-call wins over model
+    }
+    if let Some(t) = thinking {
+        // thinking_convert produces flat keys (e.g. {"thinking": {...}}, {"reasoning_summary": "auto"})
+        // which match the same Layer 1 shape as user-supplied extra_body.
+        for (k, v) in thinking_convert::to_extra_body(t, provider_name) {
+            extra.insert(k, v);
+        }
+    }
+    if !extra.is_empty() {
+        let mut po = ProviderOptions::default();
+        po.set(provider_name, extra);            // ← namespace wrap happens HERE, only HERE
+        call.provider_options = Some(po);
+    }
+
+    call
+}
+```
+
+There is exactly **one** place in the entire Coco codebase that writes a key into `ProviderOptions.0`: this function. Every other place reads `ModelInfo.extra_body`.
+
+### 7.1 Why typed sampling fields keep `Option<T>`
+
+`temperature`, `top_p`, `top_k` stay `Option`. `None` carries semantic meaning at the wire level: every provider's body builder uses `if let Some(v) = call.temperature { body["temperature"] = json!(v); }`. A `None` simply omits the field, letting the provider apply its own default. Forcing concrete defaults would silently override every provider's tuned default, which is the opposite of what users expect.
+
+`context_window` and `max_output_tokens` are different: every model has one (it is metadata, not request-time tuning). They are concrete in resolved `ModelInfo`, and required during `PartialModelInfo → ModelInfo` validation.
+
+### 7.2 Why namespace wrapping uses `ProviderConfig.name`
+
+The vercel-ai contract says: **the language model implementation reads `provider_options[ self.provider() ]`.** `self.provider()` returns the runtime instance identifier, which (for our provider instances) is `ProviderConfig.name`. By using `provider_name = ProviderConfig.name` as the wrap key in Layer 2, we guarantee the namespace round-trips:
+
+```
+settings.providers.<KEY>      → ProviderConfig.name = <KEY>
+                              → call.provider_options[<KEY>]  
+                              → model.provider() returns <KEY>      
+                              → reads its own namespace ✓
+```
+
+The third-party review's claim #7 (provider-name backfill) becomes a Layer 2 internal invariant enforced once in `backfill_names` (§5.1.1). User config never types this key.
+
+### 7.3 What Layer 3 does with the extras (uniform leftover-merge convention)
+
+Each `vercel-ai-*` provider extracts `provider_options[ self.provider() ]` and parses it through serde into a typed `*ProviderOptions` struct (`AnthropicProviderOptions`, `OpenAIChatProviderOptions`, `GoogleLanguageModelOptions`). Today the typed parse is **strict** for Anthropic / OpenAI / Google — unknown keys are silently dropped. OpenAI-compat is the exception: `openai_compatible_chat_options.rs:74-82` retains all non-schema keys as a `passthrough` map and merges them into the wire body at `openai_compatible_chat_language_model.rs:194-199`.
+
+🎯 **Target.** Generalise OpenAI-compat's leftover-merge to Anthropic, OpenAI Chat / Responses, and Google. Each provider's `extract_*_options` returns `(TypedOptions, HashMap<String, JSONValue>)`; each `get_args` ends with a 5-line shallow-merge:
+
+```rust
+// Inserted at the end of get_args, after typed body is built.
+if let Some(obj) = body.as_object_mut() {
+    for (k, v) in &leftover {
+        obj.insert(k.clone(), v.clone());     // leftover overrides typed
+    }
+}
+```
+
+After this generalisation:
+
+| Key in `extra_body` | Outcome |
+|---|---|
+| Matches a typed-known key (e.g. Anthropic `thinking`, OpenAI `service_tier`, Google `safetySettings`) | serde deserialises, provider-specific structured wire mapping (e.g. `body["thinking"] = json!({"type":"enabled", ...})`) |
+| Does not match any typed key | shallow-merged into the wire body root; overrides any earlier typed write at the same key |
+
+This unifies what was previously a third-party-review-flagged inconsistency (claim #1) into a single rule: **`extra_body` keys are uniform across providers; the provider chooses the wire-level shape if it knows the key, otherwise the key lands raw at the top of the wire body**.
+
+Note: the leftover-merge happens **after** typed writes, so a leftover key wins over the typed lane at the wire level. This is intentional — `extra_body` is the user's escape hatch for "I want this exact wire field." The pitfall of putting `temperature` in `extra_body` is now well-defined: it wins, and the user gets the wire-body field they asked for. (Setting both `info.temperature = Some(0.7)` and `info.extra_body["temperature"] = 0.5` is user error; we document but do not police it.)
+
+### 7.4 `thinking_convert::to_extra_body`
+
+Typed reasoning collapses into flat `extra_body` keys that Layer 3's typed parser will pick up:
+
+| Provider | `extra_body` keys produced |
+|---|---|
+| Anthropic | `{ "thinking": { "type": "enabled", "budgetTokens": <n> } }` (camelCase per `AnthropicProviderOptions` schema) |
+| OpenAI Responses | `{ "reasoningSummary": "auto" }` and `{ "include": ["reasoning.encrypted_content"] }` (driven by `ThinkingLevel.options`) |
+| Google | `{ "thinkingConfig": { "includeThoughts": true, "thinkingBudget": <n> } }` |
+| OpenAI-compat (xAI / DeepSeek) | `{ "reasoningEffort": "high" }` |
+
+`thinking_convert` is provider-aware (it takes `provider_name`), but its output is provider-neutral flat keys — the same shape a user would write directly into `models.json::extra_body`. There is no separate code path for "typed thinking" vs "user extras"; they share the merge.
+
+## 8. Tool Filter Pipeline (cross-cutting reference)
+
+See `feature-gates-and-tool-filtering.md` for the full 5-layer filter. Multi-provider relevance:
+
+- **Layer 2 (per-model `ToolOverrides`)** is owned by `ModelRegistry`. Two sources merge:
+  - `coco_config::tool_overrides::builtin_tool_overrides_for(model_id)` — e.g. `gpt-5*` family → `extra: ["apply_patch"], excluded: ["edit"]`
+  - `ResolvedModel.info.tool_overrides` (from `ModelInfo` or per-entry override) — user-side opt-ins
+- **`RuntimeConfig.tool_overrides: Arc<ToolOverrides>`** is computed once for the Main role at config-build (§5.3) and threaded through `ToolUseContext.tool_overrides`. Subagent contexts inherit via `Arc::clone` and never widen.
+
+## 9. Builtin Model Registry
+
+`coco_config::builtin::builtin_models() -> &'static HashMap<String, ModelInfo>` (lazy `OnceLock`). Initial coverage:
+
+| model_id | Builtin defaults |
+|---|---|
+| `claude-sonnet-4-6` | context_window: 1_000_000 (with `context-1m` beta), max_output_tokens: 64_000, capabilities: {tool_calling, vision, extended_thinking, fast_mode}, default_thinking_level: medium |
+| `claude-opus-4-7` | similar, default_thinking_level: medium |
+| `claude-haiku-4-5` | smaller window, no extended thinking |
+| `gpt-5` | context_window: 272_000, apply_patch_tool_type: shell, tool_overrides: {extra: apply_patch, excluded: edit}, capabilities: {tool_calling, structured_output, reasoning_summaries} |
+| `gpt-5-2` | similar, apply_patch_tool_type: freeform |
+| `gemini-2.5-pro` | context_window: 1_000_000, capabilities: {extended_thinking} |
+
+Coverage expands over time; the authoritative list is in `coco_config::builtin::builtin_models`. Models not in builtin (e.g., `deepseek-r1`, custom finetunes) must declare `context_window` and `max_output_tokens` somewhere in the merge chain.
+
+## 10. Why `providers.json` and `models.json` as sibling files
+
+An earlier draft put both catalogs inline in `settings.json`. Promoting them to siblings:
+
+1. **Separation of concerns** — three files, three questions:
+   - `settings.json` — "what does this user want?" (role bindings, features, hooks, preferences)
+   - `providers.json` — "how do we reach providers?" (endpoints, env keys, served models)
+   - `models.json` — "what models exist and what are they like?" (context_window, capabilities, thinking levels, extra_body)
+2. **Switching configurations is just editing settings.json.** Work / personal / dev / prod toggle by changing role bindings; shared infrastructure files stay untouched.
+3. **Shareability.** Team admins ship a corporate `providers.json` (proxy URLs, env keys); community curators publish `models.json`. Users drop them into `~/.coco/` without copy-paste-merging into personal preferences.
+4. **Distinct lifecycles.** Provider endpoints change on vendor cadence; model metadata changes on vendor cadence; user preferences change on user cadence. Three diff histories.
+5. **Clean override layering.** Three well-defined layers per resolution (builtin → catalog file → settings.json). "Where does `claude-opus-4-7.context_window` come from?" is a 3-step lookup in single-source files, not a needle search inside a fat JSON.
+6. **Builtin extension without recompilation.** Editing the file overrides built-ins; no PR to the binary required.
+7. **Per-user override path is preserved.** `settings.json.providers.<name>` partial overlays still merge per-key onto the catalog file; users tweak personal `organization_id` or `extra_body` without forking the team's catalog.
+
+This is **not** the cocode-rs `*provider.json` / `*model.json` glob pattern. Glob expansion makes "which file owns this key" debugging painful. `~/.coco/providers.json` and `~/.coco/models.json` are **single fixed-name files**, each with one purpose. The 6-source `SettingsWithSource` traceability still applies to `settings.json`; the catalog files are intentionally single-source because they are not per-project preferences.
+
+## 11. Reload / Hot-Reload
+
+🎯 **Target.** `SettingsWatcher` (`coco-config/src/settings/watcher.rs:14`) currently watches only the four settings paths and has a `TODO: Wire to utils/file-watch` placeholder. The target wires three additional files (`~/.coco/providers.json`, `~/.coco/models.json`) into the same debounced detector and rebuilds `RuntimeConfig` on any change.
+
+Mechanism:
+
+1. Re-runs `build_runtime_config()` → fresh `Arc<RuntimeConfig>` snapshot (with new `model_registry` and `tool_overrides`).
+2. Publishes via `tokio::sync::watch::Sender<Arc<RuntimeConfig>>`.
+3. Subscribers (`QueryEngine`, TUI, …) call `receiver.borrow().clone()` at turn boundaries to obtain the fresh `Arc`. In-flight turns retain the `Arc` they captured at turn start; a mid-turn config change has no torn-read effect — the next turn picks up the new snapshot atomically.
+
+Provider clients (`Arc<dyn LanguageModelV4>`) cached inside `ApiClient` are NOT auto-rebuilt on settings change — they are rebuilt at `/model` switch or session start. Detecting `client_options` changes mid-session and rebuilding the client is tracked in `audit-gaps.md`.
+
+## 12. Crate Responsibility
+
+| Concern | Crate | Key items |
+|---|---|---|
+| Foundation enums | `coco-types` | `ProviderApi`, `WireApi`, `ModelRole`, `ModelSpec`, `Capability`, `ApplyPatchToolType`, `ThinkingLevel`, `ReasoningEffort`, `ToolOverrides`, `Features` |
+| Settings + RuntimeConfig | `coco-config` | `Settings`, `PartialProviderConfig`, `ProviderConfig` (incl. `resolve_api_key`), `PartialProviderModelOverride`, `ProviderModelOverride`, `PartialModelInfo`, `ModelInfo`, `ModelRoles`, `ModelRegistry`, `ResolvedModel`, `RuntimeConfig`, `ConfigError`, `builtin_models`, `tool_overrides::resolve_tool_overrides` |
+| Inference wrapper | `coco-inference` | `ApiClient`, `RetryConfig`, `build_call_options`, `thinking_convert::to_extra_body`, `PerCallOverrides`, `ClientOptionsView` |
+| Provider construction | `app/cli/src/model_factory.rs` | `build_language_model_from_runtime`, `build_anthropic` / `build_openai` / `build_google` / `build_openai_compat`, `build_http_client` |
+| Tool filter Layer 2 | `coco-tool-runtime` + `coco-config` | `ToolOverrides` plumbed through `RuntimeConfig.tool_overrides` → `ToolUseContext.tool_overrides` |
+| Per-provider SDK (Layer 3) | `vercel-ai-{anthropic,openai,google,openai-compatible}` | `*Provider`, `*ProviderSettings`, `extract_*_options` (typed-known + leftover return signature, §7.3) |
+
+The boundary line between Coco and vercel-ai is exactly:
+
+- **Coco owns**: `ModelInfo.extra_body` (Layer 1), `build_call_options` (Layer 2 entry), `model_factory` (Layer 2 client construction).
+- **vercel-ai owns**: `LanguageModelV4CallOptions`, `ProviderOptions`, every provider implementation. We add a small uniform leftover-merge to each provider's `get_args` and **do not** modify call-options or trait shapes.
+
+## 13. Design Decisions
 
 | Decision | Rationale |
-|----------|-----------|
-| **ThinkingLevel.options for extensibility** | Only effort + budget_tokens as typed fields (universal). All provider-specific thinking params (reasoningSummary, interleaved, includeThoughts, include encrypted_content) go through `options: HashMap<String, Value>` — data-driven, no code changes for new params. Inspired by opencode's variant system but integrated into ThinkingLevel rather than a separate concept. |
-| **default_thinking_level as ReasoningEffort ref** | Not a full ThinkingLevel — just an effort name that points into supported_thinking_levels. Single source of truth, no param duplication. |
-| **ModelInfo.options for non-thinking extensions** | Per-model provider options (e.g., store: false) separate from thinking-related options. Merged at RequestBuilder Step 4 (highest config priority). |
-| **model_id not slug** | `model_id` aligns with vercel-ai `model_id()` method and industry convention. |
-| **ModelSpec.provider: String (not ProviderApi enum)** | Supports sub-provider routing (bedrock, vertex) without expanding the enum. ModelSpec.api: ProviderApi for dispatch. |
-| **No sdk_namespace** | vercel-ai provider impls handle Bedrock/Vertex parameter differences internally. |
-| **No opencode-style variants concept** | ThinkingLevel.options + supported_thinking_levels achieves the same: user selects effort name, system resolves full param set. More type-safe than raw variant dicts. |
-| **ModelRole enum, not ad-hoc functions** | TS uses scattered functions (getSmallFastModel, getMainLoopModel). Rust unifies into enum for type safety. |
-| **RequestBuilder 5-step pipeline** | Handles provider-specific quirks (cache breakpoints for Anthropic, reasoning_effort for OpenAI). |
-| **Capability enum, not booleans** | Extensible set vs fixed fields. New capabilities don't require struct changes. |
+|---|---|
+| **Three-layer boundary (config / coco-boundary / vercel-ai)** | Vercel AI v4 spec namespaces `ProviderOptions` by provider instance name. Exposing that to user config makes models non-portable across instances and creates a footgun ("`provider_options.openai` is silently inert if you reroute to `azure-east`"). Hiding it inside Layer 2 keeps user config provider-agnostic. |
+| **`ModelInfo.extra_body: HashMap<String, JSONValue>` (flat, single level)** | Layer 1 user surface. One mental model: "extra wire-body keys for this model." Layer 2 wraps it under `ProviderConfig.name` exactly once. |
+| **`provider_options` as the namespace mechanism (kept as upstream defines)** | Outer key is `String` because a single `ProviderApi::OpenaiCompat` backs N user-named instances (`xai`, `groq`, `azure-east`, …). Enum cannot represent 1-to-N. This is upstream `@ai-sdk/provider` v4 contract; not negotiable. |
+| **Uniform leftover-merge in every Layer 3 provider** | Eliminates the third-party review's claim #1 (Lane A/B isolation broken in OpenAI-compat). Generalising openai-compat's existing pattern to Anthropic / OpenAI / Google with 5 lines per `get_args` makes `extra_body` semantics provider-uniform. |
+| **`PartialProviderConfig` and `PartialModelInfo` (every-Option overlay; `from_partial → Result`)** | Closes the third-party review's claims #2 and #3. Prevents serde defaults from masking missing required fields (`api`, `context_window`, `max_output_tokens`) in catalog overlays. |
+| **`Option<T>` retained for `temperature`, `top_p`, `top_k` in resolved `ModelInfo`** | `None` carries wire semantics ("let provider default"); typed body builders write the field only on `Some`. Forcing concrete defaults would override provider defaults globally. |
+| **`context_window` and `max_output_tokens` concrete in resolved `ModelInfo`** | Every model has one, and they participate in budget / compact / tool-schema decisions; "unset" at this layer would be a bug. The on-disk overlay (`PartialModelInfo`) keeps them `Option` so omission is detectable. |
+| **`api_key: Option<String>` (no newtype)** | `coco-utils/secret-redact` handles redaction at log boundaries. A newtype would force `.expose()` calls everywhere with no security benefit. |
+| **`~/.coco/providers.json` + `~/.coco/models.json` as sibling files** | Provider catalog and model catalog have different ownership / lifecycle / shareability profile than user preferences. Switching configurations only edits `settings.json`. See §10. |
+| **`ProviderModelOverride`** | Per-(provider, model) override layer — overrides any builtin/catalog `ModelInfo` for the (provider, model) pair. "Override" makes the per-key delta semantics explicit; the rejected alternative `ProviderModelEntry` was ambiguous ("entry of what?"). New (provider, model) pairs that lack a builtin/catalog still go through the same struct — an override against an empty base is well-defined. |
+| **`extra_body` field name (renamed from `options` and `extras`)** | "Options" was ambiguous against `ProviderConfig.client_options`; "extras" was vague. "extra_body" mirrors the LangGraph / OpenAI Python SDK convention and reads as "additional wire-body fields." |
+| **Delete dormant `ProviderInfo` / `ProviderModel`** | Zero callsites outside lib.rs re-exports. Their fields (`timeout_secs`, `streaming`, `wire_api`) merge into `ProviderConfig`. |
+| **`ModelRegistry` as `RuntimeConfig` field** | Closes the L1 dormant gap — `runtime.rs::resolve_main_tool_overrides` previously always passed `None`. With registry, lookup is O(1) and `Some(&info)` flows through. |
+| **`full_url` semantic preserved** | Required for OpenAI-compat Azure-style routing where `base_url` is a complete endpoint path; without it the SDK appends `/chat/completions` and the request 404s. (For Azure with Responses API, prefer `ProviderApi::Openai` direct — see §6.2.) |
+| **Builtin registry compiled-in (not file-loaded)** | Matches cocode-rs `builtin.rs` `OnceLock` pattern; avoids first-run network/filesystem lookup. User overrides via catalogue files flesh out custom finetunes. |
+| **No new typed sampling fields on `ModelInfo`** | Keep existing typed (`temperature`, `top_p`, `top_k`, `max_output_tokens`). `frequency_penalty` / `presence_penalty` / `seed` / `stop_sequences` go through `extra_body` — the rare user accepts the wire-shape responsibility. |
+
+## 14. Replaces / removed from prior versions
+
+- **Three-lane separation with "no cross-merge" invariant** — Replaced by the three-layer boundary model. The flat-`extra_body` ⊕ uniform leftover-merge design supersedes Lane A/B isolation. The third-party review demonstrated that Lane A/B isolation was already broken in OpenAI-compat; the new design generalises that behaviour rather than fighting it.
+- **Provider-namespaced `extras` in user config** — Removed. Users wrote `extras: HashMap<String, JSONValue>` flat in earlier drafts but the spec implied namespaced semantics; the new `extra_body` makes the flatness explicit and makes namespace wrapping a Layer 2 internal concern.
+- **`ModelHub`** — coco-rs has no central model hub; provider clients are built per-`ApiClient` via `model_factory`.
+- **`excluded_tools: Vec<String>` on ModelInfo** — superseded by `ToolOverrides { extra, excluded }` in `coco-types`, plumbed through ModelRegistry.
+- **5-step `RequestBuilder` pipeline** — replaced by `build_call_options` (Layer 2 per-call) + `build_language_model_from_runtime` (Layer 2 client construction).
+- **Beta headers matrix / `provider_supports(provider, cap, model)`** — Anthropic-specific concerns belong in `vercel-ai-anthropic`. Capabilities are per-`ModelInfo.capabilities`; use `info.has_capability(cap)`.
+- **`ApplyPatchTool` conditional registration via `model_info.apply_patch_tool_type`** — registration is driven by `ToolOverrides` Layer 2 (`extra: ["apply_patch"]`). The `apply_patch_tool_type` field still exists on `ModelInfo` but drives *request shape* only (`shell` / `freeform` / `function`), not registry membership.
+
+## 15. Test Invariants
+
+| Invariant | What to assert |
+|---|---|
+| Per-key precedence (providers) | `settings.providers.<name>.<key>` wins over `providers.json.<name>.<key>` wins over builtin, **field-by-field**; an overlay that omits `api` does NOT coerce the resolved `api` to a serde default. |
+| Per-key precedence (models) | `provider_cfg.models.<id>.<key>` wins over `models.json.<id>.<key>` wins over builtin |
+| `extra_body` shallow-merge order | `info.extra_body` < `per_call.extra_body` (per-call wins; both are flat single-level maps) |
+| Layer 2 wraps under `ProviderConfig.name` exactly once | After `build_call_options`, `call.provider_options.0` has exactly one outer key, and that key equals `provider_cfg.name`. The same `ModelInfo` rendered under two different provider names produces two different namespaces but identical inner key-sets. |
+| Namespace round-trip | The runtime `model.provider()` string equals the outer key in `call.provider_options.0`. |
+| Layer 3 leftover-merge cross-provider uniform | A flat key written into `extra_body` that does NOT match any provider's typed schema (e.g. `"my_custom_field": "x"`) appears in the wire body for Anthropic, OpenAI Chat, OpenAI Responses, Google, AND OpenAI-compat. (Once §7.3 generalisation lands.) |
+| Layer 3 typed-known wins structured shape | A flat key that DOES match a typed schema (`thinking` for Anthropic, `serviceTier` for OpenAI, `safetySettings` for Google) is parsed into the typed struct and produces the structured wire-body shape rather than a raw passthrough. |
+| `ModelInfo` is provider-portable | Switching a role from `provider_a/m1` to `provider_b/m1` (same `model_id`, different provider instance) re-uses the same `ModelInfo` (no `models.json` change required); only the namespace key in `call.provider_options.0` differs. |
+| Settings-only inline equivalent to split files | A `settings.json` containing the full `providers` block produces the same `RuntimeConfig` as the same data hoisted into sibling `providers.json` + minimal `settings.json`. |
+| Missing required field → typed error | `models.json` declaring `gpt-99` without `context_window` returns `ConfigError::MissingContextWindow { provider, model }`, never panics, never silently uses a serde default. |
+| New provider in settings.json only | A provider name appearing only in `settings.providers.<name>` requires `api`, `env_key`, `base_url` in the partial; otherwise `ConfigError::IncompleteProviderEntry`. |
+| Three-way concurrent reload | Editing all three files inside the same `SettingsWatcher` debounce window produces exactly one `RuntimeConfig` rebuild with all changes applied; in-flight turns continue with the pre-reload `Arc`. |
+| `tool_overrides` plumbed | Switching the `Main` role's model causes `RuntimeConfig.tool_overrides` to reflect the new model's `ToolOverrides` (closes the L1 dormant gap from `runtime.rs:141-156`). |
+| `full_url` preserved | An `openai_compat` provider with `client_options.full_url = true` produces a `*ProviderSettings` where the SDK skips its default path suffix (Azure-style routing). |
+| `include_usage` default | An `openai_compat` provider with `client_options.include_usage` unset produces `OpenAICompatibleProviderSettings.include_usage = None`, which the provider treats as `false` (matches `openai_compatible_provider.rs:98`). Setting `true` or `false` explicitly round-trips. |
+| Provider-name backfill (Layer 2 internal) | A `PartialProviderConfig` with `name = None` produces a resolved `ProviderConfig` whose `name` equals the map key. `debug_assert_eq!(map_key, cfg.name)` holds for every entry post-resolution. |
+
+## 16. Implementation Status Snapshot
+
+This table reflects the difference between the current code and the target design. Track migration progress here.
+
+| Item | Status | Location | Notes |
+|---|---|---|---|
+| `ProviderConfig` non-Option `api` | ✅ Implemented (with bug) | `common/config/src/provider/mod.rs:16` | Bug per third-party review #3; replace with `PartialProviderConfig` |
+| `ModelInfo.options: Option<HashMap<...>>` | ✅ Implemented | `common/config/src/model/mod.rs:86` | Rename to `extra_body`, change to non-Option `HashMap` (default empty) |
+| `ModelInfo` numeric defaults via serde | ✅ Implemented (with bug) | `common/config/src/model/mod.rs:33-36, 89-95` | Bug per third-party review #2; split via `PartialModelInfo` |
+| `ModelRegistry`, `ResolvedModel` | 🎯 Target | not present | New type, defined in `crate-coco-config.md` |
+| `runtime.rs::resolve_main_tool_overrides` plumbed | 🎯 Target | `common/config/src/runtime.rs:141-156` passes `None` | Wire through `ModelRegistry` |
+| `build_language_model_from_runtime` (handles Volcengine / Zai / OpenaiCompat) | 🎯 Target | `app/cli/src/model_factory.rs:35-70` errors out | Rewrite with `RuntimeConfig` argument |
+| `build_call_options` | 🎯 Target | `services/inference/src/client.rs:132` inlines | Extract to `services/inference/src/build_call_options.rs` |
+| Layer 3 uniform leftover-merge | 🎯 Target (partial) | OpenAI-compat: ✅ `openai_compatible_chat_language_model.rs:194-199`. Anthropic / OpenAI direct / Google: ❌ | Add 5-line shallow-merge to four `get_args` |
+| `SettingsWatcher` watches 3 files | 🎯 Target | `common/config/src/settings/watcher.rs:14` watches 4 settings paths only | Extend watch list + actually wire `utils/file-watch` (currently TODO) |
+| Hot-reload via `tokio::sync::watch::Sender<Arc<RuntimeConfig>>` | 🎯 Target | not present | Build during `RuntimeConfigBuilder` integration |
+| Dormant `ProviderInfo` / `ProviderModel` deletion | 🎯 Target | `common/config/src/provider/mod.rs:80, 116` | Delete; merge fields into `ProviderConfig` |
+| Azure example (correct wire API) | 🎯 Target (doc) | this doc §6.2 | The previous draft pointed `openai_compat` at a `/responses` endpoint; corrected here |
