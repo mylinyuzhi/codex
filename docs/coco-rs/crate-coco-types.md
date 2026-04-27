@@ -874,8 +874,11 @@ pub enum ReasoningEffort {
 ### Provider & Model Types (from multi-provider-plan.md)
 
 ```rust
-/// Which LLM provider implementation to use.
-/// Consumed by coco-config (ProviderInfo) and coco-inference (ProviderFactory).
+/// Wire-protocol family — which `vercel-ai-*` crate to dispatch to.
+/// Consumed by `coco-config::ProviderConfig` and `app/cli/model_factory`.
+/// Distinct from provider **instance identifier** (`ProviderConfig.name: String`):
+/// a single `ProviderApi::OpenaiCompat` may back N user-named instances
+/// (`xai`, `groq`, `azure-east`, …). See multi-provider-plan.md §2.2.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderApi {

@@ -131,14 +131,43 @@ impl<'de> Deserialize<'de> for SystemMessageMode {
     }
 }
 
-/// Extract OpenAI-specific options from the generic provider options map.
+/// Extract OpenAI Chat-specific options from the generic provider
+/// options map.
+///
+/// Returns `(typed, raw)`:
+///
+/// - `typed` — parsed `OpenAIChatProviderOptions`, used for
+///   reasoning-model / system-message-mode side-effects and typed
+///   body writes.
+/// - `raw` — verbatim user-supplied `provider_options["openai"]`
+///   map. The language model shallow-merges this into the wire body
+///   root **as-is**, every key wins over earlier typed body writes
+///   (multi-provider-plan §7.3). Opaque to coco-rs; users own
+///   correctness.
 pub fn extract_openai_options(
     provider_options: &Option<vercel_ai_provider::ProviderOptions>,
-) -> OpenAIChatProviderOptions {
-    provider_options
+) -> (
+    OpenAIChatProviderOptions,
+    std::collections::BTreeMap<String, serde_json::Value>,
+) {
+    let raw_value = provider_options
         .as_ref()
         .and_then(|opts| opts.0.get("openai"))
-        .and_then(|v| serde_json::to_value(v).ok())
-        .and_then(|v| serde_json::from_value::<OpenAIChatProviderOptions>(v).ok())
-        .unwrap_or_default()
+        .and_then(|v| serde_json::to_value(v).ok());
+    let typed: OpenAIChatProviderOptions = raw_value
+        .clone()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
+
+    let mut raw = std::collections::BTreeMap::new();
+    if let Some(serde_json::Value::Object(map)) = raw_value {
+        for (k, v) in map {
+            raw.insert(k, v);
+        }
+    }
+    (typed, raw)
 }
+
+#[cfg(test)]
+#[path = "openai_chat_options.test.rs"]
+mod tests;

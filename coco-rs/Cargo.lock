@@ -929,6 +929,7 @@ dependencies = [
  "coco-bridge",
  "coco-commands",
  "coco-config",
+ "coco-config-reload",
  "coco-context",
  "coco-inference",
  "coco-mcp",
@@ -944,6 +945,7 @@ dependencies = [
  "coco-types",
  "dirs 6.0.0",
  "pretty_assertions",
+ "reqwest",
  "serde",
  "serde_json",
  "tempfile",
@@ -955,6 +957,7 @@ dependencies = [
  "vercel-ai-anthropic",
  "vercel-ai-google",
  "vercel-ai-openai",
+ "vercel-ai-openai-compatible",
  "vercel-ai-provider",
 ]
 
@@ -1007,6 +1010,23 @@ dependencies = [
  "serde",
  "serde_json",
  "strum",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "coco-config-reload"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "coco-config",
+ "coco-file-watch",
+ "pretty_assertions",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1148,6 +1168,7 @@ dependencies = [
  "pretty_assertions",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
  "tracing",

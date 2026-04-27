@@ -19,8 +19,9 @@ Each piece of information has exactly one owner. No duplication across docs.
 | TS dir -> Rust crate mapping | `ts-to-rust-mapping.md` | crate plans reference, not copy |
 | TS utils file -> Rust target | `ts-utils-mapping.md` | |
 | Multi-provider types (ModelRole, ProviderApi, Capability) | `crate-coco-types.md` | multi-provider-plan.md shows usage, not definition |
-| ModelInfo, ProviderInfo, ModelRoles structs | `crate-coco-config.md` | multi-provider-plan.md shows usage, not definition |
-| ModelHub, ProviderFactory, RequestBuilder, auth, retry, files API, bootstrap | `crate-coco-inference.md` | multi-provider-plan.md shows architecture, not struct fields |
+| `PartialProviderConfig`, `ProviderConfig`, `PartialModelInfo`, `ModelInfo`, `ProviderModelOverride`, `ProviderClientOptions`, `ModelRoles`, `ModelRegistry`, `ResolvedModel`, `RuntimeConfig`, `RedactedSecret`, `PositiveTokens`, `PositiveCount` | `crate-coco-config.md` | multi-provider-plan.md shows usage and three-layer flow, not field-level definition |
+| `ApiClient`, `ProviderClientFingerprint`, `build_call_options`, `thinking_convert::to_extra_body`, `PerCallOverrides`, retry, files API, bootstrap | `crate-coco-inference.md` | multi-provider-plan.md shows architecture, not struct fields |
+| `build_language_model_from_runtime` (provider construction) | `app/cli/src/model_factory.rs` (no separate doc) | multi-provider-plan.md §6 |
 | Multi-provider architecture (flow, beta headers) | `multi-provider-plan.md` | |
 | File ownership (which crate owns which config file) | `config-file-map.md` | crate plans reference, not copy |
 | ToolId, AgentTypeId, ToolName, SubagentType — identity enums | `crate-coco-types.md` | other docs use by name |
@@ -95,11 +96,16 @@ Does NOT own: `ModelInfo` (coco-config), `ToolUseContext` (coco-tool), `HooksSet
 Owns structs that combine coco-types enums with config data:
 
 ```
-ModelInfo          (uses Capability, ProviderApi from coco-types)
-ProviderInfo       (uses ProviderApi from coco-types)
-ModelRoles         (uses ModelRole from coco-types)
+ModelInfo, PartialModelInfo                     (uses Capability, ProviderApi from coco-types)
+ProviderConfig, PartialProviderConfig           (uses ProviderApi, WireApi from coco-types)
+ProviderModelOverride, PartialProviderModelOverride
+ProviderClientOptions, PartialProviderClientOptions
+ModelRegistry, ResolvedModel
+RedactedSecret, PositiveTokens, PositiveCount   (Layer 1 invariants)
+ModelRoles                                       (uses ModelRole from coco-types)
+RuntimeConfig                                    (atomic snapshot — providers + roles + registry + tool_overrides)
 GlobalConfig, Settings, SettingsWithSource, SettingSource
-EnvOnlyConfig, ProviderConfig, RuntimeOverrides, ResolvedConfig
+EnvOnlyConfig, RuntimeOverrides, ResolvedConfig
 ModelAlias, FastModeState, SettingsWatcher, AutoModeConfig
 ```
 
@@ -150,13 +156,22 @@ See `event-system-design.md`.
 
 ### coco-inference
 
-Owns (in addition to ModelHub, auth, retry):
+Owns (in addition to retry, files API, bootstrap):
 
 ```
-thinking_convert module (ThinkingLevel + ModelInfo → per-provider ProviderOptions; typed conversion for effort/budget, passthrough for options)
-request_options_merge module (provider_base_options, merge_into_provider_options)
+ApiClient (carries ProviderClientFingerprint), ApiClientConfig
+ProviderClientFingerprint                                        (turn-boundary coherence, §11.1 of multi-provider-plan)
+build_call_options module                                        (Layer 2 per-request builder; single ProviderOptions write site)
+PerCallOverrides                                                 (per-turn deltas: temperature, top_p, top_k, max_output_tokens, thinking, extra_body)
+thinking_convert module                                           (ThinkingLevel → flat camelCase BTreeMap<String,JSONValue>; provider-aware mapping)
 CacheScope, CacheBreakDetector, CachePromptState, CacheBreakEvent
 ```
+
+There is no `ModelHub` / `ProviderFactory` / `RequestBuilder` / `request_options_merge`.
+Provider construction lives in `app/cli/src/model_factory.rs::build_language_model_from_runtime`.
+The 5-step `RequestBuilder` pipeline is replaced by `build_call_options`
+(per-call) + the model_factory entry (per-client). See multi-provider-plan.md
+§14 "Replaces / removed from prior versions".
 
 Note: ThinkingLevel and ReasoningEffort are in coco-types (shared across config/inference/query).
 ThinkingLevel.options (HashMap) carries provider-specific thinking extensions (data-driven, no typed fields).
@@ -170,7 +185,7 @@ These names are final. All docs must use these exact names.
 |---------------|----------|--------|
 | `PermissionDecision` | ~~PermissionResult~~, ~~PermissionDecision::Allowed~~ | Defined in coco-types with variants `Allow`, `Ask`, `Deny` |
 | `check_permissions` (plural) | ~~check_permission~~ | Matches TS `checkPermissions()` |
-| `ProviderApi` | ~~ApiProvider~~ | Canonical enum in coco-types. Anthropic sub-routing (Bedrock/Vertex/Foundry) is in `ProviderInfo`, not enum variants |
+| `ProviderApi` | ~~ApiProvider~~ | Canonical enum in coco-types — wire-protocol family. Anthropic sub-routing (Bedrock/Vertex/Foundry) is in `vercel-ai-anthropic` provider settings + `ProviderConfig.client_options`, not enum variants. Distinct from provider **instance identifier** (`ProviderConfig.name: String`); see multi-provider-plan.md §2.2. |
 | `ApiClient` | ~~Arc<dyn LanguageModelV4>~~ directly | QueryEngine holds `Arc<ApiClient>` which wraps vercel-ai internally |
 | `ThinkingLevel` | ~~EffortLevel~~, ~~ThinkingConfig~~, ~~ThinkingParams~~ | Single unified struct in coco-types. Fields: effort (ReasoningEffort) + budget_tokens + options (HashMap). Provider-specific thinking params (interleaved, reasoningSummary, includeThoughts) go through options, not typed fields. Evolved from cocode-rs `common/protocol/src/thinking.rs`. |
 | `model_id` | ~~slug~~ | Model identifier field name. Aligns with vercel-ai `model_id()` and industry convention. |

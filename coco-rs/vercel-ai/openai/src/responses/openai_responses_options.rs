@@ -43,14 +43,43 @@ pub struct OpenAIResponsesProviderOptions {
     pub force_reasoning: Option<bool>,
 }
 
-/// Extract Responses-specific options from the generic provider options map.
+/// Extract OpenAI Responses-specific options from the generic
+/// provider options map.
+///
+/// Returns `(typed, raw)`:
+///
+/// - `typed` — parsed `OpenAIResponsesProviderOptions`, used for
+///   reasoning-model / system-message-mode side-effects and typed
+///   body writes (`include` auto-fill, `top_logprobs`, etc.).
+/// - `raw` — verbatim user-supplied `provider_options["openai"]`
+///   map. The language model shallow-merges this into the wire body
+///   root **as-is**, every key wins over earlier typed body writes
+///   (multi-provider-plan §7.3). Opaque to coco-rs; users own
+///   correctness.
 pub fn extract_responses_options(
     provider_options: &Option<vercel_ai_provider::ProviderOptions>,
-) -> OpenAIResponsesProviderOptions {
-    provider_options
+) -> (
+    OpenAIResponsesProviderOptions,
+    std::collections::BTreeMap<String, serde_json::Value>,
+) {
+    let raw_value = provider_options
         .as_ref()
         .and_then(|opts| opts.0.get("openai"))
-        .and_then(|v| serde_json::to_value(v).ok())
-        .and_then(|v| serde_json::from_value::<OpenAIResponsesProviderOptions>(v).ok())
-        .unwrap_or_default()
+        .and_then(|v| serde_json::to_value(v).ok());
+    let typed: OpenAIResponsesProviderOptions = raw_value
+        .clone()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
+
+    let mut raw = std::collections::BTreeMap::new();
+    if let Some(serde_json::Value::Object(map)) = raw_value {
+        for (k, v) in map {
+            raw.insert(k, v);
+        }
+    }
+    (typed, raw)
 }
+
+#[cfg(test)]
+#[path = "openai_responses_options.test.rs"]
+mod tests;

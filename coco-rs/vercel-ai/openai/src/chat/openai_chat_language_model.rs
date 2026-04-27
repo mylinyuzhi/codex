@@ -67,7 +67,8 @@ impl OpenAIChatLanguageModel {
         options: &LanguageModelV4CallOptions,
     ) -> Result<(Value, Vec<Warning>), AISdkError> {
         let mut warnings = Vec::new();
-        let openai_options = extract_openai_options(&options.provider_options);
+        let (openai_options, raw_provider_options) =
+            extract_openai_options(&options.provider_options);
         let caps = get_capabilities(&self.model_id);
 
         let force_reasoning = openai_options.force_reasoning.unwrap_or(false);
@@ -330,6 +331,17 @@ impl OpenAIChatLanguageModel {
                         body["response_format"] = json!({"type": "json_object"});
                     }
                 }
+            }
+        }
+
+        // Verbatim `extra_body` patch (multi-provider-plan §7.3).
+        // The user-supplied `provider_options["openai"]` map is
+        // shallow-merged into the wire body root **as-is** — every
+        // key wins over any earlier typed body write. Opaque to
+        // coco-rs; users own correctness.
+        if let Some(obj) = body.as_object_mut() {
+            for (k, v) in &raw_provider_options {
+                obj.insert(k.clone(), v.clone());
             }
         }
 

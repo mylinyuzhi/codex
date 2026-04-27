@@ -273,7 +273,7 @@ impl AnthropicMessagesLanguageModel {
         stream: bool,
     ) -> Result<GetArgsResult, AISdkError> {
         let mut warnings = Vec::new();
-        let mut anthropic_options =
+        let (mut anthropic_options, raw_provider_options) =
             extract_anthropic_options(&options.provider_options, &self.config.provider);
 
         // Unsupported standard parameters
@@ -740,6 +740,18 @@ impl AnthropicMessagesLanguageModel {
         if let Some(ref extra) = options.headers {
             for (k, v) in extra {
                 headers.insert(k.clone(), v.clone());
+            }
+        }
+
+        // Verbatim `extra_body` patch (multi-provider-plan §7.3).
+        // The user-supplied `provider_options[<anthropic>]` map is
+        // shallow-merged into the wire body root **as-is** — opaque
+        // to coco-rs, no typed-vs-unknown filter, every key wins
+        // over any earlier typed body write at the same name. Users
+        // own the correctness of their `extra_body` shapes.
+        if let Some(obj) = body.as_object_mut() {
+            for (k, v) in &raw_provider_options {
+                obj.insert(k.clone(), v.clone());
             }
         }
 

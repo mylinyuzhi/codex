@@ -1,15 +1,17 @@
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 
 use coco_types::ModelRole;
 use coco_types::ModelSpec;
 use coco_types::ProviderApi;
 use pretty_assertions::assert_eq;
+use tempfile::TempDir;
 
 use super::*;
 use crate::EnvKey;
 use crate::EnvSnapshot;
 use crate::ModelSelection;
-use crate::ProviderConfig;
+use crate::PartialProviderConfig;
 use crate::RuntimeOverrides;
 use crate::Settings;
 use crate::settings::SettingsWithSource;
@@ -19,6 +21,25 @@ fn settings_with(settings: Settings) -> SettingsWithSource {
         merged: settings,
         per_source: HashMap::new(),
     }
+}
+
+/// Build a `RuntimeConfig` with isolated catalog paths so tests don't
+/// pick up a stray `~/.coco/providers.json` (or `settings.json`,
+/// `models.json`, managed-settings) on the developer's host. The
+/// `TempDir` is dropped after `build_runtime_config_with` returns —
+/// the resolved `RuntimeConfig` doesn't retain any path references,
+/// so the tempdir's lifetime can end before the test asserts on the
+/// returned snapshot.
+fn build_isolated(
+    settings: SettingsWithSource,
+    env: EnvSnapshot,
+    overrides: RuntimeOverrides,
+) -> anyhow::Result<RuntimeConfig> {
+    let tmp = TempDir::new().expect("tempdir");
+    let catalogs = CatalogPaths::empty_in(tmp.path());
+    let runtime = build_runtime_config_with(settings, env, overrides, catalogs);
+    drop(tmp);
+    runtime
 }
 
 fn model_spec(provider: &str, api: ProviderApi, model_id: &str) -> ModelSpec {
@@ -43,14 +64,31 @@ fn model_selection(provider: &str, model_id: &str) -> ModelSelection {
 
 #[test]
 fn test_runtime_config_resolves_provider_overrides() {
-    let mut providers = HashMap::new();
+    use crate::PartialModelInfo;
+    use crate::positive::PositiveTokens;
+    use crate::provider::PartialProviderModelOverride;
+
+    let mut model_entries = BTreeMap::new();
+    model_entries.insert(
+        "local-model".to_string(),
+        PartialProviderModelOverride {
+            api_model_name: None,
+            info: PartialModelInfo {
+                context_window: Some(PositiveTokens::new(128_000)),
+                max_output_tokens: Some(PositiveTokens::new(4_096)),
+                ..Default::default()
+            },
+        },
+    );
+    let mut providers = BTreeMap::new();
     providers.insert(
         "local".to_string(),
-        ProviderConfig {
-            api: ProviderApi::OpenaiCompat,
-            env_key: "LOCAL_API_KEY".to_string(),
-            base_url: "http://localhost:8080/v1".to_string(),
+        PartialProviderConfig {
+            api: Some(ProviderApi::OpenaiCompat),
+            env_key: Some("LOCAL_API_KEY".to_string()),
+            base_url: Some("http://localhost:8080/v1".to_string()),
             default_model: Some("local-model".to_string()),
+            models: Some(model_entries),
             ..Default::default()
         },
     );
@@ -60,7 +98,7 @@ fn test_runtime_config_resolves_provider_overrides() {
         ..Default::default()
     });
 
-    let runtime = build_runtime_config(
+    let runtime = build_isolated(
         settings,
         EnvSnapshot::default(),
         RuntimeOverrides::default(),
@@ -78,6 +116,82 @@ fn test_runtime_config_resolves_provider_overrides() {
 }
 
 #[test]
+fn test_runtime_providers_satisfy_identity_invariant() {
+    // Plan §15 Group B claim #2 (release-build invariant).
+    let runtime = build_isolated(
+        settings_with(Settings::default()),
+        EnvSnapshot::default(),
+        RuntimeOverrides::default(),
+    )
+    .expect("runtime config");
+    for (key, cfg) in &runtime.providers {
+        assert_eq!(key, &cfg.name, "providers map key must equal cfg.name");
+    }
+}
+
+#[test]
+fn test_partial_provider_overlay_does_not_coerce_api() {
+    // settings.json supplies only `client_options` for the builtin
+    // `openai` provider. The `api` field MUST remain `Openai` from the
+    // builtin layer — it is NOT silently coerced by serde default.
+    let mut providers = BTreeMap::new();
+    providers.insert(
+        "openai".to_string(),
+        PartialProviderConfig {
+            client_options: Some(crate::PartialProviderClientOptions {
+                organization_id: Some("org-myown".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    );
+    let settings = settings_with(Settings {
+        providers,
+        ..Default::default()
+    });
+    let runtime = build_isolated(
+        settings,
+        EnvSnapshot::default(),
+        RuntimeOverrides::default(),
+    )
+    .expect("runtime config");
+    let openai = runtime.providers.get("openai").expect("openai entry");
+    assert_eq!(openai.api, ProviderApi::Openai);
+    assert_eq!(
+        openai.client_options.organization_id.as_deref(),
+        Some("org-myown")
+    );
+}
+
+#[test]
+fn test_incomplete_new_provider_overlay_returns_typed_error() {
+    let mut providers = BTreeMap::new();
+    providers.insert(
+        "brand-new".to_string(),
+        PartialProviderConfig {
+            // Missing api / env_key / base_url — the partial declares a
+            // new provider without the required identity fields.
+            client_options: Some(crate::PartialProviderClientOptions::default()),
+            ..Default::default()
+        },
+    );
+    let settings = settings_with(Settings {
+        providers,
+        ..Default::default()
+    });
+    let err = build_isolated(
+        settings,
+        EnvSnapshot::default(),
+        RuntimeOverrides::default(),
+    )
+    .expect_err("incomplete partial must fail");
+    assert!(
+        err.to_string().contains("brand-new"),
+        "expected error to name the provider, got: {err}"
+    );
+}
+
+#[test]
 fn test_runtime_config_env_model_override_beats_json() {
     let settings = settings_with(Settings {
         model: Some("anthropic/json-model".to_string()),
@@ -86,7 +200,7 @@ fn test_runtime_config_env_model_override_beats_json() {
     let env = EnvSnapshot::from_pairs([(EnvKey::CocoModel, "openai/gpt-5")]);
 
     let runtime =
-        build_runtime_config(settings, env, RuntimeOverrides::default()).expect("runtime config");
+        build_isolated(settings, env, RuntimeOverrides::default()).expect("runtime config");
 
     let main = runtime
         .model_roles
@@ -102,13 +216,13 @@ fn test_runtime_config_resolves_structured_model_roles() {
     let settings = settings_with(Settings {
         models: crate::ModelSelectionSettings {
             main: Some(role_slots_of("openai", "gpt-5")),
-            fast: Some(role_slots_of("google", "gemini-2.5-flash")),
+            fast: Some(role_slots_of("google", "gemini-2.5-pro")),
             ..Default::default()
         },
         ..Default::default()
     });
 
-    let runtime = build_runtime_config(
+    let runtime = build_isolated(
         settings,
         EnvSnapshot::default(),
         RuntimeOverrides::default(),
@@ -126,7 +240,7 @@ fn test_runtime_config_resolves_structured_model_roles() {
     assert_eq!(main, &model_spec("openai", ProviderApi::Openai, "gpt-5"));
     assert_eq!(
         fast,
-        &model_spec("google", ProviderApi::Gemini, "gemini-2.5-flash")
+        &model_spec("google", ProviderApi::Gemini, "gemini-2.5-pro")
     );
 }
 
@@ -135,7 +249,7 @@ fn test_runtime_config_rejects_bare_env_model_override() {
     let settings = settings_with(Settings::default());
     let env = EnvSnapshot::from_pairs([(EnvKey::CocoModel, "gpt-5")]);
 
-    let err = build_runtime_config(settings, env, RuntimeOverrides::default())
+    let err = build_isolated(settings, env, RuntimeOverrides::default())
         .expect_err("bare model override should fail");
 
     assert!(
@@ -147,22 +261,24 @@ fn test_runtime_config_rejects_bare_env_model_override() {
 #[test]
 fn test_cli_fallback_model_overrides_populate_main_chain_in_order() {
     // `--fallback-model X --fallback-model Y` produces an ordered
-    // Main role fallback chain. Flag order = chain priority.
+    // Main role fallback chain. Flag order = chain priority. Use
+    // model ids that don't match the anthropic builtin's
+    // `default_model` (`claude-sonnet-4-6`) so the chain has no
+    // duplicates with the auto-selected primary.
     let settings = settings_with(Settings::default());
     let env = EnvSnapshot::default();
     let overrides = RuntimeOverrides {
         fallback_model_overrides: vec![
-            "anthropic/claude-sonnet-4-6".to_string(),
+            "anthropic/claude-opus-4-7".to_string(),
             "openai/gpt-5".to_string(),
         ],
         ..Default::default()
     };
-    let runtime =
-        build_runtime_config(settings, env, overrides).expect("runtime with fallback chain");
+    let runtime = build_isolated(settings, env, overrides).expect("runtime with fallback chain");
     let fallbacks = runtime.model_roles.fallbacks(ModelRole::Main);
     assert_eq!(fallbacks.len(), 2);
     assert_eq!(fallbacks[0].provider, "anthropic");
-    assert_eq!(fallbacks[0].model_id, "claude-sonnet-4-6");
+    assert_eq!(fallbacks[0].model_id, "claude-opus-4-7");
     assert_eq!(fallbacks[1].provider, "openai");
     assert_eq!(fallbacks[1].model_id, "gpt-5");
 }
@@ -173,16 +289,16 @@ fn test_cli_fallback_model_rejects_duplicate_of_primary() {
     // fallback useless; hard-fail at startup rather than silently
     // accept a degenerate config.
     let settings = settings_with(Settings {
-        model: Some("anthropic/claude-opus-4-6".into()),
+        model: Some("anthropic/claude-opus-4-7".into()),
         ..Default::default()
     });
     let env = EnvSnapshot::default();
     let overrides = RuntimeOverrides {
-        fallback_model_overrides: vec!["anthropic/claude-opus-4-6".to_string()],
+        fallback_model_overrides: vec!["anthropic/claude-opus-4-7".to_string()],
         ..Default::default()
     };
-    let err = build_runtime_config(settings, env, overrides)
-        .expect_err("duplicate primary+fallback must fail");
+    let err =
+        build_isolated(settings, env, overrides).expect_err("duplicate primary+fallback must fail");
     assert!(
         err.to_string().contains("duplicates primary"),
         "expected duplicate-primary error, got: {err}"
@@ -191,7 +307,12 @@ fn test_cli_fallback_model_rejects_duplicate_of_primary() {
 
 #[test]
 fn test_cli_fallback_model_rejects_duplicate_within_chain() {
-    let settings = settings_with(Settings::default());
+    // Use an explicit primary so the auto-default doesn't collide
+    // with one of the duplicated fallbacks.
+    let settings = settings_with(Settings {
+        model: Some("openai/gpt-5".into()),
+        ..Default::default()
+    });
     let env = EnvSnapshot::default();
     let overrides = RuntimeOverrides {
         fallback_model_overrides: vec![
@@ -200,7 +321,7 @@ fn test_cli_fallback_model_rejects_duplicate_within_chain() {
         ],
         ..Default::default()
     };
-    let err = build_runtime_config(settings, env, overrides)
+    let err = build_isolated(settings, env, overrides)
         .expect_err("duplicate fallback within chain must fail");
     assert!(
         err.to_string().contains("duplicates earlier fallback"),
@@ -216,12 +337,139 @@ fn test_cli_fallback_model_with_unknown_provider_fails_startup() {
         fallback_model_overrides: vec!["nonexistent/some-model".to_string()],
         ..Default::default()
     };
-    let err = build_runtime_config(settings, env, overrides)
+    let err = build_isolated(settings, env, overrides)
         .expect_err("unknown provider must fail fast at startup");
     let msg = err.to_string();
     assert!(
         msg.contains("unknown provider") || msg.contains("nonexistent"),
         "expected unknown-provider error, got: {msg}",
+    );
+}
+
+#[test]
+fn settings_inline_provider_block_equals_providers_json_split() {
+    // Plan §15 invariant: a `settings.json` containing the full
+    // `providers` block produces the same `RuntimeConfig` as the same
+    // data hoisted into sibling `providers.json` + minimal
+    // `settings.json`. Asserts no surprise ordering, key-set, or
+    // resolution divergence between the two on-disk shapes.
+    use std::fs;
+
+    let mut providers_inline = BTreeMap::new();
+    providers_inline.insert(
+        "azure-east".to_string(),
+        PartialProviderConfig {
+            api: Some(ProviderApi::Openai),
+            env_key: Some("AZURE_KEY".into()),
+            base_url: Some("https://azure.example/v1".into()),
+            ..Default::default()
+        },
+    );
+
+    // Path A: providers declared inline in settings.json.
+    let inline_runtime = build_isolated(
+        settings_with(Settings {
+            providers: providers_inline.clone(),
+            ..Default::default()
+        }),
+        EnvSnapshot::default(),
+        RuntimeOverrides::default(),
+    )
+    .expect("inline runtime");
+
+    // Path B: providers in sibling providers.json, settings minimal.
+    let tmp = TempDir::new().unwrap();
+    let providers_json_path = tmp.path().join("providers.json");
+    fs::write(
+        &providers_json_path,
+        serde_json::to_string_pretty(&providers_inline).unwrap(),
+    )
+    .unwrap();
+    let split_runtime = build_runtime_config_with(
+        settings_with(Settings::default()),
+        EnvSnapshot::default(),
+        RuntimeOverrides::default(),
+        CatalogPaths::rooted(tmp.path()),
+    )
+    .expect("split runtime");
+
+    let inline_keys: std::collections::BTreeSet<_> = inline_runtime.providers.keys().collect();
+    let split_keys: std::collections::BTreeSet<_> = split_runtime.providers.keys().collect();
+    assert_eq!(
+        inline_keys, split_keys,
+        "provider key set must match between inline and split shapes"
+    );
+    let inline_az = inline_runtime.providers.get("azure-east").unwrap();
+    let split_az = split_runtime.providers.get("azure-east").unwrap();
+    assert_eq!(inline_az.api, split_az.api);
+    assert_eq!(inline_az.base_url, split_az.base_url);
+    assert_eq!(inline_az.env_key, split_az.env_key);
+    assert_eq!(inline_az.name, split_az.name);
+}
+
+#[test]
+fn test_role_validation_rejects_unknown_model_id() {
+    // Plan §11: typo'd model_id in `settings.models.main` must
+    // surface at config build, not silently degrade ApiClient to the
+    // legacy mock path.
+    let settings = settings_with(Settings {
+        model: Some("openai/gpt-typo".into()),
+        ..Default::default()
+    });
+    let err = build_isolated(
+        settings,
+        EnvSnapshot::default(),
+        RuntimeOverrides::default(),
+    )
+    .expect_err("unknown model id must fail at config build");
+    assert!(
+        err.to_string().contains("unknown model"),
+        "expected UnknownModel error, got: {err}"
+    );
+}
+
+#[test]
+fn test_role_validation_rejects_incomplete_user_catalog_entry() {
+    // A `models.json` entry that sets only `max_output_tokens` (no
+    // `context_window`) is incomplete. The validation pass surfaces
+    // it as `IncompleteModelEntry` at startup instead of letting it
+    // silently disappear under `Option<ModelInfo> = None` later.
+    use crate::positive::PositiveTokens;
+    use std::fs;
+
+    let tmp = TempDir::new().unwrap();
+    let models_json = tmp.path().join("models.json");
+    let entries: BTreeMap<String, crate::PartialModelInfo> = [(
+        "custom-llm".to_string(),
+        crate::PartialModelInfo {
+            max_output_tokens: Some(PositiveTokens::new(2048)),
+            // intentionally no context_window
+            ..Default::default()
+        },
+    )]
+    .into_iter()
+    .collect();
+    fs::write(
+        &models_json,
+        serde_json::to_string_pretty(&entries).unwrap(),
+    )
+    .unwrap();
+
+    let settings = settings_with(Settings {
+        model: Some("openai/custom-llm".into()),
+        ..Default::default()
+    });
+    let err = build_runtime_config_with(
+        settings,
+        EnvSnapshot::default(),
+        RuntimeOverrides::default(),
+        CatalogPaths::rooted(tmp.path()),
+    )
+    .expect_err("incomplete user_catalog entry must fail at config build");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("context_window") || msg.contains("missing required field"),
+        "expected IncompleteModelEntry on context_window, got: {msg}"
     );
 }
 
@@ -237,7 +485,7 @@ fn test_cli_fallback_overrides_take_precedence_over_settings_fallbacks() {
             main: Some(
                 RoleSlots::new(ModelSelection {
                     provider: "anthropic".into(),
-                    model_id: "claude-opus-4-6".into(),
+                    model_id: "claude-opus-4-7".into(),
                 })
                 .with_fallback(ModelSelection {
                     provider: "anthropic".into(),
@@ -252,7 +500,7 @@ fn test_cli_fallback_overrides_take_precedence_over_settings_fallbacks() {
         fallback_model_overrides: vec!["openai/gpt-5".into()],
         ..Default::default()
     };
-    let runtime = build_runtime_config(settings, EnvSnapshot::default(), overrides)
+    let runtime = build_isolated(settings, EnvSnapshot::default(), overrides)
         .expect("CLI should override settings fallbacks");
     let fallbacks = runtime.model_roles.fallbacks(ModelRole::Main);
     assert_eq!(fallbacks.len(), 1, "CLI replaces settings chain entirely");

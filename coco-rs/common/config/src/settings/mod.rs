@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 
 use crate::model::ModelSelectionSettings;
-use crate::provider::ProviderConfig;
+use crate::provider::PartialProviderConfig;
 use crate::sections::PartialApiSettings;
 use crate::sections::PartialLoopSettings;
 use crate::sections::PartialMcpRuntimeSettings;
@@ -50,10 +50,13 @@ pub struct Settings {
     pub thinking_level: Option<ThinkingLevel>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fast_mode: Option<bool>,
-    /// JSON-first provider catalog overrides. Secrets should normally stay in
-    /// provider `env_key` env vars rather than `api_key`.
+    /// JSON-first provider catalog overlays. Secrets should normally stay in
+    /// provider `env_key` env vars rather than `api_key`. Each overlay is a
+    /// `PartialProviderConfig` (every field `Option`), so unset fields leave
+    /// the base catalog untouched. Identity is the parent map key — see
+    /// `multi-provider-plan.md` §5.1.1.
     #[serde(default)]
-    pub providers: HashMap<String, ProviderConfig>,
+    pub providers: BTreeMap<String, PartialProviderConfig>,
     #[serde(default)]
     pub models: ModelSelectionSettings,
 
@@ -347,26 +350,46 @@ pub fn parse_settings(json: &str) -> anyhow::Result<Settings> {
     Ok(settings)
 }
 
-/// Load and merge settings from multiple sources.
-/// Merge order (later overrides earlier):
-///   1. Plugin base
-///   2. User global (~/.coco/settings.json)
-///   3. Project shared (.claude/settings.json)
-///   4. Project local (.claude/settings.local.json)
-///   5. Flag (--settings file)
-///   6. Policy (enterprise managed)
+/// Load and merge settings using the default user / managed paths
+/// (`~/.coco/settings.json` and the platform-managed file).
 pub fn load_settings(
     cwd: &std::path::Path,
     flag_settings: Option<&std::path::Path>,
 ) -> anyhow::Result<SettingsWithSource> {
+    load_settings_with(
+        cwd,
+        flag_settings,
+        &crate::global_config::user_settings_path(),
+        &crate::global_config::managed_settings_path(),
+    )
+}
+
+/// Load and merge settings with explicit user / managed paths.
+/// Tests pass TempDir-rooted paths to isolate from the developer's
+/// real `~/.coco/`.
+///
+/// Merge order (later overrides earlier):
+///   1. Plugin base
+///   2. User global (`user_path`)
+///   3. Project shared (`{cwd}/.claude/settings.json`)
+///   4. Project local (`{cwd}/.claude/settings.local.json`)
+///   5. Flag (`--settings file`)
+///   6. Policy (`managed_path`)
+pub fn load_settings_with(
+    cwd: &std::path::Path,
+    flag_settings: Option<&std::path::Path>,
+    user_path: &std::path::Path,
+    managed_path: &std::path::Path,
+) -> anyhow::Result<SettingsWithSource> {
     use crate::global_config;
+    use anyhow::Context;
 
     let mut per_source = HashMap::new();
     let mut merged = serde_json::Value::Object(serde_json::Map::new());
 
-    // Load each source if it exists, merge in order
+    let user_pathbuf = user_path.to_path_buf();
     let sources = [
-        (SettingSource::User, global_config::user_settings_path()),
+        (SettingSource::User, user_pathbuf),
         (
             SettingSource::Project,
             global_config::project_settings_path(cwd),
@@ -378,39 +401,53 @@ pub fn load_settings(
     ];
 
     for (source, path) in &sources {
-        if path.exists()
-            && let Ok(contents) = std::fs::read_to_string(path)
-            && let Ok(value) = serde_json::from_str::<serde_json::Value>(&contents)
-        {
-            per_source.insert(*source, value.clone());
-            merge::deep_merge(&mut merged, &value);
+        if path.exists() {
+            load_and_merge(&mut per_source, &mut merged, *source, path)?;
         }
     }
 
-    // Flag settings
+    // Flag settings (`--settings <path>`).
     if let Some(flag_path) = flag_settings
         && flag_path.exists()
-        && let Ok(contents) = std::fs::read_to_string(flag_path)
-        && let Ok(value) = serde_json::from_str::<serde_json::Value>(&contents)
     {
-        per_source.insert(SettingSource::Flag, value.clone());
-        merge::deep_merge(&mut merged, &value);
+        load_and_merge(&mut per_source, &mut merged, SettingSource::Flag, flag_path)?;
     }
 
-    // Policy settings
-    let policy_path = global_config::managed_settings_path();
-    if policy_path.exists()
-        && let Ok(contents) = std::fs::read_to_string(&policy_path)
-        && let Ok(value) = serde_json::from_str::<serde_json::Value>(&contents)
-    {
-        per_source.insert(SettingSource::Policy, value.clone());
-        merge::deep_merge(&mut merged, &value);
+    // Policy / managed settings (highest precedence).
+    if managed_path.exists() {
+        load_and_merge(
+            &mut per_source,
+            &mut merged,
+            SettingSource::Policy,
+            managed_path,
+        )?;
     }
 
-    let settings: Settings = serde_json::from_value(merged)?;
+    let settings: Settings = serde_json::from_value(merged)
+        .context("failed to deserialize merged settings into Settings struct")?;
 
     Ok(SettingsWithSource {
         merged: settings,
         per_source,
     })
+}
+
+/// Read + parse a settings layer, propagate IO / parse errors with
+/// the offending path attached. Silently swallowing these used to
+/// confuse users whose edits had no observable effect — now the
+/// CLI fails fast at startup with a clear error.
+fn load_and_merge(
+    per_source: &mut HashMap<SettingSource, serde_json::Value>,
+    merged: &mut serde_json::Value,
+    source: SettingSource,
+    path: &std::path::Path,
+) -> anyhow::Result<()> {
+    use anyhow::Context;
+    let contents = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read settings file: {}", path.display()))?;
+    let value: serde_json::Value = serde_json::from_str(&contents)
+        .with_context(|| format!("failed to parse JSON in settings file: {}", path.display()))?;
+    per_source.insert(source, value.clone());
+    merge::deep_merge(merged, &value);
+    Ok(())
 }

@@ -126,7 +126,7 @@ fn api_client(model: Arc<dyn LanguageModelV4>) -> Arc<ApiClient> {
         max_retries: 0,
         ..RetryConfig::default()
     };
-    Arc::new(ApiClient::new(model, retry))
+    Arc::new(ApiClient::with_default_fingerprint(model, retry))
 }
 
 fn minimal_config(model_name: &str) -> QueryEngineConfig {

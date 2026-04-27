@@ -98,14 +98,31 @@ impl GoogleGenerativeAILanguageModel {
         }
     }
 
-    /// Parse provider options from call options.
+    /// Parse provider options.
+    ///
+    /// Returns `(typed, raw)`:
+    ///
+    /// - `typed` — parsed `GoogleLanguageModelOptions`, used for
+    ///   `generationConfig` / `safetySettings` / `thinkingConfig` /
+    ///   `cachedContent` typed body writes and `responseSchema`
+    ///   side-effects.
+    /// - `raw` — verbatim user-supplied namespace map. The language
+    ///   model shallow-merges this into the wire body root **as-is**
+    ///   (multi-provider-plan §7.3) — every key wins over earlier
+    ///   typed body writes. Opaque to coco-rs; users own correctness.
     fn parse_provider_options(
         &self,
         options: &LanguageModelV4CallOptions,
         provider_options_name: &str,
-    ) -> GoogleLanguageModelOptions {
+    ) -> (
+        GoogleLanguageModelOptions,
+        std::collections::BTreeMap<String, Value>,
+    ) {
         let Some(ref provider_options) = options.provider_options else {
-            return GoogleLanguageModelOptions::default();
+            return (
+                GoogleLanguageModelOptions::default(),
+                std::collections::BTreeMap::new(),
+            );
         };
 
         // Try provider-specific namespace first, then fallback to "google"
@@ -119,11 +136,23 @@ impl GoogleGenerativeAILanguageModel {
         });
 
         let Some(opts_map) = opts_map else {
-            return GoogleLanguageModelOptions::default();
+            return (
+                GoogleLanguageModelOptions::default(),
+                std::collections::BTreeMap::new(),
+            );
         };
 
         let opts_value = serde_json::to_value(opts_map).unwrap_or(Value::Null);
-        serde_json::from_value(opts_value).unwrap_or_default()
+        let typed: GoogleLanguageModelOptions =
+            serde_json::from_value(opts_value.clone()).unwrap_or_default();
+
+        let mut raw = std::collections::BTreeMap::new();
+        if let Value::Object(map) = opts_value {
+            for (k, v) in map {
+                raw.insert(k, v);
+            }
+        }
+        (typed, raw)
     }
 
     /// Build the request arguments for the Google API.
@@ -134,7 +163,8 @@ impl GoogleGenerativeAILanguageModel {
         options: &LanguageModelV4CallOptions,
     ) -> Result<(Value, HashMap<String, String>, Vec<Warning>, String), AISdkError> {
         let provider_options_name = self.provider_options_name();
-        let provider_opts = self.parse_provider_options(options, &provider_options_name);
+        let (provider_opts, raw_provider_options) =
+            self.parse_provider_options(options, &provider_options_name);
         let mut warnings: Vec<Warning> = Vec::new();
 
         // Check if model supports system instructions (Gemma models don't)
@@ -314,6 +344,17 @@ impl GoogleGenerativeAILanguageModel {
         // Labels
         if let Some(ref labels) = provider_opts.labels {
             body["labels"] = serde_json::to_value(labels).unwrap_or(Value::Null);
+        }
+
+        // Verbatim `extra_body` patch (multi-provider-plan §7.3).
+        // The user-supplied `provider_options[<google|vertex>]` map
+        // is shallow-merged into the wire body root **as-is** —
+        // every key wins over any earlier typed body write. Opaque
+        // to coco-rs; users own correctness.
+        if let Some(obj) = body.as_object_mut() {
+            for (k, v) in &raw_provider_options {
+                obj.insert(k.clone(), v.clone());
+            }
         }
 
         // Build headers

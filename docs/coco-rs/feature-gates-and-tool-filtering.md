@@ -545,6 +545,6 @@ pub fn experimental_menu_entries() -> Vec<&'static FeatureSpec> {
 ## 14. Open questions
 
 1. `Sandbox` Feature 与 `SandboxConfig.mode` 的关系：是否需要把 `mode = "off"` 视为等价于 Feature off？目前规约：Feature 决定"沙箱子系统是否生效"，`mode` 决定"启用时多严"，两者正交保持。
-2. `ToolOverrides` 如何从 model registry 读取：内置 registry 在 `coco-config/src/tool_overrides.rs::builtin_tool_overrides_for` 按 `model_id` pattern 匹配（今天只有 `gpt-5*`）；用户侧通过 `ModelInfo.tool_overrides` 在 settings.json 声明，由 `resolve_tool_overrides(model_id, info)` 在 builtin 之上 `merge`，user `excluded` 总是赢过 builtin `extra`。`ModelInfo` 接入 `RuntimeConfig` 的 plumbing 仍待 `ProviderInfo` / `ProviderModel` 的整体接通（独立 PR 处理）。
+2. `ToolOverrides` 如何从 model registry 读取：内置 registry 在 `coco-config/src/tool_overrides.rs::builtin_tool_overrides_for` 按 `model_id` pattern 匹配（今天只有 `gpt-5*`）；用户侧通过 `ModelInfo.tool_overrides` 在 settings.json 声明，由 `resolve_tool_overrides(model_id, info)` 在 builtin 之上 `merge`，user `excluded` 总是赢过 builtin `extra`。`ModelInfo` 接入 `RuntimeConfig` 通过 `ModelRegistry` plumbing 完成；`RuntimeConfig.tool_overrides: Arc<ToolOverrides>` 在 build 时为 Main role 一次性算好（multi-provider-plan.md §5.3）。
 3. Per-role tool filter（如 `compact-model` 不该看到 `Bash`）：目前归 Layer 2 内部，后续若需要可独立成 Layer 2.5。
 4. Layer 4 widening：当前 subagent 的 `tool_filter` 不与父级 `tool_filter` 求交集——agent definition 的 `allowed_tools` 可以包含父级排除掉的工具。Layer 1 + Layer 2 已经收口（subagent 永远不能放大），但 Layer 4 仍是松的，待独立 PR 修。

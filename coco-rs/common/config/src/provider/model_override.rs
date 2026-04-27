@@ -1,0 +1,61 @@
+//! Per-(provider, model) entry overrides.
+//!
+//! Sits in `ProviderConfig.models` as `BTreeMap<String, ProviderModelOverride>`.
+//! Each entry supplies the per-(provider, model) routing fields
+//! (`api_model_name`) and any per-entry `ModelInfo` overrides under an
+//! explicit `info: { ... }` nesting.
+//!
+//! Earlier drafts used `#[serde(flatten)]` to lift the `info` fields
+//! to the entry root. That silently disables `deny_unknown_fields`
+//! (per serde docs); a typo in `models.<id>.<key>` would slip
+//! through. Explicit nesting keeps both `deny_unknown_fields` checks
+//! active end-to-end.
+
+use crate::model::partial::PartialModelInfo;
+use serde::Deserialize;
+use serde::Serialize;
+
+/// Wire format — every field optional. `BTreeMap` order is stable.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PartialProviderModelOverride {
+    /// Provider-side model name when it differs from `model_id`. For
+    /// example, an internal gateway routes `internal/coder-v3` to
+    /// `ep-internal-v3-prod` on the wire.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_model_name: Option<String>,
+    /// Per-entry `ModelInfo` overrides (sampling, capabilities, …).
+    /// Layered on top of the catalog `models.json` entry.
+    #[serde(skip_serializing_if = "PartialModelInfo::is_empty")]
+    pub info: PartialModelInfo,
+}
+
+/// Resolved per-(provider, model) override.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ProviderModelOverride {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_model_name: Option<String>,
+    #[serde(skip_serializing_if = "PartialModelInfo::is_empty")]
+    pub info: PartialModelInfo,
+}
+
+impl ProviderModelOverride {
+    pub fn from_partial(partial: PartialProviderModelOverride) -> Self {
+        Self {
+            api_model_name: partial.api_model_name,
+            info: partial.info,
+        }
+    }
+
+    /// Apply the per-entry `ModelInfo` overrides on top of an
+    /// accumulator. Used in `build_model_registry` after the catalog
+    /// `models.json` layer.
+    ///
+    /// **Scope is `info` only.** `api_model_name` is a routing field
+    /// stored separately on `ResolvedModel.provider_model.api_model_name`
+    /// and consumed by `model_factory::build_*`; it is not part of
+    /// the merged `ModelInfo`.
+    pub fn apply_info_to(&self, acc: &mut PartialModelInfo) {
+        acc.merge_from(&self.info);
+    }
+}

@@ -112,6 +112,18 @@ pub fn user_settings_path() -> PathBuf {
     config_home().join("settings.json")
 }
 
+/// Path to `~/.coco/providers.json` — provider catalog sibling of
+/// `settings.json`. See `docs/coco-rs/multi-provider-plan.md` §4.
+pub fn providers_catalog_path() -> PathBuf {
+    config_home().join("providers.json")
+}
+
+/// Path to `~/.coco/models.json` — provider-agnostic ModelInfo
+/// catalog sibling of `settings.json`.
+pub fn models_catalog_path() -> PathBuf {
+    config_home().join("models.json")
+}
+
 /// Get the project settings path.
 pub fn project_settings_path(cwd: &Path) -> PathBuf {
     cwd.join(".claude/settings.json")

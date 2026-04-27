@@ -1,0 +1,195 @@
+use super::*;
+use coco_config::ModelInfo;
+use coco_config::PartialModelInfo;
+use coco_config::PositiveTokens;
+use coco_types::ProviderApi;
+use coco_types::ReasoningEffort;
+use coco_types::ThinkingLevel;
+use pretty_assertions::assert_eq;
+
+fn info_with_defaults(extra_body: BTreeMap<String, serde_json::Value>) -> ModelInfo {
+    let partial = PartialModelInfo {
+        context_window: Some(PositiveTokens::new(200_000)),
+        max_output_tokens: Some(PositiveTokens::new(64_000)),
+        extra_body: if extra_body.is_empty() {
+            None
+        } else {
+            Some(extra_body)
+        },
+        ..Default::default()
+    };
+    ModelInfo::from_partial("test-provider", "test-model", partial).unwrap()
+}
+
+#[test]
+fn anthropic_renamed_instance_wraps_under_anthropic() {
+    let mut extra = BTreeMap::new();
+    extra.insert("store".into(), serde_json::Value::Bool(false));
+    let info = info_with_defaults(extra);
+
+    let call = build_call_options(
+        &info,
+        ProviderApi::Anthropic,
+        "azure-east",
+        &PerCallOverrides::default(),
+        Vec::new(),
+        None,
+    );
+
+    let po = call.provider_options.expect("provider_options set");
+    assert_eq!(po.0.len(), 1, "exactly one outer namespace key");
+    assert!(
+        po.0.contains_key("anthropic"),
+        "Anthropic SDK reads provider_options[anthropic] regardless of instance name; got keys: {:?}",
+        po.0.keys().collect::<Vec<_>>()
+    );
+    assert!(
+        !po.0.contains_key("azure-east"),
+        "non-canonical namespace key would be silently dropped by the SDK"
+    );
+}
+
+#[test]
+fn openai_compat_uses_instance_name_as_namespace() {
+    let mut extra = BTreeMap::new();
+    extra.insert("foo".into(), serde_json::Value::Bool(true));
+    let info = info_with_defaults(extra);
+
+    let call = build_call_options(
+        &info,
+        ProviderApi::OpenaiCompat,
+        "internal-router",
+        &PerCallOverrides::default(),
+        Vec::new(),
+        None,
+    );
+
+    let po = call.provider_options.unwrap();
+    assert!(po.0.contains_key("internal-router"));
+}
+
+#[test]
+fn per_call_extra_body_wins_over_model_level() {
+    let mut model_extra = BTreeMap::new();
+    model_extra.insert("store".into(), serde_json::Value::Bool(true));
+    let info = info_with_defaults(model_extra);
+
+    let mut per_call = PerCallOverrides::default();
+    per_call
+        .extra_body
+        .insert("store".into(), serde_json::Value::Bool(false));
+
+    let call = build_call_options(
+        &info,
+        ProviderApi::Openai,
+        "openai",
+        &per_call,
+        Vec::new(),
+        None,
+    );
+    let inner = call
+        .provider_options
+        .as_ref()
+        .unwrap()
+        .get("openai")
+        .unwrap();
+    assert_eq!(
+        inner.get("store").and_then(serde_json::Value::as_bool),
+        Some(false)
+    );
+}
+
+#[test]
+fn max_output_tokens_uses_from_positive_tokens_no_cast() {
+    let info = info_with_defaults(BTreeMap::new());
+    let call = build_call_options(
+        &info,
+        ProviderApi::Anthropic,
+        "anthropic",
+        &PerCallOverrides::default(),
+        Vec::new(),
+        None,
+    );
+    assert_eq!(call.max_output_tokens, Some(64_000));
+}
+
+#[test]
+fn no_extra_body_no_provider_options() {
+    let info = info_with_defaults(BTreeMap::new());
+    let call = build_call_options(
+        &info,
+        ProviderApi::Anthropic,
+        "anthropic",
+        &PerCallOverrides::default(),
+        Vec::new(),
+        None,
+    );
+    assert!(call.provider_options.is_none());
+}
+
+#[test]
+fn explicit_per_call_none_thinking_disables_default() {
+    // Model has a default thinking level. Per-call sets thinking_level
+    // to Some(effort=None) — this MUST disable thinking, not fall
+    // through to the model default.
+    let partial = PartialModelInfo {
+        context_window: Some(PositiveTokens::new(200_000)),
+        max_output_tokens: Some(PositiveTokens::new(64_000)),
+        supported_thinking_levels: Some(vec![ThinkingLevel::medium()]),
+        default_thinking_level: Some(ReasoningEffort::Medium),
+        ..Default::default()
+    };
+    let info = ModelInfo::from_partial("test", "test", partial).unwrap();
+
+    let per_call = PerCallOverrides {
+        thinking_level: Some(ThinkingLevel::none()),
+        ..Default::default()
+    };
+
+    let call = build_call_options(
+        &info,
+        ProviderApi::Anthropic,
+        "anthropic",
+        &per_call,
+        Vec::new(),
+        None,
+    );
+
+    assert!(
+        call.reasoning.is_none(),
+        "explicit per-call None must disable reasoning"
+    );
+    assert!(
+        call.provider_options.is_none(),
+        "no thinking → no extra_body → no provider_options"
+    );
+}
+
+#[test]
+fn unset_per_call_falls_through_to_model_default_thinking() {
+    let partial = PartialModelInfo {
+        context_window: Some(PositiveTokens::new(200_000)),
+        max_output_tokens: Some(PositiveTokens::new(64_000)),
+        supported_thinking_levels: Some(vec![ThinkingLevel::medium()]),
+        default_thinking_level: Some(ReasoningEffort::Medium),
+        ..Default::default()
+    };
+    let info = ModelInfo::from_partial("test", "test", partial).unwrap();
+
+    let call = build_call_options(
+        &info,
+        ProviderApi::Anthropic,
+        "anthropic",
+        &PerCallOverrides::default(),
+        Vec::new(),
+        None,
+    );
+
+    assert!(
+        call.reasoning.is_some(),
+        "unset per-call should fall through to model default"
+    );
+    let po = call.provider_options.expect("anthropic thinking emitted");
+    let inner = po.get("anthropic").unwrap();
+    assert!(inner.contains_key("thinking"));
+}

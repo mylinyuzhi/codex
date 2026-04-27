@@ -1,9 +1,19 @@
 pub mod aliases;
+pub mod partial;
+pub mod registry;
 pub mod role_slots;
 
+pub use partial::PartialModelInfo;
+pub use registry::ModelRegistry;
+pub use registry::ResolvedModel;
+pub use registry::build_model_registry;
 pub use role_slots::FallbackRecoveryPolicy;
 pub use role_slots::RoleSlots;
 
+use crate::error::ConfigError;
+use crate::error::ConfigField;
+use crate::positive::PositiveCount;
+use crate::positive::PositiveTokens;
 use coco_types::ApplyPatchToolType;
 use coco_types::Capability;
 use coco_types::ModelRole;
@@ -14,87 +24,142 @@ use coco_types::ThinkingLevel;
 use coco_types::ToolOverrides;
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 
-/// Rich per-model configuration. All optional fields for layered merging.
+/// Resolved per-model configuration. The on-disk overlay shape is
+/// [`PartialModelInfo`]; this is the post-resolution form with required
+/// fields concrete.
 ///
-/// Config layers (later overrides earlier):
-///   builtin defaults → models.json → provider.models[model_id]
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
+/// Required fields (`context_window`, `max_output_tokens`) are typed
+/// `PositiveTokens` so that `as u64` casts are unrepresentable in the
+/// downstream call chain — `From<PositiveTokens> for u64` is infallible.
+#[derive(Debug, Clone)]
 pub struct ModelInfo {
     // === Identity ===
     pub model_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
 
     // === Capacity ===
-    /// NOT Option — every model has a context window (default 200_000).
-    #[serde(default = "default_context_window")]
-    pub context_window: i64,
-    #[serde(default = "default_max_output")]
-    pub max_output_tokens: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_window: PositiveTokens,
+    pub max_output_tokens: PositiveTokens,
     pub timeout_secs: Option<i64>,
 
     // === Capabilities ===
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub capabilities: Option<Vec<Capability>>,
 
-    // === Sampling ===
-    #[serde(skip_serializing_if = "Option::is_none")]
+    // === Sampling — `Option` carries wire semantics ("let provider default") ===
     pub temperature: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub top_p: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub top_k: Option<i64>,
+    pub top_k: Option<PositiveCount>,
 
-    // === Thinking/Reasoning ===
-    #[serde(skip_serializing_if = "Option::is_none")]
+    // === Thinking / Reasoning ===
     pub supported_thinking_levels: Option<Vec<ThinkingLevel>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub default_thinking_level: Option<ReasoningEffort>,
 
     // === Context Management ===
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_compact_pct: Option<i32>,
 
     // === Tools ===
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
-    /// Per-model tool-availability adjustments — what extra tools the
-    /// model adds beyond the baseline (e.g. gpt-5's `apply_patch`) and
-    /// what baseline tools the model excludes (e.g. gpt-5's `Edit`).
-    /// Layered on top of the built-in registry at config-resolve time
-    /// so users can opt custom finetunes into the same pipeline without
-    /// touching code. See `docs/coco-rs/feature-gates-and-tool-filtering.md`.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Per-model tool-availability adjustments. Layered on top of the
+    /// built-in registry. See `docs/coco-rs/feature-gates-and-tool-filtering.md`.
     pub tool_overrides: Option<ToolOverrides>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub shell_type: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tool_output_chars: Option<i32>,
 
     // === Instructions ===
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub base_instructions: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub base_instructions_file: Option<String>,
 
-    // === Provider-Specific Extensions ===
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub options: Option<HashMap<String, serde_json::Value>>,
+    /// Layer 1 escape hatch. Provider-agnostic flat keys, **camelCase**
+    /// to match each provider's typed-options struct (Layer 3 reads
+    /// `#[serde(rename_all = "camelCase")]`). Layer 2 wraps as
+    /// `provider_options[<provider_name>]` at call time. snake_case keys
+    /// silently fall through Layer 3's typed parser to leftover-merge.
+    pub extra_body: BTreeMap<String, serde_json::Value>,
 }
 
-fn default_context_window() -> i64 {
-    200_000
-}
-
-fn default_max_output() -> i64 {
-    16_384
+impl Default for ModelInfo {
+    /// Sentinel placeholder for tests and in-process construction. The
+    /// `context_window` / `max_output_tokens` values are arbitrary —
+    /// they bypass the JSON-boundary validation enforced by
+    /// [`ModelInfo::from_partial`].
+    ///
+    /// **Production paths must not use `Default::default()`** —
+    /// always go through `from_partial(provider, model_id, partial)`
+    /// so missing required fields surface as
+    /// `ConfigError::IncompleteModelEntry { ContextWindow | MaxOutputTokens }`
+    /// rather than silently passing through.
+    fn default() -> Self {
+        Self {
+            model_id: String::new(),
+            display_name: None,
+            context_window: PositiveTokens::new(200_000),
+            max_output_tokens: PositiveTokens::new(16_384),
+            timeout_secs: None,
+            capabilities: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            supported_thinking_levels: None,
+            default_thinking_level: None,
+            auto_compact_pct: None,
+            apply_patch_tool_type: None,
+            tool_overrides: None,
+            shell_type: None,
+            max_tool_output_chars: None,
+            base_instructions: None,
+            base_instructions_file: None,
+            extra_body: BTreeMap::new(),
+        }
+    }
 }
 
 impl ModelInfo {
+    /// Resolve a `PartialModelInfo` into a complete `ModelInfo`. The
+    /// only public path from JSON; surfaces a typed error when a
+    /// required field never appeared anywhere in the merge chain.
+    pub fn from_partial(
+        provider: &str,
+        model_id: &str,
+        partial: PartialModelInfo,
+    ) -> Result<Self, ConfigError> {
+        Ok(Self {
+            model_id: model_id.to_string(),
+            display_name: partial.display_name,
+            context_window: partial.context_window.ok_or_else(|| {
+                ConfigError::IncompleteModelEntry {
+                    provider: provider.to_string(),
+                    model: model_id.to_string(),
+                    field: ConfigField::ContextWindow,
+                }
+            })?,
+            max_output_tokens: partial.max_output_tokens.ok_or_else(|| {
+                ConfigError::IncompleteModelEntry {
+                    provider: provider.to_string(),
+                    model: model_id.to_string(),
+                    field: ConfigField::MaxOutputTokens,
+                }
+            })?,
+            timeout_secs: partial.timeout_secs,
+            capabilities: partial.capabilities,
+            temperature: partial.temperature,
+            top_p: partial.top_p,
+            top_k: partial.top_k,
+            supported_thinking_levels: partial.supported_thinking_levels,
+            default_thinking_level: partial.default_thinking_level,
+            auto_compact_pct: partial.auto_compact_pct,
+            apply_patch_tool_type: partial.apply_patch_tool_type,
+            tool_overrides: partial.tool_overrides,
+            shell_type: partial.shell_type,
+            max_tool_output_chars: partial.max_tool_output_chars,
+            base_instructions: partial.base_instructions,
+            base_instructions_file: partial.base_instructions_file,
+            extra_body: partial.extra_body.unwrap_or_default(),
+        })
+    }
+
     pub fn has_capability(&self, cap: Capability) -> bool {
         self.capabilities
             .as_ref()
@@ -111,6 +176,18 @@ impl ModelInfo {
     }
 
     /// Resolve a requested effort to the best matching supported ThinkingLevel.
+    ///
+    /// Resolution semantics:
+    /// - `Some(non-empty)` — exact-effort match wins; otherwise fall
+    ///   back to the closest declared level by effort distance.
+    /// - `None` (field absent) — pass `requested` through unchanged;
+    ///   the model has not declared its thinking surface, so trust
+    ///   the caller.
+    /// - `Some(vec![])` — also passes `requested` through. An
+    ///   explicitly-empty list is treated as "no declared surface,"
+    ///   identical to `None`. If a future caller needs an explicit
+    ///   "thinking unsupported" signal, prefer omitting `Capability::ExtendedThinking`
+    ///   from `capabilities` rather than overloading this field.
     pub fn resolve_thinking_level(&self, requested: &ThinkingLevel) -> ThinkingLevel {
         match &self.supported_thinking_levels {
             Some(levels) if !levels.is_empty() => levels
@@ -127,42 +204,6 @@ impl ModelInfo {
             _ => requested.clone(),
         }
     }
-
-    /// Merge another config into this one (other.Some overrides self).
-    pub fn merge_from(&mut self, other: &Self) {
-        if !other.model_id.is_empty() {
-            self.model_id.clone_from(&other.model_id);
-        }
-        macro_rules! merge_opt {
-            ($field:ident) => {
-                if other.$field.is_some() {
-                    self.$field.clone_from(&other.$field);
-                }
-            };
-        }
-        merge_opt!(display_name);
-        if other.context_window != default_context_window() {
-            self.context_window = other.context_window;
-        }
-        if other.max_output_tokens != default_max_output() {
-            self.max_output_tokens = other.max_output_tokens;
-        }
-        merge_opt!(timeout_secs);
-        merge_opt!(capabilities);
-        merge_opt!(temperature);
-        merge_opt!(top_p);
-        merge_opt!(top_k);
-        merge_opt!(supported_thinking_levels);
-        merge_opt!(default_thinking_level);
-        merge_opt!(auto_compact_pct);
-        merge_opt!(apply_patch_tool_type);
-        merge_opt!(tool_overrides);
-        merge_opt!(shell_type);
-        merge_opt!(max_tool_output_chars);
-        merge_opt!(base_instructions);
-        merge_opt!(base_instructions_file);
-        merge_opt!(options);
-    }
 }
 
 impl PartialEq for ModelInfo {
@@ -177,10 +218,6 @@ impl PartialEq for ModelInfo {
 /// `ModelSelectionSettings`); this runtime-facing side stores the
 /// already-resolved `RoleSlots<ModelSpec>`, produced by
 /// `RuntimeConfigBuilder`.
-///
-/// Deliberately NOT `Deserialize` — it's runtime state built by the
-/// resolver, never read from JSON. The config source is
-/// `ModelSelectionSettings`.
 #[derive(Debug, Clone, Default)]
 pub struct ModelRoles {
     pub roles: HashMap<ModelRole, RoleSlots<ModelSpec>>,
@@ -188,8 +225,7 @@ pub struct ModelRoles {
 
 impl ModelRoles {
     /// Primary model for a role. Falls back to `Main`'s primary if
-    /// the role is unset — preserves the existing "any role without
-    /// a dedicated model uses Main" behavior.
+    /// the role is unset.
     pub fn get(&self, role: ModelRole) -> Option<&ModelSpec> {
         self.roles
             .get(&role)
@@ -197,9 +233,7 @@ impl ModelRoles {
             .or_else(|| self.roles.get(&ModelRole::Main).map(|s| &s.primary))
     }
 
-    /// Ordered fallback chain for a role. Strictly per-role — never
-    /// walks to Main's fallbacks. Empty vec = no fallback configured
-    /// for this role.
+    /// Ordered fallback chain for a role. Strictly per-role.
     pub fn fallbacks(&self, role: ModelRole) -> &[ModelSpec] {
         self.roles
             .get(&role)
@@ -207,24 +241,18 @@ impl ModelRoles {
             .unwrap_or(&[])
     }
 
-    /// Recovery policy for a role. `None` = sticky (stay on fallback
-    /// once switched). Strictly per-role; no Main walk.
+    /// Recovery policy for a role. `None` = sticky.
     pub fn recovery(&self, role: ModelRole) -> Option<FallbackRecoveryPolicy> {
         self.roles.get(&role).and_then(|s| s.recovery)
     }
 
-    /// Full `RoleSlots` for a role. Used by the runtime-config
-    /// resolver and tests that need the whole binding.
+    /// Full `RoleSlots` for a role.
     pub fn role_slots(&self, role: ModelRole) -> Option<&RoleSlots<ModelSpec>> {
         self.roles.get(&role)
     }
 }
 
 /// JSON-facing role model selection.
-///
-/// This mirrors the selectable identity fields of `ModelSpec` without exposing
-/// runtime dispatch or display fields; `RuntimeConfigBuilder` resolves provider
-/// API from the provider catalog.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct ModelSelection {
@@ -244,10 +272,6 @@ impl ModelSelection {
 }
 
 /// JSON-facing role model selections.
-///
-/// Each role must name a provider explicitly. A role entry may also
-/// carry a fallback chain (`fallback:` / `fallbacks:`) and optional
-/// `recovery:` policy — see [`RoleSlots`] for the accepted shapes.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ModelSelectionSettings {

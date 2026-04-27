@@ -1,6 +1,7 @@
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::BTreeMap;
 use vercel_ai_provider::ProviderOptions;
 
 /// Anthropic-specific thinking configuration.
@@ -147,23 +148,41 @@ pub struct AnthropicProviderOptions {
 
 /// Extract Anthropic-specific options from generic provider options.
 ///
-/// Parses from both the canonical `"anthropic"` key and any custom provider name key,
-/// merging them (custom overrides canonical). The provider name prefix is extracted
-/// from the full provider string (e.g., `"my-proxy.messages"` → `"my-proxy"`).
+/// Returns `(typed, raw)`:
+///
+/// - `typed` — parsed `AnthropicProviderOptions`, used for header /
+///   beta / validation side-effects (e.g. `interleaved-thinking-*`
+///   beta, MCP tool validation, `code-execution-*` beta gates).
+/// - `raw` — verbatim user-supplied map, shallow-merged into the wire
+///   body root at the end of `get_args`. **Opaque to coco-rs** — every
+///   key (typed-known or not) is patched as-is. Users are responsible
+///   for the correctness of their keys and shapes (multi-provider-plan
+///   §7.3).
+///
+/// Parses from both the canonical `"anthropic"` key and any custom
+/// provider name key (for renamed instances like `"my-proxy"`),
+/// merging them per-key with custom winning. The provider name prefix
+/// is extracted from the full provider string
+/// (`"my-proxy.messages"` → `"my-proxy"`).
+///
+/// `BTreeMap` keeps wire-body field order stable in tests / insta
+/// snapshots.
 pub fn extract_anthropic_options(
     provider_options: &Option<ProviderOptions>,
     provider: &str,
-) -> AnthropicProviderOptions {
+) -> (AnthropicProviderOptions, BTreeMap<String, Value>) {
     let opts = match provider_options.as_ref() {
         Some(opts) => opts,
-        None => return AnthropicProviderOptions::default(),
+        None => return (AnthropicProviderOptions::default(), BTreeMap::new()),
     };
 
     // Parse canonical "anthropic" key
-    let canonical: AnthropicProviderOptions = opts
+    let canonical_value = opts
         .0
         .get("anthropic")
-        .and_then(|v| serde_json::to_value(v).ok())
+        .and_then(|v| serde_json::to_value(v).ok());
+    let canonical: AnthropicProviderOptions = canonical_value
+        .clone()
         .and_then(|v| serde_json::from_value(v).ok())
         .unwrap_or_default();
 
@@ -173,21 +192,39 @@ pub fn extract_anthropic_options(
         None => provider,
     };
 
-    if provider_name == "anthropic" {
-        return canonical;
+    let (typed, custom_value): (AnthropicProviderOptions, Option<Value>) =
+        if provider_name == "anthropic" {
+            (canonical, None)
+        } else {
+            let custom_value = opts
+                .0
+                .get(provider_name)
+                .and_then(|v| serde_json::to_value(v).ok());
+            let custom_typed: Option<AnthropicProviderOptions> = custom_value
+                .clone()
+                .and_then(|v| serde_json::from_value(v).ok());
+            let merged = match custom_typed {
+                Some(custom) => merge_anthropic_options(canonical, custom),
+                None => canonical,
+            };
+            (merged, custom_value)
+        };
+
+    // Verbatim raw map: every key from canonical + custom (custom wins
+    // per-key). NOT filtered by typed schema — user owns correctness.
+    let mut raw = BTreeMap::new();
+    if let Some(Value::Object(map)) = canonical_value {
+        for (k, v) in map {
+            raw.insert(k, v);
+        }
+    }
+    if let Some(Value::Object(map)) = custom_value {
+        for (k, v) in map {
+            raw.insert(k, v);
+        }
     }
 
-    // Parse custom provider key and merge (custom overrides canonical)
-    let custom: Option<AnthropicProviderOptions> = opts
-        .0
-        .get(provider_name)
-        .and_then(|v| serde_json::to_value(v).ok())
-        .and_then(|v| serde_json::from_value(v).ok());
-
-    match custom {
-        Some(custom) => merge_anthropic_options(canonical, custom),
-        None => canonical,
-    }
+    (typed, raw)
 }
 
 /// Merge two option structs: custom values override canonical.
@@ -214,3 +251,7 @@ fn merge_anthropic_options(
         context_management: custom.context_management.or(canonical.context_management),
     }
 }
+
+#[cfg(test)]
+#[path = "anthropic_messages_options.test.rs"]
+mod tests;

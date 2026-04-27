@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -9,10 +10,15 @@ use coco_types::ToolOverrides;
 
 use crate::env::EnvOnlyConfig;
 use crate::env::EnvSnapshot;
+use crate::error::ConfigError;
+use crate::model::ModelRegistry;
 use crate::model::ModelRoles;
 use crate::model::ModelSelection;
+use crate::model::PartialModelInfo;
 use crate::model::RoleSlots;
+use crate::model::build_model_registry;
 use crate::overrides::RuntimeOverrides;
+use crate::provider::PartialProviderConfig;
 use crate::provider::ProviderConfig;
 use crate::provider::builtin::builtin_providers;
 use crate::sections::ApiConfig;
@@ -39,8 +45,14 @@ pub struct RuntimeConfig {
     pub settings: SettingsWithSource,
     pub env_only: EnvOnlyConfig,
     pub overrides: RuntimeOverrides,
-    pub providers: HashMap<String, ProviderConfig>,
+    /// Resolved provider catalog. `BTreeMap` so on-disk serialisation
+    /// (settings.json overlay round-trip, debug snapshots) is byte-stable.
+    pub providers: BTreeMap<String, ProviderConfig>,
     pub model_roles: ModelRoles,
+    /// Resolved (provider, model_id) → `Arc<ResolvedModel>` index.
+    /// Closes the L1 dormant gap — `tool_overrides` plumbing reads
+    /// `ResolvedModel.info.tool_overrides` here.
+    pub model_registry: Arc<ModelRegistry>,
     pub api: ApiConfig,
     pub loop_config: LoopConfig,
     pub tool: ToolConfig,
@@ -56,9 +68,63 @@ pub struct RuntimeConfig {
     pub features: Features,
     /// Layer 2 of the tool-filter pipeline — extra tools the active
     /// main-loop model adds beyond the baseline + baseline tools it
-    /// excludes. Resolved once from the Main role's `model_id`;
-    /// subagents inherit this `Arc` and never widen it.
+    /// excludes. Resolved once from the Main role's `(provider,
+    /// model_id)` pair via `model_registry`; subagents inherit this
+    /// `Arc` and never widen it.
     pub tool_overrides: Arc<ToolOverrides>,
+}
+
+/// Resolved on-disk paths for settings + catalog files. Threaded
+/// through `RuntimeConfigBuilder` so tests can isolate filesystem
+/// reads via `tempfile::TempDir`. Production `Default` resolves to
+/// the user's `~/.coco/` via `global_config`.
+///
+/// **All paths affected by `coco_home`.** Earlier drafts only
+/// overrode `providers.json` / `models.json` here, but the
+/// user-level `settings.json` and the platform-managed policy file
+/// were still read from the real `~/.coco/`. With this struct, every
+/// path the resolver and reloader read is overridable in one place.
+#[derive(Debug, Clone)]
+pub struct CatalogPaths {
+    pub coco_home: PathBuf,
+    pub user_settings: PathBuf,
+    pub managed_settings: PathBuf,
+    pub providers: PathBuf,
+    pub models: PathBuf,
+}
+
+impl Default for CatalogPaths {
+    fn default() -> Self {
+        Self {
+            coco_home: crate::global_config::config_home(),
+            user_settings: crate::global_config::user_settings_path(),
+            managed_settings: crate::global_config::managed_settings_path(),
+            providers: crate::global_config::providers_catalog_path(),
+            models: crate::global_config::models_catalog_path(),
+        }
+    }
+}
+
+impl CatalogPaths {
+    /// Construct a CatalogPaths rooted at `home` — convenience for tests
+    /// that want every path under a single TempDir.
+    pub fn rooted(home: impl Into<PathBuf>) -> Self {
+        let home = home.into();
+        Self {
+            user_settings: home.join("settings.json"),
+            managed_settings: home.join("managed-settings.json"),
+            providers: home.join("providers.json"),
+            models: home.join("models.json"),
+            coco_home: home,
+        }
+    }
+
+    /// CatalogPaths whose all files point inside `home` and don't
+    /// exist by default. Useful for tests that assert empty-catalog
+    /// behavior.
+    pub fn empty_in(home: impl Into<PathBuf>) -> Self {
+        Self::rooted(home)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -67,6 +133,7 @@ pub struct RuntimeConfigBuilder {
     flag_settings: Option<PathBuf>,
     env: EnvSnapshot,
     overrides: RuntimeOverrides,
+    catalogs: CatalogPaths,
 }
 
 impl RuntimeConfigBuilder {
@@ -76,6 +143,7 @@ impl RuntimeConfigBuilder {
             flag_settings: None,
             env: EnvSnapshot::from_current_process(),
             overrides: RuntimeOverrides::default(),
+            catalogs: CatalogPaths::default(),
         }
     }
 
@@ -85,6 +153,7 @@ impl RuntimeConfigBuilder {
             flag_settings: None,
             env,
             overrides: RuntimeOverrides::default(),
+            catalogs: CatalogPaths::default(),
         }
     }
 
@@ -98,24 +167,67 @@ impl RuntimeConfigBuilder {
         self
     }
 
+    /// Override the catalog paths. Tests pass a `TempDir`-rooted
+    /// `CatalogPaths` to isolate from the developer's `~/.coco/`.
+    pub fn with_catalog_paths(mut self, catalogs: CatalogPaths) -> Self {
+        self.catalogs = catalogs;
+        self
+    }
+
     pub fn build(self) -> anyhow::Result<RuntimeConfig> {
-        let settings = crate::settings::load_settings(&self.cwd, self.flag_settings.as_deref())?;
-        build_runtime_config(settings, self.env, self.overrides)
+        let settings = crate::settings::load_settings_with(
+            &self.cwd,
+            self.flag_settings.as_deref(),
+            &self.catalogs.user_settings,
+            &self.catalogs.managed_settings,
+        )?;
+        build_runtime_config_with(settings, self.env, self.overrides, self.catalogs)
     }
 }
 
-fn build_runtime_config(
+/// Build a runtime using the default `CatalogPaths` (the developer's
+/// `~/.coco/`). Test callers should prefer
+/// `build_runtime_config_with` and pass a TempDir-rooted `CatalogPaths`
+/// to avoid filesystem pollution.
+pub fn build_runtime_config(
     settings: SettingsWithSource,
     env: EnvSnapshot,
     overrides: RuntimeOverrides,
 ) -> anyhow::Result<RuntimeConfig> {
+    build_runtime_config_with(settings, env, overrides, CatalogPaths::default())
+}
+
+/// Build a runtime with explicit catalog paths. Single-source for the
+/// resolution pipeline; `build_runtime_config` is a thin wrapper that
+/// uses the production defaults.
+pub fn build_runtime_config_with(
+    settings: SettingsWithSource,
+    env: EnvSnapshot,
+    overrides: RuntimeOverrides,
+    catalogs: CatalogPaths,
+) -> anyhow::Result<RuntimeConfig> {
     let env_only = EnvOnlyConfig::from_snapshot(&env);
-    let providers = resolve_providers(&settings);
+    let providers = resolve_providers(&settings, &catalogs)?;
     let model_roles = resolve_model_roles(&settings, &env_only, &overrides, &providers)?;
     let merged = &settings.merged;
 
+    let user_catalog = load_models_catalog(&catalogs.models)?;
+    let model_registry = Arc::new(build_model_registry(
+        &providers,
+        &user_catalog,
+        &catalogs.coco_home,
+    )?);
+
+    // Fail-fast: every role's primary + fallbacks must resolve through
+    // the registry now, not later inside `build_api_client` where a
+    // missing entry silently degrades to the legacy mock path (loses
+    // `extra_body`, thinking translation, typed sampling). Surfaces
+    // typos in `settings.models.<role>.{provider,model_id}` and
+    // partial entries in `models.json` at startup.
+    validate_roles_against_registry(&model_roles, &model_registry)?;
+
     let features = resolve_features(merged, &env, &overrides);
-    let tool_overrides = resolve_main_tool_overrides(&model_roles);
+    let tool_overrides = resolve_main_tool_overrides(&model_roles, &model_registry);
 
     Ok(RuntimeConfig {
         api: ApiConfig::resolve(merged),
@@ -135,26 +247,55 @@ fn build_runtime_config(
         overrides,
         providers,
         model_roles,
+        model_registry,
     })
 }
 
-fn resolve_main_tool_overrides(roles: &crate::model::ModelRoles) -> Arc<ToolOverrides> {
+/// Walk every (role, primary + fallback) `ModelSpec` and verify it
+/// resolves in the registry. Surfaces both `IncompleteModelEntry`
+/// (partial `models.json` entries) and `UnknownModel` (typos) at
+/// config-build time instead of letting them silently disable
+/// Layer-2 plumbing inside `ApiClient`.
+fn validate_roles_against_registry(
+    roles: &ModelRoles,
+    registry: &ModelRegistry,
+) -> Result<(), ConfigError> {
+    for slots in roles.roles.values() {
+        for spec in std::iter::once(&slots.primary).chain(slots.fallbacks.iter()) {
+            match registry.try_resolve(&spec.provider, &spec.model_id)? {
+                Some(_) => {}
+                None => {
+                    return Err(ConfigError::UnknownModel {
+                        provider: spec.provider.clone(),
+                        model: spec.model_id.clone(),
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Resolve `tool_overrides` from the Main role's (provider, model_id)
+/// via `ModelRegistry`. Closes the L1 dormant gap — the lookup
+/// previously always passed `None`.
+fn resolve_main_tool_overrides(roles: &ModelRoles, registry: &ModelRegistry) -> Arc<ToolOverrides> {
     // Tool-overrides resolution keys on `model_id` alone — provider is
     // a routing concern (URL, auth, wire API), not a capability axis.
     // gpt-5 served by OpenAI direct, Azure, or any compat gateway
-    // returns the same diff.
-    //
-    // The user-side override path (per-model `ModelInfo.tool_overrides`
-    // from settings.json) is wired through
-    // `tool_overrides::resolve_tool_overrides`'s second arg, but
-    // `RuntimeConfig` doesn't yet plumb a live `ModelInfo` registry —
-    // that lives on the dormant `ProviderInfo`/`ProviderModel` types.
-    // Pass `None` until that plumbing lands.
-    let overrides = match roles.get(ModelRole::Main) {
-        Some(spec) => crate::tool_overrides::resolve_tool_overrides(&spec.model_id, None),
-        None => ToolOverrides::none(),
+    // returns the same diff. The registry lookup additionally lets the
+    // user-side `ModelInfo.tool_overrides` (settings.json) layer onto
+    // the built-in diff.
+    let Some(spec) = roles.get(ModelRole::Main) else {
+        return Arc::new(ToolOverrides::none());
     };
-    Arc::new(overrides)
+    let info = registry
+        .resolve(&spec.provider, &spec.model_id)
+        .map(|r| r.info.clone());
+    Arc::new(crate::tool_overrides::resolve_tool_overrides(
+        &spec.model_id,
+        info.as_ref(),
+    ))
 }
 
 fn resolve_features(
@@ -171,40 +312,83 @@ fn resolve_features(
     features
 }
 
-fn resolve_providers(settings: &SettingsWithSource) -> HashMap<String, ProviderConfig> {
-    let mut providers = HashMap::new();
-    for provider in builtin_providers() {
+/// Load a JSON catalog file into a partial overlay map. Missing file
+/// is not an error (returns empty); read or parse failures surface
+/// typed errors so misconfiguration is visible at startup rather than
+/// masking as "no entries".
+fn load_models_catalog(
+    path: &std::path::Path,
+) -> Result<BTreeMap<String, PartialModelInfo>, ConfigError> {
+    load_catalog_file(path)
+}
+
+fn load_providers_catalog(
+    path: &std::path::Path,
+) -> Result<BTreeMap<String, PartialProviderConfig>, ConfigError> {
+    load_catalog_file(path)
+}
+
+fn load_catalog_file<T>(path: &std::path::Path) -> Result<BTreeMap<String, T>, ConfigError>
+where
+    T: serde::de::DeserializeOwned,
+{
+    if !path.exists() {
+        return Ok(BTreeMap::new());
+    }
+    let contents = std::fs::read_to_string(path).map_err(|source| ConfigError::CatalogRead {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    serde_json::from_str(&contents).map_err(|source| ConfigError::CatalogParse {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
+fn resolve_providers(
+    settings: &SettingsWithSource,
+    catalogs: &CatalogPaths,
+) -> Result<BTreeMap<String, ProviderConfig>, ConfigError> {
+    let mut providers: BTreeMap<String, ProviderConfig> = BTreeMap::new();
+    for provider in builtin_providers()? {
         providers.insert(provider.name.clone(), provider);
     }
 
-    for (name, override_cfg) in &settings.merged.providers {
-        let mut merged = providers
-            .remove(name)
-            .unwrap_or_else(ProviderConfig::default);
-        merged.merge_from(override_cfg);
-        if merged.name.is_empty() {
-            merged.name.clone_from(name);
-        }
-        providers.insert(name.clone(), merged);
-    }
+    // L1: ~/.coco/providers.json (shared catalog)
+    let file_catalog = load_providers_catalog(&catalogs.providers)?;
+    apply_partial_layer(&mut providers, &file_catalog)?;
 
-    providers
+    // L2: settings.providers per-user overlay
+    apply_partial_layer(&mut providers, &settings.merged.providers)?;
+    Ok(providers)
+}
+
+fn apply_partial_layer(
+    base: &mut BTreeMap<String, ProviderConfig>,
+    overlay: &BTreeMap<String, PartialProviderConfig>,
+) -> Result<(), ConfigError> {
+    for (name, partial) in overlay {
+        match base.get_mut(name) {
+            Some(existing) => existing.merge_partial(partial)?,
+            None => {
+                let resolved = ProviderConfig::from_partial(name, partial)?;
+                base.insert(name.clone(), resolved);
+            }
+        }
+    }
+    Ok(())
 }
 
 fn resolve_model_roles(
     settings: &SettingsWithSource,
     env: &EnvOnlyConfig,
     overrides: &RuntimeOverrides,
-    providers: &HashMap<String, ProviderConfig>,
+    providers: &BTreeMap<String, ProviderConfig>,
 ) -> anyhow::Result<ModelRoles> {
     let mut roles = ModelRoles::default();
 
     // Main has the richest resolution precedence: CLI override > env
     // override > settings.models.main > settings.model > default.
-    // Overrides and env only supply a bare `provider/model_id` for
-    // the primary; the chain (`settings.models.main.fallbacks`)
-    // comes from JSON unless CLI explicitly provides
-    // `fallback_model_overrides` (which wins).
     let mut main_slots = if let Some(selection) = overrides.model_override.as_deref() {
         RoleSlots::new(model_spec_from_selection(selection, providers)?)
     } else if let Some(selection) = env.model_override.as_deref() {
@@ -220,16 +404,13 @@ fn resolve_model_roles(
     // CLI `--fallback-model` overrides settings.json fallbacks for
     // Main. Resolving here (after `main_slots` is built) means the
     // CLI can swap in a completely different chain even when
-    // settings.models.main.fallbacks is populated. Per-role
-    // fallbacks for non-Main roles stay driven by settings.json.
+    // settings.models.main.fallbacks is populated.
     if !overrides.fallback_model_overrides.is_empty() {
         let fallbacks: Vec<coco_types::ModelSpec> = overrides
             .fallback_model_overrides
             .iter()
             .map(|sel| model_spec_from_selection(sel, providers))
             .collect::<anyhow::Result<Vec<_>>>()?;
-        // Validate against duplicates with primary + each other,
-        // matching the JSON-side chain validation.
         main_slots = RoleSlots {
             primary: main_slots.primary,
             fallbacks,
@@ -303,7 +484,7 @@ fn set_role_from_json(
     roles: &mut ModelRoles,
     role: ModelRole,
     slots: Option<&RoleSlots<ModelSelection>>,
-    providers: &HashMap<String, ProviderConfig>,
+    providers: &BTreeMap<String, ProviderConfig>,
 ) -> anyhow::Result<()> {
     if let Some(slots) = slots {
         roles
@@ -313,18 +494,10 @@ fn set_role_from_json(
     Ok(())
 }
 
-/// Resolve a `RoleSlots<ModelSelection>` into `RoleSlots<ModelSpec>`
-/// and validate the chain:
-///
-/// - Every slot (primary + each fallback) must reference a known provider.
-/// - Each `model_id` must be non-empty.
-/// - No slot may duplicate another (same provider + model_id twice in
-///   the same chain is always a user mistake — silently deduping
-///   masks intent, hard-erroring prompts a fix).
 fn resolve_role_slots(
     role: ModelRole,
     slots: RoleSlots<ModelSelection>,
-    providers: &HashMap<String, ProviderConfig>,
+    providers: &BTreeMap<String, ProviderConfig>,
 ) -> anyhow::Result<RoleSlots<ModelSpec>> {
     let resolved: RoleSlots<ModelSpec> =
         slots.try_map(|sel| resolve_model_selection(sel, providers))?;
@@ -332,11 +505,6 @@ fn resolve_role_slots(
     Ok(resolved)
 }
 
-/// Assert the chain (primary + fallbacks) has no duplicate
-/// `(provider, model_id)` pairs. A duplicate is always a user
-/// mistake — silently deduping masks intent, hard-erroring prompts a
-/// fix. Applied identically to JSON-configured and CLI-overridden
-/// chains so the error message is consistent across sources.
 fn ensure_chain_unique(role: ModelRole, slots: &RoleSlots<ModelSpec>) -> anyhow::Result<()> {
     let mut seen: HashMap<(String, String), &'static str> = HashMap::new();
     seen.insert(
@@ -363,7 +531,7 @@ fn ensure_chain_unique(role: ModelRole, slots: &RoleSlots<ModelSpec>) -> anyhow:
 
 fn model_spec_from_selection(
     selection: &str,
-    providers: &HashMap<String, ProviderConfig>,
+    providers: &BTreeMap<String, ProviderConfig>,
 ) -> anyhow::Result<ModelSpec> {
     let (provider_name, model_id) = selection.split_once('/').ok_or_else(|| {
         anyhow::anyhow!(
@@ -388,7 +556,7 @@ fn model_spec_from_selection(
 
 fn resolve_model_selection(
     selection: ModelSelection,
-    providers: &HashMap<String, ProviderConfig>,
+    providers: &BTreeMap<String, ProviderConfig>,
 ) -> anyhow::Result<ModelSpec> {
     if selection.provider.is_empty() || selection.model_id.is_empty() {
         anyhow::bail!("model role selection must include non-empty `provider` and `model_id`");
@@ -404,19 +572,21 @@ fn resolve_model_selection(
 }
 
 fn default_main_model_spec(
-    providers: &HashMap<String, ProviderConfig>,
+    providers: &BTreeMap<String, ProviderConfig>,
 ) -> anyhow::Result<ModelSpec> {
-    // Iterate in a stable order so the fallback is deterministic even when
-    // `providers` is a `HashMap`: builtins first (in their defined order),
-    // then any user-registered extras sorted by name.
+    // Iterate in a stable order so the fallback is deterministic. Builtin
+    // providers come first (in defined order); user-registered extras
+    // sorted by name follow.
     //
     // Intentionally does **not** probe `resolve_api_key()` — that reads the
     // live process env and would break the `EnvSnapshot`-based determinism
-    // of `build_runtime_config` (provider env-key names are arbitrary
-    // strings and are not captured in the snapshot). Users who want a
-    // specific provider as main must set `settings.model`, `settings.models.main`,
-    // `COCO_MODEL`, or `RuntimeOverrides::model_override`.
-    let builtin_order: Vec<String> = builtin_providers().into_iter().map(|p| p.name).collect();
+    // of `build_runtime_config`.
+    // Builtin slot keys for stable ordering. Reads the partial table
+    // directly (cheap) instead of re-running `from_partial`.
+    let builtin_order: Vec<String> = crate::provider::builtin::builtin_provider_partials()
+        .into_iter()
+        .map(|(name, _)| name.to_string())
+        .collect();
     let mut ordered: Vec<&ProviderConfig> = Vec::with_capacity(providers.len());
     for name in &builtin_order {
         if let Some(p) = providers.get(name) {
@@ -448,6 +618,42 @@ fn default_main_model_spec(
         model_id: model_id.to_string(),
         display_name: model_id.to_string(),
     })
+}
+
+/// Hot-reload publisher.
+///
+/// Wraps `tokio::sync::watch` so subscribers can grab the latest
+/// `Arc<RuntimeConfig>` snapshot at turn boundaries without locking.
+/// In-flight turns retain the `Arc` they captured at turn start; a
+/// mid-turn config change has no torn-read effect — the next turn
+/// picks up the new snapshot atomically (see multi-provider-plan §11).
+#[derive(Debug, Clone)]
+pub struct RuntimePublisher {
+    sender: tokio::sync::watch::Sender<Arc<RuntimeConfig>>,
+}
+
+impl RuntimePublisher {
+    pub fn new(initial: Arc<RuntimeConfig>) -> Self {
+        let (sender, _) = tokio::sync::watch::channel(initial);
+        Self { sender }
+    }
+
+    /// Publish a fresh snapshot. Subscribers see the new `Arc`
+    /// at their next `borrow().clone()`.
+    pub fn publish(&self, runtime: Arc<RuntimeConfig>) {
+        let _ = self.sender.send(runtime);
+    }
+
+    /// Subscribe to runtime updates. Each subscriber gets its own
+    /// receiver; cloning is cheap (`watch::Receiver` is Arc-internally).
+    pub fn subscribe(&self) -> tokio::sync::watch::Receiver<Arc<RuntimeConfig>> {
+        self.sender.subscribe()
+    }
+
+    /// Borrow the current snapshot without subscribing.
+    pub fn current(&self) -> Arc<RuntimeConfig> {
+        self.sender.borrow().clone()
+    }
 }
 
 #[cfg(test)]
