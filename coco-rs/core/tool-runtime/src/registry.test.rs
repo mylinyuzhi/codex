@@ -7,6 +7,7 @@ use crate::traits::McpToolInfo;
 use crate::traits::Tool;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
+use coco_types::ToolName;
 use coco_types::ToolResult;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -149,6 +150,231 @@ fn test_qualified_name_format() {
         tool_name: "send_message".into(),
     };
     assert_eq!(info.qualified_name(), "mcp__slack__send_message");
+}
+
+// ---------------------------------------------------------------------------
+// 5-layer filter pipeline (docs/coco-rs/feature-gates-and-tool-filtering.md §7)
+// ---------------------------------------------------------------------------
+
+/// Stub variant that supports per-instance read-only and feature-gate
+/// behavior so we can exercise each filter layer in isolation.
+struct GatedTool {
+    id: ToolId,
+    name: String,
+    read_only: bool,
+    feature_gate: Option<coco_types::Feature>,
+}
+
+#[async_trait::async_trait]
+impl Tool for GatedTool {
+    fn id(&self) -> ToolId {
+        self.id.clone()
+    }
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn description(&self, _: &Value, _: &DescriptionOptions) -> String {
+        "gated".into()
+    }
+    fn input_schema(&self) -> ToolInputSchema {
+        ToolInputSchema {
+            properties: HashMap::new(),
+        }
+    }
+    fn is_enabled(&self, ctx: &crate::context::ToolUseContext) -> bool {
+        match self.feature_gate {
+            Some(f) => ctx.features.enabled(f),
+            None => true,
+        }
+    }
+    fn is_read_only(&self, _input: &Value) -> bool {
+        self.read_only
+    }
+    async fn execute(
+        &self,
+        input: Value,
+        _ctx: &crate::context::ToolUseContext,
+    ) -> Result<ToolResult<Value>, crate::error::ToolError> {
+        Ok(ToolResult {
+            data: input,
+            new_messages: vec![],
+            app_state_patch: None,
+        })
+    }
+}
+
+fn builtin(
+    name: ToolName,
+    read_only: bool,
+    feature_gate: Option<coco_types::Feature>,
+) -> Arc<GatedTool> {
+    Arc::new(GatedTool {
+        id: ToolId::Builtin(name),
+        name: name.as_str().to_string(),
+        read_only,
+        feature_gate,
+    })
+}
+
+/// Build a registry mirroring the design-doc §8 worked example. Every
+/// tool name goes through `ToolName` so a rename surfaces at compile
+/// time instead of as a silent test miss.
+fn doc_example_registry() -> ToolRegistry {
+    let mut reg = ToolRegistry::new();
+    // read-only, no gate
+    reg.register(builtin(ToolName::Read, true, None));
+    // write tools, no gate
+    reg.register(builtin(ToolName::Edit, false, None));
+    reg.register(builtin(ToolName::Write, false, None));
+    // is_read_only depends on input — `Bash` registers as not always-read-only
+    reg.register(builtin(ToolName::Bash, false, None));
+    // apply_patch — model-specific tool now in ToolName enum
+    reg.register(builtin(ToolName::ApplyPatch, false, None));
+    // Feature-gated read-only tools (Layer 1 candidates)
+    reg.register(builtin(
+        ToolName::WebSearch,
+        true,
+        Some(coco_types::Feature::WebSearch),
+    ));
+    reg.register(builtin(
+        ToolName::WebFetch,
+        true,
+        Some(coco_types::Feature::WebFetch),
+    ));
+    reg
+}
+
+fn names(tools: &[&Arc<dyn Tool>]) -> std::collections::HashSet<String> {
+    tools.iter().map(|t| t.name().to_string()).collect()
+}
+
+#[test]
+fn pipeline_layer1_feature_gate_filters_web_tools() {
+    let reg = doc_example_registry();
+    let mut features = coco_types::Features::with_defaults();
+    features.disable(coco_types::Feature::WebSearch);
+    features.disable(coco_types::Feature::WebFetch);
+    let ctx = crate::context::ToolUseContext::stub_for_filtering(
+        Arc::new(features),
+        Arc::new(coco_types::ToolOverrides::none()),
+        coco_types::ToolFilter::unrestricted(),
+        coco_types::PermissionMode::Default,
+    );
+    let visible = names(&reg.loaded_tools(&ctx));
+    assert!(!visible.contains(ToolName::WebSearch.as_str()));
+    assert!(!visible.contains(ToolName::WebFetch.as_str()));
+    assert!(visible.contains(ToolName::Read.as_str()));
+    assert!(visible.contains(ToolName::Edit.as_str()));
+}
+
+#[test]
+fn pipeline_layer2_tool_overrides_drop_excluded() {
+    let reg = doc_example_registry();
+    // gpt-5-style diff: excludes Edit (uses apply_patch instead).
+    // Other baseline tools stay visible without enumeration — diff
+    // model means we only declare the delta, not the full universe.
+    let overrides =
+        coco_types::ToolOverrides::default().with_excluded(ToolId::Builtin(ToolName::Edit));
+    let ctx = crate::context::ToolUseContext::stub_for_filtering(
+        Arc::new(coco_types::Features::with_defaults()),
+        Arc::new(overrides),
+        coco_types::ToolFilter::unrestricted(),
+        coco_types::PermissionMode::Default,
+    );
+    let visible = names(&reg.loaded_tools(&ctx));
+    assert!(!visible.contains(ToolName::Edit.as_str()));
+    // Baseline tools stay — the diff didn't have to mention them.
+    assert!(visible.contains(ToolName::Read.as_str()));
+    assert!(visible.contains(ToolName::Bash.as_str()));
+}
+
+#[test]
+fn pipeline_layer3_plan_mode_hides_writes() {
+    let reg = doc_example_registry();
+    let ctx = crate::context::ToolUseContext::stub_for_filtering(
+        Arc::new(coco_types::Features::with_defaults()),
+        Arc::new(coco_types::ToolOverrides::none()),
+        coco_types::ToolFilter::unrestricted(),
+        coco_types::PermissionMode::Plan,
+    );
+    let visible = names(&reg.loaded_tools(&ctx));
+    // Read-only survives.
+    assert!(visible.contains(ToolName::Read.as_str()));
+    assert!(visible.contains(ToolName::WebSearch.as_str()));
+    assert!(visible.contains(ToolName::WebFetch.as_str()));
+    // Writes hidden.
+    assert!(!visible.contains(ToolName::Edit.as_str()));
+    assert!(!visible.contains(ToolName::Write.as_str()));
+    assert!(!visible.contains(ToolName::ApplyPatch.as_str()));
+    assert!(!visible.contains(ToolName::Bash.as_str()));
+}
+
+#[test]
+fn pipeline_layer4_agent_filter_narrows() {
+    let reg = doc_example_registry();
+    let filter = coco_types::ToolFilter::new(
+        vec![
+            ToolName::Read.as_str().to_string(),
+            ToolName::Bash.as_str().to_string(),
+        ],
+        Vec::new(),
+    );
+    let ctx = crate::context::ToolUseContext::stub_for_filtering(
+        Arc::new(coco_types::Features::with_defaults()),
+        Arc::new(coco_types::ToolOverrides::none()),
+        filter,
+        coco_types::PermissionMode::Default,
+    );
+    let visible = names(&reg.loaded_tools(&ctx));
+    let expected: std::collections::HashSet<String> =
+        [ToolName::Read.as_str(), ToolName::Bash.as_str()]
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+    assert_eq!(visible, expected);
+}
+
+/// End-to-end design-doc §8 trace: gpt-5 + Plan mode.
+///
+/// Expected final visible set: `{ Read, web_search, web_fetch }` —
+/// `Bash` survives because it's still in the model's universe and
+/// passes the agent filter, but Plan mode hides it (not statically
+/// read-only).
+#[test]
+fn pipeline_design_doc_gpt5_plan_mode_trace() {
+    let reg = doc_example_registry();
+
+    // Layer 1 — features all default ON.
+    let features = coco_types::Features::with_defaults();
+
+    // Layer 2 — gpt-5 diff: extra apply_patch (now a typed ToolName
+    // variant), excluded Edit. Both go in via `ToolId::Builtin`.
+    let overrides = coco_types::ToolOverrides::default()
+        .with_extra(ToolId::Builtin(ToolName::ApplyPatch))
+        .with_excluded(ToolId::Builtin(ToolName::Edit));
+
+    // Layer 3 — Plan mode.
+    // Layer 4 — top-level session, no agent restriction.
+    let ctx = crate::context::ToolUseContext::stub_for_filtering(
+        Arc::new(features),
+        Arc::new(overrides),
+        coco_types::ToolFilter::unrestricted(),
+        coco_types::PermissionMode::Plan,
+    );
+
+    let visible = names(&reg.loaded_tools(&ctx));
+    let expected: std::collections::HashSet<String> = [
+        ToolName::Read.as_str(),
+        ToolName::WebSearch.as_str(),
+        ToolName::WebFetch.as_str(),
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    assert_eq!(
+        visible, expected,
+        "design doc §8 trace: only Read + web_search + web_fetch should remain"
+    );
 }
 
 /// Deregister-by-server must find tools by their MCP info, regardless

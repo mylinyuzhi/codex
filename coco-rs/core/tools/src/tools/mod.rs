@@ -4,6 +4,7 @@ pub mod agent_fork;
 pub mod agent_handoff;
 pub mod agent_resume;
 pub mod agent_spawn;
+pub mod apply_patch;
 pub mod ask_user_question;
 pub mod bash;
 pub mod bash_advanced;
@@ -26,7 +27,8 @@ pub mod web;
 pub mod worktree;
 pub mod write;
 
-// File I/O (7)
+// File I/O (8 — `ApplyPatchTool` is gated to gpt-5 family)
+pub use apply_patch::ApplyPatchTool;
 pub use bash::BashTool;
 pub use edit::EditTool;
 pub use glob::GlobTool;

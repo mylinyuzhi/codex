@@ -177,6 +177,8 @@ impl TurnRunner for QueryEngineRunner {
                 shell_config: runtime_config.shell,
                 web_fetch_config: runtime_config.web_fetch,
                 web_search_config: runtime_config.web_search,
+                features: std::sync::Arc::new(runtime_config.features),
+                tool_overrides: runtime_config.tool_overrides,
                 ..Default::default()
             };
 

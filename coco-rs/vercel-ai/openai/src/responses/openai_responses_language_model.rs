@@ -69,7 +69,8 @@ impl OpenAIResponsesLanguageModel {
         options: &LanguageModelV4CallOptions,
     ) -> Result<(Value, Vec<Warning>), AISdkError> {
         let mut warnings = Vec::new();
-        let openai_options = extract_responses_options(&options.provider_options);
+        let (openai_options, raw_provider_options) =
+            extract_responses_options(&options.provider_options);
         let caps = get_capabilities(&self.model_id);
 
         let force_reasoning = openai_options.force_reasoning.unwrap_or(false);
@@ -384,6 +385,8 @@ impl OpenAIResponsesLanguageModel {
         if is_reasoning_model && openai_options.store == Some(false) {
             ensure_include_entry(&mut body, "reasoning.encrypted_content");
         }
+
+        vercel_ai_provider_utils::shallow_merge_object(&mut body, raw_provider_options);
 
         Ok((body, warnings))
     }

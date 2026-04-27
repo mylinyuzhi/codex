@@ -372,6 +372,16 @@ impl SwarmAgentHandle {
             context_window: None,
             max_output_tokens: None,
             allowed_tools: Vec::new(),
+            disallowed_tools: Vec::new(),
+            // Subagent inherits parent's resolved Layer 1 + 2 + 4 from
+            // the spawn request (filled by `AgentTool::execute` from the
+            // parent's `ToolUseContext`). Falling back to `None` here
+            // would let the adapter widen with `ToolOverrides::none()` /
+            // `Features::with_defaults()` / unrestricted parent filter,
+            // re-enabling gates the user disabled at the top level.
+            tool_overrides: request.tool_overrides.clone(),
+            features: request.features.clone(),
+            parent_tool_filter: request.parent_tool_filter.clone(),
             // Fork mode: preserve tool_use_results across the
             // child's compaction boundary — parent's history
             // references tool_use_ids that the child needs to

@@ -67,42 +67,45 @@ fn test_tool_config_json_first_env_override() {
 }
 
 #[test]
-fn test_memory_config_env_disables_memory() {
+fn test_memory_config_resolves_sub_toggles() {
+    // After feature-gate consolidation, top-level enable/disable lives on
+    // `Feature::AutoMemory`, not on `MemoryConfig`. This struct only carries
+    // sub-toggles + parameters.
     let settings = Settings {
         memory: PartialMemorySettings {
-            enabled: Some(true),
-            extraction_enabled: Some(true),
+            extraction_enabled: Some(false),
+            team_memory_enabled: Some(true),
             ..Default::default()
         },
         ..Default::default()
     };
-    let env = EnvSnapshot::from_pairs([(EnvKey::CocoDisableAutoMemory, "yes")]);
+    let env = EnvSnapshot::from_pairs(std::iter::empty::<(EnvKey, &str)>());
 
     let config = MemoryConfig::resolve(&settings, &env);
 
-    assert!(!config.enabled);
     assert!(!config.extraction_enabled);
+    assert!(config.team_memory_enabled);
 }
 
 #[test]
-fn test_sandbox_config_json_first_env_override() {
+fn test_sandbox_config_resolves_mode_and_network() {
+    // After feature-gate consolidation, top-level enable/disable lives on
+    // `Feature::Sandbox`. This struct only carries mode + parameters.
     let settings = Settings {
         sandbox: PartialSandboxSettings {
-            enabled: Some(false),
             mode: Some(coco_types::SandboxMode::ReadOnly),
+            allow_network: Some(true),
             ..Default::default()
         },
         ..Default::default()
     };
-    let env = EnvSnapshot::from_pairs([
-        (EnvKey::CocoSandboxEnabled, "1"),
-        (EnvKey::CocoSandboxMode, "workspace-write"),
-    ]);
+    let env = EnvSnapshot::from_pairs([(EnvKey::CocoSandboxMode, "workspace-write")]);
 
     let config = SandboxConfig::resolve(&settings, &env);
 
-    assert!(config.enabled);
+    // Env override beats settings.
     assert_eq!(config.mode, coco_types::SandboxMode::WorkspaceWrite);
+    assert!(config.allow_network);
 }
 
 #[test]

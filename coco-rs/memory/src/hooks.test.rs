@@ -13,8 +13,10 @@ fn test_should_extract_default() {
 }
 
 #[test]
-fn test_should_not_extract_when_disabled() {
-    let hook = init_extraction_hook(PathBuf::from("/tmp"), MemoryConfig::disabled());
+fn test_should_not_extract_when_extraction_disabled() {
+    let mut config = MemoryConfig::default();
+    config.extraction_enabled = false;
+    let hook = init_extraction_hook(PathBuf::from("/tmp"), config);
     assert!(!should_extract(&hook, false));
 }
 

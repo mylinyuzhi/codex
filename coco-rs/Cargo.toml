@@ -6,6 +6,7 @@ members = [
     "common/otel",
     "common/types",
     "common/config",
+    "common/config-reload",
 
     # ─── utils/ (25) ── 24 from cocode-rs + 1 new ───
     "utils/absolute-path",
@@ -103,6 +104,7 @@ coco-stack-trace-macro = { path = "common/stack-trace-macro" }
 coco-otel = { path = "common/otel" }
 coco-types = { path = "common/types" }
 coco-config = { path = "common/config" }
+coco-config-reload = { path = "common/config-reload" }
 
 # Internal - utilities
 coco-file-encoding = { path = "utils/file-encoding" }

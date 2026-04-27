@@ -1,127 +1,174 @@
-//! API-level micro-compaction: clear tool uses and thinking blocks via
-//! native API content editing (no LLM call required).
+//! API-native context management config builder.
 //!
-//! TS: apiMicrocompact.ts — `clear_tool_uses`, `clear_thinking`.
+//! TS: services/compact/apiMicrocompact.ts. **This module produces the
+//! `context_management` payload sent to the Anthropic API**, which then
+//! applies the edits server-side without invalidating the prompt cache.
+//! Client-side message mutation (the inverse approach that *does* break
+//! cache) lives in [`crate::micro_advanced`] under `clear_tool_uses_inplace`
+//! and `clear_thinking_inplace`.
 //!
-//! These functions operate directly on message content blocks, removing
-//! tool-use inputs or reasoning blocks from older messages while preserving
-//! the message structure required by the API.
+//! The two strategies are:
+//!
+//! - `clear_tool_uses_20250919` — drops tool result content / tool inputs
+//!   for older turns when input tokens exceed `trigger`, retaining the
+//!   most-recent N tool uses.
+//! - `clear_thinking_20251015` — preserves thinking blocks in past turns
+//!   without re-sending their full content. Useful when models with native
+//!   reasoning support emit chain-of-thought between turns.
 
-use coco_types::AssistantContent;
-use coco_types::LlmMessage;
-use coco_types::Message;
+use coco_types::ToolName;
 
-use crate::types::MicrocompactResult;
+use crate::types::ClearToolInputs;
+use crate::types::ContextEditStrategy;
+use crate::types::ThinkingKeep;
 
-/// Clear tool-use content blocks from older assistant messages.
+/// Default trigger threshold for `clear_tool_uses` (input tokens).
 ///
-/// Walks assistant messages oldest-first and replaces tool-call `input`
-/// fields with an empty JSON object, preserving the tool-call structure
-/// so the API still sees matching call/result pairs. Skips the most
-/// recent `keep_recent_count` assistant messages and any tools named
-/// in `exclude_tools`.
-pub fn clear_tool_uses(
-    messages: &mut [Message],
-    keep_recent_count: usize,
-    exclude_tools: &[String],
-) -> MicrocompactResult {
-    let assistant_indices: Vec<usize> = messages
-        .iter()
-        .enumerate()
-        .filter_map(|(i, m)| matches!(m, Message::Assistant(_)).then_some(i))
-        .collect();
+/// Matches TS `DEFAULT_MAX_INPUT_TOKENS` — typical warning threshold.
+pub const DEFAULT_API_MAX_INPUT_TOKENS: i64 = 180_000;
 
-    let cutoff_count = assistant_indices.len().saturating_sub(keep_recent_count);
-    let indices_to_clear = &assistant_indices[..cutoff_count];
+/// Default keep-target for `clear_tool_uses` (input tokens after clearing).
+///
+/// Matches TS `DEFAULT_TARGET_INPUT_TOKENS` — keeps roughly the last 40K of
+/// context like the client-side microcompact heuristic.
+pub const DEFAULT_API_TARGET_INPUT_TOKENS: i64 = 40_000;
 
-    let mut cleared: i32 = 0;
-    let mut tokens_freed: i64 = 0;
+/// Tool names whose results are eligible for `clear_tool_inputs`.
+///
+/// Matches TS `TOOLS_CLEARABLE_RESULTS` — read/search/web tools that may
+/// have produced large but no-longer-essential output.
+pub const TOOLS_CLEARABLE_RESULTS: &[ToolName] = &[
+    ToolName::Bash,
+    ToolName::PowerShell,
+    ToolName::Glob,
+    ToolName::Grep,
+    ToolName::Read,
+    ToolName::WebFetch,
+    ToolName::WebSearch,
+];
 
-    for &idx in indices_to_clear {
-        let Message::Assistant(ref mut asst) = messages[idx] else {
-            continue;
-        };
+/// Tool names that should be **excluded** from `clear_tool_uses`.
+///
+/// Matches TS `TOOLS_CLEARABLE_USES` — file-mutating tools whose tool_use
+/// inputs (the actual edit specifications) carry semantic value beyond the
+/// resulting tool_result, so we keep their inputs intact.
+pub const TOOLS_EXCLUDE_FROM_CLEAR_USES: &[ToolName] =
+    &[ToolName::Edit, ToolName::Write, ToolName::NotebookEdit];
 
-        let LlmMessage::Assistant {
-            ref mut content, ..
-        } = asst.message
-        else {
-            continue;
-        };
+/// Options driving [`get_api_context_management`].
+///
+/// Mirrors TS `getAPIContextManagement` parameter object.
+#[derive(Debug, Clone, Default)]
+pub struct ApiContextOptions {
+    /// Whether the model has thinking enabled (skip `clear_thinking` when off).
+    pub has_thinking: bool,
+    /// Whether redact-thinking is active (skip `clear_thinking` — redacted
+    /// blocks have no model-visible content).
+    pub is_redact_thinking_active: bool,
+    /// Force `clear_thinking { keep: 1 }` (TS: long-idle / >1h gap).
+    pub clear_all_thinking: bool,
+    /// Whether to enable `clear_tool_uses_20250919` clearing tool result
+    /// content. TS gates this behind `USE_API_CLEAR_TOOL_RESULTS` env var.
+    pub clear_tool_results: bool,
+    /// Whether to enable `clear_tool_uses_20250919` clearing entire tool use
+    /// blocks (excluding write/edit tools). TS gates this behind
+    /// `USE_API_CLEAR_TOOL_USES` env var.
+    pub clear_tool_uses: bool,
+    /// Override for the trigger threshold; falls back to
+    /// `API_MAX_INPUT_TOKENS` env / [`DEFAULT_API_MAX_INPUT_TOKENS`].
+    pub trigger_threshold: Option<i64>,
+    /// Override for the keep target; falls back to `API_TARGET_INPUT_TOKENS`
+    /// env / [`DEFAULT_API_TARGET_INPUT_TOKENS`].
+    pub keep_target: Option<i64>,
+}
 
-        for part in content.iter_mut() {
-            let AssistantContent::ToolCall(ref mut tc) = *part else {
-                continue;
-            };
-
-            if exclude_tools.iter().any(|ex| tc.tool_name.contains(ex)) {
-                continue;
-            }
-
-            // Only clear if input is non-trivial
-            let input_str = tc.input.to_string();
-            let est_tokens = (input_str.len() as i64) / 4;
-            if est_tokens <= 5 {
-                continue;
-            }
-
-            tc.input = serde_json::Value::Object(serde_json::Map::new());
-            tokens_freed += est_tokens;
-            cleared += 1;
-        }
-    }
-
-    MicrocompactResult {
-        messages_cleared: cleared,
-        tokens_saved_estimate: tokens_freed,
-        was_time_triggered: false,
+/// Read [`ApiContextOptions`] from process env vars.
+///
+/// TS `getAPIContextManagement` reads `USE_API_CLEAR_TOOL_RESULTS`,
+/// `USE_API_CLEAR_TOOL_USES`, `API_MAX_INPUT_TOKENS`,
+/// `API_TARGET_INPUT_TOKENS`. These are ant-only in TS; coco-rs keeps the
+/// same names for parity. `has_thinking` etc. are model-state-driven and
+/// must be filled by the caller.
+#[must_use]
+pub fn options_from_env() -> ApiContextOptions {
+    ApiContextOptions {
+        clear_tool_results: env_truthy("USE_API_CLEAR_TOOL_RESULTS"),
+        clear_tool_uses: env_truthy("USE_API_CLEAR_TOOL_USES"),
+        trigger_threshold: std::env::var("API_MAX_INPUT_TOKENS")
+            .ok()
+            .and_then(|s| s.parse().ok()),
+        keep_target: std::env::var("API_TARGET_INPUT_TOKENS")
+            .ok()
+            .and_then(|s| s.parse().ok()),
+        ..Default::default()
     }
 }
 
-/// Clear reasoning/thinking blocks from all assistant messages.
+/// Build the API-native context management strategy list.
 ///
-/// Removes `Reasoning` content parts entirely, freeing tokens used by
-/// chain-of-thought that is no longer needed. Preserves text and
-/// tool-call parts.
-pub fn clear_thinking(messages: &mut [Message]) -> MicrocompactResult {
-    let mut cleared: i32 = 0;
-    let mut tokens_freed: i64 = 0;
+/// Returns an empty `Vec` when no strategies are applicable — callers
+/// should treat that as "omit `context_management` from the request" so
+/// the API falls back to defaults.
+///
+/// TS: `getAPIContextManagement(options)`. Output ordering matches TS
+/// (thinking first, tool_results second, tool_uses third) so server-side
+/// edit application has a stable shape.
+#[must_use]
+pub fn get_api_context_management(opts: &ApiContextOptions) -> Vec<ContextEditStrategy> {
+    let mut strategies = Vec::new();
 
-    for msg in messages.iter_mut() {
-        let Message::Assistant(ref mut asst) = *msg else {
-            continue;
-        };
-
-        let LlmMessage::Assistant {
-            ref mut content, ..
-        } = asst.message
-        else {
-            continue;
-        };
-
-        let original_len = content.len();
-        let mut removed_tokens: i64 = 0;
-
-        content.retain(|part| match part {
-            AssistantContent::Reasoning(r) => {
-                removed_tokens += (r.text.len() as i64) / 4;
-                false
-            }
-            _ => true,
+    // 1. Clear thinking — skip when redact-thinking is on (no visible content).
+    if opts.has_thinking && !opts.is_redact_thinking_active {
+        strategies.push(ContextEditStrategy::ClearThinking {
+            keep: if opts.clear_all_thinking {
+                ThinkingKeep::Recent { turns: 1 }
+            } else {
+                ThinkingKeep::All
+            },
         });
-
-        let removed = (original_len - content.len()) as i32;
-        if removed > 0 {
-            cleared += removed;
-            tokens_freed += removed_tokens;
-        }
     }
 
-    MicrocompactResult {
-        messages_cleared: cleared,
-        tokens_saved_estimate: tokens_freed,
-        was_time_triggered: false,
+    // Tool clearing strategies require explicit opt-in (TS: ant-only).
+    if !opts.clear_tool_results && !opts.clear_tool_uses {
+        return strategies;
     }
+
+    let trigger = opts
+        .trigger_threshold
+        .unwrap_or(DEFAULT_API_MAX_INPUT_TOKENS);
+
+    // 2. Clear tool result content — clear_tool_inputs is the per-tool list.
+    if opts.clear_tool_results {
+        strategies.push(ContextEditStrategy::ClearToolUses {
+            trigger: Some(trigger),
+            keep_recent: None,
+            clear_inputs: ClearToolInputs::SpecificTools(TOOLS_CLEARABLE_RESULTS.to_vec()),
+            exclude_tools: Vec::new(),
+            exclude_tool_strs: Vec::new(),
+        });
+    }
+
+    // 3. Clear entire tool_use blocks (excluding write/edit tools).
+    if opts.clear_tool_uses {
+        strategies.push(ContextEditStrategy::ClearToolUses {
+            trigger: Some(trigger),
+            keep_recent: None,
+            clear_inputs: ClearToolInputs::None,
+            exclude_tools: TOOLS_EXCLUDE_FROM_CLEAR_USES.to_vec(),
+            exclude_tool_strs: Vec::new(),
+        });
+    }
+
+    strategies
+}
+
+fn env_truthy(name: &str) -> bool {
+    std::env::var(name)
+        .map(|v| {
+            let lower = v.to_ascii_lowercase();
+            matches!(lower.as_str(), "1" | "true" | "yes" | "on")
+        })
+        .unwrap_or(false)
 }
 
 #[cfg(test)]

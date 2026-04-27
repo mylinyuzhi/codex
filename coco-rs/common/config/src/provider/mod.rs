@@ -1,27 +1,103 @@
 pub mod builtin;
+pub mod client_options;
+pub mod model_override;
 
+pub use client_options::PartialProviderClientOptions;
+pub use client_options::ProviderClientOptions;
+pub use model_override::PartialProviderModelOverride;
+pub use model_override::ProviderModelOverride;
+
+use crate::env;
+use crate::error::ConfigError;
+use crate::error::ConfigField;
+use crate::secret::RedactedSecret;
 use coco_types::ProviderApi;
 use coco_types::WireApi;
 use serde::Deserialize;
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
+use std::fmt;
 
-use crate::env;
+/// Wire format for `~/.coco/providers.json` and the per-user
+/// `settings.providers.<name>` overlay. Every field is `Option` so an
+/// overlay never silently coerces a non-set field to a serde default.
+///
+/// # Identity invariant
+///
+/// There is intentionally **no `name` field** here — the provider
+/// identifier is the parent map key in
+/// `BTreeMap<String, PartialProviderConfig>`.
+/// `serde(deny_unknown_fields)` rejects user-written `name` at parse
+/// time; `from_partial(map_key, partial)` writes
+/// `resolved.name = map_key.to_string()` exactly once.
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PartialProviderConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api: Option<ProviderApi>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub env_key: Option<String>,
+    /// Fallback API key from config file. Prefer `env_key` env var.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<RedactedSecret>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wire_api: Option<WireApi>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_options: Option<PartialProviderClientOptions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub models: Option<BTreeMap<String, PartialProviderModelOverride>>,
+}
 
-/// Per-provider configuration for API key resolution.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+impl fmt::Debug for PartialProviderConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PartialProviderConfig")
+            .field("api", &self.api)
+            .field("env_key", &self.env_key)
+            .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
+            .field("base_url", &self.base_url)
+            .field("default_model", &self.default_model)
+            .field("timeout_secs", &self.timeout_secs)
+            .field("wire_api", &self.wire_api)
+            .field("client_options", &self.client_options)
+            .field("models", &self.models)
+            .finish()
+    }
+}
+
+const DEFAULT_TIMEOUT_SECS: i64 = 600;
+
+/// Resolved per-provider configuration. `name` is set in exactly one
+/// place — `from_partial` — from the parent map key. There is no path
+/// for a divergence between the map key and `name`.
+///
+/// `Debug` is implemented manually so `api_key` cannot leak through
+/// `tracing::error!("{cfg:?}")`, snafu cause chains, or panic
+/// formatters.
+#[derive(Clone, Serialize)]
 pub struct ProviderConfig {
+    /// Identity = parent map key, written exactly once in `from_partial`.
     pub name: String,
     pub api: ProviderApi,
-    /// Environment variable name for this provider's API key.
     pub env_key: String,
-    /// Fallback API key from config file.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub api_key: Option<String>,
+    /// Fallback API key from config file. `RedactedSecret` redacts
+    /// `Debug`/`Display`; `.expose()` is the single audit point.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<RedactedSecret>,
     pub base_url: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub default_model: Option<String>,
+    pub timeout_secs: i64,
+    pub wire_api: WireApi,
+    pub client_options: ProviderClientOptions,
+    /// Per-(provider, model) entries — `BTreeMap` so on-disk
+    /// serialisation is byte-stable.
+    pub models: BTreeMap<String, ProviderModelOverride>,
 }
 
 impl Default for ProviderConfig {
@@ -33,93 +109,166 @@ impl Default for ProviderConfig {
             api_key: None,
             base_url: String::new(),
             default_model: None,
+            timeout_secs: DEFAULT_TIMEOUT_SECS,
+            wire_api: WireApi::Chat,
+            client_options: ProviderClientOptions::default(),
+            models: BTreeMap::new(),
         }
+    }
+}
+
+impl fmt::Debug for ProviderConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProviderConfig")
+            .field("name", &self.name)
+            .field("api", &self.api)
+            .field("env_key", &self.env_key)
+            .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
+            .field("base_url", &self.base_url)
+            .field("default_model", &self.default_model)
+            .field("timeout_secs", &self.timeout_secs)
+            .field("wire_api", &self.wire_api)
+            .field("client_options", &self.client_options)
+            .field("models", &self.models)
+            .finish()
     }
 }
 
 impl ProviderConfig {
-    /// Resolve API key for this provider.
-    /// Priority: env var > config file api_key.
-    pub fn resolve_api_key(&self) -> Option<String> {
-        env::env_opt(&self.env_key).or_else(|| self.api_key.clone())
+    /// Build a fully-resolved entry from a partial overlay. `name` is
+    /// taken from `map_key` — the partial cannot supply one (rejected
+    /// at parse time by `deny_unknown_fields`). Required fields
+    /// (`api`, `env_key`, `base_url`) must be `Some(_)` or this
+    /// returns `ConfigError::IncompleteProviderEntry`.
+    pub fn from_partial(
+        map_key: &str,
+        partial: &PartialProviderConfig,
+    ) -> Result<Self, ConfigError> {
+        let api = partial.api.ok_or(ConfigError::IncompleteProviderEntry {
+            name: map_key.to_string(),
+            field: ConfigField::Api,
+        })?;
+        let env_key = partial
+            .env_key
+            .clone()
+            .ok_or(ConfigError::IncompleteProviderEntry {
+                name: map_key.to_string(),
+                field: ConfigField::EnvKey,
+            })?;
+        let base_url = partial
+            .base_url
+            .clone()
+            .ok_or(ConfigError::IncompleteProviderEntry {
+                name: map_key.to_string(),
+                field: ConfigField::BaseUrl,
+            })?;
+
+        // A negative `timeout_secs` is unambiguously a typo — neither
+        // "default" (use `None`) nor "disabled" (use `0`). Rejecting at
+        // the boundary turns a silent unbounded-request bug into a
+        // startup error.
+        if let Some(t) = partial.timeout_secs
+            && t < 0
+        {
+            return Err(ConfigError::InvalidTimeoutSecs {
+                name: map_key.to_string(),
+                value: t,
+            });
+        }
+
+        let client_options = partial
+            .client_options
+            .as_ref()
+            .map(ProviderClientOptions::from_partial)
+            .unwrap_or_default();
+
+        let models = partial
+            .models
+            .as_ref()
+            .map(|m| {
+                m.iter()
+                    .map(|(k, v)| (k.clone(), ProviderModelOverride::from_partial(v.clone())))
+                    .collect::<BTreeMap<_, _>>()
+            })
+            .unwrap_or_default();
+
+        Ok(Self {
+            name: map_key.to_string(),
+            api,
+            env_key,
+            api_key: partial.api_key.clone(),
+            base_url,
+            default_model: partial.default_model.clone(),
+            timeout_secs: partial.timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS),
+            wire_api: partial.wire_api.unwrap_or(WireApi::Chat),
+            client_options,
+            models,
+        })
     }
 
-    /// Layer `override_cfg` onto `self`: every non-empty / Some field in
-    /// `override_cfg` wins, every empty / None field leaves `self`
-    /// untouched so builtin defaults (e.g. `default_model`) are preserved
-    /// when the user only overrides a subset.
+    /// Layer a partial overlay over `self`. `api` is taken from the
+    /// overlay only when `Some` — never silently coerced to a serde
+    /// default. `models` merges entry-by-entry; nested
+    /// `client_options` merges field-by-field, and `client_options.headers`
+    /// itself merges key-by-key (overlay wins per key).
     ///
-    /// Note: `api` is always taken from the override because it's a non-
-    /// optional enum with no "unset" sentinel — users who partially
-    /// override a builtin (e.g. just changing `base_url`) but forget to
-    /// set `api` will get `ProviderApi::Anthropic` by serde default. For
-    /// the five builtins this happens to match; for unknown providers
-    /// users should set `api` explicitly.
-    pub fn merge_from(&mut self, override_cfg: &Self) {
-        if !override_cfg.name.is_empty() {
-            self.name.clone_from(&override_cfg.name);
+    /// Returns [`ConfigError::InvalidTimeoutSecs`] when the overlay
+    /// supplies a negative `timeout_secs`. Same boundary check as
+    /// [`Self::from_partial`] — neither path should silently accept a
+    /// typo'd negative value.
+    pub fn merge_partial(&mut self, overlay: &PartialProviderConfig) -> Result<(), ConfigError> {
+        if let Some(api) = overlay.api {
+            self.api = api;
         }
-        self.api = override_cfg.api;
-        if !override_cfg.env_key.is_empty() {
-            self.env_key.clone_from(&override_cfg.env_key);
+        if let Some(env_key) = &overlay.env_key {
+            self.env_key.clone_from(env_key);
         }
-        if override_cfg.api_key.is_some() {
-            self.api_key.clone_from(&override_cfg.api_key);
+        if let Some(api_key) = &overlay.api_key {
+            self.api_key = Some(api_key.clone());
         }
-        if !override_cfg.base_url.is_empty() {
-            self.base_url.clone_from(&override_cfg.base_url);
+        if let Some(base_url) = &overlay.base_url {
+            self.base_url.clone_from(base_url);
         }
-        if override_cfg.default_model.is_some() {
-            self.default_model.clone_from(&override_cfg.default_model);
+        if let Some(default_model) = &overlay.default_model {
+            self.default_model = Some(default_model.clone());
         }
+        if let Some(timeout) = overlay.timeout_secs {
+            if timeout < 0 {
+                return Err(ConfigError::InvalidTimeoutSecs {
+                    name: self.name.clone(),
+                    value: timeout,
+                });
+            }
+            self.timeout_secs = timeout;
+        }
+        if let Some(wire_api) = overlay.wire_api {
+            self.wire_api = wire_api;
+        }
+        if let Some(client_opts) = &overlay.client_options {
+            self.client_options.merge_partial(client_opts);
+        }
+        if let Some(models) = &overlay.models {
+            for (k, v) in models {
+                self.models
+                    .insert(k.clone(), ProviderModelOverride::from_partial(v.clone()));
+            }
+        }
+        Ok(())
+    }
+
+    /// Resolve API key for this provider.
+    /// Priority: env var > config file `api_key` > none.
+    ///
+    /// Returns `Option<String>` (not `RedactedSecret`) because the
+    /// caller (`model_factory::build_*`) hands the raw key to vercel-ai
+    /// `*ProviderSettings.api_key`. `.expose()` here is one of the
+    /// two grep-able audit points.
+    pub fn resolve_api_key(&self) -> Option<String> {
+        env::env_opt(&self.env_key)
+            .or_else(|| self.api_key.as_ref().map(|s| s.expose().to_string()))
     }
 }
 
-/// Resolved provider configuration at runtime.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProviderInfo {
-    pub name: String,
-    pub api: ProviderApi,
-    pub base_url: String,
-    pub api_key: String,
-    #[serde(default = "default_timeout")]
-    pub timeout_secs: i64,
-    #[serde(default = "default_true")]
-    pub streaming: bool,
-    #[serde(default = "default_wire_api")]
-    pub wire_api: WireApi,
-    /// Models registered under this provider.
-    #[serde(default)]
-    pub models: HashMap<String, ProviderModel>,
-    /// SDK client construction options.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub options: Option<serde_json::Value>,
-    #[serde(default)]
-    pub interceptors: Vec<String>,
-}
-
-fn default_wire_api() -> WireApi {
-    WireApi::Chat
-}
-
-fn default_timeout() -> i64 {
-    600
-}
-
-fn default_true() -> bool {
-    true
-}
-
-/// A model entry within a provider.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct ProviderModel {
-    /// Merged ModelInfo.
-    #[serde(flatten)]
-    pub model_info: crate::model::ModelInfo,
-    /// API model name if different from model_id.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub api_model_name: Option<String>,
-    /// Per-provider per-model options.
-    pub model_options: HashMap<String, serde_json::Value>,
-}
+#[cfg(test)]
+#[path = "mod.test.rs"]
+mod tests;

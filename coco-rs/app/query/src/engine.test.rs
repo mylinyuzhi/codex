@@ -298,7 +298,10 @@ async fn test_single_turn_text_only() {
     let model = Arc::new(TextMock {
         text: "Hello!".into(),
     });
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
 
@@ -323,8 +326,14 @@ async fn test_with_fallback_client_does_not_break_primary_path() {
     let fallback_model = Arc::new(TextMock {
         text: "fallback-answer".into(),
     });
-    let primary = Arc::new(ApiClient::new(primary_model, RetryConfig::default()));
-    let fallback = Arc::new(ApiClient::new(fallback_model, RetryConfig::default()));
+    let primary = Arc::new(ApiClient::with_default_fingerprint(
+        primary_model,
+        RetryConfig::default(),
+    ));
+    let fallback = Arc::new(ApiClient::with_default_fingerprint(
+        fallback_model,
+        RetryConfig::default(),
+    ));
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
 
@@ -343,7 +352,10 @@ async fn test_multi_turn_tool_call_then_text() {
     let model = Arc::new(ToolCallThenTextMock {
         call_count: AtomicI32::new(0),
     });
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
 
     // Register ReadTool so it can be found and executed
     let mut registry = ToolRegistry::new();
@@ -375,7 +387,10 @@ async fn test_multi_tool_calls_in_one_response() {
     let model = Arc::new(MultiToolMock {
         call_count: AtomicI32::new(0),
     });
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
 
     let mut registry = ToolRegistry::new();
     registry.register(Arc::new(ReadTool));
@@ -397,7 +412,10 @@ async fn test_cancellation() {
     let model = Arc::new(TextMock {
         text: "nope".into(),
     });
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
     cancel.cancel();
@@ -414,7 +432,10 @@ async fn test_system_prompt_included() {
     let model = Arc::new(TextMock {
         text: "I am helpful.".into(),
     });
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
 
@@ -434,7 +455,10 @@ async fn test_max_turns_limit() {
     let model = Arc::new(ToolCallThenTextMock {
         call_count: AtomicI32::new(0), // but we set max_turns=1 so it stops after first
     });
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
 
     let mut registry = ToolRegistry::new();
     registry.register(Arc::new(ReadTool));
@@ -455,7 +479,10 @@ async fn test_max_turns_limit() {
 #[tokio::test]
 async fn test_permission_mode_passed_to_context() {
     let model = Arc::new(TextMock { text: "ok".into() });
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
 
@@ -545,7 +572,10 @@ async fn test_tool_execution_with_real_tools() {
         call_count: AtomicI32::new(0),
         file_path: test_file.to_str().unwrap().to_string(),
     });
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
 
     let mut registry = ToolRegistry::new();
     registry.register(Arc::new(ReadTool));
@@ -638,7 +668,10 @@ async fn test_read_tool_emits_full_tool_lifecycle() {
         call_count: AtomicI32::new(0),
         file_path: test_file.to_str().unwrap().to_string(),
     });
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
 
     let mut registry = ToolRegistry::new();
     registry.register(Arc::new(ReadTool));
@@ -762,7 +795,10 @@ async fn test_budget_exhausted_in_engine() {
     let model = Arc::new(ToolCallThenTextMock {
         call_count: AtomicI32::new(0),
     });
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
 
     let mut registry = ToolRegistry::new();
     registry.register(Arc::new(ReadTool));
@@ -791,7 +827,10 @@ async fn collect_events_from_run(
     bootstrap: Option<SessionBootstrap>,
     prompt: &str,
 ) -> (QueryResult, Vec<CoreEvent>) {
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
     let cancel = CancellationToken::new();
     let mut engine = QueryEngine::new(config, client, tools, cancel, None);
     if let Some(b) = bootstrap {
@@ -1325,7 +1364,10 @@ async fn pre_tool_use_updated_input_reaches_execution() {
         input: serde_json::json!({"value": "original"}),
         final_text: "done".into(),
     });
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
     let mut registry = ToolRegistry::new();
     registry.register(Arc::new(HookEchoTool));
     let tools = Arc::new(registry);
@@ -1378,7 +1420,10 @@ async fn post_tool_use_receives_effective_input() {
         input: serde_json::json!({"value": "original"}),
         final_text: "done".into(),
     });
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
     let mut registry = ToolRegistry::new();
     registry.register(Arc::new(HookEchoTool));
     let tools = Arc::new(registry);
@@ -1445,7 +1490,10 @@ async fn post_tool_use_updated_mcp_output_rewrites_mcp_result() {
         input: serde_json::json!({}),
         final_text: "done".into(),
     });
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
     let mut registry = ToolRegistry::new();
     registry.register(Arc::new(HookMcpTool));
     let tools = Arc::new(registry);
@@ -1518,7 +1566,10 @@ async fn post_tool_use_updated_mcp_output_is_ignored_for_non_mcp_tool() {
         input: serde_json::json!({"value": "original"}),
         final_text: "done".into(),
     });
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
     let mut registry = ToolRegistry::new();
     registry.register(Arc::new(HookEchoTool));
     let tools = Arc::new(registry);
@@ -1572,7 +1623,10 @@ async fn post_tool_use_additional_context_is_injected() {
         input: serde_json::json!({"value": "original"}),
         final_text: "done".into(),
     });
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
     let mut registry = ToolRegistry::new();
     registry.register(Arc::new(HookEchoTool));
     let tools = Arc::new(registry);
@@ -1627,7 +1681,10 @@ async fn post_tool_use_prevent_continuation_stops_next_turn() {
         final_text: "should not happen".into(),
     });
     let model_for_client: Arc<dyn LanguageModelV4> = model.clone();
-    let client = Arc::new(ApiClient::new(model_for_client, RetryConfig::default()));
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model_for_client,
+        RetryConfig::default(),
+    ));
     let mut registry = ToolRegistry::new();
     registry.register(Arc::new(HookEchoTool));
     let tools = Arc::new(registry);
@@ -1682,7 +1739,10 @@ async fn non_mcp_success_path_orders_post_hook_messages_before_new_messages() {
         input: serde_json::json!({}),
         final_text: "should not happen".into(),
     });
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
     let mut registry = ToolRegistry::new();
     registry.register(Arc::new(HookOrderingTool));
     let tools = Arc::new(registry);
@@ -1747,7 +1807,10 @@ async fn mcp_success_path_defers_post_hook_messages_until_after_prevent() {
         input: serde_json::json!({}),
         final_text: "should not happen".into(),
     });
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
     let mut registry = ToolRegistry::new();
     registry.register(Arc::new(HookOrderingMcpTool));
     let tools = Arc::new(registry);
@@ -1812,7 +1875,10 @@ async fn failure_path_orders_error_result_before_post_tool_use_failure_context()
         input: serde_json::json!({}),
         final_text: "done".into(),
     });
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
     let mut registry = ToolRegistry::new();
     registry.register(Arc::new(HookFailTool));
     let tools = Arc::new(registry);
@@ -1878,7 +1944,10 @@ async fn failure_path_completed_event_matches_error_tool_result_text() {
         input: serde_json::json!({}),
         final_text: "done".into(),
     });
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
     let mut registry = ToolRegistry::new();
     registry.register(Arc::new(HookFailTool));
     let tools = Arc::new(registry);
@@ -1915,7 +1984,10 @@ async fn pre_tool_use_permission_deny_records_denial() {
         input: serde_json::json!({"value": "original"}),
         final_text: "done".into(),
     });
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
     let mut registry = ToolRegistry::new();
     registry.register(Arc::new(HookEchoTool));
     let tools = Arc::new(registry);
@@ -2352,7 +2424,10 @@ async fn test_query_result_has_permission_denials_field() {
 async fn test_session_result_cancelled_marks_is_error() {
     // Cancellation path: cancelled flag → is_error=true, stop_reason="cancelled".
     let model = Arc::new(TextMock { text: "ok".into() });
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
     cancel.cancel(); // Pre-cancel before running
@@ -2551,7 +2626,10 @@ async fn ask_branch_consults_bridge_and_executes_on_approved() {
     let model = Arc::new(AskingToolThenTextMock {
         call_count: AtomicI32::new(0),
     });
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
 
     let mut registry = ToolRegistry::new();
     registry.register(Arc::new(AskingMockTool));
@@ -2582,7 +2660,10 @@ async fn ask_branch_consults_bridge_and_records_denial_on_rejected() {
     let model = Arc::new(AskingToolThenTextMock {
         call_count: AtomicI32::new(0),
     });
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
 
     let mut registry = ToolRegistry::new();
     registry.register(Arc::new(AskingMockTool));
@@ -2613,7 +2694,10 @@ async fn pre_tool_use_block_runs_before_permission_ask() {
     let model = Arc::new(AskingToolThenTextMock {
         call_count: AtomicI32::new(0),
     });
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
 
     let mut registry = ToolRegistry::new();
     registry.register(Arc::new(AskingMockTool));
@@ -2673,7 +2757,10 @@ async fn ask_branch_without_bridge_falls_back_to_auto_allow() {
     let model = Arc::new(AskingToolThenTextMock {
         call_count: AtomicI32::new(0),
     });
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
 
     let mut registry = ToolRegistry::new();
     registry.register(Arc::new(AskingMockTool));
@@ -2695,7 +2782,10 @@ async fn query_result_final_messages_contains_full_roundtrip() {
     let model = Arc::new(ToolCallThenTextMock {
         call_count: AtomicI32::new(0),
     });
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
 
     let mut registry = ToolRegistry::new();
     registry.register(Arc::new(ReadTool));
@@ -2733,7 +2823,10 @@ async fn query_result_final_messages_populated_on_cancel() {
     // final_messages should be set — may be empty if cancelled
     // before the first message, but the field must exist.
     let model = Arc::new(TextMock { text: "hi".into() });
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
     cancel.cancel();
@@ -2763,7 +2856,10 @@ async fn run_with_messages_uses_last_user_message_for_history_key() {
     // this test is more of a smoke test that `run_with_messages` still
     // works with multi-user-message inputs.
     let model = Arc::new(TextMock { text: "ack".into() });
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
 
@@ -2821,7 +2917,10 @@ async fn ask_branch_aborts_bridge_await_on_cancel() {
     let model = Arc::new(AskingToolThenTextMock {
         call_count: AtomicI32::new(0),
     });
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
 
     let mut registry = ToolRegistry::new();
     registry.register(Arc::new(AskingMockTool));

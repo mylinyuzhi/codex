@@ -2,6 +2,7 @@
 
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::io::BufRead;
 use std::io::BufReader;
 
@@ -94,6 +95,22 @@ pub enum SecureJsonError {
     DepthExceeded,
     #[error("JSON parse error: {0}")]
     Parse(#[from] serde_json::Error),
+}
+
+/// Shallow-merge `overlay` into `body`'s root object — each key in
+/// `overlay` overwrites the same key in `body`. Nested values are
+/// NOT merged. No-op when `body` is not a JSON object.
+///
+/// Used by language-model `get_args` to apply opaque user-supplied
+/// `provider_options[<namespace>]` ("extra_body") onto the wire body
+/// after typed body construction. Every key wins over any earlier
+/// typed write at the same name; the user owns correctness.
+pub fn shallow_merge_object(body: &mut Value, overlay: BTreeMap<String, Value>) {
+    if let Some(obj) = body.as_object_mut() {
+        for (k, v) in overlay {
+            obj.insert(k, v);
+        }
+    }
 }
 
 #[cfg(test)]

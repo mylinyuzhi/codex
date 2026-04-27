@@ -179,6 +179,9 @@ impl ToolContextFactory {
             shell_config: self.config.shell_config.clone(),
             web_fetch_config: self.config.web_fetch_config.clone(),
             web_search_config: self.config.web_search_config.clone(),
+            features: self.config.features.clone(),
+            tool_overrides: self.config.tool_overrides.clone(),
+            tool_filter: self.config.tool_filter.clone(),
             is_teammate: self.config.is_teammate,
             plan_mode_required: self.config.plan_mode_required,
             // Pre-resolve swarm identity once, so tools read from ctx

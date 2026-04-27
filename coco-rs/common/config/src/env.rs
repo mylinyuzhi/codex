@@ -27,10 +27,8 @@ pub enum EnvKey {
     CocoBashAutoBackgroundOnTimeout,
     CocoBubblewrap,
     CocoConfigDir,
-    CocoDisableAutoMemory,
     CocoDisableFastMode,
     CocoDisableShellSnapshot,
-    CocoExperimentalAgentTeams,
     CocoFileReadIgnorePatterns,
     CocoFoundryResource,
     CocoGlobTimeoutSeconds,
@@ -45,7 +43,6 @@ pub enum EnvKey {
     CocoRemote,
     CocoRemoteMemoryDir,
     CocoSandboxAllowNetwork,
-    CocoSandboxEnabled,
     CocoSandboxExcludedCommands,
     CocoSandboxMode,
     CocoSessionEndHooksTimeoutMs,
@@ -85,10 +82,8 @@ impl EnvKey {
             Self::CocoBashAutoBackgroundOnTimeout => "COCO_BASH_AUTO_BACKGROUND_ON_TIMEOUT",
             Self::CocoBubblewrap => "COCO_BUBBLEWRAP",
             Self::CocoConfigDir => "COCO_CONFIG_DIR",
-            Self::CocoDisableAutoMemory => "COCO_DISABLE_AUTO_MEMORY",
             Self::CocoDisableFastMode => "COCO_DISABLE_FAST_MODE",
             Self::CocoDisableShellSnapshot => "COCO_DISABLE_SHELL_SNAPSHOT",
-            Self::CocoExperimentalAgentTeams => "COCO_EXPERIMENTAL_AGENT_TEAMS",
             Self::CocoFileReadIgnorePatterns => "COCO_FILE_READ_IGNORE_PATTERNS",
             Self::CocoFoundryResource => "COCO_FOUNDRY_RESOURCE",
             Self::CocoGlobTimeoutSeconds => "COCO_GLOB_TIMEOUT_SECONDS",
@@ -103,7 +98,6 @@ impl EnvKey {
             Self::CocoRemote => "COCO_REMOTE",
             Self::CocoRemoteMemoryDir => "COCO_REMOTE_MEMORY_DIR",
             Self::CocoSandboxAllowNetwork => "COCO_SANDBOX_ALLOW_NETWORK",
-            Self::CocoSandboxEnabled => "COCO_SANDBOX_ENABLED",
             Self::CocoSandboxExcludedCommands => "COCO_SANDBOX_EXCLUDED_COMMANDS",
             Self::CocoSandboxMode => "COCO_SANDBOX_MODE",
             Self::CocoSessionEndHooksTimeoutMs => "COCO_SESSIONEND_HOOKS_TIMEOUT_MS",
@@ -152,6 +146,17 @@ fn is_falsy_value(raw: &str) -> bool {
     matches!(raw.to_lowercase().as_str(), "0" | "false" | "no" | "off")
 }
 
+/// Parse a raw env value into Some(true)/Some(false) or None if neither set.
+fn parse_truthy(raw: &str) -> Option<bool> {
+    if is_truthy_value(raw) {
+        Some(true)
+    } else if is_falsy_value(raw) {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 /// Returns true if the environment variable is set to a truthy value.
 /// TS: isEnvTruthy() — normalizes "1", "true", "yes", "on" to true.
 pub fn is_env_truthy<K: AsRef<OsStr>>(key: K) -> bool {
@@ -183,7 +188,12 @@ pub fn env_opt_i64<K: AsRef<OsStr>>(key: K) -> Option<i64> {
 #[derive(Debug, Clone, Default)]
 pub struct EnvSnapshot {
     values: HashMap<EnvKey, String>,
+    /// Dynamic `COCO_FEATURE_<key>=1/0` overrides. The key here is the
+    /// lowercase feature key (e.g. `auto_memory`), not the env-var name.
+    feature_overrides: std::collections::BTreeMap<String, bool>,
 }
+
+const COCO_FEATURE_PREFIX: &str = "COCO_FEATURE_";
 
 impl EnvSnapshot {
     /// Capture known env vars from the current process.
@@ -191,7 +201,17 @@ impl EnvSnapshot {
         let values = EnvKey::all()
             .filter_map(|key| env_opt(key).map(|value| (key, value)))
             .collect();
-        Self { values }
+        let feature_overrides = std::env::vars()
+            .filter_map(|(k, v)| {
+                let stripped = k.strip_prefix(COCO_FEATURE_PREFIX)?;
+                let bool_val = parse_truthy(&v)?;
+                Some((stripped.to_lowercase(), bool_val))
+            })
+            .collect();
+        Self {
+            values,
+            feature_overrides,
+        }
     }
 
     /// Build a snapshot from explicit pairs. Intended for tests and callers
@@ -206,7 +226,30 @@ impl EnvSnapshot {
                 .into_iter()
                 .map(|(key, value)| (key, value.into()))
                 .collect(),
+            feature_overrides: std::collections::BTreeMap::new(),
         }
+    }
+
+    /// Build a snapshot from explicit pairs plus feature overrides. For tests.
+    pub fn from_pairs_with_features<I, S, F>(pairs: I, features: F) -> Self
+    where
+        I: IntoIterator<Item = (EnvKey, S)>,
+        S: Into<String>,
+        F: IntoIterator<Item = (String, bool)>,
+    {
+        Self {
+            values: pairs
+                .into_iter()
+                .map(|(key, value)| (key, value.into()))
+                .collect(),
+            feature_overrides: features.into_iter().collect(),
+        }
+    }
+
+    /// Access the captured `COCO_FEATURE_*` overrides keyed by lowercase
+    /// feature key.
+    pub fn feature_overrides(&self) -> &std::collections::BTreeMap<String, bool> {
+        &self.feature_overrides
     }
 
     pub fn get(&self, key: EnvKey) -> Option<&str> {
@@ -252,10 +295,11 @@ pub struct EnvOnlyConfig {
     pub small_fast_model: Option<String>,
     pub subagent_model: Option<String>,
 
-    /// `COCO_SIMPLE` — skips stored auth tokens / api_key_helper fallback
-    /// and forces env-only API key resolution. Consumed by
+    /// `COCO_SIMPLE=1` — skip stored OAuth tokens and `api_key_helper`;
+    /// resolve auth from env vars only. Consumed by
     /// `coco_inference::auth::resolve_auth` via `AuthResolveOptions`.
-    pub bare_mode: bool,
+    /// Auth-only flag — never gate features off this.
+    pub force_env_auth: bool,
 }
 
 impl EnvOnlyConfig {
@@ -269,7 +313,7 @@ impl EnvOnlyConfig {
             model_override: env.get_string(EnvKey::CocoModel),
             small_fast_model: env.get_string(EnvKey::CocoSmallFastModel),
             subagent_model: env.get_string(EnvKey::CocoSubagentModel),
-            bare_mode: env.is_truthy(EnvKey::CocoSimple),
+            force_env_auth: env.is_truthy(EnvKey::CocoSimple),
         }
     }
 }

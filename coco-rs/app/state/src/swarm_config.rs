@@ -1,9 +1,10 @@
 //! Team/swarm configuration types.
 //!
 //! TS: configConstants.ts `TEAMMATE_MODES`, config.ts `ConfigOptions`.
-
-use super::swarm_constants::AGENT_TEAMS_ENV_VAR;
-use coco_config::env;
+//!
+//! Whether the swarm subsystem is **active** is gated upstream by
+//! `Feature::AgentTeams`; this struct only carries internal parameters
+//! (mode, max agents, default model, etc.).
 
 /// How teammates are spawned.
 ///
@@ -40,10 +41,6 @@ impl TeammateMode {
 /// TS: `ConfigOptions.showSpinnerTree`, `teammateMode`, `teammateDefaultModel`
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TeamConfig {
-    /// Whether agent teams are enabled.
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-
     /// How to spawn teammates.
     #[serde(default)]
     pub teammate_mode: TeammateMode,
@@ -72,42 +69,12 @@ fn default_max_agents() -> i32 {
 impl Default for TeamConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
             teammate_mode: TeammateMode::Auto,
             teammate_default_model: None,
             show_spinner_tree: true,
             max_agents: default_max_agents(),
         }
     }
-}
-
-/// Check whether agent teams/swarm feature is enabled.
-///
-/// TS: `isAgentSwarmsEnabled()` in `utils/agentSwarmsEnabled.ts`.
-///
-/// Checks:
-/// 1. `COCO_EXPERIMENTAL_AGENT_TEAMS` env var
-/// 2. `--agent-teams` CLI flag (via config)
-/// 3. GrowthBook gate `tengu_amber_flint` (not yet implemented, always passes)
-pub fn is_agent_teams_enabled(config: &TeamConfig, cli_flag: bool) -> bool {
-    if !config.enabled {
-        return false;
-    }
-
-    // Env var override
-    if env::env_opt(AGENT_TEAMS_ENV_VAR).is_some_and(|v| !v.is_empty() && v != "0" && v != "false")
-    {
-        return true;
-    }
-
-    // CLI flag
-    if cli_flag {
-        return true;
-    }
-
-    // Default: disabled for external builds, enabled for internal.
-    // GrowthBook gate `tengu_amber_flint` would be checked here.
-    false
 }
 
 #[cfg(test)]

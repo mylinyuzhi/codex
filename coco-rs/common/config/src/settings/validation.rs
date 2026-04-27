@@ -125,31 +125,33 @@ pub fn validate_settings(settings: &Settings) -> Vec<ValidationError> {
 /// Validate provider configurations for safe secret handling.
 ///
 /// Flags any provider entry that stores `api_key` in plaintext in
-/// settings.json. Per `ProviderConfig` docstring, secrets should live in
-/// the provider's `env_key` env var, not in the config file.
+/// settings.json. Secrets should live in the provider's `env_key` env
+/// var, not in the config file. The partial overlay shape carries
+/// `Option<RedactedSecret>` for `api_key`; presence here means the
+/// user wrote one in JSON.
 pub fn validate_providers(settings: &Settings) -> Vec<ValidationError> {
     let mut errors = Vec::new();
-    for (name, provider) in &settings.providers {
-        if let Some(key) = &provider.api_key
+    for (name, partial) in &settings.providers {
+        if let Some(key) = &partial.api_key
             && !key.is_empty()
         {
+            let env_key = partial.env_key.as_deref().unwrap_or("");
             errors.push(ValidationError {
                 file: None,
                 path: format!("providers.{name}.api_key"),
                 message: format!(
                     "Provider '{name}' stores api_key in plaintext — \
-                     move it to the `{}` environment variable instead.",
-                    provider.env_key
+                     move it to the `{env_key}` environment variable instead."
                 ),
                 expected: Some("api_key unset; use env var".into()),
                 invalid_value: Some("<redacted>".into()),
                 suggestion: Some(format!(
                     "Unset `providers.{name}.api_key` and export the key \
                      via `{}=...` in your shell.",
-                    if provider.env_key.is_empty() {
+                    if env_key.is_empty() {
                         "<provider env_key>"
                     } else {
-                        provider.env_key.as_str()
+                        env_key
                     }
                 )),
             });

@@ -90,7 +90,7 @@ impl LanguageModelV4 for ErrorModel {
 }
 
 fn mock_client(text: &str) -> ApiClient {
-    ApiClient::new(Arc::new(MockModel::new(text)), RetryConfig::default())
+    ApiClient::with_default_fingerprint(Arc::new(MockModel::new(text)), RetryConfig::default())
 }
 
 #[tokio::test]
@@ -143,7 +143,7 @@ async fn test_usage_accumulation() {
 
 #[tokio::test]
 async fn test_error_model_fails() {
-    let client = ApiClient::new(
+    let client = ApiClient::with_default_fingerprint(
         Arc::new(ErrorModel),
         RetryConfig {
             max_retries: 0,

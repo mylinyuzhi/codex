@@ -8,22 +8,38 @@
 //! - Token-budget-aware clearing (stop once enough tokens are freed)
 //! - Removal of "[file unchanged]" placeholder stubs
 //! - Compaction of thinking/reasoning blocks from old turns
+//! - **In-place** versions of the API-native clear strategies — these
+//!   mutate messages directly (and break prompt cache as a result). For
+//!   the cache-preserving server-side variant, build a config via
+//!   [`crate::api_compact::get_api_context_management`] and pass it to the
+//!   provider in `ProviderOptions`.
 
+use coco_types::AssistantContent;
+use coco_types::LlmMessage;
 use coco_types::Message;
+use coco_types::ToolName;
 
 use crate::tokens;
 use crate::types::CLEARED_TOOL_RESULT_MESSAGE;
 use crate::types::MicrocompactResult;
 
 /// Configuration for budget-aware micro-compaction.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct MicroCompactBudgetConfig {
     /// Maximum tokens to free. Compaction stops once this is met.
     pub tokens_to_free: i64,
     /// Number of recent messages to always keep intact.
     pub keep_recent: usize,
     /// Tools whose results should never be cleared.
-    pub exclude_tools: Vec<String>,
+    ///
+    /// Builtin tools should be supplied via [`ToolName`] for compile-time
+    /// verification (CLAUDE.md "no hardcoded strings for closed sets").
+    /// MCP / custom tool identifiers can be supplied via `exclude_tool_strs`.
+    pub exclude_tools: Vec<ToolName>,
+    /// Additional non-builtin tool identifiers to exclude (matched by
+    /// substring against `ToolId::to_string()` to keep parity with the
+    /// previous string-based API).
+    pub exclude_tool_strs: Vec<String>,
 }
 
 /// Clear old tool results within a token budget.
@@ -49,12 +65,14 @@ pub fn micro_compact_with_budget(
             continue;
         };
 
-        // Check if this tool is excluded
-        if config
-            .exclude_tools
-            .iter()
-            .any(|ex| tr.tool_id.to_string().contains(ex))
-        {
+        // Check if this tool is excluded — builtin (typed) and string lists.
+        let id_str = tr.tool_id.to_string();
+        let excluded = config.exclude_tools.iter().any(|t| t.as_str() == id_str)
+            || config
+                .exclude_tool_strs
+                .iter()
+                .any(|ex| id_str.contains(ex));
+        if excluded {
             continue;
         }
 
@@ -184,6 +202,124 @@ pub fn compact_thinking_blocks(
                 }
                 _ => true, // Keep everything else
             }
+        });
+
+        let removed = (original_len - content.len()) as i32;
+        if removed > 0 {
+            cleared += removed;
+            tokens_freed += removed_tokens;
+        }
+    }
+
+    MicrocompactResult {
+        messages_cleared: cleared,
+        tokens_saved_estimate: tokens_freed,
+        was_time_triggered: false,
+    }
+}
+
+/// In-place client-side analog of the API-native `clear_tool_uses_20250919`
+/// strategy.
+///
+/// Walks assistant messages oldest-first and replaces tool-call `input`
+/// fields with an empty JSON object, preserving the tool-call structure
+/// so the API still sees matching call/result pairs. Skips the most
+/// recent `keep_recent_count` assistant messages and any tools named in
+/// `exclude_tools`.
+///
+/// **This breaks the prompt cache** because it modifies what was previously
+/// sent. Prefer [`crate::api_compact::get_api_context_management`] when
+/// the provider supports server-side context editing.
+pub fn clear_tool_uses_inplace(
+    messages: &mut [Message],
+    keep_recent_count: usize,
+    exclude_tools: &[ToolName],
+) -> MicrocompactResult {
+    let assistant_indices: Vec<usize> = messages
+        .iter()
+        .enumerate()
+        .filter_map(|(i, m)| matches!(m, Message::Assistant(_)).then_some(i))
+        .collect();
+
+    let cutoff_count = assistant_indices.len().saturating_sub(keep_recent_count);
+    let indices_to_clear = &assistant_indices[..cutoff_count];
+
+    let mut cleared: i32 = 0;
+    let mut tokens_freed: i64 = 0;
+
+    for &idx in indices_to_clear {
+        let Message::Assistant(ref mut asst) = messages[idx] else {
+            continue;
+        };
+
+        let LlmMessage::Assistant {
+            ref mut content, ..
+        } = asst.message
+        else {
+            continue;
+        };
+
+        for part in content.iter_mut() {
+            let AssistantContent::ToolCall(ref mut tc) = *part else {
+                continue;
+            };
+
+            if exclude_tools.iter().any(|t| t.as_str() == tc.tool_name) {
+                continue;
+            }
+
+            let input_str = tc.input.to_string();
+            let est_tokens = (input_str.len() as i64) / 4;
+            if est_tokens <= 5 {
+                continue;
+            }
+
+            tc.input = serde_json::Value::Object(serde_json::Map::new());
+            tokens_freed += est_tokens;
+            cleared += 1;
+        }
+    }
+
+    MicrocompactResult {
+        messages_cleared: cleared,
+        tokens_saved_estimate: tokens_freed,
+        was_time_triggered: false,
+    }
+}
+
+/// In-place client-side analog of the API-native `clear_thinking_20251015`
+/// strategy.
+///
+/// Removes `Reasoning` content parts entirely, freeing tokens used by
+/// chain-of-thought no longer needed. Preserves text and tool-call parts.
+///
+/// **This breaks the prompt cache.** Prefer the API-native config builder
+/// when the provider supports it.
+pub fn clear_thinking_inplace(messages: &mut [Message]) -> MicrocompactResult {
+    let mut cleared: i32 = 0;
+    let mut tokens_freed: i64 = 0;
+
+    for msg in messages.iter_mut() {
+        let Message::Assistant(ref mut asst) = *msg else {
+            continue;
+        };
+
+        let LlmMessage::Assistant {
+            ref mut content, ..
+        } = asst.message
+        else {
+            continue;
+        };
+
+        let original_len = content.len();
+        let mut removed_tokens: i64 = 0;
+
+        content.retain(|part| match part {
+            AssistantContent::Reasoning(r) => {
+                removed_tokens += (r.text.len() as i64) / 4;
+                false
+            }
+            _ => true,
         });
 
         let removed = (original_len - content.len()) as i32;

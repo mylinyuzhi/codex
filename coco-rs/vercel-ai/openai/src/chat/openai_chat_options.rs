@@ -1,4 +1,6 @@
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 
 use crate::openai_capabilities::SystemMessageMode;
@@ -131,14 +133,44 @@ impl<'de> Deserialize<'de> for SystemMessageMode {
     }
 }
 
-/// Extract OpenAI-specific options from the generic provider options map.
+/// Extract OpenAI Chat-specific options from the generic provider
+/// options map.
 pub fn extract_openai_options(
     provider_options: &Option<vercel_ai_provider::ProviderOptions>,
-) -> OpenAIChatProviderOptions {
-    provider_options
+) -> (
+    OpenAIChatProviderOptions,
+    BTreeMap<String, serde_json::Value>,
+) {
+    extract_openai_namespace(provider_options)
+}
+
+/// Extract the `provider_options["openai"]` namespace into a typed
+/// struct + verbatim raw map. Returns `(T::default(), empty)` when
+/// the namespace is missing or fails to deserialize.
+///
+/// The raw map is shallow-merged into the wire body root by the
+/// language model after typed writes — opaque to coco-rs; users own
+/// correctness.
+pub(crate) fn extract_openai_namespace<T>(
+    provider_options: &Option<vercel_ai_provider::ProviderOptions>,
+) -> (T, BTreeMap<String, serde_json::Value>)
+where
+    T: DeserializeOwned + Default,
+{
+    let Some(map) = provider_options
         .as_ref()
         .and_then(|opts| opts.0.get("openai"))
-        .and_then(|v| serde_json::to_value(v).ok())
-        .and_then(|v| serde_json::from_value::<OpenAIChatProviderOptions>(v).ok())
-        .unwrap_or_default()
+    else {
+        return (T::default(), BTreeMap::new());
+    };
+    let typed: T = serde_json::to_value(map)
+        .and_then(serde_json::from_value)
+        .unwrap_or_default();
+    let raw: BTreeMap<String, serde_json::Value> =
+        map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    (typed, raw)
 }
+
+#[cfg(test)]
+#[path = "openai_chat_options.test.rs"]
+mod tests;

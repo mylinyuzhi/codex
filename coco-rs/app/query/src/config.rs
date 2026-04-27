@@ -11,11 +11,15 @@ use coco_config::ToolConfig;
 use coco_config::WebFetchConfig;
 use coco_config::WebSearchConfig;
 use coco_messages::CostTracker;
+use coco_types::Features;
 use coco_types::Message;
 use coco_types::PermissionMode;
 use coco_types::PermissionRulesBySource;
 use coco_types::ThinkingLevel;
 use coco_types::TokenUsage;
+use coco_types::ToolFilter;
+use coco_types::ToolOverrides;
+use std::sync::Arc;
 
 /// Escalated max_output_tokens on first `length` stop. TS: `utils/context.ts:25`
 /// `ESCALATED_MAX_TOKENS = 64_000`.
@@ -184,6 +188,15 @@ pub struct QueryEngineConfig {
     pub web_fetch_config: WebFetchConfig,
     /// Resolved web-search runtime configuration (WebSearchTool).
     pub web_search_config: WebSearchConfig,
+    /// Centralized feature gates (Layer 1 of the tool filter pipeline).
+    /// See `docs/coco-rs/feature-gates-and-tool-filtering.md`.
+    pub features: Arc<Features>,
+    /// Layer 2 — extra tools the active model adds + baseline tools it
+    /// excludes.
+    pub tool_overrides: Arc<ToolOverrides>,
+    /// Layer 4 — agent-level allow/deny list. Top-level sessions use
+    /// `unrestricted()`; subagents narrow it from `AgentDefinition`.
+    pub tool_filter: ToolFilter,
 }
 
 impl Default for QueryEngineConfig {
@@ -228,6 +241,9 @@ impl Default for QueryEngineConfig {
             shell_config: ShellConfig::default(),
             web_fetch_config: WebFetchConfig::default(),
             web_search_config: WebSearchConfig::default(),
+            features: Arc::new(Features::with_defaults()),
+            tool_overrides: Arc::new(ToolOverrides::none()),
+            tool_filter: ToolFilter::unrestricted(),
         }
     }
 }

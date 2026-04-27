@@ -29,6 +29,32 @@ fn model_id_and_provider() {
 }
 
 #[test]
+fn get_args_extra_body_patches_wire_body_verbatim() {
+    // Multi-provider-plan §7.3 — `extra_body` is opaque to coco-rs.
+    // Every key in `provider_options[google]` shallow-merges into
+    // the wire body root verbatim, including typed-known keys (no
+    // filter). Users own correctness.
+    use std::collections::HashMap as StdHashMap;
+    use vercel_ai_provider::ProviderOptions;
+    let model = make_model();
+    let mut inner = StdHashMap::new();
+    inner.insert("safetySettings".into(), serde_json::json!([])); // typed-known
+    inner.insert("myCustomTopLevel".into(), serde_json::json!("X")); // unknown
+    let mut outer = StdHashMap::new();
+    outer.insert("google".into(), inner);
+
+    let mut options = LanguageModelV4CallOptions::new(vec![
+        vercel_ai_provider::LanguageModelV4Message::user_text("Hi"),
+    ]);
+    options.provider_options = Some(ProviderOptions(outer));
+
+    let (body, _h, _w, _name) = model.get_args(&options).unwrap();
+    // Both keys appear at the wire body root.
+    assert_eq!(body["myCustomTopLevel"], serde_json::json!("X"));
+    assert_eq!(body["safetySettings"], serde_json::json!([]));
+}
+
+#[test]
 fn get_args_builds_basic_request() {
     let model = GoogleGenerativeAILanguageModel::new(
         "gemini-2.0-flash",

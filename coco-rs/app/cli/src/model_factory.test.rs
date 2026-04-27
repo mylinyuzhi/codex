@@ -1,14 +1,50 @@
-//! Unit tests for the ModelSpec → LanguageModelV4 dispatch factory.
+//! Unit tests for the RuntimeConfig + ModelSpec → LanguageModelV4 dispatch factory.
 //!
 //! These don't make real network calls — they just verify the dispatch
 //! routes each `ProviderApi` variant to the right provider crate and
 //! returns an `Arc<dyn LanguageModelV4>` without panicking.
 
 use super::*;
+use coco_config::EnvSnapshot;
+use coco_config::PartialProviderConfig;
+use coco_config::RuntimeOverrides;
+use coco_config::Settings;
+use coco_config::settings::SettingsWithSource;
+use coco_types::ProviderApi;
+use std::collections::BTreeMap;
+use std::collections::HashMap;
+use tempfile::TempDir;
 
-fn spec(api: ProviderApi, model_id: &str) -> ModelSpec {
+fn settings_with(settings: Settings) -> SettingsWithSource {
+    SettingsWithSource {
+        merged: settings,
+        per_source: HashMap::new(),
+    }
+}
+
+fn build_runtime_with(extra_provider: Option<(String, PartialProviderConfig)>) -> RuntimeConfig {
+    let mut providers = BTreeMap::new();
+    if let Some((name, partial)) = extra_provider {
+        providers.insert(name, partial);
+    }
+    let settings = Settings {
+        providers,
+        ..Default::default()
+    };
+    let tmp = TempDir::new().expect("tempdir");
+    let catalogs = coco_config::CatalogPaths::empty_in(tmp.path());
+    coco_config::build_runtime_config_with(
+        settings_with(settings),
+        EnvSnapshot::default(),
+        RuntimeOverrides::default(),
+        catalogs,
+    )
+    .expect("runtime")
+}
+
+fn spec(provider: &str, api: ProviderApi, model_id: &str) -> ModelSpec {
     ModelSpec {
-        provider: format!("{api:?}").to_lowercase(),
+        provider: provider.into(),
         api,
         model_id: model_id.into(),
         display_name: model_id.into(),
@@ -16,9 +52,10 @@ fn spec(api: ProviderApi, model_id: &str) -> ModelSpec {
 }
 
 #[test]
-fn build_anthropic_succeeds() {
-    let s = spec(ProviderApi::Anthropic, "claude-opus-4-6");
-    let result = build_language_model_from_spec(&s);
+fn build_anthropic_succeeds_via_runtime() {
+    let runtime = build_runtime_with(None);
+    let s = spec("anthropic", ProviderApi::Anthropic, "claude-opus-4-7");
+    let result = build_language_model_from_runtime(&runtime, &s);
     assert!(
         result.is_ok(),
         "anthropic factory must succeed (err: {:?})",
@@ -27,9 +64,10 @@ fn build_anthropic_succeeds() {
 }
 
 #[test]
-fn build_openai_succeeds() {
-    let s = spec(ProviderApi::Openai, "gpt-4o-mini");
-    let result = build_language_model_from_spec(&s);
+fn build_openai_succeeds_via_runtime() {
+    let runtime = build_runtime_with(None);
+    let s = spec("openai", ProviderApi::Openai, "gpt-4o-mini");
+    let result = build_language_model_from_runtime(&runtime, &s);
     assert!(
         result.is_ok(),
         "openai factory must succeed (err: {:?})",
@@ -39,13 +77,9 @@ fn build_openai_succeeds() {
 
 #[test]
 fn build_gemini_dispatches_to_google_provider() {
-    // The Google provider validates its API key at construction time,
-    // so without `GOOGLE_GENERATIVE_AI_API_KEY` this returns an error
-    // — but the error proves dispatch went to the right provider
-    // (message mentions "google" or an API key issue). Anthropic /
-    // OpenAI construct lazily so their tests assert `is_ok`.
-    let s = spec(ProviderApi::Gemini, "gemini-2.5-flash");
-    let result = build_language_model_from_spec(&s);
+    let runtime = build_runtime_with(None);
+    let s = spec("google", ProviderApi::Gemini, "gemini-2.5-flash");
+    let result = build_language_model_from_runtime(&runtime, &s);
     match result {
         Ok(_) => {}
         Err(e) => {
@@ -59,27 +93,237 @@ fn build_gemini_dispatches_to_google_provider() {
 }
 
 #[test]
-fn build_volcengine_rejects_with_clear_error() {
-    let s = spec(ProviderApi::Volcengine, "doubao-1.5");
-    let err = build_language_model_from_spec(&s)
+fn build_volcengine_routes_to_openai_compat_via_runtime() {
+    // Volcengine is a builtin provider with `api: Volcengine`. With G1 it
+    // routes through openai-compatible and constructs successfully — no
+    // longer rejected with an error.
+    let runtime = build_runtime_with(None);
+    let s = spec("volcengine", ProviderApi::Volcengine, "doubao-1.5");
+    let result = build_language_model_from_runtime(&runtime, &s);
+    assert!(
+        result.is_ok(),
+        "volcengine should route via openai-compat (err: {:?})",
+        result.err().map(|e| e.to_string())
+    );
+}
+
+#[test]
+fn build_openai_compat_routes_for_user_defined_instance() {
+    let mut models = BTreeMap::new();
+    models.insert(
+        "local-model".to_string(),
+        coco_config::PartialProviderModelOverride {
+            info: coco_config::PartialModelInfo {
+                context_window: Some(coco_config::PositiveTokens::new(128_000)),
+                max_output_tokens: Some(coco_config::PositiveTokens::new(8_192)),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    );
+    let partial = PartialProviderConfig {
+        api: Some(ProviderApi::OpenaiCompat),
+        env_key: Some("LOCAL_KEY".into()),
+        base_url: Some("http://localhost:8080/v1".into()),
+        models: Some(models),
+        ..Default::default()
+    };
+    let runtime = build_runtime_with(Some(("local-router".into(), partial)));
+    let s = spec("local-router", ProviderApi::OpenaiCompat, "local-model");
+    let result = build_language_model_from_runtime(&runtime, &s);
+    assert!(
+        result.is_ok(),
+        "openai-compat instance should construct (err: {:?})",
+        result.err().map(|e| e.to_string())
+    );
+    let model = result.unwrap();
+    // openai-compat reports `<name>.<sub-provider>` from `model.provider()`
+    // (e.g. `"local-router.chat"`), while the namespace key in
+    // `provider_options` is the bare `<name>` — the SDK strips the
+    // suffix before the lookup. Assert the prefix matches so callers
+    // who rely on `model.provider()` still see the configured name.
+    assert!(
+        model.provider().starts_with("local-router"),
+        "openai-compat must surface the runtime instance name via model.provider(); got: {}",
+        model.provider()
+    );
+}
+
+#[test]
+fn build_unknown_provider_fails_with_typed_error() {
+    let runtime = build_runtime_with(None);
+    let s = spec("unknown-provider", ProviderApi::OpenaiCompat, "x");
+    let err = build_language_model_from_runtime(&runtime, &s)
         .map(|_| ())
         .unwrap_err()
         .to_string();
     assert!(
-        err.contains("Volcengine"),
+        err.contains("unknown-provider"),
         "error names the provider: {err}"
     );
 }
 
 #[test]
-fn build_openai_compat_rejects_with_clear_error() {
-    let s = spec(ProviderApi::OpenaiCompat, "local-model");
-    let err = build_language_model_from_spec(&s)
-        .map(|_| ())
-        .unwrap_err()
-        .to_string();
+fn build_api_client_uses_real_fingerprint_for_anthropic() {
+    let runtime = build_runtime_with(None);
+    let s = spec("anthropic", ProviderApi::Anthropic, "claude-sonnet-4-6");
+    let client = build_api_client(&runtime, &s, RetryConfig::default()).expect("api client");
+    let fp = client.fingerprint();
+    assert_eq!(fp.api, ProviderApi::Anthropic);
+    assert_eq!(fp.provider, "anthropic");
+    assert_eq!(fp.api_model_name, "claude-sonnet-4-6");
+    // R1 canary — builtin must include the `/v1` segment so the SDK's
+    // path-append yields `https://api.anthropic.com/v1/messages` not
+    // `/messages`. The Rust port has no auto-detect for missing version
+    // segments; this assertion locks in the corrected URL.
+    assert_eq!(fp.base_url, "https://api.anthropic.com/v1");
     assert!(
-        err.contains("OpenaiCompat"),
-        "error names the provider: {err}"
+        fp.base_url.ends_with("/v1"),
+        "Anthropic builtin base_url must end with /v1; got {}",
+        fp.base_url
+    );
+}
+
+#[test]
+fn build_api_client_anthropic_url_composes_to_messages_endpoint() {
+    // R4 canary — guard against a future regression that drops the
+    // version segment. Asserts the composed URL via the same logic the
+    // SDK uses (`base_url.ends_with("/messages") ? base_url :
+    // format!("{base_url}/messages")`).
+    let runtime = build_runtime_with(None);
+    let s = spec("anthropic", ProviderApi::Anthropic, "claude-sonnet-4-6");
+    let client = build_api_client(&runtime, &s, RetryConfig::default()).expect("api client");
+    let base_url = &client.fingerprint().base_url;
+    let composed = if base_url.ends_with("/messages") {
+        base_url.clone()
+    } else {
+        format!("{base_url}/messages")
+    };
+    assert_eq!(composed, "https://api.anthropic.com/v1/messages");
+}
+
+#[test]
+fn builtin_google_base_url_composes_to_models_endpoint() {
+    // Google's SDK validates API keys at construction time, so we
+    // can't go through `build_api_client` without `GOOGLE_GENERATIVE_AI_API_KEY`
+    // in env. Read `base_url` directly from `runtime.providers` and
+    // assert the composition matches what the SDK does internally
+    // (`<base_url>/models/<id>:generateContent` in
+    // `google_generative_ai_language_model.rs:843`).
+    let runtime = build_runtime_with(None);
+    let base_url = runtime
+        .providers
+        .get("google")
+        .expect("google builtin")
+        .base_url
+        .clone();
+    assert!(
+        base_url.ends_with("/v1beta"),
+        "Google builtin base_url must end with /v1beta; got {base_url}"
+    );
+    let composed = format!("{base_url}/models/gemini-2.5-pro:generateContent");
+    assert_eq!(
+        composed,
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent"
+    );
+}
+
+#[test]
+fn namespace_round_trip_for_openai_compat_instance() {
+    // Plan §15 invariant: the runtime `model.provider()` string equals
+    // the outer key in `call.provider_options.0` after `build_call_options`.
+    // For OpenAI-compat instances the namespace is the `ProviderConfig.name`,
+    // which the SDK passes through to `model.provider()`.
+    use coco_inference::PerCallOverrides;
+    use coco_inference::build_call_options;
+    let mut models = BTreeMap::new();
+    models.insert(
+        "local-model".to_string(),
+        coco_config::PartialProviderModelOverride {
+            info: coco_config::PartialModelInfo {
+                context_window: Some(coco_config::PositiveTokens::new(128_000)),
+                max_output_tokens: Some(coco_config::PositiveTokens::new(8_192)),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    );
+    let partial = PartialProviderConfig {
+        api: Some(ProviderApi::OpenaiCompat),
+        env_key: Some("LOCAL_KEY".into()),
+        base_url: Some("http://localhost:8080/v1".into()),
+        models: Some(models),
+        ..Default::default()
+    };
+    let runtime = build_runtime_with(Some(("internal-router".into(), partial)));
+    let s = spec("internal-router", ProviderApi::OpenaiCompat, "local-model");
+    let model = build_language_model_from_runtime(&runtime, &s).expect("model");
+
+    let info_partial = coco_config::PartialModelInfo {
+        context_window: Some(coco_config::PositiveTokens::new(128_000)),
+        max_output_tokens: Some(coco_config::PositiveTokens::new(8_192)),
+        extra_body: Some(
+            [("myCustomField".to_string(), serde_json::json!("x"))]
+                .into_iter()
+                .collect(),
+        ),
+        ..Default::default()
+    };
+    let info = coco_config::ModelInfo::from_partial("internal-router", "local-model", info_partial)
+        .expect("info");
+    let call = build_call_options(
+        &info,
+        ProviderApi::OpenaiCompat,
+        "internal-router",
+        &PerCallOverrides::default(),
+        Vec::new(),
+        None,
+    );
+    let po = call.provider_options.expect("provider_options set");
+    assert_eq!(po.0.len(), 1, "exactly one outer namespace key");
+    assert!(po.0.contains_key("internal-router"));
+    // OpenAI-compat reports `"<name>.<sub-provider>"` from
+    // `model.provider()`. The SDK strips the suffix to obtain the
+    // namespace key, so the round-trip works in practice — assert the
+    // prefix matches the wrap key.
+    assert!(
+        model.provider().starts_with("internal-router"),
+        "model.provider() prefix must match the wrap key; got: {}",
+        model.provider()
+    );
+}
+
+#[test]
+fn build_api_client_resolves_api_model_name_override() {
+    let mut models = BTreeMap::new();
+    models.insert(
+        "internal/coder-v3".to_string(),
+        coco_config::PartialProviderModelOverride {
+            api_model_name: Some("ep-internal-v3-prod".into()),
+            info: coco_config::PartialModelInfo {
+                context_window: Some(coco_config::PositiveTokens::new(128_000)),
+                max_output_tokens: Some(coco_config::PositiveTokens::new(8_192)),
+                ..Default::default()
+            },
+        },
+    );
+    let partial = PartialProviderConfig {
+        api: Some(ProviderApi::OpenaiCompat),
+        env_key: Some("INTERNAL_KEY".into()),
+        base_url: Some("https://internal/v1".into()),
+        models: Some(models),
+        ..Default::default()
+    };
+    let runtime = build_runtime_with(Some(("internal-router".into(), partial)));
+    let s = spec(
+        "internal-router",
+        ProviderApi::OpenaiCompat,
+        "internal/coder-v3",
+    );
+    let client = build_api_client(&runtime, &s, RetryConfig::default()).expect("api client");
+    assert_eq!(
+        client.fingerprint().api_model_name,
+        "ep-internal-v3-prod",
+        "api_model_name override flows into the fingerprint",
     );
 }

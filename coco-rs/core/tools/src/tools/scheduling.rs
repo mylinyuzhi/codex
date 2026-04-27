@@ -417,7 +417,11 @@ impl Tool for RemoteTriggerTool {
         true
     }
 
-    fn validate_input(&self, input: &Value, _ctx: &ToolUseContext) -> coco_tool_runtime::ValidationResult {
+    fn validate_input(
+        &self,
+        input: &Value,
+        _ctx: &ToolUseContext,
+    ) -> coco_tool_runtime::ValidationResult {
         let action = input.get("action").and_then(|v| v.as_str()).unwrap_or("");
         if action.is_empty() {
             return coco_tool_runtime::ValidationResult::invalid("action is required");

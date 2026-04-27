@@ -391,7 +391,10 @@ pub async fn run_plan_mode_turn(
     model: Arc<dyn LanguageModelV4>,
     params: PlanModeTurnParams,
 ) -> QueryResult {
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
     let cancel = CancellationToken::new();
     let config = QueryEngineConfig {
         model_name: "scripted-mock".into(),
@@ -430,7 +433,10 @@ pub async fn run_with_mock(
     prompt: &str,
     tools: Arc<ToolRegistry>,
 ) -> QueryResult {
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
     let cancel = CancellationToken::new();
     let config = QueryEngineConfig {
         model_name: "scripted-mock".into(),

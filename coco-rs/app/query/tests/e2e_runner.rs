@@ -412,7 +412,10 @@ async fn run_with_events(
     tools: Arc<ToolRegistry>,
     config_overrides: &ScenarioConfig,
 ) -> ScenarioRunResult {
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
     let cancel = CancellationToken::new();
     let config = QueryEngineConfig {
         model_name: "json-scripted-mock".into(),

@@ -37,13 +37,7 @@ async fn test_spawn_subagent_sync_without_engine_fails_cleanly() {
         prompt: "Find files".to_string(),
         description: Some("search".to_string()),
         subagent_type: Some("Explore".to_string()),
-        model: None,
-        run_in_background: false,
-        isolation: None,
-        name: None,
-        team_name: None,
-        mode: None,
-        cwd: None,
+        ..Default::default()
     };
 
     let response = handle.spawn_agent(request).await.unwrap();
@@ -94,15 +88,8 @@ async fn test_spawn_subagent_sync_with_engine_routes_to_query() {
 
     let request = AgentSpawnRequest {
         prompt: "do work".into(),
-        description: None,
         subagent_type: Some("Explore".into()),
-        model: None,
-        run_in_background: false,
-        isolation: None,
-        name: None,
-        team_name: None,
-        mode: None,
-        cwd: None,
+        ..Default::default()
     };
     let response = handle.spawn_agent(request).await.unwrap();
     assert_eq!(response.status, AgentSpawnStatus::Completed);
@@ -119,15 +106,8 @@ async fn test_spawn_subagent_worktree_without_manager_fails_cleanly() {
     let handle = create_test_handle();
     let request = AgentSpawnRequest {
         prompt: "isolated work".into(),
-        description: None,
-        subagent_type: None,
-        model: None,
-        run_in_background: false,
         isolation: Some("worktree".into()),
-        name: None,
-        team_name: None,
-        mode: None,
-        cwd: None,
+        ..Default::default()
     };
     let response = handle.spawn_agent(request).await.unwrap();
     assert_eq!(response.status, AgentSpawnStatus::Failed);
@@ -147,15 +127,8 @@ async fn test_spawn_subagent_async() {
     let handle = create_test_handle();
     let request = AgentSpawnRequest {
         prompt: "Background work".to_string(),
-        description: None,
-        subagent_type: None,
-        model: None,
         run_in_background: true,
-        isolation: None,
-        name: None,
-        team_name: None,
-        mode: None,
-        cwd: None,
+        ..Default::default()
     };
 
     let response = handle.spawn_agent(request).await.unwrap();
@@ -168,15 +141,9 @@ async fn test_spawn_teammate() {
     let handle = create_test_handle();
     let request = AgentSpawnRequest {
         prompt: "Help me".to_string(),
-        description: None,
-        subagent_type: None,
-        model: None,
-        run_in_background: false,
-        isolation: None,
         name: Some("researcher".to_string()),
         team_name: Some("my-team".to_string()),
-        mode: None,
-        cwd: None,
+        ..Default::default()
     };
 
     let response = handle.spawn_agent(request).await.unwrap();
