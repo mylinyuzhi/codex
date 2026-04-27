@@ -93,9 +93,19 @@ impl LanguageModelV4 for MockModel {
     }
     async fn do_stream(
         &self,
-        _options: LanguageModelV4CallOptions,
+        options: LanguageModelV4CallOptions,
     ) -> std::result::Result<LanguageModelV4StreamResult, AISdkError> {
-        Err(AISdkError::new("streaming not supported in mock mode"))
+        // Compose `do_generate` output into a synthetic stream so
+        // the QueryEngine streaming path (which ALWAYS calls
+        // `query_stream`) works against the mock. Without this,
+        // every interactive session falls back to "streaming not
+        // supported" and the agent loop fails immediately.
+        let result = self.do_generate(options).await?;
+        Ok(coco_inference::synthetic_stream_from_content(
+            result.content,
+            result.usage,
+            result.finish_reason,
+        ))
     }
 }
 
@@ -111,47 +121,74 @@ impl LanguageModelV4 for MockModel {
 mod model_factory;
 mod tui_runner;
 
+pub(crate) use model_factory::build_api_client;
 pub(crate) use model_factory::build_fallback_clients_for_role;
-pub(crate) use model_factory::build_language_model_from_spec;
 
-pub(crate) fn create_model(
+/// Build the primary `ApiClient` for the session.
+///
+/// Production paths route through
+/// [`build_api_client`] → [`ProviderClientFingerprint::compute`] so the
+/// turn-boundary coherence check (multi-provider-plan §11.1) detects
+/// stale clients after hot-reload. Only the mock fallback uses
+/// [`ApiClient::with_default_fingerprint`] (the constructor's docstring
+/// flags this as test-grade).
+///
+/// Returned tuple: `(client, mode, model_id)`.
+///   - `mode`: short string describing which provider answered
+///     (`"anthropic"`, `"openai"`, …, or `"mock"`). Surfaced in the
+///     TUI banner.
+///   - `model_id`: wire-side model identifier; threaded through
+///     `QueryEngineConfig.model_name` for streaming/cache labels.
+pub(crate) fn create_api_client(
     cli_model_override: Option<&str>,
     runtime_config: &coco_config::RuntimeConfig,
-) -> (Arc<dyn LanguageModelV4>, &'static str) {
-    use vercel_ai_provider::ProviderV4;
+    retry: coco_inference::RetryConfig,
+) -> (Arc<ApiClient>, &'static str, String) {
+    use coco_types::ModelRole;
+    use coco_types::ModelSpec;
 
     // Legacy CLI bare-id path: `coco --model claude-sonnet-4-5-20250514`
     // still routes to Anthropic when the API key is configured.
     if let Some(raw) = cli_model_override
         && !raw.contains('/')
-        && runtime_config
-            .providers
-            .get("anthropic")
-            .and_then(coco_config::ProviderConfig::resolve_api_key)
-            .is_some()
+        && let Some(anthropic_cfg) = runtime_config.providers.get("anthropic")
+        && anthropic_cfg.resolve_api_key().is_some()
     {
-        let provider = vercel_ai_anthropic::anthropic();
-        if let Ok(model) = provider.language_model(raw) {
-            return (model, "anthropic");
+        let spec = ModelSpec {
+            provider: "anthropic".into(),
+            api: anthropic_cfg.api,
+            model_id: raw.to_string(),
+            display_name: raw.to_string(),
+        };
+        if let Ok(client) = build_api_client(runtime_config, &spec, retry.clone()) {
+            return (client, "anthropic", raw.to_string());
         }
     }
 
-    if let Some(main_spec) = runtime_config.model_roles.get(coco_types::ModelRole::Main)
+    if let Some(main_spec) = runtime_config.model_roles.get(ModelRole::Main)
         && runtime_config
             .providers
             .get(&main_spec.provider)
             .and_then(coco_config::ProviderConfig::resolve_api_key)
             .is_some()
-        && let Ok(model) = build_language_model_from_spec(main_spec)
+        && let Ok(client) = build_api_client(runtime_config, main_spec, retry.clone())
     {
-        return (model, provider_api_mode(main_spec.api));
+        let model_id = main_spec.model_id.clone();
+        return (client, provider_api_mode(main_spec.api), model_id);
     }
 
+    // Mock fallback — no credentials configured. The default-fingerprint
+    // constructor is intentionally test-grade; turn-boundary coherence
+    // checks treat it as a no-change fingerprint, which is fine because
+    // hot-reload won't promote a mock to a real provider mid-session.
+    let model: Arc<dyn LanguageModelV4> = Arc::new(MockModel {
+        call_count: AtomicI32::new(0),
+    });
+    let model_id = model.model_id().to_string();
     (
-        Arc::new(MockModel {
-            call_count: AtomicI32::new(0),
-        }),
+        Arc::new(ApiClient::with_default_fingerprint(model, retry)),
         "mock",
+        model_id,
     )
 }
 
@@ -170,7 +207,7 @@ fn provider_api_mode(api: coco_types::ProviderApi) -> &'static str {
 ///
 /// Only slash-qualified `--model provider/id` flows through as a model
 /// override — bare ids keep the legacy Anthropic-first interpretation in
-/// [`create_model`] so existing `coco --model claude-sonnet-...`
+/// [`create_api_client`] so existing `coco --model claude-sonnet-...`
 /// invocations continue to work.
 pub(crate) fn cli_runtime_overrides(cli: &Cli) -> coco_config::RuntimeOverrides {
     let mut overrides = coco_config::RuntimeOverrides::default();
@@ -325,10 +362,12 @@ async fn main() -> Result<()> {
             Commands::Status => {
                 let cwd = std::env::current_dir()?;
                 let runtime_config = build_runtime_config_for_cli(&cli, &cwd)?;
-                let (model, mode) = create_model(cli.model.as_deref(), &runtime_config);
+                let retry: coco_inference::RetryConfig = runtime_config.api.retry.clone().into();
+                let (client, mode, model_id) =
+                    create_api_client(cli.model.as_deref(), &runtime_config, retry);
                 println!("coco-rs v0.0.0 ({mode} mode)");
-                println!("model: {}", model.model_id());
-                println!("provider: {}", model.provider());
+                println!("model: {model_id}");
+                println!("provider: {}", client.provider());
                 return Ok(());
             }
             Commands::Sessions => {
@@ -350,8 +389,10 @@ async fn main() -> Result<()> {
                 println!("[ok] Config: loaded");
                 let cwd = std::env::current_dir()?;
                 let runtime_config = build_runtime_config_for_cli(&cli, &cwd)?;
-                let (model, mode) = create_model(cli.model.as_deref(), &runtime_config);
-                println!("[ok] Model: {} ({mode})", model.model_id());
+                let retry: coco_inference::RetryConfig = runtime_config.api.retry.clone().into();
+                let (_client, mode, model_id) =
+                    create_api_client(cli.model.as_deref(), &runtime_config, retry);
+                println!("[ok] Model: {model_id} ({mode})");
                 return Ok(());
             }
             Commands::Login => {
@@ -702,10 +743,9 @@ async fn run_chat(cli: &Cli, prompt: Option<&str>) -> Result<()> {
     let runtime_config = build_runtime_config_for_cli(cli, &cwd)?;
     let settings = &runtime_config.settings;
 
-    let (model, mode) = create_model(cli.model.as_deref(), &runtime_config);
-    let model_id = model.model_id().to_string();
     let retry: coco_inference::RetryConfig = runtime_config.api.retry.clone().into();
-    let client = Arc::new(ApiClient::new(model, retry.clone()));
+    let (client, mode, model_id) =
+        create_api_client(cli.model.as_deref(), &runtime_config, retry.clone());
     // Main-role fallback chain. Empty when no fallback is configured.
     let fallback_clients =
         build_fallback_clients_for_role(&runtime_config, coco_types::ModelRole::Main, retry)?;
@@ -759,6 +799,8 @@ async fn run_chat(cli: &Cli, prompt: Option<&str>) -> Result<()> {
         shell_config: runtime_config.shell.clone(),
         web_fetch_config: runtime_config.web_fetch.clone(),
         web_search_config: runtime_config.web_search.clone(),
+        features: std::sync::Arc::new(runtime_config.features.clone()),
+        tool_overrides: runtime_config.tool_overrides.clone(),
         ..Default::default()
     };
 
@@ -806,10 +848,10 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let runtime_config = build_runtime_config_for_cli(cli, &cwd)?;
 
-    let (model, mode) = create_model(cli.model.as_deref(), &runtime_config);
-    let is_real_anthropic = mode == "anthropic";
     let retry: coco_inference::RetryConfig = runtime_config.api.retry.clone().into();
-    let client = Arc::new(ApiClient::new(model, retry.clone()));
+    let (client, mode, model_id) =
+        create_api_client(cli.model.as_deref(), &runtime_config, retry.clone());
+    let is_real_anthropic = mode == "anthropic";
     let fallback_clients =
         build_fallback_clients_for_role(&runtime_config, coco_types::ModelRole::Main, retry)?;
     let recovery_policy = runtime_config
@@ -823,7 +865,6 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     // Resolve static config. Cwd + model id are also stored on the
     // SessionHandle at `session/start`, but we use the CLI-level values
     // here for the system prompt + headless defaults.
-    let model_id = client.model_id().to_string();
     let system_prompt = Some(build_system_prompt(&cwd, &model_id));
 
     // Wire a disk-backed SessionManager so session/list, session/read,
@@ -875,9 +916,9 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     // provider / subscription. The actual credentials don't leak to SDK
     // clients — only the structured `SdkAccountInfo` projection.
     //
-    // **Consistency with `create_model`**: we only surface a resolved
-    // auth method when `create_model` picked the real Anthropic provider.
-    // Otherwise `create_model` fell back to a mock (no env var, no
+    // **Consistency with `create_api_client`**: we only surface a resolved
+    // auth method when `create_api_client` picked the real Anthropic provider.
+    // Otherwise `create_api_client` fell back to a mock (no env var, no
     // provider wired) and advertising OAuth tokens as the account would
     // contradict the mock turn output the client is about to see. Run
     // the resolution on the blocking pool because
@@ -885,12 +926,12 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     let auth_method = if is_real_anthropic {
         let config_dir = global_config::config_home();
         let api_key_helper = runtime_config.settings.merged.api_key_helper.clone();
-        let bare_mode = runtime_config.env_only.bare_mode;
+        let force_env_auth = runtime_config.env_only.force_env_auth;
         tokio::task::spawn_blocking(move || {
             coco_inference::auth::resolve_auth(&coco_inference::auth::AuthResolveOptions {
                 config_dir: Some(config_dir),
                 api_key_helper,
-                bare_mode,
+                force_env_auth,
                 ..Default::default()
             })
         })

@@ -335,7 +335,11 @@ async fn test_factory_defaults_skill_handle_to_noop_unavailable() {
     // NoOpSkillHandle returns `Unavailable` — verifies the factory
     // installs it when no real runtime is wired.
     let ctx = factory(test_config()).build(Default::default()).await;
-    let err = ctx.skill.invoke_skill("any", "").await.unwrap_err();
+    let err = ctx
+        .skill
+        .invoke_skill("any", "", coco_tool_runtime::SubagentInheritance::default())
+        .await
+        .unwrap_err();
     assert!(matches!(
         err,
         coco_tool_runtime::SkillInvocationError::Unavailable { .. }

@@ -32,14 +32,45 @@ fn test_get_compact_prompt_with_custom() {
 
 #[test]
 fn test_user_summary_with_transcript() {
-    let msg =
-        get_compact_user_summary_message("test summary", false, Some("/tmp/transcript.jsonl"));
+    let msg = get_compact_user_summary_message(
+        "test summary",
+        false,
+        Some("/tmp/transcript.jsonl"),
+        false,
+    );
     assert!(msg.contains("read the full transcript at: /tmp/transcript.jsonl"));
 }
 
 #[test]
 fn test_user_summary_suppress_followup() {
-    let msg = get_compact_user_summary_message("test", true, None);
+    let msg = get_compact_user_summary_message("test", true, None, false);
     assert!(msg.contains("Continue the conversation"));
     assert!(msg.contains("without asking"));
+}
+
+#[test]
+fn test_user_summary_recent_preserved() {
+    let msg = get_compact_user_summary_message("test", false, None, true);
+    assert!(msg.contains("Recent messages are preserved verbatim."));
+    let no_preserve = get_compact_user_summary_message("test", false, None, false);
+    assert!(!no_preserve.contains("preserved verbatim"));
+}
+
+#[test]
+fn test_partial_compact_prompt_directions_differ() {
+    use coco_types::PartialCompactDirection;
+    let from_prompt = get_partial_compact_prompt(None, PartialCompactDirection::Newest);
+    let up_to_prompt = get_partial_compact_prompt(None, PartialCompactDirection::Oldest);
+    assert!(from_prompt.contains("Current Work"));
+    assert!(up_to_prompt.contains("Work Completed"));
+    assert!(up_to_prompt.contains("Context for Continuing Work"));
+    assert!(!from_prompt.contains("Context for Continuing Work"));
+}
+
+#[test]
+fn test_compact_prompt_includes_example_block() {
+    let prompt = get_compact_prompt(None);
+    assert!(prompt.contains("<example>"));
+    assert!(prompt.contains("</example>"));
+    assert!(prompt.contains("Compact Instructions"));
 }

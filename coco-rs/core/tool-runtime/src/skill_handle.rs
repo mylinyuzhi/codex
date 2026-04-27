@@ -28,6 +28,26 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::sync::Arc;
 
+use coco_types::Features;
+use coco_types::ToolFilter;
+use coco_types::ToolOverrides;
+
+/// In-process subagent inheritance bundle.
+///
+/// Threaded from the parent `ToolUseContext` into [`SkillHandle::invoke_skill`]
+/// (and [`crate::AgentSpawnRequest`]) so a forked subagent runs with
+/// the same Layer 1 + Layer 2 + Layer 4 set as the parent. Subagents
+/// only ever **narrow** these sets — never widen.
+#[derive(Debug, Clone, Default)]
+pub struct SubagentInheritance {
+    pub features: Option<Arc<Features>>,
+    pub tool_overrides: Option<Arc<ToolOverrides>>,
+    /// Parent's Layer 4 filter; the child's own `allowed_tools` /
+    /// `disallowed_tools` is intersected with this via
+    /// [`ToolFilter::narrow_with`].
+    pub parent_tool_filter: Option<ToolFilter>,
+}
+
 /// Outcome of a skill invocation.
 ///
 /// Inline skills return expanded messages that the runtime appends
@@ -73,10 +93,14 @@ pub trait SkillHandle: Send + Sync {
     /// `args` is the raw string the model passed through the
     /// `SkillTool` — the handle is responsible for parsing it into
     /// the shape each skill expects.
+    ///
+    /// `inherit` carries the parent context's Layer 1 + Layer 2
+    /// values for fork-mode skills; inline expansion ignores it.
     async fn invoke_skill(
         &self,
         name: &str,
         args: &str,
+        inherit: SubagentInheritance,
     ) -> Result<SkillInvocationResult, SkillInvocationError>;
 }
 
@@ -118,6 +142,7 @@ impl SkillHandle for NoOpSkillHandle {
         &self,
         _name: &str,
         _args: &str,
+        _inherit: SubagentInheritance,
     ) -> Result<SkillInvocationResult, SkillInvocationError> {
         Err(SkillInvocationError::Unavailable {
             reason: "no skill runtime installed".into(),

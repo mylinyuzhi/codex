@@ -348,58 +348,133 @@ impl EnvOnlyConfig {
 
 **Note**: `EnvOnlyConfig` handles Anthropic routing (from TS). For multi-provider API keys, see `ProviderConfig.env_key` below — each provider resolves its own env var.
 
-### Per-provider API key resolution (multi-provider, from cocode-rs)
+### Per-provider configuration (multi-provider)
+
+Authoritative on the three-layer boundary, on-disk wire format, and resolution: see [`multi-provider-plan.md`](multi-provider-plan.md). What lives here is the **type catalogue**.
+
+#### `RedactedSecret` — secret newtype (Layer 1 invariant)
 
 ```rust
-/// TS only supports ANTHROPIC_API_KEY. Rust extends for multi-provider
-/// using cocode-rs ProviderConfig pattern.
+/// Secret string that never round-trips through `Debug` / `Display` / `format!`.
+/// Use `.expose()` at the single call-site that builds the auth header.
 ///
-/// Each provider has an env_key for its API key.
-/// Resolution: env var > config file api_key > error with hint.
+/// Defence-in-depth against `tracing::error!("{cfg:?}")`, snafu cause chains,
+/// `.expect("config: {cfg:?}")`, assertion-failure formatters, and panic
+/// backtraces — all of which go through `Debug`/`Display` BEFORE reaching the
+/// log-sink-level `secret-redact` post-processor.
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(transparent)]
+pub struct RedactedSecret(String);
+
+impl RedactedSecret {
+    pub fn expose(&self) -> &str { &self.0 }
+}
+impl fmt::Debug for RedactedSecret {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("RedactedSecret(<redacted>)")
+    }
+}
+impl fmt::Display for RedactedSecret {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("<redacted>")
+    }
+}
+```
+
+`grep -r '\.expose()' coco-rs/` enumerates every site where a secret leaves the type — should be 1–2 sites in `app/cli/src/model_factory.rs`.
+
+#### `PartialProviderConfig` (wire) and `ProviderConfig` (resolved)
+
+```rust
+/// Wire format — every field optional so omission means "inherit".
+/// `BTreeMap` (NOT `HashMap`) so serialised output, snapshots, and review diffs are stable.
+#[derive(Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PartialProviderConfig {
+    // NOTE: identity is the parent map key. Intentionally NO `name` field —
+    // `serde(deny_unknown_fields)` rejects user-written `name` at parse time.
+    pub api:            Option<ProviderApi>,
+    pub env_key:        Option<String>,
+    pub api_key:        Option<RedactedSecret>,
+    pub base_url:       Option<String>,
+    pub default_model:  Option<String>,
+    pub timeout_secs:   Option<i64>,
+    pub streaming:      Option<bool>,
+    pub wire_api:       Option<WireApi>,
+    pub client_options: Option<PartialProviderClientOptions>,
+    pub models:         Option<BTreeMap<String, PartialProviderModelOverride>>,
+}
+impl fmt::Debug for PartialProviderConfig { /* prints api_key as "<redacted>" */ }
+
+/// Resolved form — required fields concrete; only genuinely-optional fields stay Option.
+#[derive(Clone)]   // NOTE: no `Debug` derive — see custom impl
 pub struct ProviderConfig {
-    pub name: String,
-    pub api: ProviderApi,
-    pub env_key: String,              // e.g. "OPENAI_API_KEY", "GOOGLE_API_KEY"
-    pub api_key: Option<String>,      // fallback from config file
-    pub base_url: String,
-    pub default_model: Option<String>,
+    pub name:           String,                 // = parent map key (set in from_partial)
+    pub api:            ProviderApi,
+    pub env_key:        String,
+    pub api_key:        Option<RedactedSecret>,
+    pub base_url:       String,
+    pub default_model:  Option<String>,
+    pub timeout_secs:   i64,
+    pub streaming:      bool,
+    pub wire_api:       WireApi,
+    pub client_options: ProviderClientOptions,
+    pub models:         BTreeMap<String, ProviderModelOverride>,
+}
+impl fmt::Debug for ProviderConfig { /* redacts api_key */ }
+
+impl ProviderConfig {
+    /// Construct a resolved config from a partial overlay against a fresh slate.
+    /// `name` is taken from `map_key`, never from the overlay.
+    pub fn from_partial(
+        map_key: &str,
+        partial: &PartialProviderConfig,
+    ) -> Result<Self, ConfigError>;
+
+    /// Resolve API key: env var (via `env_key`) → `api_key` → typed error.
+    pub fn resolve_api_key(&self) -> Result<RedactedSecret, ConfigError>;
+
+    /// Apply a partial overlay to an existing resolved config.
+    /// Each `Some(_)` field on the partial wins; `None` keeps the base value.
+    /// **Never coerces `api` to a serde default.**
+    pub fn merge_partial(&mut self, partial: &PartialProviderConfig);
 }
 
-/// Built-in providers with their env_key.
-pub fn builtin_providers() -> Vec<ProviderConfig> {
-    vec![
-        ProviderConfig {
-            name: "anthropic".into(),
-            api: ProviderApi::Anthropic,
-            env_key: "ANTHROPIC_API_KEY".into(),
-            base_url: "https://api.anthropic.com".into(),
-            ..Default::default()
-        },
-        ProviderConfig {
-            name: "openai".into(),
-            api: ProviderApi::Openai,
-            env_key: "OPENAI_API_KEY".into(),
-            base_url: "https://api.openai.com/v1".into(),
-            ..Default::default()
-        },
-        ProviderConfig {
-            name: "google".into(),
-            api: ProviderApi::Gemini,
-            env_key: "GOOGLE_API_KEY".into(),
-            base_url: "https://generativelanguage.googleapis.com".into(),
-            ..Default::default()
-        },
-        // Volcengine, Z.AI, OpenAI-compatible...
-    ]
+/// Built-in providers (compiled-in registry, lazy `OnceLock`).
+pub fn builtin_providers() -> &'static BTreeMap<String, ProviderConfig>;
+```
+
+#### `PartialProviderClientOptions` and `ProviderClientOptions`
+
+```rust
+/// Wire format — `BTreeMap`-ordered, every field `Option`. Typed parser rejects
+/// unknown keys at parse time with JSON-pointer error messages.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "snake_case")]
+pub struct PartialProviderClientOptions {
+    pub headers:                       Option<BTreeMap<String, String>>,
+    pub auth_token:                    Option<RedactedSecret>,
+    pub organization_id:               Option<String>,
+    pub project_id:                    Option<String>,
+    pub include_usage:                 Option<bool>,
+    pub full_url:                      Option<bool>,
+    pub supports_structured_outputs:   Option<bool>,
 }
 
-/// Resolve API key for a provider.
-/// 1. Check env var (env_key)
-/// 2. Fall back to config file api_key
-/// 3. Error with hint: "set {env_key} or add api_key to config"
-pub fn resolve_api_key(provider: &ProviderConfig) -> Result<String, ConfigError>;
+#[derive(Clone, Default)]
+pub struct ProviderClientOptions {
+    pub headers:                       BTreeMap<String, String>,
+    pub auth_token:                    Option<RedactedSecret>,
+    pub organization_id:               Option<String>,
+    pub project_id:                    Option<String>,
+    pub include_usage:                 Option<bool>,        // None = SDK default (false)
+    pub full_url:                      bool,
+    pub supports_structured_outputs:   bool,
+}
+impl fmt::Debug for ProviderClientOptions { /* redacts auth_token */ }
 ```
-```
+
+True provider pass-through (HTTP-body fields not modelled here) goes through `ModelInfo.extra_body`. Headers go through `client_options.headers`. There is intentionally no generic "anything goes" map at the provider level.
 
 ### Dual-source settings (both config file AND env var)
 
@@ -481,61 +556,92 @@ impl ResolvedConfig {
 
 ## 6. Model Configuration
 
-### ModelInfo (per-model, from config + defaults)
+### Bounded numeric newtypes (Layer 1 invariant)
 
 ```rust
-/// Rich per-model configuration. All fields optional for layered merging.
-/// Aligned with cocode-rs common/protocol/src/model/model_info.rs.
-///
-/// Config layers (later overrides earlier):
-///   builtin defaults → models.json → provider.models[model_id]
-/// Merged via ModelInfo::merge_from() (other.Some overrides self).
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct ModelInfo {
-    // === Identity ===
-    pub model_id: String,
-    pub display_name: Option<String>,
+/// Token-count metadata that must be a positive int. Internal repr `u32` so
+/// downstream `From<PositiveTokens> for u64` is infallible — eliminates the
+/// `as u64` underflow footgun across the entire call chain.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct PositiveTokens(u32);
 
-    // === Capacity ===
-    pub context_window: i64,           // NOT Option — every model has one (default 200_000)
-    pub max_output_tokens: i64,        // NOT Option — every model has one
-    pub timeout_secs: Option<i64>,
+impl TryFrom<i64> for PositiveTokens {
+    type Error = ConfigError;
+    fn try_from(v: i64) -> Result<Self, ConfigError> {
+        u32::try_from(v).map(Self).map_err(|_| ConfigError::NonPositiveTokens { value: v })
+    }
+}
+impl<'de> Deserialize<'de> for PositiveTokens { /* via i64 + TryFrom */ }
+impl From<PositiveTokens> for u64 { fn from(v: PositiveTokens) -> u64 { v.0 as u64 } }
+impl From<PositiveTokens> for i64 { fn from(v: PositiveTokens) -> i64 { v.0 as i64 } }
 
-    // === Capabilities ===
-    pub capabilities: Option<Vec<Capability>>,
+/// Same shape, used for `top_k` / similar small positive ints.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct PositiveCount(u32);
+impl TryFrom<i64> for PositiveCount { /* same pattern */ }
+```
 
-    // === Sampling ===
-    pub temperature: Option<f32>,
-    pub top_p: Option<f32>,
-    pub top_k: Option<i64>,
+JSON callers naturally write `200000` (parses as `i64`); we keep the wire format `i64` and validate at the type boundary.
 
-    // === Thinking/Reasoning ===
-    /// Supported thinking levels — the authority source for ThinkingLevel definitions.
-    /// Each entry is a complete ThinkingLevel with effort + budget_tokens + options.
-    /// User selects effort name → system resolves full entry from this list.
+### `PartialModelInfo` (wire) and `ModelInfo` (resolved)
+
+```rust
+/// Wire format — Option distinguishes "unset" from "explicitly set".
+/// `BTreeMap` so serialised output is deterministic for snapshots.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PartialModelInfo {
+    // NOTE: model_id is the parent map key (same identity invariant as ProviderConfig).
+    pub display_name:              Option<String>,
+    pub context_window:            Option<PositiveTokens>,
+    pub max_output_tokens:         Option<PositiveTokens>,
+    pub timeout_secs:              Option<i64>,
+    pub capabilities:              Option<Vec<Capability>>,
+    pub temperature:               Option<f32>,
+    pub top_p:                     Option<f32>,
+    pub top_k:                     Option<PositiveCount>,
     pub supported_thinking_levels: Option<Vec<ThinkingLevel>>,
-    /// Default effort level — a ref (ReasoningEffort name) into supported_thinking_levels.
-    /// NOT a full ThinkingLevel — resolved at runtime by looking up the effort in the list.
-    pub default_thinking_level: Option<ReasoningEffort>,
+    pub default_thinking_level:    Option<ReasoningEffort>,
+    pub auto_compact_pct:          Option<i32>,
+    pub apply_patch_tool_type:     Option<ApplyPatchToolType>,
+    pub tool_overrides:            Option<ToolOverrides>,
+    pub shell_type:                Option<ConfigShellToolType>,
+    pub max_tool_output_chars:     Option<i32>,
+    pub base_instructions:         Option<String>,
+    pub base_instructions_file:    Option<String>,
+    pub extra_body:                Option<BTreeMap<String, JSONValue>>,
+}
 
-    // === Context Management ===
-    pub auto_compact_pct: Option<i32>,
-
-    // === Tools ===
-    pub apply_patch_tool_type: Option<ApplyPatchToolType>,
-    pub excluded_tools: Option<Vec<String>>,
-    pub shell_type: Option<ConfigShellToolType>,
-    pub max_tool_output_chars: Option<i32>,
-
-    // === Instructions ===
-    pub base_instructions: Option<String>,
-    pub base_instructions_file: Option<String>,
-
-    // === Provider-Specific Extensions ===
-    /// Per-model provider options — merged into ProviderOptions at RequestBuilder Step 4.
-    /// For non-thinking provider-specific params (e.g., store: false).
-    /// Thinking-related params belong in ThinkingLevel.options instead.
-    pub options: Option<HashMap<String, serde_json::Value>>,
+/// Resolved form — context_window / max_output_tokens are required-and-positive.
+/// temperature / top_p / top_k stay Option because None == "let the provider default";
+/// see multi-provider-plan.md §7.1.
+#[derive(Debug, Clone)]
+pub struct ModelInfo {
+    pub model_id:                  String,                 // = parent map key
+    pub display_name:              Option<String>,
+    pub context_window:            PositiveTokens,
+    pub max_output_tokens:         PositiveTokens,
+    pub timeout_secs:              Option<i64>,
+    pub capabilities:              Option<Vec<Capability>>,
+    pub temperature:               Option<f32>,
+    pub top_p:                     Option<f32>,
+    pub top_k:                     Option<PositiveCount>,
+    pub supported_thinking_levels: Option<Vec<ThinkingLevel>>,
+    pub default_thinking_level:    Option<ReasoningEffort>,
+    pub auto_compact_pct:          Option<i32>,
+    pub apply_patch_tool_type:     Option<ApplyPatchToolType>,
+    pub tool_overrides:            Option<ToolOverrides>,
+    pub shell_type:                Option<ConfigShellToolType>,
+    pub max_tool_output_chars:     Option<i32>,
+    pub base_instructions:         Option<String>,
+    pub base_instructions_file:    Option<String>,
+    /// Layer 1 escape hatch. Provider-agnostic flat keys, **camelCase to match
+    /// each provider's typed-options struct rename_all attribute**
+    /// (multi-provider-plan.md §7.4). Layer 2 wraps as
+    /// `provider_options[<provider_name>]` at call time.
+    pub extra_body:                BTreeMap<String, JSONValue>,
 }
 
 impl ModelInfo {
@@ -543,7 +649,6 @@ impl ModelInfo {
         self.capabilities.as_ref().is_some_and(|caps| caps.contains(&cap))
     }
 
-    /// Get default ThinkingLevel by looking up default effort in supported levels.
     pub fn default_thinking(&self) -> Option<&ThinkingLevel> {
         let effort = self.default_thinking_level?;
         self.supported_thinking_levels.as_ref()?
@@ -551,7 +656,6 @@ impl ModelInfo {
             .find(|l| l.effort == effort)
     }
 
-    /// Resolve a requested effort to the best matching supported ThinkingLevel.
     pub fn resolve_thinking_level(&self, requested: &ThinkingLevel) -> ThinkingLevel {
         match &self.supported_thinking_levels {
             Some(levels) if !levels.is_empty() => {
@@ -559,7 +663,6 @@ impl ModelInfo {
                     .find(|l| l.effort == requested.effort)
                     .cloned()
                     .unwrap_or_else(|| {
-                        // nearest match by effort distance
                         levels.iter()
                             .min_by_key(|l| (l.effort as i32 - requested.effort as i32).abs())
                             .cloned()
@@ -570,44 +673,76 @@ impl ModelInfo {
         }
     }
 
-    /// Merge another config into this one (other.Some overrides self).
+    /// Validate Partial → resolved. Required-and-positive fields fail loudly.
+    pub fn from_partial(
+        provider: &str,
+        model_id: &str,
+        p: PartialModelInfo,
+    ) -> Result<Self, ConfigError>;
+
+    /// Merge another resolved config into this one (other.Some overrides self).
     pub fn merge_from(&mut self, other: &Self);
 }
 ```
 
-### ProviderInfo (runtime provider config)
+### `PartialProviderModelOverride` and `ProviderModelOverride`
 
 ```rust
-/// Resolved provider configuration at runtime.
-/// Aligned with cocode-rs common/protocol/src/provider.rs.
-pub struct ProviderInfo {
-    pub name: String,
-    pub api: ProviderApi,
-    pub base_url: String,
-    pub api_key: String,
-    pub timeout_secs: i64,                          // default: 600
-    pub streaming: bool,                             // default: true
-    pub wire_api: WireApi,
-    /// Models registered under this provider (model_id → ProviderModel).
-    pub models: HashMap<String, ProviderModel>,
-    /// SDK client construction options (org_id, auth_token, headers, etc.).
-    /// Used at provider init time, NOT per-request.
-    pub options: Option<serde_json::Value>,
-    /// HTTP interceptor chain names (applied as headers at RequestBuilder Step 5).
-    pub interceptors: Vec<String>,
+/// Per-(provider, model) override layer — overrides any builtin/catalog ModelInfo
+/// for the (provider, model) pair. Rejected alternative `ProviderModelEntry`
+/// was ambiguous ("entry of what?"). New (provider, model) pairs that lack a
+/// builtin/catalog still go through the same struct — an override against an
+/// empty base is well-defined.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PartialProviderModelOverride {
+    /// API model name if different from `model_id` (e.g., Bedrock endpoint ID).
+    pub api_model_name:  Option<String>,
+    /// Per-(provider, model) ModelInfo deltas — apply on top of the catalog ModelInfo.
+    #[serde(flatten)]
+    pub model_info_overlay: PartialModelInfo,
 }
 
-/// A model entry within a provider — combines ModelInfo with provider-specific overrides.
-pub struct ProviderModel {
-    /// Merged ModelInfo (builtin → models.json → provider config).
-    #[serde(flatten)]
-    pub model_info: ModelInfo,
-    /// API model name if different from model_id (e.g., Bedrock endpoint ID).
-    pub api_model_name: Option<String>,
-    /// Per-provider per-model options — merged with ModelInfo.options in ModelHub,
-    /// with these taking precedence.
-    pub model_options: HashMap<String, serde_json::Value>,
+#[derive(Debug, Clone, Default)]
+pub struct ProviderModelOverride {
+    pub api_model_name:  Option<String>,
+    pub model_info_overlay: PartialModelInfo,   // applied at registry build time
 }
+
+impl PartialProviderModelOverride {
+    /// Apply this entry's deltas onto an in-progress PartialModelInfo accumulator.
+    pub fn apply_to(&self, acc: &mut PartialModelInfo);
+}
+```
+
+### `ResolvedModel`, `ModelRegistry` (closes the L1 dormant gap)
+
+```rust
+/// One model fully resolved against a single (provider, model_id) pair.
+/// Built once at config-load time; consulted O(1) by RuntimeConfig clients.
+#[derive(Debug, Clone)]
+pub struct ResolvedModel {
+    pub info:           ModelInfo,
+    pub provider_model: ProviderModelOverride,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ModelRegistry {
+    resolved: BTreeMap<(String, String), Arc<ResolvedModel>>,  // (provider, model_id)
+}
+
+impl ModelRegistry {
+    pub fn resolve(&self, provider: &str, model_id: &str) -> Option<&Arc<ResolvedModel>>;
+    pub fn iter(&self) -> impl Iterator<Item = (&(String, String), &Arc<ResolvedModel>)>;
+}
+
+/// Build the registry by walking every (provider, model_id) pair and merging
+/// builtin → ~/.coco/models.json → provider_cfg.models[<id>].
+pub fn build_model_registry(
+    providers:    &BTreeMap<String, ProviderConfig>,
+    user_catalog: &BTreeMap<String, PartialModelInfo>,
+    coco_home:    &Path,
+) -> Result<ModelRegistry, ConfigError>;
 ```
 
 ### ModelRoles (role -> model mapping)
@@ -622,6 +757,32 @@ impl ModelRoles {
         self.roles.get(&role).unwrap_or_else(|| &self.roles[&ModelRole::Main])
     }
 }
+```
+
+### `RuntimeConfig` — atomic snapshot consumed by `QueryEngine` and `model_factory`
+
+```rust
+/// One atomic snapshot of all resolved config. Built by `build_runtime_config`,
+/// distributed via `tokio::sync::watch::Sender<Arc<RuntimeConfig>>`.
+/// Subscribers borrow at turn boundaries; in-flight turns retain the captured
+/// `Arc` and never observe a torn read.
+#[derive(Debug, Clone)]
+pub struct RuntimeConfig {
+    pub providers:      BTreeMap<String, ProviderConfig>,
+    pub model_roles:    ModelRoles,
+    pub features:       Features,
+    pub model_registry: Arc<ModelRegistry>,
+    /// Computed from the Main role's ResolvedModel.tool_overrides at config-build
+    /// time (closes the L1 dormant gap from `runtime.rs:141-156`).
+    pub tool_overrides: Arc<ToolOverrides>,
+}
+
+pub fn build_runtime_config(
+    settings:     &Settings,
+    file_catalog_providers: &BTreeMap<String, PartialProviderConfig>,
+    file_catalog_models:    &BTreeMap<String, PartialModelInfo>,
+    coco_home:    &Path,
+) -> Result<RuntimeConfig, ConfigError>;
 ```
 
 ### Model Selection Priority (from `utils/model/model.ts`)
@@ -657,7 +818,7 @@ pub fn parse_user_model(input: &str) -> Result<String, ConfigError>;
 
 ---
 
-## 7. Settings Watching (reuses utils/file-watch)
+## 7. Settings + Catalog Watching (reuses utils/file-watch)
 
 ```rust
 /// Uses utils/file-watch::FileWatcherBuilder (from cocode-rs, REUSE).
@@ -668,26 +829,40 @@ pub fn parse_user_model(input: &str) -> Result<String, ConfigError>;
 use coco_file_watch::{FileWatcher, FileWatcherBuilder};
 
 pub struct SettingsWatcher {
-    inner: FileWatcher,  // from utils/file-watch
+    inner:     FileWatcher,                                     // from utils/file-watch
+    publisher: tokio::sync::watch::Sender<Arc<RuntimeConfig>>,  // hot-reload broadcast
 }
 
 impl SettingsWatcher {
+    /// Watches the 4 settings paths AND the 2 sibling catalog files. Any change
+    /// triggers a single debounced rebuild of `RuntimeConfig`; the new `Arc` is
+    /// published via the watch channel.
+    ///
+    /// In-flight turns continue with the pre-reload `Arc`; the next turn picks
+    /// up the fresh snapshot atomically. Provider-client coherence at the next
+    /// turn is enforced by `coco-inference::ProviderClientFingerprint`
+    /// (multi-provider-plan.md §11.1).
     pub fn new(
         cwd: &Path,
-        on_change: impl Fn(SettingSource) + Send + 'static,
+        coco_home: &Path,
+        publisher: tokio::sync::watch::Sender<Arc<RuntimeConfig>>,
     ) -> Result<Self, ConfigError> {
+        let publisher_for_change = publisher.clone();
         let watcher = FileWatcherBuilder::new()
-            .debounce_ms(1000)  // TS: 1000ms stability threshold
+            .debounce_ms(1000)                                  // TS: 1000ms stability threshold
             .watch(user_settings_path())
             .watch(project_settings_path(cwd))
             .watch(local_settings_path(cwd))
             .watch(managed_settings_path())
-            .on_change(move |path| {
-                let source = path_to_source(&path);
-                on_change(source);
+            .watch(coco_home.join("providers.json"))            // catalog file
+            .watch(coco_home.join("models.json"))               // catalog file
+            .on_change(move |_path| {
+                if let Ok(rc) = build_runtime_config_from_disk() {
+                    let _ = publisher_for_change.send(Arc::new(rc));
+                }
             })
             .build()?;
-        Ok(Self { inner: watcher })
+        Ok(Self { inner: watcher, publisher })
     }
 }
 ```

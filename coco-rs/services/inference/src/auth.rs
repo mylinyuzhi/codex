@@ -104,8 +104,9 @@ pub struct AuthResolveOptions {
     pub api_key_helper: Option<String>,
     /// Force a specific login method.
     pub force_login_method: Option<LoginMethod>,
-    /// Bare mode: no external auth, env-only.
-    pub bare_mode: bool,
+    /// Skip stored OAuth tokens and `api_key_helper`; resolve auth from env
+    /// vars only. Triggered by `COCO_SIMPLE=1`.
+    pub force_env_auth: bool,
 }
 
 /// Resolve the auth method from environment variables and config.
@@ -121,10 +122,10 @@ pub struct AuthResolveOptions {
 /// 7. Stored OAuth tokens → OAuth
 ///
 /// If `force_login_method` is set, only that method is tried.
-/// If `bare_mode` is true, only env vars are checked (no stored tokens, no helpers).
+/// If `force_env_auth` is true, only env vars are checked (no stored tokens,
+/// no helpers).
 pub fn resolve_auth(options: &AuthResolveOptions) -> Option<AuthMethod> {
-    // Bare mode: env-only, no external auth
-    if options.bare_mode {
+    if options.force_env_auth {
         return resolve_auth_from_env();
     }
 

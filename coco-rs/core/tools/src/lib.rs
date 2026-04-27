@@ -22,7 +22,9 @@ pub use tools::*;
 pub fn register_all_tools(registry: &mut coco_tool_runtime::ToolRegistry) {
     use std::sync::Arc;
 
-    // File I/O (7)
+    // File I/O (8 — `ApplyPatchTool` only surfaces for models that
+    // declare it via `ToolOverrides::with_extra`; other models see
+    // it as hidden.)
     registry.register(Arc::new(BashTool));
     registry.register(Arc::new(ReadTool));
     registry.register(Arc::new(WriteTool));
@@ -30,6 +32,7 @@ pub fn register_all_tools(registry: &mut coco_tool_runtime::ToolRegistry) {
     registry.register(Arc::new(GlobTool));
     registry.register(Arc::new(GrepTool));
     registry.register(Arc::new(NotebookEditTool));
+    registry.register(Arc::new(ApplyPatchTool));
 
     // Web (2)
     registry.register(Arc::new(WebFetchTool));
@@ -272,7 +275,10 @@ fn is_team_memory_path(ctx: &coco_tool_runtime::ToolUseContext, path: &std::path
 /// Fire-and-forget; no error path because the trigger set is purely
 /// advisory — failure to record means at worst the next turn misses
 /// a nested memory load, never a tool failure.
-pub(crate) async fn track_nested_memory_attachment(ctx: &coco_tool_runtime::ToolUseContext, path: &Path) {
+pub(crate) async fn track_nested_memory_attachment(
+    ctx: &coco_tool_runtime::ToolUseContext,
+    path: &Path,
+) {
     let canonical = tokio::fs::canonicalize(path)
         .await
         .unwrap_or_else(|_| path.to_path_buf());

@@ -211,14 +211,39 @@ pub trait Tool: Send + Sync {
 
     // -- Capability Flags --
 
-    /// Whether this tool is enabled (can be feature-gated).
-    fn is_enabled(&self) -> bool {
+    /// Whether this tool is enabled in the given context.
+    ///
+    /// Default returns `true` — most tools are always available. Override
+    /// to gate the tool on `ctx.features.enabled(Feature::X)` (token-economy
+    /// or experimental gates), an OS check, or a runtime resource probe.
+    /// See `docs/coco-rs/feature-gates-and-tool-filtering.md` for the
+    /// design and the multi-layer filter pipeline this hook is the
+    /// first layer of.
+    fn is_enabled(&self, _ctx: &crate::context::ToolUseContext) -> bool {
         true
     }
 
     /// Whether this tool only reads (no side effects).
     fn is_read_only(&self, _input: &Value) -> bool {
         false
+    }
+
+    /// Whether this tool is **statically** read-only — known to be safe
+    /// without inspecting input. Used by Layer 3 (`PermissionMode::Plan`)
+    /// to filter the schema at definitions-time, before any input exists.
+    /// See `docs/coco-rs/feature-gates-and-tool-filtering.md` §7.
+    ///
+    /// **Contract**: the answer must not depend on input. Tools whose
+    /// read/write nature genuinely varies with input (e.g. `Bash`)
+    /// **must** leave the default — Plan mode then hides them.
+    ///
+    /// Default delegates to `is_read_only(&Value::Null)` so the common
+    /// case — tools whose `is_read_only` impl ignores input and returns
+    /// a constant — gets the correct answer for free without an extra
+    /// override. Tools whose `is_read_only` *consults* the input must
+    /// override `is_always_read_only` to return `false` explicitly.
+    fn is_always_read_only(&self) -> bool {
+        self.is_read_only(&Value::Null)
     }
 
     /// Whether multiple instances can safely run concurrently.

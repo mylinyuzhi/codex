@@ -54,7 +54,20 @@ use crate::wire_tagged::wire_tagged_enum;
 ///   not sequenced relative to other events.
 ///
 /// See `event-system-design.md` §12 and plan WS-8.
+///
+/// **`large_enum_variant` exemption.** `Protocol(ServerNotification)` is
+/// considerably larger than `Stream` / `Tui` because `ServerNotification`
+/// carries 66 wire-tagged variants. Boxing it would churn hundreds of
+/// pattern matches across `coco-query` / `coco-tui` / `coco-cli` for a
+/// per-event overhead that is dominated by per-turn work. Each
+/// `CoreEvent` is sent over `mpsc`, consumed once, and dropped — the
+/// stack-size penalty is bounded and short-lived.
+///
+/// New large variants in `ServerNotification` itself should be Boxed at
+/// the variant payload level if they appear — that's where the warning
+/// is actionable.
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum CoreEvent {
     /// Protocol-level notifications visible to ALL consumers.
     Protocol(ServerNotification),

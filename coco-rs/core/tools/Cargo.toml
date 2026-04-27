@@ -20,6 +20,9 @@ coco-secret-redact.workspace = true
 coco-file-encoding.workspace = true
 coco-file-ignore.workspace = true
 coco-utils-image.workspace = true
+coco-apply-patch.workspace = true
+coco-exec-server.workspace = true
+coco-utils-absolute-path.workspace = true
 
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

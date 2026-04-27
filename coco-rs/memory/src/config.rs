@@ -8,6 +8,9 @@ use std::path::PathBuf;
 
 /// Complete auto-memory configuration.
 ///
+/// Whether the subsystem is **active** is gated upstream by
+/// `Feature::AutoMemory`; this struct only carries internal sub-toggles.
+///
 /// Mirrors `coco_config::MemoryConfig` with a runtime-side custom
 /// `custom_directory` field (settings resolution uses `directory`,
 /// the runtime consumer uses `custom_directory` for clarity). Auto-
@@ -16,8 +19,6 @@ use std::path::PathBuf;
 /// pipelines ship.
 #[derive(Debug, Clone)]
 pub struct MemoryConfig {
-    /// Whether auto-memory is enabled.
-    pub enabled: bool,
     /// Whether background extraction is enabled.
     pub extraction_enabled: bool,
     /// Whether team memory is enabled.
@@ -33,7 +34,6 @@ pub struct MemoryConfig {
 impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
             extraction_enabled: true,
             team_memory_enabled: false,
             custom_directory: None,
@@ -44,15 +44,6 @@ impl Default for MemoryConfig {
 }
 
 impl MemoryConfig {
-    /// Create a disabled configuration (bare mode / --no-memory).
-    pub fn disabled() -> Self {
-        Self {
-            enabled: false,
-            extraction_enabled: false,
-            ..Self::default()
-        }
-    }
-
     /// Resolve the memory directory path for a project.
     ///
     /// Priority:
@@ -74,7 +65,6 @@ impl MemoryConfig {
 impl From<coco_config::MemoryConfig> for MemoryConfig {
     fn from(config: coco_config::MemoryConfig) -> Self {
         Self {
-            enabled: config.enabled,
             extraction_enabled: config.extraction_enabled,
             team_memory_enabled: config.team_memory_enabled,
             custom_directory: config.directory,

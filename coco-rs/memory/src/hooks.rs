@@ -80,7 +80,10 @@ pub fn should_extract(hook: &ExtractionHook, has_memory_writes: bool) -> bool {
         Err(_) => return false,
     };
 
-    if !state.config.enabled || !state.config.extraction_enabled {
+    // Caller is expected to skip this whole subsystem when
+    // `Feature::AutoMemory` is disabled; this layer only gates
+    // extraction within an already-active subsystem.
+    if !state.config.extraction_enabled {
         return false;
     }
 

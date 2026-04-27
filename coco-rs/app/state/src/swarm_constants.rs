@@ -38,9 +38,6 @@ pub const TEAMMATE_COLOR_ENV_VAR: EnvKey = EnvKey::CocoAgentColor;
 /// Env var: force plan mode for teammates.
 pub const PLAN_MODE_REQUIRED_ENV_VAR: EnvKey = EnvKey::CocoPlanModeRequired;
 
-/// Env var: enable experimental agent teams feature.
-pub const AGENT_TEAMS_ENV_VAR: EnvKey = EnvKey::CocoExperimentalAgentTeams;
-
 /// Env var: teammate's agent ID (cross-process identity fallback).
 pub const AGENT_ID_ENV_VAR: EnvKey = EnvKey::CocoAgentId;
 

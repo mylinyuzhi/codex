@@ -98,5 +98,5 @@ fn test_env_only_config_from_snapshot() {
     let config = EnvOnlyConfig::from_snapshot(&env);
 
     assert_eq!(config.model_override.as_deref(), Some("openai/gpt-5"));
-    assert!(config.bare_mode);
+    assert!(config.force_env_auth);
 }

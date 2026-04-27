@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn test_context_window_sizes_are_ordered() {
-    assert!(DEFAULT_CONTEXT_WINDOW < CONTEXT_WINDOW_1M);
+    const _: () = assert!(DEFAULT_CONTEXT_WINDOW < CONTEXT_WINDOW_1M);
     assert_eq!(DEFAULT_CONTEXT_WINDOW, 200_000);
     assert_eq!(CONTEXT_WINDOW_1M, 1_000_000);
 }
@@ -10,8 +10,8 @@ fn test_context_window_sizes_are_ordered() {
 #[test]
 fn test_output_token_limits_hierarchy() {
     // Capped < default < upper limit
-    assert!(CAPPED_DEFAULT_MAX_TOKENS < MAX_OUTPUT_TOKENS_DEFAULT);
-    assert!(MAX_OUTPUT_TOKENS_DEFAULT < MAX_OUTPUT_TOKENS_UPPER_LIMIT);
+    const _: () = assert!(CAPPED_DEFAULT_MAX_TOKENS < MAX_OUTPUT_TOKENS_DEFAULT);
+    const _: () = assert!(MAX_OUTPUT_TOKENS_DEFAULT < MAX_OUTPUT_TOKENS_UPPER_LIMIT);
     assert_eq!(ESCALATED_MAX_TOKENS, MAX_OUTPUT_TOKENS_UPPER_LIMIT);
 }
 
@@ -33,8 +33,8 @@ fn test_image_target_raw_size_under_base64_limit() {
 
 #[test]
 fn test_api_timeout_is_reasonable() {
-    assert!(DEFAULT_API_TIMEOUT_SECS >= 60);
-    assert!(DEFAULT_API_TIMEOUT_SECS <= 1800);
+    const _: () = assert!(DEFAULT_API_TIMEOUT_SECS >= 60);
+    const _: () = assert!(DEFAULT_API_TIMEOUT_SECS <= 1800);
 }
 
 #[test]
@@ -56,17 +56,17 @@ fn test_api_urls_are_https() {
 
 #[test]
 fn test_auto_compact_threshold_is_percentage() {
-    assert!(DEFAULT_AUTO_COMPACT_PCT > 0);
-    assert!(DEFAULT_AUTO_COMPACT_PCT <= 100);
+    const _: () = assert!(DEFAULT_AUTO_COMPACT_PCT > 0);
+    const _: () = assert!(DEFAULT_AUTO_COMPACT_PCT <= 100);
 }
 
 #[test]
 fn test_pdf_limits_ordering() {
-    assert!(PDF_EXTRACT_SIZE_THRESHOLD < PDF_TARGET_RAW_SIZE);
-    assert!(PDF_TARGET_RAW_SIZE < PDF_MAX_EXTRACT_SIZE);
+    const _: () = assert!(PDF_EXTRACT_SIZE_THRESHOLD < PDF_TARGET_RAW_SIZE);
+    const _: () = assert!(PDF_TARGET_RAW_SIZE < PDF_MAX_EXTRACT_SIZE);
 }
 
 #[test]
 fn test_max_media_per_request_positive() {
-    assert!(API_MAX_MEDIA_PER_REQUEST > 0);
+    const _: () = assert!(API_MAX_MEDIA_PER_REQUEST > 0);
 }

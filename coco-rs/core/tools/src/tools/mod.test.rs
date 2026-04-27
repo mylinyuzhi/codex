@@ -4,7 +4,10 @@ use coco_tool_runtime::ToolRegistry;
 fn test_register_all_tools_count() {
     let mut registry = ToolRegistry::new();
     crate::register_all_tools(&mut registry);
-    assert_eq!(registry.len(), 41, "expected 41 tools registered");
+    // 42 = 41 baseline + ApplyPatchTool (gated to gpt-5 family via
+    // ToolOverrides; registered universally so the layer-2 filter
+    // can surface it when the model declares it as extra).
+    assert_eq!(registry.len(), 42, "expected 42 tools registered");
 }
 
 #[test]

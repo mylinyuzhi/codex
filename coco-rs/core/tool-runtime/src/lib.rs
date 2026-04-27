@@ -104,6 +104,7 @@ pub use skill_handle::SkillHandle;
 pub use skill_handle::SkillHandleRef;
 pub use skill_handle::SkillInvocationError;
 pub use skill_handle::SkillInvocationResult;
+pub use skill_handle::SubagentInheritance;
 pub use task_handle::BackgroundShellRequest;
 pub use task_handle::BackgroundTaskInfo;
 pub use task_handle::BackgroundTaskStatus;

@@ -78,7 +78,10 @@ fn test_build_inherited_env_vars() {
     };
 
     let env = build_inherited_env_vars(&config);
-    assert!(env.contains("COCO_EXPERIMENTAL_AGENT_TEAMS=1"));
+    // Feature::AgentTeams gate is propagated via the COCO_FEATURE_*
+    // namespace so spawned children re-resolve it the same way the
+    // parent did.
+    assert!(env.contains("COCO_FEATURE_AGENT_TEAMS=1"));
     assert!(env.contains("COCO_AGENT_COLOR=red"));
     assert!(env.contains("COCO_PLAN_MODE_REQUIRED=1"));
 }

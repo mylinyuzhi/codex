@@ -17,6 +17,7 @@ use coco_tool_runtime::AgentQueryResult;
 use coco_tool_runtime::SkillHandle;
 use coco_tool_runtime::SkillInvocationError;
 use coco_tool_runtime::SkillInvocationResult;
+use coco_tool_runtime::SubagentInheritance;
 use pretty_assertions::assert_eq;
 use tokio::sync::RwLock;
 
@@ -66,7 +67,10 @@ fn runtime_with(skills: Vec<SkillDefinition>) -> QuerySkillRuntime {
 #[tokio::test]
 async fn test_not_found_returns_not_found_error() {
     let rt = runtime_with(vec![]);
-    let err = rt.invoke_skill("nope", "").await.unwrap_err();
+    let err = rt
+        .invoke_skill("nope", "", SubagentInheritance::default())
+        .await
+        .unwrap_err();
     assert!(matches!(err, SkillInvocationError::NotFound { .. }));
 }
 
@@ -74,7 +78,10 @@ async fn test_not_found_returns_not_found_error() {
 async fn test_disabled_skill_returns_disabled_error() {
     let skill = sample_skill("foo", "body", SkillContext::Inline, true, false);
     let rt = runtime_with(vec![skill]);
-    let err = rt.invoke_skill("foo", "").await.unwrap_err();
+    let err = rt
+        .invoke_skill("foo", "", SubagentInheritance::default())
+        .await
+        .unwrap_err();
     assert!(matches!(err, SkillInvocationError::Disabled { .. }));
 }
 
@@ -82,7 +89,10 @@ async fn test_disabled_skill_returns_disabled_error() {
 async fn test_disable_model_invocation_returns_hidden_error() {
     let skill = sample_skill("foo", "body", SkillContext::Inline, false, true);
     let rt = runtime_with(vec![skill]);
-    let err = rt.invoke_skill("foo", "").await.unwrap_err();
+    let err = rt
+        .invoke_skill("foo", "", SubagentInheritance::default())
+        .await
+        .unwrap_err();
     assert!(matches!(err, SkillInvocationError::HiddenFromModel { .. }));
 }
 
@@ -96,7 +106,10 @@ async fn test_inline_skill_expands_prompt_into_new_messages() {
         false,
     );
     let rt = runtime_with(vec![skill]);
-    let result = rt.invoke_skill("greet", "").await.expect("ok");
+    let result = rt
+        .invoke_skill("greet", "", SubagentInheritance::default())
+        .await
+        .expect("ok");
     match result {
         SkillInvocationResult::Inline {
             summary,
@@ -128,7 +141,10 @@ async fn test_inline_skill_expands_arguments() {
         false,
     );
     let rt = runtime_with(vec![skill]);
-    let result = rt.invoke_skill("echo", "hello world").await.expect("ok");
+    let result = rt
+        .invoke_skill("echo", "hello world", SubagentInheritance::default())
+        .await
+        .expect("ok");
     let json = match result {
         SkillInvocationResult::Inline { new_messages, .. } => new_messages[0].clone(),
         _ => panic!("expected Inline"),
@@ -144,7 +160,10 @@ async fn test_inline_skill_expands_arguments() {
 async fn test_fork_skill_without_engine_fails_forked() {
     let skill = sample_skill("run", "Run something", SkillContext::Fork, false, false);
     let rt = runtime_with(vec![skill]);
-    let err = rt.invoke_skill("run", "").await.unwrap_err();
+    let err = rt
+        .invoke_skill("run", "", SubagentInheritance::default())
+        .await
+        .unwrap_err();
     match err {
         SkillInvocationError::Forked { reason } => {
             assert!(
@@ -188,7 +207,10 @@ async fn test_fork_skill_with_engine_routes_through_agent_query() {
     );
     let rt = runtime_with(vec![skill]).with_agent_engine(Arc::new(StubEngine));
 
-    let result = rt.invoke_skill("analyze", "a signal").await.expect("ok");
+    let result = rt
+        .invoke_skill("analyze", "a signal", SubagentInheritance::default())
+        .await
+        .expect("ok");
     match result {
         SkillInvocationResult::Forked { agent_id, output } => {
             assert!(agent_id.starts_with("skill-analyze-"));
@@ -207,6 +229,8 @@ async fn test_name_normalization_strips_leading_slash() {
     // runtime should strip the slash.
     let skill = sample_skill("greet", "Hi!", SkillContext::Inline, false, false);
     let rt = runtime_with(vec![skill]);
-    let ok = rt.invoke_skill("/greet", "").await;
+    let ok = rt
+        .invoke_skill("/greet", "", SubagentInheritance::default())
+        .await;
     assert!(ok.is_ok(), "leading slash should normalize away");
 }

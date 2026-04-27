@@ -13,10 +13,6 @@ fn test_env_var_names() {
         PLAN_MODE_REQUIRED_ENV_VAR.as_str(),
         "COCO_PLAN_MODE_REQUIRED"
     );
-    assert_eq!(
-        AGENT_TEAMS_ENV_VAR.as_str(),
-        "COCO_EXPERIMENTAL_AGENT_TEAMS"
-    );
     assert_eq!(AGENT_ID_ENV_VAR.as_str(), "COCO_AGENT_ID");
     assert_eq!(AGENT_NAME_ENV_VAR.as_str(), "COCO_AGENT_NAME");
     assert_eq!(TEAM_NAME_ENV_VAR.as_str(), "COCO_TEAM_NAME");

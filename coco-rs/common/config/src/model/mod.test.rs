@@ -51,23 +51,75 @@ fn test_model_info_resolve_thinking_nearest() {
 }
 
 #[test]
-fn test_model_info_merge() {
-    let mut base = ModelInfo {
-        model_id: "base-model".into(),
-        context_window: 100_000,
+fn test_partial_model_info_merge_from() {
+    use crate::positive::PositiveTokens;
+
+    let mut base = PartialModelInfo {
+        context_window: Some(PositiveTokens::new(100_000)),
         capabilities: Some(vec![Capability::Vision]),
         ..Default::default()
     };
-    let overlay = ModelInfo {
-        context_window: 500_000,
+    let overlay = PartialModelInfo {
+        context_window: Some(PositiveTokens::new(500_000)),
         temperature: Some(0.7),
         ..Default::default()
     };
     base.merge_from(&overlay);
-    assert_eq!(base.model_id, "base-model"); // not overridden (empty in overlay)
-    assert_eq!(base.context_window, 500_000);
+    assert_eq!(base.context_window, Some(PositiveTokens::new(500_000)));
     assert_eq!(base.temperature, Some(0.7));
-    assert!(base.capabilities.is_some()); // not overridden (None in overlay)
+    assert!(base.capabilities.is_some()); // unset in overlay → preserved
+}
+
+#[test]
+fn models_json_round_trip_is_byte_stable() {
+    // Plan §15 Group B claim #7: BTreeMap on disk produces stable
+    // serialisation for the models catalog as well as providers.
+    use crate::positive::PositiveTokens;
+    use std::collections::BTreeMap;
+
+    let mut catalog: BTreeMap<String, PartialModelInfo> = BTreeMap::new();
+    catalog.insert(
+        "claude-opus-4-7".into(),
+        PartialModelInfo {
+            context_window: Some(PositiveTokens::new(200_000)),
+            max_output_tokens: Some(PositiveTokens::new(64_000)),
+            ..Default::default()
+        },
+    );
+    catalog.insert(
+        "gpt-5".into(),
+        PartialModelInfo {
+            context_window: Some(PositiveTokens::new(272_000)),
+            max_output_tokens: Some(PositiveTokens::new(16_384)),
+            ..Default::default()
+        },
+    );
+
+    let mut current = serde_json::to_string_pretty(&catalog).unwrap();
+    for _ in 0..100 {
+        let parsed: BTreeMap<String, PartialModelInfo> = serde_json::from_str(&current).unwrap();
+        let next = serde_json::to_string_pretty(&parsed).unwrap();
+        assert_eq!(current, next, "models.json must be byte-stable");
+        current = next;
+    }
+}
+
+#[test]
+fn test_model_info_from_partial_requires_context_window() {
+    use crate::positive::PositiveTokens;
+
+    let partial = PartialModelInfo {
+        max_output_tokens: Some(PositiveTokens::new(16_384)),
+        ..Default::default()
+    };
+    let err = ModelInfo::from_partial("openai", "custom", partial).unwrap_err();
+    assert!(matches!(
+        err,
+        crate::error::ConfigError::IncompleteModelEntry {
+            field: crate::error::ConfigField::ContextWindow,
+            ..
+        }
+    ));
 }
 
 fn spec(provider: &str, model_id: &str) -> ModelSpec {

@@ -3,7 +3,10 @@ use super::*;
 #[tokio::test]
 async fn test_noop_handle_returns_unavailable_error() {
     let h = NoOpSkillHandle;
-    let err = h.invoke_skill("any_skill", "").await.unwrap_err();
+    let err = h
+        .invoke_skill("any_skill", "", SubagentInheritance::default())
+        .await
+        .unwrap_err();
     assert!(matches!(err, SkillInvocationError::Unavailable { .. }));
     // Error formats cleanly for model-visible tool_result text.
     let rendered = err.to_string();

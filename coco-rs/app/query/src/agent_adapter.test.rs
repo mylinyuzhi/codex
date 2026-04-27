@@ -14,19 +14,9 @@ fn test_agent_query_config_fork_context_messages_field_round_trips() {
         system_prompt: "s".into(),
         model: "m".into(),
         max_turns: Some(1),
-        context_window: None,
-        max_output_tokens: None,
-        allowed_tools: Vec::new(),
         preserve_tool_use_results: true,
-        permission_mode: None,
-        agent_id: None,
-        is_teammate: false,
-        plan_mode_required: false,
-        session_id: None,
-        bypass_permissions_available: false,
-        cwd_override: None,
         fork_context_messages: vec![serde_json::json!({"type":"user","content":"parent turn 1"})],
-        model_role: None,
+        ..Default::default()
     };
     let s = serde_json::to_string(&cfg).unwrap();
     let back: AgentQueryConfig = serde_json::from_str(&s).unwrap();
@@ -41,19 +31,7 @@ async fn test_no_op_engine_returns_error() {
         system_prompt: "test".into(),
         model: "test-model".into(),
         max_turns: Some(1),
-        context_window: None,
-        max_output_tokens: None,
-        allowed_tools: Vec::new(),
-        preserve_tool_use_results: false,
-        permission_mode: None,
-        agent_id: None,
-        is_teammate: false,
-        plan_mode_required: false,
-        session_id: None,
-        bypass_permissions_available: false,
-        cwd_override: None,
-        fork_context_messages: Vec::new(),
-        model_role: None,
+        ..Default::default()
     };
     let result = engine.execute_query("hello", config).await;
     assert!(result.is_err());
@@ -103,19 +81,8 @@ async fn test_adapter_threads_model_role_to_factory() {
         system_prompt: "s".into(),
         model: "m".into(),
         max_turns: Some(1),
-        context_window: None,
-        max_output_tokens: None,
-        allowed_tools: Vec::new(),
-        preserve_tool_use_results: false,
-        permission_mode: None,
-        agent_id: None,
-        is_teammate: false,
-        plan_mode_required: false,
-        session_id: None,
-        bypass_permissions_available: false,
-        cwd_override: None,
-        fork_context_messages: Vec::new(),
         model_role: Some(coco_types::ModelRole::Explore),
+        ..Default::default()
     };
 
     // `catch_unwind` on an async path: wrap `futures::executor` or
@@ -158,19 +125,7 @@ async fn test_adapter_defers_to_factory_default_when_role_none() {
         system_prompt: "s".into(),
         model: "m".into(),
         max_turns: Some(1),
-        context_window: None,
-        max_output_tokens: None,
-        allowed_tools: Vec::new(),
-        preserve_tool_use_results: false,
-        permission_mode: None,
-        agent_id: None,
-        is_teammate: false,
-        plan_mode_required: false,
-        session_id: None,
-        bypass_permissions_available: false,
-        cwd_override: None,
-        fork_context_messages: Vec::new(),
-        model_role: None,
+        ..Default::default()
     };
 
     let handle = tokio::task::spawn(async move { adapter.execute_query("hello", cfg).await });

@@ -538,6 +538,9 @@ impl Tool for WebFetchTool {
     fn name(&self) -> &str {
         ToolName::WebFetch.as_str()
     }
+    fn is_enabled(&self, ctx: &coco_tool_runtime::ToolUseContext) -> bool {
+        ctx.features.enabled(coco_types::Feature::WebFetch)
+    }
     fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
         // R7-T25: byte-aligned port of TS `WebFetchTool/prompt.ts:3-21`
         // `DESCRIPTION`. Includes the MCP-preference hint, the
@@ -1256,6 +1259,9 @@ impl Tool for WebSearchTool {
     fn name(&self) -> &str {
         ToolName::WebSearch.as_str()
     }
+    fn is_enabled(&self, ctx: &coco_tool_runtime::ToolUseContext) -> bool {
+        ctx.features.enabled(coco_types::Feature::WebSearch)
+    }
     fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
         // R7-T25: byte-aligned port of TS `WebSearchTool/prompt.ts:5-33`
         // `getWebSearchPrompt()`. The CRITICAL REQUIREMENT block is
@@ -1346,7 +1352,11 @@ IMPORTANT - Use the correct year in search queries:
         true
     }
 
-    fn validate_input(&self, input: &Value, _ctx: &ToolUseContext) -> coco_tool_runtime::ValidationResult {
+    fn validate_input(
+        &self,
+        input: &Value,
+        _ctx: &ToolUseContext,
+    ) -> coco_tool_runtime::ValidationResult {
         let query = input.get("query").and_then(|v| v.as_str()).unwrap_or("");
         if query.trim().len() < SEARCH_MIN_QUERY_LEN {
             return coco_tool_runtime::ValidationResult::invalid(

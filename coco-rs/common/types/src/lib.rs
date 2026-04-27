@@ -26,6 +26,7 @@ mod client_request;
 mod command;
 mod event;
 mod extended;
+pub mod features;
 mod hook;
 mod id;
 mod jsonrpc;
@@ -43,6 +44,7 @@ mod task_list;
 mod thinking;
 mod token;
 mod tool;
+mod tool_filter;
 mod wire_tagged;
 
 // === Re-exports ===
@@ -313,6 +315,19 @@ pub use provider::WireApi;
 
 // Sandbox types
 pub use sandbox::SandboxMode;
+
+// Feature gates
+pub use features::Feature;
+pub use features::FeatureSpec;
+pub use features::Features;
+pub use features::Stage as FeatureStage;
+pub use features::all_features;
+pub use features::feature_for_key;
+pub use features::is_known_feature_key;
+
+// Tool filter pipeline (Layers 2 + 4)
+pub use tool_filter::ToolFilter;
+pub use tool_filter::ToolOverrides;
 
 // Side-query types (data only; async trait in coco-tool-runtime)
 pub use side_query::SideQueryMessage;

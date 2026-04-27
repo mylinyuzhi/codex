@@ -61,7 +61,7 @@ impl LanguageModelV4 for StubModel {
 }
 
 fn stub_client(id: &'static str) -> Arc<ApiClient> {
-    Arc::new(ApiClient::new(
+    Arc::new(ApiClient::with_default_fingerprint(
         Arc::new(StubModel { id }),
         RetryConfig::default(),
     ))

@@ -1,10 +1,52 @@
 use coco_types::MCP_TOOL_PREFIX;
+use coco_types::PermissionMode;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::context::ToolUseContext;
 use crate::traits::Tool;
+
+/// Whether the given mode permits exposing this tool to the model
+/// **at schema-definition time** (before any input exists).
+///
+/// `Plan` is the only mode that filters at this layer — it narrows the
+/// schema to statically-read-only tools. Every other mode lets the
+/// schema through unchanged; runtime permission rules still apply on
+/// the actual call.
+fn mode_permits_tool(mode: PermissionMode, tool: &dyn Tool) -> bool {
+    match mode {
+        PermissionMode::Plan => tool.is_always_read_only(),
+        PermissionMode::Default
+        | PermissionMode::AcceptEdits
+        | PermissionMode::BypassPermissions
+        | PermissionMode::DontAsk
+        | PermissionMode::Auto
+        | PermissionMode::Bubble => true,
+    }
+}
+
+/// Run the full filter pipeline against one tool.
+///
+/// 1. `Tool::is_enabled(ctx)`     — Feature gate / OS / hard deps
+/// 2. `ToolOverrides::permits`    — what the active model accepts
+/// 3. `PermissionMode::permits`   — Plan-mode read-only narrowing
+/// 4. `ToolFilter::allows`        — agent allow/deny lists
+///
+/// Layer 5 (MCP server reachability) is **not** implemented here; MCP
+/// tools whose backing server disconnects are removed from the registry
+/// via `ToolRegistry::deregister_by_server`, so they never reach this
+/// pipeline. If a future requirement needs schema-time probing
+/// (e.g. show as "unavailable" without deregistering), add a 5th
+/// filter using `ctx.mcp` here.
+fn passes_filter_pipeline(tool: &dyn Tool, ctx: &ToolUseContext) -> bool {
+    let id = tool.id();
+    tool.is_enabled(ctx)
+        && ctx.tool_overrides.permits(&id)
+        && mode_permits_tool(ctx.permission_context.mode, tool)
+        && ctx.tool_filter.allows(&id)
+}
 
 /// Registry of available tools. Populated at startup by coco-cli.
 ///
@@ -80,31 +122,39 @@ impl ToolRegistry {
         self.tools.values()
     }
 
-    /// Get enabled tools only.
-    pub fn enabled(&self) -> Vec<&Arc<dyn Tool>> {
-        self.tools.values().filter(|t| t.is_enabled()).collect()
+    /// Get enabled tools after running the full 5-layer filter pipeline.
+    /// See `docs/coco-rs/feature-gates-and-tool-filtering.md` §7.
+    pub fn enabled(&self, ctx: &ToolUseContext) -> Vec<&Arc<dyn Tool>> {
+        self.tools
+            .values()
+            .filter(|t| passes_filter_pipeline(t.as_ref(), ctx))
+            .collect()
     }
 
     /// Get non-deferred enabled tools (loaded immediately).
-    pub fn loaded_tools(&self) -> Vec<&Arc<dyn Tool>> {
+    pub fn loaded_tools(&self, ctx: &ToolUseContext) -> Vec<&Arc<dyn Tool>> {
         self.tools
             .values()
-            .filter(|t| t.is_enabled() && (!t.should_defer() || t.always_load()))
+            .filter(|t| {
+                passes_filter_pipeline(t.as_ref(), ctx) && (!t.should_defer() || t.always_load())
+            })
             .collect()
     }
 
     /// Get deferred tools (discovered via ToolSearch).
-    pub fn deferred_tools(&self) -> Vec<&Arc<dyn Tool>> {
+    pub fn deferred_tools(&self, ctx: &ToolUseContext) -> Vec<&Arc<dyn Tool>> {
         self.tools
             .values()
-            .filter(|t| t.is_enabled() && t.should_defer() && !t.always_load())
+            .filter(|t| {
+                passes_filter_pipeline(t.as_ref(), ctx) && t.should_defer() && !t.always_load()
+            })
             .collect()
     }
 
     /// Get tool definitions for the model (name + schema pairs).
     /// Only includes non-deferred enabled tools.
-    pub fn definitions(&self) -> Vec<(String, ToolInputSchema)> {
-        self.loaded_tools()
+    pub fn definitions(&self, ctx: &ToolUseContext) -> Vec<(String, ToolInputSchema)> {
+        self.loaded_tools(ctx)
             .into_iter()
             .map(|t| (t.name().to_string(), t.input_schema()))
             .collect()
