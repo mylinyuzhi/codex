@@ -386,16 +386,7 @@ impl OpenAIResponsesLanguageModel {
             ensure_include_entry(&mut body, "reasoning.encrypted_content");
         }
 
-        // Verbatim `extra_body` patch (multi-provider-plan §7.3).
-        // The user-supplied `provider_options["openai"]` map is
-        // shallow-merged into the wire body root **as-is** — every
-        // key wins over any earlier typed body write. Opaque to
-        // coco-rs; users own correctness.
-        if let Some(obj) = body.as_object_mut() {
-            for (k, v) in &raw_provider_options {
-                obj.insert(k.clone(), v.clone());
-            }
-        }
+        vercel_ai_provider_utils::shallow_merge_object(&mut body, raw_provider_options);
 
         Ok((body, warnings))
     }

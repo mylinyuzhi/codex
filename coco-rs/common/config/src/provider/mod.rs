@@ -210,8 +210,7 @@ impl ProviderConfig {
     /// overlay only when `Some` — never silently coerced to a serde
     /// default. `models` merges entry-by-entry; nested
     /// `client_options` merges field-by-field, and `client_options.headers`
-    /// itself merges key-by-key (overlay wins per key) — matches the
-    /// per-key precedence invariant in `multi-provider-plan.md` §15.
+    /// itself merges key-by-key (overlay wins per key).
     ///
     /// Returns [`ConfigError::InvalidTimeoutSecs`] when the overlay
     /// supplies a negative `timeout_secs`. Same boundary check as

@@ -42,8 +42,7 @@ pub struct ResolvedModel {
 ///    merged into a fresh `ResolvedModel` with empty
 ///    `provider_model: ProviderModelOverride::default()`. This is the
 ///    path that lets users put model metadata in `~/.coco/models.json`
-///    without mirroring the entry into every provider's `models` map
-///    (multi-provider-plan §5.2).
+///    without mirroring the entry into every provider's `models` map.
 ///
 /// Returns `None` only when `model_id` appears in NEITHER catalog.
 #[derive(Debug, Clone, Default)]
@@ -172,8 +171,7 @@ pub fn build_model_registry(
 }
 
 /// Compiled-in builtin model registry — well-known models with known
-/// metadata. User catalogue files override these per-key. See
-/// `multi-provider-plan.md` §9 for the canonical list.
+/// metadata. User catalogue files override these per-key.
 ///
 /// Returned as `&'static` partial form so the registry builder can
 /// fold it into the same `merge_from` pipeline as the L1 user catalog

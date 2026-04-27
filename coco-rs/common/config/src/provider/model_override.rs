@@ -3,13 +3,8 @@
 //! Sits in `ProviderConfig.models` as `BTreeMap<String, ProviderModelOverride>`.
 //! Each entry supplies the per-(provider, model) routing fields
 //! (`api_model_name`) and any per-entry `ModelInfo` overrides under an
-//! explicit `info: { ... }` nesting.
-//!
-//! Earlier drafts used `#[serde(flatten)]` to lift the `info` fields
-//! to the entry root. That silently disables `deny_unknown_fields`
-//! (per serde docs); a typo in `models.<id>.<key>` would slip
-//! through. Explicit nesting keeps both `deny_unknown_fields` checks
-//! active end-to-end.
+//! explicit `info: { ... }` nesting — flattening would disable
+//! `deny_unknown_fields` on the inner struct (per serde docs).
 
 use crate::model::partial::PartialModelInfo;
 use serde::Deserialize;

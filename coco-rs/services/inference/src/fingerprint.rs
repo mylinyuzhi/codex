@@ -1,10 +1,9 @@
 //! `ProviderClientFingerprint` — turn-boundary coherence check.
 //!
-//! Closes the role-binding ↔ provider-client coherence gap (see
-//! `multi-provider-plan.md` §11.1). At the start of every turn,
-//! `QueryEngine` computes a fresh fingerprint from `RuntimeConfig`
-//! and compares against `ApiClient::fingerprint()`. Mismatch → rebuild
-//! the `Arc<dyn LanguageModelV4>`.
+//! At the start of every turn, `QueryEngine` computes a fresh
+//! fingerprint from `RuntimeConfig` and compares against
+//! `ApiClient::fingerprint()`. Mismatch → rebuild the
+//! `Arc<dyn LanguageModelV4>`.
 //!
 //! Properties:
 //!

@@ -50,8 +50,7 @@ pub struct RuntimeConfig {
     pub providers: BTreeMap<String, ProviderConfig>,
     pub model_roles: ModelRoles,
     /// Resolved (provider, model_id) → `Arc<ResolvedModel>` index.
-    /// Closes the L1 dormant gap — `tool_overrides` plumbing reads
-    /// `ResolvedModel.info.tool_overrides` here.
+    /// Source of `info.tool_overrides` for the tool-filter pipeline.
     pub model_registry: Arc<ModelRegistry>,
     pub api: ApiConfig,
     pub loop_config: LoopConfig,
@@ -79,11 +78,10 @@ pub struct RuntimeConfig {
 /// reads via `tempfile::TempDir`. Production `Default` resolves to
 /// the user's `~/.coco/` via `global_config`.
 ///
-/// **All paths affected by `coco_home`.** Earlier drafts only
-/// overrode `providers.json` / `models.json` here, but the
-/// user-level `settings.json` and the platform-managed policy file
-/// were still read from the real `~/.coco/`. With this struct, every
-/// path the resolver and reloader read is overridable in one place.
+/// Every path the resolver and reloader read is overridable here —
+/// including user-level `settings.json` and the platform-managed
+/// policy file, not just the `providers.json` / `models.json`
+/// catalogs.
 #[derive(Debug, Clone)]
 pub struct CatalogPaths {
     pub coco_home: PathBuf,
@@ -277,8 +275,7 @@ fn validate_roles_against_registry(
 }
 
 /// Resolve `tool_overrides` from the Main role's (provider, model_id)
-/// via `ModelRegistry`. Closes the L1 dormant gap — the lookup
-/// previously always passed `None`.
+/// via `ModelRegistry`.
 fn resolve_main_tool_overrides(roles: &ModelRoles, registry: &ModelRegistry) -> Arc<ToolOverrides> {
     // Tool-overrides resolution keys on `model_id` alone — provider is
     // a routing concern (URL, auth, wire API), not a capability axis.
@@ -332,13 +329,16 @@ fn load_catalog_file<T>(path: &std::path::Path) -> Result<BTreeMap<String, T>, C
 where
     T: serde::de::DeserializeOwned,
 {
-    if !path.exists() {
-        return Ok(BTreeMap::new());
-    }
-    let contents = std::fs::read_to_string(path).map_err(|source| ConfigError::CatalogRead {
-        path: path.to_path_buf(),
-        source,
-    })?;
+    let contents = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
+        Err(source) => {
+            return Err(ConfigError::CatalogRead {
+                path: path.to_path_buf(),
+                source,
+            });
+        }
+    };
     serde_json::from_str(&contents).map_err(|source| ConfigError::CatalogParse {
         path: path.to_path_buf(),
         source,
@@ -626,7 +626,7 @@ fn default_main_model_spec(
 /// `Arc<RuntimeConfig>` snapshot at turn boundaries without locking.
 /// In-flight turns retain the `Arc` they captured at turn start; a
 /// mid-turn config change has no torn-read effect — the next turn
-/// picks up the new snapshot atomically (see multi-provider-plan §11).
+/// picks up the new snapshot atomically.
 #[derive(Debug, Clone)]
 pub struct RuntimePublisher {
     sender: tokio::sync::watch::Sender<Arc<RuntimeConfig>>,

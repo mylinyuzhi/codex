@@ -743,17 +743,7 @@ impl AnthropicMessagesLanguageModel {
             }
         }
 
-        // Verbatim `extra_body` patch (multi-provider-plan §7.3).
-        // The user-supplied `provider_options[<anthropic>]` map is
-        // shallow-merged into the wire body root **as-is** — opaque
-        // to coco-rs, no typed-vs-unknown filter, every key wins
-        // over any earlier typed body write at the same name. Users
-        // own the correctness of their `extra_body` shapes.
-        if let Some(obj) = body.as_object_mut() {
-            for (k, v) in &raw_provider_options {
-                obj.insert(k.clone(), v.clone());
-            }
-        }
+        vercel_ai_provider_utils::shallow_merge_object(&mut body, raw_provider_options);
 
         Ok((body, headers, warnings))
     }

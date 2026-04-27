@@ -27,10 +27,10 @@ fn anthropic_thinking_uses_camelcase_budget_tokens() {
 
 #[test]
 fn renamed_anthropic_instance_still_emits_anthropic_shape() {
-    // Plan §7.4 invariant: routing key is ProviderApi family, not
-    // ProviderConfig.name. A user-renamed instance (e.g., "azure-east"
-    // backed by ProviderApi::Anthropic) MUST still get the typed
-    // Anthropic wire body, not the OpenAI-compat fallback.
+    // Routing key is ProviderApi family, not ProviderConfig.name. A
+    // user-renamed instance (e.g., "azure-east" backed by
+    // ProviderApi::Anthropic) MUST still get the typed Anthropic wire
+    // body, not the OpenAI-compat fallback.
     let level = ThinkingLevel::with_budget(ReasoningEffort::High, 12_000);
     let out = to_extra_body(&level, ProviderApi::Anthropic);
     assert!(out.contains_key("thinking"));

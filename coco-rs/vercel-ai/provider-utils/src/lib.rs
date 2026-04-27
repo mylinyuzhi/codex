@@ -99,6 +99,7 @@ pub use headers::normalize_headers;
 
 pub use json::parse_json;
 pub use json::parse_json_event_stream;
+pub use json::shallow_merge_object;
 
 pub use load_api_key::load_api_key;
 pub use load_api_key::load_optional_api_key;

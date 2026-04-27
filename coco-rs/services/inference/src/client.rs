@@ -55,13 +55,13 @@ pub struct QueryResult {
 
 /// LLM API client wrapping vercel-ai LanguageModelV4.
 ///
-/// Carries a [`ProviderClientFingerprint`] so the turn-boundary
-/// coherence check (multi-provider-plan §11.1) can detect a stale
-/// `Arc<dyn LanguageModelV4>` after `RuntimeConfig` hot-reload and
-/// rebuild without restarting the process.
+/// Carries a [`ProviderClientFingerprint`] so a turn-boundary
+/// coherence check can detect a stale `Arc<dyn LanguageModelV4>`
+/// after `RuntimeConfig` hot-reload and rebuild without restarting
+/// the process.
 ///
-/// **Layer-2 plumbing (multi-provider-plan §7).** When `model_info`
-/// is `Some`, [`Self::query`] / [`Self::query_stream`] route through
+/// **Layer-2 plumbing.** When `model_info` is `Some`,
+/// [`Self::query`] / [`Self::query_stream`] route through
 /// [`build_call_options`] — this is the path that wraps
 /// `info.extra_body` under `provider_options[<namespace>]`, applies
 /// `info.default_thinking()` / `temperature` / `top_p` / `top_k`, and
@@ -86,8 +86,8 @@ impl ApiClient {
     /// Production constructor. The `fingerprint` should be computed
     /// from the resolved `ProviderConfig` via
     /// [`ProviderClientFingerprint::compute`] so the turn-boundary
-    /// coherence check (multi-provider-plan §11.1) can detect a
-    /// stale `Arc<dyn LanguageModelV4>` after hot-reload.
+    /// coherence check can detect a stale `Arc<dyn LanguageModelV4>`
+    /// after hot-reload.
     ///
     /// `model_info` carries the resolved [`ModelInfo`] for the
     /// (provider, model_id) pair so [`Self::query`] / [`Self::query_stream`]
@@ -109,29 +109,16 @@ impl ApiClient {
     }
 
     /// Test / mock constructor. Builds a placeholder fingerprint with
-    /// empty digests — adequate for mock-backed tests but **NOT for
-    /// production hot-reload coherence**: the digests claimed here are
-    /// inert. Any QueryEngine path that compares fingerprints will
-    /// treat every rebuild as a no-change for clients constructed
-    /// this way.
-    ///
-    /// **No `ModelInfo`.** Mock paths skip Layer-2
-    /// `build_call_options` (no `extra_body` wrap, no thinking
-    /// translation, no typed sampling). Adequate for tests that
-    /// only need the prompt + tools shape.
-    ///
-    /// `provider` and `api_model_name` echo the underlying model so
-    /// fingerprint diagnostics are still readable in tests; `api`
-    /// defaults to `OpenaiCompat` because the Mock provider implements
-    /// the OpenAI-compat wire shape and the field is not load-bearing
-    /// when digests are zero.
-    ///
-    /// Production code must call [`ApiClient::new`] with a fingerprint
-    /// derived from the resolved `ProviderConfig` via
-    /// [`ProviderClientFingerprint::compute`].
+    /// empty digests — adequate for mock-backed tests but **not for
+    /// production hot-reload coherence**: the all-zero digests will
+    /// match any rebuild and skip the swap. `model_info` is `None`,
+    /// so Layer-2 `build_call_options` is skipped (no `extra_body`,
+    /// no thinking translation, no typed sampling).
     pub fn with_default_fingerprint(model: Arc<dyn LanguageModelV4>, retry: RetryConfig) -> Self {
         let fingerprint = ProviderClientFingerprint {
             provider: model.provider().to_string(),
+            // Mock implements the OpenAI-compat wire shape; the field
+            // is inert when digests are zero.
             api: coco_types::ProviderApi::OpenaiCompat,
             api_model_name: model.model_id().to_string(),
             base_url: String::new(),
@@ -140,7 +127,7 @@ impl ApiClient {
             timeout_secs: 0,
             api_key_origin_digest: [0u8; 32],
         };
-        Self::new(model, fingerprint, None, retry)
+        Self::new(model, fingerprint, /*model_info*/ None, retry)
     }
 
     /// Identity of the underlying client.

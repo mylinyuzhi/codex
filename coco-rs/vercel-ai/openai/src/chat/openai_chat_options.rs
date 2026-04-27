@@ -1,4 +1,6 @@
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 
 use crate::openai_capabilities::SystemMessageMode;
@@ -133,38 +135,39 @@ impl<'de> Deserialize<'de> for SystemMessageMode {
 
 /// Extract OpenAI Chat-specific options from the generic provider
 /// options map.
-///
-/// Returns `(typed, raw)`:
-///
-/// - `typed` — parsed `OpenAIChatProviderOptions`, used for
-///   reasoning-model / system-message-mode side-effects and typed
-///   body writes.
-/// - `raw` — verbatim user-supplied `provider_options["openai"]`
-///   map. The language model shallow-merges this into the wire body
-///   root **as-is**, every key wins over earlier typed body writes
-///   (multi-provider-plan §7.3). Opaque to coco-rs; users own
-///   correctness.
 pub fn extract_openai_options(
     provider_options: &Option<vercel_ai_provider::ProviderOptions>,
 ) -> (
     OpenAIChatProviderOptions,
-    std::collections::BTreeMap<String, serde_json::Value>,
+    BTreeMap<String, serde_json::Value>,
 ) {
-    let raw_value = provider_options
+    extract_openai_namespace(provider_options)
+}
+
+/// Extract the `provider_options["openai"]` namespace into a typed
+/// struct + verbatim raw map. Returns `(T::default(), empty)` when
+/// the namespace is missing or fails to deserialize.
+///
+/// The raw map is shallow-merged into the wire body root by the
+/// language model after typed writes — opaque to coco-rs; users own
+/// correctness.
+pub(crate) fn extract_openai_namespace<T>(
+    provider_options: &Option<vercel_ai_provider::ProviderOptions>,
+) -> (T, BTreeMap<String, serde_json::Value>)
+where
+    T: DeserializeOwned + Default,
+{
+    let Some(map) = provider_options
         .as_ref()
         .and_then(|opts| opts.0.get("openai"))
-        .and_then(|v| serde_json::to_value(v).ok());
-    let typed: OpenAIChatProviderOptions = raw_value
-        .clone()
-        .and_then(|v| serde_json::from_value(v).ok())
+    else {
+        return (T::default(), BTreeMap::new());
+    };
+    let typed: T = serde_json::to_value(map)
+        .and_then(serde_json::from_value)
         .unwrap_or_default();
-
-    let mut raw = std::collections::BTreeMap::new();
-    if let Some(serde_json::Value::Object(map)) = raw_value {
-        for (k, v) in map {
-            raw.insert(k, v);
-        }
-    }
+    let raw: BTreeMap<String, serde_json::Value> =
+        map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
     (typed, raw)
 }
 

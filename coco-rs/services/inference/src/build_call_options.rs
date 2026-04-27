@@ -5,10 +5,10 @@
 //! Coco codebase. Every other place reads `ModelInfo.extra_body`. The
 //! function:
 //!
-//! 1. Wires Lane A typed sampling fields (`temperature`, `top_p`,
-//!    `top_k`, `max_output_tokens`) — `None` means "let provider
-//!    default", carried through to the wire body unchanged.
-//! 2. Maps reasoning channel (Lane A2) — `ThinkingLevel.effort` flows
+//! 1. Wires typed sampling fields (`temperature`, `top_p`, `top_k`,
+//!    `max_output_tokens`) — `None` means "let provider default",
+//!    carried through to the wire body unchanged.
+//! 2. Maps the reasoning channel — `ThinkingLevel.effort` flows
 //!    through `call.reasoning`; budget / interleaved / summary go
 //!    through `extra_body` via [`thinking_convert::to_extra_body`].
 //!    `Some(level)` with `effort == None` disables thinking entirely
@@ -128,8 +128,7 @@ pub fn build_call_options(
 }
 
 /// Resolve the namespace key the language-model implementation will
-/// read from `call.provider_options`. Closes the round-trip §6.3
-/// promises for builtin SDKs whose `model.provider()` is hardcoded.
+/// read from `call.provider_options`.
 ///
 /// - `Anthropic` / `Openai` / `Gemini` — SDK hardcodes the family
 ///   name (`"anthropic"`, `"openai"`, `"google"`) regardless of

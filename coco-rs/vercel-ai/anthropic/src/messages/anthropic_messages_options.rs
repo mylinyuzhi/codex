@@ -156,8 +156,7 @@ pub struct AnthropicProviderOptions {
 /// - `raw` — verbatim user-supplied map, shallow-merged into the wire
 ///   body root at the end of `get_args`. **Opaque to coco-rs** — every
 ///   key (typed-known or not) is patched as-is. Users are responsible
-///   for the correctness of their keys and shapes (multi-provider-plan
-///   §7.3).
+///   for the correctness of their keys and shapes.
 ///
 /// Parses from both the canonical `"anthropic"` key and any custom
 /// provider name key (for renamed instances like `"my-proxy"`),

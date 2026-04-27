@@ -117,12 +117,10 @@ impl ReloadOptions {
 pub struct RuntimeReloader {
     publisher: Arc<RuntimePublisher>,
     handle: JoinHandle<()>,
-    /// Owns the `FileWatcher` for this reloader. Drop here releases the
-    /// OS-level watcher handles and closes the broadcast `Sender`. The
-    /// **rename to `watcher` (no underscore) is deliberate** — the
-    /// field is load-bearing for resource cleanup; an underscore would
-    /// invite a future "unused field, remove it" pass that would leak
-    /// the OS watcher.
+    /// Owns the `FileWatcher`. Drop releases OS-level watcher handles
+    /// and closes the broadcast `Sender`; the field is load-bearing
+    /// for cleanup so it must not be renamed to start with an
+    /// underscore.
     watcher: FileWatcher<ConfigChange>,
 }
 
@@ -158,9 +156,9 @@ impl RuntimeReloader {
             debounce,
         } = opts;
 
-        // R12: install the watcher FIRST so any filesystem change
-        // between the initial build and watch-install is captured by
-        // the broadcast channel and replayed by the spawned task.
+        // Install the watcher FIRST so any filesystem change between
+        // the initial build and watch-install is captured by the
+        // broadcast channel and replayed by the spawned task.
         let settings_watcher = SettingsWatcher::with_catalogs(&cwd, &catalogs);
         let mut watch_set: Vec<(PathBuf, RecursiveMode)> = Vec::new();
         let mut tracked_files: Vec<PathBuf> = Vec::new();

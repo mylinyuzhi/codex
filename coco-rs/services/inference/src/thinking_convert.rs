@@ -9,8 +9,7 @@
 //! All keys are camelCase so they match each provider's typed-options
 //! struct (`#[serde(rename_all = "camelCase")]` on
 //! `AnthropicProviderOptions`, `OpenAIResponsesProviderOptions`,
-//! `GoogleLanguageModelOptions`, etc.). See
-//! `multi-provider-plan.md` §7.4.
+//! `GoogleLanguageModelOptions`, etc.).
 //!
 //! **Routing key is `ProviderApi`, not the runtime instance name.**
 //! A `ProviderConfig.name = "azure-east"` backed by
