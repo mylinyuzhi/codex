@@ -273,7 +273,7 @@ impl AnthropicMessagesLanguageModel {
         stream: bool,
     ) -> Result<GetArgsResult, AISdkError> {
         let mut warnings = Vec::new();
-        let mut anthropic_options =
+        let (mut anthropic_options, raw_provider_options) =
             extract_anthropic_options(&options.provider_options, &self.config.provider);
 
         // Unsupported standard parameters
@@ -742,6 +742,8 @@ impl AnthropicMessagesLanguageModel {
                 headers.insert(k.clone(), v.clone());
             }
         }
+
+        vercel_ai_provider_utils::shallow_merge_object(&mut body, raw_provider_options);
 
         Ok((body, headers, warnings))
     }

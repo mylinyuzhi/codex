@@ -48,7 +48,42 @@ use crate::Cli;
 /// Rust: spawns agent_driver as background task, runs TUI in foreground.
 pub async fn run_tui(cli: &Cli) -> Result<()> {
     let cwd = std::env::current_dir()?;
-    let runtime_config = crate::build_runtime_config_for_cli(cli, &cwd)?;
+
+    // Spawn the hot-reload loop FIRST. The reloader watches the four
+    // settings layers + `providers.json` / `models.json` and publishes
+    // a fresh `Arc<RuntimeConfig>` via `RuntimePublisher` on debounced
+    // change. We take its initial snapshot as the canonical
+    // `runtime_config` for this session so `RuntimeConfig` is built
+    // exactly once at startup. Drop on `_reloader` aborts the spawned
+    // task when `run_tui` returns.
+    //
+    // **Subscriber wiring is deferred.** The QueryEngine integration
+    // that re-reads `tool_overrides` + `api_client` per turn off the
+    // publisher lands as a separate change. Until then the published
+    // updates are observed only via tracing.
+    //
+    // **Reloader spawn failure → fall back to a one-shot static
+    // build.** Outside a Tokio runtime `RuntimeReloader::spawn`
+    // returns Err; in that case (which shouldn't happen here, but
+    // surface gracefully if it does) we build the config directly.
+    let reload_opts = coco_config_reload::ReloadOptions::new(cwd.clone())
+        .with_overrides(crate::cli_runtime_overrides(cli));
+    let reload_opts = if let Some(path) = cli.settings.as_deref() {
+        reload_opts.with_flag_settings(path)
+    } else {
+        reload_opts
+    };
+    let (_reloader, runtime_config) = match coco_config_reload::RuntimeReloader::spawn(reload_opts)
+    {
+        Ok(reloader) => {
+            let snapshot = reloader.current();
+            (Some(reloader), Arc::unwrap_or_clone(snapshot))
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "config hot-reload disabled; using one-shot build");
+            (None, crate::build_runtime_config_for_cli(cli, &cwd)?)
+        }
+    };
     let settings = &runtime_config.settings;
 
     // Resolve initial mode + bypass capability + run sudo/sandbox guard
@@ -61,11 +96,13 @@ pub async fn run_tui(cli: &Cli) -> Result<()> {
     // once `app.state` exists. Headless paths (run_chat, run_sdk_mode)
     // eprintln it instead.
 
-    // Model + client
-    let (model, mode) = crate::create_model(cli.model.as_deref(), &runtime_config);
-    let model_id = model.model_id().to_string();
+    // Model + client. `create_api_client` computes a real
+    // `ProviderClientFingerprint` from the resolved `ProviderConfig`
+    // (multi-provider-plan §11.1) — only the mock fallback uses the
+    // test-grade default fingerprint.
     let retry: coco_inference::RetryConfig = runtime_config.api.retry.clone().into();
-    let client = Arc::new(ApiClient::new(model, retry.clone()));
+    let (client, mode, model_id) =
+        crate::create_api_client(cli.model.as_deref(), &runtime_config, retry.clone());
 
     // Main role fallback chain — populated from CLI `--fallback-model`
     // flags (repeatable) OR settings.models.main.fallbacks, whichever
@@ -165,6 +202,8 @@ pub async fn run_tui(cli: &Cli) -> Result<()> {
         shell_config: runtime_config.shell.clone(),
         web_fetch_config: runtime_config.web_fetch.clone(),
         web_search_config: runtime_config.web_search.clone(),
+        features: std::sync::Arc::new(runtime_config.features.clone()),
+        tool_overrides: runtime_config.tool_overrides.clone(),
         ..Default::default()
     };
 
@@ -231,6 +270,7 @@ pub async fn run_tui(cli: &Cli) -> Result<()> {
                 })
         });
     let auto_title_enabled = settings.merged.session.auto_title;
+    let runtime_for_driver = Arc::new(runtime_config);
 
     // Spawn agent driver
     let driver_handle = tokio::spawn(run_agent_driver(
@@ -249,6 +289,7 @@ pub async fn run_tui(cli: &Cli) -> Result<()> {
         session_manager,
         fast_model_spec,
         auto_title_enabled,
+        runtime_for_driver,
     ));
 
     eprintln!("coco-rs TUI ({mode} mode) — model: {model_id}\n");
@@ -285,6 +326,7 @@ async fn run_agent_driver(
     session_manager: Arc<coco_session::SessionManager>,
     fast_model_spec: Option<coco_types::ModelSpec>,
     auto_title_enabled: bool,
+    runtime: Arc<coco_config::RuntimeConfig>,
 ) {
     // One-shot gate: title gen runs at most once per driver instance.
     // If the first attempt fails (no plan, LLM error), we don't retry —
@@ -417,7 +459,13 @@ async fn run_agent_driver(
                 ) && let (Some(spec), Some(text)) = (fast_model_spec.clone(), plan_text)
                 {
                     title_gen_attempted = true;
-                    spawn_auto_title_task(spec, text, session_manager.clone(), session_id.clone());
+                    spawn_auto_title_task(
+                        spec,
+                        text,
+                        session_manager.clone(),
+                        session_id.clone(),
+                        runtime.clone(),
+                    );
                 }
             }
 
@@ -819,20 +867,19 @@ fn spawn_auto_title_task(
     plan_text: String,
     session_manager: Arc<coco_session::SessionManager>,
     session_id: String,
+    runtime: Arc<coco_config::RuntimeConfig>,
 ) {
-    use coco_inference::ApiClient;
     use coco_inference::QueryParams;
     use coco_inference::RetryConfig;
     use coco_types::AssistantContent;
     use coco_types::LlmMessage;
 
     tokio::spawn(async move {
-        let Ok(model) = crate::build_language_model_from_spec(&spec) else {
+        let Ok(client) = crate::build_api_client(&runtime, &spec, RetryConfig::default()) else {
             // Provider dispatch failed (e.g. missing API key) — silently
             // abandon; `auto_title` is an advisory feature.
             return;
         };
-        let client = ApiClient::new(model, RetryConfig::default());
 
         let (system, user) = coco_session::title_generator::build_title_prompt(&plan_text);
         // Compose prompt as a single user message with the system text

@@ -1,9 +1,11 @@
 use serde::Deserialize;
+use std::collections::BTreeMap;
 
 use crate::chat::openai_chat_options::PromptCacheRetention;
 use crate::chat::openai_chat_options::ReasoningEffort;
 use crate::chat::openai_chat_options::ServiceTier;
 use crate::chat::openai_chat_options::TextVerbosity;
+use crate::chat::openai_chat_options::extract_openai_namespace;
 use crate::openai_capabilities::SystemMessageMode;
 
 /// A context management entry for server-side compaction.
@@ -43,14 +45,17 @@ pub struct OpenAIResponsesProviderOptions {
     pub force_reasoning: Option<bool>,
 }
 
-/// Extract Responses-specific options from the generic provider options map.
+/// Extract OpenAI Responses-specific options from the generic
+/// provider options map.
 pub fn extract_responses_options(
     provider_options: &Option<vercel_ai_provider::ProviderOptions>,
-) -> OpenAIResponsesProviderOptions {
-    provider_options
-        .as_ref()
-        .and_then(|opts| opts.0.get("openai"))
-        .and_then(|v| serde_json::to_value(v).ok())
-        .and_then(|v| serde_json::from_value::<OpenAIResponsesProviderOptions>(v).ok())
-        .unwrap_or_default()
+) -> (
+    OpenAIResponsesProviderOptions,
+    BTreeMap<String, serde_json::Value>,
+) {
+    extract_openai_namespace(provider_options)
 }
+
+#[cfg(test)]
+#[path = "openai_responses_options.test.rs"]
+mod tests;

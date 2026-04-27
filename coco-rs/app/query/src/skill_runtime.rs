@@ -44,6 +44,7 @@ use coco_tool_runtime::AgentQueryEngineRef;
 use coco_tool_runtime::SkillHandle;
 use coco_tool_runtime::SkillInvocationError;
 use coco_tool_runtime::SkillInvocationResult;
+use coco_tool_runtime::SubagentInheritance;
 use tokio::sync::RwLock;
 
 /// Real skill-runtime implementation.
@@ -84,6 +85,7 @@ impl SkillHandle for QuerySkillRuntime {
         &self,
         name: &str,
         args: &str,
+        inherit: SubagentInheritance,
     ) -> Result<SkillInvocationResult, SkillInvocationError> {
         let name = coco_tools::tools::skill_advanced::normalize_skill_name(name);
         let manager = self.manager.read().await;
@@ -163,6 +165,10 @@ impl SkillHandle for QuerySkillRuntime {
                     context_window: None,
                     max_output_tokens: None,
                     allowed_tools: skill.allowed_tools.clone().unwrap_or_default(),
+                    disallowed_tools: Vec::new(),
+                    tool_overrides: inherit.tool_overrides.clone(),
+                    features: inherit.features.clone(),
+                    parent_tool_filter: inherit.parent_tool_filter.clone(),
                     preserve_tool_use_results: false,
                     permission_mode: None,
                     agent_id: Some(agent_id.clone()),

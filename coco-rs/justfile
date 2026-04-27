@@ -14,9 +14,15 @@ fmt:
     # imports_granularity is nightly-only; filter the harmless stable warning.
     cargo fmt 2> >(grep -v 'imports_granularity = Item' >&2 || true)
 
-# Check all crates
+# Check all crates (lib + bin)
 check *args:
     cargo check "$@"
+
+# Check that tests compile too. Catches breakage in `*.test.rs` files
+# without paying the cost of running them. Run before `clippy` / `test`
+# so test compile errors surface in seconds, not minutes.
+check-tests *args:
+    cargo check --workspace --tests "$@"
 
 # Build all crates
 build *args:
@@ -52,7 +58,7 @@ test-crate crate *args:
 # ============================================================================
 
 # REQUIRED before commit
-pre-commit: fmt check clippy test
+pre-commit: fmt check check-tests clippy test
 
 # ============================================================================
 # Running

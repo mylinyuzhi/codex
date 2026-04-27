@@ -26,10 +26,14 @@ use std::sync::Arc;
 use serde::Deserialize;
 use serde::Serialize;
 
+use coco_types::Features;
+use coco_types::ToolFilter;
+use coco_types::ToolOverrides;
+
 /// Request to spawn a subagent.
 ///
 /// TS: AgentToolInput in AgentTool.tsx
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AgentSpawnRequest {
     /// The task/instruction for the agent.
     pub prompt: String,
@@ -60,6 +64,26 @@ pub struct AgentSpawnRequest {
     /// Working directory override.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<PathBuf>,
+    /// Parent's resolved feature gates, threaded through so the
+    /// subagent runs with the same Layer 1 set. Skipped at the JSON
+    /// boundary; the parent fills it in-process before handing off.
+    /// Subagents only narrow this — never widen.
+    #[serde(skip)]
+    pub features: Option<Arc<Features>>,
+    /// Parent's resolved Layer 2 tool overrides. Same in-process-only
+    /// inheritance as `features`. Falling back to `ToolOverrides::none()`
+    /// would expose tools the active model rejects, so callers must
+    /// thread the parent's value through.
+    #[serde(skip)]
+    pub tool_overrides: Option<Arc<ToolOverrides>>,
+    /// Parent's resolved Layer 4 tool filter. The subagent's own
+    /// allow/deny (from `AgentDefinition`) narrows this further via
+    /// `ToolFilter::narrow_with`, so a child's `allowed_tools` can
+    /// never widen what the parent already restricted. Skipped at the
+    /// JSON boundary for the same reason as the other inheritance
+    /// fields.
+    #[serde(skip)]
+    pub parent_tool_filter: Option<ToolFilter>,
 }
 
 /// Response from spawning a subagent.

@@ -7,11 +7,14 @@ TS source: `src/services/api/claude.ts` (3419 LOC), `src/services/api/withRetry.
 ```
 coco-inference depends on:
   - coco-types   (TokenUsage, ModelUsage, ProviderApi, ModelSpec, Capability)
-  - coco-config  (ProviderInfo, ModelInfo, ModelRoles — for provider factory + request building)
+  - coco-config  (ProviderConfig, ModelInfo, ModelRoles, RuntimeConfig, RedactedSecret,
+                  PositiveTokens, ProviderClientOptions — for build_call_options +
+                  ProviderClientFingerprint)
   - coco-error   (ApiError)
   - vercel-ai-provider (LanguageModelV4 trait)
   - vercel-ai-anthropic, vercel-ai-openai, vercel-ai-google, etc. (provider impls)
   - reqwest, tokio (HTTP, async)
+  - blake3 (ProviderClientFingerprint digest)
 
 coco-inference does NOT depend on:
   - coco-tool, coco-tools (no tool knowledge)
@@ -23,24 +26,25 @@ coco-inference does NOT depend on:
 
 ```
 coco-inference/src/
-  model_hub.rs         # ModelHub: caches providers + models, resolves ModelRole -> ModelSpec
-  provider_factory.rs  # ProviderFactory: ProviderApi -> Arc<dyn ProviderV4>
-  request_builder.rs   # 5-step pipeline: normalize, cache, thinking, options, headers
-  client.rs            # ApiClient wrapper around LanguageModelV4
-  query.rs             # queryWithStreaming(), queryWithoutStreaming()
-  retry.rs             # Two-layer retry: exponential backoff + auth retry + persistent mode
-  errors.rs            # Error classification (retryable, auth, prompt-too-long)
-  usage.rs             # TokenUsage accumulation (ModelUsage from coco-types)
-  auth.rs              # OAuth, API key, Bedrock/Vertex/GCP auth, token refresh
-  files_api.rs         # File upload/download API (500MB limit, retry, path security)
-  dump_prompts.rs      # Non-blocking debug trace for API requests/responses
-  logging.rs           # Per-request logging (usage, TTFT, latency)
-  rate_limit.rs        # Rate limit enforcement, cooldown, messaging
-  token_estimation.rs  # Token counting for budget decisions
-  analytics.rs         # Telemetry events, feature flags
-  bootstrap.rs         # Lazy-fetch org-specific config (model options, client data)
-  http.rs              # Auth headers, user-agent, OAuth retry wrapper
+  client.rs               # ApiClient wrapper around LanguageModelV4 (carries fingerprint)
+  fingerprint.rs          # ProviderClientFingerprint — turn-boundary coherence check
+  build_call_options.rs   # build_call_options() — Layer 2 per-request builder
+  thinking_convert.rs     # ThinkingLevel → flat extra_body keys (camelCase, per provider)
+  query.rs                # queryWithStreaming(), queryWithoutStreaming()
+  retry.rs                # Generic exponential backoff + auth retry + persistent mode
+  errors.rs               # Error classification (retryable, auth, prompt-too-long)
+  usage.rs                # TokenUsage accumulation (ModelUsage from coco-types)
+  files_api.rs            # File upload/download API (500MB limit, retry, path security)
+  dump_prompts.rs         # Non-blocking debug trace for API requests/responses
+  logging.rs              # Per-request logging (usage, TTFT, latency)
+  token_estimation.rs     # Token counting for budget decisions
+  bootstrap.rs            # Lazy-fetch org-specific config (model options, client data)
+  http.rs                 # Auth headers, user-agent, OAuth retry wrapper
 ```
+
+Provider concerns (auth, OAuth, beta headers, prompt-cache breakpoints, 529 retry,
+rate-limit messaging, Claude.ai policy limits) live in `vercel-ai-<provider>` —
+not here. See workspace `CLAUDE.md` "Multi-Provider Boundaries".
 
 ## Data Definitions
 
@@ -48,19 +52,55 @@ coco-inference/src/
 
 ```rust
 /// Unlike TS which uses @anthropic-ai/sdk directly, Rust uses vercel-ai trait
-/// for multi-provider support (Anthropic, OpenAI, Google, etc.)
+/// for multi-provider support (Anthropic, OpenAI, Google, etc.).
+///
+/// Carries a `ProviderClientFingerprint` so QueryEngine can detect at turn
+/// boundaries when role-rebinding via hot-reload requires a fresh client
+/// (multi-provider-plan.md §11.1).
 pub struct ApiClient {
-    model: Arc<dyn LanguageModelV4>,  // from vercel-ai-provider
-    config: ApiClientConfig,
+    model:       Arc<dyn LanguageModelV4>,   // from vercel-ai-provider
+    fingerprint: ProviderClientFingerprint,
+    config:      ApiClientConfig,
 }
 
+impl ApiClient {
+    pub fn fingerprint(&self) -> &ProviderClientFingerprint { &self.fingerprint }
+}
+
+/// Construction-time config, captured for retry/logging visibility.
+/// Per-call concerns live in `LanguageModelV4CallOptions`, NOT here.
 pub struct ApiClientConfig {
-    pub provider: ProviderApi,
-    pub api_key: Option<String>,
-    pub base_url: Option<String>,
-    pub max_retries: i32,            // default: 10
-    pub custom_headers: HashMap<String, String>,
-    pub proxy: Option<ProxyConfig>,
+    pub provider:       String,                  // = ProviderConfig.name
+    pub max_retries:    i32,                      // default: 10
+    pub custom_headers: BTreeMap<String, String>, // ordered, snapshot-stable
+    pub proxy:          Option<ProxyConfig>,
+}
+```
+
+### `ProviderClientFingerprint` — turn-boundary coherence
+
+```rust
+/// Identity for the cached `Arc<dyn LanguageModelV4>` inside `ApiClient`.
+/// QueryEngine compares (current vs. cached) at turn start; mismatch → rebuild.
+/// Atomic with `tool_overrides` because both come from the same
+/// `Arc<RuntimeConfig>` snapshot captured at turn start.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ProviderClientFingerprint {
+    pub provider:               String,         // ProviderConfig.name
+    pub api:                    ProviderApi,
+    pub api_model_name:         String,         // resolved per-(provider, model)
+    pub base_url:               String,
+    pub wire_api:               WireApi,
+    pub client_options_digest:  [u8; 32],       // blake3 over typed ProviderClientOptions
+    pub timeout_secs:           i64,
+    pub api_key_origin_digest:  [u8; 32],       // detects rotated keys; non-reversible
+}
+
+impl ProviderClientFingerprint {
+    /// Compute from the live RuntimeConfig + role binding. Reads RedactedSecret
+    /// values via `.expose()` only inside the digest hasher; never copies the
+    /// raw secret elsewhere.
+    pub fn compute(rc: &RuntimeConfig, role: ModelRole) -> Result<Self, ConfigError>;
 }
 ```
 
@@ -110,137 +150,94 @@ pub fn resolve_applied_effort(
 pub fn convert_effort_value_to_level(value: EffortValue) -> EffortLevel;
 ```
 
-### thinking_convert (from cocode-rs, evolved with options passthrough)
+### `thinking_convert::to_extra_body`
 
 ```rust
-/// Two-step conversion: typed fields (effort/budget) → per-provider mapping,
-/// then ThinkingLevel.options → direct merge into ProviderOptions.
+/// Reasoning support — typed `ThinkingLevel` → flat camelCase keys that match
+/// each Layer-3 provider's typed-options struct (multi-provider-plan.md §7.4).
 ///
-/// ModelInfo is retained for:
-///   - Budget validation/clamping (budget_tokens <= max_output_tokens - 1)
-///   - Capability-conditional logic (e.g., only inject reasoningSummary if ReasoningSummaries)
-///   - Future model-global thinking constraints
+/// Output is provider-neutral flat keys — the same shape a user would write
+/// directly into `models.json::extra_body`. There is no separate code path
+/// for "typed thinking" vs "user extras"; they share the merge in
+/// `build_call_options`.
 ///
-/// | Provider   | effort→API                       | budget→API             | options→API              |
-/// |------------|----------------------------------|------------------------|--------------------------|
-/// | Anthropic  | Adaptive or Enabled              | budgetTokens as u64    | {"interleaved": true}    |
-/// | OpenAI     | "low"/"medium"/"high"            | N/A                    | {"reasoningSummary":...}  |
-/// | Google     | ThinkingLevel Low/Medium/High    | N/A                    | {"includeThoughts":...}   |
-/// | Volcengine | "minimal"/"low"/"medium"/"high"  | budgetTokens as i32    | (any future)             |
-/// | Z.AI       | N/A                              | budgetTokens required  | (any future)             |
+/// | Provider   | extra_body keys produced                                              |
+/// |------------|------------------------------------------------------------------------|
+/// | Anthropic  | { "thinking": { "type": "enabled", "budgetTokens": <n> } }              |
+/// | OpenAI     | { "reasoningSummary": "auto", "include": ["reasoning.encrypted_content"]}|
+/// | Google     | { "thinkingConfig": { "includeThoughts": true, "thinkingBudget": <n> } } |
+/// | OpenAI-cmpt| { "reasoningEffort": "high" }                                           |
 pub mod thinking_convert {
-    /// Convert ThinkingLevel to provider-specific ProviderOptions.
-    ///
-    /// Step 1: Map effort + budget_tokens via per-provider match (typed conversion).
-    ///         Uses model_info for budget clamping (budget <= max_output_tokens - 1).
-    /// Step 2: Merge level.options into output (data passthrough, no typed conversion).
-    pub fn to_provider_options(
-        level: &ThinkingLevel,
-        model_info: &ModelInfo,
-        provider: ProviderApi,
-    ) -> Option<ProviderOptions>;
+    /// Convert ThinkingLevel to provider-specific flat camelCase keys.
+    /// `provider_name` selects the per-provider mapping.
+    pub fn to_extra_body(
+        level:         &ThinkingLevel,
+        provider_name: &str,
+    ) -> BTreeMap<String, JSONValue>;
 
     /// Map ReasoningEffort to vercel-ai ReasoningLevel enum.
+    /// Used by `build_call_options` for the `LanguageModelV4CallOptions.reasoning` field.
     pub fn effort_to_reasoning_level(effort: ReasoningEffort) -> Option<ReasoningLevel>;
 }
 ```
 
-### request_options_merge (from cocode-rs core/inference/src/request_options_merge.rs)
+### `build_call_options` — Layer 2 per-request builder
 
 ```rust
-/// Merge model request_options into vercel-ai ProviderOptions.
-/// All keys from the generic HashMap are placed into the provider-specific
-/// namespace of the ProviderOptions nested HashMap.
-pub mod request_options_merge {
-    /// Map ProviderApi to SDK namespace key (e.g., Anthropic → "anthropic", Openai → "openai").
-    pub fn provider_name_for_type(provider: ProviderApi) -> &'static str;
-
-    /// Generate per-provider base options (injected at RequestBuilder Step 2).
-    /// OpenAI: { "store": false }. Gemini: { "thinkingConfig": { "includeThoughts": true } }.
-    pub fn provider_base_options(provider: ProviderApi) -> Option<ProviderOptions>;
-
-    /// Merge request_options HashMap into ProviderOptions under the provider namespace.
-    pub fn merge_into_provider_options(
-        existing: Option<ProviderOptions>,
-        request_options: &HashMap<String, serde_json::Value>,
-        provider: ProviderApi,
-    ) -> ProviderOptions;
-
-    /// Merge two ProviderOptions (override takes precedence per key).
-    pub fn merge_provider_options(
-        base: Option<ProviderOptions>,
-        override_opts: Option<ProviderOptions>,
-    ) -> Option<ProviderOptions>;
-
-    /// Build a ProviderOptions with a single provider entry.
-    pub fn build_options(provider_name: &str, opts: HashMap<String, serde_json::Value>) -> ProviderOptions;
-}
-```
-
-### RequestBuilder Pipeline (from cocode-rs core/inference/src/request_builder.rs)
-
-```rust
-/// Build LanguageModelCallOptions from InferenceContext.
+/// Construct a fresh `LanguageModelV4CallOptions` per turn. This is the boundary
+/// where Layer 1's flat `extra_body` is wrapped under `ProviderConfig.name` for
+/// Layer 3 (multi-provider-plan.md §7).
 ///
-/// 5-step pipeline (each step overrides previous — user config always wins):
-///   Step 1: Message normalization + prompt cache breakpoints
-///   Step 2: Provider base options (store:false, thinkingConfig default)
-///   Step 3: ThinkingLevel → provider-specific options
-///           Step 3a: effort + budget_tokens → per-provider typed conversion
-///           Step 3b: level.options → merge into ProviderOptions (passthrough)
-///   Step 3.5: Fast mode speed injection (Anthropic only)
-///   Step 4: request_options merge (ModelInfo.options + ProviderModel.model_options)
-///   Step 5: HTTP interceptors → extra headers
-pub struct RequestBuilder { /* context, prompt, tools, overrides, fast_mode */ }
+/// Single point of `ProviderOptions.0` write across the entire codebase.
+pub fn build_call_options(
+    info:          &ModelInfo,            // already merged through L0/L1/L2
+    provider_name: &str,                  // = ProviderConfig.name
+    per_call:      &PerCallOverrides,     // CLI/TUI runtime overrides for this turn
+    prompt:        LlmPrompt,
+    tools:         Option<Vec<LanguageModelV4Tool>>,
+) -> LanguageModelV4CallOptions;
 
-impl RequestBuilder {
-    pub fn new(context: InferenceContext) -> Self;
-    pub fn messages(self, msgs: Vec<LanguageModelMessage>) -> Self;
-    pub fn tools(self, tools: Vec<LanguageModelTool>) -> Self;
-    pub fn fast_mode(self, active: bool) -> Self;
-    pub fn build(self) -> LanguageModelCallOptions;
+/// Per-turn overrides assembled from CLI flags, TUI commands, and active state.
+#[derive(Debug, Clone, Default)]
+pub struct PerCallOverrides {
+    pub temperature:        Option<f32>,
+    pub top_p:              Option<f32>,
+    pub top_k:              Option<PositiveCount>,
+    pub max_output_tokens:  Option<PositiveTokens>,
+    pub thinking_level:     Option<ThinkingLevel>,
+    pub extra_body:         BTreeMap<String, JSONValue>,   // wins over info.extra_body
 }
 ```
 
-### InferenceContext (from cocode-rs common/protocol/src/execution/inference_context.rs)
+Implementation contract (no `as u64` casts; deterministic merge order):
 
 ```rust
-/// Complete context for an LLM request. Assembled by ModelHub, consumed by RequestBuilder.
-pub struct InferenceContext {
-    // === Identity ===
-    pub call_id: String,
-    pub session_id: String,
-    pub turn_number: i32,
+let mut call = LanguageModelV4CallOptions::new(prompt);
+call.tools = tools;
+// PositiveTokens/PositiveCount → u64 via infallible `From`.
+call.temperature       = per_call.temperature.or(info.temperature);
+call.top_p             = per_call.top_p     .or(info.top_p);
+call.top_k             = per_call.top_k     .or(info.top_k).map(u64::from);
+call.max_output_tokens = per_call.max_output_tokens
+                            .or(Some(info.max_output_tokens))
+                            .map(u64::from);
 
-    // === Resolved Model ===
-    pub model_spec: ModelSpec,
-    pub model_info: ModelInfo,
+let thinking = per_call.thinking_level.as_ref().or(info.default_thinking());
+if let Some(t) = thinking { call.reasoning = Some(t.effort.into()); }
 
-    // === Thinking ===
-    /// Resolved ThinkingLevel (from RoleSelection override or ModelInfo default).
-    /// Contains effort + budget_tokens + options (provider-specific extensions).
-    pub thinking_level: Option<ThinkingLevel>,
-
-    // === Agent ===
-    pub agent_kind: AgentKind,
-    pub original_identity: ExecutionIdentity,
-
-    // === Extensions ===
-    /// Merged from ModelInfo.options + ProviderModel.model_options.
-    /// Applied at RequestBuilder Step 4 (highest config priority).
-    pub request_options: Option<HashMap<String, serde_json::Value>>,
-    /// HTTP interceptor names (from ProviderInfo.interceptors).
-    pub interceptor_names: Vec<String>,
-    /// Prompt cache strategy.
-    pub prompt_cache_config: Option<PromptCacheConfig>,
+let mut extra = info.extra_body.clone();                              // BTreeMap
+for (k, v) in &per_call.extra_body { extra.insert(k.clone(), v.clone()); }
+if let Some(t) = thinking {
+    for (k, v) in thinking_convert::to_extra_body(t, provider_name) {
+        extra.insert(k, v);
+    }
 }
-
-impl InferenceContext {
-    /// Get effective thinking level (explicit override or ModelInfo default).
-    pub fn effective_thinking_level(&self) -> Option<&ThinkingLevel>;
-    /// Create child context for subagent (inherits model config).
-    pub fn child_context(&self, call_id: &str, agent_type: &str, identity: ExecutionIdentity) -> Self;
+if !extra.is_empty() {
+    let mut po = ProviderOptions::default();
+    po.set(provider_name, extra);                                     // Layer 2 wrap
+    call.provider_options = Some(po);
 }
+call
 ```
 
 ### Resolution Flow
@@ -248,20 +245,17 @@ impl InferenceContext {
 ```
 User /effort high
   → ModelInfo.resolve_thinking_level(ThinkingLevel::high())
-    → lookup supported_thinking_levels for effort==High
-    → returns full ThinkingLevel { effort: High, options: { "reasoningSummary": "auto", ... } }
-  → RoleSelections.set_thinking_level(Main, resolved_level)
-  → ModelHub.build_context():
-    → InferenceContext.thinking_level = Some(resolved_level)
-    → InferenceContext.request_options = ModelInfo.options ∪ ProviderModel.model_options
-  → RequestBuilder.build():
-    Step 2: provider_base_options()
-    Step 3: thinking_convert(level, model_info, provider)
-      3a: effort + budget_tokens → per-provider typed conversion (budget clamped to max_output_tokens)
-      3b: level.options → merge into output (data passthrough)
-    Step 4: request_options → merge (ModelInfo.options, e.g., { "store": false })
-    Step 5: interceptors → headers
-  → LanguageModelCallOptions.provider_options
+    → returns full ThinkingLevel { effort: High, options: { "reasoningSummary": "auto" } }
+  → PerCallOverrides.thinking_level = Some(resolved_level)
+  → build_call_options(info, &provider_cfg.name, &per_call, prompt, tools):
+    → Lane A:  temperature/top_p/top_k/max_output_tokens (typed)
+    → Lane A2: thinking.effort  → call.reasoning
+    → Lane B:  info.extra_body ∪ per_call.extra_body ∪ thinking_convert(...)
+               → wrapped under provider_options[<provider_cfg.name>]
+  → call_options handed to model.do_generate(call_options)
+  → Layer 3 (vercel-ai provider) extracts provider_options[self.provider()],
+    parses typed-known keys + shallow-merges leftover keys into wire body
+    (multi-provider-plan.md §7.3).
 ```
 
 ### Query Options (from `claude.ts`, 3419 LOC)
@@ -828,24 +822,35 @@ pub enum CacheBreakReason {
 
 ---
 
-## ModelHub (from cocode-rs `model_hub.rs`)
+## Provider Construction
+
+There is no `ModelHub` / `ProviderFactory` in coco-rs. Provider clients are
+constructed by **`app/cli/src/model_factory.rs::build_language_model_from_runtime`**
+from `RuntimeConfig` (multi-provider-plan.md §6) and cached inside `ApiClient`.
+
+`QueryEngine` enforces coherence with hot-reload via the turn-boundary
+`ProviderClientFingerprint` check:
 
 ```rust
-/// Central model management. Caches providers and models.
-/// Resolves ModelRole -> ModelSpec using ModelRoles config.
-pub struct ModelHub {
-    config: Arc<ResolvedConfig>,
-    providers: RwLock<HashMap<String, Arc<dyn ProviderV4>>>,
-    models: RwLock<HashMap<ModelSpec, Arc<dyn LanguageModelV4>>>,
-    factory: ProviderFactory,
-}
-
-impl ModelHub {
-    pub async fn get_model(&self, spec: &ModelSpec) -> Result<Arc<dyn LanguageModelV4>, ApiError>;
-    pub fn resolve_role(&self, role: ModelRole) -> ModelSpec;
-    pub async fn get_or_create_provider(&self, api: &ProviderApi) -> Result<Arc<dyn ProviderV4>, ApiError>;
+impl QueryEngine {
+    fn ensure_client_for_turn(
+        &mut self,
+        runtime: &RuntimeConfig,
+        role:    ModelRole,
+    ) -> Result<()> {
+        let fp = ProviderClientFingerprint::compute(runtime, role)?;
+        if self.api_client.fingerprint() != &fp {
+            let new_client = ApiClient::build(runtime, role, &fp)?;
+            self.api_client = Arc::new(new_client);   // release the old client
+        }
+        Ok(())
+    }
 }
 ```
+
+The `tool_overrides` and `api_client` reads in the same turn both come from the
+same `Arc<RuntimeConfig>` snapshot, so role rebinding cannot leave them
+inconsistent (`Arc::ptr_eq` test invariant in multi-provider-plan.md §15.B).
 
 ## Core Logic
 

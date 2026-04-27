@@ -66,6 +66,9 @@ fn make_config(cancelled: Arc<AtomicBool>) -> InProcessRunnerConfig {
         cancelled,
         auto_compact_threshold: 100_000,
         bypass_permissions_available: false,
+        features: None,
+        tool_overrides: None,
+        parent_tool_filter: None,
     }
 }
 
@@ -159,12 +162,10 @@ fn test_wait_result_variants() {
 fn test_agent_query_config_clone() {
     let config = AgentQueryConfig {
         system_prompt: "test".into(),
-        model: None,
         max_turns: Some(5),
-        allowed_tools: vec!["Read".into()],
-        fork_context_messages: vec![],
+        allowed_tools: vec![coco_types::ToolName::Read.as_str().into()],
         preserve_tool_use_results: true,
-        bypass_permissions_available: false,
+        ..Default::default()
     };
     let cloned = config;
     assert_eq!(cloned.system_prompt, "test");

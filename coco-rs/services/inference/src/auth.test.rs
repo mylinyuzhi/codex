@@ -125,13 +125,13 @@ fn test_clear_stored_oauth_tokens() {
 }
 
 #[test]
-fn test_resolve_auth_bare_mode() {
+fn test_resolve_auth_force_env_auth() {
     let prev = std::env::var("ANTHROPIC_API_KEY").ok();
     // SAFETY: Test-only.
     unsafe { std::env::set_var("ANTHROPIC_API_KEY", "bare-key") };
 
     let options = AuthResolveOptions {
-        bare_mode: true,
+        force_env_auth: true,
         ..Default::default()
     };
     let auth = resolve_auth(&options);

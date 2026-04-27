@@ -433,21 +433,21 @@ async fn test_bash_with_progress_channel() {
 use super::shell_sandbox_config_from_runtime;
 
 #[test]
-fn test_shell_sandbox_config_disabled_by_default() {
-    let cfg = shell_sandbox_config_from_runtime(&coco_config::SandboxConfig::default());
+fn test_shell_sandbox_config_feature_disabled() {
+    let cfg = shell_sandbox_config_from_runtime(
+        &coco_config::SandboxConfig::default(),
+        /*feature_enabled*/ false,
+    );
     assert!(
         !cfg.mode.is_active(),
-        "sandbox should be disabled by default"
+        "Feature::Sandbox disabled → no sandbox"
     );
 }
 
 #[test]
-fn test_shell_sandbox_config_enabled_defaults_readonly() {
-    let runtime = coco_config::SandboxConfig {
-        enabled: true,
-        ..Default::default()
-    };
-    let cfg = shell_sandbox_config_from_runtime(&runtime);
+fn test_shell_sandbox_config_feature_enabled_defaults_readonly() {
+    let runtime = coco_config::SandboxConfig::default();
+    let cfg = shell_sandbox_config_from_runtime(&runtime, /*feature_enabled*/ true);
     assert!(cfg.mode.is_active());
     assert_eq!(
         cfg.mode,
@@ -459,22 +459,20 @@ fn test_shell_sandbox_config_enabled_defaults_readonly() {
 #[test]
 fn test_shell_sandbox_config_mode_workspace_write_maps_to_strict() {
     let runtime = coco_config::SandboxConfig {
-        enabled: true,
         mode: coco_types::SandboxMode::WorkspaceWrite,
         ..Default::default()
     };
-    let cfg = shell_sandbox_config_from_runtime(&runtime);
+    let cfg = shell_sandbox_config_from_runtime(&runtime, /*feature_enabled*/ true);
     assert_eq!(cfg.mode, coco_shell::sandbox::SandboxMode::Strict);
 }
 
 #[test]
 fn test_shell_sandbox_config_excluded_commands_preserved() {
     let runtime = coco_config::SandboxConfig {
-        enabled: true,
         excluded_commands: vec!["git".into(), "npm".into(), "cargo".into()],
         ..Default::default()
     };
-    let cfg = shell_sandbox_config_from_runtime(&runtime);
+    let cfg = shell_sandbox_config_from_runtime(&runtime, /*feature_enabled*/ true);
     assert_eq!(
         cfg.excluded_commands,
         vec!["git".to_string(), "npm".to_string(), "cargo".to_string()]
@@ -486,11 +484,8 @@ fn test_shell_sandbox_config_excluded_commands_preserved() {
 fn test_sandbox_decision_non_excluded_command() {
     use coco_shell::sandbox::BypassRequest;
     use coco_shell::sandbox::should_sandbox_command;
-    let runtime = coco_config::SandboxConfig {
-        enabled: true,
-        ..Default::default()
-    };
-    let cfg = shell_sandbox_config_from_runtime(&runtime);
+    let runtime = coco_config::SandboxConfig::default();
+    let cfg = shell_sandbox_config_from_runtime(&runtime, /*feature_enabled*/ true);
     let decision = should_sandbox_command(&cfg, "ls -la", BypassRequest::No);
     assert!(
         decision.is_sandboxed(),
@@ -504,11 +499,10 @@ fn test_sandbox_decision_excluded_command() {
     use coco_shell::sandbox::BypassRequest;
     use coco_shell::sandbox::should_sandbox_command;
     let runtime = coco_config::SandboxConfig {
-        enabled: true,
         excluded_commands: vec!["git".into()],
         ..Default::default()
     };
-    let cfg = shell_sandbox_config_from_runtime(&runtime);
+    let cfg = shell_sandbox_config_from_runtime(&runtime, /*feature_enabled*/ true);
     let decision = should_sandbox_command(&cfg, "git status", BypassRequest::No);
     assert!(
         !decision.is_sandboxed(),
@@ -521,11 +515,8 @@ fn test_sandbox_decision_excluded_command() {
 fn test_sandbox_decision_bypass_respected() {
     use coco_shell::sandbox::BypassRequest;
     use coco_shell::sandbox::should_sandbox_command;
-    let runtime = coco_config::SandboxConfig {
-        enabled: true,
-        ..Default::default()
-    };
-    let cfg = shell_sandbox_config_from_runtime(&runtime);
+    let runtime = coco_config::SandboxConfig::default();
+    let cfg = shell_sandbox_config_from_runtime(&runtime, /*feature_enabled*/ true);
     let decision = should_sandbox_command(&cfg, "rm -rf /", BypassRequest::Requested);
     assert!(
         !decision.is_sandboxed(),
@@ -642,7 +633,9 @@ fn test_stall_prompt_yes_no() {
 
 #[test]
 fn test_stall_prompt_password() {
-    assert!(coco_tool_runtime::matches_interactive_prompt("Enter password:"));
+    assert!(coco_tool_runtime::matches_interactive_prompt(
+        "Enter password:"
+    ));
     assert!(coco_tool_runtime::matches_interactive_prompt(
         "[sudo] password for user:"
     ));
@@ -680,7 +673,9 @@ fn test_stall_no_false_positive_normal_output() {
     assert!(!coco_tool_runtime::matches_interactive_prompt(
         "Compiling project..."
     ));
-    assert!(!coco_tool_runtime::matches_interactive_prompt("Build succeeded"));
+    assert!(!coco_tool_runtime::matches_interactive_prompt(
+        "Build succeeded"
+    ));
     assert!(!coco_tool_runtime::matches_interactive_prompt(
         "Downloaded 42 packages"
     ));

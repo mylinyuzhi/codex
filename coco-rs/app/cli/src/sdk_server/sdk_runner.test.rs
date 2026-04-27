@@ -79,7 +79,10 @@ fn runner_can_be_constructed_and_boxed_as_trait_object() {
     let model = Arc::new(SilentModel {
         _calls: AtomicI32::new(0),
     });
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
     let tools = Arc::new(ToolRegistry::new());
     let runner = QueryEngineRunner::new(
         client, tools, /*max_output_tokens*/ 16_384, /*max_turns*/ 10,

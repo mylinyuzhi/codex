@@ -1,87 +1,91 @@
+//! `ThinkingLevel` → flat camelCase `extra_body` keys.
+//!
+//! Output is a `BTreeMap<String, JSONValue>` — provider-aware mapping
+//! that produces the same shape a user would write directly into
+//! `ModelInfo.extra_body`. Layer 2 (`build_call_options`) merges this
+//! into the per-call `extra_body` and wraps under the SDK namespace
+//! key.
+//!
+//! All keys are camelCase so they match each provider's typed-options
+//! struct (`#[serde(rename_all = "camelCase")]` on
+//! `AnthropicProviderOptions`, `OpenAIResponsesProviderOptions`,
+//! `GoogleLanguageModelOptions`, etc.).
+//!
+//! **Routing key is `ProviderApi`, not the runtime instance name.**
+//! A `ProviderConfig.name = "azure-east"` backed by
+//! `api: ProviderApi::Anthropic` still emits Anthropic's
+//! `thinking { type, budgetTokens }` shape — the family is what
+//! determines wire body, not the user-facing instance label.
+
 use coco_types::ProviderApi;
 use coco_types::ReasoningEffort;
 use coco_types::ThinkingLevel;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
-/// Convert a ThinkingLevel into provider-specific options.
-///
-/// Step 1: effort + budget_tokens → per-provider typed conversion
-/// Step 2: level.options → merge directly into ProviderOptions (passthrough)
-pub fn convert_thinking_level(
+/// Convert a `ThinkingLevel` into provider-neutral flat camelCase
+/// keys. Routing key is the wire-protocol family.
+pub fn to_extra_body(
     level: &ThinkingLevel,
-    provider: ProviderApi,
-) -> HashMap<String, serde_json::Value> {
-    let mut result = HashMap::new();
+    api: ProviderApi,
+) -> BTreeMap<String, serde_json::Value> {
+    let mut out = BTreeMap::new();
 
     if level.effort == ReasoningEffort::None {
-        return result;
+        return out;
     }
 
-    match provider {
+    match api {
         ProviderApi::Anthropic => {
-            // Anthropic: thinking { type, budget_tokens }
+            // { "thinking": { "type": "enabled", "budgetTokens": <n> } }
             let mut thinking = serde_json::Map::new();
             thinking.insert("type".into(), serde_json::Value::String("enabled".into()));
             if let Some(budget) = level.budget_tokens {
                 thinking.insert(
-                    "budget_tokens".into(),
+                    "budgetTokens".into(),
                     serde_json::Value::Number(budget.into()),
                 );
             }
-            result.insert("thinking".into(), serde_json::Value::Object(thinking));
+            out.insert("thinking".into(), serde_json::Value::Object(thinking));
         }
         ProviderApi::Openai => {
-            // OpenAI: reasoning_effort
-            let effort_str = match level.effort {
-                ReasoningEffort::None | ReasoningEffort::Minimal => "low",
-                ReasoningEffort::Low => "low",
-                ReasoningEffort::Medium => "medium",
-                ReasoningEffort::High | ReasoningEffort::XHigh => "high",
-            };
-            result.insert(
-                "reasoning_effort".into(),
-                serde_json::Value::String(effort_str.into()),
+            // OpenAI Responses: { "reasoningSummary": "auto" }. Effort
+            // is sent via the `reasoning` typed field on
+            // `LanguageModelV4CallOptions`, not via extra_body.
+            out.insert(
+                "reasoningSummary".into(),
+                serde_json::Value::String("auto".into()),
             );
         }
         ProviderApi::Gemini => {
-            // Google: thinkingConfig
+            // { "thinkingConfig": { "includeThoughts": true, "thinkingBudget": <n> } }
             let mut config = serde_json::Map::new();
-            config.insert(
-                "thinkingLevel".into(),
-                serde_json::Value::String(level.effort.to_string()),
-            );
+            config.insert("includeThoughts".into(), serde_json::Value::Bool(true));
             if let Some(budget) = level.budget_tokens {
                 config.insert(
                     "thinkingBudget".into(),
                     serde_json::Value::Number(budget.into()),
                 );
             }
-            result.insert("thinkingConfig".into(), serde_json::Value::Object(config));
+            out.insert("thinkingConfig".into(), serde_json::Value::Object(config));
         }
-        ProviderApi::Volcengine | ProviderApi::Zai => {
-            // Budget-based: similar to Anthropic
-            if let Some(budget) = level.budget_tokens {
-                result.insert(
-                    "thinking_budget".into(),
-                    serde_json::Value::Number(budget.into()),
-                );
-            }
-        }
-        ProviderApi::OpenaiCompat => {
-            // Pass through as generic reasoning params
-            result.insert(
-                "reasoning_effort".into(),
+        ProviderApi::Volcengine | ProviderApi::Zai | ProviderApi::OpenaiCompat => {
+            // xAI / DeepSeek / Volcengine / Z.AI / generic compat:
+            // { "reasoningEffort": "high" }
+            out.insert(
+                "reasoningEffort".into(),
                 serde_json::Value::String(level.effort.to_string()),
             );
         }
     }
 
-    // Step 2: Merge options passthrough
+    // Pass-through `level.options` — provider-specific extensions land
+    // verbatim. Caller is responsible for camelCase keys (the typed
+    // fields above are camelCase by construction).
     for (key, value) in &level.options {
-        result.insert(key.clone(), value.clone());
+        out.insert(key.clone(), value.clone());
     }
 
-    result
+    out
 }
 
 #[cfg(test)]

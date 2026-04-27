@@ -1,7 +1,13 @@
 //! Core compaction types.
 
+use std::collections::BTreeSet;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+
+use coco_types::AssistantContent;
 use coco_types::AttachmentMessage;
 use coco_types::CompactTrigger;
+use coco_types::LlmMessage;
 use coco_types::Message;
 use serde::Deserialize;
 use serde::Serialize;
@@ -134,32 +140,137 @@ pub struct TokenWarningState {
 }
 
 /// Strategy for API-native context editing.
+///
+/// Mirrors the Anthropic `context_management.edits` payload, with each
+/// variant mapping to one wire `type` (TS `apiMicrocompact.ts`).
 #[derive(Debug, Clone)]
 pub enum ContextEditStrategy {
-    /// Clear tool use results (keep tool calls).
+    /// `clear_tool_uses_20250919`: clear tool result content / tool inputs
+    /// for older turns, keeping the most-recent N matching the [`ToolUseKeep`].
     ClearToolUses {
         /// Trigger threshold (token count).
         trigger: Option<i64>,
-        /// How many recent tool uses to keep.
-        keep_recent: Option<i32>,
+        /// How many recent tool uses to retain. `None` defers to the model
+        /// policy default.
+        keep_recent: Option<ToolUseKeep>,
         /// Which tool inputs to clear.
         clear_inputs: ClearToolInputs,
-        /// Tools excluded from clearing.
-        exclude_tools: Vec<String>,
+        /// Builtin tools excluded from clearing.
+        exclude_tools: Vec<coco_types::ToolName>,
+        /// Additional non-builtin tool identifiers (MCP / custom) to exclude.
+        exclude_tool_strs: Vec<String>,
     },
-    /// Clear thinking/reasoning content.
+    /// `clear_thinking_20251015`: drop reasoning blocks from older turns.
     ClearThinking {
-        /// How many recent thinking blocks to keep.
-        keep_recent_turns: i32,
+        /// Retention policy for thinking blocks.
+        keep: ThinkingKeep,
     },
+}
+
+/// Retention policy for tool uses under `clear_tool_uses_20250919`.
+///
+/// TS shape: `{type: 'tool_uses', value: number}`. We only model the
+/// numeric variant — the wire format has no symbolic "all" for this field.
+#[derive(Debug, Clone, Copy)]
+pub struct ToolUseKeep {
+    /// Number of recent tool uses to keep.
+    pub value: i32,
+}
+
+/// Retention policy for thinking blocks under `clear_thinking_20251015`.
+///
+/// TS shape: `{type: 'thinking_turns', value: number} | 'all'`. The
+/// `'all'` literal is preserved as a distinct variant so callers cannot
+/// accidentally smuggle a sentinel value through the numeric path.
+#[derive(Debug, Clone, Copy)]
+pub enum ThinkingKeep {
+    /// Keep all thinking blocks (TS `'all'`).
+    All,
+    /// Keep the last N turns (TS `{type: 'thinking_turns', value: N}`).
+    Recent { turns: i32 },
 }
 
 /// Which tool inputs to clear during context editing.
 #[derive(Debug, Clone)]
 pub enum ClearToolInputs {
+    /// Clear inputs for all eligible tools (TS `clear_tool_inputs: true`).
     All,
-    SpecificTools(Vec<String>),
+    /// Clear inputs only for the listed builtin tools.
+    SpecificTools(Vec<coco_types::ToolName>),
+    /// Don't clear inputs (TS `clear_tool_inputs: false` / omitted).
     None,
+}
+
+/// State store tracking whether the autocompact warning should be suppressed.
+///
+/// Set to true after a successful compaction so the TUI doesn't redundantly
+/// warn the user about the (now-stale) pre-compact token count. Cleared at
+/// the start of each new compaction attempt or when the next API response
+/// gives an accurate token count.
+///
+/// TS: `services/compact/compactWarningState.ts` — pure state, separate
+/// from the React hook (`compactWarningHook.ts`) so the print/SDK paths
+/// can use it without dragging React into the module graph.
+#[derive(Debug, Default)]
+pub struct CompactWarningState {
+    suppressed: AtomicBool,
+}
+
+impl CompactWarningState {
+    pub const fn new() -> Self {
+        Self {
+            suppressed: AtomicBool::new(false),
+        }
+    }
+
+    /// Suppress the warning. Call after successful compaction.
+    pub fn suppress(&self) {
+        self.suppressed.store(true, Ordering::Release);
+    }
+
+    /// Clear suppression. Call at the start of a new compact attempt.
+    pub fn clear(&self) {
+        self.suppressed.store(false, Ordering::Release);
+    }
+
+    /// Whether the warning is currently suppressed.
+    pub fn is_suppressed(&self) -> bool {
+        self.suppressed.load(Ordering::Acquire)
+    }
+}
+
+/// Collect names of tools that were "discovered" via ToolSearch in the
+/// conversation (i.e. deferred-load tools that were materialized).
+///
+/// TS: `extractDiscoveredToolNames(messages)` in `utils/toolSearch.ts`.
+/// Returned set is sorted (BTreeSet) so the boundary marker stores them
+/// deterministically — TS sorts before persisting too.
+pub fn extract_discovered_tool_names(messages: &[Message]) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    for msg in messages {
+        let Message::Assistant(asst) = msg else {
+            continue;
+        };
+        let LlmMessage::Assistant { content, .. } = &asst.message else {
+            continue;
+        };
+        for part in content {
+            // ToolSearch produces tool_use blocks named "ToolSearch" whose
+            // input lists discovered tools. Walk their `tools` field.
+            if let AssistantContent::ToolCall(tc) = part {
+                if tc.tool_name == "ToolSearch"
+                    && let Some(arr) = tc.input.get("tools").and_then(|v| v.as_array())
+                {
+                    for item in arr {
+                        if let Some(name) = item.as_str() {
+                            names.insert(name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    names
 }
 
 /// Compaction errors.

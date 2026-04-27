@@ -44,6 +44,8 @@ use tokio::time::sleep_until;
 use tracing::info;
 use tracing::warn;
 
+pub use notify::Event;
+pub use notify::EventKind;
 pub use notify::RecursiveMode;
 use notify::Watcher;
 
@@ -137,13 +139,25 @@ impl<E: Clone + Send + 'static> FileWatcher<E> {
         self.tx.subscribe()
     }
 
-    /// Start watching `path` for filesystem changes.
+    /// Start watching `path` for filesystem changes. Errors are
+    /// logged at `warn` and otherwise swallowed; use [`Self::try_watch`]
+    /// for a `Result`-returning variant.
     pub fn watch(&self, path: PathBuf, mode: RecursiveMode) {
+        if let Err(err) = self.try_watch(path.clone(), mode) {
+            warn!("watch install failed for {}: {err}", path.display());
+        }
+    }
+
+    /// Start watching `path` and return a typed error on failure.
+    /// Returns `Ok(())` even if the path doesn't exist (the caller
+    /// may be subscribing to a future-create event via the parent
+    /// directory).
+    pub fn try_watch(&self, path: PathBuf, mode: RecursiveMode) -> notify::Result<()> {
         let Some(inner) = &self.inner else {
-            return;
+            return Ok(());
         };
         if !path.exists() {
-            return;
+            return Ok(());
         }
         let mut guard = match inner.lock() {
             Ok(g) => g,
@@ -151,18 +165,16 @@ impl<E: Clone + Send + 'static> FileWatcher<E> {
         };
         if let Some(existing) = guard.watched_paths.get(&path) {
             if *existing == RecursiveMode::Recursive || *existing == mode {
-                return;
+                return Ok(());
             }
             // Upgrading from NonRecursive → Recursive: unwatch first.
             if let Err(err) = guard.watcher.unwatch(&path) {
                 warn!("failed to unwatch {}: {err}", path.display());
             }
         }
-        if let Err(err) = guard.watcher.watch(&path, mode) {
-            warn!("failed to watch {}: {err}", path.display());
-            return;
-        }
+        guard.watcher.watch(&path, mode)?;
         guard.watched_paths.insert(path, mode);
+        Ok(())
     }
 
     /// Stop watching `path`.

@@ -166,6 +166,13 @@ pub struct QueryEngine {
     attachment_rx: Arc<
         tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<coco_types::AttachmentMessage>>,
     >,
+    /// Observers notified after each successful full compaction. Each
+    /// crate that owns post-compact-invalidated state (file caches, skill
+    /// state, memory caches) registers itself once at startup. Empty
+    /// default ⇒ no observers fire (TS parity for skipped subsystems).
+    /// Implements the TS `runPostCompactCleanup` god-function as a
+    /// pluggable registry.
+    compaction_observers: Arc<coco_compact::CompactionObserverRegistry>,
 }
 
 impl QueryEngine {
@@ -205,7 +212,21 @@ impl QueryEngine {
             reminder_sources: coco_system_reminder::ReminderSources::default(),
             attachment_tx,
             attachment_rx: Arc::new(tokio::sync::Mutex::new(attachment_rx)),
+            compaction_observers: Arc::new(coco_compact::CompactionObserverRegistry::new()),
         }
+    }
+
+    /// Install the compaction observer registry. Caller builds the
+    /// registry, registers per-subsystem observers, then hands an
+    /// `Arc` to the engine so notifications fire in `try_full_compact`.
+    /// Omitting this leaves an empty registry — equivalent to TS skipping
+    /// `runPostCompactCleanup` when the corresponding caches don't exist.
+    pub fn with_compaction_observers(
+        mut self,
+        observers: Arc<coco_compact::CompactionObserverRegistry>,
+    ) -> Self {
+        self.compaction_observers = observers;
+        self
     }
 
     /// A clone-friendly emitter handle for owning crates (hooks /
@@ -334,7 +355,10 @@ impl QueryEngine {
     /// Attach a permission bridge so `PermissionDecision::Ask` outcomes
     /// are forwarded to an external authority (e.g. the SDK client via
     /// `SdkPermissionBridge`) instead of auto-allowing.
-    pub fn with_permission_bridge(mut self, bridge: coco_tool_runtime::ToolPermissionBridgeRef) -> Self {
+    pub fn with_permission_bridge(
+        mut self,
+        bridge: coco_tool_runtime::ToolPermissionBridgeRef,
+    ) -> Self {
         self.permission_bridge = Some(bridge);
         self
     }
@@ -563,8 +587,14 @@ impl QueryEngine {
             .and_then(|v| v.as_str().map(str::to_owned))
             .unwrap_or_else(|| "default".into());
         let tools = if bootstrap.tools.is_empty() {
+            let stub_ctx = coco_tool_runtime::ToolUseContext::stub_for_filtering(
+                self.config.features.clone(),
+                self.config.tool_overrides.clone(),
+                self.config.tool_filter.clone(),
+                self.config.permission_mode,
+            );
             self.tools
-                .loaded_tools()
+                .loaded_tools(&stub_ctx)
                 .iter()
                 .map(|t| t.name().to_string())
                 .collect()
@@ -1003,12 +1033,19 @@ impl QueryEngine {
             // (counts human turns, not LLM iterations). Tool-result
             // rounds within one human turn share the same counter value
             // so reminders don't spam mid-turn.
-            let reminder_tools: Vec<String> = self
-                .tools
-                .loaded_tools()
-                .iter()
-                .map(|t| t.name().to_string())
-                .collect();
+            let reminder_tools: Vec<String> = {
+                let stub_ctx = coco_tool_runtime::ToolUseContext::stub_for_filtering(
+                    self.config.features.clone(),
+                    self.config.tool_overrides.clone(),
+                    self.config.tool_filter.clone(),
+                    self.config.permission_mode,
+                );
+                self.tools
+                    .loaded_tools(&stub_ctx)
+                    .iter()
+                    .map(|t| t.name().to_string())
+                    .collect()
+            };
             let pm_settings = &self.config.plan_mode_settings;
             let workflow_rm = match pm_settings.workflow {
                 coco_config::PlanModeWorkflow::FivePhase => coco_context::PlanWorkflow::FivePhase,
@@ -2461,20 +2498,23 @@ impl QueryEngine {
         // Auto-compaction check: micro first, then full LLM if still over.
         // TS: `compactConversation()` — micro-compact, then full summarize.
         //
-        // TS `isAutoCompactEnabled()` short-circuits the trigger (not just
-        // the reminder) — matching that parity keeps `auto_compact_enabled
-        // = false` from silently rewriting history. Gate both call sites on
-        // the same flag so a post-micro re-check stays consistent.
+        // `should_auto_compact_guarded` honors `DISABLE_COMPACT` /
+        // `DISABLE_AUTO_COMPACT` env vars and recursion guards; we still
+        // route through `auto_compact_enabled` as the user-toggle layer.
+        // `Other` source = main thread / SDK; subagent paths set their own
+        // source when wired through.
         let estimated_tokens = coco_compact::estimate_tokens(&history.messages);
-        if self.config.auto_compact_enabled
-            && coco_compact::should_auto_compact(
-                estimated_tokens,
-                self.config.context_window,
-                self.config.max_output_tokens,
-            )
-        {
+        if coco_compact::should_auto_compact_guarded(
+            estimated_tokens,
+            self.config.context_window,
+            self.config.max_output_tokens,
+            self.config.auto_compact_enabled,
+            coco_compact::CompactQuerySource::Other,
+        ) {
+            // TS micro_compact keeps the last N compactable tool_use_ids
+            // (not the last N messages). 5 matches TS time-based MC default.
             let pre_count = history.messages.len() as i32;
-            coco_compact::micro_compact(&mut history.messages, /*keep_recent*/ 10);
+            coco_compact::micro_compact(&mut history.messages, /*keep_recent*/ 5);
             info!("auto micro-compaction triggered");
             let removed = (pre_count - history.messages.len() as i32).max(0);
             let _ = emit_protocol(
@@ -2487,13 +2527,13 @@ impl QueryEngine {
             .await;
 
             let post_micro_tokens = coco_compact::estimate_tokens(&history.messages);
-            if self.config.auto_compact_enabled
-                && coco_compact::should_auto_compact(
-                    post_micro_tokens,
-                    self.config.context_window,
-                    self.config.max_output_tokens,
-                )
-            {
+            if coco_compact::should_auto_compact_guarded(
+                post_micro_tokens,
+                self.config.context_window,
+                self.config.max_output_tokens,
+                self.config.auto_compact_enabled,
+                coco_compact::CompactQuerySource::Other,
+            ) {
                 self.try_full_compact(history, event_tx).await;
             }
         }
@@ -2640,25 +2680,28 @@ impl QueryEngine {
                     "full compaction completed"
                 );
 
-                // Replace history with TS-aligned order:
-                // boundary, summaryMessages, messagesToKeep, attachments, hookResults
-                // TS: buildPostCompactMessages() in compact.ts
-                let mut new_messages = Vec::new();
-                new_messages.push(result.boundary_marker);
-                new_messages.extend(result.summary_messages);
-                new_messages.extend(result.messages_to_keep);
-                for att in &result.attachments {
-                    new_messages.push(Message::Attachment(att.clone()));
-                }
-                new_messages.extend(result.hook_results);
-                history.messages = new_messages;
+                // TS-aligned order: boundary, summaryMessages, messagesToKeep,
+                // attachments, hookResults. Use the canonical helper.
+                let summary_tokens = result.post_compact_tokens as i32;
+                let new_messages = coco_compact::build_post_compact_messages(&result);
+                history.messages = new_messages.clone();
+
+                // TS `runPostCompactCleanup`: notify each registered observer
+                // so per-crate caches (file/memory/skill state) drop their
+                // pre-compact entries. Errors are logged inside notify_all.
+                self.compaction_observers
+                    .notify_all(&result, /*is_main_agent*/ true)
+                    .await;
+                self.compaction_observers
+                    .notify_post_compact(&new_messages)
+                    .await;
 
                 let _delivered = emit_protocol(
                     event_tx,
                     crate::ServerNotification::ContextCompacted(
                         coco_types::ContextCompactedParams {
                             removed_messages: 0,
-                            summary_tokens: result.post_compact_tokens as i32,
+                            summary_tokens,
                         },
                     ),
                 )
@@ -2813,7 +2856,13 @@ impl QueryEngine {
         &self,
         app_state: &ToolAppState,
     ) -> Vec<vercel_ai_provider::LanguageModelV4Tool> {
-        let loaded = self.tools.loaded_tools();
+        let stub_ctx = coco_tool_runtime::ToolUseContext::stub_for_filtering(
+            self.config.features.clone(),
+            self.config.tool_overrides.clone(),
+            self.config.tool_filter.clone(),
+            self.config.permission_mode,
+        );
+        let loaded = self.tools.loaded_tools(&stub_ctx);
         let tool_names: Vec<String> = loaded.iter().map(|t| t.name().to_string()).collect();
 
         let agent_names: Vec<String> = self

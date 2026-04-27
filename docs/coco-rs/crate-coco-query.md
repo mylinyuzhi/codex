@@ -7,8 +7,8 @@ TS source: `src/QueryEngine.ts`, `src/query.ts`, `src/query/tokenBudget.ts`, `sr
 ```
 coco-query depends on:
   - coco-types       (Message, TokenUsage, SessionId)
-  - coco-config      (ModelRoles, ModelInfo — role resolution)
-  - coco-inference   (ModelHub, ApiClient — LLM calls)
+  - coco-config      (ModelRoles, ModelInfo, RuntimeConfig, ProviderConfig — role + provider resolution)
+  - coco-inference   (ApiClient, ProviderClientFingerprint, build_call_options — LLM calls + turn-boundary client coherence)
   - coco-tool        (ToolRegistry, StreamingToolExecutor, run_tools)
   - coco-context     (build_system_prompt, get_context_window)
   - coco-messages    (normalize_for_api, history)

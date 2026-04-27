@@ -33,6 +33,9 @@ impl Tool for EnterWorktreeTool {
     fn name(&self) -> &str {
         ToolName::EnterWorktree.as_str()
     }
+    fn is_enabled(&self, ctx: &coco_tool_runtime::ToolUseContext) -> bool {
+        ctx.features.enabled(coco_types::Feature::Worktree)
+    }
     fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
         "Create and enter a git worktree for isolated work on a branch.".into()
     }
@@ -145,6 +148,9 @@ impl Tool for ExitWorktreeTool {
     }
     fn name(&self) -> &str {
         ToolName::ExitWorktree.as_str()
+    }
+    fn is_enabled(&self, ctx: &coco_tool_runtime::ToolUseContext) -> bool {
+        ctx.features.enabled(coco_types::Feature::Worktree)
     }
     fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
         "Remove a git worktree and return to the previous working directory. \

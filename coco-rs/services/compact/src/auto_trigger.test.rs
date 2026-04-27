@@ -80,3 +80,48 @@ fn test_time_based_mc_defaults() {
     assert_eq!(config.gap_threshold_minutes, 60);
     assert_eq!(config.keep_recent, 5);
 }
+
+#[test]
+fn test_recursion_guard_session_memory() {
+    // session_memory and compact must not auto-compact (forked-agent deadlock).
+    assert!(!should_auto_compact_guarded(
+        i64::MAX / 2,
+        CTX,
+        MAX_OUT,
+        true,
+        CompactQuerySource::SessionMemory
+    ));
+    assert!(!should_auto_compact_guarded(
+        i64::MAX / 2,
+        CTX,
+        MAX_OUT,
+        true,
+        CompactQuerySource::Compact
+    ));
+}
+
+#[test]
+fn test_evaluate_time_based_trigger() {
+    let cfg = TimeBasedMcConfig {
+        enabled: true,
+        gap_threshold_minutes: 60,
+        keep_recent: 5,
+    };
+    let now = 1_700_000_000_000_i64;
+    // Last assistant 30 min ago — below threshold, no trigger.
+    let no_fire = evaluate_time_based_trigger(&cfg, now, Some(now - 30 * 60_000), true);
+    assert!(no_fire.is_none());
+    // Last assistant 90 min ago — above threshold, fires.
+    let fire = evaluate_time_based_trigger(&cfg, now, Some(now - 90 * 60_000), true);
+    assert!(fire.is_some());
+    assert!(fire.unwrap().gap_minutes >= 60.0);
+    // Subagent (not main thread): no fire even when gap exceeded.
+    let subagent = evaluate_time_based_trigger(&cfg, now, Some(now - 90 * 60_000), false);
+    assert!(subagent.is_none());
+    // Disabled: no fire.
+    let disabled = TimeBasedMcConfig {
+        enabled: false,
+        ..cfg
+    };
+    assert!(evaluate_time_based_trigger(&disabled, now, Some(now - 90 * 60_000), true).is_none());
+}

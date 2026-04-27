@@ -57,6 +57,9 @@ impl Tool for AgentTool {
     fn name(&self) -> &str {
         ToolName::Agent.as_str()
     }
+    fn is_enabled(&self, ctx: &coco_tool_runtime::ToolUseContext) -> bool {
+        ctx.features.enabled(coco_types::Feature::AgentTeams)
+    }
     fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
         "Launch a new agent to handle complex, multi-step tasks autonomously.\n\n\
          The Agent tool launches specialized agents (subprocesses) that \
@@ -236,6 +239,18 @@ impl Tool for AgentTool {
                 .get("cwd")
                 .and_then(|v| v.as_str())
                 .map(std::path::PathBuf::from),
+            // Subagent inheritance (Layers 1 + 2 + 4). Forward the
+            // parent context's resolved values so the child can't see
+            // tools gated off at the top level. The handle
+            // implementation (e.g. `SwarmAgentHandle`) threads these
+            // into the `AgentQueryConfig` it builds for the child
+            // engine. Layer 4: the child's own `AgentDefinition.allowed_tools`
+            // is intersected with `parent_tool_filter` via
+            // `ToolFilter::narrow_with` so the child can never widen
+            // what the parent restricted.
+            features: Some(ctx.features.clone()),
+            tool_overrides: Some(ctx.tool_overrides.clone()),
+            parent_tool_filter: Some(ctx.tool_filter.clone()),
         };
 
         let request_description = request.description.clone();
@@ -367,9 +382,17 @@ impl Tool for SkillTool {
         // `AgentHandle` — skills are a different runtime concept,
         // and the swarm-oriented agent handle was never the right
         // home for expansion + forking.
+        //
+        // Forward parent's Layer 1 + 2 so a fork-mode skill subagent
+        // inherits the same gate set; inline expansion ignores it.
+        let inherit = coco_tool_runtime::SubagentInheritance {
+            features: Some(ctx.features.clone()),
+            tool_overrides: Some(ctx.tool_overrides.clone()),
+            parent_tool_filter: Some(ctx.tool_filter.clone()),
+        };
         let result = ctx
             .skill
-            .invoke_skill(skill_name, args)
+            .invoke_skill(skill_name, args, inherit)
             .await
             .map_err(|e| ToolError::ExecutionFailed {
                 message: format!("Failed to resolve skill '{skill_name}': {e}"),
@@ -398,6 +421,9 @@ impl Tool for SendMessageTool {
     }
     fn name(&self) -> &str {
         ToolName::SendMessage.as_str()
+    }
+    fn is_enabled(&self, ctx: &coco_tool_runtime::ToolUseContext) -> bool {
+        ctx.features.enabled(coco_types::Feature::AgentTeams)
     }
     fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
         "Send a message to another agent in the team. Use the agent's name \
@@ -508,6 +534,9 @@ impl Tool for TeamCreateTool {
     fn name(&self) -> &str {
         ToolName::TeamCreate.as_str()
     }
+    fn is_enabled(&self, ctx: &coco_tool_runtime::ToolUseContext) -> bool {
+        ctx.features.enabled(coco_types::Feature::AgentTeams)
+    }
     fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
         "Create a team of agents for collaborative work.".into()
     }
@@ -584,6 +613,9 @@ impl Tool for TeamDeleteTool {
     }
     fn name(&self) -> &str {
         ToolName::TeamDelete.as_str()
+    }
+    fn is_enabled(&self, ctx: &coco_tool_runtime::ToolUseContext) -> bool {
+        ctx.features.enabled(coco_types::Feature::AgentTeams)
     }
     fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
         "Delete a team and release its resources.".into()

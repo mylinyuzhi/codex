@@ -164,7 +164,10 @@ async fn test_full_path_write_then_read() {
         call_count: AtomicI32::new(0),
         test_dir: test_dir.clone(),
     });
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
     let tools = Arc::new(register_core_tools());
     let cancel = CancellationToken::new();
 
@@ -206,7 +209,10 @@ async fn test_full_path_with_hooks() {
         call_count: AtomicI32::new(0),
         test_dir,
     });
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
     let tools = Arc::new(register_core_tools());
     let cancel = CancellationToken::new();
 
@@ -236,7 +242,10 @@ async fn test_full_path_budget_exhaustion() {
         call_count: AtomicI32::new(0),
         test_dir,
     });
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
     let tools = Arc::new(register_core_tools());
     let cancel = CancellationToken::new();
 
@@ -329,7 +338,10 @@ async fn test_full_path_with_bash_safety() {
     }
 
     let model = Arc::new(DestructiveBashMock);
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
     let tools = Arc::new(register_core_tools());
     let cancel = CancellationToken::new();
 
@@ -484,7 +496,10 @@ async fn test_full_path_glob_and_grep() {
         call_count: AtomicI32::new(0),
         test_dir,
     });
-    let client = Arc::new(ApiClient::new(model, RetryConfig::default()));
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
     let tools = Arc::new(register_core_tools());
     let cancel = CancellationToken::new();
 

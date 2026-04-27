@@ -357,15 +357,16 @@ impl ShellConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PartialSandboxSettings {
-    pub enabled: Option<bool>,
     pub mode: Option<SandboxMode>,
     pub excluded_commands: Option<Vec<String>>,
     pub allow_network: Option<bool>,
 }
 
+/// Sandbox subsystem parameters. Whether the subsystem is **active** is
+/// gated upstream by `Feature::Sandbox`; this struct only carries
+/// "how it operates when on".
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SandboxConfig {
-    pub enabled: bool,
     pub mode: SandboxMode,
     pub excluded_commands: Vec<String>,
     pub allow_network: bool,
@@ -374,7 +375,6 @@ pub struct SandboxConfig {
 impl Default for SandboxConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
             mode: SandboxMode::ReadOnly,
             excluded_commands: Vec::new(),
             allow_network: false,
@@ -385,9 +385,6 @@ impl Default for SandboxConfig {
 impl SandboxConfig {
     pub fn resolve(settings: &Settings, env: &EnvSnapshot) -> Self {
         let mut config = Self::default();
-        if let Some(v) = settings.sandbox.enabled {
-            config.enabled = v;
-        }
         if let Some(v) = settings.sandbox.mode {
             config.mode = v;
         }
@@ -398,11 +395,6 @@ impl SandboxConfig {
             config.allow_network = v;
         }
 
-        if env.is_truthy(EnvKey::CocoSandboxEnabled) {
-            config.enabled = true;
-        } else if env.is_falsy(EnvKey::CocoSandboxEnabled) {
-            config.enabled = false;
-        }
         if let Some(raw) = env.get(EnvKey::CocoSandboxMode) {
             config.mode = match raw {
                 "workspace_write" | "workspace-write" | "strict" => SandboxMode::WorkspaceWrite,
@@ -429,7 +421,6 @@ impl SandboxConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PartialMemorySettings {
-    pub enabled: Option<bool>,
     pub directory: Option<PathBuf>,
     pub extraction_enabled: Option<bool>,
     pub team_memory_enabled: Option<bool>,
@@ -439,13 +430,13 @@ pub struct PartialMemorySettings {
 
 /// Resolved auto-memory configuration.
 ///
+/// Whether the subsystem is **active** is gated upstream by
+/// `Feature::AutoMemory`; this struct only carries internal sub-toggles
+/// and parameters.
+///
 /// Source of truth for `coco_memory::MemoryConfig` (thin adapter).
-/// Fields here have live consumers in `coco_memory::{prompt, hooks,
-/// config}`; auto-dream / kairos / max_relevant knobs were removed
-/// until their respective pipelines ship.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemoryConfig {
-    pub enabled: bool,
     pub directory: Option<PathBuf>,
     pub extraction_enabled: bool,
     pub team_memory_enabled: bool,
@@ -456,7 +447,6 @@ pub struct MemoryConfig {
 impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
             directory: None,
             extraction_enabled: true,
             team_memory_enabled: false,
@@ -469,9 +459,6 @@ impl Default for MemoryConfig {
 impl MemoryConfig {
     pub fn resolve(settings: &Settings, env: &EnvSnapshot) -> Self {
         let mut config = Self::default();
-        if let Some(v) = settings.memory.enabled {
-            config.enabled = v;
-        }
         if let Some(dir) = &settings.memory.directory {
             config.directory = Some(dir.clone());
         }
@@ -488,10 +475,6 @@ impl MemoryConfig {
             config.skip_index = v;
         }
 
-        if env.is_truthy(EnvKey::CocoDisableAutoMemory) || env.is_truthy(EnvKey::CocoSimple) {
-            config.enabled = false;
-            config.extraction_enabled = false;
-        }
         // Two env vars, one destination. `CocoMemoryPathOverride` is the
         // operator-facing local override. `CocoRemoteMemoryDir` is piped
         // from the swarm leader into teammates so in-process members
