@@ -61,6 +61,7 @@ fn test_api_invariant_preservation() {
         min_tokens: 100,
         min_text_block_messages: 1,
         max_tokens: 500,
+        ..Default::default()
     };
 
     let result = compact_session_memory(&messages, "Session context", &config)
@@ -101,6 +102,7 @@ fn test_token_bounds() {
         min_tokens: 5_000,
         min_text_block_messages: 2,
         max_tokens: 20_000,
+        ..Default::default()
     };
 
     let result = compact_session_memory(&messages, "Context summary", &config)

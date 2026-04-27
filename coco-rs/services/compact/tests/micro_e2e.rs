@@ -7,7 +7,6 @@
 //! - File-unchanged stub clearing
 //! - Thinking block compaction
 
-use coco_compact::api_compact;
 use coco_compact::micro::micro_compact;
 use coco_compact::micro_advanced::MicroCompactBudgetConfig;
 use coco_compact::micro_advanced::clear_file_unchanged_stubs;
@@ -21,14 +20,22 @@ use coco_types::ToolName;
 
 #[test]
 fn test_realistic_mixed_tools() {
-    // Build a conversation with a mix of compactable and non-compactable tools
+    // Build a conversation with a mix of compactable and non-compactable tools.
+    // Each tool_result is preceded by an assistant tool_use whose tool_call_id
+    // matches — required by TS-aligned `collect_compactable_tool_ids` which
+    // scans assistant messages for compactable tool names.
+    // Use distinct compactable tools so each generates a unique tool_use_id.
     let mut messages = vec![
         msg::user("do the work"),
-        // Compactable tools (should be cleared)
-        msg::tool_result(ToolName::Read, "call_read", &"file content ".repeat(200)),
-        msg::tool_result(ToolName::Bash, "call_bash", &"command output ".repeat(200)),
-        msg::tool_result(ToolName::Grep, "call_grep", &"grep results ".repeat(200)),
-        // Non-compactable tools (should NOT be cleared)
+        msg::assistant_with_tool_call("Read", serde_json::json!({"file_path": "/a"})),
+        msg::tool_result(ToolName::Read, "call_Read", &"file content ".repeat(200)),
+        msg::assistant_with_tool_call("Bash", serde_json::json!({"command": "ls"})),
+        msg::tool_result(ToolName::Bash, "call_Bash", &"command output ".repeat(200)),
+        msg::assistant_with_tool_call("Grep", serde_json::json!({"pattern": "x"})),
+        msg::tool_result(ToolName::Grep, "call_Grep", &"grep results ".repeat(200)),
+        // Non-compactable tools (Agent / TaskCreate / AskUserQuestion are
+        // Builtin but NOT in COMPACTABLE_TOOLS, so they survive untouched
+        // regardless of keep_recent).
         msg::tool_result(
             ToolName::Agent,
             "call_agent",
@@ -44,8 +51,11 @@ fn test_realistic_mixed_tools() {
             "call_ask",
             &"user answer ".repeat(200),
         ),
-        // Recent messages (should NOT be cleared regardless)
-        msg::tool_result(ToolName::Read, "call_recent", &"recent read ".repeat(200)),
+        // Recent compactable: keep_recent=2 keeps {call_Bash, call_Grep, …}
+        // — actually keeps the last 2 from a 4-id sequence so call_Glob is in
+        // the keep set with call_Grep. call_Read (oldest) gets cleared.
+        msg::assistant_with_tool_call("Glob", serde_json::json!({"pattern": "**/*.rs"})),
+        msg::tool_result(ToolName::Glob, "call_Glob", &"recent glob ".repeat(200)),
     ];
 
     let result = micro_compact(&mut messages, /*keep_recent*/ 2);
@@ -113,6 +123,7 @@ fn test_budget_stops() {
         tokens_to_free: 1200, // ~2.4 messages worth (~500 tokens each)
         keep_recent: 0,
         exclude_tools: vec![],
+        exclude_tool_strs: vec![],
     };
 
     let result = micro_compact_with_budget(&mut messages, &config);
@@ -209,7 +220,7 @@ fn test_api_clear_tool_uses_realistic() {
         msg::tool_result(ToolName::Read, "call_Read_2", "lib content"),
     ];
 
-    let result = api_compact::clear_tool_uses(
+    let result = coco_compact::clear_tool_uses_inplace(
         &mut messages,
         /*keep_recent_count*/ 1,
         &[], // no excludes
@@ -247,7 +258,7 @@ fn test_api_clear_thinking_realistic() {
         msg::assistant_with_thinking("Final cleanup", &thinking),
     ];
 
-    let result = api_compact::clear_thinking(&mut messages);
+    let result = coco_compact::clear_thinking_inplace(&mut messages);
 
     assert_eq!(
         result.messages_cleared, 3,
@@ -353,7 +364,8 @@ fn test_combined_micro_pipeline() {
     );
 
     // Stage 3: Clear old tool call inputs
-    let api_result = api_compact::clear_tool_uses(&mut messages, /*keep_recent*/ 1, &[]);
+    let api_result =
+        coco_compact::clear_tool_uses_inplace(&mut messages, /*keep_recent*/ 1, &[]);
 
     // Total tokens freed should be substantial
     let total_freed = micro_result.tokens_saved_estimate

@@ -81,6 +81,7 @@ fn test_micro_compact_with_budget_clears_old_results() {
         tokens_to_free: 400,
         keep_recent: 1,
         exclude_tools: vec![],
+        exclude_tool_strs: vec![],
     };
 
     let result = micro_compact_with_budget(&mut messages, &config);
@@ -107,7 +108,8 @@ fn test_micro_compact_with_budget_respects_exclude() {
     let config = MicroCompactBudgetConfig {
         tokens_to_free: 1000,
         keep_recent: 0,
-        exclude_tools: vec!["Read".to_string()],
+        exclude_tools: vec![coco_types::ToolName::Read],
+        exclude_tool_strs: vec![],
     };
 
     let result = micro_compact_with_budget(&mut messages, &config);

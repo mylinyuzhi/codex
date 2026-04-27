@@ -1,11 +1,26 @@
 //! Reactive compaction — mid-turn compaction when prompt is too long.
 //!
-//! TS: services/compact/autoCompact.ts + reactiveCompact.ts
-//! Triggers compaction during API calls when the prompt exceeds context window.
+//! TS: `services/compact/reactiveCompact.ts` (peel-from-tail loop driven
+//! by API `prompt_too_long` errors) + autoCompact.ts circuit breaker.
 //!
-//! Includes a circuit breaker (`ReactiveCompactState`) that tracks consecutive
-//! failures and disables reactive compaction after repeated failures to avoid
-//! wasting API calls.
+//! Three routines live here:
+//! - [`should_reactive_compact`] / [`calculate_drop_target`] — the
+//!   threshold-based fallback that lets callers proactively decide to
+//!   compact when usage is near the limit (95% of effective window).
+//! - [`peel_head_for_ptl_retry`] — the **actual** TS reactive-compact
+//!   primitive: drops oldest API-round groups (head of the slice) until
+//!   enough tokens are freed. The caller can re-issue the API call with
+//!   the survivor list directly, no LLM summarization required. (TS
+//!   describes this as "peel from tail" in conversation-history terms;
+//!   this implementation peels from the array head, which is the
+//!   chronologically-oldest end.) For a true summarized recovery, use
+//!   [`crate::compact_conversation`] with the peeled message slice.
+//! - [`api_microcompact`] — light tool-result stripping for cases where
+//!   summarization is overkill.
+//!
+//! The [`ReactiveCompactState`] circuit breaker tracks consecutive
+//! failures and disables reactive compaction after repeated failures to
+//! avoid wasting API calls (`MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES = 3`).
 
 use coco_types::Message;
 
@@ -119,10 +134,51 @@ pub fn calculate_drop_target(current_tokens: i64, config: &ReactiveCompactConfig
     (current_tokens - target).max(0)
 }
 
+/// Peel oldest API-round groups (head of the slice) until at least
+/// `tokens_to_free` tokens are freed. Returns `Some(remaining)` on success,
+/// `None` when only one group (or fewer) survives — caller should escalate
+/// to full summarization.
+///
+/// TS: reactiveCompact.ts peel-from-tail loop. Unlike
+/// [`crate::truncate_head_for_ptl_retry`] (which feeds the summarizer with
+/// the dropped portion), this returns the surviving slice **directly** so
+/// the caller can resend the API call without going through the LLM
+/// summarizer.
+#[must_use]
+pub fn peel_head_for_ptl_retry(messages: &[Message], tokens_to_free: i64) -> Option<Vec<Message>> {
+    let groups = crate::grouping::group_messages_by_api_round(messages);
+    if groups.len() < 2 {
+        return None;
+    }
+    let mut acc: i64 = 0;
+    let mut drop_count = 0;
+    for g in &groups {
+        let group_msgs: Vec<Message> = g.iter().map(|m| (*m).clone()).collect();
+        acc += crate::tokens::estimate_tokens(&group_msgs);
+        drop_count += 1;
+        if acc >= tokens_to_free {
+            break;
+        }
+    }
+    let drop_count = drop_count.min(groups.len() - 1);
+    if drop_count < 1 {
+        return None;
+    }
+    Some(
+        groups[drop_count..]
+            .iter()
+            .flat_map(|g| g.iter().map(|m| (*m).clone()))
+            .collect(),
+    )
+}
+
 /// API-level micro-compaction — trim tool results from oldest messages.
 ///
-/// TS: apiMicrocompact.ts — lightweight compaction that clears old tool
-/// result content while keeping the structure.
+/// Lightweight compaction that clears old tool result content while
+/// keeping the structure intact. **This breaks the prompt cache** because
+/// it mutates messages in place; for the cache-preserving server-side
+/// variant build a config via
+/// [`crate::api_compact::get_api_context_management`].
 pub fn api_microcompact(messages: &mut [Message], tokens_to_free: i64) {
     let mut freed = 0i64;
     for msg in messages.iter_mut() {
