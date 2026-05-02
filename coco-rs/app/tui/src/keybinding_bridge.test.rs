@@ -227,6 +227,7 @@ fn test_autocomplete_context_when_suggestions_active() {
         items: vec![crate::widgets::suggestion_popup::SuggestionItem {
             label: "/help".into(),
             description: None,
+            metadata: None,
         }],
         selected: 0,
         query: String::new(),

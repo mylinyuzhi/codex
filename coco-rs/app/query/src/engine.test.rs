@@ -2,23 +2,23 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 
+use coco_inference::AISdkError;
 use coco_inference::ApiClient;
+use coco_inference::AssistantContentPart;
+use coco_inference::FinishReason;
+use coco_inference::LanguageModel;
+use coco_inference::LanguageModelCallOptions;
+use coco_inference::LanguageModelGenerateResult;
+use coco_inference::LanguageModelStreamResult;
 use coco_inference::RetryConfig;
+use coco_inference::TextPart;
+use coco_inference::ToolCallPart;
+use coco_inference::ToolResultContent;
+use coco_inference::UnifiedFinishReason;
+use coco_inference::Usage;
 use coco_tool_runtime::ToolRegistry;
 use coco_tools::ReadTool;
 use tokio_util::sync::CancellationToken;
-use vercel_ai_provider::AISdkError;
-use vercel_ai_provider::AssistantContentPart;
-use vercel_ai_provider::FinishReason;
-use vercel_ai_provider::LanguageModelV4;
-use vercel_ai_provider::LanguageModelV4CallOptions;
-use vercel_ai_provider::LanguageModelV4GenerateResult;
-use vercel_ai_provider::LanguageModelV4StreamResult;
-use vercel_ai_provider::TextPart;
-use vercel_ai_provider::ToolCallPart;
-use vercel_ai_provider::ToolResultContent;
-use vercel_ai_provider::UnifiedFinishReason;
-use vercel_ai_provider::Usage;
 
 use super::*;
 use coco_types::PermissionMode;
@@ -35,7 +35,7 @@ struct TextMock {
 }
 
 #[async_trait::async_trait]
-impl LanguageModelV4 for TextMock {
+impl LanguageModel for TextMock {
     fn provider(&self) -> &str {
         "mock"
     }
@@ -44,9 +44,9 @@ impl LanguageModelV4 for TextMock {
     }
     async fn do_generate(
         &self,
-        _options: LanguageModelV4CallOptions,
-    ) -> Result<LanguageModelV4GenerateResult, AISdkError> {
-        Ok(LanguageModelV4GenerateResult {
+        _options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelGenerateResult, AISdkError> {
+        Ok(LanguageModelGenerateResult {
             content: vec![AssistantContentPart::Text(TextPart {
                 text: self.text.clone(),
                 provider_metadata: None,
@@ -61,8 +61,8 @@ impl LanguageModelV4 for TextMock {
     }
     async fn do_stream(
         &self,
-        options: LanguageModelV4CallOptions,
-    ) -> Result<LanguageModelV4StreamResult, AISdkError> {
+        options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelStreamResult, AISdkError> {
         let result = self.do_generate(options).await?;
         Ok(coco_inference::synthetic_stream_from_content(
             result.content,
@@ -79,7 +79,7 @@ struct ToolCallThenTextMock {
 }
 
 #[async_trait::async_trait]
-impl LanguageModelV4 for ToolCallThenTextMock {
+impl LanguageModel for ToolCallThenTextMock {
     fn provider(&self) -> &str {
         "mock"
     }
@@ -89,13 +89,13 @@ impl LanguageModelV4 for ToolCallThenTextMock {
 
     async fn do_generate(
         &self,
-        _options: LanguageModelV4CallOptions,
-    ) -> Result<LanguageModelV4GenerateResult, AISdkError> {
+        _options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelGenerateResult, AISdkError> {
         let call = self.call_count.fetch_add(1, Ordering::SeqCst);
 
         if call == 0 {
             // First call: return a tool call (Read tool)
-            Ok(LanguageModelV4GenerateResult {
+            Ok(LanguageModelGenerateResult {
                 content: vec![
                     AssistantContentPart::Text(TextPart {
                         text: "Let me read that file for you.".into(),
@@ -118,7 +118,7 @@ impl LanguageModelV4 for ToolCallThenTextMock {
             })
         } else {
             // Second call: return final text (after seeing tool result)
-            Ok(LanguageModelV4GenerateResult {
+            Ok(LanguageModelGenerateResult {
                 content: vec![AssistantContentPart::Text(TextPart {
                     text: "The file does not exist. Let me help you create it.".into(),
                     provider_metadata: None,
@@ -135,8 +135,8 @@ impl LanguageModelV4 for ToolCallThenTextMock {
 
     async fn do_stream(
         &self,
-        options: LanguageModelV4CallOptions,
-    ) -> Result<LanguageModelV4StreamResult, AISdkError> {
+        options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelStreamResult, AISdkError> {
         let result = self.do_generate(options).await?;
         Ok(coco_inference::synthetic_stream_from_content(
             result.content,
@@ -153,7 +153,7 @@ struct MultiToolMock {
 }
 
 #[async_trait::async_trait]
-impl LanguageModelV4 for MultiToolMock {
+impl LanguageModel for MultiToolMock {
     fn provider(&self) -> &str {
         "mock"
     }
@@ -163,13 +163,13 @@ impl LanguageModelV4 for MultiToolMock {
 
     async fn do_generate(
         &self,
-        _options: LanguageModelV4CallOptions,
-    ) -> Result<LanguageModelV4GenerateResult, AISdkError> {
+        _options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelGenerateResult, AISdkError> {
         let call = self.call_count.fetch_add(1, Ordering::SeqCst);
 
         if call == 0 {
             // First call: return TWO tool calls (parallel read)
-            Ok(LanguageModelV4GenerateResult {
+            Ok(LanguageModelGenerateResult {
                 content: vec![
                     AssistantContentPart::ToolCall(ToolCallPart {
                         tool_call_id: "call_a".into(),
@@ -194,7 +194,7 @@ impl LanguageModelV4 for MultiToolMock {
                 response: None,
             })
         } else {
-            Ok(LanguageModelV4GenerateResult {
+            Ok(LanguageModelGenerateResult {
                 content: vec![AssistantContentPart::Text(TextPart {
                     text: "Both files could not be read.".into(),
                     provider_metadata: None,
@@ -211,8 +211,8 @@ impl LanguageModelV4 for MultiToolMock {
 
     async fn do_stream(
         &self,
-        options: LanguageModelV4CallOptions,
-    ) -> Result<LanguageModelV4StreamResult, AISdkError> {
+        options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelStreamResult, AISdkError> {
         let result = self.do_generate(options).await?;
         Ok(coco_inference::synthetic_stream_from_content(
             result.content,
@@ -233,7 +233,7 @@ struct OneToolThenTextMock {
 }
 
 #[async_trait::async_trait]
-impl LanguageModelV4 for OneToolThenTextMock {
+impl LanguageModel for OneToolThenTextMock {
     fn provider(&self) -> &str {
         "mock"
     }
@@ -243,11 +243,11 @@ impl LanguageModelV4 for OneToolThenTextMock {
 
     async fn do_generate(
         &self,
-        _options: LanguageModelV4CallOptions,
-    ) -> Result<LanguageModelV4GenerateResult, AISdkError> {
+        _options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelGenerateResult, AISdkError> {
         let call = self.call_count.fetch_add(1, Ordering::SeqCst);
         if call == 0 {
-            Ok(LanguageModelV4GenerateResult {
+            Ok(LanguageModelGenerateResult {
                 content: vec![AssistantContentPart::ToolCall(ToolCallPart {
                     tool_call_id: self.tool_call_id.clone(),
                     tool_name: self.tool_name.clone(),
@@ -263,7 +263,7 @@ impl LanguageModelV4 for OneToolThenTextMock {
                 response: None,
             })
         } else {
-            Ok(LanguageModelV4GenerateResult {
+            Ok(LanguageModelGenerateResult {
                 content: vec![AssistantContentPart::Text(TextPart {
                     text: self.final_text.clone(),
                     provider_metadata: None,
@@ -280,8 +280,8 @@ impl LanguageModelV4 for OneToolThenTextMock {
 
     async fn do_stream(
         &self,
-        options: LanguageModelV4CallOptions,
-    ) -> Result<LanguageModelV4StreamResult, AISdkError> {
+        options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelStreamResult, AISdkError> {
         let result = self.do_generate(options).await?;
         Ok(coco_inference::synthetic_stream_from_content(
             result.content,
@@ -311,6 +311,113 @@ async fn test_single_turn_text_only() {
     assert_eq!(result.response_text, "Hello!");
     assert_eq!(result.turns, 1);
     assert!(!result.cancelled);
+}
+
+// ── D8: post-turn cache-safe params slot ──
+
+#[tokio::test]
+async fn test_cache_safe_params_unset_before_first_turn() {
+    let model = Arc::new(TextMock { text: "_".into() });
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
+    let tools = Arc::new(ToolRegistry::new());
+    let cancel = CancellationToken::new();
+    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None);
+
+    assert!(
+        engine.last_cache_safe_params().await.is_none(),
+        "slot must start empty until the first turn finalises"
+    );
+}
+
+#[tokio::test]
+async fn test_cache_safe_params_populated_after_turn() {
+    // After a successful turn the slot is populated with the
+    // model_id + post-turn history. Future post-turn fork features
+    // (`/btw`, `promptSuggestion`, `postTurnSummary`) read this for
+    // cache-key parity with the parent's last request.
+    let model = Arc::new(TextMock {
+        text: "Hello!".into(),
+    });
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
+    let tools = Arc::new(ToolRegistry::new());
+    let cancel = CancellationToken::new();
+    let config = QueryEngineConfig {
+        model_id: "claude-opus-4-7".into(),
+        system_prompt: Some("You are helpful.".into()),
+        ..QueryEngineConfig::default()
+    };
+    let engine = QueryEngine::new(config, client, tools, cancel, None);
+
+    engine.run("hi").await.expect("turn must complete");
+
+    let slot = engine
+        .last_cache_safe_params()
+        .await
+        .expect("cache-safe params must be saved post-turn");
+    assert_eq!(slot.model_id, "claude-opus-4-7");
+    assert_eq!(slot.rendered_system_prompt, "You are helpful.");
+    assert!(
+        !slot.fork_context_messages.is_empty(),
+        "fork_context_messages must mirror the post-turn history"
+    );
+}
+
+#[tokio::test]
+async fn test_clear_cache_safe_params_drops_slot() {
+    // `/clear` regen path must clear the slot — otherwise a fork
+    // after `/clear` would target the pre-clear cache key, which
+    // wouldn't match the post-clear request shape.
+    let model = Arc::new(TextMock {
+        text: "Hello!".into(),
+    });
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
+    let tools = Arc::new(ToolRegistry::new());
+    let cancel = CancellationToken::new();
+    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None);
+
+    engine.run("hi").await.expect("turn must complete");
+    assert!(engine.last_cache_safe_params().await.is_some());
+
+    engine.clear_cache_safe_params().await;
+    assert!(
+        engine.last_cache_safe_params().await.is_none(),
+        "clear must drop the slot"
+    );
+}
+
+#[tokio::test]
+async fn test_cache_safe_params_handle_observes_writer_side() {
+    // `cache_safe_params_handle()` returns a clone of the Arc so an
+    // out-of-band observer (TUI status, transcript recorder) can
+    // poll the slot without contending with the engine writer.
+    let model = Arc::new(TextMock {
+        text: "Hello!".into(),
+    });
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
+    let tools = Arc::new(ToolRegistry::new());
+    let cancel = CancellationToken::new();
+    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None);
+
+    let handle = engine.cache_safe_params_handle();
+    assert!(handle.read().await.is_none());
+
+    engine.run("hi").await.expect("turn must complete");
+    assert!(
+        handle.read().await.is_some(),
+        "observer handle must see the updated slot"
+    );
 }
 
 #[tokio::test]
@@ -487,7 +594,7 @@ async fn test_permission_mode_passed_to_context() {
     let cancel = CancellationToken::new();
 
     let config = QueryEngineConfig {
-        model_name: "test-opus".into(),
+        model_id: "test-opus".into(),
         permission_mode: PermissionMode::Default,
         ..Default::default()
     };
@@ -512,7 +619,7 @@ async fn test_tool_execution_with_real_tools() {
     }
 
     #[async_trait::async_trait]
-    impl LanguageModelV4 for ReadRealFileMock {
+    impl LanguageModel for ReadRealFileMock {
         fn provider(&self) -> &str {
             "mock"
         }
@@ -521,11 +628,11 @@ async fn test_tool_execution_with_real_tools() {
         }
         async fn do_generate(
             &self,
-            _options: LanguageModelV4CallOptions,
-        ) -> Result<LanguageModelV4GenerateResult, AISdkError> {
+            _options: LanguageModelCallOptions,
+        ) -> Result<LanguageModelGenerateResult, AISdkError> {
             let call = self.call_count.fetch_add(1, Ordering::SeqCst);
             if call == 0 {
-                Ok(LanguageModelV4GenerateResult {
+                Ok(LanguageModelGenerateResult {
                     content: vec![AssistantContentPart::ToolCall(ToolCallPart {
                         tool_call_id: "read_1".into(),
                         tool_name: "Read".into(),
@@ -541,7 +648,7 @@ async fn test_tool_execution_with_real_tools() {
                     response: None,
                 })
             } else {
-                Ok(LanguageModelV4GenerateResult {
+                Ok(LanguageModelGenerateResult {
                     content: vec![AssistantContentPart::Text(TextPart {
                         text: "File read successfully.".into(),
                         provider_metadata: None,
@@ -557,8 +664,8 @@ async fn test_tool_execution_with_real_tools() {
         }
         async fn do_stream(
             &self,
-            options: LanguageModelV4CallOptions,
-        ) -> Result<LanguageModelV4StreamResult, AISdkError> {
+            options: LanguageModelCallOptions,
+        ) -> Result<LanguageModelStreamResult, AISdkError> {
             let result = self.do_generate(options).await?;
             Ok(coco_inference::synthetic_stream_from_content(
                 result.content,
@@ -608,7 +715,7 @@ async fn test_read_tool_emits_full_tool_lifecycle() {
     }
 
     #[async_trait::async_trait]
-    impl LanguageModelV4 for SingleReadMock {
+    impl LanguageModel for SingleReadMock {
         fn provider(&self) -> &str {
             "mock"
         }
@@ -617,11 +724,11 @@ async fn test_read_tool_emits_full_tool_lifecycle() {
         }
         async fn do_generate(
             &self,
-            _options: LanguageModelV4CallOptions,
-        ) -> Result<LanguageModelV4GenerateResult, AISdkError> {
+            _options: LanguageModelCallOptions,
+        ) -> Result<LanguageModelGenerateResult, AISdkError> {
             let call = self.call_count.fetch_add(1, Ordering::SeqCst);
             if call == 0 {
-                Ok(LanguageModelV4GenerateResult {
+                Ok(LanguageModelGenerateResult {
                     content: vec![AssistantContentPart::ToolCall(ToolCallPart {
                         tool_call_id: "eager_1".into(),
                         tool_name: "Read".into(),
@@ -637,7 +744,7 @@ async fn test_read_tool_emits_full_tool_lifecycle() {
                     response: None,
                 })
             } else {
-                Ok(LanguageModelV4GenerateResult {
+                Ok(LanguageModelGenerateResult {
                     content: vec![AssistantContentPart::Text(TextPart {
                         text: "done".into(),
                         provider_metadata: None,
@@ -653,8 +760,8 @@ async fn test_read_tool_emits_full_tool_lifecycle() {
         }
         async fn do_stream(
             &self,
-            options: LanguageModelV4CallOptions,
-        ) -> Result<LanguageModelV4StreamResult, AISdkError> {
+            options: LanguageModelCallOptions,
+        ) -> Result<LanguageModelStreamResult, AISdkError> {
             let result = self.do_generate(options).await?;
             Ok(coco_inference::synthetic_stream_from_content(
                 result.content,
@@ -821,7 +928,7 @@ async fn test_budget_exhausted_in_engine() {
 
 /// Collect all CoreEvents emitted by the engine during a run.
 async fn collect_events_from_run(
-    model: Arc<dyn LanguageModelV4>,
+    model: Arc<dyn LanguageModel>,
     tools: Arc<ToolRegistry>,
     config: QueryEngineConfig,
     bootstrap: Option<SessionBootstrap>,
@@ -854,19 +961,22 @@ async fn collect_events_from_run(
     (result, events)
 }
 
-fn tool_result_error_text(messages: &[coco_types::Message], tool_use_id: &str) -> Option<String> {
+fn tool_result_error_text(
+    messages: &[coco_messages::Message],
+    tool_use_id: &str,
+) -> Option<String> {
     messages.iter().find_map(|message| {
-        let coco_types::Message::ToolResult(result) = message else {
+        let coco_messages::Message::ToolResult(result) = message else {
             return None;
         };
         if result.tool_use_id != tool_use_id {
             return None;
         }
-        let coco_types::LlmMessage::Tool { content, .. } = &result.message else {
+        let coco_messages::LlmMessage::Tool { content, .. } = &result.message else {
             return None;
         };
         content.iter().find_map(|part| {
-            let coco_types::ToolContent::ToolResult(content) = part else {
+            let coco_messages::ToolContent::ToolResult(content) = part else {
                 return None;
             };
             if content.tool_call_id != tool_use_id || !content.is_error {
@@ -881,19 +991,19 @@ fn tool_result_error_text(messages: &[coco_types::Message], tool_use_id: &str) -
     })
 }
 
-fn tool_result_text(messages: &[coco_types::Message], tool_use_id: &str) -> Option<String> {
+fn tool_result_text(messages: &[coco_messages::Message], tool_use_id: &str) -> Option<String> {
     messages.iter().find_map(|message| {
-        let coco_types::Message::ToolResult(result) = message else {
+        let coco_messages::Message::ToolResult(result) = message else {
             return None;
         };
         if result.tool_use_id != tool_use_id {
             return None;
         }
-        let coco_types::LlmMessage::Tool { content, .. } = &result.message else {
+        let coco_messages::LlmMessage::Tool { content, .. } = &result.message else {
             return None;
         };
         content.iter().find_map(|part| {
-            let coco_types::ToolContent::ToolResult(content) = part else {
+            let coco_messages::ToolContent::ToolResult(content) = part else {
                 return None;
             };
             if content.tool_call_id != tool_use_id || content.is_error {
@@ -908,31 +1018,31 @@ fn tool_result_text(messages: &[coco_types::Message], tool_use_id: &str) -> Opti
 }
 
 fn attachment_text_by_kind(
-    messages: &[coco_types::Message],
+    messages: &[coco_messages::Message],
     kind: coco_types::AttachmentKind,
 ) -> Option<String> {
     messages.iter().find_map(|message| {
-        let coco_types::Message::Attachment(attachment) = message else {
+        let coco_messages::Message::Attachment(attachment) = message else {
             return None;
         };
         if attachment.kind != kind {
             return None;
         }
-        let coco_types::AttachmentBody::Api(coco_types::LlmMessage::User { content, .. }) =
+        let coco_messages::AttachmentBody::Api(coco_messages::LlmMessage::User { content, .. }) =
             &attachment.body
         else {
             return None;
         };
         content.iter().find_map(|part| match part {
-            vercel_ai_provider::UserContentPart::Text(text) => Some(text.text.clone()),
+            coco_inference::UserContentPart::Text(text) => Some(text.text.clone()),
             _ => None,
         })
     })
 }
 
-fn tool_result_index(messages: &[coco_types::Message], tool_use_id: &str) -> Option<usize> {
+fn tool_result_index(messages: &[coco_messages::Message], tool_use_id: &str) -> Option<usize> {
     messages.iter().position(|message| {
-        let coco_types::Message::ToolResult(result) = message else {
+        let coco_messages::Message::ToolResult(result) = message else {
             return false;
         };
         result.tool_use_id == tool_use_id
@@ -940,39 +1050,42 @@ fn tool_result_index(messages: &[coco_types::Message], tool_use_id: &str) -> Opt
 }
 
 fn attachment_index_by_kind_and_text(
-    messages: &[coco_types::Message],
+    messages: &[coco_messages::Message],
     kind: coco_types::AttachmentKind,
     needle: &str,
 ) -> Option<usize> {
     messages.iter().position(|message| {
-        let coco_types::Message::Attachment(attachment) = message else {
+        let coco_messages::Message::Attachment(attachment) = message else {
             return false;
         };
         if attachment.kind != kind {
             return false;
         }
-        let coco_types::AttachmentBody::Api(coco_types::LlmMessage::User { content, .. }) =
+        let coco_messages::AttachmentBody::Api(coco_messages::LlmMessage::User { content, .. }) =
             &attachment.body
         else {
             return false;
         };
         content.iter().any(|part| match part {
-            vercel_ai_provider::UserContentPart::Text(text) => text.text.contains(needle),
+            coco_inference::UserContentPart::Text(text) => text.text.contains(needle),
             _ => false,
         })
     })
 }
 
-fn user_message_index_containing(messages: &[coco_types::Message], needle: &str) -> Option<usize> {
+fn user_message_index_containing(
+    messages: &[coco_messages::Message],
+    needle: &str,
+) -> Option<usize> {
     messages.iter().position(|message| {
-        let coco_types::Message::User(user) = message else {
+        let coco_messages::Message::User(user) = message else {
             return false;
         };
-        let coco_types::LlmMessage::User { content, .. } = &user.message else {
+        let coco_messages::LlmMessage::User { content, .. } = &user.message else {
             return false;
         };
         content.iter().any(|part| match part {
-            vercel_ai_provider::UserContentPart::Text(text) => text.text.contains(needle),
+            coco_inference::UserContentPart::Text(text) => text.text.contains(needle),
             _ => false,
         })
     })
@@ -1119,8 +1232,8 @@ impl coco_tool_runtime::Tool for PermissionRewriteTool {
         &self,
         input: serde_json::Value,
         _ctx: &coco_tool_runtime::ToolUseContext,
-    ) -> Result<coco_types::ToolResult<serde_json::Value>, coco_tool_runtime::ToolError> {
-        Ok(coco_types::ToolResult::data(input))
+    ) -> Result<coco_messages::ToolResult<serde_json::Value>, coco_tool_runtime::ToolError> {
+        Ok(coco_messages::ToolResult::data(input))
     }
 }
 
@@ -1152,8 +1265,8 @@ impl coco_tool_runtime::Tool for HookEchoTool {
         &self,
         input: serde_json::Value,
         _ctx: &coco_tool_runtime::ToolUseContext,
-    ) -> Result<coco_types::ToolResult<serde_json::Value>, coco_tool_runtime::ToolError> {
-        Ok(coco_types::ToolResult::data(input))
+    ) -> Result<coco_messages::ToolResult<serde_json::Value>, coco_tool_runtime::ToolError> {
+        Ok(coco_messages::ToolResult::data(input))
     }
 }
 
@@ -1197,8 +1310,8 @@ impl coco_tool_runtime::Tool for HookMcpTool {
         &self,
         _input: serde_json::Value,
         _ctx: &coco_tool_runtime::ToolUseContext,
-    ) -> Result<coco_types::ToolResult<serde_json::Value>, coco_tool_runtime::ToolError> {
-        Ok(coco_types::ToolResult::data(serde_json::json!({
+    ) -> Result<coco_messages::ToolResult<serde_json::Value>, coco_tool_runtime::ToolError> {
+        Ok(coco_messages::ToolResult::data(serde_json::json!({
             "value": "original-mcp-output"
         })))
     }
@@ -1232,8 +1345,8 @@ impl coco_tool_runtime::Tool for HookOrderingTool {
         &self,
         _input: serde_json::Value,
         _ctx: &coco_tool_runtime::ToolUseContext,
-    ) -> Result<coco_types::ToolResult<serde_json::Value>, coco_tool_runtime::ToolError> {
-        Ok(coco_types::ToolResult {
+    ) -> Result<coco_messages::ToolResult<serde_json::Value>, coco_tool_runtime::ToolError> {
+        Ok(coco_messages::ToolResult {
             data: serde_json::json!({"value": "ordering"}),
             new_messages: vec![coco_messages::create_user_message("tool new message")],
             app_state_patch: None,
@@ -1281,8 +1394,8 @@ impl coco_tool_runtime::Tool for HookOrderingMcpTool {
         &self,
         _input: serde_json::Value,
         _ctx: &coco_tool_runtime::ToolUseContext,
-    ) -> Result<coco_types::ToolResult<serde_json::Value>, coco_tool_runtime::ToolError> {
-        Ok(coco_types::ToolResult {
+    ) -> Result<coco_messages::ToolResult<serde_json::Value>, coco_tool_runtime::ToolError> {
+        Ok(coco_messages::ToolResult {
             data: serde_json::json!({"value": "ordering-mcp"}),
             new_messages: vec![coco_messages::create_user_message("tool new message")],
             app_state_patch: None,
@@ -1318,7 +1431,7 @@ impl coco_tool_runtime::Tool for HookFailTool {
         &self,
         _input: serde_json::Value,
         _ctx: &coco_tool_runtime::ToolUseContext,
-    ) -> Result<coco_types::ToolResult<serde_json::Value>, coco_tool_runtime::ToolError> {
+    ) -> Result<coco_messages::ToolResult<serde_json::Value>, coco_tool_runtime::ToolError> {
         Err(coco_tool_runtime::ToolError::ExecutionFailed {
             message: "kaboom".into(),
             source: None,
@@ -1680,7 +1793,7 @@ async fn post_tool_use_prevent_continuation_stops_next_turn() {
         input: serde_json::json!({"value": "original"}),
         final_text: "should not happen".into(),
     });
-    let model_for_client: Arc<dyn LanguageModelV4> = model.clone();
+    let model_for_client: Arc<dyn LanguageModel> = model.clone();
     let client = Arc::new(ApiClient::with_default_fingerprint(
         model_for_client,
         RetryConfig::default(),
@@ -2039,7 +2152,7 @@ async fn test_session_started_emitted_with_bootstrap() {
     let model = Arc::new(TextMock { text: "ok".into() });
     let tools = Arc::new(ToolRegistry::new());
     let config = QueryEngineConfig {
-        model_name: "test-model".into(),
+        model_id: "test-model".into(),
         session_id: "session-1".into(),
         permission_mode: PermissionMode::AcceptEdits,
         ..Default::default()
@@ -2112,7 +2225,7 @@ async fn test_session_result_emitted_with_full_metadata() {
     });
     let tools = Arc::new(ToolRegistry::new());
     let config = QueryEngineConfig {
-        model_name: "test-model".into(),
+        model_id: "test-model".into(),
         session_id: "s1".into(),
         ..Default::default()
     };
@@ -2271,8 +2384,8 @@ impl coco_tool_runtime::Tool for AskingTool {
         &self,
         _input: serde_json::Value,
         _ctx: &coco_tool_runtime::ToolUseContext,
-    ) -> Result<coco_types::ToolResult<serde_json::Value>, coco_tool_runtime::ToolError> {
-        Ok(coco_types::ToolResult::data(
+    ) -> Result<coco_messages::ToolResult<serde_json::Value>, coco_tool_runtime::ToolError> {
+        Ok(coco_messages::ToolResult::data(
             serde_json::json!({ "ok": true }),
         ))
     }
@@ -2284,7 +2397,7 @@ struct AskingToolCallMock {
 }
 
 #[async_trait::async_trait]
-impl LanguageModelV4 for AskingToolCallMock {
+impl LanguageModel for AskingToolCallMock {
     fn provider(&self) -> &str {
         "mock"
     }
@@ -2293,11 +2406,11 @@ impl LanguageModelV4 for AskingToolCallMock {
     }
     async fn do_generate(
         &self,
-        _options: LanguageModelV4CallOptions,
-    ) -> Result<LanguageModelV4GenerateResult, AISdkError> {
+        _options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelGenerateResult, AISdkError> {
         let call = self.call_count.fetch_add(1, Ordering::SeqCst);
         if call == 0 {
-            Ok(LanguageModelV4GenerateResult {
+            Ok(LanguageModelGenerateResult {
                 content: vec![AssistantContentPart::ToolCall(ToolCallPart {
                     tool_call_id: "call_1".into(),
                     tool_name: "AskingTool".into(),
@@ -2313,7 +2426,7 @@ impl LanguageModelV4 for AskingToolCallMock {
                 response: None,
             })
         } else {
-            Ok(LanguageModelV4GenerateResult {
+            Ok(LanguageModelGenerateResult {
                 content: vec![AssistantContentPart::Text(TextPart {
                     text: "approved and done".into(),
                     provider_metadata: None,
@@ -2329,8 +2442,8 @@ impl LanguageModelV4 for AskingToolCallMock {
     }
     async fn do_stream(
         &self,
-        options: LanguageModelV4CallOptions,
-    ) -> Result<LanguageModelV4StreamResult, AISdkError> {
+        options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelStreamResult, AISdkError> {
         let result = self.do_generate(options).await?;
         Ok(coco_inference::synthetic_stream_from_content(
             result.content,
@@ -2469,6 +2582,7 @@ async fn test_session_result_cancelled_marks_is_error() {
 // the `QueryResult.final_messages` field (added in 2.C.10 for multi-
 // turn SDK history threading).
 
+use coco_messages::ToolResult as CocoToolResult;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
@@ -2479,7 +2593,6 @@ use coco_tool_runtime::ToolPermissionResolution;
 use coco_types::PermissionDecision;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
-use coco_types::ToolResult as CocoToolResult;
 use serde_json::Value;
 use std::sync::Mutex as StdMutex;
 
@@ -2565,7 +2678,7 @@ struct AskingToolThenTextMock {
 }
 
 #[async_trait::async_trait]
-impl LanguageModelV4 for AskingToolThenTextMock {
+impl LanguageModel for AskingToolThenTextMock {
     fn provider(&self) -> &str {
         "mock"
     }
@@ -2574,11 +2687,11 @@ impl LanguageModelV4 for AskingToolThenTextMock {
     }
     async fn do_generate(
         &self,
-        _options: LanguageModelV4CallOptions,
-    ) -> Result<LanguageModelV4GenerateResult, AISdkError> {
+        _options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelGenerateResult, AISdkError> {
         let call = self.call_count.fetch_add(1, Ordering::SeqCst);
         if call == 0 {
-            Ok(LanguageModelV4GenerateResult {
+            Ok(LanguageModelGenerateResult {
                 content: vec![AssistantContentPart::ToolCall(ToolCallPart {
                     tool_call_id: "ask_call_1".into(),
                     tool_name: "asking_mock".into(),
@@ -2594,7 +2707,7 @@ impl LanguageModelV4 for AskingToolThenTextMock {
                 response: None,
             })
         } else {
-            Ok(LanguageModelV4GenerateResult {
+            Ok(LanguageModelGenerateResult {
                 content: vec![AssistantContentPart::Text(TextPart {
                     text: "done".into(),
                     provider_metadata: None,
@@ -2610,8 +2723,8 @@ impl LanguageModelV4 for AskingToolThenTextMock {
     }
     async fn do_stream(
         &self,
-        options: LanguageModelV4CallOptions,
-    ) -> Result<LanguageModelV4StreamResult, AISdkError> {
+        options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelStreamResult, AISdkError> {
         let result = self.do_generate(options).await?;
         Ok(coco_inference::synthetic_stream_from_content(
             result.content,
@@ -2809,11 +2922,11 @@ async fn query_result_final_messages_contains_full_roundtrip() {
     let has_user = result
         .final_messages
         .iter()
-        .any(|m| matches!(m, coco_types::Message::User(_)));
+        .any(|m| matches!(m, coco_messages::Message::User(_)));
     let has_assistant = result
         .final_messages
         .iter()
-        .any(|m| matches!(m, coco_types::Message::Assistant(_)));
+        .any(|m| matches!(m, coco_messages::Message::Assistant(_)));
     assert!(has_user && has_assistant);
 }
 

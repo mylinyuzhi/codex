@@ -133,7 +133,7 @@ fn multiple_reminders_preserve_order() {
 
 #[test]
 fn inject_text_reminder_produces_attachment_message_with_is_meta() {
-    use coco_types::Message;
+    use coco_messages::Message;
     let mut history: Vec<Message> = Vec::new();
     inject_reminders(
         vec![SystemReminder::new(AttachmentType::PlanMode, "hi")],
@@ -151,7 +151,7 @@ fn inject_text_reminder_produces_attachment_message_with_is_meta() {
 
 #[test]
 fn inject_empty_batch_leaves_history_unchanged() {
-    use coco_types::Message;
+    use coco_messages::Message;
     let mut history: Vec<Message> = Vec::new();
     inject_reminders(Vec::new(), &mut history);
     assert_eq!(history.len(), 0);
@@ -159,7 +159,7 @@ fn inject_empty_batch_leaves_history_unchanged() {
 
 #[test]
 fn inject_silent_reminder_does_not_append() {
-    use coco_types::Message;
+    use coco_messages::Message;
     let mut history: Vec<Message> = Vec::new();
     inject_reminders(
         vec![SystemReminder::new(AttachmentType::PlanMode, "x").silent()],
@@ -170,7 +170,7 @@ fn inject_silent_reminder_does_not_append() {
 
 #[test]
 fn inject_user_blocks_produces_user_message_with_system_injected_origin() {
-    use coco_types::Message;
+    use coco_messages::Message;
     let msgs = vec![ReminderMessage::user_text("note")];
     let r = SystemReminder::messages(AttachmentType::PlanMode, msgs);
     let mut history: Vec<Message> = Vec::new();
@@ -188,7 +188,7 @@ fn inject_user_blocks_produces_user_message_with_system_injected_origin() {
 
 #[test]
 fn inject_multiple_reminders_appends_in_order() {
-    use coco_types::Message;
+    use coco_messages::Message;
     let mut history: Vec<Message> = Vec::new();
     inject_reminders(
         vec![

@@ -6,6 +6,9 @@
 use std::io;
 use std::path::PathBuf;
 
+use coco_file_search::FileIndex;
+use coco_file_search::SharedFileIndex;
+use coco_file_search::create_shared_index;
 use crossterm::event::Event;
 use crossterm::event::EventStream;
 use crossterm::event::KeyEventKind;
@@ -22,6 +25,7 @@ use crate::autocomplete::symbol_search::create_symbol_search_channel;
 use crate::command::UserCommand;
 use crate::constants;
 use crate::events::TuiEvent;
+use crate::git_index_watcher;
 use crate::keybinding_bridge;
 use crate::render;
 use crate::state::AppState;
@@ -76,6 +80,14 @@ impl App {
         let tui = Tui::new()?;
         let state = AppState::new();
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let index = create_shared_index(cwd.clone());
+        // Pre-warm the file index so the first `@` keystroke gets results
+        // without waiting for the initial git ls-files / ripgrep walk.
+        // TS: `startBackgroundCacheRefresh` (`fileSuggestions.ts:636`).
+        FileIndex::refresh_background(index.clone());
+        // Watch `.git/index` mtime — invalidates the cache when the user
+        // commits or checks out a different branch.
+        git_index_watcher::spawn(cwd, index.clone());
         let (file_tx, file_rx) = create_file_search_channel();
         let (sym_tx, sym_rx) = create_symbol_search_channel();
 
@@ -84,7 +96,7 @@ impl App {
             state,
             command_tx,
             notification_rx,
-            file_search: FileSearchManager::new(cwd, file_tx),
+            file_search: FileSearchManager::new(index, file_tx),
             file_search_rx: file_rx,
             symbol_search: SymbolSearchManager::new(sym_tx),
             symbol_search_rx: sym_rx,
@@ -99,6 +111,7 @@ impl App {
         notification_rx: mpsc::Receiver<CoreEvent>,
     ) -> Self {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let index = create_shared_index(cwd);
         let (file_tx, file_rx) = create_file_search_channel();
         let (sym_tx, sym_rx) = create_symbol_search_channel();
         Self {
@@ -106,12 +119,19 @@ impl App {
             state: AppState::new(),
             command_tx,
             notification_rx,
-            file_search: FileSearchManager::new(cwd, file_tx),
+            file_search: FileSearchManager::new(index, file_tx),
             file_search_rx: file_rx,
             symbol_search: SymbolSearchManager::new(sym_tx),
             symbol_search_rx: sym_rx,
             last_dispatched: None,
         }
+    }
+
+    /// Allow callers to swap in their own pre-built index (used by tests
+    /// and by the CLI that already runs `discover_files` for other panels).
+    pub fn with_file_index(mut self, index: SharedFileIndex) -> Self {
+        self.file_search.set_index(index);
+        self
     }
 
     /// Get a reference to the state.

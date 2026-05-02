@@ -1,0 +1,5 @@
+Toggle brief-only output mode for the current session.
+
+When brief mode is ON: respond using the Brief tool only — plain text outside the tool is hidden from the user. When OFF: respond with regular plain text.
+
+If the user provides arguments after `/brief`, treat them as the body of the next brief. Otherwise just toggle the state.

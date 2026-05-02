@@ -1,3 +1,4 @@
+use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::SideQueryRequest;
 use coco_tool_runtime::Tool;
@@ -6,7 +7,6 @@ use coco_tool_runtime::ToolUseContext;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
 use coco_types::ToolName;
-use coco_types::ToolResult;
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -107,16 +107,16 @@ pub(super) fn clear_web_fetch_cache() {
     }
 }
 
-/// Custom User-Agent header.
-///
-/// TS: `utils/http.ts:56-58` `getWebFetchUserAgent()` returns
-/// `` `Claude-User (${getClaudeCodeUserAgent()}; +https://support.anthropic.com/)` ``
-/// where `getClaudeCodeUserAgent()` at `utils/userAgent.ts:9` returns
-/// `` `claude-code/${MACRO.VERSION}` ``. The `Claude-User` prefix is
-/// Anthropic's publicly documented agent for user-initiated fetches —
-/// site operators match this in robots.txt to distinguish CLI traffic
-/// from server-side automation.
-///
+// Custom User-Agent header.
+//
+// TS: `utils/http.ts:56-58` `getWebFetchUserAgent()` returns
+// `` `Claude-User (${getClaudeCodeUserAgent()}; +https://support.anthropic.com/)` ``
+// where `getClaudeCodeUserAgent()` at `utils/userAgent.ts:9` returns
+// `` `claude-code/${MACRO.VERSION}` ``. The `Claude-User` prefix is
+// Anthropic's publicly documented agent for user-initiated fetches —
+// site operators match this in robots.txt to distinguish CLI traffic
+// from server-side automation.
+//
 // User agent now lives on `WebFetchConfig::user_agent` (default matches
 // TS `Claude-User (...)`). Callers can override via settings.json when
 // they need a different robots.txt contract.

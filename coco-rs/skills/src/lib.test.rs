@@ -26,6 +26,9 @@ fn test_skill(name: &str, description: &str, prompt: &str, source: SkillSource) 
         shell: None,
         content_length: prompt.len() as i64,
         is_hidden: false,
+        gated_by: None,
+        files: std::collections::HashMap::new(),
+        skill_root: None,
     }
 }
 
@@ -403,13 +406,17 @@ fn test_load_skill_from_file() {
 
 #[test]
 fn test_load_from_markdown_extended_frontmatter() {
+    // TS frontmatter `arguments` is whitespace-separated (mirrors
+    // `parseArgumentNames` from `utils/argumentSubstitution.ts:50`).
+    // Comma-separation is the legacy disk format; we keep the legacy
+    // alias keys but the TS-canonical key is `arguments`.
     let content = "\
 # deploy
 
 ---
 description: Deploy to production
 when-to-use: When the user asks to deploy
-argument-names: env, region
+arguments: env region
 allowed-tools: Bash, Read
 paths: src/**/*.rs, deploy/**
 effort: high
@@ -430,7 +437,9 @@ Run the deployment pipeline for the specified environment.
         Some("When the user asks to deploy")
     );
     assert_eq!(skill.argument_names, vec!["env", "region"]);
-    assert_eq!(skill.paths, vec!["src/**/*.rs", "deploy/**"]);
+    // TS strips trailing `/**` because the `ignore` library treats a bare
+    // path as matching both the path itself and its descendants.
+    assert_eq!(skill.paths, vec!["src/**/*.rs", "deploy"]);
     assert_eq!(skill.effort.as_deref(), Some("high"));
     assert_eq!(skill.context, SkillContext::Fork);
     assert_eq!(skill.agent.as_deref(), Some("general-purpose"));
@@ -656,6 +665,39 @@ fn test_discover_skill_dirs_no_skills_dir_returns_empty() {
 
     let result = discover_skill_dirs_for_paths(&[file.as_path()], cwd);
     assert!(result.is_empty());
+}
+
+#[test]
+fn test_arguments_field_whitespace_split_filters_numeric() {
+    let content = "\
+# deploy
+
+---
+description: Test arg parsing
+arguments: env region 42 user
+---
+
+Body
+";
+    let skill = parse_skill_markdown(content, Path::new("/tmp/x.md")).unwrap();
+    // Numeric `42` is filtered (would conflict with `$N` shorthand).
+    assert_eq!(skill.argument_names, vec!["env", "region", "user"]);
+}
+
+#[test]
+fn test_arguments_field_legacy_aliases_still_work() {
+    let content = "\
+# deploy
+
+---
+description: Test arg parsing
+argument-names: env region
+---
+
+Body
+";
+    let skill = parse_skill_markdown(content, Path::new("/tmp/x.md")).unwrap();
+    assert_eq!(skill.argument_names, vec!["env", "region"]);
 }
 
 #[test]

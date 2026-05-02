@@ -1,0 +1,70 @@
+use coco_types::AppStatePatch;
+
+use super::Message;
+
+/// Result of a tool execution.
+///
+/// **Effect channel**: `app_state_patch` — a queued mutation that
+/// the executor applies post-execute (serial) or post-batch
+/// (concurrent). Tools MUST NOT mutate shared `ToolAppState`
+/// inline during `execute()` — `ToolUseContext.app_state` is an
+/// [`AppStateReadHandle`](coco_types::AppStateReadHandle) with no
+/// `.write()` method, so the compiler enforces the discipline.
+/// TS parity: `orchestration.ts:queuedContextModifiers` — per-tool
+/// `(ctx) => newCtx` modifiers keyed by `tool_use_id` and applied
+/// after the concurrent batch finishes.
+///
+/// Not `Clone` / `Serialize` / `Deserialize`: the `app_state_patch`
+/// closure can't participate in those traits. `ToolResult<T>` is
+/// always consumed by the executor (applied + converted to
+/// `Message::ToolResult`); no call path clones or serializes the
+/// whole struct.
+pub struct ToolResult<T> {
+    pub data: T,
+    pub new_messages: Vec<Message>,
+    /// Queued mutation of shared app_state. `None` for tools that
+    /// don't need to mutate (the overwhelming majority — only
+    /// `EnterPlanMode` / `ExitPlanMode` currently return a patch).
+    pub app_state_patch: Option<AppStatePatch>,
+}
+
+impl<T> ToolResult<T> {
+    /// Shorthand: plain data result, no extra messages, no app_state
+    /// mutation. Matches the 90%+ of tool call sites.
+    pub fn data(data: T) -> Self {
+        Self {
+            data,
+            new_messages: Vec::new(),
+            app_state_patch: None,
+        }
+    }
+
+    /// Construct with data + extra messages and no mutation.
+    pub fn with_messages(data: T, new_messages: Vec<Message>) -> Self {
+        Self {
+            data,
+            new_messages,
+            app_state_patch: None,
+        }
+    }
+
+    /// Attach a post-execute app_state patch. Consumes and returns
+    /// the result fluently.
+    pub fn with_patch(mut self, patch: AppStatePatch) -> Self {
+        self.app_state_patch = Some(patch);
+        self
+    }
+}
+
+impl<T: std::fmt::Debug> std::fmt::Debug for ToolResult<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ToolResult")
+            .field("data", &self.data)
+            .field("new_messages", &self.new_messages)
+            .field(
+                "app_state_patch",
+                &self.app_state_patch.as_ref().map(|_| "<fn>"),
+            )
+            .finish()
+    }
+}

@@ -20,6 +20,7 @@ use coco_tool_runtime::AgentQueryEngine;
 use coco_tool_runtime::AgentQueryResult;
 use coco_types::Features;
 use coco_types::ModelRole;
+use coco_types::ThinkingLevel;
 use coco_types::ToolFilter;
 use coco_types::ToolOverrides;
 
@@ -33,10 +34,21 @@ use crate::engine::QueryEngineConfig;
 /// primary `ApiClient` + fallback chain. `None` defaults to the
 /// parent session's model (TS parity: `runAgent.ts` inherits the
 /// parent client unless the agent definition specifies a model).
-/// The factory captures shared state (tool registry, hooks, retry
-/// config) and resolves per-role clients from `RuntimeConfig`.
-pub type QueryEngineFactory =
-    Arc<dyn Fn(QueryEngineConfig, Option<ModelRole>) -> QueryEngine + Send + Sync>;
+///
+/// The factory is async because production implementations (see
+/// `app/cli/src/agent_handle_factory.rs`) need to call into the
+/// session runtime's role-client resolver and engine builder, both
+/// of which are async. The adapter calls `(factory)(cfg, role).await`
+/// from inside `execute_query`, which itself runs in an async context
+/// — see `coco_query::agent_adapter::QueryEngineAdapter::execute_query`.
+pub type QueryEngineFactory = Arc<
+    dyn Fn(
+            QueryEngineConfig,
+            Option<ModelRole>,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = QueryEngine> + Send>>
+        + Send
+        + Sync,
+>;
 
 /// Adapter that wraps QueryEngine to implement AgentQueryEngine.
 ///
@@ -75,7 +87,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
             max_tokens: None,
             system_prompt: Some(config.system_prompt),
             append_system_prompt: None,
-            model_name: config.model,
+            model_id: config.model,
             permission_mode,
             // Inherit the parent session's bypass capability. TS
             // parity: `spawnUtils.ts:53` / `spawnMultiAgent.ts:223`
@@ -87,7 +99,20 @@ impl AgentQueryEngine for QueryEngineAdapter {
             max_budget_usd: None,
             streaming_tool_execution: true,
             is_non_interactive: true,
-            thinking_level: None,
+            // Subagent reasoning-effort override (TS parity:
+            // `AgentTool.tsx:154-159`). The resolver in
+            // `core/subagent/src/spawn_resolution.rs` carries the
+            // effort string forward; here we parse it into a
+            // `ThinkingLevel` so the engine threads it into
+            // `QueryParams.thinking_level` → `PerCallOverrides`. An
+            // unrecognized string degrades to `None` (the model's
+            // `default_thinking_level` from `ModelInfo` then applies)
+            // rather than failing the spawn — surface as a warning
+            // path later if it becomes useful.
+            thinking_level: config
+                .effort
+                .as_deref()
+                .and_then(|s| s.parse::<ThinkingLevel>().ok()),
             session_id: config.session_id.unwrap_or_default(),
             project_dir: None,
             allow_rules: Default::default(),
@@ -107,7 +132,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
             disable_all_hooks: false,
             allow_managed_hooks_only: false,
             enable_token_budget_continuation: false,
-            auto_compact_enabled: true,
+            compact: coco_config::CompactConfig::default(),
             system_reminder: coco_config::SystemReminderConfig::default(),
             tool_config: coco_config::ToolConfig::default(),
             sandbox_config: coco_config::SandboxConfig::default(),
@@ -151,6 +176,8 @@ impl AgentQueryEngine for QueryEngineAdapter {
                     None => child,
                 }
             },
+            // Sandboxed write fence — propagated as-is. Empty = no fence.
+            allowed_write_roots: config.allowed_write_roots.clone(),
         };
 
         // Role resolution: the adapter threads the subagent's role
@@ -158,21 +185,39 @@ impl AgentQueryEngine for QueryEngineAdapter {
         // chain is installed. `None` defers to the factory's
         // default (typically the parent session's Main role).
         let role = config.model_role;
-        let engine = (self.engine_factory)(engine_config, role);
+        let mut engine = (self.engine_factory)(engine_config, role).await;
+        // D3: install the per-spawn permission bridge if one was
+        // threaded through. AgentTool spawns set this so worker tool
+        // deny paths forward to the leader instead of failing closed.
+        // `None` keeps the factory-default bridge (typically the
+        // parent's, installed by `wire_engine`).
+        if let Some(bridge) = config.permission_bridge.clone() {
+            engine = engine.with_permission_bridge(bridge);
+        }
 
         // Fork mode: if the parent surfaced context messages, use
         // `run_with_messages` so the child's first turn sees the
         // parent's history prepended. TS parity:
         // `AgentTool.tsx:627-630` passes `forkContextMessages:
         // toolUseContext.messages` for `isForkPath`.
+        //
+        // Caller-supplied `event_tx` lets bg AgentTool spawns
+        // observe live `Stream::TextDelta` events (TaskOutput live
+        // streaming). When `None`, fall back to a discarded channel
+        // so the engine still has somewhere to write.
+        let event_tx = config.event_tx.clone().unwrap_or_else(|| {
+            let (tx, _rx) = tokio::sync::mpsc::channel::<crate::CoreEvent>(16);
+            tx
+        });
+
         let result = if !config.fork_context_messages.is_empty() {
             // Deserialize each message JSON back into typed
             // `Message`. Any entry that fails deserialization is
             // dropped with a warn — fork context is best-effort
             // (the child will simply lack that message).
-            let mut messages: Vec<coco_types::Message> = Vec::new();
+            let mut messages: Vec<coco_messages::Message> = Vec::new();
             for (i, v) in config.fork_context_messages.iter().enumerate() {
-                match serde_json::from_value::<coco_types::Message>(v.clone()) {
+                match serde_json::from_value::<coco_messages::Message>(v.clone()) {
                     Ok(m) => messages.push(m),
                     Err(e) => {
                         tracing::warn!(
@@ -185,10 +230,12 @@ impl AgentQueryEngine for QueryEngineAdapter {
             }
             // Append the new user prompt after the fork history.
             messages.push(coco_messages::create_user_message(prompt));
-            let (tx, _rx) = tokio::sync::mpsc::channel::<crate::CoreEvent>(16);
-            engine.run_with_messages(messages, tx).await?
+            engine.run_with_messages(messages, event_tx).await?
         } else {
-            engine.run(prompt).await?
+            // The single-prompt path uses `run_with_events` so the
+            // caller's `event_tx` (or our discarded fallback) drives
+            // the same emission stream as the fork path.
+            engine.run_with_events(prompt, event_tx).await?
         };
 
         // Count ToolResult messages as a proxy for tool_use_count —
@@ -198,7 +245,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
         let tool_use_count = result
             .final_messages
             .iter()
-            .filter(|m| matches!(m, coco_types::Message::ToolResult(_)))
+            .filter(|m| matches!(m, coco_messages::Message::ToolResult(_)))
             .count() as i64;
         // Serialize the final history so the caller (SwarmAgentHandle,
         // teammate runner) can route it through transcript / audit
@@ -221,6 +268,48 @@ impl AgentQueryEngine for QueryEngineAdapter {
             cancelled: result.cancelled,
         })
     }
+}
+
+/// Pure helper: micro-compact a teammate worker's serialized history.
+///
+/// Implements the body of [`coco_coordinator::runner_loop::AgentExecutionEngine::compact_messages`]
+/// for production engines that wrap a `coco-compact`-aware runtime.
+/// Lives here in `coco-query` (alongside the engine adapter) rather
+/// than in `coco-coordinator` so the coordinator stays free of the
+/// `coco-messages` / `coco-compact` deps.
+///
+/// Routes through [`coco_compact::micro_compact`] which clears
+/// resolved tool results while preserving recent compactable IDs — no
+/// API call needed. `keep_recent` is the TS default (5); engines that
+/// hold a `CompactConfig` should call `coco_compact::micro_compact`
+/// directly with the user's configured value instead of this helper.
+///
+/// Falls back to a no-op when message deserialization fails — a
+/// malformed history shouldn't break the runner's compaction path;
+/// the runner_loop's safety-valve sliding-window then kicks in.
+pub fn micro_compact_serialized_messages(
+    messages: Vec<serde_json::Value>,
+) -> Vec<serde_json::Value> {
+    const KEEP_RECENT: usize = 5;
+    let mut typed: Vec<coco_messages::Message> = match messages
+        .iter()
+        .map(|v| serde_json::from_value::<coco_messages::Message>(v.clone()))
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "micro_compact_serialized_messages: malformed history; returning input unchanged"
+            );
+            return messages;
+        }
+    };
+    let _result = coco_compact::micro_compact(&mut typed, KEEP_RECENT);
+    typed
+        .iter()
+        .map(|m| serde_json::to_value(m).unwrap_or_default())
+        .collect()
 }
 
 #[cfg(test)]

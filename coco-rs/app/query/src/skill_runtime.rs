@@ -181,6 +181,31 @@ impl SkillHandle for QuerySkillRuntime {
                     // role by deferring to the factory default.
                     model_role: None,
                     fork_context_messages: Vec::new(),
+                    allowed_write_roots: Vec::new(),
+                    // Skill subagents inherit the parent's call options
+                    // — no per-call AgentTool tuning surface today, so
+                    // these stay defaults.
+                    effort: None,
+                    use_exact_tools: false,
+                    mcp_servers: Vec::new(),
+                    initial_prompt: None,
+                    // Skills don't currently propagate the parent's
+                    // runtime fingerprint — the skill runner reuses the
+                    // parent ApiClient by construction. When/if the
+                    // skill path moves to a fresh-engine spawn, fill
+                    // this from the parent's `ApiClient.fingerprint()`
+                    // via `to_snapshot()` to surface drift detection.
+                    parent_runtime_snapshot: None,
+                    // Skills don't have an AgentDefinition counterpart
+                    // (they're a separate first-class workflow type).
+                    definition: None,
+                    // Skills inherit the parent's permission bridge by
+                    // construction (they reuse the parent ApiClient).
+                    // Setting this to `None` keeps the engine factory's
+                    // wire_engine path on the parent's bridge.
+                    permission_bridge: None,
+                    // Skills don't stream into a task buffer.
+                    event_tx: None,
                 };
 
                 let query_result = engine

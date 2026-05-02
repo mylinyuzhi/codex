@@ -10,6 +10,7 @@
 //! text and the permission-gate defaults live in `core/context` and
 //! `core/permissions` respectively.
 
+use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::PlanApprovalMessage;
 use coco_tool_runtime::PlanApprovalRequest;
@@ -23,7 +24,6 @@ use coco_types::PermissionMode;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
 use coco_types::ToolName;
-use coco_types::ToolResult;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;

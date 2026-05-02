@@ -1,0 +1,470 @@
+//! Free helpers used by the agent loop. Extracted from `engine.rs` to keep
+//! that file focused on the orchestration impl.
+//!
+//! Items split into five groups:
+//! - Capacity-error detection + model-fallback announcer.
+//! - Transcript rendering helpers (extractor input + streaming tool output).
+//! - Delta builders for tool / MCP / agent listing reminders.
+//! - User-input scraping for the per-turn reminder pipeline.
+//! - Streaming tool-call buffer + progress throttle utilities.
+//!
+//! `engine.rs` selectively re-exports the items its tests reach via
+//! `super::name` (e.g. `ProgressThrottle`, `is_capacity_error_message`,
+//! `classify_progress_payload`). Other modules (`engine_turn_reminders`,
+//! `engine_finalize_turn`) import directly from this module.
+//!
+//! TS parity references stay attached to each item so callers can locate the
+//! mirrored TS source quickly.
+
+use coco_inference::ToolResultContent;
+use coco_inference::UserContentPart;
+use coco_messages::AssistantContent;
+use coco_messages::LlmMessage;
+use coco_messages::Message;
+use coco_messages::MessageHistory;
+use coco_messages::UserContent;
+use std::collections::HashMap;
+use std::collections::HashSet;
+
+use crate::AgentStreamEvent;
+use crate::CoreEvent;
+use crate::ServerNotification;
+use crate::emit::emit_protocol;
+use crate::emit::emit_stream;
+use crate::emit::emit_tui;
+use crate::model_runtime::ModelFallbackReason;
+
+/// Per-call buffer used while consuming `StreamEvent`s for a single turn.
+/// `input_json` is appended from `ToolCallDelta` chunks and parsed on
+/// `ToolCallEnd`. Buffers are keyed by the provider-assigned `tool_call_id`.
+pub(crate) struct StreamingToolCallBuffer {
+    pub(crate) tool_name: String,
+    pub(crate) input_json: String,
+    pub(crate) complete: bool,
+}
+
+/// Classify an error message as a transient capacity error.
+///
+/// TS parity: `is529Error` + 429 clauses in `services/api/withRetry.ts`.
+/// Rust's [`coco_inference::InferenceError::Overloaded`] Display formats
+/// as `"provider overloaded"`; rate-limit as `"rate limited"`. Raw HTTP
+/// status codes appear in messages bubbled from provider crates. Match
+/// any of these.
+pub(crate) fn is_capacity_error_message(msg: &str) -> bool {
+    let m = msg.to_ascii_lowercase();
+    m.contains("provider overloaded")
+        || m.contains("overloaded_error")
+        || m.contains("rate limited")
+        || m.contains("rate_limit")
+        || m.contains("status: 529")
+        || m.contains("status: 503")
+        || m.contains("(529)")
+        || m.contains("(503)")
+}
+
+/// Announce a model fallback / recovery transition as an inline
+/// stream notice. TS parity: `query.ts:946` writes a system-tagged
+/// line into the transcript so SDK consumers + the TUI see it
+/// alongside the agent's response.
+///
+/// Templates are direction-aware:
+/// - `CapacityDegrade` → "Switched to {new} due to high demand for {original}."
+/// - `ProbeRecovery`   → "Recovered to primary {new} after probe."
+/// - `ChainExhausted`  → "All provider slots exhausted (last tried: {original})."
+///
+/// `original` may be empty if the previous slot never identified
+/// itself — the message degrades gracefully on each branch.
+pub(crate) async fn emit_model_fallback_notice(
+    event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
+    original: &str,
+    new_model: &str,
+    session_id: &str,
+    reason: ModelFallbackReason,
+) {
+    let notice = match reason {
+        ModelFallbackReason::CapacityDegrade { .. } => {
+            if original.is_empty() {
+                format!("[system] Switched to fallback model {new_model} due to high demand.\n")
+            } else {
+                format!("[system] Switched to {new_model} due to high demand for {original}.\n")
+            }
+        }
+        ModelFallbackReason::ProbeRecovery => {
+            format!("[system] Recovered to primary {new_model} after probe.\n")
+        }
+        ModelFallbackReason::ChainExhausted => {
+            if original.is_empty() {
+                "[system] All provider slots exhausted.\n".to_string()
+            } else {
+                format!("[system] All provider slots exhausted (last tried: {original}).\n")
+            }
+        }
+    };
+    let _ = emit_stream(
+        event_tx,
+        AgentStreamEvent::TextDelta {
+            turn_id: session_id.to_string(),
+            delta: notice,
+        },
+    )
+    .await;
+}
+
+/// Build a plain-text transcript view to feed the session-memory
+/// extractor's prompt. Includes user / assistant text and tool result
+/// summaries; thinking blocks are omitted so they don't dominate the
+/// extractor's context window.
+pub(crate) fn render_transcript_for_extractor(messages: &[Message]) -> String {
+    let mut out = String::new();
+    for msg in messages {
+        match msg {
+            Message::User(u) => {
+                if let LlmMessage::User { content, .. } = &u.message {
+                    let text: String = content
+                        .iter()
+                        .filter_map(|p| match p {
+                            UserContent::Text(t) => Some(t.text.as_str()),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    if !text.trim().is_empty() {
+                        out.push_str("USER: ");
+                        out.push_str(text.trim());
+                        out.push('\n');
+                    }
+                }
+            }
+            Message::Assistant(a) => {
+                if let LlmMessage::Assistant { content, .. } = &a.message {
+                    let mut text = String::new();
+                    for part in content {
+                        match part {
+                            AssistantContent::Text(t) => {
+                                if !t.text.trim().is_empty() {
+                                    text.push_str(&t.text);
+                                    text.push('\n');
+                                }
+                            }
+                            AssistantContent::ToolCall(tc) => {
+                                text.push_str(&format!("[tool: {}]\n", tc.tool_name));
+                            }
+                            _ => {}
+                        }
+                    }
+                    if !text.trim().is_empty() {
+                        out.push_str("ASSISTANT: ");
+                        out.push_str(text.trim());
+                        out.push('\n');
+                    }
+                }
+            }
+            Message::ToolResult(tr) => {
+                if let LlmMessage::Tool { content, .. } = &tr.message {
+                    for part in content {
+                        if let coco_messages::ToolContent::ToolResult(r) = part
+                            && let ToolResultContent::Text { value, .. } = &r.output
+                        {
+                            let trimmed = value.trim();
+                            if !trimmed.is_empty() {
+                                let preview = if trimmed.len() > 800 {
+                                    format!("{}…", &trimmed[..800])
+                                } else {
+                                    trimmed.to_string()
+                                };
+                                out.push_str("TOOL_RESULT: ");
+                                out.push_str(&preview);
+                                out.push('\n');
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Extract the first `ToolResult` text payload from a run of
+/// `ordered_messages` so the streaming path can populate
+/// `ToolUseCompleted.output` with the same string the SDK expects.
+/// Mirrors the non-streaming runner's `render_completed_output`
+/// helper in `tool_call_runner.rs`.
+pub(crate) fn extract_streaming_result_text(ordered: &[Message]) -> String {
+    for msg in ordered {
+        if let Message::ToolResult(tr) = msg
+            && let LlmMessage::Tool { content, .. } = &tr.message
+        {
+            for part in content {
+                if let coco_messages::ToolContent::ToolResult(r) = part {
+                    match &r.output {
+                        ToolResultContent::Text { value, .. } => {
+                            return value.clone();
+                        }
+                        ToolResultContent::ErrorText { value, .. } => {
+                            return value.clone();
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    String::new()
+}
+
+/// Compute the TS-parity `deferred_tools_delta` between the current tool
+/// set and the last-announced set stored on `ToolAppState`.
+///
+/// Returns `None` when the sets are equal (nothing to announce); returns
+/// `Some(info)` with `added_lines` / `removed_names` when they differ.
+///
+/// TS `getDeferredToolsDelta` at `attachments.ts:1472` reconstructs the
+/// announced set by scanning history for prior delta attachments;
+/// coco-rs persists the set directly on app_state, so this diff is
+/// O(|current ∪ announced|).
+pub(crate) fn compute_tools_delta(
+    current_tools: &[String],
+    last_announced: &HashSet<String>,
+) -> Option<coco_system_reminder::DeferredToolsDeltaInfo> {
+    let current_set: HashSet<&String> = current_tools.iter().collect();
+
+    let mut added_lines: Vec<String> = current_tools
+        .iter()
+        .filter(|t| !last_announced.contains(t.as_str()))
+        .map(|t| format!("- {t}"))
+        .collect();
+    let mut removed_names: Vec<String> = last_announced
+        .iter()
+        .filter(|t| !current_set.contains(*t))
+        .cloned()
+        .collect();
+
+    if added_lines.is_empty() && removed_names.is_empty() {
+        return None;
+    }
+    // Stable ordering so consecutive emissions with the same delta
+    // produce byte-identical reminders (simpler to diff in tests + logs).
+    added_lines.sort();
+    removed_names.sort();
+    Some(coco_system_reminder::DeferredToolsDeltaInfo {
+        added_lines,
+        removed_names,
+    })
+}
+
+/// Extract the raw user-input text from the most-recent non-meta user
+/// message in history. Mirrors TS `getAttachments(input, ...)` where
+/// `input` is the user's prompt string (not a structured message).
+/// Returns `None` when there's no plain-text user message (e.g. the
+/// session opened with a compacted summary).
+pub(crate) fn latest_user_input_text(history: &MessageHistory) -> Option<String> {
+    for msg in history.messages.iter().rev() {
+        let Message::User(u) = msg else {
+            continue;
+        };
+        if let LlmMessage::User { content, .. } = &u.message {
+            for part in content {
+                if let UserContentPart::Text(tp) = part {
+                    return Some(tp.text.clone());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Compute the TS-parity `mcp_instructions_delta` between the current
+/// server-instruction set and the last-announced set on `ToolAppState`.
+///
+/// TS: `getMcpInstructionsDeltaAttachment` reconstructs the announced
+/// set by scanning prior delta attachments in history; coco-rs
+/// persists the announced map on `app_state.last_announced_mcp_instructions`
+/// so the diff is O(|current ∪ announced|).
+pub(crate) fn compute_mcp_instructions_delta(
+    current: &HashMap<String, String>,
+    last_announced: &HashMap<String, String>,
+) -> Option<coco_system_reminder::McpInstructionsDeltaInfo> {
+    let mut added_blocks: Vec<String> = current
+        .iter()
+        .filter(|(name, text)| {
+            last_announced
+                .get(name.as_str())
+                .is_none_or(|prev| prev != *text)
+        })
+        .map(|(name, text)| format!("## {name}\n\n{text}"))
+        .collect();
+    let mut removed_names: Vec<String> = last_announced
+        .keys()
+        .filter(|name| !current.contains_key(name.as_str()))
+        .cloned()
+        .collect();
+
+    if added_blocks.is_empty() && removed_names.is_empty() {
+        return None;
+    }
+    added_blocks.sort();
+    removed_names.sort();
+    Some(coco_system_reminder::McpInstructionsDeltaInfo {
+        added_blocks,
+        removed_names,
+    })
+}
+
+/// Compute the TS-parity `agent_listing_delta` between the current agent
+/// types and the last-announced set on `ToolAppState`. `is_initial` is
+/// true when no agents have been announced yet (first emission of the
+/// session); that flips the TS "Available agent types" header (vs
+/// "New agent types are now available").
+pub(crate) fn compute_agents_delta(
+    current_agents: &[String],
+    last_announced: &HashSet<String>,
+) -> Option<coco_system_reminder::AgentListingDeltaInfo> {
+    let current_set: HashSet<&String> = current_agents.iter().collect();
+
+    let mut added_lines: Vec<String> = current_agents
+        .iter()
+        .filter(|t| !last_announced.contains(t.as_str()))
+        .map(|t| format!("- {t}"))
+        .collect();
+    let mut removed_types: Vec<String> = last_announced
+        .iter()
+        .filter(|t| !current_set.contains(*t))
+        .cloned()
+        .collect();
+
+    if added_lines.is_empty() && removed_types.is_empty() {
+        return None;
+    }
+    added_lines.sort();
+    removed_types.sort();
+    let is_initial = last_announced.is_empty();
+    Some(coco_system_reminder::AgentListingDeltaInfo {
+        added_lines,
+        removed_types,
+        is_initial,
+        show_concurrency_note: is_initial,
+    })
+}
+
+/// LRU + time-window throttle for protocol-level tool-progress events.
+///
+/// TS parity: `utils/queryHelpers.ts:99-188` — one throttle per
+/// `parent_tool_use_id`, ≤1 emission / 30 s, LRU-bound to 100 keys.
+pub(crate) struct ProgressThrottle {
+    last_sent: lru::LruCache<String, std::time::Instant>,
+    throttle: std::time::Duration,
+}
+
+impl ProgressThrottle {
+    /// Matches TS defaults (30 s window, 100-key LRU).
+    pub(crate) fn new() -> Self {
+        let cap = std::num::NonZeroUsize::new(100).unwrap_or(std::num::NonZeroUsize::MIN);
+        Self::with_params(std::time::Duration::from_secs(30), cap)
+    }
+
+    /// Test-only constructor that takes an explicit window + LRU
+    /// size. The tests use a 1 ms window so they don't need to sleep.
+    pub(crate) fn with_params(
+        throttle: std::time::Duration,
+        max_tracking: std::num::NonZeroUsize,
+    ) -> Self {
+        Self {
+            last_sent: lru::LruCache::new(max_tracking),
+            throttle,
+        }
+    }
+
+    /// Returns `true` if a protocol event for `key` should be
+    /// emitted now and stamps the send time. Returns `false` (skip)
+    /// when a prior emission fell inside the throttle window.
+    pub(crate) fn allow(&mut self, key: &str, now: std::time::Instant) -> bool {
+        // `peek` (vs `get`) does not bump recency — within-window
+        // skips must not refresh the LRU position.
+        if let Some(prev) = self.last_sent.peek(key)
+            && now.duration_since(*prev) < self.throttle
+        {
+            return false;
+        }
+        self.last_sent.put(key.to_string(), now);
+        true
+    }
+}
+
+/// Extract `(tool_name, elapsed_seconds, task_id)` from a
+/// `ToolProgress.data` payload IF it matches a TS-parity
+/// bash/powershell shape. Returns `None` for unrelated payload
+/// types (e.g. agent/skill progress) — those follow different
+/// propagation rules and are not currently surfaced as
+/// `ServerNotification::ToolProgress`.
+pub(crate) fn classify_progress_payload(
+    data: &serde_json::Value,
+) -> Option<(&'static str, f64, Option<String>)> {
+    let obj = data.as_object()?;
+    let ptype = obj.get("type").and_then(serde_json::Value::as_str)?;
+    let tool_name = match ptype {
+        "bash_progress" => "Bash",
+        "powershell_progress" => "PowerShell",
+        _ => return None,
+    };
+    let elapsed = obj
+        .get("elapsedTimeSeconds")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.0);
+    let task_id = obj
+        .get("taskId")
+        .and_then(serde_json::Value::as_str)
+        .map(ToString::to_string);
+    Some((tool_name, elapsed, task_id))
+}
+
+/// Fan out a single `ToolProgress` event to both TUI and protocol
+/// layers, applying the throttle to the protocol layer. Extracted
+/// from the session drain loop so it can be unit-tested without
+/// standing up a full engine.
+pub(crate) async fn drain_one_progress(
+    event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
+    progress: coco_tool_runtime::ToolProgress,
+    throttle: &mut ProgressThrottle,
+) {
+    // Fan-out #1: raw TUI event, always emitted.
+    let tool_use_id = progress.tool_use_id.clone();
+    let _ = emit_tui(
+        event_tx,
+        coco_types::TuiOnlyEvent::ToolProgress {
+            tool_use_id: tool_use_id.clone(),
+            data: progress.data.clone(),
+        },
+    )
+    .await;
+
+    // Fan-out #2: protocol ToolProgress. Only bash/powershell
+    // progress qualifies (TS `queryHelpers.ts:158-199`).
+    let Some((tool_name, elapsed, task_id)) = classify_progress_payload(&progress.data) else {
+        return;
+    };
+
+    // Throttle key: TS uses `parentToolUseID` because `toolUseID`
+    // rotates per progress event in its world. Rust's tool_use_id
+    // is stable, so it's a safe fallback when parent is absent.
+    let key = progress
+        .parent_tool_use_id
+        .clone()
+        .unwrap_or_else(|| tool_use_id.clone());
+    if !throttle.allow(&key, std::time::Instant::now()) {
+        return;
+    }
+
+    let _ = emit_protocol(
+        event_tx,
+        ServerNotification::ToolProgress(coco_types::ToolProgressParams {
+            tool_use_id,
+            tool_name: tool_name.to_string(),
+            parent_tool_use_id: progress.parent_tool_use_id,
+            elapsed_time_seconds: elapsed,
+            task_id,
+        }),
+    )
+    .await;
+}

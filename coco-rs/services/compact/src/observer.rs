@@ -9,7 +9,7 @@
 
 use std::sync::Arc;
 
-use coco_types::Message;
+use coco_messages::Message;
 
 use crate::types::CompactResult;
 

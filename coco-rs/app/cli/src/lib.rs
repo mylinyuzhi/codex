@@ -2,9 +2,18 @@
 //!
 //! TS: entrypoints/ + main.tsx + cli/ + server/
 
+pub mod agent_handle_factory;
+pub mod agent_transcript_persistence;
+pub mod disk_task_output;
+pub mod fork_dispatcher;
+pub mod mcp_handle_adapter;
 pub mod output;
 pub mod sdk;
 pub mod sdk_server;
+pub mod session_runtime;
+pub mod side_query_impl;
+pub mod task_runtime;
+pub mod tui_permission_bridge;
 
 use clap::Parser;
 use clap::Subcommand;

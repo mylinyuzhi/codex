@@ -1,4 +1,4 @@
-use coco_types::*;
+use coco_messages::*;
 use uuid::Uuid;
 
 use super::*;

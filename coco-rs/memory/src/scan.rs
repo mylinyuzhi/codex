@@ -1,117 +1,97 @@
-//! Enhanced memory scanning with mtime tracking and manifest formatting.
+//! Single Scanner — the only entry point for listing memory files.
 //!
-//! TS: memdir/memoryScan.ts — scanMemoryFiles, formatMemoryManifest.
+//! TS: `memdir/memoryScan.ts`. Walks the directory, reads only the first
+//! 30 lines of each `.md` (enough for frontmatter), sorts by mtime
+//! descending, caps at 200 files.
 
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
-use crate::MemoryFrontmatter;
-use crate::parse_frontmatter;
-use crate::staleness;
+use crate::store::MemoryFrontmatter;
+use crate::store::parse_memory_frontmatter;
 
-/// Maximum number of memory files to scan (sorted by mtime, newest first).
-const MAX_SCAN_FILES: usize = 200;
+/// Hard cap on files scanned in a single pass. Anything past this is
+/// silently dropped after mtime-sort.
+pub const MAX_SCANNED_FILES: usize = 200;
 
-/// A scanned memory file with metadata.
+/// Lines read for frontmatter parsing. Prevents loading large bodies
+/// when only the manifest fields are needed.
+pub const FRONTMATTER_MAX_LINES: usize = 30;
+
+/// One scanned memory file.
 #[derive(Debug, Clone)]
 pub struct ScannedMemory {
-    /// Absolute path to the file.
     pub path: PathBuf,
-    /// Parsed frontmatter (name, description, type).
-    pub frontmatter: Option<MemoryFrontmatter>,
-    /// File modification time in milliseconds since epoch.
+    pub filename: String,
     pub mtime_ms: i64,
-    /// Pre-computed header string for display (age + relative path).
-    pub header: String,
-    /// File size in bytes.
     pub size_bytes: i64,
+    pub frontmatter: Option<MemoryFrontmatter>,
 }
 
-/// Scan a memory directory for all `.md` files (excluding MEMORY.md).
+/// Scan a directory for memory files (`*.md` excluding `MEMORY.md`).
 ///
-/// Returns files sorted by mtime (newest first), capped at `MAX_SCAN_FILES`.
-pub fn scan_memory_files(memory_dir: &Path) -> Vec<ScannedMemory> {
-    let mut files = Vec::new();
-
-    if !memory_dir.is_dir() {
-        return files;
+/// Sorted newest-first by mtime, capped at 200. Errors (unreadable
+/// directory, broken symlinks) are swallowed — return an empty vec.
+pub fn scan_memory_files(dir: &Path) -> Vec<ScannedMemory> {
+    let mut out = Vec::new();
+    if !dir.is_dir() {
+        return out;
     }
-
-    let entries = match std::fs::read_dir(memory_dir) {
-        Ok(entries) => entries,
-        Err(_) => return files,
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return out,
     };
-
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().is_none_or(|e| e != "md") {
+        let filename = match path.file_name().and_then(|s| s.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+        if !filename.ends_with(".md") || filename == crate::store::ENTRYPOINT_NAME {
             continue;
         }
-        if path.file_name().is_some_and(|n| n == "MEMORY.md") {
-            continue;
-        }
-
-        let metadata = match std::fs::metadata(&path) {
+        let metadata = match entry.metadata() {
             Ok(m) => m,
             Err(_) => continue,
         };
-
+        if !metadata.is_file() {
+            continue;
+        }
         let mtime_ms = metadata
             .modified()
             .ok()
             .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0);
-
         let size_bytes = metadata.len() as i64;
-
-        // Read and parse frontmatter (lightweight — only first few lines)
-        let frontmatter = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|content| parse_frontmatter(&content).0);
-
-        // Build header: "[age] path"
-        let age = staleness::memory_age(mtime_ms);
-        let rel_path = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("unknown");
-        let header = format!("[{age}] {rel_path}");
-
-        files.push(ScannedMemory {
+        let frontmatter = read_frontmatter_only(&path);
+        out.push(ScannedMemory {
             path,
-            frontmatter,
+            filename,
             mtime_ms,
-            header,
             size_bytes,
+            frontmatter,
         });
     }
-
-    // Sort by mtime descending (newest first)
-    files.sort_by(|a, b| b.mtime_ms.cmp(&a.mtime_ms));
-
-    // Cap at max files
-    files.truncate(MAX_SCAN_FILES);
-
-    files
+    out.sort_by(|a, b| b.mtime_ms.cmp(&a.mtime_ms));
+    out.truncate(MAX_SCANNED_FILES);
+    out
 }
 
-/// Format scanned memories as a text manifest for injection into extraction prompts.
+/// Format scanned memories as a manifest line list for prompt injection.
 ///
-/// TS: memoryScan.ts formatMemoryManifest — one line per file:
-/// `- [type] filename (age): description`
+/// One line per file: `- [type] filename (age): description`. Mirrors TS
+/// `formatMemoryManifest`.
 pub fn format_memory_manifest(memories: &[ScannedMemory]) -> String {
     let mut lines = Vec::with_capacity(memories.len() + 1);
     lines.push("## Existing Memory Files".to_string());
-
+    if memories.is_empty() {
+        lines.push("_(none)_".to_string());
+        return lines.join("\n");
+    }
     for mem in memories {
-        let filename = mem
-            .path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("unknown.md");
-        let mem_type = mem
+        let ty = mem
             .frontmatter
             .as_ref()
             .map_or("unknown", |fm| fm.memory_type.as_str());
@@ -119,28 +99,55 @@ pub fn format_memory_manifest(memories: &[ScannedMemory]) -> String {
             .frontmatter
             .as_ref()
             .map_or("", |fm| fm.description.as_str());
-        let age = staleness::memory_age(mem.mtime_ms);
-
-        lines.push(format!("- [{mem_type}] {filename} ({age}): {desc}"));
+        let age = memory_age_string(mem.mtime_ms);
+        lines.push(format!("- [{ty}] {} ({age}): {desc}", mem.filename));
     }
-
     lines.join("\n")
 }
 
-/// Scan both personal and team memory directories.
-pub fn scan_all_memory_files(personal_dir: &Path, team_dir: Option<&Path>) -> Vec<ScannedMemory> {
-    let mut all = scan_memory_files(personal_dir);
-
-    if let Some(team) = team_dir {
-        let team_files = scan_memory_files(team);
-        all.extend(team_files);
+/// Days since `mtime_ms`. 0 = today, 1 = yesterday, etc.
+pub fn memory_age_days(mtime_ms: i64) -> i64 {
+    let now_ms = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let diff = now_ms.saturating_sub(mtime_ms);
+    if diff <= 0 {
+        0
+    } else {
+        diff / (24 * 60 * 60 * 1000)
     }
+}
 
-    // Re-sort combined list
-    all.sort_by(|a, b| b.mtime_ms.cmp(&a.mtime_ms));
-    all.truncate(MAX_SCAN_FILES);
+/// Human-readable age. TS `memoryAge`: `today` / `yesterday` / `N days ago`.
+pub fn memory_age_string(mtime_ms: i64) -> String {
+    match memory_age_days(mtime_ms) {
+        0 => "today".to_string(),
+        1 => "yesterday".to_string(),
+        n => format!("{n} days ago"),
+    }
+}
 
-    all
+/// Return mtime in ms since epoch, or `None` if the file is missing.
+pub fn file_mtime_ms(path: &Path) -> Option<i64> {
+    std::fs::metadata(path)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64)
+}
+
+fn read_frontmatter_only(path: &Path) -> Option<MemoryFrontmatter> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let mut bounded = String::new();
+    for (i, line) in content.lines().enumerate() {
+        if i >= FRONTMATTER_MAX_LINES {
+            break;
+        }
+        bounded.push_str(line);
+        bounded.push('\n');
+    }
+    parse_memory_frontmatter(&bounded)
 }
 
 #[cfg(test)]

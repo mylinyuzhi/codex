@@ -1,6 +1,6 @@
 //! Message filtering functions — 11 filters for cleaning message lists.
 
-use coco_types::Message;
+use crate::Message;
 
 use crate::predicates;
 
@@ -105,13 +105,11 @@ pub fn filter_orphaned_tool_results(messages: &[Message]) -> Vec<Message> {
         .iter()
         .filter_map(|m| match m {
             Message::Assistant(a) => match &a.message {
-                coco_types::LlmMessage::Assistant { content, .. } => {
+                crate::LlmMessage::Assistant { content, .. } => {
                     let ids: Vec<String> = content
                         .iter()
                         .filter_map(|c| match c {
-                            coco_types::AssistantContent::ToolCall(tc) => {
-                                Some(tc.tool_call_id.clone())
-                            }
+                            crate::AssistantContent::ToolCall(tc) => Some(tc.tool_call_id.clone()),
                             _ => None,
                         })
                         .collect();

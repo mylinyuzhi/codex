@@ -7,6 +7,7 @@
 //! (JSON envelopes like a `task` wrapper or a `tasks` array) so the model
 //! sees the same payloads as in TS.
 
+use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::MailboxEnvelope;
 use coco_tool_runtime::TaskListHandleRef;
@@ -23,7 +24,6 @@ use coco_types::ExpandedView;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
 use coco_types::ToolName;
-use coco_types::ToolResult;
 use serde_json::Value;
 use std::collections::HashMap;
 

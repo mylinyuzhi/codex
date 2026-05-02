@@ -57,7 +57,10 @@ impl Stage {
 ///
 /// Each variant represents one coarse-grained subsystem switch. Internal
 /// sub-toggles stay inside the corresponding `*Config` struct.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
 pub enum Feature {
     // Token-economy gate (Stable, default=true).
     /// Expose the `web_search` tool to the model.
@@ -80,6 +83,38 @@ pub enum Feature {
     Worktree,
     /// LSP-backed code intelligence tool.
     Lsp,
+
+    // Skill / command feature gates (TS `feature(...)` calls).
+    /// `/loop` skill — recurring task scheduling.
+    /// TS: `feature('AGENT_TRIGGERS')` in `skills/bundled/index.ts:47`.
+    AgentTriggers,
+    /// `/schedule` skill — remote agent scheduling.
+    /// TS: `feature('AGENT_TRIGGERS_REMOTE')` in `skills/bundled/index.ts:56`.
+    AgentTriggersRemote,
+    /// `/claude-api` skill — Claude API/Anthropic SDK helper.
+    /// TS: `feature('BUILDING_CLAUDE_APPS')` in `skills/bundled/index.ts:64`.
+    BuildingClaudeApps,
+    /// `/dream` skill — KAIROS auto-dream memory consolidation.
+    /// TS: `feature('KAIROS') || feature('KAIROS_DREAM')` in `skills/bundled/index.ts:35`.
+    KairosDream,
+    /// `/hunter` skill — bug-finding review artifact.
+    /// TS: `feature('REVIEW_ARTIFACT')` in `skills/bundled/index.ts:41`.
+    ReviewArtifact,
+    /// `/run-skill-generator` skill.
+    /// TS: `feature('RUN_SKILL_GENERATOR')` in `skills/bundled/index.ts:73`.
+    RunSkillGenerator,
+    /// Auto-detect Claude in Chrome installation.
+    /// TS: `shouldAutoEnableClaudeInChrome()` in `skills/bundled/index.ts:70`.
+    ClaudeInChrome,
+    /// `/init` new 8-phase prompt (vs old single-prompt).
+    /// TS: `feature('NEW_INIT')` in `commands/init.ts:230`.
+    NewInit,
+    /// Reactive compaction strategy (vs traditional summarize-all).
+    /// TS: `feature('REACTIVE_COMPACT')` in `commands/compact/compact.ts:35`.
+    ReactiveCompact,
+    /// Prompt-cache break detection wiring during compaction.
+    /// TS: `feature('PROMPT_CACHE_BREAK_DETECTION')` in `commands/compact/compact.ts:67`.
+    PromptCacheBreakDetection,
 }
 
 impl Feature {
@@ -235,7 +270,11 @@ const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::AgentTeams,
         key: "agent_teams",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Experimental {
+            name: "Agent Teams",
+            menu_description: "Spawn subagents and persistent teammates (Agent / TeamCreate / TeamDelete tools, /agents command)",
+            announcement: "Agent teams enabled — use /agents to inspect the catalog and Agent(...) to spawn workers.",
+        },
         default_enabled: false,
     },
     FeatureSpec {
@@ -247,6 +286,67 @@ const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Lsp,
         key: "lsp",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    // Skill / command bundled-feature gates (TS `feature(...)` parity).
+    FeatureSpec {
+        id: Feature::AgentTriggers,
+        key: "agent_triggers",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::AgentTriggersRemote,
+        key: "agent_triggers_remote",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::BuildingClaudeApps,
+        key: "building_claude_apps",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::KairosDream,
+        key: "kairos_dream",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ReviewArtifact,
+        key: "review_artifact",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::RunSkillGenerator,
+        key: "run_skill_generator",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ClaudeInChrome,
+        key: "claude_in_chrome",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::NewInit,
+        key: "new_init",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ReactiveCompact,
+        key: "reactive_compact",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::PromptCacheBreakDetection,
+        key: "prompt_cache_break_detection",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

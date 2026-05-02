@@ -1,0 +1,115 @@
+use coco_types::{AgentDefinition, AgentTypeId, ModelRole, SubagentType};
+use pretty_assertions::assert_eq;
+
+use super::{SubagentSelection, resolve_subagent_selection};
+
+#[test]
+fn test_request_model_wins_over_definition_model() {
+    let def = AgentDefinition {
+        model: Some("haiku".into()),
+        ..Default::default()
+    };
+    let id = AgentTypeId::Builtin(SubagentType::Explore);
+    let sel = resolve_subagent_selection(Some("opus"), Some(&def), Some(&id));
+    assert_eq!(
+        sel,
+        SubagentSelection {
+            model: Some("opus".into()),
+            model_role: ModelRole::Explore,
+        }
+    );
+}
+
+#[test]
+fn test_definition_model_used_when_request_omits() {
+    let def = AgentDefinition {
+        model: Some("haiku".into()),
+        ..Default::default()
+    };
+    let id = AgentTypeId::Builtin(SubagentType::Explore);
+    let sel = resolve_subagent_selection(None, Some(&def), Some(&id));
+    assert_eq!(
+        sel,
+        SubagentSelection {
+            model: Some("haiku".into()),
+            model_role: ModelRole::Explore,
+        }
+    );
+}
+
+#[test]
+fn test_no_model_override_returns_none_for_role_fallback() {
+    let id = AgentTypeId::Builtin(SubagentType::Plan);
+    let sel = resolve_subagent_selection(None, None, Some(&id));
+    assert_eq!(
+        sel,
+        SubagentSelection {
+            model: None,
+            model_role: ModelRole::Plan,
+        }
+    );
+}
+
+#[test]
+fn test_definition_model_role_wins_over_subagent_type_mapping() {
+    let def = AgentDefinition {
+        model_role: Some(ModelRole::Fast),
+        ..Default::default()
+    };
+    let id = AgentTypeId::Builtin(SubagentType::Explore);
+    let sel = resolve_subagent_selection(None, Some(&def), Some(&id));
+    // Explore would normally map to Explore; the definition's Fast wins.
+    assert_eq!(sel.model_role, ModelRole::Fast);
+    assert!(sel.model.is_none());
+}
+
+#[test]
+fn test_inherit_model_string_is_passed_through_verbatim() {
+    // The frontmatter parser normalizes `inherit` to a literal lowercase
+    // `"inherit"` string. The resolver doesn't try to interpret it —
+    // downstream (engine factory) decides what `inherit` means
+    // (currently: use the parent's main loop model). The resolver just
+    // forwards.
+    let def = AgentDefinition {
+        model: Some("inherit".into()),
+        ..Default::default()
+    };
+    let id = AgentTypeId::Builtin(SubagentType::Plan);
+    let sel = resolve_subagent_selection(None, Some(&def), Some(&id));
+    assert_eq!(sel.model.as_deref(), Some("inherit"));
+    assert_eq!(sel.model_role, ModelRole::Plan);
+}
+
+#[test]
+fn test_custom_agent_without_definition_falls_back_to_subagent_role() {
+    let id = AgentTypeId::Custom("research-bot".into());
+    let sel = resolve_subagent_selection(None, None, Some(&id));
+    assert_eq!(sel.model_role, ModelRole::Subagent);
+    assert!(sel.model.is_none());
+}
+
+#[test]
+fn test_no_inputs_at_all_defaults_to_subagent_role() {
+    let sel = resolve_subagent_selection(None, None, None);
+    assert_eq!(
+        sel,
+        SubagentSelection {
+            model: None,
+            model_role: ModelRole::Subagent,
+        }
+    );
+}
+
+#[test]
+fn test_verification_subagent_maps_to_review_role() {
+    let id = AgentTypeId::Builtin(SubagentType::Verification);
+    let sel = resolve_subagent_selection(None, None, Some(&id));
+    assert_eq!(sel.model_role, ModelRole::Review);
+}
+
+#[test]
+fn test_general_purpose_falls_back_to_subagent_role() {
+    let id = AgentTypeId::Builtin(SubagentType::GeneralPurpose);
+    let sel = resolve_subagent_selection(None, None, Some(&id));
+    assert_eq!(sel.model_role, ModelRole::Subagent);
+}

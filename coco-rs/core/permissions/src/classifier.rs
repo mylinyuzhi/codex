@@ -127,12 +127,12 @@ pub fn is_safe_tool(tool_name: &str) -> bool {
 /// - Tool calls → tool name + abbreviated input
 /// - Tool results → tool name + abbreviated output
 /// - System messages → stripped
-pub fn build_transcript_entries(messages: &[coco_types::Message]) -> Vec<TranscriptEntry> {
+pub fn build_transcript_entries(messages: &[coco_messages::Message]) -> Vec<TranscriptEntry> {
     let mut entries = Vec::new();
 
     for msg in messages {
         match msg {
-            coco_types::Message::User(u) => {
+            coco_messages::Message::User(u) => {
                 // Post-Phase-2: every `Message::User` is genuine human
                 // input; reminder-injected content lives in
                 // `Message::Attachment`.
@@ -144,7 +144,7 @@ pub fn build_transcript_entries(messages: &[coco_types::Message]) -> Vec<Transcr
                     });
                 }
             }
-            coco_types::Message::Assistant(a) => {
+            coco_messages::Message::Assistant(a) => {
                 let blocks = extract_assistant_blocks(&a.message);
                 if !blocks.is_empty() {
                     entries.push(TranscriptEntry {
@@ -153,7 +153,7 @@ pub fn build_transcript_entries(messages: &[coco_types::Message]) -> Vec<Transcr
                     });
                 }
             }
-            coco_types::Message::ToolResult(tr) => {
+            coco_messages::Message::ToolResult(tr) => {
                 let output = format!("tool_use_id={}", tr.tool_use_id);
                 entries.push(TranscriptEntry {
                     role: TranscriptRole::User,
@@ -248,7 +248,7 @@ pub struct ClassifyRequest {
 /// Both stages share the same system prompt prefix for cache hits.
 /// The `classify_fn` callback calls the LLM with the given request.
 pub async fn classify_yolo_action<F, Fut>(
-    messages: &[coco_types::Message],
+    messages: &[coco_messages::Message],
     tool_name: &str,
     input: &serde_json::Value,
     rules: &AutoModeRules,
@@ -463,12 +463,12 @@ fn parse_classifier_response(response: &str) -> YoloClassifierResult {
     }
 }
 
-fn extract_user_text(msg: &coco_types::LlmMessage) -> String {
+fn extract_user_text(msg: &coco_messages::LlmMessage) -> String {
     match msg {
-        coco_types::LlmMessage::User { content, .. } => content
+        coco_messages::LlmMessage::User { content, .. } => content
             .iter()
             .filter_map(|c| match c {
-                coco_types::UserContent::Text(t) => Some(t.text.as_str()),
+                coco_messages::UserContent::Text(t) => Some(t.text.as_str()),
                 _ => None,
             })
             .collect::<Vec<_>>()
@@ -477,15 +477,15 @@ fn extract_user_text(msg: &coco_types::LlmMessage) -> String {
     }
 }
 
-fn extract_assistant_blocks(msg: &coco_types::LlmMessage) -> Vec<TranscriptBlock> {
+fn extract_assistant_blocks(msg: &coco_messages::LlmMessage) -> Vec<TranscriptBlock> {
     match msg {
-        coco_types::LlmMessage::Assistant { content, .. } => content
+        coco_messages::LlmMessage::Assistant { content, .. } => content
             .iter()
             .filter_map(|c| match c {
-                coco_types::AssistantContent::Text(t) => {
+                coco_messages::AssistantContent::Text(t) => {
                     Some(TranscriptBlock::Text(truncate(&t.text, 500)))
                 }
-                coco_types::AssistantContent::ToolCall(tc) => Some(TranscriptBlock::ToolCall {
+                coco_messages::AssistantContent::ToolCall(tc) => Some(TranscriptBlock::ToolCall {
                     tool_name: tc.tool_name.clone(),
                     input_summary: truncate(
                         &serde_json::to_string(&tc.input).unwrap_or_default(),

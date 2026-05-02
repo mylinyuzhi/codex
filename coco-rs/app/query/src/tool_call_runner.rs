@@ -29,6 +29,7 @@ use coco_hooks::HookExecutionEvent;
 use coco_hooks::HookRegistry;
 use coco_hooks::orchestration::OrchestrationContext;
 use coco_inference::ApiClient;
+use coco_inference::ToolCallPart;
 use coco_messages::MessageHistory;
 use coco_permissions::AutoModeRules;
 use coco_tool_runtime::PreparedToolCall;
@@ -45,7 +46,6 @@ use tokio::sync::RwLock;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
-use vercel_ai_provider::ToolCallPart;
 
 use crate::emit::emit_stream;
 use crate::session_state::SessionStateTracker;
@@ -188,10 +188,7 @@ impl<'a> ToolCallRunner<'a> {
             .execute_with(
                 plans,
                 |prepared, _runtime| {
-                    let hooks = hooks;
                     let orchestration_ctx = orchestration_ctx.clone();
-                    let hook_tx = hook_tx;
-                    let contexts = contexts;
                     async move {
                         let ctx_entry = contexts.get(&prepared.tool_use_id);
                         let tool_name = ctx_entry
@@ -218,6 +215,19 @@ impl<'a> ToolCallRunner<'a> {
                             hooks,
                             orchestration_ctx,
                             hook_tx,
+                            // Tool Result Budget Level 1 session dir.
+                            // Wired only when both `config_home` and
+                            // `session_id_for_history` are present —
+                            // tests with a stub ToolUseContext skip
+                            // persistence (None) and tool results stay
+                            // inline.
+                            tool_result_session_dir: shared_ctx
+                                .config_home
+                                .as_ref()
+                                .zip(shared_ctx.session_id_for_history.as_ref())
+                                .map(|(home, sess)| {
+                                    home.join("cache").join("tool-results").join(sess)
+                                }),
                         })
                         .await
                     }
@@ -292,16 +302,16 @@ fn render_completed_output(outcome: &coco_tool_runtime::ToolCallOutcome) -> Stri
     // that is a ToolResult. Matches the legacy processor which
     // serialized the tool output into the event.
     for msg in outcome.ordered_messages() {
-        if let coco_types::Message::ToolResult(tr) = msg
-            && let coco_types::LlmMessage::Tool { content, .. } = &tr.message
+        if let coco_messages::Message::ToolResult(tr) = msg
+            && let coco_messages::LlmMessage::Tool { content, .. } = &tr.message
         {
             for part in content {
-                if let coco_types::ToolContent::ToolResult(r) = part {
+                if let coco_messages::ToolContent::ToolResult(r) = part {
                     match &r.output {
-                        vercel_ai_provider::ToolResultContent::Text { value, .. } => {
+                        coco_inference::ToolResultContent::Text { value, .. } => {
                             return value.clone();
                         }
-                        vercel_ai_provider::ToolResultContent::ErrorText { value, .. } => {
+                        coco_inference::ToolResultContent::ErrorText { value, .. } => {
                             return value.clone();
                         }
                         _ => {}

@@ -22,14 +22,14 @@ use tokio_util::sync::CancellationToken;
 
 use coco_config::EnvKey;
 use coco_config::env;
-use coco_types::AttachmentEmitter;
-use coco_types::AttachmentMessage;
+use coco_messages::AttachmentEmitter;
+use coco_messages::AttachmentMessage;
+use coco_messages::HookCancelledPayload;
+use coco_messages::HookErrorDuringExecutionPayload;
+use coco_messages::HookNonBlockingErrorPayload;
 use coco_types::HookEventType;
 use coco_types::HookOutcome;
 use coco_types::PermissionBehavior;
-use coco_types::attachment_body::HookCancelledPayload;
-use coco_types::attachment_body::HookErrorDuringExecutionPayload;
-use coco_types::attachment_body::HookNonBlockingErrorPayload;
 
 use crate::HookExecutionResult;
 use crate::HookHandler;
@@ -60,6 +60,8 @@ pub use crate::inputs::SessionEndInput;
 pub use crate::inputs::SessionStartInput;
 pub use crate::inputs::StopFailureInput;
 pub use crate::inputs::StopInput;
+pub use crate::inputs::SubagentStartInput;
+pub use crate::inputs::SubagentStopInput;
 pub use crate::inputs::base_from_ctx;
 
 // ---------------------------------------------------------------------------
@@ -1413,6 +1415,101 @@ pub async fn execute_session_start(
         registry,
         HookEventType::SessionStart,
         Some(source),
+        &json_input,
+        &env,
+        &ctx.cancel,
+        DEFAULT_HOOK_TIMEOUT,
+        /*event_tx*/ None,
+        &ctx.attachment_emitter,
+        ctx.allow_managed_hooks_only,
+    )
+    .await;
+
+    Ok(aggregate_results(&results))
+}
+
+/// Execute SubagentStart hooks before a subagent begins running.
+///
+/// Aggregated `additional_contexts` are returned to the caller for
+/// injection into the subagent's first user message — TS parity:
+/// `runAgent.ts:530-555` collects `additionalContexts` then pushes a
+/// `hook_additional_context` attachment onto `initialMessages`.
+pub async fn execute_subagent_start(
+    registry: &HookRegistry,
+    ctx: &OrchestrationContext,
+    agent_type: &str,
+    agent_id: &str,
+) -> anyhow::Result<AggregatedHookResult> {
+    if ctx.disable_all_hooks {
+        return Ok(AggregatedHookResult::default());
+    }
+    let input = SubagentStartInput {
+        base: base_from_ctx(ctx),
+        hook_event_name: "SubagentStart".to_string(),
+        agent_type: agent_type.to_string(),
+        agent_id: agent_id.to_string(),
+    };
+
+    let json_input = serde_json::to_string(&input)?;
+    let env = build_hook_env(
+        &ctx.session_id,
+        &ctx.cwd.to_string_lossy(),
+        None,
+        "SubagentStart",
+        ctx.project_dir.as_deref().and_then(|p| p.to_str()),
+    );
+
+    let results = execute_hooks_parallel_filtered(
+        registry,
+        HookEventType::SubagentStart,
+        Some(agent_type),
+        &json_input,
+        &env,
+        &ctx.cancel,
+        DEFAULT_HOOK_TIMEOUT,
+        /*event_tx*/ None,
+        &ctx.attachment_emitter,
+        ctx.allow_managed_hooks_only,
+    )
+    .await;
+
+    Ok(aggregate_results(&results))
+}
+
+/// Execute SubagentStop hooks after a subagent finishes (success, failure,
+/// or cancel). The optional `transcript_path` mirrors TS
+/// `SubagentStopInput.agent_transcript_path`.
+pub async fn execute_subagent_stop(
+    registry: &HookRegistry,
+    ctx: &OrchestrationContext,
+    agent_type: &str,
+    agent_id: &str,
+    transcript_path: Option<&str>,
+) -> anyhow::Result<AggregatedHookResult> {
+    if ctx.disable_all_hooks {
+        return Ok(AggregatedHookResult::default());
+    }
+    let input = SubagentStopInput {
+        base: base_from_ctx(ctx),
+        hook_event_name: "SubagentStop".to_string(),
+        agent_type: agent_type.to_string(),
+        agent_id: agent_id.to_string(),
+        agent_transcript_path: transcript_path.map(String::from),
+    };
+
+    let json_input = serde_json::to_string(&input)?;
+    let env = build_hook_env(
+        &ctx.session_id,
+        &ctx.cwd.to_string_lossy(),
+        None,
+        "SubagentStop",
+        ctx.project_dir.as_deref().and_then(|p| p.to_str()),
+    );
+
+    let results = execute_hooks_parallel_filtered(
+        registry,
+        HookEventType::SubagentStop,
+        Some(agent_type),
         &json_input,
         &env,
         &ctx.cancel,

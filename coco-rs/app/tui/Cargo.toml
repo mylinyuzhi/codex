@@ -11,6 +11,8 @@ workspace = true
 coco-config.workspace = true
 coco-types.workspace = true
 coco-context.workspace = true
+coco-file-search.workspace = true
+coco-file-watch.workspace = true
 dirs.workspace = true
 
 serde = { workspace = true, features = ["derive"] }
@@ -23,6 +25,7 @@ tokio-stream.workspace = true
 rust-i18n.workspace = true
 nucleo.workspace = true
 tracing.workspace = true
+uuid = { workspace = true, features = ["v4"] }
 # Clipboard (copy_to_clipboard + OSC 52 + arboard + WSL PowerShell fallback).
 # Unavailable on Android; see clipboard_copy.rs for the cfg gating.
 base64.workspace = true

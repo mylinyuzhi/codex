@@ -2,13 +2,21 @@
 //!
 //! TS: plugins/ + services/plugins/ (PluginManifest, PluginManager, contributions)
 
+pub mod builtins;
 pub mod command_bridge;
+pub mod dependency;
+pub mod errors;
 pub mod hook_bridge;
 pub mod hot_reload;
+pub mod identifier;
 pub mod loader;
 pub mod marketplace;
+pub mod mcpb;
+pub mod refresh;
 pub mod schemas;
+pub mod security;
 pub mod skill_bridge;
+pub mod versioning;
 
 use serde::Deserialize;
 use serde::Serialize;

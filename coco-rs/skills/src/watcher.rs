@@ -168,7 +168,8 @@ fn reload_manager(manager: &mut SkillManager, skills: Vec<SkillDefinition>) {
     for skill in skills {
         manager.register(skill);
     }
-    // Re-register bundled skills so they're always available
-    crate::bundled::register_bundled(manager);
+    // Re-register bundled skills so they're always available.
+    // Using `from_env()` matches the TS check on `process.env.USER_TYPE`.
+    crate::bundled::register_bundled(manager, coco_types::UserType::from_env());
     tracing::info!(count = manager.len(), "skills reloaded");
 }

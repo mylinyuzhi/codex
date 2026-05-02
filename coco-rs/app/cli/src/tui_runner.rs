@@ -14,10 +14,10 @@
 //!                                 FileHistoryState
 //! ```
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
+use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::sync::mpsc;
 use tracing::info;
@@ -29,14 +29,11 @@ use coco_context::FileHistoryState;
 use coco_context::attachment::Attachment;
 use coco_inference::ApiClient;
 use coco_query::CoreEvent;
-use coco_query::QueryEngine;
-use coco_query::QueryEngineConfig;
 use coco_query::ServerNotification;
 use coco_tool_runtime::ToolRegistry;
 use coco_tui::App;
 use coco_tui::UserCommand;
 use coco_tui::app::create_channels;
-use coco_types::ToolAppState;
 use coco_types::TuiOnlyEvent;
 use tokio_util::sync::CancellationToken;
 
@@ -128,105 +125,16 @@ pub async fn run_tui(cli: &Cli) -> Result<()> {
     // System prompt
     let system_prompt = crate::build_system_prompt(&cwd, &model_id);
 
-    // Config home for file history — delegated to global_config so
-    // `COCO_CONFIG_DIR` moves everything in lockstep.
-    let config_home = coco_config::global_config::config_home();
-
-    // Session ID
-    let session_id = uuid::Uuid::new_v4().to_string();
-
-    // File read state — session-level cache for @mention dedup and change detection.
-    // TS: readFileState (FileStateCache) — shared across tools and mentions.
-    let file_read_state = Arc::new(RwLock::new(coco_context::FileReadState::new()));
-
-    // File history (if enabled)
-    // TS: fileHistoryEnabled() in fileHistory.ts — enabled by default
-    let file_history = if settings.merged.file_checkpointing_enabled {
-        Some(Arc::new(RwLock::new(FileHistoryState::new())))
-    } else {
-        None
-    };
-
-    // Create channels
-    let (command_tx, command_rx, notification_tx, notification_rx) = create_channels();
-
-    // Create TUI app
-    let mut app = App::new(command_tx, notification_rx)
-        .map_err(|e| anyhow::anyhow!("Failed to create TUI: {e}"))?;
-
-    // Wire file_history_enabled into TUI session state so the rewind
-    // overlay knows whether to show code restore options.
-    app.state_mut().session.file_history_enabled = file_history.is_some();
-
-    // Seed the capability gate that controls both Shift+Tab cycle
-    // (`PermissionMode::next_in_cycle`) and the plan-mode exit
-    // overlay's "Bypass" option. Matches engine_config below so the
-    // engine and TUI share one truth. Static for session lifetime.
-    app.state_mut().session.bypass_permissions_available = bypass_permissions_available;
-    app.state_mut().session.permission_mode = permission_mode;
-
-    // Surface the startup downgrade notification (if any) as a toast
-    // so interactive users see it. Headless paths eprintln it; the
-    // TUI swallows stderr.
-    if let Some(msg) = startup.notification {
-        app.state_mut()
-            .ui
-            .add_toast(coco_tui::state::ui::Toast::warning(msg));
-    }
-
-    // Build engine config — threads LoopConfig from the runtime so
-    // max_turns / max_tokens / streaming flags flow from settings.json.
-    let engine_config = QueryEngineConfig {
-        model_name: model_id.clone(),
-        permission_mode,
-        bypass_permissions_available,
-        context_window: 200_000,
-        max_output_tokens: 16_384,
-        max_turns: runtime_config.loop_config.max_turns.unwrap_or(30),
-        max_tokens: cli
-            .max_tokens
-            .or_else(|| runtime_config.loop_config.max_tokens.map(i64::from)),
-        system_prompt: Some(system_prompt),
-        streaming_tool_execution: runtime_config.loop_config.enable_streaming_tools,
-        session_id: session_id.clone(),
-        project_dir: runtime_config
-            .paths
-            .project_dir
-            .clone()
-            .or_else(|| Some(cwd.clone())),
-        plan_mode_settings: settings.merged.plan_mode.clone(),
-        system_reminder: settings.merged.system_reminder.clone(),
-        tool_config: runtime_config.tool.clone(),
-        sandbox_config: runtime_config.sandbox.clone(),
-        memory_config: runtime_config.memory.clone(),
-        shell_config: runtime_config.shell.clone(),
-        web_fetch_config: runtime_config.web_fetch.clone(),
-        web_search_config: runtime_config.web_search.clone(),
-        features: std::sync::Arc::new(runtime_config.features.clone()),
-        tool_overrides: runtime_config.tool_overrides.clone(),
-        ..Default::default()
-    };
-
-    // Shared app_state — persists across turns so PlanModeReminder's
-    // throttle counters + has_exited_plan_mode flag survive the
-    // per-turn engine construction. Lives in the driver; engines are
-    // built with `.with_app_state(app_state.clone())` per turn.
-    let app_state: Arc<RwLock<ToolAppState>> = Arc::new(RwLock::new(ToolAppState::default()));
-
-    // Session manager for auto-title persistence (F5). Shares the same
-    // `~/.coco/sessions` path as non-TUI entry points (`main::sessions_dir`).
+    // Session manager for auto-title persistence (F5). Built here so
+    // `SessionRuntime::build` can borrow it and the cleanup task can
+    // own it.
     let sessions_dir = coco_config::global_config::config_home().join("sessions");
     let session_manager = Arc::new(coco_session::SessionManager::new(sessions_dir));
-    // Create or load the session record so `auto_title` has a canonical
-    // row to write into. Silently swallow failures — title gen is a
-    // best-effort advisory feature.
     let _ = session_manager.create(&model_id, &cwd);
-
-    // Background housekeeping: prune session files older than the
-    // default retention period. Mirrors TS `utils/cleanup.ts`
-    // `DEFAULT_CLEANUP_PERIOD_DAYS = 30`. Fire-and-forget: cleanup
-    // failures never block startup.
     {
+        // Background housekeeping: prune session files older than the
+        // default retention period. Mirrors TS `utils/cleanup.ts`
+        // `DEFAULT_CLEANUP_PERIOD_DAYS = 30`. Fire-and-forget.
         let mgr = session_manager.clone();
         tokio::spawn(async move {
             let period = coco_session::default_cleanup_period();
@@ -250,9 +158,7 @@ pub async fn run_tui(cli: &Cli) -> Result<()> {
 
     // Fast-role ModelSpec for auto-title generation (F5). Prefer the
     // JSON-first runtime config; keep the Anthropic Haiku fallback for
-    // users who only configured an API key. Credential check goes
-    // through `ProviderConfig::resolve_api_key` so both env and
-    // `settings.providers.anthropic.api_key` are honored.
+    // users who only configured an API key.
     let fast_model_spec = runtime_config
         .model_roles
         .get(coco_types::ModelRole::Fast)
@@ -269,27 +175,94 @@ pub async fn run_tui(cli: &Cli) -> Result<()> {
                     display_name: "Claude Haiku 4.5".to_string(),
                 })
         });
-    let auto_title_enabled = settings.merged.session.auto_title;
-    let runtime_for_driver = Arc::new(runtime_config);
 
-    // Spawn agent driver
+    // P0: build channels FIRST so the TUI permission bridge can
+    // capture the notification sender. Without this, the engine's
+    // `PermissionDecision::Ask` path falls back to legacy auto-allow
+    // (permission_controller.rs:100-107), which is the wrong default
+    // for interactive sessions.
+    let (command_tx, command_rx, notification_tx, notification_rx) = create_channels();
+    let pending_approvals = coco_cli::tui_permission_bridge::new_pending_map();
+    let tui_permission_bridge: coco_tool_runtime::ToolPermissionBridgeRef =
+        Arc::new(coco_cli::tui_permission_bridge::TuiPermissionBridge::new(
+            notification_tx.clone(),
+            pending_approvals.clone(),
+        ));
+
+    // SessionRuntime owns every per-session subsystem (FileReadState,
+    // SessionMemoryService, FileHistoryState, ToolAppState,
+    // CompactionObserverRegistry, HookRegistry, history Mutex, etc.).
+    // Both runners (TUI + SDK) share this construction; the per-turn
+    // engine assembly below routes through `runtime.build_engine()`.
+    let runtime = crate::session_runtime::SessionRuntime::build(
+        crate::session_runtime::SessionRuntimeBuildOpts {
+            cli,
+            runtime_config: Arc::new(runtime_config),
+            cwd: cwd.clone(),
+            model_id: model_id.clone(),
+            system_prompt,
+            bypass_permissions_available,
+            permission_mode,
+            client,
+            fallback_clients,
+            recovery_policy,
+            tools,
+            session_manager,
+            fast_model_spec,
+            permission_bridge: Some(tui_permission_bridge),
+        },
+    )
+    .await?;
+
+    // P1: install agent-team wiring (SwarmAgentHandle + QueryEngineAdapter
+    // factory) when `Feature::AgentTeams` is enabled. No-op otherwise.
+    coco_cli::agent_handle_factory::install_agent_team(runtime.clone(), cwd.display().to_string())
+        .await?;
+
+    // TS parity: TUI users opt into per-spawn periodic AgentSummary
+    // timers via `COCO_AGENT_SUMMARY_ENABLE` (TS uses an SDK control
+    // message — `agentProgressSummaries: true` — that TUI sessions
+    // can't send). Default off keeps LLM cost off the hot path.
+    // Coordinator mode auto-enables independently and ignores this
+    // flag (matches `AgentTool.tsx:750`).
+    if coco_config::env::is_env_truthy(coco_config::EnvKey::CocoAgentSummaryEnable) {
+        runtime
+            .app_state
+            .write()
+            .await
+            .agent_progress_summaries_enabled = true;
+    }
+
+    // Create TUI app
+    let mut app = App::new(command_tx, notification_rx)
+        .map_err(|e| anyhow::anyhow!("Failed to create TUI: {e}"))?;
+
+    // Wire file_history_enabled into TUI session state so the rewind
+    // overlay knows whether to show code restore options.
+    app.state_mut().session.file_history_enabled = runtime.file_history.is_some();
+
+    // Seed the capability gate that controls both Shift+Tab cycle
+    // (`PermissionMode::next_in_cycle`) and the plan-mode exit
+    // overlay's "Bypass" option. Matches engine_config below so the
+    // engine and TUI share one truth. Static for session lifetime.
+    app.state_mut().session.bypass_permissions_available = bypass_permissions_available;
+    app.state_mut().session.permission_mode = permission_mode;
+
+    // Surface the startup downgrade notification (if any) as a toast
+    // so interactive users see it. Headless paths eprintln it; the
+    // TUI swallows stderr.
+    if let Some(msg) = startup.notification {
+        app.state_mut()
+            .ui
+            .add_toast(coco_tui::state::ui::Toast::warning(msg));
+    }
+
+    // Spawn agent driver — owns the SessionRuntime + transports.
     let driver_handle = tokio::spawn(run_agent_driver(
         command_rx,
         notification_tx,
-        client,
-        fallback_clients,
-        recovery_policy,
-        tools,
-        engine_config,
-        file_read_state,
-        file_history.clone(),
-        config_home,
-        session_id,
-        app_state,
-        session_manager,
-        fast_model_spec,
-        auto_title_enabled,
-        runtime_for_driver,
+        runtime,
+        pending_approvals,
     ));
 
     eprintln!("coco-rs TUI ({mode} mode) — model: {model_id}\n");
@@ -309,177 +282,115 @@ pub async fn run_tui(cli: &Cli) -> Result<()> {
 /// Runs as a background tokio task alongside the TUI event loop.
 ///
 /// Events flow directly as `CoreEvent` from QueryEngine → TUI (no mapping layer).
-#[allow(clippy::too_many_arguments)]
 async fn run_agent_driver(
     mut command_rx: mpsc::Receiver<UserCommand>,
     event_tx: mpsc::Sender<CoreEvent>,
-    client: Arc<ApiClient>,
-    fallback_clients: Vec<Arc<ApiClient>>,
-    recovery_policy: Option<coco_config::FallbackRecoveryPolicy>,
-    tools: Arc<ToolRegistry>,
-    mut engine_config: QueryEngineConfig,
-    file_read_state: Arc<RwLock<coco_context::FileReadState>>,
-    file_history: Option<Arc<RwLock<FileHistoryState>>>,
-    config_home: PathBuf,
-    session_id: String,
-    app_state: Arc<RwLock<ToolAppState>>,
-    session_manager: Arc<coco_session::SessionManager>,
-    fast_model_spec: Option<coco_types::ModelSpec>,
-    auto_title_enabled: bool,
-    runtime: Arc<coco_config::RuntimeConfig>,
+    runtime: Arc<crate::session_runtime::SessionRuntime>,
+    pending_approvals: coco_cli::tui_permission_bridge::PendingApprovals,
 ) {
     // One-shot gate: title gen runs at most once per driver instance.
-    // If the first attempt fails (no plan, LLM error), we don't retry —
-    // the user can always /rename manually.
-    let mut title_gen_attempted = false;
+    // `Arc<AtomicBool>` because the SubmitInput body now runs in a
+    // spawned task; the outer-scope flag must stay reachable across
+    // task boundaries so subsequent turns observe the latch.
+    let title_gen_attempted = Arc::new(std::sync::atomic::AtomicBool::new(false));
     info!("Agent driver started");
 
-    let cancel = CancellationToken::new();
+    // Active-turn tracker. SubmitInput spawns the engine work into a
+    // dedicated task and stores its `JoinHandle` + `CancellationToken`
+    // here; the dispatch loop continues to `recv()` so interrupting
+    // commands (`Interrupt`, `ClearConversation`, `Compact`, `Rewind`,
+    // `Shutdown`) reach their arms without waiting for the engine to
+    // finish. TS parity: REPL.tsx's `query()` runs in the same single-
+    // threaded React event loop, so its keyboard `useInput` hook fires
+    // `abortController.abort()` "concurrently" with engine work — JS
+    // cooperative-async makes that natural; Rust needs an explicit
+    // `tokio::spawn` to free the recv loop.
+    struct ActiveTurn {
+        task: tokio::task::JoinHandle<()>,
+        cancel: CancellationToken,
+    }
+    let active_turn: Arc<Mutex<Option<ActiveTurn>>> = Arc::new(Mutex::new(None));
+
+    /// Cancel the in-flight turn (if any) and await its completion.
+    /// Used by every arm whose semantics conflict with a concurrent
+    /// turn (Clear / Compact / Rewind / Shutdown / next SubmitInput).
+    async fn drain_active_turn(slot: &Arc<Mutex<Option<ActiveTurn>>>) {
+        let state = { slot.lock().await.take() };
+        if let Some(s) = state {
+            s.cancel.cancel();
+            let _ = s.task.await;
+        }
+    }
 
     while let Some(command) = command_rx.recv().await {
+        // Re-read each turn so `/clear` regen picks up the new id.
+        let session_id = runtime.current_session_id().await;
         match command {
             UserCommand::SubmitInput {
-                content, images, ..
+                user_message_id,
+                content,
+                images,
+                ..
             } => {
                 if content.is_empty() {
                     continue;
                 }
 
-                // QueryEngine emits its own TurnStarted; no need to emit here.
+                // Defensive drain: TUI input layer gates submit on
+                // `running` state, but a slow gate could still let a
+                // second SubmitInput through. Cancel + await the prior
+                // turn before starting the new one — last-write-wins
+                // semantics, matches TS REPL.tsx behavior where a new
+                // onSubmit aborts the previous query() generator.
+                drain_active_turn(&active_turn).await;
 
-                // Resolve @mentions into attachments.
-                let processed = coco_context::process_user_input(&content);
-                let cwd = std::env::current_dir().unwrap_or_default();
+                let turn_cancel = CancellationToken::new();
+                let cancel_for_state = turn_cancel.clone();
 
-                let mut frs = file_read_state.write().await;
-                let file_attachments = coco_context::resolve_mentions(
-                    &processed.mentions,
-                    &mut frs,
-                    &coco_context::MentionResolveOptions {
-                        cwd: &cwd,
-                        max_dir_entries: 1000,
-                    },
-                )
-                .await;
+                let runtime_t = runtime.clone();
+                let event_tx_t = event_tx.clone();
+                let title_gen_attempted_t = title_gen_attempted.clone();
+                let session_id_t = session_id.clone();
 
-                // Detect files changed on disk since last read.
-                let changed_file_attachments = coco_context::detect_changed_files(&mut frs).await;
-                drop(frs);
-
-                // Build user message (text + pasted images) and separate
-                // attachment messages (file contents, changes).
-                let messages = build_turn_messages(
-                    &content,
-                    &images,
-                    &file_attachments,
-                    &changed_file_attachments,
-                );
-
-                // Build engine with file history + file read state for this turn
-                let mut engine = QueryEngine::new(
-                    engine_config.clone(),
-                    client.clone(),
-                    tools.clone(),
-                    cancel.clone(),
-                    /*hooks*/ None,
-                );
-                // Install the Main-role fallback chain (may be empty).
-                // Empty chain → single-slot ModelRuntime; no behavior
-                // change from the pre-fallback baseline.
-                if !fallback_clients.is_empty() {
-                    engine = engine.with_fallback_clients(fallback_clients.clone());
-                }
-                if let Some(policy) = recovery_policy {
-                    engine = engine.with_recovery_policy(policy);
-                }
-                engine = engine.with_file_read_state(file_read_state.clone());
-                engine = engine.with_app_state(app_state.clone());
-                // Swarm mailbox handle enables ExitPlanMode teammate
-                // branch + approval-response polling + leader pending
-                // attachment. Harmless no-op in single-agent sessions.
-                engine =
-                    engine.with_mailbox(Arc::new(coco_state::swarm_mailbox::SwarmMailboxHandle));
-                if let Some(ref fh) = file_history {
-                    engine = engine.with_file_history(fh.clone(), config_home.clone());
-                }
-
-                // Forward CoreEvent directly from QueryEngine to TUI.
-                // No mapping layer — TUI consumes CoreEvent natively via handle_core_event().
-                let (core_event_tx, mut core_event_rx) = mpsc::channel::<CoreEvent>(256);
-
-                let event_tx_clone = event_tx.clone();
-                let forward_handle = tokio::spawn(async move {
-                    while let Some(ev) = core_event_rx.recv().await {
-                        let _ = event_tx_clone.send(ev).await;
-                    }
+                let task = tokio::spawn(async move {
+                    process_submit_turn(
+                        user_message_id,
+                        content,
+                        images,
+                        runtime_t,
+                        event_tx_t,
+                        title_gen_attempted_t,
+                        session_id_t,
+                        turn_cancel,
+                    )
+                    .await;
                 });
 
-                match engine.run_with_messages(messages, core_event_tx).await {
-                    Ok(_result) => {
-                        // QueryEngine emitted TurnCompleted via Protocol layer.
-                    }
-                    Err(e) => {
-                        let _ = event_tx
-                            .send(CoreEvent::Protocol(ServerNotification::TurnFailed(
-                                coco_types::TurnFailedParams {
-                                    error: e.to_string(),
-                                },
-                            )))
-                            .await;
-                    }
-                }
-
-                let _ = forward_handle.await;
-
-                // ── F5: auto-title generation post-turn ──
-                //
-                // Check all five gate conditions; fire-and-forget a
-                // title-gen task on the first turn that matches.
-                // Subsequent turns are no-ops (`title_gen_attempted`
-                // latches). The task is fully decoupled from the turn
-                // loop — next turn is unblocked regardless of outcome.
-                let plan_exited = app_state.read().await.has_exited_plan_mode;
-                let plans_dir = coco_context::resolve_plans_directory(
-                    &config_home,
-                    /*project_dir*/ None,
-                    /*setting*/ None,
-                );
-                let plan_text =
-                    coco_context::get_plan(&session_id, &plans_dir, /*agent_id*/ None);
-                let plan_non_empty = plan_text
-                    .as_deref()
-                    .map(|t| !t.trim().is_empty())
-                    .unwrap_or(false);
-                if should_trigger_title_gen(
-                    auto_title_enabled,
-                    title_gen_attempted,
-                    fast_model_spec.is_some(),
-                    plan_exited,
-                    plan_non_empty,
-                ) && let (Some(spec), Some(text)) = (fast_model_spec.clone(), plan_text)
-                {
-                    title_gen_attempted = true;
-                    spawn_auto_title_task(
-                        spec,
-                        text,
-                        session_manager.clone(),
-                        session_id.clone(),
-                        runtime.clone(),
-                    );
-                }
+                *active_turn.lock().await = Some(ActiveTurn {
+                    task,
+                    cancel: cancel_for_state,
+                });
             }
 
             UserCommand::Rewind {
                 message_id,
                 restore_type,
+                rewound_turn,
             } => {
+                // Drain first — rewind reads file_history snapshots
+                // and rewrites runtime.history; an in-flight turn that
+                // mutates either would race.
+                drain_active_turn(&active_turn).await;
                 handle_rewind(
                     &restore_type,
                     &message_id,
-                    &file_history,
-                    &config_home,
+                    rewound_turn,
+                    &runtime.file_history,
+                    &runtime.config_home,
                     &session_id,
                     &event_tx,
+                    &runtime.history,
+                    &runtime.client,
                 )
                 .await;
             }
@@ -488,18 +399,21 @@ async fn run_agent_driver(
                 // Async diff stats computation.
                 // TS: fileHistoryGetDiffStats() in MessageSelector useEffect.
                 // Emitted as CoreEvent::Tui since this is a UI-only event.
-                if let Some(ref fh) = file_history {
+                if let Some(fh) = &runtime.file_history {
                     let fh = fh.read().await;
-                    let (files, ins, del) = match fh
-                        .get_diff_stats(&message_id, &config_home, &session_id)
+                    let (files, ins, del, paths) = match fh
+                        .get_diff_stats(&message_id, &runtime.config_home, &session_id)
                         .await
                     {
-                        Ok(stats) => (
-                            stats.files_changed.len() as i32,
-                            stats.insertions,
-                            stats.deletions,
-                        ),
-                        Err(_) => (0, 0, 0),
+                        Ok(stats) => {
+                            let paths: Vec<String> = stats
+                                .files_changed
+                                .iter()
+                                .map(|p| p.to_string_lossy().into_owned())
+                                .collect();
+                            (paths.len() as i32, stats.insertions, stats.deletions, paths)
+                        }
+                        Err(_) => (0, 0, 0, Vec::new()),
                     };
                     let _ = event_tx
                         .send(CoreEvent::Tui(TuiOnlyEvent::DiffStatsReady {
@@ -507,55 +421,91 @@ async fn run_agent_driver(
                             files_changed: files,
                             insertions: ins,
                             deletions: del,
+                            file_paths: paths,
                         }))
                         .await;
                 }
             }
 
             UserCommand::Interrupt => {
-                cancel.cancel();
+                // Mid-turn cancel: read the active turn's cancel token
+                // and fire it. The spawned turn task observes the
+                // token at the next `.await` point inside
+                // `engine.run_with_messages` (LLM streaming, tool
+                // execution, hook orchestration all check the parent
+                // CancellationToken) and exits cleanly. The task slot
+                // stays Some until the task naturally completes — the
+                // next SubmitInput (or driver shutdown) drains it.
+                // TS parity: REPL.tsx Esc/Ctrl+C → abortController
+                // .abort() → query() generator yields and returns.
+                if let Some(state) = active_turn.lock().await.as_ref() {
+                    state.cancel.cancel();
+                    info!("Interrupt: cancelled active turn");
+                }
+            }
+
+            UserCommand::Compact {
+                custom_instructions,
+            } => {
+                // Manual `/compact [instructions]` from the TUI.
+                // TS: commands/compact/compact.ts:40 — `args.trim()`
+                // becomes `customInstructions`. Build a transient engine
+                // sharing the same registries / state and drive
+                // `run_manual_compact`. The session memory short-circuit
+                // and PreCompact/PostCompact hooks are owned inside that
+                // method.
+                info!(
+                    session_id = %session_id,
+                    has_instructions = custom_instructions.is_some(),
+                    "TUI: manual /compact"
+                );
+                // Drain any active turn before compacting — compact
+                // mutates the same `runtime.history` and runs an LLM
+                // call that races with the in-flight engine.
+                drain_active_turn(&active_turn).await;
+                let compact_cancel = CancellationToken::new();
+                let engine = runtime.build_engine(compact_cancel).await;
+                let history_msgs = runtime.history.lock().await.clone();
+                let mut history = coco_messages::MessageHistory::new();
+                for m in history_msgs {
+                    history.push(m);
+                }
+                let event_tx_opt = Some(event_tx.clone());
+                engine
+                    .run_manual_compact(&mut history, &event_tx_opt, custom_instructions)
+                    .await;
+                {
+                    let mut h = runtime.history.lock().await;
+                    *h = history.messages;
+                }
             }
 
             UserCommand::SetPermissionMode { mode } => {
-                // TS parity: user toggles mode via Shift+Tab →
-                // `setAppState(prev => ({ ...prev, toolPermissionContext:
-                // { ...prepared, mode } }))` (PromptInput.tsx:1537-1547).
-                // Rust's equivalent single-source-of-truth is
-                // `Arc<RwLock<ToolAppState>>` — update it live so any
-                // in-flight engine's next `create_tool_context` sees
-                // the new mode. Also update `engine_config` so fresh
-                // engines built for subsequent turns start in the
-                // right mode. Auto-boundary side-effects (strip stash
-                // management) go through the shared
-                // `apply_auto_transition_to_app_state` helper.
-                //
-                // Defense-in-depth: the overlay + Shift+Tab cycle
-                // already gate BypassPermissions on the capability,
-                // but a UI bug that bypasses the gate could escalate
-                // here silently. Re-validate against the startup
-                // capability and the runtime killswitch; drop the
-                // mutation if the transition is illegitimate.
+                let cur_session_id = runtime.current_session_id().await;
+                let cfg = runtime.current_engine_config().await;
                 if mode == coco_types::PermissionMode::BypassPermissions
-                    && !engine_config.bypass_permissions_available
+                    && !cfg.bypass_permissions_available
                 {
                     warn!(
-                        session_id = %session_id,
+                        session_id = %cur_session_id,
                         requested = ?mode,
                         "TUI SetPermissionMode denied: bypass capability gate is off"
                     );
                     continue;
                 }
-                let prev_mode = engine_config.permission_mode;
-                engine_config.permission_mode = mode;
+                let prev_mode = cfg.permission_mode;
+                runtime
+                    .update_engine_config(|cfg| cfg.permission_mode = mode)
+                    .await;
                 {
-                    let mut guard = app_state.write().await;
+                    let mut guard = runtime.app_state.write().await;
                     guard.permission_mode = Some(mode);
                     coco_permissions::apply_auto_transition_to_app_state(
                         &mut guard, prev_mode, mode,
                     );
                 }
                 info!(
-                    session_id = %session_id,
+                    session_id = %cur_session_id,
                     from = ?prev_mode,
                     to = ?mode,
                     "TUI SetPermissionMode propagated to engine_config + app_state",
@@ -563,35 +513,14 @@ async fn run_agent_driver(
             }
 
             UserCommand::ClearConversation { scope } => {
-                // TS parity: `clearConversation` resets the engine's
-                // in-process state on top of whatever the TUI already
-                // cleared locally. The shared `app_state` is the
-                // canonical home for plan-mode cross-turn flags, so the
-                // reset is mostly a JSON clear.
-                // Always clear plan-mode reminder state so the next
-                // Plan-mode turn starts with Full (not Reentry) and a
-                // fresh attachment counter. `Default` resets every
-                // field in one shot — no risk of forgetting one.
-                *app_state.write().await = ToolAppState::default();
-
-                // Aggressive scope: slug cache + file history
-                // snapshots. Plan files on disk are already removed by
-                // the TUI side before sending this command.
-                if matches!(scope, coco_tui::command::ClearScope::All) {
-                    coco_context::clear_plan_slug(&session_id);
-                    {
-                        let mut frs = file_read_state.write().await;
-                        frs.clear();
-                    }
-                    if let Some(ref fh) = file_history {
-                        let mut fh = fh.write().await;
-                        // Clear file-history snapshots so subsequent
-                        // /rewind can't reach back across the clear.
-                        *fh = coco_context::FileHistoryState::default();
-                    }
+                // Drain first — clear_conversation mutates session_id
+                // and resets file_read_state / SM / cache-break; an
+                // in-flight turn writing into those would observe a
+                // half-cleared state.
+                drain_active_turn(&active_turn).await;
+                if let Err(e) = runtime.clear_conversation(scope).await {
+                    warn!(error = %e, "/clear failed");
                 }
-                // Conversation / History scope: keep file_history so
-                // `/resume` can still restore pre-clear file snapshots.
             }
 
             UserCommand::PlanApprovalResponse {
@@ -615,7 +544,7 @@ async fn run_agent_driver(
                 let agent_name =
                     env::var(EnvKey::CocoAgentName).unwrap_or_else(|_| "team-lead".to_string());
                 let mailbox: coco_tool_runtime::MailboxHandleRef =
-                    Arc::new(coco_state::swarm_mailbox::SwarmMailboxHandle);
+                    Arc::new(coco_coordinator::mailbox::SwarmMailboxHandle);
 
                 let response = coco_tool_runtime::PlanApprovalMessage::PlanApprovalResponse(
                     coco_tool_runtime::PlanApprovalResponse {
@@ -638,7 +567,7 @@ async fn run_agent_driver(
                 } else {
                     // Clear the leader-side awaiting flag so the
                     // reminder can stop nagging about this request.
-                    let mut guard = app_state.write().await;
+                    let mut guard = runtime.app_state.write().await;
                     if guard.awaiting_plan_approval_request_id.as_deref()
                         == Some(request_id.as_str())
                     {
@@ -648,7 +577,41 @@ async fn run_agent_driver(
                 }
             }
 
+            UserCommand::ApprovalResponse {
+                request_id,
+                approved,
+                always_allow: _, // TS persists rule via permission_updates; today we route the boolean
+                feedback,
+                updated_input: _, // TS edits the tool input pre-approval; that path lands later
+                permission_updates: _, // applied separately via the permission ruleset
+            } => {
+                // P0: route the user's Approve / Deny back to the
+                // pending oneshot the `TuiPermissionBridge` is awaiting.
+                // Stale request_ids (already resolved or timed-out)
+                // are logged and dropped — TS does the same when an
+                // overlay closes after the engine moved on.
+                let resolved = coco_cli::tui_permission_bridge::resolve_pending(
+                    &pending_approvals,
+                    &request_id,
+                    approved,
+                    feedback,
+                )
+                .await;
+                if !resolved {
+                    info!(
+                        %request_id,
+                        approved,
+                        "ApprovalResponse for unknown request_id (already resolved or stale)"
+                    );
+                }
+            }
+
             UserCommand::Shutdown => {
+                // Drain in-flight turn before emitting SessionEnded so
+                // the engine stops promptly and any pending events
+                // flush through `event_tx` ahead of the lifecycle
+                // notification.
+                drain_active_turn(&active_turn).await;
                 let _ = event_tx
                     .send(CoreEvent::Protocol(ServerNotification::SessionEnded(
                         coco_types::SessionEndedParams {
@@ -666,29 +629,204 @@ async fn run_agent_driver(
         }
     }
 
+    // Driver loop exited (sender dropped or Shutdown). Drain any
+    // turn that's still running so we don't leak a JoinHandle.
+    drain_active_turn(&active_turn).await;
     info!("Agent driver stopped");
+}
+
+/// Body of `UserCommand::SubmitInput` extracted into an async fn so
+/// it can be `tokio::spawn`ed. The dispatch loop stores the
+/// `JoinHandle` in `active_turn` and continues to recv the next
+/// command — letting `Interrupt` / `ClearConversation` / `Compact` /
+/// `Rewind` / `Shutdown` reach their arms while the engine runs.
+///
+/// All session-scoped Arcs are read out of `runtime` inside the body —
+/// the only data piped in are the per-turn user inputs, the cancel
+/// token, the cross-turn `title_gen_attempted` latch, and the snapshot
+/// of `session_id` taken on the dispatcher side (so the title-gen path
+/// uses the same id the rest of the turn observed, not a later
+/// `/clear`-regenerated one).
+#[allow(clippy::too_many_arguments)]
+async fn process_submit_turn(
+    user_message_id: String,
+    content: String,
+    images: Vec<coco_tui::paste::ImageData>,
+    runtime: Arc<crate::session_runtime::SessionRuntime>,
+    event_tx: mpsc::Sender<CoreEvent>,
+    title_gen_attempted: Arc<std::sync::atomic::AtomicBool>,
+    session_id: String,
+    turn_cancel: CancellationToken,
+) {
+    // Resolve @mentions into attachments.
+    let processed = coco_context::process_user_input(&content);
+    let cwd = std::env::current_dir().unwrap_or_default();
+
+    let (file_attachments, changed_file_attachments) = {
+        let mut frs = runtime.file_read_state.write().await;
+        let file_attachments = coco_context::resolve_mentions(
+            &processed.mentions,
+            &mut frs,
+            &coco_context::MentionResolveOptions {
+                cwd: &cwd,
+                max_dir_entries: 1000,
+            },
+        )
+        .await;
+        let changed_file_attachments = coco_context::detect_changed_files(&mut frs).await;
+        (file_attachments, changed_file_attachments)
+    };
+
+    let user_uuid =
+        uuid::Uuid::parse_str(&user_message_id).unwrap_or_else(|_| uuid::Uuid::new_v4());
+    let new_turn_messages = build_turn_messages_with_uuid(
+        user_uuid,
+        &content,
+        &images,
+        &file_attachments,
+        &changed_file_attachments,
+    );
+
+    // Persist user message immediately so engine errors don't lose it.
+    let messages: Vec<coco_messages::Message> = {
+        let mut h = runtime.history.lock().await;
+        h.extend(new_turn_messages.iter().cloned());
+        h.clone()
+    };
+
+    let engine = runtime.build_engine(turn_cancel.clone()).await;
+
+    // Mention priority for post-compact restoration.
+    let mentioned_abs: Vec<std::path::PathBuf> = file_attachments
+        .iter()
+        .filter_map(|att| match att {
+            coco_context::attachment::Attachment::File(f) => {
+                Some(std::path::PathBuf::from(&f.filename))
+            }
+            coco_context::attachment::Attachment::AlreadyReadFile(f) => {
+                Some(std::path::PathBuf::from(&f.filename))
+            }
+            _ => None,
+        })
+        .collect();
+    if !mentioned_abs.is_empty() {
+        engine.note_mentioned_paths(mentioned_abs).await;
+    }
+
+    let (core_event_tx, mut core_event_rx) = mpsc::channel::<CoreEvent>(256);
+    let event_tx_clone = event_tx.clone();
+    let forward_handle = tokio::spawn(async move {
+        while let Some(ev) = core_event_rx.recv().await {
+            let _ = event_tx_clone.send(ev).await;
+        }
+    });
+
+    match engine.run_with_messages(messages, core_event_tx).await {
+        Ok(result) => {
+            let mut h = runtime.history.lock().await;
+            *h = result.final_messages;
+        }
+        Err(e) => {
+            // User message stays in `runtime.history` from the
+            // pre-engine push above. Surface failure as TurnFailed so
+            // TUI can render it.
+            let _ = event_tx
+                .send(CoreEvent::Protocol(ServerNotification::TurnFailed(
+                    coco_types::TurnFailedParams {
+                        error: e.to_string(),
+                    },
+                )))
+                .await;
+        }
+    }
+
+    let _ = forward_handle.await;
+
+    maybe_spawn_auto_title(&runtime, &title_gen_attempted, &session_id).await;
+}
+
+/// One-shot, fire-and-forget title generation. Returns immediately
+/// without spawning if any precondition (auto-title disabled, already
+/// attempted, no Fast spec, plan not exited, plan empty) fails.
+async fn maybe_spawn_auto_title(
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    title_gen_attempted: &Arc<std::sync::atomic::AtomicBool>,
+    session_id: &str,
+) {
+    let plan_exited = runtime.app_state.read().await.has_exited_plan_mode;
+    let plans_dir = coco_context::resolve_plans_directory(
+        &runtime.config_home,
+        /*project_dir*/ None,
+        /*setting*/ None,
+    );
+    let plan_text = coco_context::get_plan(session_id, &plans_dir, /*agent_id*/ None);
+    let plan_non_empty = plan_text
+        .as_deref()
+        .map(|t| !t.trim().is_empty())
+        .unwrap_or(false);
+    let already_attempted = title_gen_attempted.load(std::sync::atomic::Ordering::Acquire);
+    if !should_trigger_title_gen(
+        runtime.auto_title_enabled,
+        already_attempted,
+        runtime.fast_model_spec.is_some(),
+        plan_exited,
+        plan_non_empty,
+    ) {
+        return;
+    }
+    let (Some(spec), Some(text)) = (runtime.fast_model_spec.clone(), plan_text) else {
+        return;
+    };
+    title_gen_attempted.store(true, std::sync::atomic::Ordering::Release);
+    spawn_auto_title_task(
+        spec,
+        text,
+        runtime.session_manager.clone(),
+        session_id.to_string(),
+        runtime.runtime_config.clone(),
+    );
 }
 
 /// Handle a rewind command.
 ///
 /// TS: REPL.tsx rewindConversationTo() + fileHistoryRewind()
 /// - Code rewind: calls file_history.rewind() to restore files
-/// - Conversation rewind: emits RewindCompleted so TUI truncates messages
+/// - Conversation rewind: truncates the agent-side history_handle
+///   AND emits RewindCompleted so the TUI truncates its display.
 /// - Both: does both
+#[allow(clippy::too_many_arguments)]
 async fn handle_rewind(
     restore_type: &coco_tui::state::RestoreType,
     message_id: &str,
+    rewound_turn: i32,
     file_history: &Option<Arc<RwLock<FileHistoryState>>>,
-    config_home: &PathBuf,
+    config_home: &std::path::Path,
     session_id: &str,
     event_tx: &mpsc::Sender<CoreEvent>,
+    history_handle: &Arc<Mutex<Vec<coco_messages::Message>>>,
+    client: &Arc<ApiClient>,
 ) {
     use coco_tui::state::RestoreType;
 
     let mut files_changed = 0i32;
+    let mut messages_removed = 0i32;
+
+    // Summarize variants: dispatch to partial_compact_conversation
+    // and replace the history with the resulting messages. TS:
+    // `screens/REPL.tsx:4918-4988` (`onSummarize` branch).
+    if matches!(
+        restore_type,
+        RestoreType::SummarizeFrom { .. } | RestoreType::SummarizeUpTo { .. }
+    ) {
+        handle_summarize_rewind(restore_type, message_id, history_handle, client, event_tx).await;
+        return;
+    }
 
     // Code rewind (file restore)
     // TS: fileHistoryRewind() in REPL.tsx onRestoreCode prop
+    // CodeOnly + Both restore files; Summarize variants do NOT
+    // restore files (TS parity: summarize keeps the workspace
+    // intact, only the conversation is rewritten).
     if matches!(restore_type, RestoreType::Both | RestoreType::CodeOnly)
         && let Some(fh) = file_history
     {
@@ -714,13 +852,33 @@ async fn handle_rewind(
         }
     }
 
-    // Conversation rewind: emit TuiOnlyEvent::RewindCompleted so TUI truncates
-    // messages, restores permission mode, and repopulates input.
+    // Conversation rewind: truncate the agent-side history at the
+    // target message, emit TuiOnlyEvent so the TUI mirrors the
+    // truncate on its display side.
     // TS: rewindConversationTo() + restoreMessageSync() in REPL.tsx
     let should_truncate = matches!(
         restore_type,
         RestoreType::Both | RestoreType::ConversationOnly
     );
+
+    if should_truncate {
+        let mut h = history_handle.lock().await;
+        if let Some(idx) = h.iter().position(|m| match m {
+            coco_messages::Message::User(u) => u.uuid.to_string() == message_id,
+            _ => false,
+        }) {
+            let pre_count = h.len() as i32;
+            messages_removed = (pre_count - idx as i32).max(0);
+            h.truncate(idx);
+            // TS `tengu_conversation_rewind` (`screens/REPL.tsx:3665-3670`).
+            coco_otel::events::emit_conversation_rewind(
+                pre_count as i64,
+                h.len() as i64,
+                messages_removed as i64,
+                idx as i64,
+            );
+        }
+    }
 
     let _ = event_tx
         .send(CoreEvent::Tui(TuiOnlyEvent::RewindCompleted {
@@ -732,34 +890,200 @@ async fn handle_rewind(
             files_changed,
         }))
         .await;
+
+    // Protocol-level event for SDK consumers (Phase 3.2). Coco-rs ext
+    // — TS doesn't emit a wire event for rewind because the React
+    // state-update is the source of truth.
+    let _ = event_tx
+        .send(CoreEvent::Protocol(ServerNotification::RewindCompleted(
+            coco_types::RewindCompletedParams {
+                rewound_turn,
+                restored_files: files_changed,
+                messages_removed,
+            },
+        )))
+        .await;
 }
 
-/// Build the list of messages for a turn: user message + attachment messages.
+/// Run `partial_compact_conversation` for SummarizeFrom / SummarizeUpTo
+/// rewind options, replace the agent history with the result, and
+/// emit a TUI signal to mirror the truncation in the display.
 ///
-/// TS architecture: user message first, then separate attachment messages
-/// wrapped in `<system-reminder>` tags with `is_meta: true`.
+/// TS: `screens/REPL.tsx:4918-4988` (`onSummarize`). Direction
+/// mapping: `SummarizeFrom` ↔ TS `'from'` (== `Newest` in coco-rs);
+/// `SummarizeUpTo` ↔ TS `'up_to'` (== `Oldest` in coco-rs).
+async fn handle_summarize_rewind(
+    restore_type: &coco_tui::state::RestoreType,
+    message_id: &str,
+    history_handle: &Arc<Mutex<Vec<coco_messages::Message>>>,
+    client: &Arc<ApiClient>,
+    event_tx: &mpsc::Sender<CoreEvent>,
+) {
+    use coco_messages::PartialCompactDirection;
+    use coco_tui::state::RestoreType;
+
+    let (direction, feedback) = match restore_type {
+        RestoreType::SummarizeFrom { feedback } => (PartialCompactDirection::Newest, feedback),
+        RestoreType::SummarizeUpTo { feedback } => (PartialCompactDirection::Oldest, feedback),
+        _ => return,
+    };
+
+    let messages = {
+        let h = history_handle.lock().await;
+        h.clone()
+    };
+
+    // Pivot index: position of the picked user message in the
+    // history vec.
+    let pivot_index = match messages.iter().position(|m| match m {
+        coco_messages::Message::User(u) => u.uuid.to_string() == message_id,
+        _ => false,
+    }) {
+        Some(i) => i,
+        None => {
+            warn!(
+                message_id,
+                "summarize-rewind: target message not found in history"
+            );
+            let _ = event_tx
+                .send(CoreEvent::Protocol(coco_query::ServerNotification::Error(
+                    coco_types::ErrorParams {
+                        message: "summarize: message not in active history".into(),
+                        category: Some("rewind".into()),
+                        retryable: false,
+                    },
+                )))
+                .await;
+            return;
+        }
+    };
+
+    // Summarize closure — same shape as engine.rs's full-compact path.
+    let summarize_fn = |prompt: String| {
+        let client = client.clone();
+        async move {
+            use coco_inference::QueryParams;
+            use coco_messages::AssistantContent;
+            use coco_messages::LlmMessage;
+            let params = QueryParams {
+                prompt: vec![LlmMessage::user_text(&prompt)],
+                max_tokens: Some(coco_compact::types::MAX_OUTPUT_TOKENS_FOR_SUMMARY),
+                thinking_level: None,
+                fast_mode: false,
+                tools: None,
+                context_management: None,
+                query_source: None,
+                agent_id: None,
+                time_since_last_assistant_ms: None,
+            };
+            match client.query(&params).await {
+                Ok(result) => {
+                    let text = result
+                        .content
+                        .iter()
+                        .filter_map(|c| match c {
+                            AssistantContent::Text(t) => Some(t.text.as_str()),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                        .join("");
+                    Ok(text)
+                }
+                Err(e) => Err(e.to_string()),
+            }
+        }
+    };
+
+    match coco_compact::partial_compact_conversation(
+        &messages,
+        pivot_index,
+        direction,
+        feedback.as_deref(),
+        /*custom_instructions*/ None,
+        summarize_fn,
+        /*attachment_fn*/ None,
+    )
+    .await
+    {
+        Ok(result) => {
+            let new_messages = coco_compact::build_post_compact_messages(&result);
+            // Persist the summarized history back so the next turn
+            // sees it. TS: setMessages(postCompact).
+            {
+                let mut h = history_handle.lock().await;
+                *h = new_messages;
+            }
+
+            // Emit a RewindCompleted with empty target so the TUI
+            // dismisses the overlay + shows a toast, but does NOT try
+            // to truncate by message_id (the message is gone after
+            // summarization).
+            let _ = event_tx
+                .send(CoreEvent::Tui(TuiOnlyEvent::RewindCompleted {
+                    target_message_id: String::new(),
+                    files_changed: 0,
+                }))
+                .await;
+
+            // Protocol-level event so SDK consumers see it too.
+            let _ = event_tx
+                .send(CoreEvent::Protocol(
+                    coco_query::ServerNotification::ContextCompacted(
+                        coco_types::ContextCompactedParams {
+                            removed_messages: 0,
+                            summary_tokens: result.post_compact_tokens as i32,
+                            trigger: coco_types::CompactTrigger::Manual,
+                            pre_tokens: Some(result.pre_compact_tokens),
+                            post_tokens: Some(result.post_compact_tokens),
+                        },
+                    ),
+                ))
+                .await;
+        }
+        Err(e) => {
+            warn!(error = %e, "partial-compact rewind failed");
+            let _ = event_tx
+                .send(CoreEvent::Protocol(coco_query::ServerNotification::Error(
+                    coco_types::ErrorParams {
+                        message: format!("Summarize failed: {e}"),
+                        category: Some("rewind".into()),
+                        retryable: false,
+                    },
+                )))
+                .await;
+        }
+    }
+}
+
+/// Build a turn's messages with a caller-supplied user-message UUID.
 ///
-/// - User message: text + pasted clipboard images (inline content parts)
-/// - Attachment messages: file contents, directories, changed files (separate messages)
-fn build_turn_messages(
+/// The caller (TUI submit path) mints the UUID at input time so the
+/// agent driver, file-history snapshot, and rewind picker all share
+/// one identity for the turn's user message.
+fn build_turn_messages_with_uuid(
+    user_uuid: uuid::Uuid,
     text: &str,
     images: &[coco_tui::ImageData],
     file_attachments: &[Attachment],
     changed_file_attachments: &[Attachment],
-) -> Vec<coco_types::Message> {
-    use vercel_ai_provider::UserContentPart;
+) -> Vec<coco_messages::Message> {
+    use coco_inference::UserContentPart;
 
     let mut messages = Vec::new();
 
     // 1. User message: text + clipboard images
     if images.is_empty() {
-        messages.push(coco_messages::create_user_message(text));
+        messages.push(coco_messages::create_user_message_with_uuid(
+            user_uuid, text,
+        ));
     } else {
         let mut parts: Vec<UserContentPart> = vec![UserContentPart::text(text)];
         for img in images {
             parts.push(UserContentPart::image(img.bytes.clone(), &img.mime));
         }
-        messages.push(coco_messages::create_user_message_with_parts(parts));
+        messages.push(coco_messages::create_user_message_with_parts_and_uuid(
+            user_uuid, parts,
+        ));
     }
 
     // 2. @mention attachment messages (separate, wrapped in system-reminder)
@@ -783,7 +1107,7 @@ fn build_turn_messages(
 ///
 /// TS: `normalizeAttachmentForAPI()` — wraps file content in synthetic
 /// tool-use/tool-result pairs inside `<system-reminder>` tags.
-fn attachment_to_message(att: &Attachment) -> Option<coco_types::Message> {
+fn attachment_to_message(att: &Attachment) -> Option<coco_messages::Message> {
     let read_tool = coco_types::ToolName::Read.as_str();
     let bash_tool = coco_types::ToolName::Bash.as_str();
 
@@ -801,8 +1125,8 @@ fn attachment_to_message(att: &Attachment) -> Option<coco_types::Message> {
         }
         Attachment::Image(img) => {
             if let Some(b64) = &img.base64_data {
-                use vercel_ai_provider::FilePart;
-                use vercel_ai_provider::UserContentPart;
+                use coco_inference::FilePart;
+                use coco_inference::UserContentPart;
                 let parts = vec![
                     UserContentPart::text(coco_messages::wrapping::wrap_in_system_reminder(
                         &format!(
@@ -871,8 +1195,8 @@ fn spawn_auto_title_task(
 ) {
     use coco_inference::QueryParams;
     use coco_inference::RetryConfig;
-    use coco_types::AssistantContent;
-    use coco_types::LlmMessage;
+    use coco_messages::AssistantContent;
+    use coco_messages::LlmMessage;
 
     tokio::spawn(async move {
         let Ok(client) = crate::build_api_client(&runtime, &spec, RetryConfig::default()) else {
@@ -892,6 +1216,10 @@ fn spawn_auto_title_task(
             thinking_level: None,
             fast_mode: false,
             tools: None,
+            context_management: None,
+            query_source: None,
+            agent_id: None,
+            time_since_last_assistant_ms: None,
         };
 
         let raw = match client.query(&params).await {
@@ -918,7 +1246,7 @@ fn spawn_auto_title_task(
 
 /// TS: `normalizeAttachmentForAPI()` for `edited_text_file` type — sends a
 /// note explaining the file was modified externally, with a diff snippet.
-fn changed_file_to_message(att: &Attachment) -> Option<coco_types::Message> {
+fn changed_file_to_message(att: &Attachment) -> Option<coco_messages::Message> {
     match att {
         Attachment::File(f) => {
             let text = format!(

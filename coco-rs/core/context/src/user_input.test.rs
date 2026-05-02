@@ -77,7 +77,8 @@ fn test_line_range_single_line() {
     assert_eq!(input.mentions[0].text, "src/main.rs");
     assert_eq!(input.mentions[0].mention_type, MentionType::FilePath);
     assert_eq!(input.mentions[0].line_start, Some(10));
-    assert_eq!(input.mentions[0].line_end, None);
+    // TS parity: `#L10` alone defaults `lineEnd` to `lineStart`.
+    assert_eq!(input.mentions[0].line_end, Some(10));
 }
 
 #[test]
@@ -93,9 +94,10 @@ fn test_line_range_span() {
 fn test_line_range_invalid_fragment_ignored() {
     let input = process_user_input("Look at @src/main.rs#heading");
     assert_eq!(input.mentions.len(), 1);
-    // Non-#L fragment is kept as part of the text
-    assert_eq!(input.mentions[0].text, "src/main.rs#heading");
+    // TS parity: non-#L fragments are stripped from the path.
+    assert_eq!(input.mentions[0].text, "src/main.rs");
     assert_eq!(input.mentions[0].line_start, None);
+    assert_eq!(input.mentions[0].line_end, None);
 }
 
 // --- Agent mention tests ---
@@ -112,7 +114,8 @@ fn test_agent_mention() {
 fn test_quoted_agent_mention() {
     let input = process_user_input("Ask @\"code-reviewer (agent)\" to check");
     assert_eq!(input.mentions.len(), 1);
-    assert_eq!(input.mentions[0].text, "code-reviewer (agent)");
+    // TS parity: ` (agent)` suffix is stripped from the mention text.
+    assert_eq!(input.mentions[0].text, "code-reviewer");
     assert_eq!(input.mentions[0].mention_type, MentionType::Agent);
 }
 
@@ -182,7 +185,44 @@ fn test_parse_line_range_single() {
     let (path, start, end) = parse_line_range("src/main.rs#L42");
     assert_eq!(path, "src/main.rs");
     assert_eq!(start, Some(42));
+    // TS parity: lineEnd defaults to lineStart for `#L<n>` alone.
+    assert_eq!(end, Some(42));
+}
+
+#[test]
+fn test_parse_line_range_strips_heading() {
+    let (path, start, end) = parse_line_range("src/main.rs#some-heading");
+    assert_eq!(path, "src/main.rs");
+    assert_eq!(start, None);
     assert_eq!(end, None);
+}
+
+#[test]
+fn test_mcp_resource_mention() {
+    let input = process_user_input("Read @server1:resource/path");
+    assert_eq!(input.mentions.len(), 1);
+    assert_eq!(input.mentions[0].text, "server1:resource/path");
+    match &input.mentions[0].mention_type {
+        MentionType::McpResource { server, uri } => {
+            assert_eq!(server, "server1");
+            assert_eq!(uri, "resource/path");
+        }
+        other => panic!("Expected McpResource, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_mcp_resource_not_confused_with_url() {
+    let input = process_user_input("Open @https://example.com");
+    assert_eq!(input.mentions.len(), 1);
+    assert_eq!(input.mentions[0].mention_type, MentionType::Url);
+}
+
+#[test]
+fn test_mcp_resource_not_confused_with_path() {
+    // `src/main.rs` has no colon → still FilePath.
+    let input = process_user_input("Read @src/main.rs");
+    assert_eq!(input.mentions[0].mention_type, MentionType::FilePath);
 }
 
 #[test]

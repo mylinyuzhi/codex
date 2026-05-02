@@ -15,8 +15,8 @@
 use std::path::Path;
 use std::path::PathBuf;
 
-use coco_types::AttachmentMessage;
-use coco_types::LlmMessage;
+use coco_messages::AttachmentMessage;
+use coco_messages::LlmMessage;
 
 /// Build the `plan_file_reference` attachment message when the plan file
 /// for this session has content. Returns `None` when the plan file is

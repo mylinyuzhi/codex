@@ -1,0 +1,146 @@
+//! Cross-process worker permission via mailbox file IPC.
+//!
+//! Extracted from `runner_loop.rs` (P1 split).
+//!
+//! Pane-mode teammates run in a *separate process* from the leader,
+//! so they can't share the leader's `ToolPermissionBridge` directly.
+//! Instead they enqueue a [`mailbox::ProtocolMessage::PermissionRequest`]
+//! into the team-lead inbox, then poll their own inbox for the
+//! matching [`mailbox::ProtocolMessage::PermissionResponse`].
+//!
+//! TS reference: `permissionSync.ts:676-722`.
+//!
+//! In-process teammates take the faster path of inheriting the
+//! leader's bridge through `wire_engine`; this module is reserved
+//! for the cross-process case.
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+
+use crate::constants::TEAM_LEAD_NAME;
+use crate::mailbox;
+use crate::types::TeammateIdentity;
+
+/// Poll interval for inbox scanning (ms). Mirrors [`crate::runner_loop::POLL_INTERVAL_MS`].
+const POLL_INTERVAL_MS: u64 = 500;
+
+/// Worker-side permission resolution: send a permission request to
+/// the leader's mailbox and block on the matching
+/// [`mailbox::ProtocolMessage::PermissionResponse`].
+///
+/// Returns `Some((approved, feedback))` on resolution, `None` on
+/// cancellation or write failure.
+pub async fn request_permission_via_mailbox(
+    identity: &TeammateIdentity,
+    cancelled: &AtomicBool,
+    request_id: &str,
+    tool_name: &str,
+    tool_use_id: &str,
+    description: &str,
+    input: &serde_json::Value,
+) -> Option<(bool, Option<String>)> {
+    let agent_id = format!("{}@{}", identity.agent_name, identity.team_name);
+    let envelope = mailbox::create_permission_request_message(
+        request_id,
+        &agent_id,
+        tool_name,
+        tool_use_id,
+        description,
+        input,
+    );
+    let message = mailbox::TeammateMessage {
+        from: identity.agent_name.clone(),
+        text: envelope,
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        read: false,
+        color: identity.color.as_ref().map(|c| c.as_str().to_string()),
+        summary: Some("permission request".to_string()),
+    };
+    if mailbox::write_to_mailbox(TEAM_LEAD_NAME, message, &identity.team_name).is_err() {
+        return None;
+    }
+
+    loop {
+        if cancelled.load(Ordering::Relaxed) {
+            return None;
+        }
+        let messages =
+            mailbox::read_mailbox(&identity.agent_name, &identity.team_name).unwrap_or_default();
+        for (i, msg) in messages.iter().enumerate() {
+            if msg.read {
+                continue;
+            }
+            if !mailbox::is_structured_protocol_message(&msg.text) {
+                continue;
+            }
+            if let Some(mailbox::ProtocolMessage::PermissionResponse {
+                request_id: rid,
+                subtype,
+                error,
+                ..
+            }) = mailbox::parse_protocol_message(&msg.text)
+                && rid == request_id
+            {
+                let _ = mailbox::mark_message_as_read_by_index(
+                    &identity.agent_name,
+                    &identity.team_name,
+                    i,
+                );
+                let approved = subtype == "success";
+                return Some((approved, error));
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
+    }
+}
+
+/// `ToolPermissionBridge` impl backed by [`request_permission_via_mailbox`].
+///
+/// Install on a cross-process pane teammate's `ToolUseContext.permission_bridge`
+/// so the deny site forwards approval prompts to the leader via
+/// mailbox IPC. In-process teammates inherit the leader's bridge
+/// directly via `wire_engine` and don't need this adapter.
+pub struct MailboxPermissionBridge {
+    identity: TeammateIdentity,
+    cancelled: Arc<AtomicBool>,
+}
+
+impl MailboxPermissionBridge {
+    pub fn new(identity: TeammateIdentity, cancelled: Arc<AtomicBool>) -> Self {
+        Self {
+            identity,
+            cancelled,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl coco_tool_runtime::ToolPermissionBridge for MailboxPermissionBridge {
+    async fn request_permission(
+        &self,
+        request: coco_tool_runtime::ToolPermissionRequest,
+    ) -> Result<coco_tool_runtime::ToolPermissionResolution, String> {
+        let outcome = request_permission_via_mailbox(
+            &self.identity,
+            &self.cancelled,
+            &request.id,
+            &request.tool_name,
+            &request.tool_use_id,
+            &request.description,
+            &request.input,
+        )
+        .await;
+        match outcome {
+            Some((true, _)) => Ok(coco_tool_runtime::ToolPermissionResolution {
+                decision: coco_tool_runtime::ToolPermissionDecision::Approved,
+                feedback: None,
+            }),
+            Some((false, feedback)) => Ok(coco_tool_runtime::ToolPermissionResolution {
+                decision: coco_tool_runtime::ToolPermissionDecision::Rejected,
+                feedback,
+            }),
+            None => Err("Permission request cancelled or leader mailbox unreachable".into()),
+        }
+    }
+}

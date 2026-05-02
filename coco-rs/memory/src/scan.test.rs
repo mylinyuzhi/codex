@@ -1,75 +1,71 @@
 use super::*;
-use crate::MemoryEntry;
-use crate::MemoryEntryType;
-use crate::format_entry_as_markdown;
+use pretty_assertions::assert_eq;
+use tempfile::tempdir;
 
-#[test]
-fn test_scan_empty_dir() {
-    let dir = tempfile::tempdir().unwrap();
-    let files = scan_memory_files(dir.path());
-    assert!(files.is_empty());
+fn write_file(dir: &std::path::Path, name: &str, content: &str) {
+    std::fs::write(dir.join(name), content).unwrap();
 }
 
 #[test]
-fn test_scan_finds_md_files() {
-    let dir = tempfile::tempdir().unwrap();
-    let entry = MemoryEntry {
-        name: "test".to_string(),
-        description: "a test memory".to_string(),
-        memory_type: MemoryEntryType::User,
-        content: "Hello".to_string(),
-        file_path: dir.path().join("test.md"),
-    };
-    let md = format_entry_as_markdown(&entry);
-    std::fs::write(dir.path().join("test.md"), &md).unwrap();
-    // MEMORY.md should be excluded
-    std::fs::write(dir.path().join("MEMORY.md"), "# Index").unwrap();
-
-    let files = scan_memory_files(dir.path());
-    assert_eq!(files.len(), 1);
-    assert_eq!(files[0].frontmatter.as_ref().unwrap().name, "test");
-    assert!(files[0].mtime_ms > 0);
+fn returns_empty_for_missing_dir() {
+    let path = std::path::Path::new("/no/such/dir");
+    assert!(scan_memory_files(path).is_empty());
 }
 
 #[test]
-fn test_scan_sorted_by_mtime() {
-    let dir = tempfile::tempdir().unwrap();
-
-    // Write two files with a small time gap
-    std::fs::write(
-        dir.path().join("old.md"),
-        "---\nname: old\ndescription: old\ntype: user\n---\nold",
-    )
-    .unwrap();
-
-    // Ensure second file has different mtime
-    std::thread::sleep(std::time::Duration::from_millis(50));
-
-    std::fs::write(
-        dir.path().join("new.md"),
-        "---\nname: new\ndescription: new\ntype: user\n---\nnew",
-    )
-    .unwrap();
-
-    let files = scan_memory_files(dir.path());
-    assert_eq!(files.len(), 2);
-    // Newest first
-    assert_eq!(files[0].frontmatter.as_ref().unwrap().name, "new");
-    assert_eq!(files[1].frontmatter.as_ref().unwrap().name, "old");
+fn skips_memory_md_index_file() {
+    let temp = tempdir().unwrap();
+    write_file(
+        temp.path(),
+        "MEMORY.md",
+        "# Memory Index\n\n- [a](a.md) — h\n",
+    );
+    write_file(
+        temp.path(),
+        "user_role.md",
+        "---\nname: x\ndescription: d\ntype: user\n---\nbody\n",
+    );
+    let scanned = scan_memory_files(temp.path());
+    assert_eq!(scanned.len(), 1);
+    assert_eq!(scanned[0].filename, "user_role.md");
 }
 
 #[test]
-fn test_format_manifest() {
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(
-        dir.path().join("user_role.md"),
-        "---\nname: user_role\ndescription: Senior engineer\ntype: user\n---\nDetails",
-    )
-    .unwrap();
+fn parses_frontmatter_and_sorts_newest_first() {
+    let temp = tempdir().unwrap();
+    write_file(
+        temp.path(),
+        "old.md",
+        "---\nname: old\ndescription: old desc\ntype: user\n---\nbody\n",
+    );
+    // Force an earlier mtime on `old.md`.
+    let mtime = filetime::FileTime::from_unix_time(1_000_000, 0);
+    filetime::set_file_mtime(temp.path().join("old.md"), mtime).unwrap();
 
-    let files = scan_memory_files(dir.path());
-    let manifest = format_memory_manifest(&files);
-    assert!(manifest.contains("user_role"));
-    assert!(manifest.contains("Senior engineer"));
-    assert!(manifest.contains("user"));
+    write_file(
+        temp.path(),
+        "new.md",
+        "---\nname: new\ndescription: new desc\ntype: feedback\n---\nbody\n",
+    );
+
+    let scanned = scan_memory_files(temp.path());
+    assert_eq!(scanned.len(), 2);
+    assert_eq!(scanned[0].filename, "new.md");
+    assert_eq!(scanned[1].filename, "old.md");
+    let fm = scanned[0].frontmatter.as_ref().unwrap();
+    assert_eq!(fm.memory_type, crate::store::MemoryEntryType::Feedback);
+}
+
+#[test]
+fn manifest_formats_each_entry() {
+    let temp = tempdir().unwrap();
+    write_file(
+        temp.path(),
+        "x.md",
+        "---\nname: x\ndescription: short hook\ntype: project\n---\nbody\n",
+    );
+    let scanned = scan_memory_files(temp.path());
+    let m = format_memory_manifest(&scanned);
+    assert!(m.contains("[project] x.md"));
+    assert!(m.contains("short hook"));
 }

@@ -25,6 +25,8 @@ pub mod names {
     pub const HELP: &str = "help";
     pub const CLEAR: &str = "clear";
     pub const COMPACT: &str = "compact";
+    /// `/dream` — manual auto-memory consolidation trigger.
+    pub const DREAM: &str = "dream";
     pub const STATUS: &str = "status";
     pub const EXIT: &str = "exit";
     pub const VERSION: &str = "version";
@@ -253,15 +255,6 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
             "Show current session status and model info",
             &["st"],
             status_extended_handler,
-            true,
-            LocalOnly,
-            None,
-        ),
-        (
-            names::AGENTS,
-            "List and manage agent definitions",
-            &[],
-            agents_extended_handler,
             true,
             LocalOnly,
             None,
@@ -528,15 +521,9 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
             LocalOnly,
             Some("[title]"),
         ),
-        (
-            names::SUMMARY,
-            "Show a summary of the current conversation",
-            &[],
-            summary_handler,
-            false,
-            BridgeSafe,
-            None,
-        ),
+        // `/summary` is registered as an async handler below — the
+        // TS-aligned behavior is "force a 9-section session-memory
+        // update", which is async by nature. Sync placeholder removed.
         (
             names::SHARE,
             "Share conversation transcript",
@@ -602,12 +589,12 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
         ),
         (
             names::REWIND,
-            "Restore code/conversation to a previous point",
+            "Restore the code and/or conversation to a previous point",
             &["checkpoint"],
             rewind_handler,
             false,
             LocalOnly,
-            Some("[turn-number]"),
+            None,
         ),
         (
             names::INSTALL_SLACK_APP,
@@ -752,6 +739,24 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
             Some("[instructions]"),
         ),
         (
+            names::DREAM,
+            "Force auto-memory consolidation now (skips three-gate scheduler)",
+            &[],
+            handlers::dream::handler,
+            false,
+            LocalOnly,
+            None,
+        ),
+        (
+            names::SUMMARY,
+            "Force a 9-section session-memory update now",
+            &[],
+            handlers::summary::handler,
+            false,
+            LocalOnly,
+            None,
+        ),
+        (
             names::CONTEXT,
             "Show context window usage breakdown",
             &["ctx"],
@@ -804,6 +809,15 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
             true,
             LocalOnly,
             Some("[allow|deny] [tool]"),
+        ),
+        (
+            names::AGENTS,
+            "List, show, validate, or reload agent definitions",
+            &[],
+            handlers::agents::handler,
+            true,
+            LocalOnly,
+            Some("[list|show <name>|paths|validate|reload]"),
         ),
         (
             names::SESSION,
@@ -1038,20 +1052,12 @@ fn plan_handler(args: &str) -> String {
     }
 }
 
-fn rewind_handler(args: &str) -> String {
-    let target = args.trim();
-    if target.is_empty() {
-        "Usage: /rewind [turn-number]\n\n\
-         Restores code and conversation to a previous checkpoint.\n\
-         Each turn creates an automatic checkpoint of modified files.\n\n\
-         Options:\n\
-         /rewind        — Show available checkpoints\n\
-         /rewind <N>    — Rewind to turn N\n\
-         /rewind last   — Rewind to the last checkpoint"
-            .to_string()
-    } else {
-        format!("Rewinding to checkpoint: {target}")
-    }
+fn rewind_handler(_args: &str) -> String {
+    // The TUI command palette intercepts /rewind and /checkpoint
+    // before this handler runs (`update/overlay.rs:441`) and opens
+    // the picker overlay. Args are intentionally ignored here — TS
+    // does the same; the picker is the only entry point.
+    "Opening rewind picker.".to_string()
 }
 
 fn skills_handler(_args: &str) -> String {
@@ -1104,12 +1110,14 @@ fn copy_handler(args: &str) -> String {
 }
 
 fn btw_handler(args: &str) -> String {
-    let question = args.trim();
-    if question.is_empty() {
-        "Usage: /btw <question> — Ask a quick side question without interrupting the main conversation.".to_string()
-    } else {
-        format!("Side question: {question}")
-    }
+    // Delegate to the structured handler in `handlers::btw` so the
+    // sentinel format stays one source of truth (tested separately).
+    // Runners (TUI / SDK) parse `BTW_SENTINEL` on the first output
+    // line and dispatch into `coco_query::forked_agent` against the
+    // engine's `last_cache_safe_params` for an actual cache-shared
+    // forked query; runners that don't recognise it fall back to
+    // showing the verbatim sentinel + status text (no crash).
+    handlers::btw::handler(args)
 }
 
 fn stickers_handler(_args: &str) -> String {
@@ -1303,20 +1311,6 @@ fn pr_extended_handler(args: &str) -> String {
     }
 }
 
-fn agents_extended_handler(args: &str) -> String {
-    match args.trim() {
-        "" | "list" => "Agent definitions:\n\n\
-               No custom agents defined.\n\n\
-               Agent definitions can be placed in:\n\
-                 .claude/agents/ (project)\n\
-                 ~/.claude/agents/ (user)\n\n\
-               Each agent is a markdown file with:\n\
-                 # Name, frontmatter (tools, model), prompt body"
-            .to_string(),
-        other => format!("Unknown agents subcommand: {other}"),
-    }
-}
-
 fn tasks_extended_handler(args: &str) -> String {
     match args.trim() {
         "" | "list" => "Active tasks:\n\n\
@@ -1327,12 +1321,6 @@ fn tasks_extended_handler(args: &str) -> String {
         "clear" => "All tasks cleared.".to_string(),
         other => format!("Unknown tasks subcommand: {other}"),
     }
-}
-
-fn summary_handler(_args: &str) -> String {
-    "Conversation summary:\n\n\
-     (Summary generation requires an active conversation with messages.)"
-        .to_string()
 }
 
 fn share_handler(_args: &str) -> String {
@@ -2171,6 +2159,202 @@ pub fn create_moved_to_plugin_command(
         handler: Some(Arc::new(MovedToPluginHandler { message })),
         is_enabled: None,
     }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// TS-parity handlers (Round 11)
+// ────────────────────────────────────────────────────────────────────────────
+
+const SECURITY_REVIEW_PROMPT: &str = include_str!("prompts/security_review.txt");
+const INSIGHTS_PROMPT: &str = include_str!("prompts/insights.txt");
+const BRIEF_PROMPT: &str = include_str!("prompts/brief.txt");
+const ADVISOR_PROMPT: &str = include_str!("prompts/advisor.txt");
+const COMMIT_PUSH_PR_PROMPT: &str = include_str!("prompts/commit_push_pr.txt");
+
+/// Register the TS-parity P1 handlers wired in Round 11.
+///
+/// Includes:
+/// - `/rewind` (opens message-selector dialog)
+/// - `/memory` (opens file-selector dialog)
+/// - `/init` (returns codebase-init prompt — NEW or OLD per feature)
+/// - prompt-type commands: `/security-review`, `/insights`, `/brief`,
+///   `/advisor`, `/commit-push-pr`
+///
+/// `user_type` and `features` come from the resolved runtime config; pass
+/// what the bootstrap layer reads from settings + env.
+pub fn register_ts_parity_handlers(
+    registry: &mut CommandRegistry,
+    user_type: coco_types::UserType,
+    features: coco_types::Features,
+    project_root: std::path::PathBuf,
+    user_home: std::path::PathBuf,
+    managed_root: Option<std::path::PathBuf>,
+) {
+    use coco_types::CommandSource;
+
+    // /rewind — TS: commands/rewind/rewind.ts
+    {
+        let base = crate::builtin_base_ext(
+            names::REWIND,
+            "Rewind to a previous turn",
+            &[],
+            CommandSafety::LocalOnly,
+            None,
+        );
+        let mut base = base;
+        base.loaded_from = Some(CommandSource::Builtin);
+        registry.register(RegisteredCommand {
+            base,
+            command_type: CommandType::LocalOverlay(LocalCommandData {
+                handler: names::REWIND.to_string(),
+            }),
+            handler: Some(Arc::new(handlers::rewind::RewindHandler)),
+            is_enabled: None,
+        });
+    }
+
+    // /memory — TS: commands/memory/memory.tsx (local-jsx Dialog)
+    {
+        let mut base = crate::builtin_base_ext(
+            names::MEMORY,
+            "Open the memory file selector",
+            &[],
+            CommandSafety::LocalOnly,
+            None,
+        );
+        base.loaded_from = Some(CommandSource::Builtin);
+        let handler = handlers::memory_dialog::MemoryDialogHandler::new(
+            project_root,
+            user_home,
+            managed_root,
+        );
+        registry.register(RegisteredCommand {
+            base,
+            command_type: CommandType::LocalOverlay(LocalCommandData {
+                handler: names::MEMORY.to_string(),
+            }),
+            handler: Some(Arc::new(handler)),
+            is_enabled: None,
+        });
+    }
+
+    // /init — TS: commands/init.ts (Prompt type, gated NEW vs OLD)
+    {
+        let mut base = crate::builtin_base_ext(
+            names::INIT,
+            "Initialize a CLAUDE.md (and optional skills/hooks) for this repo",
+            &[],
+            CommandSafety::LocalOnly,
+            None,
+        );
+        base.loaded_from = Some(CommandSource::Builtin);
+        let handler = handlers::init_prompt::InitPromptHandler {
+            user_type,
+            features,
+        };
+        registry.register(RegisteredCommand {
+            base,
+            command_type: CommandType::Local(LocalCommandData {
+                handler: names::INIT.to_string(),
+            }),
+            handler: Some(Arc::new(handler)),
+            is_enabled: None,
+        });
+    }
+
+    // /security-review — moved-to-plugin TS: commands/security-review.ts
+    register_static_prompt(
+        registry,
+        names::SECURITY_REVIEW,
+        "Complete a security review of the pending changes on the current branch",
+        "analyzing code changes for security risks",
+        SECURITY_REVIEW_PROMPT,
+        false,
+    );
+
+    // /insights — TS: commands/insights.ts
+    register_static_prompt(
+        registry,
+        names::INSIGHTS,
+        "Surface session insights, costs, and notable activity",
+        "analyzing session activity",
+        INSIGHTS_PROMPT,
+        true,
+    );
+
+    // /brief — TS: commands/brief.ts (local-jsx but rendered as prompt here)
+    register_static_prompt(
+        registry,
+        names::BRIEF,
+        "Toggle brief-only output mode",
+        "toggling brief mode",
+        BRIEF_PROMPT,
+        false,
+    );
+
+    // /advisor — TS: commands/advisor.ts
+    register_static_prompt(
+        registry,
+        names::ADVISOR,
+        "Configure the advisor (secondary review model)",
+        "configuring advisor",
+        ADVISOR_PROMPT,
+        true,
+    );
+
+    // /commit-push-pr — TS: commands/commit-push-pr.ts
+    register_static_prompt(
+        registry,
+        "commit-push-pr",
+        "Commit, push, and open a pull request — orchestrated",
+        "preparing commit + push + PR",
+        COMMIT_PUSH_PR_PROMPT,
+        true,
+    );
+}
+
+fn register_static_prompt(
+    registry: &mut CommandRegistry,
+    name: &str,
+    description: &str,
+    progress_message: &str,
+    body: &str,
+    append_task: bool,
+) {
+    let mut base = crate::builtin_base_ext(name, description, &[], CommandSafety::LocalOnly, None);
+    base.loaded_from = Some(coco_types::CommandSource::Builtin);
+
+    let handler = if append_task {
+        Arc::new(handlers::prompt_command::StaticPromptHandler {
+            name: Box::leak(name.to_string().into_boxed_str()),
+            progress_message: Box::leak(progress_message.to_string().into_boxed_str()),
+            body: Box::leak(body.to_string().into_boxed_str()),
+            append_task: true,
+        }) as Arc<dyn crate::CommandHandler>
+    } else {
+        Arc::new(handlers::prompt_command::StaticPromptHandler {
+            name: Box::leak(name.to_string().into_boxed_str()),
+            progress_message: Box::leak(progress_message.to_string().into_boxed_str()),
+            body: Box::leak(body.to_string().into_boxed_str()),
+            append_task: false,
+        }) as Arc<dyn crate::CommandHandler>
+    };
+
+    registry.register(RegisteredCommand {
+        base,
+        command_type: CommandType::Prompt(coco_types::PromptCommandData {
+            progress_message: progress_message.to_string(),
+            content_length: body.len() as i64,
+            allowed_tools: None,
+            model: None,
+            context: coco_types::CommandContext::Inline,
+            agent: None,
+            thinking_level: None,
+            hooks: None,
+        }),
+        handler: Some(handler),
+        is_enabled: None,
+    });
 }
 
 #[cfg(test)]

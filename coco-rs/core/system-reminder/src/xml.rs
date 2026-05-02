@@ -32,9 +32,13 @@ pub fn wrap_with_tag(content: &str, tag: XmlTag) -> String {
 
 /// Shorthand for `wrap_with_tag(content, XmlTag::SystemReminder)`.
 ///
-/// TS parity: `wrapInSystemReminder` (`messages.ts:3097`).
+/// TS parity: `wrapInSystemReminder` (`messages.ts:3097`). Delegates to
+/// [`coco_messages::wrapping::wrap_in_system_reminder`] so the canonical
+/// format string lives in one place — TS-parity fixes propagate without
+/// drift between the system-reminder pipeline and post-compact / plan-mode /
+/// CLI paths that wrap text directly.
 pub fn wrap_system_reminder(content: &str) -> String {
-    wrap_with_tag(content, XmlTag::SystemReminder)
+    coco_messages::wrapping::wrap_in_system_reminder(content)
 }
 
 /// Wrap content only if it isn't already wrapped in a `<system-reminder>` tag.

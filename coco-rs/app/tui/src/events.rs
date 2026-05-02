@@ -170,6 +170,12 @@ pub enum TuiCommand {
     /// Show rewind overlay (message selector).
     /// TS: triggered by double-Esc or /rewind command.
     ShowRewind,
+    /// Open the rewind overlay pre-anchored to a specific message,
+    /// jumping straight to the RestoreOptions confirm screen. TS:
+    /// `preselectedMessage` flow (`MessageSelector.tsx:42-44`). Used
+    /// by message-actions `edit` and by the non-lossless branch of
+    /// auto-restore-on-interrupt.
+    ShowRewindFor { message_id: String },
     /// Show doctor/diagnostics.
     ShowDoctor,
     /// Show the tabbed settings panel.
@@ -188,6 +194,12 @@ pub enum TuiCommand {
     OverlayNext,
     /// Select previous item in overlay list.
     OverlayPrev,
+    /// Jump selection to the first item in the overlay list. TS:
+    /// `messageSelector:top` (`Home` / `Shift+Up` / `Meta+Up` / `Shift+K`).
+    OverlayJumpStart,
+    /// Jump selection to the last item in the overlay list. TS:
+    /// `messageSelector:bottom` (`End` / `Shift+Down` / `Meta+Down` / `Shift+J`).
+    OverlayJumpEnd,
     /// Confirm selection in overlay.
     OverlayConfirm,
 

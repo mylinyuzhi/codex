@@ -77,6 +77,17 @@ Add for `None` / booleans / numeric literals. Skip for string/char literals unle
 - Field docs: 1-2 lines, no example configs
 - Code comments: only when intent is non-obvious
 
+### Commit Messages (Conventional Commits)
+
+- Subject: `<type>(<scope>): <summary>` — imperative mood, ≤72 chars, no period.
+  Types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`, `perf`, `ci`, `build`, `style`, `revert`.
+- Body (optional): wrap at 72 cols, blank line after subject. One short bullet per
+  logical change — explain *why*, not *what* the diff already shows. Skip
+  per-file recaps, test counts, and rote "verified" lines unless load-bearing.
+- Footers: `BREAKING CHANGE:` and `Co-Authored-By:` only.
+- Squash commits: keep subject ≤72 chars; body = 4–8 bullets max grouped by
+  theme. Don't paste full per-commit bodies — synthesize.
+
 ## Architecture
 
 ```
@@ -362,6 +373,7 @@ Prefer well-maintained crates; check security advisories; use workspace deps.
 | No inline tests | Use `#[path = "<name>.test.rs"]` always |
 | No `unsafe` | All safe Rust. Wrap unsafe deps in own crate. Truly unavoidable? Discuss first |
 | No single-use helpers | Inline at the call site |
+| Env vars use `COCO_*` | All coco-owned environment variables MUST use the `COCO_` prefix (third-party / SDK-vendor names like `ANTHROPIC_API_KEY` are exempt). When porting from TS, rename `CLAUDE_*` / `CLAUDE_CODE_*` / unprefixed names (e.g. `DISABLE_COMPACT`, `USE_API_CLEAR_TOOL_RESULTS`) to a namespaced `COCO_<DOMAIN>_<NAME>` form (e.g. `COCO_COMPACT_DISABLE`, `COCO_COMPACT_API_CLEAR_TOOL_RESULTS`). Add the variant to `coco_config::EnvKey`; never call `std::env::var` ad-hoc inside crates. |
 
 ### Type Safety
 
@@ -386,6 +398,13 @@ Raw strings only for unconstrained input (user text, opaque external IDs, third-
 - **Compaction — three generic strategies only:** micro-compact (clear old tool results), full LLM summarization, reactive (on `prompt_too_long`). Do **not** port TS `HISTORY_SNIP` or `CONTEXT_COLLAPSE` — cache-aware optimizations belong in that `vercel-ai-*` crate.
 
 - **Plan Mode — skip Ultraplan only.** Port core lifecycle, Pewter-ledger (Phase-4 variants `null`/`trim`/`cut`/`cap`), Interview phase — gate on `settings.json` (`plan_mode.phase4_variant`, `plan_mode.workflow`), not GrowthBook or `USER_TYPE=ant`. Skip every `feature('ULTRAPLAN')` path (needs CCR backend coco-rs doesn't ship).
+
+### Config & Feature Gates
+
+- **Consume `RuntimeConfig`, never raw `Settings`/env.** All layering (settings.json → `EnvOnlyConfig` → `RuntimeOverrides`) is folded once in `coco_config::build_runtime_config`. Leaf crates read the resolved sub-config (`tool`, `shell`, `sandbox`, `memory`, `mcp`, `compact`, `web_*`, `paths`, …) and `features` / `tool_overrides` off `RuntimeConfig` — they never re-merge `Partial*` overlays or call `std::env::var`.
+- **Feature is a coarse capability gate, not a sub-toggle.** `coco_types::Feature` is closed (`WebSearch`, `WebFetch`, `Sandbox`, `AutoMemory`, `Retrieval`, `AgentTeams`, `Worktree`, `Lsp`). Sub-toggles (`MemoryConfig.extraction_enabled`, `SandboxConfig.mode`, `RetrievalConfig.reranker.enabled`, …) stay inside their `*Config`. Enterprise policy and "configured = enabled" subsystems (hooks, plugins, skills, telemetry) are **not** Features.
+- **Three resolution layers, single merge site.** `Features::with_defaults()` → `apply_map(settings.features)` → `apply_map(env COCO_FEATURE_*)` → `RuntimeOverrides.feature_overrides`. Never bypass: no ad-hoc `COCO_DISABLE_*` env, no `Features::default()` (the type intentionally has no `Default` impl — pick `with_defaults()` or `empty()`).
+- **Gate at the right layer.** Tool-level gate → implement `Tool::is_enabled(ctx) { ctx.features.enabled(Feature::X) }` (Layer 1 of the 5-layer filter pipeline). Subsystem-level gate (`AutoMemory`, `Retrieval`, `Sandbox`) → check at the subsystem entry point, not in tool registry. Subagents inherit parent `Arc<Features>` and **must never widen**.
 
 ### Event System
 

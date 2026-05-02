@@ -55,6 +55,12 @@ pub struct PerCallOverrides {
     /// - `Some(level)` with effort != None — use this level.
     pub thinking_level: Option<ThinkingLevel>,
     pub extra_body: BTreeMap<String, serde_json::Value>,
+    /// Anthropic `context_management` payload (camelCase wire shape).
+    /// Encoded by `coco_compact::encode_anthropic_context_management`
+    /// from the resolved `[ContextEditStrategy]` list. The Anthropic
+    /// language model's `extract_anthropic_options` reads it; other
+    /// providers ignore the namespace, so the field is a no-op there.
+    pub context_management: Option<serde_json::Value>,
 }
 
 /// Build a fresh `LanguageModelV4CallOptions` for a turn.
@@ -114,6 +120,28 @@ pub fn build_call_options(
     {
         for (k, v) in thinking_convert::to_extra_body(t, api) {
             extra.insert(k, v);
+        }
+    }
+
+    // Lane C: Anthropic-only `context_management`. The provider's
+    // `extract_anthropic_options` reads it from the
+    // `provider_options["anthropic"]["contextManagement"]` slot; other
+    // providers don't, so we skip the key entirely.
+    //
+    // Precedence: when the user has pre-stuffed `contextManagement`
+    // into `extra_body` (Layer 1 escape hatch), don't overwrite — log
+    // and keep the user's value. This makes the manual override stable
+    // even after we begin computing strategies upstream.
+    if api == ProviderApi::Anthropic
+        && let Some(ctx) = per_call.context_management.clone()
+    {
+        if extra.contains_key("contextManagement") {
+            tracing::debug!(
+                "build_call_options: user-supplied contextManagement in extra_body \
+                 takes precedence over coco-computed strategy"
+            );
+        } else {
+            extra.insert("contextManagement".to_string(), ctx);
         }
     }
 

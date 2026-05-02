@@ -1,6 +1,6 @@
+use coco_messages::ToolResult;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
-use coco_types::ToolResult;
 use serde_json::Value;
 use serde_json::json;
 use std::collections::HashMap;

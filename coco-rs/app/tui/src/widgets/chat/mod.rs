@@ -92,6 +92,16 @@ impl<'a> ChatWidget<'a> {
     }
 
     fn build_lines(&self) -> Vec<Line<'a>> {
+        // TS-alignment gap: TS external builds run four display-collapse
+        // reducers over the message stream before rendering, gated on
+        // `compact.experimental.display_collapses.*` (all default true):
+        //   - collapseTeammateShutdowns         (utils/collapseTeammateShutdowns.ts)
+        //   - collapseHookSummaries             (utils/collapseHookSummaries.ts)
+        //   - collapseBackgroundBashNotifications (utils/collapseBackgroundBashNotifications.ts)
+        //   - collapseReadSearchGroups          (utils/collapseReadSearch.ts, ~1100 LOC)
+        // Rust currently renders the raw stream, so on-by-default config
+        // produces no folding. Wire each reducer here when ported; until
+        // then this path matches TS-with-feature-OFF behavior.
         let mut lines: Vec<Line> = Vec::new();
 
         let mut i = 0;
@@ -332,6 +342,7 @@ fn meta_category(content: &MessageContent) -> &'static str {
         | MessageContent::HookAsyncResponse { .. } => "hook",
         MessageContent::PlanApproval { .. } => "plan",
         MessageContent::CompactBoundary => "compact",
+        MessageContent::CompactSummary { .. } => "compact",
         MessageContent::Advisor { .. } => "advisor",
         MessageContent::TaskAssignment { .. } => "task",
         MessageContent::ResourceUpdate { .. } => "mcp",

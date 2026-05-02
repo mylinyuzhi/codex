@@ -374,3 +374,133 @@ fn test_git_config_allowed_when_enabled() {
             .is_ok()
     );
 }
+
+// ==========================================================================
+// D7: bridge-aware async checks
+// ==========================================================================
+
+use crate::bridge::{
+    SandboxApprovalBridge, SandboxApprovalDecision, SandboxApprovalRequest, SandboxOperation,
+};
+use std::sync::Arc;
+
+/// Stub bridge with a configurable decision + a recorder so tests can
+/// assert what was forwarded.
+struct StubBridge {
+    decision: SandboxApprovalDecision,
+    seen: tokio::sync::Mutex<Vec<SandboxApprovalRequest>>,
+}
+
+#[async_trait::async_trait]
+impl SandboxApprovalBridge for StubBridge {
+    async fn request_approval(&self, request: SandboxApprovalRequest) -> SandboxApprovalDecision {
+        self.seen.lock().await.push(request);
+        self.decision
+    }
+}
+
+#[tokio::test]
+async fn test_check_path_async_passes_through_when_allowed() {
+    // Allowed path → bridge must NOT be consulted (avoid spurious
+    // approval prompts for normal operations).
+    let bridge = Arc::new(StubBridge {
+        decision: SandboxApprovalDecision::Approved,
+        seen: tokio::sync::Mutex::new(Vec::new()),
+    });
+    let checker =
+        PermissionChecker::new(workspace_write_config()).with_approval_bridge(bridge.clone());
+    let result = checker
+        .check_path_async(
+            Path::new("/home/user/project/file.txt"),
+            /*write*/ true,
+        )
+        .await;
+    assert!(result.is_ok());
+    assert!(bridge.seen.lock().await.is_empty(), "no approval requested");
+}
+
+#[tokio::test]
+async fn test_check_path_async_without_bridge_returns_err() {
+    // No bridge installed → fail-closed identical to sync check.
+    let checker = PermissionChecker::new(strict_config());
+    let result = checker
+        .check_path_async(Path::new("/etc/passwd"), /*write*/ true)
+        .await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn test_check_path_async_bridge_rejects_preserves_err() {
+    let bridge = Arc::new(StubBridge {
+        decision: SandboxApprovalDecision::Rejected,
+        seen: tokio::sync::Mutex::new(Vec::new()),
+    });
+    let checker = PermissionChecker::new(strict_config()).with_approval_bridge(bridge.clone());
+    let result = checker
+        .check_path_async(Path::new("/etc/passwd"), /*write*/ true)
+        .await;
+    assert!(result.is_err(), "rejected approval must preserve deny");
+    let seen = bridge.seen.lock().await;
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].operation, SandboxOperation::Write);
+    assert!(seen[0].path.contains("passwd"));
+    assert!(
+        !seen[0].reason.is_empty(),
+        "request must carry a non-empty reason"
+    );
+}
+
+#[tokio::test]
+async fn test_check_path_async_bridge_approves_overrides_deny() {
+    let bridge = Arc::new(StubBridge {
+        decision: SandboxApprovalDecision::Approved,
+        seen: tokio::sync::Mutex::new(Vec::new()),
+    });
+    let checker = PermissionChecker::new(strict_config()).with_approval_bridge(bridge.clone());
+    let result = checker
+        .check_path_async(Path::new("/etc/passwd"), /*write*/ true)
+        .await;
+    assert!(
+        result.is_ok(),
+        "approval must override deny error: {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_check_network_async_bridge_approves_overrides_deny() {
+    let bridge = Arc::new(StubBridge {
+        decision: SandboxApprovalDecision::Approved,
+        seen: tokio::sync::Mutex::new(Vec::new()),
+    });
+    let mut config = strict_config();
+    config.allow_network = false;
+    let checker = PermissionChecker::new(config).with_approval_bridge(bridge.clone());
+    let result = checker.check_network_async().await;
+    assert!(result.is_ok(), "network approval must override deny");
+    let seen = bridge.seen.lock().await;
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].operation, SandboxOperation::Network);
+    assert!(seen[0].path.is_empty(), "network has no path: {seen:?}");
+}
+
+#[tokio::test]
+async fn test_set_approval_bridge_replaces_at_runtime() {
+    // Install one bridge, swap in another; the second must observe the
+    // call. Useful pattern for session bootstrap then later teardown.
+    let first = Arc::new(StubBridge {
+        decision: SandboxApprovalDecision::Approved,
+        seen: tokio::sync::Mutex::new(Vec::new()),
+    });
+    let second = Arc::new(StubBridge {
+        decision: SandboxApprovalDecision::Rejected,
+        seen: tokio::sync::Mutex::new(Vec::new()),
+    });
+    let mut checker = PermissionChecker::new(strict_config()).with_approval_bridge(first.clone());
+    assert!(checker.has_approval_bridge());
+    checker.set_approval_bridge(Some(second.clone()));
+    let _ = checker
+        .check_path_async(Path::new("/etc/passwd"), /*write*/ true)
+        .await;
+    assert!(first.seen.lock().await.is_empty(), "first bridge unused");
+    assert_eq!(second.seen.lock().await.len(), 1);
+}

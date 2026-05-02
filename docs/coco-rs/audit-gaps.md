@@ -2,6 +2,69 @@
 
 Exhaustive comparison of all plan docs against actual TS source + cocode-rs source.
 
+## Round 11: Skills / Commands / Plugins Parity Deep-Review (May 2, 2026)
+
+Verified TS-vs-Rust audit across `coco-rs/skills`, `coco-rs/commands`, `coco-rs/plugins` against `/lyz/codespace/3rd/claude-code/src/{skills,commands,plugins,utils/{plugins,skills}}`. **Full plan**: [parity-skills-commands-plugins.md](parity-skills-commands-plugins.md) — every gap below has TS file:line citations, type definitions, behavior, and UI specs.
+
+### Summary
+
+| Area | TS LOC | Rust LOC | Parity | Status |
+|---|---|---|---|---|
+| Skills | ~1.6K | ~1.0K | 78% | partial — missing extract/lazy/feature-gate |
+| Commands | ~10K (96 cmds) | ~3.5K (19 handlers) | 25–30% | most P1 commands stubbed |
+| Plugins | ~22K | ~1.5K | 80% schema, 40% behavior | resolver/MCPB/refresh missing |
+
+### P1 Gaps (Round A — unblocks user-visible flows)
+
+| Gap | TS source | Rust state | Plan section |
+|---|---|---|---|
+| **CommandRegistry seam** (skills+plugins→commands) | `commands.ts` | empty seam | §0 |
+| **Bundled-skill `files` extraction + nonce dir** | `skills/bundledSkills.ts:53-220` | `bundled.rs:47` (static include_str!) | §1.1 |
+| **Lazy `getPromptForCommand(args, ctx)`** | `skills/bundled/*.ts` | static String | §1.2 |
+| **Bundled inventory drift** (3 extras, 4 missing, 3 ungated) | `skills/bundled/index.ts:24-78` | `bundled.rs:47-264` | §1.3 |
+| **Skill `is_enabled` feature gate** | `types/command.ts` (per-command callback) | `IsEnabledFn` on command only | §1.4 |
+| **`/rewind` + fileHistory + message selector** | `commands/rewind/rewind.ts:1-13` + `utils/fileHistory.ts` (~1110 LOC) | missing | §2.1 |
+| **`/compact` full flow** (microcompact + session-memory + reactive) | `commands/compact/compact.ts:1-287` | stub (72 LOC) | §2.2 |
+| **`/init` 8-phase prompt** | `commands/init.ts:1-256` | partial existence-check | §2.3 |
+| **`/memory` editor dialog** | `commands/memory/memory.tsx:1-89` | list-only (170 LOC) | §2.4 |
+| **Prompt-type command execution path** | `commands.ts processSlashCommand` | stubs only | §2.5 |
+| **Plugin three-layer refresh** (Layer 2 reconcile + Layer 3 active) | `utils/plugins/{refresh,reconciler}.ts:1-216+265` | stubs only | §3.1 |
+| **Plugin dependency resolver** (DFS + cycle + scope demote + cross-mkt) | `utils/plugins/dependencyResolver.ts:1-305` | signatures only | §3.2 |
+| **MCPB (.mcpb / .dxt) bundles** | `utils/plugins/mcpbHandler.ts:968` + `zipCache.ts:406` | none | §3.3 |
+| **Plugin security validation** (path traversal, impersonation, policy) | `utils/plugins/{validatePlugin,pluginPolicy}.ts:903+20` | warn-only | §3.4 |
+| **Builtin plugin registry** (`{name}@builtin`) | `plugins/builtinPlugins.ts:1-159` | constants only | §3.5 |
+
+### P2 Gaps (Round B — security + correctness)
+
+| Gap | TS source | Plan section |
+|---|---|---|
+| Skill watcher: stability threshold, `.git/` ignore, ConfigChange hooks, `--add-dir` | `utils/skills/skillChangeDetector.ts:1-311` | §1.6 |
+| Skill `paths` glob conditional activation | `skills/loadSkillsDir.ts:159-178` | §1.5 |
+| MCP-sourced skills (write-once builder registry) | `skills/mcpSkillBuilders.ts` | §1.7 |
+| `/commit-push-pr` orchestrator | `commands/commit-push-pr.ts:158` | §2.6 |
+| `createMovedToPluginCommand` migration helper | `commands/createMovedToPluginCommand.ts:22-65` | §2.7 |
+| Headless install (auto-approve + zip-cache + 30s timeout) | `utils/plugins/headlessPluginInstall.ts:174` | §3.6 |
+| Hot reload (notify watcher + needsRefresh notification) | `utils/plugins/loadPluginHooks.ts:287` | §3.7 |
+| `installed_plugins.json` V1→V2 migration | `utils/plugins/installedPluginsManager.ts:1268` | §3.8 |
+| Versioned cache paths `<name>/<version>/` | `utils/plugins/pluginVersioning.ts:157` | §3.8 |
+| Official marketplace auto-install | `utils/plugins/officialMarketplaceStartupCheck.ts:439` | §3.8 |
+| Contribution conflict warnings | `utils/plugins/loadPluginCommands.ts:946` | §3.8 |
+| Plugin error taxonomy (20+ variants) | `types/plugin.ts` | §3.8 |
+
+### P3 Gaps (Round C — parity tail)
+
+- ~40 stub commands across config UI, session UX, diagnostics (`theme`, `color`, `branch`, `tag`, `share`, `env`, `bug-report`, `debug-tool-call`, `ant-trace`, `voice`, `heap-dump`, `ctx-viz`, `mock-limits`, …) — see §2.8.
+- Marketplace search / hint recommendation system (`utils/plugins/{marketplaceManager,hintRecommendation}.ts:2643+164`).
+
+### Cross-cutting Adjustments
+
+- **`Command.source` enum**: add missing TS variants (`bundled`, `mcp`, `commands_DEPRECATED`, etc.) to `coco-types::CommandSource`.
+- **`CommandResult` enum**: add `Compact(CompactionResult)`, `Prompt(Vec<PromptPart>)`, `OpenDialog(DialogSpec)` to mirror TS `'compact' | 'prompt' | 'local-jsx'`.
+- **Manifest format**: keep `PLUGIN.toml` for Rust-native plugins, but make `plugin.json` strict-validate (currently warn-only).
+- **Telemetry**: emit TS `tengu_skill_file_changed`, `plugin_install_*` event names through `coco-otel` for dashboard parity.
+
+---
+
 ## Round 9: Phase 1 Event Emission Wiring (April 12, 2026)
 
 Phase 1 of `event-system-design.md` implemented: all Phase 0 type definitions
@@ -138,6 +201,43 @@ All P0 gaps are now **RESOLVED** (crate-coco-tui.md created in Round 7).
 | P1 | GrowthBook architectural decision for Rust | Cross | Phase 2 |
 | P2 | SDK DirectConnect full session management | 20_SDK | Phase 5 |
 | — | ~~crate-coco-tui.md~~ | 02_UI | **RESOLVED** — created with full widget catalog, event integration, TS component mapping |
+
+### Round 10: System-Reminder + Compact Deep Review (April 29-30, 2026)
+
+**Context**: deep review of `coco-system-reminder` and `services/compact` against TS external + follow-up "fix all items" pass + second deep-review pass that found three real bugs in the prior port. Almost all P0/P1 ports landed; remaining items are intentional non-ports or analytics/feature-gated.
+
+**Round 10b deep-review fixes (post-port bugs caught and fixed):**
+
+| Bug | Site | Fix |
+|---|---|---|
+| `sanitize_error_tool_result_content` gated on outer `tr.is_error` instead of wire-level `rp.is_error` — passes were no-ops when only the inner flag was set | `core/messages/src/normalize.rs` | Drop redundant outer guard; rely on `rp.is_error` (the wire-truth flag the Anthropic API rejects on). |
+| `smoosh_system_reminder_into_tool_result` bailed on `is_error=true` tool_results, leaving the `text-after-tool_result` pattern intact — exactly the `\n\nHuman:` issue smoosh exists to prevent | `core/messages/src/normalize.rs::fold_text_into_last_tool_result` | Mirror TS `messages.ts:2545-2553`: SR text is text-only by definition, so smooshing into is_error tool_results is safe. |
+| `merge_consecutive_same_role` merged Assistant+Assistant unconditionally — TS only merges chunks with matching `message.id`. Two distinct API responses landing back-to-back (e.g. retry-after-partial-stream on resume) get incorrectly stitched, producing mismatched thinking-block signatures the API rejects | `core/messages/src/normalize.rs` | Replace LlmMessage-level merge with Message-level `merge_consecutive_assistants_by_request_id` running BEFORE extraction (so `request_id` is still readable). User+User merge stays unconditional. Old `merge_consecutive_same_role` deleted. |
+| Pipeline ordering: `sanitize_error` ran before `smoosh`, so smoosh-produced text in is_error tool_results escaped the text-only normalization | `core/messages/src/normalize.rs` | Reorder per TS: smoosh first, sanitize as final pass at LlmMessage level (`sanitize_error_tool_result_in_llm_messages`). |
+
+**Regression tests** added in `core/messages/src/normalize.test.rs`:
+- `merge_assistants_by_request_id_keeps_distinct_ids_separate`
+- `merge_assistants_by_request_id_merges_matching_ids`
+- `merge_assistants_with_no_request_id_stays_separate`
+- `smoosh_folds_into_is_error_tool_result`
+- `sanitize_strips_non_text_from_is_error_tool_result`
+
+| Priority | Gap | TS source | Status | Notes |
+|----------|-----|-----------|--------|-------|
+| P0 | image-in-tool_result strip | `compact.ts:166-184` | **RESOLVED** | `compact.rs::strip_images_from_messages` now traverses `Message::ToolResult` content arrays. Test: `strip_images_walks_tool_result_content`. |
+| P0 | `wrap_in_system_reminder` duplication | `messages.ts:3097` | **RESOLVED** | `coco-system-reminder::xml::wrap_system_reminder` delegates to `coco-messages::wrapping::wrap_in_system_reminder`. |
+| P0 | `sanitizeErrorToolResultContent` | `messages.ts:1884` | **RESOLVED** | `core/messages/src/normalize.rs::sanitize_error_tool_result_content`; runs as Step 12 in the pipeline. |
+| P0 | `smooshSystemReminderSiblings` | `messages.ts:1835-1873` | **RESOLVED** | `core/messages/src/normalize.rs::smoosh_system_reminder_into_tool_result` runs as Step 14, after same-role merge so SR-User next to Tool can fold. Bails on `is_error` and non-Text/Content output variants. |
+| P1 | `filterOrphanedThinkingOnlyMessages` | `messages.ts:2311` | **RESOLVED** | Step 8; matches on `request_id` (TS `message.id` equivalent). |
+| P1 | `filterTrailingThinkingFromLastAssistant` | `messages.ts:2322` | **RESOLVED** | Step 9; ordering invariant preserved (runs BEFORE whitespace filter). |
+| P1 | `filterWhitespaceOnlyAssistantMessages` | `messages.ts:2324` | **RESOLVED** | Step 10; post-removal calls `merge_consecutive_user_messages` to reseal alternation. |
+| P1 | `ensureNonEmptyAssistantContent` | `messages.ts:2325` | **RESOLVED** | Step 11; non-final assistants get `[No message content]` placeholder; final allowed empty for prefill. |
+| P1 | `processSessionStartHooks('compact')` LLM path | `compact.ts:592` | **RESOLVED** | `engine_compaction.rs::try_full_compact` invokes `execute_session_start("compact", …)` after PostCompact and folds `additional_contexts` into `result.hook_results`. (SM-compact path was already correct.) |
+| P1 | `createPlanModeAttachmentIfNeeded` post-compact | `compact.ts:1542-1560` | **RESOLVED** | `services/compact/post_compact_plan_mode.rs::create_plan_mode_attachment_if_needed` renders the same Full-variant text as the system-reminder cadence. Wired in `engine_compaction.rs::try_full_compact` from a snapshot taken pre-compact (live `permission_mode == Plan` + `QueryEngineConfig.plan_mode_settings`). Plan instructions land on the FIRST post-compact turn, matching TS. |
+| P1 | `createAsyncAgentAttachmentsIfNeeded` post-compact | `compact.ts:1568-1599` | **RESOLVED** | `services/compact/post_compact_async_agents.rs::create_async_agent_attachments` renders one `task_status` reminder per filtered async agent. Engine snapshot via `QueryEngine::snapshot_async_agents_for_post_compact` reads from optional `Arc<TaskManager>` (`with_running_tasks` builder hook), filters by TS rules: drop self-agent, drop pending, drop already-notified terminal. Empty when no `TaskManager` is installed (degrades to TS-feature-stripped behavior). |
+| P2 | `recompactionInfo` populate | `compact.ts:317-323` | **RESOLVED** | `CompactRunOptions.recompaction_info: Option<RecompactionInfo>` plumbs through `compact_conversation`; `CompactResult.is_recompaction` reads from it. `QueryEngine::last_compact_state` (per-engine `Mutex<Option<LastCompactState>>`) tracks turn id + run id; `turn_counter` is incremented at the top of `finalize_turn_post_tools`. `try_full_compact` derives `RecompactionInfo` from the tracker each invocation and updates it post-success. |
+| P2 | `stripReinjectedAttachments` divergence | `compact.ts:211-223` | **NON-PORT (broader is correct)** | `survives_compaction()` filters more kinds than TS's narrow `skill_discovery`/`skill_listing` filter, but the intent is identical (drop regenerable, keep audit/UI-visible). Documented in source. |
+| P3 | `relocateToolReferenceSiblings` | `messages.ts:2304` | **DEFERRED** | TS-gated on `tengu_toolref_defer_j8m`; coco-rs has no Tool Reference feature. Safe to defer until/unless the feature lands. |
 
 ---
 
@@ -301,7 +401,7 @@ Multi-provider awareness checked. Shell-parser strategy updated to HYBRID (cocod
 
 | Concept | TS source | What it is | Should be in |
 |---------|-----------|------------|-------------|
-| `ContentReplacementState` | `utils/toolResultStorage.ts` | State machine for tool result size budgets per message | `coco-context` |
+| **Tool Result Budget (full Level 1 + Level 2)** | `utils/toolResultStorage.ts` (1040 LOC), `constants/toolLimits.ts`, `utils/mcpOutputStorage.ts` | Two-level pipeline: (1) per-tool persistence — `<persisted-output>` wrapper + 2KB preview + session-scoped `tool-results/` dir, invoked from `services/tools/toolExecution.ts:addToolResult`; (2) per-message aggregate budget (`MAX_TOOL_RESULTS_PER_MESSAGE_CHARS=200_000`) — `ContentReplacementState{seenIds,replacements}` + `enforceToolResultBudget`, invoked from `query.ts:379` before micro-compact. **Not** a single state machine. **Re-routed** from `coco-context` to `coco-tool-runtime` (storage + enforcement) + `coco-query` (wiring) + `coco-session` (transcript records) — see [`tool-result-budget-plan.md`](tool-result-budget-plan.md). Prior ownership claim led to multi-round review miss; only `bash.rs::maybe_persist_oversized_output` exists today and uses a divergent shape (parallel JSON fields, `temp_dir()` storage, no `<persisted-output>` wrapper). | `coco-tool-runtime` + `coco-query` + `coco-session` |
 | `FileStateCache` | `utils/fileStateCache.ts` (1479 LOC) | LRU cache of file contents before tool execution | `coco-context` |
 | `FileHistoryState` | `utils/fileHistory.ts` | Tracks file edits per turn for change detection/undo | `coco-messages` or `coco-context` |
 | `processUserInput/` | `utils/processUserInput/` (4 files) | Pre-processes user input (images, slash commands, bash) | `coco-query` |

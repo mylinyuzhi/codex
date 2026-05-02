@@ -2,9 +2,9 @@
 //!
 //! TS: buildMessageLookups() — avoids O(n²) scans per render cycle.
 
-use coco_types::AssistantContent;
-use coco_types::LlmMessage;
-use coco_types::Message;
+use crate::AssistantContent;
+use crate::LlmMessage;
+use crate::Message;
 use std::collections::HashMap;
 use uuid::Uuid;
 

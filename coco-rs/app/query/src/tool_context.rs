@@ -16,10 +16,10 @@
 //!   `custom_system_prompt`, `append_system_prompt` — previously hardcoded
 //!   defaults in `engine.rs`. Now mirrored from `QueryEngineConfig`.
 //! - `main_loop_model` snapshots the currently-active model. The engine
-//!   passes `ToolContextOverrides.current_model_name` at build time from
-//!   `ModelRuntime::current_model_name()` so post-fallback contexts reflect
+//!   passes `ToolContextOverrides.current_model_id` at build time from
+//!   `ModelRuntime::current_model_id()` so post-fallback contexts reflect
 //!   the active slot. Callers that omit the override (tests, legacy single-
-//!   client paths) fall back to `config.model_name`.
+//!   client paths) fall back to `config.model_id`.
 //! - `hook_handle` — plumbed through even when `None` so Phase 3's
 //!   `QueryHookHandle` slots in without a second call-site edit.
 //! - Permission-mode-related fields (`mode`, `pre_plan_mode`,
@@ -66,6 +66,7 @@ pub(crate) struct ToolContextFactory {
     pub(crate) mailbox: Option<MailboxHandleRef>,
     pub(crate) task_list: Option<TaskListHandleRef>,
     pub(crate) todo_list: Option<TodoListHandleRef>,
+    pub(crate) task_handle: Option<coco_tool_runtime::TaskHandleRef>,
     pub(crate) permission_bridge: Option<ToolPermissionBridgeRef>,
     pub(crate) app_state: Option<Arc<RwLock<ToolAppState>>>,
     pub(crate) file_read_state: Option<Arc<RwLock<coco_context::FileReadState>>>,
@@ -94,6 +95,14 @@ pub(crate) struct ToolContextFactory {
     /// PreToolUse hook-rewritten input to guarantee that
     /// malformed rewrites reject BEFORE permission / execution.
     pub(crate) tool_schema_validator: Option<coco_tool_runtime::ToolSchemaValidator>,
+    /// Active agent-definition catalog snapshot (T7). Surfaced on
+    /// `ToolUseContext.agent_catalog` so AgentTool can resolve a
+    /// `subagent_type` to its full `AgentDefinition` and thread the
+    /// definition through `AgentSpawnRequest.definition`. Built by
+    /// the session bootstrap from `coco_subagent::AgentDefinitionStore`
+    /// and refreshed on `/agents reload`. `None` is the legacy/test
+    /// path — AgentTool degrades to subagent_type→role mapping alone.
+    pub(crate) agent_catalog: Option<Arc<coco_subagent::AgentCatalogSnapshot>>,
 }
 
 /// Per-call overrides applied on top of [`ToolContextFactory`] inputs.
@@ -112,10 +121,10 @@ pub(crate) struct ToolContextOverrides {
     /// progress reporting (equivalent to the pre-Phase-9 baseline).
     pub(crate) progress_tx: Option<coco_tool_runtime::ProgressSender>,
     /// Currently-active model name. Engine passes
-    /// `ModelRuntime::current_model_name()` so `main_loop_model`
+    /// `ModelRuntime::current_model_id()` so `main_loop_model`
     /// reflects post-fallback state; absent falls back to
-    /// `config.model_name` (tests, pre-fallback paths).
-    pub(crate) current_model_name: Option<String>,
+    /// `config.model_id` (tests, pre-fallback paths).
+    pub(crate) current_model_id: Option<String>,
 }
 
 impl ToolContextFactory {
@@ -158,8 +167,8 @@ impl ToolContextFactory {
         });
 
         let main_loop_model = overrides
-            .current_model_name
-            .unwrap_or_else(|| self.config.model_name.clone());
+            .current_model_id
+            .unwrap_or_else(|| self.config.model_id.clone());
         ToolUseContext {
             tools: self.tools.clone(),
             main_loop_model,
@@ -214,6 +223,11 @@ impl ToolContextFactory {
             user_message_id: overrides.user_message_id,
             agent_id: self.config.agent_id.as_ref().map(AgentId::new),
             agent_type: None,
+            // T7: agent catalog snapshot. Filled when the session
+            // bootstrap calls `ToolContextFactory::with_agent_catalog`;
+            // `None` resolves AgentTool to the subagent_type→role
+            // mapping alone (legacy / test path).
+            agent_catalog: self.agent_catalog.clone(),
             file_reading_limits: Default::default(),
             glob_limits: Default::default(),
             nested_memory_attachment_triggers: Arc::new(RwLock::new(Default::default())),
@@ -251,9 +265,13 @@ impl ToolContextFactory {
             // matching TS behavior where `AsyncLocalStorage`-based
             // cwd override only affects resolving calls.
             cwd_override: self.config.cwd_override.clone(),
+            // Memdir-only write fence for sandboxed subagents (memory
+            // extraction / auto-dream). Empty when the parent session
+            // didn't install one.
+            allowed_write_roots: self.config.allowed_write_roots.clone(),
             permission_bridge: self.permission_bridge.clone(),
             progress_tx: overrides.progress_tx,
-            task_handle: None,
+            task_handle: self.task_handle.clone(),
             task_list: self
                 .task_list
                 .clone()

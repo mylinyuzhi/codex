@@ -70,6 +70,79 @@ fn test_no_closing_delimiter() {
 }
 
 #[test]
+fn test_nested_mapping() {
+    // serde_yml backing — supports nested objects (TS YAML parity).
+    let input = r#"---
+hooks:
+  pre_tool_use:
+    - matcher: Bash
+      command: ./hook.sh
+config:
+  nested:
+    deeper: value
+---
+body"#;
+    let fm = parse(input);
+    let hooks = fm.data.get("hooks").unwrap().as_mapping().unwrap();
+    assert!(hooks.contains_key("pre_tool_use"));
+    let pre_tool_use = hooks.get("pre_tool_use").unwrap().as_sequence().unwrap();
+    assert_eq!(pre_tool_use.len(), 1);
+    let entry = pre_tool_use[0].as_mapping().unwrap();
+    assert_eq!(entry.get("matcher").unwrap().as_str(), Some("Bash"));
+    assert_eq!(entry.get("command").unwrap().as_str(), Some("./hook.sh"));
+
+    let config = fm.data.get("config").unwrap().as_mapping().unwrap();
+    let deeper = config
+        .get("nested")
+        .unwrap()
+        .as_mapping()
+        .unwrap()
+        .get("deeper")
+        .unwrap();
+    assert_eq!(deeper.as_str(), Some("value"));
+}
+
+#[test]
+fn test_inline_mapping_in_sequence() {
+    // TS `mcpServers` inline form: `[{name: {…}}]`.
+    let input = r#"---
+mcpServers:
+  - github
+  - slack:
+      command: ./slack-mcp
+      env:
+        TOKEN: xyz
+---
+body"#;
+    let fm = parse(input);
+    let servers = fm.data.get("mcpServers").unwrap().as_sequence().unwrap();
+    assert_eq!(servers.len(), 2);
+    assert_eq!(servers[0].as_str(), Some("github"));
+    let inline = servers[1].as_mapping().unwrap();
+    let slack = inline.get("slack").unwrap().as_mapping().unwrap();
+    assert_eq!(slack.get("command").unwrap().as_str(), Some("./slack-mcp"));
+}
+
+#[test]
+fn test_to_json_round_trip() {
+    let input = r#"---
+hooks:
+  pre_tool_use:
+    - command: ./hook.sh
+      timeout: 30
+---
+body"#;
+    let fm = parse(input);
+    let hooks_json = fm.data.get("hooks").unwrap().to_json();
+    let expected = serde_json::json!({
+        "pre_tool_use": [
+            {"command": "./hook.sh", "timeout": 30}
+        ]
+    });
+    assert_eq!(hooks_json, expected);
+}
+
+#[test]
 fn test_empty_body() {
     let input = "---\nkey: val\n---\n";
     let fm = parse(input);

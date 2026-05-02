@@ -311,10 +311,7 @@ pub(super) fn plan_approval_content(
         .join("\n");
     let truncated = p.plan_content.lines().count() > MAX_PREVIEW_LINES;
     let preview_block = if truncated {
-        format!(
-            "{preview}\n… {}",
-            t!("dialog.plan_approval_truncated").to_string()
-        )
+        format!("{preview}\n… {}", t!("dialog.plan_approval_truncated"))
     } else {
         preview
     };
@@ -323,26 +320,21 @@ pub(super) fn plan_approval_content(
     let deny_marker = if p.is_approve_focused() { "  " } else { "▸ " };
     let buttons = format!(
         "{approve_marker}{}    {deny_marker}{}",
-        t!("dialog.plan_approval_approve").to_string(),
-        t!("dialog.plan_approval_deny").to_string(),
+        t!("dialog.plan_approval_approve"),
+        t!("dialog.plan_approval_deny"),
     );
 
     let path_line = p
         .plan_file_path
         .as_deref()
-        .map(|p| {
-            format!(
-                "{}\n\n",
-                t!("dialog.plan_approval_file", path = p).to_string()
-            )
-        })
+        .map(|p| format!("{}\n\n", t!("dialog.plan_approval_file", path = p)))
         .unwrap_or_default();
 
     (
         t!("dialog.plan_approval_title", from = p.from.as_str()).to_string(),
         format!(
             "{path_line}{preview_block}\n\n{buttons}\n\n{}",
-            t!("dialog.plan_approval_hints").to_string()
+            t!("dialog.plan_approval_hints")
         ),
         theme.plan_mode,
     )

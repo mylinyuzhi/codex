@@ -21,10 +21,18 @@ pub fn handler(
 
         let session_count = count_session_files(&sessions_dir).await;
 
+        // TS alignment: `/clear` always performs the full reset
+        // (transcript + plan slugs + file caches + cache-break
+        // detector). `/clear all` is an alias retained for users who
+        // already typed it. `/clear history` is a Rust-only lighter
+        // mode that leaves tools / files / plans intact — useful when
+        // the user just wants a clean screen without disturbing their
+        // working environment.
         match subcommand.as_str() {
-            "" => {
+            "" | "all" => {
                 let mut out = String::from(
-                    "Conversation cleared. Starting fresh.\nHistory preserved for /resume.",
+                    "Conversation cleared. Plan state, file caches, and \
+                     cache-break tracking reset. Session preserved for /resume.",
                 );
                 if session_count > 0 {
                     out.push_str(&format!(
@@ -33,14 +41,16 @@ pub fn handler(
                 }
                 Ok(out)
             }
-            "all" => Ok("Conversation and plan state cleared.".to_string()),
-            "history" => Ok("Message history cleared. Tools and state preserved.".to_string()),
+            "history" => Ok(
+                "Message history cleared. Tools, files, plans, and session memory preserved."
+                    .to_string(),
+            ),
             other => Ok(format!(
                 "Unknown clear subcommand: {other}\n\n\
                  Usage:\n\
-                 /clear           Clear conversation, preserve session for /resume\n\
-                 /clear all       Clear conversation and plan state\n\
-                 /clear history   Clear message history only"
+                 /clear           Clear conversation + plan state + caches (TS-aligned)\n\
+                 /clear all       Alias of /clear\n\
+                 /clear history   Lighter: clear transcript only, keep tools/files/plans"
             )),
         }
     })

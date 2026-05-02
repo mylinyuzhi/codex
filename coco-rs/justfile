@@ -57,8 +57,15 @@ test-crate crate *args:
 # Pre-commit
 # ============================================================================
 
+# Enforce: vercel-ai-provider may only be imported by services/inference
+# (the re-export seam) and common/types. Every other crate must reach AI
+# SDK types via `coco_inference::*` aliases — see
+# services/inference/src/lib.rs for the canonical list.
+check-seam:
+    ./scripts/check-vercel-ai-seam.sh
+
 # REQUIRED before commit
-pre-commit: fmt check check-tests clippy test
+pre-commit: fmt check-seam check check-tests clippy test
 
 # ============================================================================
 # Running

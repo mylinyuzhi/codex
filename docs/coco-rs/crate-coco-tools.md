@@ -489,6 +489,29 @@ pub struct ToolActivity {
 
 ---
 
+## Per-Tool Result Persistence Thresholds
+
+Each `Tool::max_result_size_chars()` implementation declares the TS-aligned
+cap. The **executor** in `core/tool-runtime/src/execution.rs` reads this
+value to drive Level 1 of the
+[Tool Result Budget plan](tool-result-budget-plan.md). Tools listed below
+are the only ones that override the default `100_000`; everything else
+inherits the trait default.
+
+| Tool | TS `maxResultSizeChars` | Rust value | Reason |
+|---|---|---|---|
+| `BashTool` | `30_000` | `30_000` | shell output is bursty; small cap forces preview |
+| `PowerShellTool` | `30_000` | `30_000` | same as Bash |
+| `GrepTool` | `20_000` | `20_000` | match dumps grow superlinearly with codebase size |
+| `GlobTool` | `100_000` | `100_000` | path lists tolerate larger windows |
+| `FileReadTool` | `Infinity` (opt-out) | trait default `100_000` ⚠️ | Rust cannot express `Infinity` with `i32`; Phase 1.B of the plan migrates the trait to `ResultSizeBound::{Chars(i32), Unbounded}` |
+
+`Tool::max_result_size_chars` exists today; the **executor that reads it
+does not** (Phase 1.D). Per-tool values are right but unenforced. Bash has a
+bespoke half-implementation
+(`core/tools/src/tools/bash.rs::maybe_persist_oversized_output`) that
+deviates from TS shape — see the plan's Phase 1.E for the refactor.
+
 ## Implementation Pattern
 
 Each tool follows:

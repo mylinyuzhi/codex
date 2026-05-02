@@ -17,6 +17,7 @@
 
 use crate::PermissionMode;
 use crate::PermissionRulesBySource;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
@@ -203,6 +204,66 @@ pub struct ToolAppState {
     /// value is the instruction text (hashable on content). TS parity:
     /// reconstructed from prior delta attachments.
     pub last_announced_mcp_instructions: std::collections::HashMap<String, String>,
+
+    // ── Prompt suggestion (P5 / TS parity) ───────────────────────────
+    /// Most recently generated prompt suggestion, surfaced as dim
+    /// placeholder text in the input area. Populated by the post-turn
+    /// promptSuggestion service (`services/prompt-suggestion`); read
+    /// by the TUI input renderer to draw the suggestion behind the
+    /// user's cursor. `None` after `/clear` regen, sessions that have
+    /// the feature gate off, or when the model declined to suggest
+    /// anything.
+    ///
+    /// TS parity: `appState.promptSuggestion` written by
+    /// `services/PromptSuggestion/promptSuggestion.ts:203-212`.
+    pub prompt_suggestion: Option<PromptSuggestion>,
+
+    // ── Agent progress summaries gate (TS parity) ──────────────────
+    /// Whether per-spawn periodic AgentSummary timers should run.
+    ///
+    /// Default `false` to match TS: the SDK control protocol's
+    /// `agentProgressSummaries: true` flips this on (see
+    /// `entrypoints/sdk/controlSchemas.ts:70` →
+    /// `cli/print.ts:2904-2908` → `bootstrap/state.ts:1077-1083`).
+    /// Coordinator mode forces it on regardless (TS parity:
+    /// `AgentTool.tsx:750` ORs `isCoordinator || isForkSubagentEnabled
+    /// || getSdkAgentProgressSummariesEnabled`).
+    ///
+    /// Default-off matters for cost: a fully saturated coordinator
+    /// (`MAX_IN_PROCESS_AGENTS = 16`) at the 30 s tick rate burns
+    /// up to 32 side-query LLM calls per minute on summarization
+    /// alone — opt-in semantics keep that off the user's hot path
+    /// unless they explicitly request it.
+    ///
+    /// TUI users can flip this via `EnvKey::CocoAgentSummaryEnable`
+    /// at session bootstrap; the env var maps onto this field
+    /// without a separate signal path.
+    pub agent_progress_summaries_enabled: bool,
+}
+
+/// A user-prompt suggestion produced by the post-turn forked
+/// promptSuggestion service. Stored on [`ToolAppState`] so the TUI
+/// can render it behind the cursor and the SDK can emit it as
+/// metadata when the user accepts or ignores it on the next turn.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PromptSuggestion {
+    /// The suggestion text — typically 3-12 words, matching the
+    /// user's style.
+    pub text: String,
+    /// Stable id for telemetry. Generated when the suggestion is
+    /// written. Mirrors TS `promptId`.
+    pub prompt_id: String,
+    /// Wall-clock timestamp the suggestion was shown to the user
+    /// (RFC-3339). Lets analytics measure dwell-to-accept latency.
+    pub shown_at: String,
+    /// Set when the user explicitly accepted the suggestion. None
+    /// while pending. Mirrors TS `acceptedAt`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accepted_at: Option<String>,
+    /// Optional id of the parent turn that drove the suggestion.
+    /// Used to correlate suggestion → cache-hit telemetry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation_request_id: Option<String>,
 }
 
 // ────────────────────────────────────────────────────────────────

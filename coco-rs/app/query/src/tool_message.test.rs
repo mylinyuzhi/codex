@@ -4,17 +4,17 @@
 //! The test fixtures use tagged `ToolResult` outputs so the flatten
 //! order is verifiable by inspecting the message sequence alone.
 
+use coco_messages::LlmMessage;
+use coco_messages::Message;
+use coco_messages::ToolContent;
+use coco_messages::ToolResultMessage;
 use coco_messages::create_user_message;
-use coco_types::LlmMessage;
-use coco_types::Message;
-use coco_types::ToolContent;
 use coco_types::ToolId;
 use coco_types::ToolName;
-use coco_types::ToolResultMessage;
 use pretty_assertions::assert_eq;
 // The inner "content shape" of `ToolResultPart.output` — a separate enum
 // from the outer `ToolResultContent` alias (which is `ToolResultPart`).
-use vercel_ai_provider::ToolResultContent as InnerToolResultContent;
+use coco_inference::ToolResultContent as InnerToolResultContent;
 
 use super::*;
 
@@ -31,15 +31,13 @@ fn tool_result_marker(tool_use_id: &str, output: &str, is_error: bool) -> Messag
     Message::ToolResult(ToolResultMessage {
         uuid: uuid::Uuid::new_v4(),
         message: LlmMessage::Tool {
-            content: vec![ToolContent::ToolResult(
-                vercel_ai_provider::ToolResultPart {
-                    tool_call_id: tool_use_id.into(),
-                    tool_name: "Read".into(),
-                    output: InnerToolResultContent::text(output),
-                    is_error,
-                    provider_metadata: None,
-                },
-            )],
+            content: vec![ToolContent::ToolResult(coco_inference::ToolResultPart {
+                tool_call_id: tool_use_id.into(),
+                tool_name: "Read".into(),
+                output: InnerToolResultContent::text(output),
+                is_error,
+                provider_metadata: None,
+            })],
             provider_options: None,
         },
         tool_use_id: tool_use_id.into(),
@@ -56,7 +54,7 @@ fn marker_of(msg: &Message) -> String {
             LlmMessage::User { content, .. } => content
                 .iter()
                 .find_map(|p| match p {
-                    vercel_ai_provider::UserContentPart::Text(t) => Some(t.text.clone()),
+                    coco_inference::UserContentPart::Text(t) => Some(t.text.clone()),
                     _ => None,
                 })
                 .unwrap_or_default(),

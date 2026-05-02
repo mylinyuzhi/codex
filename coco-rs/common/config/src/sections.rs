@@ -186,13 +186,12 @@ impl BashConfig {
     }
 }
 
-// `CompactConfig` / `KeepWindowConfig` / `MicroCompactConfig` previously
-// lived here. They have been removed: no consumer reads them, and
-// `coco_compact` already ships per-invocation compaction config types
-// (`coco_compact::CompactConfig`, `ReactiveCompactConfig`,
-// `MicroCompactBudgetConfig`). When settings-sourced compaction gates
-// are needed, re-introduce them here alongside a live consumer in
-// `app/query` (e.g. auto-trigger) to avoid re-accruing dead code.
+// Compaction settings live in `crate::compact_settings`
+// (`CompactConfig` and its sub-structs). Per-invocation run-options for
+// `compact_conversation` live in `coco_compact::CompactRunOptions`.
+// The two are intentionally distinct types: the former is the global
+// resolved-from-settings struct; the latter is the per-call parameter
+// bag.
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -422,36 +421,90 @@ impl SandboxConfig {
 #[serde(default)]
 pub struct PartialMemorySettings {
     pub directory: Option<PathBuf>,
-    pub extraction_enabled: Option<bool>,
-    pub team_memory_enabled: Option<bool>,
-    pub extraction_throttle: Option<i32>,
     pub skip_index: Option<bool>,
+    pub kairos_mode: Option<bool>,
+
+    // Extraction (turn-end forked agent — services/extractMemories)
+    pub extraction_enabled: Option<bool>,
+    pub extraction_throttle: Option<i32>,
+    pub extraction_max_turns: Option<i32>,
+
+    // Team memory
+    pub team_memory_enabled: Option<bool>,
+
+    // Auto-dream consolidation (services/autoDream)
+    pub dream_enabled: Option<bool>,
+    pub dream_min_hours: Option<i32>,
+    pub dream_min_sessions: Option<i32>,
+
+    // Session memory (services/SessionMemory) — distinct from compact's
+    pub session_memory_enabled: Option<bool>,
+    pub session_memory_init_tokens: Option<i64>,
+    pub session_memory_update_tokens: Option<i64>,
+    pub session_memory_tool_calls: Option<i32>,
+    pub session_memory_per_section_tokens: Option<i64>,
+    pub session_memory_total_tokens: Option<i64>,
 }
 
 /// Resolved auto-memory configuration.
 ///
 /// Whether the subsystem is **active** is gated upstream by
 /// `Feature::AutoMemory`; this struct only carries internal sub-toggles
-/// and parameters.
+/// and parameters. Sub-toggles for extraction, team memory, auto-dream,
+/// and session memory all live here as flat fields with prefix naming
+/// — there is no separate `*Config` per subsystem (matches the project
+/// convention: one `Feature` gate, all sub-toggles flat in the owning
+/// `*Config`).
 ///
 /// Source of truth for `coco_memory::MemoryConfig` (thin adapter).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemoryConfig {
     pub directory: Option<PathBuf>,
-    pub extraction_enabled: bool,
-    pub team_memory_enabled: bool,
-    pub extraction_throttle: i32,
     pub skip_index: bool,
+    pub kairos_mode: bool,
+
+    /// Extraction (turn-end forked agent).
+    pub extraction_enabled: bool,
+    pub extraction_throttle: i32,
+    pub extraction_max_turns: i32,
+
+    /// Team memory (memdir/team subdir).
+    pub team_memory_enabled: bool,
+
+    /// Auto-dream consolidation.
+    pub dream_enabled: bool,
+    pub dream_min_hours: i32,
+    pub dream_min_sessions: i32,
+
+    /// Session memory — TS-aligned defaults, distinct feature from
+    /// `compact_settings::SessionMemoryConfig`.
+    pub session_memory_enabled: bool,
+    pub session_memory_init_tokens: i64,
+    pub session_memory_update_tokens: i64,
+    pub session_memory_tool_calls: i32,
+    pub session_memory_per_section_tokens: i64,
+    pub session_memory_total_tokens: i64,
 }
 
 impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
             directory: None,
-            extraction_enabled: true,
-            team_memory_enabled: false,
-            extraction_throttle: 1,
             skip_index: false,
+            kairos_mode: false,
+            extraction_enabled: true,
+            extraction_throttle: 1,
+            extraction_max_turns: 5,
+            team_memory_enabled: false,
+            dream_enabled: true,
+            dream_min_hours: 24,
+            dream_min_sessions: 5,
+            session_memory_enabled: true,
+            session_memory_init_tokens: 10_000,
+            session_memory_update_tokens: 5_000,
+            session_memory_tool_calls: 3,
+            session_memory_per_section_tokens: 2_000,
+            session_memory_total_tokens: 12_000,
         }
     }
 }
@@ -459,34 +512,94 @@ impl Default for MemoryConfig {
 impl MemoryConfig {
     pub fn resolve(settings: &Settings, env: &EnvSnapshot) -> Self {
         let mut config = Self::default();
-        if let Some(dir) = &settings.memory.directory {
+        let s = &settings.memory;
+
+        if let Some(dir) = &s.directory {
             config.directory = Some(dir.clone());
         }
-        if let Some(v) = settings.memory.extraction_enabled {
-            config.extraction_enabled = v;
-        }
-        if let Some(v) = settings.memory.team_memory_enabled {
-            config.team_memory_enabled = v;
-        }
-        if let Some(v) = settings.memory.extraction_throttle {
-            config.extraction_throttle = v;
-        }
-        if let Some(v) = settings.memory.skip_index {
+        if let Some(v) = s.skip_index {
             config.skip_index = v;
         }
+        if let Some(v) = s.kairos_mode {
+            config.kairos_mode = v;
+        }
+        if let Some(v) = s.extraction_enabled {
+            config.extraction_enabled = v;
+        }
+        if let Some(v) = s.extraction_throttle {
+            config.extraction_throttle = v;
+        }
+        if let Some(v) = s.extraction_max_turns {
+            config.extraction_max_turns = v;
+        }
+        if let Some(v) = s.team_memory_enabled {
+            config.team_memory_enabled = v;
+        }
+        if let Some(v) = s.dream_enabled {
+            config.dream_enabled = v;
+        }
+        if let Some(v) = s.dream_min_hours {
+            config.dream_min_hours = v;
+        }
+        if let Some(v) = s.dream_min_sessions {
+            config.dream_min_sessions = v;
+        }
+        if let Some(v) = s.session_memory_enabled {
+            config.session_memory_enabled = v;
+        }
+        if let Some(v) = s.session_memory_init_tokens {
+            config.session_memory_init_tokens = v;
+        }
+        if let Some(v) = s.session_memory_update_tokens {
+            config.session_memory_update_tokens = v;
+        }
+        if let Some(v) = s.session_memory_tool_calls {
+            config.session_memory_tool_calls = v;
+        }
+        if let Some(v) = s.session_memory_per_section_tokens {
+            config.session_memory_per_section_tokens = v;
+        }
+        if let Some(v) = s.session_memory_total_tokens {
+            config.session_memory_total_tokens = v;
+        }
 
-        // Two env vars, one destination. `CocoMemoryPathOverride` is the
-        // operator-facing local override. `CocoRemoteMemoryDir` is piped
-        // from the swarm leader into teammates so in-process members
-        // share a memory root without the operator having to re-export
-        // manually. Local override wins if both are set.
+        // Path override: `CocoMemoryPathOverride` is the operator-facing
+        // local override; `CocoRemoteMemoryDir` is piped from the swarm
+        // leader into teammates so in-process members share a memory root
+        // without the operator having to re-export manually. Local
+        // override wins if both are set.
         if let Some(dir) = env
             .get_string(EnvKey::CocoMemoryPathOverride)
             .or_else(|| env.get_string(EnvKey::CocoRemoteMemoryDir))
         {
             config.directory = Some(PathBuf::from(dir));
         }
+
+        // Force-disable env overrides (truthy = disable). Settings can
+        // already say "off"; these env vars only ever turn things off.
+        if env.is_truthy(EnvKey::CocoMemoryExtractionDisable) {
+            config.extraction_enabled = false;
+        }
+        if env.is_truthy(EnvKey::CocoMemoryDreamDisable) {
+            config.dream_enabled = false;
+        }
+        if env.is_truthy(EnvKey::CocoMemorySessionMemoryDisable) {
+            config.session_memory_enabled = false;
+        }
+        if env.is_truthy(EnvKey::CocoMemoryKairos) {
+            config.kairos_mode = true;
+        }
+
+        // Clamps. Negative / zero values would break the gates.
         config.extraction_throttle = config.extraction_throttle.max(1);
+        config.extraction_max_turns = config.extraction_max_turns.max(1);
+        config.dream_min_hours = config.dream_min_hours.max(1);
+        config.dream_min_sessions = config.dream_min_sessions.max(1);
+        config.session_memory_init_tokens = config.session_memory_init_tokens.max(1);
+        config.session_memory_update_tokens = config.session_memory_update_tokens.max(1);
+        config.session_memory_tool_calls = config.session_memory_tool_calls.max(1);
+        config.session_memory_per_section_tokens = config.session_memory_per_section_tokens.max(1);
+        config.session_memory_total_tokens = config.session_memory_total_tokens.max(1);
         config
     }
 }

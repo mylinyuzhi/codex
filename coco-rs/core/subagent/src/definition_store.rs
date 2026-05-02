@@ -19,18 +19,76 @@ use crate::frontmatter::parse_agent_markdown;
 use crate::snapshot::AgentCatalogSnapshot;
 use crate::validation::{AgentDefinitionValidator, ValidationDiagnostic, ValidationError};
 
+/// Maximum size for an agent markdown file. TS `loadAgentsDir.ts` rejects
+/// files over 1 MiB so a malformed agent never bloats the prompt. Match
+/// the limit verbatim — files larger than this are silently skipped with
+/// a debug log so the loader stays robust on misconfigured workspaces.
+const MAX_AGENT_FILE_SIZE_BYTES: u64 = 1024 * 1024;
+
 /// Filename comparator for deterministic agent enumeration. `read_dir`
 /// returns OS-dependent order (inode order on ext4, alphabetic on btrfs,
 /// arbitrary on Windows/APFS). Sort by file path so same-priority
 /// collisions resolve identically across platforms.
+///
+/// Walks the directory two levels deep (TS parity: `loadAgentsDir.ts`
+/// uses `walkdir({ max_depth: 2 })` so an `agents/<group>/foo.md`
+/// layout is supported alongside `agents/foo.md`). Files larger than
+/// [`MAX_AGENT_FILE_SIZE_BYTES`] are skipped with a `debug!` log, again
+/// matching TS so the loader can never be DoSed by a stray binary that
+/// happens to end in `.md`.
 fn sorted_md_paths(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
-    let mut paths: Vec<PathBuf> = std::fs::read_dir(dir)?
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("md"))
-        .collect();
+    let mut paths: Vec<PathBuf> = Vec::new();
+    collect_md_paths(dir, 0, &mut paths)?;
     paths.sort();
     Ok(paths)
+}
+
+fn collect_md_paths(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    // TS walks two levels — root entries (depth 0) and one nested
+    // subdirectory (depth 1). Anything deeper is ignored.
+    const MAX_DEPTH: usize = 1;
+
+    for entry in std::fs::read_dir(dir)?.flatten() {
+        let path = entry.path();
+        let file_type = match entry.file_type() {
+            Ok(ft) => ft,
+            Err(_) => continue,
+        };
+        if file_type.is_dir() {
+            if depth < MAX_DEPTH {
+                let _ = collect_md_paths(&path, depth + 1, out);
+            }
+            continue;
+        }
+        if !file_type.is_file() {
+            continue;
+        }
+        if path.extension().and_then(|s| s.to_str()) != Some("md") {
+            continue;
+        }
+        match entry.metadata() {
+            Ok(meta) if meta.len() > MAX_AGENT_FILE_SIZE_BYTES => {
+                tracing::debug!(
+                    target: "coco_subagent",
+                    path = %path.display(),
+                    size = meta.len(),
+                    cap = MAX_AGENT_FILE_SIZE_BYTES,
+                    "skipping oversized agent file"
+                );
+                continue;
+            }
+            Ok(_) => out.push(path),
+            Err(err) => {
+                tracing::debug!(
+                    target: "coco_subagent",
+                    path = %path.display(),
+                    error = %err,
+                    "metadata failed; skipping"
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 /// One loaded definition with its provenance recorded.

@@ -60,6 +60,39 @@ fn fingerprint_changes_when_secret_rotates() {
 }
 
 #[test]
+fn fingerprint_to_snapshot_carries_identity_fields() {
+    // The thin DTO that crosses into `coco-types::agent_ipc` keeps
+    // every identity-distinguishing field but drops the digests.
+    let cfg = provider_cfg("openai-prod", "https://api.openai.com/v1", None);
+    let fp = ProviderClientFingerprint::compute(&cfg, "gpt-5");
+    let snap = fp.to_snapshot();
+    assert_eq!(snap.provider, "openai-prod");
+    assert_eq!(snap.api, ProviderApi::Openai);
+    assert_eq!(snap.api_model_name, "gpt-5");
+    assert_eq!(snap.base_url, "https://api.openai.com/v1");
+    // Openai → wire_api is set; other APIs would be None.
+    assert!(snap.wire_api.is_some(), "Openai must populate wire_api");
+}
+
+#[test]
+fn fingerprint_to_snapshot_drops_anthropic_wire_api() {
+    // Anthropic's `wire_api` is inert (always Chat); the fingerprint
+    // intentionally stores `None` there so toggling the value doesn't
+    // force a rebuild. The DTO must mirror that.
+    let partial = PartialProviderConfig {
+        api: Some(ProviderApi::Anthropic),
+        env_key: Some("ANTHROPIC_API_KEY".into()),
+        base_url: Some("https://api.anthropic.com".into()),
+        ..Default::default()
+    };
+    let cfg = ProviderConfig::from_partial("anthropic", &partial).unwrap();
+    let fp = ProviderClientFingerprint::compute(&cfg, "claude-opus-4-7");
+    let snap = fp.to_snapshot();
+    assert_eq!(snap.api, ProviderApi::Anthropic);
+    assert_eq!(snap.wire_api, None);
+}
+
+#[test]
 fn fingerprint_changes_when_client_options_headers_differ() {
     let mut cfg_a = provider_cfg("openai", "https://api.openai.com/v1", None);
     let mut cfg_b = provider_cfg("openai", "https://api.openai.com/v1", None);

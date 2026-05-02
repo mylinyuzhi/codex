@@ -9,6 +9,31 @@ use coco_types::IdeDiagnosticsUpdatedParams;
 use coco_types::IdeSelectionChangedParams;
 use coco_types::PermissionMode;
 
+/// TUI-side label for the active compaction sub-phase. Built from
+/// `coco_types::CompactionPhaseParams` so the renderer can pick a
+/// localized spinner string without re-deriving it each frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompactionPhaseLabel {
+    /// "Running PreCompact hooks…"
+    PreCompactHooks,
+    /// "Running PostCompact hooks…"
+    PostCompactHooks,
+    /// "Running SessionStart hooks…"
+    SessionStartHooks,
+    /// "Compacting conversation"
+    Summarizing,
+}
+
+/// Current Unix epoch in milliseconds (best-effort — clamps to 0
+/// if the system clock is before the epoch, which only happens in
+/// pathological setups).
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
 /// Agent-synchronized session state.
 #[derive(Debug)]
 pub struct SessionState {
@@ -35,6 +60,11 @@ pub struct SessionState {
     pub token_usage: TokenUsage,
     /// Session identifier.
     pub session_id: Option<String>,
+    /// Conversation identifier — rotated on rewind so cache breaks
+    /// invalidate cleanly on the next request. TS: REPL holds a
+    /// `conversationId` minted from `randomUUID()` and re-mints it
+    /// inside `rewindConversationTo` (`screens/REPL.tsx:3673`).
+    pub conversation_id: Option<String>,
     /// Working directory.
     pub working_dir: Option<String>,
     /// Turn counter.
@@ -53,6 +83,16 @@ pub struct SessionState {
     pub fallback_model: Option<String>,
     /// Whether compaction is in progress.
     pub is_compacting: bool,
+    /// Current compaction sub-phase (drives the spinner text). `None`
+    /// when no compaction is running. Maps to TS REPL.tsx:2502
+    /// `spinnerMessage` switch on `onCompactProgress` events.
+    pub compaction_phase: Option<CompactionPhaseLabel>,
+    /// Whether the post-compact warning suppressor is active. When
+    /// true, the TokenWarning banner is hidden because the displayed
+    /// pre-compact token count is stale. TS:
+    /// `services/compact/compactWarningHook.ts` subscribes
+    /// `compactWarningStore`.
+    pub compact_warning_suppressed: bool,
     /// Connected MCP servers.
     pub mcp_servers: Vec<McpServerStatus>,
     /// Focused subagent index for side panel.
@@ -66,6 +106,10 @@ pub struct SessionState {
     /// Whether file checkpointing is enabled for rewind.
     /// Set by the orchestrator (tui_runner) at startup.
     pub file_history_enabled: bool,
+    /// Whether the rewind picker should expose `Summarize up to here`.
+    /// TS gates this behind `'external' === 'ant'`; we surface it via
+    /// `settings.json` (`rewind.allow_summarize_up_to`, default false).
+    pub allow_summarize_up_to: bool,
     /// Whether the last turn was user-interrupted (for auto-restore).
     /// TS: abortController.signal.reason === 'user-cancel'
     pub was_interrupted: bool,
@@ -222,6 +266,7 @@ impl Default for SessionState {
             subagents: Vec::new(),
             token_usage: TokenUsage::default(),
             session_id: None,
+            conversation_id: None,
             working_dir: None,
             turn_count: 0,
             context_window_used: 0,
@@ -231,12 +276,15 @@ impl Default for SessionState {
             busy: false,
             fallback_model: None,
             is_compacting: false,
+            compaction_phase: None,
+            compact_warning_suppressed: false,
             mcp_servers: Vec::new(),
             focused_subagent_index: None,
             current_turn_number: None,
             queued_commands: VecDeque::new(),
             available_models: Vec::new(),
             file_history_enabled: false,
+            allow_summarize_up_to: false,
             was_interrupted: false,
             available_commands: Vec::new(),
             available_agents: Vec::new(),
@@ -275,6 +323,19 @@ pub struct ChatMessage {
     pub role: ChatRole,
     pub content: MessageContent,
     pub is_meta: bool,
+    /// Creation timestamp (Unix epoch ms). Used by the rewind picker
+    /// to render `formatRelativeTimeAgo(ts)`. Defaults to "now" at
+    /// construction time.
+    pub created_at_ms: i64,
+    /// Compact-summary marker. The compact pipeline emits a synthetic
+    /// "summary" user message to seed the rolled-up history; rewind
+    /// must skip these because rewinding to a summary would lose the
+    /// archived turns. TS: `UserMessage.isCompactSummary` in messages.ts.
+    pub is_compact_summary: bool,
+    /// Transcript-only visibility — message is present in the JSONL
+    /// log for replay but not selectable in the rewind picker. TS:
+    /// `UserMessage.isVisibleInTranscriptOnly` in messages.ts.
+    pub is_visible_in_transcript_only: bool,
     /// Permission mode active when this message was created (for rewind restoration).
     /// TS: UserMessage.permissionMode in messages.ts
     pub permission_mode: Option<PermissionMode>,
@@ -415,6 +476,20 @@ pub enum MessageContent {
     PlanApproval { plan: String, request_id: String },
     /// Compaction boundary marker.
     CompactBoundary,
+    /// Compaction summary message — the LLM-or-SM-generated summary
+    /// that replaces the archived turns. TS: `CompactSummary.tsx`.
+    CompactSummary {
+        /// Summary text.
+        summary: String,
+        /// Number of messages summarized (None when unknown).
+        messages_summarized: Option<i32>,
+        /// User-supplied focus directive (from `/compact <text>` or
+        /// PreCompact hook). None means no metadata banner.
+        user_context: Option<String>,
+        /// How compaction was triggered. Drives the heading text:
+        /// "Summarized via session memory" vs "Conversation summary".
+        trigger: coco_types::CompactTrigger,
+    },
     /// Advisor message from coordinator agent.
     Advisor { advisor_id: String, content: String },
     /// Task assignment notification.
@@ -462,6 +537,9 @@ impl ChatMessage {
             role: ChatRole::User,
             content: MessageContent::Text(text.into()),
             is_meta: false,
+            created_at_ms: now_ms(),
+            is_compact_summary: false,
+            is_visible_in_transcript_only: false,
             permission_mode: None,
         }
     }
@@ -473,6 +551,9 @@ impl ChatMessage {
             role: ChatRole::Assistant,
             content: MessageContent::AssistantText(text.into()),
             is_meta: false,
+            created_at_ms: now_ms(),
+            is_compact_summary: false,
+            is_visible_in_transcript_only: false,
             permission_mode: None,
         }
     }
@@ -484,6 +565,9 @@ impl ChatMessage {
             role: ChatRole::System,
             content: MessageContent::SystemText(text.into()),
             is_meta: false,
+            created_at_ms: now_ms(),
+            is_compact_summary: false,
+            is_visible_in_transcript_only: false,
             permission_mode: None,
         }
     }
@@ -502,6 +586,9 @@ impl ChatMessage {
                 output: output.into(),
             },
             is_meta: false,
+            created_at_ms: now_ms(),
+            is_compact_summary: false,
+            is_visible_in_transcript_only: false,
             permission_mode: None,
         }
     }
@@ -520,6 +607,9 @@ impl ChatMessage {
                 error: error.into(),
             },
             is_meta: false,
+            created_at_ms: now_ms(),
+            is_compact_summary: false,
+            is_visible_in_transcript_only: false,
             permission_mode: None,
         }
     }
@@ -562,6 +652,7 @@ impl ChatMessage {
             MessageContent::RedactedThinking => "[redacted]",
             MessageContent::PlanMarker { .. } => "",
             MessageContent::CompactBoundary => "---",
+            MessageContent::CompactSummary { summary, .. } => summary,
             MessageContent::Advisor { content, .. } => content,
             MessageContent::TaskAssignment { description, .. } => description,
             MessageContent::ChannelMessage { content, .. } => content,

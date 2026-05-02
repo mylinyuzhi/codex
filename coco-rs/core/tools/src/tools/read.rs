@@ -1,4 +1,5 @@
 use base64::Engine;
+use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::SearchReadInfo;
 use coco_tool_runtime::Tool;
@@ -9,7 +10,6 @@ use coco_types::PermissionDecision;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
 use coco_types::ToolName;
-use coco_types::ToolResult;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
@@ -808,7 +808,7 @@ fn project_notebook_cell(cell: &Value, index: usize, code_language: &str) -> Val
 ///  - `execute_result` /
 ///    `display_data`     → `{ output_type, text, image? }`
 ///  - `error`            → `{ output_type, text }` (formatted as
-///                         `${ename}: ${evalue}\n${traceback}`)
+///    `${ename}: ${evalue}\n${traceback}`)
 fn project_notebook_output(output: &Value) -> Option<Value> {
     let output_type = output.get("output_type")?.as_str()?;
     match output_type {

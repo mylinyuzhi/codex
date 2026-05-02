@@ -20,7 +20,6 @@ use crate::state::Overlay;
 use crate::state::QuickOpenOverlay;
 use crate::state::SessionBrowserOverlay;
 use crate::state::SessionOption;
-use crate::state::Toast;
 use crate::update_rewind;
 
 /// Open the model picker, seeded from `available_models` (or current model).
@@ -149,24 +148,62 @@ pub(super) fn export(state: &mut AppState) {
     }));
 }
 
-/// Open the rewind overlay; surfaces a toast if there's nothing to rewind.
-/// TS: MessageSelector useEffect loads diffStats on mount.
-pub(super) async fn rewind(state: &mut AppState, command_tx: &mpsc::Sender<UserCommand>) {
-    let overlay = update_rewind::build_rewind_overlay(state);
-    if overlay.messages.is_empty() {
-        state
-            .ui
-            .add_toast(Toast::info(t!("toast.no_rewind_messages").to_string()));
-        return;
-    }
-    if let Some(msg) = overlay.messages.last() {
+/// Open the rewind overlay pre-anchored to `message_id`, jumping
+/// straight to the RestoreOptions confirm screen. TS:
+/// `setMessageSelectorPreselect(raw); setIsMessageSelectorVisible(true)`
+/// (`screens/REPL.tsx:3783-3784`). Falls back to the standard picker
+/// when the id doesn't match any selectable message.
+pub(super) async fn rewind_for(
+    state: &mut AppState,
+    command_tx: &mpsc::Sender<UserCommand>,
+    message_id: String,
+) {
+    let overlay = update_rewind::build_rewind_overlay_for(state, Some(&message_id));
+    let load_all_stats =
+        overlay.file_history_enabled && overlay.messages.iter().any(|m| !m.is_current_prompt);
+    let row_ids: Vec<String> = if load_all_stats {
+        overlay
+            .messages
+            .iter()
+            .filter(|m| !m.is_current_prompt)
+            .map(|m| m.message_id.clone())
+            .collect()
+    } else {
+        Vec::new()
+    };
+    state.ui.set_overlay(Overlay::Rewind(overlay));
+    for id in row_ids {
         let _ = command_tx
-            .send(UserCommand::RequestDiffStats {
-                message_id: msg.message_id.clone(),
-            })
+            .send(UserCommand::RequestDiffStats { message_id: id })
             .await;
     }
+}
+
+/// Open the rewind overlay; renders inline empty-state when nothing is
+/// rewindable. TS: MessageSelector useEffect loads diffStats per row on
+/// mount (`MessageSelector.tsx:285-312`); we mirror that by firing
+/// `RequestDiffStats` for every row instead of just the selected one.
+pub(super) async fn rewind(state: &mut AppState, command_tx: &mpsc::Sender<UserCommand>) {
+    let overlay = update_rewind::build_rewind_overlay(state);
+    let load_all_stats = overlay.file_history_enabled && !overlay.messages.is_empty();
+    let row_ids: Vec<String> = if load_all_stats {
+        // Skip the synthetic current-prompt row (empty message_id);
+        // there is no snapshot to fetch for "now".
+        overlay
+            .messages
+            .iter()
+            .filter(|m| !m.is_current_prompt)
+            .map(|m| m.message_id.clone())
+            .collect()
+    } else {
+        Vec::new()
+    };
     state.ui.set_overlay(Overlay::Rewind(overlay));
+    for id in row_ids {
+        let _ = command_tx
+            .send(UserCommand::RequestDiffStats { message_id: id })
+            .await;
+    }
 }
 
 /// Open the doctor/diagnostics overlay.

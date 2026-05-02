@@ -202,8 +202,8 @@ fn test_runnable_plan_carries_prepared_call() {
             &self,
             _input: serde_json::Value,
             _ctx: &crate::context::ToolUseContext,
-        ) -> Result<coco_types::ToolResult<serde_json::Value>, crate::error::ToolError> {
-            Ok(coco_types::ToolResult {
+        ) -> Result<coco_messages::ToolResult<serde_json::Value>, crate::error::ToolError> {
+            Ok(coco_messages::ToolResult {
                 data: json!({}),
                 new_messages: vec![],
                 app_state_patch: None,

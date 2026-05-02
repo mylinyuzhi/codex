@@ -277,6 +277,66 @@ pub struct TurnResult {
 }
 ```
 
+### Per-Message Tool Result Budget (Level 2 of [Tool Result Budget plan](tool-result-budget-plan.md))
+
+Owner: this crate (wiring) + `coco-tool-runtime` (state types + enforcement
+fn). State lives on `QueryEngine`; transcript records live in `coco-session`.
+
+TS source: `query.ts:99,376-394` (`applyToolResultBudget`),
+`utils/toolResultStorage.ts::enforceToolResultBudget` (state machine).
+
+**Wiring contract** (when Phase 2 lands):
+
+```rust
+// On QueryEngine:
+content_replacement_state: Option<Arc<RwLock<ContentReplacementState>>>,
+//   None = feature off (matches TS `tengu_hawthorn_steeple` stripped).
+//   Provisioned once per conversation thread; cloned for cache-sharing forks.
+
+// In the per-turn prompt-build path (engine_finalize_turn.rs or engine_prompt.rs),
+// BEFORE micro-compact / autocompact / snip:
+let messages_for_api = coco_tool_runtime::tool_result_storage::apply_tool_result_budget(
+    messages_for_api,
+    self.content_replacement_state.as_ref(),
+    /*write_to_transcript*/ self.transcript_store.as_ref().map(|s| {
+        Box::new(move |records: &[ContentReplacementRecord]| {
+            let _ = s.append_content_replacement_records(&self.session_id, records);
+        }) as Box<dyn Fn(&[ContentReplacementRecord])>
+    }),
+    &self.skip_tool_names_unbounded(),  // tools whose max_result_size_chars is Unbounded
+    &self.tool_results_root,
+).await;
+```
+
+**Ordering invariants** (matches TS `query.ts` exactly):
+1. attachments injected (steering)
+2. `apply_tool_result_budget` ← this step
+3. snip (currently inert)
+4. micro-compact (count-based, opt-in)
+5. autocompact threshold check
+6. API call
+
+Putting the budget AFTER attachments and BEFORE snip/micro guarantees the
+budget sees the full per-API-message payload (parallel tool results merge
+in normalize) and never picks a result that snip/micro is about to delete.
+
+**Cache-stability invariant** — once `seen_ids.contains(tool_use_id)`, the
+result's fate is frozen. Replaced results re-apply the byte-identical
+cached preview every turn (no I/O); not-replaced results are never replaced
+later. Violating either silently breaks the prompt-cache prefix for the
+remainder of the conversation. The plan's Phase 2.G test asserts byte-
+identical wire prefix across N turns of replay.
+
+**Resume**: `coco-session::TranscriptStore` writes
+`ContentReplacementRecord` entries and replays them via
+`reconstruct_content_replacement_state` on session resume.
+Subagent-fork resume uses `reconstruct_for_subagent_resume` with
+parent-state gap-fill (cache-sharing forks need byte-identical decisions).
+
+**Status**: type does not yet exist on `QueryEngine` — Phase 2 of the plan.
+The earlier `crate-coco-tool.md` mention of `content_replacement_state` on
+`ToolUseContext` was wrong (per-tool) and is corrected there.
+
 ## Steering: Mid-Turn Message Queue & Injection (from `utils/messageQueueManager.ts` 548 LOC, `query.ts:1570-1590`, `utils/attachments.ts` 3760 LOC, `utils/queueProcessor.ts` 96 LOC, `utils/QueryGuard.ts`)
 
 Steering allows users to send messages/guidance to the LLM while it is actively working,

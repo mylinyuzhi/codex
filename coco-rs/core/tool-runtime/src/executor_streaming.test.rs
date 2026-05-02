@@ -12,8 +12,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::Duration;
 
+use coco_messages::ToolResult;
 use coco_types::ToolId;
-use coco_types::ToolResult;
 use serde_json::Value;
 use serde_json::json;
 

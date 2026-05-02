@@ -7,6 +7,7 @@
 //! This split lets both `coco-permissions` and `coco-tool-runtime` share the
 //! same request/response types without circular dependencies.
 
+use crate::ModelRole;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -21,6 +22,14 @@ use serde::Serialize;
 pub struct SideQueryRequest {
     /// Model to use. If `None`, uses the implementation's default.
     pub model: Option<String>,
+
+    /// Which role to resolve. Wins over `model` when set: the
+    /// implementation looks up `ModelRoles::get(role)` and runs the
+    /// query against that resolved provider+model. Lets memory recall
+    /// say "use the Memory role" without ever hardcoding a model
+    /// string. `None` falls back to `model` (then to the default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_role: Option<ModelRole>,
 
     /// System prompt.
     pub system: String,
@@ -131,6 +140,7 @@ impl SideQueryRequest {
     pub fn simple(system: &str, user_prompt: &str, query_source: &str) -> Self {
         Self {
             model: None,
+            model_role: None,
             system: system.to_string(),
             messages: vec![SideQueryMessage {
                 role: SideQueryRole::User,
@@ -157,6 +167,7 @@ impl SideQueryRequest {
         let tool_name = tool.name.clone();
         Self {
             model: None,
+            model_role: None,
             system: system.to_string(),
             messages: vec![SideQueryMessage {
                 role: SideQueryRole::User,
@@ -172,6 +183,14 @@ impl SideQueryRequest {
             query_source: query_source.to_string(),
         }
     }
+
+    /// Builder: pin this side-query to a specific [`ModelRole`].
+    /// Wins over any later `model =` setting at request time.
+    #[must_use]
+    pub fn with_model_role(mut self, role: ModelRole) -> Self {
+        self.model_role = Some(role);
+        self
+    }
 }
 
 impl SideQueryResponse {
@@ -180,3 +199,56 @@ impl SideQueryResponse {
         self.tool_uses.first().map(|tu| &tu.input)
     }
 }
+
+// ── Post-turn cache-safe params (D8) ──
+
+/// Parameters that must be **byte-identical** between the parent
+/// session's last turn and a post-turn fork's first request to share
+/// the parent's prompt cache.
+///
+/// TS: `utils/forkedAgent.ts::CacheSafeParams` + module-level
+/// `lastCacheSafeParams` slot, written by `handleStopHooks` after each
+/// turn and read by `runForkedAgent` callers (`/btw`,
+/// `promptSuggestion`, `postTurnSummary`).
+///
+/// **Coco-rs scope**: this is the cross-layer DTO. The slot itself
+/// lives on `coco_query::QueryEngine` (`last_cache_safe_params:
+/// Arc<RwLock<Option<CacheSafeParams>>>`) populated in
+/// `finalize_turn_post_tools`. Cleared on `/clear`. Post-turn fork
+/// features (none ship in coco-rs today — see
+/// `docs/coco-rs/agentteam-architecture.md` "Deferred design
+/// decisions") will read it via `engine.last_cache_safe_params()`.
+///
+/// **Cache-key fields included here**: rendered system prompt, model
+/// id, parent message history. **Excluded**: the live `ToolUseContext`
+/// (non-serializable) — fork callers reconstruct it; tool schema
+/// changes invalidate the cache regardless. **Also excluded**:
+/// thinking config — derived per-call from the inherited
+/// `ThinkingLevel`; setting `max_output_tokens` on a fork can clamp
+/// `budget_tokens` and silently break cache parity (TS callers must
+/// avoid that combination, ditto for coco-rs).
+///
+/// All fields are owned strings / values so the slot can be safely
+/// cloned without lifetime entanglement with the parent's per-turn
+/// state.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CacheSafeParams {
+    /// Pre-rendered system prompt bytes — must match the parent's
+    /// last request verbatim. Mirrors the same threading used by
+    /// `SpawnMode::Fork`'s `rendered_system_prompt`.
+    pub rendered_system_prompt: String,
+    /// Resolved model id at the time of the parent turn. Cache keys
+    /// are scoped per `(provider, model)` — a fork that targets a
+    /// different model will simply miss the cache.
+    pub model_id: String,
+    /// Parent message history that should prefix the fork's prompt.
+    /// Carried as serialized JSON so this DTO crosses layer
+    /// boundaries without pulling `coco-messages` into `coco-types`.
+    /// Same shape as `AgentQueryConfig.fork_context_messages`.
+    #[serde(default)]
+    pub fork_context_messages: Vec<serde_json::Value>,
+}
+
+#[cfg(test)]
+#[path = "side_query.test.rs"]
+mod tests;

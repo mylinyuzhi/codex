@@ -60,6 +60,9 @@ impl Claims {
         }
     }
 
+    // Builder method named after the JWT `sub` claim — the trait-name
+    // collision with `std::ops::Sub::sub` is intentional here.
+    #[allow(clippy::should_implement_trait)]
     pub fn sub(mut self, sub: impl Into<String>) -> Self {
         self.sub = Some(sub.into());
         self

@@ -7,11 +7,11 @@
 //! pending-approvals injection.
 
 use super::PlanModeReminder;
+use coco_messages::Message;
 use coco_messages::MessageHistory;
-use coco_types::Message;
+use coco_messages::UserContent;
 use coco_types::PermissionMode;
 use coco_types::ToolAppState;
-use coco_types::UserContent;
 use std::sync::Arc;
 use tempfile::tempdir;
 use tokio::sync::RwLock;
@@ -19,7 +19,7 @@ use tokio::sync::RwLock;
 fn text_of(msg: &Message) -> Option<String> {
     match msg {
         Message::Attachment(a) => match a.as_api_message() {
-            Some(coco_types::LlmMessage::User { content, .. }) => {
+            Some(coco_messages::LlmMessage::User { content, .. }) => {
                 content.iter().find_map(|c| match c {
                     UserContent::Text(t) => Some(t.text.clone()),
                     _ => None,

@@ -327,7 +327,7 @@ Each variant's wire method is generated together with the matching \
     /// All MCP servers finished startup.
     "mcp/startupComplete" => McpStartupComplete(McpStartupCompleteParams),
 
-    // === Context (5) ===
+    // === Context (6) ===
 
     /// Context compacted.
     "context/compacted" => ContextCompacted(ContextCompactedParams),
@@ -335,6 +335,11 @@ Each variant's wire method is generated together with the matching \
     "context/usageWarning" => ContextUsageWarning(ContextUsageWarningParams),
     /// Compaction started.
     "context/compactionStarted" => CompactionStarted,
+    /// Compaction phase progress (TS `onCompactProgress`).
+    /// Drives the spinner text in the TUI / SDK runner so the user
+    /// can see which sub-phase is active (PreCompact hooks → summarize
+    /// → PostCompact hooks → done).
+    "context/compactionPhase" => CompactionPhase(CompactionPhaseParams),
     /// Compaction failed.
     "context/compactionFailed" => CompactionFailed(CompactionFailedParams),
     /// Context cleared (e.g. new mode).
@@ -832,6 +837,25 @@ pub struct McpStartupCompleteParams {
 pub struct ContextCompactedParams {
     pub removed_messages: i32,
     pub summary_tokens: i32,
+    /// Which strategy produced this compaction.
+    ///
+    /// Mirrors the TS `tengu_compact.trigger` field. Older transcripts
+    /// without this field default to `Auto`. Defaulted via serde so
+    /// off-the-wire payloads from older SDK clients keep parsing.
+    #[serde(default = "default_compact_trigger_param")]
+    pub trigger: crate::CompactTrigger,
+    /// Estimated tokens before compaction (post-strategy LLM input view).
+    /// `None` for paths that do not measure (e.g. micro/time-based may
+    /// skip when the savings are 0).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_tokens: Option<i64>,
+    /// Estimated tokens after compaction (resulting context size).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_tokens: Option<i64>,
+}
+
+fn default_compact_trigger_param() -> crate::CompactTrigger {
+    crate::CompactTrigger::Auto
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -848,6 +872,39 @@ pub struct CompactionFailedParams {
     pub error: String,
     #[serde(default)]
     pub attempts: i32,
+}
+
+/// Sub-phase of a compaction in progress (TS `onCompactProgress`).
+///
+/// Mirrors the TS phase taxonomy at Tool.ts:150-156:
+///   - `HooksStart { hook_type }` for PreCompact / PostCompact / SessionStart
+///   - `Summarizing` for the LLM summarizer call
+///   - `Done` to clear the spinner
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactionPhase {
+    HooksStart,
+    Summarizing,
+    Done,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactionHookType {
+    PreCompact,
+    PostCompact,
+    SessionStart,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompactionPhaseParams {
+    pub phase: CompactionPhase,
+    /// Set when `phase == HooksStart`. None when not applicable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hook_type: Option<CompactionHookType>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1219,6 +1276,15 @@ pub enum TuiOnlyEvent {
         files_changed: i32,
         insertions: i64,
         deletions: i64,
+        /// Path strings of changed files in display order. Empty when
+        /// `files_changed == 0`. TS source: `DiffStats.filesChanged:
+        /// string[]` (`utils/fileHistory.ts:55-61`). Used by the rewind
+        /// picker to render basenames per row and the selected-file
+        /// label on the confirm screen. `#[serde(default)]` keeps the
+        /// wire backwards-compatible with older producers that didn't
+        /// populate it.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        file_paths: Vec<String>,
     },
 
     // === Compaction / speculation toasts (4) ===

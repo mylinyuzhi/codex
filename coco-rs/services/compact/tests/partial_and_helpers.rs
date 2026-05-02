@@ -4,13 +4,13 @@
 use coco_compact::compact::partial_compact_conversation;
 use coco_compact::compact::truncate_head_for_ptl_retry;
 use coco_compact::reactive::peel_head_for_ptl_retry;
+use coco_messages::Message;
+use coco_messages::PartialCompactDirection;
+use coco_messages::SystemMessage;
 use coco_test_harness::compact as mock;
 use coco_test_harness::conversation;
 use coco_test_harness::messages as msg;
 use coco_types::CompactTrigger;
-use coco_types::Message;
-use coco_types::PartialCompactDirection;
-use coco_types::SystemMessage;
 
 const SUMMARY: &str = "<analysis>Reviewed.</analysis><summary>Summary of recent work.</summary>";
 
@@ -115,8 +115,8 @@ fn truncate_head_uses_token_gap_when_provided() {
 
 #[test]
 fn truncate_head_strips_stale_marker_before_grouping() {
-    use coco_types::LlmMessage;
-    use coco_types::UserMessage;
+    use coco_messages::LlmMessage;
+    use coco_messages::UserMessage;
     use uuid::Uuid;
 
     // Marker at the head + 4 turns → grouping must skip the marker first.
@@ -208,23 +208,21 @@ fn merge_hook_instructions_combines_both() {
 
 #[test]
 fn extract_discovered_tool_names_picks_up_toolsearch_input() {
-    use coco_types::AssistantContent;
-    use coco_types::AssistantMessage;
-    use coco_types::LlmMessage;
+    use coco_messages::AssistantContent;
+    use coco_messages::AssistantMessage;
+    use coco_messages::LlmMessage;
     use serde_json::json;
     use uuid::Uuid;
 
     let messages = vec![Message::Assistant(AssistantMessage {
         message: LlmMessage::Assistant {
-            content: vec![AssistantContent::ToolCall(
-                vercel_ai_provider::ToolCallPart {
-                    tool_call_id: "call_ts".into(),
-                    tool_name: "ToolSearch".into(),
-                    input: json!({"tools": ["Bash", "Edit"]}),
-                    provider_executed: None,
-                    provider_metadata: None,
-                },
-            )],
+            content: vec![AssistantContent::ToolCall(coco_inference::ToolCallPart {
+                tool_call_id: "call_ts".into(),
+                tool_name: "ToolSearch".into(),
+                input: json!({"tools": ["Bash", "Edit"]}),
+                provider_executed: None,
+                provider_metadata: None,
+            })],
             provider_options: None,
         },
         uuid: Uuid::new_v4(),
@@ -240,4 +238,73 @@ fn extract_discovered_tool_names_picks_up_toolsearch_input() {
     assert_eq!(names.len(), 2);
     assert!(names.contains("Bash"));
     assert!(names.contains("Edit"));
+}
+
+/// TS-parity (`compact.ts:166-184`): images nested inside
+/// `tool_result.content` arrays must be replaced with `[image]` placeholders
+/// before compact summary, not just images at the top level of user
+/// messages. Without this, BashTool tool_results containing detected image
+/// bytes (`is_likely_image_bytes` → `structuredContent`) survive the strip
+/// and re-trip prompt-too-long during compaction.
+#[test]
+fn strip_images_walks_tool_result_content() {
+    use coco_inference::ToolResultContent;
+    use coco_inference::ToolResultContentPart;
+    use coco_messages::LlmMessage;
+    use coco_messages::ToolContent;
+    use coco_messages::ToolResultContent as InternalTrc;
+    use coco_messages::ToolResultMessage;
+    use coco_types::ToolId;
+    use coco_types::ToolName;
+    use uuid::Uuid;
+
+    let image_part = ToolResultContentPart::FileData {
+        data: "iVBORw0KGgoBigBase64Payload==".to_string(),
+        media_type: "image/png".to_string(),
+        filename: Some("out.png".to_string()),
+        provider_options: None,
+    };
+    let tool_result = Message::ToolResult(ToolResultMessage {
+        message: LlmMessage::Tool {
+            content: vec![ToolContent::ToolResult(InternalTrc {
+                tool_call_id: "abc".into(),
+                tool_name: "Bash".into(),
+                output: ToolResultContent::Content {
+                    value: vec![image_part],
+                    provider_options: None,
+                },
+                is_error: false,
+                provider_metadata: None,
+            })],
+            provider_options: None,
+        },
+        uuid: Uuid::new_v4(),
+        tool_use_id: "abc".into(),
+        tool_id: ToolId::Builtin(ToolName::Bash),
+        is_error: false,
+    });
+
+    let stripped = coco_compact::strip_images_from_messages(&[tool_result]);
+    assert_eq!(stripped.len(), 1);
+    let Message::ToolResult(tr) = &stripped[0] else {
+        panic!("expected tool_result");
+    };
+    let LlmMessage::Tool { content, .. } = &tr.message else {
+        panic!("expected tool LlmMessage");
+    };
+    let ToolContent::ToolResult(rp) = &content[0] else {
+        panic!("expected tool_result part");
+    };
+    let ToolResultContent::Content { value, .. } = &rp.output else {
+        panic!("expected Content variant");
+    };
+    assert_eq!(value.len(), 1);
+    let ToolResultContentPart::Text { text, .. } = &value[0] else {
+        panic!("FileData should have been replaced with Text");
+    };
+    assert_eq!(text, "[image]");
+    assert!(
+        !format!("{value:?}").contains("iVBORw0KGgo"),
+        "raw base64 image data must not survive strip_images"
+    );
 }

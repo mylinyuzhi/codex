@@ -1,9 +1,9 @@
 # coco-compact
 
-Context compaction strategies: full LLM-summarized, micro (tool-result clearing), API-level, reactive (prompt-too-long), session-memory, auto-trigger.
+Context compaction strategies: full LLM-summarized, micro (tool-result clearing), API-native server-side editing, reactive (prompt-too-long), session-memory, auto-trigger, and the wire serializer for Anthropic `context_management`.
 
 ## TS Source
-- `services/compact/compact.ts` — full LLM-summarized compaction (largest)
+- `services/compact/compact.ts` — full LLM-summarized compaction
 - `services/compact/microCompact.ts` — clear old tool results
 - `services/compact/apiMicrocompact.ts` — API-level thinking/tool clearing
 - `services/compact/autoCompact.ts` — threshold-based auto-trigger
@@ -13,19 +13,232 @@ Context compaction strategies: full LLM-summarized, micro (tool-result clearing)
 - `services/compact/prompt.ts` — summary prompt templates
 - `services/compact/timeBasedMCConfig.ts` — time-based MC config
 
-**Intentionally NOT ported**: TS `HISTORY_SNIP` (cache-aware pre-microcompact snipping) and `CONTEXT_COLLAPSE` (`collapseReadSearch`, `collapseBackgroundBashNotifications`, `collapseHookSummaries`, `collapseTeammateShutdowns`) — these are Anthropic prompt-cache + protected-tail optimizations. If a provider needs cache-aware compaction, add it in the `vercel-ai-<provider>` crate.
+**Inert by default — match TS-feature-stripped behavior:**
 
-## Key Types
+- `Tool Result Budget` (Level 1 + 2) — TS lives in `utils/toolResultStorage.ts`
+  and wires through `services/tools/toolExecution.ts:1403` (`addToolResult`)
+  and `query.ts:99,379` (`applyToolResultBudget`). The feature is
+  **the first line of defense** before any compaction strategy runs.
+  Rust status: Phase 0 config staged on `coco_config::CompactConfig.tool_result_budget`
+  (`enabled` / `per_message_chars` / `persist_records`); runtime owners are
+  `coco-tool-runtime::tool_result_storage` (Level 1 — pending) and
+  `coco-query` (Level 2 wiring — pending). `coco-tools::BashTool` carries
+  a divergent Bash-only stub (`temp_dir()`, no `<persisted-output>` wrapper).
+  See `docs/coco-rs/tool-result-budget-plan.md`. **Three TS feature gates**
+  — `tengu_satin_quoll` (per-tool override, lives on `Tool` impls),
+  `tengu_hawthorn_window` (per-message char cap),
+  `tengu_hawthorn_steeple` (Level 2 enable).
+- `HISTORY_SNIP` — TS external is fully DCE'd
+  (`feature('HISTORY_SNIP')` strips imports of `services/compact/snipCompact.ts`
+  and `services/compact/snipProjection.ts`, neither of which exists in
+  external `src/`). Rust mirror: no runtime caller reads
+  `compact.experimental.history_snip.enabled`; the field is staged for
+  a future port.
+- `CONTEXT_COLLAPSE` (`marble_origami`) — TS external strips runtime
+  (`feature('CONTEXT_COLLAPSE')` DCEs the `services/contextCollapse/`
+  imports) but keeps `ContextCollapseCommitEntry` and
+  `ContextCollapseSnapshotEntry` in `types/logs.ts` for transcript-format
+  interop. Rust mirror: data types in `staged.rs` (kept), runtime
+  ledger never installed in production (`with_staged_ledger` has zero
+  callers), `apply_collapses_if_needed` reachable only via
+  `is_collapse_active()` whose first AND-clause is always false.
+- `display_collapses` — TS external runs the four
+  `utils/collapse*.ts` reducers in the rendering pipeline. Rust mirror:
+  config defaults stay `true`, but no renderer consults them yet; see
+  the TS-alignment-gap comment at
+  `app/tui/src/widgets/chat/mod.rs::build_lines` for the list of
+  pending reducers (`collapseTeammateShutdowns`,
+  `collapseHookSummaries`, `collapseBackgroundBashNotifications`,
+  `collapseReadSearchGroups`).
 
-- `CompactResult`, `MicrocompactResult`, `ContextEditStrategy`, `TokenWarningState`, `CompactError`
-- `CompactConfig`, `compact_conversation`, `truncate_head_for_ptl_retry`
-- `micro_compact`, `MicroCompactBudgetConfig`, `micro_compact_with_budget`, `compact_thinking_blocks`, `clear_file_unchanged_stubs`
-- `clear_thinking`, `clear_tool_uses` — API-level clearing
-- `ReactiveCompactConfig`, `ReactiveCompactState` — circuit breaker for prompt_too_long retries
-- `TimeBasedMcConfig`, `should_auto_compact`, `auto_compact_threshold`, `effective_context_window`, `calculate_token_warning_state`
-- `SessionMemoryCompactConfig`, `compact_session_memory`, `select_memories_for_compaction`, `merge_similar_memories`
-- `CompactionObserver`, `CompactionObserverRegistry` — lifecycle hooks
-- `create_post_compact_file_attachments` — post-compact file re-injection
-- `get_compact_prompt`, `get_partial_compact_prompt`, `format_compact_summary`, `get_compact_user_summary_message`
-- `strip_images_from_messages`, `strip_reinjected_attachments`, `has_text_blocks`
-- `estimate_tokens`, `estimate_tokens_conservative`, `estimate_message_tokens`
+Four opt-in flag groups on `CompactConfig` track the future implementations:
+
+- `compact.experimental.history_snip.{enabled, auto_pct, model_invocable}` — default off
+- `compact.experimental.staged_compact.{enabled, stage_at_pct, commit_at_pct, persist_to_transcript}` — default off
+- `compact.experimental.display_collapses.{read_search, hook_summaries, background_bash, teammate_shutdowns}` — default on (gates pending reducers)
+- `compact.tool_result_budget.{enabled, per_message_chars, persist_records}` — default `(false, 200_000, true)`. TS gates: `tengu_hawthorn_steeple` (enable) + `tengu_hawthorn_window` (cap override). Per-tool override (`tengu_satin_quoll`) maps to `Tool::max_result_size_chars()` after the Phase 1.B `ResultSizeBound` migration.
+
+`compact.micro` carries two additional opt-ins whose defaults match TS
+external (`microcompactMessages` no-ops outside `feature('CACHED_MICROCOMPACT')`):
+
+- `compact.micro.count_based_enabled` — default `false`. Gates
+  `coco_compact::micro_compact()` count-based clearing in the
+  autocompact threshold path and `/compact` flow.
+- `compact.micro.clear_file_unchanged_stubs_enabled` — default `false`.
+  Gates per-turn `[file unchanged]` stub rewrite. No TS equivalent.
+
+## Known TS-parity gaps (audit-gaps.md Round 10)
+
+P0 (resolved this round):
+- `strip_images_from_messages` now traverses `Message::ToolResult` content
+  arrays — Bash tool_results carrying detected image bytes
+  (`bash.rs::is_likely_image_bytes` → `structuredContent`) had been bypassing
+  the strip and re-tripping prompt-too-long during compact summarization.
+  Test: `services/compact/tests/partial_and_helpers.rs::strip_images_walks_tool_result_content`.
+- `wrap_system_reminder` in `coco-system-reminder/src/xml.rs` now delegates
+  to `coco-messages::wrapping::wrap_in_system_reminder` so the canonical
+  `<system-reminder>\n{c}\n</system-reminder>` format string lives in one
+  place.
+
+P0–P1 ports landed in Round 10 follow-up (see `docs/coco-rs/audit-gaps.md`):
+- `sanitize_error_tool_result_content`, `smoosh_system_reminder_into_tool_result`,
+  `filter_orphaned_thinking_only_messages`, `filter_trailing_thinking_from_last_assistant`,
+  `filter_whitespace_only_assistant_messages`, `ensure_non_empty_assistant_content`
+  — all live in `core/messages/src/normalize.rs` and run in TS-mandated
+  order inside `normalize_messages_for_api`.
+- `processSessionStartHooks('compact')` for the LLM path now fires in
+  `engine_compaction.rs::try_full_compact` and folds hook
+  `additional_contexts` into `result.hook_results`.
+- `createPlanModeAttachmentIfNeeded` (Round 10c) — `post_compact_plan_mode.rs::create_plan_mode_attachment_if_needed` renders the Full-variant
+  reminder text and emits an `AttachmentKind::PlanMode` message; engine
+  snapshots `permission_mode == Plan` + plan settings pre-compact.
+- `createAsyncAgentAttachmentsIfNeeded` (Round 10c) — `post_compact_async_agents.rs::create_async_agent_attachments` renders
+  one `task_status` reminder per filtered running agent; engine snapshot
+  via `QueryEngine::with_running_tasks` builder + `snapshot_async_agents_for_post_compact`.
+- `RecompactionInfo` (Round 10c) — `CompactRunOptions.recompaction_info`
+  plumbs the struct; `QueryEngine::last_compact_state` + `turn_counter`
+  populate it; `CompactResult.is_recompaction` is now driven by it.
+
+## Configuration
+
+The crate **does not read environment variables.** All env vars are
+folded into `coco_config::CompactConfig` at startup by
+`CompactConfig::resolve(&Settings, &EnvSnapshot)`. Threshold helpers,
+the API-native strategy builder, and the session-memory compactor all
+take config refs (`&AutoCompactConfig`, `&CompactApiNativeConfig`,
+`&SessionMemoryConfig`).
+
+Per-call run-options (summary token budget, keep-recent rounds, the
+`CompactTrigger` label) live in the separate
+[`CompactRunOptions`](src/compact.rs) struct — distinct from the
+global config struct above.
+
+All env vars use the `COCO_*` prefix (root `CLAUDE.md` → "Code
+Hygiene"). TS-style names (`CLAUDE_CODE_*` / unprefixed) are NOT
+honored.
+
+Layering inside `coco_config::CompactConfig`:
+
+| Sub-config | Defaults | Settings key | Env |
+|------------|----------|--------------|-----|
+| `auto.enabled` | `true` | `compact.auto.enabled` | — (user toggle) |
+| `auto.disabled_by_env` | `false` | — | `COCO_COMPACT_DISABLE` |
+| `auto.auto_disabled_by_env` | `false` | — | `COCO_COMPACT_DISABLE_AUTO` |
+| `auto.context_window_override` | `None` | `compact.auto.context_window_override` | `COCO_COMPACT_AUTO_WINDOW` |
+| `auto.pct_override` | `None` | `compact.auto.pct_override` | `COCO_COMPACT_AUTO_PCT_OVERRIDE` |
+| `auto.blocking_limit_override` | `None` | `compact.auto.blocking_limit_override` | `COCO_COMPACT_BLOCKING_LIMIT` |
+| `micro.enabled` | `true` | `compact.micro.enabled` | — |
+| `micro.keep_recent` | `5` | `compact.micro.keep_recent` | — |
+| `micro.time_based.{enabled,gap_threshold_minutes,keep_recent}` | `false`/`60`/`5` | `compact.micro.time_based.*` | — |
+| `api_native.clear_tool_results` | `false` | `compact.api_native.clear_tool_results` | `COCO_COMPACT_API_CLEAR_TOOL_RESULTS` |
+| `api_native.clear_tool_uses` | `false` | `compact.api_native.clear_tool_uses` | `COCO_COMPACT_API_CLEAR_TOOL_USES` |
+| `api_native.max_input_tokens` | `180_000` | `compact.api_native.max_input_tokens` | `COCO_COMPACT_API_MAX_INPUT_TOKENS` |
+| `api_native.target_input_tokens` | `40_000` | `compact.api_native.target_input_tokens` | `COCO_COMPACT_API_TARGET_INPUT_TOKENS` |
+| `session_memory.enabled` | `false` | `compact.session_memory.enabled` | `COCO_COMPACT_SESSION_MEMORY_{ENABLE,DISABLE}` |
+| `session_memory.{min_tokens,min_text_block_messages,max_tokens,max_summary_chars}` | `10K`/`5`/`40K`/`100K` | `compact.session_memory.*` | — |
+| `experimental.history_snip.*` | `false`/`0.7`/`false` | `compact.experimental.history_snip.*` | — |
+| `experimental.staged_compact.*` | `false`/`0.6`/`0.85`/`false` | `compact.experimental.staged_compact.*` | — |
+| `experimental.display_collapses.*` | all `true` | `compact.experimental.display_collapses.*` | — |
+| `tool_result_budget.enabled` | `false` | `compact.tool_result_budget.enabled` | `COCO_COMPACT_TOOL_RESULT_BUDGET_ENABLE` |
+| `tool_result_budget.per_message_chars` | `200_000` | `compact.tool_result_budget.per_message_chars` | `COCO_COMPACT_TOOL_RESULT_BUDGET_PER_MESSAGE_CHARS` |
+| `tool_result_budget.persist_records` | `true` | `compact.tool_result_budget.persist_records` | — |
+
+`AutoCompactConfig::is_active()` is the canonical predicate that fuses
+the user toggle with both env kill switches.
+
+## Multi-Provider Strategy
+
+Three layers, picked at runtime based on provider capability:
+
+1. **Client-side micro-compact** (`micro::micro_compact`,
+   `micro_advanced::*`). Provider-agnostic: rewrites old tool result
+   content to `[Old tool result content cleared]` placeholders.
+   Invalidates the prompt cache because it mutates messages, but works
+   with any provider.
+
+2. **API-native server-side editing** (`api_compact::get_api_context_management`
+   + `serialize::encode_anthropic_context_management`). Anthropic-only.
+   Produces `Vec<ContextEditStrategy>` describing
+   `clear_tool_uses_20250919` / `clear_thinking_20251015` edits, then
+   the serializer emits the camelCase JSON shape that
+   `vercel-ai-anthropic`'s `transform_context_management` expects.
+   Preserves the prompt cache because the API applies edits in place.
+   Dispatch gate:
+   `coco_inference::ApiClient::supports_server_side_context_edits()`
+   returns true only when `ProviderApi::Anthropic`.
+
+3. **Full LLM summarization** (`compact::compact_conversation`). Final
+   fallback when neither layer can recover enough budget. Provider-agnostic.
+
+`coco-compact` itself never inspects providers — it produces strategy
+descriptions and exposes the encoder. `coco-query` checks
+`ApiClient::supports_server_side_context_edits()` before populating
+`QueryParams.context_management`; non-Anthropic clients always see
+`None` there and rely on layer 1 / 3.
+
+## QueryEngine Integration
+
+`app/query::QueryEngine`:
+
+- `finalize_turn_post_tools` reads `&self.config.compact.auto` for the
+  guarded threshold check, runs `micro_compact` with
+  `compact.micro.keep_recent`, and falls through to
+  `try_full_compact(trigger=Auto)` when still over budget.
+- `try_full_compact` runs `execute_pre_compact` → snapshot
+  `FileReadState` → `compact_conversation` (with `custom_prompt`
+  carrying merged hook + user instructions) → notify
+  `CompactionObserverRegistry` → `execute_post_compact` →
+  emit `ContextCompacted`.
+- `run_manual_compact` is the public entry-point for `/compact`. The
+  slash-command handler (`coco_commands::handlers::compact`) emits a
+  `__COCO_COMPACT_NOW__ <args>` sentinel line that runners parse to
+  decide whether to invoke this method.
+- `do_reactive_compact` (PTL recovery) takes `&self.config.compact.auto`
+  to honor `CLAUDE_CODE_AUTO_COMPACT_WINDOW` overrides via the shared
+  `effective_context_window`.
+- The Anthropic-only `context_management` payload is built per-turn in
+  `engine.rs` from `compact.api_native` and attached to `QueryParams`;
+  `services/inference::build_call_options` slots it into
+  `provider_options["anthropic"]["contextManagement"]`.
+
+## Key Types & Functions
+
+- Run-options: `CompactRunOptions` (per-invocation parameters —
+  `max_summary_tokens` / `context_window` / `keep_recent_rounds` /
+  `custom_prompt` / `suppress_follow_up` / `trigger`). Distinct from
+  the global `coco_config::CompactConfig` (settings struct).
+- Results: `CompactResult`, `MicrocompactResult`, `TokenWarningState`,
+  `CompactWarningState`, `CompactError`.
+- Strategies: `ContextEditStrategy`, `ToolUseKeep`, `ThinkingKeep`,
+  `ClearToolInputs`.
+- Serializer: `encode_anthropic_context_management(&[ContextEditStrategy])
+  -> Option<Value>` — `None` when input is empty so callers can omit
+  the field entirely.
+- Threshold helpers: `should_auto_compact`,
+  `should_auto_compact_guarded`, `auto_compact_threshold`,
+  `effective_context_window`, `calculate_token_warning_state` —
+  **all take `&AutoCompactConfig`**.
+- Reactive: `ReactiveCompactConfig`, `ReactiveCompactState`,
+  `peel_head_for_ptl_retry`, `api_microcompact`,
+  `should_reactive_compact(&ReactiveCompactConfig, &AutoCompactConfig)`,
+  `calculate_drop_target(&ReactiveCompactConfig, &AutoCompactConfig)`.
+- Time-based MC: `TimeBasedMcConfig` (re-exported from `coco_config`),
+  `TimeBasedTrigger`, `evaluate_time_based_trigger`.
+- Session memory: `SessionMemoryCompactConfig`, `compact_session_memory`,
+  `select_memories_for_compaction`, `merge_similar_memories`.
+- Post-compact attachments: `create_post_compact_file_attachments`,
+  `create_plan_attachment_if_needed`,
+  `create_plan_attachment_from_owned`. Skill re-injection
+  (`POST_COMPACT_MAX_TOKENS_PER_SKILL` / `POST_COMPACT_SKILLS_TOKEN_BUDGET`)
+  is currently driven by `coco_system_reminder::InvokedSkillsGenerator`
+  on the next turn rather than a stand-alone helper here.
+- Observers: `CompactionObserver` trait + `CompactionObserverRegistry`
+  — replaces the TS `runPostCompactCleanup` god-function. Each crate
+  owning post-compact-invalidatable state registers its own observer
+  at startup.
+- Prompts: `get_compact_prompt`, `get_partial_compact_prompt`,
+  `format_compact_summary`, `get_compact_user_summary_message`.
+- Misc: `merge_hook_instructions`, `strip_images_from_messages`,
+  `strip_reinjected_attachments`, `truncate_head_for_ptl_retry`,
+  `extract_discovered_tool_names`, `estimate_tokens` /
+  `estimate_tokens_conservative` / `estimate_message_tokens`.

@@ -268,7 +268,10 @@ fn test_agent_definition_serde_roundtrip() {
         model: Some("opus-4".into()),
         isolation: AgentIsolation::Worktree,
         memory_scope: Some(MemoryScope::Project),
-        mcp_servers: vec!["github".into(), "jira".into()],
+        mcp_servers: vec![
+            AgentMcpServerSpec::Name("github".into()),
+            AgentMcpServerSpec::Name("jira".into()),
+        ],
         initial_prompt: Some("Search the codebase for patterns.".into()),
         max_turns: Some(10),
         disallowed_tools: vec!["Bash".into()],
@@ -295,7 +298,13 @@ fn test_agent_definition_serde_roundtrip() {
     assert_eq!(parsed.model.as_deref(), Some("opus-4"));
     assert_eq!(parsed.isolation, AgentIsolation::Worktree);
     assert_eq!(parsed.memory_scope, Some(MemoryScope::Project));
-    assert_eq!(parsed.mcp_servers, vec!["github", "jira"]);
+    assert_eq!(
+        parsed.mcp_servers,
+        vec![
+            AgentMcpServerSpec::Name("github".into()),
+            AgentMcpServerSpec::Name("jira".into()),
+        ]
+    );
     assert_eq!(parsed.max_turns, Some(10));
     assert_eq!(parsed.disallowed_tools, vec!["Bash"]);
     assert_eq!(parsed.allowed_tools, vec!["Read", "Grep"]);

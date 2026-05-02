@@ -47,6 +47,70 @@ fn apply_regex<'a>(input: Cow<'a, str>, regex: &Regex, replacement: &str) -> Cow
     }
 }
 
+/// A single secret match identified by [`scan_secrets`]. Carries the
+/// rule label (e.g. `"anthropic"`, `"github-pat"`) so callers can build
+/// user-facing reject messages without exposing the matched bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SecretMatch {
+    /// Stable rule identifier — kebab-case.
+    pub rule_id: &'static str,
+    /// Byte offset of the match in the original input.
+    pub start: usize,
+    /// End byte offset (exclusive).
+    pub end: usize,
+}
+
+impl SecretMatch {
+    /// Human-readable label derived from the rule ID. Used in TS
+    /// `secretScanner.ts` for telemetry and reject-toast text.
+    pub fn label(&self) -> String {
+        self.rule_id
+            .split('-')
+            .map(|w| {
+                let mut chars = w.chars();
+                match chars.next() {
+                    Some(c) => c.to_uppercase().chain(chars).collect::<String>(),
+                    None => String::new(),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+}
+
+const RULES: &[(&str, &LazyLock<Regex>)] = &[
+    ("anthropic", &ANTHROPIC_KEY_REGEX),
+    ("openai", &OPENAI_KEY_REGEX),
+    ("github-token", &GITHUB_TOKEN_REGEX),
+    ("slack-token", &SLACK_TOKEN_REGEX),
+    ("aws-access-key", &AWS_ACCESS_KEY_ID_REGEX),
+    ("bearer-token", &BEARER_TOKEN_REGEX),
+];
+
+/// Detect (don't redact) secrets in `input`. Returns one
+/// [`SecretMatch`] per detection so callers can BLOCK writes (rather
+/// than silently redact) — used by the team-memory write guard.
+///
+/// Mirrors TS `services/teamMemorySync/secretScanner.ts` intent: secrets
+/// must never leave the user's machine, so detected hits cause the
+/// write to be rejected outright with a labeled reason.
+///
+/// Empty result is the no-op "safe to write" signal. For redaction
+/// (when blocking is too aggressive), use [`redact_secrets`].
+pub fn scan_secrets(input: &str) -> Vec<SecretMatch> {
+    let mut matches = Vec::new();
+    for (rule_id, regex) in RULES {
+        for m in regex.find_iter(input) {
+            matches.push(SecretMatch {
+                rule_id,
+                start: m.start(),
+                end: m.end(),
+            });
+        }
+    }
+    matches
+}
+
 /// Remove secrets and keys from a string on a best-effort basis.
 ///
 /// Returns the input unchanged (zero-copy) when no secrets are found.

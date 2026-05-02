@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use coco_inference::ToolCallPart;
 use coco_messages::MessageHistory;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolRegistry;
@@ -8,7 +9,6 @@ use coco_types::CoreEvent;
 use coco_types::ToolId;
 use tokio::sync::mpsc;
 use tracing::warn;
-use vercel_ai_provider::ToolCallPart;
 
 use crate::emit::emit_stream;
 use crate::helpers::complete_tool_call_with_error;

@@ -2,21 +2,64 @@
 
 use std::path::Path;
 
+use crate::bridge::{
+    SandboxApprovalBridgeRef, SandboxApprovalDecision, SandboxApprovalRequest, SandboxOperation,
+};
 use crate::config::EnforcementLevel;
 use crate::config::SandboxConfig;
 use crate::error::Result;
 use crate::error::sandbox_error::*;
 
 /// Checks permissions against the sandbox configuration.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct PermissionChecker {
     config: SandboxConfig,
+    /// Optional async approval bridge — when set,
+    /// [`Self::check_path_async`] / [`Self::check_network_async`]
+    /// consult the bridge before returning a deny error. Static
+    /// callers ([`Self::check_path`] / [`Self::check_network`]) keep
+    /// the synchronous, fail-closed semantics for backwards
+    /// compatibility. See [`crate::bridge`].
+    approval_bridge: Option<SandboxApprovalBridgeRef>,
+}
+
+impl std::fmt::Debug for PermissionChecker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PermissionChecker")
+            .field("config", &self.config)
+            .field("approval_bridge", &self.approval_bridge.is_some())
+            .finish()
+    }
 }
 
 impl PermissionChecker {
-    /// Creates a new checker with the given configuration.
+    /// Creates a new checker with the given configuration. No approval
+    /// bridge — denies are immediate. Install one via
+    /// [`Self::with_approval_bridge`] / [`Self::set_approval_bridge`].
     pub fn new(config: SandboxConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            approval_bridge: None,
+        }
+    }
+
+    /// Builder-style: install an approval bridge at construction.
+    #[must_use]
+    pub fn with_approval_bridge(mut self, bridge: SandboxApprovalBridgeRef) -> Self {
+        self.approval_bridge = Some(bridge);
+        self
+    }
+
+    /// Replace the approval bridge after construction.
+    pub fn set_approval_bridge(&mut self, bridge: Option<SandboxApprovalBridgeRef>) {
+        self.approval_bridge = bridge;
+    }
+
+    /// Returns true when an approval bridge is installed. Useful for
+    /// callers that want to skip async detours in tight loops where
+    /// no bridge is configured.
+    pub fn has_approval_bridge(&self) -> bool {
+        self.approval_bridge.is_some()
     }
 
     /// Returns a reference to the underlying configuration.
@@ -226,6 +269,84 @@ impl PermissionChecker {
         }
 
         Ok(())
+    }
+
+    // ── Async (bridge-aware) variants — D7 ──
+    //
+    // The static `check_path` / `check_network` keep their existing
+    // fail-closed semantics. Callers that want to surface a denied
+    // operation through an interactive approval flow call the `_async`
+    // variant; when an approval bridge is installed and grants
+    // approval, the deny error is rewritten into `Ok(())`. Without a
+    // bridge installed (or with a `Rejected` decision), the original
+    // error stands.
+
+    /// Async variant of [`Self::check_path`] that consults the approval
+    /// bridge on deny. Behaviour:
+    ///
+    /// - No bridge installed → identical to [`Self::check_path`].
+    /// - Bridge returns [`SandboxApprovalDecision::Approved`] → caller's
+    ///   `Result` becomes `Ok(())`. The deny was overridden by user
+    ///   consent.
+    /// - Bridge returns [`SandboxApprovalDecision::Rejected`] → preserve
+    ///   the original deny error.
+    /// - The static gate passing (no deny) → return immediately, no
+    ///   bridge consultation.
+    pub async fn check_path_async(&self, path: &Path, write: bool) -> Result<()> {
+        match self.check_path(path, write) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let Some(bridge) = self.approval_bridge.as_ref() else {
+                    return Err(e);
+                };
+                let request = SandboxApprovalRequest {
+                    operation: if write {
+                        SandboxOperation::Write
+                    } else {
+                        SandboxOperation::Read
+                    },
+                    path: path.display().to_string(),
+                    reason: e.to_string(),
+                };
+                match bridge.request_approval(request).await {
+                    SandboxApprovalDecision::Approved => {
+                        tracing::info!(
+                            path = %path.display(),
+                            operation = if write { "write" } else { "read" },
+                            decision = "approved_by_bridge",
+                            "sandbox.permission_check"
+                        );
+                        Ok(())
+                    }
+                    SandboxApprovalDecision::Rejected => Err(e),
+                }
+            }
+        }
+    }
+
+    /// Async variant of [`Self::check_network`] — same semantics as
+    /// [`Self::check_path_async`] but for network access.
+    pub async fn check_network_async(&self) -> Result<()> {
+        match self.check_network() {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let Some(bridge) = self.approval_bridge.as_ref() else {
+                    return Err(e);
+                };
+                let request = SandboxApprovalRequest {
+                    operation: SandboxOperation::Network,
+                    path: String::new(),
+                    reason: e.to_string(),
+                };
+                match bridge.request_approval(request).await {
+                    SandboxApprovalDecision::Approved => {
+                        tracing::info!(decision = "approved_by_bridge", "sandbox.network_check");
+                        Ok(())
+                    }
+                    SandboxApprovalDecision::Rejected => Err(e),
+                }
+            }
+        }
     }
 
     /// Returns true if the path is under any writable root (respecting subpath restrictions).

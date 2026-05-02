@@ -30,7 +30,7 @@ async fn execute_and_apply_patch(
     input: Value,
     ctx: &ToolUseContext,
     state: &std::sync::Arc<tokio::sync::RwLock<ToolAppState>>,
-) -> Result<coco_types::ToolResult<Value>, coco_tool_runtime::ToolError> {
+) -> Result<coco_messages::ToolResult<Value>, coco_tool_runtime::ToolError> {
     let mut result = tool.execute(input, ctx).await?;
     if let Some(patch) = result.app_state_patch.take() {
         let mut guard = state.write().await;

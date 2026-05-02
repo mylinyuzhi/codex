@@ -1,10 +1,10 @@
 use super::*;
 
 fn make_user_message(text: &str) -> Message {
-    Message::User(coco_types::UserMessage {
-        message: coco_types::LlmMessage::User {
-            content: vec![coco_types::UserContent::Text(
-                vercel_ai_provider::TextPart::new(text.to_string()),
+    Message::User(coco_messages::UserMessage {
+        message: coco_messages::LlmMessage::User {
+            content: vec![coco_messages::UserContent::Text(
+                coco_inference::TextPart::new(text.to_string()),
             )],
             provider_options: None,
         },
@@ -20,10 +20,10 @@ fn make_user_message(text: &str) -> Message {
 }
 
 fn make_assistant_message(text: &str) -> Message {
-    Message::Assistant(coco_types::AssistantMessage {
-        message: coco_types::LlmMessage::Assistant {
-            content: vec![coco_types::AssistantContent::Text(
-                vercel_ai_provider::TextPart::new(text.to_string()),
+    Message::Assistant(coco_messages::AssistantMessage {
+        message: coco_messages::LlmMessage::Assistant {
+            content: vec![coco_messages::AssistantContent::Text(
+                coco_inference::TextPart::new(text.to_string()),
             )],
             provider_options: None,
         },
@@ -48,7 +48,7 @@ fn test_compact_session_memory_produces_summary() {
     let session_memory = "## Key Decisions\n- Refactored parser into smaller functions\n\n## Context\n- User working on parser module";
     let config = SessionMemoryCompactConfig::default();
 
-    let result = compact_session_memory(&messages, session_memory, &config)
+    let result = compact_session_memory(&messages, session_memory, None, &config)
         .expect("should not error")
         .expect("should produce a result");
 
@@ -60,7 +60,7 @@ fn test_compact_session_memory_produces_summary() {
     // Boundary marker should be in the dedicated field, not in summary_messages
     assert!(matches!(
         result.boundary_marker,
-        Message::System(coco_types::SystemMessage::CompactBoundary(_))
+        Message::System(coco_messages::SystemMessage::CompactBoundary(_))
     ));
     // summary_messages should contain only the user summary, not the boundary
     assert!(
@@ -76,10 +76,11 @@ fn test_compact_session_memory_empty_returns_none() {
     let messages = vec![make_user_message("hello")];
     let config = SessionMemoryCompactConfig::default();
 
-    let result = compact_session_memory(&messages, "", &config).expect("should not error");
+    let result = compact_session_memory(&messages, "", None, &config).expect("should not error");
     assert!(result.is_none(), "empty session memory should return None");
 
-    let result2 = compact_session_memory(&messages, "   \n  ", &config).expect("should not error");
+    let result2 =
+        compact_session_memory(&messages, "   \n  ", None, &config).expect("should not error");
     assert!(
         result2.is_none(),
         "whitespace-only session memory should return None"
@@ -189,4 +190,141 @@ fn test_extract_name_prefix() {
     assert_eq!(extract_name_prefix("auth-config.md"), "auth");
     assert_eq!(extract_name_prefix("simple.md"), "simple");
     assert_eq!(extract_name_prefix("no_ext"), "no");
+}
+
+#[test]
+fn test_should_extract_memory_init_below_threshold() {
+    let t = SessionMemoryExtractionThresholds::default();
+    assert!(!should_extract_memory(
+        SessionMemoryExtractionInputs {
+            current_tokens: 5_000,
+            tokens_at_last_extract: 0,
+            tool_calls_in_last_turn: 0,
+        },
+        &t,
+    ));
+}
+
+#[test]
+fn test_should_extract_memory_init_meets_threshold() {
+    let t = SessionMemoryExtractionThresholds::default();
+    assert!(should_extract_memory(
+        SessionMemoryExtractionInputs {
+            current_tokens: 10_000,
+            tokens_at_last_extract: 0,
+            tool_calls_in_last_turn: 0,
+        },
+        &t,
+    ));
+}
+
+#[test]
+fn test_should_extract_memory_update_blocked_by_small_delta() {
+    let t = SessionMemoryExtractionThresholds::default();
+    assert!(!should_extract_memory(
+        SessionMemoryExtractionInputs {
+            current_tokens: 12_000,
+            tokens_at_last_extract: 10_000,
+            tool_calls_in_last_turn: 5,
+        },
+        &t,
+    ));
+}
+
+#[test]
+fn test_should_extract_memory_update_tool_burst_path() {
+    let t = SessionMemoryExtractionThresholds::default();
+    assert!(should_extract_memory(
+        SessionMemoryExtractionInputs {
+            current_tokens: 16_000,
+            tokens_at_last_extract: 10_000,
+            tool_calls_in_last_turn: 4,
+        },
+        &t,
+    ));
+}
+
+#[test]
+fn test_should_extract_memory_update_idle_turn_path() {
+    let t = SessionMemoryExtractionThresholds::default();
+    // Tool calls = 0 (idle turn), but token delta high → extract.
+    assert!(should_extract_memory(
+        SessionMemoryExtractionInputs {
+            current_tokens: 16_000,
+            tokens_at_last_extract: 10_000,
+            tool_calls_in_last_turn: 0,
+        },
+        &t,
+    ));
+}
+
+#[test]
+fn test_should_extract_memory_update_low_tools_blocked() {
+    let t = SessionMemoryExtractionThresholds::default();
+    // Delta high but tool_calls between 1..min — blocked.
+    assert!(!should_extract_memory(
+        SessionMemoryExtractionInputs {
+            current_tokens: 16_000,
+            tokens_at_last_extract: 10_000,
+            tool_calls_in_last_turn: 2,
+        },
+        &t,
+    ));
+}
+
+#[test]
+fn test_template_only_recognized() {
+    use crate::session_memory::is_session_memory_template_only;
+    // Pure heading template.
+    assert!(is_session_memory_template_only(
+        "# Session Memory\n\n## Decisions\n\n## Files\n"
+    ));
+    // Heading + "none yet" placeholders.
+    assert!(is_session_memory_template_only(
+        "## Decisions\n- _none yet_\n## Open Questions\n- no entries\n"
+    ));
+    // Empty / whitespace.
+    assert!(is_session_memory_template_only(""));
+    assert!(is_session_memory_template_only("   \n\n  "));
+    assert!(is_session_memory_template_only("(empty)"));
+    assert!(is_session_memory_template_only(
+        "# Hi\nNo memories yet — try again later"
+    ));
+}
+
+#[test]
+fn test_template_only_rejects_real_content() {
+    use crate::session_memory::is_session_memory_template_only;
+    assert!(!is_session_memory_template_only(
+        "## Decisions\n- Use BTreeMap for deterministic ordering\n"
+    ));
+    assert!(!is_session_memory_template_only("Just a sentence."));
+}
+
+#[test]
+fn test_compact_session_memory_returns_none_for_template() {
+    let messages = vec![make_user_message("hi"), make_assistant_message("hello")];
+    let template = "# Session Memory\n\n## Decisions\n- _none yet_\n";
+    let config = SessionMemoryCompactConfig::default();
+    let result =
+        compact_session_memory(&messages, template, None, &config).expect("should not error");
+    assert!(
+        result.is_none(),
+        "template-only content must short-circuit to None"
+    );
+}
+
+#[test]
+fn test_compact_session_memory_unrecognized_anchor_returns_none() {
+    // last_summarized_message_id present but absent from history → bail.
+    // TS sessionMemoryCompact.ts:554.
+    let messages = vec![make_user_message("hi"), make_assistant_message("hello")];
+    let stale = uuid::Uuid::new_v4();
+    let config = SessionMemoryCompactConfig::default();
+    let result = compact_session_memory(&messages, "real summary content", Some(stale), &config)
+        .expect("should not error");
+    assert!(
+        result.is_none(),
+        "unrecognized anchor must bail to LLM fallback"
+    );
 }

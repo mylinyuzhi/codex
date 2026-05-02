@@ -177,7 +177,10 @@ async fn slash_clear_wipes_transcript_and_surfaces_toast_and_signals_engine() {
 }
 
 #[tokio::test]
-async fn slash_clear_all_signals_all_scope() {
+async fn slash_clear_all_aliases_conversation_scope() {
+    // TS alignment: `/clear` and `/clear all` route to the same full
+    // reset. The `All` enum variant still exists for back-compat but
+    // isn't produced by either alias.
     let mut state = AppState::new();
     state.session.session_id = Some("test-clear-all".into());
     state
@@ -201,7 +204,7 @@ async fn slash_clear_all_signals_all_scope() {
     assert!(matches!(
         rx.try_recv(),
         Ok(UserCommand::ClearConversation {
-            scope: crate::command::ClearScope::All
+            scope: crate::command::ClearScope::Conversation
         })
     ));
 }

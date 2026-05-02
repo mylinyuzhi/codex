@@ -14,8 +14,6 @@ default = []
 schema = ["dep:schemars"]
 
 [dependencies]
-vercel-ai-provider.workspace = true
-
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 uuid = { workspace = true, features = ["v4", "serde"] }

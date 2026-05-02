@@ -173,7 +173,7 @@ pub struct TurnHandoff {
     pub session_id: String,
     pub cwd: String,
     pub model: String,
-    pub history: Arc<Mutex<Vec<coco_types::Message>>>,
+    pub history: Arc<Mutex<Vec<coco_messages::Message>>>,
     /// Session-scoped shared state. Attached to every turn's engine
     /// via `with_app_state` so plan-mode cadence + live permission
     /// mode propagate across turns AND mid-session mode toggles
@@ -312,6 +312,12 @@ pub struct SdkServerState {
     /// When `None`, the handler returns empty / default values for those
     /// fields so the wire format stays TS-conformant.
     pub initialize_bootstrap: RwLock<Option<Arc<dyn InitializeBootstrap>>>,
+    /// Whether the SDK client opted into per-spawn periodic
+    /// AgentSummary timers via `initialize { agentProgressSummaries: true }`.
+    /// TS parity: `bootstrap/state.ts:1077` `getSdkAgentProgressSummariesEnabled`.
+    /// Default `false`. session/start copies this onto the new
+    /// session's `ToolAppState.agent_progress_summaries_enabled`.
+    pub agent_progress_summaries_enabled: std::sync::atomic::AtomicBool,
     /// Whether the process was authorized to transition into
     /// `BypassPermissions` at CLI startup (either via
     /// `--dangerously-skip-permissions` or
@@ -324,6 +330,15 @@ pub struct SdkServerState {
     /// to `bypassPermissions` are rejected with an explicit error
     /// when `isBypassPermissionsModeAvailable` is false.
     pub bypass_permissions_available: std::sync::atomic::AtomicBool,
+    /// Process-shared `SessionRuntime`. Set by `run_sdk_mode` at
+    /// startup (same Arc threaded into `QueryEngineRunner`). Read by
+    /// `handle_session_start` to call `runtime.start_new_session()`
+    /// when an SDK client cycles `session/archive` → `session/start`,
+    /// so the new session sees fresh `FileReadState`,
+    /// `SessionMemoryService` paths, file-history sink target, and
+    /// cache-break detector baseline. `None` only in tests that don't
+    /// wire a runtime.
+    pub session_runtime: RwLock<Option<Arc<crate::session_runtime::SessionRuntime>>>,
 }
 
 impl Default for SdkServerState {
@@ -347,7 +362,9 @@ impl Default for SdkServerState {
             file_history_config_home: RwLock::new(None),
             mcp_manager: RwLock::new(None),
             initialize_bootstrap: RwLock::new(None),
+            agent_progress_summaries_enabled: std::sync::atomic::AtomicBool::new(false),
             bypass_permissions_available: std::sync::atomic::AtomicBool::new(false),
+            session_runtime: RwLock::new(None),
         }
     }
 }
@@ -591,7 +608,7 @@ pub struct SessionHandle {
     /// with `QueryResult.final_messages`. The `Arc<Mutex<>>` wrapping
     /// lets the runner's detached turn task mutate it without holding
     /// the session write-lock for the whole turn.
-    pub history: Arc<Mutex<Vec<coco_types::Message>>>,
+    pub history: Arc<Mutex<Vec<coco_messages::Message>>>,
 
     /// Session-scoped `ToolAppState` — TS parity:
     /// `appState.toolPermissionContext` and the plan-mode latches.

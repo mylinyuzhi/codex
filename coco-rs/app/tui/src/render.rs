@@ -314,14 +314,32 @@ fn running_tasks_as_entries(
         .collect()
 }
 
-/// Chat area + input area (vertical split).
+/// Chat area + input area (vertical split). When the user has
+/// focused a specific subagent (Tab/Shift-Tab cycle through
+/// `subagents`), a one-line `TeammateViewHeader` is drawn above the
+/// chat to make the focus visible and remind the user that Esc
+/// returns to the main view. TS parity:
+/// `components/TeammateViewHeader.tsx`.
 fn render_chat_and_input(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
     let input_height = 3.min(constants::MAX_INPUT_HEIGHT as u16);
+    let focused_subagent = state
+        .session
+        .focused_subagent_index
+        .and_then(|i| state.session.subagents.get(i as usize));
+    let header_height: u16 = if focused_subagent.is_some() { 1 } else { 0 };
 
-    let [chat, input] = area.layout(&Layout::vertical([
-        Constraint::Min(1),               // chat
-        Constraint::Length(input_height), // input
+    let [header, chat, input] = area.layout(&Layout::vertical([
+        Constraint::Length(header_height), // teammate header (0 when unfocused)
+        Constraint::Min(1),                // chat
+        Constraint::Length(input_height),  // input
     ]));
+
+    if let Some(agent) = focused_subagent {
+        let header_widget = crate::widgets::TeammateViewHeader::new(&agent.agent_type, theme)
+            .agent_color(agent.color.as_deref())
+            .description(Some(&agent.description));
+        frame.render_widget(header_widget, header);
+    }
 
     render_conversation(frame, state, chat, theme);
     render_input(frame, state, input, theme);
@@ -373,8 +391,18 @@ fn render_input(frame: &mut Frame, state: &AppState, area: Rect, theme: &Theme) 
         Span::styled("> ", Style::default().fg(theme.primary))
     };
 
+    // P5 / A4: when the input is empty AND a post-turn prompt
+    // suggestion is available, render the suggestion as the dim
+    // placeholder. Prefer the freshest suggestion (last entry) so
+    // sequential turns each get their own. The user accepts it by
+    // pressing Tab/Right at the empty input — bound in
+    // `keybinding_bridge.rs` (TODO: A4 follow-up).
+    let suggestion = state.session.prompt_suggestions.last();
     let display_text = if state.ui.input.is_empty() {
-        t!("input.placeholder").to_string()
+        match suggestion {
+            Some(s) => s.clone(),
+            None => t!("input.placeholder").to_string(),
+        }
     } else {
         state.ui.input.text.clone()
     };
@@ -436,11 +464,35 @@ fn render_tool_panel(frame: &mut Frame, area: Rect, state: &AppState, theme: &Th
     frame.render_widget(panel, area);
 }
 
-/// Render subagent instances using SubagentPanel widget.
+/// Render subagent instances using SubagentPanel widget. Switches to
+/// the richer [`CoordinatorPanel`] when the session is operating in
+/// coordinator mode (`COCO_COORDINATOR_MODE=1` + `Feature::AgentTeams`).
+/// The coordinator panel surfaces queued-message counts and elapsed
+/// time per worker; the regular subagent panel is the default
+/// per-spawn view.
 fn render_subagent_panel(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
-    let panel = crate::widgets::SubagentPanel::new(&state.session.subagents, theme)
-        .focused_index(state.session.focused_subagent_index);
-    frame.render_widget(panel, area);
+    if is_coordinator_mode_active() {
+        let tasks: Vec<crate::widgets::CoordinatorTask> = state
+            .session
+            .subagents
+            .iter()
+            .map(crate::widgets::CoordinatorTask::from_subagent)
+            .collect();
+        let panel = crate::widgets::CoordinatorPanel::new(&tasks, theme)
+            .selected_index(state.session.focused_subagent_index);
+        frame.render_widget(panel, area);
+    } else {
+        let panel = crate::widgets::SubagentPanel::new(&state.session.subagents, theme)
+            .focused_index(state.session.focused_subagent_index);
+        frame.render_widget(panel, area);
+    }
+}
+
+/// Returns true when both `Feature::AgentTeams` and the
+/// `COCO_COORDINATOR_MODE` env gate are on. Reads via the central
+/// helper rather than `std::env::var` directly per project rule.
+fn is_coordinator_mode_active() -> bool {
+    coco_config::env::is_env_truthy(coco_config::EnvKey::CocoCoordinatorMode)
 }
 
 /// Render the status bar.

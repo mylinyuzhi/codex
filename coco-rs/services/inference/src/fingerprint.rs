@@ -23,6 +23,7 @@
 use coco_config::ProviderClientOptions;
 use coco_config::ProviderConfig;
 use coco_types::ProviderApi;
+use coco_types::SubagentRuntimeSnapshot;
 use coco_types::WireApi;
 use sha2::Digest;
 use sha2::Sha256;
@@ -69,6 +70,21 @@ impl ProviderClientFingerprint {
             client_options_digest: digest_client_options(&provider_cfg.client_options),
             timeout_secs: provider_cfg.timeout_secs,
             api_key_origin_digest: digest_api_key_origin(provider_cfg),
+        }
+    }
+
+    /// Project the identity-distinguishing fields onto the cross-layer
+    /// `SubagentRuntimeSnapshot` DTO. Drops the SHA-256 digests over
+    /// `ProviderClientOptions` and the API-key origin — those are
+    /// inference-layer secrets-aware constructs and don't cross into
+    /// `coco-types`. The DTO is what `AgentSpawnRequest` carries.
+    pub fn to_snapshot(&self) -> SubagentRuntimeSnapshot {
+        SubagentRuntimeSnapshot {
+            provider: self.provider.clone(),
+            api: self.api,
+            api_model_name: self.api_model_name.clone(),
+            base_url: self.base_url.clone(),
+            wire_api: self.wire_api,
         }
     }
 }

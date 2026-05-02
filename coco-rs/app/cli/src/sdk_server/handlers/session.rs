@@ -39,10 +39,25 @@ use super::SessionHandle;
 /// TS reference: `SDKControlInitializeRequestSchema` +
 /// `SDKControlInitializeResponseSchema` in `controlSchemas.ts:57-95`.
 pub(super) async fn handle_initialize(
-    _params: coco_types::InitializeParams,
+    params: coco_types::InitializeParams,
     ctx: &HandlerContext,
 ) -> HandlerResult {
     info!("SdkServer: initialize");
+
+    // TS parity: `cli/print.ts:2904-2908` flips
+    // `STATE.sdkAgentProgressSummariesEnabled = true` when the
+    // initialize request opts in. coco-rs stores the same flag on
+    // `SdkServerState` so subsequent `session/start` calls can copy
+    // it onto the new session's `ToolAppState`. Default-off is
+    // intentional: a fully saturated coordinator burns up to 32
+    // side-query LLM calls per minute on summarization, so opt-in
+    // semantics keep that off the user's hot path.
+    if params.agent_progress_summaries.unwrap_or(false) {
+        ctx.state
+            .agent_progress_summaries_enabled
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        info!("SdkServer: agentProgressSummaries enabled by client");
+    }
 
     // Pull the bootstrap provider out of state, drop the read guard, then
     // call its async accessors. Holding the guard across awaits would
@@ -207,7 +222,44 @@ pub(super) async fn handle_session_start(
             data: None,
         };
     }
-    *session_slot = Some(SessionHandle::new(session_id.clone(), cwd, model));
+    let handle = SessionHandle::new(session_id.clone(), cwd, model);
+    // TS parity: copy the SDK-level agentProgressSummaries flag onto
+    // the new session's ToolAppState so the bg AgentTool path can
+    // gate periodic-summary timers without reaching into
+    // SdkServerState. Coordinator mode auto-enables independently
+    // (matches `AgentTool.tsx:750`).
+    if ctx
+        .state
+        .agent_progress_summaries_enabled
+        .load(std::sync::atomic::Ordering::SeqCst)
+    {
+        handle
+            .app_state
+            .write()
+            .await
+            .agent_progress_summaries_enabled = true;
+    }
+    *session_slot = Some(handle);
+    drop(session_slot);
+
+    // Refresh per-session subsystems on the shared `SessionRuntime` so
+    // sequential `session/archive` → `session/start` cycles don't leak
+    // the prior session's `FileReadState` LRU, `SessionMemoryService`
+    // disk path, file-history sink session id, or cache-break detector
+    // baseline into the new session. TS parity: `clearSessionCaches`
+    // semantics applied at SDK session boundary.
+    //
+    // `runtime.start_new_session` also retargets the runtime-owned
+    // `TranscriptFileHistorySink` (when file-checkpointing is enabled)
+    // via its shared `Arc<RwLock<String>>` session_id, so file-history
+    // snapshots written from the engine land in the new session's jsonl.
+    let runtime_arc = {
+        let slot = ctx.state.session_runtime.read().await;
+        slot.as_ref().cloned()
+    };
+    if let Some(runtime) = runtime_arc {
+        runtime.start_new_session(session_id.clone()).await;
+    }
 
     HandlerResult::ok(SessionStartResult { session_id })
 }
@@ -286,7 +338,7 @@ async fn accumulate_session_result(
         .total_duration_api_ms
         .saturating_add(params.duration_api_ms);
     s.total_cost_usd += params.total_cost_usd;
-    s.usage = s.usage + params.usage;
+    s.usage += params.usage;
     for (model, mu) in &params.model_usage {
         let entry = s.model_usage.entry(model.clone()).or_default();
         entry.input_tokens += mu.input_tokens;

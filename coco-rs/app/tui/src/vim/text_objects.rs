@@ -66,14 +66,12 @@ pub fn quoted(text: &str, pos: i32, quote: char, scope: TextObjScope) -> TextObj
     let open = open?;
 
     // Find closing quote
-    let mut close = None;
-    for i in (open + 1)..chars.len() {
-        if chars[i] == quote {
-            close = Some(i);
-            break;
-        }
-    }
-    let close = close?;
+    let close = chars
+        .iter()
+        .enumerate()
+        .skip(open + 1)
+        .find(|&(_, c)| *c == quote)
+        .map(|(i, _)| i)?;
 
     match scope {
         TextObjScope::Inner => Some(((open + 1) as i32, (close - 1) as i32)),
@@ -112,11 +110,12 @@ pub fn bracket(
     // Find matching closing bracket
     depth = 0;
     let mut close = None;
-    for i in (open + 1)..chars.len() {
-        if chars[i] == open_ch {
+    for (i, c) in chars.iter().enumerate().skip(open + 1) {
+        let c = *c;
+        if c == open_ch {
             depth += 1;
         }
-        if chars[i] == close_ch {
+        if c == close_ch {
             if depth == 0 {
                 close = Some(i);
                 break;

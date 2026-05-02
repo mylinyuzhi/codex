@@ -8,20 +8,28 @@ use coco_types::PermissionUpdate;
 
 /// Which parts of the session to wipe on `/clear`.
 ///
-/// TS: `clearConversation({ removeTasks, removeHooks, ... })` — we
-/// collapse the per-subsystem flags into three user-visible scopes that
-/// match the slash command variants. `All` is the most aggressive
-/// (touches plan state + slug cache + regenerates session id).
+/// TS reference: `commands/clear/conversation.ts::clearConversation` is a
+/// single function with no scope parameter; `/clear` always performs the
+/// full reset (transcript + caches + session-id regen + plan slugs +
+/// file history + SessionEnd/SessionStart hooks). coco-rs preserves
+/// `/clear` (and the `/clear all` alias) at TS parity, then adds
+/// `/clear history` as a Rust-only lighter scope for users who want to
+/// declutter the transcript without disturbing tools / file caches /
+/// plans.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClearScope {
-    /// `/clear` — drop conversation transcript, keep session alive for
-    /// `/resume`, keep plan mode state, keep model usage.
+    /// `/clear` — TS-aligned full reset: transcript, FileReadState,
+    /// FileHistoryState, plan-slug cache, session-memory baseline,
+    /// cache-break detector. Plan-mode app_state flags reset to
+    /// default. Sets up the next turn as a fresh session.
     Conversation,
-    /// `/clear history` — alias of `Conversation` today; kept as a
-    /// distinct variant so future refinement can diverge.
+    /// `/clear history` — Rust-only lighter scope: transcript +
+    /// plan-mode app_state reset only. Tools, file caches, plans, and
+    /// session-memory baseline are preserved — useful for "I just want
+    /// the screen back" without invalidating any work.
     History,
-    /// `/clear all` — drop everything session-scoped (transcript +
-    /// plan files + slug cache + plan-mode flags on app_state).
+    /// `/clear all` — alias of [`Self::Conversation`]. Retained for
+    /// users who already typed it; behaves identically to `/clear`.
     All,
 }
 
@@ -30,6 +38,17 @@ pub enum ClearScope {
 pub enum UserCommand {
     /// Submit user input text with resolved paste data.
     SubmitInput {
+        /// User-message UUID minted at submit time. The TUI pushes a
+        /// `ChatMessage` carrying this id, the agent driver builds the
+        /// `Message::User` carrying the same id, and `FileHistoryState`
+        /// keys the per-turn snapshot on it. Single source of truth so
+        /// rewind picker selections, file-history snapshots, and the
+        /// JSONL transcript line up.
+        ///
+        /// TS parity: `screens/REPL.tsx`'s `onSubmit` mints
+        /// `randomUUID()` once via `createUserMessage()` before the
+        /// engine sees the message.
+        user_message_id: String,
         /// Resolved text content (paste pills expanded, image pills removed).
         content: String,
         /// Original input text (with pills intact) for display in chat history.
@@ -74,13 +93,21 @@ pub enum UserCommand {
     KillAllAgents,
     /// Toggle fast mode.
     ToggleFastMode,
-    /// Trigger manual compaction.
-    Compact,
+    /// Trigger manual compaction. Optional `custom_instructions` carry
+    /// any text after `/compact` so the LLM summarizer prompt can honor
+    /// the user's focus directive. TS: `commands/compact/compact.ts:40`
+    /// passes `args.trim()` as `customInstructions`.
+    Compact { custom_instructions: Option<String> },
     /// Rewind to a previous checkpoint.
     /// TS: rewindConversationTo() + fileHistoryRewind() in REPL.tsx
     Rewind {
         message_id: String,
         restore_type: crate::state::rewind::RestoreType,
+        /// 1-based turn number the user picked, for the protocol-level
+        /// `rewind/completed` notification. TS does not need this
+        /// (renders on the React side); coco-rs threads it through so
+        /// SDK consumers see it without a second query.
+        rewound_turn: i32,
     },
     /// Request diff stats for a message (async, response via ServerNotification).
     /// TS: fileHistoryGetDiffStats() called from MessageSelector useEffect.

@@ -24,7 +24,7 @@ use serde::Serialize;
 /// Configuration for a single agent query turn.
 ///
 /// TS: Parameters passed to runAgent() in runAgent.ts
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub struct AgentQueryConfig {
     /// System prompt for the agent.
     pub system_prompt: String,
@@ -137,6 +137,75 @@ pub struct AgentQueryConfig {
     /// `settings.models.{role}.fallbacks`. No Main-walk.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_role: Option<coco_types::ModelRole>,
+    /// FileWrite / FileEdit / NotebookEdit are restricted to paths under one
+    /// of these roots. Empty = no restriction. Threaded into the child's
+    /// `ToolUseContext::allowed_write_roots` so file-mutation tools can
+    /// reject out-of-fence paths before they hit disk. Used by memory
+    /// extraction / auto-dream subagents.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_write_roots: Vec<std::path::PathBuf>,
+    /// Reasoning-effort override forwarded from the AgentTool input
+    /// (TS `AgentTool.tsx:154-159`). Maps to the engine's
+    /// thinking-level configuration. `None` falls back to the
+    /// model-role default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    /// When true, bypass agent-definition tool rendering and use the
+    /// parent's exact tool schemas verbatim (TS `runAgent.ts:624`,
+    /// `useExactTools`). Required for prompt-cache prefix sharing in
+    /// fork-style spawns.
+    #[serde(default)]
+    pub use_exact_tools: bool,
+    /// Per-agent MCP server allow-list (TS `AgentTool.tsx:206`,
+    /// `runAgent.ts:50+`). When non-empty, only tools from these
+    /// servers are exposed to the child. Empty = no MCP restriction
+    /// from this layer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcp_servers: Vec<String>,
+    /// Inline initial-message body override (TS
+    /// `loadAgentsDir.ts::initial_prompt`). When set, replaces the
+    /// agent-definition's stored prompt body — useful for ad-hoc
+    /// subagent spawns that don't match a registered definition.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_prompt: Option<String>,
+    /// Parent's resolved provider+model identity at spawn time —
+    /// threaded from `AgentSpawnRequest.parent_runtime_snapshot`. The
+    /// adapter compares against the freshly resolved child identity
+    /// to detect `RuntimeConfig` drift between parent's last turn and
+    /// the child's first turn, and (for Fork mode) to enforce prompt-
+    /// cache parity. Skipped at the JSON boundary — purely in-process.
+    /// See `coco_types::SubagentRuntimeSnapshot`.
+    #[serde(skip)]
+    pub parent_runtime_snapshot: Option<coco_types::SubagentRuntimeSnapshot>,
+    /// Resolved agent definition for this query — threaded from
+    /// `AgentSpawnRequest.definition`. The adapter (and downstream
+    /// engine factory) consult `definition.model` /
+    /// `definition.model_role` for spawn-time identity decisions, and
+    /// `definition.system_prompt` / `definition.initial_prompt` for
+    /// content. Skipped at the JSON boundary.
+    #[serde(skip)]
+    pub definition: Option<Arc<coco_types::AgentDefinition>>,
+    /// Optional per-spawn permission bridge (D3). When present, the
+    /// adapter installs it on the child engine via
+    /// `with_permission_bridge`, replacing any parent-inherited
+    /// bridge. Worker spawns set this to a [`MailboxPermissionBridge`]
+    /// (cross-process) or in-process equivalent so a worker's
+    /// permission-deny path forwards to the team leader instead of
+    /// failing closed.
+    ///
+    /// Skipped at the JSON boundary — `Arc<dyn Trait>` doesn't
+    /// serialise, and permission routing is purely in-process.
+    #[serde(skip)]
+    pub permission_bridge: Option<crate::permission_bridge::ToolPermissionBridgeRef>,
+    /// Optional `CoreEvent` sink the engine writes to during the
+    /// child query. Used by the AgentTool background path to stream
+    /// `Stream::TextDelta` events into a per-task output buffer so
+    /// `TaskOutput` returns mid-flight text instead of just the
+    /// final response. `None` ⇒ events are emitted into a discarded
+    /// channel (existing behaviour). Skipped at the JSON boundary
+    /// — `mpsc::Sender` doesn't serialise.
+    #[serde(skip)]
+    pub event_tx: Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
 }
 
 /// Result of a multi-turn agent query.

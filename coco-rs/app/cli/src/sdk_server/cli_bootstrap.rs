@@ -17,6 +17,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use coco_commands::CommandRegistry;
 use coco_inference::auth::AuthMethod;
+use coco_subagent::AgentDefinitionStore;
+use coco_subagent::BuiltinAgentCatalog;
+use coco_subagent::definition_store::AgentSearchPaths;
 use coco_types::AgentDefinition;
 use coco_types::FastModeState;
 use coco_types::SdkAccountInfo;
@@ -51,11 +54,10 @@ pub struct CliInitializeBootstrap {
     /// markdown files. Built-ins from [`BUILTIN_OUTPUT_STYLES`] are
     /// always included.
     pub output_style_dirs: Vec<PathBuf>,
-    /// User / project directories to walk for custom agent definition
-    /// markdown files. Built-ins from
-    /// [`coco_tools::tools::agent_spawn::builtin_agents`] are always
-    /// included on top.
-    pub agent_dirs: Vec<PathBuf>,
+    /// Search paths for custom agent definition markdown files. Built-ins
+    /// resolved through [`coco_subagent::BuiltinAgentCatalog::interactive`]
+    /// are always included on top.
+    pub agent_search_paths: AgentSearchPaths,
     /// Resolved auth method for the active session. Controls how
     /// `account()` maps to [`coco_types::SdkAccountInfo`]. `None` →
     /// no auth configured, empty account.
@@ -70,7 +72,7 @@ impl CliInitializeBootstrap {
             command_registry: None,
             output_style,
             output_style_dirs: Vec::new(),
-            agent_dirs: Vec::new(),
+            agent_search_paths: AgentSearchPaths::empty(),
             auth_method: None,
         }
     }
@@ -85,8 +87,8 @@ impl CliInitializeBootstrap {
         self
     }
 
-    pub fn with_agent_dirs(mut self, dirs: Vec<PathBuf>) -> Self {
-        self.agent_dirs = dirs;
+    pub fn with_agent_search_paths(mut self, paths: AgentSearchPaths) -> Self {
+        self.agent_search_paths = paths;
         self
     }
 
@@ -122,30 +124,28 @@ impl InitializeBootstrap for CliInitializeBootstrap {
     }
 
     async fn agents(&self) -> Vec<SdkAgentInfo> {
-        let dirs = self.agent_dirs.clone();
+        let paths = self.agent_search_paths.clone();
         tokio::task::spawn_blocking(move || {
-            let mut defs = coco_tools::tools::agent_spawn::builtin_agents();
-            defs.extend(coco_tools::tools::agent_spawn::load_agents_from_dirs(&dirs));
-            // User-defined agents with the same name as a built-in
-            // override the built-in — HashMap::insert replaces on
-            // duplicate key, and `load_agents_from_dirs` appends after
-            // built-ins so the user-defined entries land second and win.
-            let mut by_name: std::collections::HashMap<String, AgentDefinition> =
-                std::collections::HashMap::new();
-            for def in defs {
-                by_name.insert(def.name.clone(), def);
-            }
-            let mut out: Vec<SdkAgentInfo> =
-                by_name.into_values().map(def_to_sdk_agent_info).collect();
+            let mut store = AgentDefinitionStore::new(BuiltinAgentCatalog::interactive(), paths);
+            store.load();
+            // The store already applies source precedence — built-ins under
+            // user/project markdown overrides — so iterating `active()` gives
+            // the deduplicated set the AgentTool will see at spawn time.
+            let mut out: Vec<SdkAgentInfo> = store
+                .snapshot()
+                .active()
+                .cloned()
+                .map(def_to_sdk_agent_info)
+                .collect();
             out.sort_by(|a, b| a.name.cmp(&b.name));
             out
         })
         .await
         .unwrap_or_else(|_| {
-            // spawn_blocking panicked inside the closure. Fall back to
-            // the built-in set so `initialize.agents` is never empty
-            // just because a markdown file had a parse bug.
-            coco_tools::tools::agent_spawn::builtin_agents()
+            // spawn_blocking panicked inside the closure. Fall back to the
+            // built-in set so `initialize.agents` is never empty just
+            // because a markdown file had a parse bug.
+            coco_subagent::builtin_definitions(BuiltinAgentCatalog::interactive())
                 .into_iter()
                 .map(def_to_sdk_agent_info)
                 .collect()

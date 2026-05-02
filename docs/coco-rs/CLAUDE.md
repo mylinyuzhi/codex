@@ -43,6 +43,7 @@ Each piece of information has exactly one owner. No duplication across docs.
 | Steering: mid-turn message queue, CommandQueue, QueryGuard, attachment injection | `crate-coco-query.md` | |
 | Prompt cache break detection, CacheScope, CacheBreakDetector | `crate-coco-inference.md` | |
 | AgentTool architecture: spawn, fork, worktree, tool filtering, agent-as-task | `crate-coco-tools.md` | |
+| **Tool Result Budget** (Level 1 per-tool persist + Level 2 per-message budget) | `tool-result-budget-plan.md` | crate-coco-tool-runtime / crate-coco-tools / crate-coco-query / crate-coco-compact reference, not redefine |
 | Skills loading, SkillDefinition, SkillManager, bundled registry | `crate-coco-skills.md` | |
 | Hooks: HooksSettings, HookMatcher, HookCommand, HookExecutor, AsyncHookRegistry | `crate-coco-hooks.md` | |
 | Background task execution: TaskState, isBackgrounded, task output, notification, PlanFileManager | `crate-coco-tasks.md` | |
@@ -661,6 +662,8 @@ Added in Round 2 review:
 | `ts-to-rust-mapping.md` | Every TS `src/` directory -> Rust crate (version, strategy) |
 | `ts-utils-mapping.md` | All 338 TS `src/utils/*.ts` files -> Rust target |
 | `multi-provider-plan.md` | Multi-LLM architecture: flow, beta headers, provider branching |
+| `tool-result-budget-plan.md` | Two-level Tool Result Budget plan: Level 1 per-tool persistence (`<persisted-output>` + 2KB preview + session-scoped storage) and Level 2 per-message aggregate budget (`ContentReplacementState` + `enforceToolResultBudget`). Owners: `coco-tool-runtime` + `coco-query` + `coco-session` (re-routed from `coco-context`). |
+| `parity-skills-commands-plugins.md` | Deep-review parity plan for `coco-skills` / `coco-commands` / `coco-plugins`: every P1/P2/P3 gap mirrors TS define/behavior/UI with file:line citations. Round 11 (May 2026). Cross-references `crate-coco-{skills,commands,plugins}.md` and `audit-gaps.md`. |
 | `config-file-map.md` | Every file coco-rs reads/writes, which crate owns it |
 | `audit-gaps.md` | Gap analysis with fix status and priority |
 | `crate-coco-types.md` | Foundation types (Message, Permission, Tool, Task, Provider) |

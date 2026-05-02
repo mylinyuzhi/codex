@@ -58,11 +58,18 @@ impl SystemPrompt {
 ///
 /// TS: buildEffectiveSystemPrompt() — assembles identity, CLAUDE.md,
 /// environment info, tool policies, and injections.
+///
+/// `memory_section` is the pre-rendered auto-memory block — typically
+/// produced by `coco_memory::prompt::build_system_prompt_section`. We
+/// take it as an opaque `&str` so this crate stays free of a memory
+/// dependency; the caller (app/cli session bootstrap) builds it
+/// against the configured `MemoryRuntime` and threads it through.
 pub fn build_system_prompt(
     identity: &str,
     claude_md_files: &[crate::ClaudeMdFile],
     environment: &crate::EnvironmentInfo,
     skill_listing: Option<&str>,
+    memory_section: Option<&str>,
     custom_append: Option<&str>,
 ) -> SystemPrompt {
     let mut prompt = SystemPrompt::new();
@@ -100,6 +107,16 @@ pub fn build_system_prompt(
         prompt.add_text(format!("\n# Available Skills\n{skills}"));
     }
 
+    // Auto-memory block: type taxonomy + how-to-save + MEMORY.md.
+    // Cache-broken so MEMORY.md edits don't invalidate the identity
+    // / CLAUDE.md prefix above it.
+    if let Some(memory) = memory_section
+        && !memory.is_empty()
+    {
+        prompt.add_cache_breakpoint();
+        prompt.add_text(memory);
+    }
+
     // Custom append (user-specified extra instructions)
     if let Some(append) = custom_append
         && !append.is_empty()
@@ -119,6 +136,7 @@ pub fn build_minimal_prompt(cwd: &std::path::Path) -> SystemPrompt {
         "You are an AI coding assistant. Be concise and helpful.",
         &claude_files,
         &env,
+        None,
         None,
         None,
     )

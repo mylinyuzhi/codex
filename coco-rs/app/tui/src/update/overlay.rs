@@ -19,13 +19,20 @@ use crate::state::SessionBrowserOverlay;
 use crate::state::SessionOption;
 use crate::state::SuggestionKind;
 use crate::update_rewind;
+use crate::widgets::suggestion_popup::SuggestionMeta;
 
 /// Splice the currently selected suggestion back into the input buffer.
 ///
-/// Replaces everything from `trigger_pos` to the cursor with the selection's
-/// label (stripped of its trigger-equivalent prefix). Adds a trailing space
-/// so the user can continue typing. Clears `active_suggestions` on commit so
-/// the popup dismisses — the user is out of the trigger range now.
+/// Replaces everything from `trigger_pos` to the cursor with a formatted
+/// rendering of the selection. Mirrors TS `formatReplacementValue` +
+/// `applyDirectorySuggestion` (`useTypeahead.tsx:148,237`):
+///   - directories → `@<path>/` and **leave the popup open** so the user
+///     can keep narrowing
+///   - files       → `@<path> ` (trailing space, popup dismisses)
+///   - paths with whitespace → auto-quoted: `@"<path>" `
+///   - agents      → `@agent-<type> `
+///   - symbols     → `@#<sym> `
+///   - slash       → `<label> ` (label already has `/` prefix)
 fn accept_suggestion(state: &mut AppState) {
     let Some(sug) = state.ui.active_suggestions.take() else {
         return;
@@ -34,19 +41,30 @@ fn accept_suggestion(state: &mut AppState) {
         state.ui.active_suggestions = None;
         return;
     };
-    // Slash labels are already prefixed with `/`; mention labels are not.
-    // For @-mentions we re-add the `@` to stay consistent with the text
-    // the user originally typed.
-    let insertion = match sug.kind {
-        SuggestionKind::SlashCommand => format!("{} ", item.label),
-        SuggestionKind::File | SuggestionKind::Agent | SuggestionKind::Symbol => {
-            let prefix = match sug.kind {
-                SuggestionKind::Agent => "@agent-",
-                SuggestionKind::Symbol => "@#",
-                _ => "@",
+
+    let is_directory = matches!(
+        item.metadata,
+        Some(SuggestionMeta::Path { is_directory: true })
+    );
+
+    let (insertion, keep_popup) = match sug.kind {
+        SuggestionKind::SlashCommand => (format!("{} ", item.label), false),
+        SuggestionKind::File => {
+            let body = if item.label.contains(char::is_whitespace) {
+                format!("@\"{}\"", item.label)
+            } else {
+                format!("@{}", item.label)
             };
-            format!("{prefix}{} ", item.label)
+            if is_directory {
+                // Append `/` and re-detect the trigger so the popup
+                // keeps showing entries inside the chosen directory.
+                (format!("{body}/"), true)
+            } else {
+                (format!("{body} "), false)
+            }
         }
+        SuggestionKind::Agent => (format!("@agent-{} ", item.label), false),
+        SuggestionKind::Symbol => (format!("@#{} ", item.label), false),
     };
 
     let text = &state.ui.input.text;
@@ -58,6 +76,14 @@ fn accept_suggestion(state: &mut AppState) {
     new_text.push_str(&chars[end..].iter().collect::<String>());
     state.ui.input.text = new_text;
     state.ui.input.cursor = (start + insertion.chars().count()) as i32;
+
+    // For directory completions, re-trigger the popup so the next
+    // search runs against the new prefix. `accept_suggestion` already
+    // took `active_suggestions`; let `refresh_suggestions` install a
+    // fresh popup keyed off the new query.
+    if keep_popup {
+        crate::autocomplete::refresh_suggestions(state);
+    }
 }
 
 /// Handle `Approve` for the current overlay.
@@ -459,23 +485,48 @@ pub(super) async fn confirm(state: &mut AppState, command_tx: &mpsc::Sender<User
             }
         }
         Some(Overlay::Rewind(mut r)) => {
-            if let Some((message_id, restore_type)) = update_rewind::handle_rewind_confirm(&mut r) {
-                let _ = command_tx
-                    .send(UserCommand::Rewind {
-                        message_id,
-                        restore_type,
-                    })
-                    .await;
-            } else {
-                // Phase transition; put overlay back.
-                state.ui.overlay = Some(Overlay::Rewind(r));
-                return;
+            // Capture the 1-based turn number for the protocol-level
+            // `rewind/completed` notification before handle_rewind_confirm
+            // mutates the overlay phase. `selected` is 0-based against the
+            // filtered messages vec, so +1 yields the user-visible label.
+            let rewound_turn = r.selected + 1;
+            match update_rewind::handle_rewind_confirm(&mut r) {
+                update_rewind::ConfirmOutcome::Dispatch {
+                    message_id,
+                    restore,
+                } => {
+                    // Keep the overlay open in `Confirming` phase while
+                    // the rewind/summarize is in flight. TS:
+                    // `MessageSelector.tsx:341-344`. `on_rewind_completed`
+                    // dismisses the overlay when the engine notifies completion.
+                    r.phase = crate::state::rewind::RewindPhase::Confirming;
+                    state.ui.overlay = Some(Overlay::Rewind(r));
+                    let _ = command_tx
+                        .send(UserCommand::Rewind {
+                            message_id,
+                            restore_type: restore,
+                            rewound_turn,
+                        })
+                        .await;
+                }
+                update_rewind::ConfirmOutcome::Phase => {
+                    // Phase transition without dispatch — put overlay back.
+                    state.ui.overlay = Some(Overlay::Rewind(r));
+                }
+                update_rewind::ConfirmOutcome::Dismiss => {
+                    // Synthetic `(current)` row or preselected-Nevermind:
+                    // close overlay (TS `MessageSelector.tsx:165` /
+                    // line 186).
+                    // (overlay already taken; do not put back.)
+                }
             }
+            return;
         }
         Some(Overlay::SessionBrowser(s)) => {
             if let Some(session) = filtered_sessions(&s).get(s.selected as usize) {
                 let _ = command_tx
                     .send(UserCommand::SubmitInput {
+                        user_message_id: uuid::Uuid::new_v4().to_string(),
                         content: format!("/resume {}", session.id),
                         display_text: None,
                         images: Vec::new(),
@@ -492,6 +543,7 @@ pub(super) async fn confirm(state: &mut AppState, command_tx: &mpsc::Sender<User
                 };
                 let _ = command_tx
                     .send(UserCommand::SubmitInput {
+                        user_message_id: uuid::Uuid::new_v4().to_string(),
                         content: cmd.to_string(),
                         display_text: None,
                         images: Vec::new(),
@@ -591,12 +643,14 @@ pub(super) async fn confirm(state: &mut AppState, command_tx: &mpsc::Sender<User
 
 /// Send `RequestDiffStats` for the selected message when a Rewind overlay
 /// is active — TS: MessageSelector useEffect recomputes on index change.
+/// Skips the synthetic current-prompt row (no snapshot exists for "now").
 pub(super) async fn request_diff_stats_if_rewind(
     state: &AppState,
     command_tx: &mpsc::Sender<UserCommand>,
 ) {
     if let Some(Overlay::Rewind(ref r)) = state.ui.overlay
         && let Some(msg) = r.messages.get(r.selected as usize)
+        && !msg.is_current_prompt
     {
         let _ = command_tx
             .send(UserCommand::RequestDiffStats {

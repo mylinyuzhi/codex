@@ -42,3 +42,47 @@ fn test_apply_patch_tool_type_default() {
     let default = ApplyPatchToolType::default();
     assert_eq!(default, ApplyPatchToolType::Freeform);
 }
+
+#[test]
+fn test_model_role_as_str_matches_serde() {
+    for role in [
+        ModelRole::Main,
+        ModelRole::Fast,
+        ModelRole::Compact,
+        ModelRole::Plan,
+        ModelRole::Explore,
+        ModelRole::Review,
+        ModelRole::HookAgent,
+        ModelRole::Memory,
+        ModelRole::Subagent,
+    ] {
+        let json = serde_json::to_string(&role).unwrap();
+        assert_eq!(json, format!("\"{}\"", role.as_str()));
+    }
+}
+
+#[test]
+fn test_model_role_from_str_canonical() {
+    assert_eq!("main".parse::<ModelRole>().unwrap(), ModelRole::Main);
+    assert_eq!("explore".parse::<ModelRole>().unwrap(), ModelRole::Explore);
+    assert_eq!(
+        "hook_agent".parse::<ModelRole>().unwrap(),
+        ModelRole::HookAgent
+    );
+}
+
+#[test]
+fn test_model_role_from_str_accepts_camelcase_and_whitespace() {
+    assert_eq!(
+        "hookAgent".parse::<ModelRole>().unwrap(),
+        ModelRole::HookAgent
+    );
+    assert_eq!("  Plan  ".parse::<ModelRole>().unwrap(), ModelRole::Plan);
+    assert_eq!("EXPLORE".parse::<ModelRole>().unwrap(), ModelRole::Explore);
+}
+
+#[test]
+fn test_model_role_from_str_rejects_unknown() {
+    assert!("nope".parse::<ModelRole>().is_err());
+    assert!("".parse::<ModelRole>().is_err());
+}

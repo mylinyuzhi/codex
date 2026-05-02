@@ -283,6 +283,10 @@ pub struct ModelSelectionSettings {
     pub review: Option<RoleSlots<ModelSelection>>,
     pub hook_agent: Option<RoleSlots<ModelSelection>>,
     pub memory: Option<RoleSlots<ModelSelection>>,
+    /// Forked-agent spawn model (TS `tools/AgentTool/`). Generic role
+    /// for agent/skill subagent dispatch — distinct from `explore`,
+    /// which is the investigative subagent type.
+    pub subagent: Option<RoleSlots<ModelSelection>>,
 }
 
 #[cfg(test)]

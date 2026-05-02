@@ -140,15 +140,27 @@ fn map_confirmation_key(key: KeyEvent) -> Option<TuiCommand> {
 
 /// Keys for filterable list overlays (model picker, command palette, etc.).
 fn map_picker_key(key: KeyEvent) -> Option<TuiCommand> {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     match key.code {
+        // Top/bottom — TS `messageSelector:top|bottom` (defaultBindings.ts:256-263).
+        KeyCode::Home => Some(TuiCommand::OverlayJumpStart),
+        KeyCode::End => Some(TuiCommand::OverlayJumpEnd),
+        KeyCode::Up if shift => Some(TuiCommand::OverlayJumpStart),
+        KeyCode::Down if shift => Some(TuiCommand::OverlayJumpEnd),
         KeyCode::Up => Some(TuiCommand::OverlayPrev),
         KeyCode::Down => Some(TuiCommand::OverlayNext),
         KeyCode::Enter => Some(TuiCommand::OverlayConfirm),
         KeyCode::Esc => Some(TuiCommand::Cancel),
         KeyCode::Backspace => Some(TuiCommand::OverlayFilterBackspace),
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            Some(TuiCommand::Cancel)
-        }
+        KeyCode::Char('c') if ctrl => Some(TuiCommand::Cancel),
+        // Vim + emacs nav aliases — TS `messageSelector:up|down` accepts
+        // k / j / ctrl+p / ctrl+n. For text-input pickers (model picker,
+        // command palette) Char(c) routes into the filter; we keep that
+        // path by short-circuiting only on ctrl+p / ctrl+n which would
+        // otherwise be no-ops in those overlays.
+        KeyCode::Char('p') if ctrl => Some(TuiCommand::OverlayPrev),
+        KeyCode::Char('n') if ctrl => Some(TuiCommand::OverlayNext),
         KeyCode::Char(c) => Some(TuiCommand::OverlayFilter(c)),
         _ => None,
     }

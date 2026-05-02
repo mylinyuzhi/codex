@@ -1,10 +1,10 @@
 //! Message predicates — 19 boolean checks used throughout the pipeline.
 
-use coco_types::AssistantContent;
-use coco_types::LlmMessage;
-use coco_types::Message;
-use coco_types::MessageKind;
-use coco_types::StopReason;
+use crate::AssistantContent;
+use crate::LlmMessage;
+use crate::Message;
+use crate::MessageKind;
+use crate::StopReason;
 use coco_types::ToolId;
 
 pub fn is_user_message(msg: &Message) -> bool {
@@ -111,7 +111,7 @@ pub fn has_text_content(msg: &Message) -> bool {
         Message::User(m) => match &m.message {
             LlmMessage::User { content, .. } => content
                 .iter()
-                .any(|c| matches!(c, coco_types::UserContent::Text(_))),
+                .any(|c| matches!(c, crate::UserContent::Text(_))),
             _ => false,
         },
         Message::Assistant(m) => match &m.message {
@@ -126,7 +126,7 @@ pub fn has_text_content(msg: &Message) -> bool {
 
 /// Whether a message is an API error system message.
 pub fn is_api_error_message(msg: &Message) -> bool {
-    matches!(msg, Message::System(coco_types::SystemMessage::ApiError(_)))
+    matches!(msg, Message::System(crate::SystemMessage::ApiError(_)))
 }
 
 /// Whether a message is a tool use summary.

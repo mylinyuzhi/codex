@@ -23,11 +23,8 @@
 use std::pin::Pin;
 use std::sync::Arc;
 
-use coco_inference::ApiClient;
-use coco_query::QueryEngine;
+use coco_messages::MessageHistory;
 use coco_query::QueryEngineConfig;
-use coco_tool_runtime::ToolPermissionBridgeRef;
-use coco_tool_runtime::ToolRegistry;
 use coco_types::CoreEvent;
 use coco_types::TurnStartParams;
 use tokio::sync::mpsc;
@@ -41,73 +38,36 @@ use crate::sdk_server::handlers::TurnRunner;
 /// `TurnRunner` implementation that spawns a fresh `QueryEngine` per
 /// turn.
 ///
-/// Holds shared process-level resources (model client, tool registry)
-/// so each turn can construct an engine cheaply without reloading
-/// providers or re-registering tools.
+/// Holds an `Arc<SessionRuntime>` — the same per-session state container
+/// the TUI runner uses. Per-turn engine assembly routes through
+/// `runtime.build_engine_from_config(...)` so SDK and TUI share the
+/// `with_*` install list.
 pub struct QueryEngineRunner {
-    client: Arc<ApiClient>,
-    /// Ordered Main-role fallback chain installed on every per-turn
-    /// engine. Empty when the session has no fallback configured.
-    fallback_clients: Vec<Arc<ApiClient>>,
-    /// Optional half-open recovery policy for Main. Installed on
-    /// every per-turn engine so probes happen consistently across
-    /// turns.
-    recovery_policy: Option<coco_config::FallbackRecoveryPolicy>,
-    tools: Arc<ToolRegistry>,
+    runtime: Arc<crate::session_runtime::SessionRuntime>,
     /// Max output tokens per turn. Pulled from CLI flags at startup.
     max_output_tokens: i64,
     /// Max internal agent turns (tool-use iterations) per SDK turn.
     max_turns: i32,
     /// Optional system prompt. When None, the engine uses its default.
     system_prompt: Option<String>,
-    /// Optional permission bridge installed on each turn's `QueryEngine`.
-    /// Wire `SdkPermissionBridge` here to route `PermissionDecision::Ask`
-    /// to the SDK client via `approval/askForApproval`.
-    permission_bridge: Option<ToolPermissionBridgeRef>,
 }
 
 impl QueryEngineRunner {
-    /// Build a runner from pre-constructed shared resources.
+    /// Build a runner from a pre-constructed [`SessionRuntime`] (which
+    /// already owns the client / tools / fallbacks / hook registry / all
+    /// session subsystems).
     pub fn new(
-        client: Arc<ApiClient>,
-        tools: Arc<ToolRegistry>,
+        runtime: Arc<crate::session_runtime::SessionRuntime>,
         max_output_tokens: i64,
         max_turns: i32,
         system_prompt: Option<String>,
     ) -> Self {
         Self {
-            client,
-            fallback_clients: Vec::new(),
-            recovery_policy: None,
-            tools,
+            runtime,
             max_output_tokens,
             max_turns,
             system_prompt,
-            permission_bridge: None,
         }
-    }
-
-    /// Install a Main-role fallback chain. Each per-turn engine
-    /// gets the same chain so the runtime can advance slots on
-    /// capacity-error streaks mid-turn.
-    pub fn with_fallback_clients(mut self, clients: Vec<Arc<ApiClient>>) -> Self {
-        self.fallback_clients = clients;
-        self
-    }
-
-    /// Install a half-open recovery policy. Each per-turn engine
-    /// probes the primary according to the same backoff schedule;
-    /// `None` = sticky fallback.
-    pub fn with_recovery_policy(mut self, policy: coco_config::FallbackRecoveryPolicy) -> Self {
-        self.recovery_policy = Some(policy);
-        self
-    }
-
-    /// Install a `ToolPermissionBridge` that every per-turn `QueryEngine`
-    /// will consult when hitting `PermissionDecision::Ask`.
-    pub fn with_permission_bridge(mut self, bridge: ToolPermissionBridgeRef) -> Self {
-        self.permission_bridge = Some(bridge);
-        self
     }
 }
 
@@ -123,11 +83,7 @@ impl TurnRunner for QueryEngineRunner {
         let system_prompt = self.system_prompt.clone();
         let max_output_tokens = self.max_output_tokens;
         let max_turns = self.max_turns;
-        let client = self.client.clone();
-        let fallback_clients = self.fallback_clients.clone();
-        let recovery_policy = self.recovery_policy;
-        let tools = self.tools.clone();
-        let permission_bridge = self.permission_bridge.clone();
+        let runtime = self.runtime.clone();
         let history_handle = handoff.history.clone();
         Box::pin(async move {
             info!(
@@ -137,32 +93,28 @@ impl TurnRunner for QueryEngineRunner {
                 "QueryEngineRunner: run_turn"
             );
 
-            // Resolve the permission mode. Priority order (most
-            // specific first):
-            //   1. `params.permission_mode` — turn-scoped override
-            //      from the `turn/start` request. TS parity:
-            //      `SDKTurnStartRequest.permissionMode`.
-            //   2. `handoff.permission_mode` — session-scoped override
-            //      set by `control/setPermissionMode`. Previously this
-            //      field was dead (no reader). Now it's the bridge
-            //      between the SDK control API and the engine.
-            //   3. `PermissionMode::default()` — factory default.
+            // Resolve the permission mode. Priority:
+            //   1. `params.permission_mode` (turn-scoped, TS parity).
+            //   2. `handoff.permission_mode` (session-scoped, set by
+            //      `control/setPermissionMode`).
+            //   3. `PermissionMode::default()`.
             let permission_mode = params
                 .permission_mode
                 .or(handoff.permission_mode)
                 .unwrap_or_default();
-            let runtime_config =
-                coco_config::RuntimeConfigBuilder::from_process(handoff.cwd.as_str()).build()?;
 
+            // Re-use the SessionRuntime's already-loaded `RuntimeConfig`
+            // instead of re-running `RuntimeConfigBuilder::from_process`
+            // per turn. The runtime's config is the canonical session-
+            // scoped resolution (incl. CLI overrides + flag settings);
+            // rebuilding from `from_process` would lose them and slow
+            // every turn down by re-walking settings layers.
+            let runtime_config = runtime.runtime_config.as_ref();
             let config = QueryEngineConfig {
-                model_name: handoff.model.clone(),
+                model_id: handoff.model.clone(),
                 permission_mode,
                 context_window: 200_000,
                 max_output_tokens,
-                // SDK callers already pass a scalar `max_turns` via the
-                // runner config, so prefer that and fall back to the
-                // resolved `LoopConfig` value when the caller didn't
-                // pin it.
                 max_turns: if max_turns > 0 {
                     max_turns
                 } else {
@@ -171,33 +123,30 @@ impl TurnRunner for QueryEngineRunner {
                 max_tokens: runtime_config.loop_config.max_tokens.map(i64::from),
                 system_prompt,
                 streaming_tool_execution: runtime_config.loop_config.enable_streaming_tools,
-                tool_config: runtime_config.tool,
-                sandbox_config: runtime_config.sandbox,
-                memory_config: runtime_config.memory,
-                shell_config: runtime_config.shell,
-                web_fetch_config: runtime_config.web_fetch,
-                web_search_config: runtime_config.web_search,
-                features: std::sync::Arc::new(runtime_config.features),
-                tool_overrides: runtime_config.tool_overrides,
+                session_id: handoff.session_id.clone(),
+                tool_config: runtime_config.tool.clone(),
+                sandbox_config: runtime_config.sandbox.clone(),
+                memory_config: runtime_config.memory.clone(),
+                shell_config: runtime_config.shell.clone(),
+                web_fetch_config: runtime_config.web_fetch.clone(),
+                web_search_config: runtime_config.web_search.clone(),
+                compact: runtime_config.compact.clone(),
+                features: std::sync::Arc::new(runtime_config.features.clone()),
+                tool_overrides: runtime_config.tool_overrides.clone(),
                 ..Default::default()
             };
 
-            let mut engine = QueryEngine::new(config, client, tools, cancel, /*hooks*/ None)
-                // Attach the session's shared `ToolAppState` so
-                // plan-mode cadence + live permission mode persist
-                // across turns and mid-session `setPermissionMode`
-                // calls propagate to the engine live. TS parity:
-                // `appState` is session-lifetime.
-                .with_app_state(handoff.app_state.clone());
-            if !fallback_clients.is_empty() {
-                engine = engine.with_fallback_clients(fallback_clients);
-            }
-            if let Some(policy) = recovery_policy {
-                engine = engine.with_recovery_policy(policy);
-            }
-            if let Some(bridge) = permission_bridge {
-                engine = engine.with_permission_bridge(bridge);
-            }
+            // SDK pre-builds an engine_config with handoff overrides
+            // (model / session_id / cwd may differ from runtime
+            // defaults). `build_engine_from_config` installs every
+            // per-session subsystem via `wire_engine`, and the
+            // `app_state_override` argument keeps the compaction
+            // observers' app_state pointer aligned with the engine's —
+            // critical so post-compact resets reach the actual flags
+            // the engine reads, not a sibling runtime copy.
+            let engine = runtime
+                .build_engine_from_config(config, cancel, Some(handoff.app_state.clone()))
+                .await;
 
             // Snapshot the prior history, append a fresh user message,
             // and **persist the combined history back to shared state
@@ -212,8 +161,119 @@ impl TurnRunner for QueryEngineRunner {
             // message in the list and keys the file history snapshot
             // against it, so passing the whole combined list works
             // for both single and multi-turn scenarios.
+            // SDK-side `/compact` short-circuit. If the prompt arrives as
+            // a sentinel-prefixed string (slash-command handler output),
+            // run manual compaction directly rather than sending the
+            // sentinel text to the LLM as a user message.
+            // TS parity: REPL.tsx command dispatcher routes /compact
+            // through `compactConversation` rather than chat input.
+            if let Some(req) = coco_commands::handlers::compact::parse_compact_sentinel(&prompt) {
+                let combined: Vec<coco_messages::Message> = {
+                    let h = history_handle.lock().await;
+                    h.clone()
+                };
+                let mut history = MessageHistory::new();
+                for m in combined {
+                    history.push(m);
+                }
+                let custom_instructions = if req.custom_instructions.is_empty() {
+                    None
+                } else {
+                    Some(req.custom_instructions)
+                };
+                let event_tx_opt = Some(event_tx.clone());
+                engine
+                    .run_manual_compact(&mut history, &event_tx_opt, custom_instructions)
+                    .await;
+                {
+                    let mut h = history_handle.lock().await;
+                    *h = history.messages;
+                }
+                return Ok(());
+            }
+
+            // SDK-side `/dream` short-circuit — fire auto-memory
+            // consolidation directly. When the engine has no
+            // `MemoryRuntime` (Feature::AutoMemory off), we silently
+            // no-op. TS parity: `/dream` slash command.
+            if coco_commands::handlers::dream::parse_dream_sentinel(&prompt).is_some() {
+                if let Some(runtime) = engine.memory_runtime() {
+                    let transcript_dir = std::path::PathBuf::from(".");
+                    let now_ms = coco_memory::service::dream::DreamService::now_ms();
+                    let _ = runtime
+                        .dream
+                        .maybe_consolidate(&transcript_dir, &[], now_ms)
+                        .await;
+                }
+                return Ok(());
+            }
+
+            // SDK-side `/summary` short-circuit — force a 9-section
+            // session-memory update.
+            if coco_commands::handlers::summary::parse_summary_sentinel(&prompt).is_some() {
+                if let Some(runtime) = engine.memory_runtime() {
+                    let combined: Vec<coco_messages::Message> = {
+                        let h = history_handle.lock().await;
+                        h.clone()
+                    };
+                    let tokens = coco_compact::estimate_tokens(&combined);
+                    let _ = runtime.session_memory.force(tokens).await;
+                }
+                return Ok(());
+            }
+
+            // SDK-side `/btw` short-circuit (D1). When the prompt is
+            // the BTW sentinel emitted by `handlers::btw::handler`,
+            // dispatch a one-shot fork via the runtime's
+            // [`ForkDispatcher`] instead of mutating the parent
+            // engine. The dispatcher builds a *fresh* engine, runs a
+            // single turn against it, and returns the response text;
+            // the parent's history and cache slot are untouched.
+            //
+            // TS parity: `commands/btw.ts` calls `runForkedAgent`
+            // which constructs an `AgentQueryConfig` with
+            // `lastCacheSafeParams`, runs one turn, and surfaces the
+            // result as a meta message.
+            if let Some(req) = coco_commands::handlers::btw::parse_btw_sentinel(&prompt) {
+                let cache = engine.last_cache_safe_params().await;
+                let response_text = match cache {
+                    None => format!(
+                        "{}\n(no parent turn yet — run a regular prompt first so /btw can share its cache)",
+                        req.display_text
+                    ),
+                    Some(cache) => match runtime.current_fork_dispatcher().await {
+                        None => format!(
+                            "{}\n(fork dispatcher not installed — /btw requires CLI bootstrap)",
+                            req.display_text
+                        ),
+                        Some(dispatcher) => {
+                            let options = coco_query::forked_agent::one_shot_options("/btw");
+                            match dispatcher
+                                .dispatch(&cache, &options, &req.question, None)
+                                .await
+                            {
+                                Ok(result) => {
+                                    format!("{}\n\n{}", req.display_text, result.text)
+                                }
+                                Err(e) => {
+                                    format!("{}\n(side-question failed: {e})", req.display_text)
+                                }
+                            }
+                        }
+                    },
+                };
+                // Surface the answer as a meta message — visible to
+                // SDK consumers but flagged so future compaction
+                // passes know it's not part of the main conversation.
+                {
+                    let mut h = history_handle.lock().await;
+                    h.push(coco_messages::create_meta_message(&response_text));
+                }
+                return Ok(());
+            }
+
             let new_user_msg = coco_messages::create_user_message(&prompt);
-            let combined: Vec<coco_types::Message> = {
+            let combined: Vec<coco_messages::Message> = {
                 let mut h = history_handle.lock().await;
                 h.push(new_user_msg);
                 h.clone()

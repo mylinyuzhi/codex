@@ -29,6 +29,25 @@ pub struct CoordinatorTask {
     pub queued_messages: i32,
 }
 
+impl CoordinatorTask {
+    /// Convert from a session-state `SubagentInstance`. Token count
+    /// and elapsed_ms aren't tracked on the per-instance struct yet,
+    /// so they default to 0 — the panel still renders meaningfully,
+    /// and when richer telemetry lands the field can populate without
+    /// changing the call site (P2 minimum-viable rendering).
+    pub fn from_subagent(s: &crate::state::SubagentInstance) -> Self {
+        use crate::state::SubagentStatus;
+        Self {
+            task_id: s.agent_id.clone(),
+            description: s.description.clone(),
+            is_running: matches!(s.status, SubagentStatus::Running),
+            elapsed_ms: 0,
+            token_count: 0,
+            queued_messages: 0,
+        }
+    }
+}
+
 /// Coordinator agent status panel widget.
 pub struct CoordinatorPanel<'a> {
     tasks: &'a [CoordinatorTask],

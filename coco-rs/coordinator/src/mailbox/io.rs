@@ -1,0 +1,205 @@
+//! On-disk I/O for teammate mailboxes.
+//!
+//! Inbox layout: `~/.claude/teams/{team_name}/inboxes/{agent_name}.json`.
+//! Each file is a JSON array of [`TeammateMessage`]. Concurrent writes
+//! are serialised by the advisory lock helpers in
+//! [`super::lock::with_inbox_lock`].
+//!
+//! TS: `utils/teammateMailbox.ts` (path resolution, read / write / mark
+//! / clear, format helpers).
+
+use std::path::PathBuf;
+
+use serde::Deserialize;
+use serde::Serialize;
+
+use crate::team_file::get_team_dir;
+
+use super::lock::{read_messages_no_lock, with_inbox_lock};
+
+// ── Core Message Type ──
+
+/// A message in the teammate mailbox.
+///
+/// TS: `TeammateMessage` in utils/teammateMailbox.ts
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TeammateMessage {
+    pub from: String,
+    pub text: String,
+    pub timestamp: String,
+    #[serde(default)]
+    pub read: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    /// Brief preview (5-10 words).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+}
+
+// ── Inbox Path ──
+
+/// Get the inbox directory for a team.
+fn inbox_dir(team_name: &str) -> PathBuf {
+    get_team_dir(team_name).join("inboxes")
+}
+
+/// Get the inbox file path for a specific agent.
+///
+/// TS: `getInboxPath(agentName, teamName)`
+pub fn inbox_path(agent_name: &str, team_name: &str) -> PathBuf {
+    inbox_dir(team_name).join(format!("{agent_name}.json"))
+}
+
+// ── Read / Write ──
+
+/// Read all messages from an agent's inbox.
+///
+/// TS: `readMailbox(agentName, teamName)`
+pub fn read_mailbox(agent_name: &str, team_name: &str) -> anyhow::Result<Vec<TeammateMessage>> {
+    let path = inbox_path(agent_name, team_name);
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let content = std::fs::read_to_string(&path)?;
+    if content.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let messages: Vec<TeammateMessage> = serde_json::from_str(&content)?;
+    Ok(messages)
+}
+
+/// Read only unread messages.
+///
+/// TS: `readUnreadMessages(agentName, teamName)`
+pub fn read_unread_messages(
+    agent_name: &str,
+    team_name: &str,
+) -> anyhow::Result<Vec<TeammateMessage>> {
+    let all = read_mailbox(agent_name, team_name)?;
+    Ok(all.into_iter().filter(|m| !m.read).collect())
+}
+
+/// Write a message to a recipient's inbox.
+///
+/// TS: `writeToMailbox(recipientName, message, teamName)` — uses
+/// `proper-lockfile` with 10 retries and 5-100 ms exponential backoff.
+/// We mirror that with `fs2`'s advisory exclusive lock on a sidecar
+/// `.lock` file; concurrent writers spin with backoff until they
+/// acquire it. Read-after-lock prevents the classic TOCTOU of
+/// "read-mailbox → append → write" losing a concurrent peer's message.
+pub fn write_to_mailbox(
+    recipient_name: &str,
+    message: TeammateMessage,
+    team_name: &str,
+) -> anyhow::Result<()> {
+    let path = inbox_path(recipient_name, team_name);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    with_inbox_lock(&path, |path| {
+        // Inside the lock: read-current, append, write. The outer lock
+        // serializes this RMW cycle against concurrent writers.
+        let mut messages = read_messages_no_lock(path).unwrap_or_default();
+        messages.push(message.clone());
+        let content = serde_json::to_string_pretty(&messages)?;
+        std::fs::write(path, content)?;
+        Ok(())
+    })
+}
+
+/// Mark all messages as read.
+///
+/// TS: `markMessagesAsRead(agentName, teamName)`
+pub fn mark_messages_as_read(agent_name: &str, team_name: &str) -> anyhow::Result<()> {
+    let path = inbox_path(agent_name, team_name);
+    if !path.exists() {
+        return Ok(());
+    }
+    let mut messages = read_mailbox(agent_name, team_name)?;
+    for msg in &mut messages {
+        msg.read = true;
+    }
+    let content = serde_json::to_string_pretty(&messages)?;
+    std::fs::write(&path, content)?;
+    Ok(())
+}
+
+/// Mark a message as read by index.
+///
+/// TS: `markMessageAsReadByIndex(agentName, teamName, messageIndex)`
+pub fn mark_message_as_read_by_index(
+    agent_name: &str,
+    team_name: &str,
+    index: usize,
+) -> anyhow::Result<()> {
+    let path = inbox_path(agent_name, team_name);
+    let mut messages = read_mailbox(agent_name, team_name)?;
+    if let Some(msg) = messages.get_mut(index) {
+        msg.read = true;
+        let content = serde_json::to_string_pretty(&messages)?;
+        std::fs::write(&path, content)?;
+    }
+    Ok(())
+}
+
+/// Mark messages as read by predicate.
+///
+/// TS: `markMessagesAsReadByPredicate(agentName, predicate, teamName?)`
+pub fn mark_messages_as_read_by_predicate(
+    agent_name: &str,
+    team_name: &str,
+    predicate: impl Fn(&TeammateMessage) -> bool,
+) -> anyhow::Result<()> {
+    let path = inbox_path(agent_name, team_name);
+    if !path.exists() {
+        return Ok(());
+    }
+    let mut messages = read_mailbox(agent_name, team_name)?;
+    for msg in &mut messages {
+        if predicate(msg) {
+            msg.read = true;
+        }
+    }
+    let content = serde_json::to_string_pretty(&messages)?;
+    std::fs::write(&path, content)?;
+    Ok(())
+}
+
+/// Clear an agent's inbox.
+///
+/// TS: `clearMailbox(agentName, teamName)`
+pub fn clear_mailbox(agent_name: &str, team_name: &str) -> anyhow::Result<()> {
+    let path = inbox_path(agent_name, team_name);
+    if path.exists() {
+        std::fs::remove_file(&path)?;
+    }
+    Ok(())
+}
+
+/// Format teammate messages for display in the conversation.
+///
+/// TS: `formatTeammateMessages(messages)`
+pub fn format_teammate_messages(messages: &[TeammateMessage]) -> String {
+    messages
+        .iter()
+        .map(|m| {
+            let color_attr = m
+                .color
+                .as_deref()
+                .map(|c| format!(" color=\"{c}\""))
+                .unwrap_or_default();
+            let summary_attr = m
+                .summary
+                .as_deref()
+                .map(|s| format!(" summary=\"{s}\""))
+                .unwrap_or_default();
+            format!(
+                "<teammate_message teammate_id=\"{from}\"{color_attr}{summary_attr}>\n{text}\n</teammate_message>",
+                from = m.from,
+                text = m.text,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}

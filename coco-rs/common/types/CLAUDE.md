@@ -1,21 +1,19 @@
 # coco-types
 
-Foundation types shared across all crates. Depends only on `vercel-ai-provider` (L0) for LLM content types.
+Foundation types shared across all crates. **Zero LLM dependencies** — provider-specific types live in `coco-messages` (which reaches vercel-ai through the `coco-inference` seam). This crate stays provider-agnostic.
 
 ## TS Source
 - `types/` — `command.ts`, `hooks.ts`, `ids.ts`, `logs.ts`, `permissions.ts`, `plugin.ts`, `textInputTypes.ts`, `generated/` (build-time message types)
-- `Tool.ts` — tool trait/schema (`ToolInputSchema`, `ToolResult<T>`, `ToolProgress`)
+- `Tool.ts` — foundational tool identity (`ToolInputSchema`, `ToolName`, `ToolId`, `ToolProgress`). `ToolResult<T>` (which carries `Vec<Message>`) lives in `coco-messages`.
 - `Task.ts` — task lifecycle (`TaskType`, `TaskStatus`, `TaskStateBase`)
 
 ## Key Types
 
-Message layer: `Message`, `UserMessage`, `AssistantMessage`, `SystemMessage` (14 sub-variants), `AttachmentMessage`, `ToolResultMessage`, `ProgressMessage`, `TombstoneMessage`, `ToolUseSummaryMessage`, `StopReason`, `MessageOrigin`.
-
-Tool / Agent identity: `ToolName` (41 builtin variants, Copy), `ToolId` (Builtin/Mcp/Custom, flat-string serde), `SubagentType` (7 builtin variants), `AgentTypeId`, `ToolInputSchema`, `ToolResult<T>`, `ToolProgress`.
+Tool / Agent identity: `ToolName` (41 builtin variants, Copy), `ToolId` (Builtin/Mcp/Custom, flat-string serde), `SubagentType` (7 builtin variants), `AgentTypeId`, `ToolInputSchema`, `ToolProgress`.
 
 Permission: `PermissionMode` (camelCase wire), `PermissionBehavior`, `PermissionRule`, `PermissionRuleSource`, `PermissionDecision`, `PermissionDecisionReason`, `ToolPermissionContext`.
 
-Hook / Task / Command: `HookEventType` (27 variants, `#[non_exhaustive]`), `HookOutcome`, `HookResult`, `TaskType`, `TaskStatus`, `TaskStateBase`, `CommandBase`, `CommandType`, `CommandSource`.
+Hook / Task / Command: `HookEventType` (32 variants, `#[non_exhaustive]`), `HookOutcome`, `HookScope`, `TaskType`, `TaskStatus`, `TaskStateBase`, `CommandBase`, `CommandType`, `CommandSource`. (`HookResult` lives in `coco-messages` because it carries `Option<Message>`.)
 
 Provider / Model: `ProviderApi`, `ModelRole`, `ModelSpec`, `Capability`, `CapabilitySet`, `ApplyPatchToolType`, `WireApi`.
 
@@ -24,6 +22,14 @@ Thinking / Token / ID / Sandbox: `ThinkingLevel { effort, budget_tokens, options
 Event envelope (owned here — see `event-system-design.md`): `CoreEvent` (3-layer), `ServerNotification` (66 variants) + `NotificationMethod` (typed wire-method enum), `AgentStreamEvent`, `TuiOnlyEvent`, `ThreadItem`, plus 50+ event param structs.
 
 Wire protocol: `ClientRequest` + `ClientRequestMethod` (30 variants), `ServerRequest` + `ServerRequestMethod` (5 variants), `JsonRpcMessage` family, `RequestId`, `error_codes`.
+
+Attachment taxonomy: `AttachmentKind` (60 variants), `AttachmentEvent`, `Coverage`, `coverage_of`. Per-variant payloads (`AttachmentBody`, `SilentPayload`, `HookCancelledPayload`, …) live in `coco-messages` because the `Api` body embeds an `LlmMessage`.
+
+App-state: `ToolAppState`, `AppStatePatch`, `AppStateReadHandle` (typed cross-turn state).
+
+Extended (ported TS extensions): `AgentColorEntry`, `AttributionSnapshotEntry`, `CommandResultDisplay`, `PermissionExplanation`, `PromptRequest`, `RiskLevel`, `SessionMode`, `SummaryEntry`, etc. (`TranscriptMessage` and `TranscriptEntry` moved to `coco-messages` because they embed `Message`.)
+
+`CompactTrigger` lives here (rather than with the rest of the message family) because `event::CompactionPhaseParams` references it; keeping it in `coco-types` avoids a back-edge from the event layer to `coco-messages`.
 
 ### Wire-tagged-enum macro
 
@@ -35,22 +41,9 @@ Wire protocol: `ClientRequest` + `ClientRequestMethod` (30 variants), `ServerReq
 
 The same `$wire` literal drives `#[serde(rename)]` **and** `#[strum(serialize)]`, so the wire string cannot drift across accessors, schema, or cross-language codegens that consume `notification_method.json` / `client_request_method.json` / `server_request_method.json`.
 
-App-state: `ToolAppState`, `AppStatePatch`, `AppStateReadHandle` (typed cross-turn state, formerly `serde_json::Value`).
+## Vercel-AI Seam
 
-Extended (ported TS extensions): `AgentColorEntry`, `AttributionSnapshotEntry`, `CommandResultDisplay`, `PermissionExplanation`, `PromptRequest`, `RiskLevel`, `SessionMode`, `TranscriptEntry`, etc.
-
-## Version Isolation
-
-Re-exports vercel-ai v4 types under version-agnostic aliases — callers must use these, never `vercel_ai_provider::*` directly:
-
-| Alias | Source |
-|-------|--------|
-| `LlmMessage` | `LanguageModelV4Message` |
-| `LlmPrompt` | `LanguageModelV4Prompt` |
-| `UserContent` / `AssistantContent` / `ToolContent` | `*ContentPart` |
-| `TextContent` / `FileContent` / `ReasoningContent` / `ToolCallContent` / `ToolResultContent` | `TextPart` / `FilePart` / `ReasoningPart` / `ToolCallPart` / `ToolResultPart` |
-
-Upgrading vercel-ai only requires editing these re-exports in `lib.rs`.
+`coco-types` no longer depends on `vercel-ai-provider`. Anything that needs LLM types (`LlmMessage`, `UserContent`, `ToolResultContent`, …) imports them from `coco-messages` (which uses `coco-inference` re-exports under the hood). The seam crate `services/inference` is the single workspace owner of `vercel-ai-provider` — guarded by `scripts/check-vercel-ai-seam.sh`.
 
 ## Conventions
 

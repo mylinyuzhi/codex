@@ -192,8 +192,8 @@ const CATEGORIES: &[Category] = &[
             CommandEntry {
                 name: "rewind",
                 aliases: &["checkpoint"],
-                description: "Restore code/conversation to a previous point",
-                usage: "/rewind [turn-number]",
+                description: "Restore the code and/or conversation to a previous point",
+                usage: "/rewind",
             },
             CommandEntry {
                 name: "stats",

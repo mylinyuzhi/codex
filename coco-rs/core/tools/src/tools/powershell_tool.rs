@@ -12,6 +12,7 @@
 //! TS: `tools/PowerShellTool/PowerShellTool.tsx`, `powershellSecurity.ts`,
 //! `powershellPermissions.ts`, `clmTypes.ts`.
 
+use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
@@ -20,7 +21,6 @@ use coco_tool_runtime::ValidationResult;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
 use coco_types::ToolName;
-use coco_types::ToolResult;
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -125,7 +125,7 @@ impl Tool for PowerShellTool {
     }
 
     /// TS `maxResultSizeChars: 30_000` at `PowerShellTool.tsx:275`.
-    fn max_result_size_chars(&self) -> i32 {
+    fn max_result_size_chars(&self) -> i64 {
         30_000
     }
 

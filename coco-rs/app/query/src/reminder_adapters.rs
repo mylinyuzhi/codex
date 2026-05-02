@@ -259,21 +259,32 @@ impl SwarmSource for SwarmAdapter {
 }
 
 // ────────────────────────────────────────────────────────────────
-// Memory adapter (stub — memory module is at root-modules layer
-// and could host the impl directly; this adapter exists for
-// consistency and can be swapped for an in-crate impl later)
+// Memory adapter — wires `coco-memory` recall into the reminder
+// pipeline. Holds the per-session `MemoryRuntime` so the recall
+// state (already-surfaced set, byte budget) survives across turns.
 // ────────────────────────────────────────────────────────────────
 
-/// Placeholder memory source. Real impl calls
-/// `coco_memory::prefetch::*` for relevant_memories and
-/// `coco_context::memory::discover_nested_claude_md` for
-/// nested_memories.
-#[derive(Clone, Debug, Default)]
-pub struct MemoryAdapter;
+/// Bridges `coco-memory` into `system-reminder::MemorySource`.
+///
+/// `nested_memories` is intentionally a no-op here — nested CLAUDE.md
+/// discovery happens upstream in `coco-context` and is delivered to
+/// the orchestrator via `GeneratorContext.nested_memories`. This
+/// adapter only owns the heuristic / LLM-ranked relevant-memory recall
+/// (TS `findRelevantMemories`).
+#[derive(Clone)]
+pub struct MemoryAdapter {
+    runtime: Arc<coco_memory::MemoryRuntime>,
+}
+
+impl std::fmt::Debug for MemoryAdapter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MemoryAdapter").finish()
+    }
+}
 
 impl MemoryAdapter {
-    pub fn new() -> Self {
-        Self
+    pub fn new(runtime: Arc<coco_memory::MemoryRuntime>) -> Self {
+        Self { runtime }
     }
 }
 
@@ -284,14 +295,31 @@ impl MemorySource for MemoryAdapter {
         _agent_id: Option<&str>,
         _mentioned_paths: &[std::path::PathBuf],
     ) -> Vec<NestedMemoryInfo> {
+        // Intentional no-op — see the type-level comment.
         Vec::new()
     }
+
     async fn relevant_memories(
         &self,
         _agent_id: Option<&str>,
-        _input: &str,
+        input: &str,
     ) -> Vec<RelevantMemoryInfo> {
-        Vec::new()
+        // Delegate to the runtime — it picks the LLM ranker
+        // (`ModelRole::Memory` side-query) when a `SideQueryHandle`
+        // was wired in at session bootstrap, otherwise the recency
+        // heuristic. Either way we get up to 5 freshness-tagged
+        // entries the system-reminder generator renders.
+        self.runtime
+            .recall(input, &[])
+            .await
+            .into_iter()
+            .map(|m| RelevantMemoryInfo {
+                path: m.path,
+                content: m.content,
+                mtime_ms: m.mtime_ms,
+                header: Some(m.header),
+            })
+            .collect()
     }
 }
 

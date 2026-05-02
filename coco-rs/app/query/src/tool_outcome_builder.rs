@@ -12,6 +12,8 @@ use std::sync::Arc;
 use coco_hooks::HookExecutionEvent;
 use coco_hooks::HookRegistry;
 use coco_hooks::orchestration::OrchestrationContext;
+use coco_messages::Message;
+use coco_messages::ToolResult;
 use coco_messages::create_error_tool_result;
 use coco_messages::create_tool_result_message;
 use coco_system_reminder::AttachmentType as ReminderAttachmentType;
@@ -22,9 +24,7 @@ use coco_tool_runtime::ToolCallErrorKind;
 use coco_tool_runtime::ToolMessagePath;
 use coco_tool_runtime::ToolSideEffects;
 use coco_tool_runtime::UnstampedToolCallOutcome;
-use coco_types::Message;
 use coco_types::ToolId;
-use coco_types::ToolResult;
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tracing::warn;
@@ -47,6 +47,15 @@ pub(crate) struct RunOneTail<'a> {
     pub hooks: Option<&'a Arc<HookRegistry>>,
     pub orchestration_ctx: OrchestrationContext,
     pub hook_tx: Option<&'a mpsc::Sender<HookExecutionEvent>>,
+    /// Per-session tool-result persistence root. `Some` ⇒ Level 1
+    /// persistence is active for this session; the outcome builder
+    /// checks `tool.max_result_size_chars()` against the rendered
+    /// output and persists to disk when over threshold (TS parity:
+    /// `utils/toolResultStorage.ts:persistToolResultToDisk`). `None`
+    /// ⇒ Level 1 is disabled (legacy behaviour) and tool results
+    /// stay inline. Wired by `tool_call_runner` from the engine's
+    /// resolved `<config_home>/cache/tool-results/<session_id>/`.
+    pub tool_result_session_dir: Option<std::path::PathBuf>,
 }
 
 /// Build an `UnstampedToolCallOutcome` from a completed tool call.
@@ -70,6 +79,7 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
         hooks,
         orchestration_ctx,
         hook_tx,
+        tool_result_session_dir,
     } = args;
     let is_mcp = tool.is_mcp();
     let order = ToolMessageOrder::for_tool(&*tool);
@@ -92,7 +102,54 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
                 output_data = updated;
             }
 
-            let rendered_output = serde_json::to_string(&output_data).unwrap_or_default();
+            let rendered_output_raw = serde_json::to_string(&output_data).unwrap_or_default();
+
+            // ── Tool Result Budget Level 1 (TS `persistToolResultToDisk`) ──
+            //
+            // When the tool opts into persistence (declared
+            // `max_result_size_chars` < `i64::MAX`) AND the rendered
+            // output exceeds `resolve_persistence_threshold(declared)`,
+            // write the body to `<session_dir>/tool-results/<id>.{txt,json}`
+            // and replace the inline content with a `<persisted-output>`
+            // reference message. Failures fall back to the inline
+            // content (TS parity: persistence is best-effort, not
+            // gating).
+            let rendered_output = if let Some(sess_dir) = tool_result_session_dir.as_ref() {
+                let declared = tool.max_result_size_chars();
+                let threshold =
+                    coco_tool_runtime::tool_result_storage::resolve_persistence_threshold(declared);
+                if threshold != i64::MAX && rendered_output_raw.len() as i64 > threshold {
+                    let is_json = output_data.is_object() || output_data.is_array();
+                    match coco_tool_runtime::tool_result_storage::persist_to_disk(
+                        sess_dir,
+                        &tool_use_id,
+                        &rendered_output_raw,
+                        is_json,
+                    )
+                    .await
+                    {
+                        Ok(persisted) => {
+                            coco_tool_runtime::tool_result_storage::render_persisted_reference(
+                                &persisted,
+                            )
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                tool = %tool_name,
+                                tool_use_id = %tool_use_id,
+                                "Level 1 tool-result persistence failed; falling back to inline"
+                            );
+                            rendered_output_raw
+                        }
+                    }
+                } else {
+                    rendered_output_raw
+                }
+            } else {
+                rendered_output_raw
+            };
+
             let tool_result_msg = create_tool_result_message(
                 &tool_use_id,
                 &tool_name,

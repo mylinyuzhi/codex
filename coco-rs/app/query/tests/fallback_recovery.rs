@@ -18,22 +18,22 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use coco_inference::AISdkError;
 use coco_inference::ApiClient;
+use coco_inference::AssistantContentPart;
+use coco_inference::FinishReason;
+use coco_inference::LanguageModel;
+use coco_inference::LanguageModelCallOptions;
+use coco_inference::LanguageModelGenerateResult;
+use coco_inference::LanguageModelStreamResult;
 use coco_inference::RetryConfig;
+use coco_inference::TextPart;
+use coco_inference::UnifiedFinishReason;
+use coco_inference::Usage;
 use coco_query::QueryEngine;
 use coco_query::QueryEngineConfig;
 use coco_tool_runtime::ToolRegistry;
 use tokio_util::sync::CancellationToken;
-use vercel_ai_provider::AISdkError;
-use vercel_ai_provider::AssistantContentPart;
-use vercel_ai_provider::FinishReason;
-use vercel_ai_provider::LanguageModelV4;
-use vercel_ai_provider::LanguageModelV4CallOptions;
-use vercel_ai_provider::LanguageModelV4GenerateResult;
-use vercel_ai_provider::LanguageModelV4StreamResult;
-use vercel_ai_provider::TextPart;
-use vercel_ai_provider::UnifiedFinishReason;
-use vercel_ai_provider::Usage;
 
 /// Each scripted call returns either a capacity error or a
 /// successful text reply. Tracks call count for assertions.
@@ -64,7 +64,7 @@ impl ScriptedCapacityMock {
 }
 
 #[async_trait::async_trait]
-impl LanguageModelV4 for ScriptedCapacityMock {
+impl LanguageModel for ScriptedCapacityMock {
     fn provider(&self) -> &str {
         "mock"
     }
@@ -73,8 +73,8 @@ impl LanguageModelV4 for ScriptedCapacityMock {
     }
     async fn do_generate(
         &self,
-        _options: LanguageModelV4CallOptions,
-    ) -> Result<LanguageModelV4GenerateResult, AISdkError> {
+        _options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelGenerateResult, AISdkError> {
         let idx = self.next.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let outcome = self
             .calls
@@ -88,7 +88,7 @@ impl LanguageModelV4 for ScriptedCapacityMock {
                 // "status: 529" matches the capacity classifier in engine.rs.
                 Err(AISdkError::new("provider overloaded (status: 529)"))
             }
-            CallOutcome::Text(s) => Ok(LanguageModelV4GenerateResult {
+            CallOutcome::Text(s) => Ok(LanguageModelGenerateResult {
                 content: vec![AssistantContentPart::Text(TextPart {
                     text: s.to_string(),
                     provider_metadata: None,
@@ -104,8 +104,8 @@ impl LanguageModelV4 for ScriptedCapacityMock {
     }
     async fn do_stream(
         &self,
-        options: LanguageModelV4CallOptions,
-    ) -> Result<LanguageModelV4StreamResult, AISdkError> {
+        options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelStreamResult, AISdkError> {
         let result = self.do_generate(options).await?;
         Ok(coco_inference::synthetic_stream_from_content(
             result.content,
@@ -121,7 +121,7 @@ impl LanguageModelV4 for ScriptedCapacityMock {
 /// scripted capacity outcomes. The default `max_retries=3` would
 /// swallow 3 capacity outcomes per engine call and make the test
 /// non-deterministic without more outcomes to burn.
-fn api_client(model: Arc<dyn LanguageModelV4>) -> Arc<ApiClient> {
+fn api_client(model: Arc<dyn LanguageModel>) -> Arc<ApiClient> {
     let retry = RetryConfig {
         max_retries: 0,
         ..RetryConfig::default()
@@ -129,14 +129,14 @@ fn api_client(model: Arc<dyn LanguageModelV4>) -> Arc<ApiClient> {
     Arc::new(ApiClient::with_default_fingerprint(model, retry))
 }
 
-fn minimal_config(model_name: &str) -> QueryEngineConfig {
+fn minimal_config(model_id: &str) -> QueryEngineConfig {
     // `max_turns` bounds retry iterations — the capacity streak can
     // use up to MAX_CONSECUTIVE_CAPACITY_ERRORS=3 iterations per
     // slot before advance fires, plus 1 successful call. 20 is
     // plenty to let a 2-slot chain walk through 3+3+1 iterations
     // without budget-exhausting.
     QueryEngineConfig {
-        model_name: model_name.to_string(),
+        model_id: model_id.to_string(),
         max_turns: 20,
         max_tokens: Some(16_384),
         context_window: 200_000,

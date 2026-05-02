@@ -124,7 +124,7 @@ fn kitty_id() -> u32 {
     use std::time::UNIX_EPOCH;
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| (d.subsec_nanos() % 10_000) as u32)
+        .map(|d| d.subsec_nanos() % 10_000)
         .unwrap_or(0)
 }
 

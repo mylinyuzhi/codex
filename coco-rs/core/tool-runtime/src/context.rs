@@ -1,9 +1,9 @@
 use coco_context::FileHistoryState;
 use coco_context::FileReadState;
+use coco_messages::Message;
 use coco_types::AgentId;
 use coco_types::AgentTypeId;
 use coco_types::Features;
-use coco_types::Message;
 use coco_types::ThinkingLevel;
 use coco_types::ToolFilter;
 use coco_types::ToolOverrides;
@@ -144,6 +144,16 @@ pub struct ToolUseContext {
     pub agent_id: Option<AgentId>,
     /// Agent type.
     pub agent_type: Option<AgentTypeId>,
+    /// Snapshot of the active agent definition catalog. AgentTool reads
+    /// it to resolve `subagent_type` → `Arc<AgentDefinition>` before
+    /// building an `AgentSpawnRequest`, so the spawn-time resolver can
+    /// consult the definition's `model` and `model_role` fields. Built
+    /// once at session bootstrap (or after `/agents reload`); cheap to
+    /// clone — `Arc`-shared.
+    ///
+    /// `None` means the catalog isn't installed (legacy/test path);
+    /// AgentTool degrades to subagent_type→role mapping alone.
+    pub agent_catalog: Option<Arc<coco_subagent::AgentCatalogSnapshot>>,
 
     // ── File Tracking ──
     /// File reading limits.
@@ -291,6 +301,15 @@ pub struct ToolUseContext {
     /// TS: cwdOverridePath in AgentTool.tsx
     pub cwd_override: Option<PathBuf>,
 
+    // ── Sandboxed-write fence ──
+    /// FileWrite / FileEdit / NotebookEdit are restricted to paths under
+    /// one of these roots. Empty = no restriction. Threaded in by the
+    /// memory crate's forked extraction / auto-dream agents (and any
+    /// future caller that needs a memdir-only fence). File-mutation
+    /// tools must reject paths outside the fence before touching disk.
+    /// TS: `services/extractMemories/extractMemories.ts:createAutoMemCanUseTool`.
+    pub allowed_write_roots: Vec<PathBuf>,
+
     // ── Permission Forwarding ──
     /// Bridge for forwarding permission requests from teammate agents.
     /// None for main agent (uses normal permission pipeline).
@@ -360,7 +379,7 @@ pub struct ToolUseContext {
     ///
     /// **Write access is deliberately not exposed** — tools cannot
     /// call `.write()` on this handle. Mutations route through
-    /// [`coco_types::ToolResult::app_state_patch`], applied
+    /// [`coco_messages::ToolResult::app_state_patch`], applied
     /// post-execute by the executor. TS parity:
     /// `orchestration.ts:queuedContextModifiers` — tools return a
     /// `(ctx) => newCtx` modifier; the orchestrator applies them
@@ -446,6 +465,7 @@ impl ToolUseContext {
             user_message_id: self.user_message_id.clone(),
             agent_id: self.agent_id.clone(),
             agent_type: self.agent_type.clone(),
+            agent_catalog: self.agent_catalog.clone(),
             file_reading_limits: self.file_reading_limits.clone(),
             glob_limits: self.glob_limits.clone(),
             // Share both trigger sets across concurrent siblings so all
@@ -475,6 +495,7 @@ impl ToolUseContext {
             tool_schema_validator: self.tool_schema_validator.clone(),
             mailbox: self.mailbox.clone(),
             cwd_override: self.cwd_override.clone(),
+            allowed_write_roots: self.allowed_write_roots.clone(),
             permission_bridge: self.permission_bridge.clone(),
             progress_tx: self.progress_tx.clone(),
             task_handle: self.task_handle.clone(),
@@ -555,6 +576,7 @@ impl ToolUseContext {
             user_message_id: None,
             agent_id: None,
             agent_type: None,
+            agent_catalog: None,
             file_reading_limits: FileReadingLimits::default(),
             glob_limits: GlobLimits::default(),
             nested_memory_attachment_triggers: Arc::new(RwLock::new(HashSet::new())),
@@ -581,6 +603,7 @@ impl ToolUseContext {
             tool_schema_validator: None,
             mailbox: Arc::new(crate::NoOpMailboxHandle),
             cwd_override: None,
+            allowed_write_roots: Vec::new(),
             permission_bridge: None,
             progress_tx: None,
             task_handle: None,

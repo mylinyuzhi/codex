@@ -131,10 +131,12 @@ fn test_apply_async_result_updates_matching_query() {
         SuggestionItem {
             label: "src/lib.rs".into(),
             description: None,
+            metadata: None,
         },
         SuggestionItem {
             label: "src/main.rs".into(),
             description: None,
+            metadata: None,
         },
     ];
     let adopted = apply_async_result(&mut state, SuggestionKind::File, "src", suggestions);
@@ -165,6 +167,7 @@ fn test_apply_async_result_drops_stale_query() {
         vec![SuggestionItem {
             label: "src/lib.rs".into(),
             description: None,
+            metadata: None,
         }],
     );
     assert!(!adopted);
@@ -192,6 +195,7 @@ fn test_apply_async_result_drops_when_dismissed() {
         vec![SuggestionItem {
             label: "foo".into(),
             description: None,
+            metadata: None,
         }],
     );
     assert!(!adopted);
@@ -221,6 +225,7 @@ fn test_refresh_agent_trigger_from_session() {
 
     let sug = state.ui.active_suggestions.expect("agent popup installed");
     assert_eq!(sug.kind, SuggestionKind::Agent);
+    // Labels are bare types — accept_suggestion re-adds `@agent-`.
     let labels: Vec<&str> = sug.items.iter().map(|i| i.label.as_str()).collect();
-    assert_eq!(labels, vec!["@agent-plan"]);
+    assert_eq!(labels, vec!["plan"]);
 }

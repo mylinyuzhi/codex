@@ -20,10 +20,10 @@
 //! pairs) land in `history` because `AttachmentMessage` is user-only. Phase B
 //! will add the assistant-block path when a generator needs it.
 
-use coco_types::AssistantMessage;
-use coco_types::AttachmentMessage;
-use coco_types::LlmMessage;
-use coco_types::Message;
+use coco_messages::AssistantMessage;
+use coco_messages::AttachmentMessage;
+use coco_messages::LlmMessage;
+use coco_messages::Message;
 use serde_json::Value;
 use tracing::debug;
 use uuid::Uuid;
@@ -248,7 +248,7 @@ pub fn inject_reminders(
                 // with Api body. The kind governs API + UI filtering; no
                 // separate is_meta flag needed.
                 let llm = user_llm_from_blocks(blocks);
-                history.push(Message::Attachment(coco_types::AttachmentMessage::api(
+                history.push(Message::Attachment(coco_messages::AttachmentMessage::api(
                     kind, llm,
                 )));
             }
@@ -275,8 +275,8 @@ pub fn inject_reminders(
 }
 
 fn user_llm_from_blocks(blocks: Vec<InjectedBlock>) -> LlmMessage {
-    use coco_types::TextContent;
-    use coco_types::UserContent;
+    use coco_messages::TextContent;
+    use coco_messages::UserContent;
     let mut content: Vec<UserContent> = Vec::with_capacity(blocks.len());
     for b in blocks {
         match b {
@@ -305,9 +305,9 @@ fn user_llm_from_blocks(blocks: Vec<InjectedBlock>) -> LlmMessage {
 }
 
 fn assistant_llm_from_blocks(blocks: Vec<InjectedBlock>) -> LlmMessage {
-    use coco_types::AssistantContent;
-    use coco_types::TextContent;
-    use coco_types::ToolCallContent;
+    use coco_messages::AssistantContent;
+    use coco_messages::TextContent;
+    use coco_messages::ToolCallContent;
     let mut content: Vec<AssistantContent> = Vec::with_capacity(blocks.len());
     for b in blocks {
         match b {

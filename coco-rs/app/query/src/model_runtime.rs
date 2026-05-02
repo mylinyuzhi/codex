@@ -171,7 +171,7 @@ impl ModelRuntime {
     }
 
     /// Model id reported to tool context + telemetry.
-    pub(crate) fn current_model_name(&self) -> &str {
+    pub(crate) fn current_model_id(&self) -> &str {
         self.slots[self.active].model_id()
     }
 
@@ -210,7 +210,7 @@ impl ModelRuntime {
         self.active += 1;
         self.on_switch_i13(now);
         self.update_recovery_on_forward_advance(now);
-        AdvanceOutcome::Switched(self.current_model_name().to_string())
+        AdvanceOutcome::Switched(self.current_model_id().to_string())
     }
 
     /// Decide whether the upcoming turn should probe primary.
@@ -347,13 +347,16 @@ impl ModelRuntime {
         });
     }
 
-    /// I13 cache-state reset seam. Currently a no-op; lands real
-    /// behavior when `QueryParams` construction consults a
-    /// per-slot `CacheBreakDetector`. Kept as a single method so
-    /// every slot transition (forward advance, probe swap, probe
-    /// finalize) routes through one enforcement point.
+    /// I13 cache-state reset seam. Each `ApiClient` slot owns its
+    /// own `CacheBreakDetector` (installed by
+    /// `model_factory::build_api_client`), so a slot transition does
+    /// NOT need to wipe the previous slot's tracking state — re-
+    /// activating the old slot picks up its baseline naturally. This
+    /// hook is kept as the single enforcement point so future
+    /// invariants (e.g. emitting a transition event, adjusting
+    /// per-slot retry budgets) have one place to land.
     fn on_switch_i13(&mut self, _now: Instant) {
-        // No-op today — no per-slot cache state yet.
+        // Per-slot detectors keep their own baseline; nothing to reset.
     }
 }
 

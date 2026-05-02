@@ -3,7 +3,7 @@
 //! TS: utils/conversationRecovery.ts — reload conversation from transcript.
 
 use crate::storage::TranscriptEntry;
-use coco_types::Message;
+use coco_messages::Message;
 use std::path::Path;
 
 /// Conversation recovery result.
@@ -120,8 +120,8 @@ fn reconstruct_message(entry: &TranscriptEntry) -> Option<Message> {
     match entry.entry_type.as_str() {
         "user" => {
             let text = extract_text_from_content(content);
-            let llm_message = coco_types::LlmMessage::user_text(text);
-            Some(Message::User(coco_types::UserMessage {
+            let llm_message = coco_messages::LlmMessage::user_text(text);
+            Some(Message::User(coco_messages::UserMessage {
                 message: llm_message,
                 uuid,
                 timestamp: entry.timestamp.clone(),
@@ -135,8 +135,8 @@ fn reconstruct_message(entry: &TranscriptEntry) -> Option<Message> {
         }
         "assistant" => {
             let text = extract_text_from_content(content);
-            let llm_message = coco_types::LlmMessage::assistant_text(text);
-            Some(Message::Assistant(coco_types::AssistantMessage {
+            let llm_message = coco_messages::LlmMessage::assistant_text(text);
+            Some(Message::Assistant(coco_messages::AssistantMessage {
                 message: llm_message,
                 uuid,
                 model: entry.model.clone().unwrap_or_default(),
@@ -159,8 +159,8 @@ fn reconstruct_message(entry: &TranscriptEntry) -> Option<Message> {
             // `CriticalSystemReminder` is the closest generic carrier
             // (always API-visible, always UI-visible, unrestricted body).
             let text = extract_text_from_content(content);
-            let llm_message = coco_types::LlmMessage::user_text(text);
-            let mut msg = coco_types::AttachmentMessage::api(
+            let llm_message = coco_messages::LlmMessage::user_text(text);
+            let mut msg = coco_messages::AttachmentMessage::api(
                 coco_types::AttachmentKind::CriticalSystemReminder,
                 llm_message,
             );

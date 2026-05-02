@@ -1,3 +1,4 @@
+use coco_inference::ToolCallPart;
 use coco_messages::MessageHistory;
 use coco_tool_runtime::ToolPermissionBridgeRef;
 use coco_types::CoreEvent;
@@ -8,7 +9,6 @@ use coco_types::ToolId;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
-use vercel_ai_provider::ToolCallPart;
 
 use crate::helpers::complete_tool_call_with_error;
 use crate::session_state::SessionStateTracker;

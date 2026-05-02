@@ -127,6 +127,14 @@ pub struct HookRegistry {
     /// Tracks hooks with `once: true` that have already fired.
     /// Key is the dedup key of the hook definition.
     fired_once: HashSet<String>,
+    /// Per-agent overlay registries — populated by
+    /// `register_for_agent(agent_id, hooks)` at SubagentStart and
+    /// cleared by `clear_agent_scope(agent_id)` at SubagentStop.
+    /// `find_matching_for_agent(event, match_value, agent_id)`
+    /// merges these with `hooks` for the duration of the spawn.
+    /// TS parity: `registerFrontmatterHooks(setAppState, agentId, ...)`
+    /// + `clearSessionHooks(setAppState, agentId)`.
+    agent_scoped: std::sync::RwLock<std::collections::HashMap<String, Vec<HookDefinition>>>,
 }
 
 impl HookRegistry {
@@ -150,6 +158,26 @@ impl HookRegistry {
         self.seen_keys.insert(key);
         self.hooks.push(hook);
         true
+    }
+
+    /// Register hooks scoped to a specific spawned agent. Replaces
+    /// any existing entry for `agent_id`. Use `&self` (interior
+    /// mutability) so callers holding `Arc<HookRegistry>` can register
+    /// without re-building the Arc. TS parity:
+    /// `registerFrontmatterHooks(setAppState, agentId, definition.hooks)`.
+    pub fn register_for_agent(&self, agent_id: String, hooks: Vec<HookDefinition>) {
+        if let Ok(mut map) = self.agent_scoped.write() {
+            map.insert(agent_id, hooks);
+        }
+    }
+
+    /// Remove all hooks scoped to `agent_id`. Called at SubagentStop
+    /// so the spawn's frontmatter hooks don't leak across spawns.
+    /// TS parity: `clearSessionHooks(setAppState, agentId)`.
+    pub fn clear_agent_scope(&self, agent_id: &str) {
+        if let Ok(mut map) = self.agent_scoped.write() {
+            map.remove(agent_id);
+        }
     }
 
     /// Find hooks matching an event type and optional match value.
@@ -179,8 +207,8 @@ impl HookRegistry {
         &self,
         event: HookEventType,
         match_value: Option<&str>,
-    ) -> Vec<&HookDefinition> {
-        let mut matches: Vec<&HookDefinition> = self
+    ) -> Vec<HookDefinition> {
+        let mut matches: Vec<HookDefinition> = self
             .hooks
             .iter()
             .filter(|h| {
@@ -188,7 +216,25 @@ impl HookRegistry {
                     && matcher_matches(h.matcher.as_deref(), match_value)
                     && !(h.once && self.fired_once.contains(&dedup_key(h)))
             })
+            .cloned()
             .collect();
+
+        // Merge in agent-scoped hooks. TS parity:
+        // `registerFrontmatterHooks` adds the agent's hooks to the
+        // shared session-state hooks list; they're visible to every
+        // event firing until `clearSessionHooks(agentId)` removes
+        // them at SubagentStop. We mirror that by flattening every
+        // bucket into the match list — identity is by agent_id key,
+        // not by hook instance.
+        if let Ok(agent_scoped) = self.agent_scoped.read() {
+            for hooks in agent_scoped.values() {
+                for h in hooks {
+                    if h.event == event && matcher_matches(h.matcher.as_deref(), match_value) {
+                        matches.push(h.clone());
+                    }
+                }
+            }
+        }
 
         matches.sort_by(|a, b| {
             // Higher scope first (descending), then lower priority first (ascending).
@@ -208,7 +254,7 @@ impl HookRegistry {
         event: HookEventType,
         match_value: Option<&str>,
         if_ctx: Option<&IfConditionContext>,
-    ) -> Vec<&HookDefinition> {
+    ) -> Vec<HookDefinition> {
         let mut matches = self.find_matching(event, match_value);
 
         if let Some(ctx) = if_ctx {
@@ -225,7 +271,7 @@ impl HookRegistry {
     }
 
     /// Backwards-compatible alias for `find_matching`.
-    pub fn find(&self, event: HookEventType, match_value: Option<&str>) -> Vec<&HookDefinition> {
+    pub fn find(&self, event: HookEventType, match_value: Option<&str>) -> Vec<HookDefinition> {
         self.find_matching(event, match_value)
     }
 

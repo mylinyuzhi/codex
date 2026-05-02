@@ -3,6 +3,7 @@
 //! Uses `coco-file-watch` to monitor `.mcp.json` files for changes and
 //! trigger server reconnection when configs are modified.
 
+use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -26,8 +27,8 @@ pub struct McpConfigChanged {
 ///
 /// Returns a broadcast receiver that emits `McpConfigChanged` on changes.
 pub fn watch_mcp_configs(
-    config_home: &PathBuf,
-    project_root: Option<&PathBuf>,
+    config_home: &Path,
+    project_root: Option<&Path>,
 ) -> anyhow::Result<broadcast::Receiver<McpConfigChanged>> {
     let watcher: coco_file_watch::FileWatcher<McpConfigChanged> = FileWatcherBuilder::new()
         .throttle_interval(Duration::from_millis(500))
@@ -56,7 +57,7 @@ pub fn watch_mcp_configs(
 
     // Watch user-level config directory
     if config_home.exists() {
-        watcher.watch(config_home.clone(), RecursiveMode::NonRecursive);
+        watcher.watch(config_home.to_path_buf(), RecursiveMode::NonRecursive);
         info!("watching MCP user config: {}", config_home.display());
     }
 
@@ -68,7 +69,7 @@ pub fn watch_mcp_configs(
             info!("watching MCP project config: {}", claude_dir.display());
         }
         // Legacy .mcp.json at project root
-        watcher.watch(root.clone(), RecursiveMode::NonRecursive);
+        watcher.watch(root.to_path_buf(), RecursiveMode::NonRecursive);
     }
 
     let rx = watcher.subscribe();

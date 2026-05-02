@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# Repo-tracked git pre-commit hook for the coco-rs workspace.
+#
+# Activate with (run from repo root, /lyz/codespace/codex):
+#   git config core.hooksPath coco-rs/scripts/git-hooks
+#
+# What this enforces (in order, fast checks first):
+#   1. vercel-ai seam guard — no direct vercel_ai_provider:: imports
+#      outside services/inference; no V4-suffixed type names leaking.
+#   2. cargo clippy on lib code — blocks on `^warning:` AND errors.
+#      Workspace baseline is zero warnings (2026-04-29).
+#   3. cargo clippy on tests — same policy.
+#
+# Steps 2/3 are skipped when the staged diff touches no coco-rs Rust
+# source or Cargo manifest, since clippy on a clean cache is ~30s and
+# pure-doc commits don't need it. The seam guard always runs (sub-second).
+#
+# This is the belt-and-braces complement to .claude/scripts/rust-quality-check.sh.
+# That hook runs at "Claude stops"; this one runs at every `git commit`,
+# catching anything that bypassed the agent (manual edits, --no-edit,
+# rebase squashes, etc.).
+
+# NOTE: deliberately *not* `set -e`. We capture cargo's exit code
+# explicitly into LIB_RC / TEST_RC; with errexit on, the assignment
+# `LIB_OUTPUT=$(cargo clippy ...)` can short-circuit before `$?` is
+# read when cargo errors out, depending on bash version. `set -u` and
+# pipefail are still useful, just not errexit.
+set -uo pipefail
+
+# Resolve to coco-rs/ workspace root regardless of where git invoked us from.
+# scripts/git-hooks/pre-commit → coco-rs/ root is two levels up.
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+cd "$script_dir/../.." || exit 1
+
+# Step 1: vercel-ai seam guard (always runs — sub-second).
+./scripts/check-vercel-ai-seam.sh || exit $?
+
+# Decide whether to run clippy. Look at the *staged* diff; the working
+# tree may carry uncommitted noise unrelated to this commit.
+staged=$(git diff --cached --name-only --diff-filter=ACMRT \
+            | grep -E '^coco-rs/.*(\.rs|/Cargo\.toml)$' || true)
+if [ -z "$staged" ]; then
+  exit 0
+fi
+
+# Ensure cargo/rustup are on PATH (shells launched by GUI git tools may
+# not source the user's profile).
+[ -f "/usr/local/cargo/env" ] && . "/usr/local/cargo/env"
+[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
+
+# Per coco-rs CLAUDE.md "virtiofs (macOS Podman) caps open FDs at ~700"
+# — keep target dir on the container-local overlay so concurrent
+# worktrees don't collide.
+export CARGO_TARGET_DIR="/tmp/cargo-target-$(echo "$PWD" | md5sum | cut -c1-12)"
+
+echo "pre-commit: running clippy gate on coco-rs..." >&2
+
+# Step 2: clippy lib — block on warnings AND errors.
+LIB_OUTPUT=$(cargo clippy --all-features 2>&1)
+LIB_RC=$?
+LIB_WARNS=$(echo "$LIB_OUTPUT" | grep '^warning:' | grep -v 'generated\|warnings emitted' || true)
+if [ $LIB_RC -ne 0 ] || [ -n "$LIB_WARNS" ]; then
+  echo "pre-commit: clippy lib warnings/errors — fix before committing:" >&2
+  echo "$LIB_OUTPUT" >&2
+  exit 1
+fi
+
+# Step 3: clippy tests — block on warnings AND errors.
+TEST_OUTPUT=$(cargo clippy --all-features --tests 2>&1)
+TEST_RC=$?
+TEST_WARNS=$(echo "$TEST_OUTPUT" | grep '^warning:' | grep -v 'generated\|warnings emitted' || true)
+if [ $TEST_RC -ne 0 ] || [ -n "$TEST_WARNS" ]; then
+  echo "pre-commit: clippy test warnings/errors — fix before committing:" >&2
+  echo "$TEST_OUTPUT" >&2
+  exit 1
+fi
+
+echo "pre-commit: clippy gate passed." >&2
