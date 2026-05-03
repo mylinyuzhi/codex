@@ -1,0 +1,27 @@
+Commit, push, and open a pull request for the current branch — orchestrated.
+
+Step 1 — Inspect the working tree:
+- Run `git status` to see all untracked/staged/unstaged files.
+- Run `git diff` for unstaged + `git diff --cached` for staged changes.
+- Run `git log --oneline -n 10` for recent commit style.
+
+Step 2 — Draft a commit:
+- Summarize the change in one sentence (imperative mood, ≤72 chars).
+- Group changes by theme; one short bullet per theme.
+- Confirm the message before staging.
+
+Step 3 — Stage + commit:
+- `git add <specific files>` — never `git add -A` or `git add .`.
+- Reject any file matching `*.env`, `credentials*`, `*.pem`, or other secret patterns.
+- Commit via heredoc to preserve formatting.
+
+Step 4 — Push:
+- Determine if the branch already tracks a remote. If not, set upstream.
+- Push the branch.
+
+Step 5 — Open the pull request:
+- `gh pr create --title <short> --body <heredoc>`.
+- Title is ≤72 chars; body has Summary + Test Plan checklist.
+- Surface the PR URL.
+
+If any step fails, stop and report the failure rather than proceeding.

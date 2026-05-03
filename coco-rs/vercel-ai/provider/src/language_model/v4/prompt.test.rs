@@ -4,9 +4,18 @@ use super::*;
 fn test_message_system() {
     let msg = LanguageModelV4Message::system("You are helpful.");
     assert!(msg.is_system());
+    assert!(!msg.is_developer());
     assert!(!msg.is_user());
     assert!(!msg.is_assistant());
     assert!(!msg.is_tool());
+}
+
+#[test]
+fn test_message_developer_text() {
+    let msg = LanguageModelV4Message::developer_text("Follow app policy.");
+    assert!(msg.is_developer());
+    assert!(!msg.is_system());
+    assert!(!msg.is_user());
 }
 
 #[test]
@@ -34,13 +43,15 @@ fn test_message_tool() {
 fn test_prompt_builder_basic() {
     let prompt = PromptBuilder::new()
         .system("You are helpful.")
+        .developer("Follow app policy.")
         .user("Hello!")
         .assistant("Hi!")
         .build();
-    assert_eq!(prompt.len(), 3);
+    assert_eq!(prompt.len(), 4);
     assert!(prompt[0].is_system());
-    assert!(prompt[1].is_user());
-    assert!(prompt[2].is_assistant());
+    assert!(prompt[1].is_developer());
+    assert!(prompt[2].is_user());
+    assert!(prompt[3].is_assistant());
 }
 
 #[test]

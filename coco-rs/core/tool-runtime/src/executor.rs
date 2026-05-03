@@ -9,9 +9,9 @@
 
 use coco_config::EnvKey;
 use coco_config::env;
+use coco_messages::ToolResult;
 use coco_types::ToolId;
 use coco_types::ToolName;
-use coco_types::ToolResult;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use serde_json::Value;

@@ -1,4 +1,5 @@
 use super::*;
+use coco_subagent::definition_store::AgentSearchPaths;
 use std::sync::Arc;
 
 #[tokio::test]
@@ -313,17 +314,23 @@ async fn account_third_party_providers_match_ts_undefined_semantics() {
 async fn agents_returns_builtins_when_no_dirs_configured() {
     let boot = CliInitializeBootstrap::new("default".into());
     let agents = boot.agents().await;
-    // builtin_agents() ships 6 defaults: general-purpose, Explore, Plan,
-    // Review, statusline-setup, claude-code-guide.
+    // `BuiltinAgentCatalog::interactive()` enables general-purpose +
+    // statusline-setup + Explore + Plan + claude-code-guide (5 entries).
+    // Verification ships behind a separate gate (`include_verification`)
+    // and is not part of the interactive default. Assert presence of the
+    // canonical names so adding verification later (or any future
+    // built-in) only relaxes the count without invalidating the test.
+    let names: Vec<&str> = agents.iter().map(|a| a.name.as_str()).collect();
     assert!(
-        agents.len() >= 6,
-        "expected built-in agents, got {}",
+        agents.len() >= 5,
+        "expected at least 5 built-in agents in interactive mode, got {}: {names:?}",
         agents.len()
     );
-    let names: Vec<&str> = agents.iter().map(|a| a.name.as_str()).collect();
     assert!(names.contains(&"general-purpose"));
     assert!(names.contains(&"Explore"));
     assert!(names.contains(&"Plan"));
+    assert!(names.contains(&"statusline-setup"));
+    assert!(names.contains(&"claude-code-guide"));
     // Descriptions come through non-empty for every built-in.
     for agent in &agents {
         assert!(
@@ -348,8 +355,11 @@ Body not used for this assertion.
 "#;
     std::fs::write(tempdir.path().join("Explore.md"), override_md).unwrap();
 
-    let boot = CliInitializeBootstrap::new("default".into())
-        .with_agent_dirs(vec![tempdir.path().to_path_buf()]);
+    let boot =
+        CliInitializeBootstrap::new("default".into()).with_agent_search_paths(AgentSearchPaths {
+            user_dir: Some(tempdir.path().to_path_buf()),
+            ..AgentSearchPaths::empty()
+        });
     let agents = boot.agents().await;
     let explore = agents
         .iter()
@@ -373,8 +383,11 @@ You are a research agent. Find information thoroughly.
 "#;
     std::fs::write(tempdir.path().join("custom-researcher.md"), custom_md).unwrap();
 
-    let boot = CliInitializeBootstrap::new("default".into())
-        .with_agent_dirs(vec![tempdir.path().to_path_buf()]);
+    let boot =
+        CliInitializeBootstrap::new("default".into()).with_agent_search_paths(AgentSearchPaths {
+            user_dir: Some(tempdir.path().to_path_buf()),
+            ..AgentSearchPaths::empty()
+        });
     let agents = boot.agents().await;
     let custom = agents
         .iter()

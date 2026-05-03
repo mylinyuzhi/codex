@@ -4,7 +4,15 @@
 //! Used by skills, commands, agents, memory files, and output styles.
 //!
 //! TS: `src/utils/frontmatterParser.ts` (370 LOC)
+//!
+//! Backed by [`serde_yml`] for full YAML compliance — supports nested
+//! mappings, sequences of mappings, multi-line strings, and the
+//! standard YAML scalar types. Earlier versions used a hand-written
+//! flat parser that could not represent the inline `mcpServers:
+//! {name: config}` or nested `hooks: {pre_tool_use: [...]}` shapes
+//! agent frontmatter uses.
 
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 
 /// Parsed frontmatter result.
@@ -25,8 +33,14 @@ pub enum FrontmatterValue {
     Bool(bool),
     /// Integer value.
     Int(i64),
-    /// List of strings.
-    StringList(Vec<String>),
+    /// Floating-point value.
+    Float(f64),
+    /// List of arbitrary values (TS-equivalent of `unknown[]`).
+    /// String-only lists still pass through `as_string_list`.
+    Sequence(Vec<FrontmatterValue>),
+    /// Nested object — TS YAML's `Record<string, unknown>`. Used for
+    /// inline `mcpServers: {name: config}` and `hooks:` shapes.
+    Mapping(BTreeMap<String, FrontmatterValue>),
     /// Null/empty value (key with no value, e.g., `key:`).
     Null,
 }
@@ -53,12 +67,62 @@ impl FrontmatterValue {
         }
     }
 
+    /// Get as integer, if it is one.
+    pub fn as_i64(&self) -> Option<i64> {
+        match self {
+            FrontmatterValue::Int(n) => Some(*n),
+            _ => None,
+        }
+    }
+
     /// Get as string list, if it is one. Single strings become a 1-element list.
+    /// Sequences containing non-string items are filtered down to the strings only.
     pub fn as_string_list(&self) -> Option<Vec<&str>> {
         match self {
-            FrontmatterValue::StringList(list) => Some(list.iter().map(String::as_str).collect()),
+            FrontmatterValue::Sequence(items) => {
+                Some(items.iter().filter_map(FrontmatterValue::as_str).collect())
+            }
             FrontmatterValue::String(s) => Some(vec![s.as_str()]),
             _ => None,
+        }
+    }
+
+    /// Get as nested mapping, if it is one.
+    pub fn as_mapping(&self) -> Option<&BTreeMap<String, FrontmatterValue>> {
+        match self {
+            FrontmatterValue::Mapping(m) => Some(m),
+            _ => None,
+        }
+    }
+
+    /// Get as raw sequence, if it is one. Useful when the items can be
+    /// mixed (`AgentMcpServerSpec` accepts `string | mapping`).
+    pub fn as_sequence(&self) -> Option<&[FrontmatterValue]> {
+        match self {
+            FrontmatterValue::Sequence(items) => Some(items),
+            _ => None,
+        }
+    }
+
+    /// Convert to `serde_json::Value` so callers (e.g.
+    /// `coco_hooks::load_hooks_from_config`) can consume nested
+    /// shapes without a second parser. Used for the hooks-from-
+    /// frontmatter pipeline.
+    pub fn to_json(&self) -> serde_json::Value {
+        match self {
+            FrontmatterValue::String(s) => serde_json::Value::String(s.clone()),
+            FrontmatterValue::Bool(b) => serde_json::Value::Bool(*b),
+            FrontmatterValue::Int(n) => serde_json::json!(n),
+            FrontmatterValue::Float(f) => serde_json::json!(f),
+            FrontmatterValue::Null => serde_json::Value::Null,
+            FrontmatterValue::Sequence(items) => {
+                serde_json::Value::Array(items.iter().map(FrontmatterValue::to_json).collect())
+            }
+            FrontmatterValue::Mapping(m) => {
+                let obj: serde_json::Map<String, serde_json::Value> =
+                    m.iter().map(|(k, v)| (k.clone(), v.to_json())).collect();
+                serde_json::Value::Object(obj)
+            }
         }
     }
 }
@@ -97,7 +161,7 @@ pub fn parse(input: &str) -> Frontmatter {
             .strip_prefix('\n')
             .unwrap_or(&after_first[content_start..]);
 
-        let data = parse_yaml_simple(yaml_block);
+        let data = parse_yaml_block(yaml_block);
 
         Frontmatter {
             data,
@@ -112,90 +176,69 @@ pub fn parse(input: &str) -> Frontmatter {
     }
 }
 
-/// Simple YAML key-value parser (no nested objects, no complex types).
-///
-/// Handles:
-/// - `key: value` (string)
-/// - `key: true/false` (bool)
-/// - `key:` (null)
-/// - `key: 123` (integer)
-/// - Multi-line list items (`- item`)
-fn parse_yaml_simple(yaml: &str) -> HashMap<String, FrontmatterValue> {
-    let mut map = HashMap::new();
-    let mut current_key: Option<String> = None;
-    let mut list_items: Vec<String> = Vec::new();
+/// Parse a YAML block via `serde_yml`. Falls through to an empty map
+/// when YAML parsing fails (matching TS lenient behaviour: malformed
+/// frontmatter doesn't poison the body).
+fn parse_yaml_block(yaml: &str) -> HashMap<String, FrontmatterValue> {
+    let trimmed = yaml.trim();
+    if trimmed.is_empty() {
+        return HashMap::new();
+    }
+    let value: serde_yml::Value = match serde_yml::from_str(yaml) {
+        Ok(v) => v,
+        Err(_) => return HashMap::new(),
+    };
+    let mapping = match value {
+        serde_yml::Value::Mapping(m) => m,
+        _ => return HashMap::new(),
+    };
+    mapping
+        .into_iter()
+        .filter_map(|(k, v)| {
+            let key = match k {
+                serde_yml::Value::String(s) => s,
+                serde_yml::Value::Number(n) => n.to_string(),
+                serde_yml::Value::Bool(b) => b.to_string(),
+                _ => return None,
+            };
+            Some((key, yaml_to_frontmatter_value(v)))
+        })
+        .collect()
+}
 
-    for line in yaml.lines() {
-        let trimmed = line.trim();
-
-        // List item (continuation of previous key)
-        if let Some(rest) = trimmed.strip_prefix("- ") {
-            let item = rest.trim().to_string();
-            // Strip quotes
-            let item = strip_quotes(&item);
-            list_items.push(item);
-            continue;
-        }
-
-        // Flush pending list
-        if !list_items.is_empty() {
-            if let Some(ref key) = current_key {
-                map.insert(
-                    key.clone(),
-                    FrontmatterValue::StringList(list_items.clone()),
-                );
-            }
-            list_items.clear();
-        }
-
-        // Key: value pair
-        if let Some(colon_pos) = trimmed.find(':') {
-            let key = trimmed[..colon_pos].trim().to_string();
-            let value = trimmed[colon_pos + 1..].trim();
-
-            current_key = Some(key.clone());
-
-            if value.is_empty() {
-                map.insert(key, FrontmatterValue::Null);
+fn yaml_to_frontmatter_value(value: serde_yml::Value) -> FrontmatterValue {
+    match value {
+        serde_yml::Value::Null => FrontmatterValue::Null,
+        serde_yml::Value::Bool(b) => FrontmatterValue::Bool(b),
+        serde_yml::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                FrontmatterValue::Int(i)
+            } else if let Some(f) = n.as_f64() {
+                FrontmatterValue::Float(f)
             } else {
-                map.insert(key, parse_value(value));
+                FrontmatterValue::String(n.to_string())
             }
         }
-    }
-
-    // Flush final pending list
-    if !list_items.is_empty()
-        && let Some(ref key) = current_key
-    {
-        map.insert(key.clone(), FrontmatterValue::StringList(list_items));
-    }
-
-    map
-}
-
-/// Parse a single YAML value string.
-fn parse_value(s: &str) -> FrontmatterValue {
-    match s.to_lowercase().as_str() {
-        "true" | "yes" => FrontmatterValue::Bool(true),
-        "false" | "no" => FrontmatterValue::Bool(false),
-        "null" | "~" => FrontmatterValue::Null,
-        _ => {
-            // Try integer
-            if let Ok(n) = s.parse::<i64>() {
-                return FrontmatterValue::Int(n);
-            }
-            // String (strip quotes if present)
-            FrontmatterValue::String(strip_quotes(s))
+        serde_yml::Value::String(s) => FrontmatterValue::String(s),
+        serde_yml::Value::Sequence(seq) => {
+            FrontmatterValue::Sequence(seq.into_iter().map(yaml_to_frontmatter_value).collect())
         }
-    }
-}
-
-/// Strip surrounding quotes (single or double) from a string.
-fn strip_quotes(s: &str) -> String {
-    if (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')) {
-        s[1..s.len() - 1].to_string()
-    } else {
-        s.to_string()
+        serde_yml::Value::Mapping(m) => {
+            let map: BTreeMap<String, FrontmatterValue> = m
+                .into_iter()
+                .filter_map(|(k, v)| {
+                    let key = match k {
+                        serde_yml::Value::String(s) => s,
+                        serde_yml::Value::Number(n) => n.to_string(),
+                        serde_yml::Value::Bool(b) => b.to_string(),
+                        _ => return None,
+                    };
+                    Some((key, yaml_to_frontmatter_value(v)))
+                })
+                .collect();
+            FrontmatterValue::Mapping(map)
+        }
+        serde_yml::Value::Tagged(tagged) => yaml_to_frontmatter_value(tagged.value),
     }
 }
 

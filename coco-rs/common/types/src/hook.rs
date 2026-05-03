@@ -3,9 +3,6 @@ use serde::Serialize;
 use strum::Display;
 use strum::IntoStaticStr;
 
-use crate::Message;
-use crate::PermissionBehavior;
-
 /// 32 hook event types (synced with TS coreSchemas.ts HOOK_EVENTS).
 /// Uses #[non_exhaustive] because TS adds new events across versions.
 #[derive(
@@ -93,22 +90,5 @@ pub enum HookOutcome {
     Cancelled,
 }
 
-/// Result returned from a hook execution.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HookResult {
-    pub outcome: HookOutcome,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub message: Option<Message>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub permission_behavior: Option<PermissionBehavior>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stop_reason: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub updated_input: Option<serde_json::Value>,
-    /// Human-readable status for progress display.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status_message: Option<String>,
-    /// When true, the hook runner should re-wake after async completion.
-    #[serde(default)]
-    pub async_rewake: bool,
-}
+// `HookResult` (which embeds `Option<Message>`) lives in `coco-messages`;
+// hook protocol enums (HookEventType / HookOutcome / HookScope) stay here.

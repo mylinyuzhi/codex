@@ -41,8 +41,11 @@ impl AgentSearchManager {
             .filter(|a| a.name.to_lowercase().contains(&query_lower))
             .take(10)
             .map(|a| SuggestionItem {
-                label: format!("@agent-{}", a.name),
+                // Bare type — `accept_suggestion` re-adds the `@agent-`
+                // prefix for the input buffer.
+                label: a.name.clone(),
                 description: a.description.clone(),
+                metadata: None,
             })
             .collect()
     }

@@ -174,8 +174,13 @@ async fn test_memory_handler() {
 
 #[test]
 fn test_rewind_handler() {
-    assert!(rewind_handler("").contains("Usage"));
-    assert!(rewind_handler("5").contains("5"));
+    // Args are dropped — the TUI command palette intercepts /rewind
+    // before this handler runs and opens the picker overlay. Both
+    // empty and arg invocations return the same opener-status text.
+    let out_empty = rewind_handler("");
+    let out_with_arg = rewind_handler("5");
+    assert!(!out_empty.is_empty());
+    assert_eq!(out_empty, out_with_arg);
 }
 
 #[test]
@@ -300,8 +305,9 @@ async fn test_context_handler() {
 #[tokio::test]
 async fn test_compact_handler_empty() {
     let output = handlers::compact::handler(String::new()).await.unwrap();
+    // Sentinel always present so SDK / TUI can dispatch the request.
+    assert!(output.starts_with(handlers::compact::COMPACT_SENTINEL));
     assert!(output.contains("Compacting"));
-    assert!(output.contains("Before compaction"));
 }
 
 #[tokio::test]

@@ -94,7 +94,7 @@ pub fn parse_title_response(raw: &str) -> Option<String> {
 }
 
 fn normalize_title(raw: &str) -> Option<String> {
-    let s = raw.trim().trim_end_matches(|c: char| c == '.' || c == '!');
+    let s = raw.trim().trim_end_matches(['.', '!']);
     if s.len() < MIN_TITLE_LEN {
         return None;
     }

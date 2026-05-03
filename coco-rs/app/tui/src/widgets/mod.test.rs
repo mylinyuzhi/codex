@@ -73,6 +73,9 @@ fn test_snapshot_with_tool_result() {
             status: ToolUseStatus::Completed,
         },
         is_meta: false,
+        is_compact_summary: false,
+        is_visible_in_transcript_only: false,
+        created_at_ms: 0,
         permission_mode: None,
     });
     state.session.add_message(ChatMessage::tool_success(
@@ -214,6 +217,9 @@ fn test_snapshot_file_diff() {
             new_content: None,
         },
         is_meta: false,
+        is_compact_summary: false,
+        is_visible_in_transcript_only: false,
+        created_at_ms: 0,
         permission_mode: None,
     });
 
@@ -248,12 +254,63 @@ fn test_snapshot_parallel_tool_batch() {
                 status: ToolUseStatus::Running,
             },
             is_meta: false,
+            is_compact_summary: false,
+            is_visible_in_transcript_only: false,
+            created_at_ms: 0,
             permission_mode: None,
         });
     }
 
     let output = render_to_string(&state, 80, 24);
     insta::assert_snapshot!("parallel_tool_batch", output);
+}
+
+#[test]
+fn test_snapshot_subagent_panel_populated() {
+    // P2 / A5: subagent panel must render mixed status states
+    // (Running/Completed/Failed/Backgrounded) without truncating
+    // the description or losing the focus indicator.
+    use crate::state::session::SubagentInstance;
+    use crate::state::session::SubagentStatus;
+    let mut state = AppState::new();
+    state.session.model = "opus-4".to_string();
+    state.session.subagents = vec![
+        SubagentInstance {
+            agent_id: "agent-7af2".into(),
+            agent_type: "Explore".into(),
+            description: "Search for auth handlers".into(),
+            status: SubagentStatus::Running,
+            color: Some("blue".into()),
+        },
+        SubagentInstance {
+            agent_id: "agent-c1d3".into(),
+            agent_type: "Plan".into(),
+            description: "Design refactor plan".into(),
+            status: SubagentStatus::Completed,
+            color: None,
+        },
+        SubagentInstance {
+            agent_id: "agent-9e5f".into(),
+            agent_type: "verification".into(),
+            description: "Run tests + verify".into(),
+            status: SubagentStatus::Failed,
+            color: Some("red".into()),
+        },
+    ];
+    state.session.focused_subagent_index = Some(0);
+    let output = render_to_string(&state, 100, 24);
+    insta::assert_snapshot!("subagent_panel_populated", output);
+}
+
+#[test]
+fn test_snapshot_prompt_suggestion_renders_as_dim_placeholder() {
+    // P5 / A4: when input is empty AND a prompt suggestion is
+    // available, the suggestion replaces the default placeholder.
+    let mut state = AppState::new();
+    state.session.model = "opus-4".to_string();
+    state.session.prompt_suggestions = vec!["Run the failing tests".into()];
+    let output = render_to_string(&state, 80, 24);
+    insta::assert_snapshot!("prompt_suggestion_placeholder", output);
 }
 
 #[test]

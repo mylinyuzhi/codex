@@ -4,10 +4,7 @@ use vercel_ai_provider::ToolCallPart;
 use vercel_ai_provider::ToolResultPart;
 
 fn system_msg(content: &str) -> LanguageModelV4Message {
-    LanguageModelV4Message::System {
-        content: content.into(),
-        provider_options: None,
-    }
+    LanguageModelV4Message::system(content)
 }
 
 fn user_text(text: &str) -> LanguageModelV4Message {

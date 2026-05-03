@@ -379,7 +379,10 @@ impl McpConnectionManager {
         project_root: Option<&PathBuf>,
     ) -> anyhow::Result<tokio::sync::broadcast::Receiver<crate::config_watcher::McpConfigChanged>>
     {
-        crate::config_watcher::watch_mcp_configs(&self.config_home, project_root)
+        crate::config_watcher::watch_mcp_configs(
+            &self.config_home,
+            project_root.map(PathBuf::as_path),
+        )
     }
 }
 

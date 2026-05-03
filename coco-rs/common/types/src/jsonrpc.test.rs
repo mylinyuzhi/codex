@@ -104,13 +104,15 @@ fn jsonrpc_message_roundtrip() {
 fn jsonrpc_error_codes_are_in_reserved_range() {
     // JSON-RPC 2.0 reserves -32768 to -32000 for protocol errors;
     // -32000 to -32099 is the reserved server error range.
-    assert!(error_codes::PARSE_ERROR < -32000);
-    assert!(error_codes::INVALID_REQUEST < -32000);
-    assert!(error_codes::METHOD_NOT_FOUND < -32000);
-    assert!(error_codes::INVALID_PARAMS < -32000);
-    assert!(error_codes::INTERNAL_ERROR < -32000);
-    // coco-rs custom codes in the implementation-defined range (-32000..)
-    assert!(error_codes::REQUEST_CANCELLED >= -32099);
-    assert!(error_codes::PERMISSION_DENIED >= -32099);
-    assert!(error_codes::NOT_INITIALIZED >= -32099);
+    // Const blocks make these compile-time checks instead of runtime asserts.
+    const _: () = {
+        assert!(error_codes::PARSE_ERROR < -32000);
+        assert!(error_codes::INVALID_REQUEST < -32000);
+        assert!(error_codes::METHOD_NOT_FOUND < -32000);
+        assert!(error_codes::INVALID_PARAMS < -32000);
+        assert!(error_codes::INTERNAL_ERROR < -32000);
+        assert!(error_codes::REQUEST_CANCELLED >= -32099);
+        assert!(error_codes::PERMISSION_DENIED >= -32099);
+        assert!(error_codes::NOT_INITIALIZED >= -32099);
+    };
 }

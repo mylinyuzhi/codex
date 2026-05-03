@@ -51,7 +51,9 @@ fn group_into_blocks(prompt: &LanguageModelV4Prompt) -> Vec<MessageBlock<'_>> {
 
     for msg in prompt {
         let msg_type = match msg {
-            LanguageModelV4Message::System { .. } => BlockType::System,
+            LanguageModelV4Message::System { .. } | LanguageModelV4Message::Developer { .. } => {
+                BlockType::System
+            }
             LanguageModelV4Message::User { .. } | LanguageModelV4Message::Tool { .. } => {
                 BlockType::User
             }
@@ -72,7 +74,8 @@ fn group_into_blocks(prompt: &LanguageModelV4Prompt) -> Vec<MessageBlock<'_>> {
             // Start new block
             current_type = Some(msg_type);
             match msg {
-                LanguageModelV4Message::System { .. } => {
+                LanguageModelV4Message::System { .. }
+                | LanguageModelV4Message::Developer { .. } => {
                     blocks.push(MessageBlock::System(vec![msg]));
                 }
                 LanguageModelV4Message::User { .. } | LanguageModelV4Message::Tool { .. } => {
@@ -196,6 +199,10 @@ pub fn convert_to_anthropic_messages_full(
                     if let LanguageModelV4Message::System {
                         content,
                         provider_options,
+                    }
+                    | LanguageModelV4Message::Developer {
+                        content,
+                        provider_options,
                     } = msg
                     {
                         let cache_control = cache_validator.get_cache_control_from_options(
@@ -205,9 +212,11 @@ pub fn convert_to_anthropic_messages_full(
                                 can_cache: true,
                             },
                         );
+                        let text =
+                            collapse_text_parts(content, &mut warnings, "system/developer message");
                         let mut block = json!({
                             "type": "text",
-                            "text": content,
+                            "text": text,
                         });
                         if let Some(cc) = cache_control {
                             block["cache_control"] = cc;
@@ -343,6 +352,24 @@ pub fn convert_to_anthropic_messages_full(
         warnings,
         betas,
     }
+}
+
+fn collapse_text_parts(
+    parts: &[UserContentPart],
+    warnings: &mut Vec<Warning>,
+    context: &str,
+) -> String {
+    let mut text = String::new();
+    for part in parts {
+        match part {
+            UserContentPart::Text(text_part) => text.push_str(&text_part.text),
+            UserContentPart::File(_) => warnings.push(Warning::unsupported_with_details(
+                "non-text prompt part",
+                format!("{context} contains a non-text part that was dropped"),
+            )),
+        }
+    }
+    text
 }
 
 // ---------------------------------------------------------------------------

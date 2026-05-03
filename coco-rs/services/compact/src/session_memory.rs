@@ -11,11 +11,11 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-use coco_types::AssistantContent;
+use coco_messages::AssistantContent;
+use coco_messages::LlmMessage;
+use coco_messages::Message;
+use coco_messages::SystemMessage;
 use coco_types::CompactTrigger;
-use coco_types::LlmMessage;
-use coco_types::Message;
-use coco_types::SystemMessage;
 
 use crate::compact::annotate_boundary_with_preserved_segment;
 use crate::tokens;
@@ -65,21 +65,56 @@ const SESSION_MEMORY_TRUNCATION_MARKER: &str =
 /// Perform session memory compaction: replace old messages with the session
 /// memory content as a summary, keeping only recent messages.
 ///
+/// `last_summarized_message_id` is the uuid of the last assistant message
+/// already covered by `session_memory` — `Some(uuid)` matches TS's normal
+/// case (extraction has run, anchor is known); `None` means resumed
+/// session (memory exists from disk but boundary is unknown). When the
+/// uuid doesn't appear in `messages`, returns `Ok(None)` so the caller
+/// falls back to LLM-based compaction (TS sessionMemoryCompact.ts:554).
+///
 /// Returns `None` when:
-/// - Session memory is empty;
+/// - Session memory is empty / template-only;
+/// - The kept-tail anchor is unrecoverable;
 /// - The post-compact token count is still ≥ `auto_compact_threshold`
 ///   (caller should fall back to LLM-based compaction).
 pub fn compact_session_memory(
     messages: &[Message],
     session_memory: &str,
+    last_summarized_message_id: Option<uuid::Uuid>,
     config: &SessionMemoryCompactConfig,
 ) -> Result<Option<CompactResult>, CompactError> {
     let trimmed = session_memory.trim();
     if trimmed.is_empty() {
         return Ok(None);
     }
+    if is_session_memory_template_only(trimmed) {
+        return Ok(None);
+    }
 
-    let start_index = calculate_messages_to_keep_index(messages, config);
+    // Resolve the last-summarized boundary index. TS:
+    //   - Some + found  → start after that index.
+    //   - Some + not found → bail (caller falls back to LLM).
+    //   - None → resumed session: pretend boundary is just before tail
+    //     so `calculate_messages_to_keep_index` initially keeps no
+    //     messages and only expands enough to hit minimums.
+    let last_summarized_index: Option<usize> = match last_summarized_message_id {
+        Some(target) => {
+            let found = messages.iter().position(|m| m.uuid() == Some(&target));
+            if found.is_none() {
+                return Ok(None);
+            }
+            found
+        }
+        None => {
+            if messages.is_empty() {
+                None
+            } else {
+                Some(messages.len() - 1)
+            }
+        }
+    };
+
+    let start_index = calculate_messages_to_keep_index(messages, last_summarized_index, config);
     let adjusted_index = adjust_index_to_preserve_api_invariants(messages, start_index);
 
     // Filter out stale compact-boundary messages from the kept tail. Otherwise
@@ -115,8 +150,8 @@ pub fn compact_session_memory(
         ));
     }
 
-    let summary_message = Message::User(coco_types::UserMessage {
-        message: coco_types::LlmMessage::user_text(&summary),
+    let summary_message = Message::User(coco_messages::UserMessage {
+        message: coco_messages::LlmMessage::user_text(&summary),
         uuid: uuid::Uuid::new_v4(),
         timestamp: String::new(),
         is_visible_in_transcript_only: true,
@@ -147,11 +182,11 @@ pub fn compact_session_memory(
     }
 
     let messages_summarized = (messages.len() - messages_to_keep.len()) as i32;
-    let mut boundary_struct = coco_types::SystemCompactBoundaryMessage {
+    let mut boundary_struct = coco_messages::SystemCompactBoundaryMessage {
         uuid: uuid::Uuid::new_v4(),
         tokens_before: pre_tokens,
         tokens_after: post_tokens,
-        trigger: CompactTrigger::Auto,
+        trigger: CompactTrigger::SessionMemory,
         user_context: None,
         messages_summarized: Some(messages_summarized),
         pre_compact_discovered_tools: extract_discovered_tool_names(messages)
@@ -173,8 +208,79 @@ pub fn compact_session_memory(
         post_compact_tokens: post_tokens,
         true_post_compact_tokens: post_tokens,
         is_recompaction: false,
-        trigger: CompactTrigger::Auto,
+        trigger: CompactTrigger::SessionMemory,
     }))
+}
+
+/// Inputs to [`should_extract_memory`] — caller-supplied counters
+/// describing the current turn's relationship to the last-extracted
+/// state. Mirrors the per-call argument bundle TS passes around in
+/// `services/SessionMemory/sessionMemory.ts:134 shouldExtractMemory`.
+#[derive(Debug, Clone, Copy)]
+pub struct SessionMemoryExtractionInputs {
+    /// Total estimated tokens in the conversation right now.
+    pub current_tokens: i64,
+    /// Tokens at the time of the last successful extraction.
+    /// `0` when no extraction has ever run.
+    pub tokens_at_last_extract: i64,
+    /// Number of tool calls in the most recent turn.
+    pub tool_calls_in_last_turn: i32,
+}
+
+/// Thresholds used by [`should_extract_memory`]. Defaults match TS:
+/// `minimum_message_tokens_to_init = 10_000`, `minimum_tokens_between_update
+/// = 5_000`, `min_tools_for_update = 3`. Keep these as a struct so
+/// settings.json overrides can tune without touching the algorithm.
+#[derive(Debug, Clone, Copy)]
+pub struct SessionMemoryExtractionThresholds {
+    pub minimum_message_tokens_to_init: i64,
+    pub minimum_tokens_between_update: i64,
+    pub min_tools_for_update: i32,
+}
+
+impl Default for SessionMemoryExtractionThresholds {
+    fn default() -> Self {
+        Self {
+            minimum_message_tokens_to_init: 10_000,
+            minimum_tokens_between_update: 5_000,
+            min_tools_for_update: 3,
+        }
+    }
+}
+
+/// Pure decision: should the session-memory extractor run this turn?
+///
+/// TS: `services/SessionMemory/sessionMemory.ts:134 shouldExtractMemory`.
+///  - **Init** (no prior extract): require ≥ `minimum_message_tokens_to_init`.
+///  - **Update** (prior extract exists): require token-delta ≥
+///    `minimum_tokens_between_update` AND
+///    (`tool_calls_in_last_turn ≥ min_tools_for_update` OR
+///    `tool_calls_in_last_turn == 0`)
+///    The second clause is "tool-bursty turns get extracted; idle
+///    turns also get extracted to capture the resolution".
+///
+/// This is a *pure* decision — the actual extraction (forked agent
+/// LLM call + file write) is owned upstream by `services/SessionMemory/`.
+#[must_use]
+pub fn should_extract_memory(
+    inputs: SessionMemoryExtractionInputs,
+    thresholds: &SessionMemoryExtractionThresholds,
+) -> bool {
+    let SessionMemoryExtractionInputs {
+        current_tokens,
+        tokens_at_last_extract,
+        tool_calls_in_last_turn,
+    } = inputs;
+
+    if tokens_at_last_extract <= 0 {
+        // Init path — first extraction.
+        return current_tokens >= thresholds.minimum_message_tokens_to_init;
+    }
+    let delta = current_tokens - tokens_at_last_extract;
+    if delta < thresholds.minimum_tokens_between_update {
+        return false;
+    }
+    tool_calls_in_last_turn >= thresholds.min_tools_for_update || tool_calls_in_last_turn == 0
 }
 
 /// Select which memories to compact when the memory directory grows too large.
@@ -273,42 +379,117 @@ pub fn merge_similar_memories(memories: &[(String, String)]) -> Vec<(String, Str
 
 /// Calculate the starting index for messages to keep after compaction.
 ///
-/// Starts from the end and expands backwards until we meet both minimum
-/// thresholds (tokens and text-block messages), or hit the max cap.
+/// Starts from `last_summarized_index + 1` and expands backwards until we
+/// meet both minimum thresholds, or hit the max cap, or hit the floor at
+/// the previous CompactBoundary. Mirrors TS
+/// `calculateMessagesToKeepIndex` (sessionMemoryCompact.ts:324).
+///
+/// Floor rationale: the preserved-segment chain has a disk discontinuity
+/// at the previous boundary (att[0]→summary shortcut from dedup-skip);
+/// expanding past it would let the loader's tail→head walk bypass inner
+/// preserved messages and prune them.
 fn calculate_messages_to_keep_index(
     messages: &[Message],
+    last_summarized_index: Option<usize>,
     config: &SessionMemoryCompactConfig,
 ) -> usize {
     if messages.is_empty() {
         return 0;
     }
 
-    let mut start_index = messages.len();
+    // Start from the message after the anchor; if no anchor, start at len
+    // (no kept messages initially) so the expansion loop fills exactly to
+    // the configured minimums.
+    let mut start_index = match last_summarized_index {
+        Some(idx) => (idx + 1).min(messages.len()),
+        None => messages.len(),
+    };
+
+    // Floor at the last CompactBoundary so we never expand past a prior
+    // compaction's archive line.
+    let floor = messages
+        .iter()
+        .rposition(|m| matches!(m, Message::System(SystemMessage::CompactBoundary(_))))
+        .map(|i| i + 1)
+        .unwrap_or(0);
+
+    // Initial accounting from start_index..len.
     let mut total_tokens: i64 = 0;
     let mut text_block_count: i32 = 0;
-
-    for i in (0..messages.len()).rev() {
-        let msg_tokens = tokens::estimate_message_tokens(&messages[i]);
-        let would_be = total_tokens + msg_tokens;
-
-        // Stop if adding this message would exceed the max cap
-        if would_be > config.max_tokens && total_tokens > 0 {
-            break;
+    for msg in &messages[start_index..] {
+        total_tokens += tokens::estimate_message_tokens(msg);
+        if has_text_blocks(msg) {
+            text_block_count += 1;
         }
+    }
 
-        total_tokens = would_be;
+    // Already over either bound — no expansion needed.
+    if total_tokens >= config.max_tokens
+        || (total_tokens >= config.min_tokens && text_block_count >= config.min_text_block_messages)
+    {
+        return start_index;
+    }
+
+    // Expand backwards until we meet both minimums, hit the max cap, or
+    // hit the boundary floor.
+    while start_index > floor {
+        let i = start_index - 1;
+        let msg_tokens = tokens::estimate_message_tokens(&messages[i]);
+        total_tokens += msg_tokens;
         if has_text_blocks(&messages[i]) {
             text_block_count += 1;
         }
         start_index = i;
 
-        // Once we meet both minimums, stop expanding
+        if total_tokens >= config.max_tokens {
+            break;
+        }
         if total_tokens >= config.min_tokens && text_block_count >= config.min_text_block_messages {
             break;
         }
     }
 
     start_index
+}
+
+/// Detect whether the on-disk session memory file contains only the
+/// extractor's empty template (no actual content yet). TS:
+/// `isSessionMemoryEmpty` checks for the boilerplate sections and
+/// returns true when no narrative content has been written.
+///
+/// Heuristic: the template uses second-level headings (`## ...`) and a
+/// known trailer; a file with no body lines under any heading is
+/// considered empty. We additionally accept the canonical placeholder
+/// strings TS recognizes ("No memories yet", "(empty)").
+pub(crate) fn is_session_memory_template_only(content: &str) -> bool {
+    let normalized = content.trim();
+    if normalized.is_empty() {
+        return true;
+    }
+    // Reject obvious empty markers regardless of structure.
+    let lower = normalized.to_lowercase();
+    if lower.contains("no memories yet") || lower == "(empty)" {
+        return true;
+    }
+    // A template-only file has only headings + blank lines and possibly
+    // bullet placeholders like "- _none yet_".
+    let mut has_content_line = false;
+    for line in normalized.lines() {
+        let t = line.trim();
+        if t.is_empty() {
+            continue;
+        }
+        if t.starts_with('#') {
+            continue;
+        }
+        let t_lower = t.to_lowercase();
+        if t_lower.contains("none yet") || t_lower.contains("no entries") {
+            continue;
+        }
+        has_content_line = true;
+        break;
+    }
+    !has_content_line
 }
 
 /// Adjust the keep index to preserve tool_use/tool_result pairs **and**
@@ -411,15 +592,15 @@ fn collect_tool_use_ids(messages: &[Message]) -> HashSet<String> {
 pub fn has_text_blocks(message: &Message) -> bool {
     match message {
         Message::User(u) => match &u.message {
-            coco_types::LlmMessage::User { content, .. } => content
+            coco_messages::LlmMessage::User { content, .. } => content
                 .iter()
-                .any(|c| matches!(c, coco_types::UserContent::Text(_))),
+                .any(|c| matches!(c, coco_messages::UserContent::Text(_))),
             _ => false,
         },
         Message::Assistant(a) => match &a.message {
-            coco_types::LlmMessage::Assistant { content, .. } => content
+            coco_messages::LlmMessage::Assistant { content, .. } => content
                 .iter()
-                .any(|c| matches!(c, coco_types::AssistantContent::Text(_))),
+                .any(|c| matches!(c, coco_messages::AssistantContent::Text(_))),
             _ => false,
         },
         _ => false,

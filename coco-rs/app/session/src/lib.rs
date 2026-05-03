@@ -9,6 +9,7 @@ pub mod title_generator;
 
 pub use history::HistoryEntry;
 pub use history::PromptHistory;
+pub use storage::AgentMetadata;
 pub use storage::Entry;
 pub use storage::MetadataEntry;
 pub use storage::ModelCostEntry;
@@ -17,6 +18,7 @@ pub use storage::TranscriptEntry;
 pub use storage::TranscriptMetadata;
 pub use storage::TranscriptStore;
 pub use storage::TranscriptUsage;
+pub use storage::build_file_history_snapshot_chain;
 pub use storage::restore_cost_from_transcript;
 
 use serde::Deserialize;

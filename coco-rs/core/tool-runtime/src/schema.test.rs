@@ -13,9 +13,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, Ordering};
 
+use coco_messages::ToolResult;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
-use coco_types::ToolResult;
 use serde_json::{Value, json};
 
 use super::*;

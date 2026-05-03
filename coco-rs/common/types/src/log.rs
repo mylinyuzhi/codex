@@ -1,13 +1,38 @@
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::Message;
-
+/// User category used for ant-only feature gates.
+///
+/// TS: `process.env.USER_TYPE` checks throughout `skills/bundled/*.ts`,
+/// `commands/init.ts`, `commands/createMovedToPluginCommand.ts`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UserType {
     Human,
     Api,
+    /// Internal Anthropic user — unlocks experimental skills and prompts.
+    /// TS: `process.env.USER_TYPE === 'ant'`.
+    Ant,
+}
+
+impl UserType {
+    /// Whether this user type is the internal Anthropic role.
+    pub fn is_ant(self) -> bool {
+        matches!(self, UserType::Ant)
+    }
+
+    /// Read from the `COCO_USER_TYPE` env var (legacy: `USER_TYPE`).
+    /// Returns `Human` if neither is set.
+    pub fn from_env() -> Self {
+        let raw = std::env::var("COCO_USER_TYPE")
+            .or_else(|_| std::env::var("USER_TYPE"))
+            .unwrap_or_default();
+        match raw.as_str() {
+            "ant" => UserType::Ant,
+            "api" => UserType::Api,
+            _ => UserType::Human,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,22 +46,8 @@ pub enum Entrypoint {
     Web,
 }
 
-/// Serialized message for log persistence (session replay, analytics).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SerializedMessage {
-    pub message: Message,
-    pub cwd: String,
-    pub user_type: UserType,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub entrypoint: Option<Entrypoint>,
-    pub session_id: String,
-    pub timestamp: String,
-    pub version: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub git_branch: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_id: Option<String>,
-}
+// `SerializedMessage` (which embeds `Message`) lives in `coco-messages`;
+// log persistence is a Core-layer concern, not a foundational types one.
 
 /// Log file option for session listing.
 pub struct LogOption {

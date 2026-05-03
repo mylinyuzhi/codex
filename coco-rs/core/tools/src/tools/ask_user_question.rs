@@ -8,6 +8,7 @@
 //! `app/tui/src/render_overlays/question.rs`), collects answers, and fills
 //! them in before the result goes back to the model.
 
+use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::PromptOptions;
 use coco_tool_runtime::Tool;
@@ -16,7 +17,6 @@ use coco_tool_runtime::ToolUseContext;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
 use coco_types::ToolName;
-use coco_types::ToolResult;
 use serde_json::Value;
 use std::collections::HashMap;
 

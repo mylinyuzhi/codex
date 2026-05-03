@@ -186,10 +186,11 @@ async fn run_monitor(
         .kill_on_drop(true)
         .spawn()?;
 
-    let stdout = child
-        .stdout
-        .take()
-        .expect("stdout was piped but not available");
+    let Some(stdout) = child.stdout.take() else {
+        return Err(std::io::Error::other(
+            "log stream child stdout was piped but not available",
+        ));
+    };
     let reader = BufReader::new(stdout);
     let mut lines = reader.lines();
 

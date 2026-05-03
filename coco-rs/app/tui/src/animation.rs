@@ -117,6 +117,11 @@ fn shimmer_alpha(elapsed_ms: i64, offset: i32) -> f64 {
 }
 
 /// Map a 0.0..1.0 alpha to a grayscale `Color`.
+//
+// Smooth shimmer requires 24-bit grayscale; the 16 named ANSI shades
+// are too coarse to produce a continuous wave. `Color::Rgb` is
+// intentional here.
+#[allow(clippy::disallowed_methods)]
 fn alpha_to_gray(alpha: f64) -> Color {
     let clamped = alpha.clamp(0.0, 1.0);
     let v = (clamped * 255.0) as u8;

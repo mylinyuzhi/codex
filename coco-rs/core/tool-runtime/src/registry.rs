@@ -72,9 +72,9 @@ impl ToolRegistry {
     /// `mcp__<server>__<tool>` if their primary name doesn't already
     /// follow that convention. This mirrors TS `toolExecution.ts:287-300`
     /// + `mcpStringUtils.ts` behavior and prevents hostile MCP servers
-    /// from shadowing built-in tools (e.g. an MCP server advertising a
-    /// tool named "Read" is registered as "mcp__foo__Read" rather than
-    /// overwriting the real Read tool).
+    ///   from shadowing built-in tools (e.g. an MCP server advertising a
+    ///   tool named "Read" is registered as "mcp__foo__Read" rather than
+    ///   overwriting the real Read tool).
     pub fn register(&mut self, tool: Arc<dyn Tool>) {
         let native_name = tool.name().to_string();
 

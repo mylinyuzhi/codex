@@ -264,6 +264,123 @@ pub trait TaskHandle: Send + Sync {
 
 pub type TaskHandleRef = Arc<dyn TaskHandle>;
 
+/// Registration side of the background-task surface.
+///
+/// AgentTool's background path needs to register a freshly-spawned
+/// engine task with the same store the read/control side
+/// ([`TaskHandle`]) consumes. Splitting registration out of
+/// `TaskHandle` keeps the trait shape that `coco-tools` already
+/// targets unchanged while letting `coco-coordinator` reach the
+/// registry through a narrow seam without depending on the CLI
+/// crate where the production impl lives.
+///
+/// Production impl: `coco_cli::task_runtime::TaskRuntime`.
+#[async_trait::async_trait]
+pub trait AgentTaskRegistry: Send + Sync {
+    /// Register a freshly-spawned background AgentTool task.
+    ///
+    /// Returns the `task_id` that subsequent
+    /// [`TaskHandle::get_task_status`] / `get_task_output_delta` /
+    /// `kill_task` calls accept. The implementation owns the per-
+    /// task cancellation token (handed back to the caller for
+    /// observation), output buffer, and lifecycle status.
+    async fn register_agent_task(
+        &self,
+        description: &str,
+        tool_use_id: Option<&str>,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> String;
+
+    /// Append text to a task's output buffer.
+    async fn append_output(&self, task_id: &str, chunk: &str);
+
+    /// Mark a task completed and stash the final response text (if
+    /// any) into the output buffer.
+    async fn mark_completed(&self, task_id: &str, response_text: Option<&str>);
+
+    /// Mark a task failed and append the error message.
+    async fn mark_failed(&self, task_id: &str, error: &str);
+
+    /// Snapshot a task's accumulated output buffer. Used by the
+    /// periodic AgentSummary timer to feed recent text into the
+    /// summarizer prompt. Returns the empty string for unknown
+    /// task ids.
+    async fn read_output(&self, task_id: &str) -> String;
+
+    /// Whether a task is in a terminal state. Periodic loops
+    /// observe this so they can stop cleanly without racing the
+    /// final `mark_completed` / `mark_failed` call.
+    async fn is_terminal(&self, task_id: &str) -> bool;
+}
+
+pub type AgentTaskRegistryRef = Arc<dyn AgentTaskRegistry>;
+
+/// Sidecar metadata for a background AgentTool spawn. Mirrors TS
+/// `AgentMetadata` (`utils/sessionStorage.ts:264-272`). Persisted
+/// when the spawn registers; read on resume.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct AgentSpawnMetadata {
+    /// Agent type used at original spawn. Resume routes against this
+    /// when `subagent_type` is omitted.
+    pub agent_type: String,
+    /// Worktree path if the spawn used `isolation: "worktree"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_path: Option<String>,
+    /// Original task description from the AgentTool input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// Per-agent transcript persistence trait. Decouples
+/// `coco-coordinator` (root layer) from `coco-session` (app layer)
+/// without a layer-rule violation. Production impl lives in
+/// `app/cli` and wraps `coco_session::TranscriptStore`.
+///
+/// TS reference: split across `utils/sessionStorage.ts`'s
+/// `getAgentTranscriptPath` / `getAgentMetadataPath` /
+/// `writeAgentMetadata` / `readAgentMetadata` / `getAgentTranscript`.
+#[async_trait::async_trait]
+pub trait AgentTranscriptStore: Send + Sync {
+    /// Append `messages` (each a serialised `coco_messages::Message`)
+    /// to the per-agent JSONL transcript. Conversation order is
+    /// preserved by append order — coco-rs doesn't need TS's
+    /// parent_uuid chain because `MessageHistory.messages` is
+    /// already a Vec. Idempotent across multiple calls.
+    async fn append_agent_messages(
+        &self,
+        session_id: &str,
+        agent_id: &str,
+        messages: Vec<serde_json::Value>,
+    ) -> anyhow::Result<()>;
+
+    /// Read every persisted message for an agent in conversation
+    /// order. Returns `Ok(None)` when no transcript exists (no
+    /// prior spawn). Resume passes the result as
+    /// `AgentQueryConfig.fork_context_messages`.
+    async fn load_agent_messages(
+        &self,
+        session_id: &str,
+        agent_id: &str,
+    ) -> anyhow::Result<Option<Vec<serde_json::Value>>>;
+
+    /// Write the metadata sidecar for an agent.
+    async fn write_agent_metadata(
+        &self,
+        session_id: &str,
+        agent_id: &str,
+        metadata: &AgentSpawnMetadata,
+    ) -> anyhow::Result<()>;
+
+    /// Read the metadata sidecar; `Ok(None)` when no sidecar exists.
+    async fn read_agent_metadata(
+        &self,
+        session_id: &str,
+        agent_id: &str,
+    ) -> anyhow::Result<Option<AgentSpawnMetadata>>;
+}
+
+pub type AgentTranscriptStoreRef = Arc<dyn AgentTranscriptStore>;
+
 /// No-op implementation for contexts without background tasks.
 #[derive(Debug, Clone)]
 pub struct NoOpTaskHandle;

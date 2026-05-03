@@ -21,7 +21,7 @@ pub fn convert_to_openai_compatible_chat_messages(
     prompt: &LanguageModelV4Prompt,
 ) -> Result<(Vec<Value>, Vec<Warning>), AISdkError> {
     let mut messages = Vec::new();
-    let warnings = Vec::new();
+    let mut warnings = Vec::new();
 
     for msg in prompt {
         match msg {
@@ -29,7 +29,20 @@ pub fn convert_to_openai_compatible_chat_messages(
                 content,
                 provider_options,
             } => {
-                let mut msg = json!({ "role": "system", "content": content });
+                let text = collapse_text_parts(content, &mut warnings, "system message");
+                let mut msg = json!({ "role": "system", "content": text });
+                for (k, v) in get_openai_metadata(provider_options) {
+                    msg[k] = v;
+                }
+                messages.push(msg);
+            }
+
+            LanguageModelV4Message::Developer {
+                content,
+                provider_options,
+            } => {
+                let text = collapse_text_parts(content, &mut warnings, "developer message");
+                let mut msg = json!({ "role": "developer", "content": text });
                 for (k, v) in get_openai_metadata(provider_options) {
                     msg[k] = v;
                 }
@@ -118,6 +131,24 @@ pub fn convert_to_openai_compatible_chat_messages(
     }
 
     Ok((messages, warnings))
+}
+
+fn collapse_text_parts(
+    parts: &[UserContentPart],
+    warnings: &mut Vec<Warning>,
+    context: &str,
+) -> String {
+    let mut text = String::new();
+    for part in parts {
+        match part {
+            UserContentPart::Text(text_part) => text.push_str(&text_part.text),
+            UserContentPart::File(_) => warnings.push(Warning::unsupported_with_details(
+                "non-text prompt part",
+                format!("{context} contains a non-text part that was dropped"),
+            )),
+        }
+    }
+    text
 }
 
 /// Extract provider metadata from the "openaiCompatible" key in provider options.

@@ -10,6 +10,7 @@
 //! - Runtime state management shared across the system via `Arc`
 
 pub mod bootstrap;
+pub mod bridge;
 pub mod checker;
 pub mod config;
 pub mod deps;
@@ -23,6 +24,10 @@ pub mod violation;
 
 pub use bootstrap::EnableCheckResult;
 pub use bootstrap::check_enable_gates;
+pub use bridge::{
+    NoOpSandboxApprovalBridge, SandboxApprovalBridge, SandboxApprovalBridgeRef,
+    SandboxApprovalDecision, SandboxApprovalRequest, SandboxOperation,
+};
 pub use checker::PermissionChecker;
 pub use config::EnforcementLevel;
 pub use config::FilesystemConfig;

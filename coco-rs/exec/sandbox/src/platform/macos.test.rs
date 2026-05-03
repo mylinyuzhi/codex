@@ -222,15 +222,15 @@ fn test_wrap_command_removes_dyld_env_vars() {
     let dyld_fw = std::ffi::OsString::from("DYLD_FRAMEWORK_PATH");
 
     assert!(
-        envs.get(&dyld_insert).is_some_and(|v| v.is_none()),
+        envs.get(&dyld_insert).is_some_and(Option::is_none),
         "DYLD_INSERT_LIBRARIES should be removed"
     );
     assert!(
-        envs.get(&dyld_lib).is_some_and(|v| v.is_none()),
+        envs.get(&dyld_lib).is_some_and(Option::is_none),
         "DYLD_LIBRARY_PATH should be removed"
     );
     assert!(
-        envs.get(&dyld_fw).is_some_and(|v| v.is_none()),
+        envs.get(&dyld_fw).is_some_and(Option::is_none),
         "DYLD_FRAMEWORK_PATH should be removed"
     );
 }
@@ -246,9 +246,8 @@ fn test_wrap_command_disabled_does_not_remove_env_vars() {
     assert!(result.is_ok());
 
     let inner = cmd.as_std();
-    let envs: Vec<_> = inner.get_envs().collect();
     // When disabled, no env manipulation should occur
-    assert!(envs.is_empty());
+    assert!(inner.get_envs().next().is_none());
 }
 
 // ==========================================================================

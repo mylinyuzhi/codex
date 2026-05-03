@@ -1,4 +1,4 @@
-//! Pure helpers for turning [`coco_types::Message`] slices into the scalar
+//! Pure helpers for turning [`coco_messages::Message`] slices into the scalar
 //! counters that generators read from [`GeneratorContext`].
 //!
 //! These functions are the bridge between raw message history and the
@@ -17,9 +17,9 @@
 //!
 //! [`GeneratorContext`]: crate::GeneratorContext
 
-use coco_types::AssistantContent;
-use coco_types::LlmMessage;
-use coco_types::Message;
+use coco_messages::AssistantContent;
+use coco_messages::LlmMessage;
+use coco_messages::Message;
 use coco_types::ToolName;
 
 /// Task tools whose **invocation resets the task-reminder silence counter**.

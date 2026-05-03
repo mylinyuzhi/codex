@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
+use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolUseContext;
@@ -15,7 +16,6 @@ use coco_tool_runtime::error::ToolError;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
 use coco_types::ToolName;
-use coco_types::ToolResult;
 use coco_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Value;
 
@@ -90,6 +90,18 @@ impl Tool for ApplyPatchTool {
                 source: None,
             }
         })?;
+
+        // Pre-flight: parse the patch to extract affected paths so we
+        // can record file-history snapshots BEFORE the mutation.
+        // Errors here are not fatal — `apply_patch` below will produce
+        // its own (more descriptive) parse error in that case. Mirrors
+        // the per-tool track_file_edit ordering used by Edit/Write.
+        if let Ok(parsed) = coco_apply_patch::parse_patch(patch) {
+            for hunk in &parsed.hunks {
+                let path = hunk.resolve_path(&cwd);
+                crate::track_file_edit(ctx, path.as_path()).await;
+            }
+        }
 
         let mut stdout: Vec<u8> = Vec::new();
         let mut stderr: Vec<u8> = Vec::new();

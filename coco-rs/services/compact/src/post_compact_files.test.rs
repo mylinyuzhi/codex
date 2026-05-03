@@ -4,7 +4,7 @@ use coco_context::file_read_state::FileReadEntry;
 use pretty_assertions::assert_eq;
 use uuid::Uuid;
 
-use vercel_ai_provider::ToolCallPart;
+use coco_inference::ToolCallPart;
 
 use super::*;
 
@@ -19,7 +19,7 @@ fn make_entry(content: &str, mtime: i64) -> FileReadEntry {
 
 fn make_assistant_with_read_tool_call(tool_call_id: &str, file_path: &str) -> Message {
     let read_name = ToolName::Read.as_str();
-    Message::Assistant(coco_types::AssistantMessage {
+    Message::Assistant(coco_messages::AssistantMessage {
         message: LlmMessage::assistant(vec![AssistantContentPart::ToolCall(ToolCallPart::new(
             tool_call_id,
             read_name,
@@ -36,14 +36,14 @@ fn make_assistant_with_read_tool_call(tool_call_id: &str, file_path: &str) -> Me
 }
 
 fn make_tool_result(tool_use_id: &str, text: &str) -> Message {
-    Message::ToolResult(coco_types::ToolResultMessage {
+    Message::ToolResult(coco_messages::ToolResultMessage {
         uuid: Uuid::new_v4(),
         message: LlmMessage::Tool {
-            content: vec![coco_types::ToolContent::ToolResult(
-                vercel_ai_provider::ToolResultPart {
+            content: vec![coco_messages::ToolContent::ToolResult(
+                coco_inference::ToolResultPart {
                     tool_call_id: tool_use_id.to_string(),
                     tool_name: String::new(),
-                    output: vercel_ai_provider::ToolResultContent::text(text),
+                    output: coco_inference::ToolResultContent::text(text),
                     is_error: false,
                     provider_metadata: None,
                 },

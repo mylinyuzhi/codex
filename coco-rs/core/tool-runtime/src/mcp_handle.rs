@@ -104,6 +104,29 @@ pub trait McpHandle: Send + Sync {
     async fn list_tools(&self) -> Vec<McpToolSchema> {
         vec![]
     }
+
+    /// Register and connect a dynamically-defined MCP server (TS
+    /// `connectToServer(name, {…inlineConfig, scope: 'dynamic'})`).
+    /// Used by per-agent MCP initialization (`runAgent.ts:135-191`)
+    /// to stand up agent-private servers from inline frontmatter
+    /// configs. Returns the server name on success so the caller can
+    /// pair it with the matching `remove_dynamic_server` at agent
+    /// teardown.
+    ///
+    /// `config` is the JSON body of `McpServerConfig` (transport,
+    /// command, env, …). The default impl returns an error so
+    /// handles without a real MCP layer surface a clean failure.
+    async fn add_dynamic_server(&self, _name: &str, _config: Value) -> anyhow::Result<()> {
+        anyhow::bail!("MCP add_dynamic_server not supported in this context")
+    }
+
+    /// Disconnect + deregister a dynamically-added server. Mirror of
+    /// `add_dynamic_server`. Called at SubagentStop for every server
+    /// that was spun up via inline config so agent-private servers
+    /// don't outlive their agent.
+    async fn remove_dynamic_server(&self, _name: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 pub type McpHandleRef = Arc<dyn McpHandle>;

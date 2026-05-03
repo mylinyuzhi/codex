@@ -16,8 +16,14 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
-tokio = { workspace = true, features = ["sync", "process", "time", "rt", "macros"] }
+tokio = { workspace = true, features = ["sync", "process", "time", "rt", "macros", "fs", "io-util"] }
 walkdir.workspace = true
+dirs.workspace = true
+rand.workspace = true
+regex.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

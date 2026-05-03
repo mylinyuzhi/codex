@@ -8,7 +8,7 @@
 //! "Additional summarization instructions" example, both of which are
 //! load-bearing for output consistency.
 
-use coco_types::PartialCompactDirection;
+use coco_messages::PartialCompactDirection;
 
 /// No-tools preamble to prevent LLM from calling tools during compaction.
 const NO_TOOLS_PREAMBLE: &str = "CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.

@@ -1,6 +1,8 @@
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashSet;
+use std::fmt;
+use std::str::FromStr;
 
 /// Which LLM provider implementation to use.
 /// Consumed by coco-config (ProviderInfo) and coco-inference (ProviderFactory).
@@ -27,6 +29,59 @@ pub enum ModelRole {
     Review,
     HookAgent,
     Memory,
+    /// Forked-agent spawn (AgentTool / SkillTool). Distinct from
+    /// `Explore` — Explore is an investigative subagent type that
+    /// happens to often be a "small fast" model; Subagent is the
+    /// generic spawn role used by tools/Agent and the swarm runtime.
+    Subagent,
+}
+
+impl ModelRole {
+    /// Canonical snake_case spelling. Matches the serde wire form so
+    /// `ModelRole::Subagent.as_str() == serde_json::to_string(&Subagent)?`
+    /// modulo the surrounding quotes.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Main => "main",
+            Self::Fast => "fast",
+            Self::Compact => "compact",
+            Self::Plan => "plan",
+            Self::Explore => "explore",
+            Self::Review => "review",
+            Self::HookAgent => "hook_agent",
+            Self::Memory => "memory",
+            Self::Subagent => "subagent",
+        }
+    }
+}
+
+impl fmt::Display for ModelRole {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for ModelRole {
+    type Err = String;
+
+    /// Accept the canonical snake_case spelling plus the camelCase form
+    /// `hookAgent` for symmetry with TS-flavored config files. Trim and
+    /// lowercase first so YAML scalars like `Explore` / ` plan ` parse.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let normalized = s.trim().to_ascii_lowercase();
+        match normalized.as_str() {
+            "main" => Ok(Self::Main),
+            "fast" => Ok(Self::Fast),
+            "compact" => Ok(Self::Compact),
+            "plan" => Ok(Self::Plan),
+            "explore" => Ok(Self::Explore),
+            "review" => Ok(Self::Review),
+            "hook_agent" | "hookagent" => Ok(Self::HookAgent),
+            "memory" => Ok(Self::Memory),
+            "subagent" => Ok(Self::Subagent),
+            _ => Err(format!("unknown model role: {s}")),
+        }
+    }
 }
 
 /// A resolved model identity: provider + model ID.

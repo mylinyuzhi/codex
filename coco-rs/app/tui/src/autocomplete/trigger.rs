@@ -181,6 +181,7 @@ fn slash_items(state: &AppState, query: &str) -> Vec<SuggestionItem> {
         .map(|(name, desc)| SuggestionItem {
             label: format!("/{name}"),
             description: desc.clone(),
+            metadata: None,
         })
         .collect()
 }

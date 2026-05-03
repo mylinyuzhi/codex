@@ -1,17 +1,32 @@
 use super::*;
+use coco_config::AutoCompactConfig;
+
+fn auto_default() -> AutoCompactConfig {
+    AutoCompactConfig::default()
+}
 
 // --- should_reactive_compact tests ---
 
 #[test]
 fn test_should_reactive_compact() {
     let config = ReactiveCompactConfig::default(); // 95% of effective window
+    let auto = auto_default();
     let effective = crate::auto_trigger::effective_context_window(
         config.context_window,
         config.max_output_tokens,
+        &auto,
     );
     let reactive_threshold = effective * 95 / 100;
-    assert!(!should_reactive_compact(reactive_threshold - 1000, &config));
-    assert!(should_reactive_compact(reactive_threshold + 1000, &config));
+    assert!(!should_reactive_compact(
+        reactive_threshold - 1000,
+        &config,
+        &auto
+    ));
+    assert!(should_reactive_compact(
+        reactive_threshold + 1000,
+        &config,
+        &auto
+    ));
 }
 
 #[test]
@@ -20,7 +35,7 @@ fn test_calculate_drop_target() {
         context_window: 200_000,
         ..Default::default()
     };
-    let drop = calculate_drop_target(195_000, &config);
+    let drop = calculate_drop_target(195_000, &config, &auto_default());
     assert!(drop > 0);
     assert!(drop < 195_000);
 }
@@ -31,7 +46,7 @@ fn test_below_threshold_no_compact() {
         context_window: 200_000,
         ..Default::default()
     };
-    assert!(!should_reactive_compact(100_000, &config));
+    assert!(!should_reactive_compact(100_000, &config, &auto_default()));
 }
 
 // --- ReactiveCompactState / circuit breaker tests ---

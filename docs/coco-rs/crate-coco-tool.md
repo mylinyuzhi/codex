@@ -62,6 +62,16 @@ pub trait Tool: Send + Sync {
     fn should_defer(&self) -> bool { false }    // lazy-loaded via ToolSearch
     fn always_load(&self) -> bool { false }
 
+    /// Per-tool persistence threshold. Read by the **executor** in
+    /// `core/tool-runtime/src/execution.rs` after `execute()` returns —
+    /// this trait method is the source value for Level 1 of the
+    /// [Tool Result Budget plan](tool-result-budget-plan.md). Returning a
+    /// declared value caps the per-tool output; the executor then clamps
+    /// it against `DEFAULT_MAX_RESULT_SIZE_CHARS=50_000` per TS semantics.
+    /// Phase 1 of the plan migrates this to
+    /// `fn max_result_size_chars(&self) -> ResultSizeBound` so FileRead
+    /// can express the TS `Infinity` opt-out (no Rust `i32` sentinel
+    /// available).
     fn max_result_size_chars(&self) -> usize { 100_000 }
 
     /// For MCP tools
@@ -185,7 +195,18 @@ pub struct ToolUseContext {
     // === File tracking ===
     pub file_reading_limits: Option<FileReadingLimits>,
     pub glob_limits: Option<GlobLimits>,
-    pub content_replacement_state: Option<Arc<RwLock<ContentReplacementState>>>,
+    // NOTE: `content_replacement_state` (Level 2 budget, was named here) is
+    // re-routed to `app/query::QueryEngine` per
+    // [`tool-result-budget-plan.md`](tool-result-budget-plan.md). It is NOT
+    // a per-tool-invocation field — Level 2 enforcement runs once per turn
+    // before the API call, not inside each tool's execute(). The current
+    // `ToolUseContext` in `core/tool-runtime/src/context.rs` does NOT carry
+    // this field; do not re-add it without revisiting the plan.
+    //
+    // Level 1 (per-tool persistence) is invoked by the executor AFTER
+    // `Tool::execute()` returns, reading `Tool::max_result_size_chars()`.
+    // It needs `tool_results_root: Option<PathBuf>` on `ToolUseContext`
+    // (added in Phase 1 — currently absent; Bash uses `temp_dir()` as a stub).
 
     // === State mutation callbacks ===
     // These are closures because ToolUseContext is shared across tools

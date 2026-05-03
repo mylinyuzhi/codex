@@ -3,9 +3,9 @@
 //! TS: cli/print.ts (5594 LOC) — message rendering, markdown, diff display.
 //! TS: cli/structuredIO.ts (859 LOC) — NDJSON SDK protocol.
 
-use coco_types::AssistantContent;
-use coco_types::LlmMessage;
-use coco_types::Message;
+use coco_messages::AssistantContent;
+use coco_messages::LlmMessage;
+use coco_messages::Message;
 use coco_types::TokenUsage;
 
 /// Output mode for CLI rendering.
@@ -53,12 +53,9 @@ fn render_text(msg: &Message) -> String {
                 format!("{text}\n")
             }
         }
-        Message::System(s) => match s {
-            coco_types::SystemMessage::Informational(m) => {
-                format!("\x1b[2m{}\x1b[0m\n", m.message)
-            }
-            _ => String::new(),
-        },
+        Message::System(coco_messages::SystemMessage::Informational(m)) => {
+            format!("\x1b[2m{}\x1b[0m\n", m.message)
+        }
         _ => String::new(),
     }
 }
@@ -74,7 +71,7 @@ fn extract_text(msg: &LlmMessage) -> String {
         LlmMessage::User { content, .. } => content
             .iter()
             .filter_map(|c| match c {
-                coco_types::UserContent::Text(t) => Some(t.text.as_str()),
+                coco_messages::UserContent::Text(t) => Some(t.text.as_str()),
                 _ => None,
             })
             .collect::<Vec<_>>()
@@ -87,7 +84,14 @@ fn extract_text(msg: &LlmMessage) -> String {
             })
             .collect::<Vec<_>>()
             .join("\n"),
-        LlmMessage::System { content, .. } => content.clone(),
+        LlmMessage::System { content, .. } | LlmMessage::Developer { content, .. } => content
+            .iter()
+            .filter_map(|c| match c {
+                coco_messages::UserContent::Text(t) => Some(t.text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
         LlmMessage::Tool { .. } => String::new(),
     }
 }

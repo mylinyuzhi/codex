@@ -1,3 +1,4 @@
+use coco_messages::*;
 use coco_types::*;
 use uuid::Uuid;
 
@@ -62,7 +63,7 @@ fn tool_result_msg() -> Message {
             content: vec![ToolContent::ToolResult(ToolResultContent {
                 tool_call_id: "call_1".into(),
                 tool_name: "Bash".into(),
-                output: vercel_ai_provider::ToolResultContent::text("output"),
+                output: coco_inference::ToolResultContent::text("output"),
                 is_error: false,
                 provider_metadata: None,
             })],

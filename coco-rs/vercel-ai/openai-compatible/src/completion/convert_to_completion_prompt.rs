@@ -37,11 +37,21 @@ pub fn convert_to_completion_prompt(
     let mut text = String::new();
     let mut iter = prompt.iter().peekable();
 
-    // If first message is a system message, add it without prefix
-    if let Some(LanguageModelV4Message::System { content, .. }) = iter.peek() {
-        text.push_str(content);
+    // Leading system/developer messages are prepended as plain text.
+    while matches!(
+        iter.peek(),
+        Some(LanguageModelV4Message::System { .. } | LanguageModelV4Message::Developer { .. })
+    ) {
+        let Some(msg) = iter.next() else {
+            break;
+        };
+        let content = match msg {
+            LanguageModelV4Message::System { content, .. }
+            | LanguageModelV4Message::Developer { content, .. } => content,
+            _ => unreachable!(),
+        };
+        text.push_str(&collapse_text_parts(content)?);
         text.push_str("\n\n");
-        iter.next();
     }
 
     for msg in iter {
@@ -49,6 +59,11 @@ pub fn convert_to_completion_prompt(
             LanguageModelV4Message::System { .. } => {
                 return Err(AISdkError::new(
                     "Invalid prompt: system messages are only supported as the first message in completion prompts",
+                ));
+            }
+            LanguageModelV4Message::Developer { .. } => {
+                return Err(AISdkError::new(
+                    "Invalid prompt: developer messages are only supported before conversation messages in completion prompts",
                 ));
             }
             LanguageModelV4Message::User { content, .. } => {
@@ -104,6 +119,21 @@ pub fn convert_to_completion_prompt(
         prompt: text,
         stop_sequences: vec![format!("\n{user}:")],
     })
+}
+
+fn collapse_text_parts(parts: &[UserContentPart]) -> Result<String, AISdkError> {
+    let mut text = String::new();
+    for part in parts {
+        match part {
+            UserContentPart::Text(text_part) => text.push_str(&text_part.text),
+            UserContentPart::File(_) => {
+                return Err(AISdkError::new(
+                    "Non-text content is not supported in completion system/developer messages",
+                ));
+            }
+        }
+    }
+    Ok(text)
 }
 
 #[cfg(test)]

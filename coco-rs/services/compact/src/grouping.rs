@@ -17,7 +17,7 @@
 //! When no assistant messages exist, all messages land in a single group
 //! (matching TS behavior).
 
-use coco_types::Message;
+use coco_messages::Message;
 
 /// Group messages by API round (assistant UUID boundaries).
 ///

@@ -1,4 +1,4 @@
-use coco_types::*;
+use crate::*;
 use uuid::Uuid;
 
 use super::ensure_user_first;
@@ -204,10 +204,10 @@ fn test_merge_consecutive_assistant_messages_no_merge() {
 // === strip_images_from_messages ===
 
 fn user_msg_with_image() -> Message {
-    use coco_types::UserContent;
-    use vercel_ai_provider::DataContent;
-    use vercel_ai_provider::FilePart;
-    use vercel_ai_provider::TextPart;
+    use crate::UserContent;
+    use coco_inference::DataContent;
+    use coco_inference::FilePart;
+    use coco_inference::TextPart;
 
     Message::User(UserMessage {
         message: LlmMessage::User {
@@ -232,9 +232,9 @@ fn user_msg_with_image() -> Message {
 }
 
 fn user_msg_image_only() -> Message {
-    use coco_types::UserContent;
-    use vercel_ai_provider::DataContent;
-    use vercel_ai_provider::FilePart;
+    use crate::UserContent;
+    use coco_inference::DataContent;
+    use coco_inference::FilePart;
 
     Message::User(UserMessage {
         message: LlmMessage::User {
@@ -263,7 +263,7 @@ fn test_strip_images_keeps_text() {
     if let Message::User(u) = &msgs[0] {
         if let LlmMessage::User { content, .. } = &u.message {
             assert_eq!(content.len(), 1);
-            assert!(matches!(content[0], coco_types::UserContent::Text(_)));
+            assert!(matches!(content[0], crate::UserContent::Text(_)));
         } else {
             panic!("expected User LlmMessage");
         }
@@ -315,7 +315,7 @@ fn test_strip_signature_basic() {
     strip_signature_blocks(&mut msgs);
     if let Message::User(u) = &msgs[0] {
         if let LlmMessage::User { content, .. } = &u.message {
-            if let coco_types::UserContent::Text(t) = &content[0] {
+            if let crate::UserContent::Text(t) = &content[0] {
                 assert_eq!(t.text, "Hello");
             } else {
                 panic!("expected text");
@@ -334,7 +334,7 @@ fn test_strip_signature_no_sig() {
     strip_signature_blocks(&mut msgs);
     if let Message::User(u) = &msgs[0] {
         if let LlmMessage::User { content, .. } = &u.message {
-            if let coco_types::UserContent::Text(t) = &content[0] {
+            if let crate::UserContent::Text(t) = &content[0] {
                 assert_eq!(t.text, "No signature here");
             } else {
                 panic!("expected text");
@@ -410,4 +410,189 @@ fn test_to_llm_prompt_skips_system_and_progress() {
 fn test_to_llm_prompt_empty() {
     let prompt = to_llm_prompt(&[]);
     assert!(prompt.is_empty());
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// TS-parity regression tests for Round 10 deep-review fixes.
+// ─────────────────────────────────────────────────────────────────────
+
+fn assistant_msg_with_request_id(text: &str, request_id: &str) -> Message {
+    Message::Assistant(AssistantMessage {
+        message: LlmMessage::Assistant {
+            content: vec![AssistantContent::Text(TextContent {
+                text: text.into(),
+                provider_metadata: None,
+            })],
+            provider_options: None,
+        },
+        uuid: Uuid::new_v4(),
+        model: "test".into(),
+        stop_reason: Some(StopReason::EndTurn),
+        usage: None,
+        cost_usd: None,
+        request_id: Some(request_id.into()),
+        api_error: None,
+    })
+}
+
+#[test]
+fn merge_assistants_by_request_id_keeps_distinct_ids_separate() {
+    // TS messages.ts:2257-2261 — different message.id stays separate.
+    let msgs = vec![
+        user_msg("hi"),
+        assistant_msg_with_request_id("first", "req-A"),
+        assistant_msg_with_request_id("second", "req-B"),
+    ];
+    let prompt = normalize_messages_for_api(&msgs);
+    // 1 user + 2 assistants (NOT merged, since request_ids differ).
+    let asst_count = prompt
+        .iter()
+        .filter(|m| matches!(m, LlmMessage::Assistant { .. }))
+        .count();
+    assert_eq!(
+        asst_count, 2,
+        "different request_ids must NOT merge — TS only merges matching message.id"
+    );
+}
+
+#[test]
+fn merge_assistants_by_request_id_merges_matching_ids() {
+    let msgs = vec![
+        user_msg("hi"),
+        assistant_msg_with_request_id("first", "req-A"),
+        assistant_msg_with_request_id("second", "req-A"),
+    ];
+    let prompt = normalize_messages_for_api(&msgs);
+    let asst_count = prompt
+        .iter()
+        .filter(|m| matches!(m, LlmMessage::Assistant { .. }))
+        .count();
+    assert_eq!(
+        asst_count, 1,
+        "matching request_ids merge — TS streaming chunks"
+    );
+}
+
+#[test]
+fn merge_assistants_with_no_request_id_stays_separate() {
+    // TS strict equality: undefined !== undefined in this comparison.
+    // Synthetic / test messages with no request_id never merge.
+    let msgs = vec![
+        user_msg("hi"),
+        assistant_msg("first"),  // request_id = None
+        assistant_msg("second"), // request_id = None
+    ];
+    let prompt = normalize_messages_for_api(&msgs);
+    let asst_count = prompt
+        .iter()
+        .filter(|m| matches!(m, LlmMessage::Assistant { .. }))
+        .count();
+    assert_eq!(
+        asst_count, 2,
+        "request_id=None never matches itself — keeps assistants separate"
+    );
+}
+
+#[test]
+fn smoosh_folds_into_is_error_tool_result() {
+    use coco_inference::ToolContentPart;
+    use coco_inference::ToolResultContent;
+    use coco_inference::ToolResultPart;
+
+    // Construct a Tool LlmMessage with an is_error=true tool_result whose
+    // output is a Content array. TS smooshIntoToolResult filters incoming
+    // blocks to text-only and proceeds — Rust must do the same.
+    let tool_msg = LlmMessage::Tool {
+        content: vec![ToolContentPart::ToolResult(ToolResultPart {
+            tool_call_id: "tc1".into(),
+            tool_name: "Bash".into(),
+            output: ToolResultContent::Text {
+                value: "error output".into(),
+                provider_options: None,
+            },
+            is_error: true,
+            provider_metadata: None,
+        })],
+        provider_options: None,
+    };
+    let user_sr = LlmMessage::User {
+        content: vec![coco_inference::UserContentPart::text(
+            "<system-reminder>\nctx\n</system-reminder>",
+        )],
+        provider_options: None,
+    };
+
+    let mut msgs = vec![tool_msg, user_sr];
+    super::smoosh_system_reminder_into_tool_result(&mut msgs);
+
+    assert_eq!(msgs.len(), 1, "SR-User must fold into is_error tool_result");
+    let LlmMessage::Tool { content, .. } = &msgs[0] else {
+        panic!("expected Tool LlmMessage");
+    };
+    let ToolContentPart::ToolResult(rp) = &content[0] else {
+        panic!("expected ToolResult part");
+    };
+    let ToolResultContent::Text { value, .. } = &rp.output else {
+        panic!("expected Text output");
+    };
+    assert!(
+        value.contains("<system-reminder>"),
+        "SR text must be folded into is_error tool_result (TS-parity fix)"
+    );
+}
+
+#[test]
+fn sanitize_strips_non_text_from_is_error_tool_result() {
+    use coco_inference::ToolContentPart;
+    use coco_inference::ToolResultContent;
+    use coco_inference::ToolResultContentPart;
+    use coco_inference::ToolResultPart;
+
+    // is_error=true with a mixed Content array (text + image). The image
+    // part must be stripped; surviving texts join with \n\n.
+    let mut msgs = vec![LlmMessage::Tool {
+        content: vec![ToolContentPart::ToolResult(ToolResultPart {
+            tool_call_id: "tc1".into(),
+            tool_name: "Bash".into(),
+            output: ToolResultContent::Content {
+                value: vec![
+                    ToolResultContentPart::Text {
+                        text: "stderr line 1".into(),
+                        provider_options: None,
+                    },
+                    ToolResultContentPart::FileData {
+                        data: "iVBORw0KGgo=".into(),
+                        media_type: "image/png".into(),
+                        filename: None,
+                        provider_options: None,
+                    },
+                    ToolResultContentPart::Text {
+                        text: "stderr line 2".into(),
+                        provider_options: None,
+                    },
+                ],
+                provider_options: None,
+            },
+            is_error: true,
+            provider_metadata: None,
+        })],
+        provider_options: None,
+    }];
+
+    super::sanitize_error_tool_result_in_llm_messages(&mut msgs);
+
+    let LlmMessage::Tool { content, .. } = &msgs[0] else {
+        panic!("expected Tool LlmMessage");
+    };
+    let ToolContentPart::ToolResult(rp) = &content[0] else {
+        panic!("expected ToolResult");
+    };
+    let ToolResultContent::Content { value, .. } = &rp.output else {
+        panic!("expected Content variant");
+    };
+    assert_eq!(value.len(), 1, "joined into one Text part");
+    let ToolResultContentPart::Text { text, .. } = &value[0] else {
+        panic!("expected Text after sanitize");
+    };
+    assert_eq!(text, "stderr line 1\n\nstderr line 2");
 }

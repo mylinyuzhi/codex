@@ -14,6 +14,7 @@
 
 use crate::error::ConfigError;
 use crate::model::ModelInfo;
+use crate::model::instructions::builtin_base_instructions;
 use crate::model::partial::PartialModelInfo;
 use crate::provider::ProviderConfig;
 use crate::provider::model_override::ProviderModelOverride;
@@ -51,8 +52,8 @@ pub struct ModelRegistry {
     /// `cfg.models` map. `BTreeMap` for byte-stable iteration.
     pub resolved: BTreeMap<(String, String), Arc<ResolvedModel>>,
     /// User-supplied `models.json` overlay, indexed by `model_id`.
-    /// Used for lazy synthesis when a (provider, model_id) pair has
-    /// no pre-resolved entry.
+    /// `base_instructions_file` has already been resolved into
+    /// `base_instructions`, so lazy synthesis never does filesystem IO.
     pub user_catalog: BTreeMap<String, PartialModelInfo>,
 }
 
@@ -128,6 +129,7 @@ pub fn build_model_registry(
     coco_home: &Path,
 ) -> Result<ModelRegistry, ConfigError> {
     let builtin = builtin_models_partial();
+    let user_catalog = normalize_user_catalog(user_catalog, coco_home)?;
     let mut resolved = BTreeMap::new();
     for (provider_name, cfg) in providers {
         for (model_id, entry) in &cfg.models {
@@ -142,17 +144,7 @@ pub fn build_model_registry(
             // L2: per-(provider, model) entry overrides.
             entry.apply_info_to(&mut acc);
 
-            // Resolve `base_instructions_file` under coco_home.
-            if let Some(file) = acc.base_instructions_file.take() {
-                let path = coco_home.join(&file);
-                let content = std::fs::read_to_string(&path).map_err(|source| {
-                    ConfigError::BaseInstructionsRead {
-                        path: path.clone(),
-                        source,
-                    }
-                })?;
-                acc.base_instructions = Some(content);
-            }
+            resolve_base_instructions_file(&mut acc, coco_home)?;
 
             let info = ModelInfo::from_partial(provider_name, model_id, acc)?;
             resolved.insert(
@@ -166,8 +158,38 @@ pub fn build_model_registry(
     }
     Ok(ModelRegistry {
         resolved,
-        user_catalog: user_catalog.clone(),
+        user_catalog,
     })
+}
+
+fn normalize_user_catalog(
+    user_catalog: &BTreeMap<String, PartialModelInfo>,
+    coco_home: &Path,
+) -> Result<BTreeMap<String, PartialModelInfo>, ConfigError> {
+    user_catalog
+        .iter()
+        .map(|(model_id, info)| {
+            let mut normalized = info.clone();
+            resolve_base_instructions_file(&mut normalized, coco_home)?;
+            Ok((model_id.clone(), normalized))
+        })
+        .collect()
+}
+
+fn resolve_base_instructions_file(
+    info: &mut PartialModelInfo,
+    coco_home: &Path,
+) -> Result<(), ConfigError> {
+    if let Some(file) = info.base_instructions_file.take() {
+        let path = coco_home.join(&file);
+        let content =
+            std::fs::read_to_string(&path).map_err(|source| ConfigError::BaseInstructionsRead {
+                path: path.clone(),
+                source,
+            })?;
+        info.base_instructions = Some(content);
+    }
+    Ok(())
 }
 
 /// Compiled-in builtin model registry — well-known models with known
@@ -304,6 +326,70 @@ fn seed_builtin_models() -> BTreeMap<String, PartialModelInfo> {
                 Capability::ReasoningSummaries,
             ]),
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
+            tool_overrides: Some(gpt5_overrides.clone()),
+            ..Default::default()
+        },
+    );
+
+    m.insert(
+        "gpt-5-4".into(),
+        PartialModelInfo {
+            display_name: Some("GPT-5.4".into()),
+            base_instructions: builtin_base_instructions("gpt-5-4").map(str::to_string),
+            context_window: Some(PositiveTokens::new(272_000)),
+            max_output_tokens: Some(PositiveTokens::new(32_768)),
+            capabilities: Some(vec![
+                Capability::TextGeneration,
+                Capability::Streaming,
+                Capability::ToolCalling,
+                Capability::Vision,
+                Capability::ReasoningSummaries,
+                Capability::ParallelToolCalls,
+            ]),
+            apply_patch_tool_type: Some(ApplyPatchToolType::Shell),
+            tool_overrides: Some(gpt5_overrides.clone()),
+            ..Default::default()
+        },
+    );
+
+    m.insert(
+        "gpt-5-5".into(),
+        PartialModelInfo {
+            display_name: Some("GPT-5.5".into()),
+            base_instructions: builtin_base_instructions("gpt-5-5").map(str::to_string),
+            context_window: Some(PositiveTokens::new(272_000)),
+            max_output_tokens: Some(PositiveTokens::new(64_000)),
+            capabilities: Some(vec![
+                Capability::TextGeneration,
+                Capability::Streaming,
+                Capability::ToolCalling,
+                Capability::Vision,
+                Capability::ExtendedThinking,
+                Capability::ReasoningSummaries,
+                Capability::ParallelToolCalls,
+            ]),
+            apply_patch_tool_type: Some(ApplyPatchToolType::Shell),
+            tool_overrides: Some(gpt5_overrides.clone()),
+            ..Default::default()
+        },
+    );
+
+    m.insert(
+        "gpt-5-3-codex".into(),
+        PartialModelInfo {
+            display_name: Some("GPT-5.3 Codex".into()),
+            base_instructions: builtin_base_instructions("gpt-5-3-codex").map(str::to_string),
+            context_window: Some(PositiveTokens::new(272_000)),
+            max_output_tokens: Some(PositiveTokens::new(32_768)),
+            capabilities: Some(vec![
+                Capability::TextGeneration,
+                Capability::Streaming,
+                Capability::ToolCalling,
+                Capability::Vision,
+                Capability::ReasoningSummaries,
+                Capability::ParallelToolCalls,
+            ]),
+            apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
             tool_overrides: Some(gpt5_overrides),
             ..Default::default()
         },
@@ -313,6 +399,7 @@ fn seed_builtin_models() -> BTreeMap<String, PartialModelInfo> {
         "gemini-2.5-pro".into(),
         PartialModelInfo {
             display_name: Some("Gemini 2.5 Pro".into()),
+            base_instructions: builtin_base_instructions("gemini-2.5-pro").map(str::to_string),
             context_window: Some(PositiveTokens::new(1_000_000)),
             max_output_tokens: Some(PositiveTokens::new(8_192)),
             capabilities: Some(vec![
@@ -321,6 +408,23 @@ fn seed_builtin_models() -> BTreeMap<String, PartialModelInfo> {
                 Capability::ToolCalling,
                 Capability::Vision,
                 Capability::ExtendedThinking,
+            ]),
+            ..Default::default()
+        },
+    );
+
+    m.insert(
+        "gemini-2.5-flash".into(),
+        PartialModelInfo {
+            display_name: Some("Gemini 2.5 Flash".into()),
+            base_instructions: builtin_base_instructions("gemini-2.5-flash").map(str::to_string),
+            context_window: Some(PositiveTokens::new(1_000_000)),
+            max_output_tokens: Some(PositiveTokens::new(8_192)),
+            capabilities: Some(vec![
+                Capability::TextGeneration,
+                Capability::Streaming,
+                Capability::ToolCalling,
+                Capability::Vision,
             ]),
             ..Default::default()
         },

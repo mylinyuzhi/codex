@@ -3,15 +3,15 @@
 //! Tests compact_conversation with mock summarize_fn closures.
 //! Also tests the combined flow: micro-compact → full compact.
 
-use coco_compact::compact::CompactConfig;
+use coco_compact::compact::CompactRunOptions;
 use coco_compact::compact::compact_conversation;
 use coco_compact::micro::micro_compact;
 use coco_compact::types::CompactError;
+use coco_messages::Message;
 use coco_test_harness::compact as mock;
 use coco_test_harness::conversation;
 use coco_test_harness::messages as msg;
 use coco_types::CompactTrigger;
-use coco_types::Message;
 use coco_types::ToolName;
 
 const SUMMARY: &str =
@@ -20,7 +20,7 @@ const SUMMARY: &str =
 #[tokio::test]
 async fn test_basic_compact() {
     let messages = conversation::simple(5);
-    let config = CompactConfig {
+    let config = CompactRunOptions {
         keep_recent_rounds: 2,
         ..Default::default()
     };
@@ -46,7 +46,7 @@ async fn test_basic_compact() {
 async fn test_nothing_to_compact() {
     // Only 2 turns, keep_recent_rounds=2 → nothing to compact
     let messages = conversation::simple(2);
-    let config = CompactConfig {
+    let config = CompactRunOptions {
         keep_recent_rounds: 2,
         ..Default::default()
     };
@@ -69,7 +69,7 @@ async fn test_image_stripping() {
     messages.insert(2, msg::image_user());
 
     let (summarize, captured) = mock::mock_summarize_capturing(SUMMARY);
-    let config = CompactConfig {
+    let config = CompactRunOptions {
         keep_recent_rounds: 1,
         ..Default::default()
     };
@@ -94,7 +94,7 @@ async fn test_image_stripping() {
 #[tokio::test]
 async fn test_ptl_retry_succeeds() {
     let messages = conversation::simple(5);
-    let config = CompactConfig {
+    let config = CompactRunOptions {
         keep_recent_rounds: 1,
         ..Default::default()
     };
@@ -116,7 +116,7 @@ async fn test_ptl_retry_succeeds() {
 #[tokio::test]
 async fn test_ptl_exhausted() {
     let messages = conversation::simple(5);
-    let config = CompactConfig {
+    let config = CompactRunOptions {
         keep_recent_rounds: 1,
         ..Default::default()
     };
@@ -139,7 +139,7 @@ async fn test_ptl_exhausted() {
 #[tokio::test]
 async fn test_stream_retry() {
     let messages = conversation::simple(5);
-    let config = CompactConfig {
+    let config = CompactRunOptions {
         keep_recent_rounds: 1,
         ..Default::default()
     };
@@ -160,7 +160,7 @@ async fn test_stream_retry() {
 #[tokio::test]
 async fn test_stream_exhausted() {
     let messages = conversation::simple(5);
-    let config = CompactConfig {
+    let config = CompactRunOptions {
         keep_recent_rounds: 1,
         ..Default::default()
     };
@@ -183,7 +183,7 @@ async fn test_stream_exhausted() {
 #[tokio::test]
 async fn test_empty_summary_error() {
     let messages = conversation::simple(5);
-    let config = CompactConfig {
+    let config = CompactRunOptions {
         keep_recent_rounds: 1,
         ..Default::default()
     };
@@ -201,16 +201,16 @@ async fn test_empty_summary_error() {
 #[tokio::test]
 async fn test_attachment_callback() {
     let messages = conversation::simple(5);
-    let config = CompactConfig {
+    let config = CompactRunOptions {
         keep_recent_rounds: 1,
         ..Default::default()
     };
 
     let attachment_fn: coco_compact::compact::PostCompactAttachmentFn =
         Box::new(|_result: &coco_compact::CompactResult| {
-            vec![coco_types::AttachmentMessage::api(
+            vec![coco_messages::AttachmentMessage::api(
                 coco_types::AttachmentKind::CompactFileReference,
-                coco_types::LlmMessage::user_text("restored file content"),
+                coco_messages::LlmMessage::user_text("restored file content"),
             )]
         });
 
@@ -233,7 +233,7 @@ async fn test_attachment_callback() {
 #[tokio::test]
 async fn test_boundary_fields() {
     let messages = conversation::simple(5);
-    let config = CompactConfig {
+    let config = CompactRunOptions {
         keep_recent_rounds: 1,
         ..Default::default()
     };
@@ -242,7 +242,8 @@ async fn test_boundary_fields() {
         .await
         .unwrap();
 
-    let Message::System(coco_types::SystemMessage::CompactBoundary(ref b)) = result.boundary_marker
+    let Message::System(coco_messages::SystemMessage::CompactBoundary(ref b)) =
+        result.boundary_marker
     else {
         panic!("expected CompactBoundary");
     };
@@ -255,7 +256,7 @@ async fn test_boundary_fields() {
 #[tokio::test]
 async fn test_custom_instructions() {
     let messages = conversation::simple(5);
-    let config = CompactConfig {
+    let config = CompactRunOptions {
         keep_recent_rounds: 1,
         custom_prompt: Some("Focus on Rust refactoring decisions".to_string()),
         ..Default::default()
@@ -273,7 +274,7 @@ async fn test_custom_instructions() {
 #[tokio::test]
 async fn test_manual_trigger() {
     let messages = conversation::simple(5);
-    let config = CompactConfig {
+    let config = CompactRunOptions {
         keep_recent_rounds: 1,
         trigger: CompactTrigger::Manual,
         ..Default::default()
@@ -284,7 +285,8 @@ async fn test_manual_trigger() {
         .unwrap();
 
     assert_eq!(result.trigger, CompactTrigger::Manual);
-    let Message::System(coco_types::SystemMessage::CompactBoundary(ref b)) = result.boundary_marker
+    let Message::System(coco_messages::SystemMessage::CompactBoundary(ref b)) =
+        result.boundary_marker
     else {
         panic!("expected CompactBoundary");
     };
@@ -296,7 +298,7 @@ async fn test_agentic_grouping() {
     // 1 user message + 5 assistant rounds (different UUIDs) → should group into 5 rounds
     // With keep_recent_rounds=2, should compact first 3 rounds
     let messages = conversation::agentic(5);
-    let config = CompactConfig {
+    let config = CompactRunOptions {
         keep_recent_rounds: 2,
         ..Default::default()
     };
@@ -332,7 +334,7 @@ async fn test_micro_then_full_compact() {
     );
 
     // Stage 2: Full compact on the micro-compacted messages
-    let config = CompactConfig {
+    let config = CompactRunOptions {
         keep_recent_rounds: 2,
         ..Default::default()
     };
@@ -352,7 +354,7 @@ async fn test_micro_then_full_compact() {
 async fn test_full_compact_summary_format() {
     // Verify the summary is correctly formatted (analysis stripped, summary extracted)
     let messages = conversation::simple(5);
-    let config = CompactConfig {
+    let config = CompactRunOptions {
         keep_recent_rounds: 1,
         ..Default::default()
     };
@@ -371,12 +373,12 @@ async fn test_full_compact_summary_format() {
 
     // The summary message should have analysis stripped
     if let Message::User(u) = &result.summary_messages[0]
-        && let coco_types::LlmMessage::User { content, .. } = &u.message
+        && let coco_messages::LlmMessage::User { content, .. } = &u.message
     {
         let text: String = content
             .iter()
             .filter_map(|c| match c {
-                coco_types::UserContent::Text(t) => Some(t.text.as_str()),
+                coco_messages::UserContent::Text(t) => Some(t.text.as_str()),
                 _ => None,
             })
             .collect();

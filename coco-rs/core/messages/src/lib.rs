@@ -9,7 +9,13 @@ pub mod history;
 pub mod lookups;
 pub mod normalize;
 pub mod predicates;
+pub mod types;
 pub mod wrapping;
+
+// Re-export the relocated Message-family types at the crate root so consumers
+// can write `coco_messages::Message` rather than `coco_messages::types::Message`.
+// The single source of truth for which symbols are exported is `types/mod.rs`.
+pub use types::*;
 
 pub use cost::CostTracker;
 pub use cost::calculate_cost_usd;
@@ -27,6 +33,8 @@ pub use creation::create_progress_message;
 pub use creation::create_tool_result_message;
 pub use creation::create_user_message;
 pub use creation::create_user_message_with_parts;
+pub use creation::create_user_message_with_parts_and_uuid;
+pub use creation::create_user_message_with_uuid;
 pub use history::MessageHistory;
 pub use lookups::MessageLookups;
 pub use lookups::build_message_lookups;

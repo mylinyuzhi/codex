@@ -12,13 +12,48 @@ pub enum CommandAvailability {
 }
 
 /// How a command was loaded.
+///
+/// TS: `Command.source` field. Variants mirror `LoadedFrom` in
+/// `skills/loadSkillsDir.ts` plus `'builtin'` for hardcoded slash commands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandSource {
+    /// On-disk skill directory (general SKILL.md catch-all).
     Skills,
+    /// Plugin-provided skill or command.
     Plugin,
+    /// Compiled-in bundled skill.
     Bundled,
+    /// MCP-server-provided skill.
     Mcp,
+    /// User-scope on-disk skill (`~/.coco/skills/`). TS: `userSettings`.
+    User,
+    /// Project-scope on-disk skill (`.claude/skills/`). TS: `projectSettings`.
+    Project,
+    /// Enterprise/policy-managed skill. TS: `policySettings`.
+    Managed,
+    /// Hardcoded built-in slash command (e.g. `/help`, `/clear`).
+    /// TS: `source: 'builtin'`.
+    Builtin,
+    /// Legacy `.claude/commands/` flat-`.md` path. TS: `commands_DEPRECATED`.
+    CommandsDeprecated,
+}
+
+impl CommandSource {
+    /// Wire string used by TS Skill tool listing / analytics.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CommandSource::Skills => "skills",
+            CommandSource::Plugin => "plugin",
+            CommandSource::Bundled => "bundled",
+            CommandSource::Mcp => "mcp",
+            CommandSource::User => "userSettings",
+            CommandSource::Project => "projectSettings",
+            CommandSource::Managed => "policySettings",
+            CommandSource::Builtin => "builtin",
+            CommandSource::CommandsDeprecated => "commands_DEPRECATED",
+        }
+    }
 }
 
 /// Common fields for all commands.

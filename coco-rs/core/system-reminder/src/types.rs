@@ -732,7 +732,7 @@ pub struct EditedImageFileMeta {
 ///
 /// One generator produces at most one [`SystemReminder`] per turn (or `None`
 /// when not applicable). The orchestrator collects them into a `Vec`, throttle
-/// state is updated, and the inject step converts each into `coco_types::Message`
+/// state is updated, and the inject step converts each into `coco_messages::Message`
 /// entries — silent reminders are filtered from the model path and routed to
 /// UI/transcript via [`crate::inject::NormalizedMessages::display_only`].
 #[derive(Debug, Clone, Serialize, Deserialize)]

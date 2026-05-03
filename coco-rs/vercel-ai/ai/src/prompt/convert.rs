@@ -54,7 +54,9 @@ pub fn convert_to_language_model_prompt(
                 }
                 result.push(message);
             }
-            LanguageModelV4Message::User { .. } | LanguageModelV4Message::System { .. } => {
+            LanguageModelV4Message::User { .. }
+            | LanguageModelV4Message::System { .. }
+            | LanguageModelV4Message::Developer { .. } => {
                 // Check for missing tool results before user/system messages
                 if !pending_tool_calls.is_empty() {
                     return Err(MissingToolResultsError::new(

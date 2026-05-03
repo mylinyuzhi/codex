@@ -6,6 +6,7 @@ use crate::provider::model_override::PartialProviderModelOverride;
 use coco_types::ProviderApi;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
+use std::fs;
 use tempfile::TempDir;
 
 fn empty_catalog() -> BTreeMap<String, PartialModelInfo> {
@@ -147,6 +148,184 @@ fn lazy_resolve_from_builtin_when_neither_user_catalog_nor_cfg_entry() {
         resolved
             .info
             .has_capability(coco_types::Capability::ExtendedThinking)
+    );
+}
+
+#[test]
+fn builtin_gpt_and_gemini_models_have_base_instructions() {
+    let builtin = builtin_models_partial();
+    for model_id in [
+        "gpt-5-4",
+        "gpt-5-5",
+        "gpt-5-3-codex",
+        "gemini-2.5-pro",
+        "gemini-2.5-flash",
+    ] {
+        let instructions = builtin
+            .get(model_id)
+            .and_then(|info| info.base_instructions.as_deref())
+            .expect("builtin base instructions");
+        assert!(
+            !instructions.trim().is_empty(),
+            "{model_id} must have non-empty base instructions"
+        );
+    }
+    assert!(
+        builtin["gpt-5-4"]
+            .base_instructions
+            .as_deref()
+            .unwrap()
+            .starts_with("You are Codex"),
+        "gpt prompt should preserve Codex identity"
+    );
+    assert!(
+        builtin["gemini-2.5-pro"]
+            .base_instructions
+            .as_deref()
+            .unwrap()
+            .starts_with("You are a CLI agent powered by Gemini Pro"),
+        "gemini prompt should preserve Gemini identity"
+    );
+}
+
+#[test]
+fn user_base_instructions_override_builtin_for_lazy_resolution() {
+    let mut user_catalog = BTreeMap::new();
+    user_catalog.insert(
+        "gpt-5-4".into(),
+        PartialModelInfo {
+            base_instructions: Some("User override instructions".into()),
+            ..Default::default()
+        },
+    );
+    let mut providers = BTreeMap::new();
+    let partial = crate::provider::PartialProviderConfig {
+        api: Some(ProviderApi::Openai),
+        env_key: Some("OPENAI_API_KEY".into()),
+        base_url: Some("https://api.openai.com/v1".into()),
+        ..Default::default()
+    };
+    providers.insert(
+        "openai".into(),
+        ProviderConfig::from_partial("openai", &partial).unwrap(),
+    );
+    let coco_home = TempDir::new().unwrap();
+    let registry = build_model_registry(&providers, &user_catalog, coco_home.path()).unwrap();
+    let resolved = registry.resolve("openai", "gpt-5-4").unwrap();
+    assert_eq!(
+        resolved.info.base_instructions.as_deref(),
+        Some("User override instructions")
+    );
+}
+
+#[test]
+fn user_base_instructions_override_builtin_for_provider_entry() {
+    let mut user_catalog = BTreeMap::new();
+    user_catalog.insert(
+        "gpt-5-5".into(),
+        PartialModelInfo {
+            base_instructions: Some("Provider-backed user override".into()),
+            ..Default::default()
+        },
+    );
+    let mut providers = BTreeMap::new();
+    providers.insert(
+        "openai".into(),
+        provider_with_model(
+            "openai",
+            ProviderApi::Openai,
+            "gpt-5-5",
+            PartialProviderModelOverride::default(),
+        ),
+    );
+    let coco_home = TempDir::new().unwrap();
+    let registry = build_model_registry(&providers, &user_catalog, coco_home.path()).unwrap();
+    let resolved = registry.resolve("openai", "gpt-5-5").unwrap();
+    assert_eq!(
+        resolved.info.base_instructions.as_deref(),
+        Some("Provider-backed user override")
+    );
+}
+
+#[test]
+fn provider_backed_base_instructions_file_resolves() {
+    let coco_home = TempDir::new().unwrap();
+    fs::write(
+        coco_home.path().join("provider-instructions.md"),
+        "Provider file instructions",
+    )
+    .unwrap();
+    let mut providers = BTreeMap::new();
+    providers.insert(
+        "openai".into(),
+        provider_with_model(
+            "openai",
+            ProviderApi::Openai,
+            "custom-provider-model",
+            PartialProviderModelOverride {
+                info: PartialModelInfo {
+                    context_window: Some(PositiveTokens::new(64_000)),
+                    max_output_tokens: Some(PositiveTokens::new(8_192)),
+                    base_instructions_file: Some("provider-instructions.md".into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        ),
+    );
+    let registry = build_model_registry(&providers, &empty_catalog(), coco_home.path()).unwrap();
+    let resolved = registry.resolve("openai", "custom-provider-model").unwrap();
+    assert_eq!(
+        resolved.info.base_instructions.as_deref(),
+        Some("Provider file instructions")
+    );
+    assert!(resolved.info.base_instructions_file.is_none());
+}
+
+#[test]
+fn lazy_user_catalog_base_instructions_file_resolves() {
+    let coco_home = TempDir::new().unwrap();
+    fs::write(
+        coco_home.path().join("lazy-instructions.md"),
+        "Lazy file instructions",
+    )
+    .unwrap();
+    let mut user_catalog = BTreeMap::new();
+    user_catalog.insert(
+        "lazy-model".into(),
+        PartialModelInfo {
+            context_window: Some(PositiveTokens::new(64_000)),
+            max_output_tokens: Some(PositiveTokens::new(8_192)),
+            base_instructions_file: Some("lazy-instructions.md".into()),
+            ..Default::default()
+        },
+    );
+    let mut providers = BTreeMap::new();
+    let partial = crate::provider::PartialProviderConfig {
+        api: Some(ProviderApi::OpenaiCompat),
+        env_key: Some("LAZY_KEY".into()),
+        base_url: Some("https://lazy.example".into()),
+        ..Default::default()
+    };
+    providers.insert(
+        "lazy".into(),
+        ProviderConfig::from_partial("lazy", &partial).unwrap(),
+    );
+    let registry = build_model_registry(&providers, &user_catalog, coco_home.path()).unwrap();
+    let resolved = registry.resolve("lazy", "lazy-model").unwrap();
+    assert_eq!(
+        resolved.info.base_instructions.as_deref(),
+        Some("Lazy file instructions")
+    );
+    assert!(resolved.info.base_instructions_file.is_none());
+    assert!(
+        registry
+            .user_catalog
+            .get("lazy-model")
+            .unwrap()
+            .base_instructions_file
+            .is_none(),
+        "lazy catalog should store normalized inline instructions"
     );
 }
 

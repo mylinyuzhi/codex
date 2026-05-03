@@ -9,7 +9,6 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::HookEventType;
-use crate::Message;
 use crate::PermissionDecision;
 use crate::PermissionMode;
 use crate::PermissionRule;
@@ -430,49 +429,6 @@ pub struct AttributionSnapshotEntry {
     pub escape_count_at_last_commit: Option<i64>,
 }
 
-/// Full transcript message (SerializedMessage + transcript metadata).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TranscriptMessage {
-    pub message: Message,
-    pub cwd: String,
-    pub user_type: String,
-    pub session_id: String,
-    pub timestamp: String,
-    pub version: String,
-    pub parent_uuid: Option<Uuid>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub logical_parent_uuid: Option<Uuid>,
-    #[serde(default)]
-    pub is_sidechain: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub entrypoint: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub git_branch: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub team_name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_color: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prompt_id: Option<String>,
-}
-
-/// Discriminated union of all transcript entry types.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum TranscriptEntry {
-    Transcript(Box<TranscriptMessage>),
-    Summary(SummaryEntry),
-    CustomTitle(CustomTitleEntry),
-    AiTitle(AiTitleEntry),
-    Tag(TagEntry),
-    AgentName(AgentNameEntry),
-    AgentColor(AgentColorEntry),
-    AgentSetting(AgentSettingEntry),
-    TaskSummary(TaskSummaryEntry),
-    PrLink(PrLinkEntry),
-    AttributionSnapshot(AttributionSnapshotEntry),
-}
+// `TranscriptMessage` and `TranscriptEntry` (both reference `Message`) live
+// in `coco-messages`. The standalone Entry structs above stay here because
+// they're pure data and other crates compose them without touching messages.

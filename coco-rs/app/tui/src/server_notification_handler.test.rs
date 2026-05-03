@@ -256,6 +256,9 @@ fn test_context_compacted_toast() {
             coco_types::ContextCompactedParams {
                 removed_messages: 10,
                 summary_tokens: 500,
+                trigger: coco_types::CompactTrigger::Auto,
+                pre_tokens: None,
+                post_tokens: None,
             },
         )),
     );

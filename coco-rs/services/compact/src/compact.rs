@@ -8,14 +8,14 @@
 //! - Post-compact attachment creation (file restore, plan, skills)
 //! - Pre/post compact hook points
 
+use coco_messages::Message;
+use coco_messages::PartialCompactDirection;
+use coco_messages::PreservedSegment;
+use coco_messages::SystemCompactBoundaryMessage;
+use coco_messages::SystemMessage;
+use coco_messages::UserContent;
+use coco_messages::UserMessage;
 use coco_types::CompactTrigger;
-use coco_types::Message;
-use coco_types::PartialCompactDirection;
-use coco_types::PreservedSegment;
-use coco_types::SystemCompactBoundaryMessage;
-use coco_types::SystemMessage;
-use coco_types::UserContent;
-use coco_types::UserMessage;
 use uuid::Uuid;
 
 use crate::grouping::group_messages_by_api_round;
@@ -28,23 +28,36 @@ use crate::types::MAX_PTL_RETRIES;
 use crate::types::PTL_RETRY_MARKER;
 use crate::types::extract_discovered_tool_names;
 
-/// Configuration for full compaction.
-pub struct CompactConfig {
+/// Per-invocation parameters for [`compact_conversation`].
+///
+/// Distinct from `coco_config::CompactConfig` (the global resolved
+/// settings struct) — this carries only the knobs that vary per call:
+/// summary token budget, what to keep, and the trigger label that ends
+/// up on the boundary marker.
+pub struct CompactRunOptions {
     /// Maximum tokens for the summary output.
     pub max_summary_tokens: i64,
-    /// Context window size.
+    /// Context window size of the model running the summarizer.
     pub context_window: i64,
     /// Number of recent rounds to preserve (not compacted).
     pub keep_recent_rounds: usize,
-    /// Custom compact prompt override.
+    /// Custom compact prompt override (merged from PreCompact hooks +
+    /// `/compact <instructions>`).
     pub custom_prompt: Option<String>,
     /// Whether to suppress follow-up questions in the summary.
     pub suppress_follow_up: bool,
     /// How this compaction was triggered.
     pub trigger: CompactTrigger,
+    /// Recompaction tracking — populated when this compaction follows a
+    /// previous one in the same conversation. TS:
+    /// `compact.ts:317 RecompactionInfo`. Drives `tengu_compact` analytics
+    /// (H1/H2/H3/H5 chain disambiguation). When `Some`, sets
+    /// `CompactResult.is_recompaction` to the embedded flag so consumers
+    /// downstream see the chain state.
+    pub recompaction_info: Option<crate::types::RecompactionInfo>,
 }
 
-impl Default for CompactConfig {
+impl Default for CompactRunOptions {
     fn default() -> Self {
         Self {
             max_summary_tokens: MAX_OUTPUT_TOKENS_FOR_SUMMARY,
@@ -53,6 +66,7 @@ impl Default for CompactConfig {
             custom_prompt: None,
             suppress_follow_up: true,
             trigger: CompactTrigger::Auto,
+            recompaction_info: None,
         }
     }
 }
@@ -62,7 +76,7 @@ impl Default for CompactConfig {
 /// Called after summarization to produce file/skill/plan attachments.
 /// Returns attachment messages to include in the CompactResult.
 pub type PostCompactAttachmentFn =
-    Box<dyn FnOnce(&CompactResult) -> Vec<coco_types::AttachmentMessage> + Send>;
+    Box<dyn FnOnce(&CompactResult) -> Vec<coco_messages::AttachmentMessage> + Send>;
 
 /// Perform full compaction on a conversation.
 ///
@@ -78,7 +92,7 @@ pub type PostCompactAttachmentFn =
 /// the caller provides an async function that takes a prompt and returns a summary.
 pub async fn compact_conversation<F, Fut>(
     messages: &[Message],
-    config: &CompactConfig,
+    config: &CompactRunOptions,
     summarize_fn: F,
     attachment_fn: Option<PostCompactAttachmentFn>,
 ) -> Result<CompactResult, CompactError>
@@ -105,7 +119,10 @@ where
             pre_compact_tokens: 0,
             post_compact_tokens: 0,
             true_post_compact_tokens: 0,
-            is_recompaction: false,
+            is_recompaction: config
+                .recompaction_info
+                .as_ref()
+                .is_some_and(|i| i.is_recompaction),
             trigger: config.trigger,
         });
     }
@@ -139,8 +156,8 @@ where
         /*recent_messages_preserved*/ false,
     );
 
-    let summary_message = Message::User(coco_types::UserMessage {
-        message: coco_types::LlmMessage::user_text(&summary_user_msg),
+    let summary_message = Message::User(coco_messages::UserMessage {
+        message: coco_messages::LlmMessage::user_text(&summary_user_msg),
         uuid: uuid::Uuid::new_v4(),
         timestamp: String::new(),
         is_visible_in_transcript_only: true,
@@ -194,7 +211,10 @@ where
         pre_compact_tokens: pre_tokens,
         post_compact_tokens: post_tokens,
         true_post_compact_tokens: post_tokens,
-        is_recompaction: false,
+        is_recompaction: config
+            .recompaction_info
+            .as_ref()
+            .is_some_and(|i| i.is_recompaction),
         trigger: config.trigger,
     };
 
@@ -301,7 +321,7 @@ where
 
     let summary_text = call_with_ptl_retry(
         &rounds,
-        &CompactConfig {
+        &CompactRunOptions {
             custom_prompt: merged.clone(),
             ..Default::default()
         },
@@ -317,7 +337,7 @@ where
     );
 
     let summary_message = Message::User(UserMessage {
-        message: coco_types::LlmMessage::user_text(&summary_user_msg),
+        message: coco_messages::LlmMessage::user_text(&summary_user_msg),
         uuid: Uuid::new_v4(),
         timestamp: String::new(),
         is_visible_in_transcript_only: true,
@@ -443,14 +463,19 @@ pub fn merge_hook_instructions(
 
 /// Strip images and documents from messages to prevent prompt-too-long.
 ///
-/// TS: `stripImagesFromMessages()` — replaces image/document content blocks
-/// with `[image]` / `[document]` text placeholders.
+/// TS: `stripImagesFromMessages()` (`compact.ts:145-200`) — replaces
+/// image/document content blocks with `[image]` / `[document]` text
+/// placeholders. **Includes images nested inside tool_result content arrays**
+/// (per TS lines 166-184) — Bash/MCP tool_results that carry image data
+/// (e.g. `cat image.png`) must be stripped before the compact summarizer
+/// runs or the summarization request itself trips prompt-too-long on the
+/// re-encoded base64.
 pub fn strip_images_from_messages(messages: &[Message]) -> Vec<Message> {
     messages
         .iter()
         .map(|msg| match msg {
             Message::User(u) => {
-                if let coco_types::LlmMessage::User {
+                if let coco_messages::LlmMessage::User {
                     content,
                     provider_options,
                 } = &u.message
@@ -470,7 +495,7 @@ pub fn strip_images_from_messages(messages: &[Message]) -> Vec<Message> {
                         })
                         .collect();
                     let mut new_u = u.clone();
-                    new_u.message = coco_types::LlmMessage::User {
+                    new_u.message = coco_messages::LlmMessage::User {
                         content: stripped,
                         provider_options: provider_options.clone(),
                     };
@@ -479,9 +504,81 @@ pub fn strip_images_from_messages(messages: &[Message]) -> Vec<Message> {
                     msg.clone()
                 }
             }
+            // TS-parity: tool_result content arrays may carry FileData
+            // (image/document) parts — those are common from BashTool when
+            // stdout is detected as binary image bytes (`bash.rs:isLikely
+            // ImageBytes` → `structuredContent`). Walk the inner
+            // `ToolResultContent::Content` and replace FileData parts with
+            // `[image]` / `[document]` Text parts.
+            Message::ToolResult(tr) => {
+                let coco_messages::LlmMessage::Tool {
+                    content,
+                    provider_options,
+                } = &tr.message
+                else {
+                    return msg.clone();
+                };
+                let stripped: Vec<coco_messages::ToolContent> = content
+                    .iter()
+                    .map(|part| match part {
+                        coco_messages::ToolContent::ToolResult(rp) => {
+                            let new_output = strip_images_from_tool_result_content(&rp.output);
+                            coco_messages::ToolContent::ToolResult(
+                                coco_messages::ToolResultContent {
+                                    output: new_output,
+                                    ..rp.clone()
+                                },
+                            )
+                        }
+                        // ToolApprovalResponse carries no media — pass through.
+                        other => other.clone(),
+                    })
+                    .collect();
+                let mut new_tr = tr.clone();
+                new_tr.message = coco_messages::LlmMessage::Tool {
+                    content: stripped,
+                    provider_options: provider_options.clone(),
+                };
+                Message::ToolResult(new_tr)
+            }
             _ => msg.clone(),
         })
         .collect()
+}
+
+/// Replace `FileData` parts inside `ToolResultContent::Content` with
+/// `[image]` / `[document]` text parts. Other variants pass through.
+fn strip_images_from_tool_result_content(
+    output: &coco_inference::ToolResultContent,
+) -> coco_inference::ToolResultContent {
+    let coco_inference::ToolResultContent::Content {
+        value,
+        provider_options,
+    } = output
+    else {
+        return output.clone();
+    };
+    let new_value: Vec<coco_inference::ToolResultContentPart> = value
+        .iter()
+        .map(|p| match p {
+            coco_inference::ToolResultContentPart::FileData { media_type, .. } => {
+                let placeholder = if media_type.starts_with("image/") {
+                    "[image]"
+                } else {
+                    "[document]"
+                };
+                coco_inference::ToolResultContentPart::Text {
+                    text: placeholder.to_string(),
+                    provider_options: None,
+                }
+            }
+            other => other.clone(),
+        })
+        .collect();
+    coco_inference::ToolResultContent::Content {
+        value: new_value,
+        provider_options: provider_options.clone(),
+    }
 }
 
 /// Strip re-injectable attachment messages (skills, agents, etc.).
@@ -491,6 +588,17 @@ pub fn strip_images_from_messages(messages: &[Message]) -> Vec<Message> {
 /// file references). The rest are stripped — reminders regenerate per-turn,
 /// silent dedup markers are ephemeral, and file content re-injection is
 /// handled separately by [`create_post_compact_file_attachments`].
+///
+/// **Intentional divergence from TS** (compact.ts:211-223). TS only
+/// filters `skill_discovery` / `skill_listing` and only when
+/// `feature('EXPERIMENTAL_SKILL_SEARCH')` is on (no-op otherwise). Rust
+/// uses the broader `AttachmentKind::survives_compaction()` predicate
+/// because the Rust `AttachmentKind` taxonomy (60 variants) is a superset
+/// of TS's, including reminders that didn't exist in TS at the time TS
+/// wrote its narrow filter. The predicate keeps the safe ones (audit /
+/// UI-visible) and drops the regenerable ones — equivalent intent, wider
+/// coverage. Tracked in audit-gaps.md Round 10 as P2 (intentional, no
+/// fix required).
 pub fn strip_reinjected_attachments(messages: &[Message]) -> Vec<Message> {
     messages
         .iter()
@@ -574,7 +682,7 @@ pub fn truncate_head_for_ptl_retry(
 }
 
 fn user_message_text_equals(u: &UserMessage, needle: &str) -> bool {
-    let coco_types::LlmMessage::User { content, .. } = &u.message else {
+    let coco_messages::LlmMessage::User { content, .. } = &u.message else {
         return false;
     };
     content
@@ -584,7 +692,7 @@ fn user_message_text_equals(u: &UserMessage, needle: &str) -> bool {
 
 fn make_ptl_marker_message() -> Message {
     Message::User(UserMessage {
-        message: coco_types::LlmMessage::user_text(PTL_RETRY_MARKER),
+        message: coco_messages::LlmMessage::user_text(PTL_RETRY_MARKER),
         uuid: Uuid::new_v4(),
         timestamp: String::new(),
         is_visible_in_transcript_only: true,
@@ -601,7 +709,7 @@ fn make_ptl_marker_message() -> Message {
 /// Call the summarize function with prompt-too-long retry logic.
 async fn call_with_ptl_retry<F, Fut>(
     old_rounds: &[Vec<&Message>],
-    config: &CompactConfig,
+    config: &CompactRunOptions,
     summarize_fn: &F,
     initial_prompt: String,
 ) -> Result<String, CompactError>
@@ -688,8 +796,8 @@ fn create_boundary_marker(
     post_tokens: i64,
     messages_summarized: Option<i32>,
 ) -> Message {
-    Message::System(coco_types::SystemMessage::CompactBoundary(
-        coco_types::SystemCompactBoundaryMessage {
+    Message::System(coco_messages::SystemMessage::CompactBoundary(
+        coco_messages::SystemCompactBoundaryMessage {
             uuid: uuid::Uuid::new_v4(),
             tokens_before: pre_tokens,
             tokens_after: post_tokens,
@@ -703,11 +811,11 @@ fn create_boundary_marker(
 }
 
 /// Build a prompt asking the LLM to summarize the conversation.
-fn build_summary_prompt(rounds: &[Vec<&Message>], config: &CompactConfig) -> String {
+fn build_summary_prompt(rounds: &[Vec<&Message>], config: &CompactRunOptions) -> String {
     build_summary_prompt_from_refs(rounds, config)
 }
 
-fn build_summary_prompt_from_refs(rounds: &[Vec<&Message>], config: &CompactConfig) -> String {
+fn build_summary_prompt_from_refs(rounds: &[Vec<&Message>], config: &CompactRunOptions) -> String {
     let base_prompt = crate::prompt::get_compact_prompt(config.custom_prompt.as_deref());
 
     let mut conversation = String::with_capacity(base_prompt.len() + 4096);
@@ -740,7 +848,7 @@ fn build_summary_prompt_from_refs(rounds: &[Vec<&Message>], config: &CompactConf
     conversation
 }
 
-fn is_image_media_type(file: &vercel_ai_provider::FilePart) -> bool {
+fn is_image_media_type(file: &coco_inference::FilePart) -> bool {
     file.media_type.starts_with("image/")
 }
 

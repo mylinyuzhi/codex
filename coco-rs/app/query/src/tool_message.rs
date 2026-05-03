@@ -25,18 +25,19 @@
 //! in the next step.
 #![allow(dead_code)]
 
+use coco_messages::Message;
 use coco_tool_runtime::Tool;
-use coco_types::Message;
 
 /// Which lifecycle path produced this bucket set.
 ///
 /// The flatten algorithm branches on this — MCP deferred-post-hook
 /// ordering only applies to `Success`. `Failure` and `EarlyReturn` use
 /// a single canonical order regardless of `is_mcp`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum ToolMessagePath {
     /// `tool.execute()` ran to completion. Post-hook is `PostToolUse`.
     /// Non-MCP and MCP success paths differ per I5.
+    #[default]
     Success,
     /// `tool.execute()` threw. Post-hook is `PostToolUseFailure`
     /// (TS `toolExecution.ts:1696` inside the catch block at :1589).
@@ -116,15 +117,6 @@ pub(crate) struct ToolMessageBuckets {
     /// template; also surfaced as `ToolMessagePath` in
     /// `UnstampedToolCallOutcome` for telemetry.
     pub(crate) path: ToolMessagePath,
-}
-
-impl Default for ToolMessagePath {
-    fn default() -> Self {
-        // The dominant case during construction is Success; the runner
-        // flips to Failure / EarlyReturn explicitly when those branches
-        // are taken.
-        Self::Success
-    }
 }
 
 impl ToolMessageBuckets {

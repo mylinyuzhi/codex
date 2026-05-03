@@ -51,8 +51,9 @@ impl SymbolSearchManager {
 
             // Placeholder — real impl queries LSP workspace/symbol
             let suggestions = vec![SuggestionItem {
-                label: format!("@#{query}"),
+                label: query.clone(),
                 description: Some("(LSP lookup pending)".to_string()),
+                metadata: None,
             }];
 
             let _ = tx

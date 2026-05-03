@@ -1,7 +1,7 @@
-use coco_types::AssistantContent;
-use coco_types::LlmMessage;
-use coco_types::Message;
-use coco_types::MessageKind;
+use crate::AssistantContent;
+use crate::LlmMessage;
+use crate::Message;
+use crate::MessageKind;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;

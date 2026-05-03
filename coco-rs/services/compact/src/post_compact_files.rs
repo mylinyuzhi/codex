@@ -19,11 +19,11 @@ use std::path::PathBuf;
 use coco_context::attachment::FileReadOptions;
 use coco_context::attachment::generate_file_attachment;
 use coco_context::file_read_state::FileReadEntry;
-use coco_types::AttachmentMessage;
-use coco_types::LlmMessage;
-use coco_types::Message;
+use coco_inference::AssistantContentPart;
+use coco_messages::AttachmentMessage;
+use coco_messages::LlmMessage;
+use coco_messages::Message;
 use coco_types::ToolName;
-use vercel_ai_provider::AssistantContentPart;
 
 use crate::tokens;
 use crate::types::POST_COMPACT_MAX_FILES_TO_RESTORE;
@@ -51,17 +51,47 @@ pub fn create_post_compact_file_attachments(
     cwd: &Path,
     plan_file: Option<&Path>,
 ) -> Vec<AttachmentMessage> {
+    create_post_compact_file_attachments_with_priority(
+        snapshot,
+        preserved_messages,
+        cwd,
+        plan_file,
+        &HashSet::new(),
+    )
+}
+
+/// Like [`create_post_compact_file_attachments`] but boosts files whose
+/// paths appear in `prioritized_paths` (typically: files the user
+/// recently @mentioned). Prioritized files keep their relative LRU
+/// ordering but jump ahead of non-mentioned files in the candidate
+/// list — they survive compaction even when not the most-recently-read.
+///
+/// Self-designed augmentation; TS has no mention-aware re-injection.
+pub fn create_post_compact_file_attachments_with_priority(
+    snapshot: &[(PathBuf, FileReadEntry)],
+    preserved_messages: &[Message],
+    cwd: &Path,
+    plan_file: Option<&Path>,
+    prioritized_paths: &HashSet<PathBuf>,
+) -> Vec<AttachmentMessage> {
     let preserved_read_paths = collect_read_tool_file_paths(preserved_messages);
 
     // Filter: skip excluded paths and files already in preserved messages.
     // Reverse so most-recently-accessed comes first.
-    let candidates: Vec<&(PathBuf, FileReadEntry)> = snapshot
+    let mut filtered: Vec<&(PathBuf, FileReadEntry)> = snapshot
         .iter()
         .rev()
         .filter(|(path, _)| {
             !should_exclude_from_restore(path, cwd, plan_file)
                 && !preserved_read_paths.contains(path)
         })
+        .collect();
+
+    // Stable partition: prioritized first, others second. Both keep
+    // their LRU order from the reverse iteration above.
+    filtered.sort_by_key(|(path, _)| !prioritized_paths.contains(path));
+    let candidates: Vec<&(PathBuf, FileReadEntry)> = filtered
+        .into_iter()
         .take(POST_COMPACT_MAX_FILES_TO_RESTORE)
         .collect();
 
@@ -191,23 +221,23 @@ fn should_exclude_from_restore(path: &Path, cwd: &Path, plan_file: Option<&Path>
 }
 
 /// Check if a tool result message text starts with a given prefix.
-fn tool_result_starts_with_text(tr: &coco_types::ToolResultMessage, prefix: &str) -> bool {
+fn tool_result_starts_with_text(tr: &coco_messages::ToolResultMessage, prefix: &str) -> bool {
     let LlmMessage::Tool { content, .. } = &tr.message else {
         return false;
     };
     for part in content {
-        let coco_types::ToolContent::ToolResult(result) = part else {
+        let coco_messages::ToolContent::ToolResult(result) = part else {
             continue;
         };
         match &result.output {
-            vercel_ai_provider::ToolResultContent::Text { value, .. } => {
+            coco_inference::ToolResultContent::Text { value, .. } => {
                 if value.starts_with(prefix) {
                     return true;
                 }
             }
-            vercel_ai_provider::ToolResultContent::Content { value, .. } => {
+            coco_inference::ToolResultContent::Content { value, .. } => {
                 for sub in value {
-                    if let vercel_ai_provider::ToolResultContentPart::Text { text, .. } = sub
+                    if let coco_inference::ToolResultContentPart::Text { text, .. } = sub
                         && text.starts_with(prefix)
                     {
                         return true;

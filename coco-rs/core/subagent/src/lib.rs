@@ -9,22 +9,52 @@
 //! See `docs/coco-rs/subagent-refactor-plan.md` § D8 for ownership boundary.
 
 pub mod builtins;
+pub mod coordinator_mode;
 pub mod definition_store;
 pub mod filter;
+pub mod fork;
 pub mod frontmatter;
+pub mod handoff;
 pub mod prompt;
 pub mod snapshot;
+pub mod spawn_resolution;
+pub mod subagent_role;
+pub mod summary;
+pub mod transcript;
 pub mod validation;
 
 pub use builtins::{BuiltinAgentCatalog, builtin_definition, builtin_definitions};
+pub use coordinator_mode::{
+    ParsedTaskNotification, SessionMode, SessionModeSwitch, TaskNotification,
+    TaskNotificationStatus, TaskNotificationUsage, coordinator_system_prompt,
+    coordinator_user_context, is_coordinator_mode, is_coordinator_mode_env,
+    is_fork_subagent_active, looks_like_task_notification, parse_task_notification,
+    render_task_notification, session_mode_switch_action, worker_tool_pool,
+};
 pub use definition_store::{AgentDefinitionStore, AgentLoadReport, LoadedAgentDefinition};
 pub use filter::{AgentToolFilter, AllowedAgentTypes, ToolFilterPlan, parse_allowed_agent_types};
+pub use fork::{
+    FORK_BOILERPLATE_TAG, FORK_DIRECTIVE_PREFIX, FORK_PLACEHOLDER, ForkContext,
+    build_fork_child_message, build_fork_child_rules, build_fork_context, build_worktree_notice,
+    is_fork_allowed, is_fork_enabled, is_in_fork_child,
+};
 pub use frontmatter::{
     FrontmatterParseError, parse_agent_markdown, parse_color_value, parse_isolation_value,
     parse_memory_value,
 };
+pub use handoff::{
+    HandoffClassification, build_transcript_summary as build_handoff_transcript_summary,
+    is_read_only_agent, parse_classifier_response, render_block_message, should_classify,
+    stage1_prompts as handoff_stage1_prompts, stage2_prompts as handoff_stage2_prompts,
+};
 pub use prompt::{AgentToolPromptRenderer, PromptOptions, format_tools_description};
 pub use snapshot::AgentCatalogSnapshot;
+pub use snapshot::filter_agents_by_mcp_requirements;
+pub use snapshot::has_required_mcp_servers;
+pub use spawn_resolution::{SubagentSelection, resolve_subagent_selection};
+pub use subagent_role::{resolve_subagent_role, role_for_builtin};
+pub use summary::{build_summary_prompts, sanitize_summary, should_summarize};
+pub use transcript::{AgentResumeState, filter_transcript};
 pub use validation::{AgentDefinitionValidator, ValidationDiagnostic, ValidationError};
 
 /// One-shot built-in agent types — TS `ONE_SHOT_BUILTIN_AGENT_TYPES`

@@ -1,7 +1,7 @@
+use coco_messages::ToolResult;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
 use coco_types::ToolName;
-use coco_types::ToolResult;
 use serde_json::Value;
 use serde_json::json;
 use std::collections::HashMap;
@@ -63,7 +63,9 @@ fn test_tool_default_flags() {
     assert!(!tool.should_defer());
     assert!(!tool.always_load());
     assert_eq!(tool.interrupt_behavior(), InterruptBehavior::Block);
-    assert_eq!(tool.max_result_size_chars(), 100_000);
+    // Default is `i64::MAX` (opt-out of persistence) — Round 10
+    // change from the prior `100_000` cap. Tools opt in by overriding.
+    assert_eq!(tool.max_result_size_chars(), i64::MAX);
     assert!(tool.mcp_info().is_none());
     // R4: `is_open_world` defaults to false — tools are closed-world
     // unless they opt in. Matches TS `Tool.ts:434` (optional field,
@@ -110,7 +112,7 @@ fn test_is_mcp_derives_from_mcp_info() {
             &self,
             _: serde_json::Value,
             _: &ToolUseContext,
-        ) -> Result<coco_types::ToolResult<serde_json::Value>, super::super::ToolError> {
+        ) -> Result<coco_messages::ToolResult<serde_json::Value>, super::super::ToolError> {
             unimplemented!()
         }
     }
@@ -145,6 +147,10 @@ fn test_prompt_options_to_description_options() {
         allowed_agent_types: None,
         skill_names: vec![],
         permission_context: None,
+        agent_catalog: None,
+        ready_mcp_servers: None,
+        coordinator_mode: false,
+        fork_enabled: false,
     };
     let desc_opts = prompt_opts.as_description_options();
     assert!(desc_opts.is_non_interactive);

@@ -20,10 +20,14 @@ coco-hooks.workspace = true
 coco-otel.workspace = true
 coco-permissions.workspace = true
 coco-skills.workspace = true
+coco-subagent.workspace = true
 coco-system-reminder.workspace = true
 coco-lsp.workspace = true
 coco-mcp.workspace = true
-vercel-ai-provider.workspace = true
+coco-memory.workspace = true
+coco-session.workspace = true
+coco-session-memory.workspace = true
+coco-tasks.workspace = true
 chrono.workspace = true
 lru.workspace = true
 
@@ -41,7 +45,6 @@ pretty_assertions.workspace = true
 tokio = { workspace = true, features = ["rt", "macros"] }
 coco-tools.workspace = true
 coco-tool-runtime = { workspace = true, features = ["testing"] }
-coco-session.workspace = true
 coco-hooks.workspace = true
 tempfile.workspace = true
 async-trait.workspace = true

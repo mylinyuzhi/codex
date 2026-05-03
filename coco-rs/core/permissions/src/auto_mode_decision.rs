@@ -7,7 +7,7 @@
 //! `Auto`. Chains: safe-tool check → heuristic → LLM classifier → denial
 //! tracking.
 
-use coco_types::Message;
+use coco_messages::Message;
 use coco_types::PermissionDecision;
 use coco_types::PermissionDecisionReason;
 use serde_json::Value;
@@ -29,6 +29,11 @@ use crate::denial_tracking::DenialTracker;
 /// Returns `Some(decision)` when auto-mode handled the request.
 ///
 /// TS: `canUseToolInAutoMode()` in classifierDecision.ts
+//
+// Each parameter carries a distinct piece of caller-side state (rules,
+// state machines, denial cache, classifier callback). Bundling them
+// would just rename the noise — kept individual to preserve clarity.
+#[allow(clippy::too_many_arguments)]
 pub async fn can_use_tool_in_auto_mode<F, Fut>(
     tool_name: &str,
     input: &Value,

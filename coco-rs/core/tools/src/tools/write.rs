@@ -1,3 +1,4 @@
+use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
@@ -6,7 +7,6 @@ use coco_tool_runtime::ValidationResult;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
 use coco_types::ToolName;
-use coco_types::ToolResult;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
@@ -177,6 +177,15 @@ impl Tool for WriteTool {
                     });
                 }
             }
+        }
+
+        // Sandboxed write fence (memory-extraction / auto-dream
+        // subagents). No-op when `ctx.allowed_write_roots` is empty.
+        if let Some(err) = crate::check_write_root_fence(ctx, path) {
+            return Err(ToolError::ExecutionFailed {
+                message: err,
+                source: None,
+            });
         }
 
         // Team-memory secret guard. TS `FileWriteTool.ts:156-160`:

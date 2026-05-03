@@ -102,6 +102,21 @@ pub trait SkillHandle: Send + Sync {
         args: &str,
         inherit: SubagentInheritance,
     ) -> Result<SkillInvocationResult, SkillInvocationError>;
+
+    /// Read a skill's prompt body without invoking it. Used by
+    /// `AgentTool` to preload skills declared in agent frontmatter
+    /// (`skills: [foo, bar]`) — the bodies are prepended to the
+    /// spawned subagent's first user message so the child sees the
+    /// skill content from turn 1. TS parity:
+    /// `runAgent.ts:577-645` preloads frontmatter skills via
+    /// `getSkillToolCommands()` + `skill.getPromptForCommand('')`.
+    ///
+    /// Default implementation returns `None` — handles that don't
+    /// support preload (test fixtures / minimal embeddings) leave
+    /// the skill body unloaded; the spawn proceeds with no preload.
+    async fn read_skill_body(&self, _name: &str) -> Option<String> {
+        None
+    }
 }
 
 /// Shared handle type for `ToolUseContext`.

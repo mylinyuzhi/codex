@@ -27,6 +27,9 @@ fn skill(name: &str, desc: &str) -> SkillDefinition {
         shell: None,
         content_length: 0,
         is_hidden: false,
+        gated_by: None,
+        files: std::collections::HashMap::new(),
+        skill_root: None,
     }
 }
 

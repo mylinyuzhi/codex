@@ -21,6 +21,7 @@ pub mod command;
 pub mod constants;
 pub mod editor;
 pub mod events;
+pub mod git_index_watcher;
 pub mod i18n;
 pub mod keybinding_bridge;
 pub mod paste;

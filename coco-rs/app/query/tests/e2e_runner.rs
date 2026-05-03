@@ -21,8 +21,19 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 
+use coco_inference::AISdkError;
 use coco_inference::ApiClient;
+use coco_inference::AssistantContentPart;
+use coco_inference::FinishReason;
+use coco_inference::LanguageModel;
+use coco_inference::LanguageModelCallOptions;
+use coco_inference::LanguageModelGenerateResult;
+use coco_inference::LanguageModelStreamResult;
 use coco_inference::RetryConfig;
+use coco_inference::TextPart;
+use coco_inference::ToolCallPart;
+use coco_inference::UnifiedFinishReason;
+use coco_inference::Usage;
 use coco_query::AgentStreamEvent;
 use coco_query::CoreEvent;
 use coco_query::QueryEngine;
@@ -45,17 +56,6 @@ use coco_types::PermissionMode;
 use serde::Deserialize;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
-use vercel_ai_provider::AISdkError;
-use vercel_ai_provider::AssistantContentPart;
-use vercel_ai_provider::FinishReason;
-use vercel_ai_provider::LanguageModelV4;
-use vercel_ai_provider::LanguageModelV4CallOptions;
-use vercel_ai_provider::LanguageModelV4GenerateResult;
-use vercel_ai_provider::LanguageModelV4StreamResult;
-use vercel_ai_provider::TextPart;
-use vercel_ai_provider::ToolCallPart;
-use vercel_ai_provider::UnifiedFinishReason;
-use vercel_ai_provider::Usage;
 
 // ─── JSON scenario types ───
 
@@ -161,7 +161,7 @@ impl JsonScriptedMock {
         }
     }
 
-    fn build_response(&self, idx: i32) -> LanguageModelV4GenerateResult {
+    fn build_response(&self, idx: i32) -> LanguageModelGenerateResult {
         let i = idx as usize;
         if i >= self.turns.len() {
             return make_text_result("(mock: no more scripted turns)", idx);
@@ -187,7 +187,7 @@ impl JsonScriptedMock {
 }
 
 #[async_trait::async_trait]
-impl LanguageModelV4 for JsonScriptedMock {
+impl LanguageModel for JsonScriptedMock {
     fn provider(&self) -> &str {
         "mock"
     }
@@ -197,16 +197,16 @@ impl LanguageModelV4 for JsonScriptedMock {
 
     async fn do_generate(
         &self,
-        _options: LanguageModelV4CallOptions,
-    ) -> Result<LanguageModelV4GenerateResult, AISdkError> {
+        _options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelGenerateResult, AISdkError> {
         let idx = self.call_count.fetch_add(1, Ordering::SeqCst);
         Ok(self.build_response(idx))
     }
 
     async fn do_stream(
         &self,
-        options: LanguageModelV4CallOptions,
-    ) -> Result<LanguageModelV4StreamResult, AISdkError> {
+        options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelStreamResult, AISdkError> {
         let result = self.do_generate(options).await?;
         Ok(coco_inference::synthetic_stream_from_content(
             result.content,
@@ -218,8 +218,8 @@ impl LanguageModelV4 for JsonScriptedMock {
 
 // ─── Response builders ───
 
-fn make_text_result(text: &str, _call_idx: i32) -> LanguageModelV4GenerateResult {
-    LanguageModelV4GenerateResult {
+fn make_text_result(text: &str, _call_idx: i32) -> LanguageModelGenerateResult {
+    LanguageModelGenerateResult {
         content: vec![AssistantContentPart::Text(TextPart {
             text: text.to_string(),
             provider_metadata: None,
@@ -233,10 +233,7 @@ fn make_text_result(text: &str, _call_idx: i32) -> LanguageModelV4GenerateResult
     }
 }
 
-fn make_tool_result(
-    tool_calls: &[ResolvedToolCall],
-    call_idx: i32,
-) -> LanguageModelV4GenerateResult {
+fn make_tool_result(tool_calls: &[ResolvedToolCall], call_idx: i32) -> LanguageModelGenerateResult {
     let content = tool_calls
         .iter()
         .enumerate()
@@ -251,7 +248,7 @@ fn make_tool_result(
         })
         .collect();
 
-    LanguageModelV4GenerateResult {
+    LanguageModelGenerateResult {
         content,
         usage: Usage::new(50, 20),
         finish_reason: FinishReason::new(UnifiedFinishReason::ToolCalls),
@@ -266,7 +263,7 @@ fn make_text_and_tool_result(
     text: &str,
     tool_calls: &[ResolvedToolCall],
     call_idx: i32,
-) -> LanguageModelV4GenerateResult {
+) -> LanguageModelGenerateResult {
     let mut content = vec![AssistantContentPart::Text(TextPart {
         text: text.to_string(),
         provider_metadata: None,
@@ -281,7 +278,7 @@ fn make_text_and_tool_result(
         }));
     }
 
-    LanguageModelV4GenerateResult {
+    LanguageModelGenerateResult {
         content,
         usage: Usage::new(50, 20),
         finish_reason: FinishReason::new(UnifiedFinishReason::ToolCalls),
@@ -407,7 +404,7 @@ struct ScenarioRunResult {
 }
 
 async fn run_with_events(
-    model: Arc<dyn LanguageModelV4>,
+    model: Arc<dyn LanguageModel>,
     prompt: &str,
     tools: Arc<ToolRegistry>,
     config_overrides: &ScenarioConfig,
@@ -418,7 +415,7 @@ async fn run_with_events(
     ));
     let cancel = CancellationToken::new();
     let config = QueryEngineConfig {
-        model_name: "json-scripted-mock".into(),
+        model_id: "json-scripted-mock".into(),
         permission_mode: PermissionMode::BypassPermissions,
         max_turns: config_overrides.max_turns.unwrap_or(10),
         max_tokens: config_overrides.max_tokens,
@@ -639,7 +636,7 @@ async fn run_scenario(path: &Path) {
     let resolved = resolve_turns(&scenario.turns, ws);
     let prompt = scenario.prompt.as_deref().unwrap_or("run scenario");
 
-    let model: Arc<dyn LanguageModelV4> = Arc::new(JsonScriptedMock::new(resolved));
+    let model: Arc<dyn LanguageModel> = Arc::new(JsonScriptedMock::new(resolved));
     let tools = tools_for_config(&scenario.config);
     let run = run_with_events(model, prompt, tools, &scenario.config).await;
 

@@ -26,11 +26,11 @@
 //! `attachments.ts:1380-1399` (auto-mode exit flag), and the swarm
 //! mailbox protocol (`plan_approval_request` / `_response` messages).
 
+use coco_messages::AttachmentMessage;
+use coco_messages::LlmMessage;
+use coco_messages::Message;
 use coco_messages::MessageHistory;
 use coco_messages::wrapping::wrap_in_system_reminder;
-use coco_types::AttachmentMessage;
-use coco_types::LlmMessage;
-use coco_types::Message;
 use coco_types::PermissionMode;
 use coco_types::ToolAppState;
 use std::path::Path;

@@ -1,7 +1,7 @@
 //! Reusable mock model harness for e2e testing.
 //!
 //! Provides `MockModelBuilder` to define a sequence of LLM responses
-//! (text + tool calls) without writing boilerplate LanguageModelV4 impls.
+//! (text + tool calls) without writing boilerplate LanguageModel impls.
 //!
 //! Usage:
 //! ```ignore
@@ -19,8 +19,19 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 
+use coco_inference::AISdkError;
 use coco_inference::ApiClient;
+use coco_inference::AssistantContentPart;
+use coco_inference::FinishReason;
+use coco_inference::LanguageModel;
+use coco_inference::LanguageModelCallOptions;
+use coco_inference::LanguageModelGenerateResult;
+use coco_inference::LanguageModelStreamResult;
 use coco_inference::RetryConfig;
+use coco_inference::TextPart;
+use coco_inference::ToolCallPart;
+use coco_inference::UnifiedFinishReason;
+use coco_inference::Usage;
 use coco_query::QueryEngine;
 use coco_query::QueryEngineConfig;
 use coco_query::QueryResult;
@@ -42,17 +53,6 @@ use coco_types::PermissionMode;
 use coco_types::ToolAppState;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
-use vercel_ai_provider::AISdkError;
-use vercel_ai_provider::AssistantContentPart;
-use vercel_ai_provider::FinishReason;
-use vercel_ai_provider::LanguageModelV4;
-use vercel_ai_provider::LanguageModelV4CallOptions;
-use vercel_ai_provider::LanguageModelV4GenerateResult;
-use vercel_ai_provider::LanguageModelV4StreamResult;
-use vercel_ai_provider::TextPart;
-use vercel_ai_provider::ToolCallPart;
-use vercel_ai_provider::UnifiedFinishReason;
-use vercel_ai_provider::Usage;
 
 // ─── MockResponse: declarative response builder ───
 
@@ -90,7 +90,7 @@ impl MockResponse {
         Self::MultiToolCall(calls.into_iter().map(|(n, i)| (n.to_string(), i)).collect())
     }
 
-    fn into_generate_result(self, call_idx: i32) -> LanguageModelV4GenerateResult {
+    fn into_generate_result(self, call_idx: i32) -> LanguageModelGenerateResult {
         let (content, finish) = match self {
             Self::Text(text) => (
                 vec![AssistantContentPart::Text(TextPart {
@@ -143,7 +143,7 @@ impl MockResponse {
             }
         };
 
-        LanguageModelV4GenerateResult {
+        LanguageModelGenerateResult {
             content,
             usage: Usage::new(50, 20),
             finish_reason: FinishReason::new(finish),
@@ -157,7 +157,7 @@ impl MockResponse {
 
 // ─── ScriptedMock: plays a sequence of responses ───
 
-type ResponseFn = Box<dyn Fn(&LanguageModelV4CallOptions) -> MockResponse + Send + Sync>;
+type ResponseFn = Box<dyn Fn(&LanguageModelCallOptions) -> MockResponse + Send + Sync>;
 
 /// A mock model that plays a predefined script of responses.
 pub struct ScriptedMock {
@@ -168,7 +168,7 @@ pub struct ScriptedMock {
 }
 
 impl ScriptedMock {
-    fn get_response(&self, options: &LanguageModelV4CallOptions) -> MockResponse {
+    fn get_response(&self, options: &LanguageModelCallOptions) -> MockResponse {
         let idx = self.call_count.fetch_add(1, Ordering::SeqCst) as usize;
         if idx < self.responses.len() {
             (self.responses[idx])(options)
@@ -179,7 +179,7 @@ impl ScriptedMock {
 }
 
 #[async_trait::async_trait]
-impl LanguageModelV4 for ScriptedMock {
+impl LanguageModel for ScriptedMock {
     fn provider(&self) -> &str {
         "mock"
     }
@@ -188,16 +188,16 @@ impl LanguageModelV4 for ScriptedMock {
     }
     async fn do_generate(
         &self,
-        options: LanguageModelV4CallOptions,
-    ) -> Result<LanguageModelV4GenerateResult, AISdkError> {
+        options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelGenerateResult, AISdkError> {
         let idx = self.call_count.load(Ordering::SeqCst);
         let response = self.get_response(&options);
         Ok(response.into_generate_result(idx))
     }
     async fn do_stream(
         &self,
-        options: LanguageModelV4CallOptions,
-    ) -> Result<LanguageModelV4StreamResult, AISdkError> {
+        options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelStreamResult, AISdkError> {
         let result = self.do_generate(options).await?;
         Ok(coco_inference::synthetic_stream_from_content(
             result.content,
@@ -230,7 +230,7 @@ impl MockModelBuilder {
     /// Add a response for call N (0-indexed).
     pub fn on_call<F>(mut self, _idx: usize, f: F) -> Self
     where
-        F: Fn(&LanguageModelV4CallOptions) -> MockResponse + Send + Sync + 'static,
+        F: Fn(&LanguageModelCallOptions) -> MockResponse + Send + Sync + 'static,
     {
         self.responses.push(Box::new(f));
         self
@@ -328,7 +328,7 @@ pub struct PlanModeTurnParams {
     pub tools: Arc<ToolRegistry>,
     /// Messages from prior turns (plus the new user prompt). When empty
     /// the helper creates a fresh user message from `prompt_if_empty`.
-    pub messages: Vec<coco_types::Message>,
+    pub messages: Vec<coco_messages::Message>,
     /// Fallback prompt when `messages` is empty (first turn case).
     pub prompt_if_empty: String,
     /// Raise this for scenarios that need more than the default 10
@@ -374,7 +374,7 @@ impl PlanModeTurnParams {
 
     /// Feed the prior turn's `final_messages` + a new user message into
     /// the next run.
-    pub fn next_turn(mut self, prev_messages: Vec<coco_types::Message>, prompt: &str) -> Self {
+    pub fn next_turn(mut self, prev_messages: Vec<coco_messages::Message>, prompt: &str) -> Self {
         self.messages = prev_messages;
         self.messages
             .push(coco_messages::create_user_message(prompt));
@@ -388,7 +388,7 @@ impl PlanModeTurnParams {
 /// `config_home` (plan-file path resolution), registers the passed
 /// tool set, and starts in the caller-specified permission mode.
 pub async fn run_plan_mode_turn(
-    model: Arc<dyn LanguageModelV4>,
+    model: Arc<dyn LanguageModel>,
     params: PlanModeTurnParams,
 ) -> QueryResult {
     let client = Arc::new(ApiClient::with_default_fingerprint(
@@ -397,7 +397,7 @@ pub async fn run_plan_mode_turn(
     ));
     let cancel = CancellationToken::new();
     let config = QueryEngineConfig {
-        model_name: "scripted-mock".into(),
+        model_id: "scripted-mock".into(),
         permission_mode: params.permission_mode,
         max_turns: params.max_turns,
         session_id: params.session_id,
@@ -429,7 +429,7 @@ pub async fn run_plan_mode_turn(
 
 /// Run the query engine with a mock model and default config.
 pub async fn run_with_mock(
-    model: Arc<dyn LanguageModelV4>,
+    model: Arc<dyn LanguageModel>,
     prompt: &str,
     tools: Arc<ToolRegistry>,
 ) -> QueryResult {
@@ -439,7 +439,7 @@ pub async fn run_with_mock(
     ));
     let cancel = CancellationToken::new();
     let config = QueryEngineConfig {
-        model_name: "scripted-mock".into(),
+        model_id: "scripted-mock".into(),
         permission_mode: PermissionMode::BypassPermissions,
         max_turns: 10,
         ..Default::default()

@@ -66,7 +66,11 @@ Every TS `src/` directory and top-level file mapped to its Rust crate, version, 
 | `utils/modelCost.ts` | `coco-inference` | `services/inference/` | v1 | TS | Per-model pricing calculations |
 | `utils/worktree.ts` | `coco-tools` | `core/tools/` | v1 | TS | Git worktree management |
 | `utils/theme.ts` | `coco-tui` | `app/tui/` | v1 | TS | Theme management |
-| `utils/toolResultStorage.ts` | `coco-context` | `core/context/` | v1 | TS | ContentReplacementState (tool result budgets) |
+| `utils/toolResultStorage.ts` (Level 1: persist + preview) | `coco-tool-runtime` | `core/tool-runtime/src/tool_result_storage/` | v1 | TS | Per-tool persistence pipeline (`<persisted-output>` wrapper, 2KB preview, session-scoped `tool-results/`). See [`tool-result-budget-plan.md`](tool-result-budget-plan.md). |
+| `utils/toolResultStorage.ts` (Level 2: budget) | `coco-query` (wiring) + `coco-tool-runtime` (state types) | `app/query/src/`, `core/tool-runtime/src/tool_result_storage/budget.rs` | v1 | TS | `ContentReplacementState` + `enforceToolResultBudget`, invoked from query loop before micro-compact. See [`tool-result-budget-plan.md`](tool-result-budget-plan.md). |
+| `utils/toolResultStorage.ts` (transcript records) | `coco-session` | `app/session/src/storage.rs` | v1 | TS | `ContentReplacementRecord` persistence + resume reconstruction. |
+| `constants/toolLimits.ts` | `coco-tool-runtime` | `core/tool-runtime/src/tool_result_storage/constants.rs` | v1 | TS | `DEFAULT_MAX_RESULT_SIZE_CHARS`, `PREVIEW_SIZE_BYTES`, `MAX_TOOL_RESULTS_PER_MESSAGE_CHARS`, etc. |
+| `utils/mcpOutputStorage.ts` | `coco-tool-runtime` (Phase 3) | `core/tool-runtime/src/tool_result_storage/mcp_output.rs` | v1 | TS | Parallel pipeline for MCP server outputs; depends on Level 1 primitives. |
 | `utils/fileStateCache.ts` (1.5K LOC) | `coco-context` | `core/context/` | v1 | TS | LRU file read cache per turn |
 | `query.ts` | `coco-query` | `app/query/` | v1 | TS | Single-turn execution |
 | `QueryEngine.ts` | `coco-query` | `app/query/` | v1 | TS | Multi-turn agent loop |

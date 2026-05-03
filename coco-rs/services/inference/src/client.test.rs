@@ -102,6 +102,10 @@ async fn test_client_returns_mock_text() {
         thinking_level: None,
         fast_mode: false,
         tools: None,
+        context_management: None,
+        query_source: None,
+        agent_id: None,
+        time_since_last_assistant_ms: None,
     };
     let result = client.query(&params).await.expect("query should succeed");
 
@@ -130,6 +134,10 @@ async fn test_usage_accumulation() {
         thinking_level: None,
         fast_mode: false,
         tools: None,
+        context_management: None,
+        query_source: None,
+        agent_id: None,
+        time_since_last_assistant_ms: None,
     };
 
     client.query(&params).await.expect("query 1");
@@ -156,6 +164,10 @@ async fn test_error_model_fails() {
         thinking_level: None,
         fast_mode: false,
         tools: None,
+        context_management: None,
+        query_source: None,
+        agent_id: None,
+        time_since_last_assistant_ms: None,
     };
     let result = client.query(&params).await;
     assert!(result.is_err());

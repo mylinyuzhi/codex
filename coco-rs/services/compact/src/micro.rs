@@ -4,9 +4,9 @@
 //! Preserves message structure (tool_use/tool_result pairing) — does NOT
 //! tombstone messages.
 
-use coco_types::AssistantContent;
-use coco_types::LlmMessage;
-use coco_types::Message;
+use coco_messages::AssistantContent;
+use coco_messages::LlmMessage;
+use coco_messages::Message;
 use coco_types::ToolId;
 use coco_types::ToolName;
 
@@ -99,13 +99,11 @@ pub fn micro_compact(messages: &mut [Message], keep_recent: usize) -> Microcompa
         }
 
         tr.message = LlmMessage::Tool {
-            content: vec![coco_types::ToolContent::ToolResult(
-                coco_types::ToolResultContent {
+            content: vec![coco_messages::ToolContent::ToolResult(
+                coco_messages::ToolResultContent {
                     tool_call_id: tr.tool_use_id.clone(),
                     tool_name: String::new(),
-                    output: vercel_ai_provider::ToolResultContent::text(
-                        CLEARED_TOOL_RESULT_MESSAGE,
-                    ),
+                    output: coco_inference::ToolResultContent::text(CLEARED_TOOL_RESULT_MESSAGE),
                     is_error: false,
                     provider_metadata: None,
                 },
@@ -165,11 +163,11 @@ fn is_compactable_tool(tool_id: &ToolId) -> bool {
 }
 
 /// Check if a tool result has already been cleared.
-fn is_already_cleared(tr: &coco_types::ToolResultMessage) -> bool {
+fn is_already_cleared(tr: &coco_messages::ToolResultMessage) -> bool {
     if let LlmMessage::Tool { content, .. } = &tr.message
         && content.len() == 1
-        && let coco_types::ToolContent::ToolResult(part) = &content[0]
-        && let vercel_ai_provider::ToolResultContent::Text { value, .. } = &part.output
+        && let coco_messages::ToolContent::ToolResult(part) = &content[0]
+        && let coco_inference::ToolResultContent::Text { value, .. } = &part.output
     {
         return value == CLEARED_TOOL_RESULT_MESSAGE;
     }

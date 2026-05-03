@@ -10,6 +10,8 @@ workspace = true
 [dependencies]
 coco-config.workspace = true
 coco-types.workspace = true
+coco-messages.workspace = true
+coco-subagent.workspace = true
 coco-tool-runtime.workspace = true
 coco-context.workspace = true
 coco-permissions.workspace = true

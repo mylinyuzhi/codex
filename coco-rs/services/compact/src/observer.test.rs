@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 
+use coco_messages::Message;
 use coco_types::CompactTrigger;
-use coco_types::Message;
 
 use super::*;
 
@@ -65,8 +65,8 @@ impl CompactionObserver for LegacyObserver {
 }
 
 fn dummy_result() -> CompactResult {
-    let boundary = Message::System(coco_types::SystemMessage::CompactBoundary(
-        coco_types::SystemCompactBoundaryMessage {
+    let boundary = Message::System(coco_messages::SystemMessage::CompactBoundary(
+        coco_messages::SystemCompactBoundaryMessage {
             uuid: uuid::Uuid::new_v4(),
             tokens_before: 100,
             tokens_after: 50,

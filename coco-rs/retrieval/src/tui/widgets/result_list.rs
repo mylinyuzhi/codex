@@ -418,7 +418,7 @@ impl StatefulWidget for ResultList<'_> {
                 .highlight_symbol("> ");
 
             // Copy state for rendering
-            *state = self.state.list_state.clone();
+            *state = self.state.list_state;
             StatefulWidget::render(list, area, buf, state);
 
             // Add scrollbar if there are more items than visible
@@ -452,7 +452,7 @@ impl StatefulWidget for ResultList<'_> {
 // Also implement Widget for simpler rendering
 impl Widget for ResultList<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let mut state = self.state.list_state.clone();
+        let mut state = self.state.list_state;
         StatefulWidget::render(self, area, buf, &mut state);
     }
 }

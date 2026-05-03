@@ -85,8 +85,7 @@ impl SandboxPlatform for MacOsSandbox {
 fn escape_sbpl_path(path: &str) -> String {
     path.replace('\\', "\\\\")
         .replace('"', "\\\"")
-        .replace('\n', "")
-        .replace('\r', "")
+        .replace(['\n', '\r'], "")
 }
 
 /// Generate a complete Seatbelt profile from static base + dynamic paths.
@@ -105,7 +104,7 @@ fn generate_seatbelt_profile(config: &SandboxConfig, command: &str, session_tag:
     // include it, allowing the ViolationMonitor to correlate to specific commands.
     let command_tag = generate_command_tag(command, session_tag);
     profile.push_str("(version 1)\n");
-    let _ = write!(profile, "(deny default (with message \"{command_tag}\"))\n");
+    let _ = writeln!(profile, "(deny default (with message \"{command_tag}\"))");
     let _ = write!(profile, "; LogTag: {command_tag}\n\n");
 
     // Static base policy (process, sysctl, iokit, mach) — excludes version
@@ -143,13 +142,13 @@ fn generate_seatbelt_profile(config: &SandboxConfig, command: &str, session_tag:
         "/private/tmp",
         "/etc",
     ] {
-        let _ = write!(profile, "(allow file-read* (subpath \"{path}\"))\n");
+        let _ = writeln!(profile, "(allow file-read* (subpath \"{path}\"))");
     }
 
     // Home directory read access
     if let Some(h) = &home {
         let escaped = escape_sbpl_path(h);
-        let _ = write!(profile, "(allow file-read* (subpath \"{escaped}\"))\n");
+        let _ = writeln!(profile, "(allow file-read* (subpath \"{escaped}\"))");
     }
     profile.push('\n');
 
@@ -161,7 +160,7 @@ fn generate_seatbelt_profile(config: &SandboxConfig, command: &str, session_tag:
         profile.push_str("; Explicitly denied read paths\n");
         for path in config.denied_read_paths.iter().chain(&config.denied_paths) {
             let escaped = escape_sbpl_path(&path.display().to_string());
-            let _ = write!(profile, "(deny file-read* (subpath \"{escaped}\"))\n");
+            let _ = writeln!(profile, "(deny file-read* (subpath \"{escaped}\"))");
         }
         profile.push('\n');
     }
@@ -176,7 +175,7 @@ fn generate_seatbelt_profile(config: &SandboxConfig, command: &str, session_tag:
         "/dev/dtracehelper",
         "/dev/autofs_nowait",
     ] {
-        let _ = write!(profile, "(allow file-write* (literal \"{dev}\"))\n");
+        let _ = writeln!(profile, "(allow file-write* (literal \"{dev}\"))");
     }
     // Branded temp dirs
     profile.push_str("(allow file-write* (subpath \"/tmp/coco\"))\n");
@@ -184,13 +183,13 @@ fn generate_seatbelt_profile(config: &SandboxConfig, command: &str, session_tag:
     // Home-relative dirs for logging
     if let Some(h) = &home {
         let escaped = escape_sbpl_path(h);
-        let _ = write!(
+        let _ = writeln!(
             profile,
-            "(allow file-write* (subpath \"{escaped}/.npm/_logs\"))\n"
+            "(allow file-write* (subpath \"{escaped}/.npm/_logs\"))"
         );
-        let _ = write!(
+        let _ = writeln!(
             profile,
-            "(allow file-write* (subpath \"{escaped}/.coco/debug\"))\n"
+            "(allow file-write* (subpath \"{escaped}/.coco/debug\"))"
         );
     }
     profile.push('\n');
@@ -200,12 +199,12 @@ fn generate_seatbelt_profile(config: &SandboxConfig, command: &str, session_tag:
         profile.push_str("; Writable roots\n");
         for root in &config.writable_roots {
             let path = escape_sbpl_path(&root.path.display().to_string());
-            let _ = write!(profile, "(allow file-write* (subpath \"{path}\"))\n");
+            let _ = writeln!(profile, "(allow file-write* (subpath \"{path}\"))");
             // Re-deny write access to read-only subpaths
             for sub in &root.readonly_subpaths {
                 let sub_path = root.path.join(sub);
                 let escaped = escape_sbpl_path(&sub_path.display().to_string());
-                let _ = write!(profile, "(deny file-write* (subpath \"{escaped}\"))\n");
+                let _ = writeln!(profile, "(deny file-write* (subpath \"{escaped}\"))");
             }
         }
         profile.push('\n');
@@ -217,7 +216,7 @@ fn generate_seatbelt_profile(config: &SandboxConfig, command: &str, session_tag:
     profile.push_str("(allow file-write* (subpath \"/private/tmp\"))\n");
     for tmpdir in tmpdir_variants() {
         let escaped = escape_sbpl_path(&tmpdir);
-        let _ = write!(profile, "(allow file-write* (subpath \"{escaped}\"))\n");
+        let _ = writeln!(profile, "(allow file-write* (subpath \"{escaped}\"))");
     }
     profile.push('\n');
 
@@ -233,7 +232,7 @@ fn generate_seatbelt_profile(config: &SandboxConfig, command: &str, session_tag:
             .or_else(|| home.as_ref().map(|h| format!("{h}/Library/Caches")));
         if let Some(cache_dir) = cache_dir {
             let escaped = escape_sbpl_path(&cache_dir);
-            let _ = write!(profile, "(allow file-write* (subpath \"{escaped}\"))\n");
+            let _ = writeln!(profile, "(allow file-write* (subpath \"{escaped}\"))");
         }
     } else {
         // Allow loopback only (for proxy connections)
@@ -274,17 +273,17 @@ fn tmpdir_variants() -> Vec<String> {
             let parent_str = parent.display().to_string();
             if !parent_str.is_empty() && parent_str != "/" {
                 dirs.push(parent_str.clone());
-                if let Some(stripped) = parent_str.strip_prefix("/private") {
-                    if !stripped.is_empty() {
-                        dirs.push(stripped.to_string());
-                    }
+                if let Some(stripped) = parent_str.strip_prefix("/private")
+                    && !stripped.is_empty()
+                {
+                    dirs.push(stripped.to_string());
                 }
             }
         }
-    } else if let Some(rest) = tmpdir.strip_prefix("/var/") {
-        if !rest.is_empty() {
-            dirs.push(format!("/private/var/{rest}"));
-        }
+    } else if let Some(rest) = tmpdir.strip_prefix("/var/")
+        && !rest.is_empty()
+    {
+        dirs.push(format!("/private/var/{rest}"));
     }
     dirs
 }

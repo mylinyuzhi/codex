@@ -49,7 +49,7 @@ use vercel_ai_provider_utils::without_trailing_slash;
 use crate::convert_google_generative_ai_usage::GoogleUsageMetadata;
 use crate::convert_google_generative_ai_usage::convert_usage;
 use crate::convert_to_google_generative_ai_messages::ConvertOptions;
-use crate::convert_to_google_generative_ai_messages::convert_to_google_generative_ai_messages;
+use crate::convert_to_google_generative_ai_messages::convert_to_google_generative_ai_messages_with_warnings;
 use crate::get_model_path::get_model_path;
 use crate::google_error::GoogleFailedResponseHandler;
 use crate::google_generative_ai_options::GoogleLanguageModelOptions;
@@ -177,8 +177,10 @@ impl GoogleGenerativeAILanguageModel {
             supports_function_response_parts: is_gemini_3_model(&self.model_id),
         };
 
-        let prompt = convert_to_google_generative_ai_messages(&options.prompt, &convert_opts)
-            .map_err(AISdkError::new)?;
+        let (prompt, prompt_warnings) =
+            convert_to_google_generative_ai_messages_with_warnings(&options.prompt, &convert_opts)
+                .map_err(AISdkError::new)?;
+        warnings.extend(prompt_warnings);
 
         // Prepare tools
         let prepared_tools = prepare_tools(&options.tools, &options.tool_choice, &self.model_id);

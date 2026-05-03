@@ -163,6 +163,26 @@ impl SdkServer {
         self
     }
 
+    /// Install the process-shared [`SessionRuntime`]. Required so
+    /// `handle_session_start` can call `runtime.start_new_session()`
+    /// when an SDK client cycles `session/archive` → `session/start`.
+    /// Without this, sequential SDK sessions reuse the prior session's
+    /// `FileReadState`, `SessionMemoryService` paths, file-history sink
+    /// session id, and cache-break baseline — surfacing as @mention
+    /// dedup leakage, memory writes to wrong directory, and false-
+    /// positive cache break alerts on the first turn of session 2.
+    pub fn with_session_runtime(
+        self,
+        runtime: Arc<crate::session_runtime::SessionRuntime>,
+    ) -> Self {
+        let Ok(mut slot) = self.state.session_runtime.try_write() else {
+            panic!("with_session_runtime: state was already locked at construction time");
+        };
+        *slot = Some(runtime);
+        drop(slot);
+        self
+    }
+
     /// Asynchronously replace the installed [`TurnRunner`]. Used by
     /// code paths that need to construct the runner after cloning the
     /// shared state (e.g. the approval-bridge wiring in

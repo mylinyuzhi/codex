@@ -57,7 +57,7 @@ impl PermissionEvaluator {
     ///
     /// Pipeline (matches TS `hasPermissionsToUseToolInner`):
     /// 1. Deny rules — deny always wins, regardless of priority
-    /// 1b. Tool-level permission check (via callback)
+    ///    1b. Tool-level permission check (via callback)
     /// 2. Allow rules — priority-sorted by source
     /// 3. Content-specific allow — Bash/PowerShell exact/prefix/wildcard
     /// 4. Ask rules — tool-wide ask requires user confirmation
@@ -403,8 +403,8 @@ fn mode_fallthrough(
 ///
 /// TS: `checkEditableInternalPath` in `utils/permissions/filesystem.ts:1479`
 /// + `isSessionPlanFile` at `filesystem.ts:245-255` — the plan file is
-/// carved out so the model can build up its plan in plan mode without
-/// per-write prompts.
+///   carved out so the model can build up its plan in plan mode without
+///   per-write prompts.
 ///
 /// TS matches with `normalize(path).startsWith("<plansDir>/<slug>") &&
 /// endsWith(".md")`. The `normalize()` step is security-load-bearing: it

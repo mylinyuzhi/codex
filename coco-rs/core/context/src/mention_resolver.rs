@@ -47,7 +47,7 @@ pub async fn resolve_mentions(
     let mut attachments = Vec::new();
 
     for mention in mentions {
-        match mention.mention_type {
+        match &mention.mention_type {
             MentionType::FilePath => {
                 if let Some(att) = resolve_file_mention(mention, file_read_state, options).await {
                     attachments.push(att);
@@ -59,6 +59,14 @@ pub async fn resolve_mentions(
                         agent_type: mention.text.clone(),
                     },
                 ));
+            }
+            MentionType::McpResource { .. } => {
+                // MCP resource fetch is wired through `services/mcp` at the
+                // call site (the resolver doesn't depend on MCP). Once the
+                // caller has the client handle it can post-process this
+                // mention; here we just preserve the parse result so the
+                // caller can iterate `mentions` separately when needed.
+                // TS: `processAtMentionedFiles` calls a separate MCP path.
             }
             MentionType::Url | MentionType::Symbol => {
                 // URL and symbol mentions not resolved to attachments yet.

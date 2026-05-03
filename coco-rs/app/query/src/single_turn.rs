@@ -4,10 +4,10 @@
 //! Used for compaction summaries, memory extraction, etc.
 
 use coco_inference::ApiClient;
+use coco_inference::LanguageModelPrompt;
 use coco_inference::QueryParams;
 use coco_types::TokenUsage;
 use std::sync::Arc;
-use vercel_ai_provider::LanguageModelV4Prompt;
 
 /// Result of a single-turn query.
 #[derive(Debug, Clone)]
@@ -30,9 +30,9 @@ pub async fn single_turn_query(
 ) -> anyhow::Result<SingleTurnResult> {
     let start = std::time::Instant::now();
 
-    let prompt: LanguageModelV4Prompt = vec![
-        vercel_ai_provider::LanguageModelV4Message::system(system_prompt),
-        vercel_ai_provider::LanguageModelV4Message::user_text(user_message),
+    let prompt: LanguageModelPrompt = vec![
+        coco_inference::LanguageModelMessage::system(system_prompt),
+        coco_inference::LanguageModelMessage::user_text(user_message),
     ];
 
     let params = QueryParams {
@@ -41,6 +41,10 @@ pub async fn single_turn_query(
         thinking_level: None,
         fast_mode: false,
         tools: None,
+        context_management: None,
+        query_source: None,
+        agent_id: None,
+        time_since_last_assistant_ms: None,
     };
 
     let result = client
@@ -53,7 +57,7 @@ pub async fn single_turn_query(
         .content
         .iter()
         .filter_map(|part| {
-            if let vercel_ai_provider::AssistantContentPart::Text(t) = part {
+            if let coco_inference::AssistantContentPart::Text(t) = part {
                 Some(t.text.as_str())
             } else {
                 None

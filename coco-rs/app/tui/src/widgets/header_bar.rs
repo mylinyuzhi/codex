@@ -51,14 +51,27 @@ impl Widget for HeaderBar<'_> {
             );
         }
 
-        // Compacting indicator
+        // Compacting indicator. Prefer the phase-aware label so the user
+        // can see which sub-phase is active (matches TS REPL.tsx:2502
+        // `spinnerMessage` switch). Falls back to the generic label when
+        // a phase event hasn't arrived yet.
         if self.state.session.is_compacting {
+            use crate::state::session::CompactionPhaseLabel;
+            let phase_label = match self.state.session.compaction_phase {
+                Some(CompactionPhaseLabel::PreCompactHooks) => Some("status.compacting_pre_hooks"),
+                Some(CompactionPhaseLabel::PostCompactHooks) => {
+                    Some("status.compacting_post_hooks")
+                }
+                Some(CompactionPhaseLabel::SessionStartHooks) => {
+                    Some("status.compacting_session_start_hooks")
+                }
+                Some(CompactionPhaseLabel::Summarizing) | None => None,
+            };
+            let label = phase_label
+                .map(|k| t!(k).to_string())
+                .unwrap_or_else(|| t!("status.compacting").to_string());
             parts.push(Span::raw(" | ").fg(self.theme.border));
-            parts.push(
-                Span::raw(t!("status.compacting").to_string())
-                    .fg(self.theme.warning)
-                    .italic(),
-            );
+            parts.push(Span::raw(label).fg(self.theme.warning).italic());
         }
 
         // Turn count

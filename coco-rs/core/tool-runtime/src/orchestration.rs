@@ -3,7 +3,7 @@
 //! TS: services/tools/toolOrchestration.ts (900 LOC) + toolExecution.ts (1.7K)
 //! Runs tools through the permission → execute → hook pipeline.
 
-use coco_types::Message;
+use coco_messages::Message;
 use coco_types::ToolId;
 use serde_json::Value;
 use std::sync::Arc;

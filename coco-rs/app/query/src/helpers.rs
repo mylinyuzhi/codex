@@ -4,13 +4,13 @@
 //! All functions here are pure or I/O-free (no awaits except for the queue
 //! drain), and easy to unit-test in isolation.
 
+use coco_inference::AssistantContentPart;
+use coco_messages::AssistantContent;
+use coco_messages::LlmMessage;
+use coco_messages::Message;
 use coco_messages::MessageHistory;
 use coco_messages::create_error_tool_result;
-use coco_types::AssistantContent;
-use coco_types::LlmMessage;
-use coco_types::Message;
 use coco_types::ToolId;
-use vercel_ai_provider::AssistantContentPart;
 
 use crate::BudgetTracker;
 use crate::command_queue::CommandQueue;
@@ -20,7 +20,7 @@ use crate::emit::emit_stream;
 
 /// Convert between the two-name alias for `AssistantContent`.
 ///
-/// `coco_types::AssistantContent` and `vercel_ai_provider::AssistantContentPart`
+/// `coco_messages::AssistantContent` and `coco_inference::AssistantContentPart`
 /// are the same type re-exported under two aliases (see `coco-types` re-export
 /// section). This wrapper exists only to make the conversion intent explicit.
 pub(crate) fn convert_to_assistant_content(part: AssistantContentPart) -> AssistantContent {
@@ -79,11 +79,11 @@ pub(crate) fn budget_pct_used(budget: &BudgetTracker) -> i32 {
     }
 }
 
-pub(crate) fn parse_stop_reason(s: &str) -> Option<coco_types::StopReason> {
+pub(crate) fn parse_stop_reason(s: &str) -> Option<coco_messages::StopReason> {
     match s {
-        "stop" => Some(coco_types::StopReason::EndTurn),
-        "length" => Some(coco_types::StopReason::MaxTokens),
-        "tool-calls" => Some(coco_types::StopReason::ToolUse),
+        "stop" => Some(coco_messages::StopReason::EndTurn),
+        "length" => Some(coco_messages::StopReason::MaxTokens),
+        "tool-calls" => Some(coco_messages::StopReason::ToolUse),
         _ => None,
     }
 }

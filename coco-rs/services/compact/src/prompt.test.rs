@@ -58,7 +58,7 @@ fn test_user_summary_recent_preserved() {
 
 #[test]
 fn test_partial_compact_prompt_directions_differ() {
-    use coco_types::PartialCompactDirection;
+    use coco_messages::PartialCompactDirection;
     let from_prompt = get_partial_compact_prompt(None, PartialCompactDirection::Newest);
     let up_to_prompt = get_partial_compact_prompt(None, PartialCompactDirection::Oldest);
     assert!(from_prompt.contains("Current Work"));

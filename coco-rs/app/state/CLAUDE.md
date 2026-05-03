@@ -22,21 +22,21 @@ coordinator / team / multi-pane orchestration.
 | `ElicitationEntry` | MCP elicitation queue |
 | `SubAgentState` | Per-subagent status map |
 
-## Swarm Subsystem (21 modules)
+## Swarm subsystem extracted (PR #3)
 
-Coordinator-mode infrastructure. `swarm_runner` drives the outer loop;
-`swarm_runner_loop` handles per-iteration scheduling.
+All 21 swarm modules previously hosted here moved to the dedicated
+`coco-coordinator` crate at `coordinator/` — see
+`docs/coco-rs/agentteam-architecture.md`. `app/state` now holds only the
+`AppState` field tree; spawn lifecycle, mailbox IPC, terminal pane
+backends, runner, runner-loop, identity / discovery / reconnect, and the
+`AgentHandle` implementation all live in `coco-coordinator`.
 
-| Module group | Purpose |
-|--------------|---------|
-| `swarm_runner`, `swarm_runner_loop`, `swarm_agent_handle` | Lifecycle + per-agent handles |
-| `swarm_backend` (+ `iterm2`, `pane`, `tmux`) | Terminal layout backends (iTerm2 panes, tmux windows) |
-| `swarm_config`, `swarm_constants`, `swarm_discovery`, `swarm_identity` | Config + well-known paths + teammate discovery |
-| `swarm_file_io`, `swarm_mailbox`, `swarm_prompt` | Per-agent mailbox files + prompt assembly |
-| `swarm_layout`, `swarm_it2_setup` | Terminal layout + iTerm2 setup |
-| `swarm_reconnect`, `swarm_spawn_utils`, `swarm_task`, `swarm_teammate` | Reconnect, spawn helpers, task routing, teammate bookkeeping |
-
-See `docs/coco-rs/crate-coco-coordinator.md` for the coordinator design (v2).
+`coco-state` does **not** depend on `coco-coordinator` (one-way layering:
+`coco-coordinator → coco-state` is the only allowed direction). Inter-crate
+data shapes that both layers read or write (`TeamContext`, `TeammateEntry`,
+`SubAgentState`, `SubAgentStatus`, `IdleReason`, `TaskEntry`, the mailbox
+protocol enums) live in `coco_types::agent_ipc` so neither side has to
+import the other for the types alone.
 
 ## Conventions
 

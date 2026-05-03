@@ -24,6 +24,19 @@ pub struct SuggestionItem {
     pub label: String,
     /// Optional description (shown dimmed).
     pub description: Option<String>,
+    /// Optional kind-specific metadata (e.g. directory flag for path
+    /// completions). `None` for legacy / context-free items.
+    pub metadata: Option<SuggestionMeta>,
+}
+
+/// Per-kind metadata carried alongside a suggestion. Used by the input
+/// handler to format insertion correctly (directory `/` suffix vs file
+/// trailing-space, MCP resource server prefix, etc.).
+#[derive(Debug, Clone)]
+pub enum SuggestionMeta {
+    /// Path completion (file or directory). `is_directory` lets the
+    /// insertion path append `/` and keep the popup open for drilling.
+    Path { is_directory: bool },
 }
 
 /// Suggestion popup widget.

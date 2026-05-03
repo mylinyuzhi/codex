@@ -14,9 +14,9 @@
 //!   [`crate::api_compact::get_api_context_management`] and pass it to the
 //!   provider in `ProviderOptions`.
 
-use coco_types::AssistantContent;
-use coco_types::LlmMessage;
-use coco_types::Message;
+use coco_messages::AssistantContent;
+use coco_messages::LlmMessage;
+use coco_messages::Message;
 use coco_types::ToolName;
 
 use crate::tokens;
@@ -83,14 +83,12 @@ pub fn micro_compact_with_budget(
         }
 
         // Replace with cleared placeholder
-        tr.message = coco_types::LlmMessage::Tool {
-            content: vec![coco_types::ToolContent::ToolResult(
-                coco_types::ToolResultContent {
+        tr.message = coco_messages::LlmMessage::Tool {
+            content: vec![coco_messages::ToolContent::ToolResult(
+                coco_messages::ToolResultContent {
                     tool_call_id: tr.tool_use_id.clone(),
                     tool_name: String::new(),
-                    output: vercel_ai_provider::ToolResultContent::text(
-                        CLEARED_TOOL_RESULT_MESSAGE,
-                    ),
+                    output: coco_inference::ToolResultContent::text(CLEARED_TOOL_RESULT_MESSAGE),
                     is_error: false,
                     provider_metadata: None,
                 },
@@ -131,12 +129,12 @@ pub fn clear_file_unchanged_stubs(messages: &mut [Message]) -> MicrocompactResul
         }
 
         let est_tokens = tokens::estimate_tool_result_tokens(tr);
-        tr.message = coco_types::LlmMessage::Tool {
-            content: vec![coco_types::ToolContent::ToolResult(
-                coco_types::ToolResultContent {
+        tr.message = coco_messages::LlmMessage::Tool {
+            content: vec![coco_messages::ToolContent::ToolResult(
+                coco_messages::ToolResultContent {
                     tool_call_id: tr.tool_use_id.clone(),
                     tool_name: String::new(),
-                    output: vercel_ai_provider::ToolResultContent::text(
+                    output: coco_inference::ToolResultContent::text(
                         "[file unchanged - stub cleared]",
                     ),
                     is_error: false,
@@ -184,7 +182,7 @@ pub fn compact_thinking_blocks(
             continue;
         };
 
-        let coco_types::LlmMessage::Assistant {
+        let coco_messages::LlmMessage::Assistant {
             ref mut content, ..
         } = asst.message
         else {
@@ -196,7 +194,7 @@ pub fn compact_thinking_blocks(
 
         content.retain(|part| {
             match part {
-                coco_types::AssistantContent::Reasoning(r) => {
+                coco_messages::AssistantContent::Reasoning(r) => {
                     removed_tokens += (r.text.len() as i64) / 4;
                     false // Remove thinking blocks
                 }
@@ -337,23 +335,23 @@ pub fn clear_thinking_inplace(messages: &mut [Message]) -> MicrocompactResult {
 }
 
 /// Check if a tool result message contains specific text (walks content parts).
-fn tool_result_contains_text(tr: &coco_types::ToolResultMessage, needle: &str) -> bool {
-    let coco_types::LlmMessage::Tool { content, .. } = &tr.message else {
+fn tool_result_contains_text(tr: &coco_messages::ToolResultMessage, needle: &str) -> bool {
+    let coco_messages::LlmMessage::Tool { content, .. } = &tr.message else {
         return false;
     };
     for part in content {
-        let coco_types::ToolContent::ToolResult(result) = part else {
+        let coco_messages::ToolContent::ToolResult(result) = part else {
             continue;
         };
         match &result.output {
-            vercel_ai_provider::ToolResultContent::Text { value, .. } => {
+            coco_inference::ToolResultContent::Text { value, .. } => {
                 if value.contains(needle) {
                     return true;
                 }
             }
-            vercel_ai_provider::ToolResultContent::Content { value, .. } => {
+            coco_inference::ToolResultContent::Content { value, .. } => {
                 for sub in value {
-                    if let vercel_ai_provider::ToolResultContentPart::Text { text, .. } = sub
+                    if let coco_inference::ToolResultContentPart::Text { text, .. } = sub
                         && text.contains(needle)
                     {
                         return true;

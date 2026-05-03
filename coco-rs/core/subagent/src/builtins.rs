@@ -124,9 +124,10 @@ fn base(t: SubagentType, when_to_use: &str) -> AgentDefinition {
 }
 
 fn general_purpose() -> AgentDefinition {
+    // Verbatim TS `built-in/generalPurposeAgent.ts:27-29`.
     base(
         SubagentType::GeneralPurpose,
-        "General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks.",
+        "General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks. When you are searching for a keyword or file and are not confident that you will find the right match in the first few tries use this agent to perform the search for you.",
     )
 }
 
@@ -167,7 +168,8 @@ fn explore() -> AgentDefinition {
         disallowed_tools: read_only_disallowed(),
         ..base(
             SubagentType::Explore,
-            "Read-only exploration agent for surveying code and answering targeted questions about the repo.",
+            // Verbatim TS `built-in/exploreAgent.ts:60-61` `EXPLORE_WHEN_TO_USE`.
+            "Fast agent specialized for exploring codebases. Use this when you need to quickly find files by patterns (eg. \"src/components/**/*.tsx\"), search code for keywords (eg. \"API endpoints\"), or answer questions about the codebase (eg. \"how do API endpoints work?\"). When calling this agent, specify the desired thoroughness level: \"quick\" for basic searches, \"medium\" for moderate exploration, or \"very thorough\" for comprehensive analysis across multiple locations and naming conventions.",
         )
     }
 }
@@ -179,7 +181,8 @@ fn plan() -> AgentDefinition {
         disallowed_tools: read_only_disallowed(),
         ..base(
             SubagentType::Plan,
-            "Planning agent that drafts implementation strategies without modifying code.",
+            // Verbatim TS `built-in/planAgent.ts:75-77` whenToUse.
+            "Software architect agent for designing implementation plans. Use this when you need to plan the implementation strategy for a task. Returns step-by-step plans, identifies critical files, and considers architectural trade-offs.",
         )
     }
 }
@@ -192,7 +195,9 @@ fn verification() -> AgentDefinition {
         disallowed_tools: read_only_disallowed(),
         ..base(
             SubagentType::Verification,
-            "Background verification agent that checks the most recent change for regressions.",
+            // Verbatim TS `built-in/verificationAgent.ts:131-133`
+            // `VERIFICATION_WHEN_TO_USE`.
+            "Use this agent to verify that implementation work is correct before reporting completion. Invoke after non-trivial tasks (3+ file edits, backend/API changes, infrastructure changes). Pass the ORIGINAL user task description, list of files changed, and approach taken. The agent runs builds, tests, linters, and checks to produce a PASS/FAIL/PARTIAL verdict with evidence.",
         )
     }
 }
@@ -212,7 +217,11 @@ fn claude_code_guide() -> AgentDefinition {
         ],
         ..base(
             SubagentType::ClaudeCodeGuide,
-            "Use this agent for questions about Claude Code, the Claude Agent SDK, or the Anthropic API.",
+            // Verbatim TS `built-in/claudeCodeGuideAgent.ts:100`. The TS
+            // template references `${SEND_MESSAGE_TOOL_NAME}` (= "SendMessage")
+            // — inlined here as the constant value for byte-faithful prompt
+            // rendering.
+            "Use this agent when the user asks questions (\"Can Claude...\", \"Does Claude...\", \"How do I...\") about: (1) Claude Code (the CLI tool) - features, hooks, slash commands, MCP servers, settings, IDE integrations, keyboard shortcuts; (2) Claude Agent SDK - building custom agents; (3) Claude API (formerly Anthropic API) - API usage, tool use, Anthropic SDK usage. **IMPORTANT:** Before spawning a new agent, check if there is already a running or recently completed claude-code-guide agent that you can continue via SendMessage.",
         )
     }
 }

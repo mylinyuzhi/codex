@@ -83,6 +83,12 @@ pub enum MentionType {
     Url,
     Symbol,
     Agent,
+    /// MCP resource reference of the form `@server:uri` (no `://`).
+    /// TS: `extractMcpResourceMentions` (`utils/attachments.ts`).
+    McpResource {
+        server: String,
+        uri: String,
+    },
 }
 
 /// Extract @mentions from text.
@@ -132,15 +138,40 @@ fn extract_mentions(text: &str) -> Vec<Mention> {
                 continue;
             }
 
-            // Parse line range from fragment: file#L10 or file#L10-20
+            // Parse line range from fragment: file#L10 or file#L10-20.
+            // Also strips trailing non-`#L` fragments (`file.rs#heading` →
+            // `file.rs`) to match TS `parseAtMentionedFileLines` regex.
             let (path_text, line_start, line_end) = parse_line_range(mention_text);
 
-            // Classify mention type
+            // Classify mention type. Order matters:
+            //   1. Agent  — `agent-` prefix or `(agent)` suffix
+            //   2. Url    — `scheme://...`
+            //   3. McpResource — `server:uri` (no `://`)
+            //   4. FilePath — has `/` or `.` (path-ish)
+            //   5. Symbol — fallback
             let is_agent = path_text.starts_with("agent-") || mention_text.ends_with(" (agent)");
+            let final_text = if is_agent {
+                strip_agent_suffix(path_text)
+            } else {
+                path_text.to_string()
+            };
             let mention_type = if is_agent {
                 MentionType::Agent
             } else if path_text.contains("://") {
                 MentionType::Url
+            } else if let Some((server, uri)) = parse_mcp_resource(path_text) {
+                mentions.push(Mention {
+                    text: path_text.to_string(),
+                    mention_type: MentionType::McpResource {
+                        server: server.to_string(),
+                        uri: uri.to_string(),
+                    },
+                    start,
+                    end: i,
+                    line_start: None,
+                    line_end: None,
+                });
+                continue;
             } else if path_text.contains('/') || path_text.contains('.') {
                 MentionType::FilePath
             } else {
@@ -148,7 +179,7 @@ fn extract_mentions(text: &str) -> Vec<Mention> {
             };
 
             mentions.push(Mention {
-                text: path_text.to_string(),
+                text: final_text,
                 mention_type,
                 start,
                 end: i,
@@ -163,23 +194,76 @@ fn extract_mentions(text: &str) -> Vec<Mention> {
 }
 
 /// Parse `#L10` or `#L10-20` suffix from a mention token.
-/// Returns `(path_without_fragment, line_start, line_end)`.
+///
+/// Mirrors the TS regex
+/// `^([^#]+)(?:#L(\d+)(?:-(\d+))?)?(?:#[^#]*)?$`
+/// — strips trailing non-`#L` fragments such as `#heading`.
+///
+/// Returns `(path_without_fragment, line_start, line_end)`. When only
+/// `#L10` is present, `line_end` is set to `Some(line_start)` so a
+/// single-line mention reads exactly that line, matching TS
+/// `parseAtMentionedFileLines` (`lineEnd ?? lineStart`).
 fn parse_line_range(mention: &str) -> (&str, Option<i32>, Option<i32>) {
-    // Find #L pattern (case sensitive)
-    if let Some(hash_pos) = mention.find("#L") {
-        let path = &mention[..hash_pos];
-        let fragment = &mention[hash_pos + 2..]; // after "#L"
-        if let Some(dash) = fragment.find('-') {
-            let start = fragment[..dash].parse::<i32>().ok();
-            let end = fragment[dash + 1..].parse::<i32>().ok();
-            if start.is_some() {
-                return (path, start, end);
-            }
-        } else if let Ok(line) = fragment.parse::<i32>() {
-            return (path, Some(line), None);
+    let Some(hash_pos) = mention.find('#') else {
+        return (mention, None, None);
+    };
+    // TS regex requires `[^#]+` before the fragment — at least one
+    // non-`#` char. `#sym` (leading `#`) is not a fragment, it's a
+    // symbol mention; preserve the whole token.
+    if hash_pos == 0 {
+        return (mention, None, None);
+    }
+    let path = &mention[..hash_pos];
+    let fragment = &mention[hash_pos + 1..]; // after the first `#`
+
+    // `#L<digits>` or `#L<digits>-<digits>` line-range fragment.
+    if let Some(rest) = fragment.strip_prefix('L') {
+        let (start_str, end_str) = match rest.find('-') {
+            Some(dash) => (&rest[..dash], Some(&rest[dash + 1..])),
+            None => (rest, None),
+        };
+        if let Ok(start) = start_str.parse::<i32>() {
+            let end = match end_str {
+                Some(s) => s.parse::<i32>().ok().or(Some(start)),
+                // TS: lineEnd defaults to lineStart for single-line.
+                None => Some(start),
+            };
+            return (path, Some(start), end);
         }
     }
-    (mention, None, None)
+
+    // Non-`#L` fragment (e.g. `#heading`) — strip and return path only.
+    (path, None, None)
+}
+
+/// Strip a trailing ` (agent)` suffix from an agent mention's text.
+/// TS `extractAgentMentions` returns the bare type without the suffix.
+fn strip_agent_suffix(text: &str) -> String {
+    text.strip_suffix(" (agent)").unwrap_or(text).to_string()
+}
+
+/// Try to parse `server:uri` (without `://`) as an MCP resource mention.
+/// Returns `Some((server, uri))` when:
+///   - `mention` contains exactly one `:` (no `://`)
+///   - both sides are non-empty
+///
+/// TS: `extractMcpResourceMentions` regex `(^|\s)@([^\s]+:[^\s]+)\b`.
+fn parse_mcp_resource(mention: &str) -> Option<(&str, &str)> {
+    if mention.contains("://") {
+        return None;
+    }
+    let colon = mention.find(':')?;
+    let server = &mention[..colon];
+    let uri = &mention[colon + 1..];
+    if server.is_empty() || uri.is_empty() {
+        return None;
+    }
+    // Server must be a plain identifier (no dots/slashes) so that paths
+    // like `src/main.rs` aren't misclassified — they don't contain `:`.
+    if server.contains('/') || server.contains('.') {
+        return None;
+    }
+    Some((server, uri))
 }
 
 #[cfg(test)]

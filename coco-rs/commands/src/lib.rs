@@ -23,10 +23,112 @@ pub use implementations::register_extended_builtins;
 #[async_trait]
 pub trait CommandHandler: Send + Sync {
     /// Execute the command with the given arguments string.
-    async fn execute(&self, args: &str) -> anyhow::Result<String>;
+    ///
+    /// Returns a [`CommandResult`] capturing the four execution shapes TS
+    /// supports — Text, InjectPrompt, Compact, Skip — plus OpenDialog for
+    /// `local-jsx` modal commands and Prompt for prompt-type commands that
+    /// expand to model input.
+    async fn execute_command(&self, args: &str) -> anyhow::Result<CommandResult> {
+        let text = self.execute(args).await?;
+        Ok(CommandResult::Text(text))
+    }
+
+    /// Backwards-compatible string-only shim used by simple builtins. Most
+    /// new commands should override `execute_command` instead.
+    async fn execute(&self, args: &str) -> anyhow::Result<String> {
+        let _ = args;
+        anyhow::bail!("command provides only execute_command")
+    }
 
     /// Short name for debug output.
     fn handler_name(&self) -> &str;
+}
+
+/// Result of executing a slash command.
+///
+/// TS source: `commands.ts processSlashCommand` — the four `type` shapes
+/// returned by `LocalCommandCall` / `LocalJSXCommandCall` / `PromptCommand`,
+/// plus `Skip` for "no output".
+#[derive(Debug, Clone)]
+pub enum CommandResult {
+    /// Display message in the chat (system-line). TS: `{type:'text'}`.
+    Text(String),
+    /// Inject as user input (re-enter the agent loop with this string).
+    /// TS: `{type:'inject', prompt}`.
+    InjectPrompt(String),
+    /// Compaction completed; embed the summary into the next turn.
+    /// TS: `{type:'compact', compactionResult, displayText}`.
+    Compact {
+        display_text: String,
+        summary: String,
+    },
+    /// Prompt command — expand to ContentBlockParam[] and feed back to the
+    /// model. TS: `{type:'prompt'}` with `getPromptForCommand`.
+    Prompt {
+        progress_message: String,
+        parts: Vec<PromptPart>,
+    },
+    /// Open a TUI dialog/overlay. TS: `{type:'local-jsx'}`.
+    OpenDialog(DialogSpec),
+    /// No output (TS: `{type:'skip'}`).
+    Skip,
+}
+
+/// One block of rendered prompt content.
+///
+/// Mirrors `coco_skills::prompt_render::PromptPart` (kept separate to avoid
+/// the commands→skills dependency direction).
+#[derive(Debug, Clone)]
+pub enum PromptPart {
+    Text { text: String },
+    File { media_type: String, data: Vec<u8> },
+}
+
+/// Description of a TUI dialog the command requests.
+///
+/// TS: `local-jsx` returned `ReactNode` directly. Rust models the TUI dialog
+/// as data; the actual ratatui rendering lives in `coco-tui::overlays`.
+#[derive(Debug, Clone)]
+pub enum DialogSpec {
+    /// `/memory` — file selector + editor open.
+    /// TS: `commands/memory/memory.tsx Dialog<MemoryFileSelector>`.
+    MemoryFileSelector { entries: Vec<MemoryFileEntry> },
+    /// `/rewind` — message-selector overlay.
+    /// TS: `Tool.openMessageSelector` callback.
+    MessageSelector,
+    /// `/plugin` — plugin picker (built-in + marketplace).
+    PluginPicker,
+    /// MCPB config form.
+    McpbConfig {
+        plugin_name: String,
+        config_schema: std::collections::HashMap<String, serde_json::Value>,
+        existing_config: std::collections::HashMap<String, serde_json::Value>,
+    },
+    /// Generic confirm dialog.
+    Confirm { title: String, message: String },
+}
+
+/// One row in the memory-file selector.
+#[derive(Debug, Clone)]
+pub struct MemoryFileEntry {
+    pub path: std::path::PathBuf,
+    pub label: String,
+    pub scope: MemoryScope,
+}
+
+/// Scope of a memory file (matches TS `MemoryFileSelector` ordering).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryScope {
+    /// Enterprise / managed.
+    Managed,
+    /// User-global (`~/.coco/CLAUDE.md`).
+    User,
+    /// Project (`./CLAUDE.md`).
+    Project,
+    /// Project-local (`./CLAUDE.local.md`).
+    ProjectLocal,
+    /// Subdirectory CLAUDE.md (auto-loaded under cwd).
+    Subdir,
 }
 
 /// Feature-flag gate for conditionally enabled commands.
@@ -117,7 +219,28 @@ impl CommandRegistry {
     }
 
     /// Execute a command by name (or alias), passing the given arguments.
+    /// Returns the legacy String shape — for the typed [`CommandResult`] use
+    /// [`Self::execute_command`].
     pub async fn execute(&self, name: &str, args: &str) -> anyhow::Result<String> {
+        match self.execute_command(name, args).await? {
+            CommandResult::Text(s) => Ok(s),
+            CommandResult::InjectPrompt(s) => Ok(s),
+            CommandResult::Compact { display_text, .. } => Ok(display_text),
+            CommandResult::Prompt { parts, .. } => Ok(parts
+                .iter()
+                .filter_map(|p| match p {
+                    PromptPart::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n")),
+            CommandResult::OpenDialog(_) => Ok(String::new()),
+            CommandResult::Skip => Ok(String::new()),
+        }
+    }
+
+    /// Execute a command by name (or alias) and return the typed result.
+    pub async fn execute_command(&self, name: &str, args: &str) -> anyhow::Result<CommandResult> {
         let cmd = self
             .get(name)
             .ok_or_else(|| anyhow::anyhow!("unknown command: /{name}"))?;
@@ -127,9 +250,290 @@ impl CommandRegistry {
         }
 
         match &cmd.handler {
-            Some(handler) => handler.execute(args).await,
+            Some(handler) => handler.execute_command(args).await,
             None => anyhow::bail!("command /{name} has no handler"),
         }
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Top-level seam — TS-mirroring resolution order
+// (§0 of parity-skills-commands-plugins.md)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Build a fully-populated CommandRegistry mirroring the TS load order.
+///
+/// TS source: `commands.ts` registry construction.
+///
+/// **Order** (last wins on name collision):
+/// 1. Hardcoded slash commands (`register_builtins` + `register_extended_builtins`).
+/// 2. Bundled-skill commands (already registered via skill→command bridge).
+/// 3. Builtin-plugin skill commands.
+/// 4. Marketplace plugin commands.
+/// 5. On-disk skill dirs (managed → user → project → legacy `commands/`).
+/// 6. TS-parity P1 handlers (rewind / memory / init / prompt-type commands).
+///
+/// This function is a thin wrapper that performs the in-order registration —
+/// callers pass the constructed `SkillManager` and `PluginManager` along with
+/// user / feature context.
+pub fn build_command_registry(
+    skill_manager: &coco_skills::SkillManager,
+    plugin_manager: &coco_plugins::PluginManager,
+    user_type: coco_types::UserType,
+    features: coco_types::Features,
+    project_root: std::path::PathBuf,
+    user_home: std::path::PathBuf,
+    managed_root: Option<std::path::PathBuf>,
+) -> CommandRegistry {
+    let mut registry = CommandRegistry::new();
+
+    // 1. Hardcoded slash commands.
+    register_builtins(&mut registry);
+    implementations::register_extended_builtins(&mut registry);
+
+    // 2-5. Skill-derived commands (filtered by feature gates).
+    register_skills_as_commands(&mut registry, skill_manager, &features);
+    register_plugin_contributions(&mut registry, plugin_manager);
+
+    // 6. TS-parity P1 handlers — last so they win over any name collisions
+    //    from skills/plugins (matches TS where `/init`, `/rewind`, `/memory`
+    //    are baseline commands not overridable by user skills).
+    implementations::register_ts_parity_handlers(
+        &mut registry,
+        user_type,
+        features,
+        project_root,
+        user_home,
+        managed_root,
+    );
+
+    registry
+}
+
+fn register_skills_as_commands(
+    registry: &mut CommandRegistry,
+    manager: &coco_skills::SkillManager,
+    features: &coco_types::Features,
+) {
+    use coco_types::CommandSource;
+    use coco_types::PromptCommandData;
+    for skill in manager.visible(features) {
+        if !skill.user_invocable {
+            continue;
+        }
+        let source = match skill.source {
+            coco_skills::SkillSource::Bundled => CommandSource::Bundled,
+            coco_skills::SkillSource::User { .. } => CommandSource::User,
+            coco_skills::SkillSource::Project { .. } => CommandSource::Project,
+            coco_skills::SkillSource::Plugin { .. } => CommandSource::Plugin,
+            coco_skills::SkillSource::Managed { .. } => CommandSource::Managed,
+            coco_skills::SkillSource::Mcp { .. } => CommandSource::Mcp,
+        };
+        let mut base = builtin_base(&skill.name, &skill.description, &[]);
+        base.loaded_from = Some(source);
+        base.is_hidden = skill.is_hidden;
+        base.user_invocable = skill.user_invocable;
+        base.argument_hint = skill.argument_hint.clone();
+        base.when_to_use = skill.when_to_use.clone();
+        let prompt = skill.prompt.clone();
+        let progress_message = "running".to_string();
+        registry.register(RegisteredCommand {
+            base,
+            command_type: CommandType::Prompt(PromptCommandData {
+                progress_message: progress_message.clone(),
+                content_length: skill.content_length,
+                allowed_tools: skill.allowed_tools.clone(),
+                model: skill.model.clone(),
+                context: match skill.context {
+                    coco_skills::SkillContext::Inline => coco_types::CommandContext::Inline,
+                    coco_skills::SkillContext::Fork => coco_types::CommandContext::Fork,
+                },
+                agent: skill.agent.clone(),
+                thinking_level: None,
+                hooks: skill.hooks.clone(),
+            }),
+            handler: Some(std::sync::Arc::new(SkillPromptHandler {
+                name: skill.name.clone(),
+                body: prompt,
+                progress_message,
+            })),
+            is_enabled: None,
+        });
+    }
+}
+
+fn register_plugin_contributions(
+    registry: &mut CommandRegistry,
+    manager: &coco_plugins::PluginManager,
+) {
+    use coco_types::CommandSource;
+    let total = coco_plugins::collect_all_contributions(manager);
+    for cmd_name in total.commands {
+        let mut base = builtin_base(&cmd_name, &format!("Plugin command: {cmd_name}"), &[]);
+        base.loaded_from = Some(CommandSource::Plugin);
+        registry.register(RegisteredCommand {
+            base,
+            command_type: CommandType::Local(LocalCommandData {
+                handler: cmd_name.clone(),
+            }),
+            handler: Some(std::sync::Arc::new(PluginCommandStub {
+                name: cmd_name.clone(),
+            })),
+            is_enabled: None,
+        });
+    }
+}
+
+struct SkillPromptHandler {
+    name: String,
+    body: String,
+    progress_message: String,
+}
+
+#[async_trait]
+impl CommandHandler for SkillPromptHandler {
+    async fn execute_command(&self, args: &str) -> anyhow::Result<CommandResult> {
+        // TS-mirroring argument substitution via the canonical implementation
+        // in `coco_skills::prompt_render`.
+        let args_opt = (!args.is_empty()).then_some(args);
+        let text = coco_skills::prompt_render::substitute_arguments(
+            &self.body,
+            args_opt,
+            &[],
+            /* append_if_no_placeholder */ true,
+        );
+        Ok(CommandResult::Prompt {
+            progress_message: self.progress_message.clone(),
+            parts: vec![PromptPart::Text { text }],
+        })
+    }
+
+    fn handler_name(&self) -> &str {
+        &self.name
+    }
+}
+
+#[cfg(test)]
+mod seam_tests {
+    use super::*;
+    use coco_skills::SkillManager;
+    use coco_skills::bundled::register_bundled_default;
+    use coco_types::Features;
+    use coco_types::UserType;
+
+    #[tokio::test]
+    async fn build_registry_includes_skills_and_ts_parity_handlers() {
+        let mut sm = SkillManager::new();
+        register_bundled_default(&mut sm);
+        let pm = coco_plugins::PluginManager::new();
+        let reg = build_command_registry(
+            &sm,
+            &pm,
+            UserType::Human,
+            Features::with_defaults(),
+            std::path::PathBuf::from("."),
+            std::path::PathBuf::from("/home/test"),
+            None,
+        );
+        // TS-parity handlers are present.
+        assert!(reg.get("rewind").is_some());
+        assert!(reg.get("memory").is_some());
+        assert!(reg.get("init").is_some());
+        assert!(reg.get("security-review").is_some());
+        assert!(reg.get("commit-push-pr").is_some());
+        // Bundled skills (unconditional) are present.
+        assert!(reg.get("update-config").is_some());
+        assert!(reg.get("batch").is_some());
+    }
+
+    #[tokio::test]
+    async fn skills_filtered_by_features() {
+        let mut sm = SkillManager::new();
+        register_bundled_default(&mut sm);
+        let pm = coco_plugins::PluginManager::new();
+        let reg = build_command_registry(
+            &sm,
+            &pm,
+            UserType::Ant,
+            Features::empty(),
+            std::path::PathBuf::from("."),
+            std::path::PathBuf::from("/home/test"),
+            None,
+        );
+        // Gated skills MUST NOT appear when features are off. (`/dream` is also
+        // registered as an extended-builtin handler so we can't assert its
+        // absence — `loop`, `schedule`, `claude-api`, `hunter`, `claude-in-chrome`,
+        // `run-skill-generator` are skill-only and serve as the gate test.)
+        for missing in [
+            "loop",
+            "schedule",
+            "claude-api",
+            "hunter",
+            "claude-in-chrome",
+            "run-skill-generator",
+        ] {
+            assert!(
+                reg.get(missing).is_none(),
+                "{missing} should not appear when its feature is off"
+            );
+        }
+
+        // Enable the relevant features and confirm they show up.
+        let mut features = Features::empty();
+        features
+            .enable(coco_types::Feature::AgentTriggers)
+            .enable(coco_types::Feature::AgentTriggersRemote)
+            .enable(coco_types::Feature::BuildingClaudeApps);
+        let reg2 = build_command_registry(
+            &sm,
+            &pm,
+            UserType::Ant,
+            features,
+            std::path::PathBuf::from("."),
+            std::path::PathBuf::from("/home/test"),
+            None,
+        );
+        assert!(reg2.get("loop").is_some());
+        assert!(reg2.get("schedule").is_some());
+        assert!(reg2.get("claude-api").is_some());
+    }
+
+    #[tokio::test]
+    async fn rewind_emits_open_dialog() {
+        let mut sm = SkillManager::new();
+        register_bundled_default(&mut sm);
+        let pm = coco_plugins::PluginManager::new();
+        let reg = build_command_registry(
+            &sm,
+            &pm,
+            UserType::Human,
+            Features::with_defaults(),
+            std::path::PathBuf::from("."),
+            std::path::PathBuf::from("/home/test"),
+            None,
+        );
+        match reg.execute_command("rewind", "").await.unwrap() {
+            CommandResult::OpenDialog(DialogSpec::MessageSelector) => {}
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+}
+
+struct PluginCommandStub {
+    name: String,
+}
+
+#[async_trait]
+impl CommandHandler for PluginCommandStub {
+    async fn execute_command(&self, _args: &str) -> anyhow::Result<CommandResult> {
+        Ok(CommandResult::Text(format!(
+            "Plugin command /{} not yet bound to a handler.",
+            self.name
+        )))
+    }
+
+    fn handler_name(&self) -> &str {
+        &self.name
     }
 }
 
@@ -157,21 +561,18 @@ impl CommandHandler for BuiltinCommand {
     }
 }
 
+/// Function pointer for async command bodies.
+pub type AsyncCommandFn =
+    fn(String) -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>>;
+
 /// Async built-in command handler for commands that need I/O (git, filesystem).
 pub struct AsyncBuiltinCommand {
     name: &'static str,
-    execute_fn:
-        fn(String) -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>>,
+    execute_fn: AsyncCommandFn,
 }
 
 impl AsyncBuiltinCommand {
-    pub const fn new(
-        name: &'static str,
-        execute_fn: fn(
-            String,
-        )
-            -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>>,
-    ) -> Self {
+    pub const fn new(name: &'static str, execute_fn: AsyncCommandFn) -> Self {
         Self { name, execute_fn }
     }
 }

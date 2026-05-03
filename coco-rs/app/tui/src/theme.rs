@@ -229,6 +229,10 @@ impl Theme {
         }
     }
 
+    // Dracula's palette is defined by specific 24-bit RGB values
+    // (https://draculatheme.com/contribute) — the named ANSI palette is the
+    // wrong contract here. `Color::Rgb` is intentional in this constructor.
+    #[allow(clippy::disallowed_methods)]
     fn dracula_theme() -> Self {
         Self {
             primary: Color::Rgb(139, 233, 253), // cyan
@@ -275,6 +279,10 @@ impl Theme {
         }
     }
 
+    // Nord's palette is defined by specific 24-bit RGB values
+    // (https://www.nordtheme.com/) — the named ANSI palette is the wrong
+    // contract here. `Color::Rgb` is intentional in this constructor.
+    #[allow(clippy::disallowed_methods)]
     fn nord_theme() -> Self {
         Self {
             primary: Color::Rgb(136, 192, 208), // nord8

@@ -230,7 +230,7 @@ All 338 top-level TS utils files mapped to their Rust destination.
 | `systemPromptType.ts` | System prompt type definitions |
 | `fileStateCache.ts` (1479 LOC) | LRU file read cache |
 | `fileHistory.ts` (200 LOC) | File edit tracking per turn |
-| `toolResultStorage.ts` (1040 LOC) | ContentReplacementState |
+| `toolResultStorage.ts` (1040 LOC) | **MOVED** — see B-N below. Originally listed here as `ContentReplacementState`; this routing was incomplete (only Level 2; Level 1 persistence pipeline missing) and led to multi-round review miss. Re-routed to `coco-tool-runtime` (storage + enforcement) + `coco-query` (wiring) + `coco-session` (records). See [`tool-result-budget-plan.md`](tool-result-budget-plan.md). |
 | `analyzeContext.ts` (1382 LOC) | Context analysis |
 | `contextAnalysis.ts` | Context size analysis |
 | `contextSuggestions.ts` | Context suggestions |
@@ -375,12 +375,19 @@ All 338 top-level TS utils files mapped to their Rust destination.
 | `agentId.ts` | Agent ID generation and validation |
 | `standaloneAgent.ts` | Standalone agent mode (headless agent execution) |
 
+### B12.5. → `coco-tool-runtime`
+
+| TS file | What it does |
+|---------|-------------|
+| `toolResultStorage.ts` (1040 LOC) — Level 1 + Level 2 storage primitives | Per-tool persistence (`processToolResultBlock`, `persistToolResult`, `<persisted-output>` wrapper, 2KB preview) + per-message budget state (`ContentReplacementState`, `enforceToolResultBudget`). Query-loop wiring lives in `coco-query`; transcript records live in `coco-session`. See [`tool-result-budget-plan.md`](tool-result-budget-plan.md). |
+| `constants/toolLimits.ts` | Constants module: `DEFAULT_MAX_RESULT_SIZE_CHARS=50_000`, `PREVIEW_SIZE_BYTES=2_000`, `MAX_TOOL_RESULTS_PER_MESSAGE_CHARS=200_000`, `MAX_TOOL_RESULT_BYTES=400_000`, `TOOL_RESULTS_SUBDIR='tool-results'`, `PERSISTED_OUTPUT_TAG`. |
+
 ### B13. → `coco-mcp`
 
 | TS file | What it does |
 |---------|-------------|
 | `mcpInstructionsDelta.ts` | MCP instruction changes |
-| `mcpOutputStorage.ts` | MCP output storage |
+| `mcpOutputStorage.ts` | **CO-OWNED** with `coco-tool-runtime` — parallel pipeline to `toolResultStorage.ts` for MCP server outputs; depends on the same `<persisted-output>` + storage primitives. Phase 3 of [`tool-result-budget-plan.md`](tool-result-budget-plan.md). |
 | `mcpValidation.ts` | MCP config validation |
 | `mcpWebSocketTransport.ts` | MCP WebSocket transport |
 
