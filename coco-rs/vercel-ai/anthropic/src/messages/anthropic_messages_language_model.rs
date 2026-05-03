@@ -456,8 +456,27 @@ impl AnthropicMessagesLanguageModel {
             "max_tokens": max_tokens,
         });
 
-        // System messages
-        if let Some(system) = system {
+        // System messages. Layout adapter wins over the converter-derived
+        // `system[]` when `provider_options["prompt_layout"].system_blocks`
+        // is set, so the request body carries the layout-supplied blocks
+        // verbatim (with their pre-attached `cache_control`).
+        let layout = parse_prompt_layout_namespace(&options.provider_options);
+        let layout_system_blocks = layout
+            .as_ref()
+            .and_then(|l| l.system_blocks.as_ref())
+            .cloned();
+        let resolved_system = match (layout_system_blocks, system) {
+            (Some(layout_blocks), Some(_)) => {
+                warnings.push(Warning::other(
+                    "Anthropic `system[]` set both via prompt_layout and converter; \
+                     layout wins",
+                ));
+                Some(prompt_layout_blocks_to_value(&layout_blocks))
+            }
+            (Some(layout_blocks), None) => Some(prompt_layout_blocks_to_value(&layout_blocks)),
+            (None, sys) => sys,
+        };
+        if let Some(system) = resolved_system {
             body["system"] = Value::Array(system);
         }
         body["messages"] = Value::Array(messages);
@@ -2542,6 +2561,60 @@ fn create_anthropic_stream(
     );
 
     Box::pin(stream)
+}
+
+/// Local mirror of `coco_inference::PromptLayoutOptions` (Anthropic
+/// slot only). Provider crates do NOT depend on `coco-inference`; the
+/// wire shape under `provider_options["prompt_layout"]` is the
+/// cross-layer contract, and this struct deserializes it locally.
+#[derive(serde::Deserialize, Default)]
+struct PromptLayoutWire {
+    #[serde(default)]
+    system_blocks: Option<Vec<AnthropicSystemBlockWire>>,
+}
+
+#[derive(serde::Deserialize, Clone)]
+struct AnthropicSystemBlockWire {
+    text: String,
+    #[serde(default)]
+    cache_control: Option<AnthropicCacheControlWire>,
+}
+
+#[derive(serde::Deserialize, Clone)]
+struct AnthropicCacheControlWire {
+    #[serde(rename = "type")]
+    type_name: String,
+    #[serde(default)]
+    ttl: Option<String>,
+}
+
+fn parse_prompt_layout_namespace(
+    provider_options: &Option<vercel_ai_provider::ProviderOptions>,
+) -> Option<PromptLayoutWire> {
+    let opts = provider_options.as_ref()?;
+    let inner = opts.get("prompt_layout")?;
+    let mut object = serde_json::Map::new();
+    for (key, value) in inner {
+        object.insert(key.clone(), value.clone());
+    }
+    serde_json::from_value(Value::Object(object)).ok()
+}
+
+fn prompt_layout_blocks_to_value(blocks: &[AnthropicSystemBlockWire]) -> Vec<Value> {
+    blocks
+        .iter()
+        .map(|b| {
+            let mut obj = json!({ "type": "text", "text": b.text });
+            if let Some(ref cc) = b.cache_control {
+                let mut cc_obj = json!({ "type": cc.type_name });
+                if let Some(ref ttl) = cc.ttl {
+                    cc_obj["ttl"] = Value::String(ttl.clone());
+                }
+                obj["cache_control"] = cc_obj;
+            }
+            obj
+        })
+        .collect()
 }
 
 #[cfg(test)]

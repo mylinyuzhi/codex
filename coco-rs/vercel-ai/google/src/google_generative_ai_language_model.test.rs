@@ -55,6 +55,48 @@ fn get_args_extra_body_patches_wire_body_verbatim() {
 }
 
 #[test]
+fn layout_system_instruction_overrides_converter_instruction() {
+    use std::collections::HashMap as StdHashMap;
+    use vercel_ai_provider::ProviderOptions;
+    use vercel_ai_provider::Warning;
+    let model = make_model();
+    let mut inner = StdHashMap::new();
+    inner.insert(
+        "system_instruction".into(),
+        serde_json::Value::String("layout-supplied".into()),
+    );
+    let mut outer = StdHashMap::new();
+    outer.insert("prompt_layout".into(), inner);
+
+    let mut options = LanguageModelV4CallOptions::new(vec![
+        vercel_ai_provider::LanguageModelV4Message::System {
+            content: vec![vercel_ai_provider::UserContentPart::Text(
+                vercel_ai_provider::TextPart {
+                    text: "converter-derived".into(),
+                    provider_metadata: None,
+                },
+            )],
+            provider_options: None,
+        },
+        vercel_ai_provider::LanguageModelV4Message::user_text("Hi"),
+    ]);
+    options.provider_options = Some(ProviderOptions(outer));
+
+    let (body, _h, warnings, _name) = model.get_args(&options).unwrap();
+    assert_eq!(
+        body["systemInstruction"]["parts"][0]["text"],
+        "layout-supplied"
+    );
+    assert!(
+        warnings.iter().any(|w| matches!(
+            w,
+            Warning::Other { message, .. } if message.contains("layout wins")
+        )),
+        "expected a Warning::Other documenting layout precedence"
+    );
+}
+
+#[test]
 fn get_args_builds_basic_request() {
     let model = GoogleGenerativeAILanguageModel::new(
         "gemini-2.0-flash",

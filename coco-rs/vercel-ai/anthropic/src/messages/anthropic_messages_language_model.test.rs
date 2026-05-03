@@ -51,6 +51,51 @@ fn get_args_sets_model_and_max_tokens() {
 }
 
 #[test]
+fn layout_system_blocks_override_converter_blocks_and_carry_cache_control() {
+    let model = AnthropicMessagesLanguageModel::new("claude-sonnet-4-5", make_config());
+    let mut po = vercel_ai_provider::ProviderOptions::default();
+    let mut layout_inner = HashMap::new();
+    let blocks = serde_json::json!([
+        {
+            "text": "you are coco",
+            "cache_control": { "type": "ephemeral", "ttl": "5m" }
+        }
+    ]);
+    layout_inner.insert("system_blocks".to_string(), blocks);
+    po.set("prompt_layout", layout_inner);
+    let mut options = LanguageModelV4CallOptions::new(vec![
+        vercel_ai_provider::LanguageModelV4Message::System {
+            content: vec![vercel_ai_provider::UserContentPart::Text(
+                vercel_ai_provider::TextPart {
+                    text: "converter-derived".into(),
+                    provider_metadata: None,
+                },
+            )],
+            provider_options: None,
+        },
+        vercel_ai_provider::LanguageModelV4Message::user_text("Hi"),
+    ]);
+    options.provider_options = Some(po);
+
+    let (body, _headers, warnings) = model
+        .get_args(&options, false)
+        .unwrap_or_else(|e| panic!("{e}"));
+    let system = body["system"].as_array().expect("system array");
+    assert_eq!(system.len(), 1);
+    assert_eq!(system[0]["type"], "text");
+    assert_eq!(system[0]["text"], "you are coco");
+    assert_eq!(system[0]["cache_control"]["type"], "ephemeral");
+    assert_eq!(system[0]["cache_control"]["ttl"], "5m");
+    assert!(
+        warnings.iter().any(|w| matches!(
+            w,
+            Warning::Other { message, .. } if message.contains("layout wins")
+        )),
+        "expected a Warning::Other documenting layout precedence"
+    );
+}
+
+#[test]
 fn get_args_warns_on_unsupported_params() {
     let model = AnthropicMessagesLanguageModel::new("claude-sonnet-4-5", make_config());
     let mut options = LanguageModelV4CallOptions::new(vec![

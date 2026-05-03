@@ -281,8 +281,27 @@ impl GoogleGenerativeAILanguageModel {
             "contents": prompt.contents,
         });
 
-        if let Some(si) = prompt.system_instruction {
-            body["systemInstruction"] = serde_json::to_value(si).unwrap_or(Value::Null);
+        // Layout slot wins over the converter-derived `systemInstruction`:
+        // when `provider_options["prompt_layout"].system_instruction` is
+        // set, write the layout text verbatim and emit a warning when both
+        // sources are present.
+        let layout = parse_prompt_layout_namespace(&options.provider_options);
+        let layout_system_instruction = layout.as_ref().and_then(|l| l.system_instruction.clone());
+        match (layout_system_instruction, prompt.system_instruction) {
+            (Some(layout_si), Some(_converter_si)) => {
+                warnings.push(Warning::other(
+                    "Google `systemInstruction` set both via prompt_layout and converter; \
+                     layout wins",
+                ));
+                body["systemInstruction"] = json!({ "parts": [{ "text": layout_si }] });
+            }
+            (Some(layout_si), None) => {
+                body["systemInstruction"] = json!({ "parts": [{ "text": layout_si }] });
+            }
+            (None, Some(si)) => {
+                body["systemInstruction"] = serde_json::to_value(si).unwrap_or(Value::Null);
+            }
+            (None, None) => {}
         }
 
         // Tools
@@ -1597,6 +1616,28 @@ fn resolve_gemini_25_thinking_config(
         include_thoughts: None,
         thinking_level: None,
     })
+}
+
+/// Local mirror of `coco_inference::PromptLayoutOptions` (Google slot
+/// only). Provider crates do NOT depend on `coco-inference`; the wire
+/// shape under `provider_options["prompt_layout"]` is the cross-layer
+/// contract, and this struct deserializes it locally.
+#[derive(serde::Deserialize, Default)]
+struct PromptLayoutWire {
+    #[serde(default)]
+    system_instruction: Option<String>,
+}
+
+fn parse_prompt_layout_namespace(
+    provider_options: &Option<vercel_ai_provider::ProviderOptions>,
+) -> Option<PromptLayoutWire> {
+    let opts = provider_options.as_ref()?;
+    let inner = opts.get("prompt_layout")?;
+    let mut object = serde_json::Map::new();
+    for (key, value) in inner {
+        object.insert(key.clone(), value.clone());
+    }
+    serde_json::from_value(Value::Object(object)).ok()
 }
 
 #[cfg(test)]
