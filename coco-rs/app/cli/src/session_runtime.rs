@@ -619,6 +619,15 @@ impl SessionRuntime {
         }))
     }
 
+    /// The tool registry shared by every engine instance.
+    ///
+    /// Callers that need to register or deregister tools at runtime (e.g.
+    /// the SDK MCP lifecycle handlers) use this to mutate the registry
+    /// via its interior-mutability API.
+    pub fn tools(&self) -> &Arc<ToolRegistry> {
+        &self.tools
+    }
+
     /// Install the MCP handle that every per-turn engine receives via
     /// `wire_engine`. Call this after `SessionRuntime::build` returns
     /// so the bootstrap can wrap a real `McpConnectionManager`.

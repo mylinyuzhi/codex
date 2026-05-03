@@ -262,6 +262,21 @@ pub struct ModelSelection {
 }
 
 impl ModelSelection {
+    /// Parse `"provider/model_id"` into a `ModelSelection`.
+    /// Both parts must be non-empty; any other format is an error.
+    pub fn from_slash_str(s: &str) -> Result<Self, String> {
+        let (provider, model_id) = s
+            .split_once('/')
+            .ok_or_else(|| format!("`{s}` must use `provider/model_id` format"))?;
+        if provider.is_empty() || model_id.is_empty() {
+            return Err(format!("`{s}` must use `provider/model_id` format"));
+        }
+        Ok(Self {
+            provider: provider.to_string(),
+            model_id: model_id.to_string(),
+        })
+    }
+
     pub fn into_model_spec(self, api: ProviderApi) -> ModelSpec {
         ModelSpec {
             provider: self.provider,

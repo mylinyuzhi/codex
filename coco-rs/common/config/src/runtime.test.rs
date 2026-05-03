@@ -269,8 +269,14 @@ fn test_cli_fallback_model_overrides_populate_main_chain_in_order() {
     let env = EnvSnapshot::default();
     let overrides = RuntimeOverrides {
         fallback_model_overrides: vec![
-            "anthropic/claude-opus-4-7".to_string(),
-            "openai/gpt-5".to_string(),
+            ModelSelection {
+                provider: "anthropic".into(),
+                model_id: "claude-opus-4-7".into(),
+            },
+            ModelSelection {
+                provider: "openai".into(),
+                model_id: "gpt-5".into(),
+            },
         ],
         ..Default::default()
     };
@@ -294,7 +300,10 @@ fn test_cli_fallback_model_rejects_duplicate_of_primary() {
     });
     let env = EnvSnapshot::default();
     let overrides = RuntimeOverrides {
-        fallback_model_overrides: vec!["anthropic/claude-opus-4-7".to_string()],
+        fallback_model_overrides: vec![ModelSelection {
+            provider: "anthropic".into(),
+            model_id: "claude-opus-4-7".into(),
+        }],
         ..Default::default()
     };
     let err =
@@ -316,8 +325,14 @@ fn test_cli_fallback_model_rejects_duplicate_within_chain() {
     let env = EnvSnapshot::default();
     let overrides = RuntimeOverrides {
         fallback_model_overrides: vec![
-            "anthropic/claude-sonnet-4-6".to_string(),
-            "anthropic/claude-sonnet-4-6".to_string(),
+            ModelSelection {
+                provider: "anthropic".into(),
+                model_id: "claude-sonnet-4-6".into(),
+            },
+            ModelSelection {
+                provider: "anthropic".into(),
+                model_id: "claude-sonnet-4-6".into(),
+            },
         ],
         ..Default::default()
     };
@@ -334,7 +349,10 @@ fn test_cli_fallback_model_with_unknown_provider_fails_startup() {
     let settings = settings_with(Settings::default());
     let env = EnvSnapshot::default();
     let overrides = RuntimeOverrides {
-        fallback_model_overrides: vec!["nonexistent/some-model".to_string()],
+        fallback_model_overrides: vec![ModelSelection {
+            provider: "nonexistent".into(),
+            model_id: "some-model".into(),
+        }],
         ..Default::default()
     };
     let err = build_isolated(settings, env, overrides)
@@ -497,7 +515,10 @@ fn test_cli_fallback_overrides_take_precedence_over_settings_fallbacks() {
         ..Default::default()
     });
     let overrides = RuntimeOverrides {
-        fallback_model_overrides: vec!["openai/gpt-5".into()],
+        fallback_model_overrides: vec![ModelSelection {
+            provider: "openai".into(),
+            model_id: "gpt-5".into(),
+        }],
         ..Default::default()
     };
     let runtime = build_isolated(settings, EnvSnapshot::default(), overrides)

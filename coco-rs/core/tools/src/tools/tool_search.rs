@@ -120,7 +120,12 @@ impl Tool for ToolSearchTool {
         }
 
         // Count of deferred tools — both modes include this in the output.
-        let total_deferred_tools = ctx.tools.all().filter(|t| t.should_defer()).count();
+        let total_deferred_tools = ctx
+            .tools
+            .all()
+            .into_iter()
+            .filter(|t| t.should_defer())
+            .count();
 
         // Direct selection mode: `select:Tool1,Tool2,...`
         //
@@ -190,7 +195,12 @@ impl Tool for ToolSearchTool {
 
         // Pass the current permission context so tools can tailor their
         // descriptions to the mode — matches TS `getToolPermissionContext()`.
-        let tool_names: Vec<String> = ctx.tools.all().map(|t| t.name().to_string()).collect();
+        let tool_names: Vec<String> = ctx
+            .tools
+            .all()
+            .into_iter()
+            .map(|t| t.name().to_string())
+            .collect();
         let desc_opts = DescriptionOptions {
             is_non_interactive: false,
             tool_names,

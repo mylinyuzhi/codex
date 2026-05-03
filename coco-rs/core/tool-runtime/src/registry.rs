@@ -4,6 +4,7 @@ use coco_types::ToolId;
 use coco_types::ToolInputSchema;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::RwLock;
 
 use crate::context::ToolUseContext;
 use crate::traits::Tool;
@@ -48,16 +49,40 @@ fn passes_filter_pipeline(tool: &dyn Tool, ctx: &ToolUseContext) -> bool {
         && ctx.tool_filter.allows(&id)
 }
 
+/// Inner state protected by a single RwLock.
+///
+/// Both maps are always mutated together (every `register` touches
+/// `tools` and may also touch `aliases`; every `deregister_by_server`
+/// touches both). A single lock ensures the two maps are always
+/// consistent — no window where `tools` has a new entry but `aliases`
+/// does not, or vice versa.
+#[derive(Default)]
+struct RegistryInner {
+    /// Primary lookup: canonical name → tool.
+    tools: HashMap<String, Arc<dyn Tool>>,
+    /// Alias lookup: alias → canonical name.
+    aliases: HashMap<String, String>,
+}
+
 /// Registry of available tools. Populated at startup by coco-cli.
 ///
 /// Supports lookup by name, alias, and ToolId.
 /// Feature-gated tools are registered but may return is_enabled() == false.
-#[derive(Default)]
+///
+/// Interior mutability via a single `RwLock` allows `register` and
+/// `deregister_by_server` to take `&self`, so the registry can be
+/// mutated after it is wrapped in `Arc` (required for runtime MCP
+/// tool registration after servers connect).
 pub struct ToolRegistry {
-    /// Primary lookup: name → tool.
-    tools: HashMap<String, Arc<dyn Tool>>,
-    /// Alias lookup: alias → canonical name.
-    aliases: HashMap<String, String>,
+    inner: RwLock<RegistryInner>,
+}
+
+impl Default for ToolRegistry {
+    fn default() -> Self {
+        Self {
+            inner: RwLock::new(RegistryInner::default()),
+        }
+    }
 }
 
 impl ToolRegistry {
@@ -75,8 +100,12 @@ impl ToolRegistry {
     ///   from shadowing built-in tools (e.g. an MCP server advertising a
     ///   tool named "Read" is registered as "mcp__foo__Read" rather than
     ///   overwriting the real Read tool).
-    pub fn register(&mut self, tool: Arc<dyn Tool>) {
+    pub fn register(&self, tool: Arc<dyn Tool>) {
         let native_name = tool.name().to_string();
+        let mut inner = self
+            .inner
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         // MCP namespace enforcement: if the tool has MCP info but its
         // name doesn't start with `mcp__`, silently promote to the
@@ -90,7 +119,7 @@ impl ToolRegistry {
                 // Native name differs: use the qualified form as the
                 // canonical entry and map the original name back via
                 // alias so the model can still reference it both ways.
-                self.aliases.insert(native_name, qualified.clone());
+                inner.aliases.insert(native_name, qualified.clone());
                 qualified
             }
         } else {
@@ -98,56 +127,84 @@ impl ToolRegistry {
         };
 
         for alias in tool.aliases() {
-            self.aliases.insert(alias.to_string(), canonical.clone());
+            inner.aliases.insert(alias.to_string(), canonical.clone());
         }
-        self.tools.insert(canonical, tool);
+        inner.tools.insert(canonical, tool);
     }
 
     /// Look up a tool by ToolId.
-    pub fn get(&self, id: &ToolId) -> Option<&Arc<dyn Tool>> {
+    pub fn get(&self, id: &ToolId) -> Option<Arc<dyn Tool>> {
         self.get_by_name(&id.to_string())
     }
 
     /// Look up a tool by name or alias.
-    pub fn get_by_name(&self, name: &str) -> Option<&Arc<dyn Tool>> {
-        self.tools.get(name).or_else(|| {
-            self.aliases
+    pub fn get_by_name(&self, name: &str) -> Option<Arc<dyn Tool>> {
+        let inner = self
+            .inner
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        inner.tools.get(name).cloned().or_else(|| {
+            inner
+                .aliases
                 .get(name)
-                .and_then(|canonical| self.tools.get(canonical))
+                .and_then(|canonical| inner.tools.get(canonical))
+                .cloned()
         })
     }
 
-    /// Get all registered tools.
-    pub fn all(&self) -> impl Iterator<Item = &Arc<dyn Tool>> {
-        self.tools.values()
+    /// Get all registered tools (clones the Arc handles).
+    pub fn all(&self) -> Vec<Arc<dyn Tool>> {
+        let inner = self
+            .inner
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        inner.tools.values().cloned().collect()
     }
 
     /// Get enabled tools after running the full 5-layer filter pipeline.
     /// See `docs/coco-rs/feature-gates-and-tool-filtering.md` §7.
-    pub fn enabled(&self, ctx: &ToolUseContext) -> Vec<&Arc<dyn Tool>> {
-        self.tools
+    pub fn enabled(&self, ctx: &ToolUseContext) -> Vec<Arc<dyn Tool>> {
+        let inner = self
+            .inner
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        inner
+            .tools
             .values()
             .filter(|t| passes_filter_pipeline(t.as_ref(), ctx))
+            .cloned()
             .collect()
     }
 
     /// Get non-deferred enabled tools (loaded immediately).
-    pub fn loaded_tools(&self, ctx: &ToolUseContext) -> Vec<&Arc<dyn Tool>> {
-        self.tools
+    pub fn loaded_tools(&self, ctx: &ToolUseContext) -> Vec<Arc<dyn Tool>> {
+        let inner = self
+            .inner
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        inner
+            .tools
             .values()
             .filter(|t| {
                 passes_filter_pipeline(t.as_ref(), ctx) && (!t.should_defer() || t.always_load())
             })
+            .cloned()
             .collect()
     }
 
     /// Get deferred tools (discovered via ToolSearch).
-    pub fn deferred_tools(&self, ctx: &ToolUseContext) -> Vec<&Arc<dyn Tool>> {
-        self.tools
+    pub fn deferred_tools(&self, ctx: &ToolUseContext) -> Vec<Arc<dyn Tool>> {
+        let inner = self
+            .inner
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        inner
+            .tools
             .values()
             .filter(|t| {
                 passes_filter_pipeline(t.as_ref(), ctx) && t.should_defer() && !t.always_load()
             })
+            .cloned()
             .collect()
     }
 
@@ -167,8 +224,13 @@ impl ToolRegistry {
     /// their aliases.
     ///
     /// TS: full re-discovery on reconnect, old tools cleaned up.
-    pub fn deregister_by_server(&mut self, server_name: &str) {
-        let to_remove: Vec<String> = self
+    pub fn deregister_by_server(&self, server_name: &str) {
+        let mut inner = self
+            .inner
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        let to_remove: Vec<String> = inner
             .tools
             .iter()
             .filter(|(_, tool)| {
@@ -179,20 +241,29 @@ impl ToolRegistry {
             .collect();
 
         for name in &to_remove {
-            self.tools.remove(name);
+            inner.tools.remove(name);
         }
 
         // Also remove aliases that point to removed tools
-        self.aliases
+        inner
+            .aliases
             .retain(|_, canonical| !to_remove.contains(canonical));
     }
 
     pub fn len(&self) -> usize {
-        self.tools.len()
+        self.inner
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .tools
+            .len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.tools.is_empty()
+        self.inner
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .tools
+            .is_empty()
     }
 }
 

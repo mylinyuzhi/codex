@@ -19,7 +19,7 @@ pub use tools::*;
 ///
 /// MCPTool instances are registered separately via `register_mcp_tools()`
 /// after MCP servers connect and report their tools.
-pub fn register_all_tools(registry: &mut coco_tool_runtime::ToolRegistry) {
+pub fn register_all_tools(registry: &coco_tool_runtime::ToolRegistry) {
     use std::sync::Arc;
 
     // File I/O (8 — `ApplyPatchTool` only surfaces for models that
@@ -94,7 +94,7 @@ pub fn register_all_tools(registry: &mut coco_tool_runtime::ToolRegistry) {
 /// then registers the new ones. Safe to call multiple times for the
 /// same server (idempotent after deregister).
 pub fn register_mcp_tools(
-    registry: &mut coco_tool_runtime::ToolRegistry,
+    registry: &coco_tool_runtime::ToolRegistry,
     server_name: &str,
     mcp_tools: Vec<coco_tool_runtime::McpToolSchema>,
 ) {
@@ -117,7 +117,7 @@ pub fn register_mcp_tools(
 /// Deregister all tools from a specific MCP server.
 ///
 /// Called when an MCP server disconnects to clean up stale tools.
-pub fn deregister_mcp_server(registry: &mut coco_tool_runtime::ToolRegistry, server_name: &str) {
+pub fn deregister_mcp_server(registry: &coco_tool_runtime::ToolRegistry, server_name: &str) {
     registry.deregister_by_server(server_name);
 }
 
@@ -424,7 +424,7 @@ pub(crate) async fn track_file_edit(ctx: &coco_tool_runtime::ToolUseContext, pat
 }
 
 /// Register only core tools (for lightweight setups).
-pub fn register_core_tools(registry: &mut coco_tool_runtime::ToolRegistry) {
+pub fn register_core_tools(registry: &coco_tool_runtime::ToolRegistry) {
     use std::sync::Arc;
     registry.register(Arc::new(BashTool));
     registry.register(Arc::new(ReadTool));

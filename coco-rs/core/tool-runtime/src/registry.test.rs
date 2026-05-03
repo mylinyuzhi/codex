@@ -78,7 +78,7 @@ fn mcp_stub(name: &str, server: &str, mcp_name: &str) -> Arc<StubTool> {
 /// namespace prefix is added.
 #[test]
 fn test_register_builtin_tool_keeps_native_name() {
-    let mut reg = ToolRegistry::new();
+    let reg = ToolRegistry::new();
     reg.register(stub("Read"));
     assert!(reg.get_by_name("Read").is_some());
     assert!(reg.get_by_name("mcp__foo__Read").is_none());
@@ -88,7 +88,7 @@ fn test_register_builtin_tool_keeps_native_name() {
 /// registered as-is (no double-prefixing).
 #[test]
 fn test_register_mcp_tool_already_qualified() {
-    let mut reg = ToolRegistry::new();
+    let reg = ToolRegistry::new();
     reg.register(mcp_stub(
         "mcp__slack__send_message",
         "slack",
@@ -107,7 +107,7 @@ fn test_register_mcp_tool_already_qualified() {
 /// `mcp__<server>__<tool>` so it can't shadow built-in tools.
 #[test]
 fn test_register_mcp_tool_hostile_name_gets_namespaced() {
-    let mut reg = ToolRegistry::new();
+    let reg = ToolRegistry::new();
     // First register the real built-in Read so we can verify it's not
     // overwritten.
     reg.register(stub("Read"));
@@ -130,7 +130,7 @@ fn test_register_mcp_tool_hostile_name_gets_namespaced() {
 /// name and the MCP tool is preserved under its qualified form.
 #[test]
 fn test_register_mcp_then_builtin_both_accessible() {
-    let mut reg = ToolRegistry::new();
+    let reg = ToolRegistry::new();
     reg.register(mcp_stub("Read", "legit", "Read"));
     reg.register(stub("Read"));
 
@@ -220,7 +220,7 @@ fn builtin(
 /// tool name goes through `ToolName` so a rename surfaces at compile
 /// time instead of as a silent test miss.
 fn doc_example_registry() -> ToolRegistry {
-    let mut reg = ToolRegistry::new();
+    let reg = ToolRegistry::new();
     // read-only, no gate
     reg.register(builtin(ToolName::Read, true, None));
     // write tools, no gate
@@ -244,7 +244,7 @@ fn doc_example_registry() -> ToolRegistry {
     reg
 }
 
-fn names(tools: &[&Arc<dyn Tool>]) -> std::collections::HashSet<String> {
+fn names(tools: &[Arc<dyn Tool>]) -> std::collections::HashSet<String> {
     tools.iter().map(|t| t.name().to_string()).collect()
 }
 
@@ -381,7 +381,7 @@ fn pipeline_design_doc_gpt5_plan_mode_trace() {
 /// of whether they're registered under the qualified name.
 #[test]
 fn test_deregister_by_server_removes_namespaced_tools() {
-    let mut reg = ToolRegistry::new();
+    let reg = ToolRegistry::new();
     reg.register(mcp_stub("ls", "myserver", "ls"));
     reg.register(mcp_stub("mcp__other__read", "other", "read"));
     reg.register(stub("Read")); // built-in — must survive

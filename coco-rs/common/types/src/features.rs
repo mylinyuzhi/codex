@@ -67,6 +67,10 @@ pub enum Feature {
     WebSearch,
     /// Expose the `web_fetch` tool to the model.
     WebFetch,
+    /// Expose MCP management tools and dynamic MCP server tool wrappers to the model.
+    Mcp,
+    /// Expose the `notebook_edit` tool to the model.
+    NotebookEdit,
 
     // Behavior / safety gate (Stable, default=false for risk-conservative).
     /// Run shell commands inside a sandbox.
@@ -246,6 +250,18 @@ const FEATURES: &[FeatureSpec] = &[
         key: "web_fetch",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::Mcp,
+        key: "mcp",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::NotebookEdit,
+        key: "notebook_edit",
+        stage: Stage::Stable,
+        default_enabled: false,
     },
     // Behavior / safety gate.
     FeatureSpec {

@@ -173,7 +173,7 @@ impl crate::traits::Tool for ValidateRawExecuteStrippedBashTool {
 
 #[tokio::test]
 async fn test_execute_tool_call_validates_raw_input_before_stripping() {
-    let mut tools = ToolRegistry::new();
+    let tools = ToolRegistry::new();
     tools.register(std::sync::Arc::new(ValidateRawExecuteStrippedBashTool));
     let ctx = ToolUseContext::test_default();
 

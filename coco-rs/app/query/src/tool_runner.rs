@@ -47,7 +47,7 @@ pub(crate) async fn prepare_committed_tool_call(
     )
     .await;
 
-    let Some(tool) = tools.get(&tool_id).cloned() else {
+    let Some(tool) = tools.get(&tool_id) else {
         warn!(tool = tool_call.tool_name, "tool not found in registry");
         let output = format!("Unknown tool: {}", tool_call.tool_name);
         complete_tool_call_with_error(
