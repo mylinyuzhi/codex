@@ -67,6 +67,56 @@ pub(super) async fn handle_mcp_status(ctx: &HandlerContext) -> HandlerResult {
     })
 }
 
+/// Convert the tools of a connected MCP server into `McpToolSchema` values
+/// ready for `register_mcp_tools`.
+///
+/// The `McpConnectionManager::get_state` is awaited while the caller already
+/// holds the manager lock, so this is a `&McpConnectionManager` call (not
+/// `&mut`). Safety: the lock was acquired by the caller and we are still
+/// inside that scope.
+async fn collect_server_schemas(
+    manager: &coco_mcp::McpConnectionManager,
+    server_name: &str,
+) -> Vec<coco_tool_runtime::McpToolSchema> {
+    let Some(coco_mcp::McpConnectionState::Connected(server)) =
+        manager.get_state(server_name).await
+    else {
+        return vec![];
+    };
+    server
+        .tools
+        .iter()
+        .map(|t| coco_tool_runtime::McpToolSchema {
+            server_name: server_name.to_string(),
+            tool_name: t.name.clone(),
+            description: t.description.clone(),
+            input_schema: t.input_schema.clone(),
+            annotations: coco_tool_runtime::McpToolAnnotations::default(),
+        })
+        .collect()
+}
+
+/// Register MCP server tools in the shared `ToolRegistry` via the session
+/// runtime, if one is currently wired.
+async fn register_server_tools(
+    ctx: &HandlerContext,
+    server_name: &str,
+    schemas: Vec<coco_tool_runtime::McpToolSchema>,
+) {
+    let rt_guard = ctx.state.session_runtime.read().await;
+    if let Some(rt) = rt_guard.as_ref() {
+        coco_tools::register_mcp_tools(rt.tools(), server_name, schemas);
+    }
+}
+
+/// Deregister all tools for an MCP server from the shared `ToolRegistry`.
+async fn deregister_server_tools(ctx: &HandlerContext, server_name: &str) {
+    let rt_guard = ctx.state.session_runtime.read().await;
+    if let Some(rt) = rt_guard.as_ref() {
+        coco_tools::deregister_mcp_server(rt.tools(), server_name);
+    }
+}
+
 /// No-op `SendElicitation` callback used when the SDK server's MCP
 /// lifecycle handlers trigger a connect that surfaces an elicitation
 /// from the upstream server.
@@ -193,6 +243,9 @@ pub(super) async fn handle_mcp_reconnect(
     {
         Ok(()) => {
             info!(server = %params.server_name, "SdkServer: mcp/reconnect ok");
+            let schemas = collect_server_schemas(&manager, &params.server_name).await;
+            drop(manager);
+            register_server_tools(ctx, &params.server_name, schemas).await;
             HandlerResult::ok_empty()
         }
         Err(e) => HandlerResult::Err {
@@ -228,6 +281,9 @@ pub(super) async fn handle_mcp_toggle(
         {
             Ok(()) => {
                 info!(server = %params.server_name, "SdkServer: mcp/toggle (enabled)");
+                let schemas = collect_server_schemas(&manager, &params.server_name).await;
+                drop(manager);
+                register_server_tools(ctx, &params.server_name, schemas).await;
                 HandlerResult::ok_empty()
             }
             Err(e) => HandlerResult::Err {
@@ -239,6 +295,8 @@ pub(super) async fn handle_mcp_toggle(
     } else {
         manager.disconnect(&params.server_name).await;
         info!(server = %params.server_name, "SdkServer: mcp/toggle (disabled)");
+        drop(manager);
+        deregister_server_tools(ctx, &params.server_name).await;
         HandlerResult::ok_empty()
     }
 }

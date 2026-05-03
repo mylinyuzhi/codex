@@ -291,7 +291,7 @@ pub fn allow_all_bridge() -> ToolPermissionBridgeRef {
 
 /// Register all 6 core tools.
 pub fn core_tools() -> Arc<ToolRegistry> {
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Arc::new(BashTool));
     registry.register(Arc::new(ReadTool));
     registry.register(Arc::new(WriteTool));
@@ -305,7 +305,7 @@ pub fn core_tools() -> Arc<ToolRegistry> {
 /// tests. Built on top of [`core_tools`] so Read/Write/Grep/etc. are
 /// available inside plan mode (model "explores the codebase").
 pub fn tools_with_plan_mode() -> Arc<ToolRegistry> {
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Arc::new(BashTool));
     registry.register(Arc::new(ReadTool));
     registry.register(Arc::new(WriteTool));

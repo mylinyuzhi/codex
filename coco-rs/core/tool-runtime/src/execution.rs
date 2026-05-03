@@ -88,7 +88,7 @@ pub async fn execute_tool_call(
         .unwrap_or_else(|_| ToolId::Custom(tool_name.to_string()));
 
     let tool = match tools.get(&tool_id) {
-        Some(t) => t.clone(),
+        Some(t) => t,
         None => {
             let err = ToolError::NotFound {
                 tool_id: tool_id.clone(),

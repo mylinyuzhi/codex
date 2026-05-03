@@ -64,7 +64,7 @@ pub async fn run_tui(cli: &Cli) -> Result<()> {
     // returns Err; in that case (which shouldn't happen here, but
     // surface gracefully if it does) we build the config directly.
     let reload_opts = coco_config_reload::ReloadOptions::new(cwd.clone())
-        .with_overrides(crate::cli_runtime_overrides(cli));
+        .with_overrides(crate::cli_runtime_overrides(cli)?);
     let reload_opts = if let Some(path) = cli.settings.as_deref() {
         reload_opts.with_flag_settings(path)
     } else {
@@ -98,8 +98,8 @@ pub async fn run_tui(cli: &Cli) -> Result<()> {
     // (multi-provider-plan §11.1) — only the mock fallback uses the
     // test-grade default fingerprint.
     let retry: coco_inference::RetryConfig = runtime_config.api.retry.clone().into();
-    let (client, mode, model_id) =
-        crate::create_api_client(cli.model.as_deref(), &runtime_config, retry.clone());
+    let (client, provider_api, model_id) = crate::create_api_client(&runtime_config, retry.clone());
+    let mode = provider_api.map_or("mock", |api| api.as_str());
 
     // Main role fallback chain — populated from CLI `--fallback-model`
     // flags (repeatable) OR settings.models.main.fallbacks, whichever
@@ -118,8 +118,8 @@ pub async fn run_tui(cli: &Cli) -> Result<()> {
         .recovery(coco_types::ModelRole::Main);
 
     // Tools
-    let mut registry = ToolRegistry::new();
-    coco_tools::register_all_tools(&mut registry);
+    let registry = ToolRegistry::new();
+    coco_tools::register_all_tools(&registry);
     let tools = Arc::new(registry);
 
     // System prompt

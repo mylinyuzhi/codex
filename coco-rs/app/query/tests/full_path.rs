@@ -143,7 +143,7 @@ impl LanguageModel for FullPathMock {
 
 /// Register all 6 core tools.
 fn register_core_tools() -> ToolRegistry {
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Arc::new(BashTool));
     registry.register(Arc::new(ReadTool));
     registry.register(Arc::new(WriteTool));

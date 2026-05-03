@@ -46,6 +46,9 @@ impl Tool for NotebookEditTool {
     fn name(&self) -> &str {
         ToolName::NotebookEdit.as_str()
     }
+    fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
+        ctx.features.enabled(coco_types::Feature::NotebookEdit)
+    }
     fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
         "Edit a cell in a Jupyter notebook (.ipynb file). Supports replace, insert, and delete operations.".into()
     }
