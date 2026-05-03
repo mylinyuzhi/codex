@@ -15,10 +15,9 @@ use super::*;
 
 #[test]
 fn converts_system_message() {
-    let prompt = vec![LanguageModelV4Message::System {
-        content: "You are a helpful assistant.".into(),
-        provider_options: None,
-    }];
+    let prompt = vec![LanguageModelV4Message::system(
+        "You are a helpful assistant.",
+    )];
     let (system, messages, warnings) = convert_to_anthropic_messages(&prompt, true);
     assert!(warnings.is_empty());
     assert!(messages.is_empty());
@@ -26,6 +25,17 @@ fn converts_system_message() {
     assert_eq!(system.len(), 1);
     assert_eq!(system[0]["type"], "text");
     assert_eq!(system[0]["text"], "You are a helpful assistant.");
+}
+
+#[test]
+fn converts_developer_message_as_system_block() {
+    let prompt = vec![LanguageModelV4Message::developer_text("Follow app policy.")];
+    let (system, messages, warnings) = convert_to_anthropic_messages(&prompt, true);
+    assert!(warnings.is_empty());
+    assert!(messages.is_empty());
+    let system = system.unwrap_or_else(|| panic!("expected system"));
+    assert_eq!(system[0]["type"], "text");
+    assert_eq!(system[0]["text"], "Follow app policy.");
 }
 
 #[test]
@@ -121,14 +131,8 @@ fn system_is_none_when_no_system_messages() {
 #[test]
 fn multiple_system_messages_concatenated() {
     let prompt = vec![
-        LanguageModelV4Message::System {
-            content: "First instruction.".into(),
-            provider_options: None,
-        },
-        LanguageModelV4Message::System {
-            content: "Second instruction.".into(),
-            provider_options: None,
-        },
+        LanguageModelV4Message::system("First instruction."),
+        LanguageModelV4Message::system("Second instruction."),
     ];
     let (system, _, _) = convert_to_anthropic_messages(&prompt, true);
     let system = system.unwrap_or_else(|| panic!("expected system"));
@@ -1124,15 +1128,9 @@ fn unsupported_user_file_media_type_warns() {
 #[test]
 fn non_contiguous_system_messages_produces_warning() {
     let prompt = vec![
-        LanguageModelV4Message::System {
-            content: "First system.".into(),
-            provider_options: None,
-        },
+        LanguageModelV4Message::system("First system."),
         LanguageModelV4Message::user_text("Hello"),
-        LanguageModelV4Message::System {
-            content: "Second system.".into(),
-            provider_options: None,
-        },
+        LanguageModelV4Message::system("Second system."),
     ];
     let (_, _, warnings) = convert_to_anthropic_messages(&prompt, true);
     assert!(warnings.iter().any(|w| matches!(
@@ -1145,14 +1143,8 @@ fn non_contiguous_system_messages_produces_warning() {
 #[test]
 fn contiguous_system_messages_no_warning() {
     let prompt = vec![
-        LanguageModelV4Message::System {
-            content: "First.".into(),
-            provider_options: None,
-        },
-        LanguageModelV4Message::System {
-            content: "Second.".into(),
-            provider_options: None,
-        },
+        LanguageModelV4Message::system("First."),
+        LanguageModelV4Message::system("Second."),
     ];
     let (_, _, warnings) = convert_to_anthropic_messages(&prompt, true);
     assert!(

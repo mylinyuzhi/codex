@@ -341,6 +341,75 @@ fn frontmatter_invalid_effort_warns_and_drops() {
 }
 
 #[test]
+fn frontmatter_model_role_snake_case_parses() {
+    let project = TempDir::new().unwrap();
+    write_md(
+        project.path(),
+        "scout.md",
+        "---\nname: scout\ndescription: roams\nmodel_role: explore\n---\nbody",
+    );
+    let mut store = AgentDefinitionStore::new(
+        BuiltinAgentCatalog::default(),
+        AgentSearchPaths {
+            project_dirs: vec![project.path().to_path_buf()],
+            ..Default::default()
+        },
+    );
+    store.load();
+    let def = store.snapshot().find_active("scout").cloned().unwrap();
+    assert_eq!(def.model_role, Some(coco_types::ModelRole::Explore));
+}
+
+#[test]
+fn frontmatter_model_role_camel_case_alias_parses() {
+    let project = TempDir::new().unwrap();
+    write_md(
+        project.path(),
+        "hooky.md",
+        "---\nname: hooky\ndescription: hookish\nmodelRole: hookAgent\n---\nbody",
+    );
+    let mut store = AgentDefinitionStore::new(
+        BuiltinAgentCatalog::default(),
+        AgentSearchPaths {
+            project_dirs: vec![project.path().to_path_buf()],
+            ..Default::default()
+        },
+    );
+    store.load();
+    let def = store.snapshot().find_active("hooky").cloned().unwrap();
+    assert_eq!(def.model_role, Some(coco_types::ModelRole::HookAgent));
+}
+
+#[test]
+fn frontmatter_invalid_model_role_warns_and_drops() {
+    let project = TempDir::new().unwrap();
+    write_md(
+        project.path(),
+        "bad.md",
+        "---\nname: bad\ndescription: x\nmodel_role: octopus\n---\nbody",
+    );
+    let mut store = AgentDefinitionStore::new(
+        BuiltinAgentCatalog::default(),
+        AgentSearchPaths {
+            project_dirs: vec![project.path().to_path_buf()],
+            ..Default::default()
+        },
+    );
+    store.load();
+    let def = store.snapshot().find_active("bad").cloned().unwrap();
+    assert!(def.model_role.is_none());
+    assert!(
+        store
+            .last_report()
+            .warnings
+            .iter()
+            .any(|w| matches!(&w.error, ValidationError::InvalidModelRole { value } if value == "octopus")),
+        "expected InvalidModelRole warning, got: {:?}",
+        store.last_report().warnings
+    );
+}
+
+#[test]
 fn frontmatter_invalid_permission_mode_warns_and_drops() {
     let project = TempDir::new().unwrap();
     write_md(
@@ -692,7 +761,7 @@ fn prompt_lists_active_agents_in_alphabetical_order() {
         lines,
         vec![
             "- build: Build verification (Tools: Bash, Read)",
-            "- general-purpose: General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks. (Tools: All tools)",
+            "- general-purpose: General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks. When you are searching for a keyword or file and are not confident that you will find the right match in the first few tries use this agent to perform the search for you. (Tools: All tools)",
             "- statusline-setup: Use this agent to configure the user's Claude Code status line setting. (Tools: Read, Edit)",
         ]
     );

@@ -1,7 +1,9 @@
 use super::*;
+use vercel_ai_provider::FilePart;
 use vercel_ai_provider::ToolCallPart;
 use vercel_ai_provider::ToolResultContent;
 use vercel_ai_provider::ToolResultPart;
+use vercel_ai_provider::UserContentPart;
 
 #[test]
 fn converts_system_message() {
@@ -13,6 +15,34 @@ fn converts_system_message() {
     assert_eq!(si.parts.len(), 1);
     assert_eq!(si.parts[0].text, "You are helpful.");
     assert!(result.contents.is_empty());
+}
+
+#[test]
+fn converts_developer_message_to_system_instruction() {
+    let messages = vec![LanguageModelV4Message::developer_text("Follow app policy.")];
+    let result =
+        convert_to_google_generative_ai_messages(&messages, &ConvertOptions::default()).unwrap();
+    let si = result.system_instruction.unwrap();
+    assert_eq!(si.parts[0].text, "Follow app policy.");
+    assert!(result.contents.is_empty());
+}
+
+#[test]
+fn system_non_text_part_produces_warning() {
+    let messages = vec![LanguageModelV4Message::system_parts(vec![
+        UserContentPart::text("text"),
+        UserContentPart::File(FilePart::image(vec![1, 2, 3], "image/png")),
+    ])];
+    let (prompt, warnings) = convert_to_google_generative_ai_messages_with_warnings(
+        &messages,
+        &ConvertOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        prompt.system_instruction.unwrap().parts[0].text,
+        "text".to_string()
+    );
+    assert_eq!(warnings.len(), 1);
 }
 
 #[test]

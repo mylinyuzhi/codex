@@ -4,6 +4,7 @@
 //!
 //! Uses `ctx.schedules` (ScheduleStore trait) for persistence.
 
+use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
@@ -12,7 +13,6 @@ use coco_tool_runtime::ValidationResult;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
 use coco_types::ToolName;
-use coco_types::ToolResult;
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -25,8 +25,8 @@ const MAX_CRON_JOBS: usize = 50;
 /// Lightweight 5-field cron expression validator. TS uses
 /// `parseCronExpression()` from `utils/cron.ts` for full RFC parsing
 /// + next-run scheduling; coco-rs accepts the same syntax minus
-/// extension features (no L/W/# qualifiers) and rejects obviously
-/// malformed inputs at the tool boundary.
+///   extension features (no L/W/# qualifiers) and rejects obviously
+///   malformed inputs at the tool boundary.
 ///
 /// Returns `true` if the expression is well-formed (5 fields, each
 /// matching the simple grammar). Returns `false` for any structural

@@ -1,6 +1,6 @@
-use coco_types::AssistantMessage;
-use coco_types::LlmMessage;
-use coco_types::ToolResultMessage;
+use coco_messages::AssistantMessage;
+use coco_messages::LlmMessage;
+use coco_messages::ToolResultMessage;
 use uuid::Uuid;
 
 use super::*;
@@ -9,11 +9,11 @@ fn make_tool_result(tool_use_id: &str, content: &str) -> Message {
     Message::ToolResult(ToolResultMessage {
         uuid: Uuid::new_v4(),
         message: LlmMessage::Tool {
-            content: vec![coco_types::ToolContent::ToolResult(
-                coco_types::ToolResultContent {
+            content: vec![coco_messages::ToolContent::ToolResult(
+                coco_messages::ToolResultContent {
                     tool_call_id: tool_use_id.to_string(),
                     tool_name: String::new(),
-                    output: vercel_ai_provider::ToolResultContent::text(content.to_string()),
+                    output: coco_inference::ToolResultContent::text(content.to_string()),
                     is_error: false,
                     provider_metadata: None,
                 },
@@ -30,11 +30,11 @@ fn make_assistant_with_thinking(text: &str, thinking: &str) -> Message {
     Message::Assistant(AssistantMessage {
         message: LlmMessage::Assistant {
             content: vec![
-                coco_types::AssistantContent::Reasoning(vercel_ai_provider::ReasoningPart {
+                coco_messages::AssistantContent::Reasoning(coco_inference::ReasoningPart {
                     text: thinking.to_string(),
                     provider_metadata: None,
                 }),
-                coco_types::AssistantContent::Text(vercel_ai_provider::TextPart::new(
+                coco_messages::AssistantContent::Text(coco_inference::TextPart::new(
                     text.to_string(),
                 )),
             ],
@@ -53,8 +53,8 @@ fn make_assistant_with_thinking(text: &str, thinking: &str) -> Message {
 fn make_assistant_text(text: &str) -> Message {
     Message::Assistant(AssistantMessage {
         message: LlmMessage::Assistant {
-            content: vec![coco_types::AssistantContent::Text(
-                vercel_ai_provider::TextPart::new(text.to_string()),
+            content: vec![coco_messages::AssistantContent::Text(
+                coco_inference::TextPart::new(text.to_string()),
             )],
             provider_options: None,
         },
@@ -160,7 +160,7 @@ fn test_compact_thinking_blocks_removes_old_thinking() {
     {
         let has_thinking = content
             .iter()
-            .any(|c| matches!(c, coco_types::AssistantContent::Reasoning(_)));
+            .any(|c| matches!(c, coco_messages::AssistantContent::Reasoning(_)));
         assert!(has_thinking, "recent turn should keep its thinking blocks");
     }
 
@@ -170,7 +170,7 @@ fn test_compact_thinking_blocks_removes_old_thinking() {
     {
         let has_thinking = content
             .iter()
-            .any(|c| matches!(c, coco_types::AssistantContent::Reasoning(_)));
+            .any(|c| matches!(c, coco_messages::AssistantContent::Reasoning(_)));
         assert!(
             !has_thinking,
             "old turn should have thinking blocks removed"

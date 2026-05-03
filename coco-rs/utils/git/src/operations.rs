@@ -113,6 +113,29 @@ pub(crate) fn resolve_repository_root(path: &Path) -> Result<PathBuf, GitTooling
     Ok(PathBuf::from(root))
 }
 
+/// Find the canonical git root for `start`, sharing one identity across worktrees.
+///
+/// TS: `findCanonicalGitRoot` in `memdir/paths.ts`. Linked worktrees point their
+/// `.git` file at a sibling under the main repo's `.git/worktrees/<name>`; the
+/// `--git-common-dir` rev-parse returns that shared `.git`, whose parent is the
+/// canonical root every worktree of the repo agrees on. Returns `None` for
+/// paths outside any git work tree (or when git is unavailable).
+pub fn find_canonical_git_root(start: &Path) -> Option<PathBuf> {
+    let common_dir = run_git_for_stdout(
+        start,
+        vec![
+            OsString::from("rev-parse"),
+            OsString::from("--path-format=absolute"),
+            OsString::from("--git-common-dir"),
+        ],
+        None,
+    )
+    .ok()?;
+    let common = PathBuf::from(common_dir);
+    let canonical = common.canonicalize().unwrap_or(common);
+    canonical.parent().map(Path::to_path_buf)
+}
+
 pub(crate) fn apply_repo_prefix_to_force_include(
     prefix: Option<&Path>,
     paths: &[PathBuf],
@@ -322,3 +345,7 @@ pub fn commit_all(path: &Path, message: &str) -> Result<Option<String>, GitTooli
     let commit_id = get_head_commit(path)?;
     Ok(Some(commit_id))
 }
+
+#[cfg(test)]
+#[path = "operations.test.rs"]
+mod tests;

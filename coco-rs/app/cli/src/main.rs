@@ -4,16 +4,16 @@ use std::sync::atomic::Ordering;
 
 use anyhow::Result;
 use clap::Parser;
-use vercel_ai_provider::AISdkError;
-use vercel_ai_provider::AssistantContentPart;
-use vercel_ai_provider::FinishReason;
-use vercel_ai_provider::LanguageModelV4;
-use vercel_ai_provider::LanguageModelV4CallOptions;
-use vercel_ai_provider::LanguageModelV4GenerateResult;
-use vercel_ai_provider::LanguageModelV4StreamResult;
-use vercel_ai_provider::TextPart;
-use vercel_ai_provider::UnifiedFinishReason;
-use vercel_ai_provider::Usage;
+use coco_inference::AISdkError;
+use coco_inference::AssistantContentPart;
+use coco_inference::FinishReason;
+use coco_inference::LanguageModel;
+use coco_inference::LanguageModelCallOptions;
+use coco_inference::LanguageModelGenerateResult;
+use coco_inference::LanguageModelStreamResult;
+use coco_inference::TextPart;
+use coco_inference::UnifiedFinishReason;
+use coco_inference::Usage;
 
 use coco_cli::Cli;
 use coco_cli::Commands;
@@ -42,7 +42,7 @@ struct MockModel {
 }
 
 #[async_trait::async_trait]
-impl LanguageModelV4 for MockModel {
+impl LanguageModel for MockModel {
     fn provider(&self) -> &str {
         "mock"
     }
@@ -51,18 +51,18 @@ impl LanguageModelV4 for MockModel {
     }
     async fn do_generate(
         &self,
-        options: LanguageModelV4CallOptions,
-    ) -> std::result::Result<LanguageModelV4GenerateResult, AISdkError> {
+        options: LanguageModelCallOptions,
+    ) -> std::result::Result<LanguageModelGenerateResult, AISdkError> {
         let call = self.call_count.fetch_add(1, Ordering::SeqCst);
         let user_text: String = options
             .prompt
             .iter()
             .filter_map(|msg| match msg {
-                vercel_ai_provider::LanguageModelV4Message::User { content, .. } => Some(
+                coco_inference::LanguageModelMessage::User { content, .. } => Some(
                     content
                         .iter()
                         .filter_map(|c| match c {
-                            vercel_ai_provider::UserContentPart::Text(t) => Some(t.text.as_str()),
+                            coco_inference::UserContentPart::Text(t) => Some(t.text.as_str()),
                             _ => None,
                         })
                         .collect::<Vec<_>>()
@@ -78,7 +78,7 @@ impl LanguageModelV4 for MockModel {
              This is coco-rs with a mock provider. Set ANTHROPIC_API_KEY to use a real model."
         );
 
-        Ok(LanguageModelV4GenerateResult {
+        Ok(LanguageModelGenerateResult {
             content: vec![AssistantContentPart::Text(TextPart {
                 text: response,
                 provider_metadata: None,
@@ -93,8 +93,8 @@ impl LanguageModelV4 for MockModel {
     }
     async fn do_stream(
         &self,
-        options: LanguageModelV4CallOptions,
-    ) -> std::result::Result<LanguageModelV4StreamResult, AISdkError> {
+        options: LanguageModelCallOptions,
+    ) -> std::result::Result<LanguageModelStreamResult, AISdkError> {
         // Compose `do_generate` output into a synthetic stream so
         // the QueryEngine streaming path (which ALWAYS calls
         // `query_stream`) works against the mock. Without this,
@@ -118,11 +118,11 @@ impl LanguageModelV4 for MockModel {
 ///   2. `runtime_config.model_roles.get(Main)` — the JSON-first role,
 ///      resolved from Settings / env / overrides by the config builder.
 ///   3. Mock model (no credentials available).
-mod model_factory;
 mod tui_runner;
 
-pub(crate) use model_factory::build_api_client;
-pub(crate) use model_factory::build_fallback_clients_for_role;
+use coco_cli::session_runtime;
+pub(crate) use coco_inference::model_factory::build_api_client;
+pub(crate) use coco_inference::model_factory::build_fallback_clients_for_role;
 
 /// Build the primary `ApiClient` for the session.
 ///
@@ -138,7 +138,7 @@ pub(crate) use model_factory::build_fallback_clients_for_role;
 ///     (`"anthropic"`, `"openai"`, …, or `"mock"`). Surfaced in the
 ///     TUI banner.
 ///   - `model_id`: wire-side model identifier; threaded through
-///     `QueryEngineConfig.model_name` for streaming/cache labels.
+///     `QueryEngineConfig.model_id` for streaming/cache labels.
 pub(crate) fn create_api_client(
     cli_model_override: Option<&str>,
     runtime_config: &coco_config::RuntimeConfig,
@@ -181,7 +181,7 @@ pub(crate) fn create_api_client(
     // constructor is intentionally test-grade; turn-boundary coherence
     // checks treat it as a no-change fingerprint, which is fine because
     // hot-reload won't promote a mock to a real provider mid-session.
-    let model: Arc<dyn LanguageModelV4> = Arc::new(MockModel {
+    let model: Arc<dyn LanguageModel> = Arc::new(MockModel {
         call_count: AtomicI32::new(0),
     });
     let model_id = model.model_id().to_string();
@@ -516,39 +516,35 @@ async fn main() -> Result<()> {
     }
 }
 
+const DEFAULT_SYSTEM_PROMPT_IDENTITY: &str =
+    "You are coco, an AI coding assistant. Be concise and helpful.";
+
 /// Build the system prompt with environment context and CLAUDE.md content.
-pub(crate) fn build_system_prompt(cwd: &std::path::Path, model_id: &str) -> String {
+pub(crate) fn build_system_prompt(
+    cwd: &std::path::Path,
+    model_id: &str,
+    base_instructions: Option<&str>,
+) -> String {
     let claude_files = coco_context::discover_claude_md_files(cwd);
-    let claude_md_content: String = claude_files
-        .iter()
-        .map(|f| format!("# {}\n{}\n", f.path.display(), f.content))
-        .collect();
-
     let env_info = coco_context::get_environment_info(cwd, model_id);
+    let identity = base_instructions.unwrap_or(DEFAULT_SYSTEM_PROMPT_IDENTITY);
+    coco_context::build_system_prompt(identity, &claude_files, &env_info, None, None, None)
+        .full_text()
+}
 
-    let mut system_prompt =
-        String::from("You are coco, an AI coding assistant. Be concise and helpful.\n\n");
-    system_prompt.push_str(&format!(
-        "# Environment\n- Platform: {}\n- Shell: {:?}\n- CWD: {}\n",
-        env_info.platform.display_name(),
-        env_info.shell,
-        env_info.cwd,
-    ));
-    if let Some(ref git) = env_info.git_status {
-        system_prompt.push_str(&format!(
-            "- Git branch: {}\n- Git status: {}\n",
-            git.branch,
-            if git.status.is_empty() {
-                "(clean)"
-            } else {
-                &git.status
-            },
-        ));
-    }
-    if !claude_md_content.is_empty() {
-        system_prompt.push_str(&format!("\n# Project Instructions\n{claude_md_content}"));
-    }
-    system_prompt
+/// Resolve model-specific instructions from runtime config, then build
+/// the prompt. Shared by headless, SDK, and TUI bootstraps.
+pub(crate) fn build_system_prompt_for_model(
+    cwd: &std::path::Path,
+    runtime_config: &coco_config::RuntimeConfig,
+    provider: &str,
+    model_id: &str,
+) -> String {
+    let resolved = runtime_config.model_registry.resolve(provider, model_id);
+    let base_instructions = resolved
+        .as_ref()
+        .and_then(|model| model.info.base_instructions.as_deref());
+    build_system_prompt(cwd, model_id, base_instructions)
 }
 
 /// Handle `coco plugin <action>`.
@@ -704,26 +700,32 @@ fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> Result<()
 /// Handle `coco agents` — list discovered agent definitions.
 ///
 /// TS: `src/cli/handlers/agents.ts` — walks the standard agent dirs and
-/// prints a flat list. Rust mirrors the same discovery sources.
+/// prints a flat list. Rust mirrors the same discovery sources via the
+/// `coco-subagent` catalog (built-ins + per-source markdown loaders).
 async fn run_agents_subcommand() -> Result<()> {
     let cwd = std::env::current_dir().unwrap_or_default();
     let config_home = global_config::config_home();
-    let agent_dirs = coco_tools::tools::agent_spawn::get_agent_dirs(&config_home, &cwd);
-    let mut agents = coco_tools::tools::agent_spawn::load_agents_from_dirs(&agent_dirs);
+    let paths = standard_agent_search_paths(&config_home, &cwd);
+    let mut store = coco_subagent::AgentDefinitionStore::new(
+        coco_subagent::BuiltinAgentCatalog::interactive(),
+        paths.clone(),
+    );
+    store.load();
+    let snapshot = store.snapshot();
 
-    if agents.is_empty() {
+    if snapshot.active_count() == 0 {
+        let searched: Vec<String> = paths
+            .user_dir
+            .iter()
+            .chain(paths.project_dirs.iter())
+            .map(|p| p.display().to_string())
+            .collect();
         println!("No agents found.");
-        println!(
-            "Searched: {}",
-            agent_dirs
-                .iter()
-                .map(|p| p.display().to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
+        println!("Searched: {}", searched.join(", "));
         return Ok(());
     }
 
+    let mut agents: Vec<&coco_types::AgentDefinition> = snapshot.active().collect();
     agents.sort_by(|a, b| a.name.cmp(&b.name));
     println!("{} agent(s):", agents.len());
     for agent in &agents {
@@ -732,6 +734,21 @@ async fn run_agents_subcommand() -> Result<()> {
         println!("  {} · {model}  — {desc}", agent.name);
     }
     Ok(())
+}
+
+/// Standard CLI agent search paths: `~/.coco/agents` (user) plus
+/// `<cwd>/.claude/agents` (project). Mirrors TS `agentDirs` from
+/// `tools/AgentTool/loadAgentsDir.ts` discovery roots and the legacy
+/// `agent_spawn::get_agent_dirs` shape we replaced.
+fn standard_agent_search_paths(
+    config_home: &std::path::Path,
+    cwd: &std::path::Path,
+) -> coco_subagent::definition_store::AgentSearchPaths {
+    coco_subagent::definition_store::AgentSearchPaths {
+        user_dir: Some(config_home.join("agents")),
+        project_dirs: vec![cwd.join(".claude").join("agents")],
+        ..coco_subagent::definition_store::AgentSearchPaths::empty()
+    }
 }
 
 /// Run a single-turn print mode (--print / piped stdout).
@@ -766,10 +783,11 @@ async fn run_chat(cli: &Cli, prompt: Option<&str>) -> Result<()> {
     let permission_mode = startup.mode;
     let bypass_permissions_available = startup.bypass_available;
 
-    let system_prompt = build_system_prompt(&cwd, &model_id);
+    let system_prompt =
+        build_system_prompt_for_model(&cwd, &runtime_config, client.provider(), &model_id);
 
     let config = QueryEngineConfig {
-        model_name: model_id.clone(),
+        model_id: model_id.clone(),
         permission_mode,
         bypass_permissions_available,
         context_window: 200_000,
@@ -799,6 +817,7 @@ async fn run_chat(cli: &Cli, prompt: Option<&str>) -> Result<()> {
         shell_config: runtime_config.shell.clone(),
         web_fetch_config: runtime_config.web_fetch.clone(),
         web_search_config: runtime_config.web_search.clone(),
+        compact: runtime_config.compact.clone(),
         features: std::sync::Arc::new(runtime_config.features.clone()),
         tool_overrides: runtime_config.tool_overrides.clone(),
         ..Default::default()
@@ -865,21 +884,17 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     // Resolve static config. Cwd + model id are also stored on the
     // SessionHandle at `session/start`, but we use the CLI-level values
     // here for the system prompt + headless defaults.
-    let system_prompt = Some(build_system_prompt(&cwd, &model_id));
+    let system_prompt = Some(build_system_prompt_for_model(
+        &cwd,
+        &runtime_config,
+        client.provider(),
+        &model_id,
+    ));
 
     // Wire a disk-backed SessionManager so session/list, session/read,
     // and session/resume work against `~/.coco/sessions`.
     let session_manager = Arc::new(SessionManager::new(sessions_dir()));
-
-    // Wire a FileHistoryState so control/rewindFiles can preview and
-    // apply rewinds. A fresh state is empty — snapshots will accrue
-    // as future integration code wires file-history tracking into the
-    // tool layer. Until then, `control/rewindFiles` will error with
-    // "no snapshot for user_message_id" which is the expected contract
-    // when nothing has been tracked yet.
-    let file_history = Arc::new(tokio::sync::RwLock::new(
-        coco_context::FileHistoryState::new(),
-    ));
+    let session_manager_for_runtime = session_manager.clone();
 
     // Wire an empty MCP connection manager so mcp/setServers,
     // mcp/reconnect, mcp/toggle, and mcp/status work. Initial config
@@ -906,11 +921,10 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     let output_style_dirs = vec![global_config::config_home().join("output-styles")];
     let current_output_style = "default".to_string();
 
-    // Standard agent-definition directories — mirrors what the Agent
+    // Standard agent-definition search paths — mirrors what the Agent
     // tool walks at spawn time. `initialize` reads the same sources so
     // clients see the same list the agent tool will actually use.
-    let agent_dirs =
-        coco_tools::tools::agent_spawn::get_agent_dirs(&global_config::config_home(), &cwd);
+    let agent_search_paths = standard_agent_search_paths(&global_config::config_home(), &cwd);
 
     // Resolve auth once so `initialize.account` can report the
     // provider / subscription. The actual credentials don't leak to SDK
@@ -945,7 +959,7 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     let mut bootstrap_builder = CliInitializeBootstrap::new(current_output_style)
         .with_command_registry(command_registry)
         .with_output_style_dirs(output_style_dirs)
-        .with_agent_dirs(agent_dirs);
+        .with_agent_search_paths(agent_search_paths);
     if let Some(auth) = auth_method {
         bootstrap_builder = bootstrap_builder.with_auth_method(auth);
     }
@@ -962,13 +976,16 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     }
     let bypass_permissions_available = startup.bypass_available;
 
-    // Build the server with a default runner first so we have a live
-    // `state` handle to give to the approval bridge.
+    // Stage 1 — build the server *without* a TurnRunner / SessionRuntime
+    // / file_history yet. We need a live `state` Arc so the
+    // `SdkPermissionBridge` can hold it; the runtime needs the bridge.
+    // The remaining wirings (file_history shared with the runtime,
+    // session_runtime, real turn_runner) are layered on after the
+    // runtime is built.
     let transport = StdioTransport::new();
     let server = SdkServer::new(transport)
         .with_session_manager(session_manager)
-        .with_file_history(file_history, global_config::config_home())
-        .with_mcp_manager(mcp_manager)
+        .with_mcp_manager(mcp_manager.clone())
         .with_initialize_bootstrap(bootstrap);
     let state = server.state();
     // Seed the bypass capability so `handle_set_permission_mode` can
@@ -978,23 +995,128 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
         std::sync::atomic::Ordering::Relaxed,
     );
 
-    // Build the real runner with an SdkPermissionBridge that routes
-    // `PermissionDecision::Ask` via `approval/askForApproval` to the
-    // SDK client. Then install the runner on the live state.
+    // Build the SdkPermissionBridge that routes `PermissionDecision::Ask`
+    // via `approval/askForApproval` to the SDK client.
     let bridge: Arc<dyn coco_tool_runtime::ToolPermissionBridge> =
         Arc::new(coco_cli::sdk_server::SdkPermissionBridge::new(state));
-    let mut runner_builder = QueryEngineRunner::new(
-        client,
-        tools,
+
+    // Stage 2 — build the SessionRuntime. Same construction as TUI so SDK
+    // sessions pick up FileReadState / SessionMemoryService /
+    // CompactionObservers / HookRegistry / mailbox / file_history.
+    // Per-session subsystem state isolation across SDK sessions is a
+    // future feature; today the SDK runs effectively single-session.
+    let session_runtime = crate::session_runtime::SessionRuntime::build(
+        crate::session_runtime::SessionRuntimeBuildOpts {
+            cli,
+            runtime_config: Arc::new(runtime_config),
+            cwd: cwd.clone(),
+            model_id,
+            system_prompt: system_prompt.clone().unwrap_or_default(),
+            bypass_permissions_available,
+            permission_mode: startup.mode,
+            client,
+            fallback_clients,
+            recovery_policy,
+            tools,
+            session_manager: session_manager_for_runtime,
+            fast_model_spec: None,
+            permission_bridge: Some(bridge),
+        },
+    )
+    .await?;
+
+    // P2'+: install the production background TaskRuntime FIRST so
+    // both the engine wire-up (TaskHandle) and the agent-team handle
+    // (AgentTaskRegistry) see the same `Arc`. AgentTool's background
+    // path registers spawns through the registry; `Task*` tools the
+    // model invokes consume the same store via `ctx.task_handle`.
+    //
+    // Disk-output session dir mirrors TS's
+    // `getProjectTempDir()/{sessionId}/tasks/`. Captured ONCE here
+    // so subsequent `/clear` session regen doesn't invalidate paths
+    // held by in-flight `DiskTaskOutput` instances — bg agent tasks
+    // outliving `/clear` keep writing to the original path until
+    // they complete or are killed.
+    let task_session_id = session_runtime.current_session_id().await;
+    let task_session_dir = coco_config::global_config::config_home()
+        .join("cache")
+        .join("tasks")
+        .join(&task_session_id);
+    let task_runtime = std::sync::Arc::new(coco_cli::task_runtime::TaskRuntime::with_session_dir(
+        std::sync::Arc::new(coco_tasks::TaskManager::new()),
+        task_session_dir,
+    ));
+    session_runtime
+        .attach_task_runtime(task_runtime.clone())
+        .await;
+
+    // Per-agent transcript persistence (TS-faithful resume).
+    // Constructed BEFORE `install_agent_team` so the resulting Arc
+    // can be threaded into `SwarmAgentHandle::set_transcript_store`.
+    // The sessions_dir matches the runtime's transcript path so
+    // `<sessions_dir>/<session_id>/subagents/agent-<id>.*` lives
+    // alongside the main session JSONL.
+    let agent_transcript_sessions_dir = coco_config::global_config::config_home().join("sessions");
+    let agent_transcript_store: std::sync::Arc<dyn coco_tool_runtime::AgentTranscriptStore> =
+        std::sync::Arc::new(
+            coco_cli::agent_transcript_persistence::SessionAgentTranscriptStore::new(
+                std::sync::Arc::new(coco_session::TranscriptStore::new(
+                    agent_transcript_sessions_dir,
+                )),
+            ),
+        );
+    session_runtime
+        .attach_agent_transcript_store(agent_transcript_store.clone())
+        .await;
+
+    // Wire the MCP handle so AgentTool's prompt-time dynamic listing
+    // can pre-filter agents whose `required_mcp_servers` aren't
+    // connected. Wraps the SDK-bootstrapped `McpConnectionManager` —
+    // shared with `mcp/setServers`, `mcp/reconnect`, etc.
+    session_runtime
+        .attach_mcp_handle(std::sync::Arc::new(
+            coco_cli::mcp_handle_adapter::McpManagerAdapter::new(mcp_manager.clone()),
+        ))
+        .await;
+
+    // P1: install agent-team wiring (SwarmAgentHandle + QueryEngineAdapter
+    // factory). No-op when `Feature::AgentTeams` is off.
+    coco_cli::agent_handle_factory::install_agent_team(
+        session_runtime.clone(),
+        cwd.display().to_string(),
+    )
+    .await?;
+
+    // D1/D2: install the fork dispatcher used by post-turn forks
+    // (`/btw`, `promptSuggestion`). Captures `Arc<SessionRuntime>`
+    // and routes every dispatch through `build_engine_from_config`,
+    // so the parent loop is never mutated. Always installed — the
+    // dispatcher has no feature gate; its callers gate themselves
+    // (`Feature::AgentTeams`, `COCO_PROMPT_SUGGESTION_DISABLE`,
+    // …).
+    coco_cli::fork_dispatcher::install(session_runtime.clone()).await;
+
+    // Stage 3 — install the runtime's file_history on the server so
+    // `control/rewindFiles` and the engine share the SAME Arc. When
+    // file-checkpointing is disabled (`runtime.file_history == None`)
+    // we still install an empty placeholder so `control/rewindFiles`
+    // returns a meaningful "no snapshots" reply instead of
+    // METHOD_NOT_FOUND.
+    let file_history_for_server = session_runtime.file_history.clone().unwrap_or_else(|| {
+        Arc::new(tokio::sync::RwLock::new(
+            coco_context::FileHistoryState::new(),
+        ))
+    });
+    let server = server
+        .with_file_history(file_history_for_server, global_config::config_home())
+        .with_session_runtime(session_runtime.clone());
+
+    let runner = Arc::new(QueryEngineRunner::new(
+        session_runtime,
         cli.max_tokens.unwrap_or(16_384),
         cli.max_turns.unwrap_or(30),
         system_prompt,
-    )
-    .with_fallback_clients(fallback_clients);
-    if let Some(policy) = recovery_policy {
-        runner_builder = runner_builder.with_recovery_policy(policy);
-    }
-    let runner = Arc::new(runner_builder.with_permission_bridge(bridge));
+    ));
     server.set_turn_runner(runner).await;
 
     // Run the dispatch loop to completion. Exits on EOF, transport
@@ -1141,3 +1263,7 @@ fn is_sandboxed_env() -> bool {
     };
     truthy("IS_SANDBOX") || env::is_env_truthy(EnvKey::CocoBubblewrap)
 }
+
+#[cfg(test)]
+#[path = "main.test.rs"]
+mod tests;

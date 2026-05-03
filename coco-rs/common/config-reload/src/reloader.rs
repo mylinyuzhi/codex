@@ -183,17 +183,33 @@ impl RuntimeReloader {
             }
         }
 
-        let tracked_pairs: Vec<(PathBuf, TrackedKind)> =
-            tracked_files.into_iter().zip(tracked_kinds).collect();
+        // Build per-tracked-file matching keys. Some platforms (notably
+        // macOS FSEvents) report event paths via canonicalized parents
+        // (`/private/var/...`) while the configured paths point at the
+        // original symlink (`/var/...`). Match on both the original and
+        // a canonicalized-parent variant so the classify closure sees
+        // the event regardless of which form notify surfaces.
+        let tracked_keys: Vec<(PathBuf, PathBuf, TrackedKind)> = tracked_files
+            .iter()
+            .zip(tracked_kinds.iter().copied())
+            .map(|(path, kind)| {
+                let canonical = path
+                    .parent()
+                    .and_then(|parent| std::fs::canonicalize(parent).ok())
+                    .and_then(|canon| path.file_name().map(|name| canon.join(name)))
+                    .unwrap_or_else(|| path.clone());
+                (path.clone(), canonical, kind)
+            })
+            .collect();
         let watcher = FileWatcherBuilder::<ConfigChange>::new()
             .throttle_interval(debounce)
             .build(
                 move |ev: &FsEvent| {
                     ev.paths.iter().find_map(|p| {
-                        tracked_pairs
+                        tracked_keys
                             .iter()
-                            .find(|(path, _)| path == p)
-                            .map(|(path, kind)| ConfigChange {
+                            .find(|(path, canonical, _)| path == p || canonical == p)
+                            .map(|(path, _, kind)| ConfigChange {
                                 path: path.clone(),
                                 kind: *kind,
                             })

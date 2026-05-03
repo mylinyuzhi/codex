@@ -28,6 +28,10 @@ pub enum ValidationError {
     InvalidMemoryScope { value: String },
     #[error("invalid permission_mode `{value}`")]
     InvalidPermissionMode { value: String },
+    #[error(
+        "invalid model_role `{value}` (expected one of main/fast/compact/plan/explore/review/hook_agent/memory/subagent)"
+    )]
+    InvalidModelRole { value: String },
     #[error("invalid `max_turns` value `{value}` (expected positive integer)")]
     InvalidMaxTurns { value: String },
     #[error("invalid YAML frontmatter: {message}")]

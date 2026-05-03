@@ -1,3 +1,4 @@
+use coco_messages::ToolResult;
 use coco_shell::read_only::is_read_only_command;
 use coco_shell::sandbox::BypassRequest;
 use coco_shell::sandbox::SandboxConfig as ShellSandboxConfig;
@@ -16,7 +17,6 @@ use coco_tool_runtime::ValidationResult;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
 use coco_types::ToolName;
-use coco_types::ToolResult;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -317,7 +317,7 @@ impl Tool for BashTool {
     /// the executor persists the full output to a tool-results file and
     /// only keeps a truncated snippet inline. We match TS exactly so
     /// cross-runtime sessions handle large outputs identically.
-    fn max_result_size_chars(&self) -> i32 {
+    fn max_result_size_chars(&self) -> i64 {
         30_000
     }
 
@@ -851,6 +851,19 @@ fn build_image_block(bytes: &[u8]) -> Value {
 /// or `(Some(path), bytes)` after persisting. Failure to write the
 /// file silently returns `(None, 0)` — persistence is best-effort
 /// and shouldn't break the tool result.
+///
+/// TODO(level-1-pipeline): this is a Bash-only stub of Level 1 of the
+/// Tool Result Budget plan. It diverges from TS in three ways:
+///   1. `temp_dir()` instead of session-scoped `<sessionDir>/tool-results/`
+///   2. Adds parallel `persistedOutputPath`/`persistedOutputSize` JSON
+///      fields instead of replacing `tool_result.content` with the
+///      `<persisted-output>` envelope (so the model still sees full stdout).
+///   3. No idempotency — every turn rewrites with a fresh nanosecond
+///      timestamp, breaking prompt-cache stability.
+///
+/// Replace with delegation to
+/// `coco_tool_runtime::tool_result_storage::maybe_persist_large_tool_result`
+/// once Phase 1 of `docs/coco-rs/tool-result-budget-plan.md` lands.
 pub(crate) fn maybe_persist_oversized_output(bytes: &[u8]) -> (Option<String>, usize) {
     // Match TS `maxResultSizeChars: 30_000` as the persistence trigger.
     // We threshold against raw bytes since TS uses char count and

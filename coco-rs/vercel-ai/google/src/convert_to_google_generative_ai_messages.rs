@@ -9,6 +9,7 @@ use vercel_ai_provider::ToolContentPart;
 use vercel_ai_provider::ToolResultContent;
 use vercel_ai_provider::ToolResultContentPart;
 use vercel_ai_provider::UserContentPart;
+use vercel_ai_provider::Warning;
 
 use crate::google_generative_ai_prompt::FileDataPart;
 use crate::google_generative_ai_prompt::FunctionCallPart;
@@ -48,9 +49,18 @@ pub fn convert_to_google_generative_ai_messages(
     prompt: &[LanguageModelV4Message],
     options: &ConvertOptions,
 ) -> Result<GoogleGenerativeAIPrompt, String> {
+    let (prompt, _) = convert_to_google_generative_ai_messages_with_warnings(prompt, options)?;
+    Ok(prompt)
+}
+
+pub fn convert_to_google_generative_ai_messages_with_warnings(
+    prompt: &[LanguageModelV4Message],
+    options: &ConvertOptions,
+) -> Result<(GoogleGenerativeAIPrompt, Vec<Warning>), String> {
     let mut system_instruction_parts: Vec<GoogleTextPart> = Vec::new();
     let mut contents: Vec<GoogleGenerativeAIContent> = Vec::new();
     let mut system_messages_allowed = true;
+    let mut warnings = Vec::new();
 
     for message in prompt {
         match message {
@@ -61,9 +71,18 @@ pub fn convert_to_google_generative_ai_messages(
                             .to_string(),
                     );
                 }
-                system_instruction_parts.push(GoogleTextPart {
-                    text: content.clone(),
-                });
+                let text = collapse_text_parts(content, &mut warnings, "system message");
+                system_instruction_parts.push(GoogleTextPart { text });
+            }
+            LanguageModelV4Message::Developer { content, .. } => {
+                if !system_messages_allowed {
+                    return Err(
+                        "developer messages are only supported at the beginning of the conversation"
+                            .to_string(),
+                    );
+                }
+                let text = collapse_text_parts(content, &mut warnings, "developer message");
+                system_instruction_parts.push(GoogleTextPart { text });
             }
             LanguageModelV4Message::User { content, .. } => {
                 system_messages_allowed = false;
@@ -131,10 +150,31 @@ pub fn convert_to_google_generative_ai_messages(
             })
         };
 
-    Ok(GoogleGenerativeAIPrompt {
-        system_instruction,
-        contents,
-    })
+    Ok((
+        GoogleGenerativeAIPrompt {
+            system_instruction,
+            contents,
+        },
+        warnings,
+    ))
+}
+
+fn collapse_text_parts(
+    parts: &[UserContentPart],
+    warnings: &mut Vec<Warning>,
+    context: &str,
+) -> String {
+    let mut text = String::new();
+    for part in parts {
+        match part {
+            UserContentPart::Text(text_part) => text.push_str(&text_part.text),
+            UserContentPart::File(_) => warnings.push(Warning::unsupported_with_details(
+                "non-text prompt part",
+                format!("{context} contains a non-text part that was dropped"),
+            )),
+        }
+    }
+    text
 }
 
 fn convert_user_content_parts(parts: &[UserContentPart]) -> Vec<GoogleGenerativeAIContentPart> {

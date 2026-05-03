@@ -1,0 +1,1260 @@
+//! Standalone-subagent spawn dispatch.
+//!
+//! Owns:
+//! - [`SwarmAgentHandle::spawn_subagent`] — registers the subagent on the
+//!   agents list, applies worktree isolation, resolves the spawn-time
+//!   identity (`coco_subagent::resolve_subagent_selection`), builds the
+//!   `AgentQueryConfig`, dispatches sync vs background, and updates
+//!   tracked status.
+//! - [`spawn_failed`] — tiny shorthand for sync-path early failures.
+//!
+//! Pure-logic helpers live in `core/subagent`. Handoff classification and
+//! AgentSummary live in `super::handoff`. Background-spawn resume lives in
+//! `super::resume`.
+
+use std::sync::Arc;
+use std::time::Instant;
+
+use coco_tool_runtime::AgentSpawnRequest;
+use coco_tool_runtime::AgentSpawnResponse;
+use coco_tool_runtime::AgentSpawnStatus;
+use coco_types::SubAgentState;
+use coco_types::SubAgentStatus;
+
+use super::SwarmAgentHandle;
+
+/// Build an `OrchestrationContext` for subagent-spawn hook firing.
+///
+/// Standalone so the bg path can build it inside a detached task
+/// without holding `&SwarmAgentHandle`. The hook system's full
+/// feature surface (project_dir resolution, per-session disable
+/// flag, attachment emitter) is approximated here — subagent-spawn
+/// hooks don't need the same wire-up the parent's per-turn hooks do.
+pub(super) fn hook_ctx_for_cwd(cwd: &str) -> coco_hooks::orchestration::OrchestrationContext {
+    coco_hooks::orchestration::OrchestrationContext {
+        session_id: String::new(),
+        cwd: std::path::PathBuf::from(cwd),
+        project_dir: Some(std::path::PathBuf::from(cwd)),
+        permission_mode: None,
+        cancel: tokio_util::sync::CancellationToken::new(),
+        disable_all_hooks: false,
+        allow_managed_hooks_only: false,
+        attachment_emitter: coco_messages::AttachmentEmitter::noop(),
+    }
+}
+
+/// Free-function variant of `fire_subagent_start_hook` for the bg
+/// path. Same fail-open semantics.
+pub(super) async fn fire_subagent_start_for_task(
+    registry: Option<Arc<coco_hooks::HookRegistry>>,
+    cwd: &str,
+    agent_id: &str,
+    agent_type: &str,
+    prompt: &str,
+) -> String {
+    let Some(registry) = registry else {
+        return prompt.to_string();
+    };
+    let ctx = hook_ctx_for_cwd(cwd);
+    match coco_hooks::orchestration::execute_subagent_start(&registry, &ctx, agent_type, agent_id)
+        .await
+    {
+        Ok(result) if !result.additional_contexts.is_empty() => {
+            let blocks = result
+                .additional_contexts
+                .iter()
+                .map(|c| format!("<hook-additional-context>\n{c}\n</hook-additional-context>"))
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            format!("{blocks}\n\n{prompt}")
+        }
+        Ok(_) => prompt.to_string(),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                %agent_id,
+                %agent_type,
+                "SubagentStart (bg) hook firing failed; proceeding without injected context"
+            );
+            prompt.to_string()
+        }
+    }
+}
+
+/// Free-function variant of `fire_subagent_stop_hook` for the bg
+/// path. Errors logged + swallowed.
+pub(super) async fn fire_subagent_stop_for_task(
+    registry: Option<Arc<coco_hooks::HookRegistry>>,
+    cwd: &str,
+    agent_id: &str,
+    agent_type: &str,
+    transcript_path: Option<&str>,
+) {
+    let Some(registry) = registry else { return };
+    let ctx = hook_ctx_for_cwd(cwd);
+    if let Err(e) = coco_hooks::orchestration::execute_subagent_stop(
+        &registry,
+        &ctx,
+        agent_type,
+        agent_id,
+        transcript_path,
+    )
+    .await
+    {
+        tracing::warn!(
+            error = %e,
+            %agent_id,
+            %agent_type,
+            "SubagentStop (bg) hook firing failed"
+        );
+    }
+}
+
+impl SwarmAgentHandle {
+    /// Build an `OrchestrationContext` keyed off the handle's cwd.
+    /// Thin wrapper around [`hook_ctx_for_cwd`] for sync-path callers
+    /// that already hold `&self`.
+    fn hook_orchestration_context(&self) -> coco_hooks::orchestration::OrchestrationContext {
+        hook_ctx_for_cwd(&self.cwd)
+    }
+
+    /// Fire SubagentStart hooks and prepend the aggregated
+    /// `additional_contexts` (each wrapped in a `<hook-additional-context>`
+    /// XML block) to `prompt`. Returns `(effective_prompt, raw_result)`.
+    /// Fail-open: any hook error is logged and the original prompt is
+    /// returned unchanged.
+    pub(super) async fn fire_subagent_start_hook(
+        &self,
+        agent_id: &str,
+        agent_type: &str,
+        prompt: &str,
+    ) -> (
+        String,
+        Option<coco_hooks::orchestration::AggregatedHookResult>,
+    ) {
+        let Some(registry) = self.hook_registry().cloned() else {
+            return (prompt.to_string(), None);
+        };
+        let ctx = self.hook_orchestration_context();
+        match coco_hooks::orchestration::execute_subagent_start(
+            &registry, &ctx, agent_type, agent_id,
+        )
+        .await
+        {
+            Ok(result) => {
+                if result.additional_contexts.is_empty() {
+                    (prompt.to_string(), Some(result))
+                } else {
+                    let blocks = result
+                        .additional_contexts
+                        .iter()
+                        .map(|c| {
+                            format!("<hook-additional-context>\n{c}\n</hook-additional-context>")
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n\n");
+                    (format!("{blocks}\n\n{prompt}"), Some(result))
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    %agent_id,
+                    %agent_type,
+                    "SubagentStart hook firing failed; proceeding without injected context"
+                );
+                (prompt.to_string(), None)
+            }
+        }
+    }
+
+    /// Register frontmatter hooks scoped to this spawn's agent_id.
+    /// Returns `true` if any hooks were registered (caller should
+    /// arrange `clear_frontmatter_hooks(agent_id)` at SubagentStop).
+    /// TS parity: `runAgent.ts:564-575`
+    /// `registerFrontmatterHooks(setAppState, agentId, definition.hooks, ...)`.
+    ///
+    /// The `def.hooks` field is `serde_json::Value` because TS's
+    /// shape is an event-keyed map of arrays — same as
+    /// `Settings.hooks`. We parse via `coco_hooks::load_hooks_from_config`
+    /// and stamp `HookScope::Session` (TS treats agent-scoped hooks
+    /// as session-priority because they're programmatic, not config).
+    pub(super) fn register_frontmatter_hooks(
+        &self,
+        agent_id: &str,
+        definition: Option<&coco_types::AgentDefinition>,
+    ) -> bool {
+        let Some(def) = definition else {
+            return false;
+        };
+        if def.hooks.is_null() {
+            return false;
+        }
+        let Some(registry) = self.hook_registry() else {
+            tracing::debug!(
+                agent_type = %def.agent_type,
+                "agent declares frontmatter hooks but no HookRegistry is installed; skipping"
+            );
+            return false;
+        };
+        match coco_hooks::load_hooks_from_config(&def.hooks, coco_types::HookScope::Session) {
+            Ok(hooks) if !hooks.is_empty() => {
+                let count = hooks.len();
+                registry.register_for_agent(agent_id.to_string(), hooks);
+                tracing::debug!(
+                    agent_type = %def.agent_type,
+                    %agent_id,
+                    count,
+                    "registered frontmatter hooks for agent scope"
+                );
+                true
+            }
+            Ok(_) => false,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    agent_type = %def.agent_type,
+                    "failed to parse frontmatter hooks; skipping"
+                );
+                false
+            }
+        }
+    }
+
+    /// Symmetrical cleanup: drop the per-agent hook bucket.
+    /// TS parity: `clearSessionHooks(setAppState, agentId)`.
+    pub(super) fn clear_frontmatter_hooks(&self, agent_id: &str) {
+        if let Some(registry) = self.hook_registry() {
+            registry.clear_agent_scope(agent_id);
+        }
+    }
+
+    /// Initialise per-agent MCP servers from `def.mcp_servers`. For
+    /// each spec:
+    /// - `Name(s)` (string-ref): no mutation — we trust the parent's
+    ///   pre-existing connection. The model just sees the server's
+    ///   tools through the inherited `McpHandle`.
+    /// - `Inline(config)`: call `add_dynamic_server(name, config)` on
+    ///   the handle. Track the new name under `agent_id` so
+    ///   `cleanup_per_agent_mcp` removes only the newly-created
+    ///   ones. TS parity: `runAgent.ts:135-191` distinguishes
+    ///   `isNewlyCreated` so cleanup doesn't touch shared servers.
+    ///
+    /// Any inline-add failure logs at warn and continues — TS
+    /// behaviour: a failed server logs and the agent runs without
+    /// that one.
+    pub(super) async fn initialize_per_agent_mcp(
+        &self,
+        agent_id: &str,
+        definition: Option<&coco_types::AgentDefinition>,
+    ) {
+        let Some(def) = definition else {
+            return;
+        };
+        if def.mcp_servers.is_empty() {
+            return;
+        }
+        let Some(handle) = self.mcp_handle() else {
+            tracing::debug!(
+                agent_type = %def.agent_type,
+                "agent declares mcpServers but no McpHandle is installed; skipping per-agent MCP init"
+            );
+            return;
+        };
+
+        let mut newly_created: Vec<String> = Vec::new();
+        for spec in &def.mcp_servers {
+            match spec {
+                coco_types::AgentMcpServerSpec::Name(_) => {
+                    // String-ref → relies on parent's connection. No
+                    // dynamic mutation; nothing to track for cleanup.
+                }
+                coco_types::AgentMcpServerSpec::Inline(map) => {
+                    let Some((name, config)) = map.iter().next() else {
+                        continue;
+                    };
+                    match handle.add_dynamic_server(name, config.clone()).await {
+                        Ok(()) => {
+                            tracing::debug!(
+                                agent_type = %def.agent_type,
+                                %agent_id,
+                                server = %name,
+                                "registered dynamic agent MCP server"
+                            );
+                            newly_created.push(name.clone());
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                agent_type = %def.agent_type,
+                                %agent_id,
+                                server = %name,
+                                "failed to register dynamic agent MCP server; agent runs without it"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        if !newly_created.is_empty() {
+            self.dynamic_mcp_servers()
+                .write()
+                .await
+                .insert(agent_id.to_string(), newly_created);
+        }
+    }
+
+    /// Tear down dynamically-added MCP servers registered for this
+    /// `agent_id`. Mirror of [`Self::initialize_per_agent_mcp`]. No-op
+    /// when nothing was tracked.
+    pub(super) async fn cleanup_per_agent_mcp(&self, agent_id: &str) {
+        let entry = self.dynamic_mcp_servers().write().await.remove(agent_id);
+        let Some(names) = entry else { return };
+        let Some(handle) = self.mcp_handle() else {
+            return;
+        };
+        for name in names {
+            if let Err(e) = handle.remove_dynamic_server(&name).await {
+                tracing::debug!(
+                    error = %e,
+                    %agent_id,
+                    server = %name,
+                    "failed to remove dynamic agent MCP server (continuing cleanup)"
+                );
+            }
+        }
+    }
+
+    /// Resolve every skill name in `def.skills` via the installed
+    /// `SkillHandle` and prepend the loaded bodies to `prompt` as
+    /// `<preloaded-skill name="...">` XML blocks. Missing skills /
+    /// missing handle / read errors are logged at debug and silently
+    /// dropped — the spawn proceeds with whatever loaded.
+    pub(super) async fn preload_frontmatter_skills(
+        &self,
+        definition: Option<&coco_types::AgentDefinition>,
+        prompt: &str,
+    ) -> String {
+        let Some(def) = definition else {
+            return prompt.to_string();
+        };
+        if def.skills.is_empty() {
+            return prompt.to_string();
+        }
+        let Some(handle) = self.skill_handle() else {
+            tracing::debug!(
+                agent_type = %def.agent_type,
+                count = def.skills.len(),
+                "agent declares frontmatter skills but no SkillHandle is installed; skipping preload"
+            );
+            return prompt.to_string();
+        };
+
+        let mut blocks = Vec::with_capacity(def.skills.len());
+        for name in &def.skills {
+            match handle.read_skill_body(name).await {
+                Some(body) if !body.trim().is_empty() => blocks.push(format!(
+                    "<preloaded-skill name=\"{name}\">\n{body}\n</preloaded-skill>"
+                )),
+                _ => {
+                    tracing::debug!(
+                        agent_type = %def.agent_type,
+                        skill = %name,
+                        "frontmatter skill not found / empty body; skipping preload"
+                    );
+                }
+            }
+        }
+        if blocks.is_empty() {
+            return prompt.to_string();
+        }
+        format!("{}\n\n{prompt}", blocks.join("\n\n"))
+    }
+
+    /// Fire SubagentStop hooks. Errors are logged and swallowed — a
+    /// failed stop hook must not gate the spawn's response. TS parity:
+    /// stop hooks run for completion / failure / cancel.
+    pub(super) async fn fire_subagent_stop_hook(
+        &self,
+        agent_id: &str,
+        agent_type: &str,
+        transcript_path: Option<&str>,
+    ) -> Option<coco_hooks::orchestration::AggregatedHookResult> {
+        let registry = self.hook_registry().cloned()?;
+        let ctx = self.hook_orchestration_context();
+        match coco_hooks::orchestration::execute_subagent_stop(
+            &registry,
+            &ctx,
+            agent_type,
+            agent_id,
+            transcript_path,
+        )
+        .await
+        {
+            Ok(result) => Some(result),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    %agent_id,
+                    %agent_type,
+                    "SubagentStop hook firing failed"
+                );
+                None
+            }
+        }
+    }
+}
+
+/// Sync-path early-failure response. Worktree cleanup is the caller's
+/// responsibility — this helper only builds the `AgentSpawnResponse`
+/// shell.
+pub(super) fn spawn_failed(
+    agent_id: String,
+    message: String,
+    duration_ms: i64,
+) -> AgentSpawnResponse {
+    AgentSpawnResponse {
+        status: AgentSpawnStatus::Failed,
+        agent_id: Some(agent_id),
+        result: None,
+        error: Some(message),
+        total_tool_use_count: 0,
+        total_tokens: 0,
+        duration_ms,
+        worktree_path: None,
+        worktree_branch: None,
+        output_file: None,
+        prompt: None,
+        ..Default::default()
+    }
+}
+
+impl SwarmAgentHandle {
+    pub(super) async fn spawn_subagent(
+        &self,
+        request: &AgentSpawnRequest,
+    ) -> Result<AgentSpawnResponse, String> {
+        let start = Instant::now();
+        let agent_type = request
+            .subagent_type
+            .as_deref()
+            .unwrap_or("general-purpose");
+
+        let agent_id = format!(
+            "agent-{}",
+            uuid::Uuid::new_v4()
+                .to_string()
+                .split('-')
+                .next()
+                .unwrap_or("0")
+        );
+
+        // Validation must complete BEFORE registering the agent state.
+        // Earlier code pushed the entry first, then validated — leaving a
+        // dangling Pending entry on every worktree-creation or
+        // missing-engine failure. Build the prospective state now and
+        // commit it only after both gates pass.
+        let prospective_state = SubAgentState {
+            agent_id: agent_id.clone(),
+            name: request
+                .description
+                .clone()
+                .unwrap_or_else(|| agent_type.to_string()),
+            status: if request.run_in_background {
+                SubAgentStatus::Backgrounded
+            } else {
+                SubAgentStatus::Running
+            },
+            turns: 0,
+            model: request.model.clone(),
+            working_dir: request.cwd.as_ref().map(|p| p.display().to_string()),
+            last_message: None,
+        };
+
+        // Worktree isolation: any creation error returns a model-visible
+        // failure — never silently fall back to sync-without-isolation.
+        let worktree_session = if matches!(request.isolation.as_deref(), Some("worktree")) {
+            match self.worktree_manager() {
+                Some(m) => {
+                    let slug = format!(
+                        "agent-{}",
+                        agent_id
+                            .strip_prefix("agent-")
+                            .unwrap_or(&agent_id)
+                            .chars()
+                            .take(8)
+                            .collect::<String>()
+                    );
+                    match m.create_for(&slug) {
+                        Ok(s) => Some(s),
+                        Err(e) => {
+                            return Ok(spawn_failed(
+                                agent_id,
+                                format!("Worktree creation failed: {e}"),
+                                start.elapsed().as_millis() as i64,
+                            ));
+                        }
+                    }
+                }
+                None => {
+                    return Ok(spawn_failed(
+                        agent_id,
+                        "Isolation 'worktree' requested but no AgentWorktreeManager is \
+                         configured. Use SwarmAgentHandle::set_worktree_manager."
+                            .into(),
+                        start.elapsed().as_millis() as i64,
+                    ));
+                }
+            }
+        } else {
+            None
+        };
+
+        let Some(engine) = self.execution_engine() else {
+            if let (Some(m), Some(session)) = (self.worktree_manager(), worktree_session.clone()) {
+                let _ = m.cleanup_if_unchanged(session);
+            }
+            return Ok(spawn_failed(
+                agent_id,
+                "No AgentQueryEngine configured on SwarmAgentHandle. Use \
+                 SwarmAgentHandle::set_execution_engine at session bootstrap."
+                    .into(),
+                start.elapsed().as_millis() as i64,
+            ));
+        };
+
+        // All validation passed — commit the agent state. Subsequent
+        // failures (engine errors during execute_query, transcript-write
+        // failures) update the same entry's `status` rather than leaking
+        // it.
+        self.agents().write().await.push(prospective_state);
+
+        let cwd_override = worktree_session
+            .as_ref()
+            .map(|s| s.path.clone())
+            .or_else(|| request.cwd.clone());
+
+        // Spawn-time identity resolution (T3 + T7). Centralizes model +
+        // role precedence in `coco_subagent`:
+        //   model:  request.model > definition.model > role-resolved
+        //   role:   definition.model_role > subagent_type → role > Subagent
+        //
+        // The definition flows through `AgentSpawnRequest.definition`,
+        // populated by AgentTool from `ctx.agent_catalog`. When the catalog
+        // isn't installed, `definition` is `None` and the resolver
+        // degrades cleanly to subagent_type→role mapping.
+        let agent_type_id: Option<coco_types::AgentTypeId> = request
+            .subagent_type
+            .as_deref()
+            .map(|t| t.parse().expect("AgentTypeId::from_str is Infallible"));
+        let selection = coco_subagent::resolve_subagent_selection(
+            request.model.as_deref(),
+            request.definition.as_deref(),
+            agent_type_id.as_ref(),
+        );
+
+        // Pin the agent type's color in the per-`AgentTypeId` cache so
+        // `SubagentPanel` renders all `Explore` spawns in the same color
+        // regardless of how many copies are running. Teammates use a
+        // separate per-`name@team` cache. TS:
+        // `tools/AgentTool/agentColorManager.ts:setAgentColor`.
+        if let Some(id) = agent_type_id.as_ref() {
+            let _ = crate::pane::layout::assign_agent_type_color(id);
+        }
+
+        // Resolve the prior-history + system-prompt pair from the
+        // requested spawn mode:
+        //
+        // - Fresh     → no history, no inherited prompt; engine builds
+        //               the system prompt from `definition`.
+        // - Fork      → parent's pre-rendered system-prompt bytes
+        //               verbatim (cache parity), parent history with
+        //               `tool_result` blocks rewritten to
+        //               `FORK_PLACEHOLDER` (TS `forkSubagent.ts`).
+        // - Resume    → empty system prompt (engine rebuilds from
+        //               `definition`), prior history kept verbatim
+        //               (NO placeholder rewrite — the child needs real
+        //               tool outputs to continue). TS
+        //               `resumeAgent.ts:resumeAgentBackground` for
+        //               non-fork agent types.
+        //
+        // `preserve_tool_use_results` flips on for Fork and Resume so
+        // downstream compaction doesn't strip the inherited results.
+        let (mut system_prompt, fork_context_messages, preserve_tool_use_results) =
+            match &request.spawn_mode {
+                coco_tool_runtime::SpawnMode::Fork {
+                    rendered_system_prompt,
+                    parent_messages,
+                    inherit_tool_pool: _,
+                } => {
+                    let prompt_str = std::str::from_utf8(rendered_system_prompt)
+                        .map(str::to_string)
+                        .unwrap_or_default();
+                    let ctx = coco_subagent::build_fork_context(parent_messages, &request.prompt);
+                    (prompt_str, ctx.messages, true)
+                }
+                coco_tool_runtime::SpawnMode::Resume { parent_messages } => {
+                    (String::new(), parent_messages.clone(), true)
+                }
+                coco_tool_runtime::SpawnMode::Fresh => {
+                    (String::new(), request.fork_context_messages.clone(), false)
+                }
+                // `SpawnMode` is `#[non_exhaustive]` (cross-crate), so the
+                // compiler forces a wildcard. Future variants need
+                // explicit handling at this seam.
+                other => {
+                    tracing::warn!(?other, "unknown SpawnMode; treating as Fresh");
+                    (String::new(), request.fork_context_messages.clone(), false)
+                }
+            };
+
+        // ── Gap B fix — per-agent MEMORY.md injection ──
+        //
+        // When the resolved AgentDefinition declares `memory:
+        // user|project|local`, append the agent's persistent
+        // MEMORY.md body to its system prompt so the child sees its
+        // own scoped memory at every spawn.
+        //
+        // TS parity: `tools/AgentTool/loadAgentsDir.ts:484, 728` and
+        // `utils/plugins/loadPluginAgents.ts:207` call
+        // `loadAgentMemoryPrompt(agentType, memory)` and concatenate
+        // it onto the agent's system prompt. Before this fix the
+        // `memory_scope` field was parsed and threaded through
+        // `AgentDefinition` / `SpawnConfig` / `AgentContext` but
+        // never read — frontmatter `memory: project` silently had
+        // no effect.
+        //
+        // Fork mode uses parent's pre-rendered system prompt verbatim
+        // (cache parity invariant), so per-agent memory injection is
+        // skipped for Fork — the parent's rendered prompt already
+        // captures whatever main-agent memory it cares about.
+        let inject_memory = !matches!(
+            request.spawn_mode,
+            coco_tool_runtime::SpawnMode::Fork { .. }
+        );
+        if inject_memory
+            && let Some(definition) = request.definition.as_deref()
+            && let Some(scope) = definition.memory_scope
+        {
+            let cwd_path = cwd_override
+                .clone()
+                .unwrap_or_else(|| std::path::PathBuf::from(&self.cwd));
+            let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
+            let memory_block = coco_memory::agent_memory::load_agent_memory_prompt(
+                agent_type, scope, &cwd_path, &home,
+            );
+            if !system_prompt.is_empty() {
+                system_prompt.push_str("\n\n");
+            }
+            system_prompt.push_str(&memory_block);
+        }
+        let query_config = coco_tool_runtime::AgentQueryConfig {
+            system_prompt,
+            // `selection.model` carries the explicit override (request >
+            // definition). When unset, the engine factory consumes
+            // `model_role` and resolves the primary `ModelSpec` from the
+            // live `RuntimeConfig` — so a hot-reload between parent's last
+            // turn and this spawn picks up the new Main mapping (T6).
+            model: selection
+                .model
+                .clone()
+                .unwrap_or_else(|| self.current_main_model_id()),
+            max_turns: request
+                .constraints
+                .as_ref()
+                .and_then(|c| c.max_turns)
+                .or(request.max_turns),
+            context_window: None,
+            max_output_tokens: None,
+            // Coordinator-mode tool pool: when the leader is in coordinator
+            // mode, AgentTool spawns are workers and must see only the
+            // worker tool pool. Outside coordinator mode the child's own
+            // `AgentDefinition.allowed_tools` (later resolved by the
+            // engine) controls — leave empty here.
+            allowed_tools: if request
+                .features
+                .as_deref()
+                .is_some_and(coco_subagent::is_coordinator_mode)
+            {
+                let simple_mode = coco_config::env::is_env_truthy(coco_config::EnvKey::CocoSimple);
+                coco_subagent::worker_tool_pool(simple_mode)
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect()
+            } else {
+                Vec::new()
+            },
+            disallowed_tools: request.disallowed_tools.clone(),
+            tool_overrides: request.tool_overrides.clone(),
+            features: request.features.clone(),
+            parent_tool_filter: request.parent_tool_filter.clone(),
+            preserve_tool_use_results,
+            permission_mode: request.mode.clone(),
+            agent_id: Some(agent_id.clone()),
+            is_teammate: false,
+            plan_mode_required: false,
+            session_id: None,
+            bypass_permissions_available: false,
+            cwd_override,
+            fork_context_messages,
+            allowed_write_roots: request
+                .constraints
+                .as_ref()
+                .map(|c| c.allowed_write_roots.clone())
+                .unwrap_or_default(),
+            model_role: Some(selection.model_role),
+            effort: request.effort.clone(),
+            use_exact_tools: request.use_exact_tools,
+            mcp_servers: request.mcp_servers.clone(),
+            initial_prompt: request.initial_prompt.clone(),
+            parent_runtime_snapshot: request.parent_runtime_snapshot.clone(),
+            definition: request.definition.clone(),
+            // In-process AgentTool spawns inherit the leader's
+            // `ToolPermissionBridge` via `wire_engine`. Setting an override
+            // here would mask whatever the leader installed (SDK
+            // askForApproval / TUI overlay / legacy auto-allow).
+            // Cross-process pane teammates use `MailboxPermissionBridge`
+            // (file IPC) instead.
+            permission_bridge: None,
+            // The bg path below populates a per-task event channel so live
+            // text deltas reach the task's output buffer.
+            event_tx: None,
+        };
+
+        if request.run_in_background {
+            return self
+                .spawn_background(
+                    request,
+                    agent_id,
+                    agent_type,
+                    query_config,
+                    worktree_session,
+                    start,
+                    engine,
+                )
+                .await;
+        }
+
+        // ── Frontmatter hooks registration (TS parity: runAgent.ts:564-575) ──
+        //
+        // Register `def.hooks` under the spawn's agent_id so they're
+        // visible to every event firing during this spawn. Cleared at
+        // SubagentStop below. No-op when def.hooks is null / hook
+        // registry unwired.
+        let registered_frontmatter_hooks =
+            self.register_frontmatter_hooks(&agent_id, request.definition.as_deref());
+
+        // ── Per-agent MCP servers (TS parity: runAgent.ts:95-218 initializeAgentMcpServers) ──
+        //
+        // String-ref entries piggyback on the parent's pre-existing
+        // connections; inline `{name: config}` entries get registered
+        // as dynamic servers and torn down at SubagentStop.
+        self.initialize_per_agent_mcp(&agent_id, request.definition.as_deref())
+            .await;
+
+        // ── Frontmatter skills preload (TS parity: runAgent.ts:577-645) ──
+        //
+        // When `def.skills` is non-empty, resolve each skill's body
+        // via the installed `SkillHandle` and prepend the loaded
+        // contents to the prompt — wrapped in `<preloaded-skill>`
+        // blocks so the model can distinguish them from the actual
+        // task prompt.
+        let prompt_with_skills = self
+            .preload_frontmatter_skills(request.definition.as_deref(), &request.prompt)
+            .await;
+
+        // ── SubagentStart hook firing (TS parity: runAgent.ts:530-555) ──
+        //
+        // Fire user-defined SubagentStart hooks and inject their
+        // `additional_contexts` into the child's prompt as a leading
+        // system-reminder block. Pre-fix: SubagentStart was defined in
+        // the hook event taxonomy but no caller ever fired it for
+        // subagent spawns.
+        let (effective_prompt, _start_result) = self
+            .fire_subagent_start_hook(&agent_id, agent_type, &prompt_with_skills)
+            .await;
+
+        // Sync path.
+        let query_result = engine.execute_query(&effective_prompt, query_config).await;
+        let duration_ms = start.elapsed().as_millis() as i64;
+
+        // SubagentStop fires whether the run succeeded, failed, or
+        // was cancelled — TS parity. Transcript path is `None` for
+        // sync spawns (no per-agent JSONL persistence on the sync
+        // path; bg spawns expose it via the transcript_store).
+        let _stop_result = self
+            .fire_subagent_stop_hook(&agent_id, agent_type, /*transcript*/ None)
+            .await;
+
+        // Drop per-agent frontmatter hooks now that the spawn is
+        // terminal. TS parity: `clearSessionHooks(setAppState, agentId)`
+        // in `runAgent.ts` finally block.
+        if registered_frontmatter_hooks {
+            self.clear_frontmatter_hooks(&agent_id);
+        }
+
+        // Tear down dynamically-added MCP servers (no-op when none
+        // were created). TS parity: `runAgent.ts:197-210 mcpCleanup`.
+        self.cleanup_per_agent_mcp(&agent_id).await;
+
+        let (worktree_path, worktree_branch) = match (self.worktree_manager(), worktree_session) {
+            (Some(m), Some(session)) => match m.cleanup_if_unchanged(session) {
+                crate::worktree::WorktreeCleanupOutcome::Removed => (None, None),
+                crate::worktree::WorktreeCleanupOutcome::Kept { path, branch, .. } => {
+                    (Some(path), Some(branch))
+                }
+            },
+            _ => (None, None),
+        };
+
+        {
+            let mut agents = self.agents().write().await;
+            if let Some(agent) = agents.iter_mut().find(|a| a.agent_id == agent_id) {
+                agent.status = match &query_result {
+                    Ok(_) => SubAgentStatus::Completed,
+                    Err(_) => SubAgentStatus::Failed,
+                };
+            }
+        }
+
+        match query_result {
+            Ok(qr) => {
+                let response_text = self.classify_handoff_if_needed(agent_type, &qr).await;
+                self.summarize_handoff_if_needed(agent_type, &qr, &agent_id)
+                    .await;
+                Ok(AgentSpawnResponse {
+                    status: AgentSpawnStatus::Completed,
+                    agent_id: Some(agent_id),
+                    result: response_text,
+                    error: None,
+                    total_tool_use_count: qr.tool_use_count,
+                    total_tokens: qr.input_tokens + qr.output_tokens,
+                    input_tokens: qr.input_tokens,
+                    output_tokens: qr.output_tokens,
+                    tool_use_counts: count_tool_uses_in_messages(&qr.messages),
+                    duration_ms,
+                    worktree_path,
+                    worktree_branch,
+                    output_file: None,
+                    prompt: None,
+                })
+            }
+            Err(e) => Ok(AgentSpawnResponse {
+                status: AgentSpawnStatus::Failed,
+                agent_id: Some(agent_id),
+                result: None,
+                error: Some(e.to_string()),
+                total_tool_use_count: 0,
+                total_tokens: 0,
+                duration_ms,
+                worktree_path,
+                worktree_branch,
+                output_file: None,
+                prompt: None,
+                ..Default::default()
+            }),
+        }
+    }
+
+    /// Background dispatch: spawn the engine in a detached tokio task,
+    /// register with `AgentTaskRegistry` (if installed), persist transcript
+    /// metadata for resume, drain text deltas into the task's output
+    /// buffer, and run the periodic AgentSummary timer.
+    ///
+    /// Returns `AsyncLaunched` immediately. Worktree isolation is rejected
+    /// at this seam so the cleanup contract isn't ambiguous.
+    #[allow(clippy::too_many_arguments)]
+    async fn spawn_background(
+        &self,
+        request: &AgentSpawnRequest,
+        agent_id: String,
+        agent_type: &str,
+        query_config: coco_tool_runtime::AgentQueryConfig,
+        worktree_session: Option<crate::worktree::AgentWorktreeSession>,
+        start: Instant,
+        engine: coco_tool_runtime::AgentQueryEngineRef,
+    ) -> Result<AgentSpawnResponse, String> {
+        if worktree_session.is_some() {
+            if let (Some(m), Some(session)) = (self.worktree_manager(), worktree_session.clone()) {
+                let _ = m.cleanup_if_unchanged(session);
+            }
+            return Ok(spawn_failed(
+                agent_id,
+                "Background AgentTool spawn does not currently support worktree \
+                 isolation. Set run_in_background=false to use a worktree, or \
+                 drop isolation: \"worktree\" to run in the parent's working \
+                 directory."
+                    .into(),
+                start.elapsed().as_millis() as i64,
+            ));
+        }
+
+        let agents = self.agents().clone();
+        let prompt = request.prompt.clone();
+        let agent_id_for_task = agent_id.clone();
+
+        let task_registry = self.task_registry().cloned();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let task_id = if let Some(reg) = task_registry.as_ref() {
+            let description = request
+                .description
+                .clone()
+                .unwrap_or_else(|| agent_type.to_string());
+            Some(
+                reg.register_agent_task(&description, /*tool_use_id*/ None, cancel.clone())
+                    .await,
+            )
+        } else {
+            None
+        };
+
+        // Per-agent metadata sidecar (TS `writeAgentMetadata` at
+        // `utils/sessionStorage.ts:283`). Persisted at registration so
+        // resume can route the rehydrated spawn to the right `agent_type`
+        // and (if worktree-isolated) restore cwd_override.
+        let session_id = request.session_id.clone();
+        if let (Some(store), Some(tid)) = (self.transcript_store(), task_id.as_deref()) {
+            let store_for_meta = store.clone();
+            let session_for_meta = session_id.clone();
+            let task_for_meta = tid.to_string();
+            let meta = coco_tool_runtime::AgentSpawnMetadata {
+                agent_type: agent_type.to_string(),
+                worktree_path: worktree_session
+                    .as_ref()
+                    .map(|s| s.path.display().to_string()),
+                description: request.description.clone(),
+            };
+            if let Err(e) = store_for_meta
+                .write_agent_metadata(&session_for_meta, &task_for_meta, &meta)
+                .await
+            {
+                tracing::debug!(error = %e, "agent metadata write failed");
+            }
+        }
+
+        // When a registry is installed, drain `Stream::TextDelta` events
+        // from the engine into the task's output buffer so `TaskOutput`
+        // returns mid-flight text. Without a registry the channel is unset
+        // and the adapter's discarded fallback is used.
+        let (event_tx, event_rx) = if task_registry.is_some() {
+            let (tx, rx) = tokio::sync::mpsc::channel::<coco_types::CoreEvent>(64);
+            (Some(tx), Some(rx))
+        } else {
+            (None, None)
+        };
+        let mut query_config = query_config;
+        query_config.event_tx = event_tx;
+
+        if let (Some(reg), Some(tid), Some(mut rx)) =
+            (task_registry.clone(), task_id.clone(), event_rx)
+        {
+            tokio::spawn(async move {
+                while let Some(event) = rx.recv().await {
+                    if let coco_types::CoreEvent::Stream(
+                        coco_types::AgentStreamEvent::TextDelta { delta, .. },
+                    ) = event
+                    {
+                        reg.append_output(&tid, &delta).await;
+                    }
+                }
+            });
+        }
+
+        // Periodic AgentSummary timer (TS parity gate `AgentTool.tsx:750-852`):
+        // only run when the spawn requested it via `enable_summarization`.
+        // AgentTool resolves the flag at the boundary as
+        // `is_coordinator || is_fork_subagent || sdk_opt_in`. Default-off
+        // keeps a saturated coordinator (16 spawns × 30 s = 32 LLM calls/min)
+        // off the user's hot path unless they explicitly opted in.
+        const AGENT_SUMMARY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+        if !request.enable_summarization {
+            tracing::debug!(
+                %agent_id,
+                "periodic AgentSummary disabled (request.enable_summarization = false)"
+            );
+        } else if let (Some(reg), Some(tid)) = (task_registry.clone(), task_id.clone()) {
+            let agents_for_summary = self.agents().clone();
+            let agent_id_for_summary = agent_id.clone();
+            let cancel_for_summary = cancel.clone();
+            let agent_type_owned = agent_type.to_string();
+            let engine_for_summary = engine.clone();
+            let definition_for_summary = request.definition.clone();
+            // Reuse the spawn's resolved model role so the periodic
+            // summary lands on the same per-role provider+model and
+            // shares cache state. `query_config.model_role` was set by
+            // spawn_subagent from `selection.model_role`.
+            let model_role_for_summary = query_config.model_role;
+            tokio::spawn(async move {
+                let mut previous: Option<String> = None;
+                loop {
+                    tokio::select! {
+                        _ = cancel_for_summary.cancelled() => break,
+                        _ = tokio::time::sleep(AGENT_SUMMARY_INTERVAL) => {}
+                    }
+                    // Re-check terminal status AFTER waking — engine may
+                    // have completed during the sleep, in which case the
+                    // one-shot completion summary already ran in
+                    // `spawn_subagent` and a periodic summary here would
+                    // be redundant.
+                    if reg.is_terminal(&tid).await {
+                        break;
+                    }
+                    let buf = reg.read_output(&tid).await;
+                    if buf.trim().is_empty() {
+                        continue;
+                    }
+                    let (sys, user) = coco_subagent::build_summary_prompts(
+                        &agent_type_owned,
+                        previous.as_deref(),
+                    );
+                    // Bound the input to keep the summary call cheap — TS
+                    // uses transcript filtering; we approximate by
+                    // clipping the tail.
+                    let tail = if buf.len() > 4_000 {
+                        &buf[buf.len() - 4_000..]
+                    } else {
+                        buf.as_str()
+                    };
+                    let user_with_buf = format!("{user}\n\n--- recent output ---\n{tail}");
+
+                    // ── AgentSummary cache parity ──
+                    //
+                    // TS `services/AgentSummary/agentSummary.ts` uses
+                    // `runForkedAgent` with `CacheSafeParams` so the
+                    // periodic summary call shares the parent agent's
+                    // prompt cache. Pre-fix (Round 4): coco-rs used
+                    // `SideQueryRequest::simple` which created a fresh
+                    // request with no cache overlap.
+                    //
+                    // Now: route through the wrapped `AgentQueryEngine`
+                    // with the same `definition` + `model_role` the
+                    // parent spawn used, allowed_tools empty (no-tools
+                    // turn). The engine factory installs the same
+                    // system prompt, tools, and per-role provider so
+                    // the cache key prefix lines up — the summary call
+                    // benefits from the parent's warm cache.
+                    let summary_cfg = coco_tool_runtime::AgentQueryConfig {
+                        system_prompt: sys.clone(),
+                        model: String::new(),
+                        max_turns: Some(1),
+                        // Empty allow-list → no tools fire during
+                        // summarization (TS denies via canUseTool callback;
+                        // empty allow-list achieves the same outcome).
+                        allowed_tools: vec![String::new()],
+                        is_teammate: false,
+                        definition: definition_for_summary.clone(),
+                        model_role: model_role_for_summary,
+                        ..Default::default()
+                    };
+                    let summary_text = match engine_for_summary
+                        .execute_query(&user_with_buf, summary_cfg)
+                        .await
+                    {
+                        Ok(resp) => resp.response_text.unwrap_or_default(),
+                        Err(_) => continue,
+                    };
+                    if let Some(clean) = coco_subagent::sanitize_summary(&summary_text) {
+                        previous = Some(clean.clone());
+                        let mut agents = agents_for_summary.write().await;
+                        if let Some(state) = agents
+                            .iter_mut()
+                            .find(|s| s.agent_id == agent_id_for_summary)
+                        {
+                            state.last_message = Some(clean);
+                        }
+                    }
+                }
+            });
+        }
+
+        let registry_for_task = task_registry.clone();
+        let task_id_for_task = task_id.clone();
+        let cancel_for_task = cancel.clone();
+        let transcript_store_for_task = self.transcript_store().cloned();
+        let session_id_for_task = session_id.clone();
+        let hook_registry_for_task = self.hook_registry().cloned();
+        let cwd_for_task = self.cwd.clone();
+        let agent_type_for_task = agent_type.to_string();
+        // Preload frontmatter skills synchronously here — bg task can't
+        // borrow `&self`, so resolve bodies upfront and prepend
+        // before handing the prompt to the detached task.
+        let prompt_after_skills = self
+            .preload_frontmatter_skills(request.definition.as_deref(), &prompt)
+            .await;
+        let prompt = prompt_after_skills;
+        // Register frontmatter hooks BEFORE the detached task starts
+        // so they're visible during execute_query. Tracked here so the
+        // task can clear them at SubagentStop time without re-borrowing
+        // `&self`.
+        let registered_frontmatter_hooks =
+            self.register_frontmatter_hooks(&agent_id, request.definition.as_deref());
+        // Initialise per-agent MCP servers synchronously here. Cleanup
+        // happens after the spawn completes — we capture the dynamic
+        // server map + handle into the task so it can run cleanup
+        // without re-borrowing `&self`.
+        self.initialize_per_agent_mcp(&agent_id, request.definition.as_deref())
+            .await;
+        let mcp_handle_for_task = self.mcp_handle().cloned();
+        let dynamic_mcp_servers_for_task = self.dynamic_mcp_servers().clone();
+        tokio::spawn(async move {
+            // Fire SubagentStart hooks before kicking off execution and
+            // prepend any returned context blocks to the prompt. TS
+            // parity: `runAgent.ts:530-555`. Bg path mirrors the sync
+            // path's behaviour (added in this fix round).
+            let effective_prompt = fire_subagent_start_for_task(
+                hook_registry_for_task.clone(),
+                &cwd_for_task,
+                &agent_id_for_task,
+                &agent_type_for_task,
+                &prompt,
+            )
+            .await;
+
+            // Race the engine query against the cancellation token so
+            // `kill_task` propagates. The engine itself honours its config
+            // `cancel`; the extra select here covers a cancel mid-engine.
+            let outcome = tokio::select! {
+                _ = cancel_for_task.cancelled() => {
+                    Err(anyhow::anyhow!("task cancelled by leader"))
+                }
+                r = engine.execute_query(&effective_prompt, query_config) => r,
+            };
+
+            {
+                let mut agents = agents.write().await;
+                if let Some(state) = agents.iter_mut().find(|s| s.agent_id == agent_id_for_task) {
+                    state.status = match &outcome {
+                        Ok(_) => SubAgentStatus::Completed,
+                        Err(_) => SubAgentStatus::Failed,
+                    };
+                }
+            }
+
+            // Fire SubagentStop AFTER execution completes (success,
+            // failure, or cancel — TS parity). Transcript path is
+            // populated when the per-agent JSONL store is wired and a
+            // session-id is available.
+            let transcript_path = transcript_store_for_task
+                .as_ref()
+                .zip(task_id_for_task.as_deref())
+                .filter(|_| !session_id_for_task.is_empty())
+                .map(|(_, tid)| format!("agent-{tid}.jsonl"));
+            fire_subagent_stop_for_task(
+                hook_registry_for_task.clone(),
+                &cwd_for_task,
+                &agent_id_for_task,
+                &agent_type_for_task,
+                transcript_path.as_deref(),
+            )
+            .await;
+
+            // Cleanup per-agent hook bucket. Mirrors sync path's
+            // `clear_frontmatter_hooks(&agent_id)`. TS parity:
+            // `runAgent.ts` finally `clearSessionHooks(...)`.
+            if registered_frontmatter_hooks && let Some(reg) = hook_registry_for_task.as_ref() {
+                reg.clear_agent_scope(&agent_id_for_task);
+            }
+
+            // Tear down dynamically-added MCP servers. TS parity:
+            // `runAgent.ts:197-210 mcpCleanup`. Pull names from the
+            // shared map (same write lock the sync path uses) and
+            // call `remove_dynamic_server` per entry.
+            let dynamic_names = dynamic_mcp_servers_for_task
+                .write()
+                .await
+                .remove(&agent_id_for_task);
+            if let (Some(names), Some(handle)) = (dynamic_names, mcp_handle_for_task.as_ref()) {
+                for name in names {
+                    if let Err(e) = handle.remove_dynamic_server(&name).await {
+                        tracing::debug!(
+                            error = %e,
+                            agent_id = %agent_id_for_task,
+                            server = %name,
+                            "bg cleanup: failed to remove dynamic agent MCP server"
+                        );
+                    }
+                }
+            }
+            // Persist the full message history to the per-agent JSONL
+            // transcript on success. `agent/resume` reads this back via
+            // `AgentTranscriptStore::load_agent_messages` and threads the
+            // entries into the resumed spawn's `fork_context_messages`.
+            if let (Some(store), Some(tid), Ok(qr)) = (
+                transcript_store_for_task.as_ref(),
+                task_id_for_task.as_deref(),
+                outcome.as_ref(),
+            ) && !session_id_for_task.is_empty()
+                && !qr.messages.is_empty()
+            {
+                let messages = qr.messages.clone();
+                if let Err(e) = store
+                    .append_agent_messages(&session_id_for_task, tid, messages)
+                    .await
+                {
+                    tracing::debug!(error = %e, "agent transcript write failed");
+                }
+            }
+            if let (Some(reg), Some(tid)) = (registry_for_task, task_id_for_task) {
+                match outcome {
+                    // `None` because text deltas already streamed into the
+                    // buffer during execution — passing `response_text`
+                    // would double-append.
+                    Ok(_) => reg.mark_completed(&tid, /*response_text*/ None).await,
+                    Err(e) => reg.mark_failed(&tid, &e.to_string()).await,
+                }
+            }
+        });
+
+        Ok(AgentSpawnResponse {
+            status: AgentSpawnStatus::AsyncLaunched,
+            // Return the registry's `task_id` so the model can address the
+            // spawn via TaskGet / TaskOutput / TaskStop. Falls back to
+            // `agent_id` for compat with the legacy panel id.
+            agent_id: Some(task_id.unwrap_or(agent_id)),
+            result: None,
+            error: None,
+            total_tool_use_count: 0,
+            total_tokens: 0,
+            duration_ms: start.elapsed().as_millis() as i64,
+            worktree_path: None,
+            worktree_branch: None,
+            output_file: None,
+            prompt: None,
+            ..Default::default()
+        })
+    }
+}
+
+/// Walk the child agent's serialized message log and tally
+/// `tool_name` from every assistant tool-call block. Memory telemetry
+/// uses the `Write + Edit + NotebookEdit` count to populate
+/// `MemoryEvent::ExtractionCompleted::files_written` without
+/// re-running the LLM.
+fn count_tool_uses_in_messages(
+    messages: &[serde_json::Value],
+) -> std::collections::HashMap<String, i64> {
+    let mut counts: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+    for msg in messages {
+        // Accept either `{type: assistant, message: {content: [...]}}`
+        // (coco internal Message envelope) or a bare assistant LLM
+        // message. We look two levels deep.
+        let content = msg
+            .get("message")
+            .and_then(|m| m.get("content"))
+            .or_else(|| msg.get("content"))
+            .and_then(|v| v.as_array());
+        let Some(blocks) = content else {
+            continue;
+        };
+        for block in blocks {
+            let ty = block.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            if !ty.eq_ignore_ascii_case("tool_call") && !ty.eq_ignore_ascii_case("tool-call") {
+                continue;
+            }
+            if let Some(name) = block.get("tool_name").and_then(|v| v.as_str()) {
+                *counts.entry(name.to_string()).or_insert(0) += 1;
+            }
+        }
+    }
+    counts
+}

@@ -34,7 +34,9 @@ members = [
     "utils/stream-parser",
     "utils/string",
     "utils/symbol-search",
-    "utils/test-harness",
+
+    # ─── tests/ (1) ── shared integration-test scaffolding ───
+    "tests/harness",
 
     # ─── vercel-ai/ (8) ───
     "vercel-ai/provider",
@@ -46,13 +48,14 @@ members = [
     "vercel-ai/anthropic",
     "vercel-ai/bytedance",
 
-    # ─── services/ (6) ───
+    # ─── services/ (7) ───
     "services/inference",
     "services/mcp",
     "services/mcp-types",
     "services/rmcp-client",
     "services/lsp",
     "services/compact",
+    "services/session-memory",
 
     # ─── core/ (7) ───
     "core/messages",
@@ -70,7 +73,7 @@ members = [
     "exec/exec-server",
     "exec/apply-patch",
 
-    # ─── root modules (7) ───
+    # ─── root modules (8) ───
     "commands",
     "skills",
     "hooks",
@@ -78,6 +81,7 @@ members = [
     "memory",
     "plugins",
     "keybindings",
+    "coordinator",
 
     # ─── app/ (5) ───
     "app/query",
@@ -150,7 +154,8 @@ coco-mcp-types = { path = "services/mcp-types" }
 coco-rmcp-client = { path = "services/rmcp-client" }
 coco-lsp = { path = "services/lsp" }
 coco-compact = { path = "services/compact" }
-coco-test-harness = { path = "utils/test-harness" }
+coco-session-memory = { path = "services/session-memory" }
+coco-test-harness = { path = "tests/harness" }
 
 # Internal - core
 coco-messages = { path = "core/messages" }
@@ -176,6 +181,7 @@ coco-tasks = { path = "tasks" }
 coco-memory = { path = "memory" }
 coco-plugins = { path = "plugins" }
 coco-keybindings = { path = "keybindings" }
+coco-coordinator = { path = "coordinator" }
 
 # Internal - app
 coco-query = { path = "app/query" }

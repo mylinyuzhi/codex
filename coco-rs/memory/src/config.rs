@@ -1,100 +1,62 @@
-//! Auto-memory configuration.
+//! Thin runtime adapter over `coco_config::MemoryConfig`.
 //!
-//! TS: memdir/paths.ts (isAutoMemoryEnabled, getAutoMemPath) +
-//!     utils/settings/types.ts (autoMemoryEnabled, autoMemoryDirectory, autoDreamEnabled)
+//! The settings + env resolution layer lives in `coco-config`. This
+//! struct is field-for-field identical and exists only so memory-crate
+//! consumers can take an owned `MemoryConfig` without depending on the
+//! config crate just for the type alias. It re-borrows from the shared
+//! source of truth — never grow new fields here.
 
-use std::path::Path;
 use std::path::PathBuf;
 
-/// Complete auto-memory configuration.
-///
-/// Whether the subsystem is **active** is gated upstream by
-/// `Feature::AutoMemory`; this struct only carries internal sub-toggles.
-///
-/// Mirrors `coco_config::MemoryConfig` with a runtime-side custom
-/// `custom_directory` field (settings resolution uses `directory`,
-/// the runtime consumer uses `custom_directory` for clarity). Auto-
-/// dream / KAIROS / max-relevant-memories fields were removed; re-add
-/// alongside their consumers in `prefetch.rs` / `dream.rs` when those
-/// pipelines ship.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemoryConfig {
-    /// Whether background extraction is enabled.
-    pub extraction_enabled: bool,
-    /// Whether team memory is enabled.
-    pub team_memory_enabled: bool,
-    /// Custom memory directory (overrides default).
-    pub custom_directory: Option<PathBuf>,
-    /// Extraction throttle: run every N turns (default 1 = every turn).
-    pub extraction_throttle: i32,
-    /// Whether to skip MEMORY.md index updates (single-step write).
+    pub directory: Option<PathBuf>,
     pub skip_index: bool,
+    pub kairos_mode: bool,
+
+    pub extraction_enabled: bool,
+    pub extraction_throttle: i32,
+    pub extraction_max_turns: i32,
+
+    pub team_memory_enabled: bool,
+
+    pub dream_enabled: bool,
+    pub dream_min_hours: i32,
+    pub dream_min_sessions: i32,
+
+    pub session_memory_enabled: bool,
+    pub session_memory_init_tokens: i64,
+    pub session_memory_update_tokens: i64,
+    pub session_memory_tool_calls: i32,
+    pub session_memory_per_section_tokens: i64,
+    pub session_memory_total_tokens: i64,
 }
 
 impl Default for MemoryConfig {
     fn default() -> Self {
-        Self {
-            extraction_enabled: true,
-            team_memory_enabled: false,
-            custom_directory: None,
-            extraction_throttle: 1,
-            skip_index: false,
-        }
-    }
-}
-
-impl MemoryConfig {
-    /// Resolve the memory directory path for a project.
-    ///
-    /// Priority:
-    /// 1. `custom_directory` (env override)
-    /// 2. `~/.claude/projects/<sanitized-cwd>/memory/`
-    pub fn resolve_memory_dir(&self, project_root: &Path) -> PathBuf {
-        if let Some(custom) = &self.custom_directory {
-            return custom.clone();
-        }
-        resolve_default_memory_dir(project_root)
-    }
-
-    /// Resolve the team memory directory (subdirectory of memory dir).
-    pub fn resolve_team_memory_dir(&self, project_root: &Path) -> PathBuf {
-        self.resolve_memory_dir(project_root).join("team")
+        coco_config::MemoryConfig::default().into()
     }
 }
 
 impl From<coco_config::MemoryConfig> for MemoryConfig {
-    fn from(config: coco_config::MemoryConfig) -> Self {
+    fn from(c: coco_config::MemoryConfig) -> Self {
         Self {
-            extraction_enabled: config.extraction_enabled,
-            team_memory_enabled: config.team_memory_enabled,
-            custom_directory: config.directory,
-            extraction_throttle: config.extraction_throttle,
-            skip_index: config.skip_index,
+            directory: c.directory,
+            skip_index: c.skip_index,
+            kairos_mode: c.kairos_mode,
+            extraction_enabled: c.extraction_enabled,
+            extraction_throttle: c.extraction_throttle,
+            extraction_max_turns: c.extraction_max_turns,
+            team_memory_enabled: c.team_memory_enabled,
+            dream_enabled: c.dream_enabled,
+            dream_min_hours: c.dream_min_hours,
+            dream_min_sessions: c.dream_min_sessions,
+            session_memory_enabled: c.session_memory_enabled,
+            session_memory_init_tokens: c.session_memory_init_tokens,
+            session_memory_update_tokens: c.session_memory_update_tokens,
+            session_memory_tool_calls: c.session_memory_tool_calls,
+            session_memory_per_section_tokens: c.session_memory_per_section_tokens,
+            session_memory_total_tokens: c.session_memory_total_tokens,
         }
     }
 }
-
-/// Resolve the default memory directory for a project root.
-///
-/// Path: `~/.claude/projects/<sanitized-cwd>/memory/`
-fn resolve_default_memory_dir(project_root: &Path) -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    let sanitized = sanitize_project_path(project_root);
-    PathBuf::from(home)
-        .join(".claude")
-        .join("projects")
-        .join(sanitized)
-        .join("memory")
-}
-
-/// Sanitize a project root path for use as a directory name.
-///
-/// Replaces path separators with `-` and strips leading `/`.
-fn sanitize_project_path(path: &Path) -> String {
-    let s = path.to_string_lossy();
-    s.trim_start_matches('/').replace(['/', '\\'], "-")
-}
-
-#[cfg(test)]
-#[path = "config.test.rs"]
-mod tests;

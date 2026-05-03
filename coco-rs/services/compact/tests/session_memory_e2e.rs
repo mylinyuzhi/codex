@@ -3,14 +3,14 @@
 //! Tests the no-LLM-call compaction path: use pre-extracted session memory
 //! as the summary, with fallback to full compaction when memory is unavailable.
 
-use coco_compact::compact::CompactConfig;
+use coco_compact::compact::CompactRunOptions;
 use coco_compact::compact::compact_conversation;
 use coco_compact::session_memory::SessionMemoryCompactConfig;
 use coco_compact::session_memory::compact_session_memory;
+use coco_messages::Message;
 use coco_test_harness::compact as mock;
 use coco_test_harness::conversation;
 use coco_test_harness::messages as msg;
-use coco_types::Message;
 use coco_types::ToolName;
 
 #[test]
@@ -19,14 +19,14 @@ fn test_basic_flow() {
     let memory = "## Decisions\n- Chose Rust over Go\n- Using tokio for async\n\n## Context\n- Building CLI tool";
     let config = SessionMemoryCompactConfig::default();
 
-    let result = compact_session_memory(&messages, memory, &config)
+    let result = compact_session_memory(&messages, memory, None, &config)
         .expect("should not error")
         .expect("should produce a result");
 
     // Boundary should be in the dedicated field
     assert!(matches!(
         result.boundary_marker,
-        Message::System(coco_types::SystemMessage::CompactBoundary(_))
+        Message::System(coco_messages::SystemMessage::CompactBoundary(_))
     ));
 
     // Summary should be a user message
@@ -64,7 +64,7 @@ fn test_api_invariant_preservation() {
         ..Default::default()
     };
 
-    let result = compact_session_memory(&messages, "Session context", &config)
+    let result = compact_session_memory(&messages, "Session context", None, &config)
         .expect("should not error")
         .expect("should produce a result");
 
@@ -83,12 +83,12 @@ fn test_empty_returns_none() {
     let config = SessionMemoryCompactConfig::default();
 
     assert!(
-        compact_session_memory(&messages, "", &config)
+        compact_session_memory(&messages, "", None, &config)
             .unwrap()
             .is_none()
     );
     assert!(
-        compact_session_memory(&messages, "   \n  ", &config)
+        compact_session_memory(&messages, "   \n  ", None, &config)
             .unwrap()
             .is_none()
     );
@@ -105,7 +105,7 @@ fn test_token_bounds() {
         ..Default::default()
     };
 
-    let result = compact_session_memory(&messages, "Context summary", &config)
+    let result = compact_session_memory(&messages, "Context summary", None, &config)
         .expect("should not error")
         .expect("should produce a result");
 
@@ -135,18 +135,18 @@ async fn test_session_memory_fallback_to_full_compact() {
     let config = SessionMemoryCompactConfig::default();
 
     // Step 1: Session memory is empty → None
-    let sm_result = compact_session_memory(&messages, "", &config).expect("should not error");
+    let sm_result = compact_session_memory(&messages, "", None, &config).expect("should not error");
     assert!(sm_result.is_none(), "empty memory should return None");
 
     // Step 2: Caller falls back to full compact
-    let compact_config = CompactConfig {
+    let compact_run_options = CompactRunOptions {
         keep_recent_rounds: 1,
         ..Default::default()
     };
     let summary = "<analysis>x</analysis><summary>Fallback summary</summary>";
     let result = compact_conversation(
         &messages,
-        &compact_config,
+        &compact_run_options,
         mock::mock_summarize_ok(summary),
         None,
     )
@@ -164,25 +164,25 @@ async fn test_session_memory_preferred_over_full() {
     let memory = "## Decisions\n- Used Rust for performance\n## Context\n- Building CLI";
     let config = SessionMemoryCompactConfig::default();
 
-    let sm_result = compact_session_memory(&messages, memory, &config)
+    let sm_result = compact_session_memory(&messages, memory, None, &config)
         .expect("should not error")
         .expect("session memory should produce result");
 
     // Verify it's a valid compaction without LLM call
     assert!(matches!(
         sm_result.boundary_marker,
-        Message::System(coco_types::SystemMessage::CompactBoundary(_))
+        Message::System(coco_messages::SystemMessage::CompactBoundary(_))
     ));
     assert!(!sm_result.summary_messages.is_empty());
 
     // The summary should contain the session memory content
     if let Message::User(u) = &sm_result.summary_messages[0]
-        && let coco_types::LlmMessage::User { content, .. } = &u.message
+        && let coco_messages::LlmMessage::User { content, .. } = &u.message
     {
         let text: String = content
             .iter()
             .filter_map(|c| match c {
-                coco_types::UserContent::Text(t) => Some(t.text.as_str()),
+                coco_messages::UserContent::Text(t) => Some(t.text.as_str()),
                 _ => None,
             })
             .collect();

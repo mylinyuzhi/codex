@@ -203,6 +203,7 @@ fn to_suggestion(skill: &SkillInfo) -> SuggestionItem {
         } else {
             Some(desc_parts.join(" "))
         },
+        metadata: None,
     }
 }
 

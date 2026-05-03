@@ -62,9 +62,9 @@ impl<'a> PlanPanel<'a> {
     }
 }
 
-fn status_icon_and_color<'a>(
+fn status_icon_and_color(
     status: TaskListStatus,
-    theme: &'a Theme,
+    theme: &Theme,
 ) -> (&'static str, ratatui::style::Color) {
     match status {
         TaskListStatus::Pending => ("○", theme.text_dim),
@@ -73,10 +73,7 @@ fn status_icon_and_color<'a>(
     }
 }
 
-fn todo_icon_and_color<'a>(
-    status: &str,
-    theme: &'a Theme,
-) -> (&'static str, ratatui::style::Color) {
+fn todo_icon_and_color(status: &str, theme: &Theme) -> (&'static str, ratatui::style::Color) {
     match status {
         "pending" => ("○", theme.text_dim),
         "in_progress" => ("◑", theme.tool_running),

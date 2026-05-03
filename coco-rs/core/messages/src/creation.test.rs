@@ -1,10 +1,10 @@
-use coco_types::AssistantContent;
-use coco_types::LlmMessage;
-use coco_types::Message;
-use coco_types::MessageKind;
-use coco_types::MessageOrigin;
-use coco_types::SystemMessage;
-use coco_types::SystemMessageLevel;
+use crate::AssistantContent;
+use crate::LlmMessage;
+use crate::Message;
+use crate::MessageKind;
+use crate::MessageOrigin;
+use crate::SystemMessage;
+use crate::SystemMessageLevel;
 use coco_types::TokenUsage;
 use coco_types::ToolId;
 use coco_types::ToolName;

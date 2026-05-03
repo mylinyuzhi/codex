@@ -9,17 +9,17 @@ use std::time::Duration;
 
 use coco_config::FallbackRecoveryPolicy;
 use coco_inference::ApiClient;
+use coco_inference::AssistantContentPart;
+use coco_inference::FinishReason;
+use coco_inference::LanguageModel;
+use coco_inference::LanguageModelCallOptions;
+use coco_inference::LanguageModelGenerateResult;
+use coco_inference::LanguageModelStreamResult;
 use coco_inference::RetryConfig;
+use coco_inference::TextPart;
+use coco_inference::UnifiedFinishReason;
+use coco_inference::Usage;
 use pretty_assertions::assert_eq;
-use vercel_ai_provider::AssistantContentPart;
-use vercel_ai_provider::FinishReason;
-use vercel_ai_provider::LanguageModelV4;
-use vercel_ai_provider::LanguageModelV4CallOptions;
-use vercel_ai_provider::LanguageModelV4GenerateResult;
-use vercel_ai_provider::LanguageModelV4StreamResult;
-use vercel_ai_provider::TextPart;
-use vercel_ai_provider::UnifiedFinishReason;
-use vercel_ai_provider::Usage;
 
 use super::*;
 
@@ -28,7 +28,7 @@ struct StubModel {
 }
 
 #[async_trait::async_trait]
-impl LanguageModelV4 for StubModel {
+impl LanguageModel for StubModel {
     fn provider(&self) -> &str {
         "stub"
     }
@@ -37,9 +37,9 @@ impl LanguageModelV4 for StubModel {
     }
     async fn do_generate(
         &self,
-        _options: LanguageModelV4CallOptions,
-    ) -> Result<LanguageModelV4GenerateResult, vercel_ai_provider::AISdkError> {
-        Ok(LanguageModelV4GenerateResult {
+        _options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelGenerateResult, coco_inference::AISdkError> {
+        Ok(LanguageModelGenerateResult {
             content: vec![AssistantContentPart::Text(TextPart {
                 text: "stub".into(),
                 provider_metadata: None,
@@ -54,9 +54,9 @@ impl LanguageModelV4 for StubModel {
     }
     async fn do_stream(
         &self,
-        _options: LanguageModelV4CallOptions,
-    ) -> Result<LanguageModelV4StreamResult, vercel_ai_provider::AISdkError> {
-        Err(vercel_ai_provider::AISdkError::new("no stream"))
+        _options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelStreamResult, coco_inference::AISdkError> {
+        Err(coco_inference::AISdkError::new("no stream"))
     }
 }
 
@@ -90,9 +90,9 @@ fn fast_policy() -> FallbackRecoveryPolicy {
 // ─── Basic slot-state tests ─────────────────────────────────────────────────
 
 #[test]
-fn test_primary_only_reports_primary_model_name() {
+fn test_primary_only_reports_primary_model_id() {
     let rt = primary_only("primary");
-    assert_eq!(rt.current_model_name(), "primary");
+    assert_eq!(rt.current_model_id(), "primary");
     assert_eq!(rt.active_index(), 0);
     assert!(!rt.has_fallback());
 }
@@ -107,10 +107,10 @@ fn test_advance_without_fallback_reports_exhausted() {
 #[test]
 fn test_advance_single_fallback_then_exhausted() {
     let mut rt = with_single_fallback("primary", "fallback");
-    assert_eq!(rt.current_model_name(), "primary");
+    assert_eq!(rt.current_model_id(), "primary");
     assert_eq!(rt.advance(), AdvanceOutcome::Switched("fallback".into()));
     assert_eq!(rt.active_index(), 1);
-    assert_eq!(rt.current_model_name(), "fallback");
+    assert_eq!(rt.current_model_id(), "fallback");
     assert_eq!(
         rt.advance(),
         AdvanceOutcome::Exhausted,
@@ -126,7 +126,7 @@ fn test_new_walks_every_slot_in_order() {
         vec![stub_client("fb1"), stub_client("fb2"), stub_client("fb3")],
     );
     assert_eq!(rt.slot_count(), 4);
-    assert_eq!(rt.current_model_name(), "primary");
+    assert_eq!(rt.current_model_id(), "primary");
     assert_eq!(rt.advance(), AdvanceOutcome::Switched("fb1".into()));
     assert_eq!(rt.advance(), AdvanceOutcome::Switched("fb2".into()));
     assert_eq!(rt.advance(), AdvanceOutcome::Switched("fb3".into()));

@@ -42,7 +42,15 @@ pub(super) fn handle(state: &mut AppState, event: TuiOnlyEvent) -> bool {
             files_changed,
             insertions,
             deletions,
-        } => on_diff_stats_loaded(state, message_id, files_changed, insertions, deletions),
+            file_paths,
+        } => on_diff_stats_loaded(
+            state,
+            message_id,
+            files_changed,
+            insertions,
+            deletions,
+            file_paths,
+        ),
         TuiOnlyEvent::RewindCompleted {
             target_message_id,
             files_changed,
@@ -213,23 +221,38 @@ fn on_diff_stats_loaded(
     diff_files: i32,
     insertions: i64,
     deletions: i64,
+    file_paths: Vec<String>,
 ) -> bool {
     let has_any_changes = diff_files > 0;
+    let preview = crate::state::DiffStatsPreview {
+        files_changed: diff_files,
+        insertions,
+        deletions,
+        file_paths,
+    };
     if let Some(crate::state::Overlay::Rewind(ref mut r)) = state.ui.overlay {
+        // Per-row metadata for the pick-list. TS: `fileHistoryMetadata`
+        // map keyed by item index (`MessageSelector.tsx:285-312`).
+        if let Some(row) = r
+            .messages
+            .iter_mut()
+            .find(|m| m.message_id == stats_message_id)
+        {
+            row.diff_stats = Some(preview.clone());
+            row.can_restore_code = Some(true);
+        }
+        // Selected-row aggregates drive the RestoreOptions phase.
         let selected_id = r
             .messages
             .get(r.selected as usize)
             .map(|m| m.message_id.as_str());
         if selected_id == Some(&stats_message_id) {
             r.has_file_changes = has_any_changes;
-            r.diff_stats = Some(crate::state::DiffStatsPreview {
-                files_changed: diff_files,
-                insertions,
-                deletions,
-            });
+            r.diff_stats = Some(preview);
             r.available_options = crate::state::rewind::build_restore_options(
                 r.file_history_enabled,
                 has_any_changes,
+                r.allow_summarize_up_to,
             );
         }
     }
@@ -244,6 +267,7 @@ fn on_rewind_completed(
     let mut restored_permission_mode = None;
     let mut restored_input_text = None;
 
+    let mut restored_image_path: Option<String> = None;
     if !target_message_id.is_empty()
         && let Some(target_msg) = state
             .session
@@ -252,7 +276,18 @@ fn on_rewind_completed(
             .find(|m| m.id == target_message_id)
     {
         restored_permission_mode = target_msg.permission_mode;
-        restored_input_text = Some(target_msg.text_content().to_string()).filter(|s| !s.is_empty());
+        // TS `textForResubmit` (`utils/messages.ts:2873-2886`) strips
+        // IDE-injected context tags so the restored prompt doesn't
+        // leak `<ide_opened_file>` / `<ide_selection>` blocks.
+        let stripped = crate::update_rewind::strip_ide_context_tags(target_msg.text_content());
+        restored_input_text = Some(stripped).filter(|s| !s.is_empty());
+        // TS `restoreMessageSync` (`screens/REPL.tsx:3721-3737`) restores
+        // pasted images by reading them off the rewound message. Coco's
+        // ChatMessage carries `MessageContent::Image { path }` for
+        // pasted images — capture the path so we can re-inject below.
+        if let crate::state::MessageContent::Image { path } = &target_msg.content {
+            restored_image_path = Some(path.clone());
+        }
     }
 
     if !target_message_id.is_empty()
@@ -272,6 +307,30 @@ fn on_rewind_completed(
     if let Some(text) = restored_input_text {
         state.ui.input.text = text;
         state.ui.input.cursor = state.ui.input.text.chars().count() as i32;
+    }
+
+    // Rotate conversation_id on truncate so the next request breaks
+    // any prior cache key. TS: setConversationId(randomUUID()) inside
+    // rewindConversationTo (`screens/REPL.tsx:3673`).
+    if !target_message_id.is_empty() {
+        state.session.conversation_id = Some(uuid::Uuid::new_v4().to_string());
+    }
+
+    // Clear the prompt-suggestion belt — stale suggestions from
+    // earlier turns are no longer valid in the rewound conversation.
+    // TS: setAppState({...prev, promptSuggestion: {text: null, ...}})
+    // (`screens/REPL.tsx:3699-3705`).
+    state.session.prompt_suggestions.clear();
+
+    // Paste buffer handling — TS `restoreMessageSync` rebuilds
+    // `pastedContents` from the rewound message's image blocks
+    // (`screens/REPL.tsx:3721-3737`). Coco's ChatMessage stores at most
+    // one image per message; if present, re-attach it; otherwise clear
+    // any leftover paste-buffer state so it doesn't leak into the new
+    // turn.
+    state.ui.paste_manager.clear();
+    if let Some(path) = restored_image_path {
+        state.ui.paste_manager.add_image(path);
     }
 
     state.ui.scroll_offset = 0;

@@ -6,6 +6,8 @@ use std::convert::Infallible;
 use std::fmt;
 use std::str::FromStr;
 
+use crate::ModelRole;
+
 /// TS-parity built-in subagent types.
 ///
 /// **Case is part of the contract.** TS treats `Explore` / `Plan` as PascalCase
@@ -303,6 +305,52 @@ impl FromStr for AgentIsolation {
     }
 }
 
+// ── Agent MCP server spec (string-ref vs inline) ──
+
+/// One entry in `AgentDefinition.mcp_servers`. Mirrors the TS union:
+/// either a `string` (reference to an existing MCP server config) or
+/// an inline `{name: config}` mapping that stands up a dynamic
+/// server scoped to this agent. Inline configs are stored as
+/// `serde_json::Value` because the underlying `McpServerConfig`
+/// shape lives in `coco-mcp` (a higher layer that depends on
+/// `coco-types`); keeping it as opaque JSON avoids a back-edge.
+///
+/// TS: `tools/AgentTool/loadAgentsDir.ts:58 AgentMcpServerSpec`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum AgentMcpServerSpec {
+    /// Reference an existing MCP server by name (TS `string` arm).
+    Name(String),
+    /// Inline definition `{name: config}` (TS record arm). The map
+    /// always carries exactly one entry — the server name → its
+    /// `McpServerConfig` JSON. TS validates this with Zod on load.
+    Inline(std::collections::BTreeMap<String, serde_json::Value>),
+}
+
+impl AgentMcpServerSpec {
+    /// The server name this spec references (string-ref form) or
+    /// declares (inline form's first key).
+    pub fn name(&self) -> Option<&str> {
+        match self {
+            Self::Name(s) => Some(s.as_str()),
+            Self::Inline(map) => map.keys().next().map(String::as_str),
+        }
+    }
+
+    /// Inline-form config payload (the value side of the single entry).
+    /// `None` for string-ref form.
+    pub fn inline_config(&self) -> Option<&serde_json::Value> {
+        match self {
+            Self::Name(_) => None,
+            Self::Inline(map) => map.values().next(),
+        }
+    }
+
+    pub fn is_inline(&self) -> bool {
+        matches!(self, Self::Inline(_))
+    }
+}
+
 // ── Memory Scope ──
 
 /// Scope for agent memory persistence.
@@ -436,6 +484,18 @@ pub struct AgentDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
 
+    /// Explicit `ModelRole` declaration. When present, the spawn-time
+    /// resolver uses this role as the source of truth — overriding the
+    /// default `subagent_type → ModelRole` mapping. Lets a custom `.md`
+    /// agent declare e.g. `model_role: explore` to ride on the user's
+    /// `~/.coco/config.json` Explore role mapping rather than the
+    /// generic Subagent role.
+    ///
+    /// No TS equivalent — TS uses model alias strings (`'haiku'`/`'sonnet'`)
+    /// directly without a role indirection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_role: Option<ModelRole>,
+
     /// Isolation mode for the agent's execution environment.
     #[serde(default)]
     pub isolation: AgentIsolation,
@@ -444,10 +504,13 @@ pub struct AgentDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory_scope: Option<MemoryScope>,
 
-    /// Per-agent MCP server names to connect.
-    /// TS: `mcpServers`
+    /// Per-agent MCP server specs to connect. TS: `mcpServers`. Each
+    /// entry is either a string-reference to an existing server name
+    /// or an inline `{name: config}` mapping that creates a fresh
+    /// dynamic server. TS source:
+    /// `tools/AgentTool/loadAgentsDir.ts:58 AgentMcpServerSpec`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub mcp_servers: Vec<String>,
+    pub mcp_servers: Vec<AgentMcpServerSpec>,
 
     /// Starting prompt prefix for the first user turn (TS `initialPrompt`).
     /// **Not** the system prompt — see `system_prompt`.
@@ -505,6 +568,19 @@ pub struct AgentDefinition {
     /// TS: `criticalSystemReminder_EXPERIMENTAL`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub critical_system_reminder: Option<String>,
+
+    /// Frontmatter hooks scoped to this agent's lifecycle. Same shape
+    /// as `Settings.hooks` (event-keyed map of matcher+handler entries);
+    /// stored as opaque `Value` here because parsing into typed
+    /// `HookDefinition` lives in `coco_hooks` (avoids a back-edge from
+    /// types → hooks). When set, the spawn lifecycle registers these
+    /// hooks under the spawned agent's id and clears them at
+    /// SubagentStop. TS parity: `loadAgentsDir.ts` reads `hooks` into
+    /// the definition; `runAgent.ts:564-575` calls
+    /// `registerFrontmatterHooks(setAppState, agentId, definition.hooks, ...)`.
+    /// `Null` ⇒ no per-agent hooks.
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub hooks: serde_json::Value,
 }
 
 impl Default for AgentDefinition {
@@ -521,6 +597,7 @@ impl Default for AgentDefinition {
             effort: None,
             use_exact_tools: false,
             model: None,
+            model_role: None,
             isolation: AgentIsolation::None,
             memory_scope: None,
             mcp_servers: Vec::new(),
@@ -536,6 +613,7 @@ impl Default for AgentDefinition {
             required_mcp_servers: Vec::new(),
             omit_claude_md: false,
             critical_system_reminder: None,
+            hooks: serde_json::Value::Null,
         }
     }
 }

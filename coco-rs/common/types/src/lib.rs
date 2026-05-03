@@ -1,26 +1,14 @@
 //! Foundation types shared across all coco-rs crates.
 //!
-//! Zero internal dependencies (only depends on vercel-ai-provider for LLM message types).
-
-// === Version isolation layer: re-export vercel-ai types as version-agnostic aliases ===
-// All crates reference via these aliases — never use vercel_ai_provider::* directly.
-// Upgrading vercel-ai v5 only requires changing these re-exports.
-pub use vercel_ai_provider::AssistantContentPart as AssistantContent;
-pub use vercel_ai_provider::FilePart as FileContent;
-pub use vercel_ai_provider::LanguageModelV4Message as LlmMessage;
-pub use vercel_ai_provider::LanguageModelV4Prompt as LlmPrompt;
-pub use vercel_ai_provider::ReasoningPart as ReasoningContent;
-pub use vercel_ai_provider::TextPart as TextContent;
-pub use vercel_ai_provider::ToolCallPart as ToolCallContent;
-pub use vercel_ai_provider::ToolContentPart as ToolContent;
-pub use vercel_ai_provider::ToolResultPart as ToolResultContent;
-pub use vercel_ai_provider::UserContentPart as UserContent;
+//! **Zero LLM dependencies.** Provider-specific types (LlmMessage, content
+//! parts, Message-family structs, ToolResult, HookResult, SerializedMessage,
+//! TranscriptMessage) live in `coco-messages` and reach vercel-ai through the
+//! `coco-inference` seam. This crate stays provider-agnostic.
 
 // === Modules ===
 mod agent;
+mod agent_ipc;
 mod app_state;
-pub mod attachment_body;
-mod attachment_emitter;
 mod attachment_kind;
 mod client_request;
 mod command;
@@ -31,7 +19,6 @@ mod hook;
 mod id;
 mod jsonrpc;
 mod log;
-mod message;
 mod permission;
 mod plugin;
 mod provider;
@@ -52,18 +39,10 @@ mod wire_tagged;
 // App-state (cross-turn shared state carried on ToolUseContext)
 pub use app_state::AppStatePatch;
 pub use app_state::AppStateReadHandle;
+pub use app_state::PromptSuggestion;
 pub use app_state::ToolAppState;
 
-// Message visibility (API × UI axes)
-pub use message::Visibility;
-
-// Cross-crate attachment sink
-pub use attachment_emitter::AttachmentEmitter;
-
 // Attachment taxonomy (full TS `Attachment.type` catalog + coverage)
-pub use attachment_body::AttachmentBody;
-pub use attachment_body::HookPermissionDecision;
-pub use attachment_body::SilentPayload;
 pub use attachment_kind::AttachmentEvent;
 pub use attachment_kind::AttachmentKind;
 pub use attachment_kind::Coverage;
@@ -73,6 +52,7 @@ pub use attachment_kind::coverage_of;
 pub use agent::AgentColorName;
 pub use agent::AgentDefinition;
 pub use agent::AgentIsolation;
+pub use agent::AgentMcpServerSpec;
 pub use agent::AgentSource;
 pub use agent::AgentTypeId;
 pub use agent::MemoryScope;
@@ -80,11 +60,26 @@ pub use agent::ModelInheritance;
 pub use agent::ModelSource;
 pub use agent::SubagentType;
 
+// Inter-agent IPC (mailbox protocol + sub-agent state snapshots)
+pub use agent_ipc::IdleReason;
+pub use agent_ipc::StandaloneAgentContext;
+pub use agent_ipc::SubAgentState;
+pub use agent_ipc::SubAgentStatus;
+pub use agent_ipc::SubagentRuntimeSnapshot;
+pub use agent_ipc::TaskEntry;
+pub use agent_ipc::TeamContext;
+pub use agent_ipc::TeammateEntry;
+pub use agent_ipc::TeammateProtocolContent;
+pub use agent_ipc::TeammateProtocolMessage;
+
 // Event types (three-layer CoreEvent system; see event-system-design.md)
 pub use event::AgentInfo;
 pub use event::AgentStreamEvent;
 pub use event::AgentsKilledParams;
 pub use event::CompactionFailedParams;
+pub use event::CompactionHookType;
+pub use event::CompactionPhase;
+pub use event::CompactionPhaseParams;
 pub use event::ContentDeltaParams;
 pub use event::ContextClearedParams;
 pub use event::ContextCompactedParams;
@@ -233,7 +228,6 @@ pub use command::PromptCommandData;
 // Hook types
 pub use hook::HookEventType;
 pub use hook::HookOutcome;
-pub use hook::HookResult;
 pub use hook::HookScope;
 
 // ID types
@@ -244,41 +238,28 @@ pub use id::TaskId;
 // Log types
 pub use log::Entrypoint;
 pub use log::LogOption;
-pub use log::SerializedMessage;
 pub use log::UserType;
 
-// Message types
-pub use message::ApiError;
-pub use message::AssistantMessage;
-pub use message::AttachmentMessage;
-pub use message::CompactTrigger;
-pub use message::Message;
-pub use message::MessageKind;
-pub use message::MessageOrigin;
-pub use message::PartialCompactDirection;
-pub use message::PreservedSegment;
-pub use message::ProgressMessage;
-pub use message::StopReason;
-pub use message::SystemAgentsKilledMessage;
-pub use message::SystemApiErrorMessage;
-pub use message::SystemApiMetricsMessage;
-pub use message::SystemAwaySummaryMessage;
-pub use message::SystemBridgeStatusMessage;
-pub use message::SystemCompactBoundaryMessage;
-pub use message::SystemInformationalMessage;
-pub use message::SystemLocalCommandMessage;
-pub use message::SystemMemorySavedMessage;
-pub use message::SystemMessage;
-pub use message::SystemMessageLevel;
-pub use message::SystemMicrocompactBoundaryMessage;
-pub use message::SystemPermissionRetryMessage;
-pub use message::SystemScheduledTaskFireMessage;
-pub use message::SystemStopHookSummaryMessage;
-pub use message::SystemTurnDurationMessage;
-pub use message::TombstoneMessage;
-pub use message::ToolResultMessage;
-pub use message::ToolUseSummaryMessage;
-pub use message::UserMessage;
+/// How compaction was triggered.
+///
+/// Stays in `coco-types` (rather than `coco-messages`) because
+/// `event::CompactionPhaseParams` references it; the rest of the message
+/// family lives in `coco-messages`.
+///
+/// Mirrors the TS taxonomy: manual `/compact`, threshold-based auto, PTL-413
+/// reactive recovery, gap-based time-based microcompact, session-memory
+/// short-circuit (no LLM), and staged context-collapse commit.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactTrigger {
+    Manual,
+    Auto,
+    Reactive,
+    TimeBased,
+    SessionMemory,
+    ContextCollapse,
+}
 
 // Permission types
 pub use permission::AdditionalWorkingDir;
@@ -330,6 +311,7 @@ pub use tool_filter::ToolFilter;
 pub use tool_filter::ToolOverrides;
 
 // Side-query types (data only; async trait in coco-tool-runtime)
+pub use side_query::CacheSafeParams;
 pub use side_query::SideQueryMessage;
 pub use side_query::SideQueryRequest;
 pub use side_query::SideQueryResponse;
@@ -366,7 +348,7 @@ pub use thinking::ThinkingLevel;
 pub use token::ModelUsage;
 pub use token::TokenUsage;
 
-// Tool types
+// Tool types (ToolResult moved to coco-messages because new_messages: Vec<Message>)
 pub use tool::AGENT_WORKTREE_BRANCH_PREFIX;
 pub use tool::MCP_TOOL_PREFIX;
 pub use tool::MCP_TOOL_SEPARATOR;
@@ -374,7 +356,6 @@ pub use tool::ToolId;
 pub use tool::ToolInputSchema;
 pub use tool::ToolName;
 pub use tool::ToolProgress;
-pub use tool::ToolResult;
 
 // Extended types (ported from TS hooks.ts, command.ts, permissions.ts, logs.ts)
 pub use extended::{
@@ -412,8 +393,6 @@ pub use extended::{
     TagEntry,
     TaskSummaryEntry,
     ToolPermissionContextExt,
-    TranscriptEntry,
-    TranscriptMessage,
 };
 
 /// Permission mode (top-level because it's used by both message and permission modules).

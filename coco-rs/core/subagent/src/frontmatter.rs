@@ -8,7 +8,8 @@ use std::path::Path;
 
 use coco_frontmatter::FrontmatterValue;
 use coco_types::{
-    AgentColorName, AgentDefinition, AgentIsolation, AgentSource, AgentTypeId, MemoryScope,
+    AgentColorName, AgentDefinition, AgentIsolation, AgentMcpServerSpec, AgentSource, AgentTypeId,
+    MemoryScope, ModelRole,
 };
 
 use crate::validation::ValidationError;
@@ -68,6 +69,12 @@ pub fn parse_agent_markdown(
             model.trim().to_ascii_lowercase()
         };
         def.model = Some(normalized);
+    }
+    if let Some(raw) = read_str_aliased(frontmatter, &["modelRole", "model_role"]) {
+        match raw.parse::<ModelRole>() {
+            Ok(role) => def.model_role = Some(role),
+            Err(_) => warnings.push(ValidationError::InvalidModelRole { value: raw }),
+        }
     }
     if let Some(effort) = read_str(frontmatter, "effort").or_else(|| {
         // TS `parseEffortValue` accepts `effort: 64000` numeric form too.
@@ -154,13 +161,73 @@ pub fn parse_agent_markdown(
         read_csv_or_list_aliased(frontmatter, &["disallowedTools", "disallowed_tools"])
             .unwrap_or_default();
     def.skills = read_csv_or_list(frontmatter, "skills").unwrap_or_default();
-    def.mcp_servers =
-        read_csv_or_list_aliased(frontmatter, &["mcpServers", "mcp_servers"]).unwrap_or_default();
+    def.mcp_servers = parse_mcp_servers(frontmatter);
     def.required_mcp_servers =
         read_csv_or_list_aliased(frontmatter, &["requiredMcpServers", "required_mcp_servers"])
             .unwrap_or_default();
+    // Hooks parsing: nested `hooks:` mapping flows through verbatim
+    // as `serde_json::Value`. `coco_hooks::load_hooks_from_config`
+    // consumes it at SubagentStart time. TS parity:
+    // `loadAgentsDir.ts:711 parseHooksFromFrontmatter` runs Zod
+    // validation client-side; coco-rs defers validation until the
+    // hook loader actually parses the value (errors surface as
+    // tracing::warn there, matching TS's logForDebugging).
+    def.hooks = frontmatter
+        .get("hooks")
+        .map(FrontmatterValue::to_json)
+        .unwrap_or(serde_json::Value::Null);
 
     Ok((def, warnings))
+}
+
+/// Parse `mcpServers:` from frontmatter into `Vec<AgentMcpServerSpec>`.
+/// Handles three TS-supported shapes:
+/// - String list (string-ref form): `mcpServers: [github, slack]`
+/// - Mixed sequence (string-ref + inline): `mcpServers: [github, {slack: {...}}]`
+/// - Pure inline mapping list: `mcpServers: [{slack: {command: ./mcp}}]`
+fn parse_mcp_servers(
+    frontmatter: &std::collections::HashMap<String, FrontmatterValue>,
+) -> Vec<AgentMcpServerSpec> {
+    let raw = match frontmatter
+        .get("mcpServers")
+        .or_else(|| frontmatter.get("mcp_servers"))
+    {
+        Some(v) => v,
+        None => return Vec::new(),
+    };
+
+    // Pure-string CSV form (single string with comma separators):
+    // mcpServers: github,slack
+    if let Some(s) = raw.as_str() {
+        return s
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| AgentMcpServerSpec::Name(s.to_string()))
+            .collect();
+    }
+
+    let Some(items) = raw.as_sequence() else {
+        return Vec::new();
+    };
+
+    items
+        .iter()
+        .filter_map(|item| match item {
+            FrontmatterValue::String(s) if !s.trim().is_empty() => {
+                Some(AgentMcpServerSpec::Name(s.clone()))
+            }
+            FrontmatterValue::Mapping(m) if m.len() == 1 => {
+                // TS: `Object.entries(spec)` with `entries.length === 1`.
+                // Multiple keys per inline entry is rejected as malformed.
+                let (name, config) = m.iter().next()?;
+                let mut single = std::collections::BTreeMap::new();
+                single.insert(name.clone(), config.to_json());
+                Some(AgentMcpServerSpec::Inline(single))
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// Validate a color string against the TS `AgentColorName` set. Invalid

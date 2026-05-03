@@ -14,8 +14,8 @@ use coco_compact::micro_advanced::compact_thinking_blocks;
 use coco_compact::micro_advanced::micro_compact_with_budget;
 use coco_compact::reactive;
 use coco_compact::types::CLEARED_TOOL_RESULT_MESSAGE;
+use coco_messages::Message;
 use coco_test_harness::messages as msg;
-use coco_types::Message;
 use coco_types::ToolName;
 
 #[test]
@@ -154,11 +154,11 @@ fn test_thinking_compact() {
     // First 3 should have thinking removed
     for m in &messages[..3] {
         if let Message::Assistant(a) = m
-            && let coco_types::LlmMessage::Assistant { content, .. } = &a.message
+            && let coco_messages::LlmMessage::Assistant { content, .. } = &a.message
         {
             let has_thinking = content
                 .iter()
-                .any(|c| matches!(c, coco_types::AssistantContent::Reasoning(_)));
+                .any(|c| matches!(c, coco_messages::AssistantContent::Reasoning(_)));
             assert!(!has_thinking, "old turn should have thinking removed");
         }
     }
@@ -166,11 +166,11 @@ fn test_thinking_compact() {
     // Last 2 should keep thinking
     for m in &messages[3..] {
         if let Message::Assistant(a) = m
-            && let coco_types::LlmMessage::Assistant { content, .. } = &a.message
+            && let coco_messages::LlmMessage::Assistant { content, .. } = &a.message
         {
             let has_thinking = content
                 .iter()
-                .any(|c| matches!(c, coco_types::AssistantContent::Reasoning(_)));
+                .any(|c| matches!(c, coco_messages::AssistantContent::Reasoning(_)));
             assert!(has_thinking, "recent turn should keep thinking");
         }
     }
@@ -234,10 +234,10 @@ fn test_api_clear_tool_uses_realistic() {
 
     // Recent assistant's tool call input should be preserved
     if let Message::Assistant(a) = &messages[messages.len() - 2]
-        && let coco_types::LlmMessage::Assistant { content, .. } = &a.message
+        && let coco_messages::LlmMessage::Assistant { content, .. } = &a.message
     {
         for part in content {
-            if let coco_types::AssistantContent::ToolCall(tc) = part {
+            if let coco_messages::AssistantContent::ToolCall(tc) = part {
                 assert_ne!(
                     tc.input,
                     serde_json::Value::Object(serde_json::Map::new()),
@@ -269,11 +269,11 @@ fn test_api_clear_thinking_realistic() {
     // All assistant messages should still have text content
     for m in &messages {
         if let Message::Assistant(a) = m
-            && let coco_types::LlmMessage::Assistant { content, .. } = &a.message
+            && let coco_messages::LlmMessage::Assistant { content, .. } = &a.message
         {
             let has_text = content
                 .iter()
-                .any(|c| matches!(c, coco_types::AssistantContent::Text(_)));
+                .any(|c| matches!(c, coco_messages::AssistantContent::Text(_)));
             assert!(
                 has_text,
                 "text content should be preserved after clearing thinking"
@@ -304,7 +304,11 @@ fn test_reactive_api_microcompact() {
     };
 
     let current_tokens = coco_compact::estimate_tokens(&messages);
-    let drop_target = reactive::calculate_drop_target(current_tokens, &config);
+    let drop_target = reactive::calculate_drop_target(
+        current_tokens,
+        &config,
+        &coco_config::AutoCompactConfig::default(),
+    );
     assert!(drop_target > 0, "should need to drop tokens");
 
     reactive::api_microcompact(&mut messages, drop_target);

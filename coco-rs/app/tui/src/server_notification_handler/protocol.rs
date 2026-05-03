@@ -188,6 +188,12 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
         // === Context ===
         ServerNotification::ContextCompacted(p) => {
             state.session.is_compacting = false;
+            // Suppress the next ContextUsageWarning emission — the
+            // freshly-compacted token count won't be reflected in the
+            // banner until the next API response arrives. TS:
+            // `services/compact/compactWarningHook.ts` subscribes
+            // `compactWarningStore` to gate the warning.
+            state.session.compact_warning_suppressed = true;
             state.ui.add_toast(Toast::info(
                 t!("toast.compacted_short", count = p.removed_messages).to_string(),
             ));
@@ -195,20 +201,56 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
         }
         ServerNotification::ContextUsageWarning(p) => {
             state.session.context_usage_percent = Some(p.percent_left);
-            if p.percent_left < 10.0 {
+            // The next API response will deliver an accurate token count;
+            // until then, drop the warning so we don't show a stale value.
+            // TS: `compactWarningHook.ts` gates on `compactWarningStore`.
+            if !state.session.compact_warning_suppressed && p.percent_left < 10.0 {
                 state.ui.add_toast(Toast::warning(format!(
                     "Context {:.0}% remaining",
                     p.percent_left
                 )));
             }
+            // Any subsequent warning post-suppression means the API
+            // already returned a fresh count — clear the flag.
+            state.session.compact_warning_suppressed = false;
             true
         }
         ServerNotification::CompactionStarted => {
             state.session.is_compacting = true;
+            state.session.compact_warning_suppressed = false;
+            true
+        }
+        ServerNotification::CompactionPhase(p) => {
+            use crate::state::session::CompactionPhaseLabel;
+            use coco_types::CompactionHookType;
+            use coco_types::CompactionPhase;
+            state.session.compaction_phase = match (p.phase, p.hook_type) {
+                (CompactionPhase::HooksStart, Some(CompactionHookType::PreCompact)) => {
+                    state.session.is_compacting = true;
+                    Some(CompactionPhaseLabel::PreCompactHooks)
+                }
+                (CompactionPhase::HooksStart, Some(CompactionHookType::PostCompact)) => {
+                    Some(CompactionPhaseLabel::PostCompactHooks)
+                }
+                (CompactionPhase::HooksStart, Some(CompactionHookType::SessionStart)) => {
+                    Some(CompactionPhaseLabel::SessionStartHooks)
+                }
+                (CompactionPhase::HooksStart, None) => Some(CompactionPhaseLabel::PreCompactHooks),
+                (CompactionPhase::Summarizing, _) => {
+                    state.session.is_compacting = true;
+                    Some(CompactionPhaseLabel::Summarizing)
+                }
+                (CompactionPhase::Done, _) => {
+                    state.session.is_compacting = false;
+                    state.session.compact_warning_suppressed = true;
+                    None
+                }
+            };
             true
         }
         ServerNotification::CompactionFailed(p) => {
             state.session.is_compacting = false;
+            state.session.compaction_phase = None;
             // Compaction failures leave the session in a compromised state
             // (context still over budget); escalate past the toast.
             let msg = t!("toast.compaction_failed_short", error = p.error.as_str()).to_string();
@@ -502,10 +544,9 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
                 .active_hooks
                 .iter_mut()
                 .find(|h| h.hook_id == p.hook_id)
+                && !p.stdout.is_empty()
             {
-                if !p.stdout.is_empty() {
-                    hook.output = Some(p.stdout);
-                }
+                hook.output = Some(p.stdout);
             }
             true
         }
@@ -681,6 +722,11 @@ fn on_turn_completed(state: &mut AppState, p: coco_types::TurnCompletedParams) -
             state.ui.input.text = input_text;
             state.ui.input.cursor = state.ui.input.text.chars().count() as i32;
         }
+        // Match the rewind flow's full side-effect set so an Esc-driven
+        // auto-restore behaves the same as the explicit overlay path.
+        state.session.conversation_id = Some(uuid::Uuid::new_v4().to_string());
+        state.session.prompt_suggestions.clear();
+        state.ui.paste_manager.clear();
         state.ui.scroll_offset = 0;
         state.ui.user_scrolled = false;
     }

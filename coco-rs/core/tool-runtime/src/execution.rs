@@ -11,10 +11,10 @@
 //! 6. Post-execution hooks
 //! 7. Result processing + error classification
 
+use coco_messages::ToolResult;
 use coco_types::PermissionDecision;
 use coco_types::ToolId;
 use coco_types::ToolName;
-use coco_types::ToolResult;
 use serde_json::Value;
 use std::time::Instant;
 

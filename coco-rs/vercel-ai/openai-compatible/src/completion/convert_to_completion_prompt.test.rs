@@ -6,10 +6,7 @@ use vercel_ai_provider::ToolCallPart;
 #[test]
 fn converts_simple_prompt_with_structured_format() {
     let prompt = vec![
-        LanguageModelV4Message::System {
-            content: "Be helpful".into(),
-            provider_options: None,
-        },
+        LanguageModelV4Message::system("Be helpful"),
         LanguageModelV4Message::User {
             content: vec![UserContentPart::Text(TextPart {
                 text: "Hello".into(),
@@ -26,10 +23,7 @@ fn converts_simple_prompt_with_structured_format() {
 #[test]
 fn converts_multi_turn_conversation() {
     let prompt = vec![
-        LanguageModelV4Message::System {
-            content: "You are a helpful bot".into(),
-            provider_options: None,
-        },
+        LanguageModelV4Message::system("You are a helpful bot"),
         LanguageModelV4Message::User {
             content: vec![UserContentPart::Text(TextPart {
                 text: "What is 2+2?".into(),

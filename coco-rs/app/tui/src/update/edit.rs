@@ -54,32 +54,66 @@ pub(super) fn try_local_command(state: &mut AppState, trimmed: &str) -> bool {
     false
 }
 
+/// Try to handle `trimmed` as `/compact [instructions]`. Routes to
+/// the engine's manual compact entry-point so the user's directive
+/// flows into the summary prompt. TS: `commands/compact/compact.ts:40`.
+///
+/// Async because we need the command channel to dispatch the compact
+/// request to the agent driver.
+pub(super) async fn try_local_compact(
+    state: &mut AppState,
+    trimmed: &str,
+    command_tx: &mpsc::Sender<UserCommand>,
+) -> bool {
+    if trimmed != "/compact" && !trimmed.starts_with("/compact ") {
+        return false;
+    }
+    let instructions = trimmed
+        .strip_prefix("/compact")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+
+    // Show the standard "Compacting…" toast so the user sees immediate
+    // feedback even before the engine emits CompactionStarted.
+    state
+        .ui
+        .add_toast(Toast::info(t!("status.compacting").to_string()));
+
+    let _ = command_tx
+        .send(UserCommand::Compact {
+            custom_instructions: instructions,
+        })
+        .await;
+    true
+}
+
 /// Try to handle `trimmed` as a `/clear` variant. Called by [`submit`]
 /// with access to the core command channel so the engine-side reset
 /// can be kicked off asynchronously.
 ///
 /// Scope (TS: `src/commands/clear/conversation.ts::clearConversation`):
-/// - `/clear`          — transcript only (session survives for /resume)
-/// - `/clear history`  — alias of `/clear`
-/// - `/clear all`      — transcript + plan files + plan-mode app_state
+/// - `/clear`          — full TS-aligned reset (default)
+/// - `/clear all`      — alias of `/clear`
+/// - `/clear history`  — Rust-only lighter mode: transcript only,
+///   keep tools/files/plans
 pub(super) async fn try_local_clear(
     state: &mut AppState,
     trimmed: &str,
     command_tx: &mpsc::Sender<UserCommand>,
 ) -> bool {
     let scope = match trimmed {
-        "/clear" | "/clear history" => {
-            let alias_history = trimmed == "/clear history";
-            do_clear_conversation(state, /*clear_plan_state*/ false);
-            if alias_history {
-                crate::command::ClearScope::History
-            } else {
-                crate::command::ClearScope::Conversation
-            }
-        }
-        "/clear all" => {
+        "/clear" | "/clear all" => {
+            // TS: clearAllPlanSlugs is unconditional. We mirror by
+            // always passing `clear_plan_state=true` here (deletes
+            // plan files on disk and clears the slug cache). Users
+            // wanting a lighter reset use `/clear history`.
             do_clear_conversation(state, /*clear_plan_state*/ true);
-            crate::command::ClearScope::All
+            crate::command::ClearScope::Conversation
+        }
+        "/clear history" => {
+            do_clear_conversation(state, /*clear_plan_state*/ false);
+            crate::command::ClearScope::History
         }
         _ => return false,
     };
@@ -146,11 +180,45 @@ pub(super) async fn submit(state: &mut AppState, command_tx: &mpsc::Sender<UserC
     if try_local_clear(state, trimmed, command_tx).await {
         return true;
     }
+    // /compact also needs the command channel; intercept before the
+    // raw text would otherwise be sent to the LLM.
+    if try_local_compact(state, trimmed, command_tx).await {
+        return true;
+    }
 
     state.ui.input.add_to_history(text.clone());
     let resolved = state.ui.paste_manager.resolve_structured(&text);
+
+    // Mint the user-message UUID once at submit time so the TUI's
+    // ChatMessage, the agent driver's Message::User, the file-history
+    // snapshot, and the JSONL transcript all key off the same id.
+    // TS: REPL.tsx onSubmit calls createUserMessage() which mints the
+    // UUID before the agent loop runs.
+    let user_message_id = uuid::Uuid::new_v4().to_string();
+
+    // Push the user's input into the displayed conversation immediately
+    // (TS REPL: setMessages(prev => [...prev, userMsg]) on submit).
+    // The same id then flows through UserCommand::SubmitInput so rewind
+    // selections target the very message the user sees in the chat.
+    state
+        .session
+        .add_message(crate::state::session::ChatMessage {
+            id: user_message_id.clone(),
+            role: crate::state::session::ChatRole::User,
+            content: crate::state::session::MessageContent::Text(text.clone()),
+            is_meta: false,
+            created_at_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0),
+            is_compact_summary: false,
+            is_visible_in_transcript_only: false,
+            permission_mode: Some(state.session.permission_mode),
+        });
+
     let _ = command_tx
         .send(UserCommand::SubmitInput {
+            user_message_id,
             content: resolved.text,
             display_text: Some(text),
             images: resolved.images,

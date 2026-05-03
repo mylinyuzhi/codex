@@ -11,6 +11,7 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
+use crate::compact_settings::PartialCompactSettings;
 use crate::model::ModelSelectionSettings;
 use crate::provider::PartialProviderConfig;
 use crate::sections::PartialApiSettings;
@@ -85,6 +86,13 @@ pub struct Settings {
     pub web_search: PartialWebSearchSettings,
     #[serde(default)]
     pub paths: PartialPathSettings,
+
+    // === Compaction ===
+    /// Compaction (auto / micro / api-native / session-memory / experimental).
+    /// Resolved at startup into `RuntimeConfig.compact` (`CompactConfig`);
+    /// `coco_compact` reads only that struct, never env directly.
+    #[serde(default)]
+    pub compact: PartialCompactSettings,
 
     // === Feature gates ===
     /// Coarse-grained feature toggles. Each key matches `Feature::key()`;

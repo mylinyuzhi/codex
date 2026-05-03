@@ -133,6 +133,24 @@ impl TaskManager {
         self.update_status(id, TaskStatus::Cancelled).await;
     }
 
+    /// Stamp the `tool_use_id` onto the matching task entry. Used by
+    /// task-spawning tools (AgentTool, BashTool background) so the
+    /// `<task-notification>` envelope can route back to the model's
+    /// invocation that started the task.
+    pub async fn set_tool_use_id(&self, id: &str, tool_use_id: String) {
+        if let Some(task) = self.tasks.write().await.get_mut(id) {
+            task.tool_use_id = Some(tool_use_id);
+        }
+    }
+
+    /// Flip the `notified` flag so subsequent `poll_notifications`
+    /// calls don't re-emit a completed task.
+    pub async fn mark_notified(&self, id: &str) {
+        if let Some(task) = self.tasks.write().await.get_mut(id) {
+            task.notified = true;
+        }
+    }
+
     pub async fn set_output(&self, id: &str, output: TaskOutput) {
         self.outputs.write().await.insert(id.to_string(), output);
     }

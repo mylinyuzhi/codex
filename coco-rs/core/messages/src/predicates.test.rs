@@ -1,4 +1,4 @@
-use coco_types::*;
+use crate::*;
 use uuid::Uuid;
 
 use super::*;
@@ -6,7 +6,7 @@ use super::*;
 fn make_user_msg(text: &str, meta: bool, virtual_flag: bool) -> Message {
     // Post-Phase-2: meta=true → Message::Attachment; meta=false → regular User.
     if meta {
-        Message::Attachment(coco_types::AttachmentMessage::api(
+        Message::Attachment(crate::AttachmentMessage::api(
             coco_types::AttachmentKind::CriticalSystemReminder,
             LlmMessage::user_text(text),
         ))

@@ -3,7 +3,7 @@ use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolUseContext;
 use serde_json::json;
 
-fn text(result: &coco_types::ToolResult<serde_json::Value>) -> &str {
+fn text(result: &coco_messages::ToolResult<serde_json::Value>) -> &str {
     result.data.as_str().unwrap()
 }
 

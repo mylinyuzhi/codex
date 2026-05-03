@@ -507,3 +507,127 @@ fn test_cli_fallback_overrides_take_precedence_over_settings_fallbacks() {
     assert_eq!(fallbacks[0].provider, "openai");
     assert_eq!(fallbacks[0].model_id, "gpt-5");
 }
+
+#[test]
+fn test_unconfigured_roles_default_to_main() {
+    // No settings.models.{fast,memory,compact,plan,explore,review,hook_agent}
+    // → resolver should fall back to Main so consumer-side
+    // `.get(role)` is total.
+    let settings = settings_with(Settings {
+        model: Some("anthropic/claude-opus-4-7".into()),
+        ..Default::default()
+    });
+    let runtime = build_isolated(
+        settings,
+        EnvSnapshot::default(),
+        RuntimeOverrides::default(),
+    )
+    .expect("resolve");
+
+    let main_spec = runtime
+        .model_roles
+        .get(ModelRole::Main)
+        .expect("Main always set");
+
+    for role in [
+        ModelRole::Fast,
+        ModelRole::Compact,
+        ModelRole::Plan,
+        ModelRole::Explore,
+        ModelRole::Review,
+        ModelRole::HookAgent,
+        ModelRole::Memory,
+    ] {
+        let got = runtime
+            .model_roles
+            .get(role)
+            .unwrap_or_else(|| panic!("{role:?} should default to Main"));
+        assert_eq!(
+            got.model_id, main_spec.model_id,
+            "{role:?} did not inherit Main"
+        );
+        assert_eq!(got.provider, main_spec.provider);
+    }
+}
+
+#[test]
+fn test_explicit_role_overrides_main_default() {
+    // settings.models.memory present → keep that, do NOT overwrite
+    // with Main.
+    use crate::model::ModelSelection;
+    use crate::model::RoleSlots;
+    let settings = settings_with(Settings {
+        model: Some("anthropic/claude-opus-4-7".into()),
+        models: crate::ModelSelectionSettings {
+            memory: Some(RoleSlots::new(ModelSelection {
+                provider: "anthropic".into(),
+                model_id: "claude-haiku-4-5".into(),
+            })),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    let runtime = build_isolated(
+        settings,
+        EnvSnapshot::default(),
+        RuntimeOverrides::default(),
+    )
+    .expect("resolve");
+    let memory = runtime
+        .model_roles
+        .get(ModelRole::Memory)
+        .expect("Memory configured");
+    assert_eq!(memory.model_id, "claude-haiku-4-5");
+}
+
+#[test]
+fn test_subagent_role_resolves_from_settings() {
+    // settings.models.subagent → ModelRole::Subagent. Env-only
+    // overrides for this role have been removed; settings.json is
+    // the single source.
+    use crate::model::ModelSelection;
+    use crate::model::RoleSlots;
+    let settings = settings_with(Settings {
+        model: Some("anthropic/claude-opus-4-7".into()),
+        models: crate::ModelSelectionSettings {
+            subagent: Some(RoleSlots::new(ModelSelection {
+                provider: "anthropic".into(),
+                model_id: "claude-haiku-4-5".into(),
+            })),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    let runtime = build_isolated(
+        settings,
+        EnvSnapshot::default(),
+        RuntimeOverrides::default(),
+    )
+    .expect("resolve");
+    let subagent = runtime
+        .model_roles
+        .get(ModelRole::Subagent)
+        .expect("Subagent configured");
+    assert_eq!(subagent.model_id, "claude-haiku-4-5");
+}
+
+#[test]
+fn test_subagent_role_defaults_to_main_when_unset() {
+    let settings = settings_with(Settings {
+        model: Some("anthropic/claude-opus-4-7".into()),
+        ..Default::default()
+    });
+    let runtime = build_isolated(
+        settings,
+        EnvSnapshot::default(),
+        RuntimeOverrides::default(),
+    )
+    .expect("resolve");
+    let main = runtime.model_roles.get(ModelRole::Main).expect("Main");
+    let subagent = runtime
+        .model_roles
+        .get(ModelRole::Subagent)
+        .expect("Subagent defaulted from Main");
+    assert_eq!(subagent.model_id, main.model_id);
+    assert_eq!(subagent.provider, main.provider);
+}

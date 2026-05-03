@@ -201,6 +201,71 @@ pub(crate) async fn record_file_edit(
 /// `coco-secret-redact` covers common patterns but isn't exhaustive.
 /// The intent matches TS: prevent the most common accident of putting
 /// `API_KEY=sk-...` into a synced memory file.
+/// Reject Edit/Write/NotebookEdit calls whose target falls outside the
+/// caller-installed write fence on `ToolUseContext::allowed_write_roots`.
+///
+/// Empty fence = no restriction (the common case). When non-empty
+/// (forked memory-extraction / auto-dream subagents), the path must
+/// be a descendant of one of the listed roots after `..` normalization.
+///
+/// TS: `services/extractMemories/extractMemories.ts:createAutoMemCanUseTool`
+/// (memdir-only sandbox for the extraction agent).
+pub(crate) fn check_write_root_fence(
+    ctx: &coco_tool_runtime::ToolUseContext,
+    path: &std::path::Path,
+) -> Option<String> {
+    if ctx.allowed_write_roots.is_empty() {
+        return None;
+    }
+    // Resolve relative paths against cwd_override (worktree-isolated
+    // subagents) or the process cwd. Without this step, a relative
+    // path like `notes.md` would lexically-normalize to itself, never
+    // match an absolute fence root, and **either** be over-rejected
+    // (when the model intended a memdir-relative write) or — worse,
+    // when a tool resolves the path itself via OS cwd — slip past the
+    // fence entirely.
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else if let Some(cwd) = ctx.cwd_override.as_ref() {
+        cwd.join(path)
+    } else {
+        std::env::current_dir()
+            .map(|c| c.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    };
+    let normalized = normalize_lexical(&absolute);
+    let allowed = ctx.allowed_write_roots.iter().any(|root| {
+        let root = normalize_lexical(root);
+        normalized.starts_with(&root)
+    });
+    if allowed {
+        return None;
+    }
+    Some(format!(
+        "Refusing to write {}: this agent is sandboxed and may only write under one of {}.",
+        path.display(),
+        ctx.allowed_write_roots
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    ))
+}
+
+fn normalize_lexical(path: &std::path::Path) -> std::path::PathBuf {
+    let mut out = std::path::PathBuf::new();
+    for c in path.components() {
+        match c {
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => out.push(other),
+        }
+    }
+    out
+}
+
 pub(crate) fn check_team_mem_secret(
     ctx: &coco_tool_runtime::ToolUseContext,
     path: &std::path::Path,
@@ -249,9 +314,21 @@ fn is_team_memory_path(ctx: &coco_tool_runtime::ToolUseContext, path: &std::path
         .clone()
         .or_else(|| std::env::current_dir().ok());
     if let Some(root) = project_root {
-        let memory_config = coco_memory::config::MemoryConfig::from(ctx.memory_config.clone());
-        let memory_dir = memory_config.resolve_memory_dir(&root);
-        if coco_memory::team_paths::is_team_mem_path(path, &memory_dir) {
+        // The config home is derived from `CocoConfigDir` env or
+        // defaulted by the bootstrap layer. We don't have direct access
+        // here, so fall back to `~/.coco` — same default the resolver
+        // uses for the layered settings path.
+        let config_home = std::env::var_os("HOME")
+            .map(|h| std::path::PathBuf::from(h).join(".coco"))
+            .unwrap_or_else(|| std::path::PathBuf::from(".coco"));
+        let directories = coco_memory::path::MemoryDir::resolve(
+            &config_home,
+            &root,
+            ctx.memory_config.directory.as_deref(),
+        );
+        if coco_memory::path::memory_scope_for_path(path, &directories.personal)
+            == coco_memory::path::MemoryScope::Team
+        {
             return true;
         }
     }
@@ -259,8 +336,10 @@ fn is_team_memory_path(ctx: &coco_tool_runtime::ToolUseContext, path: &std::path
     // Stage 2: substring fallback. Catches paths where the resolved
     // memory dir doesn't match the file's on-disk location (custom
     // mount points, symlinks, mid-session cwd changes, test fixtures).
+    // Both `.claude/memory/team/` (legacy / TS layout) and `.coco/.../memory/team/`
+    // are accepted — the secret-detector second stage gates false positives.
     let path_str = path.to_string_lossy();
-    path_str.contains("/.claude/memory/team/") || path_str.contains("\\.claude\\memory\\team\\")
+    path_str.contains("/memory/team/") || path_str.contains("\\memory\\team\\")
 }
 
 /// Push the read file path into `ctx.nested_memory_attachment_triggers`

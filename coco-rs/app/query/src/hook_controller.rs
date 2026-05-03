@@ -5,6 +5,7 @@ use coco_hooks::HookRegistry;
 use coco_hooks::orchestration;
 use coco_hooks::orchestration::AggregatedHookResult;
 use coco_hooks::orchestration::OrchestrationContext;
+use coco_inference::ToolCallPart;
 use coco_messages::MessageHistory;
 use coco_types::CoreEvent;
 use coco_types::PermissionBehavior;
@@ -12,7 +13,6 @@ use coco_types::ToolId;
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tracing::warn;
-use vercel_ai_provider::ToolCallPart;
 
 use crate::helpers::complete_tool_call_with_error;
 
@@ -145,7 +145,7 @@ impl<'a> HookController<'a> {
         )
         .await
         {
-            Ok(agg) => self.into_post_tool_use_outcome(agg),
+            Ok(agg) => self.build_post_tool_use_outcome(agg),
             Err(e) => {
                 warn!(
                     error = %e,
@@ -192,7 +192,7 @@ impl<'a> HookController<'a> {
         }
     }
 
-    fn into_post_tool_use_outcome(&self, agg: AggregatedHookResult) -> PostToolUseOutcome {
+    fn build_post_tool_use_outcome(&self, agg: AggregatedHookResult) -> PostToolUseOutcome {
         PostToolUseOutcome {
             additional_contexts: agg.additional_contexts,
             updated_mcp_tool_output: agg.updated_mcp_tool_output,

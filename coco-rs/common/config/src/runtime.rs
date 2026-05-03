@@ -8,6 +8,7 @@ use coco_types::ModelRole;
 use coco_types::ModelSpec;
 use coco_types::ToolOverrides;
 
+use crate::compact_settings::CompactConfig;
 use crate::env::EnvOnlyConfig;
 use crate::env::EnvSnapshot;
 use crate::error::ConfigError;
@@ -62,6 +63,10 @@ pub struct RuntimeConfig {
     pub web_fetch: WebFetchConfig,
     pub web_search: WebSearchConfig,
     pub paths: PathConfig,
+    /// Resolved compaction parameters (auto threshold, micro keep-recent,
+    /// api-native gate, session-memory budgets, experimental flags). Single
+    /// source of truth — `coco_compact` reads this and never touches env.
+    pub compact: CompactConfig,
     /// Coarse-grained capability gates. See
     /// `docs/coco-rs/feature-gates-and-tool-filtering.md`.
     pub features: Features,
@@ -238,6 +243,7 @@ pub fn build_runtime_config_with(
         web_fetch: WebFetchConfig::resolve(merged),
         web_search: WebSearchConfig::resolve(merged),
         paths: PathConfig::resolve(merged),
+        compact: CompactConfig::resolve(merged, &env),
         features,
         tool_overrides,
         settings,
@@ -463,18 +469,43 @@ fn resolve_model_roles(
         settings.merged.models.memory.as_ref(),
         providers,
     )?;
+    set_role_from_json(
+        &mut roles,
+        ModelRole::Subagent,
+        settings.merged.models.subagent.as_ref(),
+        providers,
+    )?;
 
-    if let Some(model) = env.small_fast_model.as_deref() {
-        roles.roles.insert(
+    // Default unconfigured roles to Main. This makes the consumer side
+    // (`runtime_config.model_roles.get(role)`) always return `Some(spec)`
+    // so subagents / hook-agent / compact summarizer / session-memory
+    // extractor / etc. don't each need their own `or_else` fallback chain.
+    //
+    // Single source of truth: every role goes through settings.json
+    // (`models.<role>`). The legacy `COCO_SMALL_FAST_MODEL` /
+    // `COCO_SUBAGENT_MODEL` env-only overrides have been removed —
+    // configure via settings instead. Only `COCO_MODEL` survives as
+    // the single-knob Main escape hatch (handled above).
+    if let Some(main_slots) = roles.roles.get(&ModelRole::Main).cloned() {
+        for fallback_role in [
             ModelRole::Fast,
-            RoleSlots::new(model_spec_from_selection(model, providers)?),
-        );
-    }
-    if let Some(model) = env.subagent_model.as_deref() {
-        roles.roles.insert(
+            ModelRole::Compact,
+            ModelRole::Plan,
             ModelRole::Explore,
-            RoleSlots::new(model_spec_from_selection(model, providers)?),
-        );
+            ModelRole::Review,
+            ModelRole::HookAgent,
+            ModelRole::Memory,
+            ModelRole::Subagent,
+        ] {
+            if let std::collections::hash_map::Entry::Vacant(e) = roles.roles.entry(fallback_role) {
+                tracing::debug!(
+                    role = ?fallback_role,
+                    main_model = %main_slots.primary.model_id,
+                    "model role unconfigured; defaulting to Main",
+                );
+                e.insert(main_slots.clone());
+            }
+        }
     }
 
     Ok(roles)

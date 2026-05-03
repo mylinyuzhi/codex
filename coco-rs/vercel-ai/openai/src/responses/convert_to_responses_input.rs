@@ -88,23 +88,34 @@ pub fn convert_to_openai_responses_input_with_flags(
             LanguageModelV4Message::System {
                 content,
                 provider_options: _,
-            } => match system_message_mode {
-                SystemMessageMode::System => {
-                    items.push(json!({ "role": "system", "content": content }));
+            } => {
+                let text = collapse_text_parts(content, &mut warnings, "system message");
+                match system_message_mode {
+                    SystemMessageMode::System => {
+                        items.push(json!({ "role": "system", "content": text }));
+                    }
+                    SystemMessageMode::Developer => {
+                        items.push(json!({ "role": "developer", "content": text }));
+                    }
+                    SystemMessageMode::Remove => {
+                        warnings.push(Warning::Unsupported {
+                            feature: "system messages".into(),
+                            details: Some(
+                                "System messages are not supported for this model and were removed"
+                                    .into(),
+                            ),
+                        });
+                    }
                 }
-                SystemMessageMode::Developer => {
-                    items.push(json!({ "role": "developer", "content": content }));
-                }
-                SystemMessageMode::Remove => {
-                    warnings.push(Warning::Unsupported {
-                        feature: "system messages".into(),
-                        details: Some(
-                            "System messages are not supported for this model and were removed"
-                                .into(),
-                        ),
-                    });
-                }
-            },
+            }
+
+            LanguageModelV4Message::Developer {
+                content,
+                provider_options: _,
+            } => {
+                let text = collapse_text_parts(content, &mut warnings, "developer message");
+                items.push(json!({ "role": "developer", "content": text }));
+            }
 
             LanguageModelV4Message::User {
                 content,
@@ -134,6 +145,24 @@ pub fn convert_to_openai_responses_input_with_flags(
     }
 
     (items, warnings)
+}
+
+fn collapse_text_parts(
+    parts: &[UserContentPart],
+    warnings: &mut Vec<Warning>,
+    context: &str,
+) -> String {
+    let mut text = String::new();
+    for part in parts {
+        match part {
+            UserContentPart::Text(text_part) => text.push_str(&text_part.text),
+            UserContentPart::File(_) => warnings.push(Warning::unsupported_with_details(
+                "non-text prompt part",
+                format!("{context} contains a non-text part that was dropped"),
+            )),
+        }
+    }
+    text
 }
 
 fn convert_user_parts(parts: &[UserContentPart]) -> Vec<Value> {

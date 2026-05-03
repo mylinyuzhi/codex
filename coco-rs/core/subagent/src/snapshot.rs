@@ -51,4 +51,62 @@ impl AgentCatalogSnapshot {
     pub fn all(&self) -> &[LoadedAgentDefinition] {
         &self.all
     }
+
+    /// Active agents whose `required_mcp_servers` are all satisfied by
+    /// the connected MCP server set. Definitions with no requirements
+    /// pass through unchanged. Matching is case-insensitive substring
+    /// (TS parity: `loadAgentsDir.ts:hasRequiredMcpServers`).
+    ///
+    /// AgentTool's prompt-rendering layer should use this filter so the
+    /// model never sees an agent it can't actually call — pre-filter
+    /// gives a better error surface than the execute-time
+    /// `check_mcp_ready` failure.
+    pub fn active_with_mcp(
+        &self,
+        connected_servers: &[String],
+    ) -> impl Iterator<Item = &AgentDefinition> {
+        self.active().filter(move |def| {
+            if def.required_mcp_servers.is_empty() {
+                return true;
+            }
+            def.required_mcp_servers.iter().all(|pattern| {
+                let needle = pattern.to_lowercase();
+                connected_servers
+                    .iter()
+                    .any(|server| server.to_lowercase().contains(&needle))
+            })
+        })
+    }
 }
+
+/// Standalone-helper variant of `AgentCatalogSnapshot::active_with_mcp`.
+/// Useful when callers already hold a `Vec<&AgentDefinition>` and just
+/// need to filter it. TS: `filterAgentsByMcpRequirements`.
+pub fn filter_agents_by_mcp_requirements<'a>(
+    agents: impl IntoIterator<Item = &'a AgentDefinition>,
+    connected_servers: &[String],
+) -> Vec<&'a AgentDefinition> {
+    agents
+        .into_iter()
+        .filter(|def| has_required_mcp_servers(def, connected_servers))
+        .collect()
+}
+
+/// Pure predicate — `true` when every entry in
+/// `def.required_mcp_servers` matches at least one connected server
+/// (case-insensitive substring). TS: `hasRequiredMcpServers`.
+pub fn has_required_mcp_servers(def: &AgentDefinition, connected_servers: &[String]) -> bool {
+    if def.required_mcp_servers.is_empty() {
+        return true;
+    }
+    def.required_mcp_servers.iter().all(|pattern| {
+        let needle = pattern.to_lowercase();
+        connected_servers
+            .iter()
+            .any(|server| server.to_lowercase().contains(&needle))
+    })
+}
+
+#[cfg(test)]
+#[path = "snapshot.test.rs"]
+mod tests;

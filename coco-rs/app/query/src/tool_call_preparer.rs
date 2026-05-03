@@ -6,6 +6,8 @@ use coco_hooks::HookRegistry;
 use coco_hooks::orchestration::OrchestrationContext;
 use coco_inference::ApiClient;
 use coco_inference::QueryParams;
+use coco_inference::ToolCallPart;
+use coco_messages::Message;
 use coco_messages::MessageHistory;
 use coco_permissions::AutoModeRules;
 use coco_tool_runtime::PendingToolCall;
@@ -14,14 +16,12 @@ use coco_tool_runtime::ToolPermissionBridgeRef;
 use coco_tool_runtime::ToolRegistry;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::CoreEvent;
-use coco_types::Message;
 use coco_types::PermissionDecision;
 use coco_types::PermissionDenialInfo;
 use coco_types::ToolId;
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use vercel_ai_provider::ToolCallPart;
 
 use crate::helpers::complete_tool_call_with_error;
 use crate::hook_controller::HookController;
@@ -225,6 +225,7 @@ async fn resolve_effective_input_from_pre_hook(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn resolve_permission_decision(
     tool_call: &ToolCallPart,
     tool: &Arc<dyn Tool>,
@@ -286,6 +287,7 @@ async fn resolve_permission_decision(
     decision
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn try_classify_in_auto_mode(
     tool_name: &str,
     input: &Value,
@@ -300,14 +302,19 @@ async fn try_classify_in_auto_mode(
     let classify_fn = move |req: coco_permissions::ClassifyRequest| {
         let client = Arc::clone(&client);
         async move {
-            let prompt: vercel_ai_provider::LanguageModelV4Prompt = vec![
-                vercel_ai_provider::LanguageModelV4Message::System {
-                    content: req.system_prompt,
+            let prompt: coco_inference::LanguageModelPrompt = vec![
+                coco_inference::LanguageModelMessage::System {
+                    content: vec![coco_inference::UserContentPart::Text(
+                        coco_inference::TextPart {
+                            text: req.system_prompt,
+                            provider_metadata: None,
+                        },
+                    )],
                     provider_options: None,
                 },
-                vercel_ai_provider::LanguageModelV4Message::User {
-                    content: vec![vercel_ai_provider::UserContentPart::Text(
-                        vercel_ai_provider::TextPart {
+                coco_inference::LanguageModelMessage::User {
+                    content: vec![coco_inference::UserContentPart::Text(
+                        coco_inference::TextPart {
                             text: req.user_prompt,
                             provider_metadata: None,
                         },
@@ -321,6 +328,10 @@ async fn try_classify_in_auto_mode(
                 thinking_level: None,
                 fast_mode: req.stage == 1,
                 tools: None,
+                context_management: None,
+                query_source: None,
+                agent_id: None,
+                time_since_last_assistant_ms: None,
             };
             match client.query(&params).await {
                 Ok(result) => {
@@ -328,9 +339,7 @@ async fn try_classify_in_auto_mode(
                         .content
                         .iter()
                         .filter_map(|p| match p {
-                            vercel_ai_provider::AssistantContentPart::Text(t) => {
-                                Some(t.text.as_str())
-                            }
+                            coco_inference::AssistantContentPart::Text(t) => Some(t.text.as_str()),
                             _ => None,
                         })
                         .collect::<Vec<_>>()
@@ -355,6 +364,7 @@ async fn try_classify_in_auto_mode(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn resolve_effective_input_from_permission(
     event_tx: &Option<mpsc::Sender<CoreEvent>>,
     history: &mut MessageHistory,
@@ -404,20 +414,20 @@ async fn validate_effective_input_or_complete_error(
     // `ctx.tool_schema_validator` when present; a null validator
     // short-circuits to the legacy path (no schema check). Cache
     // hits across validations within a turn are free.
-    if let Some(validator) = ctx.tool_schema_validator.as_ref() {
-        if let Err(e) = validator.validate(tool.as_ref(), &input).await {
-            let message = format!("Invalid input: {e}");
-            complete_tool_call_with_error(
-                event_tx,
-                history,
-                &tool_call.tool_call_id,
-                &tool_call.tool_name,
-                tool_id,
-                &message,
-            )
-            .await;
-            return None;
-        }
+    if let Some(validator) = ctx.tool_schema_validator.as_ref()
+        && let Err(e) = validator.validate(tool.as_ref(), &input).await
+    {
+        let message = format!("Invalid input: {e}");
+        complete_tool_call_with_error(
+            event_tx,
+            history,
+            &tool_call.tool_call_id,
+            &tool_call.tool_name,
+            tool_id,
+            &message,
+        )
+        .await;
+        return None;
     }
 
     let validation = tool.validate_input(&input, ctx);

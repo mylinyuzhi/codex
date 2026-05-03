@@ -33,6 +33,7 @@
 
 use coco_file_ignore::IgnoreConfig;
 use coco_file_ignore::IgnoreService;
+use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::SearchReadInfo;
 use coco_tool_runtime::Tool;
@@ -43,7 +44,6 @@ use coco_types::PermissionDecision;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
 use coco_types::ToolName;
-use coco_types::ToolResult;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
@@ -115,7 +115,7 @@ impl Tool for GlobTool {
     }
 
     /// Result persistence threshold — matches TS `maxResultSizeChars: 100_000`.
-    fn max_result_size_chars(&self) -> i32 {
+    fn max_result_size_chars(&self) -> i64 {
         100_000
     }
 

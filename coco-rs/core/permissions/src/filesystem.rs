@@ -182,13 +182,8 @@ pub enum PathSafetyResult {
 
 /// Check path safety for auto-edit mode.
 ///
-/// TS: `checkPathSafetyForAutoEdit()` in filesystem.ts
-/// Validation order:
-/// 1. Suspicious Windows patterns
-/// 2. Claude config files
-/// 3. Dangerous files/directories
-/// 4. Path traversal
-/// TS: `checkPathSafetyForAutoEdit()` in filesystem.ts / pathValidation.ts
+/// TS: `checkPathSafetyForAutoEdit()` in filesystem.ts / pathValidation.ts.
+///
 /// Validation order:
 /// 1. Suspicious Windows patterns (NTFS ADS, 8.3, long-path, etc.)
 /// 2. Shell expansion patterns ($VAR, `cmd`, %VAR%)

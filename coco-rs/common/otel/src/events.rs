@@ -213,6 +213,85 @@ pub fn emit_tool_use(tool_name: &str, duration_ms: i64, success: bool) {
     );
 }
 
+/// Emit a file-history backup-created event.
+///
+/// TS: `tengu_file_history_backup_file_created` (`fileHistory.ts:788`).
+pub fn emit_file_backup_created(file_path: &str, version: i32, file_size: u64) {
+    emit_event(
+        &AppEvent::new(AppEventType::FileBackupCreated)
+            .with_str("file_path", file_path)
+            .with_int("version", i64::from(version))
+            .with_int("file_size", file_size as i64),
+    );
+}
+
+/// Emit a file-history snapshot-success event.
+///
+/// TS: `tengu_file_history_snapshot_success` (`fileHistory.ts:330`).
+pub fn emit_file_snapshot_success(tracked_files: usize, snapshot_count: usize) {
+    emit_event(
+        &AppEvent::new(AppEventType::FileEdit)
+            .with_str("event", "snapshot_success")
+            .with_int("tracked_files", tracked_files as i64)
+            .with_int("snapshot_count", snapshot_count as i64),
+    );
+}
+
+/// Emit a file-history track-edit-success event.
+///
+/// TS: `tengu_file_history_track_edit_success` (`fileHistory.ts:178`).
+pub fn emit_file_track_edit_success(file: &str, version: i32, is_new_file: bool) {
+    emit_event(
+        &AppEvent::new(AppEventType::FileEdit)
+            .with_str("event", "track_edit_success")
+            .with_str("file", file)
+            .with_int("version", i64::from(version))
+            .with_bool("is_new_file", is_new_file),
+    );
+}
+
+/// Emit a file-history rewind-success event.
+///
+/// TS: `tengu_file_history_rewind_success` (`fileHistory.ts:386`).
+pub fn emit_file_rewind_success(tracked_files: usize, files_changed: usize) {
+    emit_event(
+        &AppEvent::new(AppEventType::FileRewind)
+            .with_str("event", "rewind_success")
+            .with_int("tracked_files", tracked_files as i64)
+            .with_int("files_changed", files_changed as i64),
+    );
+}
+
+/// Emit a file-history rewind-failed event.
+///
+/// TS: `tengu_file_history_rewind_failed` (`fileHistory.ts:391`).
+pub fn emit_file_rewind_failed(reason: &str) {
+    emit_event(
+        &AppEvent::new(AppEventType::FileRewind)
+            .with_str("event", "rewind_failed")
+            .with_str("reason", reason),
+    );
+}
+
+/// Emit a conversation-rewind event. TS: `tengu_conversation_rewind`
+/// (`screens/REPL.tsx:3665-3670`). Recorded when the user truncates
+/// the active history via the rewind picker.
+pub fn emit_conversation_rewind(
+    pre_count: i64,
+    post_count: i64,
+    messages_removed: i64,
+    rewind_to_index: i64,
+) {
+    emit_event(
+        &AppEvent::new(AppEventType::TurnContinue)
+            .with_str("event", "conversation_rewind")
+            .with_int("pre_rewind_message_count", pre_count)
+            .with_int("post_rewind_message_count", post_count)
+            .with_int("messages_removed", messages_removed)
+            .with_int("rewind_to_message_index", rewind_to_index),
+    );
+}
+
 /// Emit an API request event.
 pub fn emit_api_request(model: &str, input_tokens: i64, output_tokens: i64, cost_usd: f64) {
     emit_event(

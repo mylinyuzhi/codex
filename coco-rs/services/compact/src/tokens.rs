@@ -3,11 +3,11 @@
 //! Replaces the fragile `format!("{:?}")` approach with proper content-part
 //! traversal. Uses ~4 chars/token heuristic (same as TS).
 
-use coco_types::AssistantContent;
-use coco_types::LlmMessage;
-use coco_types::Message;
-use coco_types::ToolContent;
-use coco_types::UserContent;
+use coco_messages::AssistantContent;
+use coco_messages::LlmMessage;
+use coco_messages::Message;
+use coco_messages::ToolContent;
+use coco_messages::UserContent;
 
 /// Estimate tokens for a single message.
 pub fn estimate_message_tokens(msg: &Message) -> i64 {
@@ -52,7 +52,7 @@ pub fn extract_message_text(msg: &Message) -> Option<String> {
 }
 
 /// Estimate tokens for a tool result (used by micro-compaction).
-pub fn estimate_tool_result_tokens(tr: &coco_types::ToolResultMessage) -> i64 {
+pub fn estimate_tool_result_tokens(tr: &coco_messages::ToolResultMessage) -> i64 {
     let chars = llm_message_char_count(&tr.message);
     chars_to_tokens(chars)
 }
@@ -80,7 +80,9 @@ fn message_char_count(msg: &Message) -> i64 {
 
 fn llm_message_char_count(msg: &LlmMessage) -> i64 {
     match msg {
-        LlmMessage::System { content, .. } => content.len() as i64,
+        LlmMessage::System { content, .. } | LlmMessage::Developer { content, .. } => {
+            user_content_chars(content)
+        }
         LlmMessage::User { content, .. } => user_content_chars(content),
         LlmMessage::Assistant { content, .. } => assistant_content_chars(content),
         LlmMessage::Tool { content, .. } => tool_content_chars(content),
@@ -125,22 +127,22 @@ fn tool_content_chars(parts: &[ToolContent]) -> i64 {
         .sum()
 }
 
-fn tool_result_content_chars(output: &vercel_ai_provider::ToolResultContent) -> i64 {
+fn tool_result_content_chars(output: &coco_inference::ToolResultContent) -> i64 {
     match output {
-        vercel_ai_provider::ToolResultContent::Text { value, .. } => value.len() as i64,
-        vercel_ai_provider::ToolResultContent::Json { value, .. } => value.to_string().len() as i64,
-        vercel_ai_provider::ToolResultContent::Content { value, .. } => value
+        coco_inference::ToolResultContent::Text { value, .. } => value.len() as i64,
+        coco_inference::ToolResultContent::Json { value, .. } => value.to_string().len() as i64,
+        coco_inference::ToolResultContent::Content { value, .. } => value
             .iter()
             .map(|part| match part {
-                vercel_ai_provider::ToolResultContentPart::Text { text, .. } => text.len() as i64,
+                coco_inference::ToolResultContentPart::Text { text, .. } => text.len() as i64,
                 _ => 100, // file data, images — small estimate
             })
             .sum(),
-        vercel_ai_provider::ToolResultContent::ExecutionDenied { reason, .. } => {
+        coco_inference::ToolResultContent::ExecutionDenied { reason, .. } => {
             reason.as_ref().map_or(20, |r| r.len() as i64)
         }
-        vercel_ai_provider::ToolResultContent::ErrorText { value, .. } => value.len() as i64,
-        vercel_ai_provider::ToolResultContent::ErrorJson { value, .. } => {
+        coco_inference::ToolResultContent::ErrorText { value, .. } => value.len() as i64,
+        coco_inference::ToolResultContent::ErrorJson { value, .. } => {
             value.to_string().len() as i64
         }
     }
@@ -148,7 +150,20 @@ fn tool_result_content_chars(output: &vercel_ai_provider::ToolResultContent) -> 
 
 fn extract_llm_message_text(msg: &LlmMessage) -> Option<String> {
     match msg {
-        LlmMessage::System { content, .. } => Some(content.clone()),
+        LlmMessage::System { content, .. } | LlmMessage::Developer { content, .. } => {
+            let texts: Vec<&str> = content
+                .iter()
+                .filter_map(|p| match p {
+                    UserContent::Text(t) => Some(t.text.as_str()),
+                    _ => None,
+                })
+                .collect();
+            if texts.is_empty() {
+                None
+            } else {
+                Some(texts.join("\n"))
+            }
+        }
         LlmMessage::User { content, .. } => {
             let texts: Vec<&str> = content
                 .iter()
@@ -198,23 +213,23 @@ fn extract_llm_message_text(msg: &LlmMessage) -> Option<String> {
     }
 }
 
-fn tool_result_text(output: &vercel_ai_provider::ToolResultContent) -> String {
+fn tool_result_text(output: &coco_inference::ToolResultContent) -> String {
     match output {
-        vercel_ai_provider::ToolResultContent::Text { value, .. } => value.clone(),
-        vercel_ai_provider::ToolResultContent::Json { value, .. } => value.to_string(),
-        vercel_ai_provider::ToolResultContent::Content { value, .. } => value
+        coco_inference::ToolResultContent::Text { value, .. } => value.clone(),
+        coco_inference::ToolResultContent::Json { value, .. } => value.to_string(),
+        coco_inference::ToolResultContent::Content { value, .. } => value
             .iter()
             .filter_map(|p| match p {
-                vercel_ai_provider::ToolResultContentPart::Text { text, .. } => Some(text.as_str()),
+                coco_inference::ToolResultContentPart::Text { text, .. } => Some(text.as_str()),
                 _ => None,
             })
             .collect::<Vec<_>>()
             .join("\n"),
-        vercel_ai_provider::ToolResultContent::ExecutionDenied { reason, .. } => {
+        coco_inference::ToolResultContent::ExecutionDenied { reason, .. } => {
             reason.clone().unwrap_or_default()
         }
-        vercel_ai_provider::ToolResultContent::ErrorText { value, .. } => value.clone(),
-        vercel_ai_provider::ToolResultContent::ErrorJson { value, .. } => value.to_string(),
+        coco_inference::ToolResultContent::ErrorText { value, .. } => value.clone(),
+        coco_inference::ToolResultContent::ErrorJson { value, .. } => value.to_string(),
     }
 }
 

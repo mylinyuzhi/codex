@@ -36,6 +36,14 @@ pub enum EnvKey {
     CocoMaxContextTokens,
     CocoMaxToolUseConcurrency,
     CocoMemoryPathOverride,
+    /// Force-disable turn-end memory extraction. Wins over settings.
+    CocoMemoryExtractionDisable,
+    /// Force-disable auto-dream consolidation. Wins over settings.
+    CocoMemoryDreamDisable,
+    /// Force-disable session-memory per-session insights. Wins over settings.
+    CocoMemorySessionMemoryDisable,
+    /// Force-enable KAIROS daily-log mode (assistant-mode append-only logs).
+    CocoMemoryKairos,
     CocoMcpToolTimeoutMs,
     CocoModel,
     CocoParentSessionId,
@@ -53,12 +61,91 @@ pub enum EnvKey {
     /// settings.json path).
     CocoShellPrefix,
     CocoSimple,
-    CocoSmallFastModel,
-    CocoSubagentModel,
     CocoTaskListId,
     CocoTeamName,
     CocoTeammateCommand,
     CocoVerifyPlan,
+    /// Soft kill auto-compact only. Manual `/compact` keeps working.
+    CocoCompactDisableAuto,
+    /// Hard kill all compaction (auto + manual).
+    CocoCompactDisable,
+    /// Force-enable session-memory compact (overrides
+    /// `Settings.compact.session_memory.enabled`).
+    CocoCompactSessionMemoryEnable,
+    /// Force-disable session-memory compact (wins over enable).
+    CocoCompactSessionMemoryDisable,
+    /// Auto-compact context-window cap (replaces TS
+    /// `CLAUDE_CODE_AUTO_COMPACT_WINDOW`).
+    CocoCompactAutoWindow,
+    /// Auto-compact threshold percentage override (1-100). Replaces TS
+    /// `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`.
+    CocoCompactAutoPctOverride,
+    /// Manual-compact blocking limit. Replaces TS
+    /// `CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE`.
+    CocoCompactBlockingLimit,
+    /// API-native context_management trigger threshold (input tokens).
+    /// Replaces TS `API_MAX_INPUT_TOKENS`.
+    CocoCompactApiMaxInputTokens,
+    /// API-native context_management keep-target after clearing
+    /// (input tokens). Replaces TS `API_TARGET_INPUT_TOKENS`.
+    CocoCompactApiTargetInputTokens,
+    /// Enable Anthropic `clear_tool_uses_20250919` for tool-result content.
+    /// Replaces TS `USE_API_CLEAR_TOOL_RESULTS`.
+    CocoCompactApiClearToolResults,
+    /// Enable Anthropic `clear_tool_uses_20250919` for entire tool_use blocks.
+    /// Replaces TS `USE_API_CLEAR_TOOL_USES`.
+    CocoCompactApiClearToolUses,
+    /// Enable Tool Result Budget Level 2 (per-message aggregate cap).
+    /// TS feature gate: `tengu_hawthorn_steeple` (default off, matches
+    /// feature-stripped behavior). See `docs/coco-rs/tool-result-budget-plan.md`.
+    CocoCompactToolResultBudgetEnable,
+    /// Per-message char cap for Tool Result Budget Level 2.
+    /// TS GrowthBook override: `tengu_hawthorn_window` (default 200_000).
+    CocoCompactToolResultBudgetPerMessageChars,
+    /// Enable coordinator mode (system-prompt swap + worker pool +
+    /// `<task-notification>` XML routing). Replaces TS
+    /// `CLAUDE_CODE_COORDINATOR_MODE`. Requires `Feature::AgentTeams`.
+    CocoCoordinatorMode,
+    /// Enable fork-subagent path: omitting `subagent_type` on AgentTool
+    /// triggers an implicit fork that inherits the parent's full
+    /// conversation context for prompt-cache sharing. Replaces TS
+    /// `FORK_SUBAGENT`. Mutually exclusive with coordinator mode.
+    CocoForkSubagent,
+    /// Disable the post-turn promptSuggestion service. When set
+    /// truthy, the engine skips spawning the side-channel fork that
+    /// computes "what should I ask next" placeholders. Replaces TS
+    /// `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false` (TS uses an
+    /// enable-default-true flag; coco-rs flips to disable-by-env to
+    /// match the rest of the `COCO_*_DISABLE` family).
+    CocoPromptSuggestionDisable,
+    /// Disable AgentTool background-task registration. When set
+    /// truthy, `run_in_background: true` and
+    /// `AgentDefinition.background = true` are both ignored — every
+    /// spawn runs synchronously. Replaces TS
+    /// `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` (`AgentTool.tsx:65-73`)
+    /// and the `tengu_auto_background_agents` GrowthBook gate.
+    /// Useful for sandbox / CI environments that want deterministic
+    /// blocking behavior.
+    CocoBackgroundTasksDisable,
+    /// Enable periodic AgentSummary timers for TUI users. Default
+    /// off (TS parity — SDK clients opt-in via the
+    /// `agentProgressSummaries: true` control message; TUI users
+    /// don't have that protocol path so we expose an env opt-in
+    /// instead).
+    ///
+    /// Coordinator mode auto-enables periodic summaries regardless
+    /// of this flag (matches TS `AgentTool.tsx:750` ORing
+    /// `isCoordinator || getSdkAgentProgressSummariesEnabled`).
+    CocoAgentSummaryEnable,
+    /// Terminal-multiplexer detection (third-party env vars, not
+    /// COCO-prefixed). Surfaced through `EnvKey` so pane backends
+    /// don't reach for `std::env::var` directly. The env names are
+    /// fixed by the host tools (tmux, iTerm2, etc.) — coco-rs only
+    /// reads them.
+    Tmux,
+    TmuxPane,
+    TermProgram,
+    ItermSessionId,
 }
 
 impl EnvKey {
@@ -91,6 +178,10 @@ impl EnvKey {
             Self::CocoMaxContextTokens => "COCO_MAX_CONTEXT_TOKENS",
             Self::CocoMaxToolUseConcurrency => "COCO_MAX_TOOL_USE_CONCURRENCY",
             Self::CocoMemoryPathOverride => "COCO_MEMORY_PATH_OVERRIDE",
+            Self::CocoMemoryExtractionDisable => "COCO_MEMORY_EXTRACTION_DISABLE",
+            Self::CocoMemoryDreamDisable => "COCO_MEMORY_DREAM_DISABLE",
+            Self::CocoMemorySessionMemoryDisable => "COCO_MEMORY_SESSION_MEMORY_DISABLE",
+            Self::CocoMemoryKairos => "COCO_MEMORY_KAIROS",
             Self::CocoMcpToolTimeoutMs => "COCO_MCP_TOOL_TIMEOUT_MS",
             Self::CocoModel => "COCO_MODEL",
             Self::CocoParentSessionId => "COCO_PARENT_SESSION_ID",
@@ -104,12 +195,34 @@ impl EnvKey {
             Self::CocoShell => "COCO_SHELL",
             Self::CocoShellPrefix => "COCO_SHELL_PREFIX",
             Self::CocoSimple => "COCO_SIMPLE",
-            Self::CocoSmallFastModel => "COCO_SMALL_FAST_MODEL",
-            Self::CocoSubagentModel => "COCO_SUBAGENT_MODEL",
             Self::CocoTaskListId => "COCO_TASK_LIST_ID",
             Self::CocoTeamName => "COCO_TEAM_NAME",
             Self::CocoTeammateCommand => "COCO_TEAMMATE_COMMAND",
             Self::CocoVerifyPlan => "COCO_VERIFY_PLAN",
+            Self::CocoCompactDisableAuto => "COCO_COMPACT_DISABLE_AUTO",
+            Self::CocoCompactDisable => "COCO_COMPACT_DISABLE",
+            Self::CocoCompactSessionMemoryEnable => "COCO_COMPACT_SESSION_MEMORY_ENABLE",
+            Self::CocoCompactSessionMemoryDisable => "COCO_COMPACT_SESSION_MEMORY_DISABLE",
+            Self::CocoCompactAutoWindow => "COCO_COMPACT_AUTO_WINDOW",
+            Self::CocoCompactAutoPctOverride => "COCO_COMPACT_AUTO_PCT_OVERRIDE",
+            Self::CocoCompactBlockingLimit => "COCO_COMPACT_BLOCKING_LIMIT",
+            Self::CocoCompactApiMaxInputTokens => "COCO_COMPACT_API_MAX_INPUT_TOKENS",
+            Self::CocoCompactApiTargetInputTokens => "COCO_COMPACT_API_TARGET_INPUT_TOKENS",
+            Self::CocoCompactApiClearToolResults => "COCO_COMPACT_API_CLEAR_TOOL_RESULTS",
+            Self::CocoCompactApiClearToolUses => "COCO_COMPACT_API_CLEAR_TOOL_USES",
+            Self::CocoCompactToolResultBudgetEnable => "COCO_COMPACT_TOOL_RESULT_BUDGET_ENABLE",
+            Self::CocoCompactToolResultBudgetPerMessageChars => {
+                "COCO_COMPACT_TOOL_RESULT_BUDGET_PER_MESSAGE_CHARS"
+            }
+            Self::CocoCoordinatorMode => "COCO_COORDINATOR_MODE",
+            Self::CocoForkSubagent => "COCO_FORK_SUBAGENT",
+            Self::CocoPromptSuggestionDisable => "COCO_PROMPT_SUGGESTION_DISABLE",
+            Self::CocoBackgroundTasksDisable => "COCO_BACKGROUND_TASKS_DISABLE",
+            Self::CocoAgentSummaryEnable => "COCO_AGENT_SUMMARY_ENABLE",
+            Self::Tmux => "TMUX",
+            Self::TmuxPane => "TMUX_PANE",
+            Self::TermProgram => "TERM_PROGRAM",
+            Self::ItermSessionId => "ITERM_SESSION_ID",
         }
     }
 }
@@ -289,11 +402,11 @@ impl EnvSnapshot {
 /// provider crate when they land.
 #[derive(Debug, Clone, Default)]
 pub struct EnvOnlyConfig {
-    // Model overrides (consumed by `resolve_model_roles`; not duplicated
-    // into a typed section because `ModelRoles` already is the section).
+    /// Single-knob `COCO_MODEL` Main override (kept env-only — it is
+    /// the user's "swap the whole thing" escape hatch and must work
+    /// before settings.json is parsed). Per-role models go through
+    /// `settings.models.*` exclusively.
     pub model_override: Option<String>,
-    pub small_fast_model: Option<String>,
-    pub subagent_model: Option<String>,
 
     /// `COCO_SIMPLE=1` — skip stored OAuth tokens and `api_key_helper`;
     /// resolve auth from env vars only. Consumed by
@@ -311,8 +424,6 @@ impl EnvOnlyConfig {
     pub fn from_snapshot(env: &EnvSnapshot) -> Self {
         Self {
             model_override: env.get_string(EnvKey::CocoModel),
-            small_fast_model: env.get_string(EnvKey::CocoSmallFastModel),
-            subagent_model: env.get_string(EnvKey::CocoSubagentModel),
             force_env_auth: env.is_truthy(EnvKey::CocoSimple),
         }
     }

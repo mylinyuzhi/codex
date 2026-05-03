@@ -11,8 +11,8 @@ use coco_config::ToolConfig;
 use coco_config::WebFetchConfig;
 use coco_config::WebSearchConfig;
 use coco_messages::CostTracker;
+use coco_messages::Message;
 use coco_types::Features;
-use coco_types::Message;
 use coco_types::PermissionMode;
 use coco_types::PermissionRulesBySource;
 use coco_types::ThinkingLevel;
@@ -63,7 +63,7 @@ pub struct QueryEngineConfig {
     /// Append to system prompt (after CLAUDE.md).
     pub append_system_prompt: Option<String>,
     /// Model name for tool context.
-    pub model_name: String,
+    pub model_id: String,
     /// Permission mode for tool execution.
     pub permission_mode: PermissionMode,
     /// Whether this session may transition into `BypassPermissions`.
@@ -164,12 +164,12 @@ pub struct QueryEngineConfig {
     /// `max_tokens` budget, inject a nudge meta message and continue.
     /// TS: `query.ts:1308-1340` feature('TOKEN_BUDGET').
     pub enable_token_budget_continuation: bool,
-    /// User preference for auto-compaction. When false, the
-    /// `compaction_reminder` system-reminder is suppressed and
-    /// `services/compact::should_auto_compact` is bypassed. TS:
-    /// `isAutoCompactEnabled()` — mapped to `settings.json` in coco-rs.
-    /// Defaults to `true` to match TS default behavior.
-    pub auto_compact_enabled: bool,
+    /// Resolved compaction configuration (auto / micro / api-native /
+    /// session-memory / experimental). Single source of truth — engine
+    /// reads only this, never env directly. TS env vars
+    /// (`DISABLE_COMPACT`, `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`, …) are
+    /// folded in by `coco_config::CompactConfig::resolve` at startup.
+    pub compact: coco_config::CompactConfig,
     /// System-reminder subsystem configuration (per-generator toggles,
     /// timeout, critical-instruction payload). Bootstrap reads
     /// `settings.system_reminder` from `coco-config::Settings` and
@@ -197,6 +197,12 @@ pub struct QueryEngineConfig {
     /// Layer 4 — agent-level allow/deny list. Top-level sessions use
     /// `unrestricted()`; subagents narrow it from `AgentDefinition`.
     pub tool_filter: ToolFilter,
+    /// Sandboxed write fence — FileWrite / FileEdit / NotebookEdit may
+    /// only target paths under one of these roots. Empty = no fence.
+    /// Set on subagents launched by the memory crate (extraction /
+    /// auto-dream) so the child can only write inside the memdir.
+    /// Threaded onto every `ToolUseContext.allowed_write_roots`.
+    pub allowed_write_roots: Vec<std::path::PathBuf>,
 }
 
 impl Default for QueryEngineConfig {
@@ -206,7 +212,7 @@ impl Default for QueryEngineConfig {
             max_tokens: None,
             system_prompt: None,
             append_system_prompt: None,
-            model_name: String::new(),
+            model_id: String::new(),
             permission_mode: PermissionMode::Default,
             bypass_permissions_available: false,
             context_window: 200_000,
@@ -233,7 +239,7 @@ impl Default for QueryEngineConfig {
             disable_all_hooks: false,
             allow_managed_hooks_only: false,
             enable_token_budget_continuation: false,
-            auto_compact_enabled: true,
+            compact: coco_config::CompactConfig::default(),
             system_reminder: coco_config::SystemReminderConfig::default(),
             tool_config: ToolConfig::default(),
             sandbox_config: SandboxConfig::default(),
@@ -244,7 +250,18 @@ impl Default for QueryEngineConfig {
             features: Arc::new(Features::with_defaults()),
             tool_overrides: Arc::new(ToolOverrides::none()),
             tool_filter: ToolFilter::unrestricted(),
+            allowed_write_roots: Vec::new(),
         }
+    }
+}
+
+impl QueryEngineConfig {
+    /// Convenience: whether auto-compaction is currently allowed (user
+    /// toggle AND env kill switches resolved). Used by the system-reminder
+    /// generator and the auto-compact branch in `finalize_turn_post_tools`.
+    #[must_use]
+    pub fn is_auto_compact_active(&self) -> bool {
+        self.compact.auto.is_active()
     }
 }
 

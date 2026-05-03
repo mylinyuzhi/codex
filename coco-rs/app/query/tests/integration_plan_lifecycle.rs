@@ -31,7 +31,7 @@ mod harness;
 
 use std::sync::Arc;
 
-use coco_types::Message;
+use coco_messages::Message;
 use coco_types::PermissionMode;
 use coco_types::ToolAppState;
 use harness::MockModelBuilder;
@@ -61,9 +61,9 @@ fn count_attachments_containing(messages: &[Message], needle: &str) -> usize {
         .iter()
         .filter_map(|m| match m {
             Message::Attachment(a) => match a.as_api_message() {
-                Some(coco_types::LlmMessage::User { content, .. }) => {
+                Some(coco_messages::LlmMessage::User { content, .. }) => {
                     content.iter().find_map(|c| match c {
-                        coco_types::UserContent::Text(t) => Some(t.text.clone()),
+                        coco_messages::UserContent::Text(t) => Some(t.text.clone()),
                         _ => None,
                     })
                 }

@@ -22,7 +22,8 @@
 //! failures and disables reactive compaction after repeated failures to
 //! avoid wasting API calls (`MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES = 3`).
 
-use coco_types::Message;
+use coco_config::AutoCompactConfig;
+use coco_messages::Message;
 
 use crate::tokens;
 use crate::types::CLEARED_TOOL_RESULT_MESSAGE;
@@ -109,14 +110,23 @@ impl ReactiveCompactState {
 ///
 /// Uses a HIGHER threshold than auto-compact (95% vs ~87% of effective window).
 /// Reactive compact is a fallback when auto-compact missed or wasn't enough.
+///
+/// `auto_cfg` carries any `CLAUDE_CODE_AUTO_COMPACT_WINDOW` override that
+/// also constrains reactive's effective window — they share the same
+/// "what the user told us the window is" view.
 #[must_use]
-pub fn should_reactive_compact(estimated_tokens: i64, config: &ReactiveCompactConfig) -> bool {
+pub fn should_reactive_compact(
+    estimated_tokens: i64,
+    config: &ReactiveCompactConfig,
+    auto_cfg: &AutoCompactConfig,
+) -> bool {
     if config.context_window <= 0 {
         return false;
     }
     let effective = crate::auto_trigger::effective_context_window(
         config.context_window,
         config.max_output_tokens,
+        auto_cfg,
     );
     let threshold = effective * config.trigger_threshold_pct as i64 / 100;
     estimated_tokens >= threshold
@@ -125,10 +135,15 @@ pub fn should_reactive_compact(estimated_tokens: i64, config: &ReactiveCompactCo
 /// Determine how many tokens to drop to get below the threshold.
 /// Target 70% of effective context window after compaction.
 #[must_use]
-pub fn calculate_drop_target(current_tokens: i64, config: &ReactiveCompactConfig) -> i64 {
+pub fn calculate_drop_target(
+    current_tokens: i64,
+    config: &ReactiveCompactConfig,
+    auto_cfg: &AutoCompactConfig,
+) -> i64 {
     let effective = crate::auto_trigger::effective_context_window(
         config.context_window,
         config.max_output_tokens,
+        auto_cfg,
     );
     let target = effective * 70 / 100;
     (current_tokens - target).max(0)
@@ -188,12 +203,12 @@ pub fn api_microcompact(messages: &mut [Message], tokens_to_free: i64) {
         if let Message::ToolResult(tr) = msg {
             let est = tokens::estimate_tool_result_tokens(tr);
             if est > 50 {
-                tr.message = coco_types::LlmMessage::Tool {
-                    content: vec![coco_types::ToolContent::ToolResult(
-                        coco_types::ToolResultContent {
+                tr.message = coco_messages::LlmMessage::Tool {
+                    content: vec![coco_messages::ToolContent::ToolResult(
+                        coco_messages::ToolResultContent {
                             tool_call_id: tr.tool_use_id.clone(),
                             tool_name: String::new(),
-                            output: vercel_ai_provider::ToolResultContent::text(
+                            output: coco_inference::ToolResultContent::text(
                                 CLEARED_TOOL_RESULT_MESSAGE,
                             ),
                             is_error: false,

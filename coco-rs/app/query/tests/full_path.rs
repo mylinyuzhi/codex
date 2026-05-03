@@ -8,8 +8,19 @@ use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 
 use coco_hooks::HookRegistry;
+use coco_inference::AISdkError;
 use coco_inference::ApiClient;
+use coco_inference::AssistantContentPart;
+use coco_inference::FinishReason;
+use coco_inference::LanguageModel;
+use coco_inference::LanguageModelCallOptions;
+use coco_inference::LanguageModelGenerateResult;
+use coco_inference::LanguageModelStreamResult;
 use coco_inference::RetryConfig;
+use coco_inference::TextPart;
+use coco_inference::ToolCallPart;
+use coco_inference::UnifiedFinishReason;
+use coco_inference::Usage;
 use coco_query::QueryEngine;
 use coco_query::QueryEngineConfig;
 use coco_session::SessionManager;
@@ -22,17 +33,6 @@ use coco_tools::ReadTool;
 use coco_tools::WriteTool;
 use coco_types::PermissionMode;
 use tokio_util::sync::CancellationToken;
-use vercel_ai_provider::AISdkError;
-use vercel_ai_provider::AssistantContentPart;
-use vercel_ai_provider::FinishReason;
-use vercel_ai_provider::LanguageModelV4;
-use vercel_ai_provider::LanguageModelV4CallOptions;
-use vercel_ai_provider::LanguageModelV4GenerateResult;
-use vercel_ai_provider::LanguageModelV4StreamResult;
-use vercel_ai_provider::TextPart;
-use vercel_ai_provider::ToolCallPart;
-use vercel_ai_provider::UnifiedFinishReason;
-use vercel_ai_provider::Usage;
 
 // ─── Mock model that exercises the full tool pipeline ───
 
@@ -46,7 +46,7 @@ struct FullPathMock {
 }
 
 #[async_trait::async_trait]
-impl LanguageModelV4 for FullPathMock {
+impl LanguageModel for FullPathMock {
     fn provider(&self) -> &str {
         "mock"
     }
@@ -56,15 +56,15 @@ impl LanguageModelV4 for FullPathMock {
 
     async fn do_generate(
         &self,
-        _options: LanguageModelV4CallOptions,
-    ) -> Result<LanguageModelV4GenerateResult, AISdkError> {
+        _options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelGenerateResult, AISdkError> {
         let call = self.call_count.fetch_add(1, Ordering::SeqCst);
 
         match call {
             0 => {
                 // Turn 1: Write a test file
                 let file_path = format!("{}/e2e_test.txt", self.test_dir);
-                Ok(LanguageModelV4GenerateResult {
+                Ok(LanguageModelGenerateResult {
                     content: vec![
                         AssistantContentPart::Text(TextPart {
                             text: "I'll create a test file first.".into(),
@@ -92,7 +92,7 @@ impl LanguageModelV4 for FullPathMock {
             1 => {
                 // Turn 2: Read it back
                 let file_path = format!("{}/e2e_test.txt", self.test_dir);
-                Ok(LanguageModelV4GenerateResult {
+                Ok(LanguageModelGenerateResult {
                     content: vec![AssistantContentPart::ToolCall(ToolCallPart {
                         tool_call_id: "read_1".into(),
                         tool_name: "Read".into(),
@@ -110,7 +110,7 @@ impl LanguageModelV4 for FullPathMock {
             }
             _ => {
                 // Turn 3: Final summary
-                Ok(LanguageModelV4GenerateResult {
+                Ok(LanguageModelGenerateResult {
                     content: vec![AssistantContentPart::Text(TextPart {
                         text:
                             "Done! I created and read the file successfully. It contains 3 lines."
@@ -130,8 +130,8 @@ impl LanguageModelV4 for FullPathMock {
 
     async fn do_stream(
         &self,
-        options: LanguageModelV4CallOptions,
-    ) -> Result<LanguageModelV4StreamResult, AISdkError> {
+        options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelStreamResult, AISdkError> {
         let result = self.do_generate(options).await?;
         Ok(coco_inference::synthetic_stream_from_content(
             result.content,
@@ -172,7 +172,7 @@ async fn test_full_path_write_then_read() {
     let cancel = CancellationToken::new();
 
     let config = QueryEngineConfig {
-        model_name: "mock-full-path".into(),
+        model_id: "mock-full-path".into(),
         permission_mode: PermissionMode::BypassPermissions,
         max_turns: 10,
         ..Default::default()
@@ -220,7 +220,7 @@ async fn test_full_path_with_hooks() {
     let hooks = Arc::new(HookRegistry::new());
 
     let config = QueryEngineConfig {
-        model_name: "mock-full-path".into(),
+        model_id: "mock-full-path".into(),
         permission_mode: PermissionMode::BypassPermissions,
         max_turns: 10,
         ..Default::default()
@@ -251,7 +251,7 @@ async fn test_full_path_budget_exhaustion() {
 
     // Very small budget — should stop after first turn
     let config = QueryEngineConfig {
-        model_name: "mock-full-path".into(),
+        model_id: "mock-full-path".into(),
         permission_mode: PermissionMode::BypassPermissions,
         max_tokens: Some(50), // Will be exhausted after first turn (100+50=150 > 50)
         max_turns: 10,
@@ -271,7 +271,7 @@ async fn test_full_path_with_bash_safety() {
     struct DestructiveBashMock;
 
     #[async_trait::async_trait]
-    impl LanguageModelV4 for DestructiveBashMock {
+    impl LanguageModel for DestructiveBashMock {
         fn provider(&self) -> &str {
             "mock"
         }
@@ -280,8 +280,8 @@ async fn test_full_path_with_bash_safety() {
         }
         async fn do_generate(
             &self,
-            options: LanguageModelV4CallOptions,
-        ) -> Result<LanguageModelV4GenerateResult, AISdkError> {
+            options: LanguageModelCallOptions,
+        ) -> Result<LanguageModelGenerateResult, AISdkError> {
             // Check if we've received a tool error (permission denied)
             let has_tool_error = options.prompt.iter().any(|msg| {
                 format!("{msg:?}").contains("permission denied")
@@ -290,7 +290,7 @@ async fn test_full_path_with_bash_safety() {
 
             if has_tool_error {
                 // Second call: model acknowledges the denial
-                return Ok(LanguageModelV4GenerateResult {
+                return Ok(LanguageModelGenerateResult {
                     content: vec![AssistantContentPart::Text(TextPart {
                         text:
                             "I cannot execute destructive commands. Let me find a safer approach."
@@ -307,7 +307,7 @@ async fn test_full_path_with_bash_safety() {
             }
 
             // First call: attempt rm -rf /
-            Ok(LanguageModelV4GenerateResult {
+            Ok(LanguageModelGenerateResult {
                 content: vec![AssistantContentPart::ToolCall(ToolCallPart {
                     tool_call_id: "bash_1".into(),
                     tool_name: "Bash".into(),
@@ -326,8 +326,8 @@ async fn test_full_path_with_bash_safety() {
 
         async fn do_stream(
             &self,
-            options: LanguageModelV4CallOptions,
-        ) -> Result<LanguageModelV4StreamResult, AISdkError> {
+            options: LanguageModelCallOptions,
+        ) -> Result<LanguageModelStreamResult, AISdkError> {
             let result = self.do_generate(options).await?;
             Ok(coco_inference::synthetic_stream_from_content(
                 result.content,
@@ -346,7 +346,7 @@ async fn test_full_path_with_bash_safety() {
     let cancel = CancellationToken::new();
 
     let config = QueryEngineConfig {
-        model_name: "mock".into(),
+        model_id: "mock".into(),
         permission_mode: PermissionMode::BypassPermissions,
         max_turns: 5,
         ..Default::default()
@@ -409,7 +409,7 @@ async fn test_full_path_glob_and_grep() {
     }
 
     #[async_trait::async_trait]
-    impl LanguageModelV4 for GlobGrepMock {
+    impl LanguageModel for GlobGrepMock {
         fn provider(&self) -> &str {
             "mock"
         }
@@ -418,13 +418,13 @@ async fn test_full_path_glob_and_grep() {
         }
         async fn do_generate(
             &self,
-            _options: LanguageModelV4CallOptions,
-        ) -> Result<LanguageModelV4GenerateResult, AISdkError> {
+            _options: LanguageModelCallOptions,
+        ) -> Result<LanguageModelGenerateResult, AISdkError> {
             let call = self.call_count.fetch_add(1, Ordering::SeqCst);
             match call {
                 0 => {
                     // Glob for .rs files
-                    Ok(LanguageModelV4GenerateResult {
+                    Ok(LanguageModelGenerateResult {
                         content: vec![AssistantContentPart::ToolCall(ToolCallPart {
                             tool_call_id: "glob_1".into(),
                             tool_name: "Glob".into(),
@@ -445,7 +445,7 @@ async fn test_full_path_glob_and_grep() {
                 }
                 1 => {
                     // Grep for "hello" in the dir
-                    Ok(LanguageModelV4GenerateResult {
+                    Ok(LanguageModelGenerateResult {
                         content: vec![AssistantContentPart::ToolCall(ToolCallPart {
                             tool_call_id: "grep_1".into(),
                             tool_name: "Grep".into(),
@@ -465,7 +465,7 @@ async fn test_full_path_glob_and_grep() {
                         response: None,
                     })
                 }
-                _ => Ok(LanguageModelV4GenerateResult {
+                _ => Ok(LanguageModelGenerateResult {
                     content: vec![AssistantContentPart::Text(TextPart {
                         text: "Found 2 Rust files and hello() in foo.rs.".into(),
                         provider_metadata: None,
@@ -481,8 +481,8 @@ async fn test_full_path_glob_and_grep() {
         }
         async fn do_stream(
             &self,
-            options: LanguageModelV4CallOptions,
-        ) -> Result<LanguageModelV4StreamResult, AISdkError> {
+            options: LanguageModelCallOptions,
+        ) -> Result<LanguageModelStreamResult, AISdkError> {
             let result = self.do_generate(options).await?;
             Ok(coco_inference::synthetic_stream_from_content(
                 result.content,
@@ -504,7 +504,7 @@ async fn test_full_path_glob_and_grep() {
     let cancel = CancellationToken::new();
 
     let config = QueryEngineConfig {
-        model_name: "mock".into(),
+        model_id: "mock".into(),
         permission_mode: PermissionMode::BypassPermissions,
         max_turns: 10,
         ..Default::default()

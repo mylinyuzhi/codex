@@ -1,79 +1,54 @@
 use super::*;
 
-#[test]
-fn test_format_tokens_zero() {
-    assert_eq!(format_tokens(0), "0");
-}
-
-#[test]
-fn test_format_tokens_small() {
-    assert_eq!(format_tokens(42), "42");
-    assert_eq!(format_tokens(999), "999");
-}
-
-#[test]
-fn test_format_tokens_thousands() {
-    assert_eq!(format_tokens(1_000), "1,000");
-    assert_eq!(format_tokens(12_345), "12,345");
-    assert_eq!(format_tokens(200_000), "200,000");
-    assert_eq!(format_tokens(1_234_567), "1,234,567");
-}
-
 #[tokio::test]
-async fn test_compact_handler_no_args() {
+async fn test_compact_handler_no_args_emits_sentinel() {
     let output = handler(String::new()).await.unwrap();
+    assert!(output.starts_with(COMPACT_SENTINEL));
     assert!(output.contains("Compacting conversation"));
-    assert!(output.contains("Before compaction"));
-    assert!(output.contains("After compaction"));
-    assert!(output.contains("Est. tokens"));
+    assert!(output.contains("compact representation"));
 }
 
 #[tokio::test]
-async fn test_compact_handler_with_instructions() {
+async fn test_compact_handler_with_instructions_passes_them_in_sentinel() {
     let output = handler("focus on API changes".to_string()).await.unwrap();
+    let first_line = output.lines().next().unwrap();
+    assert!(first_line.starts_with(COMPACT_SENTINEL));
+    assert!(first_line.contains("focus on API changes"));
     assert!(output.contains("Summarization focus: focus on API changes"));
-    assert!(output.contains("Before compaction"));
 }
 
 #[tokio::test]
-async fn test_compact_handler_empty_session() {
-    // With no sessions dir, should report 0 tokens gracefully
+async fn test_compact_handler_no_args_has_empty_instructions() {
     let output = handler(String::new()).await.unwrap();
-    assert!(output.contains("Messages:     0"));
+    let first_line = output.lines().next().unwrap();
+    // Sentinel + space + (no instructions)
+    assert_eq!(first_line.trim_end(), COMPACT_SENTINEL);
 }
 
 #[tokio::test]
-async fn test_estimate_session_tokens_nonexistent_dir() {
-    let (tokens, count) =
-        estimate_session_tokens(std::path::Path::new("/tmp/nonexistent_dir_abc123")).await;
-    assert_eq!(tokens, 0);
-    assert_eq!(count, 0);
+async fn test_compact_handler_trims_whitespace_in_args() {
+    let output = handler("   spaces around   ".to_string()).await.unwrap();
+    let first_line = output.lines().next().unwrap();
+    assert!(first_line.contains("spaces around"));
+    assert!(!first_line.contains("   spaces"));
 }
 
 #[tokio::test]
-async fn test_estimate_session_tokens_with_temp_session() {
-    let tmp = tempfile::tempdir().unwrap();
-    let session_path = tmp.path().join("test-session.json");
+async fn test_parse_compact_sentinel_with_instructions() {
+    let output = handler("focus on auth".to_string()).await.unwrap();
+    let req = parse_compact_sentinel(&output).expect("sentinel must parse");
+    assert_eq!(req.custom_instructions, "focus on auth");
+    assert!(req.display_text.contains("Compacting conversation"));
+}
 
-    let session_json = serde_json::json!({
-        "messages": [
-            {"role": "user", "content": "Hello, how are you?"},
-            {"role": "assistant", "content": "I'm doing well, thanks for asking!"},
-            {"role": "user", "content": "Can you help me with Rust?"},
-        ]
-    });
+#[tokio::test]
+async fn test_parse_compact_sentinel_no_args() {
+    let output = handler(String::new()).await.unwrap();
+    let req = parse_compact_sentinel(&output).expect("sentinel must parse");
+    assert!(req.custom_instructions.is_empty());
+}
 
-    tokio::fs::write(
-        &session_path,
-        serde_json::to_string_pretty(&session_json).unwrap(),
-    )
-    .await
-    .unwrap();
-
-    let (tokens, count) = estimate_session_tokens(tmp.path()).await;
-    assert_eq!(count, 3);
-    assert!(
-        tokens > 0,
-        "should estimate non-zero tokens from session content"
-    );
+#[test]
+fn test_parse_compact_sentinel_returns_none_for_plain_text() {
+    assert!(parse_compact_sentinel("just a normal command output").is_none());
 }

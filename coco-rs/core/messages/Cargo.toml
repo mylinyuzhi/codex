@@ -9,12 +9,15 @@ workspace = true
 
 [dependencies]
 coco-types.workspace = true
-vercel-ai-provider.workspace = true
+coco-inference.workspace = true
 
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 anyhow.workspace = true
+# `attachment_emitter` uses `tokio::sync::mpsc::UnboundedSender` for its
+# cross-crate AttachmentMessage channel — no other tokio surface is needed.
+tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
 pretty_assertions.workspace = true

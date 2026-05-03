@@ -53,6 +53,9 @@ fn sample_skill(
         shell: None,
         content_length: prompt.len() as i64,
         is_hidden: false,
+        gated_by: None,
+        files: std::collections::HashMap::new(),
+        skill_root: None,
     }
 }
 

@@ -4,11 +4,11 @@ use std::collections::BTreeSet;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
-use coco_types::AssistantContent;
-use coco_types::AttachmentMessage;
+use coco_messages::AssistantContent;
+use coco_messages::AttachmentMessage;
+use coco_messages::LlmMessage;
+use coco_messages::Message;
 use coco_types::CompactTrigger;
-use coco_types::LlmMessage;
-use coco_types::Message;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -106,6 +106,15 @@ fn default_trigger() -> CompactTrigger {
 }
 
 /// Info about a re-compaction scenario.
+///
+/// **Currently unused.** TS uses these fields for the `tengu_compact`
+/// analytics event (H1/H2/H3/H5 chain disambiguation in `compact.ts:317`).
+/// coco-rs has no equivalent analytics path today, so `compact_conversation`
+/// does not accept this struct and the field on `CompactResult.is_recompaction`
+/// is hard-coded to `false` everywhere. When porting analytics, plumb this
+/// through `compact_conversation` and drive its values from a per-engine
+/// last-compact tracker (turn id + run id). Tracked in `audit-gaps.md`
+/// Round 10 as P2.
 #[derive(Debug, Clone)]
 pub struct RecompactionInfo {
     pub is_recompaction: bool,
@@ -153,6 +162,12 @@ pub enum ContextEditStrategy {
         /// How many recent tool uses to retain. `None` defers to the model
         /// policy default.
         keep_recent: Option<ToolUseKeep>,
+        /// Minimum number of input tokens the API must free during this
+        /// edit. TS `apiMicrocompact.ts:118-121` sets this to
+        /// `triggerThreshold - keepTarget` so the server clears enough
+        /// even when its default would clear less. Without this, the
+        /// `keep_target` config is informational only.
+        clear_at_least: Option<i64>,
         /// Which tool inputs to clear.
         clear_inputs: ClearToolInputs,
         /// Builtin tools excluded from clearing.
@@ -257,14 +272,13 @@ pub fn extract_discovered_tool_names(messages: &[Message]) -> BTreeSet<String> {
         for part in content {
             // ToolSearch produces tool_use blocks named "ToolSearch" whose
             // input lists discovered tools. Walk their `tools` field.
-            if let AssistantContent::ToolCall(tc) = part {
-                if tc.tool_name == "ToolSearch"
-                    && let Some(arr) = tc.input.get("tools").and_then(|v| v.as_array())
-                {
-                    for item in arr {
-                        if let Some(name) = item.as_str() {
-                            names.insert(name.to_string());
-                        }
+            if let AssistantContent::ToolCall(tc) = part
+                && tc.tool_name == "ToolSearch"
+                && let Some(arr) = tc.input.get("tools").and_then(|v| v.as_array())
+            {
+                for item in arr {
+                    if let Some(name) = item.as_str() {
+                        names.insert(name.to_string());
                     }
                 }
             }

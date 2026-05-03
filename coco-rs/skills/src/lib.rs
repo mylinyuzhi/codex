@@ -3,10 +3,14 @@
 //! TS: skills/ (SkillDefinition, SkillManager, bundled + user + project + plugin skills)
 
 pub mod bundled;
+pub mod extraction;
+pub mod prompt_render;
 pub mod reminder_source;
 pub mod shell_exec;
 pub mod watcher;
 
+use coco_types::Feature;
+use coco_types::Features;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -102,6 +106,42 @@ pub struct SkillDefinition {
     /// TS: `isHidden` — separate from `user_invocable` (which blocks user invocation entirely).
     #[serde(default)]
     pub is_hidden: bool,
+    /// Optional feature gate. When set, the skill is only visible/invocable
+    /// if the listed feature is enabled (`Features::enabled(feature)`).
+    ///
+    /// TS: `Command.isEnabled?: () => boolean` from `types/command.ts:180`.
+    /// Used by every gated bundled skill (loop, schedule, dream, hunter,
+    /// claude-api, claude-in-chrome, run-skill-generator).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gated_by: Option<Feature>,
+    /// Reference files extracted lazily on first invocation.
+    ///
+    /// TS: `BundledSkillDefinition.files: Record<string, string>` in
+    /// `skills/bundledSkills.ts:36`. Keys are relative paths (forward slashes,
+    /// no `..`); values are file contents. When set, the skill prompt is
+    /// prefixed with `Base directory for this skill: <dir>` so the model
+    /// can Read/Grep these files via the same contract as on-disk skills.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub files: HashMap<String, String>,
+    /// On-disk extraction directory after first invocation.
+    ///
+    /// TS: `Command.skillRoot` (set by `registerBundledSkill`).
+    /// `None` until the skill is first invoked AND has `files`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_root: Option<PathBuf>,
+}
+
+impl SkillDefinition {
+    /// Whether this skill is enabled in the given feature set.
+    /// Skills without `gated_by` are always enabled.
+    ///
+    /// TS: `Command.isEnabled?.()` callback semantics.
+    pub fn is_enabled(&self, features: &Features) -> bool {
+        match self.gated_by {
+            Some(feat) => features.enabled(feat),
+            None => true,
+        }
+    }
 }
 
 fn default_true() -> bool {
@@ -163,6 +203,17 @@ impl SkillManager {
         self.skills.values()
     }
 
+    /// Iterate skills currently enabled under the given feature set.
+    ///
+    /// TS: `commands.filter(c => c.isEnabled?.() ?? true)` applied at
+    /// every typeahead / Skill-tool listing call site.
+    pub fn visible(&self, features: &Features) -> Vec<&SkillDefinition> {
+        self.skills
+            .values()
+            .filter(|s| s.is_enabled(features))
+            .collect()
+    }
+
     pub fn len(&self) -> usize {
         self.skills.len()
     }
@@ -189,6 +240,78 @@ impl SkillManager {
             }
         }
     }
+
+    /// TS-mirroring load: walk the four scopes in TS priority order
+    /// (managed → user → project → legacy), tagging each skill with the
+    /// correct [`SkillSource`] variant.
+    ///
+    /// TS: `loadSkillsDir.ts` walks `getSkillsPath('policySettings'|'userSettings'|'projectSettings', 'skills'|'commands')`.
+    /// Last-wins semantics — later registrations override earlier ones, mirroring TS.
+    pub fn load_scoped(&mut self, scopes: &SkillScopes) {
+        // Order matters — last-write-wins, so least-priority first.
+        if let Some(p) = &scopes.managed {
+            self.load_with_source(p, SkillDirFormat::SkillMdOnly, |path| {
+                SkillSource::Managed { path }
+            });
+        }
+        if let Some(p) = &scopes.user_skills {
+            self.load_with_source(p, SkillDirFormat::SkillMdOnly, |path| SkillSource::User {
+                path,
+            });
+        }
+        if let Some(p) = &scopes.project_skills {
+            self.load_with_source(p, SkillDirFormat::SkillMdOnly, |path| {
+                SkillSource::Project { path }
+            });
+        }
+        // Legacy `.claude/commands/` dirs — load last but keep the flat `.md`
+        // format (TS: `LoadedFrom = 'commands_DEPRECATED'`).
+        if let Some(p) = &scopes.user_commands {
+            self.load_with_source(p, SkillDirFormat::Legacy, |path| SkillSource::User { path });
+        }
+        if let Some(p) = &scopes.project_commands {
+            self.load_with_source(p, SkillDirFormat::Legacy, |path| SkillSource::Project {
+                path,
+            });
+        }
+    }
+
+    fn load_with_source<F>(&mut self, dir: &Path, format: SkillDirFormat, source_for: F)
+    where
+        F: Fn(PathBuf) -> SkillSource,
+    {
+        let dirs = vec![dir.to_path_buf()];
+        for mut skill in discover_skills_with_format(&dirs, format) {
+            // Replace the auto-set User source from `parse_skill_markdown` with
+            // the actual scope.
+            let path = match &skill.source {
+                SkillSource::User { path }
+                | SkillSource::Project { path }
+                | SkillSource::Managed { path } => path.clone(),
+                _ => PathBuf::new(),
+            };
+            skill.source = source_for(path);
+            self.register(skill);
+        }
+    }
+}
+
+/// Per-scope skill directory configuration for `SkillManager::load_scoped`.
+///
+/// TS: `getSkillsPath()` returns paths for `policySettings | userSettings | projectSettings`
+/// across `skills | commands` subdirectories.
+#[derive(Debug, Clone, Default)]
+pub struct SkillScopes {
+    /// Enterprise/policy skills (highest priority).
+    pub managed: Option<PathBuf>,
+    /// `~/.coco/skills/`.
+    pub user_skills: Option<PathBuf>,
+    /// `<cwd>/.claude/skills/`.
+    pub project_skills: Option<PathBuf>,
+    /// `~/.coco/commands/` (legacy flat-md format).
+    pub user_commands: Option<PathBuf>,
+    /// `<cwd>/.claude/commands/` (legacy flat-md format).
+    pub project_commands: Option<PathBuf>,
 }
 
 /// Parse a skill definition from a markdown file.
@@ -414,6 +537,17 @@ fn parse_csv_list(value: &str) -> Vec<String> {
         .collect()
 }
 
+/// Parse a whitespace-separated list — TS `argumentNames.split(/\s+/)`.
+/// Filters numeric-only names (they conflict with `$N` shorthand) per
+/// TS `parseArgumentNames` `isValidName`.
+fn parse_argument_names_field(value: &str) -> Vec<String> {
+    value
+        .split_whitespace()
+        .map(str::to_string)
+        .filter(|s| !s.is_empty() && !s.chars().all(|c| c.is_ascii_digit()))
+        .collect()
+}
+
 /// Parse skill markdown content into a `SkillDefinition`.
 fn parse_skill_markdown(content: &str, path: &Path) -> anyhow::Result<SkillDefinition> {
     let mut lines = content.lines();
@@ -446,25 +580,49 @@ fn parse_skill_markdown(content: &str, path: &Path) -> anyhow::Result<SkillDefin
         .get("when-to-use")
         .or(frontmatter.get("when_to_use"))
         .cloned();
+    // TS reads the `arguments` frontmatter key (`utils/argumentSubstitution.ts:50`).
+    // Legacy `argument-names` / `argument_names` aliases are accepted for
+    // disk skills that pre-date the rename. TS `parseArgumentNames` splits on
+    // whitespace, not commas, and drops numeric-only names.
     let argument_names = frontmatter
-        .get("argument-names")
+        .get("arguments")
+        .or(frontmatter.get("argument-names"))
         .or(frontmatter.get("argument_names"))
-        .map(|v| parse_csv_list(v))
+        .map(|v| parse_argument_names_field(v))
         .unwrap_or_default();
     let aliases = frontmatter
         .get("aliases")
         .map(|v| parse_csv_list(v))
         .unwrap_or_default();
-    let paths = frontmatter
+    let paths: Vec<String> = frontmatter
         .get("paths")
         .map(|v| {
-            // Use brace-aware splitting so *.{ts,tsx} isn't broken on the inner comma
+            // Use brace-aware splitting so *.{ts,tsx} isn't broken on the inner comma.
             split_top_level_commas(v)
                 .into_iter()
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
                 .flat_map(expand_braces)
+                // TS `parseSkillPaths` (`loadSkillsDir.ts:159-178`):
+                // strip trailing `/**` because the `ignore` library matches a
+                // bare path as both the path and everything inside it.
+                .map(|p| {
+                    if let Some(stripped) = p.strip_suffix("/**") {
+                        stripped.to_string()
+                    } else {
+                        p
+                    }
+                })
+                .filter(|p| !p.is_empty())
                 .collect()
+        })
+        .map(|patterns: Vec<String>| {
+            // TS: if all patterns are bare `**`, treat as no paths.
+            if patterns.is_empty() || patterns.iter().all(|p| p == "**") {
+                Vec::new()
+            } else {
+                patterns
+            }
         })
         .unwrap_or_default();
     let effort = frontmatter.get("effort").cloned();
@@ -530,6 +688,9 @@ fn parse_skill_markdown(content: &str, path: &Path) -> anyhow::Result<SkillDefin
         shell,
         content_length,
         is_hidden,
+        gated_by: None,
+        files: HashMap::new(),
+        skill_root: None,
     })
 }
 

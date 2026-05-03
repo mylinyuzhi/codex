@@ -12,6 +12,7 @@ mod worktree;
 // Basic git operations
 pub use operations::commit_all;
 pub use operations::ensure_git_repository;
+pub use operations::find_canonical_git_root;
 pub use operations::get_current_branch;
 pub use operations::get_head_commit;
 pub use operations::get_uncommitted_changes;

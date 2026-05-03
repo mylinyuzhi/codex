@@ -124,16 +124,11 @@ pub fn strip_safe_wrappers(command: &str) -> String {
 pub fn strip_all_env_vars(command: &str, check_hijack: bool) -> String {
     let mut rest = command.trim();
 
-    loop {
-        // Match VAR=value pattern
-        if let Some((var_name, after)) = try_parse_env_assignment(rest) {
-            if check_hijack && is_binary_hijack_var(var_name) {
-                break;
-            }
-            rest = after.trim_start();
-        } else {
+    while let Some((var_name, after)) = try_parse_env_assignment(rest) {
+        if check_hijack && is_binary_hijack_var(var_name) {
             break;
         }
+        rest = after.trim_start();
     }
 
     rest.to_string()
@@ -253,11 +248,13 @@ fn strip_one_safe_env_var(command: &str) -> String {
     command.to_string()
 }
 
+type WrapperStripper = fn(&str) -> Option<&str>;
+
 /// Try to strip one wrapper command from the front.
 fn strip_one_wrapper(command: &str) -> String {
     let trimmed = command.trim_start();
 
-    let wrappers: &[(&str, fn(&str) -> Option<&str>)] = &[
+    let wrappers: &[(&str, WrapperStripper)] = &[
         ("timeout ", strip_timeout_args),
         ("time ", strip_simple_wrapper),
         ("nice ", strip_nice_args),

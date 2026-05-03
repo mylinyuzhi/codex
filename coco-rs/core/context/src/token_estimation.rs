@@ -3,7 +3,7 @@
 //! TS: services/tokenEstimation.ts — rough estimation from character count,
 //! with adjustment for code vs prose.
 
-use coco_types::Message;
+use coco_messages::Message;
 
 /// Rough estimate of token count from character count.
 ///
@@ -50,33 +50,40 @@ pub fn estimate_tokens_for_messages(messages: &[Message]) -> i64 {
     total
 }
 
-fn estimate_llm_message_tokens(msg: &coco_types::LlmMessage) -> i64 {
+fn estimate_llm_message_tokens(msg: &coco_messages::LlmMessage) -> i64 {
     match msg {
-        coco_types::LlmMessage::User { content, .. } => {
+        coco_messages::LlmMessage::User { content, .. } => {
             content
                 .iter()
                 .map(|c| match c {
-                    coco_types::UserContent::Text(t) => estimate_tokens(&t.text),
+                    coco_messages::UserContent::Text(t) => estimate_tokens(&t.text),
                     _ => 100, // Images, files: rough estimate
                 })
                 .sum()
         }
-        coco_types::LlmMessage::Assistant { content, .. } => content
+        coco_messages::LlmMessage::Assistant { content, .. } => content
             .iter()
             .map(|c| match c {
-                coco_types::AssistantContent::Text(t) => estimate_tokens(&t.text),
-                coco_types::AssistantContent::ToolCall(tc) => {
+                coco_messages::AssistantContent::Text(t) => estimate_tokens(&t.text),
+                coco_messages::AssistantContent::ToolCall(tc) => {
                     estimate_tokens(&tc.tool_name)
                         + estimate_tokens(&serde_json::to_string(&tc.input).unwrap_or_default())
                 }
                 _ => 50,
             })
             .sum(),
-        coco_types::LlmMessage::System { content, .. } => estimate_tokens(content),
-        coco_types::LlmMessage::Tool { content, .. } => content
+        coco_messages::LlmMessage::System { content, .. }
+        | coco_messages::LlmMessage::Developer { content, .. } => content
             .iter()
             .map(|c| match c {
-                coco_types::ToolContent::ToolResult(r) => {
+                coco_messages::UserContent::Text(t) => estimate_tokens(&t.text),
+                _ => 100,
+            })
+            .sum(),
+        coco_messages::LlmMessage::Tool { content, .. } => content
+            .iter()
+            .map(|c| match c {
+                coco_messages::ToolContent::ToolResult(r) => {
                     estimate_tokens(&format!("{:?}", r.output)) + 10
                 }
                 _ => 20,

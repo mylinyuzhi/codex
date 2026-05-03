@@ -5,6 +5,15 @@
 //! Threshold formula (must match TS exactly):
 //!   effectiveWindow = contextWindow - min(maxOutputTokens, 20K)
 //!   autoCompactThreshold = effectiveWindow - 13K
+//!
+//! Env vars (`DISABLE_COMPACT`, `DISABLE_AUTO_COMPACT`,
+//! `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`,
+//! `CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE`) are read once at startup by
+//! `coco_config::CompactConfig::resolve` and threaded through here as
+//! plain fields — this module does not touch the environment.
+
+use coco_config::AutoCompactConfig;
+pub use coco_config::TimeBasedMcConfig;
 
 use crate::types::AUTOCOMPACT_BUFFER_TOKENS;
 use crate::types::ERROR_THRESHOLD_BUFFER_TOKENS;
@@ -25,76 +34,64 @@ pub enum CompactQuerySource {
     SessionMemory,
     /// The compact LLM call itself; must not nest.
     Compact,
+    /// ctx-agent (marble_origami) spawn; must not auto-compact when its
+    /// own context blows up (would destroy the main-thread commit log
+    /// it shares module-level state with).
+    MarbleOrigami,
     /// Any other source (main thread, subagents, SDK).
     Other,
 }
 
-/// Read TS-equivalent env vars to short-circuit auto-compact.
+/// Whether auto-compaction is currently allowed.
 ///
-/// Honors `DISABLE_COMPACT` (kills both manual and auto) and
-/// `DISABLE_AUTO_COMPACT` (auto only — manual `/compact` keeps working).
-/// The user-supplied `enabled` flag corresponds to TS
-/// `globalConfig.autoCompactEnabled`.
+/// Single predicate that fuses the user toggle (`enabled`) with both env
+/// kill switches (`DISABLE_COMPACT` / `DISABLE_AUTO_COMPACT`). Use
+/// [`AutoCompactConfig::is_active`] in callers; this wrapper exists so
+/// downstream code that only has the bool-ish view stays terse.
 #[must_use]
-pub fn is_auto_compact_enabled(enabled: bool) -> bool {
-    if env_truthy("DISABLE_COMPACT") {
-        return false;
-    }
-    if env_truthy("DISABLE_AUTO_COMPACT") {
-        return false;
-    }
-    enabled
-}
-
-fn env_truthy(name: &str) -> bool {
-    std::env::var(name)
-        .map(|v| {
-            let lower = v.to_ascii_lowercase();
-            matches!(lower.as_str(), "1" | "true" | "yes" | "on")
-        })
-        .unwrap_or(false)
+pub fn is_auto_compact_enabled(cfg: &AutoCompactConfig) -> bool {
+    cfg.is_active()
 }
 
 /// Apply the optional `CLAUDE_CODE_AUTO_COMPACT_WINDOW` cap.
 ///
-/// TS reads this env var to override the model's reported context window
-/// (for tests / debugging). Pure function; caller threads it through.
+/// Pure function: caller threads the resolved override (or `None`).
 #[must_use]
-pub fn apply_context_window_override(context_window: i64) -> i64 {
-    match std::env::var("CLAUDE_CODE_AUTO_COMPACT_WINDOW")
-        .ok()
-        .and_then(|s| s.parse::<i64>().ok())
-        .filter(|v| *v > 0)
-    {
-        Some(override_val) => context_window.min(override_val),
+pub fn apply_context_window_override(context_window: i64, override_window: Option<i64>) -> i64 {
+    match override_window.filter(|v| *v > 0) {
+        Some(v) => context_window.min(v),
         None => context_window,
     }
 }
 
-/// Compute the effective context window size after reserving space for summary output.
-///
-/// TS: `getEffectiveContextWindowSize(model)` in autoCompact.ts.
+/// Compute the effective context window size after reserving space for
+/// summary output. TS: `getEffectiveContextWindowSize(model)` in
+/// autoCompact.ts.
 #[must_use]
-pub fn effective_context_window(context_window: i64, max_output_tokens: i64) -> i64 {
-    let context_window = apply_context_window_override(context_window);
+pub fn effective_context_window(
+    context_window: i64,
+    max_output_tokens: i64,
+    cfg: &AutoCompactConfig,
+) -> i64 {
+    let context_window = apply_context_window_override(context_window, cfg.context_window_override);
     let reserved = max_output_tokens.min(MAX_OUTPUT_TOKENS_FOR_SUMMARY);
     (context_window - reserved).max(0)
 }
 
 /// Compute the auto-compact trigger threshold.
 ///
-/// TS: `getAutoCompactThreshold(model)` in autoCompact.ts.
-/// Honors `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` (1-100) for testing.
+/// TS: `getAutoCompactThreshold(model)` in autoCompact.ts. Honors
+/// `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` (1-100) when set on the config.
 #[must_use]
-pub fn auto_compact_threshold(context_window: i64, max_output_tokens: i64) -> i64 {
-    let effective = effective_context_window(context_window, max_output_tokens);
+pub fn auto_compact_threshold(
+    context_window: i64,
+    max_output_tokens: i64,
+    cfg: &AutoCompactConfig,
+) -> i64 {
+    let effective = effective_context_window(context_window, max_output_tokens, cfg);
     let default_threshold = (effective - AUTOCOMPACT_BUFFER_TOKENS).max(0);
 
-    if let Some(pct) = std::env::var("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE")
-        .ok()
-        .and_then(|s| s.parse::<f64>().ok())
-        .filter(|p| *p > 0.0 && *p <= 100.0)
-    {
+    if let Some(pct) = cfg.pct_override.filter(|p| *p > 0.0 && *p <= 100.0) {
         let percentage_threshold = ((effective as f64) * (pct / 100.0)).floor() as i64;
         return percentage_threshold.min(default_threshold);
     }
@@ -105,74 +102,96 @@ pub fn auto_compact_threshold(context_window: i64, max_output_tokens: i64) -> i6
 /// Check if auto-compaction should be triggered.
 ///
 /// Uses the TS formula: `tokens >= effectiveWindow - 13K`.
-/// Falls back to the default threshold if the env override is unset.
 #[must_use]
 pub fn should_auto_compact(
     current_tokens: i64,
     context_window: i64,
     max_output_tokens: i64,
+    cfg: &AutoCompactConfig,
 ) -> bool {
     if context_window <= 0 {
         return false;
     }
-    current_tokens >= auto_compact_threshold(context_window, max_output_tokens)
+    current_tokens >= auto_compact_threshold(context_window, max_output_tokens, cfg)
 }
 
 /// Recursion-guarded variant of [`should_auto_compact`].
 ///
-/// TS guards `session_memory` and `compact` query sources to prevent forked
-/// agents from re-entering the compaction loop. Pass [`CompactQuerySource`]
-/// to opt out of those sources. Also returns `false` when auto-compact is
-/// disabled (env vars or user setting).
+/// TS guards `session_memory`, `compact`, and `marble_origami` query
+/// sources to prevent forked agents from re-entering the compaction
+/// loop. Returns `false` when auto-compact is disabled (env vars or
+/// user setting).
 #[must_use]
 pub fn should_auto_compact_guarded(
     current_tokens: i64,
     context_window: i64,
     max_output_tokens: i64,
-    auto_compact_enabled: bool,
+    cfg: &AutoCompactConfig,
     source: CompactQuerySource,
 ) -> bool {
     if matches!(
         source,
-        CompactQuerySource::SessionMemory | CompactQuerySource::Compact
+        CompactQuerySource::SessionMemory
+            | CompactQuerySource::Compact
+            | CompactQuerySource::MarbleOrigami
     ) {
         return false;
     }
-    if !is_auto_compact_enabled(auto_compact_enabled) {
+    if !cfg.is_active() {
         return false;
     }
-    should_auto_compact(current_tokens, context_window, max_output_tokens)
+    should_auto_compact(current_tokens, context_window, max_output_tokens, cfg)
+}
+
+/// Variant of [`should_auto_compact_guarded`] that additionally honors
+/// the staged-compact mutual exclusion: when `is_collapse_active` is
+/// true, autocompact is suppressed so it doesn't race the staged
+/// commit/spawn ladder. TS: autoCompact.ts:215-223.
+#[must_use]
+pub fn should_auto_compact_guarded_with_collapse(
+    current_tokens: i64,
+    context_window: i64,
+    max_output_tokens: i64,
+    cfg: &AutoCompactConfig,
+    source: CompactQuerySource,
+    is_collapse_active: bool,
+) -> bool {
+    if is_collapse_active {
+        return false;
+    }
+    should_auto_compact_guarded(
+        current_tokens,
+        context_window,
+        max_output_tokens,
+        cfg,
+        source,
+    )
 }
 
 /// Calculate full token warning state (matches TS `calculateTokenWarningState`).
 ///
-/// `auto_compact_enabled`: whether the user has auto-compact turned on.
-/// Honors `CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE` for testing.
+/// `cfg.enabled` (the user toggle) picks the warning denominator: when
+/// auto-compact is OFF, the user-visible "context left" is until the
+/// effective window, not the autocompact threshold. Honors
+/// `cfg.blocking_limit_override` for testing.
 #[must_use]
 pub fn calculate_token_warning_state(
     current_tokens: i64,
     context_window: i64,
     max_output_tokens: i64,
-    auto_compact_enabled: bool,
+    cfg: &AutoCompactConfig,
 ) -> TokenWarningState {
-    let effective = effective_context_window(context_window, max_output_tokens);
-    let threshold = auto_compact_threshold(context_window, max_output_tokens);
+    let effective = effective_context_window(context_window, max_output_tokens, cfg);
+    let threshold = auto_compact_threshold(context_window, max_output_tokens, cfg);
 
     let blocking_default = (effective - MANUAL_COMPACT_BUFFER_TOKENS).max(0);
-    let blocking_limit = std::env::var("CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE")
-        .ok()
-        .and_then(|s| s.parse::<i64>().ok())
+    let blocking_limit = cfg
+        .blocking_limit_override
         .filter(|v| *v > 0)
         .unwrap_or(blocking_default);
 
-    // TS uses isAutoCompactEnabled() to pick the warning denominator: when
-    // auto-compact is OFF, the user-visible "context left" is until the
-    // effective window, not the autocompact threshold.
-    let warning_denominator = if auto_compact_enabled {
-        threshold
-    } else {
-        effective
-    };
+    let auto_active = cfg.is_active();
+    let warning_denominator = if auto_active { threshold } else { effective };
 
     let percent_left = if warning_denominator > 0 {
         (((warning_denominator - current_tokens).max(0) as f64 / warning_denominator as f64)
@@ -188,32 +207,8 @@ pub fn calculate_token_warning_state(
             >= warning_denominator - WARNING_THRESHOLD_BUFFER_TOKENS,
         is_above_error_threshold: current_tokens
             >= warning_denominator - ERROR_THRESHOLD_BUFFER_TOKENS,
-        is_above_auto_compact_threshold: auto_compact_enabled && current_tokens >= threshold,
+        is_above_auto_compact_threshold: auto_active && current_tokens >= threshold,
         is_at_blocking_limit: current_tokens >= blocking_limit,
-    }
-}
-
-/// Time-based micro-compact configuration.
-///
-/// TS: GrowthBook-driven (`tengu_slate_heron`). coco-rs takes a struct from
-/// the caller — settings can be wired through the config layer if/when
-/// remote config arrives.
-#[derive(Debug, Clone)]
-pub struct TimeBasedMcConfig {
-    pub enabled: bool,
-    /// Minutes of inactivity before triggering (TS default: 60, matches cache TTL).
-    pub gap_threshold_minutes: i32,
-    /// Number of recent compactable tool_use_ids to keep (TS default: 5).
-    pub keep_recent: i32,
-}
-
-impl Default for TimeBasedMcConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            gap_threshold_minutes: 60,
-            keep_recent: 5,
-        }
     }
 }
 

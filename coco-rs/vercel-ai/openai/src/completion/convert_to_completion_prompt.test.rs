@@ -5,10 +5,7 @@ use vercel_ai_provider::ToolCallPart;
 #[test]
 fn system_then_user_formats_with_role_prefixes() {
     let prompt = vec![
-        LanguageModelV4Message::System {
-            content: "Be helpful".into(),
-            provider_options: None,
-        },
+        LanguageModelV4Message::system("Be helpful"),
         LanguageModelV4Message::User {
             content: vec![UserContentPart::Text(TextPart {
                 text: "Hello".into(),
@@ -77,10 +74,7 @@ fn system_after_first_message_is_error() {
             })],
             provider_options: None,
         },
-        LanguageModelV4Message::System {
-            content: "Bad system".into(),
-            provider_options: None,
-        },
+        LanguageModelV4Message::system("Bad system"),
     ];
     let result = convert_to_completion_prompt(&prompt);
     assert!(result.is_err());

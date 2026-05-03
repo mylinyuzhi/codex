@@ -57,6 +57,16 @@ impl DenialTracker {
         self.consecutive_denials = 0;
     }
 
+    /// Clear all denial state (consecutive + total + per-tool counts +
+    /// circuit breaker). Called by the post-compact observer because
+    /// the conversational context that drove the denials is now archived.
+    pub fn clear(&mut self) {
+        self.consecutive_denials = 0;
+        self.total_denials = 0;
+        self.per_tool_denials.clear();
+        self.circuit_breaker_tripped = false;
+    }
+
     /// Whether the agent appears stuck in a denial loop.
     pub fn is_stuck(&self) -> bool {
         self.consecutive_denials >= CONSECUTIVE_DENIAL_THRESHOLD

@@ -94,7 +94,7 @@ pub(super) fn try_render<'a>(
             lines.push(Line::from(vec![
                 Span::raw("  ⚠ ").fg(w.theme.warning),
                 Span::raw(format!("{hook_name}: ")).fg(w.theme.text_dim),
-                Span::raw(error.clone()).yellow(),
+                Span::raw(error.clone()).fg(w.theme.warning),
             ]));
             Some(())
         }
@@ -137,7 +137,7 @@ pub(super) fn try_render<'a>(
         MessageContent::HookStoppedContinuation { hook_name, reason } => {
             lines.push(Line::from(vec![
                 Span::raw(format!("  {hook_name}: ")).fg(w.theme.text_dim),
-                Span::raw(reason.clone()).yellow(),
+                Span::raw(reason.clone()).fg(w.theme.warning),
             ]));
             Some(())
         }
@@ -167,6 +167,45 @@ pub(super) fn try_render<'a>(
             lines.push(Line::from(
                 Span::raw(format!("  {border}")).fg(w.theme.border).dim(),
             ));
+            Some(())
+        }
+        MessageContent::CompactSummary {
+            summary,
+            messages_summarized,
+            user_context,
+            trigger,
+        } => {
+            // TS: components/CompactSummary.tsx
+            let heading = match trigger {
+                coco_types::CompactTrigger::SessionMemory => "Summarized via session memory",
+                coco_types::CompactTrigger::Reactive => "Summarized (PTL recovery)",
+                coco_types::CompactTrigger::TimeBased => "Summarized (idle gap)",
+                coco_types::CompactTrigger::ContextCollapse => "Summarized (context collapse)",
+                _ => "Conversation summary",
+            };
+            let mut hdr = vec![
+                Span::raw("  ✻ ").fg(w.theme.accent),
+                Span::raw(heading).fg(w.theme.primary).bold(),
+            ];
+            if let Some(n) = messages_summarized {
+                hdr.push(Span::raw(format!(" · {n} messages")).fg(w.theme.text_dim));
+            }
+            lines.push(Line::from(hdr));
+            if let Some(ctx) = user_context.as_ref().filter(|s| !s.is_empty()) {
+                lines.push(Line::from(
+                    Span::raw(format!("    focus: {ctx}")).fg(w.theme.text_dim),
+                ));
+            }
+            for line in summary.lines().take(8) {
+                lines.push(Line::from(
+                    Span::raw(format!("    {line}")).fg(w.theme.text),
+                ));
+            }
+            if summary.lines().count() > 8 {
+                lines.push(Line::from(
+                    Span::raw("    …(ctrl+o to see full summary)").fg(w.theme.text_dim),
+                ));
+            }
             Some(())
         }
         MessageContent::TaskAssignment {

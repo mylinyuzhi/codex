@@ -1,0 +1,28 @@
+---
+source: app/tui/src/widgets/mod.test.rs
+expression: output
+---
+ | opus-4                                                                       
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+ Input ─────────────────────────────────────────────────────────────────────────
+> Run the failing tests                                                         
+                                                                                
+ opus-4 | Default | 0 msgs

@@ -26,19 +26,30 @@ pub fn convert_to_openai_chat_messages(
             LanguageModelV4Message::System {
                 content,
                 provider_options: _,
-            } => match system_message_mode {
-                SystemMessageMode::System => {
-                    messages.push(json!({ "role": "system", "content": content }));
+            } => {
+                let text = collapse_text_parts(content, &mut warnings, "system message");
+                match system_message_mode {
+                    SystemMessageMode::System => {
+                        messages.push(json!({ "role": "system", "content": text }));
+                    }
+                    SystemMessageMode::Developer => {
+                        messages.push(json!({ "role": "developer", "content": text }));
+                    }
+                    SystemMessageMode::Remove => {
+                        warnings.push(Warning::Other {
+                            message: "system messages are removed for this model".into(),
+                        });
+                    }
                 }
-                SystemMessageMode::Developer => {
-                    messages.push(json!({ "role": "developer", "content": content }));
-                }
-                SystemMessageMode::Remove => {
-                    warnings.push(Warning::Other {
-                        message: "system messages are removed for this model".into(),
-                    });
-                }
-            },
+            }
+
+            LanguageModelV4Message::Developer {
+                content,
+                provider_options: _,
+            } => {
+                let text = collapse_text_parts(content, &mut warnings, "developer message");
+                messages.push(json!({ "role": "developer", "content": text }));
+            }
 
             LanguageModelV4Message::User {
                 content,
@@ -99,6 +110,24 @@ pub fn convert_to_openai_chat_messages(
     }
 
     (messages, warnings)
+}
+
+fn collapse_text_parts(
+    parts: &[UserContentPart],
+    warnings: &mut Vec<Warning>,
+    context: &str,
+) -> String {
+    let mut text = String::new();
+    for part in parts {
+        match part {
+            UserContentPart::Text(text_part) => text.push_str(&text_part.text),
+            UserContentPart::File(_) => warnings.push(Warning::unsupported_with_details(
+                "non-text prompt part",
+                format!("{context} contains a non-text part that was dropped"),
+            )),
+        }
+    }
+    text
 }
 
 /// Convert user content parts to OpenAI format.

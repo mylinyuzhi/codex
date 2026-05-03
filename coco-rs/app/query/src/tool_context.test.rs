@@ -13,7 +13,7 @@ use crate::config::QueryEngineConfig;
 
 fn test_config() -> QueryEngineConfig {
     QueryEngineConfig {
-        model_name: "claude-test".into(),
+        model_id: "claude-test".into(),
         permission_mode: PermissionMode::Default,
         context_window: 200_000,
         max_output_tokens: 8_192,
@@ -30,6 +30,7 @@ fn factory(config: QueryEngineConfig) -> ToolContextFactory {
         mailbox: None,
         task_list: None,
         todo_list: None,
+        task_handle: None,
         permission_bridge: None,
         app_state: None,
         file_read_state: None,
@@ -39,13 +40,14 @@ fn factory(config: QueryEngineConfig) -> ToolContextFactory {
         agent_handle: None,
         skill_handle: None,
         tool_schema_validator: None,
+        agent_catalog: None,
     }
 }
 
 #[tokio::test]
-async fn test_factory_main_loop_model_defaults_to_config_model_name() {
-    // Pre-A contract: when no current_model_name override is supplied,
-    // main_loop_model mirrors the static config.model_name. This path
+async fn test_factory_main_loop_model_defaults_to_config_model_id() {
+    // Pre-A contract: when no current_model_id override is supplied,
+    // main_loop_model mirrors the static config.model_id. This path
     // is used by tests and legacy single-client constructions that
     // don't have a ModelRuntime.
     let config = test_config();
@@ -54,15 +56,15 @@ async fn test_factory_main_loop_model_defaults_to_config_model_name() {
 }
 
 #[tokio::test]
-async fn test_factory_honors_current_model_name_override() {
+async fn test_factory_honors_current_model_id_override() {
     // Pre-A fix: after a fallback switch, the engine passes the
-    // active-slot model name via ToolContextOverrides so tools and
+    // active-slot model id via ToolContextOverrides so tools and
     // subagents see post-fallback state instead of the static config
     // value (which was set at session bootstrap and never updated).
     let config = test_config();
     let ctx = factory(config)
         .build(ToolContextOverrides {
-            current_model_name: Some("fallback-model".into()),
+            current_model_id: Some("fallback-model".into()),
             ..Default::default()
         })
         .await;
@@ -213,16 +215,10 @@ async fn test_factory_installs_custom_agent_handle() {
         async fn create_team(&self, _name: &str) -> Result<String, String> {
             Err("marker".into())
         }
-        async fn delete_team(&self, _name: &str) -> Result<String, String> {
+        async fn delete_team(&self) -> Result<String, String> {
             Err("marker".into())
         }
-        async fn resume_agent(
-            &self,
-            _agent_id: &str,
-            _prompt: Option<&str>,
-        ) -> Result<AgentSpawnResponse, String> {
-            Err("marker".into())
-        }
+        // resume_agent uses the trait default impl.
         async fn query_agent_status(&self, _agent_id: &str) -> Result<AgentSpawnResponse, String> {
             Err("marker".into())
         }

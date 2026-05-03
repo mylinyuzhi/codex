@@ -38,6 +38,7 @@ pub mod cli_bootstrap;
 pub mod dispatcher;
 pub mod handlers;
 pub mod pending_map;
+pub mod sandbox_approval_bridge;
 pub mod sdk_runner;
 pub mod transport;
 
@@ -54,6 +55,7 @@ pub use handlers::SessionHandle;
 pub use handlers::SessionStats;
 pub use handlers::TurnRunner;
 pub use handlers::dispatch_client_request;
+pub use sandbox_approval_bridge::SdkSandboxApprovalBridge;
 pub use sdk_runner::QueryEngineRunner;
 pub use transport::InMemoryTransport;
 pub use transport::SdkTransport;

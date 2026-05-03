@@ -37,7 +37,28 @@ Also: `tools/shared/`, `tools/utils.ts`, and supporting utils (`utils/worktree.t
 
 - MCPTool is the only dynamic tool — schema comes from the connected server at runtime. Re-connection is idempotent: the registry deregisters prior tools for that server first.
 - All file-mutation tools (Edit/Write/NotebookEdit/Bash) invoke the team-mem secret guard + file-history tracking helpers before touching disk.
-- `AskUserQuestionTool` lives in `ask_user_question.rs` — own module so the full TS prompt (plan-mode guidance + `"Other"` option + preview-feature markdown) stays co-located. Other utility tools (`ToolSearch`/`Config`/`Brief`/`Lsp`/`NotebookEdit`) share `utility.rs`.
+- One file per tool. Utility tools live in their own modules: `ask_user_question.rs`, `tool_search.rs`, `config.rs`, `brief.rs`, `lsp_tool.rs`, `notebook_edit.rs`. (`lsp_tool.rs` is suffixed because `lsp.rs` is reserved for shared LSP types/formatters scaffolding.)
+
+## Per-tool Result Persistence Thresholds
+
+`Tool::max_result_size_chars()` overrides — TS-aligned, read by the executor
+(`core/tool-runtime/src/execution.rs`) per Level 1 of the
+[Tool Result Budget plan](../../../docs/coco-rs/tool-result-budget-plan.md):
+
+| Tool | Value | TS source | Note |
+|---|---|---|---|
+| BashTool | 30_000 | `BashTool.tsx:424` | bursty shell output |
+| PowerShellTool | 30_000 | `PowerShellTool.tsx:275` | same as Bash |
+| GrepTool | 20_000 | `GrepTool.ts` | match dumps grow superlinearly |
+| GlobTool | 100_000 | `GlobTool.ts` | path lists tolerate larger windows |
+| FileReadTool | trait default `100_000` ⚠️ | TS `Infinity` (opt-out) | Rust cannot express `Infinity` with `i32`; Phase 1.B of the plan migrates to `ResultSizeBound::{Chars,Unbounded}` |
+| (other tools) | trait default `100_000` | trait default | inherit |
+
+`bash.rs::maybe_persist_oversized_output` is a stub of Level 1 (Bash-only,
+`temp_dir()` storage, parallel JSON fields instead of `<persisted-output>`
+content replacement). It will be replaced by delegation to the generic
+`coco-tool-runtime::tool_result_storage::maybe_persist_large_tool_result`
+in Phase 1.E.
 
 ## Divergences from TS
 

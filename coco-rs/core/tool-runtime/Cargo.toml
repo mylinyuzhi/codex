@@ -12,8 +12,13 @@ testing = []
 
 [dependencies]
 coco-types.workspace = true
+coco-messages.workspace = true
 coco-config.workspace = true
 coco-context.workspace = true
+# Pure-logic foundation; carries the AgentDefinition catalog snapshot that
+# `ToolUseContext` exposes to AgentTool. One-way dep — `coco-subagent`
+# does NOT depend on `coco-tool-runtime` (see core/subagent/Cargo.toml).
+coco-subagent.workspace = true
 
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
@@ -27,3 +32,5 @@ tokio-util = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

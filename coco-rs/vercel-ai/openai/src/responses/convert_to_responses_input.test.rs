@@ -5,15 +5,21 @@ use vercel_ai_provider::ToolResultPart;
 
 #[test]
 fn converts_system_as_developer() {
-    let prompt = vec![LanguageModelV4Message::System {
-        content: "Be helpful".into(),
-        provider_options: None,
-    }];
+    let prompt = vec![LanguageModelV4Message::system("Be helpful")];
     let (items, warnings) =
         convert_to_openai_responses_input(&prompt, SystemMessageMode::Developer);
     assert!(warnings.is_empty());
     assert_eq!(items[0]["role"], "developer");
     assert_eq!(items[0]["content"], "Be helpful");
+}
+
+#[test]
+fn converts_developer_message() {
+    let prompt = vec![LanguageModelV4Message::developer_text("Follow app policy")];
+    let (items, warnings) = convert_to_openai_responses_input(&prompt, SystemMessageMode::System);
+    assert!(warnings.is_empty());
+    assert_eq!(items[0]["role"], "developer");
+    assert_eq!(items[0]["content"], "Follow app policy");
 }
 
 #[test]

@@ -338,6 +338,7 @@ fn prune_tool_calls_custom(
 fn is_empty_message(msg: &LanguageModelV4Message) -> bool {
     match msg {
         LanguageModelV4Message::System { content, .. } => content.is_empty(),
+        LanguageModelV4Message::Developer { content, .. } => content.is_empty(),
         LanguageModelV4Message::User { content, .. } => content.is_empty(),
         LanguageModelV4Message::Assistant { content, .. } => content.is_empty(),
         LanguageModelV4Message::Tool { content, .. } => content.is_empty(),

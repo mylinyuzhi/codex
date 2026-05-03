@@ -19,8 +19,16 @@ pub type LanguageModelV4Prompt = Vec<LanguageModelV4Message>;
 pub enum LanguageModelV4Message {
     /// A system message.
     System {
-        /// The system message content.
-        content: String,
+        /// The system message content parts.
+        content: Vec<UserContentPart>,
+        /// Provider-specific options.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provider_options: Option<ProviderOptions>,
+    },
+    /// A developer message.
+    Developer {
+        /// The developer message content parts.
+        content: Vec<UserContentPart>,
         /// Provider-specific options.
         #[serde(skip_serializing_if = "Option::is_none")]
         provider_options: Option<ProviderOptions>,
@@ -54,16 +62,50 @@ pub enum LanguageModelV4Message {
 impl LanguageModelV4Message {
     /// Create a system message.
     pub fn system(content: impl Into<String>) -> Self {
+        Self::system_parts(vec![UserContentPart::text(content)])
+    }
+
+    /// Create a system message with content parts.
+    pub fn system_parts(parts: Vec<UserContentPart>) -> Self {
         Self::System {
-            content: content.into(),
+            content: parts,
             provider_options: None,
         }
     }
 
     /// Create a system message with provider options.
     pub fn system_with_options(content: impl Into<String>, options: ProviderOptions) -> Self {
+        Self::system_parts_with_options(vec![UserContentPart::text(content)], options)
+    }
+
+    /// Create a system message with content parts and provider options.
+    pub fn system_parts_with_options(
+        parts: Vec<UserContentPart>,
+        options: ProviderOptions,
+    ) -> Self {
         Self::System {
-            content: content.into(),
+            content: parts,
+            provider_options: Some(options),
+        }
+    }
+
+    /// Create a developer message with text.
+    pub fn developer_text(content: impl Into<String>) -> Self {
+        Self::developer(vec![UserContentPart::text(content)])
+    }
+
+    /// Create a developer message with content parts.
+    pub fn developer(parts: Vec<UserContentPart>) -> Self {
+        Self::Developer {
+            content: parts,
+            provider_options: None,
+        }
+    }
+
+    /// Create a developer message with content parts and provider options.
+    pub fn developer_with_options(parts: Vec<UserContentPart>, options: ProviderOptions) -> Self {
+        Self::Developer {
+            content: parts,
             provider_options: Some(options),
         }
     }
@@ -140,6 +182,11 @@ impl LanguageModelV4Message {
         matches!(self, Self::System { .. })
     }
 
+    /// Check if this is a developer message.
+    pub fn is_developer(&self) -> bool {
+        matches!(self, Self::Developer { .. })
+    }
+
     /// Check if this is a user message.
     pub fn is_user(&self) -> bool {
         matches!(self, Self::User { .. })
@@ -171,6 +218,13 @@ impl PromptBuilder {
     /// Add a system message.
     pub fn system(mut self, content: impl Into<String>) -> Self {
         self.messages.push(LanguageModelV4Message::system(content));
+        self
+    }
+
+    /// Add a developer message.
+    pub fn developer(mut self, content: impl Into<String>) -> Self {
+        self.messages
+            .push(LanguageModelV4Message::developer_text(content));
         self
     }
 

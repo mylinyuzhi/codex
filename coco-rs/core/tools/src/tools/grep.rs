@@ -40,6 +40,7 @@
 
 use coco_file_ignore::IgnoreConfig;
 use coco_file_ignore::IgnoreService;
+use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::SearchReadInfo;
 use coco_tool_runtime::Tool;
@@ -50,7 +51,6 @@ use coco_types::PermissionDecision;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
 use coco_types::ToolName;
-use coco_types::ToolResult;
 use grep_regex::RegexMatcherBuilder;
 use grep_searcher::BinaryDetection;
 use grep_searcher::Searcher;
@@ -371,7 +371,7 @@ impl Tool for GrepTool {
     }
 
     /// Result persistence threshold — matches TS `maxResultSizeChars: 20_000`.
-    fn max_result_size_chars(&self) -> i32 {
+    fn max_result_size_chars(&self) -> i64 {
         20_000
     }
 

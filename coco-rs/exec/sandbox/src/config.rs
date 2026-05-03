@@ -112,7 +112,12 @@ impl WritableRoot {
         if git_path.is_file()
             && let Some(gitdir) = resolve_git_pointer(&git_path)
         {
-            match gitdir.strip_prefix(&path) {
+            // `resolve_git_pointer` canonicalizes the gitdir, so canonicalize
+            // the writable root too — otherwise on macOS the
+            // `/var/folders/...` symlink prefix won't match the resolved
+            // `/private/var/folders/...` and `strip_prefix` fails.
+            let canonical_root = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+            match gitdir.strip_prefix(&canonical_root) {
                 Ok(rel) => {
                     let rel_str = rel.display().to_string();
                     if !subpaths.contains(&rel_str) {
@@ -209,7 +214,7 @@ fn default_readonly_subpaths() -> Vec<String> {
 }
 
 /// Configuration for the sandbox.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SandboxConfig {
     /// The sandbox enforcement level.
     #[serde(default)]
@@ -253,6 +258,26 @@ pub struct SandboxConfig {
     /// Seatbelt profile, preventing sandboxed commands from allocating TTYs.
     #[serde(default = "default_true")]
     pub allow_pty: bool,
+}
+
+impl Default for SandboxConfig {
+    fn default() -> Self {
+        Self {
+            enforcement: EnforcementLevel::default(),
+            writable_roots: Vec::new(),
+            denied_paths: Vec::new(),
+            denied_read_paths: Vec::new(),
+            deny_write_paths: Vec::new(),
+            allow_git_config: false,
+            allow_network: false,
+            proxy_active: false,
+            extra_bind_ro: Vec::new(),
+            weaker_network_isolation: false,
+            // Mirrors the `#[serde(default = "default_true")]` attribute so
+            // `..Default::default()` matches the deserialized default.
+            allow_pty: true,
+        }
+    }
 }
 
 /// Filesystem access configuration for the sandbox.

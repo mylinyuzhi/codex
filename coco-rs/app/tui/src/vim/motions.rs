@@ -73,12 +73,12 @@ pub fn line_end(text: &str, _pos: i32) -> MotionResult {
 /// Find character forward (f).
 pub fn find_char_forward(text: &str, pos: i32, ch: char) -> Option<MotionResult> {
     let chars: Vec<char> = text.chars().collect();
-    for i in (pos as usize + 1)..chars.len() {
-        if chars[i] == ch {
-            return Some(i as i32);
-        }
-    }
-    None
+    chars
+        .iter()
+        .enumerate()
+        .skip(pos as usize + 1)
+        .find(|&(_, c)| *c == ch)
+        .map(|(i, _)| i as i32)
 }
 
 /// Find character backward (F).

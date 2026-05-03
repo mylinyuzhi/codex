@@ -1,8 +1,8 @@
-use coco_types::Message;
+use coco_messages::Message;
+use coco_messages::ToolResult;
 use coco_types::PermissionDecision;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
-use coco_types::ToolResult;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -73,6 +73,33 @@ pub struct PromptOptions {
     /// Permission context for tailoring prompt to current mode.
     /// TS: `getToolPermissionContext()` — async in TS, pre-resolved here.
     pub permission_context: Option<coco_types::ToolPermissionContext>,
+    /// Full agent catalog snapshot. `AgentTool::prompt` consumes this
+    /// to render the per-agent listing (`- {type}: {whenToUse} (Tools:
+    /// ...)`) so the model sees the available subagent types and their
+    /// tool surfaces. `None` ⇒ static fallback description (the
+    /// pre-Round-7 behaviour). TS parity: `AgentTool.tsx:218-225`
+    /// passes `filterAgentsByMcpRequirements(agents, mcpServersWithTools)`
+    /// to `getPrompt`.
+    pub agent_catalog: Option<std::sync::Arc<coco_subagent::AgentCatalogSnapshot>>,
+    /// Names of MCP servers ready (connected) this turn. The dynamic
+    /// AgentTool prompt uses this to filter out agent definitions
+    /// whose `required_mcp_servers` aren't all available — the model
+    /// then never sees an agent it can't actually call. TS parity:
+    /// `mcpServersWithTools` arg to `filterAgentsByMcpRequirements`.
+    ///
+    /// `None` ⇒ no MCP layer wired; the renderer's behaviour is to
+    /// hide MCP-required agents (fail-closed). `Some(list)` filters
+    /// against the named connected servers.
+    pub ready_mcp_servers: Option<Vec<String>>,
+    /// Coordinator-mode flag — when true, `AgentTool::prompt` renders
+    /// the slim coordinator description (no usage notes, no parallel-
+    /// spawn examples). TS parity: `isCoordinator` branch in
+    /// `getPrompt`.
+    pub coordinator_mode: bool,
+    /// Fork-mode flag — when true, `AgentTool::prompt` adds the fork
+    /// guidance section. TS parity: `isForkSubagentEnabled()` gating
+    /// in `getPrompt`.
+    pub fork_enabled: bool,
 }
 
 impl PromptOptions {
@@ -289,9 +316,24 @@ pub trait Tool: Send + Sync {
         InterruptBehavior::Block
     }
 
-    /// Maximum result size in characters (default 100,000).
-    fn max_result_size_chars(&self) -> i32 {
-        100_000
+    /// Per-tool tool-result size cap (in characters). When a tool's
+    /// result exceeds this size, the runtime persists it to disk
+    /// (via `coco_tool_runtime::tool_result_storage::persist_to_disk`)
+    /// and substitutes a `<persisted-output>` reference message into
+    /// the conversation.
+    ///
+    /// `i64::MAX` opts the tool out of persistence — its results stay
+    /// inline regardless of length. The aggregate per-message budget
+    /// from `compact.tool_result_budget.per_message_chars` still
+    /// applies via `apply_tool_result_budget` (Level 2). Tools whose
+    /// output is canonical (e.g. `Read` on a tracked file the model
+    /// will read again) opt out so persistence isn't circular.
+    ///
+    /// TS: `Tool.maxResultSizeChars` (default
+    /// `DEFAULT_MAX_RESULT_SIZE_CHARS = 50_000`). Override per-tool
+    /// to declare an opt-out (`i64::MAX`) or a tighter cap.
+    fn max_result_size_chars(&self) -> i64 {
+        i64::MAX
     }
 
     /// MCP server/tool info (for MCP-wrapped tools).

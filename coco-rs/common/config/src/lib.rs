@@ -3,6 +3,7 @@
 //! Depends on coco-types for shared enums. Uses anyhow for error handling.
 
 pub mod analytics;
+pub mod compact_settings;
 pub mod constants;
 pub mod effort;
 pub mod env;
@@ -27,6 +28,17 @@ pub use analytics::AnalyticsSink;
 pub use analytics::EventProperties;
 pub use analytics::MetadataValue;
 pub use analytics::SessionAnalytics;
+pub use compact_settings::ApiNativeConfig as CompactApiNativeConfig;
+pub use compact_settings::AutoCompactConfig;
+pub use compact_settings::CompactConfig;
+pub use compact_settings::DisplayCollapseConfig;
+pub use compact_settings::ExperimentalConfig as CompactExperimentalConfig;
+pub use compact_settings::HistorySnipConfig;
+pub use compact_settings::MicroCompactConfig;
+pub use compact_settings::PartialCompactSettings;
+pub use compact_settings::SessionMemoryConfig;
+pub use compact_settings::StagedCompactConfig;
+pub use compact_settings::TimeBasedMcConfig;
 pub use env::EnvKey;
 pub use env::EnvOnlyConfig;
 pub use env::EnvSnapshot;

@@ -11,7 +11,7 @@
 //! async `query_fn` callback (same pattern as [`crate::classifier`]).
 //! This keeps `coco-permissions` free of any `coco-inference` dependency.
 
-use coco_types::Message;
+use coco_messages::Message;
 use coco_types::PermissionExplanation;
 use coco_types::RiskLevel;
 use coco_types::SideQueryRequest;
@@ -249,12 +249,12 @@ fn extract_conversation_context(messages: &[Message], max_chars: usize) -> Strin
     parts.join("\n\n")
 }
 
-fn extract_assistant_text(msg: &coco_types::LlmMessage) -> String {
+fn extract_assistant_text(msg: &coco_messages::LlmMessage) -> String {
     match msg {
-        coco_types::LlmMessage::Assistant { content, .. } => content
+        coco_messages::LlmMessage::Assistant { content, .. } => content
             .iter()
             .filter_map(|c| match c {
-                coco_types::AssistantContent::Text(t) => Some(t.text.as_str()),
+                coco_messages::AssistantContent::Text(t) => Some(t.text.as_str()),
                 _ => None,
             })
             .collect::<Vec<_>>()

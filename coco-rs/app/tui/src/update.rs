@@ -12,6 +12,7 @@ use crate::constants;
 use crate::events::TuiCommand;
 use crate::state::AppState;
 use crate::state::FocusTarget;
+use crate::update_rewind;
 
 mod clipboard;
 mod edit;
@@ -102,6 +103,39 @@ pub async fn handle_command(
         TuiCommand::Interrupt => {
             state.session.was_interrupted = true;
             let _ = command_tx.send(UserCommand::Interrupt).await;
+            // TS `screens/REPL.tsx:3010-3022` — auto-rewind on user-cancel
+            // when the input is empty, no commands are queued, and no
+            // overlay is open. Lossless (synthetic-only after last user
+            // message) → dispatch directly. Non-lossless (meaningful
+            // assistant text or file changes) → open the picker
+            // pre-anchored on the last user turn so the user can pick
+            // a restore type — TS `MessageActionsCaps.edit` non-lossless
+            // branch (`screens/REPL.tsx:3781-3785`).
+            if state.ui.input.is_empty()
+                && state.session.queued_commands.is_empty()
+                && state.ui.overlay.is_none()
+            {
+                if let Some((message_id, restore_type)) =
+                    update_rewind::auto_restore_after_interrupt(&state.session.messages)
+                {
+                    let rewound_turn =
+                        update_rewind::find_last_user_message_index(&state.session.messages)
+                            .map(|i| i as i32 + 1)
+                            .unwrap_or(0);
+                    let _ = command_tx
+                        .send(UserCommand::Rewind {
+                            message_id,
+                            restore_type,
+                            rewound_turn,
+                        })
+                        .await;
+                } else if let Some(idx) =
+                    update_rewind::find_last_user_message_index(&state.session.messages)
+                    && let Some(msg) = state.session.messages.get(idx)
+                {
+                    show::rewind_for(state, command_tx, msg.id.clone()).await;
+                }
+            }
             true
         }
         TuiCommand::Cancel => {
@@ -132,7 +166,16 @@ pub async fn handle_command(
 
         // ── Text editing ──
         TuiCommand::InsertChar(c) => {
-            state.ui.input.insert_char(c);
+            // Route into the rewind summarize-feedback box when that
+            // overlay phase is active so typing builds the feedback
+            // string instead of leaking to the input bar.
+            if let Some(crate::state::Overlay::Rewind(ref mut r)) = state.ui.overlay
+                && r.phase == crate::state::rewind::RewindPhase::SummarizeFeedback
+            {
+                r.summarize_feedback.push(c);
+            } else {
+                state.ui.input.insert_char(c);
+            }
             true
         }
         TuiCommand::InsertNewline => {
@@ -140,7 +183,13 @@ pub async fn handle_command(
             true
         }
         TuiCommand::DeleteBackward => {
-            state.ui.input.backspace();
+            if let Some(crate::state::Overlay::Rewind(ref mut r)) = state.ui.overlay
+                && r.phase == crate::state::rewind::RewindPhase::SummarizeFeedback
+            {
+                r.summarize_feedback.pop();
+            } else {
+                state.ui.input.backspace();
+            }
             true
         }
         TuiCommand::DeleteForward => {
@@ -287,6 +336,16 @@ pub async fn handle_command(
             overlay::request_diff_stats_if_rewind(state, command_tx).await;
             true
         }
+        TuiCommand::OverlayJumpStart => {
+            overlay::nav(state, i32::MIN / 2);
+            overlay::request_diff_stats_if_rewind(state, command_tx).await;
+            true
+        }
+        TuiCommand::OverlayJumpEnd => {
+            overlay::nav(state, i32::MAX / 2);
+            overlay::request_diff_stats_if_rewind(state, command_tx).await;
+            true
+        }
         TuiCommand::OverlayConfirm => {
             overlay::confirm(state, command_tx).await;
             true
@@ -325,6 +384,10 @@ pub async fn handle_command(
         }
         TuiCommand::ShowRewind => {
             show::rewind(state, command_tx).await;
+            true
+        }
+        TuiCommand::ShowRewindFor { message_id } => {
+            show::rewind_for(state, command_tx, message_id).await;
             true
         }
         TuiCommand::ShowDoctor => {

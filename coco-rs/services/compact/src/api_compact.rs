@@ -1,21 +1,22 @@
 //! API-native context management config builder.
 //!
 //! TS: services/compact/apiMicrocompact.ts. **This module produces the
-//! `context_management` payload sent to the Anthropic API**, which then
-//! applies the edits server-side without invalidating the prompt cache.
-//! Client-side message mutation (the inverse approach that *does* break
-//! cache) lives in [`crate::micro_advanced`] under `clear_tool_uses_inplace`
-//! and `clear_thinking_inplace`.
+//! `context_management` payload sent to providers that support
+//! server-side context editing** (today: Anthropic). Multi-provider
+//! dispatch lives at the `services/inference` layer via the
+//! `ProviderContextEditing` capability trait — providers without
+//! server-side support return `None` from `encode_context_management`,
+//! and the client-side fallback (`crate::micro_advanced::*`) handles
+//! the same effect at the cost of cache invalidation.
 //!
-//! The two strategies are:
+//! The two strategies emitted here are:
 //!
 //! - `clear_tool_uses_20250919` — drops tool result content / tool inputs
-//!   for older turns when input tokens exceed `trigger`, retaining the
-//!   most-recent N tool uses.
+//!   for older turns when input tokens exceed the configured trigger.
 //! - `clear_thinking_20251015` — preserves thinking blocks in past turns
-//!   without re-sending their full content. Useful when models with native
-//!   reasoning support emit chain-of-thought between turns.
+//!   without re-sending their full content.
 
+use coco_config::CompactApiNativeConfig;
 use coco_types::ToolName;
 
 use crate::types::ClearToolInputs;
@@ -23,14 +24,11 @@ use crate::types::ContextEditStrategy;
 use crate::types::ThinkingKeep;
 
 /// Default trigger threshold for `clear_tool_uses` (input tokens).
-///
-/// Matches TS `DEFAULT_MAX_INPUT_TOKENS` — typical warning threshold.
+/// Matches TS `DEFAULT_MAX_INPUT_TOKENS` and `CompactApiNativeConfig` default.
 pub const DEFAULT_API_MAX_INPUT_TOKENS: i64 = 180_000;
 
 /// Default keep-target for `clear_tool_uses` (input tokens after clearing).
-///
-/// Matches TS `DEFAULT_TARGET_INPUT_TOKENS` — keeps roughly the last 40K of
-/// context like the client-side microcompact heuristic.
+/// Matches TS `DEFAULT_TARGET_INPUT_TOKENS`.
 pub const DEFAULT_API_TARGET_INPUT_TOKENS: i64 = 40_000;
 
 /// Tool names whose results are eligible for `clear_tool_inputs`.
@@ -49,15 +47,26 @@ pub const TOOLS_CLEARABLE_RESULTS: &[ToolName] = &[
 
 /// Tool names that should be **excluded** from `clear_tool_uses`.
 ///
-/// Matches TS `TOOLS_CLEARABLE_USES` — file-mutating tools whose tool_use
-/// inputs (the actual edit specifications) carry semantic value beyond the
-/// resulting tool_result, so we keep their inputs intact.
-pub const TOOLS_EXCLUDE_FROM_CLEAR_USES: &[ToolName] =
-    &[ToolName::Edit, ToolName::Write, ToolName::NotebookEdit];
+/// Matches TS `TOOLS_CLEARABLE_USES` plus `ApplyPatch` — file-mutating
+/// tools whose tool_use inputs (the actual edit specifications) carry
+/// semantic value beyond the resulting tool_result, so we keep their
+/// inputs intact. TS list dates from before `ApplyPatch` was added; the
+/// gpt-5 ApplyPatch overlay applies the same rationale (input *is* the
+/// patch spec) so we proactively include it.
+pub const TOOLS_EXCLUDE_FROM_CLEAR_USES: &[ToolName] = &[
+    ToolName::Edit,
+    ToolName::Write,
+    ToolName::NotebookEdit,
+    ToolName::ApplyPatch,
+];
 
-/// Options driving [`get_api_context_management`].
+/// Per-call overrides driving [`get_api_context_management`].
 ///
-/// Mirrors TS `getAPIContextManagement` parameter object.
+/// Mirrors TS `getAPIContextManagement` parameter object. Static
+/// gates (`clear_tool_results` / `clear_tool_uses` / threshold / target)
+/// come from `coco_config::ApiNativeConfig`; the model-state-driven
+/// fields (thinking / redact-thinking / clear-all-thinking) are passed
+/// per-call by the inference layer.
 #[derive(Debug, Clone, Default)]
 pub struct ApiContextOptions {
     /// Whether the model has thinking enabled (skip `clear_thinking` when off).
@@ -68,39 +77,39 @@ pub struct ApiContextOptions {
     /// Force `clear_thinking { keep: 1 }` (TS: long-idle / >1h gap).
     pub clear_all_thinking: bool,
     /// Whether to enable `clear_tool_uses_20250919` clearing tool result
-    /// content. TS gates this behind `USE_API_CLEAR_TOOL_RESULTS` env var.
+    /// content. Sourced from `CompactApiNativeConfig.clear_tool_results`.
     pub clear_tool_results: bool,
     /// Whether to enable `clear_tool_uses_20250919` clearing entire tool use
-    /// blocks (excluding write/edit tools). TS gates this behind
-    /// `USE_API_CLEAR_TOOL_USES` env var.
+    /// blocks (excluding write/edit tools). Sourced from
+    /// `CompactApiNativeConfig.clear_tool_uses`.
     pub clear_tool_uses: bool,
-    /// Override for the trigger threshold; falls back to
-    /// `API_MAX_INPUT_TOKENS` env / [`DEFAULT_API_MAX_INPUT_TOKENS`].
-    pub trigger_threshold: Option<i64>,
-    /// Override for the keep target; falls back to `API_TARGET_INPUT_TOKENS`
-    /// env / [`DEFAULT_API_TARGET_INPUT_TOKENS`].
-    pub keep_target: Option<i64>,
+    /// Trigger threshold (input tokens) for `clear_tool_uses_20250919`.
+    /// Default `DEFAULT_API_MAX_INPUT_TOKENS`.
+    pub trigger_threshold: i64,
+    /// Keep target (input tokens) — informational; the API uses it as a
+    /// hint for how aggressively to clear. Default `DEFAULT_API_TARGET_INPUT_TOKENS`.
+    pub keep_target: i64,
 }
 
-/// Read [`ApiContextOptions`] from process env vars.
-///
-/// TS `getAPIContextManagement` reads `USE_API_CLEAR_TOOL_RESULTS`,
-/// `USE_API_CLEAR_TOOL_USES`, `API_MAX_INPUT_TOKENS`,
-/// `API_TARGET_INPUT_TOKENS`. These are ant-only in TS; coco-rs keeps the
-/// same names for parity. `has_thinking` etc. are model-state-driven and
-/// must be filled by the caller.
-#[must_use]
-pub fn options_from_env() -> ApiContextOptions {
-    ApiContextOptions {
-        clear_tool_results: env_truthy("USE_API_CLEAR_TOOL_RESULTS"),
-        clear_tool_uses: env_truthy("USE_API_CLEAR_TOOL_USES"),
-        trigger_threshold: std::env::var("API_MAX_INPUT_TOKENS")
-            .ok()
-            .and_then(|s| s.parse().ok()),
-        keep_target: std::env::var("API_TARGET_INPUT_TOKENS")
-            .ok()
-            .and_then(|s| s.parse().ok()),
-        ..Default::default()
+impl ApiContextOptions {
+    /// Build options from the resolved compact-api-native config and
+    /// per-call model state.
+    #[must_use]
+    pub fn from_config(
+        cfg: &CompactApiNativeConfig,
+        has_thinking: bool,
+        is_redact_thinking_active: bool,
+        clear_all_thinking: bool,
+    ) -> Self {
+        Self {
+            has_thinking,
+            is_redact_thinking_active,
+            clear_all_thinking,
+            clear_tool_results: cfg.clear_tool_results,
+            clear_tool_uses: cfg.clear_tool_uses,
+            trigger_threshold: cfg.max_input_tokens,
+            keep_target: cfg.target_input_tokens,
+        }
     }
 }
 
@@ -128,20 +137,34 @@ pub fn get_api_context_management(opts: &ApiContextOptions) -> Vec<ContextEditSt
         });
     }
 
-    // Tool clearing strategies require explicit opt-in (TS: ant-only).
+    // Tool clearing strategies require explicit opt-in.
     if !opts.clear_tool_results && !opts.clear_tool_uses {
         return strategies;
     }
 
-    let trigger = opts
-        .trigger_threshold
-        .unwrap_or(DEFAULT_API_MAX_INPUT_TOKENS);
+    let trigger = if opts.trigger_threshold > 0 {
+        opts.trigger_threshold
+    } else {
+        DEFAULT_API_MAX_INPUT_TOKENS
+    };
+
+    // `clear_at_least = trigger - keep_target` so Anthropic frees the
+    // gap rather than its default smaller cut. TS apiMicrocompact.ts:118-121.
+    // Skip when keep_target ≥ trigger (config error: would request a
+    // negative clear).
+    let keep_target = if opts.keep_target > 0 {
+        opts.keep_target
+    } else {
+        DEFAULT_API_TARGET_INPUT_TOKENS
+    };
+    let clear_at_least = (trigger > keep_target).then_some(trigger - keep_target);
 
     // 2. Clear tool result content — clear_tool_inputs is the per-tool list.
     if opts.clear_tool_results {
         strategies.push(ContextEditStrategy::ClearToolUses {
             trigger: Some(trigger),
             keep_recent: None,
+            clear_at_least,
             clear_inputs: ClearToolInputs::SpecificTools(TOOLS_CLEARABLE_RESULTS.to_vec()),
             exclude_tools: Vec::new(),
             exclude_tool_strs: Vec::new(),
@@ -153,6 +176,7 @@ pub fn get_api_context_management(opts: &ApiContextOptions) -> Vec<ContextEditSt
         strategies.push(ContextEditStrategy::ClearToolUses {
             trigger: Some(trigger),
             keep_recent: None,
+            clear_at_least,
             clear_inputs: ClearToolInputs::None,
             exclude_tools: TOOLS_EXCLUDE_FROM_CLEAR_USES.to_vec(),
             exclude_tool_strs: Vec::new(),
@@ -160,15 +184,6 @@ pub fn get_api_context_management(opts: &ApiContextOptions) -> Vec<ContextEditSt
     }
 
     strategies
-}
-
-fn env_truthy(name: &str) -> bool {
-    std::env::var(name)
-        .map(|v| {
-            let lower = v.to_ascii_lowercase();
-            matches!(lower.as_str(), "1" | "true" | "yes" | "on")
-        })
-        .unwrap_or(false)
 }
 
 #[cfg(test)]

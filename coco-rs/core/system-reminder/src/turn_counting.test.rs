@@ -1,13 +1,13 @@
 use super::*;
-use coco_types::AssistantContent;
-use coco_types::AssistantMessage;
-use coco_types::LlmMessage;
-use coco_types::Message;
-use coco_types::ReasoningContent;
-use coco_types::TextContent;
-use coco_types::ToolCallContent;
+use coco_messages::AssistantContent;
+use coco_messages::AssistantMessage;
+use coco_messages::LlmMessage;
+use coco_messages::Message;
+use coco_messages::ReasoningContent;
+use coco_messages::TextContent;
+use coco_messages::ToolCallContent;
+use coco_messages::UserMessage;
 use coco_types::ToolName;
-use coco_types::UserMessage;
 use pretty_assertions::assert_eq;
 use uuid::Uuid;
 
@@ -254,7 +254,7 @@ fn total_assistant_turns_empty() {
 fn count_human_turns_ignores_meta_attachments_and_non_user() {
     // Post-Phase-2: reminder-injected content is Message::Attachment,
     // not User{is_meta:true}. count_human_turns simply counts User.
-    let meta = Message::Attachment(coco_types::AttachmentMessage::api(
+    let meta = Message::Attachment(coco_messages::AttachmentMessage::api(
         coco_types::AttachmentKind::CriticalSystemReminder,
         LlmMessage::user_text("system-injected"),
     ));

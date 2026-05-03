@@ -1,28 +1,38 @@
-use coco_types::ApiError;
-use coco_types::AssistantContent;
-use coco_types::AssistantMessage;
-use coco_types::LlmMessage;
-use coco_types::Message;
-use coco_types::MessageOrigin;
-use coco_types::ProgressMessage;
-use coco_types::SystemCompactBoundaryMessage;
-use coco_types::SystemInformationalMessage;
-use coco_types::SystemMessage;
-use coco_types::SystemMessageLevel;
+use crate::ApiError;
+use crate::AssistantContent;
+use crate::AssistantMessage;
+use crate::LlmMessage;
+use crate::Message;
+use crate::MessageOrigin;
+use crate::ProgressMessage;
+use crate::SystemCompactBoundaryMessage;
+use crate::SystemInformationalMessage;
+use crate::SystemMessage;
+use crate::SystemMessageLevel;
+use crate::ToolContent;
+use crate::ToolResultMessage;
+use crate::UserMessage;
+use coco_inference::ToolResultContent;
+use coco_inference::UserContentPart;
 use coco_types::TokenUsage;
-use coco_types::ToolContent;
 use coco_types::ToolId;
-use coco_types::ToolResultMessage;
-use coco_types::UserMessage;
 use uuid::Uuid;
-use vercel_ai_provider::ToolResultContent;
-use vercel_ai_provider::UserContentPart;
 
 /// Create a user message from text content.
 pub fn create_user_message(text: &str) -> Message {
+    create_user_message_with_uuid(Uuid::new_v4(), text)
+}
+
+/// Create a user message from text with a caller-supplied UUID.
+///
+/// Used by the TUI submit path so the UUID minted at user-input time is the
+/// same one the engine, file-history snapshots, JSONL transcript, and rewind
+/// picker see. TS REPL does the equivalent via `createUserMessage` on the
+/// React side before passing into QueryEngine.
+pub fn create_user_message_with_uuid(uuid: Uuid, text: &str) -> Message {
     Message::User(UserMessage {
         message: LlmMessage::user_text(text),
-        uuid: Uuid::new_v4(),
+        uuid,
         timestamp: String::new(),
         is_visible_in_transcript_only: false,
         is_virtual: false,
@@ -39,9 +49,14 @@ pub fn create_user_message(text: &str) -> Message {
 /// alongside text. The provider layer (e.g. Anthropic) already handles
 /// `UserContentPart::File` with image/* media types.
 pub fn create_user_message_with_parts(parts: Vec<UserContentPart>) -> Message {
+    create_user_message_with_parts_and_uuid(Uuid::new_v4(), parts)
+}
+
+/// Create a user message with parts and a caller-supplied UUID.
+pub fn create_user_message_with_parts_and_uuid(uuid: Uuid, parts: Vec<UserContentPart>) -> Message {
     Message::User(UserMessage {
         message: LlmMessage::user(parts),
-        uuid: Uuid::new_v4(),
+        uuid,
         timestamp: String::new(),
         is_visible_in_transcript_only: false,
         is_virtual: false,
@@ -58,7 +73,7 @@ pub fn create_user_message_with_parts(parts: Vec<UserContentPart>) -> Message {
 /// the generic carrier for system-injected text whose content goes to the
 /// model but shouldn't surface in the UI transcript as a "user" message.
 pub fn create_meta_message(text: &str) -> Message {
-    Message::Attachment(coco_types::AttachmentMessage::api(
+    Message::Attachment(crate::AttachmentMessage::api(
         coco_types::AttachmentKind::CriticalSystemReminder,
         LlmMessage::user_text(text),
     ))
@@ -105,7 +120,7 @@ pub fn create_tool_result_message(
     } else {
         ToolResultContent::text(output)
     };
-    let tool_result = coco_types::ToolResultContent {
+    let tool_result = crate::ToolResultContent {
         tool_call_id: tool_call_id.to_string(),
         tool_name: tool_name.to_string(),
         output: result_content,

@@ -23,8 +23,8 @@
 
 #![allow(dead_code)]
 
+use coco_messages::Message;
 use coco_types::AppStatePatch;
-use coco_types::Message;
 use coco_types::PermissionDenialInfo;
 use coco_types::ToolId;
 use std::sync::Arc;

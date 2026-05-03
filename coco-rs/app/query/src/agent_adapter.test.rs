@@ -68,12 +68,16 @@ async fn test_adapter_threads_model_role_to_factory() {
     let calls_c = calls.clone();
 
     let factory: QueryEngineFactory = Arc::new(move |_cfg, role| {
-        *observed_c.lock().unwrap() = role;
-        calls_c.fetch_add(1, Ordering::SeqCst);
-        // Controlled abort: the factory MUST be driven by adapter
-        // in production. We use `resume_unwind` with a sentinel so
-        // `catch_unwind` in the driving test traps it cleanly.
-        std::panic::resume_unwind(Box::new("observed"));
+        let observed_c = observed_c.clone();
+        let calls_c = calls_c.clone();
+        Box::pin(async move {
+            *observed_c.lock().unwrap() = role;
+            calls_c.fetch_add(1, Ordering::SeqCst);
+            // Controlled abort: the factory MUST be driven by adapter
+            // in production. We use `resume_unwind` with a sentinel so
+            // `catch_unwind` in the driving test traps it cleanly.
+            std::panic::resume_unwind(Box::new("observed"));
+        })
     });
     let adapter = QueryEngineAdapter::new(factory);
 
@@ -105,6 +109,121 @@ async fn test_adapter_threads_model_role_to_factory() {
 }
 
 #[tokio::test]
+async fn test_adapter_parses_effort_string_into_thinking_level() {
+    // Contract: `AgentQueryConfig.effort = Some("high")` must arrive
+    // at the engine's `QueryEngineConfig.thinking_level` as a
+    // `ThinkingLevel` whose effort is `High`. An unrecognized string
+    // degrades to `None` (model's `default_thinking_level` then wins).
+    use super::QueryEngineAdapter;
+    use super::QueryEngineFactory;
+
+    let observed: Arc<std::sync::Mutex<Option<coco_types::ThinkingLevel>>> =
+        Arc::new(std::sync::Mutex::new(None));
+    let observed_c = observed.clone();
+
+    let factory: QueryEngineFactory = Arc::new(move |cfg, _role| {
+        let observed_c = observed_c.clone();
+        Box::pin(async move {
+            *observed_c.lock().unwrap() = cfg.thinking_level;
+            std::panic::resume_unwind(Box::new("observed"));
+        })
+    });
+    let adapter = QueryEngineAdapter::new(factory);
+
+    let cfg = AgentQueryConfig {
+        system_prompt: "s".into(),
+        model: "m".into(),
+        max_turns: Some(1),
+        effort: Some("high".into()),
+        ..Default::default()
+    };
+
+    let handle = tokio::task::spawn(async move { adapter.execute_query("hello", cfg).await });
+    let _ = handle.await.expect_err("factory panic must bubble up");
+    let captured = observed.lock().unwrap().clone();
+    assert!(
+        captured.is_some(),
+        "effort=high must produce a ThinkingLevel"
+    );
+    assert_eq!(
+        captured.unwrap().effort,
+        coco_types::ReasoningEffort::High,
+        "high must map to High",
+    );
+}
+
+#[tokio::test]
+async fn test_adapter_unknown_effort_degrades_to_none() {
+    use super::QueryEngineAdapter;
+    use super::QueryEngineFactory;
+
+    let observed: Arc<std::sync::Mutex<Option<coco_types::ThinkingLevel>>> = Arc::new(
+        std::sync::Mutex::new(Some(coco_types::ThinkingLevel::high())),
+    );
+    let observed_c = observed.clone();
+
+    let factory: QueryEngineFactory = Arc::new(move |cfg, _role| {
+        let observed_c = observed_c.clone();
+        Box::pin(async move {
+            *observed_c.lock().unwrap() = cfg.thinking_level;
+            std::panic::resume_unwind(Box::new("observed"));
+        })
+    });
+    let adapter = QueryEngineAdapter::new(factory);
+
+    let cfg = AgentQueryConfig {
+        system_prompt: "s".into(),
+        model: "m".into(),
+        max_turns: Some(1),
+        effort: Some("nonsense".into()),
+        ..Default::default()
+    };
+
+    let handle = tokio::task::spawn(async move { adapter.execute_query("hello", cfg).await });
+    let _ = handle.await.expect_err("factory panic must bubble up");
+    assert!(
+        observed.lock().unwrap().is_none(),
+        "unknown effort string must degrade to None, not panic",
+    );
+}
+
+#[tokio::test]
+async fn test_adapter_max_effort_alias_maps_to_xhigh() {
+    use super::QueryEngineAdapter;
+    use super::QueryEngineFactory;
+
+    let observed: Arc<std::sync::Mutex<Option<coco_types::ThinkingLevel>>> =
+        Arc::new(std::sync::Mutex::new(None));
+    let observed_c = observed.clone();
+
+    let factory: QueryEngineFactory = Arc::new(move |cfg, _role| {
+        let observed_c = observed_c.clone();
+        Box::pin(async move {
+            *observed_c.lock().unwrap() = cfg.thinking_level;
+            std::panic::resume_unwind(Box::new("observed"));
+        })
+    });
+    let adapter = QueryEngineAdapter::new(factory);
+
+    let cfg = AgentQueryConfig {
+        system_prompt: "s".into(),
+        model: "m".into(),
+        max_turns: Some(1),
+        // TS `parseEffortValue` accepts the `max` alias for the
+        // top tier.
+        effort: Some("max".into()),
+        ..Default::default()
+    };
+
+    let handle = tokio::task::spawn(async move { adapter.execute_query("hello", cfg).await });
+    let _ = handle.await.expect_err("factory panic must bubble up");
+    assert_eq!(
+        observed.lock().unwrap().as_ref().map(|t| t.effort),
+        Some(coco_types::ReasoningEffort::XHigh),
+    );
+}
+
+#[tokio::test]
 async fn test_adapter_defers_to_factory_default_when_role_none() {
     use super::QueryEngineAdapter;
     use super::QueryEngineFactory;
@@ -116,8 +235,11 @@ async fn test_adapter_defers_to_factory_default_when_role_none() {
     let observed_c = observed.clone();
 
     let factory: QueryEngineFactory = Arc::new(move |_cfg, role| {
-        *observed_c.lock().unwrap() = role;
-        std::panic::resume_unwind(Box::new("observed"));
+        let observed_c = observed_c.clone();
+        Box::pin(async move {
+            *observed_c.lock().unwrap() = role;
+            std::panic::resume_unwind(Box::new("observed"));
+        })
     });
     let adapter = QueryEngineAdapter::new(factory);
 
