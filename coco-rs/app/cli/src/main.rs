@@ -75,7 +75,7 @@ impl LanguageModel for MockModel {
 
         let response = format!(
             "[mock model, call #{call}] Received: \"{user_text}\"\n\n\
-             This is coco-rs with a mock provider. Set ANTHROPIC_API_KEY to use a real model."
+             No model configured. Set a model via settings.json or --model to use a real provider."
         );
 
         Ok(LanguageModelGenerateResult {
@@ -133,37 +133,14 @@ pub(crate) use coco_inference::model_factory::build_fallback_clients_for_role;
 /// [`ApiClient::with_default_fingerprint`] (the constructor's docstring
 /// flags this as test-grade).
 ///
-/// Returned tuple: `(client, mode, model_id)`.
-///   - `mode`: short string describing which provider answered
-///     (`"anthropic"`, `"openai"`, …, or `"mock"`). Surfaced in the
-///     TUI banner.
-///   - `model_id`: wire-side model identifier; threaded through
-///     `QueryEngineConfig.model_id` for streaming/cache labels.
+/// Returns `(client, provider_api, model_id)`. `provider_api` is `None` for the
+/// mock fallback, `Some(api)` for real providers. `model_id` is the wire-side
+/// identifier threaded through `QueryEngineConfig.model_id`.
 pub(crate) fn create_api_client(
-    cli_model_override: Option<&str>,
     runtime_config: &coco_config::RuntimeConfig,
     retry: coco_inference::RetryConfig,
-) -> (Arc<ApiClient>, &'static str, String) {
+) -> (Arc<ApiClient>, Option<coco_types::ProviderApi>, String) {
     use coco_types::ModelRole;
-    use coco_types::ModelSpec;
-
-    // Legacy CLI bare-id path: `coco --model claude-sonnet-4-5-20250514`
-    // still routes to Anthropic when the API key is configured.
-    if let Some(raw) = cli_model_override
-        && !raw.contains('/')
-        && let Some(anthropic_cfg) = runtime_config.providers.get("anthropic")
-        && anthropic_cfg.resolve_api_key().is_some()
-    {
-        let spec = ModelSpec {
-            provider: "anthropic".into(),
-            api: anthropic_cfg.api,
-            model_id: raw.to_string(),
-            display_name: raw.to_string(),
-        };
-        if let Ok(client) = build_api_client(runtime_config, &spec, retry.clone()) {
-            return (client, "anthropic", raw.to_string());
-        }
-    }
 
     if let Some(main_spec) = runtime_config.model_roles.get(ModelRole::Main)
         && runtime_config
@@ -174,7 +151,7 @@ pub(crate) fn create_api_client(
         && let Ok(client) = build_api_client(runtime_config, main_spec, retry.clone())
     {
         let model_id = main_spec.model_id.clone();
-        return (client, provider_api_mode(main_spec.api), model_id);
+        return (client, Some(main_spec.api), model_id);
     }
 
     // Mock fallback — no credentials configured. The default-fingerprint
@@ -187,34 +164,19 @@ pub(crate) fn create_api_client(
     let model_id = model.model_id().to_string();
     (
         Arc::new(ApiClient::with_default_fingerprint(model, retry)),
-        "mock",
+        None,
         model_id,
     )
 }
 
-fn provider_api_mode(api: coco_types::ProviderApi) -> &'static str {
-    match api {
-        coco_types::ProviderApi::Anthropic => "anthropic",
-        coco_types::ProviderApi::Openai => "openai",
-        coco_types::ProviderApi::Gemini => "google",
-        coco_types::ProviderApi::Volcengine => "volcengine",
-        coco_types::ProviderApi::Zai => "zai",
-        coco_types::ProviderApi::OpenaiCompat => "openai-compat",
-    }
-}
-
 /// Derive `RuntimeOverrides` from the parsed CLI flags.
-///
-/// Only slash-qualified `--model provider/id` flows through as a model
-/// override — bare ids keep the legacy Anthropic-first interpretation in
-/// [`create_api_client`] so existing `coco --model claude-sonnet-...`
-/// invocations continue to work.
-pub(crate) fn cli_runtime_overrides(cli: &Cli) -> coco_config::RuntimeOverrides {
+pub(crate) fn cli_runtime_overrides(cli: &Cli) -> Result<coco_config::RuntimeOverrides> {
+    use coco_config::ModelSelection;
+
     let mut overrides = coco_config::RuntimeOverrides::default();
-    if let Some(model) = cli.model.as_deref()
-        && model.contains('/')
-    {
-        overrides.model_override = Some(model.to_string());
+    if let Some(raw) = cli.model.as_deref() {
+        overrides.model_override =
+            Some(ModelSelection::from_slash_str(raw).map_err(|e| anyhow::anyhow!("--model: {e}"))?);
     }
     if let Some(mode) = cli.permission_mode.as_deref()
         && let Ok(pm) = serde_json::from_value::<coco_types::PermissionMode>(
@@ -224,11 +186,18 @@ pub(crate) fn cli_runtime_overrides(cli: &Cli) -> coco_config::RuntimeOverrides 
         overrides.permission_mode_override = Some(pm);
     }
     // --fallback-model (repeatable) accumulates into Main's fallback
-    // chain, in flag order. The resolver validates each entry against
-    // the provider catalog and rejects duplicates against primary or
-    // earlier fallbacks.
-    overrides.fallback_model_overrides = cli.fallback_model.clone();
-    overrides
+    // chain, in flag order. Each entry must be `provider/model_id`;
+    // validated here at the CLI boundary rather than deferred to the
+    // config resolver.
+    overrides.fallback_model_overrides = cli
+        .fallback_model
+        .iter()
+        .map(|raw| {
+            ModelSelection::from_slash_str(raw)
+                .map_err(|e| anyhow::anyhow!("--fallback-model: {e}"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(overrides)
 }
 
 /// Build a `RuntimeConfig` honoring CLI-level overrides.
@@ -237,7 +206,7 @@ pub(crate) fn build_runtime_config_for_cli(
     cwd: &std::path::Path,
 ) -> Result<coco_config::RuntimeConfig> {
     let mut builder = coco_config::RuntimeConfigBuilder::from_process(cwd)
-        .with_overrides(cli_runtime_overrides(cli));
+        .with_overrides(cli_runtime_overrides(cli)?);
     if let Some(path) = cli.settings.as_deref() {
         builder = builder.with_flag_settings(path);
     }
@@ -363,8 +332,8 @@ async fn main() -> Result<()> {
                 let cwd = std::env::current_dir()?;
                 let runtime_config = build_runtime_config_for_cli(&cli, &cwd)?;
                 let retry: coco_inference::RetryConfig = runtime_config.api.retry.clone().into();
-                let (client, mode, model_id) =
-                    create_api_client(cli.model.as_deref(), &runtime_config, retry);
+                let (client, provider_api, model_id) = create_api_client(&runtime_config, retry);
+                let mode = provider_api.map_or("mock", |api| api.as_str());
                 println!("coco-rs v0.0.0 ({mode} mode)");
                 println!("model: {model_id}");
                 println!("provider: {}", client.provider());
@@ -390,8 +359,8 @@ async fn main() -> Result<()> {
                 let cwd = std::env::current_dir()?;
                 let runtime_config = build_runtime_config_for_cli(&cli, &cwd)?;
                 let retry: coco_inference::RetryConfig = runtime_config.api.retry.clone().into();
-                let (_client, mode, model_id) =
-                    create_api_client(cli.model.as_deref(), &runtime_config, retry);
+                let (_client, provider_api, model_id) = create_api_client(&runtime_config, retry);
+                let mode = provider_api.map_or("mock", |api| api.as_str());
                 println!("[ok] Model: {model_id} ({mode})");
                 return Ok(());
             }
@@ -761,8 +730,8 @@ async fn run_chat(cli: &Cli, prompt: Option<&str>) -> Result<()> {
     let settings = &runtime_config.settings;
 
     let retry: coco_inference::RetryConfig = runtime_config.api.retry.clone().into();
-    let (client, mode, model_id) =
-        create_api_client(cli.model.as_deref(), &runtime_config, retry.clone());
+    let (client, provider_api, model_id) = create_api_client(&runtime_config, retry.clone());
+    let mode = provider_api.map_or("mock", |api| api.as_str());
     // Main-role fallback chain. Empty when no fallback is configured.
     let fallback_clients =
         build_fallback_clients_for_role(&runtime_config, coco_types::ModelRole::Main, retry)?;
@@ -770,8 +739,8 @@ async fn run_chat(cli: &Cli, prompt: Option<&str>) -> Result<()> {
         .model_roles
         .recovery(coco_types::ModelRole::Main);
 
-    let mut registry = ToolRegistry::new();
-    coco_tools::register_all_tools(&mut registry);
+    let registry = ToolRegistry::new();
+    coco_tools::register_all_tools(&registry);
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
 
@@ -868,17 +837,16 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     let runtime_config = build_runtime_config_for_cli(cli, &cwd)?;
 
     let retry: coco_inference::RetryConfig = runtime_config.api.retry.clone().into();
-    let (client, mode, model_id) =
-        create_api_client(cli.model.as_deref(), &runtime_config, retry.clone());
-    let is_real_anthropic = mode == "anthropic";
+    let (client, provider_api, model_id) = create_api_client(&runtime_config, retry.clone());
+    let is_real_anthropic = provider_api == Some(coco_types::ProviderApi::Anthropic);
     let fallback_clients =
         build_fallback_clients_for_role(&runtime_config, coco_types::ModelRole::Main, retry)?;
     let recovery_policy = runtime_config
         .model_roles
         .recovery(coco_types::ModelRole::Main);
 
-    let mut registry = ToolRegistry::new();
-    coco_tools::register_all_tools(&mut registry);
+    let registry = ToolRegistry::new();
+    coco_tools::register_all_tools(&registry);
     let tools = Arc::new(registry);
 
     // Resolve static config. Cwd + model id are also stored on the

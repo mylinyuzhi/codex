@@ -19,6 +19,7 @@ fn defaults_for_token_economy_gates() {
     let f = Features::with_defaults();
     assert!(f.enabled(Feature::WebSearch));
     assert!(f.enabled(Feature::WebFetch));
+    assert!(f.enabled(Feature::Mcp));
 }
 
 #[test]
@@ -36,6 +37,7 @@ fn defaults_for_experimental_gates() {
         Feature::AgentTeams,
         Feature::Worktree,
         Feature::Lsp,
+        Feature::NotebookEdit,
     ] {
         assert!(!f.enabled(feat), "{feat:?} must default off");
     }

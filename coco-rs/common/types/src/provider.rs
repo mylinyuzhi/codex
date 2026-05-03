@@ -17,6 +17,26 @@ pub enum ProviderApi {
     OpenaiCompat,
 }
 
+impl ProviderApi {
+    /// Canonical display name used in banners, config labels, and wire strings.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Anthropic => "anthropic",
+            Self::Openai => "openai",
+            Self::Gemini => "google",
+            Self::Volcengine => "volcengine",
+            Self::Zai => "zai",
+            Self::OpenaiCompat => "openai-compat",
+        }
+    }
+}
+
+impl fmt::Display for ProviderApi {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Which purpose a model serves. Multiple roles can map to different models.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

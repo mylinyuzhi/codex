@@ -20,6 +20,9 @@ impl Tool for McpAuthTool {
     fn name(&self) -> &str {
         ToolName::McpAuth.as_str()
     }
+    fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
+        ctx.features.enabled(coco_types::Feature::Mcp)
+    }
     fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
         "Authenticate with an MCP server to enable tool and resource access.".into()
     }
@@ -78,6 +81,9 @@ impl Tool for ListMcpResourcesTool {
     }
     fn name(&self) -> &str {
         ToolName::ListMcpResources.as_str()
+    }
+    fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
+        ctx.features.enabled(coco_types::Feature::Mcp)
     }
     fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
         "List resources available on MCP servers.".into()
@@ -154,6 +160,9 @@ impl Tool for ReadMcpResourceTool {
     }
     fn name(&self) -> &str {
         ToolName::ReadMcpResource.as_str()
+    }
+    fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
+        ctx.features.enabled(coco_types::Feature::Mcp)
     }
     fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
         "Read a specific resource from an MCP server.".into()
@@ -296,6 +305,10 @@ impl Tool for McpTool {
 
     fn name(&self) -> &str {
         &self.info.tool_name
+    }
+
+    fn is_enabled(&self, ctx: &coco_tool_runtime::ToolUseContext) -> bool {
+        ctx.features.enabled(coco_types::Feature::Mcp)
     }
 
     fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {

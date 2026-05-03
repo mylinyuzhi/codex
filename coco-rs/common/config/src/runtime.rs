@@ -395,8 +395,8 @@ fn resolve_model_roles(
 
     // Main has the richest resolution precedence: CLI override > env
     // override > settings.models.main > settings.model > default.
-    let mut main_slots = if let Some(selection) = overrides.model_override.as_deref() {
-        RoleSlots::new(model_spec_from_selection(selection, providers)?)
+    let mut main_slots = if let Some(selection) = overrides.model_override.as_ref() {
+        RoleSlots::new(resolve_model_selection(selection.clone(), providers)?)
     } else if let Some(selection) = env.model_override.as_deref() {
         RoleSlots::new(model_spec_from_selection(selection, providers)?)
     } else if let Some(slots) = settings.merged.models.main.clone() {
@@ -415,7 +415,7 @@ fn resolve_model_roles(
         let fallbacks: Vec<coco_types::ModelSpec> = overrides
             .fallback_model_overrides
             .iter()
-            .map(|sel| model_spec_from_selection(sel, providers))
+            .map(|sel| resolve_model_selection(sel.clone(), providers))
             .collect::<anyhow::Result<Vec<_>>>()?;
         main_slots = RoleSlots {
             primary: main_slots.primary,

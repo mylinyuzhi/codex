@@ -363,7 +363,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path) {
 // ─── Core tools & runner ───
 
 fn core_tools() -> Arc<ToolRegistry> {
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Arc::new(BashTool));
     registry.register(Arc::new(ReadTool));
     registry.register(Arc::new(WriteTool));
@@ -375,7 +375,7 @@ fn core_tools() -> Arc<ToolRegistry> {
 
 /// Extended tool set: core + Agent, Skill, SendMessage, Team tools.
 fn extended_tools() -> Arc<ToolRegistry> {
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Arc::new(BashTool));
     registry.register(Arc::new(ReadTool));
     registry.register(Arc::new(WriteTool));

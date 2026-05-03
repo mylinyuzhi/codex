@@ -465,7 +465,7 @@ async fn test_multi_turn_tool_call_then_text() {
     ));
 
     // Register ReadTool so it can be found and executed
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Arc::new(ReadTool));
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
@@ -499,7 +499,7 @@ async fn test_multi_tool_calls_in_one_response() {
         RetryConfig::default(),
     ));
 
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Arc::new(ReadTool));
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
@@ -567,7 +567,7 @@ async fn test_max_turns_limit() {
         RetryConfig::default(),
     ));
 
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Arc::new(ReadTool));
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
@@ -684,7 +684,7 @@ async fn test_tool_execution_with_real_tools() {
         RetryConfig::default(),
     ));
 
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Arc::new(ReadTool));
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
@@ -780,7 +780,7 @@ async fn test_read_tool_emits_full_tool_lifecycle() {
         RetryConfig::default(),
     ));
 
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Arc::new(ReadTool));
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
@@ -907,7 +907,7 @@ async fn test_budget_exhausted_in_engine() {
         RetryConfig::default(),
     ));
 
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Arc::new(ReadTool));
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
@@ -1172,7 +1172,7 @@ async fn invalid_tool_input_gets_error_result_and_completed_event() {
         input: serde_json::json!({}),
         final_text: "done".into(),
     });
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Arc::new(ReadTool));
     let tools = Arc::new(registry);
     let config = QueryEngineConfig::default();
@@ -1448,7 +1448,7 @@ async fn permission_allow_updated_input_reaches_execution() {
         input: serde_json::json!({"value": "original"}),
         final_text: "done".into(),
     });
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Arc::new(PermissionRewriteTool));
     let tools = Arc::new(registry);
     let config = QueryEngineConfig::default();
@@ -1481,7 +1481,7 @@ async fn pre_tool_use_updated_input_reaches_execution() {
         model,
         RetryConfig::default(),
     ));
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Arc::new(HookEchoTool));
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
@@ -1537,7 +1537,7 @@ async fn post_tool_use_receives_effective_input() {
         model,
         RetryConfig::default(),
     ));
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Arc::new(HookEchoTool));
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
@@ -1607,7 +1607,7 @@ async fn post_tool_use_updated_mcp_output_rewrites_mcp_result() {
         model,
         RetryConfig::default(),
     ));
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Arc::new(HookMcpTool));
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
@@ -1683,7 +1683,7 @@ async fn post_tool_use_updated_mcp_output_is_ignored_for_non_mcp_tool() {
         model,
         RetryConfig::default(),
     ));
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Arc::new(HookEchoTool));
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
@@ -1740,7 +1740,7 @@ async fn post_tool_use_additional_context_is_injected() {
         model,
         RetryConfig::default(),
     ));
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Arc::new(HookEchoTool));
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
@@ -1798,7 +1798,7 @@ async fn post_tool_use_prevent_continuation_stops_next_turn() {
         model_for_client,
         RetryConfig::default(),
     ));
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Arc::new(HookEchoTool));
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
@@ -1856,7 +1856,7 @@ async fn non_mcp_success_path_orders_post_hook_messages_before_new_messages() {
         model,
         RetryConfig::default(),
     ));
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Arc::new(HookOrderingTool));
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
@@ -1924,7 +1924,7 @@ async fn mcp_success_path_defers_post_hook_messages_until_after_prevent() {
         model,
         RetryConfig::default(),
     ));
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Arc::new(HookOrderingMcpTool));
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
@@ -1992,7 +1992,7 @@ async fn failure_path_orders_error_result_before_post_tool_use_failure_context()
         model,
         RetryConfig::default(),
     ));
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Arc::new(HookFailTool));
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
@@ -2061,7 +2061,7 @@ async fn failure_path_completed_event_matches_error_tool_result_text() {
         model,
         RetryConfig::default(),
     ));
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Arc::new(HookFailTool));
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
@@ -2101,7 +2101,7 @@ async fn pre_tool_use_permission_deny_records_denial() {
         model,
         RetryConfig::default(),
     ));
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Arc::new(HookEchoTool));
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
@@ -2462,7 +2462,7 @@ async fn test_requires_action_emitted_on_permission_ask() {
     let model = Arc::new(AskingToolCallMock {
         call_count: AtomicI32::new(0),
     });
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Arc::new(AskingTool));
     let tools = Arc::new(registry);
     let config = QueryEngineConfig::default();
@@ -2744,7 +2744,7 @@ async fn ask_branch_consults_bridge_and_executes_on_approved() {
         RetryConfig::default(),
     ));
 
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Arc::new(AskingMockTool));
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
@@ -2778,7 +2778,7 @@ async fn ask_branch_consults_bridge_and_records_denial_on_rejected() {
         RetryConfig::default(),
     ));
 
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Arc::new(AskingMockTool));
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
@@ -2812,7 +2812,7 @@ async fn pre_tool_use_block_runs_before_permission_ask() {
         RetryConfig::default(),
     ));
 
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Arc::new(AskingMockTool));
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
@@ -2875,7 +2875,7 @@ async fn ask_branch_without_bridge_falls_back_to_auto_allow() {
         RetryConfig::default(),
     ));
 
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Arc::new(AskingMockTool));
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
@@ -2900,7 +2900,7 @@ async fn query_result_final_messages_contains_full_roundtrip() {
         RetryConfig::default(),
     ));
 
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Arc::new(ReadTool));
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
@@ -3035,7 +3035,7 @@ async fn ask_branch_aborts_bridge_await_on_cancel() {
         RetryConfig::default(),
     ));
 
-    let mut registry = ToolRegistry::new();
+    let registry = ToolRegistry::new();
     registry.register(Arc::new(AskingMockTool));
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
