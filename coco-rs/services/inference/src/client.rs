@@ -8,6 +8,8 @@ use crate::cache_detection::canonical_extra_body_serialize;
 use crate::cache_detection::djb2_hash;
 use crate::errors::InferenceError;
 use crate::fingerprint::ProviderClientFingerprint;
+use crate::prompt_layout::build_prompt_layout_from_prompt;
+use crate::prompt_layout::put_layout_options;
 use crate::retry::RetryConfig;
 use crate::usage::UsageAccumulator;
 use coco_config::ModelInfo;
@@ -294,7 +296,23 @@ impl ApiClient {
         if let Some(detector) = &self.cache_break_detector
             && let Some(query_source) = params.query_source.as_deref()
         {
-            let input = build_prompt_state_input(self, params, query_source);
+            // Mirror the layout adapter that runs in `build_options`
+            // so the detector reads the same hashes the wire body was
+            // built from. `build_options` is called in `do_query`
+            // below; recomputing here keeps the snapshot phase pure
+            // and avoids passing the call options through the retry
+            // loop just to pluck out the layout namespace.
+            let layout = if self.model_info.is_some() {
+                Some(crate::prompt_layout::build_prompt_layout_from_prompt(
+                    &params.prompt,
+                    self.fingerprint.api,
+                    params.tools.as_deref(),
+                ))
+            } else {
+                None
+            };
+            let layout_hashes = layout.as_ref().and_then(|l| l.prompt_hash_inputs.as_ref());
+            let input = build_prompt_state_input(self, params, query_source, layout_hashes);
             detector.lock().await.record_prompt_state(input);
         }
 
@@ -501,14 +519,30 @@ impl ApiClient {
             context_management: params.context_management.clone(),
             ..Default::default()
         };
-        build_call_options(
+        let mut call = build_call_options(
             info,
             self.fingerprint.api,
             &self.fingerprint.provider,
             &per_call,
             params.prompt.clone(),
             params.tools.clone(),
-        )
+        );
+
+        // Layout adapter: route the System / Developer text into the
+        // provider's native top-level slot and stash provider-agnostic
+        // hash inputs for the cache-break detector. Provider crates
+        // parse `provider_options["prompt_layout"]` via a local serde
+        // mirror struct (no `coco-inference` dependency).
+        let layout = build_prompt_layout_from_prompt(
+            &call.prompt,
+            self.fingerprint.api,
+            call.tools.as_deref(),
+        );
+        let mut po = call.provider_options.unwrap_or_default();
+        put_layout_options(&mut po, &layout);
+        call.provider_options = Some(po);
+
+        call
     }
 }
 
@@ -550,15 +584,47 @@ fn cache_break_reason_bucket(reason: &str) -> &'static str {
 /// fields (`betas`, `is_using_overage`, `cached_mc_enabled`) stay at
 /// defaults until a future provider shim populates them via
 /// [`QueryParams`] extensions.
+///
+/// **Layout integration.** When the call options already carry a
+/// `provider_options["prompt_layout"].prompt_hash_inputs` payload (set by
+/// [`crate::prompt_layout::build_prompt_layout_from_prompt`] in
+/// `build_options`), prefer those hashes — they're the single source of
+/// truth for prompt-content cache inputs. Otherwise fall back to walking
+/// `params.prompt` directly so callers that bypass `build_options` (mock
+/// path, integration tests) still get cache detection.
 fn build_prompt_state_input(
     client: &ApiClient,
     params: &QueryParams,
     query_source: &str,
+    layout_hashes: Option<&crate::prompt_layout::PromptHashInputs>,
 ) -> PromptStateInput {
-    let (system_text, system_char_count) = extract_system_text(&params.prompt);
-    let system_hash = djb2_hash(system_text.as_bytes());
-
-    let (tool_names, per_tool_hashes, tools_hash) = hash_tools(params.tools.as_deref());
+    let (system_hash, tool_names, per_tool_hashes, tools_hash, system_char_count) =
+        if let Some(hashes) = layout_hashes {
+            let names: Vec<String> = hashes
+                .per_tool_hashes
+                .iter()
+                .map(|(n, _)| n.clone())
+                .collect();
+            let per_tool: HashMap<String, u64> = hashes.per_tool_hashes.iter().cloned().collect();
+            (
+                hashes.system_text_hash,
+                names,
+                per_tool,
+                hashes.tools_hash,
+                hashes.contextual_user_char_count,
+            )
+        } else {
+            let (system_text, system_char_count) = extract_system_text(&params.prompt);
+            let system_hash = djb2_hash(system_text.as_bytes());
+            let (tool_names, per_tool, tools_hash) = hash_tools(params.tools.as_deref());
+            (
+                system_hash,
+                tool_names,
+                per_tool,
+                tools_hash,
+                system_char_count,
+            )
+        };
 
     let extra_body_hash = params
         .context_management

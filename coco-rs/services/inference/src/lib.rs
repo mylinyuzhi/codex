@@ -54,6 +54,7 @@ pub use prompt_layout::PromptPart;
 pub use prompt_layout::PromptSection;
 pub use prompt_layout::PromptSectionKind;
 pub use prompt_layout::PromptSource;
+pub use prompt_layout::build_prompt_layout_from_prompt;
 pub use prompt_layout::put_layout_options;
 pub use prompt_layout::take_layout_options;
 pub use retry::RetryConfig;

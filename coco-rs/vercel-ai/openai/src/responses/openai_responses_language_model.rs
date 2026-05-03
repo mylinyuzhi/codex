@@ -71,6 +71,7 @@ impl OpenAIResponsesLanguageModel {
         let mut warnings = Vec::new();
         let (openai_options, raw_provider_options) =
             extract_responses_options(&options.provider_options);
+        let layout = parse_prompt_layout_namespace(&options.provider_options);
         let caps = get_capabilities(&self.model_id);
 
         let force_reasoning = openai_options.force_reasoning.unwrap_or(false);
@@ -85,10 +86,28 @@ impl OpenAIResponsesLanguageModel {
                     caps.system_message_mode
                 });
 
+        // Layout adapter wins for top-level instructions: when
+        // `provider_options["prompt_layout"].instructions` is set, the
+        // System messages must NOT be re-emitted into `input[]` —
+        // otherwise the same text would appear in both top-level
+        // `instructions` and the developer/system slot of `input[]`.
+        let layout_instructions = layout.as_ref().and_then(|l| l.instructions.clone());
+        let prompt_for_convert: std::borrow::Cow<'_, _> = if layout_instructions.is_some() {
+            let filtered: Vec<_> = options
+                .prompt
+                .iter()
+                .filter(|m| !matches!(m, vercel_ai_provider::LanguageModelV4Message::System { .. }))
+                .cloned()
+                .collect();
+            std::borrow::Cow::Owned(filtered)
+        } else {
+            std::borrow::Cow::Borrowed(&options.prompt)
+        };
+
         // Convert prompt to input items
         let tool_flags = ProviderToolFlags::from_tools(&options.tools);
         let (input, input_warnings) = convert_to_openai_responses_input_with_flags(
-            &options.prompt,
+            &prompt_for_convert,
             system_message_mode,
             &tool_flags,
         );
@@ -297,9 +316,10 @@ impl OpenAIResponsesLanguageModel {
         if let Some(ref metadata) = openai_options.metadata {
             body["metadata"] = metadata.clone();
         }
-        if let Some(ref instructions) = openai_options.instructions {
-            body["instructions"] = Value::String(instructions.clone());
-        }
+        // Note: top-level `instructions` is written AFTER
+        // `shallow_merge_object` below so the layout slot wins over
+        // both the typed `openai_options.instructions` and any raw
+        // `openai.*` map override.
         if let Some(ref conversation) = openai_options.conversation {
             body["conversation"] = Value::String(conversation.clone());
         }
@@ -387,6 +407,34 @@ impl OpenAIResponsesLanguageModel {
         }
 
         vercel_ai_provider_utils::shallow_merge_object(&mut body, raw_provider_options);
+
+        // Top-level `instructions` resolution. Layout slot wins over
+        // both `openai_options.instructions` and the raw `openai.*` map
+        // (which the shallow-merge above just spliced in). Emit a
+        // warning on conflict so callers notice the override.
+        let instructions_to_write = match (
+            layout_instructions.as_ref(),
+            openai_options.instructions.as_ref(),
+        ) {
+            (Some(layout_instr), Some(_)) => {
+                warnings.push(Warning::other(
+                    "OpenAI `instructions` set both via prompt_layout and provider \
+                     options; layout wins",
+                ));
+                Some(layout_instr.clone())
+            }
+            (Some(layout_instr), None) => Some(layout_instr.clone()),
+            (None, Some(opt_instr)) => {
+                // Already spliced via shallow_merge, but writing here
+                // makes the typed-options path explicit and survives
+                // a future change to the merge order.
+                Some(opt_instr.clone())
+            }
+            (None, None) => None,
+        };
+        if let Some(instructions) = instructions_to_write {
+            body["instructions"] = Value::String(instructions);
+        }
 
         Ok((body, warnings))
     }
@@ -1866,6 +1914,31 @@ fn set_optional_f32(body: &mut Value, key: &str, value: Option<f32>) {
     if let Some(v) = value {
         body[key] = json!(v);
     }
+}
+
+/// Local mirror of `coco_inference::PromptLayoutOptions`.
+///
+/// Provider crates do NOT depend on `coco-inference` (the SDK-fidelity
+/// contract in `vercel-ai/provider/CLAUDE.md` forbids it). The wire
+/// shape under `provider_options["prompt_layout"]` is the cross-layer
+/// contract; this struct mirrors it locally so the consumer can parse
+/// it with `serde_json::from_value`.
+#[derive(serde::Deserialize, Default)]
+struct PromptLayoutWire {
+    #[serde(default)]
+    instructions: Option<String>,
+}
+
+fn parse_prompt_layout_namespace(
+    provider_options: &Option<vercel_ai_provider::ProviderOptions>,
+) -> Option<PromptLayoutWire> {
+    let opts = provider_options.as_ref()?;
+    let inner = opts.get("prompt_layout")?;
+    let mut object = serde_json::Map::new();
+    for (key, value) in inner {
+        object.insert(key.clone(), value.clone());
+    }
+    serde_json::from_value(Value::Object(object)).ok()
 }
 
 #[cfg(test)]

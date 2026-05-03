@@ -44,6 +44,96 @@ fn get_args_basic() {
     assert!(body["input"].is_array());
 }
 
+fn provider_options_with_layout(instructions: &str) -> vercel_ai_provider::ProviderOptions {
+    let mut po = vercel_ai_provider::ProviderOptions::default();
+    let mut inner = std::collections::HashMap::new();
+    inner.insert(
+        "instructions".to_string(),
+        serde_json::Value::String(instructions.to_string()),
+    );
+    po.set("prompt_layout", inner);
+    po
+}
+
+#[test]
+fn layout_instructions_promote_to_top_level_and_drop_system_from_input() {
+    let model = OpenAIResponsesLanguageModel::new("gpt-4o", make_config());
+    let options = LanguageModelV4CallOptions {
+        prompt: vec![
+            vercel_ai_provider::LanguageModelV4Message::System {
+                content: vec![vercel_ai_provider::UserContentPart::Text(
+                    vercel_ai_provider::TextPart {
+                        text: "you are coco".into(),
+                        provider_metadata: None,
+                    },
+                )],
+                provider_options: None,
+            },
+            vercel_ai_provider::LanguageModelV4Message::User {
+                content: vec![vercel_ai_provider::UserContentPart::Text(
+                    vercel_ai_provider::TextPart {
+                        text: "Hi".into(),
+                        provider_metadata: None,
+                    },
+                )],
+                provider_options: None,
+            },
+        ],
+        provider_options: Some(provider_options_with_layout("you are coco")),
+        ..Default::default()
+    };
+
+    let (body, _) = model.get_args(&options).expect("get_args");
+    assert_eq!(body["instructions"], "you are coco");
+    let input = body["input"].as_array().expect("input");
+    // The System message must NOT also appear in input[]; the only
+    // remaining item is the User turn.
+    let has_system = input.iter().any(|item| {
+        item.get("role")
+            .and_then(|r| r.as_str())
+            .is_some_and(|r| r == "system" || r == "developer")
+    });
+    assert!(
+        !has_system,
+        "System should be stripped from input[] when layout supplies instructions"
+    );
+}
+
+#[test]
+fn layout_instructions_win_over_provider_options_with_warning() {
+    let model = OpenAIResponsesLanguageModel::new("gpt-4o", make_config());
+    let mut po = provider_options_with_layout("layout-supplied");
+    let mut openai_inner = std::collections::HashMap::new();
+    openai_inner.insert(
+        "instructions".to_string(),
+        serde_json::Value::String("openai-options-supplied".to_string()),
+    );
+    po.set("openai", openai_inner);
+    let options = LanguageModelV4CallOptions {
+        prompt: vec![vercel_ai_provider::LanguageModelV4Message::User {
+            content: vec![vercel_ai_provider::UserContentPart::Text(
+                vercel_ai_provider::TextPart {
+                    text: "Hi".into(),
+                    provider_metadata: None,
+                },
+            )],
+            provider_options: None,
+        }],
+        provider_options: Some(po),
+        ..Default::default()
+    };
+
+    let (body, warnings) = model.get_args(&options).expect("get_args");
+    assert_eq!(body["instructions"], "layout-supplied");
+    assert!(
+        warnings.iter().any(|w| matches!(
+            w,
+            vercel_ai_provider::Warning::Other { message, .. } if message.contains("layout wins")
+        )),
+        "expected a Warning::Other documenting layout precedence"
+    );
+}
+
 #[test]
 fn get_args_reasoning_model() {
     let model = OpenAIResponsesLanguageModel::new("o3", make_config());
