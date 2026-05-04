@@ -59,6 +59,9 @@ pub use prompt_layout::put_layout_options;
 pub use prompt_layout::take_layout_options;
 pub use retry::RetryConfig;
 pub use stream::StreamEvent;
+pub use stream::StreamMetrics;
+pub use stream::StreamProcessorConfig;
+pub use stream::default_process_stream_config;
 pub use stream::synthetic_stream_from_content;
 pub use thinking_convert::to_extra_body;
 pub use tool_schemas::GeneratedSchemas;
@@ -141,6 +144,8 @@ pub mod prelude {
     pub use crate::QueryParams;
     pub use crate::QueryResult;
     pub use crate::StreamEvent;
+    pub use crate::StreamMetrics;
+    pub use crate::StreamProcessorConfig;
     pub use crate::TextPart;
     pub use crate::ToolCallPart;
     pub use crate::Usage;

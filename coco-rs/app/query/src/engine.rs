@@ -1147,12 +1147,14 @@ impl QueryEngine {
                             }
                         }
                     }
-                    StreamEvent::Finish { usage, stop_reason } => {
+                    StreamEvent::Finish {
+                        usage, stop_reason, ..
+                    } => {
                         stream_usage = Some(usage);
                         stream_stop_reason = Some(stop_reason);
                         break;
                     }
-                    StreamEvent::Error { message } => {
+                    StreamEvent::Error { message, .. } => {
                         stream_error = Some(message);
                         break;
                     }

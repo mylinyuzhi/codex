@@ -9,21 +9,50 @@ use vercel_ai_provider::LanguageModelV4StreamResult;
 use vercel_ai_provider::errors::AISdkError;
 use vercel_ai_provider::language_model::v4::stream::LanguageModelV4StreamPart;
 
+use super::metrics::StreamMetrics;
+use super::metrics::StreamMetricsTracker;
 use super::processor_state::ProcessorState;
 use super::snapshot::StreamSnapshot;
+
+const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+const DEFAULT_STALL_THRESHOLD: Duration = Duration::from_secs(30);
 
 /// Configuration for the stream processor.
 #[derive(Debug, Clone)]
 pub struct StreamProcessorConfig {
-    /// Timeout for idle streams (no events received). Default: 60s.
-    pub idle_timeout: Duration,
+    /// Timeout for idle streams (no events received). `None` disables idle
+    /// timeout checks. Default: 60s.
+    pub idle_timeout: Option<Duration>,
+    /// Gap between stream items that is counted as a stall. Default: 30s.
+    pub stall_threshold: Duration,
 }
 
 impl Default for StreamProcessorConfig {
     fn default() -> Self {
         Self {
-            idle_timeout: Duration::from_secs(60),
+            idle_timeout: Some(DEFAULT_IDLE_TIMEOUT),
+            stall_threshold: DEFAULT_STALL_THRESHOLD,
         }
+    }
+}
+
+impl StreamProcessorConfig {
+    /// Set the idle timeout.
+    pub fn with_idle_timeout(mut self, timeout: Duration) -> Self {
+        self.idle_timeout = Some(timeout);
+        self
+    }
+
+    /// Disable idle timeout checks.
+    pub fn without_idle_timeout(mut self) -> Self {
+        self.idle_timeout = None;
+        self
+    }
+
+    /// Set the stall detection threshold.
+    pub fn with_stall_threshold(mut self, threshold: Duration) -> Self {
+        self.stall_threshold = threshold;
+        self
     }
 }
 
@@ -38,16 +67,21 @@ pub struct StreamProcessor {
         Pin<Box<dyn Stream<Item = Result<LanguageModelV4StreamPart, AISdkError>> + Send + 'static>>,
     config: StreamProcessorConfig,
     state: ProcessorState,
+    metrics: StreamMetricsTracker,
 }
 
 impl StreamProcessor {
     /// Create a new StreamProcessor from a stream result.
     pub fn new(result: LanguageModelV4StreamResult) -> Self {
-        Self {
-            stream: result.stream,
-            config: StreamProcessorConfig::default(),
-            state: ProcessorState::new(),
-        }
+        Self::new_with_config(result, StreamProcessorConfig::default())
+    }
+
+    /// Create a new StreamProcessor from a stream result and explicit config.
+    pub fn new_with_config(
+        result: LanguageModelV4StreamResult,
+        config: StreamProcessorConfig,
+    ) -> Self {
+        Self::from_stream_with_config(result.stream, config)
     }
 
     /// Create a StreamProcessor from a raw stream.
@@ -56,22 +90,52 @@ impl StreamProcessor {
             Box<dyn Stream<Item = Result<LanguageModelV4StreamPart, AISdkError>> + Send + 'static>,
         >,
     ) -> Self {
+        Self::from_stream_with_config(stream, StreamProcessorConfig::default())
+    }
+
+    /// Create a StreamProcessor from a raw stream and explicit config.
+    pub fn from_stream_with_config(
+        stream: Pin<
+            Box<dyn Stream<Item = Result<LanguageModelV4StreamPart, AISdkError>> + Send + 'static>,
+        >,
+        config: StreamProcessorConfig,
+    ) -> Self {
+        let stall_threshold = config.stall_threshold;
         Self {
             stream,
-            config: StreamProcessorConfig::default(),
+            config,
             state: ProcessorState::new(),
+            metrics: StreamMetricsTracker::new(stall_threshold),
         }
     }
 
     /// Set the idle timeout.
     pub fn idle_timeout(mut self, timeout: Duration) -> Self {
-        self.config.idle_timeout = timeout;
+        self.config = self.config.with_idle_timeout(timeout);
+        self
+    }
+
+    /// Disable idle timeout checks for this processor.
+    pub fn disable_idle_timeout(mut self) -> Self {
+        self.config = self.config.without_idle_timeout();
+        self
+    }
+
+    /// Set the stall detection threshold.
+    pub fn stall_threshold(mut self, threshold: Duration) -> Self {
+        self.config = self.config.with_stall_threshold(threshold);
+        self.metrics.set_stall_threshold(threshold);
         self
     }
 
     /// Get a reference to the current snapshot.
     pub fn snapshot(&self) -> &StreamSnapshot {
         &self.state.snapshot
+    }
+
+    /// Get the current stream health metrics.
+    pub fn metrics(&self) -> StreamMetrics {
+        self.metrics.snapshot()
     }
 
     /// Pull next event from the stream, updating internal snapshot.
@@ -81,21 +145,31 @@ impl StreamProcessor {
     pub async fn next(
         &mut self,
     ) -> Option<Result<(LanguageModelV4StreamPart, &StreamSnapshot), AISdkError>> {
-        let timeout = self.config.idle_timeout;
+        let next_item = if let Some(timeout) = self.config.idle_timeout {
+            match tokio::time::timeout(timeout, self.stream.next()).await {
+                Ok(item) => item,
+                Err(_) => {
+                    return Some(Err(AISdkError::new(format!(
+                        "Stream idle timeout after {}s",
+                        timeout.as_secs()
+                    ))));
+                }
+            }
+        } else {
+            self.stream.next().await
+        };
 
-        let result = tokio::time::timeout(timeout, self.stream.next()).await;
-
-        match result {
-            Ok(Some(Ok(part))) => {
+        match next_item {
+            Some(Ok(part)) => {
+                self.metrics.record_item(Some(&part));
                 self.state.update(&part);
                 Some(Ok((part, &self.state.snapshot)))
             }
-            Ok(Some(Err(e))) => Some(Err(e)),
-            Ok(None) => None,
-            Err(_) => Some(Err(AISdkError::new(format!(
-                "Stream idle timeout after {}s",
-                timeout.as_secs()
-            )))),
+            Some(Err(e)) => {
+                self.metrics.record_item(None);
+                Some(Err(e))
+            }
+            None => None,
         }
     }
 

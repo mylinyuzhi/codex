@@ -28,10 +28,12 @@
 //! }
 //! ```
 
+mod metrics;
 mod processor;
 mod processor_state;
 mod snapshot;
 
+pub use metrics::StreamMetrics;
 pub use processor::StreamProcessor;
 pub use processor::StreamProcessorConfig;
 pub use snapshot::FileSnapshot;
