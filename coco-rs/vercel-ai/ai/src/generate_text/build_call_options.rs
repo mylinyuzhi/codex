@@ -84,12 +84,14 @@ pub fn build_call_options(
         call_options.tool_choice = Some(choice.clone());
     }
 
-    // Add provider options (from CallSettings first, then from explicit options)
-    let effective_provider_options = provider_options
-        .as_ref()
-        .or(settings.provider_options.as_ref());
+    // Add provider options. Per-step/request options override settings, with
+    // nested objects merged to preserve provider defaults.
+    let effective_provider_options = merge_provider_options(
+        settings.provider_options.as_ref(),
+        provider_options.as_ref(),
+    );
     if let Some(opts) = effective_provider_options {
-        call_options.provider_options = Some(opts.clone());
+        call_options.provider_options = Some(opts);
     }
 
     // Add response format for structured output
@@ -99,6 +101,69 @@ pub fn build_call_options(
 
     call_options
 }
+
+/// Deeply merge provider options.
+///
+/// Objects are merged recursively, arrays and primitives are replaced, and
+/// prototype-polluting keys are ignored for parity with the TS helper.
+pub fn merge_provider_options(
+    base: Option<&ProviderOptions>,
+    overrides: Option<&ProviderOptions>,
+) -> Option<ProviderOptions> {
+    match (base, overrides) {
+        (None, None) => None,
+        (Some(base), None) => Some(base.clone()),
+        (None, Some(overrides)) => Some(sanitize_provider_options(overrides)),
+        (Some(base), Some(overrides)) => {
+            let mut merged = base.clone();
+            for (provider, override_options) in &overrides.0 {
+                if is_polluting_key(provider) {
+                    continue;
+                }
+                let target = merged.0.entry(provider.clone()).or_default();
+                for (key, override_value) in override_options {
+                    if is_polluting_key(key) {
+                        continue;
+                    }
+                    match target.get(key) {
+                        Some(base_value) => {
+                            target
+                                .insert(key.clone(), merge_json_value(base_value, override_value));
+                        }
+                        None => {
+                            target.insert(key.clone(), override_value.clone());
+                        }
+                    }
+                }
+            }
+            Some(merged)
+        }
+    }
+}
+
+fn sanitize_provider_options(options: &ProviderOptions) -> ProviderOptions {
+    let mut sanitized = ProviderOptions::new();
+    for (provider, provider_options) in &options.0 {
+        if is_polluting_key(provider) {
+            continue;
+        }
+        let mut sanitized_provider_options = std::collections::HashMap::new();
+        for (key, value) in provider_options {
+            if !is_polluting_key(key) {
+                sanitized_provider_options.insert(key.clone(), value.clone());
+            }
+        }
+        sanitized.set(provider.clone(), sanitized_provider_options);
+    }
+    sanitized
+}
+
+// Deep-merge / prototype-pollution helpers live in
+// `vercel-ai-provider-utils::json` so non-AI crates (e.g.
+// `coco-inference`) can reuse them without depending on the AI loop
+// crate. Re-exported below for ergonomic access from this module.
+pub use vercel_ai_provider_utils::is_prototype_polluting_key as is_polluting_key;
+pub use vercel_ai_provider_utils::merge_json_value;
 
 /// Filter tool definitions to only include active tools.
 pub fn filter_active_tools(

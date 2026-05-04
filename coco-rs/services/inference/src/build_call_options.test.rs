@@ -193,3 +193,104 @@ fn unset_per_call_falls_through_to_model_default_thinking() {
     let inner = po.get("anthropic").unwrap();
     assert!(inner.contains_key("thinking"));
 }
+
+#[test]
+fn extra_body_per_call_deep_merges_into_model_extra_body() {
+    // model-level: reasoning has effort=low + summary=auto, plus a sibling key.
+    let mut model_extra = BTreeMap::new();
+    model_extra.insert(
+        "reasoning".to_string(),
+        serde_json::json!({ "effort": "low", "summary": "auto" }),
+    );
+    model_extra.insert("store".to_string(), serde_json::json!(true));
+
+    let partial = PartialModelInfo {
+        context_window: Some(PositiveTokens::new(200_000)),
+        max_output_tokens: Some(PositiveTokens::new(64_000)),
+        extra_body: Some(model_extra),
+        ..Default::default()
+    };
+    let info = ModelInfo::from_partial("test", "test", partial).unwrap();
+
+    // per-call: override reasoning.effort, add a new sibling.
+    let mut per_call_extra = BTreeMap::new();
+    per_call_extra.insert(
+        "reasoning".to_string(),
+        serde_json::json!({ "effort": "high" }),
+    );
+    per_call_extra.insert("metadata".to_string(), serde_json::json!({ "tag": "x" }));
+
+    let per_call = PerCallOverrides {
+        extra_body: per_call_extra,
+        ..Default::default()
+    };
+
+    let call = build_call_options(
+        &info,
+        ProviderApi::Openai,
+        "openai",
+        &per_call,
+        Vec::new(),
+        None,
+    );
+
+    let po = call.provider_options.expect("provider options emitted");
+    let inner = po.get("openai").expect("openai namespace");
+
+    // reasoning.summary is preserved (would be lost under shallow merge).
+    assert_eq!(
+        inner.get("reasoning"),
+        Some(&serde_json::json!({ "effort": "high", "summary": "auto" })),
+        "per-call reasoning.effort overrides; summary survives from model-level"
+    );
+    // unrelated model-level key passes through.
+    assert_eq!(inner.get("store"), Some(&serde_json::json!(true)));
+    // per-call-only key is added.
+    assert_eq!(
+        inner.get("metadata"),
+        Some(&serde_json::json!({ "tag": "x" }))
+    );
+}
+
+#[test]
+fn extra_body_merge_drops_prototype_polluting_keys() {
+    // model-level: reasoning has a value at "safe" key.
+    let mut model_extra = BTreeMap::new();
+    model_extra.insert("safe".to_string(), serde_json::json!({ "ok": 0 }));
+    let partial = PartialModelInfo {
+        context_window: Some(PositiveTokens::new(200_000)),
+        max_output_tokens: Some(PositiveTokens::new(64_000)),
+        extra_body: Some(model_extra),
+        ..Default::default()
+    };
+    let info = ModelInfo::from_partial("test", "test", partial).unwrap();
+
+    // per-call carries a __proto__ key inside the nested object.
+    let mut per_call_extra = BTreeMap::new();
+    per_call_extra.insert(
+        "safe".to_string(),
+        serde_json::json!({ "__proto__": { "polluted": true }, "ok": 1 }),
+    );
+    let per_call = PerCallOverrides {
+        extra_body: per_call_extra,
+        ..Default::default()
+    };
+
+    let call = build_call_options(
+        &info,
+        ProviderApi::Openai,
+        "openai",
+        &per_call,
+        Vec::new(),
+        None,
+    );
+
+    let po = call.provider_options.expect("provider options emitted");
+    let inner = po.get("openai").expect("openai namespace");
+    let safe = inner.get("safe").expect("safe key").as_object().unwrap();
+    assert!(
+        !safe.contains_key("__proto__"),
+        "prototype-polluting key must be filtered during deep merge"
+    );
+    assert_eq!(safe.get("ok"), Some(&serde_json::json!(1)));
+}

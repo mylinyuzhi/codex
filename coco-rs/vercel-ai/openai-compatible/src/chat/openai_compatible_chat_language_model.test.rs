@@ -1,6 +1,9 @@
 use super::*;
+use bytes::Bytes;
+use futures::StreamExt;
 use std::sync::Arc;
 use vercel_ai_provider::LanguageModelV4CallOptions;
+use vercel_ai_provider::LanguageModelV4StreamPart;
 
 fn make_config() -> Arc<OpenAICompatibleConfig> {
     Arc::new(OpenAICompatibleConfig {
@@ -268,4 +271,171 @@ fn get_args_warns_on_json_schema_fallback() {
     assert!(warnings.iter().any(|w| {
         matches!(w, Warning::Unsupported { feature, .. } if feature == "responseFormat.schema")
     }));
+}
+
+async fn collect_chat_stream(chunks: Vec<Value>) -> Vec<LanguageModelV4StreamPart> {
+    let data = chunks
+        .into_iter()
+        .map(|chunk| format!("data: {chunk}\n\n"))
+        .collect::<String>();
+    let byte_stream: vercel_ai_provider_utils::ByteStream =
+        Box::pin(futures::stream::iter(vec![Ok::<Bytes, reqwest::Error>(
+            Bytes::from(data),
+        )]));
+
+    create_chat_stream(byte_stream, Vec::new(), false, "xai".into(), None)
+        .map(|part| part.expect("stream part"))
+        .collect()
+        .await
+}
+
+#[tokio::test]
+async fn stream_buffers_tool_call_arguments_until_function_name_arrives() {
+    let parts = collect_chat_stream(vec![
+        json!({
+            "id": "chatcmpl-1",
+            "created": 1,
+            "model": "test",
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "tool_calls": [{
+                        "index": 0,
+                        "id": "call_late",
+                        "type": "function",
+                        "function": { "arguments": "" }
+                    }]
+                }
+            }]
+        }),
+        json!({
+            "id": "chatcmpl-1",
+            "created": 1,
+            "model": "test",
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "tool_calls": [{
+                        "index": 0,
+                        "id": "call_late",
+                        "type": "function",
+                        "function": { "name": "test_tool", "arguments": "{\"" }
+                    }]
+                }
+            }]
+        }),
+        json!({
+            "id": "chatcmpl-1",
+            "created": 1,
+            "model": "test",
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "tool_calls": [{
+                        "index": 0,
+                        "function": { "arguments": "value" }
+                    }]
+                }
+            }]
+        }),
+        json!({
+            "id": "chatcmpl-1",
+            "created": 1,
+            "model": "test",
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "tool_calls": [{
+                        "index": 0,
+                        "function": { "arguments": "\":\"hi\"}" }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        }),
+    ])
+    .await;
+
+    assert!(
+        parts
+            .iter()
+            .all(|part| !matches!(part, LanguageModelV4StreamPart::Error { .. }))
+    );
+
+    let input_start = parts.iter().find_map(|part| match part {
+        LanguageModelV4StreamPart::ToolInputStart { id, tool_name, .. } => {
+            Some((id.as_str(), tool_name.as_str()))
+        }
+        _ => None,
+    });
+    assert_eq!(input_start, Some(("call_late", "test_tool")));
+
+    let deltas = parts
+        .iter()
+        .filter_map(|part| match part {
+            LanguageModelV4StreamPart::ToolInputDelta { delta, .. } => Some(delta.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(deltas, vec!["{\"", "value", r#"":"hi"}"#]);
+
+    let tool_call = parts.iter().find_map(|part| match part {
+        LanguageModelV4StreamPart::ToolCall(call) => Some((
+            call.tool_call_id.as_str(),
+            call.tool_name.as_str(),
+            call.input.as_str(),
+        )),
+        _ => None,
+    });
+    assert_eq!(
+        tool_call,
+        Some(("call_late", "test_tool", r#"{"value":"hi"}"#))
+    );
+}
+
+#[tokio::test]
+async fn stream_errors_when_pending_tool_call_never_receives_function_name() {
+    let parts = collect_chat_stream(vec![
+        json!({
+            "id": "chatcmpl-1",
+            "created": 1,
+            "model": "test",
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "tool_calls": [{
+                        "index": 0,
+                        "id": "call_missing_name",
+                        "type": "function",
+                        "function": { "arguments": "{\"value\":\"hi\"}" }
+                    }]
+                }
+            }]
+        }),
+        json!({
+            "id": "chatcmpl-1",
+            "created": 1,
+            "model": "test",
+            "choices": [{
+                "index": 0,
+                "delta": {},
+                "finish_reason": "tool_calls"
+            }]
+        }),
+    ])
+    .await;
+
+    let error = parts.iter().find_map(|part| match part {
+        LanguageModelV4StreamPart::Error { error } => Some(error.message.as_str()),
+        _ => None,
+    });
+    assert_eq!(
+        error,
+        Some("Invalid response data: Expected 'function.name' to be a string.")
+    );
+    assert!(
+        parts
+            .iter()
+            .all(|part| !matches!(part, LanguageModelV4StreamPart::ToolCall(_)))
+    );
 }

@@ -243,8 +243,7 @@ impl LanguageModelV4 for OpenAICompletionLanguageModel {
 
         let timestamp = response
             .created
-            .and_then(|ts| chrono::DateTime::from_timestamp(ts as i64, 0))
-            .map(|dt| dt.to_rfc3339());
+            .and_then(|ts| chrono::DateTime::from_timestamp(ts as i64, 0));
 
         Ok(LanguageModelV4GenerateResult {
             content: vec![AssistantContentPart::Text(TextPart {
@@ -257,6 +256,7 @@ impl LanguageModelV4 for OpenAICompletionLanguageModel {
             provider_metadata: Some(provider_metadata),
             request: Some(LanguageModelV4Request { body: Some(body) }),
             response: Some(LanguageModelV4Response {
+                id: response.id.clone(),
                 timestamp,
                 model_id: response.model,
                 headers: None,

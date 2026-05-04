@@ -5,7 +5,8 @@
 //! the text, optional signature, and provider metadata.
 
 use vercel_ai_provider::AssistantContentPart;
-use vercel_ai_provider::DataContent;
+use vercel_ai_provider::FileRawData;
+use vercel_ai_provider::LanguageModelV4FileData;
 use vercel_ai_provider::ProviderMetadata;
 use vercel_ai_provider::ReasoningFilePart;
 use vercel_ai_provider::ReasoningPart;
@@ -109,8 +110,8 @@ pub fn convert_from_reasoning_outputs(items: &[ReasoningOutputItem]) -> Vec<Assi
                 AssistantContentPart::Reasoning(part)
             }
             ReasoningOutputItem::File(rf) => {
-                let data = DataContent::from_base64(&rf.file.content);
-                let mut part = ReasoningFilePart::new(data, &rf.file.media_type);
+                let mut part =
+                    ReasoningFilePart::from_base64(&rf.file.content, &rf.file.media_type);
                 if let Some(ref pm) = rf.provider_metadata {
                     part.provider_metadata = Some(pm.clone());
                 }
@@ -134,11 +135,15 @@ pub fn convert_to_reasoning_outputs(parts: &[AssistantContentPart]) -> Vec<Reaso
             }
             AssistantContentPart::ReasoningFile(rf) => {
                 let file = match &rf.data {
-                    DataContent::Base64(b) => {
-                        GeneratedFile::from_base64("reasoning-file", b, &rf.media_type)
+                    LanguageModelV4FileData::Data {
+                        data: FileRawData::Base64(b),
+                    } => GeneratedFile::from_base64("reasoning-file", b, &rf.media_type),
+                    LanguageModelV4FileData::Url { url } => {
+                        GeneratedFile::new("reasoning-file", url, &rf.media_type)
                     }
-                    DataContent::Url(u) => GeneratedFile::new("reasoning-file", u, &rf.media_type),
-                    DataContent::Bytes(bytes) => {
+                    LanguageModelV4FileData::Data {
+                        data: FileRawData::Bytes(bytes),
+                    } => {
                         use base64::Engine as _;
                         use base64::engine::general_purpose::STANDARD;
                         GeneratedFile::from_base64(

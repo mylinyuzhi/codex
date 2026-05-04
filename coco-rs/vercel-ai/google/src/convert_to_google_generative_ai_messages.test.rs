@@ -267,11 +267,11 @@ fn converts_tool_result_content_with_text() {
 
 #[test]
 fn converts_file_with_base64() {
-    use vercel_ai_provider::DataContent;
     use vercel_ai_provider::FilePart;
+    use vercel_ai_provider::SharedV4FileData;
 
     let parts = vec![UserContentPart::File(FilePart::new(
-        DataContent::from_base64("aGVsbG8="),
+        SharedV4FileData::data_base64("aGVsbG8="),
         "image/png",
     ))];
     let messages = vec![LanguageModelV4Message::user(parts)];
@@ -288,11 +288,11 @@ fn converts_file_with_base64() {
 
 #[test]
 fn converts_image_wildcard_to_jpeg() {
-    use vercel_ai_provider::DataContent;
     use vercel_ai_provider::FilePart;
+    use vercel_ai_provider::SharedV4FileData;
 
     let parts = vec![UserContentPart::File(FilePart::new(
-        DataContent::from_base64("aGVsbG8="),
+        SharedV4FileData::data_base64("aGVsbG8="),
         "image/*",
     ))];
     let messages = vec![LanguageModelV4Message::user(parts)];
@@ -374,7 +374,6 @@ fn filters_empty_reasoning_parts() {
 
 #[test]
 fn converts_reasoning_file_with_thought_and_signature() {
-    use vercel_ai_provider::DataContent;
     use vercel_ai_provider::ReasoningFilePart;
 
     let meta = vercel_ai_provider::ProviderMetadata::from_map(
@@ -387,8 +386,7 @@ fn converts_reasoning_file_with_thought_and_signature() {
     );
 
     let parts = vec![AssistantContentPart::ReasoningFile(
-        ReasoningFilePart::new(DataContent::from_base64("AAECAw=="), "image/png")
-            .with_metadata(meta),
+        ReasoningFilePart::from_base64("AAECAw==", "image/png").with_metadata(meta),
     )];
     let messages = vec![LanguageModelV4Message::assistant(parts)];
     let result =
@@ -411,13 +409,11 @@ fn converts_reasoning_file_with_thought_and_signature() {
 
 #[test]
 fn converts_reasoning_file_without_signature() {
-    use vercel_ai_provider::DataContent;
     use vercel_ai_provider::ReasoningFilePart;
 
-    let parts = vec![AssistantContentPart::ReasoningFile(ReasoningFilePart::new(
-        DataContent::from_base64("BAUG"),
-        "image/jpeg",
-    ))];
+    let parts = vec![AssistantContentPart::ReasoningFile(
+        ReasoningFilePart::from_base64("BAUG", "image/jpeg"),
+    )];
     let messages = vec![LanguageModelV4Message::assistant(parts)];
     let result =
         convert_to_google_generative_ai_messages(&messages, &ConvertOptions::default()).unwrap();
@@ -439,13 +435,11 @@ fn converts_reasoning_file_without_signature() {
 
 #[test]
 fn rejects_url_file_data_in_reasoning_file() {
-    use vercel_ai_provider::DataContent;
     use vercel_ai_provider::ReasoningFilePart;
 
-    let parts = vec![AssistantContentPart::ReasoningFile(ReasoningFilePart::new(
-        DataContent::from_url("https://example.com/image.png"),
-        "image/png",
-    ))];
+    let parts = vec![AssistantContentPart::ReasoningFile(
+        ReasoningFilePart::from_url("https://example.com/image.png", "image/png"),
+    )];
     let messages = vec![LanguageModelV4Message::assistant(parts)];
     let result = convert_to_google_generative_ai_messages(&messages, &ConvertOptions::default());
     assert!(result.is_err());
@@ -458,11 +452,11 @@ fn rejects_url_file_data_in_reasoning_file() {
 
 #[test]
 fn rejects_url_file_data_in_assistant_file() {
-    use vercel_ai_provider::DataContent;
     use vercel_ai_provider::FilePart;
+    use vercel_ai_provider::SharedV4FileData;
 
     let parts = vec![AssistantContentPart::File(FilePart::new(
-        DataContent::from_url("https://example.com/image.png"),
+        SharedV4FileData::url("https://example.com/image.png"),
         "image/png",
     ))];
     let messages = vec![LanguageModelV4Message::assistant(parts)];
@@ -477,7 +471,6 @@ fn rejects_url_file_data_in_assistant_file() {
 
 #[test]
 fn handles_mixed_reasoning_reasoning_file_text_and_tool_call() {
-    use vercel_ai_provider::DataContent;
     use vercel_ai_provider::ReasoningFilePart;
 
     let meta1 = vercel_ai_provider::ProviderMetadata::from_map(
@@ -504,8 +497,7 @@ fn handles_mixed_reasoning_reasoning_file_text_and_tool_call() {
                 .with_metadata(meta1),
         ),
         AssistantContentPart::ReasoningFile(
-            ReasoningFilePart::new(DataContent::from_base64("AAECAw=="), "image/png")
-                .with_metadata(meta2),
+            ReasoningFilePart::from_base64("AAECAw==", "image/png").with_metadata(meta2),
         ),
         AssistantContentPart::text("Here is the result"),
         AssistantContentPart::tool_call("call_1", "search", serde_json::json!({"q": "test"})),

@@ -43,6 +43,7 @@
 // Core types kept at root (shared across model types)
 pub mod content;
 pub mod data_content;
+pub mod files;
 pub mod json_schema;
 pub mod response_metadata;
 pub mod tool;
@@ -81,6 +82,7 @@ pub use errors::LoadAPIKeyError;
 pub use errors::LoadSettingError;
 pub use errors::NoContentGeneratedError;
 pub use errors::NoSuchModelError;
+pub use errors::NoSuchProviderReferenceError;
 pub use errors::ProviderError;
 pub use errors::TooManyEmbeddingValuesForCallError;
 pub use errors::TypeValidationContext;
@@ -88,17 +90,25 @@ pub use errors::TypeValidationError;
 pub use errors::UnsupportedFunctionalityError;
 
 // Shared types
+pub use shared::FileRawData;
 pub use shared::ProviderMetadata;
 pub use shared::ProviderOptions;
+pub use shared::SharedV4FileData;
 pub use shared::Warning;
+
+// Files interface
+pub use files::FilesV4;
+pub use files::FilesV4UploadData;
+pub use files::FilesV4UploadFileCallOptions;
+pub use files::FilesV4UploadFileResult;
 
 // Content types
 pub use content::AssistantContentPart;
 pub use content::CustomPart;
-pub use content::FileIdReference;
 pub use content::FilePart;
 pub use content::ReasoningFilePart;
 pub use content::ReasoningPart;
+pub use content::SharedV4ProviderReference;
 pub use content::TextPart;
 pub use content::ToolCallPart;
 pub use content::ToolContentPart;
@@ -107,7 +117,7 @@ pub use content::ToolResultContentPart;
 pub use content::ToolResultPart;
 pub use content::UserContentPart;
 
-// Data content
+// Data content (legacy — prefer SharedV4FileData for new code)
 pub use data_content::DataContent;
 
 // Prompt types
@@ -136,6 +146,11 @@ pub use json_schema::JSONSchema;
 pub use json_value::JSONArray;
 pub use json_value::JSONObject;
 pub use json_value::JSONValue;
+
+// Language model file data
+pub use language_model::v4::file::LanguageModelV4FileData;
+pub use language_model::v4::tool_call::LanguageModelV4ToolCall;
+pub use language_model::v4::tool_result::LanguageModelV4ToolResult;
 
 // Model traits
 pub use embedding_model::EmbeddingModelV4;

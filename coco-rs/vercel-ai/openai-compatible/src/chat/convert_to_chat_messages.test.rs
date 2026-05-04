@@ -1,4 +1,5 @@
 use super::*;
+use vercel_ai_provider::SharedV4FileData;
 use vercel_ai_provider::TextPart;
 use vercel_ai_provider::ToolCallPart;
 use vercel_ai_provider::ToolResultPart;
@@ -119,7 +120,7 @@ fn includes_reasoning_content_in_assistant_message() {
 fn handles_audio_mpeg_as_mp3() {
     let prompt = vec![LanguageModelV4Message::User {
         content: vec![UserContentPart::File(FilePart {
-            data: DataContent::Base64("dGVzdA==".into()),
+            data: SharedV4FileData::data_base64("dGVzdA=="),
             media_type: "audio/mpeg".into(),
             filename: None,
             provider_metadata: None,
@@ -136,7 +137,7 @@ fn handles_audio_mpeg_as_mp3() {
 fn handles_image_wildcard_as_jpeg() {
     let prompt = vec![LanguageModelV4Message::User {
         content: vec![UserContentPart::File(FilePart {
-            data: DataContent::Base64("dGVzdA==".into()),
+            data: SharedV4FileData::data_base64("dGVzdA=="),
             media_type: "image/*".into(),
             filename: None,
             provider_metadata: None,
@@ -162,7 +163,7 @@ fn handles_text_media_type() {
                 provider_metadata: None,
             }),
             UserContentPart::File(FilePart {
-                data: DataContent::Base64(text_data),
+                data: SharedV4FileData::data_base64(text_data),
                 media_type: "text/plain".into(),
                 filename: None,
                 provider_metadata: None,
@@ -182,7 +183,7 @@ fn handles_text_media_type() {
 fn pdf_includes_filename() {
     let prompt = vec![LanguageModelV4Message::User {
         content: vec![UserContentPart::File(FilePart {
-            data: DataContent::Base64("dGVzdA==".into()),
+            data: SharedV4FileData::data_base64("dGVzdA=="),
             media_type: "application/pdf".into(),
             filename: None,
             provider_metadata: None,
@@ -372,7 +373,7 @@ fn image_part_spreads_metadata() {
 
     let prompt = vec![LanguageModelV4Message::User {
         content: vec![UserContentPart::File(FilePart {
-            data: DataContent::Base64("dGVzdA==".into()),
+            data: SharedV4FileData::data_base64("dGVzdA=="),
             media_type: "image/png".into(),
             filename: None,
             provider_metadata: Some(pm),
@@ -391,7 +392,7 @@ fn image_part_spreads_metadata() {
 fn pdf_url_returns_error() {
     let prompt = vec![LanguageModelV4Message::User {
         content: vec![UserContentPart::File(FilePart {
-            data: DataContent::Url("https://example.com/doc.pdf".into()),
+            data: SharedV4FileData::url("https://example.com/doc.pdf"),
             media_type: "application/pdf".into(),
             filename: None,
             provider_metadata: None,
@@ -408,7 +409,7 @@ fn pdf_url_returns_error() {
 fn unsupported_audio_format_returns_error() {
     let prompt = vec![LanguageModelV4Message::User {
         content: vec![UserContentPart::File(FilePart {
-            data: DataContent::Base64("dGVzdA==".into()),
+            data: SharedV4FileData::data_base64("dGVzdA=="),
             media_type: "audio/ogg".into(),
             filename: None,
             provider_metadata: None,
@@ -425,7 +426,7 @@ fn unsupported_audio_format_returns_error() {
 fn unsupported_file_media_type_returns_error() {
     let prompt = vec![LanguageModelV4Message::User {
         content: vec![UserContentPart::File(FilePart {
-            data: DataContent::Base64("dGVzdA==".into()),
+            data: SharedV4FileData::data_base64("dGVzdA=="),
             media_type: "application/octet-stream".into(),
             filename: None,
             provider_metadata: None,

@@ -290,8 +290,11 @@ impl MockLanguageModelBuilder {
         let tool_call_id = tool_call_id.into();
         let tool_name = tool_name.into();
         self.with_stream_handler(move |_| {
-            let tc =
-                vercel_ai_provider::tool::ToolCall::new(&tool_call_id, &tool_name, args.clone());
+            let tc = vercel_ai_provider::LanguageModelV4ToolCall::from_json(
+                &tool_call_id,
+                &tool_name,
+                args.clone(),
+            );
             let parts = vec![
                 Ok(LanguageModelV4StreamPart::ToolInputStart {
                     id: tool_call_id.clone(),

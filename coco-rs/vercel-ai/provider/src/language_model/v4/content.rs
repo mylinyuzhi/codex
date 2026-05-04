@@ -6,6 +6,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use super::file::LanguageModelV4File;
+use super::file::LanguageModelV4FileData;
 use super::reasoning::LanguageModelV4Reasoning;
 use super::source::LanguageModelV4Source;
 use super::text::LanguageModelV4Text;
@@ -29,14 +30,11 @@ pub enum LanguageModelV4Content {
     /// Source reference (for citations).
     Source(LanguageModelV4Source),
     /// Reasoning file content (file data that is part of reasoning).
-    ///
-    /// The TS spec allows `string | Uint8Array` for `data`; in Rust this is
-    /// always a base64-encoded string (binary data is pre-encoded).
     #[serde(rename = "reasoning-file")]
     ReasoningFile {
-        /// The file data as a base64-encoded string.
-        data: String,
-        /// The MIME type.
+        /// File data as a tagged 2-arm union (data or url).
+        data: LanguageModelV4FileData,
+        /// Either a full IANA media type or just the top-level segment.
         #[serde(rename = "mediaType")]
         media_type: String,
         /// Provider metadata.

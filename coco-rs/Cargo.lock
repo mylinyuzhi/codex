@@ -1234,6 +1234,7 @@ dependencies = [
  "vercel-ai-openai",
  "vercel-ai-openai-compatible",
  "vercel-ai-provider",
+ "vercel-ai-provider-utils",
 ]
 
 [[package]]

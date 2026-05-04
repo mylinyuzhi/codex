@@ -30,12 +30,14 @@ pub mod google_error;
 pub mod google_generative_ai_embedding_model;
 pub mod google_generative_ai_embedding_options;
 pub mod google_generative_ai_image_model;
+pub mod google_generative_ai_image_options;
 pub mod google_generative_ai_image_settings;
 pub mod google_generative_ai_language_model;
 pub mod google_generative_ai_options;
 pub mod google_generative_ai_prompt;
 pub mod google_generative_ai_video_model;
 pub mod google_generative_ai_video_settings;
+pub mod google_json_accumulator;
 pub mod google_prepare_tools;
 pub mod google_provider;
 pub mod google_supported_file_url;
@@ -71,6 +73,7 @@ pub use google_generative_ai_video_settings::GoogleGenerativeAIVideoSettings;
 pub use google_generative_ai_prompt::*;
 
 // Utilities
+pub use convert_google_generative_ai_usage::GoogleTokenDetail;
 pub use convert_google_generative_ai_usage::GoogleUsageMetadata;
 pub use convert_google_generative_ai_usage::convert_usage;
 pub use convert_json_schema_to_openapi_schema::convert_json_schema_to_openapi_schema;

@@ -1,9 +1,10 @@
 use serde_json::Value;
 use serde_json::json;
 use vercel_ai_provider::AssistantContentPart;
-use vercel_ai_provider::DataContent;
+use vercel_ai_provider::FileRawData;
 use vercel_ai_provider::LanguageModelV4Message;
 use vercel_ai_provider::LanguageModelV4Prompt;
+use vercel_ai_provider::SharedV4FileData;
 use vercel_ai_provider::ToolContentPart;
 use vercel_ai_provider::ToolResultContent;
 use vercel_ai_provider::UserContentPart;
@@ -157,7 +158,7 @@ fn convert_user_parts(
                     } else {
                         media_type.as_str()
                     };
-                    let url = data_content_to_url(&file_part.data, effective_type);
+                    let url = shared_file_data_to_url(&file_part.data, effective_type);
                     let mut image_url = json!({ "url": url });
                     if let Some(ref detail) = image_detail {
                         image_url["detail"] = Value::String(detail.clone());
@@ -167,7 +168,7 @@ fn convert_user_parts(
                     || media_type == "audio/mp3"
                     || media_type == "audio/mpeg"
                 {
-                    let b64 = data_content_to_base64(&file_part.data);
+                    let b64 = shared_file_data_to_base64(&file_part.data);
                     let format = if media_type == "audio/wav" {
                         "wav"
                     } else {
@@ -178,30 +179,31 @@ fn convert_user_parts(
                         "input_audio": { "data": b64, "format": format }
                     })
                 } else if media_type == "application/pdf" {
-                    // Check if data is a file ID (string starting with "file-")
-                    if let DataContent::Base64(ref s) = file_part.data
+                    // Check if data is a provider reference (file-id lookup)
+                    if let SharedV4FileData::Reference { reference } = &file_part.data
+                        && let Some(file_id) = reference.get("openai")
+                    {
+                        return json!({ "type": "file", "file": { "file_id": file_id } });
+                    }
+                    // Backward-compat: bare Base64 string starting with "file-" treated as file ID
+                    if let SharedV4FileData::Data {
+                        data: FileRawData::Base64(ref s),
+                    } = file_part.data
                         && s.starts_with("file-")
                     {
-                        return json!({
-                            "type": "file",
-                            "file": { "file_id": s }
-                        });
+                        return json!({ "type": "file", "file": { "file_id": s } });
                     }
-                    let b64 = data_content_to_base64(&file_part.data);
+                    let b64 = shared_file_data_to_base64(&file_part.data);
                     json!({
                         "type": "file",
-                        "file": {
-                            "file_data": format!("data:{media_type};base64,{b64}"),
-                        }
+                        "file": { "file_data": format!("data:{media_type};base64,{b64}") }
                     })
                 } else {
                     // Generic file
-                    let b64 = data_content_to_base64(&file_part.data);
+                    let b64 = shared_file_data_to_base64(&file_part.data);
                     json!({
                         "type": "file",
-                        "file": {
-                            "file_data": format!("data:{media_type};base64,{b64}"),
-                        }
+                        "file": { "file_data": format!("data:{media_type};base64,{b64}") }
                     })
                 }
             }
@@ -271,34 +273,48 @@ fn serialize_tool_result_content(content: &ToolResultContent) -> String {
     }
 }
 
-/// Convert DataContent to a URL string (for images).
-fn data_content_to_url(data: &DataContent, media_type: &str) -> String {
+/// Convert `SharedV4FileData` to a URL string (for images).
+fn shared_file_data_to_url(data: &SharedV4FileData, media_type: &str) -> String {
     match data {
-        DataContent::Url(url) => url.clone(),
-        DataContent::Base64(b64) => format!("data:{media_type};base64,{b64}"),
-        DataContent::Bytes(bytes) => {
-            use base64::Engine;
-            let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+        SharedV4FileData::Url { url } => url.clone(),
+        SharedV4FileData::Data { data: raw } => {
+            let b64 = raw_data_to_base64(raw);
             format!("data:{media_type};base64,{b64}")
         }
+        SharedV4FileData::Text { text } => {
+            use base64::Engine as _;
+            let b64 = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
+            format!("data:{media_type};base64,{b64}")
+        }
+        SharedV4FileData::Reference { .. } => String::new(),
     }
 }
 
-/// Convert DataContent to base64 string.
-fn data_content_to_base64(data: &DataContent) -> String {
+/// Convert `SharedV4FileData` to a base64 string.
+fn shared_file_data_to_base64(data: &SharedV4FileData) -> String {
     match data {
-        DataContent::Base64(b64) => b64.clone(),
-        DataContent::Bytes(bytes) => {
-            use base64::Engine;
-            base64::engine::general_purpose::STANDARD.encode(bytes)
-        }
-        DataContent::Url(url) => {
-            // If it's already a data URL, extract the base64
+        SharedV4FileData::Data { data: raw } => raw_data_to_base64(raw),
+        SharedV4FileData::Url { url } => {
             if let Some(idx) = url.find(";base64,") {
                 url[idx + 8..].to_string()
             } else {
                 url.clone()
             }
+        }
+        SharedV4FileData::Text { text } => {
+            use base64::Engine as _;
+            base64::engine::general_purpose::STANDARD.encode(text.as_bytes())
+        }
+        SharedV4FileData::Reference { .. } => String::new(),
+    }
+}
+
+fn raw_data_to_base64(raw: &FileRawData) -> String {
+    match raw {
+        FileRawData::Base64(b64) => b64.clone(),
+        FileRawData::Bytes(bytes) => {
+            use base64::Engine as _;
+            base64::engine::general_purpose::STANDARD.encode(bytes)
         }
     }
 }

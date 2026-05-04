@@ -538,22 +538,42 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                     }
                 }
                 ResponseOutputItem::FunctionCall {
+                    id: item_id,
                     call_id,
                     name,
                     arguments,
-                    ..
+                    namespace,
                 } => {
                     has_function_call = true;
                     let input: Value = arguments
                         .as_deref()
                         .and_then(|a| serde_json::from_str(a).ok())
                         .unwrap_or(Value::Null);
+                    // TS upstream #14789: surface the function_call's
+                    // `namespace` (set when a server-executed
+                    // tool_search dispatched to a deferred tool) under
+                    // `provider_metadata.openai.namespace` alongside
+                    // the existing `itemId`.
+                    let mut openai_meta = serde_json::Map::new();
+                    if let Some(id) = item_id.clone() {
+                        openai_meta.insert("itemId".into(), Value::String(id));
+                    }
+                    if let Some(ns) = namespace.clone() {
+                        openai_meta.insert("namespace".into(), Value::String(ns));
+                    }
+                    let provider_metadata = if openai_meta.is_empty() {
+                        None
+                    } else {
+                        let mut meta = HashMap::new();
+                        meta.insert("openai".to_string(), Value::Object(openai_meta));
+                        Some(ProviderMetadata(meta))
+                    };
                     content.push(AssistantContentPart::ToolCall(ToolCallPart {
                         tool_call_id: call_id.clone().unwrap_or_default(),
                         tool_name: name.clone().unwrap_or_default(),
                         input,
                         provider_executed: None,
-                        provider_metadata: None,
+                        provider_metadata,
                     }));
                 }
                 ResponseOutputItem::CustomToolCall {
@@ -884,7 +904,17 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
             provider_metadata,
             request: Some(LanguageModelV4Request { body: Some(body) }),
             response: Some(LanguageModelV4Response {
-                timestamp: response.created_at,
+                id: response.id.clone(),
+                // Responses API delivers `created_at` as an ISO 8601
+                // string (or unix-seconds number, normalized to string
+                // by `deserialize_created_at`); parse to typed
+                // DateTime here so the wire format is consistent with
+                // the other providers.
+                timestamp: response
+                    .created_at
+                    .as_ref()
+                    .and_then(|ts| chrono::DateTime::parse_from_rfc3339(ts).ok())
+                    .map(|dt| dt.with_timezone(&chrono::Utc)),
                 model_id: response.model,
                 headers: None,
                 body: None,
@@ -936,6 +966,11 @@ struct ActiveFnCall {
     name: String,
     arguments: String,
     started: bool,
+    /// Namespace marker from server-executed tool_search dispatch
+    /// (TS upstream #14789). Surfaces under
+    /// `provider_metadata.openai.namespace` on the finalized
+    /// `tool-input-end` and `tool-call` events.
+    namespace: Option<String>,
 }
 
 struct ActiveCustomToolCall {
@@ -1146,7 +1181,12 @@ impl ResponsesStreamState {
             }
 
             ResponsesStreamEvent::OutputItemAdded { item: Some(item) } => match &item {
-                ResponseOutputItem::FunctionCall { id, name, .. } => {
+                ResponseOutputItem::FunctionCall {
+                    id,
+                    name,
+                    namespace,
+                    ..
+                } => {
                     self.has_function_call = true;
                     let item_id = id.clone().unwrap_or_default();
                     self.active_fn_calls.insert(
@@ -1156,6 +1196,7 @@ impl ResponsesStreamState {
                             name: name.clone().unwrap_or_default(),
                             arguments: String::new(),
                             started: false,
+                            namespace: namespace.clone(),
                         },
                     );
                 }
@@ -1373,15 +1414,32 @@ impl ResponsesStreamState {
                 ..
             } => {
                 if let Some(fc) = self.active_fn_calls.remove(&item_id) {
+                    // TS upstream #14789: when the function_call carries
+                    // a `namespace` (server-executed tool_search
+                    // dispatch), propagate it to both `tool-input-end`
+                    // and `tool-call` provider_metadata.
+                    let namespace_meta = fc.namespace.as_ref().map(|ns| {
+                        let mut openai_meta = serde_json::Map::new();
+                        openai_meta.insert("namespace".into(), Value::String(ns.clone()));
+                        let mut meta = HashMap::new();
+                        meta.insert("openai".to_string(), Value::Object(openai_meta));
+                        ProviderMetadata(meta)
+                    });
                     self.pending
                         .push_back(LanguageModelV4StreamPart::ToolInputEnd {
                             id: fc.id.clone(),
-                            provider_metadata: None,
+                            provider_metadata: namespace_meta.clone(),
                         });
-                    let input: Value = serde_json::from_str(&fc.arguments).unwrap_or(Value::Null);
-                    self.pending.push_back(LanguageModelV4StreamPart::ToolCall(
-                        vercel_ai_provider::tool::ToolCall::new(fc.id, fc.name, input),
-                    ));
+                    let mut tc = vercel_ai_provider::LanguageModelV4ToolCall::new(
+                        fc.id,
+                        fc.name,
+                        fc.arguments,
+                    );
+                    if let Some(meta) = namespace_meta {
+                        tc = tc.with_metadata(meta);
+                    }
+                    self.pending
+                        .push_back(LanguageModelV4StreamPart::ToolCall(tc));
                 }
             }
 
@@ -1439,9 +1497,8 @@ impl ResponsesStreamState {
                             id: ct.id.clone(),
                             provider_metadata: None,
                         });
-                    let input: Value = serde_json::from_str(&ct.input).unwrap_or(Value::Null);
                     self.pending.push_back(LanguageModelV4StreamPart::ToolCall(
-                        vercel_ai_provider::tool::ToolCall::new(ct.id, ct.name, input),
+                        vercel_ai_provider::LanguageModelV4ToolCall::new(ct.id, ct.name, ct.input),
                     ));
                 }
             }
@@ -1531,7 +1588,7 @@ impl ResponsesStreamState {
                                 provider_metadata: None,
                             });
                         self.pending.push_back(LanguageModelV4StreamPart::ToolCall(
-                            vercel_ai_provider::tool::ToolCall::new(
+                            vercel_ai_provider::LanguageModelV4ToolCall::from_json(
                                 &item_id,
                                 "web_search",
                                 json!({ "type": "web_search" }),
@@ -1546,7 +1603,7 @@ impl ResponsesStreamState {
                                 id: item_id.clone(),
                                 provider_metadata: None,
                             });
-                        let tc = vercel_ai_provider::tool::ToolCall::new(
+                        let tc = vercel_ai_provider::LanguageModelV4ToolCall::from_json(
                             &item_id,
                             "file_search",
                             json!({ "type": "file_search" }),
@@ -1558,7 +1615,7 @@ impl ResponsesStreamState {
                         if let Some(r) = results {
                             self.pending
                                 .push_back(LanguageModelV4StreamPart::ToolResult(
-                                    vercel_ai_provider::tool::ToolResult::new(
+                                    vercel_ai_provider::LanguageModelV4ToolResult::new(
                                         &item_id,
                                         "file_search",
                                         json!(r),
@@ -1575,7 +1632,7 @@ impl ResponsesStreamState {
                                 id: item_id.clone(),
                                 provider_metadata: None,
                             });
-                        let tc = vercel_ai_provider::tool::ToolCall::new(
+                        let tc = vercel_ai_provider::LanguageModelV4ToolCall::from_json(
                             &item_id,
                             "code_interpreter",
                             json!({ "type": "code_interpreter", "code": code }),
@@ -1586,7 +1643,7 @@ impl ResponsesStreamState {
                         if let Some(outs) = outputs {
                             self.pending
                                 .push_back(LanguageModelV4StreamPart::ToolResult(
-                                    vercel_ai_provider::tool::ToolResult::new(
+                                    vercel_ai_provider::LanguageModelV4ToolResult::new(
                                         &item_id,
                                         "code_interpreter",
                                         json!(outs),
@@ -1601,7 +1658,7 @@ impl ResponsesStreamState {
                                 id: item_id.clone(),
                                 provider_metadata: None,
                             });
-                        let tc = vercel_ai_provider::tool::ToolCall::new(
+                        let tc = vercel_ai_provider::LanguageModelV4ToolCall::from_json(
                             &item_id,
                             "image_generation",
                             json!({ "type": "image_generation" }),
@@ -1612,7 +1669,7 @@ impl ResponsesStreamState {
                         if let Some(res) = result {
                             self.pending
                                 .push_back(LanguageModelV4StreamPart::ToolResult(
-                                    vercel_ai_provider::tool::ToolResult::new(
+                                    vercel_ai_provider::LanguageModelV4ToolResult::new(
                                         &item_id,
                                         "image_generation",
                                         res.clone(),
@@ -1629,7 +1686,7 @@ impl ResponsesStreamState {
                                 id: item_id.clone(),
                                 provider_metadata: None,
                             });
-                        let tc = vercel_ai_provider::tool::ToolCall::new(
+                        let tc = vercel_ai_provider::LanguageModelV4ToolCall::from_json(
                             &item_id,
                             "shell",
                             action.clone().unwrap_or(Value::Null),
@@ -1640,7 +1697,7 @@ impl ResponsesStreamState {
                         if let Some(outs) = output {
                             self.pending
                                 .push_back(LanguageModelV4StreamPart::ToolResult(
-                                    vercel_ai_provider::tool::ToolResult::new(
+                                    vercel_ai_provider::LanguageModelV4ToolResult::new(
                                         &item_id,
                                         "shell",
                                         json!(outs),
@@ -1655,7 +1712,7 @@ impl ResponsesStreamState {
                                 id: item_id.clone(),
                                 provider_metadata: None,
                             });
-                        let tc = vercel_ai_provider::tool::ToolCall::new(
+                        let tc = vercel_ai_provider::LanguageModelV4ToolCall::from_json(
                             &item_id,
                             "local_shell",
                             action.clone().unwrap_or(Value::Null),
@@ -1671,7 +1728,7 @@ impl ResponsesStreamState {
                                 id: item_id.clone(),
                                 provider_metadata: None,
                             });
-                        let tc = vercel_ai_provider::tool::ToolCall::new(
+                        let tc = vercel_ai_provider::LanguageModelV4ToolCall::from_json(
                             &item_id,
                             "apply_patch",
                             operation.clone().unwrap_or(Value::Null),
@@ -1699,7 +1756,7 @@ impl ResponsesStreamState {
                             .as_deref()
                             .and_then(|a| serde_json::from_str(a).ok())
                             .unwrap_or(Value::Null);
-                        let tc = vercel_ai_provider::tool::ToolCall::new(
+                        let tc = vercel_ai_provider::LanguageModelV4ToolCall::from_json(
                             &item_id,
                             &tool_name,
                             parsed_args,
@@ -1710,7 +1767,7 @@ impl ResponsesStreamState {
                         if let Some(err) = error {
                             self.pending
                                 .push_back(LanguageModelV4StreamPart::ToolResult(
-                                    vercel_ai_provider::tool::ToolResult::error(
+                                    vercel_ai_provider::LanguageModelV4ToolResult::error(
                                         &item_id,
                                         &tool_name,
                                         err.clone(),
@@ -1719,7 +1776,7 @@ impl ResponsesStreamState {
                         } else if let Some(out) = output {
                             self.pending
                                 .push_back(LanguageModelV4StreamPart::ToolResult(
-                                    vercel_ai_provider::tool::ToolResult::new(
+                                    vercel_ai_provider::LanguageModelV4ToolResult::new(
                                         &item_id,
                                         &tool_name,
                                         out.clone(),
@@ -1756,8 +1813,11 @@ impl ResponsesStreamState {
                             "arguments": arguments,
                             "call_id": call_id,
                         });
-                        let mut tc =
-                            vercel_ai_provider::tool::ToolCall::new(&tc_id, "tool_search", input);
+                        let mut tc = vercel_ai_provider::LanguageModelV4ToolCall::from_json(
+                            &tc_id,
+                            "tool_search",
+                            input,
+                        );
                         if is_hosted {
                             tc = tc.with_provider_executed(true);
                         }
@@ -1775,7 +1835,7 @@ impl ResponsesStreamState {
                         let result = json!({ "tools": tools });
                         self.pending
                             .push_back(LanguageModelV4StreamPart::ToolResult(
-                                vercel_ai_provider::tool::ToolResult::new(
+                                vercel_ai_provider::LanguageModelV4ToolResult::new(
                                     &tc_id,
                                     "tool_search",
                                     result,

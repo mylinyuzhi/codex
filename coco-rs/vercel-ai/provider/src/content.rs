@@ -8,13 +8,14 @@
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::data_content::DataContent;
 use crate::json_value::JSONValue;
 use crate::shared::ProviderMetadata;
 use crate::shared::ProviderOptions;
+use crate::shared::SharedV4FileData;
 
 /// A text content part.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TextPart {
     /// The text content.
     pub text: String,
@@ -40,11 +41,19 @@ impl TextPart {
 }
 
 /// A file content part (image, document, etc.).
+///
+/// `data` is a tagged discriminated union:
+/// - `Data { data }` — raw bytes or base64-encoded string.
+/// - `Url { url }` — a URL pointing to the file.
+/// - `Reference { reference }` — a provider reference (`{ [provider]: id }`).
+/// - `Text { text }` — inline text content.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FilePart {
-    /// The file data.
-    pub data: DataContent,
-    /// The MIME type of the file.
+    /// The file data as a tagged discriminated union.
+    pub data: SharedV4FileData,
+    /// Either a full IANA media type (`type/subtype`) or just the top-level
+    /// segment (e.g. `image`, `audio`).
     pub media_type: String,
     /// Optional filename.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -56,7 +65,7 @@ pub struct FilePart {
 
 impl FilePart {
     /// Create a new file part.
-    pub fn new(data: DataContent, media_type: impl Into<String>) -> Self {
+    pub fn new(data: SharedV4FileData, media_type: impl Into<String>) -> Self {
         Self {
             data,
             media_type: media_type.into(),
@@ -65,19 +74,39 @@ impl FilePart {
         }
     }
 
+    /// Create a file part from bytes.
+    pub fn from_bytes(bytes: Vec<u8>, media_type: impl Into<String>) -> Self {
+        Self::new(SharedV4FileData::data_bytes(bytes), media_type)
+    }
+
+    /// Create a file part from a URL.
+    pub fn from_url(url: impl Into<String>, media_type: impl Into<String>) -> Self {
+        Self::new(SharedV4FileData::url(url), media_type)
+    }
+
+    /// Create a file part from base64.
+    pub fn from_base64(base64: impl Into<String>, media_type: impl Into<String>) -> Self {
+        Self::new(SharedV4FileData::data_base64(base64), media_type)
+    }
+
     /// Create an image file part from bytes.
     pub fn image(bytes: Vec<u8>, media_type: impl Into<String>) -> Self {
-        Self::new(DataContent::from_bytes(bytes), media_type)
+        Self::from_bytes(bytes, media_type)
     }
 
     /// Create an image file part from a URL.
     pub fn image_url(url: impl Into<String>, media_type: impl Into<String>) -> Self {
-        Self::new(DataContent::from_url(url), media_type)
+        Self::from_url(url, media_type)
     }
 
     /// Create an image file part from base64.
     pub fn image_base64(base64: impl Into<String>, media_type: impl Into<String>) -> Self {
-        Self::new(DataContent::from_base64(base64), media_type)
+        Self::from_base64(base64, media_type)
+    }
+
+    /// Create a text file part (inline text document).
+    pub fn from_text(text: impl Into<String>, media_type: impl Into<String>) -> Self {
+        Self::new(SharedV4FileData::text(text), media_type)
     }
 
     /// Set the filename.
@@ -95,6 +124,7 @@ impl FilePart {
 
 /// A reasoning content part (for thinking models).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ReasoningPart {
     /// The reasoning text.
     pub text: String,
@@ -218,7 +248,11 @@ impl ToolResultPart {
 ///
 /// This matches the LanguageModelV4ToolResultOutput type from the v4 spec.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "kebab-case")]
+#[serde(
+    tag = "type",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
 pub enum ToolResultContent {
     /// Text tool output that should be directly sent to the API.
     Text {
@@ -226,7 +260,7 @@ pub enum ToolResultContent {
         value: String,
         /// Provider-specific options.
         #[serde(skip_serializing_if = "Option::is_none")]
-        provider_options: Option<ProviderMetadata>,
+        provider_options: Option<ProviderOptions>,
     },
     /// JSON tool output.
     Json {
@@ -234,7 +268,7 @@ pub enum ToolResultContent {
         value: JSONValue,
         /// Provider-specific options.
         #[serde(skip_serializing_if = "Option::is_none")]
-        provider_options: Option<ProviderMetadata>,
+        provider_options: Option<ProviderOptions>,
     },
     /// Type when the user has denied the execution of the tool call.
     ExecutionDenied {
@@ -243,7 +277,7 @@ pub enum ToolResultContent {
         reason: Option<String>,
         /// Provider-specific options.
         #[serde(skip_serializing_if = "Option::is_none")]
-        provider_options: Option<ProviderMetadata>,
+        provider_options: Option<ProviderOptions>,
     },
     /// Error text output.
     ErrorText {
@@ -251,7 +285,7 @@ pub enum ToolResultContent {
         value: String,
         /// Provider-specific options.
         #[serde(skip_serializing_if = "Option::is_none")]
-        provider_options: Option<ProviderMetadata>,
+        provider_options: Option<ProviderOptions>,
     },
     /// Error JSON output.
     ErrorJson {
@@ -259,7 +293,7 @@ pub enum ToolResultContent {
         value: JSONValue,
         /// Provider-specific options.
         #[serde(skip_serializing_if = "Option::is_none")]
-        provider_options: Option<ProviderMetadata>,
+        provider_options: Option<ProviderOptions>,
     },
     /// Multiple content parts.
     Content {
@@ -267,7 +301,7 @@ pub enum ToolResultContent {
         value: Vec<ToolResultContentPart>,
         /// Provider-specific options.
         #[serde(skip_serializing_if = "Option::is_none")]
-        provider_options: Option<ProviderMetadata>,
+        provider_options: Option<ProviderOptions>,
     },
 }
 
@@ -335,9 +369,17 @@ impl From<&str> for ToolResultContent {
 
 /// A part of tool result content.
 ///
-/// Matches the content array items in LanguageModelV4ToolResultOutput.
+/// Matches the `content` array items in `LanguageModelV4ToolResultOutput`
+/// from the v4 spec — TS source has 5 variants: `text`, `file-data`,
+/// `file-url`, `file-reference`, `custom`. Image / non-image are
+/// distinguished by `media_type` (image/png vs application/pdf etc.),
+/// not by separate variants.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "kebab-case")]
+#[serde(
+    tag = "type",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
 pub enum ToolResultContentPart {
     /// Text content.
     Text {
@@ -345,72 +387,47 @@ pub enum ToolResultContentPart {
         text: String,
         /// Provider-specific options.
         #[serde(skip_serializing_if = "Option::is_none")]
-        provider_options: Option<ProviderMetadata>,
+        provider_options: Option<ProviderOptions>,
     },
     /// File data (base64 encoded).
     FileData {
         /// Base-64 encoded media data.
         data: String,
         /// IANA media type.
-        #[serde(rename = "mediaType")]
         media_type: String,
         /// Optional filename.
         #[serde(skip_serializing_if = "Option::is_none")]
         filename: Option<String>,
         /// Provider-specific options.
         #[serde(skip_serializing_if = "Option::is_none")]
-        provider_options: Option<ProviderMetadata>,
+        provider_options: Option<ProviderOptions>,
     },
     /// File URL reference.
     FileUrl {
         /// URL of the file.
         url: String,
-        /// Provider-specific options.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        provider_options: Option<ProviderMetadata>,
-    },
-    /// File ID reference.
-    FileId {
-        /// ID of the file, can be a string or a map of provider to ID.
-        #[serde(rename = "fileId")]
-        file_id: FileIdReference,
-        /// Provider-specific options.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        provider_options: Option<ProviderMetadata>,
-    },
-    /// Image data (base64 encoded).
-    ImageData {
-        /// Base-64 encoded image data.
-        data: String,
-        /// IANA media type.
-        #[serde(rename = "mediaType")]
+        /// IANA media type. TS spec carries this; Rust now honors it.
         media_type: String,
         /// Provider-specific options.
         #[serde(skip_serializing_if = "Option::is_none")]
-        provider_options: Option<ProviderMetadata>,
+        provider_options: Option<ProviderOptions>,
     },
-    /// Image URL reference.
-    ImageUrl {
-        /// URL of the image.
-        url: String,
+    /// Provider reference (cross-provider file identifier mapping).
+    /// Replaces the old `FileId { file_id: ... }` variant; field is
+    /// `providerReference` to match the TS spec exactly.
+    FileReference {
+        /// Provider-specific references for the file (e.g.
+        /// `{ "openai": "file-abc", "anthropic": "file-xyz" }`).
+        provider_reference: SharedV4ProviderReference,
         /// Provider-specific options.
         #[serde(skip_serializing_if = "Option::is_none")]
-        provider_options: Option<ProviderMetadata>,
-    },
-    /// Image file ID reference.
-    ImageFileId {
-        /// Image file ID, can be a string or a map of provider to ID.
-        #[serde(rename = "fileId")]
-        file_id: FileIdReference,
-        /// Provider-specific options.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        provider_options: Option<ProviderMetadata>,
+        provider_options: Option<ProviderOptions>,
     },
     /// Custom content part for provider-specific content.
     Custom {
         /// Provider-specific options.
         #[serde(skip_serializing_if = "Option::is_none")]
-        provider_options: Option<ProviderMetadata>,
+        provider_options: Option<ProviderOptions>,
     },
 }
 
@@ -423,7 +440,7 @@ impl ToolResultContentPart {
         }
     }
 
-    /// Create a file data part.
+    /// Create a file data part (base64).
     pub fn file_data(data: impl Into<String>, media_type: impl Into<String>) -> Self {
         Self::FileData {
             data: data.into(),
@@ -433,45 +450,27 @@ impl ToolResultContentPart {
         }
     }
 
-    /// Create an image data part.
-    pub fn image_data(data: impl Into<String>, media_type: impl Into<String>) -> Self {
-        Self::ImageData {
-            data: data.into(),
+    /// Create a file URL part.
+    pub fn file_url(url: impl Into<String>, media_type: impl Into<String>) -> Self {
+        Self::FileUrl {
+            url: url.into(),
             media_type: media_type.into(),
             provider_options: None,
         }
     }
 
-    /// Create an image URL part.
-    pub fn image_url(url: impl Into<String>) -> Self {
-        Self::ImageUrl {
-            url: url.into(),
+    /// Create a provider reference part from a provider→id map.
+    pub fn file_reference(reference: SharedV4ProviderReference) -> Self {
+        Self::FileReference {
+            provider_reference: reference,
             provider_options: None,
         }
     }
 }
 
-/// File ID reference that can be either a single string or a provider-to-ID mapping.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum FileIdReference {
-    /// A single file ID string.
-    Single(String),
-    /// A mapping from provider name to file ID.
-    Mapped(std::collections::HashMap<String, String>),
-}
-
-impl From<String> for FileIdReference {
-    fn from(s: String) -> Self {
-        Self::Single(s)
-    }
-}
-
-impl From<&str> for FileIdReference {
-    fn from(s: &str) -> Self {
-        Self::Single(s.to_string())
-    }
-}
+/// Cross-provider file identifier mapping — `{provider_name: file_id}`.
+/// Mirrors TS `SharedV4ProviderReference`.
+pub type SharedV4ProviderReference = std::collections::HashMap<String, String>;
 
 /// User message content parts.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -490,7 +489,7 @@ impl UserContentPart {
     }
 
     /// Create a file part.
-    pub fn file(data: DataContent, media_type: impl Into<String>) -> Self {
+    pub fn file(data: SharedV4FileData, media_type: impl Into<String>) -> Self {
         Self::File(FilePart::new(data, media_type))
     }
 
@@ -506,12 +505,17 @@ impl UserContentPart {
 }
 
 /// A reasoning file content part (file data that is part of reasoning).
+///
+/// `data` is a 2-arm tagged union:
+/// - `Data { data }` — raw bytes or base64-encoded string.
+/// - `Url { url }` — a URL pointing to the file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReasoningFilePart {
-    /// The file data.
-    pub data: DataContent,
-    /// The MIME type of the file.
+    /// The file data (raw bytes/base64 or URL).
+    pub data: crate::language_model::v4::file::LanguageModelV4FileData,
+    /// Either a full IANA media type (`type/subtype`) or just the top-level
+    /// segment (e.g. `image`, `audio`).
     pub media_type: String,
     /// Provider-specific metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -520,7 +524,10 @@ pub struct ReasoningFilePart {
 
 impl ReasoningFilePart {
     /// Create a new reasoning file part.
-    pub fn new(data: DataContent, media_type: impl Into<String>) -> Self {
+    pub fn new(
+        data: crate::language_model::v4::file::LanguageModelV4FileData,
+        media_type: impl Into<String>,
+    ) -> Self {
         Self {
             data,
             media_type: media_type.into(),
@@ -530,7 +537,26 @@ impl ReasoningFilePart {
 
     /// Create from base64 data.
     pub fn from_base64(base64: impl Into<String>, media_type: impl Into<String>) -> Self {
-        Self::new(DataContent::from_base64(base64), media_type)
+        Self::new(
+            crate::language_model::v4::file::LanguageModelV4FileData::base64(base64),
+            media_type,
+        )
+    }
+
+    /// Create from bytes.
+    pub fn from_bytes(bytes: Vec<u8>, media_type: impl Into<String>) -> Self {
+        Self::new(
+            crate::language_model::v4::file::LanguageModelV4FileData::bytes(bytes),
+            media_type,
+        )
+    }
+
+    /// Create from a URL.
+    pub fn from_url(url: impl Into<String>, media_type: impl Into<String>) -> Self {
+        Self::new(
+            crate::language_model::v4::file::LanguageModelV4FileData::url(url),
+            media_type,
+        )
     }
 
     /// Add provider metadata.

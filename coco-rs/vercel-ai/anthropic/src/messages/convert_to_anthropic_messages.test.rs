@@ -564,7 +564,7 @@ fn maps_image_wildcard_to_image_jpeg() {
     let prompt = vec![LanguageModelV4Message::User {
         content: vec![UserContentPart::File(
             vercel_ai_provider::content::FilePart {
-                data: DataContent::Base64("abc".into()),
+                data: vercel_ai_provider::SharedV4FileData::data_base64("abc"),
                 media_type: "image/*".into(),
                 filename: None,
                 provider_metadata: None,
@@ -878,6 +878,7 @@ fn code_execution_result_preserves_existing_content() {
 
 #[test]
 fn tool_result_content_image_data() {
+    // Image data — distinguished by media_type starting with "image/"
     let prompt = vec![LanguageModelV4Message::Tool {
         content: vec![ToolContentPart::ToolResult(
             vercel_ai_provider::content::ToolResultPart {
@@ -885,9 +886,10 @@ fn tool_result_content_image_data() {
                 tool_name: String::new(),
                 is_error: false,
                 output: ToolResultContent::Content {
-                    value: vec![vercel_ai_provider::ToolResultContentPart::ImageData {
+                    value: vec![vercel_ai_provider::ToolResultContentPart::FileData {
                         data: "iVBOR...".into(),
                         media_type: "image/png".into(),
+                        filename: None,
                         provider_options: None,
                     }],
                     provider_options: None,
@@ -909,6 +911,7 @@ fn tool_result_content_image_data() {
 
 #[test]
 fn tool_result_content_image_url() {
+    // Image URL — FileUrl with image/* media_type routes to image block.
     let prompt = vec![LanguageModelV4Message::Tool {
         content: vec![ToolContentPart::ToolResult(
             vercel_ai_provider::content::ToolResultPart {
@@ -916,8 +919,9 @@ fn tool_result_content_image_url() {
                 tool_name: String::new(),
                 is_error: false,
                 output: ToolResultContent::Content {
-                    value: vec![vercel_ai_provider::ToolResultContentPart::ImageUrl {
+                    value: vec![vercel_ai_provider::ToolResultContentPart::FileUrl {
                         url: "https://example.com/img.png".into(),
+                        media_type: "image/png".into(),
                         provider_options: None,
                     }],
                     provider_options: None,
@@ -948,6 +952,7 @@ fn tool_result_content_file_url() {
                 output: ToolResultContent::Content {
                     value: vec![vercel_ai_provider::ToolResultContentPart::FileUrl {
                         url: "https://example.com/doc.pdf".into(),
+                        media_type: "application/pdf".into(),
                         provider_options: None,
                     }],
                     provider_options: None,
@@ -1038,11 +1043,11 @@ fn tool_result_content_file_data_unsupported_media_type_warns() {
 
 #[test]
 fn tool_result_content_custom_tool_reference() {
+    let mut inner = HashMap::new();
+    inner.insert("type".into(), json!("tool-reference"));
+    inner.insert("toolName".into(), json!("my_tool"));
     let mut po = HashMap::new();
-    po.insert(
-        "anthropic".into(),
-        json!({"type": "tool-reference", "toolName": "my_tool"}),
-    );
+    po.insert("anthropic".into(), inner);
     let prompt = vec![LanguageModelV4Message::Tool {
         content: vec![ToolContentPart::ToolResult(
             vercel_ai_provider::content::ToolResultPart {
@@ -1051,7 +1056,7 @@ fn tool_result_content_custom_tool_reference() {
                 is_error: false,
                 output: ToolResultContent::Content {
                     value: vec![vercel_ai_provider::ToolResultContentPart::Custom {
-                        provider_options: Some(ProviderMetadata(po)),
+                        provider_options: Some(ProviderOptions::from_map(po.clone())),
                     }],
                     provider_options: None,
                 },
@@ -1071,8 +1076,10 @@ fn tool_result_content_custom_tool_reference() {
 
 #[test]
 fn tool_result_content_custom_unsupported_warns() {
+    let mut inner = HashMap::new();
+    inner.insert("type".into(), json!("unknown-type"));
     let mut po = HashMap::new();
-    po.insert("anthropic".into(), json!({"type": "unknown-type"}));
+    po.insert("anthropic".into(), inner);
     let prompt = vec![LanguageModelV4Message::Tool {
         content: vec![ToolContentPart::ToolResult(
             vercel_ai_provider::content::ToolResultPart {
@@ -1081,7 +1088,7 @@ fn tool_result_content_custom_unsupported_warns() {
                 is_error: false,
                 output: ToolResultContent::Content {
                     value: vec![vercel_ai_provider::ToolResultContentPart::Custom {
-                        provider_options: Some(ProviderMetadata(po)),
+                        provider_options: Some(ProviderOptions::from_map(po.clone())),
                     }],
                     provider_options: None,
                 },
@@ -1105,7 +1112,7 @@ fn unsupported_user_file_media_type_warns() {
     let prompt = vec![LanguageModelV4Message::User {
         content: vec![UserContentPart::File(
             vercel_ai_provider::content::FilePart {
-                data: DataContent::Base64("data".into()),
+                data: vercel_ai_provider::SharedV4FileData::data_base64("data"),
                 media_type: "application/zip".into(),
                 filename: None,
                 provider_metadata: None,

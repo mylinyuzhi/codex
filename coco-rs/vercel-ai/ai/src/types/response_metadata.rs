@@ -34,7 +34,8 @@ pub struct LanguageModelResponseMetadata {
     /// The response ID from the provider.
     pub id: Option<String>,
     /// The timestamp of the response.
-    pub timestamp: Option<String>,
+    /// Mirrors TS `LanguageModelV4ResponseMetadata.timestamp: Date`.
+    pub timestamp: Option<chrono::DateTime<chrono::Utc>>,
     /// The model ID used for the request.
     pub model_id: Option<String>,
     /// Response headers from the provider.
@@ -56,8 +57,8 @@ impl LanguageModelResponseMetadata {
     }
 
     /// Create response metadata with a timestamp.
-    pub fn with_timestamp(mut self, timestamp: impl Into<String>) -> Self {
-        self.timestamp = Some(timestamp.into());
+    pub fn with_timestamp(mut self, timestamp: chrono::DateTime<chrono::Utc>) -> Self {
+        self.timestamp = Some(timestamp);
         self
     }
 

@@ -102,6 +102,11 @@ pub enum SecureJsonError {
 /// NOT merged. No-op when `body` is not a JSON object.
 ///
 /// Used by language-model `get_args` to apply opaque user-supplied
+/// Returns `true` if `input` is a valid JSON string.
+pub fn is_parsable_json(input: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(input).is_ok()
+}
+
 /// `provider_options[<namespace>]` ("extra_body") onto the wire body
 /// after typed body construction. Every key wins over any earlier
 /// typed write at the same name; the user owns correctness.
@@ -111,6 +116,49 @@ pub fn shallow_merge_object(body: &mut Value, overlay: BTreeMap<String, Value>) 
             obj.insert(k, v);
         }
     }
+}
+
+/// Deep-merge two JSON values.
+///
+/// Object keys merge recursively; arrays and primitives in `overrides`
+/// replace `base`. Prototype-polluting keys (`__proto__`,
+/// `constructor`, `prototype`) are dropped from `overrides`.
+///
+/// Mirrors `@ai-sdk/ai`'s `mergeObjects` and is the single deep-merge
+/// implementation used across the workspace — `vercel-ai` builds
+/// `merge_provider_options` on top of it for per-step overrides, and
+/// `coco-inference::build_call_options` uses it directly for nested
+/// `extra_body` merges. One canonical helper, identical semantics
+/// everywhere.
+pub fn merge_json_value(base: &Value, overrides: &Value) -> Value {
+    match (base, overrides) {
+        (Value::Object(base_map), Value::Object(override_map)) => {
+            let mut result = base_map.clone();
+            for (key, override_value) in override_map {
+                if is_prototype_polluting_key(key) {
+                    continue;
+                }
+                match result.get(key) {
+                    Some(base_value) => {
+                        result.insert(key.clone(), merge_json_value(base_value, override_value));
+                    }
+                    None => {
+                        result.insert(key.clone(), override_value.clone());
+                    }
+                }
+            }
+            Value::Object(result)
+        }
+        _ => overrides.clone(),
+    }
+}
+
+/// Whether `key` is one of the JS prototype-pollution keys
+/// (`__proto__`, `constructor`, `prototype`). Used by deep-merge
+/// helpers to drop untrusted nested keys without changing the merge
+/// shape.
+pub fn is_prototype_polluting_key(key: &str) -> bool {
+    matches!(key, "__proto__" | "constructor" | "prototype")
 }
 
 #[cfg(test)]

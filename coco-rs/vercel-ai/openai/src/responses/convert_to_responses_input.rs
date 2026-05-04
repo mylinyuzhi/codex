@@ -3,10 +3,11 @@ use std::collections::HashSet;
 use serde_json::Value;
 use serde_json::json;
 use vercel_ai_provider::AssistantContentPart;
-use vercel_ai_provider::DataContent;
+use vercel_ai_provider::FileRawData;
 use vercel_ai_provider::LanguageModelV4Message;
 use vercel_ai_provider::LanguageModelV4Prompt;
 use vercel_ai_provider::LanguageModelV4Tool;
+use vercel_ai_provider::SharedV4FileData;
 use vercel_ai_provider::ToolContentPart;
 use vercel_ai_provider::ToolResultContent;
 use vercel_ai_provider::ToolResultContentPart;
@@ -175,35 +176,47 @@ fn convert_user_parts(parts: &[UserContentPart]) -> Vec<Value> {
             UserContentPart::File(file_part) => {
                 let media_type = &file_part.media_type;
                 if media_type.starts_with("image/") {
-                    // Convert wildcard image/* to image/jpeg
                     let effective_type = if media_type == "image/*" {
                         "image/jpeg"
                     } else {
                         media_type.as_str()
                     };
-                    // Check for file ID
-                    if let DataContent::Base64(ref s) = file_part.data
+                    // Provider reference → file ID lookup
+                    if let SharedV4FileData::Reference { reference } = &file_part.data
+                        && let Some(file_id) = reference.get("openai")
+                    {
+                        return json!({ "type": "input_image", "file_id": file_id });
+                    }
+                    // Backward-compat: bare base64 string starting with "file-"
+                    if let SharedV4FileData::Data {
+                        data: FileRawData::Base64(ref s),
+                    } = file_part.data
                         && s.starts_with("file-")
                     {
                         return json!({ "type": "input_image", "file_id": s });
                     }
-                    let url = data_content_to_url(&file_part.data, effective_type);
+                    let url = shared_file_data_to_url(&file_part.data, effective_type);
                     json!({ "type": "input_image", "image_url": url })
                 } else if media_type == "application/pdf" {
-                    // Check for file ID
-                    if let DataContent::Base64(ref s) = file_part.data
+                    if let SharedV4FileData::Reference { reference } = &file_part.data
+                        && let Some(file_id) = reference.get("openai")
+                    {
+                        return json!({ "type": "input_file", "file_id": file_id });
+                    }
+                    if let SharedV4FileData::Data {
+                        data: FileRawData::Base64(ref s),
+                    } = file_part.data
                         && s.starts_with("file-")
                     {
                         return json!({ "type": "input_file", "file_id": s });
                     }
-                    let b64 = data_content_to_base64(&file_part.data);
+                    let b64 = shared_file_data_to_base64(&file_part.data);
                     json!({
                         "type": "input_file",
                         "file_data": format!("data:{media_type};base64,{b64}"),
                     })
                 } else {
-                    // Generic file
-                    let b64 = data_content_to_base64(&file_part.data);
+                    let b64 = shared_file_data_to_base64(&file_part.data);
                     json!({
                         "type": "input_file",
                         "file_data": format!("data:{media_type};base64,{b64}"),
@@ -408,12 +421,16 @@ fn serialize_tool_result_for_responses(content: &ToolResultContent) -> Value {
                     ToolResultContentPart::Text { text, .. } => {
                         Some(json!({ "type": "input_text", "text": text }))
                     }
-                    ToolResultContentPart::ImageUrl { url, .. } => {
+                    // image content is FileUrl with image/* media_type or
+                    // FileData with image/* media_type
+                    ToolResultContentPart::FileUrl { url, media_type, .. }
+                        if media_type.starts_with("image/") || media_type == "image" =>
+                    {
                         Some(json!({ "type": "input_image", "image_url": url }))
                     }
-                    ToolResultContentPart::ImageData {
+                    ToolResultContentPart::FileData {
                         data, media_type, ..
-                    } => Some(
+                    } if media_type.starts_with("image/") => Some(
                         json!({ "type": "input_image", "image_url": format!("data:{media_type};base64,{data}") }),
                     ),
                     _ => None,
@@ -424,31 +441,46 @@ fn serialize_tool_result_for_responses(content: &ToolResultContent) -> Value {
     }
 }
 
-fn data_content_to_url(data: &DataContent, media_type: &str) -> String {
+fn shared_file_data_to_url(data: &SharedV4FileData, media_type: &str) -> String {
     match data {
-        DataContent::Url(url) => url.clone(),
-        DataContent::Base64(b64) => format!("data:{media_type};base64,{b64}"),
-        DataContent::Bytes(bytes) => {
-            use base64::Engine;
-            let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+        SharedV4FileData::Url { url } => url.clone(),
+        SharedV4FileData::Data { data: raw } => {
+            let b64 = raw_to_base64(raw);
             format!("data:{media_type};base64,{b64}")
         }
+        SharedV4FileData::Text { text } => {
+            use base64::Engine as _;
+            let b64 = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
+            format!("data:{media_type};base64,{b64}")
+        }
+        SharedV4FileData::Reference { .. } => String::new(),
     }
 }
 
-fn data_content_to_base64(data: &DataContent) -> String {
+fn shared_file_data_to_base64(data: &SharedV4FileData) -> String {
     match data {
-        DataContent::Base64(b64) => b64.clone(),
-        DataContent::Bytes(bytes) => {
-            use base64::Engine;
-            base64::engine::general_purpose::STANDARD.encode(bytes)
-        }
-        DataContent::Url(url) => {
+        SharedV4FileData::Data { data: raw } => raw_to_base64(raw),
+        SharedV4FileData::Url { url } => {
             if let Some(idx) = url.find(";base64,") {
                 url[idx + 8..].to_string()
             } else {
                 url.clone()
             }
+        }
+        SharedV4FileData::Text { text } => {
+            use base64::Engine as _;
+            base64::engine::general_purpose::STANDARD.encode(text.as_bytes())
+        }
+        SharedV4FileData::Reference { .. } => String::new(),
+    }
+}
+
+fn raw_to_base64(raw: &FileRawData) -> String {
+    match raw {
+        FileRawData::Base64(b64) => b64.clone(),
+        FileRawData::Bytes(bytes) => {
+            use base64::Engine as _;
+            base64::engine::general_purpose::STANDARD.encode(bytes)
         }
     }
 }
