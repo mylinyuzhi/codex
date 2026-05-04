@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use crate::embedding_model::EmbeddingModelV4;
 use crate::errors::NoSuchModelError;
+use crate::files::FilesV4;
 use crate::image_model::ImageModelV4;
 use crate::language_model::LanguageModelV4;
 use crate::reranking_model::RerankingModelV4;
@@ -90,6 +91,13 @@ pub trait ProviderV4: Send + Sync {
             model_id,
             "videoModel",
         ))
+    }
+
+    /// Get the files interface for uploading files to this provider.
+    ///
+    /// Returns `None` if the provider does not support file uploads.
+    fn files(&self) -> Option<&dyn FilesV4> {
+        None
     }
 }
 

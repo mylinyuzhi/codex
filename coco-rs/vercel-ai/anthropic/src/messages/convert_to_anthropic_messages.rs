@@ -4,10 +4,11 @@ use std::collections::HashSet;
 use serde_json::Value;
 use serde_json::json;
 use vercel_ai_provider::AssistantContentPart;
-use vercel_ai_provider::DataContent;
+use vercel_ai_provider::FileRawData;
 use vercel_ai_provider::LanguageModelV4Message;
 use vercel_ai_provider::LanguageModelV4Prompt;
 use vercel_ai_provider::ProviderOptions;
+use vercel_ai_provider::SharedV4FileData;
 use vercel_ai_provider::ToolContentPart;
 use vercel_ai_provider::ToolResultContent;
 use vercel_ai_provider::UserContentPart;
@@ -1349,30 +1350,27 @@ fn convert_tool_result_content_part(
         vercel_ai_provider::ToolResultContentPart::Text { text, .. } => {
             Some(json!({"type": "text", "text": text}))
         }
-        vercel_ai_provider::ToolResultContentPart::ImageData {
-            data, media_type, ..
-        } => Some(json!({
-            "type": "image",
-            "source": {
-                "type": "base64",
-                "media_type": media_type,
-                "data": data,
+        vercel_ai_provider::ToolResultContentPart::FileUrl {
+            url, media_type, ..
+        } => {
+            if media_type.starts_with("image/") || media_type == "image" {
+                Some(json!({
+                    "type": "image",
+                    "source": { "type": "url", "url": url }
+                }))
+            } else {
+                Some(json!({
+                    "type": "document",
+                    "source": { "type": "url", "url": url }
+                }))
             }
-        })),
-        vercel_ai_provider::ToolResultContentPart::ImageUrl { url, .. } => Some(json!({
-            "type": "image",
-            "source": {
-                "type": "url",
-                "url": url,
-            }
-        })),
-        vercel_ai_provider::ToolResultContentPart::FileUrl { url, .. } => Some(json!({
-            "type": "document",
-            "source": {
-                "type": "url",
-                "url": url,
-            }
-        })),
+        }
+        vercel_ai_provider::ToolResultContentPart::FileReference { .. } => {
+            warnings.push(Warning::Other {
+                message: "Anthropic does not accept tool-result file-reference parts".into(),
+            });
+            None
+        }
         vercel_ai_provider::ToolResultContentPart::FileData {
             data, media_type, ..
         } => {
@@ -1431,18 +1429,6 @@ fn convert_tool_result_content_part(
                 None
             }
         }
-        _ => {
-            let type_name = format!("{part:?}");
-            let type_name = type_name
-                .split_once('{')
-                .or_else(|| type_name.split_once(' '))
-                .map(|(name, _)| name.trim())
-                .unwrap_or(&type_name);
-            warnings.push(Warning::Other {
-                message: format!("unsupported tool content part type: {type_name}"),
-            });
-            None
-        }
     }
 }
 
@@ -1450,78 +1436,69 @@ fn convert_tool_result_content_part(
 // Data content conversion helpers
 // ---------------------------------------------------------------------------
 
-/// Convert DataContent to an Anthropic source object (`base64` or `url`).
-fn data_content_to_anthropic_source(data: &DataContent, media_type: &str) -> Value {
-    match data {
-        DataContent::Url(url) => {
-            json!({
-                "type": "url",
-                "url": url,
-            })
-        }
-        DataContent::Base64(b64) => {
-            json!({
-                "type": "base64",
-                "media_type": media_type,
-                "data": b64,
-            })
-        }
-        DataContent::Bytes(bytes) => {
-            use base64::Engine;
-            let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
-            json!({
-                "type": "base64",
-                "media_type": media_type,
-                "data": b64,
-            })
+/// Convert a `FileRawData` (bytes or base64) to a base64 string.
+fn file_raw_data_to_base64(raw: &FileRawData) -> String {
+    match raw {
+        FileRawData::Base64(b64) => b64.clone(),
+        FileRawData::Bytes(bytes) => {
+            use base64::Engine as _;
+            base64::engine::general_purpose::STANDARD.encode(bytes)
         }
     }
 }
 
-/// Convert DataContent to a text source for text/* documents.
-fn data_content_to_text_source(data: &DataContent, media_type: &str) -> Value {
+/// Convert `SharedV4FileData` to an Anthropic source object (`base64` or `url`).
+fn data_content_to_anthropic_source(data: &SharedV4FileData, media_type: &str) -> Value {
     match data {
-        DataContent::Base64(b64) => {
-            // Try to decode the base64 to get the text
-            use base64::Engine;
-            if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(b64)
-                && let Ok(text) = String::from_utf8(bytes)
-            {
-                return json!({
-                    "type": "text",
-                    "media_type": media_type,
-                    "data": text,
-                });
-            }
-            // Fall back to base64
-            json!({
-                "type": "base64",
-                "media_type": media_type,
-                "data": b64,
-            })
+        SharedV4FileData::Url { url } => {
+            json!({ "type": "url", "url": url })
         }
-        DataContent::Bytes(bytes) => {
-            if let Ok(text) = String::from_utf8(bytes.clone()) {
-                json!({
-                    "type": "text",
-                    "media_type": media_type,
-                    "data": text,
-                })
-            } else {
-                use base64::Engine;
-                let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
-                json!({
-                    "type": "base64",
-                    "media_type": media_type,
-                    "data": b64,
-                })
-            }
+        SharedV4FileData::Data { data: raw } => {
+            let b64 = file_raw_data_to_base64(raw);
+            json!({ "type": "base64", "media_type": media_type, "data": b64 })
         }
-        DataContent::Url(url) => {
-            json!({
-                "type": "url",
-                "url": url,
-            })
+        SharedV4FileData::Text { text } => {
+            json!({ "type": "text", "media_type": media_type, "data": text })
+        }
+        SharedV4FileData::Reference { reference } => {
+            // Provider references are not supported as Anthropic sources in this context;
+            // return a placeholder that will surface as an API error.
+            json!({ "type": "reference", "reference": reference })
+        }
+    }
+}
+
+/// Convert `SharedV4FileData` to a text source for text/* documents.
+fn data_content_to_text_source(data: &SharedV4FileData, media_type: &str) -> Value {
+    match data {
+        SharedV4FileData::Text { text } => {
+            json!({ "type": "text", "media_type": media_type, "data": text })
+        }
+        SharedV4FileData::Data { data: raw } => match raw {
+            FileRawData::Base64(b64) => {
+                use base64::Engine as _;
+                if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(b64)
+                    && let Ok(text) = String::from_utf8(bytes)
+                {
+                    return json!({ "type": "text", "media_type": media_type, "data": text });
+                }
+                json!({ "type": "base64", "media_type": media_type, "data": b64 })
+            }
+            FileRawData::Bytes(bytes) => {
+                if let Ok(text) = String::from_utf8(bytes.clone()) {
+                    json!({ "type": "text", "media_type": media_type, "data": text })
+                } else {
+                    use base64::Engine as _;
+                    let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+                    json!({ "type": "base64", "media_type": media_type, "data": b64 })
+                }
+            }
+        },
+        SharedV4FileData::Url { url } => {
+            json!({ "type": "url", "url": url })
+        }
+        SharedV4FileData::Reference { reference } => {
+            json!({ "type": "reference", "reference": reference })
         }
     }
 }

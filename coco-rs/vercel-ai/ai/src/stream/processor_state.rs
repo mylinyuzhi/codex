@@ -102,7 +102,7 @@ impl ProcessorState {
 
             // --- Tool Call (complete) ---
             LanguageModelV4StreamPart::ToolCall(tc) => {
-                let input_str = tc.input.to_string();
+                let input_str = tc.input.clone();
                 if let Some(&idx) = self.active_tool_inputs.get(&tc.tool_call_id) {
                     self.snapshot.tool_calls[idx].is_complete = true;
                     // Use the final input from the ToolCall event

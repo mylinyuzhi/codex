@@ -38,6 +38,7 @@ use vercel_ai_provider::LanguageModelV4Prompt;
 use vercel_ai_provider::LanguageModelV4Tool;
 use vercel_ai_provider::ProviderOptions;
 use vercel_ai_provider::ReasoningLevel;
+use vercel_ai_provider_utils::merge_json_value;
 
 /// Per-call deltas applied on top of the resolved `ModelInfo`. Each
 /// field overrides the corresponding model-level value when `Some`.
@@ -109,17 +110,25 @@ pub fn build_call_options(
         call.reasoning = Some(reasoning_effort_to_level(t.effort));
     }
 
-    // Lane B: shallow-merge extra_body and wrap under the canonical
-    // namespace. `BTreeMap` so key order in tests / snapshots is deterministic.
+    // Lane B: deep-merge extra_body and wrap under the canonical
+    // namespace. `BTreeMap` so key order in tests / snapshots is
+    // deterministic.
+    //
+    // Per-call values layer onto model-level via [`merge_json_value`]:
+    // nested objects merge recursively, arrays/primitives replace.
+    // Reuses vercel-ai's helper so `__proto__` / `constructor` /
+    // `prototype` pollution is filtered, and the merge semantics stay
+    // identical to what `vercel_ai::generate_text` does for its
+    // per-step `prepare_step` provider-option overrides.
     let mut extra: BTreeMap<String, serde_json::Value> = info.extra_body.clone();
     for (k, v) in &per_call.extra_body {
-        extra.insert(k.clone(), v.clone());
+        merge_into_extra(&mut extra, k, v);
     }
     if let Some(t) = thinking
         && t.effort != ReasoningEffort::None
     {
         for (k, v) in thinking_convert::to_extra_body(t, api) {
-            extra.insert(k, v);
+            merge_into_extra(&mut extra, &k, &v);
         }
     }
 
@@ -171,6 +180,26 @@ pub fn canonical_namespace_key(api: ProviderApi, provider_name: &str) -> &str {
         ProviderApi::Openai => "openai",
         ProviderApi::Gemini => "google",
         ProviderApi::OpenaiCompat | ProviderApi::Volcengine | ProviderApi::Zai => provider_name,
+    }
+}
+
+/// Insert `value` at `key` in `extra`, deep-merging when both the
+/// existing entry and `value` are JSON objects. Drops in delegation to
+/// vercel-ai's [`merge_json_value`] so semantics (recursive object
+/// merge, primitive/array replacement, `__proto__` filtering) match the
+/// AI layer's per-step ProviderOptions merge byte for byte.
+fn merge_into_extra(
+    extra: &mut BTreeMap<String, serde_json::Value>,
+    key: &str,
+    value: &serde_json::Value,
+) {
+    match extra.get(key) {
+        Some(existing) => {
+            extra.insert(key.to_string(), merge_json_value(existing, value));
+        }
+        None => {
+            extra.insert(key.to_string(), value.clone());
+        }
     }
 }
 

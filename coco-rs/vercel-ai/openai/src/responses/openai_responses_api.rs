@@ -50,6 +50,13 @@ pub enum ResponseOutputItem {
         call_id: Option<String>,
         name: Option<String>,
         arguments: Option<String>,
+        /// Namespace marker — present when the function_call originated
+        /// from a server-executed tool_search dispatching to a deferred
+        /// client-side tool. Surfaces as
+        /// `provider_metadata.openai.namespace` on the resulting
+        /// `tool-call` part. (TS upstream #14789)
+        #[serde(default)]
+        namespace: Option<String>,
     },
     #[serde(rename = "function_call_output")]
     FunctionCallOutput {

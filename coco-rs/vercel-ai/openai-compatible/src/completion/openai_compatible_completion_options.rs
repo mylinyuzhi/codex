@@ -2,6 +2,8 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
 
+use crate::provider_options_key::get_effective_provider_options;
+
 /// Provider-specific options for OpenAI-compatible completion models.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -23,11 +25,7 @@ pub fn extract_completion_options(
     OpenAICompatibleCompletionProviderOptions,
     HashMap<String, Value>,
 ) {
-    let raw = provider_options.as_ref().and_then(|opts| {
-        opts.0
-            .get(provider_name)
-            .or_else(|| opts.0.get("openaiCompatible"))
-    });
+    let raw = get_effective_provider_options(provider_name, provider_options.as_ref());
 
     let typed = raw
         .and_then(|v| serde_json::to_value(v).ok())

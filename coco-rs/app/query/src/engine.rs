@@ -1049,20 +1049,36 @@ impl QueryEngine {
                             && let Some(buf) = tool_buffers.get(&id)
                             && buf.complete
                         {
-                            let input: serde_json::Value = if buf.input_json.trim().is_empty() {
-                                serde_json::Value::Object(Default::default())
-                            } else {
-                                match serde_json::from_str(&buf.input_json) {
-                                    Ok(v) => v,
-                                    Err(e) => {
-                                        warn!(
+                            // Strict parse → repair fallback (trailing
+                            // commas, unquoted keys, unclosed strings /
+                            // brackets). Models occasionally emit these;
+                            // the repair pass turns "drop the call" into
+                            // "run with the obvious intent".
+                            let input: serde_json::Value = match coco_tool_runtime::parse_tool_input(
+                                &buf.input_json,
+                            ) {
+                                Ok((v, outcome)) => {
+                                    if let coco_tool_runtime::ParseOutcome::Repaired {
+                                        repaired_with,
+                                    } = outcome
+                                    {
+                                        tracing::info!(
                                             tool_call_id = %id,
                                             tool_name = %buf.tool_name,
-                                            error = %e,
-                                            "streaming tool input JSON parse failed; dropping call"
+                                            repaired_with = ?repaired_with,
+                                            "streaming tool input JSON repaired before execution",
                                         );
-                                        continue;
                                     }
+                                    v
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        tool_call_id = %id,
+                                        tool_name = %buf.tool_name,
+                                        error = %e,
+                                        "streaming tool input JSON parse failed; dropping call"
+                                    );
+                                    continue;
                                 }
                             };
                             let tcp = ToolCallPart {
@@ -1257,11 +1273,24 @@ impl QueryEngine {
                     warn!(tool_call_id = %call_id, "tool call buffer did not complete");
                     continue;
                 }
-                let input: serde_json::Value = if buf.input_json.trim().is_empty() {
-                    serde_json::Value::Object(Default::default())
-                } else {
-                    match serde_json::from_str(&buf.input_json) {
-                        Ok(v) => v,
+                // Strict parse → repair fallback (same path as the
+                // streaming branch). Repaired calls are logged so we
+                // can observe real-world hit rates per provider.
+                let input: serde_json::Value =
+                    match coco_tool_runtime::parse_tool_input(&buf.input_json) {
+                        Ok((v, outcome)) => {
+                            if let coco_tool_runtime::ParseOutcome::Repaired { repaired_with } =
+                                outcome
+                            {
+                                tracing::info!(
+                                    tool_call_id = %call_id,
+                                    tool_name = %buf.tool_name,
+                                    repaired_with = ?repaired_with,
+                                    "tool input JSON repaired before execution",
+                                );
+                            }
+                            v
+                        }
                         Err(e) => {
                             warn!(
                                 tool_call_id = %call_id,
@@ -1272,8 +1301,7 @@ impl QueryEngine {
                             );
                             continue;
                         }
-                    }
-                };
+                    };
                 tool_calls.push(ToolCallPart {
                     tool_call_id: call_id.clone(),
                     tool_name: buf.tool_name.clone(),

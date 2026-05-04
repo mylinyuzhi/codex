@@ -38,6 +38,7 @@
 //! ```
 
 // Module declarations
+pub mod add_additional_properties_to_json_schema;
 pub mod api;
 pub mod data_uri;
 pub mod delay;
@@ -54,8 +55,12 @@ pub mod load_api_key;
 pub mod load_setting;
 pub mod map_reasoning_to_provider;
 pub mod media_type;
+pub mod parse_provider_options;
+pub mod resolve_full_media_type;
+pub mod resolve_provider_reference;
 pub mod response_handler;
 pub mod schema;
+pub mod streaming_tool_call_tracker;
 pub mod strip_extension;
 pub mod tool_execution;
 pub mod tool_mapping;
@@ -97,6 +102,8 @@ pub use headers::combine_headers;
 pub use headers::extract_header;
 pub use headers::normalize_headers;
 
+pub use json::is_prototype_polluting_key;
+pub use json::merge_json_value;
 pub use json::parse_json;
 pub use json::parse_json_event_stream;
 pub use json::shallow_merge_object;
@@ -175,6 +182,19 @@ pub use types::ExecutableTool;
 pub use types::SimpleTool;
 pub use types::ToolExecutionOptions;
 pub use types::ToolRegistry;
+
+// Streaming tool call tracking
+pub use parse_provider_options::parse_provider_options;
+pub use parse_provider_options::parse_provider_options_with_fallback;
+pub use resolve_provider_reference::resolve_provider_reference;
+pub use streaming_tool_call_tracker::StreamingToolCallDelta;
+pub use streaming_tool_call_tracker::StreamingToolCallTracker;
+pub use streaming_tool_call_tracker::StreamingToolCallTrackerOptions;
+pub use streaming_tool_call_tracker::ToolCallDeltaFunction;
+pub use streaming_tool_call_tracker::TypeValidation;
+
+// JSON utilities
+pub use json::is_parsable_json;
 
 // Version constant
 pub use version::VERSION;

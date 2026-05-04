@@ -2,6 +2,8 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
 
+use crate::provider_options_key::get_effective_provider_options;
+
 /// Provider-specific options for OpenAI-compatible Chat models.
 ///
 /// Only includes the 4 fields defined in the openai-compatible schema.
@@ -44,12 +46,7 @@ pub fn extract_compatible_options(
         );
     };
 
-    // Resolve raw value with precedence: providerOptionsName > openaiCompatible
-    // (TS also checks deprecated "openai-compatible" but Rust omits hyphenated keys)
-    let raw = opts
-        .0
-        .get(provider_name)
-        .or_else(|| opts.0.get("openaiCompatible"));
+    let raw = get_effective_provider_options(provider_name, Some(opts));
 
     let Some(raw) = raw else {
         return (

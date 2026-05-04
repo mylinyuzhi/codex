@@ -1,10 +1,10 @@
 use futures::stream;
 use serde_json::json;
+use vercel_ai_provider::LanguageModelV4ToolCall;
 use vercel_ai_provider::errors::AISdkError;
 use vercel_ai_provider::language_model::v4::finish_reason::FinishReason;
 use vercel_ai_provider::language_model::v4::stream::LanguageModelV4StreamPart;
 use vercel_ai_provider::language_model::v4::usage::Usage;
-use vercel_ai_provider::tool::ToolCall;
 
 use super::*;
 
@@ -148,10 +148,10 @@ async fn test_tool_call_with_streaming_input() {
             id: "tc1".into(),
             provider_metadata: None,
         },
-        LanguageModelV4StreamPart::ToolCall(ToolCall::new(
+        LanguageModelV4StreamPart::ToolCall(LanguageModelV4ToolCall::new(
             "tc1",
             "read_file",
-            json!({"path": "foo.rs"}),
+            r#"{"path":"foo.rs"}"#,
         )),
         LanguageModelV4StreamPart::Finish {
             usage: Usage::new(5, 10),
@@ -177,7 +177,11 @@ async fn test_tool_call_with_streaming_input() {
 #[tokio::test]
 async fn test_tool_call_without_streaming_input() {
     let parts = vec![
-        LanguageModelV4StreamPart::ToolCall(ToolCall::new("tc1", "bash", json!({"cmd": "ls"}))),
+        LanguageModelV4StreamPart::ToolCall(LanguageModelV4ToolCall::new(
+            "tc1",
+            "bash",
+            r#"{"cmd":"ls"}"#,
+        )),
         LanguageModelV4StreamPart::Finish {
             usage: Usage::new(5, 3),
             finish_reason: FinishReason::tool_calls(),
@@ -214,7 +218,11 @@ async fn test_multiple_tool_calls() {
             id: "tc1".into(),
             provider_metadata: None,
         },
-        LanguageModelV4StreamPart::ToolCall(ToolCall::new("tc1", "read", json!({"a": 1}))),
+        LanguageModelV4StreamPart::ToolCall(LanguageModelV4ToolCall::new(
+            "tc1",
+            "read",
+            r#"{"a":1}"#,
+        )),
         LanguageModelV4StreamPart::ToolInputStart {
             id: "tc2".into(),
             tool_name: "write".into(),
@@ -232,7 +240,11 @@ async fn test_multiple_tool_calls() {
             id: "tc2".into(),
             provider_metadata: None,
         },
-        LanguageModelV4StreamPart::ToolCall(ToolCall::new("tc2", "write", json!({"b": 2}))),
+        LanguageModelV4StreamPart::ToolCall(LanguageModelV4ToolCall::new(
+            "tc2",
+            "write",
+            r#"{"b":2}"#,
+        )),
         LanguageModelV4StreamPart::Finish {
             usage: Usage::new(10, 20),
             finish_reason: FinishReason::tool_calls(),

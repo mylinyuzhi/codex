@@ -49,8 +49,9 @@ pub struct GenerateTextResult {
     pub steps: Vec<StepResult>,
     /// The model ID used.
     pub model_id: Option<String>,
-    /// Response timestamp.
-    pub timestamp: Option<String>,
+    /// Response timestamp (parsed from the provider — typed as
+    /// `DateTime<Utc>` to mirror TS `LanguageModelV4ResponseMetadata.timestamp: Date`).
+    pub timestamp: Option<chrono::DateTime<chrono::Utc>>,
     /// Response headers.
     pub response_headers: Option<std::collections::HashMap<String, String>>,
     /// Sources used in generation (e.g., from RAG).
@@ -99,10 +100,16 @@ impl GenerateTextResult {
         let tool_calls = content_utils::extract_tool_calls(&result.content);
 
         let response = result.response.as_ref().map(|r| {
-            LanguageModelResponseMetadata::new()
-                .with_timestamp(r.timestamp.clone().unwrap_or_default())
+            let mut meta = LanguageModelResponseMetadata::new()
                 .with_model_id(r.model_id.clone().unwrap_or_default())
-                .with_headers(r.headers.clone().unwrap_or_default())
+                .with_headers(r.headers.clone().unwrap_or_default());
+            if let Some(id) = r.id.clone() {
+                meta = meta.with_id(id);
+            }
+            if let Some(ts) = r.timestamp {
+                meta = meta.with_timestamp(ts);
+            }
+            meta
         });
 
         Self {
@@ -119,7 +126,7 @@ impl GenerateTextResult {
             tool_results: Vec::new(),
             steps: Vec::new(),
             model_id: Some(model_id.to_string()),
-            timestamp: result.response.as_ref().and_then(|r| r.timestamp.clone()),
+            timestamp: result.response.as_ref().and_then(|r| r.timestamp),
             response_headers: result.response.and_then(|r| r.headers),
             sources: Vec::new(),
             files: Vec::new(),

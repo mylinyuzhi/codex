@@ -27,6 +27,7 @@ use vercel_ai_provider_utils::post_json_to_api_with_client_and_headers;
 use vercel_ai_provider_utils::post_stream_to_api_with_client_and_headers;
 
 use crate::openai_compatible_config::OpenAICompatibleConfig;
+use crate::provider_options_key::warn_if_deprecated_provider_options_key;
 
 use super::convert_completion_usage::convert_openai_compatible_completion_usage;
 use super::convert_to_completion_prompt::convert_to_completion_prompt;
@@ -74,6 +75,11 @@ impl LanguageModelV4 for OpenAICompatibleCompletionLanguageModel {
     ) -> Result<LanguageModelV4GenerateResult, AISdkError> {
         let mut warnings = Vec::new();
         let provider_name = self.config.provider_options_name();
+        warn_if_deprecated_provider_options_key(
+            provider_name,
+            options.provider_options.as_ref(),
+            &mut warnings,
+        );
         let (compat_opts, passthrough) =
             extract_completion_options(&options.provider_options, provider_name);
         let prompt_result = convert_to_completion_prompt(&options.prompt)?;
@@ -197,8 +203,8 @@ impl LanguageModelV4 for OpenAICompatibleCompletionLanguageModel {
         let response_body = serde_json::to_value(&response).ok();
         let timestamp = response
             .created
-            .and_then(|ts| chrono::DateTime::from_timestamp(ts as i64, 0))
-            .map(|dt| dt.to_rfc3339());
+            .and_then(|ts| chrono::DateTime::from_timestamp(ts as i64, 0));
+        let response_id = response.id.clone();
 
         // Only include text content when non-empty
         let content = if text.is_empty() {
@@ -218,6 +224,7 @@ impl LanguageModelV4 for OpenAICompatibleCompletionLanguageModel {
             provider_metadata: None,
             request: Some(LanguageModelV4Request { body: Some(body) }),
             response: Some(LanguageModelV4Response {
+                id: response_id,
                 timestamp,
                 model_id: response.model,
                 headers: Some(response_headers),
@@ -232,6 +239,11 @@ impl LanguageModelV4 for OpenAICompatibleCompletionLanguageModel {
     ) -> Result<LanguageModelV4StreamResult, AISdkError> {
         let mut warnings = Vec::new();
         let provider_name = self.config.provider_options_name();
+        warn_if_deprecated_provider_options_key(
+            provider_name,
+            options.provider_options.as_ref(),
+            &mut warnings,
+        );
         let (compat_opts, passthrough) =
             extract_completion_options(&options.provider_options, provider_name);
         let prompt_result = convert_to_completion_prompt(&options.prompt)?;

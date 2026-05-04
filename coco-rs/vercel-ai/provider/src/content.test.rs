@@ -119,7 +119,7 @@ fn test_tool_result_content() {
     // Content parts
     let parts = ToolResultContent::content_parts(vec![
         ToolResultContentPart::text("Hello"),
-        ToolResultContentPart::image_url("https://example.com/image.png"),
+        ToolResultContentPart::file_url("https://example.com/image.png", "image/png"),
     ]);
     let json_str = serde_json::to_string(&parts).unwrap();
     let parsed: ToolResultContent = serde_json::from_str(&json_str).unwrap();

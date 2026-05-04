@@ -144,6 +144,8 @@ pub struct AnthropicProviderOptions {
     pub anthropic_beta: Option<Vec<String>>,
     /// Context management configuration.
     pub context_management: Option<Value>,
+    /// Inference geography constraint (`"us"` or `"global"`).
+    pub inference_geo: Option<String>,
 }
 
 /// Extract Anthropic-specific options from generic provider options.
@@ -248,6 +250,7 @@ fn merge_anthropic_options(
         speed: custom.speed.or(canonical.speed),
         anthropic_beta: custom.anthropic_beta.or(canonical.anthropic_beta),
         context_management: custom.context_management.or(canonical.context_management),
+        inference_geo: custom.inference_geo.or(canonical.inference_geo),
     }
 }
 

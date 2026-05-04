@@ -61,6 +61,7 @@ pub use prepare_tools_and_tool_choice::prepare_tools_and_tool_choice;
 pub use standardize::StandardizedPrompt;
 pub use standardize::standardize_messages_prompt;
 pub use standardize::standardize_prompt;
+pub use standardize::standardize_prompt_with_options;
 pub use standardize::standardize_text_prompt;
 pub use types::Prompt;
 pub use types::PromptContent;

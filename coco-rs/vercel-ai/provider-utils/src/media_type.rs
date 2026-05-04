@@ -219,6 +219,42 @@ pub fn parse_media_type(s: &str) -> MediaType {
     }
 }
 
+/// Returns the top-level segment of a media type (the portion before `/`).
+///
+/// Examples:
+/// - `"image/png"` → `"image"`
+/// - `"image/*"` → `"image"`
+/// - `"image"` → `"image"`
+/// - `"image/"` → `"image"`
+/// - `""` → `""`
+/// - `"/"` → `""`
+pub fn get_top_level_media_type(media_type: &str) -> &str {
+    match media_type.find('/') {
+        Some(idx) => &media_type[..idx],
+        None => media_type,
+    }
+}
+
+/// Returns `true` only when the given media type has a non-empty, non-wildcard
+/// subtype (i.e. matches the form `type/subtype`, and `subtype` is not `*`).
+///
+/// Examples:
+/// - `"image/png"` → `true`
+/// - `"image/*"` → `false`
+/// - `"image"` → `false`
+/// - `"image/"` → `false`
+/// - `""` → `false`
+/// - `"/"` → `false`
+pub fn is_full_media_type(media_type: &str) -> bool {
+    match media_type.find('/') {
+        Some(idx) => {
+            let subtype = &media_type[idx + 1..];
+            !subtype.is_empty() && subtype != "*"
+        }
+        None => false,
+    }
+}
+
 #[cfg(test)]
 #[path = "media_type.test.rs"]
 mod tests;

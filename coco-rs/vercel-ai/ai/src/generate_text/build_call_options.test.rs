@@ -1,6 +1,7 @@
 use super::*;
 use crate::prompt::CallSettings;
 use std::collections::HashMap;
+use vercel_ai_provider::ProviderOptions;
 use vercel_ai_provider::language_model::v4::LanguageModelV4FunctionTool;
 
 #[test]
@@ -49,6 +50,67 @@ fn test_build_call_options_with_abort_signal() {
     let opts = build_call_options(&settings, &None, &Some(signal), &None, &None, vec![], &None);
 
     assert!(opts.abort_signal.is_some());
+}
+
+#[test]
+fn test_build_call_options_merges_provider_options() {
+    let mut base_openai = HashMap::new();
+    base_openai.insert(
+        "reasoning".to_string(),
+        serde_json::json!({ "effort": "low", "summary": "auto" }),
+    );
+    base_openai.insert("store".to_string(), serde_json::json!(true));
+
+    let mut base = ProviderOptions::new();
+    base.set("openai", base_openai);
+
+    let mut override_openai = HashMap::new();
+    override_openai.insert(
+        "reasoning".to_string(),
+        serde_json::json!({ "effort": "high" }),
+    );
+    override_openai.insert("metadata".to_string(), serde_json::json!({ "a": 1 }));
+
+    let mut overrides = ProviderOptions::new();
+    overrides.set("openai", override_openai);
+
+    let settings = CallSettings::new().with_provider_options(base);
+    let opts = build_call_options(
+        &settings,
+        &None,
+        &None,
+        &Some(overrides),
+        &None,
+        vec![],
+        &None,
+    );
+
+    let provider_options = opts.provider_options.expect("provider options");
+    let openai = provider_options.get("openai").expect("openai options");
+    assert_eq!(
+        openai.get("reasoning"),
+        Some(&serde_json::json!({ "effort": "high", "summary": "auto" }))
+    );
+    assert_eq!(openai.get("store"), Some(&serde_json::json!(true)));
+    assert_eq!(openai.get("metadata"), Some(&serde_json::json!({ "a": 1 })));
+}
+
+#[test]
+fn test_merge_provider_options_skips_polluting_keys() {
+    let mut override_openai = HashMap::new();
+    override_openai.insert(
+        "__proto__".to_string(),
+        serde_json::json!({ "polluted": true }),
+    );
+    override_openai.insert("safe".to_string(), serde_json::json!(1));
+
+    let mut overrides = ProviderOptions::new();
+    overrides.set("openai", override_openai);
+
+    let merged = merge_provider_options(None, Some(&overrides)).expect("merged options");
+    let openai = merged.get("openai").expect("openai options");
+    assert!(!openai.contains_key("__proto__"));
+    assert_eq!(openai.get("safe"), Some(&serde_json::json!(1)));
 }
 
 #[test]

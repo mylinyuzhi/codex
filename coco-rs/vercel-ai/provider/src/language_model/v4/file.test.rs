@@ -1,10 +1,16 @@
 use super::*;
+use crate::shared::FileRawData;
 
 #[test]
 fn test_file_new() {
     let file = LanguageModelV4File::new("image/png", "base64data");
     assert_eq!(file.media_type, "image/png");
-    assert!(matches!(file.data, FileData::Base64(_)));
+    assert!(matches!(
+        file.data,
+        LanguageModelV4FileData::Data {
+            data: FileRawData::Base64(_)
+        }
+    ));
     assert!(file.provider_metadata.is_none());
 }
 
@@ -12,7 +18,12 @@ fn test_file_new() {
 fn test_file_from_bytes() {
     let file = LanguageModelV4File::from_bytes("image/png", vec![1, 2, 3, 4]);
     assert_eq!(file.media_type, "image/png");
-    assert!(matches!(file.data, FileData::Bytes(_)));
+    assert!(matches!(
+        file.data,
+        LanguageModelV4FileData::Data {
+            data: FileRawData::Bytes(_)
+        }
+    ));
 }
 
 #[test]
@@ -25,18 +36,26 @@ fn test_file_serialization() {
 
 #[test]
 fn test_file_data_base64() {
-    let data = FileData::base64("test");
+    let data = LanguageModelV4FileData::base64("test");
     match data {
-        FileData::Base64(s) => assert_eq!(s, "test"),
-        _ => panic!("Expected Base64 variant"),
+        LanguageModelV4FileData::Data {
+            data: FileRawData::Base64(s),
+        } => {
+            assert_eq!(s, "test");
+        }
+        _ => panic!("Expected Data/Base64 variant"),
     }
 }
 
 #[test]
 fn test_file_data_bytes() {
-    let data = FileData::bytes(vec![1, 2, 3]);
+    let data = LanguageModelV4FileData::bytes(vec![1, 2, 3]);
     match data {
-        FileData::Bytes(b) => assert_eq!(b, vec![1, 2, 3]),
-        _ => panic!("Expected Bytes variant"),
+        LanguageModelV4FileData::Data {
+            data: FileRawData::Bytes(b),
+        } => {
+            assert_eq!(b, vec![1, 2, 3]);
+        }
+        _ => panic!("Expected Data/Bytes variant"),
     }
 }

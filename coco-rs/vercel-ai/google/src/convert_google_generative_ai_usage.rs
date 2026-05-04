@@ -7,6 +7,14 @@ use vercel_ai_provider::InputTokens;
 use vercel_ai_provider::OutputTokens;
 use vercel_ai_provider::Usage;
 
+/// Per-modality token breakdown (e.g. text, image, audio, video).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoogleTokenDetail {
+    pub modality: String,
+    pub token_count: u64,
+}
+
 /// Google API usage metadata.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -23,6 +31,12 @@ pub struct GoogleUsageMetadata {
     pub total_token_count: Option<u64>,
     #[serde(default)]
     pub traffic_type: Option<String>,
+    /// Per-modality breakdown of prompt tokens.
+    #[serde(default)]
+    pub prompt_tokens_details: Option<Vec<GoogleTokenDetail>>,
+    /// Per-modality breakdown of candidate (output) tokens.
+    #[serde(default)]
+    pub candidates_tokens_details: Option<Vec<GoogleTokenDetail>>,
 }
 
 /// Convert Google usage metadata to unified Usage type.

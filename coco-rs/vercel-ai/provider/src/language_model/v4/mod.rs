@@ -63,8 +63,8 @@ pub use stream::StreamError;
 // Re-export new content types (matching TS SDK naming)
 pub use content::LanguageModelV4Content;
 pub use data_content::LanguageModelV4DataContent;
-pub use file::FileData;
 pub use file::LanguageModelV4File;
+pub use file::LanguageModelV4FileData;
 pub use function_tool::LanguageModelV4FunctionTool;
 pub use function_tool::ToolInputExample;
 pub use reasoning::LanguageModelV4Reasoning;

@@ -34,9 +34,12 @@ fn test_generate_result_with_warnings() {
 
 #[test]
 fn test_generate_result_with_response() {
+    let ts = chrono::DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
     let response = LanguageModelV4Response::new()
         .with_model_id("gpt-4")
-        .with_timestamp("2024-01-01T00:00:00Z");
+        .with_timestamp(ts);
     let result =
         LanguageModelV4GenerateResult::text("test", Usage::empty()).with_response(response);
     assert!(result.response.is_some());
@@ -67,12 +70,17 @@ fn test_response_builder() {
     let mut headers = std::collections::HashMap::new();
     headers.insert("x-request-id".to_string(), "req-123".to_string());
 
+    let ts = chrono::DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
     let response = LanguageModelV4Response::new()
-        .with_timestamp("2024-01-01T00:00:00Z")
+        .with_id("resp_abc")
+        .with_timestamp(ts)
         .with_model_id("gpt-4")
         .with_headers(headers.clone());
 
-    assert_eq!(response.timestamp, Some("2024-01-01T00:00:00Z".to_string()));
+    assert_eq!(response.id, Some("resp_abc".to_string()));
+    assert_eq!(response.timestamp, Some(ts));
     assert_eq!(response.model_id, Some("gpt-4".to_string()));
     assert_eq!(response.headers, Some(headers));
 }

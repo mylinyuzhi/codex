@@ -27,6 +27,10 @@ use vercel_ai_provider::TextPart;
 use vercel_ai_provider::ToolCallPart;
 use vercel_ai_provider::Warning;
 use vercel_ai_provider_utils::JsonResponseHandler;
+use vercel_ai_provider_utils::StreamingToolCallDelta;
+use vercel_ai_provider_utils::StreamingToolCallTracker;
+use vercel_ai_provider_utils::ToolCallDeltaFunction;
+use vercel_ai_provider_utils::TypeValidation;
 use vercel_ai_provider_utils::is_custom_reasoning;
 use vercel_ai_provider_utils::post_json_to_api_with_client;
 use vercel_ai_provider_utils::post_stream_to_api_with_client;
@@ -470,8 +474,7 @@ impl LanguageModelV4 for OpenAIChatLanguageModel {
         // Response metadata
         let timestamp = response
             .created
-            .and_then(|ts| chrono::DateTime::from_timestamp(ts as i64, 0))
-            .map(|dt| dt.to_rfc3339());
+            .and_then(|ts| chrono::DateTime::from_timestamp(ts as i64, 0));
 
         Ok(LanguageModelV4GenerateResult {
             content,
@@ -481,6 +484,7 @@ impl LanguageModelV4 for OpenAIChatLanguageModel {
             provider_metadata,
             request: Some(LanguageModelV4Request { body: Some(body) }),
             response: Some(LanguageModelV4Response {
+                id: response.id.clone(),
                 timestamp,
                 model_id: response.model,
                 headers: None,
@@ -525,14 +529,6 @@ impl LanguageModelV4 for OpenAIChatLanguageModel {
             response: Some(LanguageModelV4StreamResponse::new()),
         })
     }
-}
-
-/// In-progress tool call accumulator.
-struct InProgressToolCall {
-    id: String,
-    name: String,
-    arguments: String,
-    started: bool,
 }
 
 /// Create a stream of `LanguageModelV4StreamPart` from a raw SSE byte stream.
@@ -605,7 +601,13 @@ struct ChatStreamState {
     byte_stream: vercel_ai_provider_utils::ByteStream,
     buffer: String,
     pending: std::collections::VecDeque<LanguageModelV4StreamPart>,
-    tool_calls: Vec<InProgressToolCall>,
+    /// Shared tool-call accumulator (TS parity:
+    /// `processStreamingToolCalls` from `@ai-sdk/provider-utils`).
+    /// OpenAI Chat is strict — id + function.name on first delta —
+    /// which matches the tracker's default semantics, so we use it
+    /// directly without the outer pending buffer that
+    /// openai-compatible needs.
+    tool_call_tracker: StreamingToolCallTracker,
     text_started: bool,
     text_id: String,
     usage: Option<super::convert_chat_usage::OpenAIChatUsage>,
@@ -626,11 +628,18 @@ impl ChatStreamState {
         let mut pending = std::collections::VecDeque::new();
         pending.push_back(LanguageModelV4StreamPart::StreamStart { warnings });
 
+        let tool_call_tracker = StreamingToolCallTracker::with_options(
+            vercel_ai_provider_utils::StreamingToolCallTrackerOptions {
+                type_validation: TypeValidation::IfPresent,
+                ..Default::default()
+            },
+        );
+
         Self {
             byte_stream,
             buffer: String::new(),
             pending,
-            tool_calls: Vec::new(),
+            tool_call_tracker,
             text_started: false,
             text_id: vercel_ai_provider_utils::generate_id("txt"),
             usage: None,
@@ -640,6 +649,15 @@ impl ChatStreamState {
             metadata_emitted: false,
             include_raw,
             provider_metadata: HashMap::new(),
+        }
+    }
+
+    /// Drain queued tool-call stream parts from the tracker into the
+    /// state's `pending` deque. Called after every `process_delta` /
+    /// `flush` so ordering stays consistent with surrounding text.
+    fn drain_tool_call_parts(&mut self) {
+        for part in self.tool_call_tracker.take_parts() {
+            self.pending.push_back(part);
         }
     }
 
@@ -779,113 +797,40 @@ impl ChatStreamState {
                         });
                 }
 
-                // Tool call deltas
-                if let Some(ref tool_calls) = delta.tool_calls {
+                // Tool call deltas — close any open text first so
+                // tool-input-start lands after text-end (matches TS).
+                if let Some(ref tool_calls) = delta.tool_calls
+                    && !tool_calls.is_empty()
+                {
+                    if self.text_started {
+                        self.text_started = false;
+                        self.pending.push_back(LanguageModelV4StreamPart::TextEnd {
+                            id: self.text_id.clone(),
+                            provider_metadata: None,
+                        });
+                    }
+
                     for tc_delta in tool_calls {
-                        let idx = tc_delta.index as usize;
-
-                        // Ensure tool_calls vec is big enough
-                        while self.tool_calls.len() <= idx {
-                            self.tool_calls.push(InProgressToolCall {
-                                id: String::new(),
-                                name: String::new(),
-                                arguments: String::new(),
-                                started: false,
+                        let function = tc_delta.function.as_ref().map(|f| ToolCallDeltaFunction {
+                            name: f.name.clone(),
+                            arguments: f.arguments.clone(),
+                        });
+                        let delta_for_tracker = StreamingToolCallDelta {
+                            index: Some(tc_delta.index as usize),
+                            id: tc_delta.id.clone(),
+                            r#type: tc_delta.tool_type.clone(),
+                            function,
+                            extra: None,
+                        };
+                        if let Err(e) = self.tool_call_tracker.process_delta(delta_for_tracker) {
+                            self.pending.push_back(LanguageModelV4StreamPart::Error {
+                                error: vercel_ai_provider::StreamError::new(e.message),
                             });
-                        }
-
-                        let tc = &mut self.tool_calls[idx];
-
-                        // Validate first chunk for a new tool call (TS: InvalidResponseDataError)
-                        if tc.id.is_empty() && tc.name.is_empty() {
-                            if let Some(ref tc_type) = tc_delta.tool_type
-                                && tc_type != "function"
-                            {
-                                self.pending.push_back(LanguageModelV4StreamPart::Error {
-                                    error: vercel_ai_provider::StreamError::new(
-                                        "Expected 'function' type.",
-                                    ),
-                                });
-                                self.done = true;
-                                return;
-                            }
-                            if tc_delta.id.is_none() {
-                                self.pending.push_back(LanguageModelV4StreamPart::Error {
-                                    error: vercel_ai_provider::StreamError::new(
-                                        "Expected 'id' to be a string.",
-                                    ),
-                                });
-                                self.done = true;
-                                return;
-                            }
-                            if tc_delta
-                                .function
-                                .as_ref()
-                                .and_then(|f| f.name.as_ref())
-                                .is_none()
-                            {
-                                self.pending.push_back(LanguageModelV4StreamPart::Error {
-                                    error: vercel_ai_provider::StreamError::new(
-                                        "Expected 'function.name' to be a string.",
-                                    ),
-                                });
-                                self.done = true;
-                                return;
-                            }
-                        }
-
-                        // Populate fields from delta
-                        if let Some(ref id) = tc_delta.id {
-                            tc.id = id.clone();
-                        }
-                        if let Some(ref func) = tc_delta.function {
-                            if let Some(ref name) = func.name {
-                                tc.name = name.clone();
-                            }
-                            if let Some(ref args) = func.arguments {
-                                tc.arguments.push_str(args);
-                            }
-                        }
-
-                        // Emit ToolInputStart on first delta
-                        if !tc.started && !tc.name.is_empty() {
-                            tc.started = true;
-                            // Generate ID if not provided
-                            if tc.id.is_empty() {
-                                tc.id = vercel_ai_provider_utils::generate_id("tc");
-                            }
-                            // Close text if open
-                            if self.text_started {
-                                self.text_started = false;
-                                self.pending.push_back(LanguageModelV4StreamPart::TextEnd {
-                                    id: self.text_id.clone(),
-                                    provider_metadata: None,
-                                });
-                            }
-                            self.pending
-                                .push_back(LanguageModelV4StreamPart::ToolInputStart {
-                                    id: tc.id.clone(),
-                                    tool_name: tc.name.clone(),
-                                    provider_executed: None,
-                                    dynamic: None,
-                                    title: None,
-                                    provider_metadata: None,
-                                });
-                        }
-
-                        // Emit argument delta
-                        if let Some(ref func) = tc_delta.function
-                            && let Some(ref args) = func.arguments
-                            && !args.is_empty()
-                        {
-                            self.pending
-                                .push_back(LanguageModelV4StreamPart::ToolInputDelta {
-                                    id: self.tool_calls[idx].id.clone(),
-                                    delta: args.clone(),
-                                    provider_metadata: None,
-                                });
+                            self.done = true;
+                            return;
                         }
                     }
+                    self.drain_tool_call_parts();
                 }
 
                 // Annotations (sources)
@@ -921,22 +866,10 @@ impl ChatStreamState {
                 });
             }
 
-            // Finalize tool calls
-            let tool_calls = std::mem::take(&mut self.tool_calls);
-            for tc in tool_calls {
-                if tc.started {
-                    self.pending
-                        .push_back(LanguageModelV4StreamPart::ToolInputEnd {
-                            id: tc.id.clone(),
-                            provider_metadata: None,
-                        });
-
-                    let input: Value = serde_json::from_str(&tc.arguments).unwrap_or(Value::Null);
-                    self.pending.push_back(LanguageModelV4StreamPart::ToolCall(
-                        vercel_ai_provider::tool::ToolCall::new(tc.id, tc.name, input),
-                    ));
-                }
-            }
+            // Finalize any tool calls the tracker accumulated but
+            // didn't auto-finish (partial JSON, etc.).
+            self.tool_call_tracker.flush();
+            self.drain_tool_call_parts();
         }
     }
 }

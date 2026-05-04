@@ -21,6 +21,8 @@ use vercel_ai_provider::LanguageModelV4CallOptions;
 use vercel_ai_provider::LanguageModelV4GenerateResult;
 use vercel_ai_provider::LanguageModelV4StreamPart;
 use vercel_ai_provider::LanguageModelV4StreamResult;
+use vercel_ai_provider::LanguageModelV4ToolCall;
+use vercel_ai_provider::LanguageModelV4ToolResult;
 use vercel_ai_provider::ProviderMetadata;
 use vercel_ai_provider::ReasoningFilePart;
 use vercel_ai_provider::ReasoningLevel;
@@ -34,8 +36,6 @@ use vercel_ai_provider::language_model::LanguageModelV4Response;
 use vercel_ai_provider::language_model::v4::stream::File as StreamFile;
 use vercel_ai_provider::language_model::v4::stream::ReasoningFile as StreamReasoningFile;
 use vercel_ai_provider::response_metadata::ResponseMetadata;
-use vercel_ai_provider::tool::ToolCall;
-use vercel_ai_provider::tool::ToolResult;
 
 use vercel_ai_provider_utils::JsonResponseHandler;
 use vercel_ai_provider_utils::combine_headers;
@@ -1238,7 +1238,7 @@ fn process_stream_chunk(
                 });
                 parts.push(LanguageModelV4StreamPart::ToolInputDelta {
                     id: call_id.clone(),
-                    delta: args_str,
+                    delta: args_str.clone(),
                     provider_metadata: None,
                 });
                 parts.push(LanguageModelV4StreamPart::ToolInputEnd {
@@ -1246,7 +1246,8 @@ fn process_stream_chunk(
                     provider_metadata: None,
                 });
                 parts.push(LanguageModelV4StreamPart::ToolCall(
-                    ToolCall::new(&call_id, "code_execution", args).with_provider_executed(true),
+                    LanguageModelV4ToolCall::new(&call_id, "code_execution", args_str)
+                        .with_provider_executed(true),
                 ));
             }
 
@@ -1256,14 +1257,16 @@ fn process_stream_chunk(
                     .last_code_execution_tool_call_id
                     .take()
                     .unwrap_or_else(|| (ctx.id_gen)());
-                parts.push(LanguageModelV4StreamPart::ToolResult(ToolResult::new(
-                    &call_id,
-                    "code_execution",
-                    json!({
-                        "outcome": exec_result.outcome,
-                        "output": exec_result.output,
-                    }),
-                )));
+                parts.push(LanguageModelV4StreamPart::ToolResult(
+                    LanguageModelV4ToolResult::new(
+                        &call_id,
+                        "code_execution",
+                        json!({
+                            "outcome": exec_result.outcome,
+                            "output": exec_result.output,
+                        }),
+                    ),
+                ));
             }
 
             // Handle text parts
@@ -1350,14 +1353,14 @@ fn process_stream_chunk(
                 });
                 parts.push(LanguageModelV4StreamPart::ToolInputDelta {
                     id: call_id.clone(),
-                    delta: args_str,
+                    delta: args_str.clone(),
                     provider_metadata: ts_meta.clone(),
                 });
                 parts.push(LanguageModelV4StreamPart::ToolInputEnd {
                     id: call_id.clone(),
                     provider_metadata: ts_meta.clone(),
                 });
-                let mut tc = ToolCall::new(&call_id, &fc.name, fc.args.clone());
+                let mut tc = LanguageModelV4ToolCall::new(&call_id, &fc.name, args_str);
                 if let Some(ref meta) = ts_meta {
                     tc.provider_metadata = Some(meta.clone());
                 }

@@ -3,8 +3,10 @@
 use base64::Engine as _;
 use serde_json::Value;
 use vercel_ai_provider::AssistantContentPart;
-use vercel_ai_provider::DataContent;
+use vercel_ai_provider::FileRawData;
+use vercel_ai_provider::LanguageModelV4FileData;
 use vercel_ai_provider::LanguageModelV4Message;
+use vercel_ai_provider::SharedV4FileData;
 use vercel_ai_provider::ToolContentPart;
 use vercel_ai_provider::ToolResultContent;
 use vercel_ai_provider::ToolResultContentPart;
@@ -236,7 +238,7 @@ fn convert_assistant_content_parts(
                 });
             }
             AssistantContentPart::File(file_part) => {
-                if matches!(&file_part.data, DataContent::Url(_)) {
+                if matches!(&file_part.data, SharedV4FileData::Url { .. }) {
                     return Err(
                         "File data URLs in assistant messages are not supported".to_string()
                     );
@@ -268,14 +270,14 @@ fn convert_assistant_content_parts(
                 }
             }
             AssistantContentPart::ReasoningFile(rf_part) => {
-                if matches!(&rf_part.data, DataContent::Url(_)) {
+                if matches!(&rf_part.data, LanguageModelV4FileData::Url { .. }) {
                     return Err(
                         "File data URLs in assistant messages are not supported".to_string()
                     );
                 }
                 let ts =
                     extract_thought_signature(&rf_part.provider_metadata, provider_options_name);
-                let base_part = convert_file_part_to_inline(&rf_part.data, &rf_part.media_type);
+                let base_part = convert_lm_file_data_to_inline(&rf_part.data, &rf_part.media_type);
                 match base_part {
                     GoogleGenerativeAIContentPart::InlineData { inline_data, .. } => {
                         result.push(GoogleGenerativeAIContentPart::InlineData {
@@ -421,10 +423,7 @@ fn append_tool_result_parts(
             ToolResultContentPart::Text { text, .. } => {
                 response_text_parts.push(text.clone());
             }
-            ToolResultContentPart::ImageData {
-                data, media_type, ..
-            }
-            | ToolResultContentPart::FileData {
+            ToolResultContentPart::FileData {
                 data, media_type, ..
             } => {
                 function_response_parts.push(InlineDataPart {
@@ -432,8 +431,7 @@ fn append_tool_result_parts(
                     data: data.clone(),
                 });
             }
-            ToolResultContentPart::ImageUrl { url, .. }
-            | ToolResultContentPart::FileUrl { url, .. } => {
+            ToolResultContentPart::FileUrl { url, .. } => {
                 // Only data: URLs can be converted to inline data
                 if let Some((media_type, data)) = parse_base64_data_url(url) {
                     function_response_parts.push(InlineDataPart {
@@ -498,10 +496,7 @@ fn append_legacy_tool_result_parts(
                     },
                 });
             }
-            ToolResultContentPart::ImageData {
-                data, media_type, ..
-            }
-            | ToolResultContentPart::FileData {
+            ToolResultContentPart::FileData {
                 data, media_type, ..
             } => {
                 result.push(GoogleGenerativeAIContentPart::InlineData {
@@ -531,9 +526,9 @@ fn append_legacy_tool_result_parts(
     }
 }
 
-/// Convert file data to an InlineData part (for assistant context where URLs are rejected beforehand).
+/// Convert `SharedV4FileData` to an InlineData part (URLs are rejected by the caller beforehand).
 fn convert_file_part_to_inline(
-    data: &DataContent,
+    data: &SharedV4FileData,
     media_type: &str,
 ) -> GoogleGenerativeAIContentPart {
     let media_type = if media_type == "image/*" {
@@ -542,16 +537,8 @@ fn convert_file_part_to_inline(
         media_type
     };
     match data {
-        DataContent::Base64(base64) => GoogleGenerativeAIContentPart::InlineData {
-            inline_data: InlineDataPart {
-                mime_type: media_type.to_string(),
-                data: base64.clone(),
-            },
-            thought: None,
-            thought_signature: None,
-        },
-        DataContent::Bytes(bytes) => {
-            let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+        SharedV4FileData::Data { data: raw } => {
+            let encoded = raw_file_data_to_base64(raw);
             GoogleGenerativeAIContentPart::InlineData {
                 inline_data: InlineDataPart {
                     mime_type: media_type.to_string(),
@@ -561,7 +548,104 @@ fn convert_file_part_to_inline(
                 thought_signature: None,
             }
         }
-        DataContent::Url(url) => GoogleGenerativeAIContentPart::FileData {
+        SharedV4FileData::Url { url } => GoogleGenerativeAIContentPart::FileData {
+            file_data: FileDataPart {
+                mime_type: media_type.to_string(),
+                file_uri: url.clone(),
+            },
+        },
+        SharedV4FileData::Text { text } => {
+            let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
+            GoogleGenerativeAIContentPart::InlineData {
+                inline_data: InlineDataPart {
+                    mime_type: media_type.to_string(),
+                    data: encoded,
+                },
+                thought: None,
+                thought_signature: None,
+            }
+        }
+        SharedV4FileData::Reference { .. } => GoogleGenerativeAIContentPart::InlineData {
+            inline_data: InlineDataPart {
+                mime_type: media_type.to_string(),
+                data: String::new(),
+            },
+            thought: None,
+            thought_signature: None,
+        },
+    }
+}
+
+/// Convert `SharedV4FileData` to a Google content part (inline data or file URI).
+fn convert_file_part(data: &SharedV4FileData, media_type: &str) -> GoogleGenerativeAIContentPart {
+    let media_type = if media_type == "image/*" {
+        "image/jpeg"
+    } else {
+        media_type
+    };
+    match data {
+        SharedV4FileData::Url { url } => GoogleGenerativeAIContentPart::FileData {
+            file_data: FileDataPart {
+                mime_type: media_type.to_string(),
+                file_uri: url.clone(),
+            },
+        },
+        SharedV4FileData::Data { data: raw } => {
+            let encoded = raw_file_data_to_base64(raw);
+            GoogleGenerativeAIContentPart::InlineData {
+                inline_data: InlineDataPart {
+                    mime_type: media_type.to_string(),
+                    data: encoded,
+                },
+                thought: None,
+                thought_signature: None,
+            }
+        }
+        SharedV4FileData::Text { text } => {
+            let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
+            GoogleGenerativeAIContentPart::InlineData {
+                inline_data: InlineDataPart {
+                    mime_type: media_type.to_string(),
+                    data: encoded,
+                },
+                thought: None,
+                thought_signature: None,
+            }
+        }
+        SharedV4FileData::Reference { .. } => GoogleGenerativeAIContentPart::InlineData {
+            inline_data: InlineDataPart {
+                mime_type: media_type.to_string(),
+                data: String::new(),
+            },
+            thought: None,
+            thought_signature: None,
+        },
+    }
+}
+
+/// Convert `LanguageModelV4FileData` (2-arm: Data/Url) to an InlineData or FileData part.
+fn convert_lm_file_data_to_inline(
+    data: &LanguageModelV4FileData,
+    media_type: &str,
+) -> GoogleGenerativeAIContentPart {
+    let media_type = if media_type == "image/*" {
+        "image/jpeg"
+    } else {
+        media_type
+    };
+    match data {
+        LanguageModelV4FileData::Data { data: raw } => {
+            let encoded = raw_file_data_to_base64(raw);
+            GoogleGenerativeAIContentPart::InlineData {
+                inline_data: InlineDataPart {
+                    mime_type: media_type.to_string(),
+                    data: encoded,
+                },
+                thought: None,
+                thought_signature: None,
+            }
+        }
+        LanguageModelV4FileData::Url { url } => GoogleGenerativeAIContentPart::FileData {
             file_data: FileDataPart {
                 mime_type: media_type.to_string(),
                 file_uri: url.clone(),
@@ -570,38 +654,10 @@ fn convert_file_part_to_inline(
     }
 }
 
-fn convert_file_part(data: &DataContent, media_type: &str) -> GoogleGenerativeAIContentPart {
-    let media_type = if media_type == "image/*" {
-        "image/jpeg"
-    } else {
-        media_type
-    };
-    match data {
-        DataContent::Url(url) => GoogleGenerativeAIContentPart::FileData {
-            file_data: FileDataPart {
-                mime_type: media_type.to_string(),
-                file_uri: url.clone(),
-            },
-        },
-        DataContent::Base64(base64) => GoogleGenerativeAIContentPart::InlineData {
-            inline_data: InlineDataPart {
-                mime_type: media_type.to_string(),
-                data: base64.clone(),
-            },
-            thought: None,
-            thought_signature: None,
-        },
-        DataContent::Bytes(bytes) => {
-            let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
-            GoogleGenerativeAIContentPart::InlineData {
-                inline_data: InlineDataPart {
-                    mime_type: media_type.to_string(),
-                    data: encoded,
-                },
-                thought: None,
-                thought_signature: None,
-            }
-        }
+fn raw_file_data_to_base64(raw: &FileRawData) -> String {
+    match raw {
+        FileRawData::Base64(b64) => b64.clone(),
+        FileRawData::Bytes(bytes) => base64::engine::general_purpose::STANDARD.encode(bytes),
     }
 }
 

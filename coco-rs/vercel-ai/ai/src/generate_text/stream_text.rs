@@ -3,6 +3,7 @@
 //! This module provides the `stream_text` function for streaming text
 //! generation from a language model.
 
+use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -44,6 +45,8 @@ use super::collect_tool_approvals::apply_approvals;
 use super::content_utils;
 use super::generate::PrepareStepContext;
 use super::generate::PrepareStepFn;
+use super::generate::RuntimeContext;
+use super::generate::ToolContextMap;
 use super::generate_text_result::GenerateTextResult;
 use super::generate_text_result::ToolCall;
 use super::generate_text_result::ToolResult;
@@ -87,6 +90,10 @@ pub struct StreamTextOptions {
     pub stop_when: Vec<StopCondition>,
     /// Per-step overrides callback.
     pub prepare_step: Option<PrepareStepFn>,
+    /// Runtime context shared with prepare_step and tool execution.
+    pub runtime_context: Option<RuntimeContext>,
+    /// Tool-specific runtime contexts keyed by tool name.
+    pub tools_context: ToolContextMap,
     /// Tool call repair function for malformed tool calls.
     pub repair_tool_call: Option<Arc<dyn ToolCallRepairFunction>>,
     /// Tool approval collector.
@@ -177,6 +184,39 @@ impl StreamTextOptions {
         self
     }
 
+    /// Set shared runtime context.
+    pub fn with_runtime_context<T: Any + Send + Sync + 'static>(mut self, context: T) -> Self {
+        self.runtime_context = Some(Arc::new(context));
+        self
+    }
+
+    /// Set shared runtime context from an existing Arc.
+    pub fn with_runtime_context_arc(mut self, context: RuntimeContext) -> Self {
+        self.runtime_context = Some(context);
+        self
+    }
+
+    /// Set runtime context for a specific tool.
+    pub fn with_tool_context<T: Any + Send + Sync + 'static>(
+        mut self,
+        tool_name: impl Into<String>,
+        context: T,
+    ) -> Self {
+        self.tools_context
+            .insert(tool_name.into(), Arc::new(context));
+        self
+    }
+
+    /// Set runtime context for a specific tool from an existing Arc.
+    pub fn with_tool_context_arc(
+        mut self,
+        tool_name: impl Into<String>,
+        context: RuntimeContext,
+    ) -> Self {
+        self.tools_context.insert(tool_name.into(), context);
+        self
+    }
+
     /// Set the tool call repair function.
     pub fn with_repair_tool_call(mut self, repair: Arc<dyn ToolCallRepairFunction>) -> Self {
         self.repair_tool_call = Some(repair);
@@ -237,6 +277,34 @@ pub enum TextStreamPart {
     ToolError {
         /// The tool error.
         error: ToolError,
+    },
+    /// Tool approval has been requested for an upcoming tool execution.
+    ///
+    /// Mirrors TS `ToolApprovalRequestOutput`. Consumers should respond with a
+    /// `ToolApprovalResponse` (approve / deny) before the tool can run.
+    ToolApprovalRequest {
+        /// ID of the approval request — referenced by the matching response.
+        approval_id: String,
+        /// The pending tool call awaiting approval.
+        tool_call: ToolCall,
+        /// True when the SDK auto-resolved the request (no human prompt).
+        is_automatic: bool,
+    },
+    /// Tool approval response — emitted after a request is resolved.
+    ///
+    /// Mirrors TS `ToolApprovalResponseOutput`.
+    ToolApprovalResponse {
+        /// ID of the approval request this response is for.
+        approval_id: String,
+        /// The tool call that was approved or denied.
+        tool_call: ToolCall,
+        /// Whether the approval was granted (true) or denied (false).
+        approved: bool,
+        /// Optional reason for approval / denial.
+        reason: Option<String>,
+        /// Whether the underlying tool is provider-executed.
+        /// Only provider-executed approval responses round-trip to the model.
+        provider_executed: bool,
     },
     /// Source referenced in the response.
     Source {
@@ -739,6 +807,8 @@ async fn stream_text_inner(
     let max_steps = options.max_steps.unwrap_or(1);
     let mut total_usage = Usage::default();
     let mut steps: Vec<StepResult> = Vec::new();
+    let mut runtime_context = options.runtime_context.clone();
+    let mut tools_context = options.tools_context.clone();
 
     // Track collected data for lazy values
     let mut all_text = String::new();
@@ -787,6 +857,9 @@ async fn stream_text_inner(
                 step,
                 steps: steps.clone(),
                 model_id: model_id.clone(),
+                messages: messages.clone(),
+                runtime_context: runtime_context.clone(),
+                tools_context: tools_context.clone(),
             };
             let overrides = prepare(&ctx);
             step_tool_choice = overrides
@@ -802,6 +875,12 @@ async fn stream_text_inner(
                 None => None,
             };
             step_provider_options = overrides.as_ref().and_then(|o| o.provider_options.clone());
+            if let Some(ctx) = overrides.as_ref().and_then(|o| o.runtime_context.clone()) {
+                runtime_context = Some(ctx);
+            }
+            if let Some(ctxs) = overrides.as_ref().and_then(|o| o.tools_context.clone()) {
+                tools_context = ctxs;
+            }
             // Handle messages override, then system prompt override
             if let Some(msgs) = overrides.as_ref().and_then(|o| o.messages.clone()) {
                 // Use the overridden messages directly, replacing the entire array
@@ -832,11 +911,17 @@ async fn stream_text_inner(
             step_provider_options = None;
             step_messages = messages.clone();
         }
+        let step_messages_for_tools = step_messages.clone();
+        let step_tools_context = tools_context.clone();
 
         let effective_model = step_model.as_ref().unwrap_or(&model);
-        let effective_provider_options = step_provider_options
-            .as_ref()
-            .or(options.provider_options.as_ref());
+        // Deep-merge call-level + step-level provider options (TS parity:
+        // `mergeObjects(providerOptions, prepareStepResult?.providerOptions)`).
+        // Step keys layer onto call keys; nested objects merge recursively.
+        let effective_provider_options = build_call_options::merge_provider_options(
+            options.provider_options.as_ref(),
+            step_provider_options.as_ref(),
+        );
 
         // Filter active tools
         let effective_tools =
@@ -847,7 +932,7 @@ async fn stream_text_inner(
             &options.settings,
             &step_tool_choice,
             &options.abort_signal,
-            &effective_provider_options.cloned(),
+            &effective_provider_options,
             &options.output,
             step_messages,
             &effective_tools,
@@ -1020,11 +1105,10 @@ async fn stream_text_inner(
                         let _ = tx.send(TextStreamPart::ToolInputEnd { id }).await;
                     }
                     LanguageModelV4StreamPart::ToolCall(tc) => {
-                        let tool_call = ToolCall::new(
-                            tc.tool_call_id.clone(),
-                            tc.tool_name.clone(),
-                            tc.input.clone(),
-                        );
+                        let input =
+                            serde_json::from_str(&tc.input).unwrap_or(serde_json::Value::Null);
+                        let tool_call =
+                            ToolCall::new(tc.tool_call_id.clone(), tc.tool_name.clone(), input);
                         tool_calls.push(tool_call.clone());
 
                         // Send the tool call event
@@ -1121,8 +1205,11 @@ async fn stream_text_inner(
             let tool_futures: Vec<_> = tool_calls
                 .iter()
                 .map(|tc| {
-                    let exec_options =
-                        ToolExecutionOptions::new(&tc.tool_call_id).with_messages(messages.clone());
+                    let mut exec_options = ToolExecutionOptions::new(&tc.tool_call_id)
+                        .with_messages(step_messages_for_tools.clone());
+                    if let Some(context) = step_tools_context.get(&tc.tool_name) {
+                        exec_options = exec_options.with_context_arc(context.clone());
+                    }
                     let tc = tc.clone();
                     async move {
                         let start_time = std::time::Instant::now();

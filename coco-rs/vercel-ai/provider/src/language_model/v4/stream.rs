@@ -7,13 +7,13 @@ use serde::Serialize;
 
 use super::finish_reason::FinishReason;
 use super::tool_approval_request::LanguageModelV4ToolApprovalRequest;
+use super::tool_call::LanguageModelV4ToolCall;
+use super::tool_result::LanguageModelV4ToolResult;
 use super::usage::Usage;
 use crate::json_value::JSONValue;
 use crate::response_metadata::ResponseMetadata;
 use crate::shared::ProviderMetadata;
 use crate::shared::Warning;
-use crate::tool::ToolCall;
-use crate::tool::ToolResult;
 
 /// Backward-compatible alias for [`LanguageModelV4ToolApprovalRequest`].
 pub type ToolApprovalRequest = LanguageModelV4ToolApprovalRequest;
@@ -149,10 +149,10 @@ pub enum LanguageModelV4StreamPart {
     },
     /// Emitted when a tool call is complete.
     #[serde(rename = "tool-call")]
-    ToolCall(ToolCall),
+    ToolCall(LanguageModelV4ToolCall),
     /// Emitted when a tool result is available.
     #[serde(rename = "tool-result")]
-    ToolResult(ToolResult),
+    ToolResult(LanguageModelV4ToolResult),
     /// Emitted when a provider requests approval for a tool execution.
     #[serde(rename = "tool-approval-request")]
     ToolApprovalRequest(LanguageModelV4ToolApprovalRequest),

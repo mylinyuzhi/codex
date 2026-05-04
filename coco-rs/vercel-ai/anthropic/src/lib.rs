@@ -30,6 +30,7 @@ pub mod tool;
 // Cache control and utilities
 pub mod cache_control;
 pub mod forward_container_id;
+pub mod sanitize_json_schema;
 
 // Re-exports
 pub use anthropic_config::AnthropicConfig;

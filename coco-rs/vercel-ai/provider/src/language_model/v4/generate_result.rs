@@ -35,10 +35,18 @@ pub struct LanguageModelV4Request {
 }
 
 /// Response information.
+///
+/// Mirrors TS `LanguageModelV4ResponseMetadata & { headers?, body? }` —
+/// `id`, `timestamp`, `modelId` from the metadata flattened in, plus
+/// optional headers and body for telemetry.
 #[derive(Debug, Clone)]
 pub struct LanguageModelV4Response {
-    /// The timestamp of the response.
-    pub timestamp: Option<String>,
+    /// ID for the generated response, if the provider sends one.
+    pub id: Option<String>,
+    /// The timestamp of the response, parsed from the provider.
+    /// Stored as a typed `DateTime<Utc>` (TS spec: `Date`) — providers
+    /// converting from Unix seconds or ISO 8601 should land here.
+    pub timestamp: Option<chrono::DateTime<chrono::Utc>>,
     /// The model ID used for the response.
     pub model_id: Option<String>,
     /// Response headers.
@@ -132,6 +140,7 @@ impl LanguageModelV4Response {
     /// Create a new response info.
     pub fn new() -> Self {
         Self {
+            id: None,
             timestamp: None,
             model_id: None,
             headers: None,
@@ -139,9 +148,15 @@ impl LanguageModelV4Response {
         }
     }
 
+    /// Set the response ID.
+    pub fn with_id(mut self, id: impl Into<String>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
     /// Set the timestamp.
-    pub fn with_timestamp(mut self, timestamp: impl Into<String>) -> Self {
-        self.timestamp = Some(timestamp.into());
+    pub fn with_timestamp(mut self, timestamp: chrono::DateTime<chrono::Utc>) -> Self {
+        self.timestamp = Some(timestamp);
         self
     }
 

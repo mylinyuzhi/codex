@@ -53,7 +53,7 @@ pub fn image_user() -> Message {
             content: vec![
                 UserContent::Text(coco_inference::TextPart::new("see this image")),
                 UserContent::File(coco_inference::FilePart {
-                    data: coco_inference::DataContent::Base64("iVBORw0KGgo=".to_string()),
+                    data: coco_inference::SharedV4FileData::data_base64("iVBORw0KGgo="),
                     media_type: "image/png".to_string(),
                     filename: Some("test.png".to_string()),
                     provider_metadata: None,

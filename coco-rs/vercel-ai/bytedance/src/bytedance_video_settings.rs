@@ -1,5 +1,11 @@
 //! ByteDance Seedance video model IDs and type aliases.
 
+/// Seedance 2.0 Fast (2026-01-28) — Dreamina-branded.
+pub const DREAMINA_SEEDANCE_2_0_FAST_260128: &str = "dreamina-seedance-2-0-fast-260128";
+
+/// Seedance 2.0 (2026-01-28) — Dreamina-branded.
+pub const DREAMINA_SEEDANCE_2_0_260128: &str = "dreamina-seedance-2-0-260128";
+
 /// Seedance 1.5 Pro (2025-12-15).
 pub const SEEDANCE_1_5_PRO_251215: &str = "seedance-1-5-pro-251215";
 
