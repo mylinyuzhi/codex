@@ -1,15 +1,22 @@
 //! Streaming query support — processes LanguageModelV4StreamPart into StreamEvent.
 
 use coco_types::TokenUsage;
-use futures::StreamExt;
 use std::pin::Pin;
+use std::time::Duration;
 use tokio::sync::mpsc;
+use tracing::warn;
+use vercel_ai::StreamProcessor;
 use vercel_ai_provider::AISdkError;
 use vercel_ai_provider::AssistantContentPart;
 use vercel_ai_provider::FinishReason;
 use vercel_ai_provider::LanguageModelV4StreamPart;
 use vercel_ai_provider::LanguageModelV4StreamResult;
 use vercel_ai_provider::Usage;
+
+pub use vercel_ai::StreamMetrics;
+pub use vercel_ai::StreamProcessorConfig;
+
+const DEFAULT_PROCESS_STREAM_STALL_THRESHOLD: Duration = Duration::from_secs(30);
 
 /// Events emitted during streaming inference.
 #[derive(Debug, Clone)]
@@ -28,61 +35,130 @@ pub enum StreamEvent {
     Finish {
         usage: TokenUsage,
         stop_reason: String,
+        metrics: StreamMetrics,
     },
     /// Error during streaming.
-    Error { message: String },
+    Error {
+        message: String,
+        metrics: StreamMetrics,
+    },
 }
 
 /// Process a vercel-ai stream into StreamEvents sent via channel.
 pub async fn process_stream(
-    mut stream: Pin<
+    stream: Pin<
         Box<dyn futures::Stream<Item = Result<LanguageModelV4StreamPart, AISdkError>> + Send>,
     >,
     tx: mpsc::Sender<StreamEvent>,
 ) {
-    while let Some(part) = stream.next().await {
-        let event = match part {
-            Ok(LanguageModelV4StreamPart::TextDelta { delta, .. }) => {
-                StreamEvent::TextDelta { text: delta }
+    process_stream_with_config(stream, tx, default_process_stream_config()).await;
+}
+
+/// Default stream processor config for the inference event bridge.
+///
+/// Idle timeout is disabled here to preserve the historical `process_stream`
+/// behavior; callers that want watchdog semantics should pass an explicit
+/// timeout through [`process_stream_with_config`].
+pub fn default_process_stream_config() -> StreamProcessorConfig {
+    StreamProcessorConfig::default()
+        .without_idle_timeout()
+        .with_stall_threshold(DEFAULT_PROCESS_STREAM_STALL_THRESHOLD)
+}
+
+/// Process a vercel-ai stream into StreamEvents using explicit processor config.
+pub async fn process_stream_with_config(
+    stream: Pin<
+        Box<dyn futures::Stream<Item = Result<LanguageModelV4StreamPart, AISdkError>> + Send>,
+    >,
+    tx: mpsc::Sender<StreamEvent>,
+    config: StreamProcessorConfig,
+) {
+    let mut processor = StreamProcessor::from_stream_with_config(stream, config);
+    let mut reported_stall_count = 0;
+
+    while let Some(result) = processor.next().await {
+        let (event, metrics) = match result {
+            Ok((part, _)) => {
+                let metrics = processor.metrics();
+                (stream_event_from_part(part, metrics), metrics)
             }
-            Ok(LanguageModelV4StreamPart::ReasoningDelta { delta, .. }) => {
-                StreamEvent::ReasoningDelta { text: delta }
+            Err(e) => {
+                let metrics = processor.metrics();
+                (
+                    Some(StreamEvent::Error {
+                        message: e.to_string(),
+                        metrics,
+                    }),
+                    metrics,
+                )
             }
-            Ok(LanguageModelV4StreamPart::ToolInputStart { id, tool_name, .. }) => {
-                StreamEvent::ToolCallStart { id, tool_name }
-            }
-            Ok(LanguageModelV4StreamPart::ToolInputDelta { id, delta, .. }) => {
-                StreamEvent::ToolCallDelta { id, delta }
-            }
-            Ok(LanguageModelV4StreamPart::ToolInputEnd { id, .. }) => {
-                StreamEvent::ToolCallEnd { id }
-            }
-            Ok(LanguageModelV4StreamPart::Finish {
-                usage,
-                finish_reason,
-                ..
-            }) => StreamEvent::Finish {
-                usage: TokenUsage {
-                    input_tokens: usage.input_tokens.total.unwrap_or(0) as i64,
-                    output_tokens: usage.output_tokens.total.unwrap_or(0) as i64,
-                    cache_read_input_tokens: usage.input_tokens.cache_read.unwrap_or(0) as i64,
-                    cache_creation_input_tokens: usage.input_tokens.cache_write.unwrap_or(0) as i64,
-                },
-                stop_reason: finish_reason.unified.to_string(),
-            },
-            Ok(LanguageModelV4StreamPart::Error { error }) => StreamEvent::Error {
-                message: error.message,
-            },
-            Ok(_) => continue, // Skip other events (StreamStart, Raw, etc.)
-            Err(e) => StreamEvent::Error {
-                message: e.to_string(),
-            },
+        };
+
+        if metrics.stall_count > reported_stall_count {
+            reported_stall_count = metrics.stall_count;
+            warn!(
+                stall_count = metrics.stall_count,
+                total_stall_ms = metrics.total_stall_ms,
+                "streaming stall detected"
+            );
+        }
+
+        let Some(event) = event else {
+            continue;
         };
 
         if tx.send(event).await.is_err() {
             break; // Receiver dropped
         }
     }
+}
+
+fn stream_event_from_part(
+    part: LanguageModelV4StreamPart,
+    metrics: StreamMetrics,
+) -> Option<StreamEvent> {
+    match part {
+        LanguageModelV4StreamPart::TextDelta { delta, .. } => {
+            Some(StreamEvent::TextDelta { text: delta })
+        }
+        LanguageModelV4StreamPart::ReasoningDelta { delta, .. } => {
+            Some(StreamEvent::ReasoningDelta { text: delta })
+        }
+        LanguageModelV4StreamPart::ToolInputStart { id, tool_name, .. } => {
+            Some(StreamEvent::ToolCallStart { id, tool_name })
+        }
+        LanguageModelV4StreamPart::ToolInputDelta { id, delta, .. } => {
+            Some(StreamEvent::ToolCallDelta { id, delta })
+        }
+        LanguageModelV4StreamPart::ToolInputEnd { id, .. } => Some(StreamEvent::ToolCallEnd { id }),
+        LanguageModelV4StreamPart::Finish {
+            usage,
+            finish_reason,
+            ..
+        } => Some(StreamEvent::Finish {
+            usage: token_usage_from_provider_usage(&usage),
+            stop_reason: finish_reason.unified.to_string(),
+            metrics,
+        }),
+        LanguageModelV4StreamPart::Error { error } => Some(StreamEvent::Error {
+            message: error.message,
+            metrics,
+        }),
+        _ => None,
+    }
+}
+
+fn token_usage_from_provider_usage(usage: &Usage) -> TokenUsage {
+    TokenUsage {
+        input_tokens: u64_to_i64(usage.input_tokens.total.unwrap_or(0)),
+        output_tokens: u64_to_i64(usage.output_tokens.total.unwrap_or(0)),
+        cache_read_input_tokens: u64_to_i64(usage.input_tokens.cache_read.unwrap_or(0)),
+        cache_creation_input_tokens: u64_to_i64(usage.input_tokens.cache_write.unwrap_or(0)),
+    }
+}
+
+fn u64_to_i64(value: u64) -> i64 {
+    value.try_into().unwrap_or(i64::MAX)
 }
 
 /// Build a synthetic `LanguageModelV4StreamResult` from a fully-materialized
