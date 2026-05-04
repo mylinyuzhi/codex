@@ -3,6 +3,7 @@
 //! This module provides the `generate_text` function for generating text
 //! from a language model without streaming.
 
+use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -49,8 +50,13 @@ use super::tool_call_repair::validate_tool_call_for_repair;
 pub type PrepareStepFn =
     Arc<dyn Fn(&PrepareStepContext) -> Option<PrepareStepOverrides> + Send + Sync>;
 
+/// Runtime context shared with prepare-step callbacks and tools.
+pub type RuntimeContext = Arc<dyn Any + Send + Sync>;
+
+/// Per-tool runtime contexts keyed by tool name.
+pub type ToolContextMap = HashMap<String, RuntimeContext>;
+
 /// Context provided to the `prepare_step` callback.
-#[derive(Debug)]
 pub struct PrepareStepContext {
     /// The current step number.
     pub step: u32,
@@ -58,6 +64,25 @@ pub struct PrepareStepContext {
     pub steps: Vec<StepResult>,
     /// The current model ID.
     pub model_id: String,
+    /// Messages that will be sent to the model for this step.
+    pub messages: Vec<vercel_ai_provider::LanguageModelV4Message>,
+    /// Shared runtime context for this step.
+    pub runtime_context: Option<RuntimeContext>,
+    /// Tool-specific runtime contexts for this step.
+    pub tools_context: ToolContextMap,
+}
+
+impl std::fmt::Debug for PrepareStepContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PrepareStepContext")
+            .field("step", &self.step)
+            .field("steps", &self.steps)
+            .field("model_id", &self.model_id)
+            .field("messages", &self.messages)
+            .field("has_runtime_context", &self.runtime_context.is_some())
+            .field("tools_context_len", &self.tools_context.len())
+            .finish()
+    }
 }
 
 /// Overrides returned from `prepare_step`.
@@ -75,6 +100,10 @@ pub struct PrepareStepOverrides {
     pub provider_options: Option<crate::types::ProviderOptions>,
     /// Override the entire messages array for this step.
     pub messages: Option<Vec<vercel_ai_provider::LanguageModelV4Message>>,
+    /// Override the runtime context for this and subsequent work in the step.
+    pub runtime_context: Option<RuntimeContext>,
+    /// Override tool-specific runtime contexts for this step.
+    pub tools_context: Option<ToolContextMap>,
 }
 
 /// Options for `generate_text`.
@@ -108,6 +137,10 @@ pub struct GenerateTextOptions {
     pub active_tools: Option<Vec<String>>,
     /// Per-step overrides callback.
     pub prepare_step: Option<PrepareStepFn>,
+    /// Runtime context shared with prepare_step and tool execution.
+    pub runtime_context: Option<RuntimeContext>,
+    /// Tool-specific runtime contexts keyed by tool name.
+    pub tools_context: ToolContextMap,
     /// Tool call repair function for malformed tool calls.
     pub repair_tool_call: Option<Arc<dyn ToolCallRepairFunction>>,
     /// Tool approval collector.
@@ -195,6 +228,39 @@ impl GenerateTextOptions {
     /// Set the prepare_step callback.
     pub fn with_prepare_step(mut self, prepare: PrepareStepFn) -> Self {
         self.prepare_step = Some(prepare);
+        self
+    }
+
+    /// Set shared runtime context.
+    pub fn with_runtime_context<T: Any + Send + Sync + 'static>(mut self, context: T) -> Self {
+        self.runtime_context = Some(Arc::new(context));
+        self
+    }
+
+    /// Set shared runtime context from an existing Arc.
+    pub fn with_runtime_context_arc(mut self, context: RuntimeContext) -> Self {
+        self.runtime_context = Some(context);
+        self
+    }
+
+    /// Set runtime context for a specific tool.
+    pub fn with_tool_context<T: Any + Send + Sync + 'static>(
+        mut self,
+        tool_name: impl Into<String>,
+        context: T,
+    ) -> Self {
+        self.tools_context
+            .insert(tool_name.into(), Arc::new(context));
+        self
+    }
+
+    /// Set runtime context for a specific tool from an existing Arc.
+    pub fn with_tool_context_arc(
+        mut self,
+        tool_name: impl Into<String>,
+        context: RuntimeContext,
+    ) -> Self {
+        self.tools_context.insert(tool_name.into(), context);
         self
     }
 
@@ -332,6 +398,8 @@ async fn generate_text_inner(
     let max_steps = options.max_steps.unwrap_or(1);
     let mut steps: Vec<StepResult> = Vec::new();
     let mut total_usage = vercel_ai_provider::Usage::default();
+    let mut runtime_context = options.runtime_context.clone();
+    let mut tools_context = options.tools_context.clone();
 
     // Build retry config
     let retry_config = options
@@ -385,6 +453,9 @@ async fn generate_text_inner(
                 step,
                 steps: steps.clone(),
                 model_id: model_id.clone(),
+                messages: messages.clone(),
+                runtime_context: runtime_context.clone(),
+                tools_context: tools_context.clone(),
             };
             let overrides = prepare(&ctx);
 
@@ -401,6 +472,12 @@ async fn generate_text_inner(
                 None => None,
             };
             step_provider_options = overrides.as_ref().and_then(|o| o.provider_options.clone());
+            if let Some(ctx) = overrides.as_ref().and_then(|o| o.runtime_context.clone()) {
+                runtime_context = Some(ctx);
+            }
+            if let Some(ctxs) = overrides.as_ref().and_then(|o| o.tools_context.clone()) {
+                tools_context = ctxs;
+            }
 
             if let Some(msgs) = overrides.as_ref().and_then(|o| o.messages.clone()) {
                 // Use the overridden messages directly, replacing the entire array
@@ -431,10 +508,17 @@ async fn generate_text_inner(
             step_provider_options = None;
             step_messages = messages.clone();
         }
+        let step_messages_for_tools = step_messages.clone();
+        let step_tools_context = tools_context.clone();
 
         let effective_model = step_model.as_ref().unwrap_or(&model);
-        let effective_provider_options =
-            step_provider_options.as_ref().or(provider_options.as_ref());
+        // Deep-merge call-level + step-level provider options (TS parity:
+        // `mergeObjects(providerOptions, prepareStepResult?.providerOptions)`).
+        // Step keys layer onto call keys; nested objects merge recursively.
+        let effective_provider_options = build_call_options::merge_provider_options(
+            provider_options.as_ref(),
+            step_provider_options.as_ref(),
+        );
 
         // Filter active tools
         let effective_tools =
@@ -456,7 +540,7 @@ async fn generate_text_inner(
             settings,
             &step_tool_choice,
             abort_signal,
-            &effective_provider_options.cloned(),
+            &effective_provider_options,
             output,
             step_messages,
             &effective_tools,
@@ -580,7 +664,7 @@ async fn generate_text_inner(
                     callbacks.on_tool_call_start.as_deref(),
                     &integrations,
                     &OnToolCallStartEvent::new(&call_id, step, model_info.clone(), tc.clone())
-                        .with_messages(messages.clone()),
+                        .with_messages(step_messages_for_tools.clone()),
                 )
                 .await;
             }
@@ -588,8 +672,11 @@ async fn generate_text_inner(
             let tool_futures: Vec<_> = tool_calls
                 .iter()
                 .map(|tc| {
-                    let exec_options =
-                        ToolExecutionOptions::new(&tc.tool_call_id).with_messages(messages.clone());
+                    let mut exec_options = ToolExecutionOptions::new(&tc.tool_call_id)
+                        .with_messages(step_messages_for_tools.clone());
+                    if let Some(context) = step_tools_context.get(&tc.tool_name) {
+                        exec_options = exec_options.with_context_arc(context.clone());
+                    }
                     let tc = tc.clone();
                     async move {
                         let start_time = std::time::Instant::now();

@@ -320,8 +320,8 @@ async fn generate_object_inner<T: DeserializeOwned>(
     }
     if let Some(ref resp) = result.response {
         gen_result.response = Some(crate::types::LanguageModelResponseMetadata {
-            id: None,
-            timestamp: resp.timestamp.clone(),
+            id: resp.id.clone(),
+            timestamp: resp.timestamp,
             model_id: resp.model_id.clone(),
             headers: resp.headers.clone(),
             body: resp.body.clone(),

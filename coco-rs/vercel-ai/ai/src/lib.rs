@@ -105,8 +105,13 @@ pub use generate_text::{
     DynamicToolCall,
     DynamicToolResult,
     GenerateTextCallbacks,
+    // TS-parity event type aliases
+    GenerateTextEndEvent,
     GenerateTextOptions,
     GenerateTextResult,
+    GenerateTextStartEvent,
+    GenerateTextStepEndEvent,
+    GenerateTextStepStartEvent,
     // Generated files
     GeneratedFile,
     GeneratedFiles,
@@ -147,6 +152,7 @@ pub use generate_text::{
     // Stop condition
     StopCondition,
     StreamTextCallbacks,
+    StreamTextChunkEvent,
     StreamTextOptions,
     StreamTextResult,
     TextStreamPart,
@@ -189,14 +195,18 @@ pub use generate_text::{
     // Stop condition functions
     has_reasoning_content,
     has_tool_call,
+    // Stop condition
+    is_loop_finished,
+    is_step_count,
+    is_stop_condition_met,
     json_output,
     json_output_with,
     object_output,
     // Prune messages
     prune_messages,
+    response_contains,
     // Smooth stream
     smooth_stream_iter,
-    // Stop condition
     step_count_is,
     stream_text,
     text_output,
@@ -387,6 +397,7 @@ pub use rerank::rerank;
 
 // Re-exports from telemetry module
 pub use telemetry::TelemetryIntegration;
+pub use telemetry::TelemetryOptions;
 pub use telemetry::TelemetrySettings;
 pub use telemetry::clear_global_integrations;
 pub use telemetry::get_global_integrations;

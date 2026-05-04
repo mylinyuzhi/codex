@@ -205,7 +205,6 @@ fn test_merge_consecutive_assistant_messages_no_merge() {
 
 fn user_msg_with_image() -> Message {
     use crate::UserContent;
-    use coco_inference::DataContent;
     use coco_inference::FilePart;
     use coco_inference::TextPart;
 
@@ -213,10 +212,7 @@ fn user_msg_with_image() -> Message {
         message: LlmMessage::User {
             content: vec![
                 UserContent::Text(TextPart::new("caption")),
-                UserContent::File(FilePart::new(
-                    DataContent::from_base64("abc123"),
-                    "image/png",
-                )),
+                UserContent::File(FilePart::from_base64("abc123", "image/png")),
             ],
             provider_options: None,
         },
@@ -233,13 +229,12 @@ fn user_msg_with_image() -> Message {
 
 fn user_msg_image_only() -> Message {
     use crate::UserContent;
-    use coco_inference::DataContent;
     use coco_inference::FilePart;
 
     Message::User(UserMessage {
         message: LlmMessage::User {
-            content: vec![UserContent::File(FilePart::new(
-                DataContent::from_base64("abc123"),
+            content: vec![UserContent::File(FilePart::from_base64(
+                "abc123",
                 "image/jpeg",
             ))],
             provider_options: None,

@@ -68,6 +68,12 @@ impl ToolExecutionOptions {
         self
     }
 
+    /// Set the experimental context from a shared object.
+    pub fn with_context_arc(mut self, context: Arc<dyn Any + Send + Sync>) -> Self {
+        self.experimental_context = Some(context);
+        self
+    }
+
     /// Get the context as a specific type.
     pub fn get_context<T: Clone + 'static>(&self) -> Option<T> {
         self.experimental_context

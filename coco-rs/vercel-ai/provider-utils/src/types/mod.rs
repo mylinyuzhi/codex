@@ -5,8 +5,6 @@
 mod content_part;
 mod model_message;
 mod tool;
-mod tool_call;
-mod tool_result;
 
 // New types
 mod assistant_model_message;
@@ -24,8 +22,6 @@ mod tool_execution;
 pub use content_part::*;
 pub use model_message::*;
 pub use tool::*;
-pub use tool_call::*;
-pub use tool_result::*;
 
 // Export new types
 pub use assistant_model_message::AssistantContent;

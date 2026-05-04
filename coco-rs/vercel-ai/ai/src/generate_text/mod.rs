@@ -32,6 +32,8 @@ mod tool_output;
 
 // build_call_options (shared utility, used internally; export filter_active_tools)
 pub use build_call_options::filter_active_tools;
+pub use build_call_options::merge_json_value;
+pub use build_call_options::merge_provider_options;
 
 // callback types
 pub use callback::CallbackModelInfo;
@@ -46,6 +48,18 @@ pub use callback::OnToolCallFinishEvent;
 pub use callback::OnToolCallStartEvent;
 pub use callback::StreamTextCallbacks;
 pub use callback::ToolCallOutcome;
+
+// TS-parity event type aliases (TS SDK renamed these in a later version)
+/// Preferred name for [`OnStartEvent`] (TS SDK: `GenerateTextStartEvent`).
+pub type GenerateTextStartEvent = callback::OnStartEvent;
+/// Preferred name for [`OnStepStartEvent`] (TS SDK: `GenerateTextStepStartEvent`).
+pub type GenerateTextStepStartEvent = callback::OnStepStartEvent;
+/// Preferred name for [`OnStepFinishEvent`] (TS SDK: `GenerateTextStepEndEvent`).
+pub type GenerateTextStepEndEvent = callback::OnStepFinishEvent;
+/// Preferred name for [`OnFinishEvent`] (TS SDK: `GenerateTextEndEvent`).
+pub type GenerateTextEndEvent = callback::OnFinishEvent;
+/// Preferred name for [`OnChunkEvent`] (TS SDK: `StreamTextChunkEvent`).
+pub type StreamTextChunkEvent = callback::OnChunkEvent;
 
 // collect_tool_approvals
 pub use collect_tool_approvals::AutoApproveCollector;
@@ -164,6 +178,8 @@ pub use step_result::StepResult;
 // stop_condition
 pub use stop_condition::StopCondition;
 pub use stop_condition::has_tool_call;
+pub use stop_condition::is_loop_finished;
+pub use stop_condition::is_step_count;
 pub use stop_condition::is_stop_condition_met;
 pub use stop_condition::response_contains;
 pub use stop_condition::step_count_is;

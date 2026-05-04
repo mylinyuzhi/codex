@@ -391,14 +391,11 @@ impl ApiClient {
     async fn do_query(&self, params: &QueryParams) -> Result<QueryResult, InferenceError> {
         let options = self.build_options(params);
 
-        let result =
-            self.model
-                .do_generate(options)
-                .await
-                .map_err(|e| InferenceError::ProviderError {
-                    status: 0,
-                    message: e.to_string(),
-                })?;
+        let result = self
+            .model
+            .do_generate(options)
+            .await
+            .map_err(|e| self.wrap_provider_error(e))?;
 
         let usage = TokenUsage {
             input_tokens: result
@@ -457,14 +454,11 @@ impl ApiClient {
     ) -> Result<tokio::sync::mpsc::Receiver<crate::stream::StreamEvent>, InferenceError> {
         let options = self.build_options(params);
 
-        let result =
-            self.model
-                .do_stream(options)
-                .await
-                .map_err(|e| InferenceError::ProviderError {
-                    status: 0,
-                    message: e.to_string(),
-                })?;
+        let result = self
+            .model
+            .do_stream(options)
+            .await
+            .map_err(|e| self.wrap_provider_error(e))?;
 
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         tokio::spawn(crate::stream::process_stream(result.stream, tx));
@@ -475,6 +469,25 @@ impl ApiClient {
     /// Get accumulated usage across all calls.
     pub async fn accumulated_usage(&self) -> UsageAccumulator {
         self.usage.lock().await.clone()
+    }
+
+    /// Wrap an opaque provider `AISdkError` into [`InferenceError::ProviderError`]
+    /// with `(provider, model_id)` attribution prefixed onto the message.
+    /// Mirrors `vercel_ai::wrap_gateway_error` so error logs name the
+    /// failing provider/model instead of just the raw vendor message.
+    /// Status defaults to `0` because the underlying SDK error type
+    /// doesn't carry HTTP status — typed status codes are recovered at
+    /// the next layer up via [`crate::errors`] classification.
+    fn wrap_provider_error(&self, e: vercel_ai_provider::AISdkError) -> InferenceError {
+        InferenceError::ProviderError {
+            status: 0,
+            message: format!(
+                "Provider '{}' error for model '{}': {}",
+                self.model.provider(),
+                self.model.model_id(),
+                e
+            ),
+        }
     }
 
     /// Build [`LanguageModelV4CallOptions`] for a query. When

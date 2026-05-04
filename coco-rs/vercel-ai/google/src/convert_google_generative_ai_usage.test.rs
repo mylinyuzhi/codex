@@ -9,6 +9,7 @@ fn converts_full_usage() {
         thoughts_token_count: Some(30),
         total_token_count: Some(300),
         traffic_type: None,
+        ..Default::default()
     };
     let usage = convert_usage(Some(&google_usage));
     assert_eq!(usage.total_input_tokens(), 100);
@@ -38,6 +39,7 @@ fn handles_partial_usage() {
         thoughts_token_count: None,
         total_token_count: None,
         traffic_type: None,
+        ..Default::default()
     };
     let usage = convert_usage(Some(&google_usage));
     assert_eq!(usage.total_input_tokens(), 100);
@@ -55,6 +57,7 @@ fn includes_traffic_type_in_raw() {
         thoughts_token_count: None,
         total_token_count: Some(30),
         traffic_type: Some("ON_DEMAND".to_string()),
+        ..Default::default()
     };
     let usage = convert_usage(Some(&google_usage));
     let raw = usage.raw.unwrap();

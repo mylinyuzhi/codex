@@ -68,8 +68,10 @@ fn test_content_custom_serialization() {
 
 #[test]
 fn test_content_reasoning_file_serialization() {
+    use crate::shared::FileRawData;
+
     let content = LanguageModelV4Content::ReasoningFile {
-        data: "base64data".into(),
+        data: LanguageModelV4FileData::base64("base64data"),
         media_type: "image/png".into(),
         provider_metadata: None,
     };
@@ -79,7 +81,12 @@ fn test_content_reasoning_file_serialization() {
     assert!(json.contains(r#""mediaType":"image/png""#));
 
     let deserialized: LanguageModelV4Content = serde_json::from_str(&json).unwrap();
-    assert!(
-        matches!(deserialized, LanguageModelV4Content::ReasoningFile { data, media_type, .. } if data == "base64data" && media_type == "image/png")
-    );
+    assert!(matches!(
+        deserialized,
+        LanguageModelV4Content::ReasoningFile {
+            data: LanguageModelV4FileData::Data { data: FileRawData::Base64(ref s) },
+            ref media_type,
+            ..
+        } if s == "base64data" && media_type == "image/png"
+    ));
 }

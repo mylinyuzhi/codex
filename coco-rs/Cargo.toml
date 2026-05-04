@@ -201,7 +201,7 @@ assert_matches = "1.5.0"
 async-trait = "0.1.89"
 base64 = "0.22.1"
 bytes = "1.10.1"
-chrono = "0.4.42"
+chrono = { version = "0.4.42", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 dotenvy = "0.15.7"
 eventsource-stream = "0.2.3"

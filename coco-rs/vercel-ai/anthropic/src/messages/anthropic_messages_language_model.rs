@@ -35,6 +35,7 @@ use vercel_ai_provider_utils::post_stream_to_api_with_client;
 use crate::anthropic_config::AnthropicConfig;
 use crate::anthropic_error::AnthropicFailedResponseHandler;
 use crate::cache_control::CacheControlValidator;
+use crate::sanitize_json_schema::sanitize_json_schema;
 
 use super::anthropic_messages_api::AnthropicCitation;
 use super::anthropic_messages_api::AnthropicMessagesResponse;
@@ -600,14 +601,15 @@ impl AnthropicMessagesLanguageModel {
                 .as_object_mut()
                 .and_then(|m| m.get_mut("output_config"))
                 .and_then(|v| v.as_object_mut());
+            let sanitized = sanitize_json_schema(schema);
             if let Some(oc) = output_config {
                 oc.insert(
                     "format".into(),
-                    json!({"type": "json_schema", "schema": schema}),
+                    json!({"type": "json_schema", "schema": sanitized}),
                 );
             } else {
                 body["output_config"] = json!({
-                    "format": {"type": "json_schema", "schema": schema},
+                    "format": {"type": "json_schema", "schema": sanitized},
                 });
             }
         }
@@ -720,6 +722,11 @@ impl AnthropicMessagesLanguageModel {
             {
                 betas.insert("compact-2026-01-12".into());
             }
+        }
+
+        // Inference geography
+        if let Some(ref geo) = anthropic_options.inference_geo {
+            body["inference_geo"] = Value::String(geo.clone());
         }
 
         // Streaming
@@ -1318,6 +1325,7 @@ impl LanguageModelV4 for AnthropicMessagesLanguageModel {
             provider_metadata,
             request: Some(LanguageModelV4Request { body: Some(body) }),
             response: Some(LanguageModelV4Response {
+                id: response.id,
                 timestamp: None,
                 model_id: response.model,
                 headers: None,
@@ -1794,7 +1802,7 @@ impl AnthropicStreamState {
                                 self.pending
                                     .push_back(LanguageModelV4StreamPart::ToolInputDelta {
                                         id: id.to_string(),
-                                        delta: input_str,
+                                        delta: input_str.clone(),
                                         provider_metadata: None,
                                     });
                                 self.pending
@@ -1803,10 +1811,10 @@ impl AnthropicStreamState {
                                         provider_metadata: None,
                                     });
                                 self.pending.push_back(LanguageModelV4StreamPart::ToolCall(
-                                    vercel_ai_provider::tool::ToolCall::new(
+                                    vercel_ai_provider::LanguageModelV4ToolCall::new(
                                         id.to_string(),
                                         name.to_string(),
-                                        input,
+                                        input_str,
                                     ),
                                 ));
                             }
@@ -2236,10 +2244,10 @@ impl AnthropicStreamState {
                                     }
 
                                     // Build ToolCall with caller, dynamic, and provider_executed (Gap 2-4)
-                                    let mut tc = vercel_ai_provider::tool::ToolCall::new(
+                                    let mut tc = vercel_ai_provider::LanguageModelV4ToolCall::new(
                                         id.clone(),
                                         tool_name.clone(),
-                                        input,
+                                        serde_json::to_string(&input).unwrap_or_default(),
                                     );
                                     if let Some(pe) = *provider_executed {
                                         tc = tc.with_provider_executed(pe);
@@ -2251,7 +2259,7 @@ impl AnthropicStreamState {
                                     if let Some(c) = caller {
                                         let mut meta = HashMap::new();
                                         meta.insert("anthropic".into(), json!({"caller": c}));
-                                        tc = tc.with_provider_metadata(ProviderMetadata(meta));
+                                        tc = tc.with_metadata(ProviderMetadata(meta));
                                     }
                                     self.pending
                                         .push_back(LanguageModelV4StreamPart::ToolCall(tc));
@@ -2331,20 +2339,22 @@ impl AnthropicStreamState {
                                             .get("is_error")
                                             .and_then(Value::as_bool)
                                             .unwrap_or(false);
+                                        let mut tool_result =
+                                            vercel_ai_provider::LanguageModelV4ToolResult::new(
+                                                tool_use_id.to_string(),
+                                                tool_name,
+                                                block_val.clone(),
+                                            );
+                                        if is_error {
+                                            tool_result = tool_result.with_error(true);
+                                        }
                                         self.pending.push_back(
-                                            LanguageModelV4StreamPart::ToolResult(
-                                                vercel_ai_provider::tool::ToolResult {
-                                                    tool_call_id: tool_use_id.to_string(),
-                                                    tool_name,
-                                                    output: block_val.clone(),
-                                                    is_error,
-                                                },
-                                            ),
+                                            LanguageModelV4StreamPart::ToolResult(tool_result),
                                         );
                                     } else if !tool_use_id.is_empty() {
                                         self.pending.push_back(
                                             LanguageModelV4StreamPart::ToolResult(
-                                                vercel_ai_provider::tool::ToolResult::new(
+                                                vercel_ai_provider::LanguageModelV4ToolResult::new(
                                                     tool_use_id.to_string(),
                                                     String::new(),
                                                     block_val.clone(),

@@ -41,11 +41,21 @@ impl StopCondition {
     }
 }
 
-/// Create a stop condition that triggers after a specific number of steps.
-pub fn step_count_is(step_count: usize) -> StopCondition {
+/// Create a stop condition that triggers when the number of completed steps equals `step_count`.
+pub fn is_step_count(step_count: usize) -> StopCondition {
     StopCondition::new(format!("Stop after {step_count} steps"), move |steps| {
-        steps.len() >= step_count
+        steps.len() == step_count
     })
+}
+
+/// Alias for [`is_step_count`] (previous name).
+pub fn step_count_is(step_count: usize) -> StopCondition {
+    is_step_count(step_count)
+}
+
+/// Create a stop condition that never stops. Lets the loop run until a natural termination.
+pub fn is_loop_finished() -> StopCondition {
+    StopCondition::new("Never stop (loop finished)", |_steps| false)
 }
 
 /// Create a stop condition that triggers when a specific tool is called.

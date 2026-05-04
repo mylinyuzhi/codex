@@ -1,8 +1,10 @@
-//! Tool invocation and tool call/result types.
+//! Tool invocation type.
 //!
-//! Tool definition types have been consolidated into
-//! [`crate::language_model::v4::function_tool::LanguageModelV4FunctionTool`].
-//! The type alias `ToolDefinitionV4` in the crate root points there.
+//! Tool definition types live in
+//! [`crate::language_model::v4::function_tool::LanguageModelV4FunctionTool`]
+//! (alias `ToolDefinitionV4`). Tool call / tool result types live in
+//! [`crate::language_model::v4::tool_call::LanguageModelV4ToolCall`] /
+//! [`crate::language_model::v4::tool_result::LanguageModelV4ToolResult`].
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -54,110 +56,6 @@ impl ToolInvocation {
         self.output = Some(error);
         self.is_error = true;
         self
-    }
-}
-
-/// A tool call in a response.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ToolCall {
-    /// The tool call ID.
-    pub tool_call_id: String,
-    /// The tool name.
-    pub tool_name: String,
-    /// The tool arguments.
-    pub input: JSONValue,
-    /// Whether the tool call will be executed by the provider.
-    /// If this flag is not set or is false, the tool call will be executed by the client.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider_executed: Option<bool>,
-    /// Whether the tool is dynamic, i.e. defined at runtime.
-    /// For example, MCP (Model Context Protocol) tools that are executed by the provider.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dynamic: Option<bool>,
-    /// Additional provider-specific metadata for the tool call.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub provider_metadata: Option<crate::shared::ProviderMetadata>,
-}
-
-impl ToolCall {
-    /// Create a new tool call.
-    pub fn new(
-        tool_call_id: impl Into<String>,
-        tool_name: impl Into<String>,
-        input: JSONValue,
-    ) -> Self {
-        Self {
-            tool_call_id: tool_call_id.into(),
-            tool_name: tool_name.into(),
-            input,
-            provider_executed: None,
-            dynamic: None,
-            provider_metadata: None,
-        }
-    }
-
-    /// Set whether this is a provider-executed tool call.
-    pub fn with_provider_executed(mut self, provider_executed: bool) -> Self {
-        self.provider_executed = Some(provider_executed);
-        self
-    }
-
-    /// Set whether this is a dynamic tool call.
-    pub fn with_dynamic(mut self, dynamic: bool) -> Self {
-        self.dynamic = Some(dynamic);
-        self
-    }
-
-    /// Set provider metadata.
-    pub fn with_provider_metadata(mut self, metadata: crate::shared::ProviderMetadata) -> Self {
-        self.provider_metadata = Some(metadata);
-        self
-    }
-}
-
-/// A tool result.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ToolResult {
-    /// The tool call ID.
-    pub tool_call_id: String,
-    /// The tool name.
-    pub tool_name: String,
-    /// The result content.
-    pub output: JSONValue,
-    /// Whether this is an error result.
-    #[serde(default)]
-    pub is_error: bool,
-}
-
-impl ToolResult {
-    /// Create a new tool result.
-    pub fn new(
-        tool_call_id: impl Into<String>,
-        tool_name: impl Into<String>,
-        output: JSONValue,
-    ) -> Self {
-        Self {
-            tool_call_id: tool_call_id.into(),
-            tool_name: tool_name.into(),
-            output,
-            is_error: false,
-        }
-    }
-
-    /// Create an error result.
-    pub fn error(
-        tool_call_id: impl Into<String>,
-        tool_name: impl Into<String>,
-        error: JSONValue,
-    ) -> Self {
-        Self {
-            tool_call_id: tool_call_id.into(),
-            tool_name: tool_name.into(),
-            output: error,
-            is_error: true,
-        }
     }
 }
 

@@ -28,12 +28,17 @@ use vercel_ai_provider::TextPart;
 use vercel_ai_provider::ToolCallPart;
 use vercel_ai_provider::Warning;
 use vercel_ai_provider_utils::JsonResponseHandler;
+use vercel_ai_provider_utils::StreamingToolCallDelta;
+use vercel_ai_provider_utils::StreamingToolCallTracker;
+use vercel_ai_provider_utils::StreamingToolCallTrackerOptions;
+use vercel_ai_provider_utils::ToolCallDeltaFunction;
 use vercel_ai_provider_utils::is_custom_reasoning;
 use vercel_ai_provider_utils::post_json_to_api_with_client_and_headers;
 use vercel_ai_provider_utils::post_stream_to_api_with_client_and_headers;
 
 use crate::metadata_extractor::StreamMetadataExtractor;
 use crate::openai_compatible_config::OpenAICompatibleConfig;
+use crate::provider_options_key::warn_if_deprecated_provider_options_key;
 
 use super::convert_chat_usage::convert_openai_compatible_chat_usage;
 use super::convert_to_chat_messages::convert_to_openai_compatible_chat_messages;
@@ -65,6 +70,11 @@ impl OpenAICompatibleChatLanguageModel {
     ) -> Result<(Value, Vec<Warning>), AISdkError> {
         let mut warnings = Vec::new();
         let provider_name = self.config.provider_options_name();
+        warn_if_deprecated_provider_options_key(
+            provider_name,
+            options.provider_options.as_ref(),
+            &mut warnings,
+        );
         let (compat_options, passthrough) =
             extract_compatible_options(&options.provider_options, provider_name);
 
@@ -397,8 +407,7 @@ impl LanguageModelV4 for OpenAICompatibleChatLanguageModel {
         let response_body = serde_json::to_value(&response).ok();
         let timestamp = response
             .created
-            .and_then(|ts| chrono::DateTime::from_timestamp(ts as i64, 0))
-            .map(|dt| dt.to_rfc3339());
+            .and_then(|ts| chrono::DateTime::from_timestamp(ts as i64, 0));
 
         Ok(LanguageModelV4GenerateResult {
             content,
@@ -408,6 +417,7 @@ impl LanguageModelV4 for OpenAICompatibleChatLanguageModel {
             provider_metadata,
             request: Some(LanguageModelV4Request { body: Some(body) }),
             response: Some(LanguageModelV4Response {
+                id: response.id.clone(),
                 timestamp,
                 model_id: response.model,
                 headers: Some(response_headers),
@@ -474,14 +484,16 @@ impl LanguageModelV4 for OpenAICompatibleChatLanguageModel {
     }
 }
 
-/// In-progress tool call accumulator.
-struct InProgressToolCall {
-    id: String,
-    name: String,
-    arguments: String,
-    has_finished: bool,
-    started: bool,
-    thought_signature: Option<String>,
+/// Buffered tool-call delta for an index whose `function.name` has not yet
+/// arrived. Some OpenAI-compatible providers (e.g. Google via Gemini's
+/// OpenAI-compat surface) split the first chunk so the name lands one or two
+/// deltas after the id+arguments. The shared `StreamingToolCallTracker`
+/// requires `id` AND `function.name` on the first delta, so we hold the
+/// fragments here and forward a synthetic delta once the name appears.
+struct PendingToolCall {
+    id: Option<String>,
+    buffered_arguments: String,
+    extra_content: Option<Value>,
 }
 
 /// Create a stream of `LanguageModelV4StreamPart` from a raw SSE byte stream.
@@ -525,28 +537,41 @@ fn create_chat_stream(
                         state.close_reasoning();
                         state.close_text();
 
-                        // Finalize unfinished tool calls
-                        let tool_calls = std::mem::take(&mut state.tool_calls);
-                        for tc in tool_calls {
-                            if tc.started && !tc.has_finished {
-                                state
-                                    .pending
-                                    .push_back(LanguageModelV4StreamPart::ToolInputEnd {
-                                        id: tc.id.clone(),
-                                        provider_metadata: None,
+                        // Finalize tool calls (TS parity):
+                        // 1. Forward any pending un-named buffered deltas
+                        //    into the tracker. The tracker rejects them
+                        //    because `function.name` is missing — we
+                        //    surface that as an `Error` stream part.
+                        let pending_indices: Vec<usize> =
+                            state.pending_tool_calls.keys().copied().collect();
+                        for idx in pending_indices {
+                            if let Some(pending) = state.pending_tool_calls.remove(&idx) {
+                                let delta = StreamingToolCallDelta {
+                                    index: Some(idx),
+                                    id: pending.id,
+                                    r#type: None,
+                                    function: Some(ToolCallDeltaFunction {
+                                        name: None,
+                                        arguments: Some(pending.buffered_arguments),
+                                    }),
+                                    extra: pending.extra_content,
+                                };
+                                if let Err(e) = state.tool_call_tracker.process_delta(delta) {
+                                    state.pending.push_back(LanguageModelV4StreamPart::Error {
+                                        error: StreamError::new(format!(
+                                            "Invalid response data: {}",
+                                            e.message
+                                        )),
                                     });
-
-                                let input: Value =
-                                    serde_json::from_str(&tc.arguments).unwrap_or(Value::Null);
-                                let pm = state.tool_call_provider_metadata(&tc.thought_signature);
-                                let mut tool_call =
-                                    vercel_ai_provider::tool::ToolCall::new(tc.id, tc.name, input);
-                                tool_call.provider_metadata = pm;
-                                state
-                                    .pending
-                                    .push_back(LanguageModelV4StreamPart::ToolCall(tool_call));
+                                }
+                                state.drain_tool_call_parts();
                             }
                         }
+
+                        // 2. Finalize any tool calls that were started
+                        //    but never completed (partial JSON).
+                        state.tool_call_tracker.flush();
+                        state.drain_tool_call_parts();
 
                         // Emit finish if we haven't already
                         if !state.finish_emitted {
@@ -617,7 +642,13 @@ struct ChatStreamState {
     byte_stream: vercel_ai_provider_utils::ByteStream,
     buffer: String,
     pending: std::collections::VecDeque<LanguageModelV4StreamPart>,
-    tool_calls: Vec<InProgressToolCall>,
+    /// Per-index buffer for deltas that arrive before `function.name`.
+    pending_tool_calls: HashMap<usize, PendingToolCall>,
+    /// Indices already forwarded to the tracker — subsequent deltas go
+    /// straight through (incremental arguments).
+    forwarded_tool_call_indices: std::collections::HashSet<usize>,
+    /// Shared OpenAI-compatible tool-call accumulator.
+    tool_call_tracker: StreamingToolCallTracker,
     text_started: bool,
     text_id: String,
     reasoning_started: bool,
@@ -643,11 +674,36 @@ impl ChatStreamState {
         let mut pending = std::collections::VecDeque::new();
         pending.push_back(LanguageModelV4StreamPart::StreamStart { warnings });
 
+        // Build the shared tracker. `extract_metadata` reads the Google
+        // `thought_signature` from `extra_content`; `build_tool_call_provider_metadata`
+        // is identity (TS does the same).
+        let provider_name_for_metadata = provider_name.clone();
+        let tool_call_tracker =
+            StreamingToolCallTracker::with_options(StreamingToolCallTrackerOptions {
+                extract_metadata: Some(Box::new(move |delta| {
+                    let extra = delta.extra.as_ref()?;
+                    let ts = extra
+                        .get("google")
+                        .and_then(|g| g.get("thought_signature"))
+                        .and_then(|v| v.as_str())?;
+                    let mut inner = serde_json::Map::new();
+                    inner.insert("thoughtSignature".into(), Value::String(ts.to_string()));
+                    let mut meta = HashMap::new();
+                    meta.insert(provider_name_for_metadata.clone(), Value::Object(inner));
+                    Some(ProviderMetadata(meta))
+                })),
+                #[allow(clippy::redundant_closure_for_method_calls)]
+                build_tool_call_provider_metadata: Some(Box::new(|metadata| metadata.cloned())),
+                ..Default::default()
+            });
+
         Self {
             byte_stream,
             buffer: String::new(),
             pending,
-            tool_calls: Vec::new(),
+            pending_tool_calls: HashMap::new(),
+            forwarded_tool_call_indices: std::collections::HashSet::new(),
+            tool_call_tracker,
             text_started: false,
             text_id: vercel_ai_provider_utils::generate_id("txt"),
             reasoning_started: false,
@@ -702,18 +758,122 @@ impl ChatStreamState {
         }
     }
 
-    /// Build provider metadata for a tool call (includes thought_signature if present).
-    fn tool_call_provider_metadata(
-        &self,
-        thought_signature: &Option<String>,
-    ) -> Option<ProviderMetadata> {
-        thought_signature.as_ref().map(|ts| {
-            let mut inner = serde_json::Map::new();
-            inner.insert("thoughtSignature".into(), Value::String(ts.clone()));
-            let mut meta = HashMap::new();
-            meta.insert(self.provider_name.clone(), Value::Object(inner));
-            ProviderMetadata(meta)
-        })
+    /// Drain any tool-call stream parts the tracker has accumulated and
+    /// queue them for emission. Called after every `process_delta` /
+    /// `flush` so the order of `ToolInputStart` / `ToolInputDelta` /
+    /// `ToolInputEnd` / `ToolCall` is preserved relative to surrounding
+    /// text/reasoning events.
+    fn drain_tool_call_parts(&mut self) {
+        for part in self.tool_call_tracker.take_parts() {
+            self.pending.push_back(part);
+        }
+    }
+
+    /// Process one OpenAI-compatible tool-call delta. Buffers fragments
+    /// for an index whose `function.name` has not arrived yet (some
+    /// providers split the first chunk so name lands later); once the
+    /// name is known, forwards a synthetic delta to the shared tracker.
+    /// Subsequent deltas for the same index go straight through.
+    fn process_tool_call_delta(
+        &mut self,
+        tc_delta: &super::openai_compatible_chat_api::OpenAICompatibleChatChunkToolCall,
+    ) {
+        let Some(idx_u32) = tc_delta.index else {
+            // Pass through unindexed deltas — let the tracker assign an
+            // index and surface any error.
+            self.forward_to_tracker(None, tc_delta);
+            self.drain_tool_call_parts();
+            return;
+        };
+        let idx = idx_u32 as usize;
+
+        if self.forwarded_tool_call_indices.contains(&idx) {
+            self.forward_to_tracker(Some(idx), tc_delta);
+            self.drain_tool_call_parts();
+            return;
+        }
+
+        // Buffer this delta into the per-index pending entry.
+        let pending = self
+            .pending_tool_calls
+            .entry(idx)
+            .or_insert_with(|| PendingToolCall {
+                id: tc_delta.id.clone(),
+                buffered_arguments: String::new(),
+                extra_content: tc_delta.extra_content.clone(),
+            });
+        if pending.id.is_none()
+            && let Some(ref id) = tc_delta.id
+        {
+            pending.id = Some(id.clone());
+        }
+        if pending.extra_content.is_none() {
+            pending.extra_content = tc_delta.extra_content.clone();
+        }
+        if let Some(ref func) = tc_delta.function
+            && let Some(ref args) = func.arguments
+        {
+            pending.buffered_arguments.push_str(args);
+        }
+
+        // If the name has arrived, forward the buffered state as a
+        // single synthetic first delta, then mark this index as
+        // forwarded.
+        let name = tc_delta.function.as_ref().and_then(|f| f.name.as_ref());
+        if let Some(name) = name {
+            let pending = self
+                .pending_tool_calls
+                .remove(&idx)
+                .unwrap_or(PendingToolCall {
+                    id: tc_delta.id.clone(),
+                    buffered_arguments: String::new(),
+                    extra_content: tc_delta.extra_content.clone(),
+                });
+            let synthetic = StreamingToolCallDelta {
+                index: Some(idx),
+                id: pending.id,
+                r#type: tc_delta.tool_type.clone(),
+                function: Some(ToolCallDeltaFunction {
+                    name: Some(name.clone()),
+                    arguments: Some(pending.buffered_arguments),
+                }),
+                extra: pending.extra_content,
+            };
+            if let Err(e) = self.tool_call_tracker.process_delta(synthetic) {
+                self.pending.push_back(LanguageModelV4StreamPart::Error {
+                    error: StreamError::new(format!("Invalid response data: {}", e.message)),
+                });
+            } else {
+                self.forwarded_tool_call_indices.insert(idx);
+            }
+            self.drain_tool_call_parts();
+        }
+    }
+
+    /// Forward a delta directly to the tracker (used for already-forwarded
+    /// indices and the unindexed fallback). Translates the OpenAI-compatible
+    /// chunk shape into the generic tracker delta.
+    fn forward_to_tracker(
+        &mut self,
+        index: Option<usize>,
+        tc_delta: &super::openai_compatible_chat_api::OpenAICompatibleChatChunkToolCall,
+    ) {
+        let function = tc_delta.function.as_ref().map(|f| ToolCallDeltaFunction {
+            name: f.name.clone(),
+            arguments: f.arguments.clone(),
+        });
+        let delta = StreamingToolCallDelta {
+            index,
+            id: tc_delta.id.clone(),
+            r#type: tc_delta.tool_type.clone(),
+            function,
+            extra: tc_delta.extra_content.clone(),
+        };
+        if let Err(e) = self.tool_call_tracker.process_delta(delta) {
+            self.pending.push_back(LanguageModelV4StreamPart::Error {
+                error: StreamError::new(format!("Invalid response data: {}", e.message)),
+            });
+        }
     }
 
     /// Close reasoning if it's currently active.
@@ -886,134 +1046,7 @@ impl ChatStreamState {
                     self.close_reasoning();
 
                     for tc_delta in tool_calls {
-                        let idx = tc_delta.index.unwrap_or(self.tool_calls.len() as u32) as usize;
-
-                        // Track if this is a new tool call entry
-                        let is_new = self.tool_calls.len() <= idx;
-
-                        // Ensure tool_calls vec is big enough
-                        while self.tool_calls.len() <= idx {
-                            self.tool_calls.push(InProgressToolCall {
-                                id: String::new(),
-                                name: String::new(),
-                                arguments: String::new(),
-                                has_finished: false,
-                                started: false,
-                                thought_signature: None,
-                            });
-                        }
-
-                        // Skip if already finished (early completion)
-                        if self.tool_calls[idx].has_finished {
-                            continue;
-                        }
-
-                        // Update tool call state from delta
-                        if let Some(ref id) = tc_delta.id {
-                            self.tool_calls[idx].id = id.clone();
-                        }
-
-                        // Validate first delta for a new tool call has id and function.name
-                        if is_new {
-                            let has_id = tc_delta.id.is_some();
-                            let has_name = tc_delta
-                                .function
-                                .as_ref()
-                                .and_then(|f| f.name.as_ref())
-                                .is_some();
-                            if !has_id || !has_name {
-                                self.pending.push_back(LanguageModelV4StreamPart::Error {
-                                    error: StreamError::new(format!(
-                                        "Invalid response data: expected tool call \
-                                             delta to have id and function.name in first chunk, \
-                                             got id={:?} function.name={:?}",
-                                        tc_delta.id,
-                                        tc_delta.function.as_ref().and_then(|f| f.name.as_ref()),
-                                    )),
-                                });
-                                continue;
-                            }
-                        }
-
-                        // Capture thought_signature from extra_content
-                        if let Some(ref ec) = tc_delta.extra_content
-                            && let Some(ts) = ec
-                                .get("google")
-                                .and_then(|g| g.get("thought_signature"))
-                                .and_then(|v| v.as_str())
-                        {
-                            self.tool_calls[idx].thought_signature = Some(ts.to_string());
-                        }
-
-                        if let Some(ref func) = tc_delta.function {
-                            if let Some(ref name) = func.name {
-                                self.tool_calls[idx].name = name.clone();
-                            }
-                            if let Some(ref args) = func.arguments {
-                                self.tool_calls[idx].arguments.push_str(args);
-                            }
-                        }
-
-                        // Emit ToolInputStart on first delta
-                        if !self.tool_calls[idx].started && !self.tool_calls[idx].name.is_empty() {
-                            self.tool_calls[idx].started = true;
-
-                            let tc_id = self.tool_calls[idx].id.clone();
-                            let tc_name = self.tool_calls[idx].name.clone();
-                            self.pending
-                                .push_back(LanguageModelV4StreamPart::ToolInputStart {
-                                    id: tc_id,
-                                    tool_name: tc_name,
-                                    provider_executed: None,
-                                    dynamic: None,
-                                    title: None,
-                                    provider_metadata: None,
-                                });
-                        }
-
-                        // Emit argument delta
-                        if let Some(ref func) = tc_delta.function
-                            && let Some(ref args) = func.arguments
-                            && !args.is_empty()
-                        {
-                            let tc_id = self.tool_calls[idx].id.clone();
-                            self.pending
-                                .push_back(LanguageModelV4StreamPart::ToolInputDelta {
-                                    id: tc_id,
-                                    delta: args.clone(),
-                                    provider_metadata: None,
-                                });
-                        }
-
-                        // #7: Early tool call completion via JSON parse detection
-                        if self.tool_calls[idx].started
-                            && !self.tool_calls[idx].has_finished
-                            && !self.tool_calls[idx].arguments.is_empty()
-                            && serde_json::from_str::<Value>(&self.tool_calls[idx].arguments)
-                                .is_ok()
-                        {
-                            self.tool_calls[idx].has_finished = true;
-
-                            let thought_sig = self.tool_calls[idx].thought_signature.clone();
-                            let pm = self.tool_call_provider_metadata(&thought_sig);
-                            let tc_id = self.tool_calls[idx].id.clone();
-                            let tc_name = self.tool_calls[idx].name.clone();
-                            let tc_args = self.tool_calls[idx].arguments.clone();
-
-                            self.pending
-                                .push_back(LanguageModelV4StreamPart::ToolInputEnd {
-                                    id: tc_id.clone(),
-                                    provider_metadata: None,
-                                });
-
-                            let input: Value =
-                                serde_json::from_str(&tc_args).unwrap_or(Value::Null);
-                            let mut tool_call =
-                                vercel_ai_provider::tool::ToolCall::new(tc_id, tc_name, input);
-                            tool_call.provider_metadata = pm;
-                            self.pending
-                                .push_back(LanguageModelV4StreamPart::ToolCall(tool_call));
-                        }
+                        self.process_tool_call_delta(tc_delta);
                     }
                 }
 

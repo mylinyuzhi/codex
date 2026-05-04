@@ -12,6 +12,7 @@ coco-types.workspace = true
 coco-config.workspace = true
 coco-otel.workspace = true
 vercel-ai-provider.workspace = true
+vercel-ai-provider-utils.workspace = true
 # Concrete provider crates — `coco-inference` is the canonical home for
 # `Arc<dyn LanguageModel>` construction. No other crate may depend on
 # these directly (enforced by scripts/check-vercel-ai-seam.sh).

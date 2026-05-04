@@ -172,3 +172,42 @@ async fn test_error_model_fails() {
     let result = client.query(&params).await;
     assert!(result.is_err());
 }
+
+#[tokio::test]
+async fn test_provider_error_includes_provider_and_model_attribution() {
+    let client = ApiClient::with_default_fingerprint(
+        Arc::new(ErrorModel),
+        RetryConfig {
+            max_retries: 0,
+            ..Default::default()
+        },
+    );
+    let params = QueryParams {
+        prompt: vec![LanguageModelV4Message::user_text("hi")],
+        max_tokens: Some(100),
+        thinking_level: None,
+        fast_mode: false,
+        tools: None,
+        context_management: None,
+        query_source: None,
+        agent_id: None,
+        time_since_last_assistant_ms: None,
+    };
+    let err = client.query(&params).await.unwrap_err();
+    let message = match err {
+        InferenceError::ProviderError { message, .. } => message,
+        other => panic!("expected ProviderError, got {other:?}"),
+    };
+    assert!(
+        message.contains("Provider 'mock'"),
+        "missing provider attribution: {message}"
+    );
+    assert!(
+        message.contains("model 'error-model'"),
+        "missing model attribution: {message}"
+    );
+    assert!(
+        message.contains("simulated failure"),
+        "missing original error: {message}"
+    );
+}

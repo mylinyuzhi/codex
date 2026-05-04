@@ -2,10 +2,11 @@ use serde_json::Value;
 use serde_json::json;
 use vercel_ai_provider::AISdkError;
 use vercel_ai_provider::AssistantContentPart;
-use vercel_ai_provider::DataContent;
+use vercel_ai_provider::FileRawData;
 use vercel_ai_provider::LanguageModelV4Message;
 use vercel_ai_provider::LanguageModelV4Prompt;
 use vercel_ai_provider::ProviderMetadata;
+use vercel_ai_provider::SharedV4FileData;
 use vercel_ai_provider::ToolContentPart;
 use vercel_ai_provider::ToolResultContent;
 use vercel_ai_provider::UserContentPart;
@@ -207,7 +208,7 @@ fn convert_user_parts(
                     } else {
                         media_type.as_str()
                     };
-                    let url = data_content_to_url(&file_part.data, effective_type);
+                    let url = shared_file_data_to_url(&file_part.data, effective_type);
                     let mut image_url = json!({ "url": url });
                     if let Some(ref detail) = image_detail {
                         image_url["detail"] = Value::String(detail.clone());
@@ -219,7 +220,7 @@ fn convert_user_parts(
                     Ok(val)
                 } else if media_type.starts_with("audio/") {
                     // Audio parts with URLs are not supported
-                    if matches!(file_part.data, DataContent::Url(_)) {
+                    if matches!(file_part.data, SharedV4FileData::Url { .. }) {
                         return Err(AISdkError::new(
                             "Unsupported functionality: audio file parts with URLs",
                         ));
@@ -233,7 +234,7 @@ fn convert_user_parts(
                             )));
                         }
                     };
-                    let b64 = data_content_to_base64(&file_part.data);
+                    let b64 = shared_file_data_to_base64(&file_part.data);
                     let mut val = json!({
                         "type": "input_audio",
                         "input_audio": { "data": b64, "format": format }
@@ -244,12 +245,12 @@ fn convert_user_parts(
                     Ok(val)
                 } else if media_type == "application/pdf" {
                     // PDF parts with URLs are not supported
-                    if matches!(file_part.data, DataContent::Url(_)) {
+                    if matches!(file_part.data, SharedV4FileData::Url { .. }) {
                         return Err(AISdkError::new(
                             "Unsupported functionality: PDF file parts with URLs",
                         ));
                     }
-                    let b64 = data_content_to_base64(&file_part.data);
+                    let b64 = shared_file_data_to_base64(&file_part.data);
                     let mut val = json!({
                         "type": "file",
                         "file": {
@@ -262,7 +263,7 @@ fn convert_user_parts(
                     }
                     Ok(val)
                 } else if media_type.starts_with("text/") {
-                    let text = decode_text_data(&file_part.data);
+                    let text = shared_file_data_to_text(&file_part.data);
                     let mut val = json!({ "type": "text", "text": text });
                     for (k, v) in part_meta {
                         val[k] = v;
@@ -363,51 +364,66 @@ fn serialize_tool_result_content(content: &ToolResultContent) -> String {
     }
 }
 
-/// Convert DataContent to a URL string (for images).
-fn data_content_to_url(data: &DataContent, media_type: &str) -> String {
+fn shared_file_data_to_url(data: &SharedV4FileData, media_type: &str) -> String {
     match data {
-        DataContent::Url(url) => url.clone(),
-        DataContent::Base64(b64) => format!("data:{media_type};base64,{b64}"),
-        DataContent::Bytes(bytes) => {
-            use base64::Engine;
-            let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+        SharedV4FileData::Url { url } => url.clone(),
+        SharedV4FileData::Data { data: raw } => {
+            let b64 = file_raw_data_to_base64(raw);
             format!("data:{media_type};base64,{b64}")
         }
+        SharedV4FileData::Text { text } => {
+            use base64::Engine as _;
+            let b64 = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
+            format!("data:{media_type};base64,{b64}")
+        }
+        SharedV4FileData::Reference { .. } => String::new(),
     }
 }
 
-/// Convert DataContent to base64 string.
-fn data_content_to_base64(data: &DataContent) -> String {
+fn shared_file_data_to_base64(data: &SharedV4FileData) -> String {
     match data {
-        DataContent::Base64(b64) => b64.clone(),
-        DataContent::Bytes(bytes) => {
-            use base64::Engine;
-            base64::engine::general_purpose::STANDARD.encode(bytes)
-        }
-        DataContent::Url(url) => {
-            // If it's already a data URL, extract the base64
+        SharedV4FileData::Data { data: raw } => file_raw_data_to_base64(raw),
+        SharedV4FileData::Url { url } => {
             if let Some(idx) = url.find(";base64,") {
                 url[idx + 8..].to_string()
             } else {
                 url.clone()
             }
         }
+        SharedV4FileData::Text { text } => {
+            use base64::Engine as _;
+            base64::engine::general_purpose::STANDARD.encode(text.as_bytes())
+        }
+        SharedV4FileData::Reference { .. } => String::new(),
     }
 }
 
-/// Decode DataContent as UTF-8 text (for text/* media types).
-fn decode_text_data(data: &DataContent) -> String {
+fn shared_file_data_to_text(data: &SharedV4FileData) -> String {
     match data {
-        DataContent::Url(url) => url.clone(),
-        DataContent::Base64(b64) => {
-            use base64::Engine;
-            base64::engine::general_purpose::STANDARD
-                .decode(b64)
-                .ok()
-                .and_then(|bytes| String::from_utf8(bytes).ok())
-                .unwrap_or_default()
+        SharedV4FileData::Text { text } => text.clone(),
+        SharedV4FileData::Data { data: raw } => match raw {
+            FileRawData::Base64(b64) => {
+                use base64::Engine as _;
+                base64::engine::general_purpose::STANDARD
+                    .decode(b64)
+                    .ok()
+                    .and_then(|bytes| String::from_utf8(bytes).ok())
+                    .unwrap_or_default()
+            }
+            FileRawData::Bytes(bytes) => String::from_utf8_lossy(bytes).into_owned(),
+        },
+        SharedV4FileData::Url { url } => url.clone(),
+        SharedV4FileData::Reference { .. } => String::new(),
+    }
+}
+
+fn file_raw_data_to_base64(raw: &FileRawData) -> String {
+    match raw {
+        FileRawData::Base64(b64) => b64.clone(),
+        FileRawData::Bytes(bytes) => {
+            use base64::Engine as _;
+            base64::engine::general_purpose::STANDARD.encode(bytes)
         }
-        DataContent::Bytes(bytes) => String::from_utf8_lossy(bytes).into_owned(),
     }
 }
 

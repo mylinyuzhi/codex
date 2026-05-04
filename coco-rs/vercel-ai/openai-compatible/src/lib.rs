@@ -41,6 +41,7 @@ pub mod openai_compatible_config;
 pub mod openai_compatible_error;
 pub mod openai_compatible_provider;
 pub mod openai_compatible_provider_settings;
+pub mod provider_options_key;
 
 // Model implementations
 pub mod chat;
@@ -56,6 +57,12 @@ pub use openai_compatible_config::SupportedUrlsFn;
 pub use openai_compatible_provider::OpenAICompatibleProvider;
 pub use openai_compatible_provider::create_openai_compatible;
 pub use openai_compatible_provider_settings::OpenAICompatibleProviderSettings;
+
+// Provider options key utilities
+pub use provider_options_key::effective_provider_options_key;
+pub use provider_options_key::get_effective_provider_options;
+pub use provider_options_key::to_camel_case;
+pub use provider_options_key::warn_if_deprecated_provider_options_key;
 
 // Model type re-exports
 pub use chat::OpenAICompatibleChatLanguageModel;

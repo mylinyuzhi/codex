@@ -26,3 +26,5 @@ pub use registry::get_global_integrations;
 pub use registry::register_telemetry_integration;
 pub use telemetry_integration::TelemetryIntegration;
 pub use telemetry_settings::TelemetrySettings;
+/// Preferred alias for [`TelemetrySettings`] (matches TS SDK `TelemetryOptions`).
+pub type TelemetryOptions = TelemetrySettings;
