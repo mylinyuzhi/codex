@@ -20,6 +20,7 @@ vercel-ai-anthropic.workspace = true
 vercel-ai-openai.workspace = true
 vercel-ai-openai-compatible.workspace = true
 vercel-ai-google.workspace = true
+vercel-ai.workspace = true
 
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
@@ -34,6 +35,5 @@ reqwest.workspace = true
 [dev-dependencies]
 pretty_assertions.workspace = true
 tempfile.workspace = true
-tokio = { workspace = true, features = ["rt", "macros"] }
-vercel-ai.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "test-util"] }
 futures.workspace = true

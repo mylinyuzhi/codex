@@ -452,6 +452,16 @@ impl ApiClient {
         &self,
         params: &QueryParams,
     ) -> Result<tokio::sync::mpsc::Receiver<crate::stream::StreamEvent>, InferenceError> {
+        self.query_stream_with_config(params, crate::stream::default_process_stream_config())
+            .await
+    }
+
+    /// Execute a streaming query with explicit stream processor config.
+    pub async fn query_stream_with_config(
+        &self,
+        params: &QueryParams,
+        stream_config: crate::stream::StreamProcessorConfig,
+    ) -> Result<tokio::sync::mpsc::Receiver<crate::stream::StreamEvent>, InferenceError> {
         let options = self.build_options(params);
 
         let result = self
@@ -461,7 +471,11 @@ impl ApiClient {
             .map_err(|e| self.wrap_provider_error(e))?;
 
         let (tx, rx) = tokio::sync::mpsc::channel(64);
-        tokio::spawn(crate::stream::process_stream(result.stream, tx));
+        tokio::spawn(crate::stream::process_stream_with_config(
+            result.stream,
+            tx,
+            stream_config,
+        ));
 
         Ok(rx)
     }

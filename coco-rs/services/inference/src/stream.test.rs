@@ -1,16 +1,22 @@
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
+use std::time::Duration;
 use tokio::sync::mpsc;
+use vercel_ai_provider::AISdkError;
 use vercel_ai_provider::AssistantContentPart;
 use vercel_ai_provider::FinishReason;
+use vercel_ai_provider::LanguageModelV4StreamPart;
 use vercel_ai_provider::ReasoningPart;
+use vercel_ai_provider::StreamError;
 use vercel_ai_provider::TextPart;
 use vercel_ai_provider::ToolCallPart;
 use vercel_ai_provider::UnifiedFinishReason;
 use vercel_ai_provider::Usage;
 
 use super::StreamEvent;
+use super::default_process_stream_config;
 use super::process_stream;
+use super::process_stream_with_config;
 use super::synthetic_stream_from_content;
 
 /// End-to-end: feeding `synthetic_stream_from_content`'s output through
@@ -85,11 +91,118 @@ async fn synthetic_stream_emits_events_in_content_order() {
         "fifth event should be ToolCallEnd, got {:?}",
         &events[4]
     );
-    assert!(
-        matches!(&events[5], StreamEvent::Finish { .. }),
-        "last event should be Finish, got {:?}",
-        &events[5]
-    );
+    match &events[5] {
+        StreamEvent::Finish { metrics, .. } => {
+            assert!(metrics.ttft_ms.is_some());
+            assert_eq!(metrics.stall_count, 0);
+            assert_eq!(metrics.total_stall_ms, 0);
+        }
+        other => panic!("last event should be Finish, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn process_stream_reports_provider_stream_errors_with_metrics() {
+    let parts: Vec<Result<LanguageModelV4StreamPart, AISdkError>> = vec![
+        Ok(LanguageModelV4StreamPart::TextDelta {
+            id: "t1".into(),
+            delta: "partial".into(),
+            provider_metadata: None,
+        }),
+        Err(AISdkError::new("connection reset")),
+    ];
+
+    let (tx, mut rx) = mpsc::channel::<StreamEvent>(16);
+    tokio::spawn(process_stream(Box::pin(futures::stream::iter(parts)), tx));
+
+    assert!(matches!(
+        rx.recv().await,
+        Some(StreamEvent::TextDelta { text }) if text == "partial"
+    ));
+    match rx.recv().await {
+        Some(StreamEvent::Error { message, metrics }) => {
+            assert!(message.contains("connection reset"));
+            assert!(metrics.ttft_ms.is_some());
+        }
+        other => panic!("expected stream error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn process_stream_reports_error_parts_with_metrics() {
+    let parts: Vec<Result<LanguageModelV4StreamPart, AISdkError>> = vec![
+        Ok(LanguageModelV4StreamPart::ToolInputStart {
+            id: "call_1".into(),
+            tool_name: "Read".into(),
+            provider_executed: None,
+            dynamic: None,
+            title: None,
+            provider_metadata: None,
+        }),
+        Ok(LanguageModelV4StreamPart::Error {
+            error: StreamError::new("provider overloaded"),
+        }),
+    ];
+
+    let (tx, mut rx) = mpsc::channel::<StreamEvent>(16);
+    tokio::spawn(process_stream(Box::pin(futures::stream::iter(parts)), tx));
+
+    assert!(matches!(
+        rx.recv().await,
+        Some(StreamEvent::ToolCallStart { id, tool_name })
+            if id == "call_1" && tool_name == "Read"
+    ));
+    match rx.recv().await {
+        Some(StreamEvent::Error { message, metrics }) => {
+            assert_eq!(message, "provider overloaded");
+            assert!(metrics.ttft_ms.is_some());
+        }
+        other => panic!("expected error part, got {other:?}"),
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn process_stream_with_config_uses_custom_stall_threshold() {
+    let stream = futures::stream::unfold(0usize, |idx| async move {
+        if idx == 1 {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+        let part = match idx {
+            0 => LanguageModelV4StreamPart::TextDelta {
+                id: "t1".into(),
+                delta: "a".into(),
+                provider_metadata: None,
+            },
+            1 => LanguageModelV4StreamPart::TextDelta {
+                id: "t1".into(),
+                delta: "b".into(),
+                provider_metadata: None,
+            },
+            2 => LanguageModelV4StreamPart::Finish {
+                usage: Usage::new(1, 2),
+                finish_reason: FinishReason::new(UnifiedFinishReason::Stop),
+                provider_metadata: None,
+            },
+            _ => return None,
+        };
+        Some((Ok(part), idx + 1))
+    });
+    let config = default_process_stream_config().with_stall_threshold(Duration::from_secs(1));
+
+    let (tx, mut rx) = mpsc::channel::<StreamEvent>(16);
+    tokio::spawn(process_stream_with_config(Box::pin(stream), tx, config));
+
+    let mut finish_metrics = None;
+    while let Some(event) = rx.recv().await {
+        if let StreamEvent::Finish { metrics, .. } = event {
+            finish_metrics = Some(metrics);
+            break;
+        }
+    }
+
+    let metrics = finish_metrics.expect("finish event should include metrics");
+    assert_eq!(metrics.stall_count, 1);
+    assert_eq!(metrics.total_stall_ms, 2_000);
 }
 
 /// Tool input must round-trip through the synthetic stream: delta JSON parsed
