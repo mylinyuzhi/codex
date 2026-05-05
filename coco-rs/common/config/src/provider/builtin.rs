@@ -1,9 +1,12 @@
+use std::collections::BTreeMap;
+
 use coco_types::ProviderApi;
 
 use crate::EnvKey;
 use crate::error::ConfigError;
 
 use super::PartialProviderConfig;
+use super::PartialProviderModelOverride;
 use super::ProviderConfig;
 
 /// Built-in provider partial overlays. Identity invariant: built
@@ -72,7 +75,48 @@ pub fn builtin_provider_partials() -> Vec<(&'static str, PartialProviderConfig)>
                 ..Default::default()
             },
         ),
+        (
+            "deepseek-openai",
+            PartialProviderConfig {
+                api: Some(ProviderApi::OpenaiCompat),
+                env_key: Some(EnvKey::DeepseekApiKey.to_string()),
+                // OpenAI-compatible endpoint — SDK appends `/chat/completions`.
+                base_url: Some("https://api.deepseek.com/v1".into()),
+                default_model: Some("deepseek-v4-pro".into()),
+                models: Some(deepseek_v4_models()),
+                ..Default::default()
+            },
+        ),
+        (
+            "deepseek-anthropic",
+            PartialProviderConfig {
+                api: Some(ProviderApi::Anthropic),
+                env_key: Some(EnvKey::DeepseekApiKey.to_string()),
+                // Anthropic-compatible endpoint — must end with `/v1`; SDK
+                // appends `/messages` (same rule as `api.anthropic.com/v1`).
+                base_url: Some("https://api.deepseek.com/anthropic/v1".into()),
+                default_model: Some("deepseek-v4-pro".into()),
+                models: Some(deepseek_v4_models()),
+                ..Default::default()
+            },
+        ),
     ]
+}
+
+/// Pre-registered DeepSeek V4 model entries shared by both builtin
+/// DeepSeek providers. Empty overrides — metadata comes from the
+/// compiled-in `builtin_models_partial()` catalog.
+fn deepseek_v4_models() -> BTreeMap<String, PartialProviderModelOverride> {
+    BTreeMap::from([
+        (
+            "deepseek-v4-flash".into(),
+            PartialProviderModelOverride::default(),
+        ),
+        (
+            "deepseek-v4-pro".into(),
+            PartialProviderModelOverride::default(),
+        ),
+    ])
 }
 
 /// Resolve every builtin partial through `from_partial` so the

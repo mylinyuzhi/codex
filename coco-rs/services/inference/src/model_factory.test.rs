@@ -113,7 +113,7 @@ fn build_openai_compat_routes_for_user_defined_instance() {
     models.insert(
         "local-model".to_string(),
         coco_config::PartialProviderModelOverride {
-            info: coco_config::PartialModelInfo {
+            overrides: coco_config::PartialModelInfo {
                 context_window: Some(coco_config::PositiveTokens::new(128_000)),
                 max_output_tokens: Some(coco_config::PositiveTokens::new(8_192)),
                 ..Default::default()
@@ -240,7 +240,7 @@ fn namespace_round_trip_for_openai_compat_instance() {
     models.insert(
         "local-model".to_string(),
         coco_config::PartialProviderModelOverride {
-            info: coco_config::PartialModelInfo {
+            overrides: coco_config::PartialModelInfo {
                 context_window: Some(coco_config::PositiveTokens::new(128_000)),
                 max_output_tokens: Some(coco_config::PositiveTokens::new(8_192)),
                 ..Default::default()
@@ -300,7 +300,7 @@ fn build_api_client_resolves_api_model_name_override() {
         "internal/coder-v3".to_string(),
         coco_config::PartialProviderModelOverride {
             api_model_name: Some("ep-internal-v3-prod".into()),
-            info: coco_config::PartialModelInfo {
+            overrides: coco_config::PartialModelInfo {
                 context_window: Some(coco_config::PositiveTokens::new(128_000)),
                 max_output_tokens: Some(coco_config::PositiveTokens::new(8_192)),
                 ..Default::default()

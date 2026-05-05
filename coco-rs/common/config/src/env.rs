@@ -146,6 +146,10 @@ pub enum EnvKey {
     TmuxPane,
     TermProgram,
     ItermSessionId,
+    /// DeepSeek API key (vendor name — exempt from `COCO_` prefix).
+    /// Shared by both `deepseek-openai` and `deepseek-anthropic`
+    /// builtin providers.
+    DeepseekApiKey,
 }
 
 impl EnvKey {
@@ -223,6 +227,7 @@ impl EnvKey {
             Self::TmuxPane => "TMUX_PANE",
             Self::TermProgram => "TERM_PROGRAM",
             Self::ItermSessionId => "ITERM_SESSION_ID",
+            Self::DeepseekApiKey => "DEEPSEEK_API_KEY",
         }
     }
 }
