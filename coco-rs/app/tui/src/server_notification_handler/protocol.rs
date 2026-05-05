@@ -673,8 +673,8 @@ fn on_turn_completed(state: &mut AppState, p: coco_types::TurnCompletedParams) -
     state.session.update_tokens(TokenUsage {
         input_tokens: p.usage.input_tokens,
         output_tokens: p.usage.output_tokens,
-        cache_read_tokens: p.usage.cache_read_input_tokens,
-        cache_creation_tokens: p.usage.cache_creation_input_tokens,
+        cache_read_tokens: p.usage.cache_read_input_tokens(),
+        cache_creation_tokens: p.usage.cache_creation_input_tokens(),
     });
     // Emit a terminal notification when the user has switched away — they
     // typically want a ping when a long turn finishes in the background.

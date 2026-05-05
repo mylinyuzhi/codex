@@ -1823,6 +1823,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "coco-tests-live"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "coco-cli",
+ "coco-commands",
+ "coco-config",
+ "coco-context",
+ "coco-hooks",
+ "coco-inference",
+ "coco-messages",
+ "coco-permissions",
+ "coco-query",
+ "coco-session",
+ "coco-tool-runtime",
+ "coco-tools",
+ "coco-types",
+ "dotenvy",
+ "futures",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "coco-tool-runtime"
 version = "0.0.0"
 dependencies = [

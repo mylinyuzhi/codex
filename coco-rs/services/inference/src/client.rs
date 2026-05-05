@@ -356,8 +356,8 @@ impl ApiClient {
                     {
                         let res = detector.lock().await.check_response_for_cache_break(
                             query_source,
-                            result.usage.cache_read_input_tokens,
-                            result.usage.cache_creation_input_tokens,
+                            result.usage.cache_read_input_tokens(),
+                            result.usage.cache_creation_input_tokens(),
                             params.time_since_last_assistant_ms,
                             params.agent_id.as_deref(),
                         );
@@ -422,35 +422,66 @@ impl ApiClient {
             .await
             .map_err(|e| self.wrap_provider_error(e))?;
 
+        let input_total: i64 = result
+            .usage
+            .input_tokens
+            .total
+            .unwrap_or(0)
+            .try_into()
+            .unwrap_or(0);
+        let output_total: i64 = result
+            .usage
+            .output_tokens
+            .total
+            .unwrap_or(0)
+            .try_into()
+            .unwrap_or(0);
         let usage = TokenUsage {
-            input_tokens: result
-                .usage
-                .input_tokens
-                .total
-                .unwrap_or(0)
-                .try_into()
-                .unwrap_or(0),
-            output_tokens: result
-                .usage
-                .output_tokens
-                .total
-                .unwrap_or(0)
-                .try_into()
-                .unwrap_or(0),
-            cache_read_input_tokens: result
-                .usage
-                .input_tokens
-                .cache_read
-                .unwrap_or(0)
-                .try_into()
-                .unwrap_or(0),
-            cache_creation_input_tokens: result
-                .usage
-                .input_tokens
-                .cache_write
-                .unwrap_or(0)
-                .try_into()
-                .unwrap_or(0),
+            input_tokens: input_total,
+            output_tokens: output_total,
+            total_tokens: input_total + output_total,
+            input_token_details: coco_types::InputTokenDetails {
+                no_cache_tokens: result
+                    .usage
+                    .input_tokens
+                    .no_cache
+                    .unwrap_or(0)
+                    .try_into()
+                    .unwrap_or(0),
+                cache_read_tokens: result
+                    .usage
+                    .input_tokens
+                    .cache_read
+                    .unwrap_or(0)
+                    .try_into()
+                    .unwrap_or(0),
+                cache_write_tokens: result
+                    .usage
+                    .input_tokens
+                    .cache_write
+                    .unwrap_or(0)
+                    .try_into()
+                    .unwrap_or(0),
+            },
+            // See `coco_types::TokenUsage` doc for provenance — `0` is
+            // valid when the provider's wire shape doesn't separate
+            // reasoning from text output.
+            output_token_details: coco_types::OutputTokenDetails {
+                text_tokens: result
+                    .usage
+                    .output_tokens
+                    .text
+                    .unwrap_or(0)
+                    .try_into()
+                    .unwrap_or(0),
+                reasoning_tokens: result
+                    .usage
+                    .output_tokens
+                    .reasoning
+                    .unwrap_or(0)
+                    .try_into()
+                    .unwrap_or(0),
+            },
         };
 
         let model_id = result

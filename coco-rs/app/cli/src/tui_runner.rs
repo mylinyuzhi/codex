@@ -30,7 +30,6 @@ use coco_context::attachment::Attachment;
 use coco_inference::ApiClient;
 use coco_query::CoreEvent;
 use coco_query::ServerNotification;
-use coco_tool_runtime::ToolRegistry;
 use coco_tui::App;
 use coco_tui::ClearScope;
 use coco_tui::UserCommand;
@@ -38,6 +37,9 @@ use coco_tui::app::create_channels;
 use coco_types::SlashCommandStatusKind;
 use coco_types::TuiOnlyEvent;
 use tokio_util::sync::CancellationToken;
+
+use coco_cli::session_bootstrap::build_engine_resources;
+use coco_cli::session_bootstrap::install_session_late_binds;
 
 use crate::Cli;
 
@@ -66,7 +68,7 @@ pub async fn run_tui(cli: &Cli) -> Result<()> {
     // returns Err; in that case (which shouldn't happen here, but
     // surface gracefully if it does) we build the config directly.
     let reload_opts = coco_config_reload::ReloadOptions::new(cwd.clone())
-        .with_overrides(crate::cli_runtime_overrides(cli)?);
+        .with_overrides(coco_cli::headless::cli_runtime_overrides(cli)?);
     let reload_opts = if let Some(path) = cli.settings.as_deref() {
         reload_opts.with_flag_settings(path)
     } else {
@@ -80,86 +82,40 @@ pub async fn run_tui(cli: &Cli) -> Result<()> {
         }
         Err(e) => {
             tracing::warn!(error = %e, "config hot-reload disabled; using one-shot build");
-            (None, crate::build_runtime_config_for_cli(cli, &cwd)?)
+            (
+                None,
+                coco_cli::headless::build_runtime_config_for_cli(cli, &cwd)?,
+            )
         }
     };
-    let settings = &runtime_config.settings;
-
-    // Resolve initial mode + bypass capability + run sudo/sandbox guard
-    // in one shot. TS parity: `initialPermissionModeFromCLI` +
-    // `isBypassPermissionsModeAvailable` + `setup.ts:395-442`.
-    let startup = crate::resolve_startup_permission_state(cli, &settings.merged)?;
-    let permission_mode = startup.mode;
-    let bypass_permissions_available = startup.bypass_available;
-    // `startup.notification` is surfaced in the TUI as a toast below,
-    // once `app.state` exists. Headless paths (run_chat, run_sdk_mode)
-    // eprintln it instead.
-
-    // Model + client. `create_api_client` computes a real
-    // `ProviderClientFingerprint` from the resolved `ProviderConfig`
-    // (multi-provider-plan §11.1) — only the mock fallback uses the
-    // test-grade default fingerprint.
-    let retry: coco_inference::RetryConfig = runtime_config.api.retry.clone().into();
-    let (client, provider_api, model_id) = crate::create_api_client(&runtime_config, retry.clone());
-    let mode = provider_api.map_or("mock", |api| api.as_str());
-
-    // Main role fallback chain — populated from CLI `--fallback-model`
-    // flags (repeatable) OR settings.models.main.fallbacks, whichever
-    // the resolver produced. Fail-fast on any tier that can't build:
-    // silently dropping a fallback would only surface under outage.
-    let fallback_clients = crate::build_fallback_clients_for_role(
-        &runtime_config,
-        coco_types::ModelRole::Main,
-        retry,
-    )?;
-    // Optional half-open recovery policy for Main. Defaults to
-    // None (sticky fallback) unless settings.models.main.recovery
-    // is configured.
-    let recovery_policy = runtime_config
-        .model_roles
-        .recovery(coco_types::ModelRole::Main);
-
-    // Tools
-    let registry = ToolRegistry::new();
-    coco_tools::register_all_tools(&registry);
-    let tools = Arc::new(registry);
-
-    // Slash-command registry — same TS-parity load order used by the SDK
-    // bootstrap path (commands::build_command_registry). Built once here
-    // so dispatch_slash_command and the SDK initialize advertisement
-    // share one Arc.
-    let command_registry = {
-        let mut skill_manager = coco_skills::SkillManager::new();
-        skill_manager.load_from_dirs(&[
-            coco_config::global_config::config_home().join("skills"),
-            cwd.join(".coco").join("skills"),
-        ]);
-        let mut plugin_manager = coco_plugins::PluginManager::new();
-        plugin_manager.load_from_dirs(&coco_plugins::get_plugin_dirs(
-            &coco_config::global_config::config_home(),
-            &cwd,
-        ));
-        let registry = coco_commands::build_command_registry(
-            &skill_manager,
-            &plugin_manager,
-            coco_types::UserType::from_env(),
-            runtime_config.features.clone(),
-            cwd.clone(),
-            dirs::home_dir().unwrap_or_else(|| cwd.clone()),
-            None,
-        );
-        Arc::new(registry)
-    };
-
-    // System prompt
-    let system_prompt =
-        crate::build_system_prompt_for_model(&cwd, &runtime_config, client.provider(), &model_id);
+    // Engine resources (client, fallbacks, recovery, tools, system
+    // prompt, command registry, startup-permission state) shared with
+    // SDK / headless via `session_bootstrap::build_engine_resources`.
+    // The slash-command registry uses the full TS-parity load order
+    // (builtins → extended → skills → plugin contributions → TS-parity
+    // P1 handlers), so `dispatch_slash_command` and the SDK
+    // `initialize.commands` advertisement share one Arc.
+    let resources = build_engine_resources(cli, &runtime_config, &cwd)?;
+    let mode = resources
+        .provider_api
+        .map_or("mock", coco_types::ProviderApi::as_str);
+    let model_id = resources.model_id.clone();
+    let permission_mode = resources.startup.mode;
+    let bypass_permissions_available = resources.startup.bypass_available;
+    let startup_notification = resources.startup.notification.clone();
+    let client = resources.client;
+    let fallback_clients = resources.fallback_clients;
+    let recovery_policy = resources.recovery_policy;
+    let tools = resources.tools;
+    let system_prompt = resources.system_prompt;
+    let command_registry = resources.command_registry.clone();
 
     // Session manager for auto-title persistence (F5). Built here so
     // `SessionRuntime::build` can borrow it and the cleanup task can
     // own it.
-    let sessions_dir = coco_config::global_config::config_home().join("sessions");
-    let session_manager = Arc::new(coco_session::SessionManager::new(sessions_dir));
+    let session_manager = Arc::new(coco_session::SessionManager::new(
+        coco_cli::paths::sessions_dir(),
+    ));
     let _ = session_manager.create(&model_id, &cwd);
     {
         // Background housekeeping: prune session files older than the
@@ -245,10 +201,12 @@ pub async fn run_tui(cli: &Cli) -> Result<()> {
     )
     .await?;
 
-    // P1: install agent-team wiring (SwarmAgentHandle + QueryEngineAdapter
-    // factory) when `Feature::AgentTeams` is enabled. No-op otherwise.
-    coco_cli::agent_handle_factory::install_agent_team(runtime.clone(), cwd.display().to_string())
-        .await?;
+    // Post-build late-binds shared with SDK: task runtime, agent
+    // transcript persistence, agent-team wiring, fork dispatcher.
+    // Without this TUI used to silently miss background AgentTool,
+    // resume, and `/btw`. MCP handle is `None` until TUI grows its
+    // own `McpConnectionManager` bootstrap.
+    install_session_late_binds(runtime.clone(), &cwd, None).await?;
 
     // TS parity: TUI users opt into per-spawn periodic AgentSummary
     // timers via `COCO_AGENT_SUMMARY_ENABLE` (TS uses an SDK control
@@ -282,7 +240,7 @@ pub async fn run_tui(cli: &Cli) -> Result<()> {
     // Surface the startup downgrade notification (if any) as a toast
     // so interactive users see it. Headless paths eprintln it; the
     // TUI swallows stderr.
-    if let Some(msg) = startup.notification {
+    if let Some(msg) = startup_notification {
         app.state_mut()
             .ui
             .add_toast(coco_tui::state::ui::Toast::warning(msg));
@@ -1926,7 +1884,11 @@ fn spawn_auto_title_task(
     use coco_messages::LlmMessage;
 
     tokio::spawn(async move {
-        let Ok(client) = crate::build_api_client(&runtime, &spec, RetryConfig::default()) else {
+        let Ok(client) = coco_inference::model_factory::build_api_client(
+            &runtime,
+            &spec,
+            RetryConfig::default(),
+        ) else {
             // Provider dispatch failed (e.g. missing API key) — silently
             // abandon; `auto_title` is an advisory feature.
             return;

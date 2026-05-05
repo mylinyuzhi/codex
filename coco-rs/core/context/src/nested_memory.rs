@@ -33,14 +33,14 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 
-use crate::claude_rules::collect_rule_files;
-use crate::claude_rules::filter_rules_matching;
-use crate::claude_rules::rule_to_entry;
-use crate::claudemd::MemoryFileSource;
-use crate::claudemd_imports::expand_imports;
+use crate::memory_discovery::MemoryFileSource;
 use crate::memory_filenames::MEMORY_FILE_CANDIDATES;
 use crate::memory_filenames::MEMORY_LOCAL_FILE_CANDIDATES;
 use crate::memory_filenames::find_memory_files;
+use crate::memory_imports::expand_imports;
+use crate::memory_rules::collect_rule_files;
+use crate::memory_rules::filter_rules_matching;
+use crate::memory_rules::rule_to_entry;
 
 /// One memory file loaded by per-file traversal.
 ///
@@ -203,7 +203,7 @@ fn load_nested_dir(
 }
 
 fn push_rule_entry(
-    rule: crate::claude_rules::RuleFile,
+    rule: crate::memory_rules::RuleFile,
     source: MemoryFileSource,
     out: &mut Vec<LoadedMemoryEntry>,
     loaded: &mut HashSet<PathBuf>,

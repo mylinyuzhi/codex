@@ -373,5 +373,5 @@ pub fn expand_imports(
 }
 
 #[cfg(test)]
-#[path = "claudemd_imports.test.rs"]
+#[path = "memory_imports.test.rs"]
 mod tests;

@@ -85,6 +85,11 @@ impl TurnRunner for QueryEngineRunner {
         let max_turns = self.max_turns;
         let runtime = self.runtime.clone();
         let history_handle = handoff.history.clone();
+        // Keep our own handle on the cancel token. The engine consumes
+        // its copy; we still need to know post-run whether the user
+        // requested an interrupt so the wire stream gets `turn/interrupted`
+        // rather than `turn/failed`.
+        let cancel_for_terminal = cancel.clone();
         Box::pin(async move {
             info!(
                 session_id = %handoff.session_id,
@@ -297,8 +302,26 @@ impl TurnRunner for QueryEngineRunner {
                     // includes tool calls, tool results, and the
                     // assistant reply in addition to the user message
                     // we pre-persisted above.
-                    let mut h = history_handle.lock().await;
-                    *h = result.final_messages;
+                    {
+                        let mut h = history_handle.lock().await;
+                        *h = result.final_messages;
+                    }
+                    // Cancellation is reported as `Ok(QueryResult{cancelled:true})`
+                    // by the engine, NOT as Err — see engine.rs's top-of-loop
+                    // cancel check. Emit `TurnInterrupted` here so the SDK
+                    // wire stream produces a terminal turn event in this
+                    // path; without it, clients waiting for `turn/completed`
+                    // / `turn/interrupted` would hang forever after a
+                    // mid-flight `control/interrupt`.
+                    if cancel_for_terminal.is_cancelled() {
+                        let _ = event_tx_for_error
+                            .send(CoreEvent::Protocol(
+                                coco_types::ServerNotification::TurnInterrupted(
+                                    coco_types::TurnInterruptedParams { turn_id: None },
+                                ),
+                            ))
+                            .await;
+                    }
                     Ok(())
                 }
                 Err(e) => {
@@ -307,6 +330,24 @@ impl TurnRunner for QueryEngineRunner {
                         "QueryEngineRunner: engine returned error; \
                          user message already persisted to session history"
                     );
+                    // Emit a wire-level terminal notification BEFORE the
+                    // synthetic SessionResult. Without this the SDK
+                    // client never sees `turn/failed` or `turn/interrupted`
+                    // on the engine-bail path — `TurnCompleted` is only
+                    // emitted on the Ok path, so the client would hang
+                    // waiting for a terminator that never arrives.
+                    let was_cancelled = cancel_for_terminal.is_cancelled();
+                    let terminal = if was_cancelled {
+                        coco_types::ServerNotification::TurnInterrupted(
+                            coco_types::TurnInterruptedParams { turn_id: None },
+                        )
+                    } else {
+                        coco_types::ServerNotification::TurnFailed(coco_types::TurnFailedParams {
+                            error: e.to_string(),
+                        })
+                    };
+                    let _ = event_tx_for_error.send(CoreEvent::Protocol(terminal)).await;
+
                     // Emit a synthetic `SessionResult` with `is_error=true`
                     // so the forwarder's `accumulate_session_result` folds
                     // the failure into `SessionHandle.stats`. Without
@@ -325,7 +366,11 @@ impl TurnRunner for QueryEngineRunner {
                         duration_ms: 0,
                         duration_api_ms: 0,
                         is_error: true,
-                        stop_reason: "engine_error".into(),
+                        stop_reason: if was_cancelled {
+                            "interrupted".into()
+                        } else {
+                            "engine_error".into()
+                        },
                         total_cost_usd: 0.0,
                         usage: coco_types::TokenUsage::default(),
                         model_usage: std::collections::HashMap::new(),

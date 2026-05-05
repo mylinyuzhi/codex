@@ -144,8 +144,12 @@ fn reconstruct_message(entry: &TranscriptEntry) -> Option<Message> {
                 usage: entry.usage.as_ref().map(|u| coco_types::TokenUsage {
                     input_tokens: u.input_tokens,
                     output_tokens: u.output_tokens,
-                    cache_read_input_tokens: u.cache_read_tokens.unwrap_or(0),
-                    cache_creation_input_tokens: u.cache_creation_tokens.unwrap_or(0),
+                    input_token_details: coco_types::InputTokenDetails {
+                        cache_read_tokens: u.cache_read_tokens.unwrap_or(0),
+                        cache_write_tokens: u.cache_creation_tokens.unwrap_or(0),
+                        ..Default::default()
+                    },
+                    ..Default::default()
                 }),
                 cost_usd: entry.cost_usd,
                 request_id: None,

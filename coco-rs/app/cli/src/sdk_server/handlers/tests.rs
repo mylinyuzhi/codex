@@ -230,8 +230,12 @@ impl TurnRunner for StatsEmittingRunner {
                 usage: coco_types::TokenUsage {
                     input_tokens: input,
                     output_tokens: output,
-                    cache_read_input_tokens: 0,
-                    cache_creation_input_tokens: 0,
+                    input_token_details: coco_types::InputTokenDetails {
+                        cache_read_tokens: 0,
+                        cache_write_tokens: 0,
+                        ..Default::default()
+                    },
+                    ..Default::default()
                 },
                 model_usage: std::collections::HashMap::new(),
                 permission_denials: vec![PermissionDenialInfo {
@@ -2147,8 +2151,12 @@ impl TurnRunner for SlowRunner {
                     usage: coco_types::TokenUsage {
                         input_tokens: 9999,
                         output_tokens: 9999,
-                        cache_read_input_tokens: 0,
-                        cache_creation_input_tokens: 0,
+                        input_token_details: coco_types::InputTokenDetails {
+                            cache_read_tokens: 0,
+                            cache_write_tokens: 0,
+                            ..Default::default()
+                        },
+                        ..Default::default()
                     },
                     model_usage: std::collections::HashMap::new(),
                     permission_denials: Vec::new(),

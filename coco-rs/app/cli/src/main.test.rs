@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use coco_cli::headless::DEFAULT_SYSTEM_PROMPT_IDENTITY;
+use coco_cli::headless::build_system_prompt_for_model;
 use coco_config::CatalogPaths;
 use coco_config::EnvSnapshot;
 use coco_config::RuntimeConfig;
@@ -7,8 +9,6 @@ use coco_config::RuntimeOverrides;
 use coco_config::Settings;
 use coco_config::SettingsWithSource;
 use tempfile::TempDir;
-
-use super::*;
 
 fn runtime_for_model(selection: &str, home: &TempDir) -> RuntimeConfig {
     let settings = SettingsWithSource {

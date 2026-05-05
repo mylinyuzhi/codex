@@ -1,0 +1,404 @@
+//! In-memory SDK server harness for live tests.
+//!
+//! Builds a real `SdkServer` with a real `SessionRuntime` driven by a
+//! real `QueryEngineRunner` against the live DeepSeek API, but talks
+//! to it over an `InMemoryTransport::pair()` instead of stdio. Tests
+//! drive the client end directly.
+//!
+//! Skips a handful of optional bootstraps that `run_sdk_mode` wires
+//! (output-style discovery, agent search paths, auth resolution,
+//! agent-team install, fork dispatcher, transcript store) — none of
+//! them are exercised by the protocol tests we run, and skipping them
+//! keeps the harness short.
+
+use std::sync::Arc;
+
+use anyhow::Context;
+use anyhow::Result;
+use anyhow::anyhow;
+use coco_cli::Cli;
+use coco_cli::headless;
+use coco_cli::sdk_server::CliInitializeBootstrap;
+use coco_cli::sdk_server::InMemoryTransport;
+use coco_cli::sdk_server::QueryEngineRunner;
+use coco_cli::sdk_server::SdkServer;
+use coco_cli::sdk_server::SdkTransport;
+use coco_cli::session_runtime::SessionRuntime;
+use coco_cli::session_runtime::SessionRuntimeBuildOpts;
+use coco_commands::CommandRegistry;
+use coco_commands::register_extended_builtins;
+use coco_session::SessionManager;
+use coco_tool_runtime::ToolRegistry;
+use coco_types::ClientRequestMethod;
+use coco_types::JsonRpcMessage;
+use coco_types::JsonRpcNotification;
+use coco_types::JsonRpcRequest;
+use coco_types::NotificationMethod;
+use coco_types::RequestId;
+use tempfile::TempDir;
+use tokio::task::JoinHandle;
+
+use crate::common;
+
+/// One running SDK server bound to its transport pair. The server
+/// runs in a background task; tests drive `client` and call `shutdown`
+/// when done.
+pub struct LiveSdkServer {
+    /// Client end of the transport — `send` to push a request to the
+    /// server, `recv` to read responses + notifications.
+    pub client: Arc<InMemoryTransport>,
+    /// Background task driving the server's dispatch loop.
+    pub server_task: JoinHandle<()>,
+    /// Tempdir holding the SessionManager database. Kept alive for
+    /// the duration of the test so per-session JSONL writes don't
+    /// race the cleanup.
+    pub _sessions_dir: TempDir,
+    /// Resolved (provider, model) for the harness, for diagnostic use.
+    /// Underscore-prefixed because no test reads them today; future
+    /// failure messages may want to grab them via field access.
+    pub _provider: String,
+    pub _model_id: String,
+}
+
+impl LiveSdkServer {
+    /// Stop the server and join its task. Failing to call this leaks
+    /// the join handle but is harmless across tests because each test
+    /// gets its own server.
+    pub async fn shutdown(self) {
+        let _ = self.client.close().await;
+        // Server's `run` loop exits on `recv` returning Err(Closed).
+        // Bound the wait so a wedged server can't hang the test.
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), self.server_task).await;
+    }
+}
+
+/// Build a minimal Cli pointing at `(provider, model)`. Adds optional
+/// extra argv entries (e.g. `--max-turns 4`). Top-level flags must
+/// appear BEFORE the `sdk` subcommand because clap routes them on
+/// the parent parser.
+pub fn cli_for(provider: &str, model: &str, extra: &[&str]) -> Cli {
+    use clap::Parser;
+    let model_arg = format!("{provider}/{model}");
+    let mut argv: Vec<&str> = vec!["coco", "--model", &model_arg];
+    for e in extra {
+        argv.push(e);
+    }
+    argv.push("sdk");
+    Cli::parse_from(&argv)
+}
+
+/// Spin up an `SdkServer` driven by a real `QueryEngineRunner` against
+/// `(provider, model)`. The runner uses DeepSeek live; `DEEPSEEK_API_KEY`
+/// must be set or the harness errors before reaching the server.
+pub async fn build_live_server(provider: &str, model: &str) -> Result<LiveSdkServer> {
+    let cli = cli_for(provider, model, &[]);
+    let cwd = common::tmpdir::make("coco-tests-sdk-cwd-")?.keep();
+    let sessions_dir = common::tmpdir::make("coco-tests-sdk-sessions-")?;
+
+    let runtime_config = headless::build_runtime_config_for_cli(&cli, &cwd)?;
+    let retry: coco_inference::RetryConfig = runtime_config.api.retry.clone().into();
+    let (client_api, _provider_api, model_id) =
+        headless::create_api_client(&runtime_config, retry.clone());
+    if model_id == "mock-model" {
+        return Err(anyhow!(
+            "no live provider configured (DEEPSEEK_API_KEY missing or invalid); \
+             SDK live tests cannot run against the mock model"
+        ));
+    }
+    let fallback_clients = coco_inference::model_factory::build_fallback_clients_for_role(
+        &runtime_config,
+        coco_types::ModelRole::Main,
+        retry,
+    )?;
+    let recovery_policy = runtime_config
+        .model_roles
+        .recovery(coco_types::ModelRole::Main);
+
+    // Curated tool subset (same rationale as the cli_deepseek harness:
+    // some builtins emit non-strict schemas that DeepSeek rejects).
+    let registry = ToolRegistry::new();
+    registry.register(Arc::new(coco_tools::BashTool));
+    registry.register(Arc::new(coco_tools::ReadTool));
+    registry.register(Arc::new(coco_tools::WriteTool));
+    registry.register(Arc::new(coco_tools::EditTool));
+    registry.register(Arc::new(coco_tools::GlobTool));
+    let tools = Arc::new(registry);
+
+    let system_prompt = headless::build_system_prompt_for_model(
+        &cwd,
+        &runtime_config,
+        client_api.provider(),
+        &model_id,
+    );
+    let session_manager = Arc::new(SessionManager::new(sessions_dir.path().to_path_buf()));
+
+    let startup =
+        headless::resolve_startup_permission_state(&cli, &runtime_config.settings.merged)?;
+
+    let provider_name = client_api.provider().to_string();
+
+    // Build the SessionRuntime with the same `SessionRuntimeBuildOpts`
+    // shape `run_sdk_mode` uses, minus the optional bootstraps we don't
+    // need for protocol tests (agent-team, fork dispatcher, etc.).
+    // Bootstrap so `initialize` returns a non-empty CommandRegistry +
+    // dirs, matching what the binary's `CliInitializeBootstrap` ships.
+    // Built up-front because both the SessionRuntime and the
+    // CliInitializeBootstrap consume it.
+    let mut command_registry = CommandRegistry::new();
+    register_extended_builtins(&mut command_registry);
+    let command_registry = Arc::new(command_registry);
+
+    let session_runtime = SessionRuntime::build(SessionRuntimeBuildOpts {
+        cli: &cli,
+        runtime_config: Arc::new(runtime_config),
+        cwd: cwd.clone(),
+        model_id: model_id.clone(),
+        system_prompt: system_prompt.clone(),
+        bypass_permissions_available: startup.bypass_available,
+        permission_mode: startup.mode,
+        client: client_api,
+        fallback_clients,
+        recovery_policy,
+        tools,
+        session_manager: session_manager.clone(),
+        fast_model_spec: None,
+        permission_bridge: None,
+        command_registry: command_registry.clone(),
+    })
+    .await
+    .with_context(|| format!("build SessionRuntime for {provider}/{model_id}"))?;
+
+    let bootstrap = Arc::new(
+        CliInitializeBootstrap::new("default".to_string()).with_command_registry(command_registry),
+    );
+
+    // Wire the in-memory transport pair.
+    let (server_end, client_end) = InMemoryTransport::pair(64);
+    // Match `run_sdk_mode`'s wiring: install file_history (empty
+    // placeholder when the runtime has none) AND `with_session_runtime`
+    // BEFORE building the runner. Without `with_session_runtime`, the
+    // server's per-turn engine path can't reach the runtime's wired
+    // subsystems.
+    let file_history_for_server = session_runtime.file_history.clone().unwrap_or_else(|| {
+        Arc::new(tokio::sync::RwLock::new(
+            coco_context::FileHistoryState::new(),
+        ))
+    });
+    let server = SdkServer::new(server_end)
+        .with_session_manager(session_manager)
+        .with_initialize_bootstrap(bootstrap)
+        .with_file_history(file_history_for_server, std::env::temp_dir())
+        .with_session_runtime(session_runtime.clone());
+
+    let runner = Arc::new(QueryEngineRunner::new(
+        session_runtime,
+        cli.max_tokens.unwrap_or(2_048),
+        cli.max_turns.unwrap_or(8),
+        Some(system_prompt),
+    ));
+    server.set_turn_runner(runner).await;
+
+    let server_task = tokio::spawn(async move {
+        let _ = server.run().await;
+    });
+
+    Ok(LiveSdkServer {
+        client: client_end,
+        server_task,
+        _sessions_dir: sessions_dir,
+        _provider: provider_name,
+        _model_id: model_id,
+    })
+}
+
+/// Build a `JsonRpcRequest` envelope.
+pub fn req(id: i64, method: &str, params: serde_json::Value) -> JsonRpcMessage {
+    JsonRpcMessage::Request(JsonRpcRequest {
+        request_id: RequestId::Integer(id),
+        method: method.into(),
+        params,
+    })
+}
+
+/// Drive the server until a `JsonRpcResponse` for `request_id` arrives;
+/// return `(response_result, accumulated_notifications)`. Times out
+/// after `timeout` to keep tests bounded.
+pub async fn drive_until_response(
+    transport: &Arc<InMemoryTransport>,
+    request_id: i64,
+    timeout: std::time::Duration,
+) -> Result<(serde_json::Value, Vec<JsonRpcNotification>)> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    let mut notifications: Vec<JsonRpcNotification> = Vec::new();
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(anyhow!(
+                "SDK harness: timed out waiting for response to request {request_id} \
+                 (collected {} notifications)",
+                notifications.len()
+            ));
+        }
+        let next = tokio::time::timeout(remaining, transport.recv())
+            .await
+            .map_err(|_| anyhow!("SDK harness: recv timeout"))?
+            .map_err(|e| anyhow!("SDK transport error: {e:?}"))?;
+        let Some(msg) = next else {
+            return Err(anyhow!("SDK harness: transport closed"));
+        };
+        match msg {
+            JsonRpcMessage::Response(resp) => {
+                if matches!(resp.request_id, RequestId::Integer(n) if n == request_id) {
+                    return Ok((resp.result, notifications));
+                }
+                // Different id — ignore; out-of-order under cancellation.
+            }
+            JsonRpcMessage::Error(err) => {
+                if matches!(err.request_id, RequestId::Integer(n) if n == request_id) {
+                    return Err(anyhow!(
+                        "SDK request {request_id} returned error: \
+                         code={} message={}",
+                        err.code,
+                        err.message
+                    ));
+                }
+            }
+            JsonRpcMessage::Notification(n) => notifications.push(n),
+            JsonRpcMessage::Request(_) => {
+                // Server-initiated requests (e.g. permission asks).
+                // Protocol tests don't simulate the client's reply side.
+            }
+        }
+    }
+}
+
+/// Send `initialize` and return the parsed `InitializeResponse`.
+pub async fn send_initialize(
+    server: &LiveSdkServer,
+) -> Result<(serde_json::Value, Vec<JsonRpcNotification>)> {
+    let id = 1;
+    server
+        .client
+        .send(req(
+            id,
+            ClientRequestMethod::Initialize.as_str(),
+            serde_json::json!({}),
+        ))
+        .await
+        .map_err(|e| anyhow!("send initialize: {e:?}"))?;
+    drive_until_response(&server.client, id, std::time::Duration::from_secs(20)).await
+}
+
+/// Send `session/start` to bootstrap a session. Most SDK control
+/// methods (`turn/start`, `control/setPermissionMode`, …) require an
+/// active session and reply with `INVALID_REQUEST: no active session`
+/// when called before this.
+///
+/// **Important**: pass the model explicitly. `session/start` defaults
+/// the model to `DEFAULT_SDK_MODEL` (Claude Opus) — that becomes the
+/// `handoff.model_id` the runner threads into `QueryEngineConfig`,
+/// even when the SessionRuntime was built for a different provider.
+/// Mismatch silently breaks the turn (engine builds against wrong
+/// registry entry, no events fire).
+pub async fn send_session_start(
+    server: &LiveSdkServer,
+) -> Result<(serde_json::Value, Vec<JsonRpcNotification>)> {
+    server
+        .client
+        .send(req(
+            100,
+            ClientRequestMethod::SessionStart.as_str(),
+            serde_json::json!({ "model": &server._model_id }),
+        ))
+        .await
+        .map_err(|e| anyhow!("send session/start: {e:?}"))?;
+    drive_until_response(&server.client, 100, std::time::Duration::from_secs(15)).await
+}
+
+/// Send `turn/start` with `prompt`, drive until `turn/completed` /
+/// `turn/failed` / `turn/interrupted` notification arrives. Returns the
+/// `turn/start` response (carries `turn_id`) plus every notification
+/// observed up to and including the terminator.
+pub async fn send_turn(
+    server: &LiveSdkServer,
+    request_id: i64,
+    prompt: &str,
+) -> Result<(serde_json::Value, Vec<JsonRpcNotification>)> {
+    server
+        .client
+        .send(req(
+            request_id,
+            ClientRequestMethod::TurnStart.as_str(),
+            serde_json::json!({ "prompt": prompt }),
+        ))
+        .await
+        .map_err(|e| anyhow!("send turn/start: {e:?}"))?;
+    let verbose = std::env::var("COCO_TEST_SDK_VERBOSE").ok().as_deref() == Some("1");
+    let (resp, mut notifications) = drive_until_response(
+        &server.client,
+        request_id,
+        std::time::Duration::from_secs(120),
+    )
+    .await?;
+    if verbose {
+        eprintln!(
+            "[send_turn id={request_id}] turn/start ack received after {} early notifs",
+            notifications.len()
+        );
+        for n in &notifications {
+            eprintln!(
+                "[send_turn id={request_id}] early notif method={}",
+                n.method
+            );
+        }
+    }
+    // 360s budget: DeepSeek's reasoning model can spend 200s+ thinking
+    // about even trivial prompts before producing a single token of
+    // output, then more time on the assistant text.
+    let started = tokio::time::Instant::now();
+    let deadline = started + std::time::Duration::from_secs(360);
+    let mut last_recv = started;
+    while !notifications
+        .iter()
+        .any(|n| is_turn_terminal_method(&n.method))
+    {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            let methods: Vec<&str> = notifications.iter().map(|n| n.method.as_str()).collect();
+            return Err(anyhow!(
+                "SDK turn: timed out waiting for turn terminal notification \
+                 ({} notifications collected, methods={methods:?})",
+                notifications.len()
+            ));
+        }
+        let next = tokio::time::timeout(remaining, server.client.recv())
+            .await
+            .map_err(|_| anyhow!("SDK turn recv timeout"))?
+            .map_err(|e| anyhow!("SDK transport error: {e:?}"))?;
+        let Some(msg) = next else {
+            return Err(anyhow!("SDK transport closed mid-turn"));
+        };
+        if let JsonRpcMessage::Notification(n) = msg {
+            if verbose {
+                let now = tokio::time::Instant::now();
+                eprintln!(
+                    "[send_turn id={request_id} t+{:>5.1}s Δ{:>5.1}s] {}",
+                    now.duration_since(started).as_secs_f64(),
+                    now.duration_since(last_recv).as_secs_f64(),
+                    n.method,
+                );
+                last_recv = now;
+            }
+            notifications.push(n);
+        }
+    }
+    Ok((resp, notifications))
+}
+
+/// Returns true when the wire-method string is a terminal turn signal
+/// (one of `turn/completed`, `turn/failed`, `turn/interrupted`).
+pub fn is_turn_terminal_method(method: &str) -> bool {
+    method == NotificationMethod::TurnCompleted.as_str()
+        || method == NotificationMethod::TurnFailed.as_str()
+        || method == NotificationMethod::TurnInterrupted.as_str()
+}

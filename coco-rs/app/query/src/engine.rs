@@ -977,6 +977,15 @@ impl QueryEngine {
             //
             let mut response_text = String::new();
             let mut reasoning_text = String::new();
+            // Latest `provider_metadata` payload from a `ReasoningEnd`
+            // event in the stream. For Anthropic-shaped APIs this
+            // carries `anthropic.signature`, which the next request
+            // must echo back inside the thinking block — otherwise
+            // DeepSeek's `/anthropic/v1` (and similar strict
+            // implementations) reject the request with `content[].thinking
+            // must be passed back`. `None` for providers that don't
+            // ship the metadata.
+            let mut reasoning_provider_metadata: Option<coco_inference::ProviderMetadata> = None;
             let mut tool_order: Vec<String> = Vec::new();
             let mut tool_buffers: std::collections::HashMap<String, StreamingToolCallBuffer> =
                 std::collections::HashMap::new();
@@ -1030,6 +1039,19 @@ impl QueryEngine {
                             },
                         )
                         .await;
+                    }
+                    StreamEvent::ReasoningEnd { provider_metadata } => {
+                        // Last writer wins. Multiple thinking blocks in
+                        // one turn currently get merged into a single
+                        // `ReasoningPart` (engine collapses streamed
+                        // reasoning into one accumulator above), so
+                        // attaching the most recent signature is the
+                        // best we can do without a wider stream redesign.
+                        // For single-block turns (the common case) this
+                        // is exact.
+                        if provider_metadata.is_some() {
+                            reasoning_provider_metadata = provider_metadata;
+                        }
                     }
                     StreamEvent::ToolCallStart { id, tool_name } => {
                         if !tool_buffers.contains_key(&id) {
@@ -1346,7 +1368,11 @@ impl QueryEngine {
             if !reasoning_text.is_empty() {
                 content_parts.push(AssistantContentPart::Reasoning(ReasoningPart {
                     text: reasoning_text,
-                    provider_metadata: None,
+                    // Round-trip the provider metadata captured from
+                    // `StreamEvent::ReasoningEnd`. For Anthropic-shaped
+                    // APIs this carries `anthropic.signature`, which
+                    // must echo back on the next request.
+                    provider_metadata: reasoning_provider_metadata.take(),
                 }));
             }
             if !response_text.is_empty() {
@@ -1540,6 +1566,20 @@ impl QueryEngine {
                 // never runs on this path, so save the cache-safe
                 // params here for post-turn fork features.
                 self.save_post_turn_cache_params(&history).await;
+                // SDK protocol contract: every turn that emitted a
+                // `TurnStarted` must close with a terminal turn event.
+                // The tool-execution branches reach `TurnCompleted` via
+                // `finalize_turn_post_tools`; this text-only branch did
+                // not, leaving SDK clients waiting forever on streams
+                // that never produce a terminator. Emit it directly.
+                let _ = emit_protocol(
+                    &event_tx,
+                    crate::ServerNotification::TurnCompleted(coco_types::TurnCompletedParams {
+                        turn_id: Some(turn_id),
+                        usage,
+                    }),
+                )
+                .await;
                 return Ok(make_query_result(
                     response_text,
                     turn,

@@ -32,7 +32,7 @@
     "not_budget_exhausted": true,
     "event_counts": {
       "TurnStarted": 2,
-      "TurnCompleted": 1
+      "TurnCompleted": 2
     },
     "min_event_counts": {
       "ToolUseEnd": 1
