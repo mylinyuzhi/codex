@@ -1,7 +1,7 @@
 use pretty_assertions::assert_eq;
 
-use crate::claudemd::MemoryFileSource;
-use crate::claudemd::discover_memory_files;
+use crate::memory_discovery::MemoryFileSource;
+use crate::memory_discovery::discover_memory_files;
 
 #[test]
 fn discovers_project_root_claude_md() {

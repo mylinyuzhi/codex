@@ -25,6 +25,17 @@ pub enum StreamEvent {
     TextDelta { text: String },
     /// Reasoning/thinking delta.
     ReasoningDelta { text: String },
+    /// Reasoning/thinking block ended. Carries the provider-supplied
+    /// metadata (notably `anthropic.signature` for the Anthropic-shape
+    /// API and any compatible providers like DeepSeek's `/anthropic/v1`
+    /// endpoint). The agent loop must thread this back into the
+    /// `ReasoningPart.provider_metadata` of the assistant message it
+    /// records, otherwise the next request will drop the thinking
+    /// block and the API will reject it with `content[].thinking must
+    /// be passed back`. `None` for providers that don't ship metadata.
+    ReasoningEnd {
+        provider_metadata: Option<crate::ProviderMetadata>,
+    },
     /// Tool call started.
     ToolCallStart { id: String, tool_name: String },
     /// Tool call input delta (JSON fragment).
@@ -124,6 +135,9 @@ fn stream_event_from_part(
         LanguageModelV4StreamPart::ReasoningDelta { delta, .. } => {
             Some(StreamEvent::ReasoningDelta { text: delta })
         }
+        LanguageModelV4StreamPart::ReasoningEnd {
+            provider_metadata, ..
+        } => Some(StreamEvent::ReasoningEnd { provider_metadata }),
         LanguageModelV4StreamPart::ToolInputStart { id, tool_name, .. } => {
             Some(StreamEvent::ToolCallStart { id, tool_name })
         }
@@ -149,11 +163,25 @@ fn stream_event_from_part(
 }
 
 fn token_usage_from_provider_usage(usage: &Usage) -> TokenUsage {
+    let input_total = u64_to_i64(usage.input_tokens.total.unwrap_or(0));
+    let output_total = u64_to_i64(usage.output_tokens.total.unwrap_or(0));
     TokenUsage {
-        input_tokens: u64_to_i64(usage.input_tokens.total.unwrap_or(0)),
-        output_tokens: u64_to_i64(usage.output_tokens.total.unwrap_or(0)),
-        cache_read_input_tokens: u64_to_i64(usage.input_tokens.cache_read.unwrap_or(0)),
-        cache_creation_input_tokens: u64_to_i64(usage.input_tokens.cache_write.unwrap_or(0)),
+        input_tokens: input_total,
+        output_tokens: output_total,
+        total_tokens: input_total + output_total,
+        input_token_details: coco_types::InputTokenDetails {
+            no_cache_tokens: u64_to_i64(usage.input_tokens.no_cache.unwrap_or(0)),
+            cache_read_tokens: u64_to_i64(usage.input_tokens.cache_read.unwrap_or(0)),
+            cache_write_tokens: u64_to_i64(usage.input_tokens.cache_write.unwrap_or(0)),
+        },
+        // Reasoning + text breakdown when the provider reports them.
+        // For DeepSeek V4 / GPT-5 thinking / Claude extended thinking
+        // these are non-zero on every reasoning-emitting turn. `0` when
+        // the provider's wire shape doesn't separate the two.
+        output_token_details: coco_types::OutputTokenDetails {
+            text_tokens: u64_to_i64(usage.output_tokens.text.unwrap_or(0)),
+            reasoning_tokens: u64_to_i64(usage.output_tokens.reasoning.unwrap_or(0)),
+        },
     }
 }
 

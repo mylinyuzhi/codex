@@ -248,7 +248,7 @@ pub struct ResponseLog {
 pub fn format_response_log(log: &ResponseLog) -> String {
     let cache_pct = if log.usage.input_tokens > 0 {
         let pct =
-            (log.usage.cache_read_input_tokens as f64 / log.usage.input_tokens as f64) * 100.0;
+            (log.usage.cache_read_input_tokens() as f64 / log.usage.input_tokens as f64) * 100.0;
         format!(" cache={pct:.0}%")
     } else {
         String::new()
@@ -455,11 +455,11 @@ pub fn response_log_to_properties(log: &ResponseLog) -> HashMap<String, serde_js
     );
     props.insert(
         "cache_read_tokens".into(),
-        serde_json::json!(log.usage.cache_read_input_tokens),
+        serde_json::json!(log.usage.cache_read_input_tokens()),
     );
     props.insert(
         "cache_creation_tokens".into(),
-        serde_json::json!(log.usage.cache_creation_input_tokens),
+        serde_json::json!(log.usage.cache_creation_input_tokens()),
     );
     props.insert("duration_ms".into(), serde_json::json!(log.duration_ms));
     props.insert("attempt".into(), serde_json::json!(log.attempt));

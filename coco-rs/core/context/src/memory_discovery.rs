@@ -15,10 +15,10 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 
-use crate::claudemd_imports::expand_imports;
 use crate::memory_filenames::MEMORY_FILE_CANDIDATES;
 use crate::memory_filenames::MEMORY_LOCAL_FILE_CANDIDATES;
 use crate::memory_filenames::find_memory_files;
+use crate::memory_imports::expand_imports;
 
 /// A discovered memory file (`CLAUDE.md`, `AGENTS.md`, or local variant).
 #[derive(Debug, Clone)]
@@ -159,5 +159,5 @@ fn dirs_home() -> Option<PathBuf> {
 }
 
 #[cfg(test)]
-#[path = "claudemd.test.rs"]
+#[path = "memory_discovery.test.rs"]
 mod tests;

@@ -7,7 +7,7 @@ use tempfile::tempdir;
 use super::LoadedMemoryEntry;
 use super::directories_to_process;
 use super::traverse_for_file;
-use crate::claudemd::MemoryFileSource;
+use crate::memory_discovery::MemoryFileSource;
 
 /// Filter the entries that came from a particular directory's per-dir
 /// load — used to assert the per-dir contents independently of how the

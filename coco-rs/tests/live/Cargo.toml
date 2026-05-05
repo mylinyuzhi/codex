@@ -1,0 +1,51 @@
+[package]
+name = "coco-tests-live"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints.clippy]
+unwrap_used = "allow"  # test-only crate, unwrap/expect is fine
+
+# No library — this crate exists solely to host integration tests under
+# `tests/`. Each `tests/<target>.rs` becomes its own test binary.
+
+[dev-dependencies]
+# SDK suite (sdk_deepseek): provider construction + vercel-ai calls.
+# vercel-ai-* types reach this crate exclusively through coco_inference's
+# re-export seam (services/inference/src/lib.rs) — no direct vercel-ai
+# deps allowed outside that crate.
+coco-config.workspace = true
+coco-inference.workspace = true
+coco-types.workspace = true
+
+# CLI suite (cli_deepseek): full QueryEngine agent loop with tools + compaction.
+coco-query.workspace = true
+coco-tools.workspace = true
+coco-tool-runtime.workspace = true
+coco-messages.workspace = true
+coco-context.workspace = true
+coco-permissions.workspace = true
+coco-hooks.workspace = true
+
+# coco-cli suite (coco_cli_deepseek): full `coco -p` headless path,
+# including system-prompt assembly, fallback chain, permission resolution,
+# CLAUDE.md discovery — the user's actual entry point.
+coco-cli.workspace = true
+clap = { workspace = true }
+
+# sdk_server_deepseek suite: drives the real SdkServer with InMemoryTransport
+# against live DeepSeek; needs the SessionRuntime building blocks main.rs's
+# `run_sdk_mode` wires (SessionManager, CommandRegistry).
+coco-commands.workspace = true
+coco-session.workspace = true
+
+anyhow.workspace = true
+dotenvy.workspace = true
+futures = { workspace = true }
+serde_json.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
+tokio-util.workspace = true
+tracing.workspace = true

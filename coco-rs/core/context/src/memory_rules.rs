@@ -28,7 +28,7 @@
 use std::path::Path;
 use std::path::PathBuf;
 
-use crate::claudemd::MemoryFileSource;
+use crate::memory_discovery::MemoryFileSource;
 use crate::nested_memory::LoadedMemoryEntry;
 
 /// One rule file's parsed shape.
@@ -291,5 +291,5 @@ pub(crate) fn rule_to_entry(rule: RuleFile, source: MemoryFileSource) -> LoadedM
 }
 
 #[cfg(test)]
-#[path = "claude_rules.test.rs"]
+#[path = "memory_rules.test.rs"]
 mod tests;

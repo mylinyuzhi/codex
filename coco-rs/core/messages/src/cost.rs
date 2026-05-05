@@ -82,9 +82,9 @@ pub fn calculate_cost_usd(model: &str, usage: &TokenUsage) -> f64 {
     let input_cost = usage.input_tokens as f64 * pricing.input_per_mtok / 1_000_000.0;
     let output_cost = usage.output_tokens as f64 * pricing.output_per_mtok / 1_000_000.0;
     let cache_write_cost =
-        usage.cache_creation_input_tokens as f64 * pricing.cache_write_per_mtok / 1_000_000.0;
+        usage.cache_creation_input_tokens() as f64 * pricing.cache_write_per_mtok / 1_000_000.0;
     let cache_read_cost =
-        usage.cache_read_input_tokens as f64 * pricing.cache_read_per_mtok / 1_000_000.0;
+        usage.cache_read_input_tokens() as f64 * pricing.cache_read_per_mtok / 1_000_000.0;
 
     input_cost + output_cost + cache_write_cost + cache_read_cost
 }
@@ -162,8 +162,12 @@ mod cost_tests {
         let usage = TokenUsage {
             input_tokens: 1_000_000,
             output_tokens: 100_000,
-            cache_read_input_tokens: 0,
-            cache_creation_input_tokens: 0,
+            input_token_details: coco_types::InputTokenDetails {
+                cache_read_tokens: 0,
+                cache_write_tokens: 0,
+                ..Default::default()
+            },
+            ..Default::default()
         };
         let cost = calculate_cost_usd("claude-sonnet-4-6", &usage);
         // 1M input at $3/Mtok = $3.00, 100K output at $15/Mtok = $1.50

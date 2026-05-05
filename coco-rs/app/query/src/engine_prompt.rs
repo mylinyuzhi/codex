@@ -168,10 +168,19 @@ impl QueryEngine {
 
         let mut out = Vec::with_capacity(loaded.len());
         for tool in loaded {
-            let schema = tool.input_schema();
-            let json_schema = tool
-                .input_json_schema()
-                .unwrap_or_else(|| serde_json::to_value(&schema).unwrap_or_default());
+            // `Tool::input_json_schema` returns a fully-formed JSON Schema
+            // when the tool ships one. Otherwise we synthesize one from
+            // `Tool::input_schema`'s loose `properties` map and wrap it
+            // as `{"type":"object","properties":{...}}` — strict
+            // providers (DeepSeek, OpenAI Responses on some models)
+            // reject schemas missing a top-level `type`. Without the
+            // wrap they fail the request with HTTP 400.
+            let json_schema = tool.input_json_schema().unwrap_or_else(|| {
+                let schema = tool.input_schema();
+                let props = serde_json::to_value(&schema.properties)
+                    .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()));
+                serde_json::json!({ "type": "object", "properties": props })
+            });
             let description = tool.prompt(&prompt_options).await;
             out.push(LanguageModelTool::Function(LanguageModelFunctionTool {
                 name: tool.name().to_string(),

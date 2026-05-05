@@ -1,13 +1,11 @@
-//! System context assembly: git status, cwd, env info, CLAUDE.md discovery,
-//! file history, memory files, system prompt building.
+//! System context assembly: git status, cwd, env info, memory-file
+//! discovery (`CLAUDE.md` / `AGENTS.md`), file history, system prompt
+//! building.
 //!
 //! TS: context.ts, claudemd.ts (46K), attachments.ts (4K), cwd.ts, fileHistory.ts
 
 pub mod attachment;
 pub mod changed_files;
-pub mod claude_rules;
-pub mod claudemd;
-pub mod claudemd_imports;
 pub mod environment;
 pub mod file_cache;
 pub mod file_history;
@@ -15,7 +13,10 @@ pub mod file_read_state;
 pub mod git_operations;
 pub mod git_utils;
 pub mod memory;
+pub mod memory_discovery;
 pub mod memory_filenames;
+pub mod memory_imports;
+pub mod memory_rules;
 pub mod mention_resolver;
 pub mod nested_memory;
 pub mod plan_mode;
@@ -40,20 +41,6 @@ pub use attachment::ReminderType;
 pub use attachment::collect_batched_attachments;
 pub use attachment::generate_all_attachments_async;
 pub use changed_files::detect_changed_files;
-pub use claude_rules::RuleFile;
-pub use claude_rules::collect_rule_files;
-pub use claude_rules::filter_rules_matching;
-pub use claude_rules::parse_paths_field;
-pub use claudemd::MemoryFile;
-pub use claudemd::MemoryFileSource;
-pub use claudemd::discover_claude_md_files;
-pub use claudemd::discover_memory_files;
-pub use claudemd_imports::MAX_INCLUDE_DEPTH;
-pub use claudemd_imports::TEXT_FILE_EXTENSIONS;
-pub use claudemd_imports::expand_imports;
-pub use claudemd_imports::extract_include_paths;
-pub use claudemd_imports::is_text_extension;
-pub use claudemd_imports::resolve_at_path;
 pub use environment::EnvironmentInfo;
 pub use environment::GitStatus;
 pub use environment::Platform;
@@ -73,9 +60,23 @@ pub use file_read_state::FileReadState;
 pub use file_read_state::file_mtime_ms;
 pub use memory::MemoryFileInfo;
 pub use memory::MemoryType;
+pub use memory_discovery::MemoryFile;
+pub use memory_discovery::MemoryFileSource;
+pub use memory_discovery::discover_claude_md_files;
+pub use memory_discovery::discover_memory_files;
 pub use memory_filenames::MEMORY_FILE_CANDIDATES;
 pub use memory_filenames::MEMORY_LOCAL_FILE_CANDIDATES;
 pub use memory_filenames::find_memory_files;
+pub use memory_imports::MAX_INCLUDE_DEPTH;
+pub use memory_imports::TEXT_FILE_EXTENSIONS;
+pub use memory_imports::expand_imports;
+pub use memory_imports::extract_include_paths;
+pub use memory_imports::is_text_extension;
+pub use memory_imports::resolve_at_path;
+pub use memory_rules::RuleFile;
+pub use memory_rules::collect_rule_files;
+pub use memory_rules::filter_rules_matching;
+pub use memory_rules::parse_paths_field;
 pub use mention_resolver::MentionResolveOptions;
 pub use mention_resolver::resolve_mentions;
 pub use nested_memory::LoadedMemoryEntry;

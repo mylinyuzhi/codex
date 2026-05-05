@@ -87,8 +87,12 @@ fn test_format_response_log() {
         usage: TokenUsage {
             input_tokens: 10000,
             output_tokens: 500,
-            cache_read_input_tokens: 8000,
-            cache_creation_input_tokens: 2000,
+            input_token_details: coco_types::InputTokenDetails {
+                cache_read_tokens: 8000,
+                cache_write_tokens: 2000,
+                ..Default::default()
+            },
+            ..Default::default()
         },
         duration_ms: 1200,
         duration_ms_including_retries: 1200,
@@ -121,8 +125,12 @@ fn test_format_response_log_with_retries_and_gateway() {
         usage: TokenUsage {
             input_tokens: 100,
             output_tokens: 50,
-            cache_read_input_tokens: 0,
-            cache_creation_input_tokens: 0,
+            input_token_details: coco_types::InputTokenDetails {
+                cache_read_tokens: 0,
+                cache_write_tokens: 0,
+                ..Default::default()
+            },
+            ..Default::default()
         },
         duration_ms: 3000,
         duration_ms_including_retries: 9000,
@@ -210,8 +218,12 @@ fn test_response_log_to_properties() {
         usage: TokenUsage {
             input_tokens: 100,
             output_tokens: 50,
-            cache_read_input_tokens: 80,
-            cache_creation_input_tokens: 20,
+            input_token_details: coco_types::InputTokenDetails {
+                cache_read_tokens: 80,
+                cache_write_tokens: 20,
+                ..Default::default()
+            },
+            ..Default::default()
         },
         duration_ms: 500,
         duration_ms_including_retries: 500,

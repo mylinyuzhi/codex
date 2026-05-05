@@ -223,8 +223,12 @@ fn server_notification_stream_request_end_carries_usage() {
         usage: TokenUsage {
             input_tokens: 100,
             output_tokens: 50,
-            cache_read_input_tokens: 0,
-            cache_creation_input_tokens: 0,
+            input_token_details: crate::InputTokenDetails {
+                cache_read_tokens: 0,
+                cache_write_tokens: 0,
+                ..Default::default()
+            },
+            ..Default::default()
         },
     };
     let json = serde_json::to_value(&notif).unwrap();
@@ -432,8 +436,12 @@ fn session_result_has_model_usage_and_permission_denials() {
         usage: TokenUsage {
             input_tokens: 100,
             output_tokens: 50,
-            cache_read_input_tokens: 0,
-            cache_creation_input_tokens: 0,
+            input_token_details: crate::InputTokenDetails {
+                cache_read_tokens: 0,
+                cache_write_tokens: 0,
+                ..Default::default()
+            },
+            ..Default::default()
         },
         model_usage: usage,
         permission_denials: vec![PermissionDenialInfo {
