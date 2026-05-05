@@ -35,8 +35,9 @@ members = [
     "utils/string",
     "utils/symbol-search",
 
-    # ─── tests/ (1) ── shared integration-test scaffolding ───
+    # ─── tests/ (2) ── shared integration-test scaffolding + live API runner ───
     "tests/harness",
+    "tests/live",
 
     # ─── vercel-ai/ (8) ───
     "vercel-ai/provider",
