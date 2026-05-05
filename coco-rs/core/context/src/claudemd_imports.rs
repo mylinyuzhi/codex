@@ -1,0 +1,377 @@
+//! `@import` directive parsing for memory files.
+//!
+//! TS source: `claudemd.ts:451-685` — `extractIncludePathsFromTokens`,
+//! `processMemoryFile`, `MAX_INCLUDE_DEPTH = 5`,
+//! `TEXT_FILE_EXTENSIONS`.
+//!
+//! Memory files can include other files via `@path` syntax in text
+//! nodes. This module:
+//! - extracts `@path` references from a markdown body, skipping fenced
+//!   code blocks and inline code spans (TS skips code-type AST nodes);
+//! - resolves the four syntax variants (`@./rel`, `@~/home`,
+//!   `@/abs`, `@bare/path` = relative);
+//! - recursively expands includes with [`MAX_INCLUDE_DEPTH`] depth
+//!   guard + a per-traversal `processed` set to break cycles;
+//! - filters by [`TEXT_FILE_EXTENSIONS`] so binary blobs (images,
+//!   PDFs) can't be loaded into the system prompt.
+//!
+//! ## Ordering
+//!
+//! TS pushes the **parent** first, then recurses into children:
+//! `result.push(memoryFile); for (...) result.push(...includedFiles)`
+//! (`claudemd.ts:664-682`). We mirror that — caller appends to a flat
+//! `Vec` so the natural `.extend` order matches.
+//!
+//! ## What we don't (yet) implement
+//!
+//! - Symlink-target dedup parity with TS (we dedup by canonicalized
+//!   path which collapses symlinks the same way).
+//! - `claudeMdExcludes` user-setting filter — that's a P3 follow-up
+//!   (settings plumb-through). Files that match the path pattern
+//!   simply load.
+
+use std::collections::HashSet;
+use std::path::Path;
+use std::path::PathBuf;
+
+/// Maximum recursion depth for `@import` expansion.
+///
+/// TS: `claudemd.ts:537` `const MAX_INCLUDE_DEPTH = 5`.
+pub const MAX_INCLUDE_DEPTH: u32 = 5;
+
+/// Extensions allowed for `@import` targets — prevents binary blobs
+/// (images, PDFs, archives) from being loaded into the system prompt.
+///
+/// TS: `claudemd.ts:96-227` `TEXT_FILE_EXTENSIONS`. We carry a
+/// representative subset; missing entries can be added as needed.
+/// All matches are case-insensitive on the extension only.
+pub const TEXT_FILE_EXTENSIONS: &[&str] = &[
+    // Markdown / text
+    "md",
+    "txt",
+    "text",
+    "rst",
+    "adoc",
+    "asciidoc",
+    "org",
+    // Data formats
+    "json",
+    "yaml",
+    "yml",
+    "toml",
+    "xml",
+    "csv",
+    // Web
+    "html",
+    "htm",
+    "css",
+    "scss",
+    "sass",
+    "less",
+    // JavaScript / TypeScript
+    "js",
+    "ts",
+    "tsx",
+    "jsx",
+    "mjs",
+    "cjs",
+    "mts",
+    "cts",
+    // Python / Ruby / Go / Rust
+    "py",
+    "pyi",
+    "pyw",
+    "rb",
+    "erb",
+    "rake",
+    "go",
+    "rs",
+    // Java / Kotlin / Scala / C / C++ / C#
+    "java",
+    "kt",
+    "kts",
+    "scala",
+    "c",
+    "cpp",
+    "cc",
+    "cxx",
+    "h",
+    "hpp",
+    "hxx",
+    "cs",
+    // Swift / Shell
+    "swift",
+    "sh",
+    "bash",
+    "zsh",
+    "fish",
+    "ps1",
+    "bat",
+    "cmd",
+    // Config
+    "env",
+    "ini",
+    "cfg",
+    "conf",
+    "config",
+    "properties",
+    // Database / protocol / frontend
+    "sql",
+    "graphql",
+    "gql",
+    "proto",
+    "vue",
+    "svelte",
+    "astro",
+    // Lock / docs / misc
+    "lock",
+    "log",
+    "diff",
+    "patch",
+    "tex",
+    "latex",
+];
+
+/// Extract `@path` references from a memory-file body, ignoring
+/// fenced code blocks and inline code spans.
+///
+/// TS: `extractIncludePathsFromTokens` (`claudemd.ts:451-535`) walks
+/// the marked AST and only inspects `text` nodes (skipping `code` /
+/// `codespan`). Our line/region scanner achieves the same skip
+/// without pulling in a markdown parser dep.
+pub fn extract_include_paths(body: &str) -> Vec<String> {
+    let mut paths: Vec<String> = Vec::new();
+    let mut in_fence = false;
+    let mut fence_marker = String::new();
+
+    for line in body.lines() {
+        let trimmed = line.trim_start();
+
+        // Toggle fenced state on ``` or ~~~ markers (3+ chars). Match
+        // the same character for both open/close so ```rust...``` works
+        // and ``` inside a ~~~ block doesn't toggle.
+        if let Some(marker_char) = fence_marker_char(trimmed) {
+            if !in_fence {
+                in_fence = true;
+                fence_marker = marker_char.to_string();
+                continue;
+            } else if trimmed.starts_with(&fence_marker) {
+                in_fence = false;
+                fence_marker.clear();
+                continue;
+            }
+        }
+        if in_fence {
+            continue;
+        }
+
+        // Strip inline code spans (`...`) before scanning for @paths.
+        let cleaned = strip_inline_code(line);
+        for path in scan_at_paths(&cleaned) {
+            paths.push(path);
+        }
+    }
+
+    paths
+}
+
+/// Returns the fence character (' ` ' or ' ~ ') if `line` opens or
+/// closes a code fence, else None.
+fn fence_marker_char(line: &str) -> Option<char> {
+    if line.starts_with("```") {
+        Some('`')
+    } else if line.starts_with("~~~") {
+        Some('~')
+    } else {
+        None
+    }
+}
+
+/// Replace text inside `` `...` `` with spaces so subsequent regex
+/// scans never see content protected by inline backticks.
+fn strip_inline_code(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut in_code = false;
+    for ch in line.chars() {
+        if ch == '`' {
+            in_code = !in_code;
+            out.push(' ');
+        } else if in_code {
+            out.push(' ');
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+/// Find all `@path` substrings in `text`, returning each path string
+/// (without the leading `@`). Mirrors TS `extractIncludePathsFromTokens`
+/// validation (`claudemd.ts:475-489`):
+/// - `./relative`
+/// - `~/home/path`
+/// - `/absolute/path` (single `/` rejected)
+/// - bare `name` not starting with `@` or punctuation
+fn scan_at_paths(text: &str) -> Vec<String> {
+    let bytes = text.as_bytes();
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'@' {
+            i += 1;
+            continue;
+        }
+        // The `@` must start a token: previous char is whitespace, BOL,
+        // or punctuation. Avoids matching `email@example.com`.
+        if i > 0 {
+            let prev = bytes[i - 1];
+            let is_separator = prev.is_ascii_whitespace()
+                || prev == b'('
+                || prev == b'['
+                || prev == b'{'
+                || prev == b'<'
+                || prev == b','
+                || prev == b';'
+                || prev == b'>';
+            if !is_separator {
+                i += 1;
+                continue;
+            }
+        }
+        // Consume the path: any char until whitespace or terminating
+        // markdown punctuation. Mirrors TS regex permissive token
+        // shape — refined by the validator below.
+        let start = i + 1;
+        let mut end = start;
+        while end < bytes.len() {
+            let c = bytes[end];
+            if c.is_ascii_whitespace()
+                || matches!(c, b')' | b']' | b'}' | b'>' | b',' | b';' | b'`')
+            {
+                break;
+            }
+            end += 1;
+        }
+        let path = &text[start..end];
+        // Strip a trailing `#fragment` (TS does this implicitly via the
+        // path validator — we strip explicitly so the file-resolver
+        // doesn't try to open `path#section`).
+        let path_clean = path.split('#').next().unwrap_or(path);
+        if is_valid_at_path(path_clean) {
+            out.push(path_clean.to_string());
+        }
+        i = end;
+    }
+    out
+}
+
+/// Validation for an `@path` token (TS `claudemd.ts:475-489`).
+fn is_valid_at_path(path: &str) -> bool {
+    if path.is_empty() {
+        return false;
+    }
+    if path.starts_with("./") {
+        return true;
+    }
+    if path.starts_with("~/") {
+        return true;
+    }
+    if path.starts_with('/') && path != "/" {
+        return true;
+    }
+    // Bare token: must not start with `@` or pure punctuation, and
+    // first char must be alphanumeric / `.`/ `_`/ `-`.
+    let first = path.as_bytes()[0];
+    if first == b'@' {
+        return false;
+    }
+    let valid_first = first.is_ascii_alphanumeric() || matches!(first, b'.' | b'_' | b'-');
+    if !valid_first {
+        return false;
+    }
+    true
+}
+
+/// Resolve an `@path` token to an absolute filesystem path, given the
+/// directory of the file that contains the directive.
+///
+/// - `~/...` ⇒ relative to `$HOME`.
+/// - `/...` ⇒ used as-is.
+/// - `./...` or bare ⇒ relative to `base_dir`.
+pub fn resolve_at_path(token: &str, base_dir: &Path) -> Option<PathBuf> {
+    if let Some(rest) = token.strip_prefix("~/") {
+        let home = std::env::var("HOME").ok().map(PathBuf::from)?;
+        return Some(home.join(rest));
+    }
+    if token.starts_with('/') {
+        return Some(PathBuf::from(token));
+    }
+    let rel = token.strip_prefix("./").unwrap_or(token);
+    Some(base_dir.join(rel))
+}
+
+/// True when `path`'s extension is in [`TEXT_FILE_EXTENSIONS`]
+/// (case-insensitive). Files with no extension are accepted (markdown
+/// `README` files etc. — TS includes the `.txt`-class names too).
+pub fn is_text_extension(path: &Path) -> bool {
+    let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+        // No extension → conservatively allow (TS does too, since the
+        // marked tokenizer doesn't gate on extension at all).
+        return true;
+    };
+    TEXT_FILE_EXTENSIONS
+        .iter()
+        .any(|e| e.eq_ignore_ascii_case(ext))
+}
+
+/// Recursively expand a memory file's `@imports`, returning a flat
+/// list of `(path, content)` entries in TS-faithful order: parent
+/// first, then each include (recursively).
+///
+/// `processed` carries the canonicalized paths visited so far; cycles
+/// are silently broken by skipping repeats. `depth` is checked against
+/// [`MAX_INCLUDE_DEPTH`] — content is still loaded at depth ==
+/// MAX_INCLUDE_DEPTH but its own includes aren't recursed into.
+pub fn expand_imports(
+    path: &Path,
+    content: &str,
+    processed: &mut HashSet<PathBuf>,
+    depth: u32,
+) -> Vec<(PathBuf, String)> {
+    let mut out: Vec<(PathBuf, String)> = Vec::new();
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    if !processed.insert(canonical) {
+        return out; // cycle: skip
+    }
+
+    out.push((path.to_path_buf(), content.to_string()));
+
+    if depth >= MAX_INCLUDE_DEPTH {
+        return out;
+    }
+
+    let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
+    for token in extract_include_paths(content) {
+        let Some(resolved) = resolve_at_path(&token, base_dir) else {
+            continue;
+        };
+        if !is_text_extension(&resolved) {
+            continue;
+        }
+        let Ok(child_content) = std::fs::read_to_string(&resolved) else {
+            continue;
+        };
+        out.extend(expand_imports(
+            &resolved,
+            &child_content,
+            processed,
+            depth + 1,
+        ));
+    }
+
+    out
+}
+
+#[cfg(test)]
+#[path = "claudemd_imports.test.rs"]
+mod tests;

@@ -82,7 +82,10 @@ fn test_register_builtins() {
     let mut registry = CommandRegistry::new();
     register_builtins(&mut registry);
 
-    assert_eq!(registry.len(), 25);
+    // /commit and /pr were promoted out of register_builtins:
+    // /commit lives in register_ts_parity_handlers (Prompt command);
+    // /pr was a coco-only alias and is removed (TS uses /commit-push-pr).
+    assert_eq!(registry.len(), 23);
     assert!(registry.get("help").is_some());
     assert!(registry.get("clear").is_some());
     assert!(registry.get("compact").is_some());
@@ -90,7 +93,6 @@ fn test_register_builtins() {
     assert!(registry.get("status").is_some());
     assert!(registry.get("model").is_some());
     assert!(registry.get("diff").is_some());
-    assert!(registry.get("commit").is_some());
     assert!(registry.get("mcp").is_some());
     assert!(registry.get("doctor").is_some());
     assert!(registry.get("login").is_some());
@@ -186,6 +188,7 @@ fn test_all_builtins_are_visible() {
     let mut registry = CommandRegistry::new();
     register_builtins(&mut registry);
 
-    // All built-in commands should be visible (not hidden)
-    assert_eq!(registry.visible().len(), 25);
+    // All built-in commands should be visible (not hidden). Count tracks
+    // register_builtins (23 after parity-trim — see test_register_builtins).
+    assert_eq!(registry.visible().len(), 23);
 }

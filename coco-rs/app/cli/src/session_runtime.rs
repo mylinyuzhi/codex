@@ -29,6 +29,7 @@ use tokio::sync::RwLock;
 use tracing::info;
 use tracing::warn;
 
+use coco_commands::CommandRegistry;
 use coco_config::FallbackRecoveryPolicy;
 use coco_config::RuntimeConfig;
 use coco_context::FileHistorySnapshotSink;
@@ -119,6 +120,11 @@ pub struct SessionRuntimeBuildOpts<'a> {
     /// SDK runner installs an `SdkPermissionBridge`; TUI passes `None`
     /// and uses interactive approval prompts instead.
     pub permission_bridge: Option<ToolPermissionBridgeRef>,
+    /// Slash-command registry — populated once at startup via
+    /// `coco_commands::build_command_registry`. Both the typed
+    /// `/foo` path (`process_submit_turn`) and the command-palette
+    /// path (`UserCommand::ExecuteSkill`) dispatch through this.
+    pub command_registry: Arc<CommandRegistry>,
 }
 
 /// All per-session state shared by both runners. Construction at startup
@@ -136,6 +142,10 @@ pub struct SessionRuntime {
     /// Tool registry shared by every engine instance. Read by
     /// [`Self::build_engine`] / [`Self::build_engine_from_config`].
     tools: Arc<ToolRegistry>,
+    /// Slash-command registry. Read by
+    /// [`crate::tui_runner::dispatch_slash_command`] to resolve every
+    /// `/foo` typed by the user or selected from the command palette.
+    pub command_registry: Arc<CommandRegistry>,
     pub config_home: PathBuf,
     pub runtime_config: Arc<RuntimeConfig>,
     pub session_manager: Arc<SessionManager>,
@@ -259,6 +269,7 @@ impl SessionRuntime {
             session_manager,
             fast_model_spec,
             permission_bridge,
+            command_registry,
         } = opts;
 
         let config_home = coco_config::global_config::config_home();
@@ -303,6 +314,10 @@ impl SessionRuntime {
                                     query_source: None,
                                     agent_id: None,
                                     time_since_last_assistant_ms: None,
+                                    // Session-memory summarizer helper —
+                                    // not the agent loop.
+                                    agentic: false,
+                                    cache: None,
                                 };
                                 let result = client.query(&params).await?;
                                 let text = result
@@ -581,6 +596,7 @@ impl SessionRuntime {
             fallback_clients,
             recovery_policy,
             tools,
+            command_registry,
             config_home,
             runtime_config,
             session_manager,
@@ -644,6 +660,13 @@ impl SessionRuntime {
     /// Snapshot the current session id (cheap clone of the inner String).
     pub async fn current_session_id(&self) -> String {
         self.session_id.read().await.clone()
+    }
+
+    /// Borrow the optional `MemoryRuntime`. `None` when
+    /// `Feature::AutoMemory` is off. Callers (e.g. the slash dispatcher's
+    /// `/dream` and `/summary` triggers) clone the inner `Arc`.
+    pub fn memory_runtime(&self) -> Option<&Arc<coco_memory::MemoryRuntime>> {
+        self.memory_runtime.as_ref()
     }
 
     /// Resolve an `ApiClient` for the given `ModelRole`. Lazily builds

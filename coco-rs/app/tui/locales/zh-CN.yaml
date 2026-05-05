@@ -352,6 +352,14 @@ toast.tool_aborted_full: "工具已中止: %{reason}"
 toast.conversation_rewound_checkpoint: "对话已回退到检查点。"
 toast.no_image_clipboard: "剪贴板中没有图片 — 文本粘贴请用终端粘贴"
 
+# 斜杠命令调度状态 (TuiOnlyEvent::SlashCommandStatus)。
+slash.status.no_handler: "/%{name} 已注册但没有本地处理器。"
+slash.status.failed: "/%{name} 执行失败: %{error}"
+slash.status.empty_prompt: "/%{name} 未生成任何提示内容。"
+slash.status.dialog_pending: "/%{name} 需要打开 %{dialog_kind}（UI 对话框接入待完成）。"
+slash.permissions.usage_allow: "用法：/permissions allow <tool>"
+slash.permissions.usage_deny: "用法：/permissions deny <tool>"
+
 # 队列状态组件
 queue_status.count: " ⋯ %{count} 条排队"
 queue_status.next_preview: " — 下一条: %{preview}"

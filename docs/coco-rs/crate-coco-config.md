@@ -775,6 +775,19 @@ pub struct RuntimeConfig {
     /// Computed from the Main role's ResolvedModel.tool_overrides at config-build
     /// time (closes the L1 dormant gap from `runtime.rs:141-156`).
     pub tool_overrides: Arc<ToolOverrides>,
+    /// Provider-neutral cache config (currently 1h-TTL allowlist). Read by
+    /// `vercel-ai-anthropic` at provider construction. Hashed into the
+    /// fingerprint's `runtime_state_digest` so settings reload that mutates
+    /// the allowlist invalidates the cached `Arc<dyn LanguageModelV4>`.
+    pub prompt_cache: PromptCacheRuntimeConfig,
+    // Anthropic-specific knobs (experimental_betas, disable_interleaved_thinking,
+    // show_thinking_summaries, non_interactive) moved to `ProviderConfig.provider_options`
+    // (per-provider opaque map). The adapter parses them via
+    // `vercel-ai-anthropic::parse_provider_options`. See R7-10 in audit-gaps.md.
+    /// Auth/billing identity. **Session-stable** (R3-F3) — read by
+    /// `vercel-ai-anthropic` at provider construction; latched into
+    /// `CachePolicy::eligible_1h` on first call.
+    pub account: AccountConfig,
 }
 
 pub fn build_runtime_config(

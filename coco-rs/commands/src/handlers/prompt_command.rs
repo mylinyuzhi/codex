@@ -2,7 +2,7 @@
 //!
 //! TS source: `types/command.ts PromptCommand` + commands like
 //! `commands/security-review.ts`, `commands/insights.ts`, `commands/brief.ts`,
-//! `commands/advisor.ts`, `commands/commit-push-pr.ts` that all return
+//! `commands/commit-push-pr.ts` that all return
 //! `[{type:'text', text: PROMPT_BODY}]` from `getPromptForCommand`.
 //!
 //! These commands don't run code locally — they push a prompt back into the

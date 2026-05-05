@@ -1,7 +1,0 @@
-Configure the advisor (secondary review model).
-
-- `/advisor` — show current advisor status.
-- `/advisor <model>` — set the advisor model (e.g. `opus`).
-- `/advisor off` (or `unset`) — disable.
-
-The advisor model runs in parallel during long-form planning to provide a second-opinion review. It is only used by tools that explicitly opt in.

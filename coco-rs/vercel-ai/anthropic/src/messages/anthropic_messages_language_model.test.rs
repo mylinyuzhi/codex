@@ -4,6 +4,12 @@ use std::sync::Arc;
 use super::*;
 
 fn make_config() -> Arc<AnthropicConfig> {
+    make_config_with_caps(crate::anthropic_config::AnthropicModelCapabilities::default())
+}
+
+fn make_config_with_caps(
+    capabilities: crate::anthropic_config::AnthropicModelCapabilities,
+) -> Arc<AnthropicConfig> {
     Arc::new(AnthropicConfig {
         provider: "anthropic.messages".into(),
         base_url: "https://api.anthropic.com/v1".into(),
@@ -17,6 +23,15 @@ fn make_config() -> Arc<AnthropicConfig> {
         supports_native_structured_output: None,
         supports_strict_tools: None,
         full_url: None,
+        capabilities,
+        provider_topology: crate::anthropic_config::ProviderTopology::FirstParty,
+        experimental_betas_enabled: true,
+        disable_interleaved_thinking: false,
+        show_thinking_summaries: false,
+        non_interactive: false,
+        prompt_cache_allowlist: Vec::new(),
+        account_kind: crate::anthropic_config::AdapterAccountKind::ApiKey,
+        in_overage: false,
     })
 }
 
@@ -376,7 +391,12 @@ fn thinking_budget_default_uses_compatibility_warning() {
 
 #[test]
 fn context_management_transforms_camel_to_snake() {
-    let model = AnthropicMessagesLanguageModel::new("claude-sonnet-4-5", make_config());
+    let caps = crate::anthropic_config::AnthropicModelCapabilities {
+        context_management: true,
+        ..Default::default()
+    };
+    let model =
+        AnthropicMessagesLanguageModel::new("claude-sonnet-4-5", make_config_with_caps(caps));
 
     let mut anthropic_opts: HashMap<String, serde_json::Value> = HashMap::new();
     anthropic_opts.insert(
@@ -440,7 +460,12 @@ fn context_management_transforms_camel_to_snake() {
 
 #[test]
 fn context_management_unknown_strategy_warns() {
-    let model = AnthropicMessagesLanguageModel::new("claude-sonnet-4-5", make_config());
+    let caps = crate::anthropic_config::AnthropicModelCapabilities {
+        context_management: true,
+        ..Default::default()
+    };
+    let model =
+        AnthropicMessagesLanguageModel::new("claude-sonnet-4-5", make_config_with_caps(caps));
 
     let mut anthropic_opts: HashMap<String, serde_json::Value> = HashMap::new();
     anthropic_opts.insert(
@@ -477,4 +502,198 @@ fn context_management_unknown_strategy_warns() {
         )),
         "expected unknown strategy warning, got: {warnings:?}",
     );
+}
+
+// ---------------------------------------------------------------------------
+// Prompt-cache E2E (Phase 1): user passes cache_strategy via provider_options;
+// verify the wire body carries (a) the auto-placed marker on the last user
+// message block, (b) the deterministic sorted beta-header join, and (c) that
+// internal-only signals (cacheStrategy / requestedBetas / agenticQuery /
+// querySource) never appear in the wire body.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn prompt_cache_e2e_auto_marker_attached_to_last_user_block() {
+    let caps = crate::anthropic_config::AnthropicModelCapabilities {
+        prompt_cache: true,
+        ..Default::default()
+    };
+    let model =
+        AnthropicMessagesLanguageModel::new("claude-sonnet-4-5", make_config_with_caps(caps));
+
+    let mut anthropic_opts: HashMap<String, serde_json::Value> = HashMap::new();
+    anthropic_opts.insert(
+        "cacheStrategy".into(),
+        json!({
+            "mode": "auto",
+            "ttl": "five_minutes",
+            "scope": null,
+            "skipCacheWrite": false,
+        }),
+    );
+    anthropic_opts.insert("agenticQuery".into(), json!(true));
+    anthropic_opts.insert("querySource".into(), json!("main"));
+
+    let mut provider_opts = HashMap::new();
+    provider_opts.insert("anthropic".into(), anthropic_opts);
+
+    let options = LanguageModelV4CallOptions::new(vec![
+        vercel_ai_provider::LanguageModelV4Message::user_text("Hello cache"),
+    ])
+    .with_provider_options(vercel_ai_provider::ProviderOptions(provider_opts));
+
+    let (body, headers, _warnings) = model
+        .get_args(&options, false)
+        .unwrap_or_else(|e| panic!("{e}"));
+
+    // (a) marker placed on last block of last user message.
+    let messages = body["messages"].as_array().expect("messages array");
+    let last_msg = messages.last().expect("non-empty");
+    assert_eq!(last_msg["role"], "user");
+    let last_content = last_msg["content"].as_array().expect("user content array");
+    let last_block = last_content.last().expect("non-empty content");
+    assert_eq!(last_block["cache_control"], json!({"type": "ephemeral"}));
+
+    // (b) baseline beta present.
+    let betas = headers
+        .get("anthropic-beta")
+        .expect("anthropic-beta header set");
+    assert!(
+        betas.contains("claude-code-20250219"),
+        "agentic baseline missing: {betas}"
+    );
+
+    // (c) internal signals stripped from wire body.
+    assert!(
+        body.get("cacheStrategy").is_none(),
+        "cacheStrategy leaked into wire body"
+    );
+    assert!(
+        body.get("requestedBetas").is_none(),
+        "requestedBetas leaked into wire body"
+    );
+    assert!(
+        body.get("agenticQuery").is_none(),
+        "agenticQuery leaked into wire body"
+    );
+    assert!(
+        body.get("querySource").is_none(),
+        "querySource leaked into wire body"
+    );
+}
+
+#[test]
+fn prompt_cache_disabled_strategy_attaches_no_marker() {
+    let caps = crate::anthropic_config::AnthropicModelCapabilities {
+        prompt_cache: true,
+        ..Default::default()
+    };
+    let model =
+        AnthropicMessagesLanguageModel::new("claude-sonnet-4-5", make_config_with_caps(caps));
+
+    let mut anthropic_opts: HashMap<String, serde_json::Value> = HashMap::new();
+    anthropic_opts.insert(
+        "cacheStrategy".into(),
+        json!({
+            "mode": "disabled",
+            "ttl": "five_minutes",
+        }),
+    );
+    let mut provider_opts = HashMap::new();
+    provider_opts.insert("anthropic".into(), anthropic_opts);
+
+    let options = LanguageModelV4CallOptions::new(vec![
+        vercel_ai_provider::LanguageModelV4Message::user_text("Hello cache"),
+    ])
+    .with_provider_options(vercel_ai_provider::ProviderOptions(provider_opts));
+
+    let (body, _headers, _warnings) = model
+        .get_args(&options, false)
+        .unwrap_or_else(|e| panic!("{e}"));
+
+    let messages = body["messages"].as_array().expect("messages array");
+    let last_block = messages
+        .last()
+        .and_then(|m| m["content"].as_array())
+        .and_then(|c| c.last())
+        .expect("non-empty content");
+    assert!(
+        last_block.get("cache_control").is_none(),
+        "Disabled strategy must not attach a cache marker"
+    );
+}
+
+#[test]
+fn prompt_cache_one_hour_downgraded_for_unallowlisted_query_source() {
+    let caps = crate::anthropic_config::AnthropicModelCapabilities {
+        prompt_cache: true,
+        ..Default::default()
+    };
+    // Empty allowlist: any query_source falls through to 5m.
+    let model =
+        AnthropicMessagesLanguageModel::new("claude-sonnet-4-5", make_config_with_caps(caps));
+
+    let mut anthropic_opts: HashMap<String, serde_json::Value> = HashMap::new();
+    anthropic_opts.insert(
+        "cacheStrategy".into(),
+        json!({
+            "mode": "auto",
+            "ttl": "one_hour",
+        }),
+    );
+    anthropic_opts.insert("querySource".into(), json!("compaction"));
+    let mut provider_opts = HashMap::new();
+    provider_opts.insert("anthropic".into(), anthropic_opts);
+
+    let options = LanguageModelV4CallOptions::new(vec![
+        vercel_ai_provider::LanguageModelV4Message::user_text("Hi"),
+    ])
+    .with_provider_options(vercel_ai_provider::ProviderOptions(provider_opts));
+
+    let (body, _headers, _warnings) = model
+        .get_args(&options, false)
+        .unwrap_or_else(|e| panic!("{e}"));
+
+    let messages = body["messages"].as_array().expect("messages array");
+    let last_block = messages
+        .last()
+        .and_then(|m| m["content"].as_array())
+        .and_then(|c| c.last())
+        .expect("non-empty content");
+    // 1h request without allowlist match → 5m wire (no `ttl` field).
+    assert_eq!(last_block["cache_control"], json!({"type": "ephemeral"}));
+}
+
+#[test]
+fn prompt_cache_beta_header_join_is_deterministic_sorted() {
+    let caps = crate::anthropic_config::AnthropicModelCapabilities {
+        prompt_cache: true,
+        context_1m: true,
+        interleaved_thinking: true,
+        ..Default::default()
+    };
+    let model =
+        AnthropicMessagesLanguageModel::new("claude-sonnet-4-5", make_config_with_caps(caps));
+
+    let options = LanguageModelV4CallOptions::new(vec![
+        vercel_ai_provider::LanguageModelV4Message::user_text("Hi"),
+    ]);
+
+    // Run get_args twice; header value MUST be byte-identical.
+    let (_b1, h1, _w1) = model
+        .get_args(&options, false)
+        .unwrap_or_else(|e| panic!("{e}"));
+    let (_b2, h2, _w2) = model
+        .get_args(&options, false)
+        .unwrap_or_else(|e| panic!("{e}"));
+
+    let v1 = h1.get("anthropic-beta").expect("h1");
+    let v2 = h2.get("anthropic-beta").expect("h2");
+    assert_eq!(v1, v2, "beta header must be byte-stable across runs");
+
+    // Sorted check: split, compare against sorted copy.
+    let parts: Vec<&str> = v1.split(',').collect();
+    let mut sorted = parts.clone();
+    sorted.sort_unstable();
+    assert_eq!(parts, sorted, "betas must be sorted before join");
 }

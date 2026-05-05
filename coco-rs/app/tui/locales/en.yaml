@@ -358,6 +358,14 @@ toast.tool_aborted_full: "Tool aborted: %{reason}"
 toast.conversation_rewound_checkpoint: "Conversation rewound to checkpoint."
 toast.no_image_clipboard: "No image on clipboard — use terminal paste for text"
 
+# Slash-command dispatcher status (TuiOnlyEvent::SlashCommandStatus).
+slash.status.no_handler: "/%{name} is registered but has no local handler."
+slash.status.failed: "/%{name} failed: %{error}"
+slash.status.empty_prompt: "/%{name} produced an empty prompt."
+slash.status.dialog_pending: "/%{name} opens the %{dialog_kind} (UI dialog wiring pending)."
+slash.permissions.usage_allow: "Usage: /permissions allow <tool>"
+slash.permissions.usage_deny: "Usage: /permissions deny <tool>"
+
 # Queue status widget
 queue_status.count: " ⋯ %{count} queued"
 queue_status.next_preview: " — next: %{preview}"

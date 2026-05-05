@@ -2,6 +2,9 @@ use super::*;
 use coco_config::ModelInfo;
 use coco_config::PartialModelInfo;
 use coco_config::PositiveTokens;
+use coco_types::CacheTtl;
+use coco_types::PromptCacheConfig;
+use coco_types::PromptCacheMode;
 use coco_types::ProviderApi;
 use coco_types::ReasoningEffort;
 use coco_types::ThinkingLevel;
@@ -293,4 +296,154 @@ fn extra_body_merge_drops_prototype_polluting_keys() {
         "prototype-polluting key must be filtered during deep merge"
     );
     assert_eq!(safe.get("ok"), Some(&serde_json::json!(1)));
+}
+
+#[test]
+fn cache_strategy_per_call_writes_anthropic_namespace() {
+    let info = info_with_defaults(BTreeMap::new());
+    let per_call = PerCallOverrides {
+        cache_strategy: Some(PromptCacheConfig {
+            mode: PromptCacheMode::Auto,
+            ttl: CacheTtl::OneHour,
+            ..Default::default()
+        }),
+        agentic_query: true,
+        query_source: Some("repl_main_thread".into()),
+        ..Default::default()
+    };
+    let (call, merged) = build_call_options_with_extra(
+        &info,
+        ProviderApi::Anthropic,
+        "anthropic",
+        &per_call,
+        Vec::new(),
+        None,
+    );
+    let inner = call
+        .provider_options
+        .as_ref()
+        .unwrap()
+        .get("anthropic")
+        .unwrap();
+    assert_eq!(
+        inner.get("cacheStrategy").and_then(|v| v.get("mode")),
+        Some(&serde_json::json!("auto"))
+    );
+    assert_eq!(inner.get("agenticQuery"), Some(&serde_json::json!(true)));
+    assert_eq!(
+        inner.get("querySource"),
+        Some(&serde_json::json!("repl_main_thread"))
+    );
+    // Merged map (pre-namespace-wrap) carries the same keys for detector hashing.
+    assert!(merged.contains_key("cacheStrategy"));
+    assert!(merged.contains_key("agenticQuery"));
+    assert!(merged.contains_key("querySource"));
+}
+
+#[test]
+fn cache_strategy_skipped_for_openai_namespace() {
+    let info = info_with_defaults(BTreeMap::new());
+    let per_call = PerCallOverrides {
+        cache_strategy: Some(PromptCacheConfig {
+            mode: PromptCacheMode::Auto,
+            ..Default::default()
+        }),
+        agentic_query: true,
+        query_source: Some("repl_main_thread".into()),
+        ..Default::default()
+    };
+    let (call, merged) = build_call_options_with_extra(
+        &info,
+        ProviderApi::Openai,
+        "openai",
+        &per_call,
+        Vec::new(),
+        None,
+    );
+    // No prompt-cache keys in either the wire body or the merged map.
+    assert!(
+        call.provider_options.is_none() || {
+            let inner = call
+                .provider_options
+                .as_ref()
+                .unwrap()
+                .get("openai")
+                .unwrap();
+            !inner.contains_key("cacheStrategy")
+                && !inner.contains_key("agenticQuery")
+                && !inner.contains_key("querySource")
+        }
+    );
+    assert!(!merged.contains_key("cacheStrategy"));
+    assert!(!merged.contains_key("agenticQuery"));
+    assert!(!merged.contains_key("querySource"));
+}
+
+#[test]
+fn merged_extra_returned_for_detector_input() {
+    let mut model_extra = BTreeMap::new();
+    model_extra.insert("store".into(), serde_json::Value::Bool(true));
+    let info = info_with_defaults(model_extra);
+
+    let mut per_call = PerCallOverrides::default();
+    per_call
+        .extra_body
+        .insert("metadata".into(), serde_json::json!({ "tag": "x" }));
+    per_call.cache_strategy = Some(PromptCacheConfig {
+        mode: PromptCacheMode::Auto,
+        ttl: CacheTtl::FiveMinutes,
+        ..Default::default()
+    });
+    per_call.query_source = Some("compact".into());
+
+    let (call, merged) = build_call_options_with_extra(
+        &info,
+        ProviderApi::Anthropic,
+        "anthropic",
+        &per_call,
+        Vec::new(),
+        None,
+    );
+    // Merged map sees every key the wire body sees, in canonical order.
+    let inner = call
+        .provider_options
+        .as_ref()
+        .unwrap()
+        .get("anthropic")
+        .unwrap();
+    for key in inner.keys() {
+        assert!(
+            merged.contains_key(key),
+            "merged_extra missing wire key {key}; cannot feed detector accurately"
+        );
+    }
+    // And nothing else — merged is the post-merge, pre-wrap snapshot.
+    assert_eq!(merged.len(), inner.len());
+}
+
+#[test]
+fn cache_strategy_disabled_emits_no_session_context() {
+    // Finding 4: query_source MUST NOT change the merged map when caching
+    // is off. Otherwise extra_body_hash flips for callers that never opted in.
+    let info = info_with_defaults(BTreeMap::new());
+    let per_call = PerCallOverrides {
+        // mode is Disabled by default
+        cache_strategy: Some(PromptCacheConfig::default()),
+        agentic_query: true,
+        query_source: Some("repl_main_thread".into()),
+        ..Default::default()
+    };
+    let (call, merged) = build_call_options_with_extra(
+        &info,
+        ProviderApi::Anthropic,
+        "anthropic",
+        &per_call,
+        Vec::new(),
+        None,
+    );
+    assert!(
+        call.provider_options.is_none(),
+        "no keys → no provider_options"
+    );
+    assert!(merged.is_empty());
 }

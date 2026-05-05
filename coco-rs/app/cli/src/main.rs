@@ -24,8 +24,7 @@ use coco_cli::sdk_server::QueryEngineRunner;
 use coco_cli::sdk_server::SdkServer;
 use coco_cli::sdk_server::StdioTransport;
 use coco_cli::sdk_server::cli_bootstrap::CliInitializeBootstrap;
-use coco_commands::CommandRegistry;
-use coco_commands::register_extended_builtins;
+use coco_commands::build_command_registry;
 use coco_config::EnvKey;
 use coco_config::env;
 use coco_config::global_config;
@@ -494,7 +493,7 @@ pub(crate) fn build_system_prompt(
     model_id: &str,
     base_instructions: Option<&str>,
 ) -> String {
-    let claude_files = coco_context::discover_claude_md_files(cwd);
+    let claude_files = coco_context::discover_memory_files(cwd);
     let env_info = coco_context::get_environment_info(cwd, model_id);
     let identity = base_instructions.unwrap_or(DEFAULT_SYSTEM_PROMPT_IDENTITY);
     coco_context::build_system_prompt(identity, &claude_files, &env_info, None, None, None)
@@ -875,12 +874,34 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
         ),
     ));
 
-    // Build the slash-command registry with the extended built-ins so
-    // `initialize` advertises a real commands list. Future follow-ups
-    // can splice plugin + user-directory commands in here.
-    let mut command_registry = CommandRegistry::new();
-    register_extended_builtins(&mut command_registry);
-    let command_registry = Arc::new(command_registry);
+    // Build the slash-command registry with the full TS-parity load order
+    // (builtins → extended → skills → plugin contributions → ts-parity P1
+    // handlers). Both the SDK `initialize.commands` advertisement and the
+    // TUI dispatch chain (`tui_runner::dispatch_slash_command`) read from
+    // the same `Arc<CommandRegistry>`.
+    let command_registry = {
+        let mut skill_manager = coco_skills::SkillManager::new();
+        let skill_dirs = vec![
+            global_config::config_home().join("skills"),
+            cwd.join(".coco").join("skills"),
+        ];
+        skill_manager.load_from_dirs(&skill_dirs);
+        let mut plugin_manager = coco_plugins::PluginManager::new();
+        plugin_manager.load_from_dirs(&coco_plugins::get_plugin_dirs(
+            &global_config::config_home(),
+            &cwd,
+        ));
+        let registry = build_command_registry(
+            &skill_manager,
+            &plugin_manager,
+            coco_types::UserType::from_env(),
+            runtime_config.features.clone(),
+            cwd.clone(),
+            dirs::home_dir().unwrap_or_else(|| cwd.clone()),
+            /*managed_root*/ None,
+        );
+        Arc::new(registry)
+    };
 
     // Locate user + project output-style directories so
     // `available_output_styles` discovers custom markdown files. Both
@@ -925,7 +946,7 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     };
 
     let mut bootstrap_builder = CliInitializeBootstrap::new(current_output_style)
-        .with_command_registry(command_registry)
+        .with_command_registry(command_registry.clone())
         .with_output_style_dirs(output_style_dirs)
         .with_agent_search_paths(agent_search_paths);
     if let Some(auth) = auth_method {
@@ -989,6 +1010,7 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
             session_manager: session_manager_for_runtime,
             fast_model_spec: None,
             permission_bridge: Some(bridge),
+            command_registry: command_registry.clone(),
         },
     )
     .await?;

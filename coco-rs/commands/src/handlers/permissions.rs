@@ -40,13 +40,18 @@ pub fn handler(
         }
 
         if subcommand == "reset" {
-            // TODO: Wire to UserCommand::ResetSessionPermissions to actually
-            // clear session rules from the ToolPermissionContext. Currently the
-            // slash command handler doesn't have access to the permission context.
-            return Ok("Session permission rules cleared.\n\n\
-                 File-based rules (.claude/settings.json, ~/.coco/settings.json) are unchanged.\n\
-                 Edit those files directly to modify persistent rules."
-                .to_string());
+            // The TUI dispatcher (`tui_runner::dispatch_permissions_mutation`)
+            // intercepts this branch and mutates `engine_config.allow_rules /
+            // deny_rules` directly. This handler runs only for non-TUI
+            // contexts (SDK, tests) where the engine config isn't reachable
+            // — be honest about that.
+            return Ok(
+                "Session permission rules: reset is only effective inside the TUI \
+                 (it mutates the live engine config). File-based rules \
+                 (.claude/settings.json, ~/.cocode/settings.json) are unchanged — \
+                 edit those files directly to modify persistent rules."
+                    .to_string(),
+            );
         }
 
         Ok(format!(
@@ -121,13 +126,15 @@ async fn list_permissions() -> anyhow::Result<String> {
     Ok(out)
 }
 
-/// Add a session-level permission rule (in-memory only).
+/// Stub for non-TUI contexts. The TUI dispatcher
+/// (`tui_runner::dispatch_permissions_mutation`) handles `allow` / `deny`
+/// before this handler runs and mutates `engine_config` directly. Outside
+/// the TUI we surface a hint pointing at file-based rules.
 async fn add_permission_rule(action: &str, tool: &str) -> anyhow::Result<String> {
     if tool.is_empty() {
         return Ok(format!("Usage: /permissions {action} <tool-name>"));
     }
 
-    // Validate tool name format
     let valid_tools: &[&str] = &[
         ToolName::Bash.as_str(),
         ToolName::Read.as_str(),
@@ -139,19 +146,21 @@ async fn add_permission_rule(action: &str, tool: &str) -> anyhow::Result<String>
         ToolName::WebSearch.as_str(),
         ToolName::NotebookEdit.as_str(),
         ToolName::TodoWrite.as_str(),
-        MCP_TOOL_PREFIX, // for "mcp__*" prefix matching
+        MCP_TOOL_PREFIX,
     ];
-
     let is_known = valid_tools.contains(&tool) || tool.starts_with(MCP_TOOL_PREFIX);
 
-    let mut out = format!("Added {action} rule for tool: {tool}\n");
-    out.push_str("  Source: Session (highest priority)\n");
+    let mut out = format!(
+        "/permissions {action} {tool}: only effective inside the TUI (mutates the live \
+         engine config there). For SDK / non-interactive contexts, add the rule to \
+         settings.json directly.\n"
+    );
 
     if !is_known {
         out.push_str(&format!(
             "\n  Warning: '{tool}' is not a known built-in tool.\n\
-               Known tools: {}\n\
-               MCP tools use prefix: mcp__<server>__<tool>",
+             Known tools: {}\n\
+             MCP tools use prefix: mcp__<server>__<tool>",
             valid_tools[..6].join(", "),
         ));
     }

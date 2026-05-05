@@ -19,6 +19,7 @@ pub mod command_queue;
 pub mod config;
 pub mod emit;
 pub mod engine;
+mod engine_attachments;
 mod engine_builder;
 mod engine_compaction;
 mod engine_finalize_turn;

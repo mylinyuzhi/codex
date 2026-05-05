@@ -27,7 +27,9 @@
 //! No `as u64` casts: `PositiveTokens` / `PositiveCount` provide
 //! `From → u64` infallibly (see `coco_config::positive`).
 
+use crate::cache_convert;
 use crate::thinking_convert;
+use coco_types::PromptCacheConfig;
 use coco_types::ProviderApi;
 use coco_types::ReasoningEffort;
 use coco_types::ThinkingLevel;
@@ -62,17 +64,44 @@ pub struct PerCallOverrides {
     /// language model's `extract_anthropic_options` reads it; other
     /// providers ignore the namespace, so the field is a no-op there.
     pub context_management: Option<serde_json::Value>,
+    /// Layer-A user intent for prompt caching. Translated to camelCase
+    /// `provider_options` keys via [`cache_convert::to_extra_body`];
+    /// non-Anthropic providers see no caching keys.
+    pub cache_strategy: Option<PromptCacheConfig>,
+    /// Per-call agentic-loop flag — gates the `claude-code-20250219`
+    /// baseline beta in the Anthropic adapter. Helper calls (compaction,
+    /// title generation) pass `false`; main agent loop passes `true`.
+    pub agentic_query: bool,
+    /// Per-call query source — used for 1h-TTL allowlist match (TS
+    /// parity). Forwarded to the adapter only when a non-disabled
+    /// `cache_strategy` is also present (design §9.2 Finding 4).
+    pub query_source: Option<String>,
 }
 
-/// Build a fresh `LanguageModelV4CallOptions` for a turn.
-pub fn build_call_options(
+/// Build a fresh `LanguageModelV4CallOptions` for a turn, returning
+/// the merged flat `extra_body` map alongside the call options.
+///
+/// The returned `BTreeMap` is the **post-merge, pre-namespace-wrap**
+/// flat map that gets installed under
+/// `provider_options[<canonical_namespace>]`. It is the canonical
+/// input for `cache_detection::build_prompt_state_input` — the
+/// detector hashes whatever the wire body actually carries, with no
+/// per-feature plumbing required for new keys (cache_strategy,
+/// requestedBetas, agenticQuery, querySource, …).
+///
+/// Callers that don't need the merged map (mock paths, simple
+/// integration callsites) should use [`build_call_options`] instead.
+pub fn build_call_options_with_extra(
     info: &coco_config::ModelInfo,
     api: ProviderApi,
     provider_name: &str,
     per_call: &PerCallOverrides,
     prompt: LanguageModelV4Prompt,
     tools: Option<Vec<LanguageModelV4Tool>>,
-) -> LanguageModelV4CallOptions {
+) -> (
+    LanguageModelV4CallOptions,
+    BTreeMap<String, serde_json::Value>,
+) {
     let mut call = LanguageModelV4CallOptions {
         prompt,
         ..Default::default()
@@ -154,6 +183,33 @@ pub fn build_call_options(
         }
     }
 
+    // Lane D: prompt-cache pass-through. Non-Anthropic / disabled →
+    // no-op. Adapter (`vercel-ai-anthropic`) owns all policy
+    // interpretation; this site only forwards typed user intent
+    // (design §9.2 / §9.4).
+    if let Some(ref cache_cfg) = per_call.cache_strategy {
+        for (k, v) in cache_convert::to_extra_body(cache_cfg, api) {
+            merge_into_extra(&mut extra, &k, &v);
+        }
+    }
+    // Lane D2: per-call session context. Gated on a non-disabled
+    // cache strategy — without the gate, `query_source` would re-hash
+    // `extra_body_hash` for callers that never enabled caching
+    // (design §9.2 / Finding 4).
+    for (k, v) in cache_convert::session_context_to_extra_body(
+        per_call.cache_strategy.as_ref(),
+        per_call.agentic_query,
+        per_call.query_source.as_deref(),
+        api,
+    ) {
+        merge_into_extra(&mut extra, &k, &v);
+    }
+
+    // Snapshot the merged flat map *before* namespace-wrapping so the
+    // detector hash and the actual retry body cannot drift. The
+    // returned map is the post-merge, pre-wrap canonical extra body.
+    let merged_snapshot = extra.clone();
+
     if !extra.is_empty() {
         let mut po = ProviderOptions::default();
         let inner: HashMap<String, serde_json::Value> = extra.into_iter().collect();
@@ -161,7 +217,21 @@ pub fn build_call_options(
         call.provider_options = Some(po);
     }
 
-    call
+    (call, merged_snapshot)
+}
+
+/// Convenience wrapper around [`build_call_options_with_extra`] that
+/// discards the merged extra map. Use when you don't need to feed
+/// the detector hash (mock / test / simple integration callsites).
+pub fn build_call_options(
+    info: &coco_config::ModelInfo,
+    api: ProviderApi,
+    provider_name: &str,
+    per_call: &PerCallOverrides,
+    prompt: LanguageModelV4Prompt,
+    tools: Option<Vec<LanguageModelV4Tool>>,
+) -> LanguageModelV4CallOptions {
+    build_call_options_with_extra(info, api, provider_name, per_call, prompt, tools).0
 }
 
 /// Resolve the namespace key the language-model implementation will

@@ -102,6 +102,11 @@ pub enum EnvKey {
     /// Per-message char cap for Tool Result Budget Level 2.
     /// TS GrowthBook override: `tengu_hawthorn_window` (default 200_000).
     CocoCompactToolResultBudgetPerMessageChars,
+    /// 1h-TTL allowlist for prompt-cache (comma-separated `query_source`
+    /// patterns, exact match or `prefix*` glob). Mirrors TS
+    /// `tengu_prompt_cache_1h_config.allowlist` from GrowthBook.
+    /// See `docs/coco-rs/prompt-cache-design.md` §16a.
+    CocoPromptCacheAllowlist,
     /// Enable coordinator mode (system-prompt swap + worker pool +
     /// `<task-notification>` XML routing). Replaces TS
     /// `CLAUDE_CODE_COORDINATOR_MODE`. Requires `Feature::AgentTeams`.
@@ -215,6 +220,7 @@ impl EnvKey {
             Self::CocoCompactApiClearToolResults => "COCO_COMPACT_API_CLEAR_TOOL_RESULTS",
             Self::CocoCompactApiClearToolUses => "COCO_COMPACT_API_CLEAR_TOOL_USES",
             Self::CocoCompactToolResultBudgetEnable => "COCO_COMPACT_TOOL_RESULT_BUDGET_ENABLE",
+            Self::CocoPromptCacheAllowlist => "COCO_PROMPT_CACHE_ALLOWLIST",
             Self::CocoCompactToolResultBudgetPerMessageChars => {
                 "COCO_COMPACT_TOOL_RESULT_BUDGET_PER_MESSAGE_CHARS"
             }

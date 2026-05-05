@@ -211,61 +211,193 @@ fn extract_toml_string_value(rest: &str) -> Option<String> {
     }
 }
 
-/// Install a plugin (scaffold the directory structure).
-async fn install_plugin(name: &str) -> anyhow::Result<String> {
-    if name.is_empty() {
-        return Ok("Usage: /plugin install <name>".to_string());
+/// Install a plugin from a known marketplace, recording the installation
+/// in `installed_plugins.json` so the next session loads it.
+///
+/// Accepts either `name@marketplace` (TS parity for plugin IDs) or just
+/// `name` (search across all known marketplaces). If the plugin isn't
+/// found in any marketplace, the handler is honest about it instead of
+/// silently scaffolding an empty directory — the prior behavior misled
+/// users into thinking remote plugins had been fetched.
+///
+/// TS: `services/plugins/PluginInstallationManager.ts`. Live-registry
+/// refresh is deferred to next session — Rust doesn't yet expose a
+/// thread-safe handle to the engine's PluginManager.
+async fn install_plugin(target: &str) -> anyhow::Result<String> {
+    if target.is_empty() {
+        return Ok("Usage: /plugin install <name>[@<marketplace>]".to_string());
     }
 
-    let plugin_dir = PathBuf::from(".claude/plugins").join(name);
+    let (plugin_name, mkt_filter) = match target.split_once('@') {
+        Some((n, m)) => (n.trim(), Some(m.trim())),
+        None => (target, None),
+    };
 
-    if tokio::fs::metadata(&plugin_dir).await.is_ok() {
+    // Marketplace install runs std::fs underneath; push to the blocking
+    // pool so a slow disk doesn't stall the TUI loop.
+    let plugin_name = plugin_name.to_string();
+    let mkt_filter = mkt_filter.map(str::to_string);
+    tokio::task::spawn_blocking(move || {
+        install_plugin_blocking(&plugin_name, mkt_filter.as_deref())
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("install join error: {e}"))?
+}
+
+fn install_plugin_blocking(plugin_name: &str, mkt_filter: Option<&str>) -> anyhow::Result<String> {
+    let plugins_dir = resolve_plugins_dir();
+    let mut manager = coco_plugins::marketplace::MarketplaceManager::new(plugins_dir.clone());
+
+    // Load every known marketplace into the cache so search has something
+    // to scan.
+    let known = manager.load_known_marketplaces();
+    if known.is_empty() {
+        return Ok("No marketplaces configured. Add one before installing:\n\
+             \n\
+             /plugin marketplace add <source>\n\
+             \n\
+             Sources: GitHub (owner/repo), URL, or local directory."
+            .to_string());
+    }
+    for name in known.keys() {
+        let _ = manager.load_cached_marketplace(name);
+    }
+
+    // Resolve to a (marketplace, entry) pair: either plugin_name@mkt_filter
+    // (exact lookup) or fuzzy name match across cache.
+    let resolved = if let Some(mkt) = mkt_filter {
+        manager
+            .get_plugin_by_id(&format!("{plugin_name}@{mkt}"))
+            .map(|(_, entry)| (mkt.to_string(), entry.clone()))
+    } else {
+        manager
+            .search_plugins(plugin_name)
+            .into_iter()
+            .find(|p| p.name == plugin_name)
+            .and_then(|p| {
+                manager
+                    .get_plugin_by_id(&format!("{}@{}", p.name, p.marketplace))
+                    .map(|(_, e)| (p.marketplace, e.clone()))
+            })
+    };
+
+    let Some((mkt_name, entry)) = resolved else {
+        let suggestion = mkt_filter.map_or_else(
+            || format!("/plugin search {plugin_name}"),
+            |m| format!("/plugin search {plugin_name} (in marketplace '{m}')"),
+        );
         return Ok(format!(
-            "Plugin '{name}' is already installed at {}",
-            plugin_dir.display()
+            "Plugin '{plugin_name}' not found in any known marketplace.\n\
+             \n\
+             Try: {suggestion}"
         ));
-    }
+    };
 
-    // Create plugin directory and manifest
-    tokio::fs::create_dir_all(&plugin_dir).await?;
+    let install_path =
+        manager.install_plugin(&mkt_name, &entry, coco_plugins::schemas::PluginScope::User)?;
 
-    let manifest = format!(
-        "[plugin]\n\
-         name = \"{name}\"\n\
-         version = \"0.1.0\"\n\
-         description = \"Plugin {name}\"\n"
+    // Record into installed_plugins.json so the next session's PluginManager
+    // discovers this plugin via the loader's standard scan.
+    let installed_path = plugins_dir.join("installed_plugins.json");
+    let mut installed = coco_plugins::loader::InstalledPluginsManager::load(installed_path)?;
+    let plugin_id = format!("{}@{mkt_name}", entry.name);
+    let now = chrono::Utc::now().to_rfc3339();
+    installed.record_installation(
+        &plugin_id,
+        coco_plugins::schemas::PluginInstallationEntry {
+            scope: coco_plugins::schemas::PluginScope::User,
+            project_path: None,
+            install_path: install_path.to_string_lossy().to_string(),
+            version: entry.version,
+            installed_at: Some(now.clone()),
+            last_updated: Some(now),
+            git_commit_sha: None,
+        },
     );
-    tokio::fs::write(plugin_dir.join("PLUGIN.toml"), manifest).await?;
+    installed.save()?;
 
     Ok(format!(
-        "Installed plugin '{name}' at {}\n\n\
-         Created PLUGIN.toml manifest.\n\
-         Add skills to {}/skills/\n\
-         Add hooks to {}/hooks/",
-        plugin_dir.display(),
-        plugin_dir.display(),
-        plugin_dir.display(),
+        "Installed '{plugin_id}' to {}.\n\
+         Live engine refresh is deferred — restart the session for the \
+         plugin's skills/hooks/agents to load.",
+        install_path.display()
     ))
 }
 
-/// Uninstall a plugin by removing its directory.
-async fn uninstall_plugin(name: &str) -> anyhow::Result<String> {
-    let plugin_dir = PathBuf::from(".claude/plugins").join(name);
-
-    if tokio::fs::metadata(&plugin_dir).await.is_err() {
-        // Check user-level too
-        if let Some(home) = dirs::home_dir() {
-            let user_dir = home.join(".cocode").join("plugins").join(name);
-            if tokio::fs::metadata(&user_dir).await.is_ok() {
-                tokio::fs::remove_dir_all(&user_dir).await?;
-                return Ok(format!("Uninstalled user plugin: {name}"));
-            }
-        }
-        return Ok(format!("Plugin '{name}' not found."));
+/// Uninstall a plugin: remove its directory AND scrub the corresponding
+/// entry from `installed_plugins.json` so the next session's loader
+/// doesn't try to materialise stale state.
+///
+/// Accepts a bare name (looks across project + user dirs) or
+/// `name@marketplace` (the canonical plugin ID — matches what `install`
+/// records in installed_plugins.json).
+async fn uninstall_plugin(target: &str) -> anyhow::Result<String> {
+    if target.is_empty() {
+        return Ok("Usage: /plugin uninstall <name>".to_string());
     }
 
-    tokio::fs::remove_dir_all(&plugin_dir).await?;
-    Ok(format!("Uninstalled plugin: {name}"))
+    let (name, mkt_filter) = match target.split_once('@') {
+        Some((n, m)) => (n.trim().to_string(), Some(m.trim().to_string())),
+        None => (target.to_string(), None),
+    };
+
+    let project_dir = PathBuf::from(".claude/plugins").join(&name);
+    let user_dir = dirs::home_dir().map(|h| h.join(".cocode").join("plugins").join(&name));
+
+    let removed_path = if tokio::fs::metadata(&project_dir).await.is_ok() {
+        tokio::fs::remove_dir_all(&project_dir).await?;
+        Some(project_dir)
+    } else if let Some(ud) = user_dir
+        && tokio::fs::metadata(&ud).await.is_ok()
+    {
+        tokio::fs::remove_dir_all(&ud).await?;
+        Some(ud)
+    } else {
+        None
+    };
+
+    // Scrub installed_plugins.json — covers both the local-scaffold case
+    // (no entry, no-op) and marketplace-installed plugins.
+    let installed_path = resolve_plugins_dir().join("installed_plugins.json");
+    if tokio::fs::metadata(&installed_path).await.is_ok() {
+        let plugin_id = mkt_filter
+            .as_ref()
+            .map(|m| format!("{name}@{m}"))
+            .unwrap_or_else(|| name.clone());
+        let name_owned = name.clone();
+        let _ = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let mut mgr = coco_plugins::loader::InstalledPluginsManager::load(installed_path)?;
+            // Try both `name` and `name@anything` — when no marketplace
+            // was given, scan for any matching prefix.
+            if mkt_filter.is_some() {
+                mgr.remove_plugin(&plugin_id);
+            } else {
+                let prefix = format!("{name_owned}@");
+                let to_remove: Vec<String> = mgr
+                    .installed_plugin_ids()
+                    .into_iter()
+                    .filter(|id| id == &plugin_id || id.starts_with(&prefix))
+                    .map(String::from)
+                    .collect();
+                for id in &to_remove {
+                    mgr.remove_plugin(id);
+                }
+            }
+            mgr.save()?;
+            Ok(())
+        })
+        .await?;
+    }
+
+    match removed_path {
+        Some(p) => Ok(format!(
+            "Uninstalled plugin '{name}' from {}.\n\
+             Live engine still has it loaded for this session — restart \
+             to drop it.",
+            p.display()
+        )),
+        None => Ok(format!("Plugin '{name}' not found.")),
+    }
 }
 
 /// Show detailed information about a specific plugin.
@@ -382,33 +514,82 @@ async fn search_plugins(query: &str) -> anyhow::Result<String> {
     Ok(out)
 }
 
-/// Enable a plugin.
+/// Enable a plugin: remove its name from the persistent disabled-plugins
+/// file. Live registry refresh deferred to next session — Rust doesn't yet
+/// expose a thread-safe handle to PluginManager.
 async fn enable_plugin(name: &str) -> anyhow::Result<String> {
     if name.is_empty() {
         return Ok("Usage: /plugin enable <name>".to_string());
     }
-    // Check both project and user dirs
-    for (dir, label) in plugin_scan_dirs() {
-        let plugin_dir = dir.join(name);
-        if tokio::fs::metadata(&plugin_dir).await.is_ok() {
-            return Ok(format!("Plugin '{name}' enabled ({label})."));
-        }
+    if !plugin_dir_exists(name).await {
+        return Ok(format!("Plugin '{name}' not found."));
     }
-    Ok(format!("Plugin '{name}' not found."))
+    let mut disabled = read_disabled_plugins().await;
+    if !disabled.iter().any(|n| n == name) {
+        return Ok(format!("Plugin '{name}' is already enabled."));
+    }
+    disabled.retain(|n| n != name);
+    write_disabled_plugins(&disabled).await?;
+    Ok(format!(
+        "Plugin '{name}' enabled (persisted). Live engine refresh is \
+         deferred — restart the session for it to load."
+    ))
 }
 
-/// Disable a plugin.
+/// Disable a plugin: append its name to the persistent disabled-plugins
+/// file. Same deferral semantics as enable.
 async fn disable_plugin(name: &str) -> anyhow::Result<String> {
     if name.is_empty() {
         return Ok("Usage: /plugin disable <name>".to_string());
     }
-    for (dir, label) in plugin_scan_dirs() {
-        let plugin_dir = dir.join(name);
-        if tokio::fs::metadata(&plugin_dir).await.is_ok() {
-            return Ok(format!("Plugin '{name}' disabled ({label})."));
+    if !plugin_dir_exists(name).await {
+        return Ok(format!("Plugin '{name}' not found."));
+    }
+    let mut disabled = read_disabled_plugins().await;
+    if disabled.iter().any(|n| n == name) {
+        return Ok(format!("Plugin '{name}' is already disabled."));
+    }
+    disabled.push(name.to_string());
+    write_disabled_plugins(&disabled).await?;
+    Ok(format!(
+        "Plugin '{name}' disabled (persisted). Live engine still has it \
+         loaded for this session — restart to take effect."
+    ))
+}
+
+/// Check whether a plugin directory exists in any scan dir. Used by
+/// enable/disable to refuse silently mutating state for unknown names.
+async fn plugin_dir_exists(name: &str) -> bool {
+    for (dir, _label) in plugin_scan_dirs() {
+        if tokio::fs::metadata(dir.join(name)).await.is_ok() {
+            return true;
         }
     }
-    Ok(format!("Plugin '{name}' not found."))
+    false
+}
+
+/// Path to the persistent disabled-plugins state file. Lives next to
+/// `installed_plugins.json` so deployment / backup tooling can treat the
+/// plugin state directory as one unit.
+fn disabled_plugins_path() -> PathBuf {
+    resolve_plugins_dir().join("disabled_plugins.json")
+}
+
+async fn read_disabled_plugins() -> Vec<String> {
+    let Ok(content) = tokio::fs::read_to_string(disabled_plugins_path()).await else {
+        return Vec::new();
+    };
+    serde_json::from_str(&content).unwrap_or_default()
+}
+
+async fn write_disabled_plugins(names: &[String]) -> anyhow::Result<()> {
+    let path = disabled_plugins_path();
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    let json = serde_json::to_string_pretty(names)?;
+    tokio::fs::write(path, json).await?;
+    Ok(())
 }
 
 /// Marketplace subcommand dispatcher.

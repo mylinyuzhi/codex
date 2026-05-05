@@ -9,10 +9,11 @@ fn test_register_extended_builtins() {
     register_extended_builtins(&mut registry);
 
     // Verify we registered a reasonable number of extended commands.
-    // Count may change as new commands are added.
+    // Count drifts as commands move between layers; the floor only
+    // catches whole-block regressions.
     assert!(
-        registry.len() >= 60,
-        "Expected at least 60 extended commands, got {}",
+        registry.len() >= 50,
+        "Expected at least 50 extended commands, got {}",
         registry.len()
     );
 }
@@ -68,8 +69,8 @@ fn test_extended_builtins_no_overlap_with_base() {
 
 #[test]
 fn test_all_name_constants_are_valid() {
-    // Verify no constant is empty
-    let all_names = [
+    // Verify every name constant is non-empty and uses kebab-case ASCII.
+    let all_names: &[&str] = &[
         names::HELP,
         names::CLEAR,
         names::COMPACT,
@@ -85,10 +86,7 @@ fn test_all_name_constants_are_valid() {
         names::VIM,
         names::OUTPUT_STYLE,
         names::KEYBINDINGS,
-        names::FAST,
         names::SANDBOX,
-        names::PRIVACY_SETTINGS,
-        names::RATE_LIMIT_OPTIONS,
         names::SESSION,
         names::RESUME,
         names::COST,
@@ -101,7 +99,6 @@ fn test_all_name_constants_are_valid() {
         names::STATS,
         names::DIFF,
         names::COMMIT,
-        names::PR,
         names::REVIEW,
         names::INIT,
         names::MCP,
@@ -114,54 +111,51 @@ fn test_all_name_constants_are_valid() {
         names::DOCTOR,
         names::LOGIN,
         names::LOGOUT,
-        names::FEEDBACK,
         names::UPGRADE,
         names::USAGE,
         names::BTW,
-        names::STICKERS,
         names::MEMORY,
         names::PLAN,
         names::ADD_DIR,
-        names::DESKTOP,
-        names::MOBILE,
         names::IDE,
         names::TAG,
         names::SUMMARY,
-        names::RELEASE_NOTES,
-        names::ONBOARDING,
-        names::CHROME,
         names::PR_COMMENTS,
-        names::SHARE,
         names::PASSES,
-        names::EXTRA_USAGE,
-        names::TELEPORT,
-        names::INSTALL_GITHUB_APP,
-        names::INSTALL_SLACK_APP,
+        names::STATUSLINE,
+        names::RELOAD_PLUGINS,
+        names::SECURITY_REVIEW,
+        names::INSIGHTS,
+        names::ENV,
+        names::DEBUG_TOOL_CALL,
+        names::ANT_TRACE,
     ];
 
-    for name in &all_names {
+    for name in all_names {
         assert!(!name.is_empty(), "found empty command name constant");
         assert!(
-            name.chars().all(|c| c.is_ascii_lowercase() || c == '-'),
+            name.chars()
+                .all(|c: char| c.is_ascii_lowercase() || c == '-'),
             "command name '{name}' contains invalid characters"
         );
     }
 
-    // Check total count matches TS source (~65+ directories)
+    // After parity-trimming we keep ~55 constants; the floor catches future
+    // accidental drops without hard-coding the precise count.
     assert!(
-        all_names.len() >= 65,
-        "expected at least 65 command name constants, got {}",
+        all_names.len() >= 55,
+        "expected at least 55 command name constants, got {}",
         all_names.len()
     );
 }
 
 #[test]
 fn test_plan_handler_subcommands() {
+    // Fallback handler used when not running through the TUI dispatcher.
     assert!(plan_handler("").contains("Plan mode"));
-    assert!(plan_handler("on").contains("enabled"));
-    assert!(plan_handler("off").contains("disabled"));
-    assert!(plan_handler("open").contains("Opening"));
+    assert!(plan_handler("open").contains("EDITOR"));
     assert!(plan_handler("refactor the auth module").contains("Creating plan"));
+    assert!(plan_handler("refactor the auth module").contains("EnterPlanMode"));
 }
 
 #[tokio::test]
@@ -183,11 +177,16 @@ fn test_rewind_handler() {
     assert_eq!(out_empty, out_with_arg);
 }
 
-#[test]
-fn test_skills_handler() {
-    let output = skills_handler("");
-    assert!(output.contains(".claude/skills/"));
-    assert!(output.contains("Bundled"));
+#[tokio::test]
+async fn test_skills_handler() {
+    // Real enumeration via SkillManager — bundled skills are always present
+    // so the count line and the [bundled] source tag prove the handler
+    // exercised the real loader rather than a static stub.
+    let output = super::handlers::skills::handler(String::new())
+        .await
+        .unwrap();
+    assert!(output.contains("skill(s) loaded"));
+    assert!(output.contains("[bundled]"));
 }
 
 #[tokio::test]
@@ -212,12 +211,7 @@ fn test_version_handler() {
     assert!(output.starts_with("cocode v"));
 }
 
-#[test]
-fn test_vim_handler() {
-    assert!(vim_handler("on").contains("enabled"));
-    assert!(vim_handler("off").contains("disabled"));
-    assert!(vim_handler("").contains("toggled"));
-}
+// /vim is now an async handler; behavior covered by handlers::vim::tests.
 
 #[test]
 fn test_theme_handler() {
@@ -225,11 +219,7 @@ fn test_theme_handler() {
     assert!(theme_handler("dark").contains("dark"));
 }
 
-#[test]
-fn test_fast_handler() {
-    assert!(fast_handler("on").contains("enabled"));
-    assert!(fast_handler("off").contains("disabled"));
-}
+// /fast removed per parity scope; coverage dropped accordingly.
 
 #[tokio::test]
 async fn test_model_handler_empty() {
@@ -263,29 +253,34 @@ async fn test_permissions_handler_empty() {
 }
 
 #[tokio::test]
-async fn test_permissions_handler_allow() {
+async fn test_permissions_handler_allow_non_tui_hint() {
+    // Non-TUI handler returns hint pointing at TUI / settings.json.
+    // The TUI dispatcher (`tui_runner::dispatch_permissions_mutation`)
+    // intercepts this and mutates engine_config — verified separately.
     let output = handlers::permissions::handler("allow Bash".to_string())
         .await
         .unwrap();
-    assert!(output.contains("allow rule"));
     assert!(output.contains("Bash"));
+    assert!(output.contains("only effective inside the TUI"));
 }
 
 #[tokio::test]
-async fn test_permissions_handler_deny() {
+async fn test_permissions_handler_deny_non_tui_hint() {
     let output = handlers::permissions::handler("deny Write".to_string())
         .await
         .unwrap();
-    assert!(output.contains("deny rule"));
     assert!(output.contains("Write"));
+    assert!(output.contains("only effective inside the TUI"));
 }
 
 #[tokio::test]
-async fn test_permissions_handler_reset() {
+async fn test_permissions_handler_reset_non_tui_honest() {
     let output = handlers::permissions::handler("reset".to_string())
         .await
         .unwrap();
-    assert!(output.contains("cleared"));
+    // No more lying about clearing — the TUI dispatcher does that.
+    assert!(output.contains("only effective inside the TUI"));
+    assert!(output.contains("File-based rules"));
 }
 
 #[tokio::test]

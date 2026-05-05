@@ -33,6 +33,7 @@ coco-context.workspace = true
 coco-mcp.workspace = true
 coco-permissions.workspace = true
 coco-plugins.workspace = true
+coco-skills.workspace = true
 coco-coordinator.workspace = true
 coco-tasks.workspace = true
 coco-state.workspace = true

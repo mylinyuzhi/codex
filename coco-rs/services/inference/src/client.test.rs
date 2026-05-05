@@ -99,13 +99,7 @@ async fn test_client_returns_mock_text() {
     let params = QueryParams {
         prompt: vec![LanguageModelV4Message::user_text("hi")],
         max_tokens: Some(100),
-        thinking_level: None,
-        fast_mode: false,
-        tools: None,
-        context_management: None,
-        query_source: None,
-        agent_id: None,
-        time_since_last_assistant_ms: None,
+        ..Default::default()
     };
     let result = client.query(&params).await.expect("query should succeed");
 
@@ -131,13 +125,7 @@ async fn test_usage_accumulation() {
     let params = QueryParams {
         prompt: vec![LanguageModelV4Message::user_text("hi")],
         max_tokens: Some(100),
-        thinking_level: None,
-        fast_mode: false,
-        tools: None,
-        context_management: None,
-        query_source: None,
-        agent_id: None,
-        time_since_last_assistant_ms: None,
+        ..Default::default()
     };
 
     client.query(&params).await.expect("query 1");
@@ -161,13 +149,7 @@ async fn test_error_model_fails() {
     let params = QueryParams {
         prompt: vec![LanguageModelV4Message::user_text("hi")],
         max_tokens: Some(100),
-        thinking_level: None,
-        fast_mode: false,
-        tools: None,
-        context_management: None,
-        query_source: None,
-        agent_id: None,
-        time_since_last_assistant_ms: None,
+        ..Default::default()
     };
     let result = client.query(&params).await;
     assert!(result.is_err());
@@ -185,13 +167,7 @@ async fn test_provider_error_includes_provider_and_model_attribution() {
     let params = QueryParams {
         prompt: vec![LanguageModelV4Message::user_text("hi")],
         max_tokens: Some(100),
-        thinking_level: None,
-        fast_mode: false,
-        tools: None,
-        context_management: None,
-        query_source: None,
-        agent_id: None,
-        time_since_last_assistant_ms: None,
+        ..Default::default()
     };
     let err = client.query(&params).await.unwrap_err();
     let message = match err {

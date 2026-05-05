@@ -19,6 +19,8 @@ use crate::model::PartialModelInfo;
 use crate::model::RoleSlots;
 use crate::model::build_model_registry;
 use crate::overrides::RuntimeOverrides;
+use crate::prompt_cache_settings::AccountConfig;
+use crate::prompt_cache_settings::PromptCacheRuntimeConfig;
 use crate::provider::PartialProviderConfig;
 use crate::provider::ProviderConfig;
 use crate::provider::builtin::builtin_providers;
@@ -67,6 +69,15 @@ pub struct RuntimeConfig {
     /// api-native gate, session-memory budgets, experimental flags). Single
     /// source of truth — `coco_compact` reads this and never touches env.
     pub compact: CompactConfig,
+    /// Provider-agnostic prompt-cache settings (1h-TTL allowlist).
+    /// Adapter (`vercel-ai-anthropic`) reads `allowlist` via
+    /// `AnthropicConfig.prompt_cache_allowlist` (set by `build_anthropic`).
+    /// See `docs/coco-rs/prompt-cache-design.md` §16a.
+    pub prompt_cache: PromptCacheRuntimeConfig,
+    /// Account / billing identity (api_key vs subscriber, in-overage
+    /// flag). Drives 1h-TTL eligibility latch + OAuth beta in the
+    /// Anthropic adapter. **Session-stable** (R3-F3).
+    pub account: AccountConfig,
     /// Coarse-grained capability gates. See
     /// `docs/coco-rs/feature-gates-and-tool-filtering.md`.
     pub features: Features,
@@ -244,6 +255,8 @@ pub fn build_runtime_config_with(
         web_search: WebSearchConfig::resolve(merged),
         paths: PathConfig::resolve(merged),
         compact: CompactConfig::resolve(merged, &env),
+        prompt_cache: PromptCacheRuntimeConfig::resolve(merged, &env),
+        account: AccountConfig::resolve(merged, &env),
         features,
         tool_overrides,
         settings,

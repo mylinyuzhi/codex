@@ -20,11 +20,16 @@
 //!   (rebuilt every turn in `build_call_options`); changing it does
 //!   not invalidate the cached client.
 
+use std::collections::BTreeMap;
+
+use coco_config::AccountConfig;
+use coco_config::PromptCacheRuntimeConfig;
 use coco_config::ProviderClientOptions;
 use coco_config::ProviderConfig;
 use coco_types::ProviderApi;
 use coco_types::SubagentRuntimeSnapshot;
 use coco_types::WireApi;
+use serde_json::Value;
 use sha2::Digest;
 use sha2::Sha256;
 
@@ -50,14 +55,44 @@ pub struct ProviderClientFingerprint {
     /// SHA-256 over `(env_key_name, resolved_secret_or_empty)`. Detects
     /// rotated keys without storing the secret. Non-reversible.
     pub api_key_origin_digest: [u8; 32],
+    /// SHA-256 over the prompt-cache-relevant `RuntimeConfig` sections
+    /// (`account`, `prompt_cache`) plus this provider instance's own
+    /// `provider_options` map. Mutating any of these via settings
+    /// reload invalidates the cached `ApiClient` so the next turn
+    /// picks up the new `AnthropicConfig`. Per-provider scoping
+    /// (rather than a workspace-wide knob hash) means a settings
+    /// flip on one Anthropic instance doesn't churn an unrelated
+    /// instance's client. See `docs/coco-rs/prompt-cache-design.md`
+    /// §19.3 attack γ.
+    pub runtime_state_digest: [u8; 32],
 }
 
 impl ProviderClientFingerprint {
-    /// Build a fingerprint for a (provider, model_id) pair. The
-    /// `api_model_name` is the resolved per-(provider, model)
-    /// override — fall back to the role's `model_id` when no override
-    /// is present.
+    /// Build a fingerprint for a (provider, model_id) pair without
+    /// the runtime-state digest. Equivalent to
+    /// [`Self::compute_with_runtime_state`] called with default
+    /// (empty) sections. Kept for tests and the
+    /// `with_default_fingerprint` mock-client path.
     pub fn compute(provider_cfg: &ProviderConfig, api_model_name: &str) -> Self {
+        Self::compute_with_runtime_state(
+            provider_cfg,
+            api_model_name,
+            &AccountConfig::default(),
+            &PromptCacheRuntimeConfig::default(),
+        )
+    }
+
+    /// Build a fingerprint that includes prompt-cache-relevant runtime
+    /// state. Call this from `build_api_client` so a settings reload
+    /// that flips `account.kind`, `prompt_cache.allowlist`, or any key
+    /// inside this provider's `provider_options` invalidates the cached
+    /// client at the next turn boundary.
+    pub fn compute_with_runtime_state(
+        provider_cfg: &ProviderConfig,
+        api_model_name: &str,
+        account: &AccountConfig,
+        prompt_cache: &PromptCacheRuntimeConfig,
+    ) -> Self {
         Self {
             provider: provider_cfg.name.clone(),
             api: provider_cfg.api,
@@ -70,6 +105,11 @@ impl ProviderClientFingerprint {
             client_options_digest: digest_client_options(&provider_cfg.client_options),
             timeout_secs: provider_cfg.timeout_secs,
             api_key_origin_digest: digest_api_key_origin(provider_cfg),
+            runtime_state_digest: digest_runtime_state(
+                account,
+                prompt_cache,
+                &provider_cfg.provider_options,
+            ),
         }
     }
 
@@ -137,6 +177,60 @@ fn digest_api_key_origin(cfg: &ProviderConfig) -> [u8; 32] {
         update_optional_bytes(&mut hasher, Some(secret.as_bytes()));
     } else {
         update_optional_bytes(&mut hasher, None);
+    }
+    hasher.finalize().into()
+}
+
+/// SHA-256 over the prompt-cache-relevant `RuntimeConfig` sections
+/// (`account` + `prompt_cache`) plus this provider's own
+/// `provider_options` map. Length-prefixed, tagged-per-field, identical
+/// pattern to `digest_client_options`.
+///
+/// Mutating any of these via settings reload changes the digest, so
+/// the next turn-boundary fingerprint compare in `QueryEngine` rebuilds
+/// the cached `Arc<dyn LanguageModelV4>` and the new provider config
+/// propagates without a process restart.
+///
+/// `provider_options` is the per-instance opaque knob map (see
+/// `ProviderConfig.provider_options`). Hashing it here scopes
+/// invalidation to the affected provider — a flip on one Anthropic
+/// instance won't churn an unrelated instance's client. The map is
+/// already a `BTreeMap`, so iteration order is deterministic; values
+/// are serialized via canonical JSON so structurally-equal trees
+/// produce byte-equal input.
+fn digest_runtime_state(
+    account: &AccountConfig,
+    prompt_cache: &PromptCacheRuntimeConfig,
+    provider_options: &BTreeMap<String, Value>,
+) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    // account.kind: tag 0x20, 1-byte discriminant.
+    update_u8(&mut hasher, 0x20);
+    let kind_tag: u8 = match account.kind {
+        coco_types::AccountKind::ApiKey => 0x00,
+        coco_types::AccountKind::ClaudeAiSubscriber => 0x01,
+    };
+    update_u8(&mut hasher, kind_tag);
+    // account.in_overage: tag 0x21.
+    update_u8(&mut hasher, 0x21);
+    update_bool(&mut hasher, account.in_overage);
+    // prompt_cache.allowlist: tag 0x22, count, then per-entry bytes.
+    update_u8(&mut hasher, 0x22);
+    update_u64(&mut hasher, prompt_cache.allowlist.len() as u64);
+    for pat in &prompt_cache.allowlist {
+        update_bytes(&mut hasher, pat.as_bytes());
+    }
+    // provider_options: tag 0x30, count, then per-entry (key bytes,
+    // canonical-JSON value bytes). `BTreeMap` iteration is sorted, and
+    // `serde_json::to_vec` on a `Value` is deterministic (object keys
+    // are emitted in insertion order, but we only ever store
+    // `BTreeMap`-derived values here so the order matches).
+    update_u8(&mut hasher, 0x30);
+    update_u64(&mut hasher, provider_options.len() as u64);
+    for (k, v) in provider_options {
+        update_bytes(&mut hasher, k.as_bytes());
+        let bytes = serde_json::to_vec(v).unwrap_or_default();
+        update_bytes(&mut hasher, &bytes);
     }
     hasher.finalize().into()
 }
