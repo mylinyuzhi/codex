@@ -294,30 +294,11 @@ fn seed_builtin_models() -> BTreeMap<String, PartialModelInfo> {
         .with_excluded(ToolId::Builtin(ToolName::Edit));
 
     m.insert(
-        "gpt-5".into(),
-        PartialModelInfo {
-            display_name: Some("GPT-5".into()),
-            context_window: Some(PositiveTokens::new(272_000)),
-            max_output_tokens: Some(PositiveTokens::new(16_384)),
-            capabilities: Some(vec![
-                Capability::TextGeneration,
-                Capability::Streaming,
-                Capability::ToolCalling,
-                Capability::StructuredOutput,
-                Capability::ReasoningSummaries,
-            ]),
-            apply_patch_tool_type: Some(ApplyPatchToolType::Shell),
-            tool_overrides: Some(gpt5_overrides.clone()),
-            ..Default::default()
-        },
-    );
-
-    m.insert(
         "gpt-5-2".into(),
         PartialModelInfo {
             display_name: Some("GPT-5.2".into()),
             context_window: Some(PositiveTokens::new(272_000)),
-            max_output_tokens: Some(PositiveTokens::new(16_384)),
+            max_output_tokens: Some(PositiveTokens::new(12_288)),
             capabilities: Some(vec![
                 Capability::TextGeneration,
                 Capability::Streaming,
@@ -337,7 +318,7 @@ fn seed_builtin_models() -> BTreeMap<String, PartialModelInfo> {
             display_name: Some("GPT-5.4".into()),
             base_instructions: builtin_base_instructions("gpt-5-4").map(str::to_string),
             context_window: Some(PositiveTokens::new(272_000)),
-            max_output_tokens: Some(PositiveTokens::new(32_768)),
+            max_output_tokens: Some(PositiveTokens::new(12_288)),
             capabilities: Some(vec![
                 Capability::TextGeneration,
                 Capability::Streaming,
@@ -346,7 +327,7 @@ fn seed_builtin_models() -> BTreeMap<String, PartialModelInfo> {
                 Capability::ReasoningSummaries,
                 Capability::ParallelToolCalls,
             ]),
-            apply_patch_tool_type: Some(ApplyPatchToolType::Shell),
+            apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
             tool_overrides: Some(gpt5_overrides.clone()),
             ..Default::default()
         },
@@ -358,7 +339,7 @@ fn seed_builtin_models() -> BTreeMap<String, PartialModelInfo> {
             display_name: Some("GPT-5.5".into()),
             base_instructions: builtin_base_instructions("gpt-5-5").map(str::to_string),
             context_window: Some(PositiveTokens::new(272_000)),
-            max_output_tokens: Some(PositiveTokens::new(64_000)),
+            max_output_tokens: Some(PositiveTokens::new(12_288)),
             capabilities: Some(vec![
                 Capability::TextGeneration,
                 Capability::Streaming,
@@ -368,7 +349,7 @@ fn seed_builtin_models() -> BTreeMap<String, PartialModelInfo> {
                 Capability::ReasoningSummaries,
                 Capability::ParallelToolCalls,
             ]),
-            apply_patch_tool_type: Some(ApplyPatchToolType::Shell),
+            apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
             tool_overrides: Some(gpt5_overrides.clone()),
             ..Default::default()
         },
@@ -380,7 +361,7 @@ fn seed_builtin_models() -> BTreeMap<String, PartialModelInfo> {
             display_name: Some("GPT-5.3 Codex".into()),
             base_instructions: builtin_base_instructions("gpt-5-3-codex").map(str::to_string),
             context_window: Some(PositiveTokens::new(272_000)),
-            max_output_tokens: Some(PositiveTokens::new(32_768)),
+            max_output_tokens: Some(PositiveTokens::new(12_288)),
             capabilities: Some(vec![
                 Capability::TextGeneration,
                 Capability::Streaming,
@@ -401,7 +382,7 @@ fn seed_builtin_models() -> BTreeMap<String, PartialModelInfo> {
             display_name: Some("Gemini 2.5 Pro".into()),
             base_instructions: builtin_base_instructions("gemini-2.5-pro").map(str::to_string),
             context_window: Some(PositiveTokens::new(1_000_000)),
-            max_output_tokens: Some(PositiveTokens::new(8_192)),
+            max_output_tokens: Some(PositiveTokens::new(12_288)),
             capabilities: Some(vec![
                 Capability::TextGeneration,
                 Capability::Streaming,
@@ -419,12 +400,44 @@ fn seed_builtin_models() -> BTreeMap<String, PartialModelInfo> {
             display_name: Some("Gemini 2.5 Flash".into()),
             base_instructions: builtin_base_instructions("gemini-2.5-flash").map(str::to_string),
             context_window: Some(PositiveTokens::new(1_000_000)),
-            max_output_tokens: Some(PositiveTokens::new(8_192)),
+            max_output_tokens: Some(PositiveTokens::new(12_288)),
             capabilities: Some(vec![
                 Capability::TextGeneration,
                 Capability::Streaming,
                 Capability::ToolCalling,
                 Capability::Vision,
+            ]),
+            ..Default::default()
+        },
+    );
+
+    m.insert(
+        "deepseek-v4-flash".into(),
+        PartialModelInfo {
+            display_name: Some("DeepSeek V4 Flash".into()),
+            base_instructions: builtin_base_instructions("deepseek-v4-flash").map(str::to_string),
+            context_window: Some(PositiveTokens::new(1_000_000)),
+            max_output_tokens: Some(PositiveTokens::new(12_288)),
+            capabilities: Some(vec![
+                Capability::TextGeneration,
+                Capability::Streaming,
+                Capability::ToolCalling,
+            ]),
+            ..Default::default()
+        },
+    );
+
+    m.insert(
+        "deepseek-v4-pro".into(),
+        PartialModelInfo {
+            display_name: Some("DeepSeek V4 Pro".into()),
+            base_instructions: builtin_base_instructions("deepseek-v4-pro").map(str::to_string),
+            context_window: Some(PositiveTokens::new(1_000_000)),
+            max_output_tokens: Some(PositiveTokens::new(12_288)),
+            capabilities: Some(vec![
+                Capability::TextGeneration,
+                Capability::Streaming,
+                Capability::ToolCalling,
             ]),
             ..Default::default()
         },
