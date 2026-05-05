@@ -7,6 +7,7 @@ pub(crate) const GPT_5_4: &str = include_str!("../../instructions/gpt5_4_prompt.
 pub(crate) const GPT_5_5: &str = include_str!("../../instructions/gpt5_5_prompt.md");
 pub(crate) const GPT_5_3_CODEX: &str = include_str!("../../instructions/gpt5_3_codex_prompt.md");
 pub(crate) const GEMINI: &str = include_str!("../../instructions/gemini_prompt.md");
+pub(crate) const DEFAULT: &str = include_str!("../../instructions/default_prompt.md");
 
 pub(crate) fn builtin_base_instructions(model_id: &str) -> Option<&'static str> {
     match model_id {
@@ -14,6 +15,7 @@ pub(crate) fn builtin_base_instructions(model_id: &str) -> Option<&'static str> 
         "gpt-5-5" => Some(GPT_5_5),
         "gpt-5-3-codex" => Some(GPT_5_3_CODEX),
         "gemini-2.5-pro" | "gemini-2.5-flash" => Some(GEMINI),
+        "deepseek-v4-flash" | "deepseek-v4-pro" => Some(DEFAULT),
         _ => None,
     }
 }

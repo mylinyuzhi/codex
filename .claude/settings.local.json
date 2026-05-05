@@ -79,11 +79,12 @@
       "Bash(python3 *)",
       "Read(//tmp/**)",
       "Bash(unset SCCACHE_DIR)",
-      "Bash(perl *)"
+      "Bash(perl *)",
+      "Bash(mkdir -p /Users/linyuzhi/codespace/myagent/codex/.claude/skills/karpathy-guidelines)",
+      "Bash(mv /Users/linyuzhi/codespace/myagent/codex/.claude/skills/karpathy-guidelines.md /Users/linyuzhi/codespace/myagent/codex/.claude/skills/karpathy-guidelines/SKILL.md)"
     ],
     "deny": [],
     "ask": [],
-    "defaultMode": "bypassPermissions",
     "additionalDirectories": []
   },
   "hooks": {
