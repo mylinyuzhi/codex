@@ -73,7 +73,7 @@ fn test_runtime_config_resolves_provider_overrides() {
         "local-model".to_string(),
         PartialProviderModelOverride {
             api_model_name: None,
-            info: PartialModelInfo {
+            overrides: PartialModelInfo {
                 context_window: Some(PositiveTokens::new(128_000)),
                 max_output_tokens: Some(PositiveTokens::new(4_096)),
                 ..Default::default()
@@ -197,7 +197,7 @@ fn test_runtime_config_env_model_override_beats_json() {
         model: Some("anthropic/json-model".to_string()),
         ..Default::default()
     });
-    let env = EnvSnapshot::from_pairs([(EnvKey::CocoModel, "openai/gpt-5")]);
+    let env = EnvSnapshot::from_pairs([(EnvKey::CocoModel, "openai/gpt-5-5")]);
 
     let runtime =
         build_isolated(settings, env, RuntimeOverrides::default()).expect("runtime config");
@@ -208,14 +208,14 @@ fn test_runtime_config_env_model_override_beats_json() {
         .expect("main model role");
     assert_eq!(main.provider, "openai");
     assert_eq!(main.api, ProviderApi::Openai);
-    assert_eq!(main.model_id, "gpt-5");
+    assert_eq!(main.model_id, "gpt-5-5");
 }
 
 #[test]
 fn test_runtime_config_resolves_structured_model_roles() {
     let settings = settings_with(Settings {
         models: crate::ModelSelectionSettings {
-            main: Some(role_slots_of("openai", "gpt-5")),
+            main: Some(role_slots_of("openai", "gpt-5-5")),
             fast: Some(role_slots_of("google", "gemini-2.5-pro")),
             ..Default::default()
         },
@@ -237,7 +237,7 @@ fn test_runtime_config_resolves_structured_model_roles() {
         .model_roles
         .get(ModelRole::Fast)
         .expect("fast model role");
-    assert_eq!(main, &model_spec("openai", ProviderApi::Openai, "gpt-5"));
+    assert_eq!(main, &model_spec("openai", ProviderApi::Openai, "gpt-5-5"));
     assert_eq!(
         fast,
         &model_spec("google", ProviderApi::Gemini, "gemini-2.5-pro")
@@ -247,7 +247,7 @@ fn test_runtime_config_resolves_structured_model_roles() {
 #[test]
 fn test_runtime_config_rejects_bare_env_model_override() {
     let settings = settings_with(Settings::default());
-    let env = EnvSnapshot::from_pairs([(EnvKey::CocoModel, "gpt-5")]);
+    let env = EnvSnapshot::from_pairs([(EnvKey::CocoModel, "gpt-5-5")]);
 
     let err = build_isolated(settings, env, RuntimeOverrides::default())
         .expect_err("bare model override should fail");
@@ -275,7 +275,7 @@ fn test_cli_fallback_model_overrides_populate_main_chain_in_order() {
             },
             ModelSelection {
                 provider: "openai".into(),
-                model_id: "gpt-5".into(),
+                model_id: "gpt-5-5".into(),
             },
         ],
         ..Default::default()
@@ -286,7 +286,7 @@ fn test_cli_fallback_model_overrides_populate_main_chain_in_order() {
     assert_eq!(fallbacks[0].provider, "anthropic");
     assert_eq!(fallbacks[0].model_id, "claude-opus-4-7");
     assert_eq!(fallbacks[1].provider, "openai");
-    assert_eq!(fallbacks[1].model_id, "gpt-5");
+    assert_eq!(fallbacks[1].model_id, "gpt-5-5");
 }
 
 #[test]
@@ -319,7 +319,7 @@ fn test_cli_fallback_model_rejects_duplicate_within_chain() {
     // Use an explicit primary so the auto-default doesn't collide
     // with one of the duplicated fallbacks.
     let settings = settings_with(Settings {
-        model: Some("openai/gpt-5".into()),
+        model: Some("openai/gpt-5-5".into()),
         ..Default::default()
     });
     let env = EnvSnapshot::default();
@@ -517,7 +517,7 @@ fn test_cli_fallback_overrides_take_precedence_over_settings_fallbacks() {
     let overrides = RuntimeOverrides {
         fallback_model_overrides: vec![ModelSelection {
             provider: "openai".into(),
-            model_id: "gpt-5".into(),
+            model_id: "gpt-5-5".into(),
         }],
         ..Default::default()
     };
@@ -526,7 +526,7 @@ fn test_cli_fallback_overrides_take_precedence_over_settings_fallbacks() {
     let fallbacks = runtime.model_roles.fallbacks(ModelRole::Main);
     assert_eq!(fallbacks.len(), 1, "CLI replaces settings chain entirely");
     assert_eq!(fallbacks[0].provider, "openai");
-    assert_eq!(fallbacks[0].model_id, "gpt-5");
+    assert_eq!(fallbacks[0].model_id, "gpt-5-5");
 }
 
 #[test]
