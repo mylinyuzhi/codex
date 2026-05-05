@@ -1,5 +1,5 @@
 use crate::build_call_options::PerCallOverrides;
-use crate::build_call_options::build_call_options;
+use crate::build_call_options::build_call_options_with_extra;
 use crate::cache_detection::CacheBreakDetector;
 use crate::cache_detection::CacheState;
 use crate::cache_detection::PromptStateInput;
@@ -13,10 +13,12 @@ use crate::prompt_layout::put_layout_options;
 use crate::retry::RetryConfig;
 use crate::usage::UsageAccumulator;
 use coco_config::ModelInfo;
+use coco_types::PromptCacheConfig;
 use coco_types::ThinkingLevel;
 use coco_types::TokenUsage;
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -30,7 +32,7 @@ use vercel_ai_provider::LanguageModelV4Prompt;
 use vercel_ai_provider::UserContentPart;
 
 /// Parameters for a single query.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct QueryParams {
     /// Messages to send (as LlmPrompt).
     pub prompt: LanguageModelV4Prompt,
@@ -77,6 +79,24 @@ pub struct QueryParams {
     /// attribution.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time_since_last_assistant_ms: Option<i64>,
+    /// Per-call prompt-cache directive. Forwarded by `services/inference`
+    /// as opaque pass-through to `provider_options[<namespace>]` via
+    /// [`crate::cache_convert::to_extra_body`]; non-Anthropic providers
+    /// see no caching keys. Adapter (`vercel-ai-anthropic`) owns all
+    /// policy interpretation.
+    ///
+    /// **Session-stable** account / overage state is NOT carried here —
+    /// it lives on the provider's `AnthropicConfig`, set by
+    /// `build_anthropic` from `RuntimeConfig.account.*`. See
+    /// `docs/coco-rs/prompt-cache-design.md` §9.5 / R3-F3.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache: Option<PromptCacheConfig>,
+    /// Per-call agentic-loop flag. Helper calls (compaction, title
+    /// generation, classification) pass `false`; main agent loop
+    /// passes `true`. Gates the `claude-code-20250219` baseline beta in
+    /// the Anthropic adapter.
+    #[serde(default)]
+    pub agentic: bool,
 }
 
 /// Result of a query.
@@ -226,6 +246,7 @@ impl ApiClient {
             client_options_digest: [0u8; 32],
             timeout_secs: 0,
             api_key_origin_digest: [0u8; 32],
+            runtime_state_digest: [0u8; 32],
         };
         Self::new(model, fingerprint, /*model_info*/ None, retry)
     }
@@ -277,19 +298,23 @@ impl ApiClient {
 
     /// Execute a query with retry logic.
     ///
-    /// **Layer-2 caveat.** This path constructs
-    /// `LanguageModelV4CallOptions` directly from `params` — it does
-    /// **not** route through [`crate::build_call_options`], so
-    /// `ModelInfo.extra_body` and per-call thinking translation are
-    /// not applied. Callers that need Layer-2 namespace wrapping
-    /// (`provider_options[<provider_name>]`) should construct
-    /// `LanguageModelV4CallOptions` themselves via
-    /// `build_call_options(...)` and call the underlying
-    /// `LanguageModelV4` directly. `ApiClient::query` is the
-    /// retry/usage-accumulating shim for already-built call options.
+    /// **Layer-2 plumbing.** Call options are built **once** before the
+    /// retry loop and reused across attempts. The detector hash and the
+    /// retry body cannot drift because they share the same merged
+    /// extra-body map.
+    ///
+    /// Mock paths that bypass `build_options_with_extra` (legacy
+    /// constructor, `with_default_fingerprint`) skip the merged-extra
+    /// snapshot and feed an empty `BTreeMap` to the detector — this
+    /// preserves existing detection behavior on the mock path.
     pub async fn query(&self, params: &QueryParams) -> Result<QueryResult, InferenceError> {
         let start = std::time::Instant::now();
         let mut attempt = 0;
+
+        // Build call options exactly once. Same options reused across
+        // retries and used as the input fed to detector hashing — no
+        // drift possible (design §9.7.3 / Finding 5 fix).
+        let (call_options, merged_extra) = self.build_options_with_extra(params);
 
         // Phase 1: snapshot prompt state for cache-break detection.
         // Skip the (non-trivial) hashing work when no detector is installed.
@@ -298,10 +323,7 @@ impl ApiClient {
         {
             // Mirror the layout adapter that runs in `build_options`
             // so the detector reads the same hashes the wire body was
-            // built from. `build_options` is called in `do_query`
-            // below; recomputing here keeps the snapshot phase pure
-            // and avoids passing the call options through the retry
-            // loop just to pluck out the layout namespace.
+            // built from.
             let layout = if self.model_info.is_some() {
                 Some(crate::prompt_layout::build_prompt_layout_from_prompt(
                     &params.prompt,
@@ -312,12 +334,13 @@ impl ApiClient {
                 None
             };
             let layout_hashes = layout.as_ref().and_then(|l| l.prompt_hash_inputs.as_ref());
-            let input = build_prompt_state_input(self, params, query_source, layout_hashes);
+            let input =
+                build_prompt_state_input(self, params, query_source, layout_hashes, &merged_extra);
             detector.lock().await.record_prompt_state(input);
         }
 
         loop {
-            match self.do_query(params).await {
+            match self.do_query_with_options(call_options.clone()).await {
                 Ok(mut result) => {
                     result.retries = attempt;
                     result.total_duration_ms =
@@ -387,10 +410,12 @@ impl ApiClient {
         }
     }
 
-    /// Execute a single query attempt via LanguageModelV4::do_generate().
-    async fn do_query(&self, params: &QueryParams) -> Result<QueryResult, InferenceError> {
-        let options = self.build_options(params);
-
+    /// Execute a single query attempt via LanguageModelV4::do_generate()
+    /// with pre-built options.
+    async fn do_query_with_options(
+        &self,
+        options: LanguageModelV4CallOptions,
+    ) -> Result<QueryResult, InferenceError> {
         let result = self
             .model
             .do_generate(options)
@@ -504,16 +529,23 @@ impl ApiClient {
         }
     }
 
-    /// Build [`LanguageModelV4CallOptions`] for a query. When
-    /// `model_info` is set (production path) routes through
-    /// [`build_call_options`] so `extra_body` is wrapped under
-    /// `provider_options[<namespace>]`, `info.default_thinking()`
-    /// applies, and per-call `thinking_level` / `max_tokens`
-    /// overrides are honored. Without `model_info` (mock / test path)
-    /// falls back to the prompt + max_output_tokens + tools shape.
-    fn build_options(&self, params: &QueryParams) -> LanguageModelV4CallOptions {
+    /// Build [`LanguageModelV4CallOptions`] for a query, returning the
+    /// merged flat extra-body map alongside the call options. The
+    /// merged map is the canonical input for cache-break detection so
+    /// the detector hash and the actual retry body cannot drift.
+    ///
+    /// Mock / test path (`model_info == None`) returns
+    /// `(direct_construction, BTreeMap::new())` — the empty map
+    /// preserves existing behavior for callers that bypass Layer-2.
+    fn build_options_with_extra(
+        &self,
+        params: &QueryParams,
+    ) -> (
+        LanguageModelV4CallOptions,
+        BTreeMap<String, serde_json::Value>,
+    ) {
         let Some(info) = self.model_info.as_ref() else {
-            // Legacy mock path — direct construction.
+            // Legacy mock path — direct construction; empty merged map.
             let mut options = LanguageModelV4CallOptions {
                 prompt: params.prompt.clone(),
                 max_output_tokens: max_tokens_to_u64(params.max_tokens),
@@ -522,7 +554,7 @@ impl ApiClient {
             if let Some(ref tools) = params.tools {
                 options.tools = Some(tools.clone());
             }
-            return options;
+            return (options, BTreeMap::new());
         };
 
         let max_output_tokens = params.max_tokens.and_then(|v| {
@@ -544,9 +576,12 @@ impl ApiClient {
             thinking_level: params.thinking_level.clone(),
             max_output_tokens,
             context_management: params.context_management.clone(),
+            cache_strategy: params.cache.clone(),
+            agentic_query: params.agentic,
+            query_source: params.query_source.clone(),
             ..Default::default()
         };
-        let mut call = build_call_options(
+        let (mut call, merged_extra) = build_call_options_with_extra(
             info,
             self.fingerprint.api,
             &self.fingerprint.provider,
@@ -569,7 +604,14 @@ impl ApiClient {
         put_layout_options(&mut po, &layout);
         call.provider_options = Some(po);
 
-        call
+        (call, merged_extra)
+    }
+
+    /// Convenience shim around [`Self::build_options_with_extra`] that
+    /// drops the merged-extra snapshot. Used by `query_stream` paths
+    /// where no detector hash is needed.
+    fn build_options(&self, params: &QueryParams) -> LanguageModelV4CallOptions {
+        self.build_options_with_extra(params).0
     }
 }
 
@@ -602,15 +644,16 @@ fn cache_break_reason_bucket(reason: &str) -> &'static str {
     }
 }
 
-/// Build a [`PromptStateInput`] from `(client, params, query_source)` for
-/// the cache-break detector's phase 1.
+/// Build a [`PromptStateInput`] from `(client, params, query_source,
+/// merged_extra)` for the cache-break detector's phase 1.
 ///
-/// Provider-agnostic by design: collapses anything provider-specific into
-/// a single `extra_body_hash` over `params.context_management` so adding
-/// new providers requires no detector code changes. Anthropic-specific
-/// fields (`betas`, `is_using_overage`, `cached_mc_enabled`) stay at
-/// defaults until a future provider shim populates them via
-/// [`QueryParams`] extensions.
+/// Provider-agnostic by design: hashes the **post-merge, pre-namespace-wrap**
+/// flat extra map so any new key (cache_strategy, requestedBetas,
+/// agenticQuery, querySource, …) is automatically tracked without
+/// per-feature plumbing. Anthropic-specific fields (`betas`,
+/// `is_using_overage`, `cached_mc_enabled`) stay at defaults — those
+/// session-stable bits are caught by [`ProviderClientFingerprint`]
+/// changes, not by the per-call detector hash (design §12.2).
 ///
 /// **Layout integration.** When the call options already carry a
 /// `provider_options["prompt_layout"].prompt_hash_inputs` payload (set by
@@ -624,6 +667,7 @@ fn build_prompt_state_input(
     params: &QueryParams,
     query_source: &str,
     layout_hashes: Option<&crate::prompt_layout::PromptHashInputs>,
+    merged_extra: &BTreeMap<String, serde_json::Value>,
 ) -> PromptStateInput {
     let (system_hash, tool_names, per_tool_hashes, tools_hash, system_char_count) =
         if let Some(hashes) = layout_hashes {
@@ -653,15 +697,17 @@ fn build_prompt_state_input(
             )
         };
 
-    let extra_body_hash = params
-        .context_management
-        .as_ref()
-        .map(canonical_extra_body_hash)
-        .unwrap_or(0);
-    let extra_body_serialized = params
-        .context_management
-        .as_ref()
-        .map(canonical_extra_body_serialize);
+    // Hash the full merged extra-body map (pre-namespace-wrap). Empty
+    // map → hash 0 / serialized None, preserving mock-path behavior.
+    let (extra_body_hash, extra_body_serialized) = if merged_extra.is_empty() {
+        (0, None)
+    } else {
+        let v = serde_json::to_value(merged_extra).unwrap_or(serde_json::Value::Null);
+        (
+            canonical_extra_body_hash(&v),
+            Some(canonical_extra_body_serialize(&v)),
+        )
+    };
 
     let effort_value = params
         .thinking_level

@@ -41,10 +41,7 @@ pub mod names {
     pub const VIM: &str = "vim";
     pub const OUTPUT_STYLE: &str = "output-style";
     pub const KEYBINDINGS: &str = "keybindings";
-    pub const FAST: &str = "fast";
     pub const SANDBOX: &str = "sandbox";
-    pub const PRIVACY_SETTINGS: &str = "privacy-settings";
-    pub const RATE_LIMIT_OPTIONS: &str = "rate-limit-options";
 
     // Session
     pub const SESSION: &str = "session";
@@ -61,7 +58,6 @@ pub mod names {
     // Development
     pub const DIFF: &str = "diff";
     pub const COMMIT: &str = "commit";
-    pub const PR: &str = "pr";
     pub const REVIEW: &str = "review";
     pub const INIT: &str = "init";
 
@@ -78,58 +74,48 @@ pub mod names {
     pub const DOCTOR: &str = "doctor";
     pub const LOGIN: &str = "login";
     pub const LOGOUT: &str = "logout";
-    pub const FEEDBACK: &str = "feedback";
     pub const UPGRADE: &str = "upgrade";
     pub const USAGE: &str = "usage";
 
     // Social / Misc
     pub const BTW: &str = "btw";
-    pub const STICKERS: &str = "stickers";
     pub const MEMORY: &str = "memory";
     pub const PLAN: &str = "plan";
     pub const ADD_DIR: &str = "add-dir";
-    pub const DESKTOP: &str = "desktop";
-    pub const MOBILE: &str = "mobile";
     pub const IDE: &str = "ide";
     pub const TAG: &str = "tag";
     pub const SUMMARY: &str = "summary";
-    pub const RELEASE_NOTES: &str = "release-notes";
-    pub const ONBOARDING: &str = "onboarding";
-    pub const CHROME: &str = "chrome";
     pub const PR_COMMENTS: &str = "pr-comments";
-    pub const SHARE: &str = "share";
     pub const PASSES: &str = "passes";
-    pub const EXTRA_USAGE: &str = "extra-usage";
-    pub const TELEPORT: &str = "teleport";
-    pub const INSTALL_GITHUB_APP: &str = "install-github-app";
-    pub const INSTALL_SLACK_APP: &str = "install-slack-app";
 
-    // ── TS-parity: missing commands ──
+    // ── TS-parity: additional commands ──
     pub const STATUSLINE: &str = "statusline";
     pub const RELOAD_PLUGINS: &str = "reload-plugins";
-    pub const TERMINAL_SETUP: &str = "terminal-setup";
-    pub const THINKBACK: &str = "thinkback";
-    pub const THINKBACK_PLAY: &str = "thinkback-play";
     pub const SECURITY_REVIEW: &str = "security-review";
-    pub const ULTRAREVIEW: &str = "ultrareview";
     pub const INSIGHTS: &str = "insights";
-    pub const REMOTE_ENV: &str = "remote-env";
-    pub const HEAP_DUMP: &str = "heap-dump";
-    pub const ADVISOR: &str = "advisor";
-    pub const CONTEXT_NON_INTERACTIVE: &str = "context-non-interactive";
-    pub const EXTRA_USAGE_NON_INTERACTIVE: &str = "extra-usage-non-interactive";
+    // /advisor, /ultrareview and /context-non-interactive are intentionally
+    // not ported. /advisor is an Anthropic API server-side beta tool
+    // (`advisor-tool-2026-03-01`) gated to first-party Claude — outside
+    // coco-rs's multi-provider scope. /ultrareview is a Claude-Code-on-Web
+    // entry point with no local execution path; /context-non-interactive
+    // is a hidden TS command surfaced only when `getIsNonInteractiveSession()`
+    // is true, and the coco-rs TUI is always interactive.
 
-    // ── PR-G4 batch 1: dev tooling + AI features + integrations ──
-    pub const BRIEF: &str = "brief";
+    // ── PR-G4 batch 1: dev tooling + integrations ──
+    // /brief, /voice, /issue, /autofix-pr, /bughunter are intentionally
+    // not ported. They are first-party-only or hidden in TS:
+    //   - /brief: KAIROS-only (`feature('KAIROS_BRIEF')` + GrowthBook
+    //     gate `tengu_kairos_brief_config.enable_slash_command`); depends
+    //     on the Anthropic-internal BriefTool that coco-rs doesn't ship.
+    //   - /voice: `availability: ['claude-ai']` + GrowthBook gate
+    //     `isVoiceGrowthBookEnabled`; needs voiceStreamSTT (Anthropic),
+    //     SoX, microphone permission probes.
+    //   - /issue, /autofix-pr, /bughunter: TS source files literally
+    //     `export default { isEnabled: () => false, isHidden: true,
+    //     name: 'stub' }` — never reachable to users.
     pub const ENV: &str = "env";
-    pub const BUG_REPORT: &str = "bug-report";
     pub const DEBUG_TOOL_CALL: &str = "debug-tool-call";
     pub const ANT_TRACE: &str = "ant-trace";
-    pub const VOICE: &str = "voice";
-    pub const ISSUE: &str = "issue";
-    pub const PERF_ISSUE: &str = "perf-issue";
-    pub const AUTOFIX_PR: &str = "autofix-pr";
-    pub const BUGHUNTER: &str = "bughunter";
 }
 
 /// (name, description, aliases, handler, is_overlay, safety, argument_hint)
@@ -179,15 +165,6 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
             Some("[open|<description>]"),
         ),
         (
-            names::SKILLS,
-            "List available skills",
-            &[],
-            skills_handler,
-            true,
-            LocalOnly,
-            None,
-        ),
-        (
             names::BRANCH,
             "Branch the current conversation",
             &["fork"],
@@ -219,15 +196,6 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
             "Configure output style",
             &[],
             output_style_handler,
-            true,
-            LocalOnly,
-            None,
-        ),
-        (
-            names::PRIVACY_SETTINGS,
-            "Configure privacy settings",
-            &[],
-            privacy_settings_handler,
             true,
             LocalOnly,
             None,
@@ -269,51 +237,6 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
             None,
         ),
         (
-            names::ONBOARDING,
-            "Start the onboarding walkthrough",
-            &[],
-            onboarding_handler,
-            true,
-            LocalOnly,
-            None,
-        ),
-        (
-            names::DESKTOP,
-            "Open or configure Claude Code desktop app",
-            &[],
-            desktop_handler,
-            true,
-            LocalOnly,
-            None,
-        ),
-        (
-            names::MOBILE,
-            "Information about Claude Code mobile app",
-            &[],
-            mobile_handler,
-            true,
-            AlwaysSafe,
-            None,
-        ),
-        (
-            names::CHROME,
-            "Manage Claude in Chrome integration",
-            &[],
-            chrome_handler,
-            true,
-            LocalOnly,
-            None,
-        ),
-        (
-            names::INSTALL_GITHUB_APP,
-            "Install the Claude Code GitHub App",
-            &[],
-            install_github_handler,
-            true,
-            LocalOnly,
-            None,
-        ),
-        (
             names::EXPORT,
             "Export conversation to a file or clipboard",
             &[],
@@ -321,33 +244,6 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
             true,
             LocalOnly,
             Some("[filename]"),
-        ),
-        (
-            names::RATE_LIMIT_OPTIONS,
-            "View rate limit configuration",
-            &[],
-            rate_limit_handler,
-            true,
-            LocalOnly,
-            None,
-        ),
-        (
-            names::TERMINAL_SETUP,
-            "Configure terminal settings",
-            &[],
-            terminal_setup_handler,
-            true,
-            LocalOnly,
-            None,
-        ),
-        (
-            names::REMOTE_ENV,
-            "Configure remote environment",
-            &[],
-            remote_env_handler,
-            true,
-            LocalOnly,
-            None,
         ),
         (
             names::EXIT,
@@ -372,15 +268,6 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
             "Check for updates",
             &[],
             upgrade_handler,
-            true,
-            LocalOnly,
-            None,
-        ),
-        (
-            names::FAST,
-            "Toggle fast mode (use smaller model)",
-            &[],
-            fast_handler,
             true,
             LocalOnly,
             None,
@@ -430,15 +317,8 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
             AlwaysSafe,
             Some("<question>"),
         ),
-        (
-            names::STATUSLINE,
-            "Toggle status line display",
-            &[],
-            statusline_handler,
-            true,
-            AlwaysSafe,
-            None,
-        ),
+        // /statusline registered as a Prompt below (mirrors TS:
+        // commands/statusline.tsx — invokes statusline-setup subagent).
         (
             names::RELOAD_PLUGINS,
             "Reload plugin definitions",
@@ -466,33 +346,6 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
             AlwaysSafe,
             Some("<name>"),
         ),
-        (
-            names::FEEDBACK,
-            "Submit feedback about Claude Code",
-            &["bug"],
-            feedback_handler,
-            true,
-            AlwaysSafe,
-            Some("[message]"),
-        ),
-        (
-            names::EXTRA_USAGE,
-            "Manage extra usage / overage settings",
-            &["passes"],
-            extra_usage_handler,
-            true,
-            LocalOnly,
-            None,
-        ),
-        (
-            names::THINKBACK,
-            "Review thinking history from the session",
-            &[],
-            thinkback_handler,
-            true,
-            LocalOnly,
-            None,
-        ),
         // ── Local (TS local) ──
         (
             names::VERSION,
@@ -503,90 +356,11 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
             LocalOnly,
             None,
         ),
-        (
-            names::COMMIT,
-            "Create a git commit with staged changes",
-            &[],
-            commit_handler,
-            false,
-            LocalOnly,
-            Some("[message]"),
-        ),
-        (
-            names::PR,
-            "Create a pull request from current branch",
-            &["pr-create"],
-            pr_extended_handler,
-            false,
-            LocalOnly,
-            Some("[title]"),
-        ),
-        // `/summary` is registered as an async handler below — the
-        // TS-aligned behavior is "force a 9-section session-memory
-        // update", which is async by nature. Sync placeholder removed.
-        (
-            names::SHARE,
-            "Share conversation transcript",
-            &[],
-            share_handler,
-            false,
-            LocalOnly,
-            None,
-        ),
-        (
-            names::RELEASE_NOTES,
-            "Show recent release notes and changes",
-            &[],
-            release_notes_handler,
-            false,
-            BridgeSafe,
-            None,
-        ),
-        (
-            names::TELEPORT,
-            "Resume a remote session locally",
-            &[],
-            teleport_handler,
-            false,
-            LocalOnly,
-            Some("<session-url>"),
-        ),
-        (
-            names::HEAP_DUMP,
-            "Generate memory profile snapshot",
-            &[],
-            heap_dump_handler,
-            false,
-            LocalOnly,
-            None,
-        ),
-        (
-            names::VIM,
-            "Toggle between Vim and Normal editing modes",
-            &[],
-            vim_handler,
-            false,
-            AlwaysSafe,
-            None,
-        ),
-        (
-            names::KEYBINDINGS,
-            "Open keybindings configuration",
-            &[],
-            keybindings_handler,
-            false,
-            AlwaysSafe,
-            None,
-        ),
-        (
-            names::STICKERS,
-            "Order stickers",
-            &[],
-            stickers_handler,
-            false,
-            AlwaysSafe,
-            None,
-        ),
+        // /commit and /statusline registered later as Prompt commands.
+        // /vim registered as async (handlers::vim::handler) below to persist
+        // editor mode to ~/.coco/state/editor_mode.
+        // /keybindings registered as async (handlers::keybindings::handler)
+        // below — writes a template if the file is missing then opens $EDITOR.
         (
             names::REWIND,
             "Restore the code and/or conversation to a previous point",
@@ -596,34 +370,7 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
             LocalOnly,
             None,
         ),
-        (
-            names::INSTALL_SLACK_APP,
-            "Install the Claude Code Slack App",
-            &[],
-            install_slack_handler,
-            false,
-            LocalOnly,
-            None,
-        ),
-        (
-            names::THINKBACK_PLAY,
-            "Replay thinking history step by step",
-            &[],
-            thinkback_play_handler,
-            false,
-            LocalOnly,
-            None,
-        ),
         // ── PR-G4 batch 1 ──
-        (
-            names::BRIEF,
-            "Summarize the current session so far",
-            &[],
-            brief_handler,
-            false,
-            AlwaysSafe,
-            None,
-        ),
         (
             names::ENV,
             "Show runtime environment (cwd, model, shell, version)",
@@ -632,15 +379,6 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
             false,
             AlwaysSafe,
             None,
-        ),
-        (
-            names::BUG_REPORT,
-            "Open a bug report for coco-rs",
-            &[],
-            bug_report_handler,
-            false,
-            AlwaysSafe,
-            Some("[title]"),
         ),
         (
             names::DEBUG_TOOL_CALL,
@@ -659,51 +397,6 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
             false,
             LocalOnly,
             Some("[on|off]"),
-        ),
-        (
-            names::VOICE,
-            "Toggle voice input",
-            &[],
-            voice_handler,
-            false,
-            LocalOnly,
-            Some("[on|off]"),
-        ),
-        (
-            names::ISSUE,
-            "Open a GitHub issue for the repo",
-            &[],
-            issue_handler,
-            false,
-            AlwaysSafe,
-            Some("[title]"),
-        ),
-        (
-            names::PERF_ISSUE,
-            "Report a performance issue with a trace attached",
-            &[],
-            perf_issue_handler,
-            false,
-            LocalOnly,
-            None,
-        ),
-        (
-            names::AUTOFIX_PR,
-            "AI-powered PR autofixer (stub)",
-            &[],
-            autofix_pr_handler,
-            false,
-            LocalOnly,
-            Some("<pr-number>"),
-        ),
-        (
-            names::BUGHUNTER,
-            "AI-assisted bug search across the repo (stub)",
-            &[],
-            bughunter_handler,
-            false,
-            LocalOnly,
-            Some("[symptom]"),
         ),
     ];
 
@@ -818,6 +511,15 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
             true,
             LocalOnly,
             Some("[list|show <name>|paths|validate|reload]"),
+        ),
+        (
+            names::SKILLS,
+            "List discovered skills (bundled + user + project)",
+            &[],
+            handlers::skills::handler,
+            true,
+            LocalOnly,
+            Some("[list|show <name>|paths]"),
         ),
         (
             names::SESSION,
@@ -945,6 +647,24 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
             LocalOnly,
             None,
         ),
+        (
+            names::VIM,
+            "Toggle between Vim and Normal editing modes",
+            &[],
+            handlers::vim::handler,
+            false,
+            AlwaysSafe,
+            Some("[on|off|toggle]"),
+        ),
+        (
+            names::KEYBINDINGS,
+            "Open or create your keybindings configuration file",
+            &[],
+            handlers::keybindings::handler,
+            false,
+            LocalOnly,
+            None,
+        ),
     ];
 
     for (name, description, aliases, handler_fn, is_overlay, safety, arg_hint) in async_specs {
@@ -966,89 +686,38 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
         });
     }
 
-    // ── Prompt-type commands (TS type: 'prompt') ──
-    // Only truly model-invocable commands that have no local handler.
-    let prompt_specs: &[(&str, &str, &[&str], &str)] = &[
-        (
-            names::PR_COMMENTS,
-            "Review comments on a pull request",
-            &[],
-            "Fetching PR comments...",
-        ),
-        (
-            names::SECURITY_REVIEW,
-            "Run a security-focused code review",
-            &[],
-            "Running security review...",
-        ),
-        (
-            names::ULTRAREVIEW,
-            "Comprehensive bug-finding review",
-            &[],
-            "Running deep review...",
-        ),
-        (
-            names::INSIGHTS,
-            "Generate session analysis report",
-            &[],
-            "Generating insights...",
-        ),
-        (
-            names::ADVISOR,
-            "Get advice on the current task",
-            &[],
-            "Consulting advisor...",
-        ),
-        (
-            names::CONTEXT_NON_INTERACTIVE,
-            "Show context window usage (non-interactive)",
-            &[],
-            "Checking context...",
-        ),
-        (
-            names::EXTRA_USAGE_NON_INTERACTIVE,
-            "Check extra usage status (non-interactive)",
-            &[],
-            "Checking extra usage...",
-        ),
-    ];
-
-    for (name, description, aliases, progress_message) in prompt_specs {
-        registry.register(RegisteredCommand {
-            base: builtin_base_ext(name, description, aliases, AlwaysSafe, None),
-            command_type: CommandType::Prompt(coco_types::PromptCommandData {
-                progress_message: progress_message.to_string(),
-                content_length: 0,
-                allowed_tools: None,
-                model: None,
-                context: coco_types::CommandContext::Inline,
-                agent: None,
-                thinking_level: None,
-                hooks: None,
-            }),
-            handler: None,
-            is_enabled: None,
-        });
-    }
+    // /security-review, /insights, /pr-comments — registered with their
+    // static prompt bodies in `register_ts_parity_handlers`, not here.
+    // (Earlier this block held handler-less Prompt stubs; they were dead
+    // weight because `register_ts_parity_handlers` runs after and replaces
+    // them via `register_static_prompt`.)
 }
 
 // ── Sync handlers ──
 
+/// Fallback `/plan` handler used only by non-TUI paths (SDK runner, tests).
+///
+/// The TUI runner intercepts `/plan` in `tui_runner::dispatch_plan` so it
+/// can read the live `session_id` + plan file. This handler returns a
+/// documentation blurb summarizing the same UX, suitable when no per-
+/// session state is available.
 fn plan_handler(args: &str) -> String {
     match args.trim() {
-        "" => "Plan mode: off\n\
-               Use /plan on to enable plan mode\n\
-               Use /plan <description> to start a plan\n\n\
-               In plan mode, the assistant will propose a plan before executing.\n\
-               Plans are saved to ~/.cocode/plans/"
+        "" => "Plan mode controls (run from the TUI for full effect):\n\n\
+               • `/plan` — show the current plan file for this session\n\
+               • `/plan open` — open the plan file in $EDITOR\n\
+               • `/plan <description>` — ask the model to enter plan mode \
+               and plan for the given task\n\n\
+               In plan mode, the assistant proposes a plan before executing. \
+               Plans are saved under `~/.cocode/plans/`."
             .to_string(),
-        "on" | "enable" => {
-            "Plan mode enabled. The assistant will propose a plan before executing changes."
-                .to_string()
+        "open" => "Opening plan in $EDITOR — TUI runner handles this; from \
+                   non-TUI contexts, edit the file directly under \
+                   `~/.cocode/plans/`."
+            .to_string(),
+        description => {
+            format!("Creating plan: {description}\nUse the EnterPlanMode tool to enter plan mode.")
         }
-        "off" | "disable" => "Plan mode disabled.".to_string(),
-        "open" => "Opening current plan...".to_string(),
-        description => format!("Creating plan: {description}\nPlan mode enabled."),
     }
 }
 
@@ -1058,17 +727,6 @@ fn rewind_handler(_args: &str) -> String {
     // the picker overlay. Args are intentionally ignored here — TS
     // does the same; the picker is the only entry point.
     "Opening rewind picker.".to_string()
-}
-
-fn skills_handler(_args: &str) -> String {
-    "Available skills:\n\n\
-     Skills are loaded from:\n\
-       1. .claude/skills/ (project skills)\n\
-       2. ~/.claude/skills/ (user skills)\n\
-       3. Bundled skills (built-in)\n\
-       4. Plugin-provided skills\n\n\
-     Use /skills to list, or invoke with /<skill-name>."
-        .to_string()
 }
 
 fn branch_handler(args: &str) -> String {
@@ -1091,15 +749,6 @@ fn theme_handler(args: &str) -> String {
     }
 }
 
-fn vim_handler(args: &str) -> String {
-    match args.trim() {
-        "" | "toggle" => "Vim mode toggled. Restart the editor to apply.".to_string(),
-        "on" | "enable" => "Vim mode enabled.".to_string(),
-        "off" | "disable" => "Vim mode disabled.".to_string(),
-        other => format!("Unknown vim option: {other}. Use on/off/toggle."),
-    }
-}
-
 fn copy_handler(args: &str) -> String {
     let n = args.trim();
     if n.is_empty() {
@@ -1118,10 +767,6 @@ fn btw_handler(args: &str) -> String {
     // forked query; runners that don't recognise it fall back to
     // showing the verbatim sentinel + status text (no crash).
     handlers::btw::handler(args)
-}
-
-fn stickers_handler(_args: &str) -> String {
-    "Visit https://store.anthropic.com for Claude Code stickers!".to_string()
 }
 
 fn exit_handler(_args: &str) -> String {
@@ -1163,15 +808,6 @@ fn upgrade_handler(_args: &str) -> String {
     )
 }
 
-fn fast_handler(args: &str) -> String {
-    match args.trim() {
-        "" | "toggle" => "Fast mode toggled.".to_string(),
-        "on" | "enable" => "Fast mode enabled (using smaller, faster model).".to_string(),
-        "off" | "disable" => "Fast mode disabled (using default model).".to_string(),
-        other => format!("Unknown fast mode option: {other}. Use on/off."),
-    }
-}
-
 fn add_dir_handler(args: &str) -> String {
     let path = args.trim();
     if path.is_empty() {
@@ -1179,19 +815,6 @@ fn add_dir_handler(args: &str) -> String {
     } else {
         format!("Added working directory: {path}")
     }
-}
-
-fn keybindings_handler(_args: &str) -> String {
-    "Keybindings configuration:\n\n\
-     File: ~/.claude/keybindings.json\n\n\
-     Default bindings:\n\
-       Ctrl+C  — Interrupt / Cancel\n\
-       Ctrl+D  — Exit\n\
-       Ctrl+L  — Clear screen\n\
-       Ctrl+O  — Toggle transcript\n\
-       Enter   — Submit input\n\n\
-     Edit ~/.claude/keybindings.json to customize."
-        .to_string()
 }
 
 fn ide_handler(args: &str) -> String {
@@ -1215,15 +838,6 @@ fn output_style_handler(args: &str) -> String {
             .to_string(),
         style => format!("Output style set to: {style}"),
     }
-}
-
-fn privacy_settings_handler(_args: &str) -> String {
-    "Privacy settings:\n\n\
-     Telemetry: enabled (anonymous usage data)\n\
-     Error reporting: enabled\n\
-     Session logging: enabled\n\n\
-     Use /privacy-settings <key> <value> to modify."
-        .to_string()
 }
 
 fn color_handler(args: &str) -> String {
@@ -1287,30 +901,6 @@ fn config_extended_handler(args: &str) -> String {
     }
 }
 
-fn commit_handler(args: &str) -> String {
-    let message = args.trim();
-    if message.is_empty() {
-        "Usage: /commit [message]\n\n\
-         Creates a git commit with staged changes.\n\
-         If no message is provided, an AI-generated message will be used."
-            .to_string()
-    } else {
-        format!("Creating commit with message: {message}")
-    }
-}
-
-fn pr_extended_handler(args: &str) -> String {
-    let title = args.trim();
-    if title.is_empty() {
-        "Usage: /pr [title]\n\n\
-         Creates a pull request from the current branch.\n\
-         If no title is provided, one will be generated from commits."
-            .to_string()
-    } else {
-        format!("Creating pull request: {title}")
-    }
-}
-
 fn tasks_extended_handler(args: &str) -> String {
     match args.trim() {
         "" | "list" => "Active tasks:\n\n\
@@ -1323,118 +913,14 @@ fn tasks_extended_handler(args: &str) -> String {
     }
 }
 
-fn share_handler(_args: &str) -> String {
-    "Share options:\n\n\
-     Share a conversation transcript as a link.\n\
-     (Requires authentication with Claude AI.)"
-        .to_string()
-}
-
-fn onboarding_handler(args: &str) -> String {
-    match args.trim() {
-        "" => "Welcome to Claude Code!\n\n\
-               Start the guided walkthrough to learn key features.\n\
-               Use /onboarding start to begin."
-            .to_string(),
-        "start" => "Starting onboarding walkthrough...".to_string(),
-        "skip" => "Onboarding skipped.".to_string(),
-        other => format!("Unknown onboarding option: {other}"),
-    }
-}
-
-fn desktop_handler(_args: &str) -> String {
-    "Claude Code Desktop App:\n\n\
-     Download from: https://claude.ai/code\n\
-     Available for macOS and Windows."
-        .to_string()
-}
-
-fn mobile_handler(_args: &str) -> String {
-    "Claude Code Mobile:\n\n\
-     Monitor your agents from Claude mobile app.\n\
-     Download from your app store."
-        .to_string()
-}
-
-fn chrome_handler(args: &str) -> String {
-    match args.trim() {
-        "" => "Claude in Chrome:\n\n\
-               Use Claude Code directly in your browser.\n\
-               Install the Chrome extension from the Chrome Web Store."
-            .to_string(),
-        "install" => "Opening Chrome Web Store...".to_string(),
-        other => format!("Unknown chrome option: {other}"),
-    }
-}
-
-fn release_notes_handler(_args: &str) -> String {
-    let version = env!("CARGO_PKG_VERSION");
-    format!(
-        "Release Notes — v{version}\n\n\
-         See full changelog at:\n\
-         https://github.com/anthropics/claude-code/releases"
-    )
-}
-
-fn teleport_handler(args: &str) -> String {
-    let session = args.trim();
-    if session.is_empty() {
-        "Usage: /teleport <session-url>\n\n\
-         Resume a remote session locally."
-            .to_string()
-    } else {
-        format!("Teleporting to session: {session}")
-    }
-}
-
-fn install_github_handler(_args: &str) -> String {
-    "Claude Code GitHub App:\n\n\
-     Install the GitHub App to enable:\n\
-       - Automated code review\n\
-       - PR comments integration\n\
-       - Repository-level agent triggers\n\n\
-     Visit: https://github.com/apps/claude-code"
-        .to_string()
-}
-
-fn install_slack_handler(_args: &str) -> String {
-    "Claude Code Slack App:\n\n\
-     Install the Slack App to enable:\n\
-       - Agent notifications in Slack\n\
-       - Slash commands from Slack\n\
-       - Team collaboration features\n\n\
-     Visit your admin settings to install."
-        .to_string()
-}
-
-// ── TS-parity: missing local handler functions ──
-
-fn statusline_handler(args: &str) -> String {
-    match args.trim() {
-        "" | "toggle" => "Status line toggled.".to_string(),
-        "on" | "enable" => "Status line enabled.".to_string(),
-        "off" | "disable" => "Status line disabled.".to_string(),
-        other => format!("Unknown statusline option: {other}. Use on/off/toggle."),
-    }
-}
+// ── TS-parity: additional local handler functions ──
 
 fn reload_plugins_handler(_args: &str) -> String {
-    "Reloading plugin definitions...\nAll plugins reloaded.".to_string()
-}
-
-fn terminal_setup_handler(_args: &str) -> String {
-    "Terminal Setup:\n\n\
-     Configure your terminal for the best Claude Code experience.\n\
-     Recommended: 256-color terminal with Unicode support.\n\n\
-     Current: auto-detected"
-        .to_string()
-}
-
-fn remote_env_handler(_args: &str) -> String {
-    "Remote Environment:\n\n\
-     Configure remote execution environment for headless operation.\n\
-     Use `coco remote-control` to start bridge mode."
-        .to_string()
+    // Real plugin-reload requires a thread-safe handle to the live
+    // PluginManager (held in AppState). Without the TUI seam this stub is
+    // intentionally a status string — wiring through `UserCommand::ReloadPlugins`
+    // happens when the runtime exposes the manager handle.
+    "Reload requested. Active plugins will refresh on the next turn.".to_string()
 }
 
 fn rename_handler(args: &str) -> String {
@@ -1455,43 +941,6 @@ fn tag_handler(args: &str) -> String {
     }
 }
 
-fn feedback_handler(args: &str) -> String {
-    let report = args.trim();
-    if report.is_empty() {
-        "Usage: /feedback <message> — Submit feedback about Claude Code.\n\
-         Or visit: https://github.com/anthropics/claude-code/issues"
-            .to_string()
-    } else {
-        format!("Thank you for your feedback: {report}")
-    }
-}
-
-fn extra_usage_handler(args: &str) -> String {
-    match args.trim() {
-        "" => "Extra usage / overage:\n\n\
-               Status: not configured\n\n\
-               Extra usage allows continued use beyond plan limits.\n\
-               Configure in account settings at claude.ai."
-            .to_string(),
-        "enable" => "Extra usage enabled.".to_string(),
-        "disable" => "Extra usage disabled.".to_string(),
-        other => format!("Unknown extra-usage option: {other}"),
-    }
-}
-
-fn thinkback_handler(_args: &str) -> String {
-    "Thinking history for this session:\n\n\
-     (No thinking blocks recorded yet.)\n\n\
-     Extended thinking content is captured as the model works."
-        .to_string()
-}
-
-fn thinkback_play_handler(_args: &str) -> String {
-    "Replaying thinking history...\n\n\
-     (No thinking blocks to replay.)"
-        .to_string()
-}
-
 fn export_handler(args: &str) -> String {
     let filename = args.trim();
     if filename.is_empty() {
@@ -1503,20 +952,6 @@ fn export_handler(args: &str) -> String {
     } else {
         format!("Exporting conversation to: {filename}")
     }
-}
-
-fn rate_limit_handler(_args: &str) -> String {
-    "Rate limit configuration:\n\n\
-     Current tier: default\n\
-     Requests per minute: (varies by model)\n\n\
-     Rate limits are determined by your subscription plan."
-        .to_string()
-}
-
-fn heap_dump_handler(_args: &str) -> String {
-    "Heap dump not available in this build.\n\
-     Use --debug for runtime diagnostics."
-        .to_string()
 }
 
 // ── Async handlers ──
@@ -1896,15 +1331,6 @@ fn review_handler_async(
 
 // ── PR-G4 batch-1 sync handlers ──────────────────────────────────────
 
-/// `/brief` — emit a brief session summary cue that the next turn
-/// should respond to. The actual summarization runs on the agent side;
-/// this handler just expands into a canonical user prompt.
-fn brief_handler(_args: &str) -> String {
-    "Briefly summarize the work done in this session so far in 3-5 bullet \
-     points. Include key decisions, files changed, and any blockers."
-        .to_string()
-}
-
 /// `/env` — dump runtime environment (cwd, shell, platform, version).
 /// Local-only: the output is printed in the TUI and not sent to the
 /// agent.
@@ -1919,23 +1345,6 @@ fn env_handler(_args: &str) -> String {
         "cwd:     {cwd}\nshell:   {shell}\nplatform: {}\nversion:  {version}",
         std::env::consts::OS
     )
-}
-
-/// `/bug-report` — open a bug template URL with optional prefilled title.
-fn bug_report_handler(args: &str) -> String {
-    let title = args.trim();
-    let url = if title.is_empty() {
-        "https://github.com/anthropics/claude-code/issues/new?template=bug.md".to_string()
-    } else {
-        // The GitHub issue URL doesn't support a single 'title' field via
-        // query for the template-new page, but GitHub accepts `?title=`
-        // on the generic new-issue path.
-        format!(
-            "https://github.com/anthropics/claude-code/issues/new?title={}",
-            urlencode_basic(title)
-        )
-    };
-    format!("Open this URL to file a bug report:\n{url}")
 }
 
 /// `/debug-tool-call` — local debug dump for a tool-call by id. Without
@@ -1984,192 +1393,16 @@ fn ant_trace_handler(args: &str) -> String {
     }
 }
 
-/// `/voice` — voice input toggle. Stub: voice recording isn't wired
-/// into the TUI yet; the command is here so scripts and `/help` show it.
-fn voice_handler(args: &str) -> String {
-    let arg = args.trim().to_ascii_lowercase();
-    match arg.as_str() {
-        "on" | "off" | "" => "Voice input is not wired into this build. Track progress at \
-             https://github.com/anthropics/claude-code (coco-voice crate)."
-            .into(),
-        _ => "Usage: /voice [on|off]".into(),
-    }
-}
-
-/// `/issue` — open a new GitHub issue for the CURRENT repo (detected
-/// via `git remote get-url origin`).
-fn issue_handler(args: &str) -> String {
-    let title = args.trim();
-    let cmd = std::process::Command::new("git")
-        .args(["remote", "get-url", "origin"])
-        .output();
-    let repo_slug = cmd
-        .ok()
-        .and_then(|out| String::from_utf8(out.stdout).ok())
-        .and_then(|url| parse_github_slug(url.trim()));
-
-    match repo_slug {
-        Some(slug) => {
-            let url = if title.is_empty() {
-                format!("https://github.com/{slug}/issues/new")
-            } else {
-                format!(
-                    "https://github.com/{slug}/issues/new?title={}",
-                    urlencode_basic(title)
-                )
-            };
-            format!("Open this URL to file an issue:\n{url}")
-        }
-        None => "Couldn't determine GitHub repo from `git remote`. Use \
-             /bug-report for coco-rs itself, or run this command in a \
-             directory whose `origin` points at github.com."
-            .into(),
-    }
-}
-
-/// `/perf-issue` — report a performance issue. Captures basic metadata
-/// but doesn't auto-submit (avoids accidental reports).
-fn perf_issue_handler(_args: &str) -> String {
-    "Performance issue flow: run `/ant-trace on`, reproduce the slow \
-     behavior, then run `/ant-trace off`. Attach the trace log from \
-     `~/.coco/trace/` to a new issue via /issue."
-        .into()
-}
-
-/// `/autofix-pr` — AI-powered PR autofixer. Currently a stub routing to
-/// the relevant TS documentation.
-fn autofix_pr_handler(args: &str) -> String {
-    let pr = args.trim();
-    if pr.is_empty() {
-        "Usage: /autofix-pr <pr-number>\n\n\
-         The autofix flow is not yet wired in coco-rs. Use the standard \
-         /review + manual edits workflow for now."
-            .into()
-    } else {
-        format!(
-            "Autofix for PR #{pr} is not yet implemented. Fall back to \
-             /review {pr} followed by targeted edits."
-        )
-    }
-}
-
-/// `/bughunter` — AI-assisted bug search. Expands into a user prompt
-/// that the agent can act on.
-fn bughunter_handler(args: &str) -> String {
-    let symptom = args.trim();
-    if symptom.is_empty() {
-        "Scan the repository for bugs matching common patterns (null \
-         derefs, off-by-one, missing error handling, unvalidated input). \
-         Prioritize by blast radius and report the top 5 with file:line \
-         pointers and suggested fixes."
-            .into()
-    } else {
-        format!(
-            "Search the codebase for the root cause of this symptom: \
-             {symptom}\n\nTrace the flow from the symptom back to the \
-             originating call site. Report the suspected cause and a \
-             proposed fix."
-        )
-    }
-}
-
-/// Minimal URL-encoder for title-style strings — replaces spaces with
-/// `+` and percent-encodes chars outside `[A-Za-z0-9-._~]`. Keeps the
-/// commands crate free of an extra `urlencoding` dep.
-fn urlencode_basic(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for ch in s.chars() {
-        match ch {
-            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '.' | '_' | '~' => out.push(ch),
-            ' ' => out.push('+'),
-            _ => {
-                let mut buf = [0u8; 4];
-                for b in ch.encode_utf8(&mut buf).bytes() {
-                    out.push_str(&format!("%{b:02X}"));
-                }
-            }
-        }
-    }
-    out
-}
-
-/// Parse `git@github.com:owner/repo.git` or
-/// `https://github.com/owner/repo[.git]` into `owner/repo`.
-fn parse_github_slug(remote: &str) -> Option<String> {
-    let mut rest = if let Some(r) = remote.strip_prefix("git@github.com:") {
-        r.to_string()
-    } else if let Some(r) = remote.strip_prefix("https://github.com/") {
-        r.to_string()
-    } else if let Some(r) = remote.strip_prefix("http://github.com/") {
-        r.to_string()
-    } else {
-        return None;
-    };
-    rest = rest.trim_end_matches(".git").to_string();
-    // Must be exactly owner/repo
-    let slashes = rest.matches('/').count();
-    if slashes != 1 || rest.starts_with('/') || rest.ends_with('/') {
-        return None;
-    }
-    Some(rest)
-}
-
-/// Handler for commands that have been moved to plugins.
-///
-/// TS: `createMovedToPluginCommand()` in `createMovedToPluginCommand.ts`.
-struct MovedToPluginHandler {
-    message: String,
-}
-
-#[async_trait::async_trait]
-impl crate::CommandHandler for MovedToPluginHandler {
-    async fn execute(&self, _args: &str) -> anyhow::Result<String> {
-        Ok(self.message.clone())
-    }
-
-    fn handler_name(&self) -> &str {
-        "moved-to-plugin"
-    }
-}
-
-/// Create a command that informs users a built-in command has been
-/// migrated to a plugin.
-///
-/// TS: `createMovedToPluginCommand()` in `createMovedToPluginCommand.ts`.
-pub fn create_moved_to_plugin_command(
-    name: &str,
-    description: &str,
-    plugin_name: &str,
-    plugin_command: &str,
-) -> RegisteredCommand {
-    let message = format!(
-        "This command has been moved to a plugin. To use it:\n\n\
-         1. Install the plugin:\n   \
-            coco plugin install {plugin_name}@claude-code-marketplace\n\n\
-         2. Then use:\n   \
-            /{plugin_name}:{plugin_command}\n\n\
-         For more information, see the plugin's README."
-    );
-
-    RegisteredCommand {
-        base: crate::builtin_base(name, description, &[]),
-        command_type: CommandType::Local(LocalCommandData {
-            handler: name.to_string(),
-        }),
-        handler: Some(Arc::new(MovedToPluginHandler { message })),
-        is_enabled: None,
-    }
-}
-
 // ────────────────────────────────────────────────────────────────────────────
 // TS-parity handlers (Round 11)
 // ────────────────────────────────────────────────────────────────────────────
 
 const SECURITY_REVIEW_PROMPT: &str = include_str!("prompts/security_review.txt");
 const INSIGHTS_PROMPT: &str = include_str!("prompts/insights.txt");
-const BRIEF_PROMPT: &str = include_str!("prompts/brief.txt");
-const ADVISOR_PROMPT: &str = include_str!("prompts/advisor.txt");
-const COMMIT_PUSH_PR_PROMPT: &str = include_str!("prompts/commit_push_pr.txt");
+const PR_COMMENTS_PROMPT: &str = include_str!("prompts/pr_comments.txt");
+// /commit-push-pr loads its prompt directly inside
+// handlers::commit_push_pr::PROMPT_TEMPLATE.
+const STATUSLINE_PROMPT: &str = include_str!("prompts/statusline.txt");
 
 /// Register the TS-parity P1 handlers wired in Round 11.
 ///
@@ -2177,8 +1410,7 @@ const COMMIT_PUSH_PR_PROMPT: &str = include_str!("prompts/commit_push_pr.txt");
 /// - `/rewind` (opens message-selector dialog)
 /// - `/memory` (opens file-selector dialog)
 /// - `/init` (returns codebase-init prompt — NEW or OLD per feature)
-/// - prompt-type commands: `/security-review`, `/insights`, `/brief`,
-///   `/advisor`, `/commit-push-pr`
+/// - prompt-type commands: `/security-review`, `/insights`, `/commit-push-pr`
 ///
 /// `user_type` and `features` come from the resolved runtime config; pass
 /// what the bootstrap layer reads from settings + env.
@@ -2272,6 +1504,19 @@ pub fn register_ts_parity_handlers(
         false,
     );
 
+    // /pr-comments — TS: commands/pr_comments/index.ts. Args (if any) are
+    // appended verbatim under "## Task" so the agent can scope to a
+    // specific PR number / repo path. The prompt body itself instructs
+    // the model to drive `gh pr` + `gh api` to fetch and format comments.
+    register_static_prompt(
+        registry,
+        names::PR_COMMENTS,
+        "Get comments from a GitHub pull request",
+        "fetching PR comments",
+        PR_COMMENTS_PROMPT,
+        true,
+    );
+
     // /insights — TS: commands/insights.ts
     register_static_prompt(
         registry,
@@ -2282,35 +1527,103 @@ pub fn register_ts_parity_handlers(
         true,
     );
 
-    // /brief — TS: commands/brief.ts (local-jsx but rendered as prompt here)
-    register_static_prompt(
-        registry,
-        names::BRIEF,
-        "Toggle brief-only output mode",
-        "toggling brief mode",
-        BRIEF_PROMPT,
-        false,
-    );
+    // /commit-push-pr — TS: commands/commit-push-pr.ts. Inline-resolves git
+    // status / diff / branch / `git diff <default>...HEAD` / `gh pr view`
+    // and detects the repo's default branch before emitting the Prompt.
+    {
+        let mut base = crate::builtin_base_ext(
+            "commit-push-pr",
+            "Commit, push, and open a pull request — orchestrated",
+            &[],
+            CommandSafety::LocalOnly,
+            Some("[additional instructions]"),
+        );
+        base.loaded_from = Some(CommandSource::Builtin);
+        registry.register(RegisteredCommand {
+            base,
+            command_type: CommandType::Prompt(coco_types::PromptCommandData {
+                progress_message: "creating commit and PR".to_string(),
+                content_length: 0,
+                allowed_tools: Some(commit_push_pr_allowed_tools()),
+                model: None,
+                context: coco_types::CommandContext::Inline,
+                agent: None,
+                thinking_level: None,
+                hooks: None,
+            }),
+            handler: Some(Arc::new(
+                handlers::commit_push_pr::CommitPushPrHandler::new(),
+            )),
+            is_enabled: None,
+        });
+    }
 
-    // /advisor — TS: commands/advisor.ts
+    // /commit — TS: commands/commit.ts. Builds git context (status / diff /
+    // log / branch) inline and emits a Prompt for the agent. Mirrors TS
+    // ALLOWED_TOOLS so the agent can stage + commit without re-prompting.
+    {
+        let mut base = crate::builtin_base_ext(
+            names::COMMIT,
+            "Create a git commit",
+            &[],
+            CommandSafety::LocalOnly,
+            Some("[additional guidance]"),
+        );
+        base.loaded_from = Some(CommandSource::Builtin);
+        registry.register(RegisteredCommand {
+            base,
+            command_type: CommandType::Prompt(coco_types::PromptCommandData {
+                progress_message: "creating commit".to_string(),
+                content_length: 0,
+                allowed_tools: Some(commit_allowed_tools()),
+                model: None,
+                context: coco_types::CommandContext::Inline,
+                agent: None,
+                thinking_level: None,
+                hooks: None,
+            }),
+            handler: Some(Arc::new(handlers::commit_prompt::CommitPromptHandler::new())),
+            is_enabled: None,
+        });
+    }
+
+    // /statusline — TS: commands/statusline.tsx. Pushes the args (or default)
+    // through the statusline-setup subagent.
     register_static_prompt(
         registry,
-        names::ADVISOR,
-        "Configure the advisor (secondary review model)",
-        "configuring advisor",
-        ADVISOR_PROMPT,
+        names::STATUSLINE,
+        "Set up Claude Code's status line UI",
+        "setting up statusLine",
+        STATUSLINE_PROMPT,
         true,
     );
+}
 
-    // /commit-push-pr — TS: commands/commit-push-pr.ts
-    register_static_prompt(
-        registry,
-        "commit-push-pr",
-        "Commit, push, and open a pull request — orchestrated",
-        "preparing commit + push + PR",
-        COMMIT_PUSH_PR_PROMPT,
-        true,
-    );
+/// Bash patterns auto-allowed during a `/commit` Prompt turn. Mirrors TS
+/// `commands/commit.ts` `ALLOWED_TOOLS`.
+fn commit_allowed_tools() -> Vec<String> {
+    vec![
+        "Bash(git add:*)".to_string(),
+        "Bash(git status:*)".to_string(),
+        "Bash(git commit:*)".to_string(),
+    ]
+}
+
+/// Bash + gh + Slack patterns auto-allowed during a `/commit-push-pr` Prompt
+/// turn. Mirrors TS `commands/commit-push-pr.ts` `ALLOWED_TOOLS`.
+fn commit_push_pr_allowed_tools() -> Vec<String> {
+    vec![
+        "Bash(git checkout --branch:*)".to_string(),
+        "Bash(git checkout -b:*)".to_string(),
+        "Bash(git add:*)".to_string(),
+        "Bash(git status:*)".to_string(),
+        "Bash(git push:*)".to_string(),
+        "Bash(git commit:*)".to_string(),
+        "Bash(gh pr create:*)".to_string(),
+        "Bash(gh pr edit:*)".to_string(),
+        "Bash(gh pr view:*)".to_string(),
+        "Bash(gh pr merge:*)".to_string(),
+    ]
 }
 
 fn register_static_prompt(

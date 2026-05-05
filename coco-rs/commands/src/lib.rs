@@ -704,13 +704,10 @@ pub fn register_builtins(registry: &mut CommandRegistry) {
             &[],
             diff_handler,
         ),
-        (
-            "commit",
-            "Create a git commit with staged changes",
-            &[],
-            commit_handler,
-        ),
-        ("pr", "Create a pull request", &["pr-create"], pr_handler),
+        // /commit registered as a Prompt in
+        // implementations.rs::register_ts_parity_handlers (mirrors TS:
+        // commands/commit.ts which builds git context + commit prompt).
+        // /pr removed: TS uses /commit-push-pr instead.
         ("review", "Review code changes or a PR", &[], review_handler),
         // ── Tools & Plugins ──
         ("mcp", "Manage MCP server connections", &[], mcp_handler),
@@ -863,23 +860,6 @@ fn context_handler(_args: &str) -> String {
 
 fn diff_handler(_args: &str) -> String {
     "Showing git diff of current changes...".to_string()
-}
-
-fn commit_handler(args: &str) -> String {
-    if args.is_empty() {
-        "Usage: /commit [message] — Creates a commit with AI-generated or provided message."
-            .to_string()
-    } else {
-        format!("Creating commit: {args}")
-    }
-}
-
-fn pr_handler(args: &str) -> String {
-    if args.is_empty() {
-        "Usage: /pr [title] — Creates a pull request.".to_string()
-    } else {
-        format!("Creating PR: {args}")
-    }
 }
 
 fn review_handler(args: &str) -> String {

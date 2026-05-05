@@ -766,3 +766,57 @@ Deep comparison of coco-rs multi-provider design against opencode (TS, 40+ provi
 - `crate-coco-inference.md`: thinking_convert simplified (no ModelInfo param), RequestBuilder full pipeline, request_options_merge module, InferenceContext full fields
 - `multi-provider-plan.md`: config examples updated, design decisions table, removed redundant type definitions
 - `CLAUDE.md`: type ownership, canonical names updated
+
+## Cross-Review Round 7 (Prompt-Cache Implementation — May 2026)
+
+Implementation of `prompt-cache-design.md` (2456 lines). Primary references: TS `claude-code/src/services/prompt-caching/`, `betas.ts`, `should1hCacheTTL`. See round-3 findings (R3-F1..F8) embedded in the design doc.
+
+### Implementation summary
+
+| Layer | Modules introduced | Owner |
+|---|---|---|
+| `coco-types` | `cache.rs` (`PromptCacheMode`, `CacheTtl`, `CacheScope`, `PromptCacheConfig`, `BetaCapability`, `AccountKind`); 5 new `Capability` variants (`PromptCache`, `Context1m`, `InterleavedThinking`, `ContextManagement`, `TokenEfficientTools`) | provider-neutral |
+| `coco-config` | `prompt_cache_settings.rs` — `PromptCacheRuntimeConfig`, `AnthropicRuntimeKnobs`, `AccountConfig`; 5 new `EnvKey` variants (`COCO_PROMPT_CACHE_ALLOWLIST`, `COCO_ANTHROPIC_*`); 3 new `RuntimeConfig` sections | settings layering |
+| `coco-config` registry | builtin Claude models declare `PromptCache` + topology-relevant capabilities | per-model truth |
+| `services/inference` | `cache_convert.rs` (pass-through emission of `cacheStrategy` / `requestedBetas` / `agenticQuery` / `querySource`); `build_call_options` returns `(call, merged_extra)` so detector hashes the merged map directly (Finding 5); `fingerprint.rs` extended with `runtime_state_digest` so settings-reload invalidation works (design §19.3 attack γ) | provider-agnostic |
+| `vercel-ai-anthropic` | `cache_policy.rs` (`OnceLock` eligibility + allowlist latches, R3-F3); `beta_resolver.rs` (single source of truth for which betas a request emits, F7-deterministic sorted set); `beta_capabilities.rs` (typed enum → kebab-case header string, two-hop translation); `cache_placement.rs` (auto-marker on last user content block, design §10.3); `INTERNAL_ANTHROPIC_OPTION_KEYS` deny-list strips internal signals from raw map (Finding 2) | adapter-only policy |
+| `vercel-ai-anthropic` `prepare_tools` | memory tool branch gated on shared `should_emit_context_management` predicate (R3-F2) — three sites now agree (body insert + memory tool + beta header) | shared predicate |
+
+### Design decisions
+
+| # | Decision | Outcome |
+|---|----------|---------|
+| R7-1 | Where does Anthropic-specific policy live? | **Adapter (`vercel-ai-anthropic`)**, not `services/inference`. Mirrors `services/inference/CLAUDE.md` rule "auth/OAuth/prompt-cache/rate-limit live in vercel-ai-anthropic". Inference layer only emits a typed pass-through map. |
+| R7-2 | How do session-stable fields cross the L0 boundary? | Adapter-local mirror types (`AdapterAccountKind`, `AdapterCacheMode`, `AdapterCacheTtl`, `AdapterCacheScope`, `AdapterBetaCapability`) with **identical wire JSON** to `coco_types::*`. Translation happens in `services/inference::model_factory::build_anthropic` via `anthropic_caps_from(Option<&Vec<Capability>>)`. Round-trip stability checked by `wire_round_trip` tests. |
+| R7-3 | When to invalidate the cached `Arc<dyn LanguageModelV4>` after settings reload? | Extended `ProviderClientFingerprint` with `runtime_state_digest` (SHA-256 over `account` + `prompt_cache` + `anthropic_knobs`). Mismatch at turn-boundary check rebuilds the client so flips of `account.kind`, `prompt_cache.allowlist`, or any `anthropic_knobs.*` propagate without process restart. |
+| R7-4 | How to prevent internal-only signals from leaking into the wire body? | `INTERNAL_ANTHROPIC_OPTION_KEYS` (`cacheStrategy`, `requestedBetas`, `agenticQuery`, `querySource`) stripped from raw map before shallow-merge (design §10.1.5 / Finding 2). E2E test asserts none appear in `body.*`. |
+| R7-5 | How to keep `betas` deterministic for snapshot tests + cache-break detector? | `BTreeSet<String>` in `ResolvedBetas`; final `anthropic-beta` header is `sort_unstable + join(',')` so wire output is byte-stable across runs (Finding 7). |
+| R7-6 | Who owns the 1h-TTL eligibility latch? | Adapter `CachePolicy::eligible_1h: OnceLock<bool>`. Computed once on first call from `(account_kind, in_overage)`. Mid-session billing flip never silently upgrades — flipping requires settings reload that bumps the fingerprint and rebuilds the model. |
+| R7-7 | Memory tool / context-management body / beta header — three sites, one rule | All three gate on `beta_resolver::should_emit_context_management(&AnthropicConfig)`. Fixes R3-F2: a half-emitted state (e.g. memory tool present without beta header) is now structurally impossible. Memory tool dropped + warning if predicate fails. |
+| R7-8 | Bedrock auth / `ProviderTopology::Bedrock` | **Deferred** (design Non-Goal §2). Single-variant `ProviderTopology::FirstParty` keeps `matches!(topology, FirstParty)` predicates correct; future Bedrock PR adds variant + auth + bedrock_1h_env in one shot to keep half-states unrepresentable. |
+| R7-9 | Ant-only gates (`cli-internal-2026-02-09`, `summarize-connector-text-*`, ant-context-management) | **Not ported** (§3.5). These are internal to Anthropic infra and would be no-ops for public users. |
+
+### Files changed
+
+- `coco-rs/common/types/src/{cache.rs,cache.test.rs,provider.rs,lib.rs}`
+- `coco-rs/common/config/src/{prompt_cache_settings.rs,prompt_cache_settings.test.rs,settings/mod.rs,env.rs,runtime.rs,lib.rs,model/registry.rs,model/registry.test.rs}`
+- `coco-rs/services/inference/src/{cache_convert.rs,cache_convert.test.rs,build_call_options.rs,build_call_options.test.rs,client.rs,client.test.rs,fingerprint.rs,model_factory.rs,lib.rs}`
+- `coco-rs/vercel-ai/anthropic/src/{anthropic_config.rs,anthropic_provider.rs,beta_capabilities.rs,beta_capabilities.test.rs,beta_resolver.rs,beta_resolver.test.rs,cache_placement.rs,cache_placement.test.rs,cache_policy.rs,cache_policy.test.rs,lib.rs}`
+- `coco-rs/vercel-ai/anthropic/src/messages/{anthropic_messages_options.rs,anthropic_messages_language_model.rs,anthropic_messages_language_model.test.rs,prepare_tools.rs,prepare_tools.test.rs}`
+
+### Round 7 follow-up — Anthropic knobs migrated to per-provider `provider_options` (May 2026)
+
+Round-7 had landed `AnthropicRuntimeKnobs` as a workspace-level `RuntimeConfig` section. That solved the immediate need but did not scale: the same shape would have to repeat for every future provider's behavior knobs, and `coco-config` (provider-neutral) would accumulate provider-specific schema. Migrated to the design that does scale.
+
+| # | Decision | Outcome |
+|---|----------|---------|
+| R7-10 | Where do Anthropic-specific behavior knobs live? | **Per-provider-instance opaque map.** `ProviderConfig.provider_options: BTreeMap<String, Value>` carries the knobs; `vercel-ai-anthropic::parse_provider_options` parses them via an adapter-owned typed struct (`AnthropicProviderOptionsConfig`, `deny_unknown_fields`). `coco-config` is now provider-neutral end-to-end. |
+| R7-11 | Settings.json shape changed? | Yes — `settings.anthropic_knobs.*` is replaced by `settings.providers.<name>.provider_options.{experimental_betas,disable_interleaved_thinking,show_thinking_summaries,non_interactive}`. Defaults match TS `betas.ts` parity (only `experimental_betas` defaults `true`). |
+| R7-12 | Env var support for the four knobs? | **Dropped.** No `COCO_ANTHROPIC_*` env vars. Settings.json is canonical. The 4 `EnvKey::CocoAnthropic*` variants are removed. (No installed-base concern — Round 7 was the first ship.) |
+| R7-13 | What replaces the `anthropic_knobs` slice in `runtime_state_digest`? | Per-provider `provider_options` map. `digest_runtime_state(&account, &prompt_cache, &provider_cfg.provider_options)` hashes a tagged sequence of `(key, canonical-JSON value)` pairs. Per-provider scoping means a knob flip on one Anthropic instance doesn't churn an unrelated instance's client. |
+| R7-14 | Why an opaque `BTreeMap<String, Value>` at the config layer instead of a typed slot per provider? | Extensibility. Adding a future provider knob (OpenAI, Google, …) only requires the owning `vercel-ai-<provider>` crate to define its own `parse_provider_options` — no `coco-config` schema change. Mirrors `client_options.headers` semantics: opaque to the transport, typed at the consumer. |
+| R7-15 | Merge semantics across settings layers? | Key-by-key shallow merge — overlay wins per key; `Value::Null` removes a key. Identical to `client_options.headers`. |
+
+Removed (no longer in coco-config): `AnthropicRuntimeKnobs`, `PartialAnthropicKnobsSettings`, `Settings.anthropic_knobs`, `RuntimeConfig.anthropic_knobs`, `EnvKey::CocoAnthropicExperimentalBetas`, `EnvKey::CocoAnthropicDisableInterleavedThinking`, `EnvKey::CocoAnthropicShowThinkingSummaries`, `EnvKey::CocoAnthropicNonInteractive`. Re-exports in `coco-config::lib` dropped.
+
+Added (in `vercel-ai-anthropic`): `provider_options.rs` with `AnthropicProviderOptionsConfig`, `parse_provider_options`, `ProviderOptionsError`. Added (in `coco-config`): `PartialProviderConfig.provider_options: Option<BTreeMap<String, Value>>` + `ProviderConfig.provider_options: BTreeMap<String, Value>` with key-by-key merge.

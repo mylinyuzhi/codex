@@ -13,6 +13,8 @@ use std::collections::HashMap;
 
 use crate::compact_settings::PartialCompactSettings;
 use crate::model::ModelSelectionSettings;
+use crate::prompt_cache_settings::PartialAccountSettings;
+use crate::prompt_cache_settings::PartialPromptCacheSettings;
 use crate::provider::PartialProviderConfig;
 use crate::sections::PartialApiSettings;
 use crate::sections::PartialLoopSettings;
@@ -93,6 +95,20 @@ pub struct Settings {
     /// `coco_compact` reads only that struct, never env directly.
     #[serde(default)]
     pub compact: PartialCompactSettings,
+
+    // === Prompt cache ===
+    /// Provider-agnostic prompt-cache settings (currently the 1h-TTL
+    /// allowlist). Resolved at startup into
+    /// `RuntimeConfig.prompt_cache`. See `prompt-cache-design.md` §16a.
+    #[serde(default)]
+    pub prompt_cache: PartialPromptCacheSettings,
+
+    // === Account / billing identity (Anthropic adapter consumes) ===
+    /// User account identity (`api_key` / `claude_ai_subscriber`) +
+    /// subscriber overage flag. Drives 1h-TTL eligibility latch + OAuth
+    /// beta in the Anthropic adapter. **Session-stable** (R3-F3).
+    #[serde(default)]
+    pub account: PartialAccountSettings,
 
     // === Feature gates ===
     /// Coarse-grained feature toggles. Each key matches `Feature::key()`;

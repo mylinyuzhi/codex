@@ -10,11 +10,13 @@ use vercel_ai_provider::errors::NoSuchModelError;
 use vercel_ai_provider::provider::v4::FromEnvProvider;
 use vercel_ai_provider_utils::load_api_key;
 
+use crate::anthropic_config::AdapterAccountKind;
 use crate::anthropic_config::AnthropicConfig;
+use crate::anthropic_config::AnthropicModelCapabilities;
+use crate::anthropic_config::ProviderTopology;
 use crate::messages::AnthropicMessagesLanguageModel;
 
 /// Settings for creating an Anthropic provider.
-#[derive(Default)]
 pub struct AnthropicProviderSettings {
     /// Base URL (default: "https://api.anthropic.com/v1").
     pub base_url: Option<String>,
@@ -39,6 +41,52 @@ pub struct AnthropicProviderSettings {
     /// When `true`, `base_url` is the complete endpoint URL — no API path
     /// suffix is appended. Default (`None`): auto-detect duplicate suffixes.
     pub full_url: Option<bool>,
+
+    // ─── Prompt-cache + beta-policy fields (design §10.0) ─────────────
+    /// Resolved per-model capabilities. Empty = unknown-model safe default.
+    pub capabilities: AnthropicModelCapabilities,
+    /// Endpoint topology — drives first-party-only beta inclusion.
+    pub provider_topology: ProviderTopology,
+    /// Mirrors TS `!DISABLE_EXPERIMENTAL_BETAS`. Default true.
+    pub experimental_betas_enabled: bool,
+    /// Mirrors TS `process.env.DISABLE_INTERLEAVED_THINKING`.
+    pub disable_interleaved_thinking: bool,
+    /// Mirrors TS `getInitialSettings().showThinkingSummaries`.
+    pub show_thinking_summaries: bool,
+    /// Mirrors TS `getIsNonInteractiveSession()`.
+    pub non_interactive: bool,
+    /// 1h-TTL allowlist patterns. Each entry is either an exact match for
+    /// `query_source`, or a `prefix*` glob.
+    pub prompt_cache_allowlist: Vec<String>,
+    /// Session-stable account / billing identity (R3-F3).
+    pub account_kind: AdapterAccountKind,
+    /// Session-stable subscriber overage flag (R3-F3).
+    pub in_overage: bool,
+}
+
+impl Default for AnthropicProviderSettings {
+    fn default() -> Self {
+        Self {
+            base_url: None,
+            api_key: None,
+            auth_token: None,
+            headers: None,
+            name: None,
+            client: None,
+            supports_native_structured_output: None,
+            supports_strict_tools: None,
+            full_url: None,
+            capabilities: AnthropicModelCapabilities::default(),
+            provider_topology: ProviderTopology::default(),
+            experimental_betas_enabled: true,
+            disable_interleaved_thinking: false,
+            show_thinking_summaries: false,
+            non_interactive: false,
+            prompt_cache_allowlist: Vec::new(),
+            account_kind: AdapterAccountKind::default(),
+            in_overage: false,
+        }
+    }
 }
 
 /// Anthropic multi-model provider.
@@ -53,6 +101,17 @@ pub struct AnthropicProvider {
     supports_native_structured_output: Option<bool>,
     supports_strict_tools: Option<bool>,
     full_url: Option<bool>,
+
+    // ─── Prompt-cache + beta-policy fields (design §10.0) ─────────────
+    capabilities: AnthropicModelCapabilities,
+    provider_topology: ProviderTopology,
+    experimental_betas_enabled: bool,
+    disable_interleaved_thinking: bool,
+    show_thinking_summaries: bool,
+    non_interactive: bool,
+    prompt_cache_allowlist: Vec<String>,
+    account_kind: AdapterAccountKind,
+    in_overage: bool,
 }
 
 impl AnthropicProvider {
@@ -110,6 +169,15 @@ impl AnthropicProvider {
             supports_native_structured_output: settings.supports_native_structured_output,
             supports_strict_tools: settings.supports_strict_tools,
             full_url: settings.full_url,
+            capabilities: settings.capabilities,
+            provider_topology: settings.provider_topology,
+            experimental_betas_enabled: settings.experimental_betas_enabled,
+            disable_interleaved_thinking: settings.disable_interleaved_thinking,
+            show_thinking_summaries: settings.show_thinking_summaries,
+            non_interactive: settings.non_interactive,
+            prompt_cache_allowlist: settings.prompt_cache_allowlist,
+            account_kind: settings.account_kind,
+            in_overage: settings.in_overage,
         }
     }
 
@@ -122,6 +190,15 @@ impl AnthropicProvider {
             supports_native_structured_output: self.supports_native_structured_output,
             supports_strict_tools: self.supports_strict_tools,
             full_url: self.full_url,
+            capabilities: self.capabilities,
+            provider_topology: self.provider_topology,
+            experimental_betas_enabled: self.experimental_betas_enabled,
+            disable_interleaved_thinking: self.disable_interleaved_thinking,
+            show_thinking_summaries: self.show_thinking_summaries,
+            non_interactive: self.non_interactive,
+            prompt_cache_allowlist: self.prompt_cache_allowlist.clone(),
+            account_kind: self.account_kind,
+            in_overage: self.in_overage,
         })
     }
 

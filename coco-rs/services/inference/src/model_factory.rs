@@ -31,6 +31,7 @@ use coco_config::ModelInfo;
 use coco_config::ProviderClientOptions;
 use coco_config::ProviderConfig;
 use coco_config::RuntimeConfig;
+use coco_types::Capability;
 use coco_types::ModelRole;
 use coco_types::ModelSpec;
 use coco_types::ProviderApi;
@@ -114,7 +115,13 @@ pub fn build_language_model_from_runtime(
     let timeout_secs = effective_timeout_secs(provider_cfg, model_info.as_ref());
 
     match spec.api {
-        ProviderApi::Anthropic => build_anthropic(provider_cfg, &api_model_name, timeout_secs),
+        ProviderApi::Anthropic => build_anthropic(
+            runtime,
+            provider_cfg,
+            &api_model_name,
+            timeout_secs,
+            model_info.as_ref(),
+        ),
         ProviderApi::Openai => build_openai(provider_cfg, &api_model_name, timeout_secs),
         ProviderApi::Gemini => build_google(provider_cfg, &api_model_name),
         ProviderApi::Volcengine | ProviderApi::Zai | ProviderApi::OpenaiCompat => {
@@ -148,7 +155,12 @@ pub fn build_api_client(
         .resolve(&spec.provider, &spec.model_id)
         .map(|r| r.info.clone());
     let model = build_language_model_from_runtime(runtime, spec)?;
-    let fingerprint = ProviderClientFingerprint::compute(provider_cfg, &api_model_name);
+    let fingerprint = ProviderClientFingerprint::compute_with_runtime_state(
+        provider_cfg,
+        &api_model_name,
+        &runtime.account,
+        &runtime.prompt_cache,
+    );
     // Per-slot cache-break detector: each `ApiClient` (primary +
     // fallbacks) gets its own detector instance. When the runtime
     // switches between slots (`ModelRuntime::on_switch_i13`), the
@@ -194,11 +206,30 @@ fn resolve_api_model_name(provider_cfg: &ProviderConfig, model_id: &str) -> Stri
 }
 
 fn build_anthropic(
+    runtime: &RuntimeConfig,
     provider_cfg: &ProviderConfig,
     api_model: &str,
     timeout_secs: i64,
+    model_info: Option<&ModelInfo>,
 ) -> anyhow::Result<Arc<dyn LanguageModel>> {
     let opts = &provider_cfg.client_options;
+    let capabilities = anthropic_caps_from(model_info.and_then(|i| i.capabilities.as_ref()));
+    let account_kind = match runtime.account.kind {
+        coco_types::AccountKind::ApiKey => vercel_ai_anthropic::AdapterAccountKind::ApiKey,
+        coco_types::AccountKind::ClaudeAiSubscriber => {
+            vercel_ai_anthropic::AdapterAccountKind::ClaudeAiSubscriber
+        }
+    };
+    // Parse the opaque `provider_options` map through the
+    // adapter-owned schema. `deny_unknown_fields` surfaces typos at
+    // process startup rather than the next request.
+    let knobs = vercel_ai_anthropic::parse_provider_options(&provider_cfg.provider_options)
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "anthropic provider `{}` provider_options: {e}",
+                provider_cfg.name
+            )
+        })?;
     let settings = vercel_ai_anthropic::AnthropicProviderSettings {
         base_url: Some(provider_cfg.base_url.clone()),
         api_key: provider_cfg.resolve_api_key(),
@@ -209,11 +240,58 @@ fn build_anthropic(
         supports_native_structured_output: None,
         supports_strict_tools: None,
         full_url: Some(opts.full_url),
+        capabilities,
+        // Single-variant by design (Bedrock deferred — see
+        // `vercel-ai-anthropic` `anthropic_config.rs` `ProviderTopology`).
+        provider_topology: vercel_ai_anthropic::ProviderTopology::FirstParty,
+        experimental_betas_enabled: knobs.experimental_betas_enabled,
+        disable_interleaved_thinking: knobs.disable_interleaved_thinking,
+        show_thinking_summaries: knobs.show_thinking_summaries,
+        non_interactive: knobs.non_interactive,
+        prompt_cache_allowlist: runtime.prompt_cache.allowlist.clone(),
+        account_kind,
+        in_overage: runtime.account.in_overage,
     };
     let provider = vercel_ai_anthropic::create_anthropic(settings);
     provider
         .language_model(api_model)
         .map_err(|e| anyhow::anyhow!("anthropic provider `{}`: {e}", provider_cfg.name))
+}
+
+/// Translate `coco_types::Capability` flags into the adapter-local
+/// bool-per-feature struct. Unknown capabilities (e.g. `Vision`,
+/// `ToolCalling`) are ignored — only prompt-cache + beta-relevant
+/// flags matter at the adapter boundary. `None` (model unknown to the
+/// registry) → all-false safe default.
+fn anthropic_caps_from(
+    capabilities: Option<&Vec<Capability>>,
+) -> vercel_ai_anthropic::AnthropicModelCapabilities {
+    let mut out = vercel_ai_anthropic::AnthropicModelCapabilities::default();
+    let Some(caps) = capabilities else {
+        return out;
+    };
+    for cap in caps {
+        match cap {
+            Capability::PromptCache => out.prompt_cache = true,
+            Capability::Context1m => out.context_1m = true,
+            Capability::InterleavedThinking => out.interleaved_thinking = true,
+            Capability::ContextManagement => out.context_management = true,
+            Capability::TokenEfficientTools => out.token_efficient_tools = true,
+            // Other capabilities are unrelated to Anthropic adapter policy.
+            Capability::TextGeneration
+            | Capability::Streaming
+            | Capability::Vision
+            | Capability::Audio
+            | Capability::ToolCalling
+            | Capability::Embedding
+            | Capability::ExtendedThinking
+            | Capability::StructuredOutput
+            | Capability::ReasoningSummaries
+            | Capability::ParallelToolCalls
+            | Capability::FastMode => {}
+        }
+    }
+    out
 }
 
 fn build_openai(

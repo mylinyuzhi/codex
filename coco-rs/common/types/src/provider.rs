@@ -149,6 +149,22 @@ pub enum Capability {
     ReasoningSummaries,
     ParallelToolCalls,
     FastMode,
+    /// Wire supports Anthropic-style `cache_control` blocks.
+    PromptCache,
+    /// `context-1m-2025-08-07` beta — 1M token context window.
+    /// Wire name forced to `"context_1m"` (serde's snake_case treats digits
+    /// as part of the preceding word and would emit `"context1m"`).
+    #[serde(rename = "context_1m")]
+    Context1m,
+    /// `interleaved-thinking-2025-05-14` beta. Also gates
+    /// `redact-thinking-2026-02-12` (TS `betas.ts:272` reuses the
+    /// same `modelSupportsISP` predicate for both).
+    InterleavedThinking,
+    /// `context-management-2025-06-27` beta.
+    ContextManagement,
+    /// `token-efficient-tools-2026-03-28` beta. Mutually
+    /// exclusive with structured outputs.
+    TokenEfficientTools,
 }
 
 /// How a model handles file editing / apply_patch tool.

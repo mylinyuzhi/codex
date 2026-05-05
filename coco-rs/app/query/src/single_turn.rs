@@ -45,6 +45,10 @@ pub async fn single_turn_query(
         query_source: None,
         agent_id: None,
         time_since_last_assistant_ms: None,
+        // One-shot helper call: not part of an agent loop, no cache
+        // strategy plumbed at this layer.
+        agentic: false,
+        cache: None,
     };
 
     let result = client

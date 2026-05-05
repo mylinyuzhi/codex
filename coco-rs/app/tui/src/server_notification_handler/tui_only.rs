@@ -212,6 +212,73 @@ pub(super) fn handle(state: &mut AppState, event: TuiOnlyEvent) -> bool {
             ));
             true
         }
+
+        // === Slash-command result (System role transcript line) ===
+        TuiOnlyEvent::SlashCommandResult { name: _, text } => {
+            // `system_text` produces `MessageContent::SystemText`, which the
+            // chat widget routes to `render_system` (system styling, no `>`
+            // user-prefix). `is_meta` defaults to false so the body shows
+            // expanded — slash-command output is the answer the user asked
+            // for, not a collapsible reminder.
+            state
+                .session
+                .add_message(crate::state::session::ChatMessage::system_text(
+                    uuid::Uuid::new_v4().to_string(),
+                    text,
+                ));
+            true
+        }
+        // === Open the rewind picker overlay (palette path) ===
+        // Typed `/rewind` is intercepted earlier in `update/edit.rs::try_local_command`
+        // and never round-trips through CoreEvent. The palette path lacks
+        // direct AppState access, so we route through this event.
+        TuiOnlyEvent::OpenRewindPicker => {
+            let overlay = crate::update_rewind::build_rewind_overlay(state);
+            if overlay.messages.is_empty() {
+                state
+                    .ui
+                    .add_toast(Toast::info(t!("toast.no_rewind_messages").to_string()));
+            } else {
+                state.ui.set_overlay(crate::state::Overlay::Rewind(overlay));
+            }
+            true
+        }
+        TuiOnlyEvent::SlashCommandStatus { name, kind } => {
+            use coco_types::SlashCommandStatusKind;
+            let text = match kind {
+                SlashCommandStatusKind::NoHandler => {
+                    t!("slash.status.no_handler", name = name.as_str()).to_string()
+                }
+                SlashCommandStatusKind::Failed { error } => t!(
+                    "slash.status.failed",
+                    name = name.as_str(),
+                    error = error.as_str()
+                )
+                .to_string(),
+                SlashCommandStatusKind::EmptyPrompt => {
+                    t!("slash.status.empty_prompt", name = name.as_str()).to_string()
+                }
+                SlashCommandStatusKind::DialogPending { dialog_kind } => t!(
+                    "slash.status.dialog_pending",
+                    name = name.as_str(),
+                    dialog_kind = dialog_kind.as_str()
+                )
+                .to_string(),
+                SlashCommandStatusKind::PermissionsUsageAllow => {
+                    t!("slash.permissions.usage_allow").to_string()
+                }
+                SlashCommandStatusKind::PermissionsUsageDeny => {
+                    t!("slash.permissions.usage_deny").to_string()
+                }
+            };
+            state
+                .session
+                .add_message(crate::state::session::ChatMessage::system_text(
+                    uuid::Uuid::new_v4().to_string(),
+                    text,
+                ));
+            true
+        }
     }
 }
 

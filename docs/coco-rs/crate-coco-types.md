@@ -935,6 +935,23 @@ pub enum Capability {
     ReasoningSummaries,
     ParallelToolCalls,
     FastMode,
+    /// Wire supports Anthropic-style `cache_control` blocks. Gates
+    /// `cache_strategy` emission and auto-marker placement.
+    PromptCache,
+    /// `context-1m-2025-08-07` beta — 1M token context window.
+    /// Wire forced to `"context_1m"` (serde's snake_case treats digits
+    /// as part of the preceding word and would emit `"context1m"`).
+    #[serde(rename = "context_1m")]
+    Context1m,
+    /// `interleaved-thinking-2025-05-14` beta. Also gates
+    /// `redact-thinking-2026-02-12` (`betas.ts:272` reuses the same
+    /// `modelSupportsISP` predicate for both).
+    InterleavedThinking,
+    /// `context-management-2025-06-27` beta.
+    ContextManagement,
+    /// `token-efficient-tools-2026-03-28` beta. Mutually exclusive
+    /// with structured outputs.
+    TokenEfficientTools,
 }
 
 /// How a model handles file editing / apply_patch tool.
@@ -954,6 +971,82 @@ pub enum ApplyPatchToolType {
 pub enum WireApi {
     Chat,       // Standard chat completions
     Responses,  // OpenAI responses API (supports apply_patch)
+}
+```
+
+### Prompt-cache types (from `prompt-cache-design.md`)
+
+Provider-neutral types carried through `services/inference` to the adapter as opaque pass-through. Live in `coco-rs/common/types/src/cache.rs`.
+
+```rust
+/// Wire-level cache strategy (per-call).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PromptCacheMode {
+    #[default]
+    Disabled,
+    Auto,    // Adapter places cache markers automatically.
+    Manual,  // Caller is responsible for marker placement.
+}
+
+/// Caller-requested TTL. Adapter may downgrade based on eligibility.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CacheTtl {
+    #[default]
+    FiveMinutes,
+    OneHour,
+}
+
+/// Where the cache lives (Anthropic-only knob).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CacheScope {
+    Org,
+    Global,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptCacheConfig {
+    pub mode: PromptCacheMode,
+    pub ttl: CacheTtl,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<CacheScope>,
+    #[serde(default)]
+    pub skip_cache_write: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requested_betas: Vec<BetaCapability>,
+}
+
+/// Typed beta capability the user can request per call. The adapter
+/// translates each variant into its Anthropic-server header string
+/// (kebab-case + date suffix). `Context1m` keeps explicit serde rename
+/// because snake_case treats digits as part of the preceding word.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BetaCapability {
+    #[serde(rename = "context_1m")]
+    Context1m,
+    InterleavedThinking,
+    ContextManagement,
+    StructuredOutputs,
+    TokenEfficientTools,
+    FastMode,
+    PromptCachingScope,
+    RedactThinking,
+    Advisor,
+}
+
+/// Auth/billing identity. **Session-stable** — set once on
+/// `RuntimeConfig.account` and read by `vercel-ai-anthropic` at
+/// provider construction. Mid-session flip requires settings reload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountKind {
+    #[default]
+    ApiKey,
+    ClaudeAiSubscriber,
 }
 ```
 

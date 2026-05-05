@@ -327,6 +327,25 @@ pub struct QueryEngine {
     /// Distinct from `staged_session_id` because TranscriptStore keys
     /// off the session id string used by the rest of the system.
     pub(crate) transcript_session_id: Option<String>,
+    /// Engine-side delivery channel for nested-memory entries surfaced
+    /// by [`crate::engine_attachments::QueryEngine::drain_nested_memory_triggers`]
+    /// at end-of-batch. Consumed by `engine_turn_reminders` right before
+    /// building `TurnReminderInput` — the generator renders these into
+    /// `<system-reminder>Contents of {path}:\n\n{content}</system-reminder>`.
+    ///
+    /// Populated by the trigger drain; bypasses the no-op
+    /// [`crate::reminder_adapters::MemoryAdapter::nested_memories`].
+    pub(crate) pending_nested_memory: std::sync::Arc<
+        tokio::sync::Mutex<Vec<coco_system_reminder::generators::memory::NestedMemoryInfo>>,
+    >,
+    /// Session-level dedup set for nested-memory paths. Mirrors TS
+    /// `loadedNestedMemoryPathsRef` (`REPL.tsx:1964-1967`) — once a
+    /// memory file is injected in this session, subsequent file reads
+    /// in the same subtree won't re-inject it. Cleared on conversation
+    /// reset via
+    /// [`crate::engine_attachments::QueryEngine::clear_loaded_nested_memory_paths`].
+    pub(crate) loaded_nested_memory_paths:
+        std::sync::Arc<tokio::sync::Mutex<std::collections::HashSet<std::path::PathBuf>>>,
 }
 
 // `new`, every `with_*` builder, and small accessor methods live in
@@ -722,6 +741,11 @@ impl QueryEngine {
                 query_source: Some(query_source.to_string()),
                 agent_id: self.config.agent_id.clone(),
                 time_since_last_assistant_ms,
+                // Main-loop turn — agentic baseline beta on, prompt-cache
+                // strategy resolved at session bootstrap; defaults if not
+                // wired yet (Phase 2 of prompt-cache rollout).
+                agentic: true,
+                cache: None,
             };
 
             // ── Phase 9: Streaming tool scheduling ──
@@ -1553,6 +1577,15 @@ impl QueryEngine {
             // the command-queue drain / auto-compact / TurnCompleted
             // emission happens, then continue the loop.
             if streaming_executed {
+                // Drain end-of-batch nested-memory triggers BEFORE
+                // finalize so the next turn's reminder build picks
+                // them up. TS parity:
+                // `getNestedMemoryAttachments` runs in
+                // `getAttachmentMessages` between tool batch and
+                // next API call.
+                if let Some(ref c) = streaming_ctx {
+                    self.drain_nested_memory_triggers(c).await;
+                }
                 self.finalize_turn_post_tools(&mut history, &event_tx, turn_id, usage)
                     .await;
                 if let Some(stop_reason) = streaming_control_prevent {
@@ -1614,6 +1647,11 @@ impl QueryEngine {
             }
             .run()
             .await;
+            // Drain end-of-batch nested-memory triggers BEFORE finalize
+            // so the next turn's reminder build picks them up. TS:
+            // `getNestedMemoryAttachments` runs between batch + next
+            // API call.
+            self.drain_nested_memory_triggers(&ctx).await;
             self.finalize_turn_post_tools(&mut history, &event_tx, turn_id, usage)
                 .await;
             if !tool_run_outcome.continue_after_tools {

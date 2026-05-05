@@ -480,8 +480,22 @@ impl QueryEngine {
             agent_mentions: reminder_agent_mentions,
             ide_selection: materialized.ide_selection,
             ide_opened_file: materialized.ide_opened_file,
-            // Memory reminders from MemorySource.
-            nested_memories: materialized.nested_memories,
+            // Nested memories: engine-driven via the per-batch
+            // `drain_nested_memory_triggers` pipeline (Read tool
+            // populates `ctx.nested_memory_attachment_triggers` →
+            // engine drains end-of-batch → traverses CWD→file →
+            // appends here). `MemoryAdapter::nested_memories`
+            // intentionally returns empty so the engine path is the
+            // single source. We `extend` (rather than replace) in case
+            // a future MemorySource impl wants to contribute as well —
+            // currently the materialized side is always empty.
+            nested_memories: {
+                let mut v = self.take_pending_nested_memory().await;
+                if !materialized.nested_memories.is_empty() {
+                    v.extend(materialized.nested_memories);
+                }
+                v
+            },
             relevant_memories: materialized.relevant_memories,
             // Silent reminder-native attachments (Part 1).
             // `already_read_file_paths`: intersection of this turn's

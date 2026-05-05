@@ -332,6 +332,9 @@ async fn try_classify_in_auto_mode(
                 query_source: None,
                 agent_id: None,
                 time_since_last_assistant_ms: None,
+                // Auto-mode classifier helper call — not the agent loop.
+                agentic: false,
+                cache: None,
             };
             match client.query(&params).await {
                 Ok(result) => {

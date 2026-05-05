@@ -1358,6 +1358,55 @@ pub enum TuiOnlyEvent {
         /// Number of files restored (0 if conversation-only).
         files_changed: i32,
     },
+    /// Local slash-command produced a `CommandResult::Text` (or
+    /// `Compact { display_text }`). Surfaced as a system-role chat message
+    /// so it reads inline with the transcript. `text` is the pre-rendered
+    /// body — never translated, since it carries the handler's actual
+    /// output (often command-specific status / git output / prompt
+    /// preview).
+    SlashCommandResult { name: String, text: String },
+    /// Dispatcher-side breadcrumb for slash commands the runtime couldn't
+    /// fully execute (missing handler, handler error, empty Prompt body,
+    /// dialog wiring pending). The TUI translates `kind` via the i18n
+    /// catalog before rendering.
+    SlashCommandStatus {
+        name: String,
+        kind: SlashCommandStatusKind,
+    },
+    /// Tell the TUI to open the rewind picker overlay. Emitted when the
+    /// slash dispatcher resolves `/rewind` from the command palette
+    /// (typed `/rewind` is intercepted earlier in `update/edit.rs`
+    /// without round-tripping through `CoreEvent`). The TUI consumes
+    /// the current `session.messages` to build the picker.
+    OpenRewindPicker,
+}
+
+/// Categorization of a `SlashCommandStatus` payload. Each variant maps to
+/// a `slash.status.*` key in the TUI locale catalog.
+///
+/// Wire format intentionally tagged so SDK clients can render their own
+/// localized strings instead of consuming the TUI's English fallback.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SlashCommandStatusKind {
+    /// Registered command has no `handler` — typically a plugin
+    /// contribution stub that wasn't bridged.
+    NoHandler,
+    /// Handler returned `Err`. `error` is the formatted error message.
+    Failed { error: String },
+    /// Handler returned `CommandResult::Prompt` with no text parts.
+    EmptyPrompt,
+    /// Handler returned `CommandResult::OpenDialog`, but coco-rs has not
+    /// yet bound this dialog kind to a TUI overlay. `dialog_kind` is a
+    /// human-readable label like "memory file selector".
+    DialogPending { dialog_kind: String },
+    /// `/permissions allow` invoked with no tool name. Dispatcher-side
+    /// usage hint — the TUI translates via `slash.permissions.usage_allow`.
+    PermissionsUsageAllow,
+    /// `/permissions deny` invoked with no tool name. Dispatcher-side
+    /// usage hint — the TUI translates via `slash.permissions.usage_deny`.
+    PermissionsUsageDeny,
 }
 
 // ---------------------------------------------------------------------------

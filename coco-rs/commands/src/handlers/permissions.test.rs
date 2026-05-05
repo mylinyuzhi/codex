@@ -11,32 +11,38 @@ async fn test_list_permissions_output() {
 }
 
 #[tokio::test]
-async fn test_allow_known_tool() {
+async fn test_allow_known_tool_non_tui_hint() {
+    // Non-TUI handler returns a hint pointing at settings.json. The TUI
+    // dispatcher (`tui_runner::dispatch_permissions_mutation`) intercepts
+    // this branch and actually mutates engine_config.allow_rules.
     let output = handler("allow Bash".to_string()).await.unwrap();
-    assert!(output.contains("allow rule"));
-    assert!(output.contains("Bash"));
+    assert!(output.contains("/permissions allow Bash"));
+    assert!(output.contains("only effective inside the TUI"));
+    assert!(output.contains("settings.json"));
     assert!(!output.contains("Warning"));
 }
 
 #[tokio::test]
-async fn test_allow_unknown_tool() {
+async fn test_allow_unknown_tool_warns() {
     let output = handler("allow CustomTool".to_string()).await.unwrap();
-    assert!(output.contains("allow rule"));
+    assert!(output.contains("/permissions allow CustomTool"));
     assert!(output.contains("Warning"));
     assert!(output.contains("not a known built-in tool"));
 }
 
 #[tokio::test]
-async fn test_deny_tool() {
+async fn test_deny_tool_non_tui_hint() {
     let output = handler("deny Write".to_string()).await.unwrap();
-    assert!(output.contains("deny rule"));
-    assert!(output.contains("Write"));
+    assert!(output.contains("/permissions deny Write"));
+    assert!(output.contains("only effective inside the TUI"));
 }
 
 #[tokio::test]
-async fn test_reset_permissions() {
+async fn test_reset_permissions_non_tui_honest() {
+    // The handler is honest about not actually mutating state — the TUI
+    // dispatcher does the real work in `dispatch_permissions_mutation`.
     let output = handler("reset".to_string()).await.unwrap();
-    assert!(output.contains("cleared"));
+    assert!(output.contains("only effective inside the TUI"));
     assert!(output.contains("File-based rules"));
 }
 
@@ -76,11 +82,11 @@ async fn test_read_permission_rules_nonexistent() {
 }
 
 #[tokio::test]
-async fn test_allow_mcp_tool() {
+async fn test_allow_mcp_tool_no_warning() {
     let output = handler("allow mcp__myserver__tool".to_string())
         .await
         .unwrap();
-    assert!(output.contains("allow rule"));
+    assert!(output.contains("/permissions allow mcp__myserver__tool"));
     assert!(
         !output.contains("Warning"),
         "MCP tools should be recognized as valid"

@@ -46,7 +46,7 @@ impl QueryEngine {
             let mut text =
                 String::from("You are coco, an AI coding assistant. Be concise and helpful.\n\n");
             let cwd = std::env::current_dir().unwrap_or_default();
-            let claude_files = coco_context::discover_claude_md_files(&cwd);
+            let claude_files = coco_context::discover_memory_files(&cwd);
             for f in &claude_files {
                 text.push_str(&format!("# {}\n{}\n\n", f.path.display(), f.content));
             }

@@ -116,6 +116,88 @@ pub struct CacheControlConfig {
     pub ttl: Option<String>,
 }
 
+/// Adapter-side mirror of `coco_types::PromptCacheMode`. Same wire shape;
+/// no shared type (`vercel-ai-anthropic` cannot import `coco-types` per
+/// the L0 layer rule).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdapterCacheMode {
+    Disabled,
+    Auto,
+    Manual,
+}
+
+/// Adapter-side mirror of `coco_types::CacheTtl`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdapterCacheTtl {
+    FiveMinutes,
+    OneHour,
+}
+
+/// Adapter-side mirror of `coco_types::CacheScope`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdapterCacheScope {
+    Org,
+    Global,
+}
+
+/// Adapter-side mirror of `coco_types::BetaCapability`.
+///
+/// Wire boundary: snake_case (matches what
+/// `services/inference::cache_convert` writes). The adapter's
+/// `beta_capabilities::map_capability` then translates each enum variant
+/// into the actual Anthropic header string (kebab-case + date suffix,
+/// e.g. `"context-1m-2025-08-07"`). Two distinct hops:
+/// JSON-snake → Rust enum → Anthropic-kebab.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdapterBetaCapability {
+    /// Wire name forced to `"context_1m"` to match the upstream coco-types
+    /// rename — serde's snake_case treats digits as part of the preceding
+    /// word and would emit `"context1m"`.
+    #[serde(rename = "context_1m")]
+    Context1m,
+    InterleavedThinking,
+    ContextManagement,
+    StructuredOutputs,
+    TokenEfficientTools,
+    FastMode,
+    PromptCachingScope,
+    RedactThinking,
+    Advisor,
+}
+
+/// Per-call cache strategy directive. Mirror of `coco_types::PromptCacheConfig`
+/// without the `requested_betas` field (which lives at the
+/// `AnthropicProviderOptions` top level).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CacheStrategy {
+    pub mode: AdapterCacheMode,
+    /// Caller-requested TTL. Adapter may downgrade based on eligibility.
+    pub ttl: AdapterCacheTtl,
+    #[serde(default)]
+    pub scope: Option<AdapterCacheScope>,
+    #[serde(default)]
+    pub skip_cache_write: bool,
+}
+
+/// Internal-only keys that `services/inference::cache_convert` emits
+/// into `provider_options["anthropic"]`. They MUST be stripped from
+/// the raw map before the shallow-merge into the wire body, otherwise
+/// they'd be sent verbatim to `api.anthropic.com/v1/messages` (which
+/// would either reject the body or silently ignore the keys).
+///
+/// Design §10.1.5 / Finding 2.
+const INTERNAL_ANTHROPIC_OPTION_KEYS: &[&str] = &[
+    "cacheStrategy",
+    "requestedBetas",
+    "agenticQuery",
+    "querySource",
+];
+
 /// Anthropic-specific provider options.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -128,7 +210,8 @@ pub struct AnthropicProviderOptions {
     pub thinking: Option<ThinkingConfig>,
     /// Disable parallel tool use.
     pub disable_parallel_tool_use: Option<bool>,
-    /// Cache control settings.
+    /// Cache control settings (low-level user override; composes
+    /// additively with auto-placed markers).
     pub cache_control: Option<CacheControlConfig>,
     /// MCP servers.
     pub mcp_servers: Option<Vec<McpServerConfig>>,
@@ -146,6 +229,27 @@ pub struct AnthropicProviderOptions {
     pub context_management: Option<Value>,
     /// Inference geography constraint (`"us"` or `"global"`).
     pub inference_geo: Option<String>,
+
+    // ─── Prompt-cache per-call fields (design §10.1) ─────────────────
+    /// High-level cache strategy: auto-place markers, choose TTL/scope.
+    /// Adapter resolves to wire `cache_control` blocks via
+    /// `cache_placement::compute_marker_index_post_group`.
+    pub cache_strategy: Option<CacheStrategy>,
+    /// User-requested beta top-up (TS `getSdkBetas` equivalent).
+    /// Adapter applies a TS-mirror allowlist (`Context1m` only on the
+    /// typed channel) — design §10.4 / Finding F4.
+    pub requested_betas: Option<Vec<AdapterBetaCapability>>,
+    /// Per-call agentic flag — gates the `claude-code-20250219`
+    /// baseline beta. Helper calls (compaction, title generation)
+    /// pass `false`; main agent loop passes `true`.
+    pub agentic_query: Option<bool>,
+    /// Query source — matched against the 1h-TTL allowlist per call.
+    pub query_source: Option<String>,
+    // **Round-3 Finding 3:** `account_kind` and `in_overage` are NOT
+    // per-call fields. They live on `AnthropicConfig` (session-stable)
+    // because `cache_policy::resolve_ttl` latches eligibility on the
+    // first call — a missing first-call value would default-corrupt
+    // the latch for the whole session.
 }
 
 /// Extract Anthropic-specific options from generic provider options.
@@ -225,6 +329,12 @@ pub fn extract_anthropic_options(
         }
     }
 
+    // Strip internal coco-rs-only signals so they never reach
+    // `api.anthropic.com/v1/messages` (design §10.1.5 / Finding 2).
+    for key in INTERNAL_ANTHROPIC_OPTION_KEYS {
+        raw.remove(*key);
+    }
+
     (typed, raw)
 }
 
@@ -251,6 +361,10 @@ fn merge_anthropic_options(
         anthropic_beta: custom.anthropic_beta.or(canonical.anthropic_beta),
         context_management: custom.context_management.or(canonical.context_management),
         inference_geo: custom.inference_geo.or(canonical.inference_geo),
+        cache_strategy: custom.cache_strategy.or(canonical.cache_strategy),
+        requested_betas: custom.requested_betas.or(canonical.requested_betas),
+        agentic_query: custom.agentic_query.or(canonical.agentic_query),
+        query_source: custom.query_source.or(canonical.query_source),
     }
 }
 

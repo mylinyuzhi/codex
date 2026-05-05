@@ -83,3 +83,40 @@ fn unknown_subcommand_returns_usage_hint() {
     assert!(out.contains("Unknown /agents subcommand: explode"));
     assert!(out.contains("Usage:"));
 }
+
+#[test]
+fn list_includes_navigation_hints() {
+    // TS opens a 2-level menu (list → per-agent submenu). Flat-text
+    // listing must surface the equivalent navigation paths so users
+    // discover `/agents show <name>` and `/agents <name>` shorthand.
+    let out = render("list", empty_paths()).unwrap();
+    assert!(out.contains("/agents show <name>"));
+    assert!(out.contains("/agents <name>"));
+    assert!(out.contains("/agents reload"));
+}
+
+#[test]
+fn name_shortcut_resolves_to_show() {
+    // `/agents general-purpose` should match the TS picker click
+    // (selects an agent → opens its detail submenu). Bundled
+    // `general-purpose` is stable across releases.
+    let direct = render("general-purpose", empty_paths()).unwrap();
+    let via_show = render("show general-purpose", empty_paths()).unwrap();
+    assert_eq!(direct, via_show, "shortcut must equal `show <name>` output");
+    assert!(direct.contains("# general-purpose"));
+}
+
+#[test]
+fn reload_is_honest_about_session_scope() {
+    // The handler can't push changes to the engine's live agent registry
+    // (loaded once at startup), so the message must say so — pretending
+    // otherwise would silently leave callers acting on stale state.
+    let out = render("reload", empty_paths()).unwrap();
+    assert!(
+        out.contains("next session"),
+        "reload output must call out the deferral, got: {out}"
+    );
+    // Still includes the live disk snapshot so users see what *will* load
+    // next time.
+    assert!(out.contains("general-purpose"));
+}

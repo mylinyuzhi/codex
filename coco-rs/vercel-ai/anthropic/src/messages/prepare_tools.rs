@@ -21,11 +21,18 @@ pub struct PreparedAnthropicTools {
 ///
 /// `supports_strict_tools` controls whether the `strict` field is included on
 /// tool definitions and triggers the `structured-outputs` beta header.
+///
+/// `context_management_eligible` mirrors the predicate in
+/// `beta_resolver::should_emit_context_management` — passed in (rather
+/// than recomputed) so the memory-tool entry below cannot disagree
+/// with the central decision (R3-F2). When false, the memory tool is
+/// dropped from the wire payload.
 pub fn prepare_anthropic_tools(
     tools: &Option<Vec<LanguageModelV4Tool>>,
     tool_choice: &Option<LanguageModelV4ToolChoice>,
     disable_parallel_tool_use: Option<bool>,
     supports_strict_tools: bool,
+    context_management_eligible: bool,
     mut cache_validator: Option<&mut CacheControlValidator>,
 ) -> PreparedAnthropicTools {
     let mut warnings = Vec::new();
@@ -231,13 +238,30 @@ pub fn prepare_anthropic_tools(
                         }));
                     }
 
-                    // Memory tool
+                    // Memory tool. Gated on the SAME predicate as
+                    // `body["context_management"]` and the
+                    // `context-management-2025-06-27` beta — when the
+                    // model lacks the capability OR the endpoint is
+                    // not first-party OR experimental betas are
+                    // disabled, the memory tool is dropped from the
+                    // wire payload (would be rejected server-side
+                    // without the gate beta). Single source of truth
+                    // — Finding R3-F2.
                     "anthropic.memory_20250818" => {
-                        betas.insert("context-management-2025-06-27".into());
-                        anthropic_tools.push(json!({
-                            "name": "memory",
-                            "type": "memory_20250818",
-                        }));
+                        if context_management_eligible {
+                            betas.insert("context-management-2025-06-27".into());
+                            anthropic_tools.push(json!({
+                                "name": "memory",
+                                "type": "memory_20250818",
+                            }));
+                        } else {
+                            warnings.push(Warning::Other {
+                                message: "memory tool requires context-management beta; \
+                                          gated by capability + topology + experimental flag — \
+                                          tool dropped from request"
+                                    .into(),
+                            });
+                        }
                     }
 
                     // Web search tools

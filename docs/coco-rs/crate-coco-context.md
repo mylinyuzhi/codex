@@ -184,52 +184,117 @@ pub enum HookAttachment {
 }
 ```
 
-### CLAUDE.md Discovery (from `utils/claudemd.ts`)
+### Memory-File Discovery (from `utils/claudemd.ts`, `utils/attachments.ts`)
+
+Two passes — eager (once at session start) and lazy (per file-read trigger). Both
+share a single `processed: HashSet<PathBuf>` so a file never loads twice across
+the session, regardless of which pass touched it first.
 
 ```rust
-pub struct MemoryFileInfo {
+// Modules: `claudemd`, `nested_memory`, `claudemd_imports`, `claude_rules`,
+// `memory_filenames`.
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryFileSource { UserGlobal, ProjectConfig, Project, Local }
+
+#[derive(Debug, Clone)]
+pub struct MemoryFile {                  // eager-pass output
     pub path: PathBuf,
-    pub memory_type: MemoryType,  // Managed, User, Project, Local
     pub content: String,
-    pub parent: Option<PathBuf>,
-    pub globs: Option<Vec<String>>,
+    pub source: MemoryFileSource,
 }
 
-/// 6 variants (not 4): includes AutoMem and TeamMem with distinct injection semantics.
-pub enum MemoryType { Managed, User, Project, Local, AutoMem, TeamMem }
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadedMemoryEntry {           // lazy-pass output
+    pub path: PathBuf,
+    pub content: String,
+    pub source: MemoryFileSource,
+}
 
-/// Discovery order (priority):
-/// 1. Managed: /etc/claude-code/CLAUDE.md + /etc/claude-code/.claude/rules/*.md
-/// 2. User: ~/.claude/CLAUDE.md + ~/.claude/rules/*.md (only if userSettings enabled)
-/// 3. Project + Local: full upward CWD walk to filesystem root at each level:
-///    CLAUDE.md, .claude/CLAUDE.md, .claude/rules/*.md, CLAUDE.local.md
-///    Handles git worktree nesting (skips double-load of checked-in files)
-/// 4. Additional directories (--add-dir): CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD
-/// 5. AutoMem: MEMORY.md memdir entrypoint (feature-gated, isAutoMemoryEnabled())
-/// 6. TeamMem: team memory entrypoint (feature-gated TEAMMEM, wrapped in <team-memory-content> XML)
-pub fn get_memory_files(cwd: &Path) -> Vec<MemoryFileInfo>;
+/// Filename helpers (TS divergence: coco-rs supports both CLAUDE.md AND
+/// AGENTS.md case-insensitively; TS only matches CLAUDE.md literally).
+pub const MEMORY_FILE_CANDIDATES: &[&str] = &["CLAUDE.md", "AGENTS.md"];
+pub const MEMORY_LOCAL_FILE_CANDIDATES: &[&str] = &["CLAUDE.local.md", "AGENTS.local.md"];
+pub fn find_memory_files(dir: &Path, candidates: &[&str]) -> Vec<PathBuf>;
 
-/// @include directive: resolves @path, @./rel, @~/home, @/abs references recursively.
-/// MAX_INCLUDE_DEPTH=5, binary file extension blocklist (~80 text extensions allowed),
-/// circular reference prevention, symlink resolution.
-pub fn resolve_includes(content: &str, base_dir: &Path, depth: i32) -> String;
+/// Eager pass — root → CWD inclusive. Each loaded file is fed through
+/// `expand_imports` so `@./other.md` references materialise in the same call.
+pub fn discover_memory_files(cwd: &Path) -> Vec<MemoryFile>;
 
-/// Conditional rules: files with `paths:` frontmatter key are only injected when
-/// the model is working on a file matching those globs. Used for nested_memory injection.
-pub fn get_conditional_rules_for_paths(files: &[MemoryFileInfo], target_paths: &[&Path]) -> Vec<MemoryFileInfo>;
+/// Backward-compat alias; new code uses `discover_memory_files`.
+#[doc(hidden)]
+pub fn discover_claude_md_files(cwd: &Path) -> Vec<MemoryFile>;
 
-/// `claudeMdExcludes` setting: glob patterns to exclude specific CLAUDE.md paths.
-/// Symlink-resolved for macOS /tmp → /private/tmp aliasing.
+/// Lazy pass — fired per file-read trigger by
+/// `app/query::QueryEngine::drain_nested_memory_triggers` at end of every
+/// turn batch. Loads memory files surfaced by reading `file`, deduped
+/// against `loaded` so eagerly-loaded paths never re-emit.
+///
+/// Phases (TS parity):
+/// 1. Managed (`/etc/coco/rules`) + user (`~/.coco/rules`) **conditional**
+///    rules whose `paths:` glob matches `file`.
+/// 2. `directories_to_process(file, cwd)` → `(nested_dirs, cwd_level_dirs)`.
+/// 3. Per-`nested_dir` (CWD-exclusive → file-parent-inclusive): load
+///    `{CLAUDE,AGENTS}.md`, `.claude/CLAUDE.md`, local files, and
+///    `.claude/rules/**/*.md` (unconditional + matching conditional).
+/// 4. Per-`cwd_level_dir` (root → CWD inclusive): only conditional rules
+///    matching `file` — unconditional content was loaded eagerly.
+pub fn traverse_for_file(
+    file: &Path,
+    cwd: &Path,
+    loaded: &mut HashSet<PathBuf>,
+) -> Vec<LoadedMemoryEntry>;
 
-pub const MAX_MEMORY_CHARACTER_COUNT: usize = 40_000; // warning threshold per file
-pub const MAX_MEMORY_LINES: usize = 200;    // MEMORY.md index line cap
-pub const MAX_MEMORY_BYTES: usize = 25_000; // MEMORY.md byte cap
+/// CWD/file split helper used by `traverse_for_file`.
+pub fn directories_to_process(file: &Path, cwd: &Path) -> (Vec<PathBuf>, Vec<PathBuf>);
 
-/// Strip block-level HTML comments (<!-- -->), preserving comments inside code blocks.
-/// Uses marked Lexer for block-level parsing so inline/code block comments are preserved.
-pub fn strip_html_comments(content: &str) -> String;
-pub fn truncate_entrypoint(raw: &str) -> (String, bool);  // (content, was_truncated)
+// `@import` directive (TS `extractIncludePathsFromTokens` /
+// `processMemoryFile`).
+pub const MAX_INCLUDE_DEPTH: u32 = 5;
+pub const TEXT_FILE_EXTENSIONS: &[&str] = &[/* md, txt, rst, json, ts, rs, ... */];
+pub fn extract_include_paths(body: &str) -> Vec<String>;     // skips fenced + inline code
+pub fn resolve_at_path(token: &str, base_dir: &Path) -> Option<PathBuf>;
+pub fn is_text_extension(path: &Path) -> bool;
+pub fn expand_imports(
+    path: &Path,
+    content: &str,
+    processed: &mut HashSet<PathBuf>,
+    depth: u32,
+) -> Vec<(PathBuf, String)>;
+
+// `.claude/rules/*.md` discovery + frontmatter `paths:` glob matching.
+pub struct RuleFile {
+    pub path: PathBuf,
+    pub content: String,           // frontmatter-stripped
+    pub paths: Option<Vec<String>>, // None = unconditional, Some = conditional
+}
+pub fn parse_paths_field(input: &coco_frontmatter::FrontmatterValue) -> Option<Vec<String>>;
+pub fn collect_rule_files(rules_dir: &Path, conditional: bool) -> Vec<RuleFile>;
+pub fn filter_rules_matching(
+    rules: Vec<RuleFile>,
+    target_file: &Path,
+    base_dir: &Path,
+) -> Vec<RuleFile>;
 ```
+
+#### Status of TS features
+
+| TS feature | Rust status |
+|-----------|-------------|
+| Managed (`/etc/claude-code/`) | Done — `phase1_managed_user_conditional_rules` (Phase 1) reads `/etc/coco/rules` |
+| User (`~/.claude/`) | Done — Phase 1 reads `~/.coco/rules`, eager pass reads `~/.coco/{CLAUDE,AGENTS}.md` |
+| Project + Local + `.claude/CLAUDE.md` | Done — eager pass walks root → CWD; lazy pass walks CWD → file |
+| `@import` recursion + cycle break + depth cap (5) | Done — `claudemd_imports::expand_imports` |
+| Text-extension allowlist (binary blocklist) | Done — `is_text_extension` (representative subset of TS list) |
+| Conditional `paths:` rules (gitignore-style globs) | Done — `claude_rules::filter_rules_matching` via `ignore` crate |
+| Brace-expansion in `paths` (`src/*.{ts,tsx}`) | Done — `expand_braces` |
+| AGENTS.md / case-insensitive filenames | Done — coco-rs **divergence** from TS, see `memory_filenames` |
+| Additional directories (`--add-dir`) | Deferred (P3) |
+| AutoMem (`MEMORY.md` memdir entrypoint) | Owned by `coco-memory` crate; this crate just discovers files |
+| TeamMem (`<team-memory-content>` wrapper) | Deferred (v2 — requires team-sync infrastructure) |
+| `claudeMdExcludes` settings filter | Deferred (P3) |
+| HTML-comment stripping (`<!-- -->`) | Deferred — content passes through verbatim |
+| `MAX_MEMORY_CHARACTER_COUNT=40000` per-file truncation | Deferred — content passes through |
 
 ### System Prompt Building (from `utils/systemPromptType.ts`)
 

@@ -66,7 +66,7 @@ impl SystemPrompt {
 /// against the configured `MemoryRuntime` and threads it through.
 pub fn build_system_prompt(
     identity: &str,
-    claude_md_files: &[crate::ClaudeMdFile],
+    claude_md_files: &[crate::MemoryFile],
     environment: &crate::EnvironmentInfo,
     skill_listing: Option<&str>,
     memory_section: Option<&str>,
@@ -130,7 +130,7 @@ pub fn build_system_prompt(
 /// Build a minimal system prompt (for testing or non-interactive mode).
 pub fn build_minimal_prompt(cwd: &std::path::Path) -> SystemPrompt {
     let env = crate::get_environment_info(cwd, "");
-    let claude_files = crate::discover_claude_md_files(cwd);
+    let claude_files = crate::discover_memory_files(cwd);
 
     build_system_prompt(
         "You are an AI coding assistant. Be concise and helpful.",
