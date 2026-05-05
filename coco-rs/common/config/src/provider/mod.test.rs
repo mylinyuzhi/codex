@@ -177,3 +177,92 @@ fn from_partial_missing_api_returns_typed_error() {
         }
     );
 }
+
+#[test]
+fn merge_partial_provider_options_is_key_by_key() {
+    // Same shape semantics as `client_options.headers`: overlay wins
+    // per key, never wholesale-replaces. A consumer downstream
+    // (e.g. `vercel-ai-anthropic::parse_provider_options`) sees the
+    // merged result.
+    use serde_json::json;
+    let mut resolved = ProviderConfig::from_partial(
+        "anthropic",
+        &PartialProviderConfig {
+            api: Some(coco_types::ProviderApi::Anthropic),
+            env_key: Some("ANTHROPIC_API_KEY".into()),
+            base_url: Some("https://api.anthropic.com".into()),
+            provider_options: Some(
+                [
+                    ("experimental_betas".to_string(), json!(false)),
+                    ("non_interactive".to_string(), json!(true)),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let overlay = PartialProviderConfig {
+        // Update one key, add another, leave the third untouched.
+        provider_options: Some(
+            [
+                ("experimental_betas".to_string(), json!(true)),
+                ("show_thinking_summaries".to_string(), json!(true)),
+            ]
+            .into_iter()
+            .collect(),
+        ),
+        ..Default::default()
+    };
+    resolved.merge_partial(&overlay).unwrap();
+    assert_eq!(
+        resolved.provider_options.get("experimental_betas"),
+        Some(&json!(true))
+    );
+    assert_eq!(
+        resolved.provider_options.get("non_interactive"),
+        Some(&json!(true)),
+        "untouched key must survive the overlay"
+    );
+    assert_eq!(
+        resolved.provider_options.get("show_thinking_summaries"),
+        Some(&json!(true))
+    );
+}
+
+#[test]
+fn merge_partial_provider_options_null_removes_key() {
+    // `Value::Null` is the only opt-out signal a downstream overlay
+    // can use to remove a key set higher up — same convention as
+    // `client_options.headers`.
+    use serde_json::json;
+    let mut resolved = ProviderConfig::from_partial(
+        "anthropic",
+        &PartialProviderConfig {
+            api: Some(coco_types::ProviderApi::Anthropic),
+            env_key: Some("ANTHROPIC_API_KEY".into()),
+            base_url: Some("https://api.anthropic.com".into()),
+            provider_options: Some(
+                [("experimental_betas".to_string(), json!(false))]
+                    .into_iter()
+                    .collect(),
+            ),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let overlay = PartialProviderConfig {
+        provider_options: Some(
+            [("experimental_betas".to_string(), serde_json::Value::Null)]
+                .into_iter()
+                .collect(),
+        ),
+        ..Default::default()
+    };
+    resolved.merge_partial(&overlay).unwrap();
+    assert!(
+        !resolved.provider_options.contains_key("experimental_betas"),
+        "Value::Null must remove the key"
+    );
+}

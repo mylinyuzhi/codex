@@ -48,34 +48,18 @@ fi
 # Step 1: fmt (auto-fix, should not fail).
 just fmt 2>&1
 
-# Step 2: check — must pass.
-CHECK_OUTPUT=$(just check 2>&1) || {
-  echo "Compilation failed. Fix these errors:" >&2
-  echo "$CHECK_OUTPUT" >&2
-  exit 2
-}
-
-# Step 3: clippy on lib code — block on warnings AND errors.
-#
-# Workspace baseline is zero warnings (re-established 2026-04-29). The
-# git pre-commit hook (`coco-rs/scripts/git-hooks/pre-commit`) enforces
-# the same gate so warnings can't slip in via `git commit` either.
-LIB_OUTPUT=$(cargo clippy --all-features 2>&1)
-LIB_RC=$?
-LIB_WARNS=$(echo "$LIB_OUTPUT" | grep '^warning:' | grep -v 'generated\|warnings emitted')
-if [ $LIB_RC -ne 0 ] || [ -n "$LIB_WARNS" ]; then
-  echo "Clippy lib warnings/errors detected. Fix them:" >&2
-  echo "$LIB_OUTPUT" >&2
-  exit 2
-fi
-
-# Step 4: clippy on tests — same policy as Step 3.
-TEST_OUTPUT=$(cargo clippy --all-features --tests 2>&1)
-TEST_RC=$?
-TEST_WARNS=$(echo "$TEST_OUTPUT" | grep '^warning:' | grep -v 'generated\|warnings emitted')
-if [ $TEST_RC -ne 0 ] || [ -n "$TEST_WARNS" ]; then
-  echo "Clippy test warnings/errors detected. Fix them:" >&2
-  echo "$TEST_OUTPUT" >&2
+# Step 2: clippy via shared script. `--incremental --head` lints
+# {changed crates ∪ reverse-dep closure}; falls back to workspace clippy
+# when Cargo.toml/Cargo.lock/toolchain change or affected ≥ 70%.
+# Workspace policy is zero warnings — script exits non-zero on any warning.
+# `just check` is intentionally NOT run here: clippy is a strict superset of
+# check, and running both means rustc + clippy-driver compile every dep
+# twice (different cache keys).
+CLIPPY_OUTPUT=$(bash "$PROJECT_DIR/.claude/scripts/clippy.sh" --incremental --head 2>&1)
+CLIPPY_RC=$?
+if [ $CLIPPY_RC -ne 0 ]; then
+  echo "Clippy warnings/errors detected. Fix them:" >&2
+  echo "$CLIPPY_OUTPUT" >&2
   exit 2
 fi
 

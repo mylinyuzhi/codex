@@ -55,23 +55,17 @@ export CARGO_TARGET_DIR="/tmp/cargo-target-$(echo "$PWD" | md5sum | cut -c1-12)"
 
 echo "pre-commit: running clippy gate on coco-rs..." >&2
 
-# Step 2: clippy lib — block on warnings AND errors.
-LIB_OUTPUT=$(cargo clippy --all-features 2>&1)
-LIB_RC=$?
-LIB_WARNS=$(echo "$LIB_OUTPUT" | grep '^warning:' | grep -v 'generated\|warnings emitted' || true)
-if [ $LIB_RC -ne 0 ] || [ -n "$LIB_WARNS" ]; then
-  echo "pre-commit: clippy lib warnings/errors — fix before committing:" >&2
-  echo "$LIB_OUTPUT" >&2
-  exit 1
-fi
+# Resolve repo root (../../.. from this script's location: scripts/git-hooks/pre-commit).
+REPO_ROOT="$(cd "$script_dir/../../.." && pwd)"
 
-# Step 3: clippy tests — block on warnings AND errors.
-TEST_OUTPUT=$(cargo clippy --all-features --tests 2>&1)
-TEST_RC=$?
-TEST_WARNS=$(echo "$TEST_OUTPUT" | grep '^warning:' | grep -v 'generated\|warnings emitted' || true)
-if [ $TEST_RC -ne 0 ] || [ -n "$TEST_WARNS" ]; then
-  echo "pre-commit: clippy test warnings/errors — fix before committing:" >&2
-  echo "$TEST_OUTPUT" >&2
+# Clippy via shared script. `--incremental --staged` lints
+# {staged crates ∪ reverse-dep closure}; falls back to full workspace clippy
+# when Cargo.toml/Cargo.lock/toolchain change or affected ≥ 70%.
+CLIPPY_OUTPUT=$(bash "$REPO_ROOT/.claude/scripts/clippy.sh" --incremental --staged 2>&1)
+CLIPPY_RC=$?
+if [ $CLIPPY_RC -ne 0 ]; then
+  echo "pre-commit: clippy warnings/errors — fix before committing:" >&2
+  echo "$CLIPPY_OUTPUT" >&2
   exit 1
 fi
 

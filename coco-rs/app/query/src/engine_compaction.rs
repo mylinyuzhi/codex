@@ -624,6 +624,13 @@ impl QueryEngine {
                     query_source: None,
                     agent_id: None,
                     time_since_last_assistant_ms: None,
+                    // Helper call (compaction summarizer) — skip the
+                    // `claude-code-20250219` agentic baseline beta and
+                    // cache strategy. Aligns with TS parity:
+                    // summarizer prompts are forked, not part of the
+                    // main agent loop.
+                    agentic: false,
+                    cache: None,
                 };
                 match client.query(&params).await {
                     Ok(result) => {

@@ -51,7 +51,12 @@ fn render(args: &str, paths: AgentSearchPaths) -> anyhow::Result<String> {
         "show" => render_show(&snapshot, rest),
         "paths" => render_paths(&paths),
         "validate" => render_validate(report),
-        "reload" => render_list(&snapshot), // store.load() above already reloaded
+        "reload" => render_reload(&snapshot),
+        // `/agents <name>` is the TS-aligned shortcut: in TS the user
+        // selects an agent from `<AgentsMenu>` to enter the per-agent
+        // submenu (View/Edit/Delete). The flat-text equivalent is to
+        // surface that agent's detail page directly.
+        other if snapshot.find_active(other).is_some() => render_show(&snapshot, other),
         other => format!(
             "Unknown /agents subcommand: {other}\n\nUsage: /agents [list|show <name>|paths|validate|reload]"
         ),
@@ -74,6 +79,15 @@ fn render_list(snapshot: &coco_subagent::AgentCatalogSnapshot) -> String {
         out.push_str(&format!("  {}  [{source} · {model}]\n", def.name));
         out.push_str(&format!("    {desc}\n"));
     }
+    // TS opens an interactive 2-level menu (`<AgentsMenu>`: list →
+    // View/Edit/Delete submenu). Flat text equivalents — keeps SDK + TUI
+    // text-mode honest until a real overlay lands.
+    out.push_str(
+        "\nDetails: /agents show <name>  (or just /agents <name>)\n\
+         Manage:  /agents reload | /agents validate | /agents paths\n\
+         Note:    edit/delete from the TUI overlay are not yet ported — \
+         edit the markdown files directly in the agents directories.",
+    );
     out
 }
 
@@ -134,6 +148,26 @@ fn render_show(snapshot: &coco_subagent::AgentCatalogSnapshot, name: &str) -> St
             out.push_str("...\n");
         }
     }
+    out
+}
+
+/// `/agents reload`: re-scan disk and report what's there now, but be
+/// honest that the *engine's* live agent registry is loaded once at
+/// session startup. The snapshot we just rendered reflects current disk
+/// truth; mid-session edits affect the next session.
+///
+/// TS opens an interactive `<AgentsMenu>` that reloads against the live
+/// registry — Rust doesn't expose a thread-safe handle to the live store
+/// yet, so we surface the deferral instead of pretending.
+fn render_reload(snapshot: &coco_subagent::AgentCatalogSnapshot) -> String {
+    let mut out = String::from(
+        "Re-scanned agent definition directories. \
+         Note: the engine's live agent registry is loaded once at session \
+         start — disk-only changes (added / removed / edited markdown agents) \
+         take effect on the next session. /agents list and /agents show \
+         reflect current disk state.\n\n",
+    );
+    out.push_str(&render_list(snapshot));
     out
 }
 

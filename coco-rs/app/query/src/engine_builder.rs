@@ -100,6 +100,10 @@ impl QueryEngine {
             pending_reactive_context_management: Arc::new(tokio::sync::Mutex::new(None)),
             transcript_store: None,
             transcript_session_id: None,
+            pending_nested_memory: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+            loaded_nested_memory_paths: Arc::new(tokio::sync::Mutex::new(
+                std::collections::HashSet::new(),
+            )),
         }
     }
 

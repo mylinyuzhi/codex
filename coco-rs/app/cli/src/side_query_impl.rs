@@ -145,6 +145,11 @@ impl SideQuery for SideQueryAdapter {
             query_source: Some(request.query_source.clone()),
             agent_id: None,
             time_since_last_assistant_ms: None,
+            // SDK side-query helper — not the agent loop. Per-call cache
+            // strategy could be wired through `request` later if SDK
+            // surface adds it.
+            agentic: false,
+            cache: None,
         };
 
         let result = client.query(&params).await?;

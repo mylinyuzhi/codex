@@ -15,6 +15,7 @@ use coco_types::ProviderApi;
 use coco_types::WireApi;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -52,6 +53,23 @@ pub struct PartialProviderConfig {
     pub client_options: Option<PartialProviderClientOptions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub models: Option<BTreeMap<String, PartialProviderModelOverride>>,
+    /// Provider-instance behavior knobs. Opaque at the config layer —
+    /// each `vercel-ai-<provider>` crate parses its own slice via a
+    /// `parse_provider_options(&BTreeMap<String, Value>)` helper. Keys
+    /// are flat (no nesting) and merge key-by-key across settings sources
+    /// (later source wins per key, identical semantics to
+    /// `client_options.headers`).
+    ///
+    /// Example shape for Anthropic:
+    /// `{"experimental_betas": false, "disable_interleaved_thinking": true}`.
+    /// Unknown keys are ignored at the config layer; the provider crate
+    /// rejects unknown keys at parse time.
+    ///
+    /// Distinct from `client_options` (transport / auth / URL). This
+    /// field is for request-policy / behavior knobs that don't fit the
+    /// transport abstraction.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_options: Option<BTreeMap<String, Value>>,
 }
 
 impl fmt::Debug for PartialProviderConfig {
@@ -66,6 +84,7 @@ impl fmt::Debug for PartialProviderConfig {
             .field("wire_api", &self.wire_api)
             .field("client_options", &self.client_options)
             .field("models", &self.models)
+            .field("provider_options", &self.provider_options)
             .finish()
     }
 }
@@ -98,6 +117,11 @@ pub struct ProviderConfig {
     /// Per-(provider, model) entries — `BTreeMap` so on-disk
     /// serialisation is byte-stable.
     pub models: BTreeMap<String, ProviderModelOverride>,
+    /// Provider-instance behavior knobs (opaque at this layer). The
+    /// owning `vercel-ai-<provider>` crate parses its own slice via a
+    /// `parse_provider_options` helper. `BTreeMap` keeps the map
+    /// byte-stable for fingerprint/digest hashing.
+    pub provider_options: BTreeMap<String, Value>,
 }
 
 impl Default for ProviderConfig {
@@ -113,6 +137,7 @@ impl Default for ProviderConfig {
             wire_api: WireApi::Chat,
             client_options: ProviderClientOptions::default(),
             models: BTreeMap::new(),
+            provider_options: BTreeMap::new(),
         }
     }
 }
@@ -130,6 +155,7 @@ impl fmt::Debug for ProviderConfig {
             .field("wire_api", &self.wire_api)
             .field("client_options", &self.client_options)
             .field("models", &self.models)
+            .field("provider_options", &self.provider_options)
             .finish()
     }
 }
@@ -192,6 +218,8 @@ impl ProviderConfig {
             })
             .unwrap_or_default();
 
+        let provider_options = partial.provider_options.clone().unwrap_or_default();
+
         Ok(Self {
             name: map_key.to_string(),
             api,
@@ -203,6 +231,7 @@ impl ProviderConfig {
             wire_api: partial.wire_api.unwrap_or(WireApi::Chat),
             client_options,
             models,
+            provider_options,
         })
     }
 
@@ -251,6 +280,19 @@ impl ProviderConfig {
             for (k, v) in models {
                 self.models
                     .insert(k.clone(), ProviderModelOverride::from_partial(v.clone()));
+            }
+        }
+        // `provider_options` merges key-by-key — overlay wins per key.
+        // Same shape semantics as `client_options.headers`. A key set
+        // to `Value::Null` removes the field; that's the only way
+        // a downstream overlay can opt-out of a key set higher up.
+        if let Some(opts) = &overlay.provider_options {
+            for (k, v) in opts {
+                if v.is_null() {
+                    self.provider_options.remove(k);
+                } else {
+                    self.provider_options.insert(k.clone(), v.clone());
+                }
             }
         }
         Ok(())

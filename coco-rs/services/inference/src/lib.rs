@@ -10,6 +10,7 @@
 
 pub mod auth;
 pub mod build_call_options;
+pub mod cache_convert;
 pub mod cache_detection;
 pub mod client;
 pub mod errors;
@@ -26,6 +27,7 @@ pub mod usage;
 
 pub use build_call_options::PerCallOverrides;
 pub use build_call_options::build_call_options;
+pub use build_call_options::build_call_options_with_extra;
 pub use cache_detection::CacheBreakDetector;
 pub use cache_detection::CacheBreakResult;
 pub use cache_detection::CacheState;

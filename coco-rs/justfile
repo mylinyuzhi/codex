@@ -28,9 +28,15 @@ check-tests *args:
 build *args:
     cargo build "$@"
 
-# Run clippy on all crates
+# Run clippy on all crates (workspace-wide)
 clippy *args:
-    cargo clippy --all-features --tests "$@"
+    bash "{{justfile_directory()}}/../.claude/scripts/clippy.sh" --full "$@"
+
+# Run clippy only on crates affected by uncommitted changes (incl. transitive
+# reverse-dep closure). Falls back to full when Cargo.toml/Cargo.lock change
+# or affected ≥ 70% of workspace.
+clippy-affected *args:
+    bash "{{justfile_directory()}}/../.claude/scripts/clippy.sh" --incremental --head "$@"
 
 # Fix clippy warnings
 fix *args:
@@ -64,8 +70,10 @@ test-crate crate *args:
 check-seam:
     ./scripts/check-vercel-ai-seam.sh
 
-# REQUIRED before commit
-pre-commit: fmt check-seam check check-tests clippy test
+# REQUIRED before commit. Uses incremental clippy (changed crates + reverse-dep
+# closure) to avoid recompiling the whole workspace on small commits. Falls
+# back to full when Cargo.toml/Cargo.lock change.
+pre-commit: fmt check-seam clippy-affected test
 
 # ============================================================================
 # Running

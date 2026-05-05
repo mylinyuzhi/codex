@@ -10,6 +10,7 @@ mod agent;
 mod agent_ipc;
 mod app_state;
 mod attachment_kind;
+mod cache;
 mod client_request;
 mod command;
 mod event;
@@ -47,6 +48,15 @@ pub use attachment_kind::AttachmentEvent;
 pub use attachment_kind::AttachmentKind;
 pub use attachment_kind::Coverage;
 pub use attachment_kind::coverage_of;
+
+// Prompt-cache shared types (consumed by services/inference + app/query;
+// adapter mirrors live in vercel-ai-anthropic — see prompt-cache-design.md §7)
+pub use cache::AccountKind;
+pub use cache::BetaCapability;
+pub use cache::CacheScope;
+pub use cache::CacheTtl;
+pub use cache::PromptCacheConfig;
+pub use cache::PromptCacheMode;
 
 // Agent types
 pub use agent::AgentColorName;
@@ -122,6 +132,7 @@ pub use event::SessionModelUsage;
 pub use event::SessionResultParams;
 pub use event::SessionStartedParams;
 pub use event::SessionState;
+pub use event::SlashCommandStatusKind;
 pub use event::SubagentBackgroundedParams;
 pub use event::SubagentCompletedParams;
 pub use event::SubagentProgressParams;

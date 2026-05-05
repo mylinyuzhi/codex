@@ -385,3 +385,69 @@ fn user_catalog_layers_under_entry() {
     // Per-entry overrides win over user catalog.
     assert_eq!(resolved.info.temperature, Some(0.7));
 }
+
+#[test]
+fn builtin_claude_models_declare_prompt_cache_capability() {
+    let builtin = builtin_models_partial();
+    for model_id in ["claude-sonnet-4-6", "claude-opus-4-7", "claude-haiku-4-5"] {
+        let caps = builtin
+            .get(model_id)
+            .and_then(|info| info.capabilities.as_ref())
+            .unwrap_or_else(|| panic!("{model_id} must seed capabilities"));
+        assert!(
+            caps.contains(&coco_types::Capability::PromptCache),
+            "{model_id} must declare PromptCache capability"
+        );
+        assert!(
+            caps.contains(&coco_types::Capability::ContextManagement),
+            "{model_id} must declare ContextManagement capability"
+        );
+    }
+}
+
+#[test]
+fn builtin_claude_sonnet_declares_context1m_and_isp() {
+    let builtin = builtin_models_partial();
+    let caps = builtin["claude-sonnet-4-6"].capabilities.as_ref().unwrap();
+    assert!(caps.contains(&coco_types::Capability::Context1m));
+    assert!(caps.contains(&coco_types::Capability::InterleavedThinking));
+}
+
+#[test]
+fn builtin_claude_opus_declares_isp_but_not_context1m() {
+    let builtin = builtin_models_partial();
+    let caps = builtin["claude-opus-4-7"].capabilities.as_ref().unwrap();
+    assert!(caps.contains(&coco_types::Capability::InterleavedThinking));
+    assert!(!caps.contains(&coco_types::Capability::Context1m));
+}
+
+#[test]
+fn builtin_claude_haiku_does_not_declare_isp_or_context1m() {
+    // Haiku is the small/fast helper model: no interleaved thinking, no 1M ctx.
+    let builtin = builtin_models_partial();
+    let caps = builtin["claude-haiku-4-5"].capabilities.as_ref().unwrap();
+    assert!(!caps.contains(&coco_types::Capability::InterleavedThinking));
+    assert!(!caps.contains(&coco_types::Capability::Context1m));
+}
+
+#[test]
+fn non_anthropic_builtin_models_do_not_declare_prompt_cache() {
+    // Capability::PromptCache is Anthropic wire-shape specific; no GPT/Gemini
+    // builtin should declare it (multi-provider isolation invariant).
+    let builtin = builtin_models_partial();
+    for model_id in [
+        "gpt-5-2",
+        "gpt-5-4",
+        "gpt-5-5",
+        "gpt-5-3-codex",
+        "gemini-2.5-pro",
+        "gemini-2.5-flash",
+    ] {
+        if let Some(caps) = builtin.get(model_id).and_then(|i| i.capabilities.as_ref()) {
+            assert!(
+                !caps.contains(&coco_types::Capability::PromptCache),
+                "{model_id} must NOT declare PromptCache (Anthropic-only wire shape)"
+            );
+        }
+    }
+}

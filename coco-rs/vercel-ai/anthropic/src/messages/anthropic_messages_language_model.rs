@@ -256,6 +256,12 @@ fn has_web_tool_20260209_without_code_execution(
 pub struct AnthropicMessagesLanguageModel {
     model_id: String,
     config: Arc<AnthropicConfig>,
+    /// Session-stable 1h-TTL eligibility + allowlist latches. Shared
+    /// across every call this language model handles so the latch
+    /// behavior matches TS `should1hCacheTTL` (R3-F3). Replaced when
+    /// the language model itself is rebuilt (settings reload that
+    /// changes the fingerprint's `runtime_state_digest`).
+    cache_policy: Arc<crate::cache_policy::CachePolicy>,
 }
 
 impl AnthropicMessagesLanguageModel {
@@ -264,6 +270,7 @@ impl AnthropicMessagesLanguageModel {
         Self {
             model_id: model_id.into(),
             config,
+            cache_policy: Arc::new(crate::cache_policy::CachePolicy::new()),
         }
     }
 
@@ -383,9 +390,40 @@ impl AnthropicMessagesLanguageModel {
             &mut cache_validator,
         );
         let system = converted.system;
-        let messages = converted.messages;
+        let mut messages = converted.messages;
         warnings.extend(converted.warnings);
         let betas_from_messages = converted.betas;
+
+        // Auto cache-marker placement (design §10.3). When the caller
+        // requested a cache strategy (`Auto` or `Manual`), the policy
+        // engine resolves the effective TTL — possibly downgrading
+        // `1h` → `5m` based on (account, allowlist) eligibility. Only
+        // `Auto` triggers automatic placement; `Manual` leaves
+        // marker placement to the caller via `provider_options`.
+        if let Some(strategy) = anthropic_options.cache_strategy.as_ref() {
+            let resolved_ttl = self.cache_policy.resolve_ttl(
+                &self.config,
+                strategy,
+                anthropic_options.query_source.as_deref(),
+            );
+            if let Some(ttl) = resolved_ttl
+                && matches!(
+                    strategy.mode,
+                    super::anthropic_messages_options::AdapterCacheMode::Auto
+                )
+                && let Some(idx) =
+                    crate::cache_placement::compute_marker_index_post_group(&messages)
+            {
+                let cc = crate::cache_placement::build_cache_control_value(ttl);
+                crate::cache_placement::attach_marker_at(&mut messages, idx, cc);
+            }
+        }
+
+        // Eligibility predicate computed once and passed to both
+        // `prepare_anthropic_tools` (memory tool gate) and the body
+        // insertion below — single source of truth (R3-F2).
+        let context_management_eligible =
+            crate::beta_resolver::should_emit_context_management(&self.config);
 
         // Prepare tools (possibly injecting the JSON response tool)
         let prepared = if uses_json_response_tool {
@@ -398,6 +436,7 @@ impl AnthropicMessagesLanguageModel {
                 &Some(vercel_ai_provider::LanguageModelV4ToolChoice::Required),
                 Some(true),
                 false,
+                context_management_eligible,
                 Some(&mut cache_validator),
             )
         } else {
@@ -406,12 +445,28 @@ impl AnthropicMessagesLanguageModel {
                 &options.tool_choice,
                 anthropic_options.disable_parallel_tool_use,
                 supports_strict_tools,
+                context_management_eligible,
                 Some(&mut cache_validator),
             )
         };
         warnings.extend(prepared.warnings);
         let mut betas = prepared.betas;
         betas.extend(betas_from_messages);
+
+        // Resolve all capability/topology/knob-driven betas in one
+        // place. Mirrors TS `getBetas` + `getModelDependentBetas`
+        // (`betas.ts:106-263`). Output is a sorted set so the wire
+        // join is deterministic (Finding 7). Memory tool /
+        // context-management body insert below gate on the same
+        // predicate (`should_emit_context_management`) — Finding R3-F2.
+        let resolved_betas = crate::beta_resolver::resolve(
+            &self.config,
+            anthropic_options.agentic_query.unwrap_or(false),
+            anthropic_options.requested_betas.as_deref().unwrap_or(&[]),
+        );
+        for h in &resolved_betas.headers {
+            betas.insert(h.clone());
+        }
 
         // Collect cache control warnings
         warnings.extend(cache_validator.into_warnings());
@@ -707,12 +762,23 @@ impl AnthropicMessagesLanguageModel {
             }
         }
 
-        // Context management
-        if let Some(ref ctx_mgmt) = anthropic_options.context_management {
+        // Context management. The body insertion gates on the SAME
+        // predicate as the memory-tool branch in `prepare_tools` and
+        // the `context-management-2025-06-27` beta from
+        // `beta_resolver` — three sites, one source of truth (R3-F2).
+        // When the predicate fails (capability missing, third-party
+        // endpoint, or experimental gate off), per-call user-supplied
+        // `context_management` is silently dropped: the beta header
+        // is required for the server to honor it, so emitting the
+        // body without the header would just be rejected.
+        if let Some(ref ctx_mgmt) = anthropic_options.context_management
+            && context_management_eligible
+        {
             let transformed = transform_context_management(ctx_mgmt, &mut warnings);
             body["context_management"] = transformed;
-            betas.insert("context-management-2025-06-27".into());
-            // Check for compact edit
+            // `compact_20260112` edits unlock the additional
+            // `compact-2026-01-12` beta — feature-specific, not part
+            // of the central capability list.
             if let Some(edits) = body["context_management"]
                 .get("edits")
                 .and_then(|e| e.as_array())
@@ -756,11 +822,16 @@ impl AnthropicMessagesLanguageModel {
                 .and_then(|h| h.get("anthropic-beta")),
         );
 
-        // Build merged headers
+        // Build merged headers. The set is sorted before joining so
+        // the wire `anthropic-beta` value is byte-stable across runs
+        // (Finding 7) — required for deterministic snapshot tests
+        // and for cache-break detector hashes that include the
+        // header indirectly via `merged_extra`.
         let mut headers = config_headers;
         if !betas.is_empty() {
-            let beta_str: Vec<&str> = betas.iter().map(String::as_str).collect();
-            headers.insert("anthropic-beta".into(), beta_str.join(","));
+            let mut beta_vec: Vec<&str> = betas.iter().map(String::as_str).collect();
+            beta_vec.sort_unstable();
+            headers.insert("anthropic-beta".into(), beta_vec.join(","));
         }
         // Merge per-request headers
         if let Some(ref extra) = options.headers {

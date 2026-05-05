@@ -32,8 +32,10 @@ use coco_query::CoreEvent;
 use coco_query::ServerNotification;
 use coco_tool_runtime::ToolRegistry;
 use coco_tui::App;
+use coco_tui::ClearScope;
 use coco_tui::UserCommand;
 use coco_tui::app::create_channels;
+use coco_types::SlashCommandStatusKind;
 use coco_types::TuiOnlyEvent;
 use tokio_util::sync::CancellationToken;
 
@@ -121,6 +123,33 @@ pub async fn run_tui(cli: &Cli) -> Result<()> {
     let registry = ToolRegistry::new();
     coco_tools::register_all_tools(&registry);
     let tools = Arc::new(registry);
+
+    // Slash-command registry — same TS-parity load order used by the SDK
+    // bootstrap path (commands::build_command_registry). Built once here
+    // so dispatch_slash_command and the SDK initialize advertisement
+    // share one Arc.
+    let command_registry = {
+        let mut skill_manager = coco_skills::SkillManager::new();
+        skill_manager.load_from_dirs(&[
+            coco_config::global_config::config_home().join("skills"),
+            cwd.join(".coco").join("skills"),
+        ]);
+        let mut plugin_manager = coco_plugins::PluginManager::new();
+        plugin_manager.load_from_dirs(&coco_plugins::get_plugin_dirs(
+            &coco_config::global_config::config_home(),
+            &cwd,
+        ));
+        let registry = coco_commands::build_command_registry(
+            &skill_manager,
+            &plugin_manager,
+            coco_types::UserType::from_env(),
+            runtime_config.features.clone(),
+            cwd.clone(),
+            dirs::home_dir().unwrap_or_else(|| cwd.clone()),
+            None,
+        );
+        Arc::new(registry)
+    };
 
     // System prompt
     let system_prompt =
@@ -211,6 +240,7 @@ pub async fn run_tui(cli: &Cli) -> Result<()> {
             session_manager,
             fast_model_spec,
             permission_bridge: Some(tui_permission_bridge),
+            command_registry: command_registry.clone(),
         },
     )
     .await?;
@@ -306,22 +336,7 @@ async fn run_agent_driver(
     // `abortController.abort()` "concurrently" with engine work — JS
     // cooperative-async makes that natural; Rust needs an explicit
     // `tokio::spawn` to free the recv loop.
-    struct ActiveTurn {
-        task: tokio::task::JoinHandle<()>,
-        cancel: CancellationToken,
-    }
     let active_turn: Arc<Mutex<Option<ActiveTurn>>> = Arc::new(Mutex::new(None));
-
-    /// Cancel the in-flight turn (if any) and await its completion.
-    /// Used by every arm whose semantics conflict with a concurrent
-    /// turn (Clear / Compact / Rewind / Shutdown / next SubmitInput).
-    async fn drain_active_turn(slot: &Arc<Mutex<Option<ActiveTurn>>>) {
-        let state = { slot.lock().await.take() };
-        if let Some(s) = state {
-            s.cancel.cancel();
-            let _ = s.task.await;
-        }
-    }
 
     while let Some(command) = command_rx.recv().await {
         // Re-read each turn so `/clear` regen picks up the new id.
@@ -335,6 +350,48 @@ async fn run_agent_driver(
             } => {
                 if content.is_empty() {
                     continue;
+                }
+
+                // Slash-command interception. When the user typed `/foo args`,
+                // resolve through `runtime.command_registry` BEFORE handing
+                // raw text to the model. TS parity:
+                // `utils/processUserInput/processSlashCommand.tsx`.
+                let mut effective_content = content;
+                if let Some((name, args)) = parse_slash_command(&effective_content) {
+                    match dispatch_slash_command(name, args, &runtime, &event_tx).await {
+                        SlashOutcome::Handled => continue,
+                        SlashOutcome::RunEngine { content: rendered } => {
+                            effective_content = rendered;
+                        }
+                        SlashOutcome::NotFound => {
+                            // Fall through with original content — unknown
+                            // command goes to the model as raw text.
+                        }
+                        SlashOutcome::TriggerCompact {
+                            custom_instructions,
+                        } => {
+                            run_manual_compact(
+                                &runtime,
+                                &event_tx,
+                                custom_instructions,
+                                &active_turn,
+                            )
+                            .await;
+                            continue;
+                        }
+                        SlashOutcome::TriggerClear { scope } => {
+                            run_clear_conversation(&runtime, scope, &active_turn).await;
+                            continue;
+                        }
+                        SlashOutcome::TriggerDream => {
+                            run_dream_consolidation(&runtime).await;
+                            continue;
+                        }
+                        SlashOutcome::TriggerSummary => {
+                            run_session_memory_force(&runtime).await;
+                            continue;
+                        }
+                    }
                 }
 
                 // Defensive drain: TUI input layer gates submit on
@@ -356,7 +413,7 @@ async fn run_agent_driver(
                 let task = tokio::spawn(async move {
                     process_submit_turn(
                         user_message_id,
-                        content,
+                        effective_content,
                         images,
                         runtime_t,
                         event_tx_t,
@@ -371,6 +428,63 @@ async fn run_agent_driver(
                     task,
                     cancel: cancel_for_state,
                 });
+            }
+
+            UserCommand::ExecuteSkill { name, args } => {
+                // Command-palette dispatch (`update/overlay.rs::Submit`).
+                // Same registry lookup as the typed path, but with no
+                // user-supplied chat message — for `Prompt` outcomes we
+                // mint a fresh user-message UUID so file-history /
+                // rewind keys line up.
+                let args_str = args.unwrap_or_default();
+                match dispatch_slash_command(&name, &args_str, &runtime, &event_tx).await {
+                    SlashOutcome::Handled => {}
+                    SlashOutcome::RunEngine { content } => {
+                        drain_active_turn(&active_turn).await;
+                        let turn_cancel = CancellationToken::new();
+                        let cancel_for_state = turn_cancel.clone();
+                        let runtime_t = runtime.clone();
+                        let event_tx_t = event_tx.clone();
+                        let title_gen_attempted_t = title_gen_attempted.clone();
+                        let session_id_t = session_id.clone();
+                        let synth_id = uuid::Uuid::new_v4().to_string();
+                        let task = tokio::spawn(async move {
+                            process_submit_turn(
+                                synth_id,
+                                content,
+                                Vec::new(),
+                                runtime_t,
+                                event_tx_t,
+                                title_gen_attempted_t,
+                                session_id_t,
+                                turn_cancel,
+                            )
+                            .await;
+                        });
+                        *active_turn.lock().await = Some(ActiveTurn {
+                            task,
+                            cancel: cancel_for_state,
+                        });
+                    }
+                    SlashOutcome::NotFound => {
+                        warn!(%name, "ExecuteSkill: command not registered");
+                    }
+                    SlashOutcome::TriggerCompact {
+                        custom_instructions,
+                    } => {
+                        run_manual_compact(&runtime, &event_tx, custom_instructions, &active_turn)
+                            .await;
+                    }
+                    SlashOutcome::TriggerClear { scope } => {
+                        run_clear_conversation(&runtime, scope, &active_turn).await;
+                    }
+                    SlashOutcome::TriggerDream => {
+                        run_dream_consolidation(&runtime).await;
+                    }
+                    SlashOutcome::TriggerSummary => {
+                        run_session_memory_force(&runtime).await;
+                    }
+                }
             }
 
             UserCommand::Rewind {
@@ -450,35 +564,13 @@ async fn run_agent_driver(
             } => {
                 // Manual `/compact [instructions]` from the TUI.
                 // TS: commands/compact/compact.ts:40 — `args.trim()`
-                // becomes `customInstructions`. Build a transient engine
-                // sharing the same registries / state and drive
-                // `run_manual_compact`. The session memory short-circuit
-                // and PreCompact/PostCompact hooks are owned inside that
-                // method.
+                // becomes `customInstructions`.
                 info!(
                     session_id = %session_id,
                     has_instructions = custom_instructions.is_some(),
                     "TUI: manual /compact"
                 );
-                // Drain any active turn before compacting — compact
-                // mutates the same `runtime.history` and runs an LLM
-                // call that races with the in-flight engine.
-                drain_active_turn(&active_turn).await;
-                let compact_cancel = CancellationToken::new();
-                let engine = runtime.build_engine(compact_cancel).await;
-                let history_msgs = runtime.history.lock().await.clone();
-                let mut history = coco_messages::MessageHistory::new();
-                for m in history_msgs {
-                    history.push(m);
-                }
-                let event_tx_opt = Some(event_tx.clone());
-                engine
-                    .run_manual_compact(&mut history, &event_tx_opt, custom_instructions)
-                    .await;
-                {
-                    let mut h = runtime.history.lock().await;
-                    *h = history.messages;
-                }
+                run_manual_compact(&runtime, &event_tx, custom_instructions, &active_turn).await;
             }
 
             UserCommand::SetPermissionMode { mode } => {
@@ -514,14 +606,7 @@ async fn run_agent_driver(
             }
 
             UserCommand::ClearConversation { scope } => {
-                // Drain first — clear_conversation mutates session_id
-                // and resets file_read_state / SM / cache-break; an
-                // in-flight turn writing into those would observe a
-                // half-cleared state.
-                drain_active_turn(&active_turn).await;
-                if let Err(e) = runtime.clear_conversation(scope).await {
-                    warn!(error = %e, "/clear failed");
-                }
+                run_clear_conversation(&runtime, scope, &active_turn).await;
             }
 
             UserCommand::PlanApprovalResponse {
@@ -648,6 +733,644 @@ async fn run_agent_driver(
 /// of `session_id` taken on the dispatcher side (so the title-gen path
 /// uses the same id the rest of the turn observed, not a later
 /// `/clear`-regenerated one).
+/// Outcome of slash-command resolution against `runtime.command_registry`.
+///
+/// `dispatch_slash_command` is the single source of truth for routing
+/// `/foo` regardless of whether the user typed it (`SubmitInput`) or
+/// picked it from the palette (`ExecuteSkill`).
+enum SlashOutcome {
+    /// Command consumed locally (Text / Compact / OpenDialog / Skip).
+    /// The caller should NOT run the engine.
+    Handled,
+    /// Re-feed `content` into the engine as the user message
+    /// (Prompt / InjectPrompt). For typed commands the original `/foo`
+    /// is replaced with the rendered prompt body so the model sees the
+    /// expansion, not the slash.
+    RunEngine { content: String },
+    /// No command with this name is registered. Caller should fall
+    /// through to the existing path (model receives raw text).
+    NotFound,
+    /// Trigger the same flow as `UserCommand::Compact`. Emitted when
+    /// the slash dispatcher detects `COMPACT_SENTINEL` (palette path)
+    /// or intercepts `/compact` / `/compact <args>` directly. The agent
+    /// driver runs `engine.run_manual_compact` so the model actually
+    /// summarizes — not just print "Compacting…".
+    TriggerCompact { custom_instructions: Option<String> },
+    /// Trigger the same flow as `UserCommand::ClearConversation`.
+    /// Emitted for the palette path of `/clear` / `/clear all` /
+    /// `/clear history`. The agent driver calls
+    /// `runtime.clear_conversation(scope)` which actually wipes
+    /// transcript, plan slugs, file caches, etc.
+    TriggerClear { scope: ClearScope },
+    /// Trigger auto-memory consolidation (when the runtime has a
+    /// `MemoryRuntime`). Emitted when the dispatcher sees `DREAM_SENTINEL`.
+    TriggerDream,
+    /// Trigger a session-memory force update (9-section). Emitted when
+    /// the dispatcher sees `SUMMARY_SENTINEL`.
+    TriggerSummary,
+}
+
+/// Split `/<name> <args>` into `(name, args)`. Returns `None` when
+/// `text` does not start with `/` or has no name. Whitespace-trimmed.
+fn parse_slash_command(text: &str) -> Option<(&str, &str)> {
+    let stripped = text.trim().strip_prefix('/')?;
+    if stripped.is_empty() {
+        return None;
+    }
+    Some(match stripped.split_once(char::is_whitespace) {
+        Some((name, rest)) => (name, rest.trim_start()),
+        None => (stripped, ""),
+    })
+}
+
+/// Decision-tree classifier for sentinel-prefixed handler output.
+/// Pure, no side-effects — used by `dispatch_slash_command` to decide
+/// whether the Text result actually carries a request to fire a real
+/// feature (compact / dream / summary). Extracted as a free function so
+/// the routing logic is testable without a full `SessionRuntime`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SentinelTrigger {
+    Compact { custom_instructions: Option<String> },
+    Dream,
+    Summary,
+}
+
+fn classify_sentinel_trigger(text: &str) -> Option<SentinelTrigger> {
+    use coco_commands::handlers::compact::COMPACT_SENTINEL;
+    use coco_commands::handlers::compact::parse_compact_sentinel;
+    use coco_commands::handlers::dream::DREAM_SENTINEL;
+    use coco_commands::handlers::dream::parse_dream_sentinel;
+    use coco_commands::handlers::summary::SUMMARY_SENTINEL;
+    use coco_commands::handlers::summary::parse_summary_sentinel;
+    if text.starts_with(COMPACT_SENTINEL) {
+        let req = parse_compact_sentinel(text)?;
+        let trimmed = req.custom_instructions.trim();
+        let custom_instructions = if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        };
+        return Some(SentinelTrigger::Compact {
+            custom_instructions,
+        });
+    }
+    if text.starts_with(DREAM_SENTINEL) && parse_dream_sentinel(text).is_some() {
+        return Some(SentinelTrigger::Dream);
+    }
+    if text.starts_with(SUMMARY_SENTINEL) && parse_summary_sentinel(text).is_some() {
+        return Some(SentinelTrigger::Summary);
+    }
+    None
+}
+
+/// Map `/clear` args to a `ClearScope`. `None` for unknown args, which
+/// the dispatcher surfaces as a usage hint. Pure helper extracted from
+/// `dispatch_slash_command` to keep routing logic testable.
+fn parse_clear_scope(args: &str) -> Option<ClearScope> {
+    match args.trim() {
+        "" | "all" => Some(ClearScope::Conversation),
+        "history" => Some(ClearScope::History),
+        _ => None,
+    }
+}
+
+/// Mutating subcommand of `/permissions`. `None` for the read-only
+/// (`list` / no-arg) path, which falls through to the registry handler.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PermissionsMutation {
+    Allow(String),
+    Deny(String),
+    Reset,
+}
+
+fn parse_permissions_mutation(args: &str) -> Option<PermissionsMutation> {
+    let trimmed = args.trim();
+    if trimmed == "reset" {
+        return Some(PermissionsMutation::Reset);
+    }
+    if let Some(tool) = trimmed.strip_prefix("allow ") {
+        let tool = tool.trim();
+        if tool.is_empty() {
+            return None;
+        }
+        return Some(PermissionsMutation::Allow(tool.to_string()));
+    }
+    if let Some(tool) = trimmed.strip_prefix("deny ") {
+        let tool = tool.trim();
+        if tool.is_empty() {
+            return None;
+        }
+        return Some(PermissionsMutation::Deny(tool.to_string()));
+    }
+    None
+}
+
+/// Resolve `/<name> <args>` through the registry and route the result.
+async fn dispatch_slash_command(
+    name: &str,
+    args: &str,
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    event_tx: &mpsc::Sender<CoreEvent>,
+) -> SlashOutcome {
+    // Runtime-state-aware commands intercepted before registry lookup:
+    // their behavior depends on per-session state (session_id, plan
+    // file, app_state) that the static registry can't carry. TS:
+    // `commands/plan/plan.tsx` reads `appState.toolPermissionContext`
+    // + `getPlan()` / `getPlanFilePath()` directly.
+    if matches!(name, "plan" | "planning") {
+        return dispatch_plan(args, runtime, event_tx).await;
+    }
+    // `/permissions allow|deny|reset` — the registry handler can't
+    // mutate `engine_config.allow_rules / deny_rules`. Intercept the
+    // mutating subcommands so they actually take effect; the `list`
+    // / no-arg / `list` path keeps falling through to the registry
+    // handler that reads settings.json.
+    if name == "permissions"
+        && let Some(outcome) = dispatch_permissions_mutation(args, runtime, event_tx).await
+    {
+        return outcome;
+    }
+    // `/clear` from the palette: typed `/clear` is intercepted in
+    // `update/edit.rs::try_local_clear`, but ExecuteSkill flows
+    // through here. Without this short-circuit the registry handler's
+    // text — which says "Conversation cleared" — would print without
+    // any actual clearing.
+    if name == "clear" {
+        return match parse_clear_scope(args) {
+            Some(scope) => SlashOutcome::TriggerClear { scope },
+            None => {
+                emit_slash_text(
+                    event_tx,
+                    name,
+                    &format!(
+                        "Unknown clear subcommand: {}\n\n\
+                         Usage:\n\
+                         /clear           Conversation + plan state + caches\n\
+                         /clear all       Alias of /clear\n\
+                         /clear history   Lighter: clear transcript only",
+                        args.trim()
+                    ),
+                )
+                .await;
+                SlashOutcome::Handled
+            }
+        };
+    }
+    // `/rewind` / `/checkpoint` from the palette: emit a TuiOnlyEvent
+    // so the TUI builds the picker overlay from current session state.
+    // Typed paths are intercepted earlier in the TUI.
+    if matches!(name, "rewind" | "checkpoint") {
+        let _ = event_tx
+            .send(CoreEvent::Tui(TuiOnlyEvent::OpenRewindPicker))
+            .await;
+        return SlashOutcome::Handled;
+    }
+
+    let Some(cmd) = runtime.command_registry.get(name) else {
+        return SlashOutcome::NotFound;
+    };
+    let Some(handler) = cmd.handler.as_ref() else {
+        // Registered shell with no handler. For Prompt-type commands the
+        // safe default is to fall through to the model so it sees the
+        // raw `/foo` — TS does the same when the loader returns nothing.
+        // Local-type commands genuinely need a handler; surface a
+        // breadcrumb so the user knows the command is mis-wired.
+        if matches!(cmd.command_type, coco_types::CommandType::Prompt(_)) {
+            return SlashOutcome::NotFound;
+        }
+        emit_slash_status(event_tx, name, SlashCommandStatusKind::NoHandler).await;
+        return SlashOutcome::Handled;
+    };
+
+    let result = match handler.execute_command(args).await {
+        Ok(r) => r,
+        Err(e) => {
+            emit_slash_status(
+                event_tx,
+                name,
+                SlashCommandStatusKind::Failed {
+                    error: e.to_string(),
+                },
+            )
+            .await;
+            return SlashOutcome::Handled;
+        }
+    };
+
+    use coco_commands::CommandResult;
+    use coco_commands::DialogSpec;
+    use coco_commands::PromptPart;
+    match result {
+        CommandResult::Skip => SlashOutcome::Handled,
+        CommandResult::Text(text) => {
+            // Sentinel detection — handlers like `/compact`, `/dream`,
+            // `/summary` produce a sentinel-prefixed string instead of
+            // having direct access to the runtime. Convert the sentinel
+            // into a structured `SlashOutcome` so the agent driver runs
+            // the real feature (compaction, consolidation, extraction).
+            // Mirrors the SDK runner's sentinel detection
+            // (`sdk_runner.rs:170,199,213`).
+            if let Some(trigger) = classify_sentinel_trigger(&text) {
+                return match trigger {
+                    SentinelTrigger::Compact {
+                        custom_instructions,
+                    } => SlashOutcome::TriggerCompact {
+                        custom_instructions,
+                    },
+                    SentinelTrigger::Dream => SlashOutcome::TriggerDream,
+                    SentinelTrigger::Summary => SlashOutcome::TriggerSummary,
+                };
+            }
+            emit_slash_text(event_tx, name, &text).await;
+            SlashOutcome::Handled
+        }
+        CommandResult::InjectPrompt(text) => SlashOutcome::RunEngine { content: text },
+        CommandResult::Prompt { parts, .. } => {
+            // Concatenate text parts. `File` parts are not yet wired —
+            // none of the in-tree Prompt handlers emit them today.
+            let mut buf = String::new();
+            for part in parts {
+                match part {
+                    PromptPart::Text { text } => {
+                        if !buf.is_empty() {
+                            buf.push('\n');
+                        }
+                        buf.push_str(&text);
+                    }
+                    PromptPart::File { .. } => {
+                        warn!(%name, "Prompt::File parts not yet rendered to engine input");
+                    }
+                }
+            }
+            if buf.is_empty() {
+                emit_slash_status(event_tx, name, SlashCommandStatusKind::EmptyPrompt).await;
+                SlashOutcome::Handled
+            } else {
+                SlashOutcome::RunEngine { content: buf }
+            }
+        }
+        CommandResult::Compact {
+            display_text,
+            summary: _,
+        } => {
+            // Full-compaction integration lives behind `UserCommand::Compact`
+            // (engine.run_manual_compact). For now, surface the display
+            // text. A follow-up can route this through the engine path so
+            // the next turn carries `summary`.
+            emit_slash_text(event_tx, name, &display_text).await;
+            SlashOutcome::Handled
+        }
+        CommandResult::OpenDialog(spec) => {
+            // Wired dialogs route to TuiOnlyEvent so the TUI opens the
+            // overlay; unwired dialogs emit a localized breadcrumb.
+            // Typed `/rewind` etc. are intercepted earlier in
+            // `update/edit.rs::try_local_command`; this path covers the
+            // command-palette (ExecuteSkill) flow.
+            match spec {
+                DialogSpec::MessageSelector => {
+                    let _ = event_tx
+                        .send(CoreEvent::Tui(TuiOnlyEvent::OpenRewindPicker))
+                        .await;
+                }
+                DialogSpec::MemoryFileSelector { .. }
+                | DialogSpec::PluginPicker
+                | DialogSpec::McpbConfig { .. }
+                | DialogSpec::Confirm { .. } => {
+                    let dialog_kind = match spec {
+                        DialogSpec::MemoryFileSelector { .. } => "memory file selector",
+                        DialogSpec::PluginPicker => "plugin picker",
+                        DialogSpec::McpbConfig { .. } => "MCPB config form",
+                        DialogSpec::Confirm { .. } => "confirm dialog",
+                        DialogSpec::MessageSelector => unreachable!(),
+                    }
+                    .to_string();
+                    emit_slash_status(
+                        event_tx,
+                        name,
+                        SlashCommandStatusKind::DialogPending { dialog_kind },
+                    )
+                    .await;
+                }
+            }
+            SlashOutcome::Handled
+        }
+    }
+}
+
+/// `/plan` dispatch with full session-runtime context.
+///
+/// Mirrors TS `commands/plan/plan.tsx`:
+/// - `""` → show current plan content (or "no plan yet" hint)
+/// - `"open"` → ensure file exists, launch `$EDITOR` (or `vi`) on it
+/// - `"<description>"` → emit a Prompt that asks the model to call
+///   EnterPlanMode and plan for the description (TS sets app-state
+///   directly + triggers a query; coco-rs routes this through the
+///   EnterPlanMode tool, which is the canonical mode-entry path)
+async fn dispatch_plan(
+    args: &str,
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    event_tx: &mpsc::Sender<CoreEvent>,
+) -> SlashOutcome {
+    let args = args.trim();
+    let session_id = runtime.current_session_id().await;
+    let plans_dir = coco_context::resolve_plans_directory(
+        &runtime.config_home,
+        /*project_dir*/ None,
+        /*setting*/ None,
+    );
+
+    if args.is_empty() {
+        let path =
+            coco_context::get_plan_file_path(&session_id, &plans_dir, /*agent_id*/ None);
+        let content = coco_context::get_plan(&session_id, &plans_dir, /*agent_id*/ None);
+        let text = match content {
+            Some(body) if !body.trim().is_empty() => format!(
+                "## Current Plan\n\n*{}*\n\n{}\n\nRun `/plan open` to edit in $EDITOR.",
+                path.display(),
+                body
+            ),
+            _ => format!(
+                "No plan written yet for this session.\n\n\
+                 Plan file: `{}`\n\n\
+                 Run `/plan <description>` to ask the model to enter plan mode \
+                 for a task, or `/plan open` to start an empty plan in $EDITOR.",
+                path.display()
+            ),
+        };
+        emit_slash_text(event_tx, "plan", &text).await;
+        return SlashOutcome::Handled;
+    }
+
+    if args == "open" {
+        let path = coco_context::get_plan_file_path(&session_id, &plans_dir, None);
+        if let Some(parent) = path.parent()
+            && let Err(e) = tokio::fs::create_dir_all(parent).await
+        {
+            emit_slash_text(
+                event_tx,
+                "plan",
+                &format!("Failed to create plans directory: {e}"),
+            )
+            .await;
+            return SlashOutcome::Handled;
+        }
+        if !path.exists() {
+            let _ = tokio::fs::write(&path, "").await;
+        }
+        let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+        let text = match tokio::process::Command::new(&editor).arg(&path).spawn() {
+            Ok(_) => format!("Opened plan in {editor}: {}", path.display()),
+            Err(e) => format!(
+                "Failed to launch editor `{editor}`: {e}\n\nPlan file: {}",
+                path.display()
+            ),
+        };
+        emit_slash_text(event_tx, "plan", &text).await;
+        return SlashOutcome::Handled;
+    }
+
+    // /plan <description> — TS sets plan-mode + triggers a query. coco-rs
+    // analog: feed the description back as a user message asking the
+    // model to use EnterPlanMode (the canonical entry path) and plan
+    // for the task.
+    let body =
+        format!("Use the EnterPlanMode tool to enter plan mode, then create a plan for: {args}");
+    SlashOutcome::RunEngine { content: body }
+}
+
+/// In-flight turn handle. Each `SubmitInput` / `ExecuteSkill` spawns
+/// the engine call into a child task so the `command_rx` recv loop stays
+/// responsive (Interrupt / ClearConversation / Compact / Rewind / Shutdown
+/// can reach their arms while the engine runs). TS:
+/// `screens/REPL.tsx`'s React event loop fires `abortController.abort()`
+/// "concurrently" with engine work — JS cooperative-async makes that
+/// natural; Rust needs an explicit `tokio::spawn`.
+struct ActiveTurn {
+    task: tokio::task::JoinHandle<()>,
+    cancel: CancellationToken,
+}
+
+/// Cancel the in-flight turn (if any) and await its completion.
+/// Used by every arm whose semantics conflict with a concurrent
+/// turn (Clear / Compact / Rewind / Shutdown / next SubmitInput).
+async fn drain_active_turn(slot: &Arc<Mutex<Option<ActiveTurn>>>) {
+    let state = { slot.lock().await.take() };
+    if let Some(s) = state {
+        s.cancel.cancel();
+        let _ = s.task.await;
+    }
+}
+
+/// Run a manual full LLM compaction. Used by `UserCommand::Compact` and
+/// the slash dispatcher's `TriggerCompact` outcome — both routes feed
+/// through here so typed `/compact` and palette `/compact` behave
+/// identically. TS: `commands/compact/compact.ts:40`.
+async fn run_manual_compact(
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    event_tx: &mpsc::Sender<CoreEvent>,
+    custom_instructions: Option<String>,
+    active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
+) {
+    // Drain any active turn before compacting — compact mutates
+    // `runtime.history` and runs an LLM call that races with the
+    // in-flight engine.
+    drain_active_turn(active_turn).await;
+    let compact_cancel = CancellationToken::new();
+    let engine = runtime.build_engine(compact_cancel).await;
+    let history_msgs = runtime.history.lock().await.clone();
+    let mut history = coco_messages::MessageHistory::new();
+    for m in history_msgs {
+        history.push(m);
+    }
+    let event_tx_opt = Some(event_tx.clone());
+    engine
+        .run_manual_compact(&mut history, &event_tx_opt, custom_instructions)
+        .await;
+    {
+        let mut h = runtime.history.lock().await;
+        *h = history.messages;
+    }
+}
+
+/// Run the same clear flow as `UserCommand::ClearConversation`. Drains
+/// any active turn first since clear mutates session_id + resets several
+/// per-session caches. TS: `clearConversation()`.
+async fn run_clear_conversation(
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    scope: ClearScope,
+    active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
+) {
+    drain_active_turn(active_turn).await;
+    if let Err(e) = runtime.clear_conversation(scope).await {
+        warn!(error = %e, "/clear failed");
+    }
+}
+
+/// Force auto-memory consolidation now (skips the three-gate scheduler).
+/// Mirrors the SDK runner's `/dream` short-circuit (`sdk_runner.rs:199`).
+/// Silently no-ops when `Feature::AutoMemory` is off — matches TS.
+async fn run_dream_consolidation(runtime: &Arc<crate::session_runtime::SessionRuntime>) {
+    let Some(memory_runtime) = runtime.memory_runtime().cloned() else {
+        info!("/dream: no MemoryRuntime (Feature::AutoMemory off); skipping");
+        return;
+    };
+    let transcript_dir = std::path::PathBuf::from(".");
+    let now_ms = coco_memory::service::dream::DreamService::now_ms();
+    let _ = memory_runtime
+        .dream
+        .maybe_consolidate(&transcript_dir, &[], now_ms)
+        .await;
+}
+
+/// Force a 9-section session-memory update. Mirrors the SDK runner's
+/// `/summary` short-circuit (`sdk_runner.rs:213`). Silently no-ops when
+/// the runtime has no `MemoryRuntime`.
+async fn run_session_memory_force(runtime: &Arc<crate::session_runtime::SessionRuntime>) {
+    let Some(memory_runtime) = runtime.memory_runtime().cloned() else {
+        info!("/summary: no MemoryRuntime; skipping");
+        return;
+    };
+    let history_msgs = runtime.history.lock().await.clone();
+    let tokens = coco_compact::estimate_tokens(&history_msgs);
+    let _ = memory_runtime.session_memory.force(tokens).await;
+}
+
+/// `/permissions allow|deny|reset` dispatch with engine-config mutation.
+///
+/// The static registry handler can return text but can't mutate
+/// `engine_config.allow_rules / deny_rules`. This intercepts the three
+/// mutating subcommands so they take real effect; `list` / no-arg fall
+/// through to the registry handler that reads settings.json. Returns
+/// `None` for non-mutating args so the caller falls through.
+async fn dispatch_permissions_mutation(
+    args: &str,
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    event_tx: &mpsc::Sender<CoreEvent>,
+) -> Option<SlashOutcome> {
+    use coco_types::PermissionBehavior;
+    use coco_types::PermissionRule;
+    use coco_types::PermissionRuleSource;
+    use coco_types::PermissionRuleValue;
+
+    // Empty `allow` / `deny` (no tool name) is a usage error — surface
+    // the hint without falling through to the registry handler. The
+    // pure parser returns `None` in that case (vs. None for read-only
+    // / unrecognized which DO fall through).
+    let trimmed = args.trim();
+    if trimmed == "allow" || trimmed.starts_with("allow  ") || trimmed == "allow " {
+        // Route through the typed status enum so the TUI translates via
+        // `slash.permissions.usage_allow` (i18n parity with the other
+        // dispatcher status messages).
+        emit_slash_status(
+            event_tx,
+            "permissions",
+            SlashCommandStatusKind::PermissionsUsageAllow,
+        )
+        .await;
+        return Some(SlashOutcome::Handled);
+    }
+    if trimmed == "deny" || trimmed.starts_with("deny  ") || trimmed == "deny " {
+        emit_slash_status(
+            event_tx,
+            "permissions",
+            SlashCommandStatusKind::PermissionsUsageDeny,
+        )
+        .await;
+        return Some(SlashOutcome::Handled);
+    }
+
+    let mutation = parse_permissions_mutation(args)?;
+
+    let confirmation = match mutation {
+        PermissionsMutation::Allow(tool) => {
+            let rule = PermissionRule {
+                source: PermissionRuleSource::Session,
+                behavior: PermissionBehavior::Allow,
+                value: PermissionRuleValue {
+                    tool_pattern: tool.clone(),
+                    rule_content: None,
+                },
+            };
+            runtime
+                .update_engine_config(|cfg| {
+                    cfg.allow_rules
+                        .entry(PermissionRuleSource::Session)
+                        .or_default()
+                        .push(rule);
+                })
+                .await;
+            format!(
+                "Added allow rule for `{tool}`.\n\nSource: Session (highest priority — \
+                 active until end of session or `/permissions reset`)."
+            )
+        }
+        PermissionsMutation::Deny(tool) => {
+            let rule = PermissionRule {
+                source: PermissionRuleSource::Session,
+                behavior: PermissionBehavior::Deny,
+                value: PermissionRuleValue {
+                    tool_pattern: tool.clone(),
+                    rule_content: None,
+                },
+            };
+            runtime
+                .update_engine_config(|cfg| {
+                    cfg.deny_rules
+                        .entry(PermissionRuleSource::Session)
+                        .or_default()
+                        .push(rule);
+                })
+                .await;
+            format!(
+                "Added deny rule for `{tool}`.\n\nSource: Session (highest priority — \
+                 active until end of session or `/permissions reset`)."
+            )
+        }
+        PermissionsMutation::Reset => {
+            runtime
+                .update_engine_config(|cfg| {
+                    cfg.allow_rules.remove(&PermissionRuleSource::Session);
+                    cfg.deny_rules.remove(&PermissionRuleSource::Session);
+                })
+                .await;
+            "Session permission rules cleared. File-based rules \
+             (.claude/settings.json, ~/.cocode/settings.json) are unchanged — \
+             edit those files directly to modify persistent rules."
+                .to_string()
+        }
+    };
+    emit_slash_text(event_tx, "permissions", &confirmation).await;
+    Some(SlashOutcome::Handled)
+}
+
+/// Emit a `TuiOnlyEvent::SlashCommandResult` so the TUI appends a
+/// system-role chat message carrying handler-rendered content (verbatim,
+/// no translation).
+async fn emit_slash_text(event_tx: &mpsc::Sender<CoreEvent>, name: &str, text: &str) {
+    let _ = event_tx
+        .send(CoreEvent::Tui(TuiOnlyEvent::SlashCommandResult {
+            name: name.to_string(),
+            text: text.to_string(),
+        }))
+        .await;
+}
+
+/// Emit a `TuiOnlyEvent::SlashCommandStatus` so the TUI renders a
+/// localized dispatcher breadcrumb (handler missing, handler error,
+/// empty Prompt body, dialog wiring pending).
+async fn emit_slash_status(
+    event_tx: &mpsc::Sender<CoreEvent>,
+    name: &str,
+    kind: SlashCommandStatusKind,
+) {
+    let _ = event_tx
+        .send(CoreEvent::Tui(TuiOnlyEvent::SlashCommandStatus {
+            name: name.to_string(),
+            kind,
+        }))
+        .await;
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn process_submit_turn(
     user_message_id: String,
@@ -976,6 +1699,9 @@ async fn handle_summarize_rewind(
                 query_source: None,
                 agent_id: None,
                 time_since_last_assistant_ms: None,
+                // Compaction summarizer helper — not the agent loop.
+                agentic: false,
+                cache: None,
             };
             match client.query(&params).await {
                 Ok(result) => {
@@ -1221,6 +1947,9 @@ fn spawn_auto_title_task(
             query_source: None,
             agent_id: None,
             time_since_last_assistant_ms: None,
+            // Title-generation helper — not the agent loop.
+            agentic: false,
+            cache: None,
         };
 
         let raw = match client.query(&params).await {

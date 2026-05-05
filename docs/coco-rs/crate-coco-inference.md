@@ -27,8 +27,10 @@ coco-inference does NOT depend on:
 ```
 coco-inference/src/
   client.rs               # ApiClient wrapper around LanguageModelV4 (carries fingerprint)
-  fingerprint.rs          # ProviderClientFingerprint — turn-boundary coherence check
-  build_call_options.rs   # build_call_options() — Layer 2 per-request builder
+  fingerprint.rs          # ProviderClientFingerprint — turn-boundary coherence check + runtime_state_digest
+  build_call_options.rs   # build_call_options(), build_call_options_with_extra() — Layer 2 per-request builder
+  cache_convert.rs        # Pass-through emission of cacheStrategy / requestedBetas / agenticQuery / querySource
+  cache_detection.rs      # CacheBreakDetector + 5%/2_000-token TS-parity threshold
   thinking_convert.rs     # ThinkingLevel → flat extra_body keys (camelCase, per provider)
   query.rs                # queryWithStreaming(), queryWithoutStreaming()
   retry.rs                # Generic exponential backoff + auth retry + persistent mode
