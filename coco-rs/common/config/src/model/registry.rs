@@ -142,7 +142,7 @@ pub fn build_model_registry(
             }
 
             // L2: per-(provider, model) entry overrides.
-            entry.apply_info_to(&mut acc);
+            entry.apply_overrides_to(&mut acc);
 
             resolve_base_instructions_file(&mut acc, coco_home)?;
 

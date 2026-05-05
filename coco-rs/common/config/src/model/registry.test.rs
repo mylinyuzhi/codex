@@ -64,7 +64,7 @@ fn entry_supplies_required_fields() {
     let mut providers = BTreeMap::new();
     let entry = PartialProviderModelOverride {
         api_model_name: Some("gpt-5".into()),
-        info: PartialModelInfo {
+        overrides: PartialModelInfo {
             context_window: Some(PositiveTokens::new(272_000)),
             max_output_tokens: Some(PositiveTokens::new(16_384)),
             ..Default::default()
@@ -263,7 +263,7 @@ fn provider_backed_base_instructions_file_resolves() {
             ProviderApi::Openai,
             "custom-provider-model",
             PartialProviderModelOverride {
-                info: PartialModelInfo {
+                overrides: PartialModelInfo {
                     context_window: Some(PositiveTokens::new(64_000)),
                     max_output_tokens: Some(PositiveTokens::new(8_192)),
                     base_instructions_file: Some("provider-instructions.md".into()),
@@ -371,7 +371,7 @@ fn user_catalog_layers_under_entry() {
             ProviderApi::Openai,
             "gpt-5",
             PartialProviderModelOverride {
-                info: PartialModelInfo {
+                overrides: PartialModelInfo {
                     temperature: Some(0.7),
                     ..Default::default()
                 },
