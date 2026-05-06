@@ -6,6 +6,15 @@
 # (per coco-rs/CLAUDE.md and the parent CLAUDE.md). `cocode-rs/` is the
 # read-only reference implementation and is intentionally not gated here.
 
+# Best-effort observability trace: write one line per invocation so the
+# agent can `cat /tmp/coco-stop-hook-trace.log` next turn to confirm the
+# hook actually fired. Local time + offset so the timestamp is readable
+# at a glance without UTC math; ISO 8601 format keeps it sortable.
+# Failures (read-only fs, missing /tmp, etc.) are silently swallowed —
+# never a reason to fail the gate.
+{ echo "$(date "+%FT%T%z") rust-quality-check pid=$$ pwd=$PWD" \
+    >> /tmp/coco-stop-hook-trace.log; } 2>/dev/null || true
+
 # Ensure cargo/rustup are on PATH (hooks run without .bashrc).
 [ -f "/usr/local/cargo/env" ] && . "/usr/local/cargo/env"
 [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
@@ -16,7 +25,15 @@ WORKSPACE="$PROJECT_DIR/coco-rs"
 # Skip when nothing in coco-rs changed (Rust source OR Cargo manifest —
 # manifest changes catch a vercel-ai-provider dep being re-introduced
 # without touching any .rs file).
-changed=$(git -C "$PROJECT_DIR" diff --name-only HEAD 2>/dev/null \
+#
+# `git status --porcelain` covers tracked modifications AND untracked
+# files; bare `git diff HEAD` would miss new files (e.g. a fresh
+# integration-test module) and silently skip the gate. Format is
+# `XY <space> path` (rename: `R  old -> new` — we only need the new path,
+# so strip everything up to the last space).
+changed=$(git -C "$PROJECT_DIR" status --porcelain 2>/dev/null \
+            | sed 's/^...//' \
+            | sed 's/.* -> //' \
             | grep -E '^coco-rs/.*(\.rs|/Cargo\.toml)$' || true)
 if [ -z "$changed" ]; then
   exit 0

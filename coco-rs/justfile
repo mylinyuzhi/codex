@@ -38,7 +38,10 @@ clippy *args:
 clippy-affected *args:
     bash "{{justfile_directory()}}/../.claude/scripts/clippy.sh" --incremental --head "$@"
 
-# Fix clippy warnings
+# Fix clippy warnings. Flag set MUST match `clippy.sh --full` (same
+# `--all-features --tests`) so `fix` can't auto-edit code into a state
+# clippy still reports. Caller scopes via `-p coco-<name>` to a single
+# crate; the workspace-wide form lives in `clippy-affected` instead.
 fix *args:
     cargo clippy --fix --all-features --tests --allow-dirty "$@"
 
@@ -68,11 +71,22 @@ test-crate crate *args:
 # SDK types via `coco_inference::*` aliases — see
 # services/inference/src/lib.rs for the canonical list.
 check-seam:
-    ./scripts/check-vercel-ai-seam.sh
+    bash "{{justfile_directory()}}/scripts/check-vercel-ai-seam.sh"
+
+# Fast validation: same chain as `pre-commit` minus the test run. Use
+# during iteration when you want fmt + seam guard + clippy (which is a
+# superset of `cargo check`) but don't yet need to pay for nextest.
+# Promote to `pre-commit` before committing.
+quick-check: fmt check-seam clippy-affected
 
 # REQUIRED before commit. Uses incremental clippy (changed crates + reverse-dep
 # closure) to avoid recompiling the whole workspace on small commits. Falls
 # back to full when Cargo.toml/Cargo.lock change.
+#
+# Prefer this over running fmt/check/clippy/test individually: clippy is a
+# superset of `cargo check`, and `test` compiles everything `clippy --tests`
+# already linted, so the manual chain just duplicates work. For iteration
+# without a test run, use `quick-check`.
 pre-commit: fmt check-seam clippy-affected test
 
 # ============================================================================

@@ -8,17 +8,29 @@ Multi-provider LLM SDK and CLI. All development in `coco-rs/`.
 
 ## Commands
 
-Run from `coco-rs/` directory:
+Run from `coco-rs/` directory.
+
+**Default to the composite recipes — don't chain `check` + `clippy` + `test`
+manually.** Clippy is a superset of `cargo check` (it runs the same
+type-check pass plus lints), and `test` (nextest) compiles every
+`--tests` target clippy already linted, so the manual chain duplicates
+work. Pick one of:
 
 ```bash
 just fmt          # After Rust changes (auto-approve)
-just pre-commit   # REQUIRED before commit (fmt + check + clippy + test via nextest)
-just test         # If changed vercel-ai or core crates
-just test-crate <name>   # Scope to a single crate
-just check        # Type-check all crates
-just clippy       # Run clippy on all crates
-just fix -p <name>       # Auto-fix clippy warnings for a single crate
-just help         # All commands
+just quick-check  # Iteration: fmt + seam guard + incremental clippy. NO tests.
+just pre-commit   # REQUIRED before commit: quick-check + nextest test run
+```
+
+Scoped helpers (use only when you genuinely need a single piece):
+
+```bash
+just test               # Full nextest run; needed when you changed shared crates
+just test-crate <name>  # Scope tests to one crate
+just fix -p <name>      # Auto-fix clippy warnings for one crate
+just clippy             # Force full-workspace clippy (rare; clippy-affected is the default)
+just check              # Bare cargo check (rarely useful — clippy already does this)
+just help               # All commands
 ```
 
 **Path conventions** (avoids the `coco-rs/coco-rs/...` mistake):
