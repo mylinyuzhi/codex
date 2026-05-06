@@ -9,6 +9,10 @@
 #   4. If different → schema is stale → auto-regenerate schemas + Python SDK
 #   5. If regeneration fails → exit 2 with actionable error for the agent
 
+# Best-effort tracelog (see rust-quality-check.sh for rationale).
+{ echo "$(date "+%FT%T%z") sdk-schema-check pid=$$" \
+    >> /tmp/coco-stop-hook-trace.log; } 2>/dev/null || true
+
 [ -f "/usr/local/cargo/env" ] && . "/usr/local/cargo/env"
 [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
 
