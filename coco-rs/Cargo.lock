@@ -1827,6 +1827,7 @@ name = "coco-tests-live"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "clap",
  "coco-cli",
  "coco-commands",
@@ -1840,14 +1841,19 @@ dependencies = [
  "coco-session",
  "coco-tool-runtime",
  "coco-tools",
+ "coco-tui",
  "coco-types",
+ "crossterm",
  "dotenvy",
  "futures",
+ "pretty_assertions",
+ "ratatui",
  "serde_json",
  "tempfile",
  "tokio",
  "tokio-util",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
