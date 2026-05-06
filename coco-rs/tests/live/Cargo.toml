@@ -41,11 +41,20 @@ clap = { workspace = true }
 coco-commands.workspace = true
 coco-session.workspace = true
 
+# tui_mock suite: drives the in-process TUI state machine + render with a
+# scripted (no-API-key) ScriptedModel and a curated tool/hook setup.
+coco-tui.workspace = true
+ratatui.workspace = true
+async-trait.workspace = true
+crossterm.workspace = true
+
 anyhow.workspace = true
 dotenvy.workspace = true
 futures = { workspace = true }
+pretty_assertions.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
 tokio-util.workspace = true
 tracing.workspace = true
+uuid = { workspace = true, features = ["v4"] }

@@ -4,6 +4,10 @@
 # are NOT checked because they are common English words with too many legitimate uses.
 # Exit 0 = pass, Exit 2 = fail (stderr fed to agent).
 
+# Best-effort tracelog (see rust-quality-check.sh for rationale).
+{ echo "$(date "+%FT%T%z") toolname-constants-check pid=$$" \
+    >> /tmp/coco-stop-hook-trace.log; } 2>/dev/null || true
+
 REPO_ROOT="${CLAUDE_PROJECT_DIR:?CLAUDE_PROJECT_DIR not set}"
 cd "$REPO_ROOT"
 

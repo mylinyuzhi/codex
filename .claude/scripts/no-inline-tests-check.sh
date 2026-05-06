@@ -3,6 +3,10 @@
 # Tests must always be in separate .test.rs files with #[path] attribute.
 # Exit 0 = pass, Exit 2 = fail (stderr fed to agent).
 
+# Best-effort tracelog (see rust-quality-check.sh for rationale).
+{ echo "$(date "+%FT%T%z") no-inline-tests-check pid=$$" \
+    >> /tmp/coco-stop-hook-trace.log; } 2>/dev/null || true
+
 REPO_ROOT="${CLAUDE_PROJECT_DIR:?CLAUDE_PROJECT_DIR not set}"
 cd "$REPO_ROOT"
 
