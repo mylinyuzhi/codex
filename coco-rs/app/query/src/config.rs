@@ -5,7 +5,7 @@
 
 use coco_config::MemoryConfig;
 use coco_config::PlanModeSettings;
-use coco_config::SandboxConfig;
+use coco_config::SandboxSettings;
 use coco_config::ShellConfig;
 use coco_config::ToolConfig;
 use coco_config::WebFetchConfig;
@@ -111,6 +111,15 @@ pub struct QueryEngineConfig {
     pub allow_rules: PermissionRulesBySource,
     pub deny_rules: PermissionRulesBySource,
     pub ask_rules: PermissionRulesBySource,
+    /// Per-session working-directory allowlist, augmenting the cwd.
+    /// Populated by the `/add-dir <path>` slash command via the
+    /// runtime's `session_additional_dirs` and threaded into every
+    /// `ToolUseContext.permission_context.additional_dirs` so file/shell
+    /// tools see the wider scope without persisting to settings.json.
+    /// TS parity: `useWorkingDirectories` in REPL.tsx populates the
+    /// same map from `/add-dir` invocations.
+    pub session_additional_dirs:
+        std::collections::HashMap<String, coco_types::AdditionalWorkingDir>,
     /// Working directory override for this session's tool calls.
     ///
     /// When `Some(path)`, [`ToolContextFactory`](crate::tool_context::ToolContextFactory)
@@ -178,8 +187,14 @@ pub struct QueryEngineConfig {
     pub system_reminder: coco_config::SystemReminderConfig,
     /// Resolved tool runtime configuration.
     pub tool_config: ToolConfig,
-    /// Resolved sandbox runtime configuration.
-    pub sandbox_config: SandboxConfig,
+    /// Resolved sandbox runtime configuration. User-facing settings only;
+    /// for actual enforcement see [`Self::sandbox_state`].
+    pub sandbox_config: SandboxSettings,
+    /// Active sandbox runtime state. `None` when sandbox is disabled or
+    /// not bootstrapped (test/headless paths). The CLI bootstrap layer
+    /// constructs this via `coco_sandbox::adapter::build_runtime_config`
+    /// and threads it onto `ToolUseContext.sandbox_state`.
+    pub sandbox_state: Option<Arc<coco_sandbox::SandboxState>>,
     /// Resolved memory runtime configuration.
     pub memory_config: MemoryConfig,
     /// Resolved shell runtime configuration (bash-tool path).
@@ -203,6 +218,25 @@ pub struct QueryEngineConfig {
     /// auto-dream) so the child can only write inside the memdir.
     /// Threaded onto every `ToolUseContext.allowed_write_roots`.
     pub allowed_write_roots: Vec<std::path::PathBuf>,
+    /// Emit `HookExecutionEvent` (`Started`/`Progress`/`Response`) into
+    /// the SDK output stream. TS: `--include-hook-events` flag at
+    /// `entrypoints/cli.tsx`. When `false`, the engine bypasses the
+    /// hook-event forwarding channel so SDK clients don't receive
+    /// `SDKHookStarted`/etc. messages. Defaults to `false` to match
+    /// TS opt-in behaviour.
+    pub include_hook_events: bool,
+    /// Inter-turn reminder mailbox. Subsystems (slash commands, skill
+    /// loader, tool runtime, swarm coordinator) push event-driven
+    /// reminder snapshots into this — exposed to producers via
+    /// [`Arc<dyn coco_system_reminder::ReminderMailboxRef>`] threaded
+    /// onto [`coco_tool_runtime::ToolUseContext`]. The engine drains
+    /// the **concrete** type (which exposes [`coco_system_reminder::ReminderMailbox::drain`])
+    /// at the top of every turn so the next
+    /// [`coco_system_reminder::TurnReminderInput`] picks up
+    /// `command_permissions` / `dynamic_skill` / `structured_output` /
+    /// `teammate_shutdown_batch` bodies. The trait split prevents
+    /// producers from accidentally consuming the queue.
+    pub reminder_mailbox: Arc<coco_system_reminder::ReminderMailbox>,
 }
 
 impl Default for QueryEngineConfig {
@@ -230,6 +264,7 @@ impl Default for QueryEngineConfig {
             allow_rules: Default::default(),
             deny_rules: Default::default(),
             ask_rules: Default::default(),
+            session_additional_dirs: Default::default(),
             cwd_override: None,
             plans_directory: None,
             agent_id: None,
@@ -242,7 +277,8 @@ impl Default for QueryEngineConfig {
             compact: coco_config::CompactConfig::default(),
             system_reminder: coco_config::SystemReminderConfig::default(),
             tool_config: ToolConfig::default(),
-            sandbox_config: SandboxConfig::default(),
+            sandbox_config: SandboxSettings::default(),
+            sandbox_state: None,
             memory_config: MemoryConfig::default(),
             shell_config: ShellConfig::default(),
             web_fetch_config: WebFetchConfig::default(),
@@ -251,6 +287,8 @@ impl Default for QueryEngineConfig {
             tool_overrides: Arc::new(ToolOverrides::none()),
             tool_filter: ToolFilter::unrestricted(),
             allowed_write_roots: Vec::new(),
+            include_hook_events: false,
+            reminder_mailbox: coco_system_reminder::ReminderMailbox::new(),
         }
     }
 }

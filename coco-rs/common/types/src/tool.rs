@@ -202,6 +202,42 @@ impl FromStr for ToolName {
     }
 }
 
+/// Resolve a legacy tool-name alias to its canonical form.
+///
+/// TS parity: `utils/permissions/permissionRuleParser.ts` —
+/// `LEGACY_TOOL_NAME_ALIASES`. Used by hook matchers and permission
+/// rule parsing so renamed tools keep matching prior config.
+///
+/// Aliases:
+/// - `Task` → `Agent`
+/// - `KillShell` → `TaskStop`
+/// - `AgentOutputTool` / `BashOutputTool` → `TaskOutput`
+///
+/// The TS `Brief` alias is feature-gated (KAIROS) and only meaningful
+/// when the brief tool exists; coco-rs ships `ToolName::Brief` directly,
+/// so the alias is a no-op here.
+pub fn normalize_legacy_tool_name(name: &str) -> &str {
+    match name {
+        "Task" => "Agent",
+        "KillShell" => "TaskStop",
+        "AgentOutputTool" | "BashOutputTool" => "TaskOutput",
+        other => other,
+    }
+}
+
+/// Reverse lookup: list legacy aliases for a canonical name.
+///
+/// TS parity: `getLegacyToolNames` — used by regex matchers so
+/// `^Task$` keeps matching after the rename to `Agent`.
+pub fn legacy_tool_name_aliases_of(canonical: &str) -> &'static [&'static str] {
+    match canonical {
+        "Agent" => &["Task"],
+        "TaskStop" => &["KillShell"],
+        "TaskOutput" => &["AgentOutputTool", "BashOutputTool"],
+        _ => &[],
+    }
+}
+
 /// Tool identity — type-safe for all tool kinds.
 ///
 /// Three distinct concepts:

@@ -167,7 +167,9 @@ impl AttachmentGenerator for AgentMentionsGenerator {
             .agent_mentions
             .iter()
             .map(|m| format!(
-                "The user has expressed a desire to invoke the agent \"{}\". Please invoke the agent appropriately, passing in the required context to it.",
+                // TS `messages.ts:3949` ends with a trailing space — preserve
+                // it for byte-exact parity with the wrapped reminder body.
+                "The user has expressed a desire to invoke the agent \"{}\". Please invoke the agent appropriately, passing in the required context to it. ",
                 m.agent_type
             ))
             .collect();

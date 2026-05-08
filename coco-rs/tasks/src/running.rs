@@ -268,8 +268,9 @@ fn current_time_ms() -> i64 {
 }
 
 /// Wire name for a `TaskType`, matching TS `task_type` strings used in
-/// `SDKTaskStartedMessage`.
-fn task_type_wire_name(task_type: TaskType) -> &'static str {
+/// `SDKTaskStartedMessage` and the `task_status` reminder
+/// `(type: ...)` metadata.
+pub(crate) fn task_type_wire_name(task_type: TaskType) -> &'static str {
     match task_type {
         TaskType::LocalBash => "local_bash",
         TaskType::LocalAgent => "local_agent",

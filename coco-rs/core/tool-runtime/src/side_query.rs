@@ -43,7 +43,10 @@ pub use coco_types::SideQueryUsage;
 #[async_trait::async_trait]
 pub trait SideQuery: Send + Sync {
     /// Execute a side-query against the LLM.
-    async fn query(&self, request: SideQueryRequest) -> anyhow::Result<SideQueryResponse>;
+    async fn query(
+        &self,
+        request: SideQueryRequest,
+    ) -> Result<SideQueryResponse, coco_error::BoxedError>;
 
     /// Get the default model ID for side queries.
     fn model_id(&self) -> &str;
@@ -58,8 +61,14 @@ pub struct NoOpSideQuery;
 
 #[async_trait::async_trait]
 impl SideQuery for NoOpSideQuery {
-    async fn query(&self, _request: SideQueryRequest) -> anyhow::Result<SideQueryResponse> {
-        anyhow::bail!("LLM side-query not available in this context")
+    async fn query(
+        &self,
+        _request: SideQueryRequest,
+    ) -> Result<SideQueryResponse, coco_error::BoxedError> {
+        Err(Box::new(coco_error::PlainError::new(
+            "LLM side-query not available in this context",
+            coco_error::StatusCode::Internal,
+        )))
     }
 
     fn model_id(&self) -> &str {

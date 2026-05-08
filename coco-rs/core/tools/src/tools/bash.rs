@@ -1,10 +1,7 @@
 use coco_messages::ToolResult;
+use coco_sandbox::SandboxBypass;
+use coco_sandbox::SandboxState;
 use coco_shell::read_only::is_read_only_command;
-use coco_shell::sandbox::BypassRequest;
-use coco_shell::sandbox::SandboxConfig as ShellSandboxConfig;
-use coco_shell::sandbox::SandboxDecision;
-use coco_shell::sandbox::SandboxMode as ShellSandboxMode;
-use coco_shell::sandbox::should_sandbox_command;
 use coco_shell::security::SecuritySeverity;
 use coco_shell::security::check_security;
 use coco_tool_runtime::BackgroundShellRequest;
@@ -158,43 +155,19 @@ Important:
 # Other common operations
 - View comments on a Github PR: gh api repos/foo/bar/pulls/123/comments";
 
-/// Build a `SandboxConfig` from environment variables, matching the
-/// TS `SandboxManager.isSandboxingEnabled()` + settings pipeline as
-/// close as we can without a full config/settings system.
+/// Resolve the active [`SandboxState`] for a tool invocation.
 ///
-/// Env vars (R6-T18):
-///   - `COCO_SANDBOX_ENABLED` — truthy values ("1", "true", "yes") enable
-///     sandboxing. Defaults to disabled to match current coco-rs behavior.
-///   - `COCO_SANDBOX_MODE` — one of `read_only`, `strict`, `external`.
-///     Defaults to `read_only` when enabled.
-///   - `COCO_SANDBOX_EXCLUDED_COMMANDS` — colon-separated command prefixes
-///     to exclude (e.g. `"git:npm:cargo"`). Supports the same patterns
-///     as `coco_shell::sandbox::is_excluded_command`.
-///   - `COCO_SANDBOX_ALLOW_NETWORK` — truthy → allow network inside sandbox.
-///
-/// TS `shouldUseSandbox.ts` uses similar logic: enable check → bypass
-/// check → exclusion list → sandbox decision.
-fn shell_sandbox_config_from_runtime(
-    config: &coco_config::SandboxConfig,
-    feature_enabled: bool,
-) -> ShellSandboxConfig {
-    if !feature_enabled {
-        return ShellSandboxConfig::default();
+/// Returns the state when (a) the `Sandbox` feature is enabled and
+/// (b) the bootstrap layer installed an `Arc<SandboxState>` on the
+/// context. Otherwise returns `None`, leaving the executor to spawn
+/// commands without sandbox wrapping. Mirrors TS `shouldUseSandbox.ts`
+/// gate: enable check → bypass + exclusion are evaluated downstream by
+/// `SandboxState::command_snapshot`.
+fn active_sandbox_state(ctx: &ToolUseContext) -> Option<std::sync::Arc<SandboxState>> {
+    if !ctx.features.enabled(coco_types::Feature::Sandbox) {
+        return None;
     }
-    let mode = match config.mode {
-        coco_types::SandboxMode::ReadOnly => ShellSandboxMode::ReadOnly,
-        coco_types::SandboxMode::WorkspaceWrite => ShellSandboxMode::Strict,
-        coco_types::SandboxMode::FullAccess => ShellSandboxMode::None,
-        coco_types::SandboxMode::ExternalSandbox => ShellSandboxMode::External,
-    };
-
-    ShellSandboxConfig {
-        mode,
-        excluded_commands: config.excluded_commands.clone(),
-        allow_bypass: true,
-        allow_network: config.allow_network,
-        ..Default::default()
-    }
+    ctx.sandbox_state.clone()
 }
 
 /// Effective max Bash output byte budget.
@@ -395,26 +368,26 @@ impl Tool for BashTool {
         //   3. If command matches an excluded pattern → unsandboxed
         //   4. Otherwise → sandboxed
         //
-        let sandbox_config = shell_sandbox_config_from_runtime(
-            &ctx.sandbox_config,
-            ctx.features.enabled(coco_types::Feature::Sandbox),
+        // Decision evaluation lives on `SandboxState::command_snapshot`;
+        // this site only resolves whether sandboxing is reachable at all
+        // (feature gate + bootstrap supplied the state) and forwards the
+        // bypass flag.
+        let sandbox_state = active_sandbox_state(ctx);
+        let sandbox_bypass = SandboxBypass::from_flag(
+            input
+                .get("dangerouslyDisableSandbox")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
         );
-        let bypass = if input
-            .get("dangerouslyDisableSandbox")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false)
-        {
-            BypassRequest::Requested
-        } else {
-            BypassRequest::No
-        };
-        let sandbox_decision = should_sandbox_command(&sandbox_config, command, bypass);
-        if let SandboxDecision::Sandboxed { mode } = sandbox_decision {
-            tracing::debug!(
-                ?mode,
-                command = %command,
-                "bash command will run under sandbox (decision only — enforcement is a follow-up)",
-            );
+        if let Some(state) = &sandbox_state {
+            let snapshot = state.command_snapshot(command, sandbox_bypass);
+            if snapshot.should_wrap {
+                tracing::debug!(
+                    enforcement = ?snapshot.enforcement,
+                    command = %command,
+                    "bash command will run wrapped by SandboxState platform"
+                );
+            }
         }
 
         // Permission pipeline (TS: `tools/BashTool/bashPermissions.ts:1663+`,
@@ -473,9 +446,9 @@ impl Tool for BashTool {
             return execute_background(command, timeout_ms, ctx).await;
         }
 
-        // Foreground execution. The sandbox decision is resolved here
-        // (not inside execute_foreground) so the decision logic lives
-        // alongside all other input parsing.
+        // Foreground execution. The sandbox state is resolved here (not
+        // inside execute_foreground) so all input parsing lives in one
+        // place.
         //
         // R6-T19: on foreground timeout, if a TaskHandle is available
         // and auto-background is enabled, spawn a background task with
@@ -488,7 +461,15 @@ impl Tool for BashTool {
         // The re-run is only triggered for commands that explicitly
         // opt in via resolved runtime config so
         // side-effectful commands aren't duplicated unexpectedly.
-        match execute_foreground(command, timeout_ms, ctx, sandbox_decision.is_sandboxed()).await {
+        match execute_foreground(
+            command,
+            timeout_ms,
+            ctx,
+            sandbox_state.clone(),
+            sandbox_bypass,
+        )
+        .await
+        {
             Ok(result) => Ok(result),
             Err(ToolError::ExecutionFailed { message, .. }) if message.contains("timed out") => {
                 if ctx.tool_config.bash.auto_background_on_timeout && ctx.task_handle.is_some() {
@@ -572,7 +553,8 @@ async fn execute_foreground(
     command: &str,
     timeout_ms: u64,
     ctx: &ToolUseContext,
-    should_use_sandbox: bool,
+    sandbox_state: Option<std::sync::Arc<SandboxState>>,
+    sandbox_bypass: SandboxBypass,
 ) -> Result<ToolResult<Value>, ToolError> {
     // Resolve the working directory. Worktree-isolated subagents set
     // `ctx.cwd_override` so their bash commands must run inside the
@@ -587,16 +569,25 @@ async fn execute_foreground(
         .unwrap_or_else(|| PathBuf::from("/tmp"));
     let mut executor = coco_shell::ShellExecutor::new_with_config(&cwd, &ctx.shell_config);
 
-    // R6-T17 + R6-T18: thread the ctx cancel token and the sandbox
-    // decision through to the shell executor. The `should_use_sandbox`
-    // field on ExecOptions is a boolean flag the executor reads to
-    // decide whether to wrap the command in a sandbox binary
-    // (`bwrap` / `sandbox-exec`) — that wrap logic is a TODO but the
-    // decision is now correctly computed and propagated.
+    // R6-T17 + R6-T18: thread the ctx cancel token and the sandbox state
+    // through to the shell executor. When `sandbox_state` is `Some` and
+    // the per-command snapshot says `should_wrap`, the executor calls
+    // `SandboxPlatform::wrap_command` before spawning the child.
+    //
+    // Snapshot the violation count *before* spawning so we can splice
+    // anything that landed during this command into stderr (TS parity:
+    // `annotateStderrWithSandboxFailures`).
+    let violations_baseline = if let Some(state) = &sandbox_state {
+        Some(state.violations_total_snapshot().await)
+    } else {
+        None
+    };
+
     let opts = coco_shell::ExecOptions {
         timeout_ms: Some(timeout_ms as i64),
         cancel: Some(ctx.cancel.clone()),
-        should_use_sandbox,
+        sandbox: sandbox_state.clone(),
+        sandbox_bypass,
         ..Default::default()
     };
 
@@ -635,10 +626,24 @@ async fn execute_foreground(
         executor.execute(command, &opts).await
     };
 
-    let cmd_result = cmd_result.map_err(|e| ToolError::ExecutionFailed {
+    let mut cmd_result = cmd_result.map_err(|e| ToolError::ExecutionFailed {
         message: format!("shell execution failed: {e}"),
         source: None,
     })?;
+
+    // Annotate stderr with any sandbox violations recorded during this
+    // command. Mirrors TS `annotateStderrWithSandboxFailures` —
+    // violations are informational, not blocking.
+    if let (Some(state), Some(prev)) = (&sandbox_state, violations_baseline)
+        && let Some(annotation) = state.format_violations_since(prev).await
+    {
+        if cmd_result.stderr.is_empty() {
+            cmd_result.stderr = annotation;
+        } else {
+            cmd_result.stderr.push('\n');
+            cmd_result.stderr.push_str(&annotation);
+        }
+    }
 
     // ── B4.2: auto-background-on-timeout ──
     //

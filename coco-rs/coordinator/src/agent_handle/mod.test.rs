@@ -46,13 +46,13 @@ impl coco_tool_runtime::SideQuery for StubSideQuery {
     async fn query(
         &self,
         _request: coco_tool_runtime::SideQueryRequest,
-    ) -> anyhow::Result<coco_tool_runtime::SideQueryResponse> {
-        let next = self
-            .responses
-            .lock()
-            .await
-            .pop()
-            .ok_or_else(|| anyhow::anyhow!("no canned response left"))?;
+    ) -> Result<coco_tool_runtime::SideQueryResponse, coco_error::BoxedError> {
+        let next = self.responses.lock().await.pop().ok_or_else(|| {
+            Box::new(coco_error::PlainError::new(
+                "no canned response left",
+                coco_error::StatusCode::Internal,
+            )) as coco_error::BoxedError
+        })?;
         Ok(coco_tool_runtime::SideQueryResponse {
             text: Some(next),
             tool_uses: Vec::new(),
@@ -250,7 +250,7 @@ async fn test_spawn_subagent_sync_with_engine_routes_to_query() {
             &self,
             _prompt: &str,
             _config: AgentQueryConfig,
-        ) -> anyhow::Result<AgentQueryResult> {
+        ) -> Result<AgentQueryResult, coco_error::BoxedError> {
             Ok(AgentQueryResult {
                 response_text: Some("child result".into()),
                 messages: Vec::new(),
@@ -320,7 +320,7 @@ async fn test_spawn_subagent_async() {
             &self,
             _prompt: &str,
             _config: AgentQueryConfig,
-        ) -> anyhow::Result<AgentQueryResult> {
+        ) -> Result<AgentQueryResult, coco_error::BoxedError> {
             Ok(AgentQueryResult {
                 response_text: Some("background result".into()),
                 messages: Vec::new(),
@@ -401,7 +401,7 @@ async fn test_spawn_teammate_drives_engine_when_installed() {
             &self,
             _prompt: &str,
             _config: RunnerCfg,
-        ) -> anyhow::Result<RunnerResult> {
+        ) -> crate::Result<RunnerResult> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             Ok(RunnerResult {
                 messages: Vec::new(),
@@ -477,11 +477,7 @@ async fn test_spawn_teammate_uses_base_system_prompt_when_no_initial_prompt() {
 
     #[async_trait::async_trait]
     impl AgentExecutionEngine for CapturingEngine {
-        async fn run_query(
-            &self,
-            _prompt: &str,
-            config: RunnerCfg,
-        ) -> anyhow::Result<RunnerResult> {
+        async fn run_query(&self, _prompt: &str, config: RunnerCfg) -> crate::Result<RunnerResult> {
             *self.captured.lock().await = Some(config.system_prompt);
             Ok(RunnerResult {
                 messages: Vec::new(),
@@ -604,7 +600,7 @@ async fn test_subagent_start_hook_injects_additional_context() {
             &self,
             prompt: &str,
             _config: AgentQueryConfig,
-        ) -> anyhow::Result<AgentQueryResult> {
+        ) -> Result<AgentQueryResult, coco_error::BoxedError> {
             *self.captured_prompt.lock().await = Some(prompt.to_string());
             Ok(AgentQueryResult {
                 response_text: Some("ok".into()),
@@ -619,12 +615,14 @@ async fn test_subagent_start_hook_injects_additional_context() {
     }
 
     // Build a registry with one SubagentStart hook that injects context.
-    let mut registry = coco_hooks::HookRegistry::new();
+    let registry = coco_hooks::HookRegistry::new();
     let hook = coco_hooks::HookDefinition {
         event: coco_types::HookEventType::SubagentStart,
         matcher: None,
         handler: coco_hooks::HookHandler::Prompt {
             prompt: "INJECTED CONTEXT FROM HOOK".into(),
+            model: None,
+            timeout_ms: None,
         },
         priority: 0,
         scope: coco_types::HookScope::Session,
@@ -632,7 +630,6 @@ async fn test_subagent_start_hook_injects_additional_context() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     };
     registry.register_deduped(hook);
@@ -689,7 +686,7 @@ async fn test_subagent_start_hook_no_context_leaves_prompt_unchanged() {
             &self,
             prompt: &str,
             _config: AgentQueryConfig,
-        ) -> anyhow::Result<AgentQueryResult> {
+        ) -> Result<AgentQueryResult, coco_error::BoxedError> {
             *self.captured_prompt.lock().await = Some(prompt.to_string());
             Ok(AgentQueryResult {
                 response_text: Some("ok".into()),
@@ -746,7 +743,7 @@ async fn test_spawn_subagent_resume_mode_preserves_tool_results() {
             &self,
             _prompt: &str,
             config: AgentQueryConfig,
-        ) -> anyhow::Result<AgentQueryResult> {
+        ) -> Result<AgentQueryResult, coco_error::BoxedError> {
             *self.captured.lock().await = Some(config.fork_context_messages.clone());
             Ok(AgentQueryResult {
                 response_text: Some("resumed".into()),

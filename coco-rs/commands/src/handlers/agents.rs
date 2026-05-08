@@ -20,7 +20,7 @@ use coco_subagent::definition_store::AgentSearchPaths;
 /// Async handler for `/agents [list|show|validate|reload|paths]`.
 pub fn handler(
     args: String,
-) -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>> {
+) -> Pin<Box<dyn std::future::Future<Output = crate::Result<String>> + Send>> {
     Box::pin(async move {
         let cwd = std::env::current_dir().unwrap_or_default();
         let config_home = coco_config::global_config::config_home();
@@ -31,11 +31,11 @@ pub fn handler(
         let trimmed = args.trim().to_string();
         tokio::task::spawn_blocking(move || render(&trimmed, paths))
             .await
-            .map_err(|e| anyhow::anyhow!("agents handler join error: {e}"))?
+            .map_err(|e| crate::CommandsError::generic(format!("agents handler join error: {e}")))?
     })
 }
 
-fn render(args: &str, paths: AgentSearchPaths) -> anyhow::Result<String> {
+fn render(args: &str, paths: AgentSearchPaths) -> crate::Result<String> {
     let mut store = AgentDefinitionStore::new(BuiltinAgentCatalog::interactive(), paths.clone());
     store.load();
     let snapshot = store.snapshot();

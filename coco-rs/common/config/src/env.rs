@@ -23,7 +23,6 @@ pub enum EnvKey {
     CocoAgentColor,
     CocoAgentId,
     CocoAgentName,
-    CocoAntTrace,
     CocoBashAutoBackgroundOnTimeout,
     CocoBubblewrap,
     CocoConfigDir,
@@ -33,6 +32,25 @@ pub enum EnvKey {
     CocoFoundryResource,
     CocoGlobTimeoutSeconds,
     CocoLang,
+    /// Tracing-filter directive (full `EnvFilter` syntax, e.g.
+    /// `coco=debug,coco_inference::stream=trace,info`). Read by
+    /// `coco_otel::subscriber` at startup. Lower priority than
+    /// `--log-level`, higher priority than `RUST_LOG`.
+    CocoLog,
+    /// Explicit log file path. Overrides the default rotating path
+    /// (`<config_home>/logs/coco.log`).
+    CocoLogFile,
+    /// Log format: `pretty | compact | json`. Defaults to `pretty` for
+    /// TTY output and `json` for file output.
+    CocoLogFormat,
+    /// When truthy, force a stderr fmt layer in addition to the file
+    /// sink. SDK / TUI normally write to file only — this opts in to
+    /// also seeing logs on stderr (must not be set in SDK mode unless
+    /// the caller can tolerate logs on stderr alongside stdout NDJSON).
+    CocoLogStderr,
+    /// Timezone for log timestamps: `local | utc`. Lower priority than
+    /// `--log-timezone`. Defaults to `local`.
+    CocoLogTimezone,
     CocoMaxContextTokens,
     CocoMaxToolUseConcurrency,
     CocoMemoryPathOverride,
@@ -52,6 +70,9 @@ pub enum EnvKey {
     CocoRemoteMemoryDir,
     CocoSandboxAllowNetwork,
     CocoSandboxExcludedCommands,
+    /// TS parity: `sandbox.failIfUnavailable`. Truthy values force a
+    /// hard error at startup if sandbox can't initialise.
+    CocoSandboxFailIfUnavailable,
     CocoSandboxMode,
     CocoSessionEndHooksTimeoutMs,
     CocoShell,
@@ -174,7 +195,6 @@ impl EnvKey {
             Self::CocoAgentColor => "COCO_AGENT_COLOR",
             Self::CocoAgentId => "COCO_AGENT_ID",
             Self::CocoAgentName => "COCO_AGENT_NAME",
-            Self::CocoAntTrace => "COCO_ANT_TRACE",
             Self::CocoBashAutoBackgroundOnTimeout => "COCO_BASH_AUTO_BACKGROUND_ON_TIMEOUT",
             Self::CocoBubblewrap => "COCO_BUBBLEWRAP",
             Self::CocoConfigDir => "COCO_CONFIG_DIR",
@@ -184,6 +204,11 @@ impl EnvKey {
             Self::CocoFoundryResource => "COCO_FOUNDRY_RESOURCE",
             Self::CocoGlobTimeoutSeconds => "COCO_GLOB_TIMEOUT_SECONDS",
             Self::CocoLang => "COCO_LANG",
+            Self::CocoLog => "COCO_LOG",
+            Self::CocoLogFile => "COCO_LOG_FILE",
+            Self::CocoLogFormat => "COCO_LOG_FORMAT",
+            Self::CocoLogStderr => "COCO_LOG_STDERR",
+            Self::CocoLogTimezone => "COCO_LOG_TIMEZONE",
             Self::CocoMaxContextTokens => "COCO_MAX_CONTEXT_TOKENS",
             Self::CocoMaxToolUseConcurrency => "COCO_MAX_TOOL_USE_CONCURRENCY",
             Self::CocoMemoryPathOverride => "COCO_MEMORY_PATH_OVERRIDE",
@@ -199,6 +224,7 @@ impl EnvKey {
             Self::CocoRemoteMemoryDir => "COCO_REMOTE_MEMORY_DIR",
             Self::CocoSandboxAllowNetwork => "COCO_SANDBOX_ALLOW_NETWORK",
             Self::CocoSandboxExcludedCommands => "COCO_SANDBOX_EXCLUDED_COMMANDS",
+            Self::CocoSandboxFailIfUnavailable => "COCO_SANDBOX_FAIL_IF_UNAVAILABLE",
             Self::CocoSandboxMode => "COCO_SANDBOX_MODE",
             Self::CocoSessionEndHooksTimeoutMs => "COCO_SESSIONEND_HOOKS_TIMEOUT_MS",
             Self::CocoShell => "COCO_SHELL",

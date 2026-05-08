@@ -24,12 +24,12 @@ use crate::prompt_cache_settings::PromptCacheRuntimeConfig;
 use crate::provider::PartialProviderConfig;
 use crate::provider::ProviderConfig;
 use crate::provider::builtin::builtin_providers;
+use crate::sandbox_settings::SandboxSettings;
 use crate::sections::ApiConfig;
 use crate::sections::LoopConfig;
 use crate::sections::McpRuntimeConfig;
 use crate::sections::MemoryConfig;
 use crate::sections::PathConfig;
-use crate::sections::SandboxConfig;
 use crate::sections::ShellConfig;
 use crate::sections::ToolConfig;
 use crate::sections::WebFetchConfig;
@@ -59,7 +59,7 @@ pub struct RuntimeConfig {
     pub loop_config: LoopConfig,
     pub tool: ToolConfig,
     pub shell: ShellConfig,
-    pub sandbox: SandboxConfig,
+    pub sandbox: SandboxSettings,
     pub memory: MemoryConfig,
     pub mcp: McpRuntimeConfig,
     pub web_fetch: WebFetchConfig,
@@ -188,7 +188,7 @@ impl RuntimeConfigBuilder {
         self
     }
 
-    pub fn build(self) -> anyhow::Result<RuntimeConfig> {
+    pub fn build(self) -> crate::Result<RuntimeConfig> {
         let settings = crate::settings::load_settings_with(
             &self.cwd,
             self.flag_settings.as_deref(),
@@ -207,7 +207,7 @@ pub fn build_runtime_config(
     settings: SettingsWithSource,
     env: EnvSnapshot,
     overrides: RuntimeOverrides,
-) -> anyhow::Result<RuntimeConfig> {
+) -> crate::Result<RuntimeConfig> {
     build_runtime_config_with(settings, env, overrides, CatalogPaths::default())
 }
 
@@ -219,7 +219,7 @@ pub fn build_runtime_config_with(
     env: EnvSnapshot,
     overrides: RuntimeOverrides,
     catalogs: CatalogPaths,
-) -> anyhow::Result<RuntimeConfig> {
+) -> crate::Result<RuntimeConfig> {
     let env_only = EnvOnlyConfig::from_snapshot(&env);
     let providers = resolve_providers(&settings, &catalogs)?;
     let model_roles = resolve_model_roles(&settings, &env_only, &overrides, &providers)?;
@@ -248,7 +248,7 @@ pub fn build_runtime_config_with(
         loop_config: LoopConfig::resolve(merged, &overrides),
         tool: ToolConfig::resolve(merged, &env),
         shell: ShellConfig::resolve(merged, &env),
-        sandbox: SandboxConfig::resolve(merged, &env),
+        sandbox: SandboxSettings::resolve(merged, &env),
         memory: MemoryConfig::resolve(merged, &env),
         mcp: McpRuntimeConfig::resolve(merged, &env),
         web_fetch: WebFetchConfig::resolve(merged),
@@ -403,7 +403,7 @@ fn resolve_model_roles(
     env: &EnvOnlyConfig,
     overrides: &RuntimeOverrides,
     providers: &BTreeMap<String, ProviderConfig>,
-) -> anyhow::Result<ModelRoles> {
+) -> crate::Result<ModelRoles> {
     let mut roles = ModelRoles::default();
 
     // Main has the richest resolution precedence: CLI override > env
@@ -429,7 +429,7 @@ fn resolve_model_roles(
             .fallback_model_overrides
             .iter()
             .map(|sel| resolve_model_selection(sel.clone(), providers))
-            .collect::<anyhow::Result<Vec<_>>>()?;
+            .collect::<crate::Result<Vec<_>>>()?;
         main_slots = RoleSlots {
             primary: main_slots.primary,
             fallbacks,
@@ -529,7 +529,7 @@ fn set_role_from_json(
     role: ModelRole,
     slots: Option<&RoleSlots<ModelSelection>>,
     providers: &BTreeMap<String, ProviderConfig>,
-) -> anyhow::Result<()> {
+) -> crate::Result<()> {
     if let Some(slots) = slots {
         roles
             .roles
@@ -542,14 +542,14 @@ fn resolve_role_slots(
     role: ModelRole,
     slots: RoleSlots<ModelSelection>,
     providers: &BTreeMap<String, ProviderConfig>,
-) -> anyhow::Result<RoleSlots<ModelSpec>> {
+) -> crate::Result<RoleSlots<ModelSpec>> {
     let resolved: RoleSlots<ModelSpec> =
         slots.try_map(|sel| resolve_model_selection(sel, providers))?;
     ensure_chain_unique(role, &resolved)?;
     Ok(resolved)
 }
 
-fn ensure_chain_unique(role: ModelRole, slots: &RoleSlots<ModelSpec>) -> anyhow::Result<()> {
+fn ensure_chain_unique(role: ModelRole, slots: &RoleSlots<ModelSpec>) -> crate::Result<()> {
     let mut seen: HashMap<(String, String), &'static str> = HashMap::new();
     seen.insert(
         (
@@ -561,12 +561,11 @@ fn ensure_chain_unique(role: ModelRole, slots: &RoleSlots<ModelSpec>) -> anyhow:
     for (idx, fb) in slots.fallbacks.iter().enumerate() {
         let key = (fb.provider.clone(), fb.model_id.clone());
         if let Some(prev) = seen.get(&key) {
-            anyhow::bail!(
+            return Err(crate::ConfigError::generic(format!(
                 "role `{role:?}`: fallback[{idx}] `{}/{}` duplicates {prev} slot; \
                  each slot in the chain must be a distinct model",
-                fb.provider,
-                fb.model_id,
-            );
+                fb.provider, fb.model_id,
+            )));
         }
         seen.insert(key, "earlier fallback");
     }
@@ -576,19 +575,21 @@ fn ensure_chain_unique(role: ModelRole, slots: &RoleSlots<ModelSpec>) -> anyhow:
 fn model_spec_from_selection(
     selection: &str,
     providers: &BTreeMap<String, ProviderConfig>,
-) -> anyhow::Result<ModelSpec> {
+) -> crate::Result<ModelSpec> {
     let (provider_name, model_id) = selection.split_once('/').ok_or_else(|| {
-        anyhow::anyhow!(
+        crate::ConfigError::generic(format!(
             "model selection `{selection}` must use explicit `provider/model_id` format"
-        )
+        ))
     })?;
     if provider_name.is_empty() || model_id.is_empty() {
-        anyhow::bail!("model selection `{selection}` must use explicit `provider/model_id` format");
+        return Err(crate::ConfigError::generic(format!(
+            "model selection `{selection}` must use explicit `provider/model_id` format"
+        )));
     }
     let provider = providers.get(provider_name).ok_or_else(|| {
-        anyhow::anyhow!(
+        crate::ConfigError::generic(format!(
             "model selection `{selection}` references unknown provider `{provider_name}`"
-        )
+        ))
     })?;
     Ok(ModelSpec {
         provider: provider_name.to_string(),
@@ -601,23 +602,24 @@ fn model_spec_from_selection(
 fn resolve_model_selection(
     selection: ModelSelection,
     providers: &BTreeMap<String, ProviderConfig>,
-) -> anyhow::Result<ModelSpec> {
+) -> crate::Result<ModelSpec> {
     if selection.provider.is_empty() || selection.model_id.is_empty() {
-        anyhow::bail!("model role selection must include non-empty `provider` and `model_id`");
+        return Err(crate::ConfigError::generic(
+            "model role selection must include non-empty `provider` and `model_id`",
+        ));
     }
     let provider = providers.get(&selection.provider).ok_or_else(|| {
-        anyhow::anyhow!(
+        crate::ConfigError::generic(format!(
             "model `{}` references unknown provider `{}`",
-            selection.model_id,
-            selection.provider
-        )
+            selection.model_id, selection.provider
+        ))
     })?;
     Ok(selection.into_model_spec(provider.api))
 }
 
 fn default_main_model_spec(
     providers: &BTreeMap<String, ProviderConfig>,
-) -> anyhow::Result<ModelSpec> {
+) -> crate::Result<ModelSpec> {
     // Iterate in a stable order so the fallback is deterministic. Builtin
     // providers come first (in defined order); user-registered extras
     // sorted by name follow.
@@ -650,12 +652,14 @@ fn default_main_model_spec(
         .find(|p| p.default_model.is_some())
         .or_else(|| providers.get("anthropic"))
         .ok_or_else(|| {
-            anyhow::anyhow!("no provider with a configured default model is available")
+            crate::ConfigError::generic("no provider with a configured default model is available")
         })?;
-    let model_id = pick
-        .default_model
-        .as_deref()
-        .ok_or_else(|| anyhow::anyhow!("default provider `{}` has no default model", pick.name))?;
+    let model_id = pick.default_model.as_deref().ok_or_else(|| {
+        crate::ConfigError::generic(format!(
+            "default provider `{}` has no default model",
+            pick.name
+        ))
+    })?;
     Ok(ModelSpec {
         provider: pick.name.clone(),
         api: pick.api,

@@ -197,6 +197,7 @@ fn tui_kind(evt: &TuiOnlyEvent) -> &'static str {
         TuiOnlyEvent::SlashCommandResult { .. } => "slash_command_result",
         TuiOnlyEvent::SlashCommandStatus { .. } => "slash_command_status",
         TuiOnlyEvent::OpenRewindPicker => "open_rewind_picker",
+        TuiOnlyEvent::OpenMemoryDialog { .. } => "open_memory_dialog",
     }
 }
 

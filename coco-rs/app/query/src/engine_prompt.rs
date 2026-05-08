@@ -125,7 +125,7 @@ impl QueryEngine {
             .unwrap_or(self.config.permission_mode);
         let permission_context = coco_types::ToolPermissionContext {
             mode: permission_mode,
-            additional_dirs: std::collections::HashMap::new(),
+            additional_dirs: self.config.session_additional_dirs.clone(),
             allow_rules: std::collections::HashMap::new(),
             deny_rules: std::collections::HashMap::new(),
             ask_rules: std::collections::HashMap::new(),

@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
+use coco_error::BoxedError;
 use coco_mcp_types::CallToolResult;
 use coco_rmcp_client::OAuthCredentialsStoreMode;
 use coco_rmcp_client::RmcpClient;
@@ -377,7 +377,7 @@ impl McpConnectionManager {
     pub fn start_config_watcher(
         &self,
         project_root: Option<&PathBuf>,
-    ) -> anyhow::Result<tokio::sync::broadcast::Receiver<crate::config_watcher::McpConfigChanged>>
+    ) -> Result<tokio::sync::broadcast::Receiver<crate::config_watcher::McpConfigChanged>, BoxedError>
     {
         crate::config_watcher::watch_mcp_configs(
             &self.config_home,
@@ -413,6 +413,40 @@ pub enum McpClientError {
     ToolCallFailed { message: String },
     #[error("MCP tool call timed out")]
     ToolCallTimeout,
+}
+
+// `McpClientError` keeps its `thiserror` shape (many existing call sites
+// construct variants directly via `Self::Variant { .. }`); we layer the
+// `coco-error` traits on top so callers can match on `StatusCode` and
+// drive retry / classification without the mass-rewrite that a full
+// snafu migration would require.
+impl coco_error::StackError for McpClientError {
+    fn debug_fmt(&self, layer: usize, buf: &mut Vec<String>) {
+        buf.push(format!("{layer}: {self}"));
+    }
+
+    fn next(&self) -> Option<&dyn coco_error::StackError> {
+        None
+    }
+}
+
+impl coco_error::ErrorExt for McpClientError {
+    fn status_code(&self) -> coco_error::StatusCode {
+        use coco_error::StatusCode;
+        match self {
+            Self::ServerNotFound { .. } => StatusCode::ProviderNotFound,
+            Self::SpawnFailed { .. } => StatusCode::ConnectionFailed,
+            Self::UnsupportedTransport => StatusCode::Unsupported,
+            Self::SessionExpired => StatusCode::AuthenticationFailed,
+            Self::AuthRequired { .. } => StatusCode::AuthenticationFailed,
+            Self::ToolCallFailed { .. } => StatusCode::Internal,
+            Self::ToolCallTimeout => StatusCode::Timeout,
+        }
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 #[cfg(test)]

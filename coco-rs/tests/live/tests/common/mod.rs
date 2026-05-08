@@ -20,6 +20,7 @@
 
 pub mod env;
 pub mod fixtures;
+pub mod reminders;
 pub mod runtime;
 pub mod tmpdir;
 pub mod usage_report;

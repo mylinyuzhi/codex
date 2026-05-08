@@ -38,7 +38,7 @@ impl AgentExecutionEngine for TeammateExecutionAdapter {
         &self,
         prompt: &str,
         config: RunnerAgentQueryConfig,
-    ) -> anyhow::Result<RunnerAgentQueryResult> {
+    ) -> crate::Result<RunnerAgentQueryResult> {
         let tool_runtime_config = coco_tool_runtime::AgentQueryConfig {
             system_prompt: config.system_prompt,
             model: config.model.unwrap_or_default(),
@@ -58,7 +58,8 @@ impl AgentExecutionEngine for TeammateExecutionAdapter {
         let result = self
             .inner
             .execute_query(prompt, tool_runtime_config)
-            .await?;
+            .await
+            .map_err(|e| crate::CoordinatorError::generic(format!("{e}")))?;
 
         Ok(RunnerAgentQueryResult {
             messages: result.messages,
@@ -94,7 +95,7 @@ impl AgentExecutionEngine for TeammateExecutionAdapter {
         &self,
         messages: Vec<serde_json::Value>,
         _total_tokens: i64,
-    ) -> anyhow::Result<Vec<serde_json::Value>> {
+    ) -> crate::Result<Vec<serde_json::Value>> {
         const KEEP_RECENT_FOR_MICRO: usize = 5;
         const KEEP_RECENT_ROUNDS_FOR_FULL: usize = 2;
 

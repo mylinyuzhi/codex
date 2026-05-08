@@ -17,6 +17,7 @@ pub mod powershell;
 pub mod powershell_tool;
 pub mod read;
 pub mod read_permissions;
+pub(crate) mod sandbox_preflight;
 pub mod scheduling;
 pub mod shell_tools;
 pub mod skill_advanced;

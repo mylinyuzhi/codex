@@ -10,9 +10,10 @@ fn test_exponential_backoff() {
         max_delay_ms: 60_000,
         jitter_factor: 0.0, // no jitter for deterministic tests
     };
-    let err = InferenceError::NetworkError {
-        message: "timeout".into(),
-    };
+    let err = crate::errors::NetworkSnafu {
+        message: "timeout".to_string(),
+    }
+    .build();
 
     assert_eq!(
         config.delay_for_attempt(0, &err),
@@ -40,9 +41,10 @@ fn test_backoff_capped_at_max() {
         max_delay_ms: 5000,
         jitter_factor: 0.0,
     };
-    let err = InferenceError::NetworkError {
-        message: "timeout".into(),
-    };
+    let err = crate::errors::NetworkSnafu {
+        message: "timeout".to_string(),
+    }
+    .build();
 
     // 1000 * 2^5 = 32000, but capped at 5000
     assert_eq!(
@@ -54,10 +56,11 @@ fn test_backoff_capped_at_max() {
 #[test]
 fn test_server_retry_after_takes_priority() {
     let config = RetryConfig::default();
-    let err = InferenceError::RateLimited {
-        retry_after_ms: Some(15000),
-        message: "slow down".into(),
-    };
+    let err = crate::errors::RateLimitedSnafu {
+        retry_after_ms: Some(15000_i64),
+        message: "slow down".to_string(),
+    }
+    .build();
 
     // Should use server's retry-after, not calculated backoff
     assert_eq!(
@@ -72,12 +75,14 @@ fn test_should_retry_within_limit() {
         max_retries: 3,
         ..Default::default()
     };
-    let retryable = InferenceError::NetworkError {
-        message: "err".into(),
-    };
-    let non_retryable = InferenceError::AuthenticationFailed {
-        message: "err".into(),
-    };
+    let retryable = crate::errors::NetworkSnafu {
+        message: "err".to_string(),
+    }
+    .build();
+    let non_retryable = crate::errors::AuthenticationFailedSnafu {
+        message: "err".to_string(),
+    }
+    .build();
 
     assert!(config.should_retry(0, &retryable));
     assert!(config.should_retry(2, &retryable));
@@ -93,9 +98,10 @@ fn test_jitter_adds_delay() {
         max_delay_ms: 60_000,
         jitter_factor: 0.5,
     };
-    let err = InferenceError::NetworkError {
-        message: "err".into(),
-    };
+    let err = crate::errors::NetworkSnafu {
+        message: "err".to_string(),
+    }
+    .build();
 
     // With 0.5 jitter on 1000ms base: delay = 1000 + 500 = 1500
     assert_eq!(

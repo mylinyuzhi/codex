@@ -1,4 +1,7 @@
-//! `coco sessions` and `coco resume` subcommand handlers.
+//! `coco sessions` subcommand handler.
+//!
+//! `coco resume` itself is wired in `main.rs` so it shares the same
+//! TUI-bootstrap path as `coco --resume <id>` and `coco --continue`.
 
 use anyhow::Result;
 use coco_cli::paths::sessions_dir;
@@ -28,34 +31,5 @@ pub fn handle_sessions() -> Result<()> {
         );
     }
     println!("\n{} session(s) total.", sessions.len());
-    Ok(())
-}
-
-pub fn handle_resume(session_id: Option<&str>) -> Result<()> {
-    let mgr = SessionManager::new(sessions_dir());
-
-    let session = if let Some(id) = session_id {
-        mgr.resume(id)?
-    } else {
-        match mgr.most_recent()? {
-            Some(s) => {
-                println!("Resuming most recent session: {}", s.id);
-                mgr.resume(&s.id)?
-            }
-            None => {
-                println!("No sessions to resume.");
-                return Ok(());
-            }
-        }
-    };
-
-    println!("Session: {}", session.id);
-    println!("Model: {}", session.model);
-    println!("Working dir: {}", session.working_dir.display());
-    println!("Messages: {}", session.message_count);
-    if let Some(title) = &session.title {
-        println!("Title: {title}");
-    }
-    println!("\nSession resumed. Run `coco` to continue the conversation.");
     Ok(())
 }

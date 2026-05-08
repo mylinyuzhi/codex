@@ -55,7 +55,7 @@ struct UsageBucket {
 /// and formats a cost breakdown by model.
 pub fn handler(
     _args: String,
-) -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>> {
+) -> Pin<Box<dyn std::future::Future<Output = crate::Result<String>> + Send>> {
     Box::pin(async move {
         let sessions_dir = dirs::home_dir()
             .map(|h| h.join(".cocode").join("sessions"))

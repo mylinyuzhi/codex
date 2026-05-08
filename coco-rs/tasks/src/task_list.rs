@@ -201,7 +201,7 @@ pub struct TaskListStore {
 impl TaskListStore {
     /// Open (or create) the store directory for `task_list_id` under
     /// `tasks_root` (typically `{config_home}/tasks`).
-    pub fn open(tasks_root: &Path, task_list_id: &str) -> anyhow::Result<Arc<Self>> {
+    pub fn open(tasks_root: &Path, task_list_id: &str) -> crate::Result<Arc<Self>> {
         let tasks_dir = tasks_root.join(sanitize_path_component(task_list_id));
         fs::create_dir_all(&tasks_dir)?;
         let (change_tx, _rx) = tokio::sync::broadcast::channel(16);
@@ -250,9 +250,9 @@ impl TaskListStore {
 
     // ── lock primitives ───────────────────────────────────────────
 
-    async fn with_list_lock<F, R>(&self, f: F) -> anyhow::Result<R>
+    async fn with_list_lock<F, R>(&self, f: F) -> crate::Result<R>
     where
-        F: FnOnce() -> anyhow::Result<R> + Send,
+        F: FnOnce() -> crate::Result<R> + Send,
         R: Send,
     {
         let path = self.lock_path();
@@ -260,21 +260,24 @@ impl TaskListStore {
         acquire_with_retry(&path, f).await
     }
 
-    async fn with_task_lock<F, R>(&self, task_id: &str, f: F) -> anyhow::Result<R>
+    async fn with_task_lock<F, R>(&self, task_id: &str, f: F) -> crate::Result<R>
     where
-        F: FnOnce() -> anyhow::Result<R> + Send,
+        F: FnOnce() -> crate::Result<R> + Send,
         R: Send,
     {
         let path = self.task_path(task_id);
         if !path.exists() {
-            anyhow::bail!("task file not found: {}", path.display());
+            return Err(crate::TasksError::generic(format!(
+                "task file not found: {}",
+                path.display()
+            )));
         }
         acquire_with_retry(&path, f).await
     }
 
     // ── primitive disk ops (no locking) ───────────────────────────
 
-    fn read_task_unlocked(&self, task_id: &str) -> anyhow::Result<Option<Task>> {
+    fn read_task_unlocked(&self, task_id: &str) -> crate::Result<Option<Task>> {
         let path = self.task_path(task_id);
         match fs::read_to_string(&path) {
             Ok(s) => match serde_json::from_str::<Task>(&s) {
@@ -293,14 +296,14 @@ impl TaskListStore {
         }
     }
 
-    fn write_task_unlocked(&self, task: &Task) -> anyhow::Result<()> {
+    fn write_task_unlocked(&self, task: &Task) -> crate::Result<()> {
         let path = self.task_path(&task.id);
         let json = serde_json::to_string_pretty(task)?;
         fs::write(&path, json)?;
         Ok(())
     }
 
-    fn list_tasks_unlocked(&self) -> anyhow::Result<Vec<Task>> {
+    fn list_tasks_unlocked(&self) -> crate::Result<Vec<Task>> {
         let mut out = Vec::new();
         let entries = match fs::read_dir(&self.tasks_dir) {
             Ok(e) => e,
@@ -328,7 +331,7 @@ impl TaskListStore {
             .unwrap_or(0)
     }
 
-    fn write_hwm(&self, value: i64) -> anyhow::Result<()> {
+    fn write_hwm(&self, value: i64) -> crate::Result<()> {
         fs::write(self.hwm_path(), value.to_string())?;
         Ok(())
     }
@@ -362,7 +365,7 @@ impl TaskListStore {
         description: String,
         active_form: Option<String>,
         metadata: Option<HashMap<String, serde_json::Value>>,
-    ) -> anyhow::Result<Task> {
+    ) -> crate::Result<Task> {
         let task = self
             .with_list_lock(|| {
                 let highest = self.highest_id_unlocked();
@@ -390,7 +393,7 @@ impl TaskListStore {
     /// Delete a task and cascade removal of its id from other tasks'
     /// blocks / blockedBy arrays. Updates the high-water-mark so the
     /// id isn't reassigned later.
-    pub async fn delete_task(&self, task_id: &str) -> anyhow::Result<bool> {
+    pub async fn delete_task(&self, task_id: &str) -> crate::Result<bool> {
         let removed = self
             .with_list_lock(|| {
                 // Bump HWM before deletion.
@@ -432,12 +435,12 @@ impl TaskListStore {
         Ok(removed)
     }
 
-    pub async fn get_task(&self, task_id: &str) -> anyhow::Result<Option<Task>> {
+    pub async fn get_task(&self, task_id: &str) -> crate::Result<Option<Task>> {
         // Reads do not need the lock — disk atomicity + serde validates.
         self.read_task_unlocked(task_id)
     }
 
-    pub async fn list_tasks(&self) -> anyhow::Result<Vec<Task>> {
+    pub async fn list_tasks(&self) -> crate::Result<Vec<Task>> {
         self.list_tasks_unlocked()
     }
 
@@ -450,14 +453,14 @@ impl TaskListStore {
         &self,
         task_id: &str,
         updates: TaskUpdate,
-    ) -> anyhow::Result<Option<Task>> {
+    ) -> crate::Result<Option<Task>> {
         if !self.task_path(task_id).exists() {
             return Ok(None);
         }
         let (updated, completed) = self
             .with_task_lock(task_id, || {
                 let Some(mut task) = self.read_task_unlocked(task_id)? else {
-                    return Ok::<(Option<Task>, bool), anyhow::Error>((None, false));
+                    return Ok::<(Option<Task>, bool), crate::TasksError>((None, false));
                 };
                 let mut newly_completed = false;
                 if let Some(v) = updates.subject {
@@ -505,7 +508,7 @@ impl TaskListStore {
 
     /// Add a `blocks` / `blockedBy` edge between two tasks.
     /// Returns `false` if either task is missing.
-    pub async fn block_task(&self, from_id: &str, to_id: &str) -> anyhow::Result<bool> {
+    pub async fn block_task(&self, from_id: &str, to_id: &str) -> crate::Result<bool> {
         let (Some(mut from), Some(mut to)) =
             (self.get_task(from_id).await?, self.get_task(to_id).await?)
         else {
@@ -539,7 +542,7 @@ impl TaskListStore {
         task_id: &str,
         claimant: &str,
         check_agent_busy: bool,
-    ) -> anyhow::Result<ClaimResult> {
+    ) -> crate::Result<ClaimResult> {
         // Early existence check outside the lock so missing ids return
         // cleanly (TS lock layer errors on missing files).
         let Some(_) = self.get_task(task_id).await? else {
@@ -553,7 +556,7 @@ impl TaskListStore {
         let outcome = self
             .with_task_lock(task_id, || {
                 let Some(mut task) = self.read_task_unlocked(task_id)? else {
-                    return Ok::<ClaimResult, anyhow::Error>(ClaimResult::TaskNotFound);
+                    return Ok::<ClaimResult, crate::TasksError>(ClaimResult::TaskNotFound);
                 };
                 if let Some(owner) = &task.owner
                     && owner != claimant
@@ -598,12 +601,12 @@ impl TaskListStore {
         &self,
         task_id: &str,
         claimant: &str,
-    ) -> anyhow::Result<ClaimResult> {
+    ) -> crate::Result<ClaimResult> {
         let outcome = self
             .with_list_lock(|| {
                 let all = self.list_tasks_unlocked()?;
                 let Some(mut task) = all.iter().find(|t| t.id == task_id).cloned() else {
-                    return Ok::<ClaimResult, anyhow::Error>(ClaimResult::TaskNotFound);
+                    return Ok::<ClaimResult, crate::TasksError>(ClaimResult::TaskNotFound);
                 };
                 if let Some(owner) = &task.owner
                     && owner != claimant
@@ -690,7 +693,7 @@ impl TaskListStore {
         &self,
         teammate_id: &str,
         teammate_name: &str,
-    ) -> anyhow::Result<Vec<(String, String)>> {
+    ) -> crate::Result<Vec<(String, String)>> {
         let all = self.list_tasks_unlocked()?;
         let mut unassigned = Vec::new();
         for task in all {
@@ -721,7 +724,7 @@ impl TaskListStore {
 }
 
 /// Ensure the list-level lock file exists so `fs2` can lock it.
-fn ensure_lock_file(path: &Path) -> anyhow::Result<()> {
+fn ensure_lock_file(path: &Path) -> crate::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -736,9 +739,9 @@ fn ensure_lock_file(path: &Path) -> anyhow::Result<()> {
 
 /// Acquire an exclusive `fs2` lock with backoff and run the closure.
 /// Retries on `WouldBlock` up to [`LOCK_RETRIES`] times.
-async fn acquire_with_retry<F, R>(path: &Path, f: F) -> anyhow::Result<R>
+async fn acquire_with_retry<F, R>(path: &Path, f: F) -> crate::Result<R>
 where
-    F: FnOnce() -> anyhow::Result<R> + Send,
+    F: FnOnce() -> crate::Result<R> + Send,
     R: Send,
 {
     let mut attempt = 0;
@@ -753,11 +756,10 @@ where
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 if attempt >= LOCK_RETRIES {
-                    return Err(anyhow::anyhow!(
-                        "failed to acquire lock on {} after {} attempts",
-                        path.display(),
-                        LOCK_RETRIES
-                    ));
+                    return Err(crate::TasksError::LockFailed {
+                        path: path.to_path_buf(),
+                        message: format!("failed to acquire after {LOCK_RETRIES} attempts"),
+                    });
                 }
                 tokio::time::sleep(Duration::from_millis(backoff)).await;
                 attempt += 1;

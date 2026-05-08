@@ -1,22 +1,28 @@
 //! TS `queued_command` generator.
 //!
-//! Mirrors `normalizeAttachmentForAPI` `case 'queued_command':`
-//! (`messages.ts:3739`). Replays drained queue items. Coco-rs uses a
-//! simplified model: each `QueuedCommandInfo` carries its content +
-//! an `origin_system` flag. System-origin items are wrapped in a
-//! `<system-reminder>`; human-origin items pass through as plain user
-//! text (TS hides system-generated from transcript via `isMeta`).
+//! Replays queued items the model didn't see live, wrapping each in the
+//! origin-specific framing TS prepends via `wrapCommandText`
+//! (`messages.ts:5496`). Each queued item becomes its own
+//! `<system-reminder>` block — matches TS's "N attachments → N wrappers"
+//! shape (`attachments.ts:829` returns one attachment per queued item;
+//! each goes through `normalizeAttachmentForAPI`'s `case 'queued_command':`
+//! at `messages.ts:3739` which calls `wrapMessagesInSystemReminder([
+//! createUserMessage(...)])`).
 //!
-//! This generator only emits the **system-origin** subset; human-
-//! origin queued input is surfaced through the regular prompt
-//! pipeline, not the reminder system.
+//! Earlier this generator filtered out everything without an
+//! `origin_system: true` flag — but since no production producer ever
+//! set that flag, it emitted nothing. The typed
+//! [`crate::QueueOrigin`] enum + per-origin framing brings TS parity
+//! end-to-end.
 
 use async_trait::async_trait;
 
 use crate::error::Result;
 use crate::generator::AttachmentGenerator;
 use crate::generator::GeneratorContext;
+use crate::queue_origin::wrap_command_text;
 use crate::types::AttachmentType;
+use crate::types::ReminderMessage;
 use crate::types::SystemReminder;
 use coco_config::SystemReminderConfig;
 
@@ -38,22 +44,31 @@ impl AttachmentGenerator for QueuedCommandGenerator {
     }
 
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
-        let mut parts: Vec<String> = Vec::new();
-        for q in &ctx.queued_commands {
-            if !q.origin_system {
-                continue;
-            }
-            if q.content.is_empty() {
-                continue;
-            }
-            parts.push(q.content.clone());
-        }
-        if parts.is_empty() {
+        let messages: Vec<ReminderMessage> = ctx
+            .queued_commands
+            .iter()
+            .filter(|q| !q.content.is_empty() || !q.images.is_empty())
+            .map(|q| {
+                let text = wrap_command_text(&q.content, q.origin.as_ref());
+                if q.images.is_empty() {
+                    ReminderMessage::user_text(text)
+                } else {
+                    // TS `attachments.ts:1067-1075`: text first, then images.
+                    let images = q
+                        .images
+                        .iter()
+                        .map(|img| (img.media_type.clone(), img.data_base64.clone()))
+                        .collect();
+                    ReminderMessage::user_text_with_images(text, images)
+                }
+            })
+            .collect();
+        if messages.is_empty() {
             return Ok(None);
         }
-        Ok(Some(SystemReminder::new(
+        Ok(Some(SystemReminder::messages(
             AttachmentType::QueuedCommand,
-            parts.join("\n\n"),
+            messages,
         )))
     }
 }

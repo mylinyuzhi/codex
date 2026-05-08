@@ -45,8 +45,11 @@ pub const BUILTIN_OUTPUT_STYLES: &[&str] = &["default", "Explanatory", "Learning
 /// a successful handshake.
 pub struct CliInitializeBootstrap {
     /// Slash-command registry populated at CLI startup (built-ins +
-    /// plugin + user markdown). `None` disables `commands`.
-    pub command_registry: Option<Arc<CommandRegistry>>,
+    /// plugin + user markdown). `None` disables `commands`. Wrapped in
+    /// `RwLock<Arc<...>>` so reloads (`/reload-plugins`) are observed
+    /// by subsequent `initialize` calls without rebuilding the
+    /// bootstrap.
+    pub command_registry: Option<Arc<tokio::sync::RwLock<Arc<CommandRegistry>>>>,
     /// Current output style from `Settings.output_style`; defaults to
     /// `"default"`.
     pub output_style: String,
@@ -77,7 +80,10 @@ impl CliInitializeBootstrap {
         }
     }
 
-    pub fn with_command_registry(mut self, registry: Arc<CommandRegistry>) -> Self {
+    pub fn with_command_registry(
+        mut self,
+        registry: Arc<tokio::sync::RwLock<Arc<CommandRegistry>>>,
+    ) -> Self {
         self.command_registry = Some(registry);
         self
     }
@@ -101,9 +107,12 @@ impl CliInitializeBootstrap {
 #[async_trait]
 impl InitializeBootstrap for CliInitializeBootstrap {
     async fn commands(&self) -> Vec<SdkSlashCommand> {
-        let Some(registry) = self.command_registry.as_ref() else {
+        let Some(slot) = self.command_registry.as_ref() else {
             return Vec::new();
         };
+        // Snapshot once — a concurrent reload swaps the inner Arc but
+        // the snapshot stays valid for the duration of this call.
+        let registry = slot.read().await.clone();
         // `sdk_safe()` is strictly tighter than `visible()`: it also
         // filters `is_sensitive` so remote SDK clients never see
         // command names / descriptions / argument hints for commands

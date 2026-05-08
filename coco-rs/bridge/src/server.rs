@@ -47,22 +47,22 @@ impl BridgeServer {
     }
 
     /// Send a message to all connected IDEs.
-    pub fn send(&self, msg: BridgeOutMessage) -> anyhow::Result<()> {
+    pub fn send(&self, msg: BridgeOutMessage) -> crate::Result<()> {
         self.outgoing_tx
             .send(msg)
-            .map_err(|_| anyhow::anyhow!("no IDE subscribers"))?;
+            .map_err(|_| crate::BridgeError::NoSubscribers)?;
         Ok(())
     }
 
     /// Send text output.
-    pub fn send_text(&self, content: &str) -> anyhow::Result<()> {
+    pub fn send_text(&self, content: &str) -> crate::Result<()> {
         self.send(BridgeOutMessage::Text {
             content: content.to_string(),
         })
     }
 
     /// Send error message.
-    pub fn send_error(&self, message: &str) -> anyhow::Result<()> {
+    pub fn send_error(&self, message: &str) -> crate::Result<()> {
         self.send(BridgeOutMessage::Error {
             message: message.to_string(),
         })

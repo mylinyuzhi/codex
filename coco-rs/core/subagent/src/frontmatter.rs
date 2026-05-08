@@ -28,6 +28,26 @@ pub enum FrontmatterParseError {
     },
 }
 
+impl coco_error::StackError for FrontmatterParseError {
+    fn debug_fmt(&self, layer: usize, buf: &mut Vec<String>) {
+        buf.push(format!("{layer}: {self}"));
+    }
+
+    fn next(&self) -> Option<&dyn coco_error::StackError> {
+        None
+    }
+}
+
+impl coco_error::ErrorExt for FrontmatterParseError {
+    fn status_code(&self) -> coco_error::StatusCode {
+        coco_error::StatusCode::InvalidArguments
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
 /// Parse the markdown body of an agent file along with its frontmatter map.
 ///
 /// `body` is the post-frontmatter content (the system prompt). `path` is

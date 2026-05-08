@@ -10,6 +10,7 @@ workspace = true
 [dependencies]
 coco-types.workspace = true
 coco-config.workspace = true
+coco-error.workspace = true
 coco-otel.workspace = true
 vercel-ai-provider.workspace = true
 vercel-ai-provider-utils.workspace = true
@@ -24,8 +25,8 @@ vercel-ai.workspace = true
 
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-anyhow.workspace = true
 sha2.workspace = true
+snafu.workspace = true
 tokio = { workspace = true, features = ["sync", "time"] }
 async-trait.workspace = true
 tracing.workspace = true

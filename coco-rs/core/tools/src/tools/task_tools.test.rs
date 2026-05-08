@@ -45,10 +45,13 @@ impl TaskHandle for RecordingTaskHandle {
     async fn spawn_shell_task(
         &self,
         _request: coco_tool_runtime::BackgroundShellRequest,
-    ) -> anyhow::Result<String> {
+    ) -> Result<String, coco_error::BoxedError> {
         unimplemented!("not used in these tests")
     }
-    async fn get_task_status(&self, task_id: &str) -> anyhow::Result<BackgroundTaskInfo> {
+    async fn get_task_status(
+        &self,
+        task_id: &str,
+    ) -> Result<BackgroundTaskInfo, coco_error::BoxedError> {
         if self
             .known_ids
             .lock()
@@ -66,21 +69,24 @@ impl TaskHandle for RecordingTaskHandle {
                 notified: false,
             })
         } else {
-            Err(anyhow::anyhow!("unknown background task: {task_id}"))
+            Err(Box::new(coco_error::PlainError::new(
+                format!("unknown background task: {task_id}"),
+                coco_error::StatusCode::Internal,
+            )))
         }
     }
     async fn get_task_output_delta(
         &self,
         _task_id: &str,
         _from_offset: i64,
-    ) -> anyhow::Result<TaskOutputDelta> {
+    ) -> Result<TaskOutputDelta, coco_error::BoxedError> {
         Ok(TaskOutputDelta {
             content: String::new(),
             new_offset: 0,
             is_complete: false,
         })
     }
-    async fn kill_task(&self, task_id: &str) -> anyhow::Result<()> {
+    async fn kill_task(&self, task_id: &str) -> Result<(), coco_error::BoxedError> {
         if self
             .known_ids
             .lock()
@@ -91,7 +97,10 @@ impl TaskHandle for RecordingTaskHandle {
             self.kill_calls.lock().unwrap().push(task_id.to_string());
             Ok(())
         } else {
-            Err(anyhow::anyhow!("task not found: {task_id}"))
+            Err(Box::new(coco_error::PlainError::new(
+                format!("task not found: {task_id}"),
+                coco_error::StatusCode::Internal,
+            )))
         }
     }
     async fn list_tasks(&self) -> Vec<BackgroundTaskInfo> {
@@ -1038,7 +1047,7 @@ impl MailboxHandle for RecordingMailbox {
         recipient: &str,
         team_name: &str,
         message: MailboxEnvelope,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), coco_error::BoxedError> {
         self.written
             .lock()
             .unwrap()
@@ -1049,7 +1058,7 @@ impl MailboxHandle for RecordingMailbox {
         &self,
         _agent_name: &str,
         _team_name: &str,
-    ) -> anyhow::Result<Vec<InboxMessage>> {
+    ) -> Result<Vec<InboxMessage>, coco_error::BoxedError> {
         Ok(Vec::new())
     }
     async fn mark_read(
@@ -1057,7 +1066,7 @@ impl MailboxHandle for RecordingMailbox {
         _agent_name: &str,
         _team_name: &str,
         _index: usize,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), coco_error::BoxedError> {
         Ok(())
     }
 }

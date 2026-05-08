@@ -18,7 +18,7 @@ work. Pick one of:
 
 ```bash
 just fmt          # After Rust changes (auto-approve)
-just quick-check  # Iteration: fmt + seam guard + incremental clippy. NO tests.
+just quick-check  # Iteration: fmt + seam guard + check-error-policy + incremental clippy. NO tests.
 just pre-commit   # REQUIRED before commit: quick-check + nextest test run
 ```
 
@@ -302,15 +302,20 @@ Reusable primitives. **Check here first** before implementing any basic utility.
 
 ## Error Handling
 
-| Layer | Error Type |
-|-------|------------|
-| common/, core/, services/ | `coco-error` + snafu + snafu-virtstack (StatusCode `XX_YYY`, retryable flag) |
-| root modules | snafu + `coco-error` |
-| utils/ | `anyhow::Result` |
-| vercel-ai/ | `thiserror` (standalone, no coco deps) |
-| app/, exec/, standalone | `anyhow::Result` (retrieval uses `RetrievalErr`; apply-patch uses `thiserror`) |
+Three tiers, each with one allowed error library. Pick by layer, not taste.
 
-StatusCode categories: General (00-05), Config (10), Provider (11), Resource (12). See [common/error/README.md](coco-rs/common/error/README.md).
+| Tier | Where | Library | Notes |
+|------|-------|---------|-------|
+| **3 (main trunk)** | `common/`, `core/`, `services/`, root modules (`commands`, `skills`, `hooks`, `tasks`, `memory`, `plugins`, `keybindings`), `app/query` | **snafu + `coco-error`** | Required when the error crosses ≥2 layers, drives retry / classification, or surfaces to users. Implement `ErrorExt` and pick a `StatusCode`. |
+| **2 (boundary)** | `vercel-ai/*`, `utils/*` (libraries), `retrieval`, `bridge` | **thiserror** | Leaf libraries. No `coco-error` dep — main-trunk callers convert at the boundary via `boxed(err, StatusCode::X)`. |
+| **1 (terminal)** | `app/cli` `main`, `app/tui`, `exec/shell`, `exec/exec-server`, tests, `[dev-dependencies]` | **anyhow** | Entry points and tests where errors are printed and discarded. Never appears in a public lib API. |
+
+**Hard rules:**
+- **No `pub fn ... -> anyhow::Result<_>` in `utils/*` or `vercel-ai/*`** — these are libraries; their public API must be a typed `Result<T, CrateError>`. Enforced by `just check-error-policy`.
+- `[dev-dependencies]` is exempt — anyhow in tests is fine.
+- A crate that depends on a third-party API returning `anyhow::Result` (e.g. `utils/pty` → `portable-pty`) may keep `anyhow` in `[dependencies]` for internal use, but its **own** public API must still return its own `thiserror` enum.
+
+**StatusCode categories:** General (00-05), Config (10), Provider (11), Resource (12), SystemReminder (13). See [common/error/README.md](coco-rs/common/error/README.md).
 
 ## Testing
 
@@ -359,6 +364,26 @@ Tests go in `implementation.test.rs` alongside the source. Integration tests in 
 - `tokio::task::spawn_blocking` for blocking ops
 - Prefer `tokio::sync` primitives in async contexts
 - `Send + Sync` bounds on traits used with `Arc<dyn Trait>`
+
+## Tracing & Logging
+
+The global `tracing` subscriber is installed once from the binary
+(`app/cli/src/main.rs::main`) via `coco_otel::subscriber::init_subscriber`.
+**Without that install every `tracing::*` call is a no-op** — library /
+test code MUST NOT install one. Tests that need to assert on logs use
+`coco_otel::subscriber::init_for_tests` (`OnceLock`-guarded).
+
+Filter resolution: `--log-level` > `COCO_LOG` > `RUST_LOG` >
+`subscriber::DEFAULT_FILTER` (`coco=debug,info`). File sink is rotating
+daily under `<config_home>/logs/coco.log` in TUI / SDK / Headless modes.
+Stdout is reserved (TUI ratatui screen, SDK NDJSON RPC) — logs land on
+stderr only when explicitly opted in via `--log-stderr` (Headless does
+this by default).
+
+Levels, span-anchor list (the seven canonical anchors), `#[instrument]`
+policy, standard field names, and the secret-redaction rule for HTTP
+bodies — see `common/otel/CLAUDE.md` "Logging conventions". Adopt those
+field names verbatim across crates so ops can pivot.
 
 ## Dependencies
 

@@ -88,20 +88,21 @@ fn test_memory_config_resolves_sub_toggles() {
 }
 
 #[test]
-fn test_sandbox_config_resolves_mode_and_network() {
+fn test_sandbox_settings_resolves_mode_and_network() {
     // After feature-gate consolidation, top-level enable/disable lives on
-    // `Feature::Sandbox`. This struct only carries mode + parameters.
+    // `Feature::Sandbox`. The mode + network toggles are coco-rs-specific
+    // posture knobs layered on top of the TS-parity rich `SandboxSettings`.
     let settings = Settings {
-        sandbox: PartialSandboxSettings {
-            mode: Some(coco_types::SandboxMode::ReadOnly),
-            allow_network: Some(true),
+        sandbox: crate::sandbox_settings::SandboxSettings {
+            mode: coco_types::SandboxMode::ReadOnly,
+            allow_network: true,
             ..Default::default()
         },
         ..Default::default()
     };
     let env = EnvSnapshot::from_pairs([(EnvKey::CocoSandboxMode, "workspace-write")]);
 
-    let config = SandboxConfig::resolve(&settings, &env);
+    let config = crate::sandbox_settings::SandboxSettings::resolve(&settings, &env);
 
     // Env override beats settings.
     assert_eq!(config.mode, coco_types::SandboxMode::WorkspaceWrite);

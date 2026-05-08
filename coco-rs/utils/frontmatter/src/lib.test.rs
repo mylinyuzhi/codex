@@ -74,7 +74,7 @@ fn test_nested_mapping() {
     // serde_yml backing — supports nested objects (TS YAML parity).
     let input = r#"---
 hooks:
-  pre_tool_use:
+  PreToolUse:
     - matcher: Bash
       command: ./hook.sh
 config:
@@ -84,8 +84,8 @@ config:
 body"#;
     let fm = parse(input);
     let hooks = fm.data.get("hooks").unwrap().as_mapping().unwrap();
-    assert!(hooks.contains_key("pre_tool_use"));
-    let pre_tool_use = hooks.get("pre_tool_use").unwrap().as_sequence().unwrap();
+    assert!(hooks.contains_key("PreToolUse"));
+    let pre_tool_use = hooks.get("PreToolUse").unwrap().as_sequence().unwrap();
     assert_eq!(pre_tool_use.len(), 1);
     let entry = pre_tool_use[0].as_mapping().unwrap();
     assert_eq!(entry.get("matcher").unwrap().as_str(), Some("Bash"));
@@ -127,7 +127,7 @@ body"#;
 fn test_to_json_round_trip() {
     let input = r#"---
 hooks:
-  pre_tool_use:
+  PreToolUse:
     - command: ./hook.sh
       timeout: 30
 ---
@@ -135,7 +135,7 @@ body"#;
     let fm = parse(input);
     let hooks_json = fm.data.get("hooks").unwrap().to_json();
     let expected = serde_json::json!({
-        "pre_tool_use": [
+        "PreToolUse": [
             {"command": "./hook.sh", "timeout": 30}
         ]
     });

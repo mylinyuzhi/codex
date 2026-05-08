@@ -94,6 +94,22 @@ impl ToolPermissionBridge for SdkPermissionBridge {
             "SdkPermissionBridge: asking client for approval"
         );
 
+        // TS `useNotifyAfterTimeout('Claude Code is waiting for your input',
+        // 'permission_prompt')` (`PermissionRequest.tsx:190`): fire the
+        // Notification hook before blocking on the client's reply so the
+        // hook runs in lockstep with TS. Best-effort — a runtime not yet
+        // installed (e.g. tests) leaves the hook unfired.
+        if let Some(runtime) = self.state.session_runtime.read().await.clone() {
+            let title = format!("Permission request: {}", request.tool_name);
+            runtime
+                .fire_notification_hooks(
+                    "permission_prompt",
+                    "Claude Code needs your permission to use a tool",
+                    Some(&title),
+                )
+                .await;
+        }
+
         // Issue the outbound ServerRequest and await the reply.
         let reply = self
             .state

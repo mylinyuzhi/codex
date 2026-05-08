@@ -7,8 +7,7 @@
 //! 2. Async I/O (backup files outside state lock)
 //! 3. Commit (update state with fresh read)
 
-use anyhow::Context;
-use anyhow::Result;
+use crate::Result;
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde::Serialize;
@@ -300,9 +299,12 @@ impl FileHistoryState {
             Ok(content) => {
                 ensure_parent_dir(&dest).await?;
                 let size = content.len() as u64;
-                fs::write(&dest, &content)
-                    .await
-                    .with_context(|| format!("writing backup to {}", dest.display()))?;
+                fs::write(&dest, &content).await.map_err(|e| {
+                    crate::ContextError::generic(format!(
+                        "writing backup to {}: {e}",
+                        dest.display()
+                    ))
+                })?;
                 // Preserve file permissions (TS: chmod(backupPath, srcStats.mode))
                 #[cfg(unix)]
                 if let Ok(meta) = fs::metadata(file_path).await {
@@ -528,7 +530,7 @@ impl FileHistoryState {
             .snapshots
             .iter()
             .rfind(|s| s.message_id == message_id)
-            .context("no snapshot found for message")?;
+            .ok_or_else(|| crate::ContextError::generic("no snapshot found for message"))?;
 
         let changed = match apply_snapshot(self, snapshot, config_home, session_id).await {
             Ok(c) => c,
@@ -580,7 +582,7 @@ impl FileHistoryState {
             .snapshots
             .iter()
             .rfind(|s| s.message_id == message_id)
-            .context("no snapshot found for message")?;
+            .ok_or_else(|| crate::ContextError::generic("no snapshot found for message"))?;
 
         let mut stats = DiffStats::default();
         // Walk `tracked_files`, falling back to v1 backup for files
@@ -738,9 +740,12 @@ async fn apply_snapshot(
             Some(bname) => {
                 let bp = resolve_backup_path(config_home, session_id, &bname);
                 if origin_file_changed(file_path, &bp).await.unwrap_or(true) {
-                    let content = fs::read(&bp)
-                        .await
-                        .with_context(|| format!("reading backup {}", bp.display()))?;
+                    let content = fs::read(&bp).await.map_err(|e| {
+                        crate::ContextError::generic(format!(
+                            "reading backup {}: {e}",
+                            bp.display()
+                        ))
+                    })?;
                     ensure_parent_dir(file_path).await?;
                     fs::write(file_path, &content).await?;
                     // Restore file permissions (TS: chmod(filePath, backupStats.mode))

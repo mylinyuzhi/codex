@@ -4,6 +4,7 @@
 //! between IDE extensions and the coco agent, plus a REPL bridge
 //! for headless/non-TUI communication with SDK consumers.
 
+pub mod error;
 pub mod jwt_utils;
 pub mod permission_callbacks;
 pub mod protocol;
@@ -12,8 +13,13 @@ pub mod server;
 pub mod trusted_device;
 pub mod work_secret;
 
+pub use error::BridgeError;
 pub use jwt_utils::Claims;
 pub use jwt_utils::JwtError;
+
+/// Crate-local Result alias. Default error is `BridgeError`; the open
+/// generic preserves `Result::ok` and 2-arg `Result<T, E>` resolution.
+pub type Result<T, E = BridgeError> = std::result::Result<T, E>;
 pub use permission_callbacks::BridgeDecision;
 pub use permission_callbacks::BridgePermissionRequest;
 pub use permission_callbacks::BridgePermissionResponse;

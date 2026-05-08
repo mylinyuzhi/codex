@@ -32,7 +32,6 @@
 
 use std::sync::Arc;
 
-use anyhow::Context;
 use coco_query::QueryEngineConfig;
 use coco_query::forked_agent::{ForkDispatcher, ForkedAgentOptions, ForkedDispatchResult};
 use coco_types::CacheSafeParams;
@@ -59,7 +58,7 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
         options: &ForkedAgentOptions,
         prompt: &str,
         system_prompt_override: Option<String>,
-    ) -> anyhow::Result<ForkedDispatchResult> {
+    ) -> Result<ForkedDispatchResult, coco_error::BoxedError> {
         // Derive the AgentQueryConfig shape from the cache slot. This
         // keeps the byte-faithful contract documented on `forked_agent`
         // (skip_cache_write, skip_transcript, max_turns: 1 by default).
@@ -86,6 +85,7 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
             session_id: agent_config.session_id.clone().unwrap_or_default(),
             tool_config: runtime_config.tool.clone(),
             sandbox_config: runtime_config.sandbox.clone(),
+            sandbox_state: self.runtime.sandbox_state(),
             memory_config: runtime_config.memory.clone(),
             shell_config: runtime_config.shell.clone(),
             web_fetch_config: runtime_config.web_fetch.clone(),
@@ -137,12 +137,19 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
             // Discard event stream — fork output goes back via the
             // returned text, not via the parent's CoreEvent channel.
             let (tx, _rx) = tokio::sync::mpsc::channel(8);
-            engine
-                .run_with_messages(messages, tx)
-                .await
-                .context("fork engine run_with_messages")?
+            engine.run_with_messages(messages, tx).await.map_err(|e| {
+                Box::new(coco_error::PlainError::new(
+                    format!("fork engine run_with_messages: {e}"),
+                    coco_error::StatusCode::Internal,
+                )) as coco_error::BoxedError
+            })?
         } else {
-            engine.run(prompt).await.context("fork engine run")?
+            engine.run(prompt).await.map_err(|e| {
+                Box::new(coco_error::PlainError::new(
+                    format!("fork engine run: {e}"),
+                    coco_error::StatusCode::Internal,
+                )) as coco_error::BoxedError
+            })?
         };
 
         Ok(ForkedDispatchResult {

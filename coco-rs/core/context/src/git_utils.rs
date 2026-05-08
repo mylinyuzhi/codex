@@ -103,7 +103,7 @@ pub fn has_uncommitted_changes(cwd: &Path) -> bool {
 /// Create a git worktree for agent isolation.
 ///
 /// TS: utils/worktree.ts — creates isolated worktrees.
-pub fn create_worktree(cwd: &Path, branch: &str, path: &Path) -> anyhow::Result<()> {
+pub fn create_worktree(cwd: &Path, branch: &str, path: &Path) -> crate::Result<()> {
     let output = Command::new("git")
         .args(["worktree", "add", "-b", branch, &path.to_string_lossy()])
         .current_dir(cwd)
@@ -111,13 +111,15 @@ pub fn create_worktree(cwd: &Path, branch: &str, path: &Path) -> anyhow::Result<
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("git worktree add failed: {stderr}");
+        return Err(crate::ContextError::git_failed(format!(
+            "git worktree add failed: {stderr}"
+        )));
     }
     Ok(())
 }
 
 /// Remove a git worktree.
-pub fn remove_worktree(cwd: &Path, path: &Path, force: bool) -> anyhow::Result<()> {
+pub fn remove_worktree(cwd: &Path, path: &Path, force: bool) -> crate::Result<()> {
     let path_str = path.to_string_lossy().to_string();
     let mut args = vec!["worktree", "remove"];
     if force {
@@ -129,7 +131,9 @@ pub fn remove_worktree(cwd: &Path, path: &Path, force: bool) -> anyhow::Result<(
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("git worktree remove failed: {stderr}");
+        return Err(crate::ContextError::git_failed(format!(
+            "git worktree remove failed: {stderr}"
+        )));
     }
     Ok(())
 }

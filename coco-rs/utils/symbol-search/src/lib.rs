@@ -3,11 +3,13 @@
 //! Provides tree-sitter-based symbol extraction and fuzzy search
 //! for the TUI `@#SymbolName` mention feature.
 
+mod error;
 pub mod extractor;
 pub mod index;
 pub mod languages;
 pub mod watcher;
 
+pub use error::SymbolSearchError;
 pub use index::SymbolIndex;
 
 /// Kind of symbol.

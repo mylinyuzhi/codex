@@ -1,4 +1,25 @@
 //! Permission checking for sandbox-enforced operations.
+//!
+//! ## Status (audit, May 2026)
+//!
+//! `PermissionChecker` is a fail-closed validator that pairs cleanly with
+//! [`SandboxApprovalBridge`](crate::bridge::SandboxApprovalBridge) to
+//! support an interactive approval surface (mirroring TS's
+//! `wrapWithSandbox` validation flow). The SDK side is fully wired
+//! (`app/cli/src/sdk_server::SdkSandboxApprovalBridge`).
+//!
+//! **What's NOT wired yet**: tool-side consumers. The platform sandboxes
+//! (bwrap, Seatbelt) already enforce path/network restrictions at the
+//! kernel level, so the in-process `PermissionChecker` is currently
+//! redundant for command execution. To make this checker pull its
+//! weight, it should be invoked as a *pre-flight* check from
+//! `core/tools/src/tools/{file_read,file_write,file_edit}.rs` so SDK
+//! consumers get a chance to approve before the tool ever spawns a
+//! child.
+//!
+//! See `audit-gaps.md` (sandbox section) for tracking. Removing the type
+//! is also an option; we keep it because the SDK approval bridge wiring
+//! is non-trivial to recreate.
 
 use std::path::Path;
 

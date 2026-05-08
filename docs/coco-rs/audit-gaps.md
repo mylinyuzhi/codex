@@ -2,6 +2,64 @@
 
 Exhaustive comparison of all plan docs against actual TS source + cocode-rs source.
 
+## Round 13: Reminder Signal Wiring + Sandbox Wrapper Stripping (May 7, 2026)
+
+Follow-up audit pass after [Round 12](#round-12-system-reminder--sandbox-alignment-may-7-2026): caught
+two architectural gaps the first pass missed. Reminder generators added in
+Round 12 emit only when their `GeneratorContext` field is populated; the
+field surface was added on the builder but the engine-side
+`TurnReminderInput` never carried them. Sandbox `excluded_commands` matching
+covered env-var prefixes and basename normalisation but not the safe
+wrapper commands (`timeout`, `time`, `nice`, `nohup`) the TS
+`shouldUseSandbox` fixed-point loop strips.
+
+### Gaps Resolved in Round 13
+
+| Gap | Area | What Was Done | Status |
+|-----|------|--------------|--------|
+| **Reminder signal wiring** (`max_turns_reached`, `current_session_memory`, `command_permissions`, `dynamic_skill`, `skill_discovery`, `structured_output`, `teammate_shutdown_batch`, `context_efficiency`) | system-reminder | All 8 fields added to `TurnReminderInput`, threaded through `run_turn_reminders` builder, and exercised by two new turn-runner tests. `engine_turn_reminders.rs` populates `max_turns_reached_signal` from `QueryEngineConfig::max_turns` (TS `query.ts:1508` parity: `turnCount + 1 > maxTurns`); `context_efficiency_signal` stays `false` (TS gates on `feature('HISTORY_SNIP')` which root CLAUDE.md explicitly does NOT port). The remaining six are TS event-time emissions (slash command, tool execution, swarm) — engine threads `None` with a comment so future subsystem ports populate the field with no engine change. | **RESOLVED (wiring)** / **DEFERRED (six event-time sources)** |
+| **`excluded_commands` wrapper stripping** | sandbox config | `build_command_variants` BFS now also peels safe wrappers via `strip_safe_wrapper`. Handles `timeout` (with GNU flag prefixes + duration token validation), `time`, `nice` (`-n N` and `-N`), and `nohup` — including the optional `--` separator (`nohup -- cmd`). The strip is intentionally conservative: only enabled wrappers + a parsed-duration check for `timeout` so `timeout bazel build` (missing duration) leaves `bazel build` un-promoted. Three new unit tests cover the chained `timeout 300 FOO=bar /usr/bin/bazel run` case from the TS comment. TS parity: `bashPermissions.ts:524` (`stripSafeWrappers`) + `shouldUseSandbox.ts:82-101` (BFS fixed-point). | **RESOLVED** |
+
+### Items Documented (deferred — needs cross-crate work, not adapter-local)
+
+| Item | Note |
+|------|------|
+| Six event-time reminder emitters | `current_session_memory` (TS no creator yet), `command_permissions` (TS `processSlashCommand.tsx:909` from slash-command flow), `dynamic_skill` (TS `attachments.ts:2589` from skill loader), `skill_discovery` (TS no creator yet), `structured_output` (TS `services/tools/toolExecution.ts:1276` from tool execution), `teammate_shutdown_batch` (TS `collapseTeammateShutdowns.ts:43` from swarm coordinator). The reminder generator-side wiring is in place (`SystemReminder::silent_text` + builder + context); the upstream owners (`coco-skills`, `coco-permissions`, `services/tools`, swarm) need to populate the field on `TurnReminderInput`. No engine change needed for the consumer — only producer wiring. |
+| Managed-policy-only sandbox filters (`allow_managed_domains_only` / `allow_managed_read_paths_only`) | TS `sandbox-adapter.ts:152-164,343-347` filters network domains + read paths to policy-source rules only when these flags are set. coco-rs has the per-source settings infrastructure (`SettingSource::Policy`, `load_policy_settings`) but `AdapterInputs` carries flat permission rule lists with no source distinction, so the gate would require a multi-source rule plumbing refactor. Deferred until enterprise-policy work lands. |
+| Sandbox hot-reload subscriber | `RuntimeReloader` (`coco-config-reload`) publishes new `Arc<RuntimeConfig>` snapshots; `SandboxState::update_config` accepts hot-reloaded config. The wiring in between (subscribe to `RuntimePublisher`, re-run `adapter::build_runtime_config`, call `update_config`) is not installed. `tui_runner.rs:61-64` explicitly notes subscriber wiring is deferred until the QueryEngine integration lands. Same gap applies to the sandbox state. Editing `~/.coco/settings.json` mid-session has no effect on the sandbox config. |
+| `PermissionChecker` wiring (carried over from Round 12) | Type + bridge are correct; no production consumer wires it into Read/Write/Edit pre-flight. Platform sandboxes (bwrap/Seatbelt) already enforce path/network at the kernel level, so this is a UX/SDK feature gap, not a security gap. |
+
+---
+
+## Round 12: System-Reminder + Sandbox Alignment (May 7, 2026)
+
+End-to-end audit of `core/system-reminder` and `exec/sandbox` against
+TS `claude-code` (`src/utils/attachments.ts`, `messages.ts`,
+`utils/sandbox/sandbox-adapter.ts`, `entrypoints/sandboxTypes.ts`,
+`tools/BashTool/shouldUseSandbox.ts`) plus codex-rs reference (linux-sandbox + sandboxing).
+
+### Gaps Resolved in Round 12
+
+| Gap | Area | What Was Done | Status |
+|-----|------|--------------|--------|
+| **VerifyPlanReminder turn-0 cadence** | system-reminder | Gate changed from `n <= 0 \|\| n % 10 != 0` to `n < 0 \|\| n % 10 != 0`; matches TS `attachments.ts:3919-3922` (the only skip is `turnCount % 10 !== 0`, so turn 0 fires). Test renamed `skips_when_turn_count_zero` → `fires_on_turn_count_zero`. | **RESOLVED** |
+| **Per-batch reminder timeout** | system-reminder | `orchestrator::generate_all` now wraps `join_all` in a single `tokio::time::timeout(batch_timeout, ...)` matching TS's single shared `AbortController`. Per-generator hard-cap kept at 2× as a safety net. | **RESOLVED** |
+| **8 audit-add reminder variants** | system-reminder | Added `MaxTurnsReached` / `CurrentSessionMemory` / `CommandPermissions` / `DynamicSkill` / `SkillDiscovery` / `StructuredOutput` / `TeammateShutdownBatch` / `ContextEfficiency` as `Coverage::SilentReminder` generators in `generators/audit_add.rs`. All emit through `SystemReminder::silent_text` (TS-parity: `is_api_visible=false`, body lands in UI/transcript only). | **RESOLVED** |
+| **`fail_if_unavailable` hard-error** | sandbox bootstrap | Field added to `SandboxSettings` + `PartialSandboxSettings` + `SandboxConfig`. New env var `COCO_SANDBOX_FAIL_IF_UNAVAILABLE`. `build_sandbox_state` now returns `Result<Option<…>>` and propagates a fatal error when the gate is set. TS parity: `entrypoints/sandboxTypes.ts:95`. | **RESOLVED** |
+| **`sandbox_unavailable_reason` UX banner** | sandbox bootstrap | `current_platform_supported()` exposed via `lib.rs`. `build_sandbox_state` calls `sandbox_unavailable_reason(...)` after gate failure and prints a stderr banner so the user understands why sandboxing is degraded. TS parity: `getSandboxUnavailableReason()` (#34044). | **RESOLVED** |
+| **`scrub_bare_repo_files` post-command** | shell executor | `ShellExecutor` now stores `original_cwd`. Both `execute()` and `execute_with_progress()` call `scrub_bare_repo_after_command(...)` on every exit path (success / cancel / timeout / IO error). Closes [anthropics/claude-code#29316](https://github.com/anthropics/claude-code/issues/29316). TS parity: `cleanupAfterCommand()` calling `scrubBareGitRepoFiles()`. | **RESOLVED** |
+| **Deny-read glob expansion** | sandbox | New `glob_expansion` module using `globset` + `walkdir`, bounded by `glob_scan_max_depth` (default 3). Adapter classifies `filesystem.deny_read` entries with metacharacters into `denied_read_globs`. macOS Seatbelt + Linux bwrap both expand at wrap time. Matches codex-rs `glob_scan_max_depth`. | **RESOLVED** |
+| **CLAUDE.md generator-count drift** | docs | `core/system-reminder/CLAUDE.md` updated to enumerate all 8 audit-add variants and reflect the new total (50 registered generators, 60 `AttachmentKind` variants total). | **RESOLVED** |
+
+### Items Documented (deferred — wiring exists but no consumer)
+
+| Item | Note |
+|------|------|
+| `PermissionChecker` runtime wiring | Type + bridge are correct; no production consumer (Read/Write/Edit tools don't call it). The platform sandboxes (bwrap/Seatbelt) handle path/network enforcement at the kernel level today. Future: wire `PermissionChecker` into Read/Write/Edit pre-flight so SDK consumers can intercept via `SandboxApprovalBridge`. Module-level doc comment in `checker.rs` records this. |
+| Windows inner-stage sandbox | `platform/windows.rs` serializes config to base64 and builds the arg0-dispatch command, but the inner Win32 token-restriction stage is stubbed (matches codex-rs/windows-sandbox-rs). Defer per scope. |
+
+---
+
 ## Round 11: Skills / Commands / Plugins Parity Deep-Review (May 2, 2026)
 
 Verified TS-vs-Rust audit across `coco-rs/skills`, `coco-rs/commands`, `coco-rs/plugins` against `/lyz/codespace/3rd/claude-code/src/{skills,commands,plugins,utils/{plugins,skills}}`. **Full plan**: [parity-skills-commands-plugins.md](parity-skills-commands-plugins.md) — every gap below has TS file:line citations, type definitions, behavior, and UI specs.

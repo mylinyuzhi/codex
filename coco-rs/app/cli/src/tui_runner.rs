@@ -26,7 +26,6 @@ use tracing::warn;
 use coco_config::EnvKey;
 use coco_config::env;
 use coco_context::FileHistoryState;
-use coco_context::attachment::Attachment;
 use coco_inference::ApiClient;
 use coco_query::CoreEvent;
 use coco_query::ServerNotification;
@@ -41,13 +40,23 @@ use tokio_util::sync::CancellationToken;
 use coco_cli::session_bootstrap::build_engine_resources;
 use coco_cli::session_bootstrap::install_session_late_binds;
 
+use coco_cli::resume_resolver::ResumePlan;
+
 use crate::Cli;
 
 /// Run the interactive TUI mode.
 ///
 /// TS: launchRepl() → <REPL /> (React/Ink component).
 /// Rust: spawns agent_driver as background task, runs TUI in foreground.
-pub async fn run_tui(cli: &Cli) -> Result<()> {
+///
+/// `resume_plan`: resolved by the binary entry from
+/// `--resume` / `--continue` / `--fork-session` flags. When `Some`,
+/// the runtime is repointed at the source session id and `runtime.history`
+/// is seeded with the loaded messages so the first turn picks up where
+/// the prior session left off. Pre-populating the transcript dedup set
+/// prevents the per-turn append from re-writing already-persisted
+/// messages.
+pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     let cwd = std::env::current_dir()?;
 
     // Spawn the hot-reload loop FIRST. The reloader watches the four
@@ -88,6 +97,13 @@ pub async fn run_tui(cli: &Cli) -> Result<()> {
             )
         }
     };
+    // Capture a fresh ConfigChange receiver from the reloader (when
+    // available) so the SessionRuntime can drive the `ConfigChange`
+    // hook on every settings/catalog file change. Borrowed before
+    // `runtime_config` is moved into the bootstrap below.
+    let config_change_rx = _reloader
+        .as_ref()
+        .map(coco_config_reload::RuntimeReloader::subscribe_changes);
     // Engine resources (client, fallbacks, recovery, tools, system
     // prompt, command registry, startup-permission state) shared with
     // SDK / headless via `session_bootstrap::build_engine_resources`.
@@ -109,6 +125,7 @@ pub async fn run_tui(cli: &Cli) -> Result<()> {
     let tools = resources.tools;
     let system_prompt = resources.system_prompt;
     let command_registry = resources.command_registry.clone();
+    let skill_manager = resources.skill_manager.clone();
 
     // Session manager for auto-title persistence (F5). Built here so
     // `SessionRuntime::build` can borrow it and the cleanup task can
@@ -169,11 +186,18 @@ pub async fn run_tui(cli: &Cli) -> Result<()> {
     // for interactive sessions.
     let (command_tx, command_rx, notification_tx, notification_rx) = create_channels();
     let pending_approvals = coco_cli::tui_permission_bridge::new_pending_map();
-    let tui_permission_bridge: coco_tool_runtime::ToolPermissionBridgeRef =
+    // Keep a concrete `Arc<TuiPermissionBridge>` alongside the trait
+    // object so we can install the SessionRuntime weak-ref after
+    // `SessionRuntime::build` returns (used to fire the Notification
+    // hook on permission prompts — TS parity with
+    // `PermissionRequest.tsx:190`).
+    let tui_permission_bridge_concrete =
         Arc::new(coco_cli::tui_permission_bridge::TuiPermissionBridge::new(
             notification_tx.clone(),
             pending_approvals.clone(),
         ));
+    let tui_permission_bridge: coco_tool_runtime::ToolPermissionBridgeRef =
+        tui_permission_bridge_concrete.clone();
 
     // SessionRuntime owns every per-session subsystem (FileReadState,
     // SessionMemoryService, FileHistoryState, ToolAppState,
@@ -197,6 +221,7 @@ pub async fn run_tui(cli: &Cli) -> Result<()> {
             fast_model_spec,
             permission_bridge: Some(tui_permission_bridge),
             command_registry: command_registry.clone(),
+            skill_manager: skill_manager.clone(),
         },
     )
     .await?;
@@ -207,6 +232,68 @@ pub async fn run_tui(cli: &Cli) -> Result<()> {
     // resume, and `/btw`. MCP handle is `None` until TUI grows its
     // own `McpConnectionManager` bootstrap.
     install_session_late_binds(runtime.clone(), &cwd, None).await?;
+
+    // Install the SessionRuntime weak-ref on the permission bridge so
+    // `Notification` hooks (TS `permission_prompt`) fire when the
+    // user is asked to approve a tool. Weak avoids extending the
+    // runtime's lifetime through the bridge.
+    tui_permission_bridge_concrete
+        .set_notification_runtime(Arc::downgrade(&runtime))
+        .await;
+
+    // Spawn the ConfigChange watcher (TS
+    // `executeConfigChangeHooks(source, path)` from
+    // `utils/settings/changeDetector.ts:292/344`). The watcher's
+    // join-handle is leaked: it terminates on its own when the
+    // reloader's broadcast channel closes (reloader drop) or when
+    // `runtime.cancel` fires.
+    if let Some(rx) = config_change_rx {
+        std::mem::drop(runtime.spawn_config_change_watcher(rx));
+    }
+
+    // Spawn the sandbox hot-reload subscriber so settings.json edits
+    // touching `sandbox.*` re-flow into the live `SandboxState`. Skipped
+    // when the reloader spawn failed (one-shot build) or sandbox isn't
+    // bootstrapped (feature off / FullAccess / gates failed). The task
+    // exits on its own when the reloader (and its publisher) drops.
+    if let (Some(reloader), Some(state)) = (_reloader.as_ref(), runtime.sandbox_state()) {
+        std::mem::drop(coco_cli::sandbox_reload::spawn_sandbox_reload(
+            state,
+            &reloader.publisher(),
+            cwd.clone(),
+        ));
+    }
+
+    // Honor `--resume` / `--continue` / `--fork-session`. The binary
+    // entry has already loaded the source transcript; here we repoint
+    // every session-id-keyed subsystem at the resume target and seed
+    // the in-memory history so the first user prompt sees the prior
+    // chain. Pre-populating the transcript dedup set with the loaded
+    // uuids prevents `record_transcript_tail` from re-appending
+    // entries that are already on disk. TS parity:
+    // `processResumedConversation()` + `adoptResumedSessionFile()`.
+    if let Some(plan) = resume_plan {
+        runtime.start_new_session(plan.session_id.clone()).await;
+        {
+            let mut history = runtime.history.lock().await;
+            *history = plan.prior_messages.clone();
+        }
+        runtime
+            .seed_transcript_dedup(plan.prior_messages.iter().filter_map(|m| m.uuid().copied()))
+            .await;
+        eprintln!(
+            "{} session {} ({} prior message(s))",
+            if plan.is_fork { "Forked" } else { "Resumed" },
+            plan.source_session_id,
+            plan.prior_messages.len(),
+        );
+    }
+
+    // TS parity (`main.tsx:2437/2577/2607`): fire SessionStart hooks
+    // once at session bootstrap. Output queues onto the shared
+    // sync-hook buffer and surfaces as `hook_*` reminders on the
+    // first turn's reminder pass.
+    runtime.fire_session_start_hooks("startup").await;
 
     // TS parity: TUI users opt into per-spawn periodic AgentSummary
     // timers via `COCO_AGENT_SUMMARY_ENABLE` (TS uses an SDK control
@@ -349,6 +436,26 @@ async fn run_agent_driver(
                             run_session_memory_force(&runtime).await;
                             continue;
                         }
+                        SlashOutcome::TriggerRename { name } => {
+                            run_session_rename(&runtime, &event_tx, &name).await;
+                            continue;
+                        }
+                        SlashOutcome::TriggerTag { tag } => {
+                            run_session_tag(&runtime, &event_tx, &tag).await;
+                            continue;
+                        }
+                        SlashOutcome::TriggerAddDir { path } => {
+                            run_add_working_dir(&runtime, &path).await;
+                            continue;
+                        }
+                        SlashOutcome::TriggerReloadPlugins => {
+                            run_reload_plugins(&runtime, &event_tx).await;
+                            continue;
+                        }
+                        SlashOutcome::TriggerReloadHooks => {
+                            run_reload_hooks(&runtime, &event_tx).await;
+                            continue;
+                        }
                     }
                 }
 
@@ -441,6 +548,21 @@ async fn run_agent_driver(
                     }
                     SlashOutcome::TriggerSummary => {
                         run_session_memory_force(&runtime).await;
+                    }
+                    SlashOutcome::TriggerRename { name } => {
+                        run_session_rename(&runtime, &event_tx, &name).await;
+                    }
+                    SlashOutcome::TriggerTag { tag } => {
+                        run_session_tag(&runtime, &event_tx, &tag).await;
+                    }
+                    SlashOutcome::TriggerAddDir { path } => {
+                        run_add_working_dir(&runtime, &path).await;
+                    }
+                    SlashOutcome::TriggerReloadPlugins => {
+                        run_reload_plugins(&runtime, &event_tx).await;
+                    }
+                    SlashOutcome::TriggerReloadHooks => {
+                        run_reload_hooks(&runtime, &event_tx).await;
                     }
                 }
             }
@@ -666,6 +788,32 @@ async fn run_agent_driver(
                 break;
             }
 
+            UserCommand::FireIdleNotification { message } => {
+                // TS parity (`REPL.tsx:3934-3937` →
+                // `services/notifier.ts::sendNotification`): the TUI
+                // detected an idle window past
+                // `messageIdleNotifThresholdMs`; route through the
+                // hook orchestrator so registered `Notification`
+                // hooks fire with `notification_type = "idle_prompt"`.
+                let registry = runtime.hook_registry();
+                let factory = runtime.orchestration_ctx_factory();
+                let ctx = (factory)();
+                if ctx.disable_all_hooks {
+                    continue;
+                }
+                if let Err(e) = coco_hooks::orchestration::execute_notification(
+                    &registry,
+                    &ctx,
+                    "idle_prompt",
+                    &message,
+                    /*title*/ None,
+                )
+                .await
+                {
+                    tracing::warn!(error = %e, "idle_prompt notification hook failed");
+                }
+            }
+
             // Other commands: log and skip for now
             other => {
                 info!(?other, "Unhandled UserCommand in agent driver");
@@ -726,6 +874,27 @@ enum SlashOutcome {
     /// Trigger a session-memory force update (9-section). Emitted when
     /// the dispatcher sees `SUMMARY_SENTINEL`.
     TriggerSummary,
+    /// Rename the current session to `name`. Dispatcher calls
+    /// `runtime.session_manager.set_title(session_id, &name)`.
+    TriggerRename { name: String },
+    /// Toggle a tag on the current session. Dispatcher calls
+    /// `runtime.session_manager.toggle_tag(session_id, &tag)`.
+    TriggerTag { tag: String },
+    /// Push `path` onto the engine's `session_additional_dirs` so the
+    /// next turn's permission context sees the wider scope. TS:
+    /// `useWorkingDirectories` REPL hook reacting to `/add-dir`.
+    TriggerAddDir { path: String },
+    /// Rebuild the slash-command registry from disk and atomically
+    /// swap. Triggered by `/reload-plugins`. TS:
+    /// `useManagePlugins.refreshActivePlugins`.
+    TriggerReloadPlugins,
+    /// Reload the live `HookRegistry` from the latest `RuntimeConfig`
+    /// snapshot. Triggered by `/hooks reload`. TS:
+    /// `updateHooksConfigSnapshot()` (`utils/hooks/hooksConfigSnapshot.ts`).
+    /// Slash commands run only at turn boundaries (`QueryGuard::Idle`),
+    /// so PreToolUse/PostToolUse for an in-flight call cannot see
+    /// different hook sets.
+    TriggerReloadHooks,
 }
 
 /// Split `/<name> <args>` into `(name, args)`. Returns `None` when
@@ -744,13 +913,19 @@ fn parse_slash_command(text: &str) -> Option<(&str, &str)> {
 /// Decision-tree classifier for sentinel-prefixed handler output.
 /// Pure, no side-effects — used by `dispatch_slash_command` to decide
 /// whether the Text result actually carries a request to fire a real
-/// feature (compact / dream / summary). Extracted as a free function so
-/// the routing logic is testable without a full `SessionRuntime`.
+/// feature (compact / dream / summary / rename / tag). Extracted as a
+/// free function so the routing logic is testable without a full
+/// `SessionRuntime`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum SentinelTrigger {
     Compact { custom_instructions: Option<String> },
     Dream,
     Summary,
+    Rename { name: String },
+    Tag { tag: String },
+    AddDir { path: String },
+    ReloadPlugins,
+    ReloadHooks,
 }
 
 fn classify_sentinel_trigger(text: &str) -> Option<SentinelTrigger> {
@@ -777,6 +952,31 @@ fn classify_sentinel_trigger(text: &str) -> Option<SentinelTrigger> {
     }
     if text.starts_with(SUMMARY_SENTINEL) && parse_summary_sentinel(text).is_some() {
         return Some(SentinelTrigger::Summary);
+    }
+    if text.starts_with(coco_commands::RENAME_SENTINEL)
+        && let Some(name) = coco_commands::parse_rename_sentinel(text)
+    {
+        return Some(SentinelTrigger::Rename { name });
+    }
+    if text.starts_with(coco_commands::TAG_SENTINEL)
+        && let Some(tag) = coco_commands::parse_tag_sentinel(text)
+    {
+        return Some(SentinelTrigger::Tag { tag });
+    }
+    if text.starts_with(coco_commands::ADD_DIR_SENTINEL)
+        && let Some(path) = coco_commands::parse_add_dir_sentinel(text)
+    {
+        return Some(SentinelTrigger::AddDir { path });
+    }
+    if text.starts_with(coco_commands::RELOAD_PLUGINS_SENTINEL)
+        && coco_commands::parse_reload_plugins_sentinel(text).is_some()
+    {
+        return Some(SentinelTrigger::ReloadPlugins);
+    }
+    if text.starts_with(coco_commands::RELOAD_HOOKS_SENTINEL)
+        && coco_commands::parse_reload_hooks_sentinel(text).is_some()
+    {
+        return Some(SentinelTrigger::ReloadHooks);
     }
     None
 }
@@ -848,6 +1048,15 @@ async fn dispatch_slash_command(
     {
         return outcome;
     }
+    // `/color <name|default>` mutates `app_state.agent_color`. The
+    // registry handler is sync + has no runtime context, so the
+    // intercept owns the teammate guard + state write. Falls through
+    // to the registry (handler lists colors) when args are empty.
+    if name == "color"
+        && let Some(outcome) = dispatch_color(args, runtime, event_tx).await
+    {
+        return outcome;
+    }
     // `/clear` from the palette: typed `/clear` is intercepted in
     // `update/edit.rs::try_local_clear`, but ExecuteSkill flows
     // through here. Without this short-circuit the registry handler's
@@ -884,7 +1093,11 @@ async fn dispatch_slash_command(
         return SlashOutcome::Handled;
     }
 
-    let Some(cmd) = runtime.command_registry.get(name) else {
+    // Snapshot once per dispatch — `/reload-plugins` may swap the
+    // registry mid-call, but the snapshot keeps the resolved command
+    // valid through the handler's await chain.
+    let registry_snapshot = runtime.current_command_registry().await;
+    let Some(cmd) = registry_snapshot.get(name) else {
         return SlashOutcome::NotFound;
     };
     let Some(handler) = cmd.handler.as_ref() else {
@@ -937,6 +1150,11 @@ async fn dispatch_slash_command(
                     },
                     SentinelTrigger::Dream => SlashOutcome::TriggerDream,
                     SentinelTrigger::Summary => SlashOutcome::TriggerSummary,
+                    SentinelTrigger::Rename { name } => SlashOutcome::TriggerRename { name },
+                    SentinelTrigger::Tag { tag } => SlashOutcome::TriggerTag { tag },
+                    SentinelTrigger::AddDir { path } => SlashOutcome::TriggerAddDir { path },
+                    SentinelTrigger::ReloadPlugins => SlashOutcome::TriggerReloadPlugins,
+                    SentinelTrigger::ReloadHooks => SlashOutcome::TriggerReloadHooks,
                 };
             }
             emit_slash_text(event_tx, name, &text).await;
@@ -969,12 +1187,23 @@ async fn dispatch_slash_command(
         }
         CommandResult::Compact {
             display_text,
-            summary: _,
+            summary,
         } => {
-            // Full-compaction integration lives behind `UserCommand::Compact`
-            // (engine.run_manual_compact). For now, surface the display
-            // text. A follow-up can route this through the engine path so
-            // the next turn carries `summary`.
+            // Pre-computed summary path: a handler that already ran
+            // compaction (or has a summary in hand) returns the summary
+            // string + display text. We push the summary as a
+            // `is_compact_summary: true` user message so the next turn
+            // sees it as a compact boundary; the LLM-summarized engine
+            // path is unchanged (it's still the entry-point for typed
+            // `/compact` from the TUI fast-path).
+            //
+            // Truncation of pre-summary rounds is intentionally left to
+            // the handler — when no handler emits this today, we err on
+            // the side of preserving history rather than dropping it.
+            if !summary.trim().is_empty() {
+                let mut h = runtime.history.lock().await;
+                h.push(coco_compact::build_compact_summary_message(&summary));
+            }
             emit_slash_text(event_tx, name, &display_text).await;
             SlashOutcome::Handled
         }
@@ -990,16 +1219,50 @@ async fn dispatch_slash_command(
                         .send(CoreEvent::Tui(TuiOnlyEvent::OpenRewindPicker))
                         .await;
                 }
-                DialogSpec::MemoryFileSelector { .. }
-                | DialogSpec::PluginPicker
+                DialogSpec::MemoryFileSelector { entries } => {
+                    // Convert from coco_commands::MemoryFileEntry to the
+                    // wire-payload struct in coco-types so the TUI can
+                    // consume the event without depending on coco-commands.
+                    let wire_entries: Vec<coco_types::MemoryDialogEntry> = entries
+                        .into_iter()
+                        .map(|e| coco_types::MemoryDialogEntry {
+                            path: e.path.display().to_string(),
+                            label: e.label,
+                            scope: match e.scope {
+                                coco_commands::MemoryScope::Managed => {
+                                    coco_types::MemoryDialogScope::Managed
+                                }
+                                coco_commands::MemoryScope::User => {
+                                    coco_types::MemoryDialogScope::User
+                                }
+                                coco_commands::MemoryScope::Project => {
+                                    coco_types::MemoryDialogScope::Project
+                                }
+                                coco_commands::MemoryScope::ProjectLocal => {
+                                    coco_types::MemoryDialogScope::ProjectLocal
+                                }
+                                coco_commands::MemoryScope::Subdir => {
+                                    coco_types::MemoryDialogScope::Subdir
+                                }
+                            },
+                        })
+                        .collect();
+                    let _ = event_tx
+                        .send(CoreEvent::Tui(TuiOnlyEvent::OpenMemoryDialog {
+                            entries: wire_entries,
+                        }))
+                        .await;
+                }
+                DialogSpec::PluginPicker
                 | DialogSpec::McpbConfig { .. }
                 | DialogSpec::Confirm { .. } => {
                     let dialog_kind = match spec {
-                        DialogSpec::MemoryFileSelector { .. } => "memory file selector",
                         DialogSpec::PluginPicker => "plugin picker",
                         DialogSpec::McpbConfig { .. } => "MCPB config form",
                         DialogSpec::Confirm { .. } => "confirm dialog",
-                        DialogSpec::MessageSelector => unreachable!(),
+                        DialogSpec::MessageSelector | DialogSpec::MemoryFileSelector { .. } => {
+                            unreachable!()
+                        }
                     }
                     .to_string();
                     emit_slash_status(
@@ -1193,6 +1456,103 @@ async fn run_session_memory_force(runtime: &Arc<crate::session_runtime::SessionR
     let _ = memory_runtime.session_memory.force(tokens).await;
 }
 
+/// `/rename <name>` runner — sets the session title via `SessionManager`
+/// and surfaces a system-line confirmation. Silently no-ops when the
+/// session id hasn't been minted yet (rare: only between fresh launch
+/// and first turn).
+async fn run_session_rename(
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    event_tx: &mpsc::Sender<CoreEvent>,
+    name: &str,
+) {
+    let session_id = runtime.current_session_id().await;
+    let manager = runtime.session_manager.clone();
+    let name_owned = name.to_string();
+    let session_id_owned = session_id.clone();
+    let result =
+        tokio::task::spawn_blocking(move || manager.set_title(&session_id_owned, &name_owned))
+            .await
+            .map_err(anyhow::Error::from)
+            .and_then(|inner| inner.map_err(anyhow::Error::from));
+    let text = match result {
+        Ok(_) => format!("Conversation renamed to: {name}"),
+        Err(e) => format!("Failed to rename conversation ({session_id}): {e}"),
+    };
+    emit_slash_text(event_tx, "rename", &text).await;
+}
+
+/// `/reload-plugins` runner — rescans plugin + skill dirs and
+/// atomically swaps the active `CommandRegistry`. Snapshots taken by
+/// in-flight dispatches stay valid (they hold the prior `Arc`); the
+/// swap is observed by the next dispatch. TS:
+/// `useManagePlugins.refreshActivePlugins`.
+async fn run_reload_plugins(
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    event_tx: &mpsc::Sender<CoreEvent>,
+) {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let count = runtime.reload_plugins(&cwd).await;
+    let body = format!("Reloaded — {count} commands now registered.");
+    emit_slash_text(event_tx, "reload-plugins", &body).await;
+}
+
+/// `/hooks reload` runner — rebuild the live `HookRegistry` from the
+/// latest `RuntimeConfig` snapshot. TS parity:
+/// `updateHooksConfigSnapshot()`.
+async fn run_reload_hooks(
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    event_tx: &mpsc::Sender<CoreEvent>,
+) {
+    let body = match runtime.reload_hooks().await {
+        Ok(count) => format!("Reloaded — {count} hook(s) registered from current settings."),
+        Err(e) => format!("Hook reload failed: {e}"),
+    };
+    emit_slash_text(event_tx, "hooks", &body).await;
+}
+
+/// `/add-dir <abs-path>` runner — pushes the (already-validated)
+/// absolute path onto `engine_config.session_additional_dirs` so the
+/// next turn's `ToolPermissionContext.additional_dirs` carries it.
+/// Source is `Session` (TS parity) — never persisted to settings.json.
+async fn run_add_working_dir(runtime: &Arc<crate::session_runtime::SessionRuntime>, path: &str) {
+    let path_owned = path.to_string();
+    runtime
+        .update_engine_config(move |cfg| {
+            cfg.session_additional_dirs.insert(
+                path_owned.clone(),
+                coco_types::AdditionalWorkingDir {
+                    path: path_owned,
+                    source: coco_types::PermissionUpdateDestination::Session,
+                },
+            );
+        })
+        .await;
+}
+
+/// `/tag <name>` runner — toggles the tag via `SessionManager`. Reports
+/// "added" or "removed" so the user knows the new state.
+async fn run_session_tag(
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    event_tx: &mpsc::Sender<CoreEvent>,
+    tag: &str,
+) {
+    let session_id = runtime.current_session_id().await;
+    let manager = runtime.session_manager.clone();
+    let tag_owned = tag.to_string();
+    let session_id_owned = session_id.clone();
+    let result =
+        tokio::task::spawn_blocking(move || manager.toggle_tag(&session_id_owned, &tag_owned))
+            .await
+            .map_err(anyhow::Error::from)
+            .and_then(|inner| inner.map_err(anyhow::Error::from));
+    let text = match result {
+        Ok((_, true)) => format!("Tag added: {tag}"),
+        Ok((_, false)) => format!("Tag removed: {tag}"),
+        Err(e) => format!("Failed to toggle tag `{tag}` on session {session_id}: {e}"),
+    };
+    emit_slash_text(event_tx, "tag", &text).await;
+}
+
 /// `/permissions allow|deny|reset` dispatch with engine-config mutation.
 ///
 /// The static registry handler can return text but can't mutate
@@ -1200,6 +1560,73 @@ async fn run_session_memory_force(runtime: &Arc<crate::session_runtime::SessionR
 /// mutating subcommands so they take real effect; `list` / no-arg fall
 /// through to the registry handler that reads settings.json. Returns
 /// `None` for non-mutating args so the caller falls through.
+/// `/color <name|default>` — set the prompt bar color for this session.
+///
+/// TS parity: `commands/color/color.ts` — the same `RESET_ALIASES`, the
+/// same teammate guard, the same error messages. Persists to the live
+/// `ToolAppState.agent_color` so the prompt-bar UI sees the change
+/// without a session restart. Returns `None` for the empty-args case so
+/// the registry handler still produces the "Available colors: …"
+/// listing.
+async fn dispatch_color(
+    args: &str,
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    event_tx: &mpsc::Sender<CoreEvent>,
+) -> Option<SlashOutcome> {
+    use coco_coordinator::identity::is_teammate;
+    use coco_types::AgentColorName;
+
+    if is_teammate() {
+        emit_slash_text(
+            event_tx,
+            "color",
+            "Cannot set color: This session is a swarm teammate. \
+             Teammate colors are assigned by the team leader.",
+        )
+        .await;
+        return Some(SlashOutcome::Handled);
+    }
+
+    let trimmed = args.trim();
+    if trimmed.is_empty() {
+        // Empty args fall through to the registry handler, which
+        // produces the canonical "Please provide a color..." listing
+        // (identical to TS empty-args output).
+        return None;
+    }
+
+    // Reset aliases mirror `commands/color/color.ts:18`.
+    const RESET_ALIASES: &[&str] = &["default", "reset", "none", "gray", "grey"];
+    let lower = trimmed.to_ascii_lowercase();
+    if RESET_ALIASES.contains(&lower.as_str()) {
+        runtime.app_state.write().await.agent_color = None;
+        emit_slash_text(event_tx, "color", "Session color reset to default").await;
+        return Some(SlashOutcome::Handled);
+    }
+
+    match lower.parse::<AgentColorName>() {
+        Ok(color) => {
+            runtime.app_state.write().await.agent_color = Some(color);
+            emit_slash_text(event_tx, "color", &format!("Session color set to: {color}")).await;
+            Some(SlashOutcome::Handled)
+        }
+        Err(_) => {
+            let list = AgentColorName::ALL
+                .iter()
+                .map(|c| c.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            emit_slash_text(
+                event_tx,
+                "color",
+                &format!("Invalid color \"{lower}\". Available colors: {list}, default"),
+            )
+            .await;
+            Some(SlashOutcome::Handled)
+        }
+    }
+}
+
 async fn dispatch_permissions_mutation(
     args: &str,
     runtime: &Arc<crate::session_runtime::SessionRuntime>,
@@ -1239,7 +1666,14 @@ async fn dispatch_permissions_mutation(
 
     let mutation = parse_permissions_mutation(args)?;
 
-    let confirmation = match mutation {
+    // Push a `command_permissions` reminder body so the next turn's
+    // system-reminder pipeline informs the model that permission rules
+    // changed. TS parity: `processSlashCommand.tsx:909` — the model
+    // sees a brief "permission rule added/removed" hint without
+    // re-rendering the full rule set.
+    let mailbox = runtime.reminder_mailbox_handle();
+
+    let confirmation = match &mutation {
         PermissionsMutation::Allow(tool) => {
             let rule = PermissionRule {
                 source: PermissionRuleSource::Session,
@@ -1257,6 +1691,9 @@ async fn dispatch_permissions_mutation(
                         .push(rule);
                 })
                 .await;
+            mailbox.put_command_permissions(format!(
+                "Permission rule added: allow `{tool}` (session scope)."
+            ));
             format!(
                 "Added allow rule for `{tool}`.\n\nSource: Session (highest priority — \
                  active until end of session or `/permissions reset`)."
@@ -1279,6 +1716,9 @@ async fn dispatch_permissions_mutation(
                         .push(rule);
                 })
                 .await;
+            mailbox.put_command_permissions(format!(
+                "Permission rule added: deny `{tool}` (session scope)."
+            ));
             format!(
                 "Added deny rule for `{tool}`.\n\nSource: Session (highest priority — \
                  active until end of session or `/permissions reset`)."
@@ -1291,6 +1731,10 @@ async fn dispatch_permissions_mutation(
                     cfg.deny_rules.remove(&PermissionRuleSource::Session);
                 })
                 .await;
+            mailbox.put_command_permissions(
+                "Session permission rules reset (cleared all session-scope allow/deny entries)."
+                    .to_string(),
+            );
             "Session permission rules cleared. File-based rules \
              (.claude/settings.json, ~/.cocode/settings.json) are unchanged — \
              edit those files directly to modify persistent rules."
@@ -1340,34 +1784,58 @@ async fn process_submit_turn(
     session_id: String,
     turn_cancel: CancellationToken,
 ) {
-    // Resolve @mentions into attachments.
-    let processed = coco_context::process_user_input(&content);
+    // Resolve @-mentions through the shared cross-path helper.
+    // TS parity: `processUserInput.ts:504` calls `getAttachmentMessages`
+    // which produces both file-attachment system-reminders and
+    // changed-file notifications. The same pipeline now feeds headless
+    // and SDK paths via `coco_cli::at_mention_turn::resolve_turn_inputs`.
     let cwd = std::env::current_dir().unwrap_or_default();
-
-    let (file_attachments, changed_file_attachments) = {
-        let mut frs = runtime.file_read_state.write().await;
-        let file_attachments = coco_context::resolve_mentions(
-            &processed.mentions,
-            &mut frs,
-            &coco_context::MentionResolveOptions {
-                cwd: &cwd,
-                max_dir_entries: 1000,
-            },
-        )
-        .await;
-        let changed_file_attachments = coco_context::detect_changed_files(&mut frs).await;
-        (file_attachments, changed_file_attachments)
-    };
-
     let user_uuid =
         uuid::Uuid::parse_str(&user_message_id).unwrap_or_else(|_| uuid::Uuid::new_v4());
-    let new_turn_messages = build_turn_messages_with_uuid(
-        user_uuid,
+    let inputs = coco_cli::at_mention_turn::resolve_turn_inputs(
         &content,
         &images,
-        &file_attachments,
-        &changed_file_attachments,
-    );
+        &cwd,
+        user_uuid,
+        &runtime.file_read_state,
+    )
+    .await;
+
+    // TS parity (`processUserInput.ts:182-263`): fire UserPromptSubmit
+    // hooks BEFORE building the engine. Output queues onto the shared
+    // sync-hook buffer so the next turn surfaces `hook_*` reminders;
+    // a blocking_error suppresses the turn and surfaces a TurnFailed;
+    // prevent_continuation keeps the prompt but skips the engine.
+    let prompt_hook_result = runtime.fire_user_prompt_submit_hooks(&content).await;
+    if let Some(blocking) = &prompt_hook_result.blocking_error {
+        let warning = format!(
+            "UserPromptSubmit hook blocked the turn: {}\n\nOriginal prompt: {content}",
+            blocking.blocking_error,
+        );
+        let _ = event_tx
+            .send(CoreEvent::Protocol(ServerNotification::TurnFailed(
+                coco_types::TurnFailedParams { error: warning },
+            )))
+            .await;
+        return;
+    }
+    if prompt_hook_result.prevent_continuation {
+        let stop_msg = prompt_hook_result
+            .stop_reason
+            .clone()
+            .map(|r| format!("Operation stopped by hook: {r}"))
+            .unwrap_or_else(|| "Operation stopped by hook".to_string());
+        // Persist the prompt + system warning so the user sees it in
+        // the transcript even though no LLM call follows.
+        {
+            let mut h = runtime.history.lock().await;
+            h.push(coco_messages::create_user_message(&content));
+            h.push(coco_messages::create_user_message(&stop_msg));
+        }
+        return;
+    }
+
+    let new_turn_messages = coco_cli::at_mention_turn::build_messages_for_turn(&inputs);
 
     // Persist user message immediately so engine errors don't lose it.
     let messages: Vec<coco_messages::Message> = {
@@ -1379,20 +1847,10 @@ async fn process_submit_turn(
     let engine = runtime.build_engine(turn_cancel.clone()).await;
 
     // Mention priority for post-compact restoration.
-    let mentioned_abs: Vec<std::path::PathBuf> = file_attachments
-        .iter()
-        .filter_map(|att| match att {
-            coco_context::attachment::Attachment::File(f) => {
-                Some(std::path::PathBuf::from(&f.filename))
-            }
-            coco_context::attachment::Attachment::AlreadyReadFile(f) => {
-                Some(std::path::PathBuf::from(&f.filename))
-            }
-            _ => None,
-        })
-        .collect();
-    if !mentioned_abs.is_empty() {
-        engine.note_mentioned_paths(mentioned_abs).await;
+    if !inputs.mentioned_paths.is_empty() {
+        engine
+            .note_mentioned_paths(inputs.mentioned_paths.clone())
+            .await;
     }
 
     let (core_event_tx, mut core_event_rx) = mpsc::channel::<CoreEvent>(256);
@@ -1740,111 +2198,6 @@ async fn handle_summarize_rewind(
     }
 }
 
-/// Build a turn's messages with a caller-supplied user-message UUID.
-///
-/// The caller (TUI submit path) mints the UUID at input time so the
-/// agent driver, file-history snapshot, and rewind picker all share
-/// one identity for the turn's user message.
-fn build_turn_messages_with_uuid(
-    user_uuid: uuid::Uuid,
-    text: &str,
-    images: &[coco_tui::ImageData],
-    file_attachments: &[Attachment],
-    changed_file_attachments: &[Attachment],
-) -> Vec<coco_messages::Message> {
-    use coco_inference::UserContentPart;
-
-    let mut messages = Vec::new();
-
-    // 1. User message: text + clipboard images
-    if images.is_empty() {
-        messages.push(coco_messages::create_user_message_with_uuid(
-            user_uuid, text,
-        ));
-    } else {
-        let mut parts: Vec<UserContentPart> = vec![UserContentPart::text(text)];
-        for img in images {
-            parts.push(UserContentPart::image(img.bytes.clone(), &img.mime));
-        }
-        messages.push(coco_messages::create_user_message_with_parts_and_uuid(
-            user_uuid, parts,
-        ));
-    }
-
-    // 2. @mention attachment messages (separate, wrapped in system-reminder)
-    for att in file_attachments {
-        if let Some(msg) = attachment_to_message(att) {
-            messages.push(msg);
-        }
-    }
-
-    // 3. Changed file notification messages
-    for att in changed_file_attachments {
-        if let Some(msg) = changed_file_to_message(att) {
-            messages.push(msg);
-        }
-    }
-
-    messages
-}
-
-/// Convert a resolved @mention attachment into a system-reminder message.
-///
-/// TS: `normalizeAttachmentForAPI()` — wraps file content in synthetic
-/// tool-use/tool-result pairs inside `<system-reminder>` tags.
-fn attachment_to_message(att: &Attachment) -> Option<coco_messages::Message> {
-    let read_tool = coco_types::ToolName::Read.as_str();
-    let bash_tool = coco_types::ToolName::Bash.as_str();
-
-    match att {
-        Attachment::File(f) => {
-            let text = format!(
-                "Called the {read_tool} tool with the following input: \
-                 {{\"file_path\":\"{}\"}}\n\
-                 Result of calling the {read_tool} tool:\n{}",
-                f.filename, f.content
-            );
-            Some(coco_messages::wrapping::create_system_reminder_message(
-                &text,
-            ))
-        }
-        Attachment::Image(img) => {
-            if let Some(b64) = &img.base64_data {
-                use coco_inference::FilePart;
-                use coco_inference::UserContentPart;
-                let parts = vec![
-                    UserContentPart::text(coco_messages::wrapping::wrap_in_system_reminder(
-                        &format!(
-                            "Called the {read_tool} tool with the following input: \
-                             {{\"file_path\":\"{}\"}}",
-                            img.filename
-                        ),
-                    )),
-                    UserContentPart::File(FilePart::image_base64(b64, &img.media_type)),
-                ];
-                Some(coco_messages::create_user_message_with_parts(parts))
-            } else {
-                None
-            }
-        }
-        Attachment::Directory(d) => {
-            let text = format!(
-                "Called the {bash_tool} tool with the following input: \
-                 {{\"command\":\"ls {}\",\"description\":\"Lists files in {}\"}}\n\
-                 Result of calling the {bash_tool} tool:\n{}",
-                d.display_path, d.display_path, d.content
-            );
-            Some(coco_messages::wrapping::create_system_reminder_message(
-                &text,
-            ))
-        }
-        Attachment::AlreadyReadFile(_) | Attachment::AgentMention(_) => None,
-        _ => None,
-    }
-}
-
-/// Convert a changed-file attachment into a notification message.
-///
 /// Decide whether the driver should fire an auto-title task this turn.
 ///
 /// Pure gate function factored out of the driver loop so we can unit
@@ -1934,27 +2287,6 @@ fn spawn_auto_title_task(
         // user-set title — safe to always call.
         let _ = coco_session::title_generator::apply_title(&session_manager, &session_id, title);
     });
-}
-
-/// TS: `normalizeAttachmentForAPI()` for `edited_text_file` type — sends a
-/// note explaining the file was modified externally, with a diff snippet.
-fn changed_file_to_message(att: &Attachment) -> Option<coco_messages::Message> {
-    match att {
-        Attachment::File(f) => {
-            let text = format!(
-                "Note: {} was modified, either by the user or by a linter. \
-                 This change was intentional, so make sure to take it into \
-                 account as you proceed (ie. don't revert it unless the user \
-                 asks you to). Don't tell the user this, since they are already \
-                 aware. Here are the relevant changes (shown with line numbers):\n{}",
-                f.display_path, f.content
-            );
-            Some(coco_messages::wrapping::create_system_reminder_message(
-                &text,
-            ))
-        }
-        _ => None,
-    }
 }
 
 #[cfg(test)]

@@ -19,9 +19,9 @@ use super::io::TeammateMessage;
 
 /// Run `body` while holding an exclusive advisory lock on a sidecar
 /// `{path}.lock` file, retrying acquisition on contention.
-pub(crate) fn with_inbox_lock<F>(path: &std::path::Path, body: F) -> anyhow::Result<()>
+pub(crate) fn with_inbox_lock<F>(path: &std::path::Path, body: F) -> crate::Result<()>
 where
-    F: FnOnce(&std::path::Path) -> anyhow::Result<()>,
+    F: FnOnce(&std::path::Path) -> crate::Result<()>,
 {
     use fs2::FileExt;
     let lock_path = path.with_extension("json.lock");
@@ -61,10 +61,12 @@ where
                 delay_ms = (delay_ms * 2).min(MAX_DELAY_MS);
             }
             Err(e) => {
-                return Err(anyhow::anyhow!(
-                    "failed to acquire mailbox lock at {} after {MAX_RETRIES} retries: {e}",
-                    lock_path.display()
-                ));
+                return Err(crate::CoordinatorError::LockFailed {
+                    message: format!(
+                        "failed to acquire mailbox lock at {} after {MAX_RETRIES} retries: {e}",
+                        lock_path.display()
+                    ),
+                });
             }
         }
     }
@@ -76,9 +78,7 @@ where
 /// [`with_inbox_lock`] to avoid recursive locking. Callers that just
 /// want a point-in-time read should use [`super::io::read_mailbox`]
 /// which is lock-free (readers accept slight staleness).
-pub(crate) fn read_messages_no_lock(
-    path: &std::path::Path,
-) -> anyhow::Result<Vec<TeammateMessage>> {
+pub(crate) fn read_messages_no_lock(path: &std::path::Path) -> crate::Result<Vec<TeammateMessage>> {
     if !path.exists() {
         return Ok(Vec::new());
     }

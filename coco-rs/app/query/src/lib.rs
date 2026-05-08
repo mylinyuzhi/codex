@@ -31,6 +31,7 @@ pub mod forked_agent;
 mod helpers;
 mod hook_adapter;
 mod hook_controller;
+pub mod hook_llm;
 mod model_runtime;
 pub mod observers;
 mod permission_controller;

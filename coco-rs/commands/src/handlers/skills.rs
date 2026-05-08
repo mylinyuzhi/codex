@@ -20,7 +20,7 @@ use coco_skills::bundled::register_bundled_default;
 /// Async handler for `/skills [list|show <name>]`.
 pub fn handler(
     args: String,
-) -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>> {
+) -> Pin<Box<dyn std::future::Future<Output = crate::Result<String>> + Send>> {
     Box::pin(async move {
         let cwd = std::env::current_dir().unwrap_or_default();
         let config_home = coco_config::global_config::config_home();
@@ -31,11 +31,11 @@ pub fn handler(
         let trimmed = args.trim().to_string();
         tokio::task::spawn_blocking(move || render(&trimmed, &config_home, &cwd))
             .await
-            .map_err(|e| anyhow::anyhow!("skills handler join error: {e}"))?
+            .map_err(|e| crate::CommandsError::generic(format!("skills handler join error: {e}")))?
     })
 }
 
-fn render(args: &str, config_home: &Path, cwd: &Path) -> anyhow::Result<String> {
+fn render(args: &str, config_home: &Path, cwd: &Path) -> crate::Result<String> {
     let manager = build_manager(config_home, cwd);
 
     let (cmd, rest) = match args.split_once(char::is_whitespace) {

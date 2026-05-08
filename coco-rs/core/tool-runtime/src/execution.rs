@@ -73,6 +73,14 @@ pub fn classify_tool_error(error: &ToolError) -> String {
 /// This is the core execution function called by the StreamingToolExecutor
 /// for each tool. It handles permission checking, validation, execution,
 /// and error classification.
+#[tracing::instrument(
+    skip_all,
+    name = "tool_call",
+    fields(
+        tool_use_id = %tool_use_id,
+        tool_name = %tool_name,
+    ),
+)]
 pub async fn execute_tool_call(
     tool_use_id: &str,
     tool_name: &str,
@@ -90,6 +98,11 @@ pub async fn execute_tool_call(
     let tool = match tools.get(&tool_id) {
         Some(t) => t,
         None => {
+            tracing::warn!(
+                tool_use_id = %tool_use_id,
+                tool_name = %tool_name,
+                "tool not found in registry"
+            );
             let err = ToolError::NotFound {
                 tool_id: tool_id.clone(),
             };
@@ -117,6 +130,12 @@ pub async fn execute_tool_call(
     // input, never against raw model output.
     let validation = tool.validate_input(&input, ctx);
     if !validation.is_valid() {
+        tracing::warn!(
+            tool_use_id = %tool_use_id,
+            tool_name = %tool_name,
+            validation = ?validation,
+            "tool input validation failed"
+        );
         return ToolExecutionResult {
             tool_use_id: tool_use_id.to_string(),
             tool_id,
@@ -146,6 +165,12 @@ pub async fn execute_tool_call(
     let decision = tool.check_permissions(&input, ctx).await;
     match decision {
         PermissionDecision::Deny { message, .. } => {
+            tracing::info!(
+                tool_use_id = %tool_use_id,
+                tool_name = %tool_name,
+                permission_decision = "deny",
+                "tool denied by permission check"
+            );
             return ToolExecutionResult {
                 tool_use_id: tool_use_id.to_string(),
                 tool_id,
@@ -158,11 +183,29 @@ pub async fn execute_tool_call(
         }
         PermissionDecision::Ask { .. } => {
             // In auto mode, treat as allow (TUI handles interactive prompts)
+            tracing::debug!(
+                tool_use_id = %tool_use_id,
+                tool_name = %tool_name,
+                permission_decision = "ask",
+                "tool requires permission ask (auto-mode allow)"
+            );
         }
-        PermissionDecision::Allow { .. } => {}
+        PermissionDecision::Allow { .. } => {
+            tracing::debug!(
+                tool_use_id = %tool_use_id,
+                tool_name = %tool_name,
+                permission_decision = "allow",
+                "tool allowed by permission check"
+            );
+        }
     }
 
     // Step 5: Execute tool (with cancellation support)
+    tracing::debug!(
+        tool_use_id = %tool_use_id,
+        tool_name = %tool_name,
+        "tool execute begin"
+    );
     let result = tokio::select! {
         r = tool.execute(input, ctx) => r,
         () = ctx.cancel.cancelled() => Err(ToolError::Cancelled),
@@ -170,6 +213,23 @@ pub async fn execute_tool_call(
 
     let duration_ms = start.elapsed().as_millis() as i64;
     let error_class = result.as_ref().err().map(classify_tool_error);
+
+    match &result {
+        Ok(_) => tracing::debug!(
+            tool_use_id = %tool_use_id,
+            tool_name = %tool_name,
+            duration_ms,
+            "tool execute ok"
+        ),
+        Err(e) => tracing::warn!(
+            tool_use_id = %tool_use_id,
+            tool_name = %tool_name,
+            duration_ms,
+            error_class = ?error_class,
+            error = %e,
+            "tool execute failed"
+        ),
+    }
 
     ToolExecutionResult {
         tool_use_id: tool_use_id.to_string(),

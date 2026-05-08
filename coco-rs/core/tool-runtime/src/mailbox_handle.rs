@@ -54,7 +54,7 @@ pub trait MailboxHandle: Send + Sync {
         recipient: &str,
         team_name: &str,
         message: MailboxEnvelope,
-    ) -> anyhow::Result<()>;
+    ) -> Result<(), coco_error::BoxedError>;
 
     /// Read unread messages from `agent`'s own inbox. Returns empty on
     /// no-op impls (single-agent sessions).
@@ -62,7 +62,7 @@ pub trait MailboxHandle: Send + Sync {
         &self,
         agent_name: &str,
         team_name: &str,
-    ) -> anyhow::Result<Vec<InboxMessage>>;
+    ) -> Result<Vec<InboxMessage>, coco_error::BoxedError>;
 
     /// Mark a message at `index` as read. Idempotent.
     async fn mark_read(
@@ -70,7 +70,7 @@ pub trait MailboxHandle: Send + Sync {
         agent_name: &str,
         team_name: &str,
         index: usize,
-    ) -> anyhow::Result<()>;
+    ) -> Result<(), coco_error::BoxedError>;
 }
 
 pub type MailboxHandleRef = Arc<dyn MailboxHandle>;
@@ -85,17 +85,18 @@ impl MailboxHandle for NoOpMailboxHandle {
         _recipient: &str,
         _team_name: &str,
         _message: MailboxEnvelope,
-    ) -> anyhow::Result<()> {
-        Err(anyhow::anyhow!(
-            "mailbox handle not configured — teammate spawn path missing"
-        ))
+    ) -> Result<(), coco_error::BoxedError> {
+        Err(Box::new(coco_error::PlainError::new(
+            "mailbox handle not configured — teammate spawn path missing",
+            coco_error::StatusCode::Internal,
+        )))
     }
 
     async fn read_unread(
         &self,
         _agent_name: &str,
         _team_name: &str,
-    ) -> anyhow::Result<Vec<InboxMessage>> {
+    ) -> Result<Vec<InboxMessage>, coco_error::BoxedError> {
         // No-op returns empty — pollers wrapped around this degrade
         // gracefully to "no pending messages".
         Ok(Vec::new())
@@ -106,7 +107,7 @@ impl MailboxHandle for NoOpMailboxHandle {
         _agent_name: &str,
         _team_name: &str,
         _index: usize,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), coco_error::BoxedError> {
         Ok(())
     }
 }

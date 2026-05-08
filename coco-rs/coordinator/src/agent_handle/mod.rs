@@ -471,6 +471,17 @@ impl SwarmAgentHandle {
                 .await
                 .insert(spawn_result.agent_id.clone(), task_state.clone());
 
+            // Wire TeammateIdle hook context. SwarmAgentHandle owns
+            // the registry; we synthesize the orchestration context
+            // here using the same helper subagent spawning uses
+            // (`spawn::hook_ctx_for_subagent`).
+            let teammate_orchestration_ctx = self.hook_registry().map(|_| {
+                crate::agent_handle::spawn::hook_ctx_for_subagent(
+                    &self.cwd,
+                    Some(&spawn_result.agent_id),
+                    request.subagent_type.as_deref(),
+                )
+            });
             let runner_config = crate::runner_loop::InProcessRunnerConfig {
                 identity,
                 task_id: format!("task-{}", spawn_result.agent_id),
@@ -488,6 +499,8 @@ impl SwarmAgentHandle {
                 tool_overrides: request.tool_overrides.clone(),
                 parent_tool_filter: request.parent_tool_filter.clone(),
                 plan_mode_required: config.plan_mode_required,
+                hooks: self.hook_registry().cloned(),
+                orchestration_ctx: teammate_orchestration_ctx,
             };
 
             let join =

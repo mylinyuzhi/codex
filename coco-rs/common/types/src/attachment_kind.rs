@@ -238,7 +238,10 @@ impl AttachmentKind {
             | CompactFileReference
             | PlanFileReference
             | EditedTextFile => true,
-            // TS `normalizeAttachmentForAPI` returns `[]` for these.
+            // TS `normalizeAttachmentForAPI` returns `[]` for these. coco-rs
+            // ports the audit-add variants as `SilentReminder` generators —
+            // their content can still flow to the UI / transcript, but the
+            // model never sees the body.
             AlreadyReadFile
             | EditedImageFile
             | CommandPermissions
@@ -642,9 +645,8 @@ pub const fn coverage_of(kind: AttachmentKind) -> Coverage {
         },
 
         // ── Silent events (UI / telemetry, owned outside reminder crate) ──
-        CommandPermissions => Coverage::SilentEvent {
-            owner_crate: "commands / permissions",
-            note: "slash-command permission UI payload",
+        CommandPermissions => Coverage::SilentReminder {
+            generator: "CommandPermissionsGenerator",
         },
         HookCancelled => Coverage::SilentEvent {
             owner_crate: "hooks",
@@ -666,32 +668,34 @@ pub const fn coverage_of(kind: AttachmentKind) -> Coverage {
             owner_crate: "hooks",
             note: "hook-originated system message for UI only",
         },
-        StructuredOutput => Coverage::SilentEvent {
-            owner_crate: "core/tool-runtime",
-            note: "structured tool-output payload; consumed via ToolResult",
+        StructuredOutput => Coverage::SilentReminder {
+            generator: "StructuredOutputGenerator",
         },
-        DynamicSkill => Coverage::SilentEvent {
-            owner_crate: "skills",
-            note: "dynamic skill-load marker; skill content flows via Skill tool",
+        DynamicSkill => Coverage::SilentReminder {
+            generator: "DynamicSkillGenerator",
         },
 
-        // ── Feature-gated (awaiting runtime port) ──
-        ContextEfficiency => Coverage::FeatureGated {
-            feature: "HISTORY_SNIP (services/compact snip runtime not ported)",
+        // ── Audit-add: feature-gated runtime now ported as silent
+        //   reminders (TS-parity: `normalizeAttachmentForAPI` returns `[]`,
+        //   so the body never reaches the model; UI / transcript may
+        //   still consume the metadata). ──
+        ContextEfficiency => Coverage::SilentReminder {
+            generator: "ContextEfficiencyGenerator",
         },
-        SkillDiscovery => Coverage::FeatureGated {
-            feature: "EXPERIMENTAL_SKILL_SEARCH (skill-search not ported)",
+        SkillDiscovery => Coverage::SilentReminder {
+            generator: "SkillDiscoveryGenerator",
         },
 
-        // ── Runtime bookkeeping (no model text in TS either) ──
-        MaxTurnsReached => Coverage::RuntimeBookkeeping {
-            note: "query-loop budget marker; produced in app/query, not a reminder",
+        // ── Audit-add: previously runtime-only, now ported as silent
+        //   reminders. Same TS-parity rationale as above. ──
+        MaxTurnsReached => Coverage::SilentReminder {
+            generator: "MaxTurnsReachedGenerator",
         },
-        CurrentSessionMemory => Coverage::RuntimeBookkeeping {
-            note: "session-memory snapshot placeholder; no emitter in TS snapshot",
+        CurrentSessionMemory => Coverage::SilentReminder {
+            generator: "CurrentSessionMemoryGenerator",
         },
-        TeammateShutdownBatch => Coverage::RuntimeBookkeeping {
-            note: "swarm transcript-collapse marker; UI-only",
+        TeammateShutdownBatch => Coverage::SilentReminder {
+            generator: "TeammateShutdownBatchGenerator",
         },
         BagelConsole => Coverage::RuntimeBookkeeping {
             note: "internal dev console placeholder; no API text",

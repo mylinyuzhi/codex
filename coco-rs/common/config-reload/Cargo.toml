@@ -9,9 +9,9 @@ workspace = true
 
 [dependencies]
 coco-config.workspace = true
+coco-error.workspace = true
 coco-file-watch.workspace = true
 
-anyhow.workspace = true
 tokio = { workspace = true, features = ["sync", "rt", "macros"] }
 tracing.workspace = true
 

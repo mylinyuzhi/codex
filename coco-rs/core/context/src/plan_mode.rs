@@ -606,7 +606,7 @@ pub fn write_plan(
     plans_dir: &Path,
     content: &str,
     agent_id: Option<&str>,
-) -> anyhow::Result<()> {
+) -> crate::Result<()> {
     std::fs::create_dir_all(plans_dir)?;
     let file_path = get_plan_file_path(session_id, plans_dir, agent_id);
     std::fs::write(&file_path, content)?;
@@ -618,7 +618,7 @@ pub fn delete_plan(
     session_id: &str,
     plans_dir: &Path,
     agent_id: Option<&str>,
-) -> anyhow::Result<()> {
+) -> crate::Result<()> {
     let file_path = get_plan_file_path(session_id, plans_dir, agent_id);
     if file_path.exists() {
         std::fs::remove_file(file_path)?;

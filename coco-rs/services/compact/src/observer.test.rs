@@ -28,12 +28,12 @@ impl CompactionObserver for CountingObserver {
         &self,
         _result: &CompactResult,
         _is_main_agent: bool,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), BoxedError> {
         self.complete_count.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 
-    async fn on_post_compact(&self, _compacted_messages: &[Message]) -> anyhow::Result<()> {
+    async fn on_post_compact(&self, _compacted_messages: &[Message]) -> Result<(), BoxedError> {
         self.post_compact_count.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
@@ -58,7 +58,7 @@ impl CompactionObserver for LegacyObserver {
         &self,
         _result: &CompactResult,
         _is_main_agent: bool,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), BoxedError> {
         self.called.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }

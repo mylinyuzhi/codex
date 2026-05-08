@@ -536,13 +536,16 @@ impl coco_tool_runtime::TaskHandle for StoppedTaskHandle {
     async fn spawn_shell_task(
         &self,
         _: coco_tool_runtime::BackgroundShellRequest,
-    ) -> anyhow::Result<String> {
-        anyhow::bail!("not used in test")
+    ) -> Result<String, coco_error::BoxedError> {
+        Err(Box::new(coco_error::PlainError::new(
+            "not used in test",
+            coco_error::StatusCode::Internal,
+        )))
     }
     async fn get_task_status(
         &self,
         task_id: &str,
-    ) -> anyhow::Result<coco_tool_runtime::BackgroundTaskInfo> {
+    ) -> Result<coco_tool_runtime::BackgroundTaskInfo, coco_error::BoxedError> {
         Ok(coco_tool_runtime::BackgroundTaskInfo {
             task_id: task_id.into(),
             status: self.status,
@@ -557,10 +560,13 @@ impl coco_tool_runtime::TaskHandle for StoppedTaskHandle {
         &self,
         _: &str,
         _: i64,
-    ) -> anyhow::Result<coco_tool_runtime::TaskOutputDelta> {
-        anyhow::bail!("not used in test")
+    ) -> Result<coco_tool_runtime::TaskOutputDelta, coco_error::BoxedError> {
+        Err(Box::new(coco_error::PlainError::new(
+            "not used in test",
+            coco_error::StatusCode::Internal,
+        )))
     }
-    async fn kill_task(&self, _: &str) -> anyhow::Result<()> {
+    async fn kill_task(&self, _: &str) -> Result<(), coco_error::BoxedError> {
         Ok(())
     }
     async fn list_tasks(&self) -> Vec<coco_tool_runtime::BackgroundTaskInfo> {

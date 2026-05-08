@@ -2,7 +2,7 @@ use std::env;
 use std::path::PathBuf;
 use std::process;
 
-fn main() -> anyhow::Result<()> {
+fn main() -> Result<(), coco_stdio_to_uds::StdioBridgeError> {
     let mut args = env::args_os().skip(1);
     let Some(socket_path) = args.next() else {
         eprintln!("Usage: coco-stdio-to-uds <socket-path>");

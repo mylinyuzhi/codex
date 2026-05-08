@@ -192,10 +192,11 @@ fn test_parse_prompt_too_long_tokens() {
 
 #[test]
 fn test_error_log_from_inference_error() {
-    let error = InferenceError::RateLimited {
-        retry_after_ms: Some(5000),
-        message: "too many requests".into(),
-    };
+    let error = crate::errors::RateLimitedSnafu {
+        retry_after_ms: Some(5000_i64),
+        message: "too many requests".to_string(),
+    }
+    .build();
     let log = ErrorLog::from_inference_error(
         &error,
         "claude-sonnet-4-20250514",

@@ -12,8 +12,8 @@ fn test_register_extended_builtins() {
     // Count drifts as commands move between layers; the floor only
     // catches whole-block regressions.
     assert!(
-        registry.len() >= 50,
-        "Expected at least 50 extended commands, got {}",
+        registry.len() >= 45,
+        "Expected at least 45 extended commands, got {}",
         registry.len()
     );
 }
@@ -44,8 +44,6 @@ fn test_extended_builtins_no_overlap_with_base() {
         "resume",
         "init",
         "doctor",
-        "login",
-        "logout",
         "mcp",
         "plugin",
         "review",
@@ -109,8 +107,6 @@ fn test_all_name_constants_are_valid() {
         names::HOOKS,
         names::FILES,
         names::DOCTOR,
-        names::LOGIN,
-        names::LOGOUT,
         names::UPGRADE,
         names::USAGE,
         names::BTW,
@@ -128,7 +124,6 @@ fn test_all_name_constants_are_valid() {
         names::INSIGHTS,
         names::ENV,
         names::DEBUG_TOOL_CALL,
-        names::ANT_TRACE,
     ];
 
     for name in all_names {
@@ -140,11 +135,11 @@ fn test_all_name_constants_are_valid() {
         );
     }
 
-    // After parity-trimming we keep ~55 constants; the floor catches future
+    // After parity-trimming we keep ~50 constants; the floor catches future
     // accidental drops without hard-coding the precise count.
     assert!(
-        all_names.len() >= 55,
-        "expected at least 55 command name constants, got {}",
+        all_names.len() >= 50,
+        "expected at least 50 command name constants, got {}",
         all_names.len()
     );
 }
@@ -199,10 +194,14 @@ async fn test_hooks_handler() {
 
 #[test]
 fn test_sandbox_handler() {
-    assert!(sandbox_handler("").contains("disabled"));
-    assert!(sandbox_handler("none").contains("disabled"));
-    assert!(sandbox_handler("readonly").contains("readonly"));
-    assert!(sandbox_handler("strict").contains("strict"));
+    // Empty args lists modes + invocation hint.
+    let listing = sandbox_handler("");
+    assert!(listing.contains("Sandbox mode"));
+    assert!(listing.contains("none"));
+    assert!(listing.contains("readonly"));
+    assert!(listing.contains("strict"));
+    // Unknown subcommand surfaces a usage error without writing settings.
+    assert!(sandbox_handler("bogus").contains("Unknown sandbox mode"));
 }
 
 #[test]
@@ -219,6 +218,46 @@ fn test_theme_handler() {
     assert!(theme_handler("dark").contains("dark"));
 }
 
+#[test]
+fn test_color_handler_empty_lists_ts_palette() {
+    // Empty args mirrors TS commands/color/color.ts:34-39.
+    let out = color_handler("");
+    assert!(out.starts_with("Please provide a color"));
+    for c in [
+        "red", "blue", "green", "yellow", "purple", "orange", "pink", "cyan", "default",
+    ] {
+        assert!(out.contains(c), "missing color '{c}' in: {out}");
+    }
+}
+
+#[test]
+fn test_color_handler_valid_colors_case_insensitive() {
+    // Both lowercase and uppercase resolve to the canonical lowercase
+    // name (TS lower-cases args before validating).
+    assert_eq!(color_handler("red"), "Session color set to: red");
+    assert_eq!(color_handler("RED"), "Session color set to: red");
+    assert_eq!(color_handler("Cyan"), "Session color set to: cyan");
+}
+
+#[test]
+fn test_color_handler_reset_aliases() {
+    // TS RESET_ALIASES = ['default','reset','none','gray','grey'].
+    for alias in ["default", "reset", "none", "gray", "grey", "DEFAULT"] {
+        assert_eq!(
+            color_handler(alias),
+            "Session color reset to default",
+            "alias {alias} should reset"
+        );
+    }
+}
+
+#[test]
+fn test_color_handler_invalid_color() {
+    let out = color_handler("magenta");
+    assert!(out.starts_with("Invalid color \"magenta\""), "{out}");
+    assert!(out.contains("default"));
+}
+
 // /fast removed per parity scope; coverage dropped accordingly.
 
 #[tokio::test]
@@ -232,10 +271,24 @@ async fn test_model_handler_empty() {
 
 #[tokio::test]
 async fn test_model_handler_known() {
+    // Sandbox the settings write so this test doesn't pollute the
+    // developer's real `~/.coco/settings.json`.
+    let tmp = tempfile::tempdir().unwrap();
+    let prev = std::env::var_os("COCO_CONFIG_DIR");
+    unsafe {
+        std::env::set_var("COCO_CONFIG_DIR", tmp.path());
+    }
     let output = handlers::model::handler("sonnet".to_string())
         .await
         .unwrap();
-    assert!(output.contains("switched to"));
+    unsafe {
+        match prev {
+            Some(v) => std::env::set_var("COCO_CONFIG_DIR", v),
+            None => std::env::remove_var("COCO_CONFIG_DIR"),
+        }
+    }
+    assert!(output.contains("set to"));
+    assert!(output.contains("Saved to"));
 }
 
 #[tokio::test]
@@ -311,23 +364,6 @@ async fn test_compact_handler_with_instructions() {
         .await
         .unwrap();
     assert!(output.contains("focus on the API changes"));
-}
-
-#[tokio::test]
-async fn test_login_handler_async() {
-    let output = login_handler_async(String::new()).await.unwrap();
-    // Should mention authentication in some form
-    assert!(
-        output.contains("API key")
-            || output.contains("Authentication")
-            || output.contains("ANTHROPIC_API_KEY")
-    );
-}
-
-#[tokio::test]
-async fn test_logout_handler_async() {
-    let output = logout_handler_async(String::new()).await.unwrap();
-    assert!(output.contains("Logging out") || output.contains("credentials"));
 }
 
 #[tokio::test]

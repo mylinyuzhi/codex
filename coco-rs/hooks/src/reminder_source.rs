@@ -1,25 +1,28 @@
-//! `HookEventsSource` impl on [`crate::async_registry::AsyncHookRegistry`].
+//! `HookEventsSource` impls for the per-turn reminder pipeline.
 //!
-//! Bridges completed async-hook responses into the per-turn reminder
-//! pipeline. Each call to [`HookEventsSource::drain`] delegates to
-//! `AsyncHookRegistry::collect_responses()` — which marks responses
-//! delivered — and maps each response to a `HookEvent::AsyncResponse`.
+//! Two impls live here:
 //!
-//! **Scope**: only async hook responses are produced here.
-//! Synchronous hook events (`HookEvent::Success` / `BlockingError` /
-//! `AdditionalContext` / `StoppedContinuation`) are emitted directly
-//! by the synchronous orchestration path, not by this registry.
-//! Future work: add a sync-side buffer + trait impl if those events
-//! need reminder-channel surfacing.
+//! - `AsyncHookRegistry` — bridges completed async-hook responses
+//!   (TS `getAsyncHookResponseAttachments()` at
+//!   `/lyz/codespace/3rd/claude-code/src/utils/attachments.ts:3464`).
+//!   Each call to [`HookEventsSource::drain`] delegates to
+//!   `AsyncHookRegistry::collect_responses()` — which marks responses
+//!   delivered — and maps each response to a `HookEvent::AsyncResponse`.
 //!
-//! TS parity: `getAsyncHookResponseAttachments()` at
-//! `/lyz/codespace/3rd/claude-code/src/utils/attachments.ts:3464`
-//! drains the async hook registry the same way.
+//! - [`CombinedHookEventsSource`] — wraps an `AsyncHookRegistry` and a
+//!   [`SyncHookEventBuffer`] so both async drain output and sync hook
+//!   results (pushed by orchestration in `execute_session_start` /
+//!   `execute_user_prompt_submit`) reach the reminder pipeline through
+//!   a single trait object. Drain order: async first, sync second.
+//!   This is the impl `SessionRuntime::wire_engine` installs.
+
+use std::sync::Arc;
 
 use async_trait::async_trait;
 
 use crate::async_registry::AsyncHookRegistry;
 use crate::async_registry::AsyncHookResponse;
+use crate::sync_hook_buffer::SyncHookEventBuffer;
 use coco_system_reminder::HookEvent;
 use coco_system_reminder::HookEventsSource;
 
@@ -33,6 +36,36 @@ impl HookEventsSource for AsyncHookRegistry {
             .into_iter()
             .map(to_hook_event)
             .collect()
+    }
+}
+
+/// `HookEventsSource` that fans out to both the async hook registry and
+/// the sync hook buffer. Cloning is cheap — each field is already
+/// reference-counted internally.
+#[derive(Debug, Clone)]
+pub struct CombinedHookEventsSource {
+    async_registry: Arc<AsyncHookRegistry>,
+    sync_buffer: SyncHookEventBuffer,
+}
+
+impl CombinedHookEventsSource {
+    pub fn new(async_registry: Arc<AsyncHookRegistry>, sync_buffer: SyncHookEventBuffer) -> Self {
+        Self {
+            async_registry,
+            sync_buffer,
+        }
+    }
+}
+
+#[async_trait]
+impl HookEventsSource for CombinedHookEventsSource {
+    async fn drain(&self, agent_id: Option<&str>) -> Vec<HookEvent> {
+        // Async first so the model sees background-hook output before
+        // the per-turn sync events that fired in the current iteration.
+        // Order is observable in tests and in the rendered prompt.
+        let mut out = self.async_registry.drain(agent_id).await;
+        out.extend(self.sync_buffer.drain().await);
+        out
     }
 }
 

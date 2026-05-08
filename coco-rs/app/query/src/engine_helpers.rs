@@ -317,6 +317,14 @@ pub(crate) fn compute_mcp_instructions_delta(
 /// true when no agents have been announced yet (first emission of the
 /// session); that flips the TS "Available agent types" header (vs
 /// "New agent types are now available").
+///
+/// `show_concurrency_note` is unconditionally `true` here. TS gates the
+/// flag on `getSubscriptionType() !== 'pro'` (`attachments.ts:1553`),
+/// an Anthropic-OAuth specific check that has no analog in coco-rs's
+/// multi-provider model. The concurrency hint is informational and
+/// always relevant — the renderer (`agent_listing_delta.rs`) emits it
+/// on every delta, not just the initial one, so the model is reminded
+/// to parallelize when new agents become available.
 pub(crate) fn compute_agents_delta(
     current_agents: &[String],
     last_announced: &HashSet<String>,
@@ -344,7 +352,7 @@ pub(crate) fn compute_agents_delta(
         added_lines,
         removed_types,
         is_initial,
-        show_concurrency_note: is_initial,
+        show_concurrency_note: true,
     })
 }
 

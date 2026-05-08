@@ -21,7 +21,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
 
-use anyhow::Context;
 use tokio::sync::OnceCell;
 
 /// Per-process root dir. Created once, never re-randomized for the lifetime
@@ -158,7 +157,7 @@ pub async fn extract_bundled_skill_files(
 /// Group files by parent dir, mkdir each parent once (mode 0o700), then
 /// write each file via the safe-write helper (O_NOFOLLOW|O_EXCL on Unix,
 /// `wx` flag on Windows).
-async fn write_skill_files(dir: &Path, files: &HashMap<String, String>) -> anyhow::Result<()> {
+async fn write_skill_files(dir: &Path, files: &HashMap<String, String>) -> crate::Result<()> {
     use std::collections::BTreeMap;
 
     let mut by_parent: BTreeMap<PathBuf, Vec<(PathBuf, String)>> = BTreeMap::new();
@@ -166,7 +165,9 @@ async fn write_skill_files(dir: &Path, files: &HashMap<String, String>) -> anyho
         let target = resolve_skill_file_path(dir, rel_path)?;
         let parent = target
             .parent()
-            .ok_or_else(|| anyhow::anyhow!("path has no parent: {}", target.display()))?
+            .ok_or_else(|| {
+                crate::SkillsError::generic(format!("path has no parent: {}", target.display()))
+            })?
             .to_path_buf();
         by_parent
             .entry(parent)
@@ -191,19 +192,17 @@ async fn write_skill_files(dir: &Path, files: &HashMap<String, String>) -> anyho
         }
     }
     for handle in tasks {
-        handle
-            .await
-            .map_err(|e| anyhow::anyhow!("write task panicked: {e}"))??;
+        handle.await??;
     }
     Ok(())
 }
 
-async fn mkdir_secure(path: &Path) -> anyhow::Result<()> {
+async fn mkdir_secure(path: &Path) -> crate::Result<()> {
     // Recursive create. Set mode 0o700 on Unix after; std doesn't accept a
     // mode arg in `create_dir_all`. Mirrors TS `mkdir({recursive:true, mode:0o700})`.
-    tokio::fs::create_dir_all(path)
-        .await
-        .with_context(|| format!("create_dir_all({})", path.display()))?;
+    tokio::fs::create_dir_all(path).await.map_err(|e| {
+        crate::SkillsError::generic(format!("create_dir_all({}): {e}", path.display()))
+    })?;
 
     #[cfg(unix)]
     {
@@ -223,7 +222,7 @@ async fn mkdir_secure(path: &Path) -> anyhow::Result<()> {
 }
 
 #[cfg(unix)]
-async fn safe_write_file(path: &Path, content: &[u8]) -> anyhow::Result<()> {
+async fn safe_write_file(path: &Path, content: &[u8]) -> crate::Result<()> {
     use tokio::io::AsyncWriteExt;
 
     // O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, mode 0o600.
@@ -234,10 +233,9 @@ async fn safe_write_file(path: &Path, content: &[u8]) -> anyhow::Result<()> {
         .create_new(true)
         .custom_flags(libc_o_nofollow())
         .mode(0o600);
-    let mut file = opts
-        .open(path)
-        .await
-        .with_context(|| format!("safe_write_file({})", path.display()))?;
+    let mut file = opts.open(path).await.map_err(|e| {
+        crate::SkillsError::generic(format!("safe_write_file({}): {e}", path.display()))
+    })?;
     file.write_all(content).await?;
     file.flush().await?;
     Ok(())
@@ -262,7 +260,7 @@ fn libc_o_nofollow() -> i32 {
 }
 
 #[cfg(windows)]
-async fn safe_write_file(path: &Path, content: &[u8]) -> anyhow::Result<()> {
+async fn safe_write_file(path: &Path, content: &[u8]) -> crate::Result<()> {
     use tokio::io::AsyncWriteExt;
     // Windows: equivalent of TS `'wx'` flag — create new, fail if exists.
     let mut file = tokio::fs::OpenOptions::new()
@@ -270,7 +268,9 @@ async fn safe_write_file(path: &Path, content: &[u8]) -> anyhow::Result<()> {
         .create_new(true)
         .open(path)
         .await
-        .with_context(|| format!("safe_write_file({})", path.display()))?;
+        .map_err(|e| {
+            crate::SkillsError::generic(format!("safe_write_file({}): {e}", path.display()))
+        })?;
     file.write_all(content).await?;
     file.flush().await?;
     Ok(())
@@ -281,9 +281,11 @@ async fn safe_write_file(path: &Path, content: &[u8]) -> anyhow::Result<()> {
 /// TS: `bundledSkills.ts:196-206 resolveSkillFilePath`. Rejects:
 /// - absolute paths,
 /// - `..` segments against either `path::sep` or literal `/`.
-fn resolve_skill_file_path(base_dir: &Path, rel_path: &str) -> anyhow::Result<PathBuf> {
+fn resolve_skill_file_path(base_dir: &Path, rel_path: &str) -> crate::Result<PathBuf> {
     if Path::new(rel_path).is_absolute() {
-        anyhow::bail!("bundled skill file path is absolute: {rel_path}");
+        return Err(crate::SkillsError::generic(format!(
+            "bundled skill file path is absolute: {rel_path}"
+        )));
     }
     // Check both native sep and literal `/` — Windows allows both, and TS
     // checks both because the values map may use `/` separators on every
@@ -291,11 +293,15 @@ fn resolve_skill_file_path(base_dir: &Path, rel_path: &str) -> anyhow::Result<Pa
     let native_segments: Vec<_> = Path::new(rel_path).components().collect();
     for c in &native_segments {
         if matches!(c, Component::ParentDir) {
-            anyhow::bail!("bundled skill file path escapes skill dir: {rel_path}");
+            return Err(crate::SkillsError::generic(format!(
+                "bundled skill file path escapes skill dir: {rel_path}"
+            )));
         }
     }
     if rel_path.split('/').any(|s| s == "..") {
-        anyhow::bail!("bundled skill file path escapes skill dir (literal slash): {rel_path}");
+        return Err(crate::SkillsError::generic(format!(
+            "bundled skill file path escapes skill dir (literal slash): {rel_path}"
+        )));
     }
     Ok(base_dir.join(rel_path))
 }

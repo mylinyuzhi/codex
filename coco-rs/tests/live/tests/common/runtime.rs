@@ -96,7 +96,7 @@ pub fn provider_has_credentials(provider_name: &str) -> bool {
 pub fn build_client(provider_name: &str, model_id: &str) -> Result<Arc<ApiClient>> {
     let runtime = shared_runtime();
     let spec = spec_for(provider_name, model_id)?;
-    build_api_client(runtime, &spec, RetryConfig::default())
+    Ok(build_api_client(runtime, &spec, RetryConfig::default())?)
 }
 
 /// Resolved test target — provider name, the model-id under test, and a

@@ -314,7 +314,8 @@ async fn initialize_with_bootstrap_returns_real_commands() {
     );
 
     let bootstrap: Arc<dyn crate::sdk_server::InitializeBootstrap> = Arc::new(
-        CliInitializeBootstrap::new("Explanatory".into()).with_command_registry(Arc::new(registry)),
+        CliInitializeBootstrap::new("Explanatory".into())
+            .with_command_registry(Arc::new(tokio::sync::RwLock::new(Arc::new(registry)))),
     );
     let server = SdkServer::new(server_end).with_initialize_bootstrap(bootstrap);
     let server_task = tokio::spawn(async move {
@@ -2554,6 +2555,7 @@ async fn session_list_returns_persisted_sessions() {
             title: Some("first".into()),
             message_count: 3,
             total_tokens: 1000,
+            tags: Vec::new(),
         })
         .unwrap();
     manager
@@ -2566,6 +2568,7 @@ async fn session_list_returns_persisted_sessions() {
             title: None,
             message_count: 0,
             total_tokens: 0,
+            tags: Vec::new(),
         })
         .unwrap();
 
@@ -2638,6 +2641,7 @@ async fn session_read_returns_metadata_for_persisted_session() {
             title: Some("my session".into()),
             message_count: 7,
             total_tokens: 5000,
+            tags: Vec::new(),
         })
         .unwrap();
 
@@ -2707,6 +2711,7 @@ async fn session_resume_installs_session_from_disk() {
             title: None,
             message_count: 0,
             total_tokens: 0,
+            tags: Vec::new(),
         })
         .unwrap();
 

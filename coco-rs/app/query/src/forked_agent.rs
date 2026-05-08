@@ -172,7 +172,7 @@ pub trait ForkDispatcher: Send + Sync {
         options: &ForkedAgentOptions,
         prompt: &str,
         system_prompt_override: Option<String>,
-    ) -> anyhow::Result<ForkedDispatchResult>;
+    ) -> Result<ForkedDispatchResult, coco_error::BoxedError>;
 }
 
 /// Convenience reference type matching the rest of the engine's

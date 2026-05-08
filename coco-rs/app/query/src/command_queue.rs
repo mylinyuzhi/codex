@@ -6,6 +6,7 @@
 //! messages, and task notifications are queued and drained between tool calls.
 //! QueryGuard prevents race conditions between queue processing and query startup.
 
+use coco_system_reminder::QueueOrigin;
 use serde::Deserialize;
 use serde::Serialize;
 use std::sync::Arc;
@@ -26,6 +27,12 @@ pub enum QueuePriority {
 }
 
 /// A command queued for mid-turn injection.
+///
+/// The `origin` field carries the typed [`QueueOrigin`] tag (mirrors TS
+/// `MessageOrigin`) so the `queued_command` system-reminder can render
+/// the correct framing per producer (coordinator / task-notification /
+/// channel / human). `None` is rendered as human input by
+/// [`coco_system_reminder::wrap_command_text`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueuedCommand {
     /// The prompt text or slash command.
@@ -37,9 +44,27 @@ pub struct QueuedCommand {
     pub agent_id: Option<String>,
     /// Whether this is a slash command (starts with /).
     pub is_slash_command: bool,
-    /// Source identifier for tracking.
+    /// Origin tag, used by the `queued_command` reminder to pick the
+    /// correct framing prose.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source: Option<String>,
+    pub origin: Option<QueueOrigin>,
+    /// Image attachments paired with the queued text (mid-turn screenshot
+    /// pastes). Mirrors TS `attachment.prompt: ContentBlockParam[]` carrying
+    /// image blocks; see `attachments.ts:1062-1075`. Empty for text-only
+    /// queue items, which is the common case.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<QueuedImage>,
+}
+
+/// One image attached to a queued command — wire-shape mirrors
+/// `coco_context::ImageAttachment` (media_type + base64) without dragging
+/// the heavier attachment crate into the queue.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueuedImage {
+    /// IANA media type (e.g. `image/png`).
+    pub media_type: String,
+    /// Base64-encoded image payload.
+    pub data_base64: String,
 }
 
 impl QueuedCommand {
@@ -50,12 +75,26 @@ impl QueuedCommand {
             priority,
             agent_id: None,
             is_slash_command: is_slash,
-            source: None,
+            origin: None,
+            images: Vec::new(),
         }
     }
 
     pub fn with_agent(mut self, agent_id: String) -> Self {
         self.agent_id = Some(agent_id);
+        self
+    }
+
+    /// Tag the queued item with an origin variant. Determines the
+    /// framing prose the model sees in the reminder.
+    pub fn with_origin(mut self, origin: QueueOrigin) -> Self {
+        self.origin = Some(origin);
+        self
+    }
+
+    /// Attach images to the queued command.
+    pub fn with_images(mut self, images: Vec<QueuedImage>) -> Self {
+        self.images = images;
         self
     }
 }
@@ -157,10 +196,10 @@ impl CommandQueue {
     ///
     /// TS `getQueuedCommandAttachments` (`attachments.ts:829`) surfaces
     /// drained queue items so the model sees mid-turn injections as
-    /// part of its input. coco-rs maps each queue entry to a typed
-    /// `QueuedCommandInfo`; entries tagged with a `source` (`task-
-    /// notification` and friends) are flagged as `origin_system: true`
-    /// so the reminder generator can scope its rendering.
+    /// part of its input. The reminder generator wraps each entry via
+    /// `wrapCommandText` (`messages.ts:5496`) — coco-rs threads the
+    /// typed [`QueueOrigin`] through so the per-origin framing matches
+    /// TS exactly.
     ///
     /// Slash commands are excluded — they're processed post-turn and
     /// never become reminders.
@@ -174,7 +213,15 @@ impl CommandQueue {
             .filter(|c| !c.is_slash_command && c.agent_id.as_deref() == agent_id)
             .map(|c| coco_system_reminder::QueuedCommandInfo {
                 content: c.prompt.clone(),
-                origin_system: c.source.is_some(),
+                origin: c.origin.clone(),
+                images: c
+                    .images
+                    .iter()
+                    .map(|img| coco_system_reminder::QueuedCommandImage {
+                        media_type: img.media_type.clone(),
+                        data_base64: img.data_base64.clone(),
+                    })
+                    .collect(),
             })
             .collect()
     }

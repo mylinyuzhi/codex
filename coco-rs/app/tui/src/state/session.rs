@@ -167,6 +167,20 @@ pub struct SessionState {
     pub ide_selection: Option<IdeSelectionChangedParams>,
     /// Latest IDE diagnostics update (set by IdeDiagnosticsUpdated, replaces prior value).
     pub ide_diagnostics: Option<IdeDiagnosticsUpdatedParams>,
+    /// Wall-clock at which the most recent turn completed. Drives
+    /// idle-prompt notification firing (TS REPL.tsx:3933 —
+    /// `lastQueryCompletionTime` + `messageIdleNotifThresholdMs`).
+    /// Set by `on_turn_completed`; cleared on new submit / `idle_prompt_fired`.
+    pub last_query_completion_at: Option<Instant>,
+    /// Wall-clock of the most recent user keystroke or input event.
+    /// Used to short-circuit idle firing when the user has interacted
+    /// since the turn completed. TS: `getLastInteractionTime()`.
+    pub last_user_interaction_at: Instant,
+    /// Idle-prompt single-shot. After a turn completes we fire
+    /// `idle_prompt` notification at most once per
+    /// `last_query_completion_at` epoch. Reset to `false` whenever
+    /// `last_query_completion_at` is set or cleared.
+    pub idle_prompt_fired: bool,
 }
 
 impl SessionState {
@@ -309,6 +323,9 @@ impl Default for SessionState {
             last_agent_markdown: None,
             ide_selection: None,
             ide_diagnostics: None,
+            last_query_completion_at: None,
+            last_user_interaction_at: Instant::now(),
+            idle_prompt_fired: false,
         }
     }
 }

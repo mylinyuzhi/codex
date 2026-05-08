@@ -234,7 +234,8 @@ fn parse_rule_value_from_string(s: &str) -> PermissionRuleValue {
 
 // ── MCP config validation ──
 
-/// Known hook event types — synced with `HookEventType` enum in coco-types.
+/// Known hook event types — synced 1:1 with `HookEventType` (coco-types)
+/// and TS `HOOK_EVENTS` (`coreSchemas.ts:355-383`).
 const KNOWN_HOOK_EVENTS: &[&str] = &[
     // Tool lifecycle
     "PreToolUse",
@@ -271,15 +272,6 @@ const KNOWN_HOOK_EVENTS: &[&str] = &[
     // Worktree
     "WorktreeCreate",
     "WorktreeRemove",
-    // Notebook
-    "NotebookCellExecute",
-    // Model
-    "ModelSwitch",
-    // Resource pressure
-    "ContextOverflow",
-    "BudgetWarning",
-    // Query
-    "QueryStart",
 ];
 
 /// Validate MCP server configurations for structural correctness.
@@ -471,7 +463,7 @@ pub fn validate_hooks(settings: &Settings) -> Vec<ValidationError> {
             // Validate required 'type' field
             match obj.get("type").and_then(|t| t.as_str()) {
                 Some(hook_type) => {
-                    let valid_types = ["command", "prompt", "agent", "webhook", "http", "inline"];
+                    let valid_types = ["command", "prompt", "agent", "webhook", "http"];
                     if !valid_types.contains(&hook_type) {
                         errors.push(ValidationError {
                             file: None,
@@ -488,7 +480,7 @@ pub fn validate_hooks(settings: &Settings) -> Vec<ValidationError> {
                         file: None,
                         path: format!("{def_path}.type"),
                         message: "Hook definition is missing required 'type' field".into(),
-                        expected: Some("command, prompt, agent, webhook, or inline".into()),
+                        expected: Some("command, prompt, agent, webhook, or http".into()),
                         invalid_value: None,
                         suggestion: None,
                     });

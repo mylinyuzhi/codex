@@ -7,6 +7,9 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use coco_error::BoxedError;
+use coco_error::StatusCode;
+use coco_error::boxed;
 use coco_file_watch::FileWatcherBuilder;
 use coco_file_watch::RecursiveMode;
 use tokio::sync::broadcast;
@@ -29,7 +32,7 @@ pub struct McpConfigChanged {
 pub fn watch_mcp_configs(
     config_home: &Path,
     project_root: Option<&Path>,
-) -> anyhow::Result<broadcast::Receiver<McpConfigChanged>> {
+) -> Result<broadcast::Receiver<McpConfigChanged>, BoxedError> {
     let watcher: coco_file_watch::FileWatcher<McpConfigChanged> = FileWatcherBuilder::new()
         .throttle_interval(Duration::from_millis(500))
         .build(
@@ -53,7 +56,8 @@ pub fn watch_mcp_configs(
                 acc.paths.extend(new.paths);
                 acc
             },
-        )?;
+        )
+        .map_err(|e| boxed(e, StatusCode::IoError))?;
 
     // Watch user-level config directory
     if config_home.exists() {

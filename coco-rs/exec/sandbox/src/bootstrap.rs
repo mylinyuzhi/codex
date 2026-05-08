@@ -70,6 +70,15 @@ pub fn check_enable_gates(settings: &SandboxSettings) -> EnableCheckResult {
     EnableCheckResult::Enabled
 }
 
+/// Public helper: is the current platform supported for sandboxing?
+///
+/// Used by the CLI bootstrap to feed
+/// [`crate::sandbox_unavailable_reason`] without re-deriving the same
+/// gate logic.
+pub fn current_platform_supported() -> bool {
+    is_supported_platform()
+}
+
 /// Check if the current platform is supported for sandboxing.
 fn is_supported_platform() -> bool {
     if cfg!(target_os = "macos") {

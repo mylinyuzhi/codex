@@ -107,7 +107,7 @@ pub fn get_environment_info(cwd: &Path, model: &str) -> EnvironmentInfo {
 }
 
 /// Get git status for a repository.
-fn get_git_status(cwd: &Path) -> anyhow::Result<GitStatus> {
+fn get_git_status(cwd: &Path) -> crate::Result<GitStatus> {
     let branch = run_git(cwd, &["rev-parse", "--abbrev-ref", "HEAD"])?;
     let status = run_git(cwd, &["status", "--short"])?;
     let user = run_git(cwd, &["config", "user.name"]).ok();
@@ -134,7 +134,7 @@ fn detect_main_branch(cwd: &Path) -> Option<String> {
     None
 }
 
-fn run_git(cwd: &Path, args: &[&str]) -> anyhow::Result<String> {
+fn run_git(cwd: &Path, args: &[&str]) -> crate::Result<String> {
     let output = std::process::Command::new("git")
         .args(args)
         .current_dir(cwd)
@@ -142,7 +142,7 @@ fn run_git(cwd: &Path, args: &[&str]) -> anyhow::Result<String> {
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     } else {
-        anyhow::bail!("git command failed")
+        Err(crate::ContextError::git_failed("git command failed"))
     }
 }
 

@@ -266,6 +266,13 @@ impl Tool for ReadTool {
             });
         }
 
+        // Sandbox pre-flight — give SDK consumers a chance to deny before
+        // we touch the filesystem. Platform sandboxes (bwrap/Seatbelt)
+        // catch the same violations at kernel level after `read()`, but
+        // the structured `PermissionDenied` here surfaces a usable
+        // reason to the model instead of an opaque `EACCES`.
+        super::sandbox_preflight::preflight_path(ctx, path, /*write=*/ false)?;
+
         // Check existence
         if !path.exists() {
             return Err(ToolError::ExecutionFailed {

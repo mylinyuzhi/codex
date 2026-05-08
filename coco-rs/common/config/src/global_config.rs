@@ -36,6 +36,12 @@ pub struct ProjectConfig {
     pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub costs: Option<SessionCostState>,
+    /// Set true once the project has completed onboarding (CLAUDE.md
+    /// exists). TS: `hasCompletedProjectOnboarding` in
+    /// `utils/config.ts`. Used by `maybeMarkProjectOnboardingComplete`
+    /// to short-circuit subsequent /init invocations.
+    #[serde(default)]
+    pub has_completed_project_onboarding: bool,
 }
 
 /// Session cost tracking state.
@@ -86,7 +92,7 @@ pub fn global_config_path() -> PathBuf {
 }
 
 /// Load global config from disk.
-pub fn load_global_config() -> anyhow::Result<GlobalConfig> {
+pub fn load_global_config() -> crate::Result<GlobalConfig> {
     let path = global_config_path();
     if !path.exists() {
         return Ok(GlobalConfig::default());
@@ -97,7 +103,7 @@ pub fn load_global_config() -> anyhow::Result<GlobalConfig> {
 }
 
 /// Write global config to disk.
-pub fn write_global_config(config: &GlobalConfig) -> anyhow::Result<()> {
+pub fn write_global_config(config: &GlobalConfig) -> crate::Result<()> {
     let path = global_config_path();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -132,6 +138,102 @@ pub fn project_settings_path(cwd: &Path) -> PathBuf {
 /// Get the local (gitignored) settings path.
 pub fn local_settings_path(cwd: &Path) -> PathBuf {
     cwd.join(".claude/settings.local.json")
+}
+
+/// Set `key` to `value` in `~/.coco/settings.json` (creating the file
+/// + parent dir as needed). Used by slash-command handlers that need
+///   to persist a single top-level setting (e.g. `theme`, `effort`,
+///   `output_style`, `color_mode`) without round-tripping through the
+///   full `Settings` deserialize/serialize cycle.
+///
+/// `key` may be dotted (`sandbox.mode`) — intermediate objects are
+/// created if absent. Existing siblings are preserved. Returns the
+/// path that was written so callers can show it to the user.
+///
+/// **Reload semantics**: writes to disk; the live runtime keeps the
+/// pre-existing in-memory `Settings` until the user starts a new
+/// session (or the SettingsWatcher debounce fires and re-loads). This
+/// matches TS — slash-command settings writes are observed by the
+/// next session, not the current one.
+pub fn write_user_setting(key: &str, value: serde_json::Value) -> crate::Result<PathBuf> {
+    let path = user_settings_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut root: serde_json::Value = if path.exists() {
+        let s = std::fs::read_to_string(&path)?;
+        if s.trim().is_empty() {
+            serde_json::json!({})
+        } else {
+            serde_json::from_str(&s).unwrap_or_else(|_| serde_json::json!({}))
+        }
+    } else {
+        serde_json::json!({})
+    };
+    set_dotted(&mut root, key, value);
+    let contents = serde_json::to_string_pretty(&root)?;
+    std::fs::write(&path, contents)?;
+    Ok(path)
+}
+
+/// Walk `obj` along `key`'s dot-separated path, creating intermediate
+/// objects, and write `value` at the leaf. Replaces non-object
+/// intermediates rather than failing — slash-command settings writes
+/// are user-driven and the user just typed the key explicitly.
+fn set_dotted(obj: &mut serde_json::Value, key: &str, value: serde_json::Value) {
+    let mut parts = key.split('.').peekable();
+    let mut cur = obj;
+    while let Some(part) = parts.next() {
+        if parts.peek().is_none() {
+            if let Some(map) = cur.as_object_mut() {
+                map.insert(part.to_string(), value);
+            }
+            return;
+        }
+        if !cur.is_object() {
+            *cur = serde_json::json!({});
+        }
+        // Branch on as_object_mut rather than expect: structurally
+        // unreachable (we just ensured cur is an Object), but clippy
+        // forbids `.expect()` on Option in this crate.
+        let Some(map) = cur.as_object_mut() else {
+            return;
+        };
+        cur = map
+            .entry(part.to_string())
+            .or_insert_with(|| serde_json::json!({}));
+    }
+}
+
+/// Best-effort mark the project at `cwd` as having completed onboarding
+/// when a `CLAUDE.md` exists at the project root. No-op when the flag
+/// is already set, when no `CLAUDE.md` is present, or when the global
+/// config can't be read/written. Errors are swallowed because
+/// onboarding state is opportunistic — losing it doesn't impact
+/// correctness, only the cosmetic onboarding banner.
+///
+/// TS: `projectOnboardingState.ts::maybeMarkProjectOnboardingComplete`.
+/// The TS version is called once per `/init` invocation and on every
+/// REPL prompt submit; we mirror the once-per-`/init` call site (the
+/// per-prompt cadence is a TS optimization to drive an Ink banner
+/// that coco-rs doesn't render).
+pub fn maybe_mark_project_onboarding_complete(cwd: &Path) {
+    let key = cwd.to_string_lossy().to_string();
+    let mut config = match load_global_config() {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    if let Some(p) = config.projects.get(&key)
+        && p.has_completed_project_onboarding
+    {
+        return;
+    }
+    if !cwd.join("CLAUDE.md").exists() {
+        return;
+    }
+    let entry = config.projects.entry(key).or_default();
+    entry.has_completed_project_onboarding = true;
+    let _ = write_global_config(&config);
 }
 
 /// Get the managed settings path (enterprise/MDM).

@@ -65,13 +65,23 @@ fn coverage_distribution_matches_readme_snapshot() {
             Coverage::RuntimeBookkeeping { .. } => runtime += 1,
         }
     }
-    // README.md "Full TS Attachment coverage index" snapshot:
+    // Snapshot after audit-add (May 2026): 8 kinds previously categorised
+    // as SilentEvent (3) / FeatureGated (2) / RuntimeBookkeeping (3) were
+    // ported as in-crate `SilentReminder` generators (TS-parity: bodies
+    // are `is_api_visible=false`, so the model still doesn't see them,
+    // but the system-reminder crate now owns the UI/transcript path).
     assert_eq!(reminder, 38, "in-crate reminders");
-    assert_eq!(silent_reminder, 2, "in-crate silent reminders (Part 1)");
+    assert_eq!(
+        silent_reminder, 10,
+        "in-crate silent reminders (Part 1=2 + audit-add=8)"
+    );
     assert_eq!(outside, 6, "owned by sister crates");
-    assert_eq!(silent_event, 8, "UI/telemetry owned elsewhere");
-    assert_eq!(feature_gated, 2, "awaiting TS feature runtime");
-    assert_eq!(runtime, 4, "TS runtime bookkeeping only");
+    assert_eq!(silent_event, 5, "UI/telemetry owned elsewhere (post-audit)");
+    assert_eq!(
+        feature_gated, 0,
+        "audit-add ported the two feature-gated kinds"
+    );
+    assert_eq!(runtime, 1, "BagelConsole only");
     assert_eq!(
         reminder + silent_reminder + outside + silent_event + feature_gated + runtime,
         60,

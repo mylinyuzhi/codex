@@ -21,6 +21,11 @@ const CWD_MARKER_PREFIX: &str = "___COCO_CWD___";
 pub struct ShellExecutor {
     /// Current working directory.
     cwd: PathBuf,
+    /// CWD at executor construction. Stays put even when commands `cd`
+    /// elsewhere; threaded into `coco_sandbox::bare_repo_scrub_paths` so
+    /// the post-command scrub mitigates planted bare-repo attacks
+    /// (anthropics/claude-code#29316) for the original session root.
+    original_cwd: PathBuf,
     /// Shell configuration with type, path, and optional snapshot.
     shell: Shell,
     /// Resolved user settings — controls snapshot disable, shell-prefix, etc.
@@ -36,6 +41,7 @@ impl ShellExecutor {
     pub fn new(cwd: &Path) -> Self {
         Self {
             cwd: cwd.to_path_buf(),
+            original_cwd: cwd.to_path_buf(),
             shell: default_user_shell(),
             shell_config: None,
         }
@@ -48,6 +54,7 @@ impl ShellExecutor {
     pub fn new_with_config(cwd: &Path, shell_config: &ShellConfig) -> Self {
         Self {
             cwd: cwd.to_path_buf(),
+            original_cwd: cwd.to_path_buf(),
             shell: shell_from_config(shell_config),
             shell_config: Some(shell_config.clone()),
         }
@@ -110,7 +117,12 @@ impl ShellExecutor {
         command: &str,
         options: &ExecOptions,
     ) -> anyhow::Result<CommandResult> {
-        let effective_cwd = options.cwd_override.as_deref().unwrap_or(&self.cwd);
+        let effective_cwd = options
+            .cwd_override
+            .as_deref()
+            .unwrap_or(&self.cwd)
+            .to_path_buf();
+        let original_cwd = self.original_cwd.clone();
 
         let (shell_command, use_login_shell) = self.build_exec_command(command);
         let tracked_command = if options.prevent_cwd_changes {
@@ -123,13 +135,15 @@ impl ShellExecutor {
 
         let mut cmd = tokio::process::Command::new(self.shell.shell_path());
         cmd.arg(shell_flag).arg(&tracked_command);
-        cmd.current_dir(effective_cwd);
+        cmd.current_dir(&effective_cwd);
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
 
         for (key, value) in &options.extra_env {
             cmd.env(key, value);
         }
+
+        apply_sandbox_wrap(&mut cmd, command, options)?;
 
         let child = cmd.kill_on_drop(true).spawn()?;
 
@@ -151,6 +165,7 @@ impl ShellExecutor {
                     // child via `kill_on_drop(true)`. We return a
                     // CommandResult with `interrupted = true` so the
                     // caller can surface that distinctly from a timeout.
+                    scrub_bare_repo_after_command(options, &effective_cwd, &original_cwd);
                     return Ok(CommandResult {
                         exit_code: -1,
                         stdout: String::new(),
@@ -164,8 +179,12 @@ impl ShellExecutor {
                 result = tokio::time::timeout(timeout_duration, &mut wait_future) => {
                     match result {
                         Ok(Ok(output)) => output,
-                        Ok(Err(e)) => return Err(e.into()),
+                        Ok(Err(e)) => {
+                            scrub_bare_repo_after_command(options, &effective_cwd, &original_cwd);
+                            return Err(e.into());
+                        }
                         Err(_) => {
+                            scrub_bare_repo_after_command(options, &effective_cwd, &original_cwd);
                             return Ok(CommandResult {
                                 exit_code: -1,
                                 stdout: String::new(),
@@ -182,8 +201,12 @@ impl ShellExecutor {
         } else {
             match tokio::time::timeout(timeout_duration, wait_future).await {
                 Ok(Ok(output)) => output,
-                Ok(Err(e)) => return Err(e.into()),
+                Ok(Err(e)) => {
+                    scrub_bare_repo_after_command(options, &effective_cwd, &original_cwd);
+                    return Err(e.into());
+                }
                 Err(_) => {
+                    scrub_bare_repo_after_command(options, &effective_cwd, &original_cwd);
                     return Ok(CommandResult {
                         exit_code: -1,
                         stdout: String::new(),
@@ -213,6 +236,8 @@ impl ShellExecutor {
         if let Some(ref new) = new_cwd {
             self.cwd = new.clone();
         }
+
+        scrub_bare_repo_after_command(options, &effective_cwd, &original_cwd);
 
         Ok(CommandResult {
             exit_code: output.status.code().unwrap_or(-1),
@@ -257,7 +282,12 @@ impl ShellExecutor {
         use std::sync::atomic::Ordering;
         use tokio::io::AsyncReadExt;
 
-        let effective_cwd = options.cwd_override.as_deref().unwrap_or(&self.cwd);
+        let effective_cwd = options
+            .cwd_override
+            .as_deref()
+            .unwrap_or(&self.cwd)
+            .to_path_buf();
+        let original_cwd = self.original_cwd.clone();
         let (shell_command, use_login_shell) = self.build_exec_command(command);
         let tracked_command = if options.prevent_cwd_changes {
             shell_command
@@ -269,13 +299,15 @@ impl ShellExecutor {
 
         let mut cmd = tokio::process::Command::new(self.shell.shell_path());
         cmd.arg(shell_flag).arg(&tracked_command);
-        cmd.current_dir(effective_cwd);
+        cmd.current_dir(&effective_cwd);
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
 
         for (key, value) in &options.extra_env {
             cmd.env(key, value);
         }
+
+        apply_sandbox_wrap(&mut cmd, command, options)?;
 
         let mut child = cmd.kill_on_drop(true).spawn()?;
 
@@ -358,6 +390,7 @@ impl ShellExecutor {
                     let stdout_partial_bytes = stdout_handle.await.unwrap_or_default();
                     let stdout_partial = String::from_utf8_lossy(&stdout_partial_bytes).to_string();
                     let stderr_partial = stderr_handle.await.unwrap_or_default();
+                    scrub_bare_repo_after_command(options, &effective_cwd, &original_cwd);
                     return Ok(CommandResult {
                         exit_code: -1,
                         stdout: stdout_partial,
@@ -379,6 +412,7 @@ impl ShellExecutor {
                     let elapsed = start.elapsed();
                     if elapsed > timeout_duration {
                         let _ = child.kill().await;
+                        scrub_bare_repo_after_command(options, &effective_cwd, &original_cwd);
                         return Ok(CommandResult {
                             exit_code: -1,
                             stdout: String::new(),
@@ -416,6 +450,8 @@ impl ShellExecutor {
 
         let exit_code = status.and_then(|s| s.code()).unwrap_or(-1);
 
+        scrub_bare_repo_after_command(options, &effective_cwd, &original_cwd);
+
         Ok(CommandResult {
             exit_code,
             stdout,
@@ -431,6 +467,7 @@ impl ShellExecutor {
     pub fn fork_for_subagent(&self) -> Self {
         Self {
             cwd: self.cwd.clone(),
+            original_cwd: self.original_cwd.clone(),
             shell: self.shell.clone(),
             shell_config: self.shell_config.clone(),
         }
@@ -463,6 +500,47 @@ impl ShellExecutor {
 
         // No snapshot: fall back to login shell for user environment
         (command.to_string(), /*use_login_shell*/ true)
+    }
+}
+
+/// Mutate `cmd` to wrap the spawn with platform sandbox enforcement.
+///
+/// No-op if `options.sandbox` is `None`, or if the sandbox is inactive, or if
+/// the command is excluded from sandboxing per
+/// [`coco_sandbox::SandboxState::command_snapshot`].
+///
+/// Errors from the platform wrap (e.g., bwrap binary missing at exec time)
+/// are surfaced as `anyhow::Error` so the caller can fail-closed and refuse
+/// to run the command unsandboxed.
+fn apply_sandbox_wrap(
+    cmd: &mut tokio::process::Command,
+    command: &str,
+    options: &ExecOptions,
+) -> anyhow::Result<()> {
+    let Some(state) = &options.sandbox else {
+        return Ok(());
+    };
+    state
+        .try_wrap_command(command, options.sandbox_bypass, cmd)
+        .map_err(|e| anyhow::anyhow!("sandbox wrap failed: {e}"))?;
+    Ok(())
+}
+
+/// Best-effort post-command scrub of planted bare-repo files in `cwd` /
+/// `original_cwd`. Mirrors TS `cleanupAfterCommand()` calling
+/// `scrubBareGitRepoFiles()` (sandbox-adapter.ts:963-966), mitigation for
+/// anthropics/claude-code#29316: an attacker plants `HEAD`/`objects`/…
+/// and a `core.fsmonitor` config so any subsequent unsandboxed `git`
+/// invocation runs arbitrary code. The pre-command deny-write list keeps
+/// existing files intact; this post-command pass deletes any files
+/// created during execution.
+fn scrub_bare_repo_after_command(options: &ExecOptions, cwd: &Path, original_cwd: &Path) {
+    if options.sandbox.is_none() {
+        return;
+    }
+    let paths = coco_sandbox::bare_repo_scrub_paths(cwd, original_cwd);
+    if !paths.is_empty() {
+        coco_sandbox::scrub_bare_repo_files(&paths);
     }
 }
 

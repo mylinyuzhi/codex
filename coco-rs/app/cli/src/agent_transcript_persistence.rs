@@ -51,6 +51,20 @@ impl SessionAgentTranscriptStore {
     }
 }
 
+fn boxed_anyhow(e: anyhow::Error) -> coco_error::BoxedError {
+    Box::new(coco_error::PlainError::new(
+        e.to_string(),
+        coco_error::StatusCode::Internal,
+    ))
+}
+
+fn boxed_session_err(e: coco_session::SessionError) -> coco_error::BoxedError {
+    Box::new(coco_error::PlainError::new(
+        e.to_string(),
+        coco_error::StatusCode::IoError,
+    ))
+}
+
 #[async_trait]
 impl AgentTranscriptStore for SessionAgentTranscriptStore {
     async fn append_agent_messages(
@@ -58,32 +72,30 @@ impl AgentTranscriptStore for SessionAgentTranscriptStore {
         session_id: &str,
         agent_id: &str,
         messages: Vec<serde_json::Value>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), coco_error::BoxedError> {
         let store = self.store.clone();
         let session_id = session_id.to_string();
         let agent_id = agent_id.to_string();
-        // `TranscriptStore::append_agent_messages` is sync (std::fs).
-        // Hop to the blocking pool so the tokio worker isn't stalled
-        // by disk I/O — small writes are fine but the agent's full
-        // history can be megabytes.
         tokio::task::spawn_blocking(move || {
             store.append_agent_messages(&session_id, &agent_id, &messages)
         })
         .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking join: {e}"))?
+        .map_err(|e| boxed_anyhow(anyhow::anyhow!("spawn_blocking join: {e}")))?
+        .map_err(boxed_session_err)
     }
 
     async fn load_agent_messages(
         &self,
         session_id: &str,
         agent_id: &str,
-    ) -> anyhow::Result<Option<Vec<serde_json::Value>>> {
+    ) -> Result<Option<Vec<serde_json::Value>>, coco_error::BoxedError> {
         let store = self.store.clone();
         let session_id = session_id.to_string();
         let agent_id = agent_id.to_string();
         tokio::task::spawn_blocking(move || store.load_agent_messages(&session_id, &agent_id))
             .await
-            .map_err(|e| anyhow::anyhow!("spawn_blocking join: {e}"))?
+            .map_err(|e| boxed_anyhow(anyhow::anyhow!("spawn_blocking join: {e}")))?
+            .map_err(boxed_session_err)
     }
 
     async fn write_agent_metadata(
@@ -91,13 +103,10 @@ impl AgentTranscriptStore for SessionAgentTranscriptStore {
         session_id: &str,
         agent_id: &str,
         metadata: &AgentSpawnMetadata,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), coco_error::BoxedError> {
         let store = self.store.clone();
         let session_id = session_id.to_string();
         let agent_id = agent_id.to_string();
-        // Translate the trait DTO into the session-crate's struct.
-        // Both are 1:1 in shape — separate types only because the
-        // trait can't reach into `coco-session` from a lower layer.
         let session_meta = AgentMetadata {
             agent_type: metadata.agent_type.clone(),
             worktree_path: metadata.worktree_path.clone(),
@@ -107,21 +116,23 @@ impl AgentTranscriptStore for SessionAgentTranscriptStore {
             store.write_agent_metadata(&session_id, &agent_id, &session_meta)
         })
         .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking join: {e}"))?
+        .map_err(|e| boxed_anyhow(anyhow::anyhow!("spawn_blocking join: {e}")))?
+        .map_err(boxed_session_err)
     }
 
     async fn read_agent_metadata(
         &self,
         session_id: &str,
         agent_id: &str,
-    ) -> anyhow::Result<Option<AgentSpawnMetadata>> {
+    ) -> Result<Option<AgentSpawnMetadata>, coco_error::BoxedError> {
         let store = self.store.clone();
         let session_id = session_id.to_string();
         let agent_id = agent_id.to_string();
         let session_meta: Option<AgentMetadata> =
             tokio::task::spawn_blocking(move || store.read_agent_metadata(&session_id, &agent_id))
                 .await
-                .map_err(|e| anyhow::anyhow!("spawn_blocking join: {e}"))??;
+                .map_err(|e| boxed_anyhow(anyhow::anyhow!("spawn_blocking join: {e}")))?
+                .map_err(boxed_session_err)?;
         Ok(session_meta.map(|m| AgentSpawnMetadata {
             agent_type: m.agent_type,
             worktree_path: m.worktree_path,

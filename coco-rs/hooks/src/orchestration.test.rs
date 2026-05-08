@@ -17,15 +17,24 @@ fn test_ctx() -> OrchestrationContext {
         cwd: PathBuf::from("/tmp/test"),
         project_dir: Some(PathBuf::from("/tmp/project")),
         permission_mode: Some("default".to_string()),
+        transcript_path: None,
+        agent_id: None,
+        agent_type: None,
         cancel: CancellationToken::new(),
         disable_all_hooks: false,
         allow_managed_hooks_only: false,
         attachment_emitter: coco_messages::AttachmentEmitter::noop(),
+        sync_event_sink: None,
+        http_url_allowlist: None,
+        http_env_var_policy: None,
+        async_registry: None,
+        llm_handle: None,
+        workspace_trust_accepted: None,
     }
 }
 
 fn make_registry(hooks: Vec<HookDefinition>) -> HookRegistry {
-    let mut registry = HookRegistry::new();
+    let registry = HookRegistry::new();
     for h in hooks {
         registry.register(h);
     }
@@ -186,7 +195,13 @@ fn test_aggregate_results_additional_context() {
 
 #[test]
 fn test_build_hook_env_basic() {
-    let env = build_hook_env("sess-1", "/home/user", Some("Bash"), "PreToolUse", None);
+    let env = build_hook_env(
+        "sess-1",
+        "/home/user",
+        Some("Bash"),
+        HookEventType::PreToolUse,
+        None,
+    );
     assert_eq!(env.get("HOOK_EVENT").unwrap(), "PreToolUse");
     assert_eq!(env.get("HOOK_SESSION_ID").unwrap(), "sess-1");
     assert_eq!(env.get("HOOK_TOOL_NAME").unwrap(), "Bash");
@@ -195,7 +210,13 @@ fn test_build_hook_env_basic() {
 
 #[test]
 fn test_build_hook_env_with_project_dir() {
-    let env = build_hook_env("sess-2", "/tmp", None, "SessionStart", Some("/proj/root"));
+    let env = build_hook_env(
+        "sess-2",
+        "/tmp",
+        None,
+        HookEventType::SessionStart,
+        Some("/proj/root"),
+    );
     assert!(!env.contains_key("HOOK_TOOL_NAME"));
     assert_eq!(env.get("CLAUDE_PROJECT_DIR").unwrap(), "/proj/root");
 }
@@ -221,7 +242,6 @@ async fn test_parallel_execution_multiple_hooks() {
             once: false,
             is_async: false,
             async_rewake: false,
-            shell: None,
             status_message: None,
         },
         HookDefinition {
@@ -238,7 +258,6 @@ async fn test_parallel_execution_multiple_hooks() {
             once: false,
             is_async: false,
             async_rewake: false,
-            shell: None,
             status_message: None,
         },
     ]);
@@ -286,7 +305,6 @@ async fn test_parallel_execution_cancellation() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     }]);
 
@@ -328,7 +346,6 @@ async fn test_parallel_execution_timeout() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     }]);
 
@@ -367,7 +384,6 @@ async fn test_parallel_execution_exit_code_2_is_blocking() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     }]);
 
@@ -402,6 +418,8 @@ async fn test_execute_pre_tool_use_with_prompt_hook() {
         matcher: Some("Bash".to_string()),
         handler: HookHandler::Prompt {
             prompt: "Check for dangerous commands".to_string(),
+            model: None,
+            timeout_ms: None,
         },
         priority: 0,
         scope: HookScope::default(),
@@ -409,7 +427,6 @@ async fn test_execute_pre_tool_use_with_prompt_hook() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     }]);
 
@@ -440,6 +457,8 @@ async fn test_execute_post_tool_use_failure_with_prompt_hook() {
         matcher: Some("Bash".to_string()),
         handler: HookHandler::Prompt {
             prompt: "Recover from failed command".to_string(),
+            model: None,
+            timeout_ms: None,
         },
         priority: 0,
         scope: HookScope::default(),
@@ -447,7 +466,6 @@ async fn test_execute_post_tool_use_failure_with_prompt_hook() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     }]);
 
@@ -456,9 +474,10 @@ async fn test_execute_post_tool_use_failure_with_prompt_hook() {
         &registry,
         &ctx,
         "Bash",
+        "tool-use-1",
         &serde_json::json!({"command": "false"}),
         "exit code 1",
-        Some("execution_error"),
+        /*is_interrupt*/ None,
         /*event_tx*/ None,
     )
     .await
@@ -485,14 +504,19 @@ async fn test_execute_session_start() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     }]);
 
     let ctx = test_ctx();
-    let result = execute_session_start(&registry, &ctx, "startup", None, None)
-        .await
-        .expect("should succeed");
+    let result = execute_session_start(
+        &registry,
+        &ctx,
+        crate::inputs::SessionStartSource::Startup,
+        None,
+        None,
+    )
+    .await
+    .expect("should succeed");
 
     assert!(!result.is_blocked());
     // The "initialized" output appears as additional context (plain text).
@@ -522,7 +546,6 @@ async fn test_execute_stop_failure() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     }]);
 
@@ -543,6 +566,203 @@ async fn test_execute_stop_failure() {
 }
 
 // -----------------------------------------------------------------------
+// Phase 3 entry points — smoke tests
+// -----------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_execute_setup_routes_match_value_to_trigger() {
+    // Setup hooks match on the `trigger` field — verify the hook only
+    // fires for the matcher that lines up with the trigger we pass.
+    let registry = make_registry(vec![
+        HookDefinition {
+            event: HookEventType::Setup,
+            matcher: Some("init".to_string()),
+            handler: HookHandler::Command {
+                command: "echo init-only".to_string(),
+                timeout_ms: Some(5000),
+                shell: None,
+            },
+            priority: 0,
+            scope: HookScope::default(),
+            if_condition: None,
+            once: false,
+            is_async: false,
+            async_rewake: false,
+            status_message: None,
+        },
+        HookDefinition {
+            event: HookEventType::Setup,
+            matcher: Some("maintenance".to_string()),
+            handler: HookHandler::Command {
+                command: "echo maintenance-only".to_string(),
+                timeout_ms: Some(5000),
+                shell: None,
+            },
+            priority: 0,
+            scope: HookScope::default(),
+            if_condition: None,
+            once: false,
+            is_async: false,
+            async_rewake: false,
+            status_message: None,
+        },
+    ]);
+
+    let ctx = test_ctx();
+    let result = execute_setup(&registry, &ctx, crate::inputs::SetupTrigger::Init)
+        .await
+        .expect("should succeed");
+    assert!(
+        result.additional_contexts.iter().any(|c| c == "init-only"),
+        "expected init-only fire, got contexts: {:?}",
+        result.additional_contexts
+    );
+    assert!(
+        !result
+            .additional_contexts
+            .iter()
+            .any(|c| c == "maintenance-only"),
+        "maintenance-only must not fire on init trigger"
+    );
+}
+
+#[tokio::test]
+async fn test_execute_config_change_routes_match_value_to_source() {
+    // ConfigChange hooks match on the `source` field — verify the
+    // matcher correctly targets the policy_settings source.
+    let registry = make_registry(vec![HookDefinition {
+        event: HookEventType::ConfigChange,
+        matcher: Some("policy_settings".to_string()),
+        handler: HookHandler::Command {
+            command: "echo policy-changed".to_string(),
+            timeout_ms: Some(5000),
+            shell: None,
+        },
+        priority: 0,
+        scope: HookScope::default(),
+        if_condition: None,
+        once: false,
+        is_async: false,
+        async_rewake: false,
+        status_message: None,
+    }]);
+
+    let ctx = test_ctx();
+    let fired = execute_config_change(
+        &registry,
+        &ctx,
+        crate::inputs::ConfigChangeSource::PolicySettings,
+        None,
+    )
+    .await
+    .expect("should succeed");
+    assert!(
+        fired
+            .additional_contexts
+            .iter()
+            .any(|c| c == "policy-changed")
+    );
+
+    let skipped = execute_config_change(
+        &registry,
+        &ctx,
+        crate::inputs::ConfigChangeSource::UserSettings,
+        None,
+    )
+    .await
+    .expect("should succeed");
+    assert!(skipped.additional_contexts.is_empty());
+}
+
+#[tokio::test]
+async fn test_execute_file_changed_matches_basename() {
+    // FileChanged matcher gates on basename of file_path. A pipe-
+    // separated matcher like ".envrc|.env" matches both files.
+    let registry = make_registry(vec![HookDefinition {
+        event: HookEventType::FileChanged,
+        matcher: Some(".envrc|.env".to_string()),
+        handler: HookHandler::Command {
+            command: "echo env-changed".to_string(),
+            timeout_ms: Some(5000),
+            shell: None,
+        },
+        priority: 0,
+        scope: HookScope::default(),
+        if_condition: None,
+        once: false,
+        is_async: false,
+        async_rewake: false,
+        status_message: None,
+    }]);
+
+    let ctx = test_ctx();
+    let fired = execute_file_changed(
+        &registry,
+        &ctx,
+        "/proj/.envrc",
+        crate::inputs::FileChangeEvent::Change,
+    )
+    .await
+    .expect("should succeed");
+    assert!(
+        fired.additional_contexts.iter().any(|c| c == "env-changed"),
+        "expected env-changed for /proj/.envrc, got {:?}",
+        fired.additional_contexts
+    );
+
+    let skipped = execute_file_changed(
+        &registry,
+        &ctx,
+        "/proj/Cargo.toml",
+        crate::inputs::FileChangeEvent::Change,
+    )
+    .await
+    .expect("should succeed");
+    assert!(skipped.additional_contexts.is_empty());
+}
+
+#[tokio::test]
+async fn test_execute_task_event_helpers_dispatch_to_distinct_events() {
+    // The TaskCreated / TaskCompleted / TeammateIdle helpers each
+    // build their own TS-aligned input struct and route through
+    // distinct HookEventType variants. A hook registered for one
+    // must not fire for the other two.
+    let registry = make_registry(vec![HookDefinition {
+        event: HookEventType::TaskCompleted,
+        matcher: None,
+        handler: HookHandler::Command {
+            command: "echo done".to_string(),
+            timeout_ms: Some(5000),
+            shell: None,
+        },
+        priority: 0,
+        scope: HookScope::default(),
+        if_condition: None,
+        once: false,
+        is_async: false,
+        async_rewake: false,
+        status_message: None,
+    }]);
+
+    let ctx = test_ctx();
+    let created = execute_task_created(&registry, &ctx, "task-1", "subject-1", None, None, None)
+        .await
+        .expect("should succeed");
+    assert!(created.additional_contexts.is_empty());
+
+    let completed =
+        execute_task_completed(&registry, &ctx, "task-1", "subject-1", None, None, None)
+            .await
+            .expect("should succeed");
+    assert!(completed.additional_contexts.iter().any(|c| c == "done"));
+
+    let idle = execute_teammate_idle(&registry, &ctx, "teammate-1", "team-1")
+        .await
+        .expect("should succeed");
+    assert!(idle.additional_contexts.is_empty());
+}
+
+// -----------------------------------------------------------------------
 // HTTP hook filtering for SessionStart/Setup
 // -----------------------------------------------------------------------
 
@@ -554,9 +774,9 @@ async fn test_http_hooks_filtered_for_session_start() {
             matcher: None,
             handler: HookHandler::Http {
                 url: "https://example.com/hook".to_string(),
-                method: None,
                 headers: None,
                 timeout_ms: Some(5000),
+                allowed_env_vars: Vec::new(),
             },
             priority: 0,
             scope: HookScope::default(),
@@ -564,7 +784,6 @@ async fn test_http_hooks_filtered_for_session_start() {
             once: false,
             is_async: false,
             async_rewake: false,
-            shell: None,
             status_message: None,
         },
         HookDefinition {
@@ -581,7 +800,6 @@ async fn test_http_hooks_filtered_for_session_start() {
             once: false,
             is_async: false,
             async_rewake: false,
-            shell: None,
             status_message: None,
         },
     ]);
@@ -613,9 +831,9 @@ async fn test_http_hooks_filtered_for_setup() {
         matcher: None,
         handler: HookHandler::Http {
             url: "https://example.com/setup".to_string(),
-            method: None,
             headers: None,
             timeout_ms: Some(5000),
+            allowed_env_vars: Vec::new(),
         },
         priority: 0,
         scope: HookScope::default(),
@@ -623,7 +841,6 @@ async fn test_http_hooks_filtered_for_setup() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     }]);
 
@@ -653,9 +870,9 @@ async fn test_http_hooks_allowed_for_other_events() {
         matcher: None,
         handler: HookHandler::Http {
             url: "https://example.com/pre".to_string(),
-            method: None,
             headers: None,
             timeout_ms: Some(5000),
+            allowed_env_vars: Vec::new(),
         },
         priority: 0,
         scope: HookScope::default(),
@@ -663,7 +880,6 @@ async fn test_http_hooks_allowed_for_other_events() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     }]);
 
@@ -809,8 +1025,15 @@ fn test_build_hook_env_with_plugin_context() {
         skill_root: None,
     };
 
-    let env =
-        build_hook_env_with_plugin("sess", "/cwd", None, "PreToolUse", None, Some(&ctx), None);
+    let env = build_hook_env_with_plugin(
+        "sess",
+        "/cwd",
+        None,
+        HookEventType::PreToolUse,
+        None,
+        Some(&ctx),
+        None,
+    );
     assert_eq!(env.get("CLAUDE_PLUGIN_ROOT").unwrap(), "/plugins/my-plugin");
     assert!(
         env.get("CLAUDE_PLUGIN_DATA")
@@ -823,8 +1046,15 @@ fn test_build_hook_env_with_plugin_context() {
 #[test]
 fn test_build_hook_env_claude_env_file_for_session_start() {
     // CLAUDE_ENV_FILE requires hook_index for uniqueness.
-    let env =
-        build_hook_env_with_plugin("sess-1", "/cwd", None, "SessionStart", None, None, Some(0));
+    let env = build_hook_env_with_plugin(
+        "sess-1",
+        "/cwd",
+        None,
+        HookEventType::SessionStart,
+        None,
+        None,
+        Some(0),
+    );
     assert!(env.contains_key("CLAUDE_ENV_FILE"));
     assert!(env.get("CLAUDE_ENV_FILE").unwrap().contains("sess-1"));
     assert!(env.get("CLAUDE_ENV_FILE").unwrap().contains("-0.sh"));
@@ -833,13 +1063,13 @@ fn test_build_hook_env_claude_env_file_for_session_start() {
 #[test]
 fn test_build_hook_env_no_claude_env_file_without_hook_index() {
     // Without hook_index, CLAUDE_ENV_FILE is not set.
-    let env = build_hook_env("sess-1", "/cwd", None, "SessionStart", None);
+    let env = build_hook_env("sess-1", "/cwd", None, HookEventType::SessionStart, None);
     assert!(!env.contains_key("CLAUDE_ENV_FILE"));
 }
 
 #[test]
 fn test_build_hook_env_no_claude_env_file_for_pre_tool_use() {
-    let env = build_hook_env("sess-1", "/cwd", None, "PreToolUse", None);
+    let env = build_hook_env("sess-1", "/cwd", None, HookEventType::PreToolUse, None);
     assert!(!env.contains_key("CLAUDE_ENV_FILE"));
 }
 

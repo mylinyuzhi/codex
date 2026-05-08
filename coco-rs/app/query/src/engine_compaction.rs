@@ -176,11 +176,12 @@ impl QueryEngine {
             }
         };
 
-        // Run SessionStart hooks BEFORE rewriting history so a hook that
-        // emits `additional_context` user messages lands in the right
-        // place. Failure is logged + tolerated — SM-compact still proceeds.
-        // TS sessionMemoryCompact.ts:583 calls processSessionStartHooks('compact').
-        let mut session_start_messages: Vec<coco_messages::Message> = Vec::new();
+        // Run SessionStart hooks. Output flows into the sync hook buffer
+        // (orchestration pushes `HookEvent::*` per result) and surfaces
+        // as `hook_*` reminders on the next turn — matches TS
+        // `processSessionStartHooks('compact')` whose attachment
+        // messages are picked up by the next conversation iteration.
+        // Failure is logged + tolerated.
         if let Some(registry) = self.hooks.as_ref() {
             let ctx = self.orchestration_ctx();
             let model_id = self.config.model_id.as_str();
@@ -189,20 +190,16 @@ impl QueryEngine {
             } else {
                 Some(model_id)
             };
-            match coco_hooks::orchestration::execute_session_start(
-                registry, &ctx, "compact", /*agent_type*/ None, model_arg,
+            if let Err(e) = coco_hooks::orchestration::execute_session_start(
+                registry,
+                &ctx,
+                coco_hooks::orchestration::SessionStartSource::Compact,
+                /*agent_type*/ None,
+                model_arg,
             )
             .await
             {
-                Ok(res) => {
-                    for ctx_text in res.additional_contexts {
-                        if !ctx_text.trim().is_empty() {
-                            session_start_messages
-                                .push(coco_messages::create_user_message(&ctx_text));
-                        }
-                    }
-                }
-                Err(e) => warn!("SessionStart hook execution failed: {e}"),
+                warn!("SessionStart hook execution failed: {e}");
             }
         }
 
@@ -240,10 +237,7 @@ impl QueryEngine {
         let summary_tokens = result.post_compact_tokens as i32;
         let pre_tokens = result.pre_compact_tokens;
         let post_tokens = result.post_compact_tokens;
-        let mut new_messages = coco_compact::build_post_compact_messages(&result);
-        // Append SessionStart-injected messages after the boundary so
-        // they appear as fresh user context post-compaction.
-        new_messages.extend(session_start_messages);
+        let new_messages = coco_compact::build_post_compact_messages(&result);
         history.messages = new_messages.clone();
 
         let _ = emit_protocol(
@@ -284,6 +278,10 @@ impl QueryEngine {
             }),
         )
         .await;
+        // Surface task_status reminders on the next turn (TS post-compact
+        // emission gate at `attachments.ts:962`).
+        self.pending_just_compacted
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         true
     }
 
@@ -301,6 +299,16 @@ impl QueryEngine {
     /// 4. Call `compact_conversation` with the LLM summarizer.
     /// 5. Notify CompactionObservers (TS `runPostCompactCleanup`).
     /// 6. PostCompact hooks (TS `executePostCompactHooks`).
+    #[tracing::instrument(
+        skip_all,
+        name = "compaction",
+        fields(
+            trigger = ?trigger,
+            session_id = %self.config.session_id,
+            history_len = history.messages.len(),
+            has_custom_instructions = custom_instructions.is_some(),
+        ),
+    )]
     pub(crate) async fn try_full_compact(
         &self,
         history: &mut MessageHistory,
@@ -315,6 +323,16 @@ impl QueryEngine {
             coco_types::CompactTrigger::TimeBased => "time_based",
             coco_types::CompactTrigger::SessionMemory => "session_memory",
             coco_types::CompactTrigger::ContextCollapse => "context_collapse",
+        };
+        info!(trigger = trigger_label, "try_full_compact entered");
+        // TS hook schema's `trigger` is `enum('manual','auto')` — only
+        // those two values are valid on the wire. Coco-rs-only triggers
+        // (Reactive / TimeBased / SessionMemory / ContextCollapse) all
+        // map to `Auto` for the hook payload (they are autonomous
+        // compaction events from the agent's perspective).
+        let hook_trigger = match trigger {
+            coco_types::CompactTrigger::Manual => coco_hooks::orchestration::CompactTrigger::Manual,
+            _ => coco_hooks::orchestration::CompactTrigger::Auto,
         };
 
         // 1. SM-first short-circuit. Auto always tries SM (autoCompact.ts:288);
@@ -356,7 +374,7 @@ impl QueryEngine {
             match coco_hooks::orchestration::execute_pre_compact(
                 registry,
                 &ctx,
-                trigger_label,
+                hook_trigger,
                 custom_instructions.as_deref(),
             )
             .await
@@ -696,7 +714,7 @@ impl QueryEngine {
                     match coco_hooks::orchestration::execute_post_compact(
                         registry,
                         &ctx,
-                        trigger_label,
+                        hook_trigger,
                         &summary_text,
                     )
                     .await
@@ -716,11 +734,11 @@ impl QueryEngine {
 
                 // TS `compact.ts:592` calls `processSessionStartHooks('compact')`
                 // after the LLM-summarized path so user-defined SessionStart
-                // hooks (settings.json) fire after compact. Hooks emit
-                // `additional_contexts` strings; we render each non-empty
-                // entry as a synthetic user message and fold into
-                // `result.hook_results` so `build_post_compact_messages`
-                // includes them in the new history.
+                // hooks (settings.json) fire after compact. Output flows
+                // into the sync hook buffer and surfaces as `hook_*`
+                // reminders on the next turn — same as TS, where
+                // `processSessionStartHooks` returns attachment messages
+                // that the next conversation iteration appends.
                 if let Some(registry) = self.hooks.as_ref() {
                     let ctx = self.orchestration_ctx();
                     let model_id = self.config.model_id.as_str();
@@ -729,21 +747,16 @@ impl QueryEngine {
                     } else {
                         Some(model_id)
                     };
-                    match coco_hooks::orchestration::execute_session_start(
-                        registry, &ctx, "compact", /*agent_type*/ None, model_arg,
+                    if let Err(e) = coco_hooks::orchestration::execute_session_start(
+                        registry,
+                        &ctx,
+                        coco_hooks::orchestration::SessionStartSource::Compact,
+                        /*agent_type*/ None,
+                        model_arg,
                     )
                     .await
                     {
-                        Ok(agg) => {
-                            for ctx_text in agg.additional_contexts {
-                                if !ctx_text.trim().is_empty() {
-                                    result
-                                        .hook_results
-                                        .push(coco_messages::create_user_message(&ctx_text));
-                                }
-                            }
-                        }
-                        Err(e) => warn!("SessionStart hook execution failed (compact): {e}"),
+                        warn!("SessionStart hook execution failed (compact): {e}");
                     }
                 }
 
@@ -805,6 +818,10 @@ impl QueryEngine {
                     }),
                 )
                 .await;
+                // Surface task_status reminders on the next turn (TS
+                // post-compact emission gate at `attachments.ts:962`).
+                self.pending_just_compacted
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
             }
             Err(e) => {
                 warn!("full compaction failed: {e}");

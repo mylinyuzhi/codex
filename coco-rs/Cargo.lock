@@ -906,7 +906,6 @@ dependencies = [
 name = "coco-bridge"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "async-trait",
  "base64 0.22.1",
  "coco-types",
@@ -936,6 +935,8 @@ dependencies = [
  "coco-config-reload",
  "coco-context",
  "coco-coordinator",
+ "coco-error",
+ "coco-file-watch",
  "coco-git",
  "coco-hooks",
  "coco-inference",
@@ -980,6 +981,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "coco-config",
+ "coco-error",
  "coco-plugins",
  "coco-skills",
  "coco-subagent",
@@ -988,17 +990,19 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror 2.0.18",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
 name = "coco-compact"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "async-trait",
  "coco-config",
  "coco-context",
+ "coco-error",
  "coco-inference",
  "coco-messages",
  "coco-test-harness",
@@ -1006,8 +1010,8 @@ dependencies = [
  "pretty_assertions",
  "serde",
  "serde_json",
+ "snafu",
  "tempfile",
- "thiserror 2.0.18",
  "tokio",
  "tracing",
  "uuid",
@@ -1018,6 +1022,7 @@ name = "coco-config"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "coco-error",
  "coco-types",
  "coco-utils-common",
  "dirs 6.0.0",
@@ -1035,8 +1040,8 @@ dependencies = [
 name = "coco-config-reload"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "coco-config",
+ "coco-error",
  "coco-file-watch",
  "pretty_assertions",
  "tempfile",
@@ -1051,6 +1056,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "coco-config",
+ "coco-error",
  "coco-frontmatter",
  "coco-messages",
  "coco-otel",
@@ -1064,6 +1070,7 @@ dependencies = [
  "sha2",
  "similar",
  "tempfile",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
 ]
@@ -1147,7 +1154,6 @@ dependencies = [
 name = "coco-file-search"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "clap",
  "coco-file-ignore",
  "crossbeam-channel",
@@ -1157,6 +1163,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror 2.0.18",
  "tokio",
 ]
 
@@ -1202,7 +1209,9 @@ dependencies = [
  "anyhow",
  "async-trait",
  "coco-config",
+ "coco-error",
  "coco-messages",
+ "coco-shell-discovery",
  "coco-system-reminder",
  "coco-types",
  "globset",
@@ -1210,18 +1219,20 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "thiserror 2.0.18",
  "tokio",
  "tokio-util",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
 name = "coco-inference"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "async-trait",
  "coco-config",
+ "coco-error",
  "coco-otel",
  "coco-types",
  "futures",
@@ -1230,6 +1241,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "snafu",
  "tempfile",
  "tokio",
  "tracing",
@@ -1265,6 +1277,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "coco-error",
  "coco-file-watch",
  "coco-utils-common",
  "crossterm",
@@ -1290,9 +1303,9 @@ dependencies = [
 name = "coco-mcp"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "async-trait",
  "coco-config",
+ "coco-error",
  "coco-file-watch",
  "coco-mcp-types",
  "coco-rmcp-client",
@@ -1324,6 +1337,7 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "coco-config",
+ "coco-error",
  "coco-file-watch",
  "coco-frontmatter",
  "coco-git",
@@ -1349,7 +1363,6 @@ dependencies = [
 name = "coco-messages"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "coco-inference",
  "coco-types",
  "pretty_assertions",
@@ -1364,7 +1377,9 @@ name = "coco-otel"
 version = "0.0.0"
 dependencies = [
  "chrono",
+ "coco-error",
  "coco-utils-absolute-path",
+ "coco-utils-common",
  "eventsource-stream",
  "http",
  "opentelemetry",
@@ -1380,6 +1395,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "tracing-appender",
  "tracing-opentelemetry",
  "tracing-subscriber",
 ]
@@ -1388,8 +1404,8 @@ dependencies = [
 name = "coco-permissions"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "coco-config",
+ "coco-error",
  "coco-messages",
  "coco-types",
  "pretty_assertions",
@@ -1405,8 +1421,8 @@ dependencies = [
 name = "coco-plugins"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "chrono",
+ "coco-error",
  "coco-hooks",
  "coco-skills",
  "coco-types",
@@ -1443,6 +1459,7 @@ dependencies = [
  "coco-compact",
  "coco-config",
  "coco-context",
+ "coco-error",
  "coco-hooks",
  "coco-inference",
  "coco-lsp",
@@ -1451,6 +1468,7 @@ dependencies = [
  "coco-messages",
  "coco-otel",
  "coco-permissions",
+ "coco-sandbox",
  "coco-session",
  "coco-session-memory",
  "coco-skills",
@@ -1542,6 +1560,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "axum",
+ "coco-error",
  "coco-keyring-store",
  "coco-mcp-types",
  "coco-utils-cargo-bin",
@@ -1574,8 +1593,11 @@ dependencies = [
  "anyhow",
  "async-trait",
  "base64 0.22.1",
+ "coco-config",
  "coco-error",
+ "coco-types",
  "coco-utils-string",
+ "globset",
  "libc",
  "pretty_assertions",
  "rand 0.9.4",
@@ -1587,6 +1609,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "walkdir",
 ]
 
 [[package]]
@@ -1601,8 +1624,8 @@ dependencies = [
 name = "coco-session"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "coco-config",
+ "coco-error",
  "coco-messages",
  "coco-types",
  "fs2",
@@ -1610,6 +1633,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+ "thiserror 2.0.18",
  "uuid",
 ]
 
@@ -1621,6 +1645,7 @@ dependencies = [
  "async-trait",
  "coco-compact",
  "coco-config",
+ "coco-error",
  "coco-inference",
  "coco-messages",
  "coco-types",
@@ -1640,6 +1665,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "coco-config",
+ "coco-sandbox",
  "coco-types",
  "dirs 6.0.0",
  "pretty_assertions",
@@ -1648,6 +1674,16 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-util",
+ "tracing",
+ "which",
+]
+
+[[package]]
+name = "coco-shell-discovery"
+version = "0.0.0"
+dependencies = [
+ "tempfile",
+ "tokio",
  "tracing",
  "which",
 ]
@@ -1673,8 +1709,8 @@ dependencies = [
 name = "coco-skills"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "async-trait",
+ "coco-error",
  "coco-file-watch",
  "coco-system-reminder",
  "coco-types",
@@ -1685,6 +1721,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
  "walkdir",
@@ -1703,7 +1740,6 @@ dependencies = [
 name = "coco-state"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "async-trait",
  "chrono",
  "coco-config",
@@ -1730,6 +1766,7 @@ dependencies = [
  "coco-utils-cargo-bin",
  "pretty_assertions",
  "tempfile",
+ "thiserror 2.0.18",
  "uds_windows",
 ]
 
@@ -1738,6 +1775,7 @@ name = "coco-subagent"
 version = "0.0.0"
 dependencies = [
  "coco-config",
+ "coco-error",
  "coco-frontmatter",
  "coco-types",
  "pretty_assertions",
@@ -1752,12 +1790,12 @@ dependencies = [
 name = "coco-symbol-search"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "coco-file-ignore",
  "coco-utils-common",
  "notify 8.2.0",
  "pretty_assertions",
  "tempfile",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
  "tree-sitter",
@@ -1798,6 +1836,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "coco-config",
+ "coco-error",
  "coco-system-reminder",
  "coco-tool-runtime",
  "coco-types",
@@ -1805,6 +1844,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
 ]
@@ -1839,6 +1879,7 @@ dependencies = [
  "coco-permissions",
  "coco-query",
  "coco-session",
+ "coco-skills",
  "coco-tool-runtime",
  "coco-tools",
  "coco-tui",
@@ -1864,8 +1905,11 @@ dependencies = [
  "async-trait",
  "coco-config",
  "coco-context",
+ "coco-error",
  "coco-messages",
+ "coco-sandbox",
  "coco-subagent",
+ "coco-system-reminder",
  "coco-types",
  "futures",
  "jsonschema",
@@ -1876,6 +1920,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
+ "tracing",
 ]
 
 [[package]]
@@ -1889,12 +1934,14 @@ dependencies = [
  "coco-apply-patch",
  "coco-config",
  "coco-context",
+ "coco-error",
  "coco-exec-server",
  "coco-file-encoding",
  "coco-file-ignore",
  "coco-memory",
  "coco-messages",
  "coco-permissions",
+ "coco-sandbox",
  "coco-secret-redact",
  "coco-shell",
  "coco-skills",
@@ -2042,6 +2089,7 @@ dependencies = [
  "portable-pty",
  "pretty_assertions",
  "shared_library",
+ "thiserror 2.0.18",
  "tokio",
  "winapi",
 ]
@@ -7870,6 +7918,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tracing-serde"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "704b1aeb7be0d0a84fc9828cae51dab5970fee5088f83d1dd7ee6f6246fc6ff1"
+dependencies = [
+ "serde",
+ "tracing-core",
+]
+
+[[package]]
 name = "tracing-subscriber"
 version = "0.3.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7879,12 +7937,15 @@ dependencies = [
  "nu-ansi-term",
  "once_cell",
  "regex-automata",
+ "serde",
+ "serde_json",
  "sharded-slab",
  "smallvec",
  "thread_local",
  "tracing",
  "tracing-core",
  "tracing-log",
+ "tracing-serde",
 ]
 
 [[package]]

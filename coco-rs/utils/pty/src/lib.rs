@@ -1,3 +1,4 @@
+mod error;
 pub mod pipe;
 mod process;
 pub mod process_group;
@@ -6,6 +7,9 @@ pub mod pty;
 mod tests;
 #[cfg(windows)]
 mod win;
+
+pub use error::PtyError;
+pub use error::PtyResult;
 
 pub const DEFAULT_OUTPUT_BYTES_CAP: usize = 1024 * 1024;
 

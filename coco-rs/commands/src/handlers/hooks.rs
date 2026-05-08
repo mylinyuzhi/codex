@@ -1,10 +1,19 @@
-//! `/hooks` — show configured hook event handlers.
+//! `/hooks` — show or reload configured hook event handlers.
 //!
-//! Reads hook configuration from `.claude/settings.json` and
-//! `~/.cocode/settings.json`, then displays all hooks grouped by event type.
+//! `/hooks` (no args) reads hook configuration from `.claude/settings.json`
+//! and `~/.cocode/settings.json` and displays all hooks grouped by event type.
+//!
+//! `/hooks reload` emits a sentinel that runners parse and dispatch to
+//! [`SessionRuntime::reload_hooks`], which rebuilds the live registry from
+//! the latest `RuntimeConfig` snapshot.
+//!
+//! TS parity: TS `/hooks` triggers `updateHooksConfigSnapshot()` whenever
+//! the dialog mutates settings — same effect, different UI surface.
 
 use std::path::Path;
 use std::pin::Pin;
+
+use crate::implementations::RELOAD_HOOKS_SENTINEL;
 
 /// A discovered hook entry from a settings file.
 struct HookEntry {
@@ -21,18 +30,34 @@ const EVENT_DESCRIPTIONS: &[(&str, &str)] = &[
     ("Stop", "Runs when the agent turn ends"),
 ];
 
-/// Async handler for `/hooks`.
+/// Async handler for `/hooks [reload]`.
+///
+/// - no args / `list` → list configured hooks (read-only file scan)
+/// - `reload` → emit `RELOAD_HOOKS_SENTINEL` so the runner reloads the
+///   live `HookRegistry` from current settings; pre/post turn consistency
+///   is guaranteed because slash commands only run at `QueryGuard::Idle`.
 pub fn handler(
     args: String,
-) -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>> {
+) -> Pin<Box<dyn std::future::Future<Output = crate::Result<String>> + Send>> {
     Box::pin(async move {
-        let _ = args; // no subcommands for now
-        list_hooks().await
+        match args.trim() {
+            "reload" => Ok(format!(
+                "{RELOAD_HOOKS_SENTINEL}\nReloading hook registry from current settings…"
+            )),
+            "" | "list" => list_hooks().await,
+            other => Ok(format!(
+                "Unknown hooks subcommand: {other}\n\n\
+                 Usage:\n\
+                 /hooks          List hooks from settings.json files (read-only)\n\
+                 /hooks list     Same as /hooks\n\
+                 /hooks reload   Reload the live registry from current settings"
+            )),
+        }
     })
 }
 
 /// Gather and display hooks from all settings sources.
-async fn list_hooks() -> anyhow::Result<String> {
+async fn list_hooks() -> crate::Result<String> {
     let mut hooks = Vec::new();
 
     load_hooks_from_file(

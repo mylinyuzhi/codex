@@ -21,7 +21,7 @@ struct PluginEntry {
 /// Async handler for `/plugin [list|install|uninstall|info]`.
 pub fn handler(
     args: String,
-) -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>> {
+) -> Pin<Box<dyn std::future::Future<Output = crate::Result<String>> + Send>> {
     Box::pin(async move {
         let subcommand = args.trim().to_string();
 
@@ -55,7 +55,7 @@ pub fn handler(
 }
 
 /// List all installed plugins from project and user directories.
-async fn list_plugins() -> anyhow::Result<String> {
+async fn list_plugins() -> crate::Result<String> {
     let mut plugins = Vec::new();
 
     // Scan project plugins
@@ -223,7 +223,7 @@ fn extract_toml_string_value(rest: &str) -> Option<String> {
 /// TS: `services/plugins/PluginInstallationManager.ts`. Live-registry
 /// refresh is deferred to next session — Rust doesn't yet expose a
 /// thread-safe handle to the engine's PluginManager.
-async fn install_plugin(target: &str) -> anyhow::Result<String> {
+async fn install_plugin(target: &str) -> crate::Result<String> {
     if target.is_empty() {
         return Ok("Usage: /plugin install <name>[@<marketplace>]".to_string());
     }
@@ -241,10 +241,10 @@ async fn install_plugin(target: &str) -> anyhow::Result<String> {
         install_plugin_blocking(&plugin_name, mkt_filter.as_deref())
     })
     .await
-    .map_err(|e| anyhow::anyhow!("install join error: {e}"))?
+    .map_err(|e| crate::CommandsError::generic(format!("install join error: {e}")))?
 }
 
-fn install_plugin_blocking(plugin_name: &str, mkt_filter: Option<&str>) -> anyhow::Result<String> {
+fn install_plugin_blocking(plugin_name: &str, mkt_filter: Option<&str>) -> crate::Result<String> {
     let plugins_dir = resolve_plugins_dir();
     let mut manager = coco_plugins::marketplace::MarketplaceManager::new(plugins_dir.clone());
 
@@ -331,7 +331,7 @@ fn install_plugin_blocking(plugin_name: &str, mkt_filter: Option<&str>) -> anyho
 /// Accepts a bare name (looks across project + user dirs) or
 /// `name@marketplace` (the canonical plugin ID — matches what `install`
 /// records in installed_plugins.json).
-async fn uninstall_plugin(target: &str) -> anyhow::Result<String> {
+async fn uninstall_plugin(target: &str) -> crate::Result<String> {
     if target.is_empty() {
         return Ok("Usage: /plugin uninstall <name>".to_string());
     }
@@ -365,7 +365,7 @@ async fn uninstall_plugin(target: &str) -> anyhow::Result<String> {
             .map(|m| format!("{name}@{m}"))
             .unwrap_or_else(|| name.clone());
         let name_owned = name.clone();
-        let _ = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        let _ = tokio::task::spawn_blocking(move || -> crate::Result<()> {
             let mut mgr = coco_plugins::loader::InstalledPluginsManager::load(installed_path)?;
             // Try both `name` and `name@anything` — when no marketplace
             // was given, scan for any matching prefix.
@@ -401,7 +401,7 @@ async fn uninstall_plugin(target: &str) -> anyhow::Result<String> {
 }
 
 /// Show detailed information about a specific plugin.
-async fn plugin_info(name: &str) -> anyhow::Result<String> {
+async fn plugin_info(name: &str) -> crate::Result<String> {
     let project_dir = PathBuf::from(".claude/plugins").join(name);
     let user_dir = dirs::home_dir().map(|h| h.join(".cocode").join("plugins").join(name));
 
@@ -473,7 +473,7 @@ fn plugin_usage() -> String {
 }
 
 /// Search for plugins across marketplaces.
-async fn search_plugins(query: &str) -> anyhow::Result<String> {
+async fn search_plugins(query: &str) -> crate::Result<String> {
     if query.is_empty() {
         return Ok("Usage: /plugin search <query>".to_string());
     }
@@ -517,7 +517,7 @@ async fn search_plugins(query: &str) -> anyhow::Result<String> {
 /// Enable a plugin: remove its name from the persistent disabled-plugins
 /// file. Live registry refresh deferred to next session — Rust doesn't yet
 /// expose a thread-safe handle to PluginManager.
-async fn enable_plugin(name: &str) -> anyhow::Result<String> {
+async fn enable_plugin(name: &str) -> crate::Result<String> {
     if name.is_empty() {
         return Ok("Usage: /plugin enable <name>".to_string());
     }
@@ -538,7 +538,7 @@ async fn enable_plugin(name: &str) -> anyhow::Result<String> {
 
 /// Disable a plugin: append its name to the persistent disabled-plugins
 /// file. Same deferral semantics as enable.
-async fn disable_plugin(name: &str) -> anyhow::Result<String> {
+async fn disable_plugin(name: &str) -> crate::Result<String> {
     if name.is_empty() {
         return Ok("Usage: /plugin disable <name>".to_string());
     }
@@ -582,7 +582,7 @@ async fn read_disabled_plugins() -> Vec<String> {
     serde_json::from_str(&content).unwrap_or_default()
 }
 
-async fn write_disabled_plugins(names: &[String]) -> anyhow::Result<()> {
+async fn write_disabled_plugins(names: &[String]) -> crate::Result<()> {
     let path = disabled_plugins_path();
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent).await?;
@@ -593,7 +593,7 @@ async fn write_disabled_plugins(names: &[String]) -> anyhow::Result<()> {
 }
 
 /// Marketplace subcommand dispatcher.
-async fn marketplace_subcommand(args: &str) -> anyhow::Result<String> {
+async fn marketplace_subcommand(args: &str) -> crate::Result<String> {
     match args {
         "" | "list" => marketplace_list().await,
         "add" => Ok("Usage: /plugin marketplace add <source>\n\n\
@@ -616,7 +616,7 @@ async fn marketplace_subcommand(args: &str) -> anyhow::Result<String> {
 }
 
 /// Show marketplace help.
-async fn marketplace_help() -> anyhow::Result<String> {
+async fn marketplace_help() -> crate::Result<String> {
     Ok("Marketplace Management\n\n\
         Usage:\n\
         /plugin marketplace list              List configured marketplaces\n\
@@ -626,7 +626,7 @@ async fn marketplace_help() -> anyhow::Result<String> {
 }
 
 /// List configured marketplaces.
-async fn marketplace_list() -> anyhow::Result<String> {
+async fn marketplace_list() -> crate::Result<String> {
     let plugins_dir = resolve_plugins_dir();
     let manager = coco_plugins::marketplace::MarketplaceManager::new(plugins_dir);
     let known = manager.load_known_marketplaces();
@@ -653,7 +653,7 @@ async fn marketplace_list() -> anyhow::Result<String> {
 }
 
 /// Add a marketplace source.
-async fn marketplace_add(source: &str) -> anyhow::Result<String> {
+async fn marketplace_add(source: &str) -> crate::Result<String> {
     if source.is_empty() {
         return Ok("Usage: /plugin marketplace add <source>".to_string());
     }
@@ -716,7 +716,7 @@ async fn marketplace_add(source: &str) -> anyhow::Result<String> {
 }
 
 /// Remove a marketplace.
-async fn marketplace_remove(name: &str) -> anyhow::Result<String> {
+async fn marketplace_remove(name: &str) -> crate::Result<String> {
     if name.is_empty() {
         return Ok("Usage: /plugin marketplace remove <name>".to_string());
     }

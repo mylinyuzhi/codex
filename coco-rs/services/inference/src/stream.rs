@@ -4,6 +4,8 @@ use coco_types::TokenUsage;
 use std::pin::Pin;
 use std::time::Duration;
 use tokio::sync::mpsc;
+use tracing::debug;
+use tracing::trace;
 use tracing::warn;
 use vercel_ai::StreamProcessor;
 use vercel_ai_provider::AISdkError;
@@ -86,6 +88,7 @@ pub async fn process_stream_with_config(
 ) {
     let mut processor = StreamProcessor::from_stream_with_config(stream, config);
     let mut reported_stall_count = 0;
+    let mut emitted_events: i64 = 0;
 
     while let Some(result) = processor.next().await {
         let (event, metrics) = match result {
@@ -117,6 +120,57 @@ pub async fn process_stream_with_config(
         let Some(event) = event else {
             continue;
         };
+
+        // Per-chunk trace — opt-in via `coco_inference::stream=trace`. Names
+        // map directly to StreamEvent variants so a tail can grep for
+        // `event=text_delta`, `event=tool_call_delta`, etc.
+        match &event {
+            StreamEvent::TextDelta { text } => {
+                trace!(event = "text_delta", chars = text.len(), "stream event")
+            }
+            StreamEvent::ReasoningDelta { text } => trace!(
+                event = "reasoning_delta",
+                chars = text.len(),
+                "stream event"
+            ),
+            StreamEvent::ReasoningEnd { .. } => trace!(event = "reasoning_end", "stream event"),
+            StreamEvent::ToolCallStart { id, tool_name } => {
+                debug!(
+                    event = "tool_call_start",
+                    id = %id,
+                    tool_name = %tool_name,
+                    "stream event"
+                )
+            }
+            StreamEvent::ToolCallDelta { id, delta } => trace!(
+                event = "tool_call_delta",
+                id = %id,
+                chars = delta.len(),
+                "stream event"
+            ),
+            StreamEvent::ToolCallEnd { id } => debug!(
+                event = "tool_call_end",
+                id = %id,
+                "stream event"
+            ),
+            StreamEvent::Finish {
+                stop_reason, usage, ..
+            } => debug!(
+                event = "finish",
+                stop_reason = %stop_reason,
+                tokens_in = usage.input_tokens,
+                tokens_out = usage.output_tokens,
+                emitted = emitted_events,
+                "stream event"
+            ),
+            StreamEvent::Error { message, .. } => warn!(
+                event = "error",
+                message = %message,
+                emitted = emitted_events,
+                "stream event"
+            ),
+        }
+        emitted_events += 1;
 
         if tx.send(event).await.is_err() {
             break; // Receiver dropped

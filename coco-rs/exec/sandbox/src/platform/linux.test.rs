@@ -190,6 +190,74 @@ fn test_build_bwrap_args_skips_nonexistent_roots() {
 }
 
 #[test]
+fn test_build_bwrap_args_allow_read_skips_overlapping_deny() {
+    // bwrap can't precision-deny within a directory bind, so when an
+    // `allow_read` path covers a `deny_read` subtree we skip the deny
+    // entirely (the broader allow wins). This trades narrow allow for
+    // looser exposure — documented as a Linux-only limitation. macOS
+    // Seatbelt handles this with rule order; bwrap can't.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let denied = root.join("secrets");
+    std::fs::create_dir_all(&denied).expect("create secrets");
+    let allowed = denied.join("public");
+    std::fs::create_dir_all(&allowed).expect("create secrets/public");
+
+    let config = SandboxConfig {
+        enforcement: EnforcementLevel::WorkspaceWrite,
+        writable_roots: vec![WritableRoot::unprotected(root)],
+        denied_paths: vec![],
+        denied_read_paths: vec![denied.clone()],
+        allowed_read_paths: vec![allowed],
+        allow_network: false,
+        ..Default::default()
+    };
+
+    let args = build_bwrap_args(&config);
+
+    // The deny-mount over the secrets directory must NOT be emitted
+    // (allow_read carved out a descendant).
+    let deny_str = denied.display().to_string();
+    let has_deny_mount = args
+        .windows(3)
+        .any(|w| w[0] == "--ro-bind-try" && w[1] == "/dev/null" && w[2] == deny_str);
+    assert!(
+        !has_deny_mount,
+        "bwrap should skip the deny mount when allow_read covers a descendant; \
+         got args: {args:?}"
+    );
+}
+
+#[test]
+fn test_build_bwrap_args_deny_mount_emitted_without_overlapping_allow() {
+    // Sanity check the inverse: with no allow_read carve-out, the deny
+    // mount IS emitted. Guards against the skip logic over-firing.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let denied = root.join("secrets");
+    std::fs::create_dir_all(&denied).expect("create secrets");
+
+    let config = SandboxConfig {
+        enforcement: EnforcementLevel::WorkspaceWrite,
+        writable_roots: vec![WritableRoot::unprotected(root)],
+        denied_read_paths: vec![denied.clone()],
+        allowed_read_paths: vec![],
+        ..Default::default()
+    };
+
+    let args = build_bwrap_args(&config);
+    let deny_str = denied.display().to_string();
+    let has_deny_mount = args
+        .windows(3)
+        .any(|w| w[0] == "--ro-bind-try" && w[1] == "/dev/null" && w[2] == deny_str);
+    assert!(
+        has_deny_mount,
+        "bwrap should emit deny mount when no allow_read overlaps; \
+         got args: {args:?}"
+    );
+}
+
+#[test]
 fn test_build_bwrap_args_no_chdir_without_roots() {
     let config = SandboxConfig {
         enforcement: EnforcementLevel::ReadOnly,

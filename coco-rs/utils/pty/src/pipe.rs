@@ -7,7 +7,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 
-use anyhow::Result;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
@@ -20,6 +19,8 @@ use tokio::task::JoinHandle;
 use crate::process::ChildTerminator;
 use crate::process::ProcessHandle;
 use crate::process::SpawnedProcess;
+use crate::PtyError;
+use crate::PtyResult;
 
 #[cfg(target_os = "linux")]
 use libc;
@@ -103,9 +104,9 @@ async fn spawn_process_with_stdin_mode(
     arg0: &Option<String>,
     stdin_mode: PipeStdinMode,
     inherited_fds: &[i32],
-) -> Result<SpawnedProcess> {
+) -> PtyResult<SpawnedProcess> {
     if program.is_empty() {
-        anyhow::bail!("missing program for pipe spawn");
+        return Err(PtyError::MissingProgram);
     }
 
     #[cfg(not(unix))]
@@ -256,7 +257,7 @@ pub async fn spawn_process(
     cwd: &Path,
     env: &HashMap<String, String>,
     arg0: &Option<String>,
-) -> Result<SpawnedProcess> {
+) -> PtyResult<SpawnedProcess> {
     spawn_process_with_stdin_mode(program, args, cwd, env, arg0, PipeStdinMode::Piped, &[]).await
 }
 
@@ -267,7 +268,7 @@ pub async fn spawn_process_no_stdin(
     cwd: &Path,
     env: &HashMap<String, String>,
     arg0: &Option<String>,
-) -> Result<SpawnedProcess> {
+) -> PtyResult<SpawnedProcess> {
     spawn_process_no_stdin_with_inherited_fds(program, args, cwd, env, arg0, &[]).await
 }
 
@@ -280,7 +281,7 @@ pub async fn spawn_process_no_stdin_with_inherited_fds(
     env: &HashMap<String, String>,
     arg0: &Option<String>,
     inherited_fds: &[i32],
-) -> Result<SpawnedProcess> {
+) -> PtyResult<SpawnedProcess> {
     spawn_process_with_stdin_mode(
         program,
         args,

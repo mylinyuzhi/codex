@@ -48,10 +48,14 @@ fi
 [ -f "/usr/local/cargo/env" ] && . "/usr/local/cargo/env"
 [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
 
-# Per coco-rs CLAUDE.md "virtiofs (macOS Podman) caps open FDs at ~700"
-# — keep target dir on the container-local overlay so concurrent
-# worktrees don't collide.
-export CARGO_TARGET_DIR="/tmp/cargo-target-$(echo "$PWD" | md5sum | cut -c1-12)"
+# `CARGO_TARGET_DIR` is intentionally NOT set: cargo defaults to the
+# workspace-relative `target/`, so each git worktree already has its own
+# isolated build directory. The previous `/tmp/cargo-target-<md5>` shim
+# was a macOS-Podman virtiofs FD-limit workaround that broke when one
+# worktree adopted a different ad-hoc path (`/tmp/coco-test-target`),
+# causing build-lock contention across worktrees that should have been
+# independent. If virtiofs FD limits become an issue again, set the env
+# var per-shell, not in tracked scripts.
 
 echo "pre-commit: running clippy gate on coco-rs..." >&2
 

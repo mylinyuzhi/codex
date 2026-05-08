@@ -54,7 +54,7 @@ const KNOWN_MODELS: &[KnownModel] = &[
 /// With a model name or alias, validates and switches.
 pub fn handler(
     args: String,
-) -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>> {
+) -> Pin<Box<dyn std::future::Future<Output = crate::Result<String>> + Send>> {
     Box::pin(async move {
         let requested = args.trim().to_string();
 
@@ -65,26 +65,58 @@ pub fn handler(
         // Try to resolve the model
         match resolve_model(&requested) {
             Some(model) => {
-                let mut out = format!("Model switched to: {}\n\n", model.full_id);
+                let mut out = format!("Model set to: {}\n\n", model.full_id);
                 out.push_str(&format!("  {}\n", model.description));
                 out.push_str(&format!(
                     "  Pricing: ${:.2}/M input, ${:.2}/M output\n",
                     model.input_price, model.output_price,
                 ));
                 out.push_str(&format!(
-                    "  Context: {}K tokens",
+                    "  Context: {}K tokens\n",
                     model.context_window / 1000,
                 ));
+                // Persist to user settings so the next session picks it
+                // up. Matches TS `commands/model/model.tsx` which writes
+                // through `setGlobalConfig({ primaryModel })`.
+                match coco_config::global_config::write_user_setting(
+                    "model",
+                    serde_json::Value::String(model.full_id.to_string()),
+                ) {
+                    Ok(path) => {
+                        out.push_str(&format!(
+                            "\nSaved to {} (effective on next session).",
+                            path.display()
+                        ));
+                    }
+                    Err(e) => {
+                        out.push_str(&format!("\nWarning: failed to persist selection: {e}"));
+                    }
+                }
                 Ok(out)
             }
             None => {
                 // Check if it looks like a provider:model pattern
                 if requested.contains('/') || requested.contains(':') {
-                    Ok(format!(
+                    let mut out = format!(
                         "Setting custom model: {requested}\n\n\
                          Note: this model is not in the built-in registry.\n\
-                         Ensure your provider supports this model ID."
-                    ))
+                         Ensure your provider supports this model ID.\n"
+                    );
+                    match coco_config::global_config::write_user_setting(
+                        "model",
+                        serde_json::Value::String(requested.clone()),
+                    ) {
+                        Ok(path) => {
+                            out.push_str(&format!(
+                                "\nSaved to {} (effective on next session).",
+                                path.display()
+                            ));
+                        }
+                        Err(e) => {
+                            out.push_str(&format!("\nWarning: failed to persist selection: {e}"));
+                        }
+                    }
+                    Ok(out)
                 } else {
                     let mut out = format!("Unknown model: {requested}\n\n");
                     out.push_str("Did you mean one of these?\n\n");

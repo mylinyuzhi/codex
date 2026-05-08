@@ -7,7 +7,7 @@ use super::*;
 
 #[test]
 fn test_hook_registry_register_and_find() {
-    let mut registry = HookRegistry::new();
+    let registry = HookRegistry::new();
     registry.register(HookDefinition {
         event: HookEventType::PreToolUse,
         matcher: Some("Bash".into()),
@@ -22,7 +22,6 @@ fn test_hook_registry_register_and_find() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     });
     registry.register(HookDefinition {
@@ -39,7 +38,6 @@ fn test_hook_registry_register_and_find() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     });
 
@@ -60,7 +58,7 @@ fn test_hook_registry_register_and_find() {
 
 #[test]
 fn test_hook_wildcard_matcher() {
-    let mut registry = HookRegistry::new();
+    let registry = HookRegistry::new();
     registry.register(HookDefinition {
         event: HookEventType::PreToolUse,
         matcher: Some("*".into()),
@@ -75,7 +73,6 @@ fn test_hook_wildcard_matcher() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     });
 
@@ -85,19 +82,31 @@ fn test_hook_wildcard_matcher() {
 
 #[test]
 fn test_hooks_settings_deserialization() {
-    let json = r#"{"hooks": {"pre_tool_use": [{"event": "pre_tool_use", "matcher": "Bash", "handler": {"type": "command", "command": "echo hi"}}]}}"#;
-    let settings: HooksSettings = serde_json::from_str(json).unwrap();
-    assert!(settings.hooks.contains_key("pre_tool_use"));
+    let event_key = HookEventType::PreToolUse.as_str();
+    let json_value = serde_json::json!({
+        "hooks": {
+            event_key: [{
+                "event": event_key,
+                "matcher": "Bash",
+                "handler": {"type": "command", "command": "echo hi"},
+            }]
+        }
+    });
+    let json = serde_json::to_string(&json_value).unwrap();
+    let settings: HooksSettings = serde_json::from_str(&json).unwrap();
+    assert!(settings.hooks.contains_key(event_key));
 }
 
 #[test]
 fn test_find_matching_returns_sorted_by_scope_then_priority() {
-    let mut registry = HookRegistry::new();
+    let registry = HookRegistry::new();
     registry.register(HookDefinition {
         event: HookEventType::PreToolUse,
         matcher: None,
         handler: HookHandler::Prompt {
             prompt: "low priority user".into(),
+            model: None,
+            timeout_ms: None,
         },
         priority: 10,
         scope: HookScope::User,
@@ -105,7 +114,6 @@ fn test_find_matching_returns_sorted_by_scope_then_priority() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     });
     registry.register(HookDefinition {
@@ -113,6 +121,8 @@ fn test_find_matching_returns_sorted_by_scope_then_priority() {
         matcher: None,
         handler: HookHandler::Prompt {
             prompt: "high priority user".into(),
+            model: None,
+            timeout_ms: None,
         },
         priority: -5,
         scope: HookScope::User,
@@ -120,7 +130,6 @@ fn test_find_matching_returns_sorted_by_scope_then_priority() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     });
     registry.register(HookDefinition {
@@ -128,6 +137,8 @@ fn test_find_matching_returns_sorted_by_scope_then_priority() {
         matcher: None,
         handler: HookHandler::Prompt {
             prompt: "session scope".into(),
+            model: None,
+            timeout_ms: None,
         },
         priority: 100,
         scope: HookScope::Session,
@@ -135,7 +146,6 @@ fn test_find_matching_returns_sorted_by_scope_then_priority() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     });
 
@@ -150,12 +160,14 @@ fn test_find_matching_returns_sorted_by_scope_then_priority() {
 
 #[test]
 fn test_glob_matcher() {
-    let mut registry = HookRegistry::new();
+    let registry = HookRegistry::new();
     registry.register(HookDefinition {
         event: HookEventType::PreToolUse,
         matcher: Some("Read*".into()),
         handler: HookHandler::Prompt {
             prompt: "matched".into(),
+            model: None,
+            timeout_ms: None,
         },
         priority: 0,
         scope: HookScope::default(),
@@ -163,7 +175,6 @@ fn test_glob_matcher() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     });
 
@@ -178,12 +189,14 @@ fn test_glob_matcher() {
 
 #[test]
 fn test_pipe_separated_matcher() {
-    let mut registry = HookRegistry::new();
+    let registry = HookRegistry::new();
     registry.register(HookDefinition {
         event: HookEventType::PreToolUse,
         matcher: Some("Write|Edit|Bash".into()),
         handler: HookHandler::Prompt {
             prompt: "matched".into(),
+            model: None,
+            timeout_ms: None,
         },
         priority: 0,
         scope: HookScope::default(),
@@ -191,7 +204,6 @@ fn test_pipe_separated_matcher() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     });
 
@@ -223,12 +235,14 @@ fn test_pipe_separated_matcher() {
 
 #[test]
 fn test_regex_matcher() {
-    let mut registry = HookRegistry::new();
+    let registry = HookRegistry::new();
     registry.register(HookDefinition {
         event: HookEventType::PreToolUse,
         matcher: Some("^(Write|Edit)$".into()),
         handler: HookHandler::Prompt {
             prompt: "matched".into(),
+            model: None,
+            timeout_ms: None,
         },
         priority: 0,
         scope: HookScope::default(),
@@ -236,7 +250,6 @@ fn test_regex_matcher() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     });
 
@@ -262,12 +275,14 @@ fn test_regex_matcher() {
 
 #[test]
 fn test_regex_prefix_matcher() {
-    let mut registry = HookRegistry::new();
+    let registry = HookRegistry::new();
     registry.register(HookDefinition {
         event: HookEventType::PreToolUse,
         matcher: Some("^Read.*".into()),
         handler: HookHandler::Prompt {
             prompt: "matched".into(),
+            model: None,
+            timeout_ms: None,
         },
         priority: 0,
         scope: HookScope::default(),
@@ -275,7 +290,6 @@ fn test_regex_prefix_matcher() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     });
 
@@ -303,6 +317,8 @@ fn test_regex_prefix_matcher() {
 fn test_prompt_handler() {
     let handler = HookHandler::Prompt {
         prompt: "Check for security issues".into(),
+        model: None,
+        timeout_ms: None,
     };
 
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -350,7 +366,7 @@ async fn test_command_hook_execution() {
 
 #[tokio::test]
 async fn test_execute_hooks_runs_all_matching() {
-    let mut registry = HookRegistry::new();
+    let registry = HookRegistry::new();
     registry.register(HookDefinition {
         event: HookEventType::PreToolUse,
         matcher: None,
@@ -365,7 +381,6 @@ async fn test_execute_hooks_runs_all_matching() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     });
     registry.register(HookDefinition {
@@ -373,6 +388,8 @@ async fn test_execute_hooks_runs_all_matching() {
         matcher: None,
         handler: HookHandler::Prompt {
             prompt: "second".into(),
+            model: None,
+            timeout_ms: None,
         },
         priority: 2,
         scope: HookScope::default(),
@@ -380,7 +397,6 @@ async fn test_execute_hooks_runs_all_matching() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     });
     // Different event — should not match
@@ -389,6 +405,8 @@ async fn test_execute_hooks_runs_all_matching() {
         matcher: None,
         handler: HookHandler::Prompt {
             prompt: "wrong event".into(),
+            model: None,
+            timeout_ms: None,
         },
         priority: 0,
         scope: HookScope::default(),
@@ -396,7 +414,6 @@ async fn test_execute_hooks_runs_all_matching() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     });
 
@@ -410,18 +427,21 @@ async fn test_execute_hooks_runs_all_matching() {
 
 #[test]
 fn test_no_tool_name_with_wildcard_does_not_match() {
-    let mut registry = HookRegistry::new();
+    let registry = HookRegistry::new();
     registry.register(HookDefinition {
         event: HookEventType::PreToolUse,
         matcher: Some("*".into()),
-        handler: HookHandler::Prompt { prompt: "x".into() },
+        handler: HookHandler::Prompt {
+            prompt: "x".into(),
+            model: None,
+            timeout_ms: None,
+        },
         priority: 0,
         scope: HookScope::default(),
         if_condition: None,
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     });
 
@@ -432,7 +452,7 @@ fn test_no_tool_name_with_wildcard_does_not_match() {
 
 #[test]
 fn test_no_matcher_matches_without_tool_name() {
-    let mut registry = HookRegistry::new();
+    let registry = HookRegistry::new();
     registry.register(HookDefinition {
         event: HookEventType::SessionStart,
         matcher: None,
@@ -447,7 +467,6 @@ fn test_no_matcher_matches_without_tool_name() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     });
 
@@ -464,22 +483,51 @@ fn test_scope_ordering() {
 }
 
 #[test]
-fn test_new_event_types_exist() {
-    // Verify the 5 new event types are usable.
-    let events = [
-        HookEventType::NotebookCellExecute,
-        HookEventType::ModelSwitch,
-        HookEventType::ContextOverflow,
-        HookEventType::BudgetWarning,
-        HookEventType::QueryStart,
+fn test_ts_hook_events_are_all_present() {
+    // The 27 names mirror TS `HOOK_EVENTS`
+    // (`src/entrypoints/sdk/coreSchemas.ts:355-383`). If TS adds an event,
+    // this test fails until the new variant is wired in.
+    let ts_events = [
+        "PreToolUse",
+        "PostToolUse",
+        "PostToolUseFailure",
+        "SessionStart",
+        "SessionEnd",
+        "Setup",
+        "Stop",
+        "StopFailure",
+        "SubagentStart",
+        "SubagentStop",
+        "UserPromptSubmit",
+        "PermissionRequest",
+        "PermissionDenied",
+        "Notification",
+        "Elicitation",
+        "ElicitationResult",
+        "PreCompact",
+        "PostCompact",
+        "TeammateIdle",
+        "TaskCreated",
+        "TaskCompleted",
+        "ConfigChange",
+        "InstructionsLoaded",
+        "CwdChanged",
+        "FileChanged",
+        "WorktreeCreate",
+        "WorktreeRemove",
     ];
-    for event in &events {
-        let mut registry = HookRegistry::new();
+    for name in ts_events {
+        let parsed: HookEventType =
+            serde_json::from_value(serde_json::Value::String(name.to_string()))
+                .unwrap_or_else(|e| panic!("missing TS event variant {name}: {e}"));
+        let registry = HookRegistry::new();
         registry.register(HookDefinition {
-            event: *event,
+            event: parsed,
             matcher: None,
             handler: HookHandler::Prompt {
                 prompt: "test".into(),
+                model: None,
+                timeout_ms: None,
             },
             priority: 0,
             scope: HookScope::default(),
@@ -487,23 +535,23 @@ fn test_new_event_types_exist() {
             once: false,
             is_async: false,
             async_rewake: false,
-            shell: None,
             status_message: None,
         });
-        let matches = registry.find_matching(*event, None);
-        assert_eq!(matches.len(), 1);
+        assert_eq!(registry.find_matching(parsed, None).len(), 1);
     }
 }
 
 #[test]
 fn test_if_condition_filters_matching_hooks() {
-    let mut registry = HookRegistry::new();
+    let registry = HookRegistry::new();
     // Hook with if_condition: only matches "Bash(git *)"
     registry.register(HookDefinition {
         event: HookEventType::PreToolUse,
         matcher: None,
         handler: HookHandler::Prompt {
             prompt: "git-only".into(),
+            model: None,
+            timeout_ms: None,
         },
         priority: 0,
         scope: HookScope::default(),
@@ -511,7 +559,6 @@ fn test_if_condition_filters_matching_hooks() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     });
     // Hook without if_condition: matches everything
@@ -520,6 +567,8 @@ fn test_if_condition_filters_matching_hooks() {
         matcher: None,
         handler: HookHandler::Prompt {
             prompt: "any".into(),
+            model: None,
+            timeout_ms: None,
         },
         priority: 1,
         scope: HookScope::default(),
@@ -527,7 +576,6 @@ fn test_if_condition_filters_matching_hooks() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     });
 
@@ -562,7 +610,7 @@ fn test_if_condition_filters_matching_hooks() {
 #[test]
 fn test_load_hooks_from_config_command() {
     let json = serde_json::json!({
-        "pre_tool_use": [{
+        HookEventType::PreToolUse.as_str(): [{
             "type": "command",
             "command": "echo hi",
             "matcher": "Bash"
@@ -586,7 +634,7 @@ fn test_load_hooks_from_config_command() {
 #[test]
 fn test_load_hooks_from_config_prompt() {
     let json = serde_json::json!({
-        "session_start": [{
+        HookEventType::SessionStart.as_str(): [{
             "type": "prompt",
             "prompt": "hello world"
         }]
@@ -597,7 +645,7 @@ fn test_load_hooks_from_config_prompt() {
     assert_eq!(hooks[0].event, HookEventType::SessionStart);
     assert!(hooks[0].matcher.is_none());
     match &hooks[0].handler {
-        HookHandler::Prompt { prompt } => assert_eq!(prompt, "hello world"),
+        HookHandler::Prompt { prompt, .. } => assert_eq!(prompt, "hello world"),
         other => panic!("expected Prompt, got {other:?}"),
     }
 }
@@ -605,10 +653,9 @@ fn test_load_hooks_from_config_prompt() {
 #[test]
 fn test_load_hooks_from_config_http() {
     let json = serde_json::json!({
-        "post_tool_use": [{
+        HookEventType::PostToolUse.as_str(): [{
             "type": "webhook",
             "url": "https://example.com/hook",
-            "method": "PUT",
             "headers": {"Authorization": "Bearer abc"}
         }]
     });
@@ -616,14 +663,9 @@ fn test_load_hooks_from_config_http() {
     let hooks = load_hooks_from_config(&json, HookScope::Local).unwrap();
     assert_eq!(hooks.len(), 1);
     match &hooks[0].handler {
-        HookHandler::Http {
-            url,
-            method,
-            headers,
-            ..
-        } => {
+        HookHandler::Http { url, headers, .. } => {
             assert_eq!(url, "https://example.com/hook");
-            assert_eq!(method.as_deref(), Some("PUT"));
+            // TS schema has no `method` field — POST is hardcoded.
             let hdrs = headers.as_ref().unwrap();
             assert_eq!(hdrs.get("Authorization").unwrap(), "Bearer abc");
         }
@@ -634,7 +676,7 @@ fn test_load_hooks_from_config_http() {
 #[test]
 fn test_load_hooks_from_config_http_type_alias() {
     let json = serde_json::json!({
-        "post_tool_use": [{
+        HookEventType::PostToolUse.as_str(): [{
             "type": "http",
             "url": "https://example.com/hook2"
         }]
@@ -650,20 +692,22 @@ fn test_load_hooks_from_config_http_type_alias() {
 
 #[test]
 fn test_load_hooks_from_config_agent() {
+    // TS schema (`schemas/hooks.ts:128-163`): agent hooks have only
+    // `prompt` + optional `model`. No `agent_name` field exists.
     let json = serde_json::json!({
-        "pre_tool_use": [{
+        HookEventType::PreToolUse.as_str(): [{
             "type": "agent",
-            "agent_name": "security-check",
-            "prompt": "review this"
+            "prompt": "review this",
+            "model": "claude-sonnet-4-6"
         }]
     });
 
     let hooks = load_hooks_from_config(&json, HookScope::Session).unwrap();
     assert_eq!(hooks.len(), 1);
     match &hooks[0].handler {
-        HookHandler::Agent { agent_name, prompt } => {
-            assert_eq!(agent_name, "security-check");
-            assert_eq!(prompt.as_deref(), Some("review this"));
+        HookHandler::Agent { prompt, model, .. } => {
+            assert_eq!(prompt, "review this");
+            assert_eq!(model.as_deref(), Some("claude-sonnet-4-6"));
         }
         other => panic!("expected Agent, got {other:?}"),
     }
@@ -672,7 +716,7 @@ fn test_load_hooks_from_config_agent() {
 #[test]
 fn test_load_hooks_from_config_with_if_condition() {
     let json = serde_json::json!({
-        "pre_tool_use": [{
+        HookEventType::PreToolUse.as_str(): [{
             "type": "command",
             "command": "echo check",
             "if": "Bash(git *)"
@@ -686,7 +730,7 @@ fn test_load_hooks_from_config_with_if_condition() {
 #[test]
 fn test_load_hooks_from_config_with_timeout_seconds() {
     let json = serde_json::json!({
-        "pre_tool_use": [{
+        HookEventType::PreToolUse.as_str(): [{
             "type": "command",
             "command": "echo slow",
             "timeout": 30
@@ -705,7 +749,7 @@ fn test_load_hooks_from_config_with_timeout_seconds() {
 #[test]
 fn test_load_hooks_from_config_timeout_does_not_override_handler_timeout() {
     let json = serde_json::json!({
-        "pre_tool_use": [{
+        HookEventType::PreToolUse.as_str(): [{
             "type": "command",
             "command": "echo fast",
             "timeout_ms": 5000,
@@ -726,7 +770,7 @@ fn test_load_hooks_from_config_timeout_does_not_override_handler_timeout() {
 #[test]
 fn test_load_hooks_from_config_with_optional_fields() {
     let json = serde_json::json!({
-        "pre_tool_use": [{
+        HookEventType::PreToolUse.as_str(): [{
             "type": "command",
             "command": "echo hi",
             "once": true,
@@ -741,14 +785,77 @@ fn test_load_hooks_from_config_with_optional_fields() {
     assert!(hooks[0].once);
     assert!(hooks[0].is_async);
     assert!(hooks[0].async_rewake);
-    assert_eq!(hooks[0].shell.as_deref(), Some("bash"));
+    match &hooks[0].handler {
+        HookHandler::Command { shell, .. } => {
+            assert_eq!(shell.as_deref(), Some("bash"));
+        }
+        other => panic!("expected Command, got {other:?}"),
+    }
     assert_eq!(hooks[0].status_message.as_deref(), Some("Running check..."));
+}
+
+#[test]
+fn test_loader_policy_disable_all_hooks_drops_everything() {
+    let json = serde_json::json!({
+        HookEventType::PreToolUse.as_str(): [{ "type": "command", "command": "echo hi" }]
+    });
+    let hooks = load_hooks_from_config_with_policy(
+        &json,
+        HookScope::Policy,
+        LoaderPolicy {
+            disable_all_hooks: true,
+            allow_managed_hooks_only: false,
+        },
+    )
+    .unwrap();
+    assert!(hooks.is_empty(), "disable_all_hooks must drop every entry");
+}
+
+#[test]
+fn test_loader_policy_allow_managed_hooks_only_drops_user_scope() {
+    let json = serde_json::json!({
+        HookEventType::PreToolUse.as_str(): [{ "type": "command", "command": "echo hi" }]
+    });
+    // User-scope load should be skipped when managed-only is set.
+    let dropped = load_hooks_from_config_with_policy(
+        &json,
+        HookScope::User,
+        LoaderPolicy {
+            disable_all_hooks: false,
+            allow_managed_hooks_only: true,
+        },
+    )
+    .unwrap();
+    assert!(dropped.is_empty());
+
+    // Policy and Session scopes pass through under managed-only.
+    let kept_policy = load_hooks_from_config_with_policy(
+        &json,
+        HookScope::Policy,
+        LoaderPolicy {
+            disable_all_hooks: false,
+            allow_managed_hooks_only: true,
+        },
+    )
+    .unwrap();
+    assert_eq!(kept_policy.len(), 1);
+
+    let kept_session = load_hooks_from_config_with_policy(
+        &json,
+        HookScope::Session,
+        LoaderPolicy {
+            disable_all_hooks: false,
+            allow_managed_hooks_only: true,
+        },
+    )
+    .unwrap();
+    assert_eq!(kept_session.len(), 1);
 }
 
 #[test]
 fn test_load_hooks_from_config_matcher_with_tool_name_object() {
     let json = serde_json::json!({
-        "pre_tool_use": [{
+        HookEventType::PreToolUse.as_str(): [{
             "type": "command",
             "command": "echo hi",
             "matcher": {"tool_name": "Write"}
@@ -762,11 +869,11 @@ fn test_load_hooks_from_config_matcher_with_tool_name_object() {
 #[test]
 fn test_load_hooks_from_config_multiple_events() {
     let json = serde_json::json!({
-        "pre_tool_use": [
+        HookEventType::PreToolUse.as_str(): [
             {"type": "command", "command": "echo a"},
             {"type": "command", "command": "echo b"}
         ],
-        "session_start": [
+        HookEventType::SessionStart.as_str(): [
             {"type": "prompt", "prompt": "welcome"}
         ]
     });
@@ -790,7 +897,7 @@ fn test_load_hooks_from_config_unknown_event_type_errors() {
 #[test]
 fn test_load_hooks_from_config_unknown_handler_type_errors() {
     let json = serde_json::json!({
-        "pre_tool_use": [{"type": "ftp", "url": "ftp://x"}]
+        HookEventType::PreToolUse.as_str(): [{"type": "ftp", "url": "ftp://x"}]
     });
 
     let result = load_hooks_from_config(&json, HookScope::User);
@@ -812,7 +919,7 @@ fn test_load_hooks_from_config_not_object_errors() {
 
 #[test]
 fn test_register_deduped_allows_unique_hooks() {
-    let mut registry = HookRegistry::new();
+    let registry = HookRegistry::new();
     let h1 = HookDefinition {
         event: HookEventType::PreToolUse,
         matcher: None,
@@ -827,7 +934,6 @@ fn test_register_deduped_allows_unique_hooks() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     };
     let h2 = HookDefinition {
@@ -844,7 +950,6 @@ fn test_register_deduped_allows_unique_hooks() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     };
 
@@ -855,7 +960,7 @@ fn test_register_deduped_allows_unique_hooks() {
 
 #[test]
 fn test_register_deduped_rejects_duplicate_command() {
-    let mut registry = HookRegistry::new();
+    let registry = HookRegistry::new();
     let h1 = HookDefinition {
         event: HookEventType::PreToolUse,
         matcher: None,
@@ -870,7 +975,6 @@ fn test_register_deduped_rejects_duplicate_command() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     };
     let h2 = HookDefinition {
@@ -887,7 +991,6 @@ fn test_register_deduped_rejects_duplicate_command() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     };
 
@@ -899,7 +1002,7 @@ fn test_register_deduped_rejects_duplicate_command() {
 
 #[test]
 fn test_register_deduped_different_if_condition_not_duplicate() {
-    let mut registry = HookRegistry::new();
+    let registry = HookRegistry::new();
     let h1 = HookDefinition {
         event: HookEventType::PreToolUse,
         matcher: None,
@@ -914,7 +1017,6 @@ fn test_register_deduped_different_if_condition_not_duplicate() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     };
     let h2 = HookDefinition {
@@ -931,7 +1033,6 @@ fn test_register_deduped_different_if_condition_not_duplicate() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     };
 
@@ -942,7 +1043,7 @@ fn test_register_deduped_different_if_condition_not_duplicate() {
 
 #[test]
 fn test_register_deduped_different_shell_not_duplicate() {
-    let mut registry = HookRegistry::new();
+    let registry = HookRegistry::new();
     let h1 = HookDefinition {
         event: HookEventType::PreToolUse,
         matcher: None,
@@ -957,7 +1058,6 @@ fn test_register_deduped_different_shell_not_duplicate() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     };
     let h2 = HookDefinition {
@@ -974,7 +1074,6 @@ fn test_register_deduped_different_shell_not_duplicate() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     };
 
@@ -985,12 +1084,14 @@ fn test_register_deduped_different_shell_not_duplicate() {
 
 #[test]
 fn test_register_deduped_prompt_hooks() {
-    let mut registry = HookRegistry::new();
+    let registry = HookRegistry::new();
     let h1 = HookDefinition {
         event: HookEventType::PreToolUse,
         matcher: None,
         handler: HookHandler::Prompt {
             prompt: "same prompt".into(),
+            model: None,
+            timeout_ms: None,
         },
         priority: 0,
         scope: HookScope::default(),
@@ -998,7 +1099,6 @@ fn test_register_deduped_prompt_hooks() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     };
     let h2 = h1.clone();
@@ -1088,37 +1188,57 @@ fn test_sanitize_header_value_strips_crlf() {
 }
 
 // -----------------------------------------------------------------------
-// interpolate_env_vars tests
+// interpolate_env_vars_allowlisted tests (TS parity:
+// `execHttpHook.ts:89-108`)
 // -----------------------------------------------------------------------
 
 #[test]
-fn test_interpolate_env_vars_from_hook_env() {
+fn test_interpolate_env_vars_allowlisted_from_hook_env() {
     let mut env = HashMap::new();
     env.insert("MY_TOKEN".to_string(), "secret123".to_string());
+    let allow: HashSet<&str> = ["MY_TOKEN"].into_iter().collect();
 
     assert_eq!(
-        interpolate_env_vars("Bearer $MY_TOKEN", &env),
+        interpolate_env_vars_allowlisted("Bearer $MY_TOKEN", &allow, &env),
         "Bearer secret123"
     );
     assert_eq!(
-        interpolate_env_vars("Bearer ${MY_TOKEN}", &env),
+        interpolate_env_vars_allowlisted("Bearer ${MY_TOKEN}", &allow, &env),
         "Bearer secret123"
     );
 }
 
 #[test]
-fn test_interpolate_env_vars_missing_resolves_empty() {
-    let env = HashMap::new();
+fn test_interpolate_env_vars_allowlisted_blocks_unallowed() {
+    // Var present in env but NOT in allowlist resolves to "" — prevents
+    // exfiltration of arbitrary process env via project hooks.
+    let mut env = HashMap::new();
+    env.insert("AWS_SECRET_ACCESS_KEY".to_string(), "shhh".to_string());
+    let allow: HashSet<&str> = HashSet::new();
     assert_eq!(
-        interpolate_env_vars("Bearer $NONEXISTENT_VAR_XYZ", &env),
+        interpolate_env_vars_allowlisted("Bearer $AWS_SECRET_ACCESS_KEY", &allow, &env),
         "Bearer "
     );
 }
 
 #[test]
-fn test_interpolate_env_vars_no_vars() {
+fn test_interpolate_env_vars_allowlisted_missing_resolves_empty() {
     let env = HashMap::new();
-    assert_eq!(interpolate_env_vars("no vars here", &env), "no vars here");
+    let allow: HashSet<&str> = ["NONEXISTENT_VAR_XYZ"].into_iter().collect();
+    assert_eq!(
+        interpolate_env_vars_allowlisted("Bearer $NONEXISTENT_VAR_XYZ", &allow, &env),
+        "Bearer "
+    );
+}
+
+#[test]
+fn test_interpolate_env_vars_allowlisted_no_vars() {
+    let env = HashMap::new();
+    let allow: HashSet<&str> = HashSet::new();
+    assert_eq!(
+        interpolate_env_vars_allowlisted("no vars here", &allow, &env),
+        "no vars here"
+    );
 }
 
 // -----------------------------------------------------------------------
@@ -1143,4 +1263,230 @@ fn test_prompt_response_serialize() {
     let json = serde_json::to_string(&resp).unwrap();
     assert!(json.contains("prompt_response"));
     assert!(json.contains("\"a\""));
+}
+
+#[test]
+fn test_reload_from_runtime_replaces_hooks() {
+    let registry = HookRegistry::new();
+
+    let initial = serde_json::json!({
+        "PreToolUse": [{
+            "matcher": "Bash",
+            "type": "command",
+            "command": "echo first"
+        }]
+    });
+    registry
+        .reload_from_runtime(&[(HookScope::User, initial)], LoaderPolicy::default())
+        .expect("reload");
+    assert_eq!(registry.len(), 1);
+    assert_eq!(
+        registry.find_matching(HookEventType::PreToolUse, Some("Bash"))[0].matcher,
+        Some("Bash".into())
+    );
+
+    // Reload with a different hook — old one should be gone.
+    let replacement = serde_json::json!({
+        "PostToolUse": [{
+            "matcher": "Edit",
+            "type": "command",
+            "command": "echo replaced"
+        }]
+    });
+    let count = registry
+        .reload_from_runtime(&[(HookScope::User, replacement)], LoaderPolicy::default())
+        .expect("reload");
+    assert_eq!(count, 1);
+    assert!(
+        registry
+            .find_matching(HookEventType::PreToolUse, Some("Bash"))
+            .is_empty(),
+        "old PreToolUse hook should be gone after reload"
+    );
+    assert_eq!(
+        registry.find_matching(HookEventType::PostToolUse, Some("Edit"))[0].matcher,
+        Some("Edit".into())
+    );
+}
+
+#[test]
+fn test_reload_preserves_fired_once() {
+    let registry = HookRegistry::new();
+
+    let value = serde_json::json!({
+        "PreToolUse": [{
+            "matcher": "Bash",
+            "type": "command",
+            "command": "echo once",
+            "once": true
+        }]
+    });
+    registry
+        .reload_from_runtime(&[(HookScope::User, value.clone())], LoaderPolicy::default())
+        .expect("reload");
+
+    // Fire the once hook.
+    let matched = registry.find_matching(HookEventType::PreToolUse, Some("Bash"));
+    assert_eq!(matched.len(), 1);
+    registry.mark_once_fired(&matched[0]);
+
+    // After reload, fired_once should be retained — same hook config
+    // shouldn't re-match.
+    registry
+        .reload_from_runtime(&[(HookScope::User, value)], LoaderPolicy::default())
+        .expect("reload");
+    let matched_again = registry.find_matching(HookEventType::PreToolUse, Some("Bash"));
+    assert!(
+        matched_again.is_empty(),
+        "fired_once must persist across reload — got {} matches",
+        matched_again.len()
+    );
+}
+
+#[test]
+fn test_reload_preserves_agent_scoped() {
+    let registry = HookRegistry::new();
+    registry.register_for_agent(
+        "agent-1".into(),
+        vec![HookDefinition {
+            event: HookEventType::SubagentStop,
+            matcher: None,
+            handler: HookHandler::Command {
+                command: "echo agent-scoped".into(),
+                timeout_ms: None,
+                shell: None,
+            },
+            priority: 0,
+            scope: HookScope::default(),
+            if_condition: None,
+            once: false,
+            is_async: false,
+            async_rewake: false,
+            status_message: None,
+        }],
+        true,
+    );
+
+    // Reload settings — agent_scoped overlay must remain.
+    registry
+        .reload_from_runtime(
+            &[(HookScope::User, serde_json::json!({}))],
+            LoaderPolicy::default(),
+        )
+        .expect("reload");
+
+    assert_eq!(
+        registry
+            .find_matching(HookEventType::SubagentStop, None)
+            .len(),
+        1,
+        "agent_scoped hooks must survive settings reload"
+    );
+}
+
+#[test]
+fn test_shell_kind_classification() {
+    assert_eq!(ShellKind::from_field(None), ShellKind::Bash);
+    assert_eq!(ShellKind::from_field(Some("bash")), ShellKind::Bash);
+    assert_eq!(ShellKind::from_field(Some("sh")), ShellKind::Bash);
+    assert_eq!(
+        ShellKind::from_field(Some("powershell")),
+        ShellKind::PowerShell
+    );
+    assert_eq!(ShellKind::from_field(Some("pwsh")), ShellKind::PowerShell);
+    // Unknown values fall back to bash with warning.
+    assert_eq!(ShellKind::from_field(Some("zsh")), ShellKind::Bash);
+}
+
+#[test]
+fn test_substitute_plugin_vars_powershell_no_path_xform() {
+    let mut env = HashMap::new();
+    env.insert(
+        "CLAUDE_PLUGIN_ROOT".to_string(),
+        r"C:\Program Files\Plugin".to_string(),
+    );
+    let result = substitute_plugin_vars(r"echo ${CLAUDE_PLUGIN_ROOT}", &env, ShellKind::PowerShell);
+    // PowerShell consumes native Windows paths — no conversion.
+    assert_eq!(result, r"echo C:\Program Files\Plugin");
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn test_substitute_plugin_vars_bash_windows_posix_xform() {
+    let mut env = HashMap::new();
+    env.insert("CLAUDE_PLUGIN_ROOT".to_string(), r"C:\Plugin".to_string());
+    let result = substitute_plugin_vars("echo ${CLAUDE_PLUGIN_ROOT}", &env, ShellKind::Bash);
+    assert_eq!(result, "echo /c/Plugin");
+}
+
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn test_substitute_plugin_vars_bash_non_windows_passthrough() {
+    let mut env = HashMap::new();
+    env.insert(
+        "CLAUDE_PLUGIN_ROOT".to_string(),
+        "/home/user/plugin".to_string(),
+    );
+    let result = substitute_plugin_vars("echo ${CLAUDE_PLUGIN_ROOT}", &env, ShellKind::Bash);
+    assert_eq!(result, "echo /home/user/plugin");
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn test_maybe_apply_sh_prefix_windows_bash() {
+    assert_eq!(
+        maybe_apply_sh_prefix("./script.sh", ShellKind::Bash),
+        "bash ./script.sh"
+    );
+    // Already prefixed — passthrough.
+    assert_eq!(
+        maybe_apply_sh_prefix("bash ./script.sh", ShellKind::Bash),
+        "bash ./script.sh"
+    );
+    // PowerShell — no prefix injection.
+    assert_eq!(
+        maybe_apply_sh_prefix("./script.sh", ShellKind::PowerShell),
+        "./script.sh"
+    );
+    // Non-.sh extension — passthrough.
+    assert_eq!(
+        maybe_apply_sh_prefix("./script.py", ShellKind::Bash),
+        "./script.py"
+    );
+}
+
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn test_maybe_apply_sh_prefix_non_windows_passthrough() {
+    assert_eq!(
+        maybe_apply_sh_prefix("./script.sh", ShellKind::Bash),
+        "./script.sh"
+    );
+}
+
+#[tokio::test]
+async fn test_powershell_hook_returns_helpful_error_when_pwsh_missing() {
+    // On a Linux test runner without pwsh installed, a PowerShell hook
+    // should return a clear error rather than silently invoking some
+    // other shell.
+    if coco_shell_discovery::cached_powershell_path()
+        .await
+        .is_some()
+    {
+        // skip — pwsh is actually installed; can't assert the missing path
+        return;
+    }
+    let handler = HookHandler::Command {
+        command: "Write-Host hi".to_string(),
+        timeout_ms: Some(5000),
+        shell: Some("powershell".to_string()),
+    };
+    let env = HashMap::new();
+    let result = execute_hook(&handler, &env, None).await;
+    let err = result.expect_err("expected error when pwsh is not on PATH");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("PowerShell"),
+        "expected error to mention PowerShell, got: {msg}",
+    );
 }

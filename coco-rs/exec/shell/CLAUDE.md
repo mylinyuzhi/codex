@@ -22,7 +22,7 @@ Paths relative to `/lyz/codespace/3rd/claude-code/src/`.
 - **Heredoc**: `HeredocContent`, `extract_heredocs`
 - **Sed in-place**: `SedEditInfo`, `parse_sed_edit_command`, `is_sed_in_place_edit`
 - **Semantics**: `CommandResultInterpretation`
-- **Sandbox decision**: routes through `coco-sandbox::SandboxSettings`
+- **Sandbox decision**: `ExecOptions.sandbox: Option<Arc<coco_sandbox::SandboxState>>` — when `Some`, the executor calls `state.try_wrap_command(...)` before `tokio::process::Command::spawn` to apply platform enforcement (bwrap on Linux, Seatbelt on macOS). Decision logic (excluded commands, bypass) lives on `SandboxState::command_snapshot`.
 - **Snapshot**: shell environment snapshot support
 
 ## Layering

@@ -79,6 +79,29 @@ impl Reply {
         }
     }
 
+    /// Multi-tool turn — emit several `ToolCall` blocks at once. Mirrors the
+    /// shape a frontier model uses when it batches independent tool calls
+    /// into a single assistant message; the agent loop's
+    /// `StreamingToolExecutor` then dispatches them concurrently or in a
+    /// queue depending on each tool's `is_safe_concurrent`.
+    pub fn tools<I, S1, S2>(calls: I) -> Self
+    where
+        I: IntoIterator<Item = (S1, S2, serde_json::Value)>,
+        S1: Into<String>,
+        S2: Into<String>,
+    {
+        let blocks = calls
+            .into_iter()
+            .map(|(id, name, input)| {
+                AssistantContentPart::ToolCall(ToolCallPart::new(id, name, input))
+            })
+            .collect();
+        Self {
+            blocks,
+            finish: UnifiedFinishReason::ToolCalls,
+        }
+    }
+
     /// Text preface + a tool call (matches what most chat models actually
     /// emit). Engine still loops because finish-reason is `ToolCalls`.
     pub fn text_then_tool(

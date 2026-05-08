@@ -13,7 +13,6 @@ name = "coco_file_search"
 path = "src/lib.rs"
 
 [dependencies]
-anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 coco-file-ignore = { workspace = true }
 crossbeam-channel = { workspace = true }
@@ -21,6 +20,7 @@ ignore = { workspace = true }
 nucleo = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full", "sync", "time", "process"] }
 
 [dev-dependencies]

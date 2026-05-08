@@ -184,6 +184,29 @@ pub struct TurnReminderInput<'a> {
     /// entries with mtime drift. Non-empty →
     /// `EditedImageFileGenerator` emits a silent reminder.
     pub edited_image_file_paths: Vec<PathBuf>,
+
+    // ── Audit-add silent reminders (May 2026) ──
+    /// True when the session has reached its configured `max_turns` cap.
+    /// Engine compares `turn_number` against `QueryEngineConfig::max_turns`
+    /// (when > 0) and sets this so the model can wrap up gracefully.
+    pub max_turns_reached_signal: bool,
+    /// Pre-formatted current-session memory body from `coco-memory`. `None`
+    /// or empty suppresses emission.
+    pub current_session_memory: Option<String>,
+    /// Pre-formatted command-permissions snapshot from `coco-permissions`.
+    pub command_permissions: Option<String>,
+    /// Pre-formatted dynamic-skills listing from `coco-skills`.
+    pub dynamic_skill: Option<String>,
+    /// Pre-formatted skill-discovery suggestions (UserPrompt tier) from
+    /// `coco-skills`.
+    pub skill_discovery: Option<String>,
+    /// Pre-formatted structured-output blob queued by a tool execution.
+    pub structured_output: Option<String>,
+    /// Pre-formatted teammate-shutdown batch from the swarm coordinator.
+    pub teammate_shutdown_batch: Option<String>,
+    /// True when context tokens exceed the auto-compact / efficiency
+    /// threshold and auto-compact is unavailable. Engine pre-computes.
+    pub context_efficiency_signal: bool,
 }
 
 /// Build the [`GeneratorContext`] from `input`, run every applicable
@@ -256,6 +279,14 @@ pub async fn run_turn_reminders(
         relevant_memories,
         already_read_file_paths,
         edited_image_file_paths,
+        max_turns_reached_signal,
+        current_session_memory,
+        command_permissions,
+        dynamic_skill,
+        skill_discovery,
+        structured_output,
+        teammate_shutdown_batch,
+        context_efficiency_signal,
     } = input;
 
     let is_sub_agent = agent_id.is_some();
@@ -346,7 +377,15 @@ pub async fn run_turn_reminders(
         .nested_memories(nested_memories)
         .relevant_memories(relevant_memories)
         .already_read_file_paths(already_read_file_paths)
-        .edited_image_file_paths(edited_image_file_paths);
+        .edited_image_file_paths(edited_image_file_paths)
+        .max_turns_reached_signal(max_turns_reached_signal)
+        .current_session_memory(current_session_memory)
+        .command_permissions(command_permissions)
+        .dynamic_skill(dynamic_skill)
+        .skill_discovery(skill_discovery)
+        .structured_output(structured_output)
+        .teammate_shutdown_batch(teammate_shutdown_batch)
+        .context_efficiency_signal(context_efficiency_signal);
 
     let builder = apply_app_state(
         builder,

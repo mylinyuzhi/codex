@@ -157,6 +157,27 @@ impl PostToolUseOutcome {
     }
 }
 
+/// Outcome of running task lifecycle hooks (`TaskCreated`, `TaskCompleted`).
+///
+/// Mirrors the `AggregatedHookResult.blocking_error` semantic: a non-`None`
+/// `blocking_reason` means a hook returned `decision: 'block'` (TS exit
+/// code 2 / `ok: false`). The caller (TaskCreateTool / TaskUpdateTool)
+/// surfaces this to the model and rolls back the operation.
+#[derive(Debug, Clone, Default)]
+pub struct TaskHookOutcome {
+    /// Hard block reason. When set, the task operation must NOT proceed
+    /// and the model must see the message. TS:
+    /// `getTaskCreatedHookMessage`/`getTaskCompletedHookMessage` format
+    /// the blocking error for model consumption.
+    pub blocking_reason: Option<String>,
+}
+
+impl TaskHookOutcome {
+    pub fn is_blocked(&self) -> bool {
+        self.blocking_reason.is_some()
+    }
+}
+
 /// Hook handle callback. Higher-layer orchestrators (e.g. `app/query`)
 /// implement this by bridging to `coco-hooks::HookRegistry` +
 /// `execute_pre_tool_use()` / `execute_post_tool_use()`.
@@ -208,6 +229,35 @@ pub trait HookHandle: Send + Sync {
         tool_input: &Value,
         error_message: &str,
     ) -> PostToolUseOutcome;
+
+    /// Run TaskCreated hooks before TaskCreateTool persists the task.
+    /// TS: `executeTaskCreatedHooks` (`utils/hooks.ts:3745`).
+    ///
+    /// Default impl is a no-op so existing test doubles don't need
+    /// updating. The real `QueryHookHandle` overrides it.
+    async fn run_task_created(
+        &self,
+        _task_id: &str,
+        _task_subject: &str,
+        _task_description: Option<&str>,
+        _teammate_name: Option<&str>,
+        _team_name: Option<&str>,
+    ) -> TaskHookOutcome {
+        TaskHookOutcome::default()
+    }
+
+    /// Run TaskCompleted hooks before TaskUpdateTool flips status to
+    /// `completed`. TS: `executeTaskCompletedHooks` (`utils/hooks.ts:3789`).
+    async fn run_task_completed(
+        &self,
+        _task_id: &str,
+        _task_subject: &str,
+        _task_description: Option<&str>,
+        _teammate_name: Option<&str>,
+        _team_name: Option<&str>,
+    ) -> TaskHookOutcome {
+        TaskHookOutcome::default()
+    }
 }
 
 pub type HookHandleRef = Arc<dyn HookHandle>;

@@ -71,9 +71,16 @@ impl QueryEngine {
         // share the loaded set within one batch.
         let mut loaded = self.loaded_nested_memory_paths.lock().await;
         let mut new_entries: Vec<NestedMemoryInfo> = Vec::new();
+        let mut newly_loaded: Vec<(String, String, coco_context::MemoryFileSource)> = Vec::new();
         for path in triggered_paths {
+            let trigger_path = path.display().to_string();
             let entries = coco_context::traverse_for_file(&path, &cwd, &mut loaded);
             for entry in entries {
+                newly_loaded.push((
+                    entry.path.display().to_string(),
+                    trigger_path.clone(),
+                    entry.source,
+                ));
                 new_entries.push(NestedMemoryInfo {
                     path: entry.path.display().to_string(),
                     content: entry.content,
@@ -81,6 +88,45 @@ impl QueryEngine {
             }
         }
         drop(loaded);
+
+        // Fire `InstructionsLoaded` for each newly-loaded memory file.
+        // TS: `executeInstructionsLoadedHooks` invoked per-file in
+        // `claudemd.ts` after each load. Reason `nested_traversal`
+        // matches the lazy traversal path here; the eager pass at
+        // session start fires with `session_start`.
+        if let Some(registry) = self.hooks.as_ref() {
+            let ctx = self.orchestration_ctx();
+            if !ctx.disable_all_hooks {
+                for (loaded_path, trigger_path, source) in newly_loaded {
+                    let memory_type = match source {
+                        coco_context::MemoryFileSource::UserGlobal => {
+                            coco_hooks::orchestration::MemoryType::User
+                        }
+                        coco_context::MemoryFileSource::Local => {
+                            coco_hooks::orchestration::MemoryType::Local
+                        }
+                        coco_context::MemoryFileSource::ProjectConfig
+                        | coco_context::MemoryFileSource::Project => {
+                            coco_hooks::orchestration::MemoryType::Project
+                        }
+                    };
+                    if let Err(e) = coco_hooks::orchestration::execute_instructions_loaded(
+                        registry,
+                        &ctx,
+                        &loaded_path,
+                        memory_type,
+                        coco_hooks::orchestration::InstructionsLoadReason::NestedTraversal,
+                        /*globs*/ None,
+                        Some(trigger_path.as_str()),
+                        /*parent_file_path*/ None,
+                    )
+                    .await
+                    {
+                        tracing::warn!(error = %e, path = %loaded_path, "InstructionsLoaded hook failed");
+                    }
+                }
+            }
+        }
 
         if new_entries.is_empty() {
             return;

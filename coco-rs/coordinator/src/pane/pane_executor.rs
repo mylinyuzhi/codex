@@ -127,20 +127,20 @@ impl TeammateExecutor for PaneBackendExecutor {
         &self,
         agent_id: &str,
         message: mailbox::TeammateMessage,
-    ) -> anyhow::Result<()> {
+    ) -> crate::Result<()> {
         let agent_name = agent_id.split('@').next().unwrap_or(agent_id);
         let team_name = agent_id.split('@').nth(1).unwrap_or("default");
         mailbox::write_to_mailbox(agent_name, message, team_name)
     }
 
-    async fn terminate(&self, agent_id: &str, reason: Option<&str>) -> anyhow::Result<bool> {
+    async fn terminate(&self, agent_id: &str, reason: Option<&str>) -> crate::Result<bool> {
         let agent_name = agent_id.split('@').next().unwrap_or(agent_id);
         let team_name = agent_id.split('@').nth(1).unwrap_or("default");
         mailbox::send_shutdown_request(agent_name, team_name, TEAM_LEAD_NAME, reason)?;
         Ok(true)
     }
 
-    async fn kill(&self, agent_id: &str) -> anyhow::Result<bool> {
+    async fn kill(&self, agent_id: &str) -> crate::Result<bool> {
         let spawned = self.spawned.write().await.remove(agent_id);
         if let Some(teammate) = spawned {
             self.backend.kill_pane(&teammate.pane_id).await

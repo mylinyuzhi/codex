@@ -73,7 +73,7 @@ impl MemoryDialogHandler {
 
 #[async_trait]
 impl CommandHandler for MemoryDialogHandler {
-    async fn execute_command(&self, _args: &str) -> anyhow::Result<CommandResult> {
+    async fn execute_command(&self, _args: &str) -> crate::Result<CommandResult> {
         Ok(CommandResult::OpenDialog(DialogSpec::MemoryFileSelector {
             entries: self.entries(),
         }))

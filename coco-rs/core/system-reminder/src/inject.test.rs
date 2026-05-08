@@ -202,3 +202,48 @@ fn inject_multiple_reminders_appends_in_order() {
     assert!(matches!(history[0], Message::Attachment(_)));
     assert!(matches!(history[1], Message::Attachment(_)));
 }
+
+/// Regression guard for the audit-add silent-reminder shape.
+///
+/// All eight audit-add reminders (`MaxTurnsReached`, `CurrentSessionMemory`,
+/// `CommandPermissions`, `DynamicSkill`, `SkillDiscovery`,
+/// `StructuredOutput`, `TeammateShutdownBatch`, `ContextEfficiency`) have
+/// `AttachmentKind::is_api_visible() == false`. They MUST be emitted via
+/// `SystemReminder::silent_text(...)` so the inject pipeline routes
+/// them to `NormalizedMessages::display_only` and never calls
+/// `AttachmentMessage::api(...)` — which has a `debug_assert` on
+/// `kind.is_api_visible()` that would panic.
+#[test]
+fn audit_add_silent_reminders_route_to_display_only_not_history() {
+    use coco_messages::Message;
+    let kinds = [
+        AttachmentType::MaxTurnsReached,
+        AttachmentType::CurrentSessionMemory,
+        AttachmentType::CommandPermissions,
+        AttachmentType::DynamicSkill,
+        AttachmentType::SkillDiscovery,
+        AttachmentType::StructuredOutput,
+        AttachmentType::TeammateShutdownBatch,
+        AttachmentType::ContextEfficiency,
+    ];
+    for at in kinds {
+        let r = SystemReminder::silent_text(at, "body");
+        assert!(r.is_silent, "{at:?}: silent_text must set is_silent=true");
+        assert!(
+            r.is_effectively_silent(),
+            "{at:?}: is_effectively_silent() must be true",
+        );
+
+        let mut history: Vec<Message> = Vec::new();
+        let display_only = inject_reminders(vec![r], &mut history);
+        assert!(
+            history.is_empty(),
+            "{at:?}: silent reminder must not append to history",
+        );
+        assert_eq!(
+            display_only.len(),
+            1,
+            "{at:?}: silent reminder must land in display_only",
+        );
+    }
+}

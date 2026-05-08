@@ -9,18 +9,21 @@ workspace = true
 
 [dependencies]
 coco-config.workspace = true
+coco-error.workspace = true
 coco-types.workspace = true
 coco-plugins.workspace = true
 coco-skills.workspace = true
 coco-subagent.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-anyhow.workspace = true
+thiserror.workspace = true
 async-trait.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "process", "fs"] }
+tracing.workspace = true
 dirs.workspace = true
 chrono.workspace = true
 
 [dev-dependencies]
+anyhow.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "process", "fs"] }
 tempfile.workspace = true

@@ -275,7 +275,7 @@ impl IdeBridgeServer {
     /// Start listening for IDE connections on the given address.
     ///
     /// TS: bridgeMain.ts — bridge loop accepting SDK/REPL connections.
-    pub async fn listen(&mut self, addr: &str) -> anyhow::Result<()> {
+    pub async fn listen(&mut self, addr: &str) -> crate::Result<()> {
         let listener = TcpListener::bind(addr).await?;
         self.running
             .store(true, std::sync::atomic::Ordering::SeqCst);
@@ -418,10 +418,10 @@ impl IdeBridgeServer {
     }
 
     /// Send a message to all connected IDEs.
-    pub fn broadcast(&self, msg: IdeBridgeMessage) -> anyhow::Result<()> {
+    pub fn broadcast(&self, msg: IdeBridgeMessage) -> crate::Result<()> {
         self.outgoing_tx
             .send(msg)
-            .map_err(|_| anyhow::anyhow!("no IDE subscribers"))?;
+            .map_err(|_| crate::BridgeError::NoSubscribers)?;
         Ok(())
     }
 
@@ -431,7 +431,7 @@ impl IdeBridgeServer {
         path: &str,
         line: Option<i32>,
         column: Option<i32>,
-    ) -> anyhow::Result<()> {
+    ) -> crate::Result<()> {
         self.broadcast(IdeBridgeMessage::FileOpen {
             path: path.to_string(),
             line,
@@ -446,7 +446,7 @@ impl IdeBridgeServer {
         state: SessionState,
         model: Option<&str>,
         activity: Option<SessionActivity>,
-    ) -> anyhow::Result<()> {
+    ) -> crate::Result<()> {
         self.broadcast(IdeBridgeMessage::StatusUpdate {
             session_id: session_id.to_string(),
             state,
@@ -462,7 +462,7 @@ impl IdeBridgeServer {
         &self,
         session_id: &str,
         activity: SessionActivity,
-    ) -> anyhow::Result<()> {
+    ) -> crate::Result<()> {
         // Record in bounded buffer
         {
             let mut activities = self.activities.lock().await;
@@ -514,13 +514,13 @@ impl Default for IdeBridgeServer {
 }
 
 /// Encode a bridge message as NDJSON.
-pub fn encode_ide_ndjson(msg: &IdeBridgeMessage) -> anyhow::Result<String> {
+pub fn encode_ide_ndjson(msg: &IdeBridgeMessage) -> crate::Result<String> {
     let json = serde_json::to_string(msg)?;
     Ok(format!("{json}\n"))
 }
 
 /// Decode an NDJSON line into a bridge message.
-pub fn decode_ide_ndjson(line: &str) -> anyhow::Result<IdeBridgeMessage> {
+pub fn decode_ide_ndjson(line: &str) -> crate::Result<IdeBridgeMessage> {
     let msg: IdeBridgeMessage = serde_json::from_str(line.trim())?;
     Ok(msg)
 }

@@ -241,7 +241,7 @@ fn test_empty_and_malformed_lines_skipped() {
     let path = dir.path().join("bad.jsonl");
     std::fs::write(
         &path,
-        "\n{\"not_a_valid_entry\": true}\n\n{\"type\":\"user\",\"uuid\":\"u1\",\"session_id\":\"s\",\"cwd\":\"\",\"timestamp\":\"\",\"is_sidechain\":false}\n",
+        "\n{\"not_a_valid_entry\": true}\n\n{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"s\",\"cwd\":\"\",\"timestamp\":\"\",\"isSidechain\":false}\n",
     )
     .unwrap();
 
@@ -250,4 +250,261 @@ fn test_empty_and_malformed_lines_skipped() {
     assert_eq!(entries.len(), 2);
     assert!(matches!(&entries[0], Entry::Unknown(_)));
     assert!(matches!(&entries[1], Entry::Transcript(_)));
+}
+
+// ---------------------------------------------------------------------------
+// Rewind support — file-history snapshot chain + marble-origami replay.
+// These metadata entries persist into the JSONL alongside transcript
+// messages. The rewind picker uses the snapshot chain to know which
+// pre-edit file states it can restore to; marble-origami entries
+// preserve context-collapse staging across resume.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_file_history_snapshot_round_trip_appends_in_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = TranscriptStore::new(dir.path().to_path_buf());
+    let sid = "rewind-session";
+
+    // Seed transcript with at least one message so the JSONL has shape.
+    store
+        .append_message(sid, &make_user_entry("u1", sid, "edit a"))
+        .unwrap();
+
+    // Two distinct messages each get one file-history snapshot.
+    store
+        .insert_file_history_snapshot(
+            sid,
+            "msg-1",
+            json!({"files": {"a.txt": {"content": "v1"}}}),
+            /*is_snapshot_update*/ false,
+        )
+        .unwrap();
+    store
+        .insert_file_history_snapshot(
+            sid,
+            "msg-2",
+            json!({"files": {"a.txt": {"content": "v2"}}}),
+            false,
+        )
+        .unwrap();
+
+    let chain = store.load_file_history_snapshots(sid).unwrap();
+    assert_eq!(chain.len(), 2, "expected one snapshot per message_id");
+    // Order matches insertion order.
+    assert_eq!(
+        chain[0]
+            .pointer("/files/a.txt/content")
+            .and_then(|v| v.as_str()),
+        Some("v1"),
+    );
+    assert_eq!(
+        chain[1]
+            .pointer("/files/a.txt/content")
+            .and_then(|v| v.as_str()),
+        Some("v2"),
+    );
+}
+
+#[test]
+fn test_file_history_snapshot_chain_last_wins_on_update() {
+    // The rewind subsystem's `tracked_edit` flow rewrites a not-yet-
+    // flushed snapshot in place — `is_snapshot_update = true` should
+    // overwrite the prior entry for the same `message_id` rather than
+    // appending a new row. This is the load-bearing invariant for the
+    // rewind picker (TS `buildFileHistorySnapshotChain`).
+    let dir = tempfile::tempdir().unwrap();
+    let store = TranscriptStore::new(dir.path().to_path_buf());
+    let sid = "update-session";
+    store
+        .append_message(sid, &make_user_entry("u1", sid, "edit"))
+        .unwrap();
+
+    store
+        .insert_file_history_snapshot(sid, "msg-A", json!({"version": "first"}), false)
+        .unwrap();
+    store
+        .insert_file_history_snapshot(sid, "msg-B", json!({"version": "first-B"}), false)
+        .unwrap();
+    // Update msg-A in place — new snapshot, same message_id.
+    store
+        .insert_file_history_snapshot(
+            sid,
+            "msg-A",
+            json!({"version": "second"}),
+            /*is_snapshot_update*/ true,
+        )
+        .unwrap();
+
+    let chain = store.load_file_history_snapshots(sid).unwrap();
+    assert_eq!(
+        chain.len(),
+        2,
+        "update should overwrite, not append (got {chain:?})",
+    );
+    // msg-A's slot now holds the updated snapshot…
+    assert_eq!(
+        chain[0].pointer("/version").and_then(|v| v.as_str()),
+        Some("second"),
+    );
+    // …and msg-B is unchanged at its position.
+    assert_eq!(
+        chain[1].pointer("/version").and_then(|v| v.as_str()),
+        Some("first-B"),
+    );
+}
+
+#[test]
+fn test_file_history_snapshot_chain_unknown_id_ignored() {
+    // An update for a `message_id` that hasn't been recorded yet
+    // should be treated as a fresh insert (TS parity — the chain
+    // builder only consults the index for known ids).
+    let entries = vec![
+        Entry::Metadata(MetadataEntry::FileHistorySnapshot {
+            message_id: "msg-A".into(),
+            snapshot: json!({"v": "a1"}),
+            is_snapshot_update: false,
+        }),
+        // is_snapshot_update=true for an *unknown* id — falls through
+        // and gets pushed as a new entry.
+        Entry::Metadata(MetadataEntry::FileHistorySnapshot {
+            message_id: "msg-Z".into(),
+            snapshot: json!({"v": "z-update"}),
+            is_snapshot_update: true,
+        }),
+    ];
+    let chain = build_file_history_snapshot_chain(&entries);
+    assert_eq!(chain.len(), 2);
+    assert_eq!(chain[0].pointer("/v").and_then(|v| v.as_str()), Some("a1"));
+    assert_eq!(
+        chain[1].pointer("/v").and_then(|v| v.as_str()),
+        Some("z-update"),
+    );
+}
+
+#[test]
+fn test_marble_origami_entries_filtered_by_session() {
+    // Both commit and snapshot entries are session-scoped via the
+    // `sessionId` field on the payload. The loader must drop entries
+    // tagged with a different session_id (e.g. when transcripts get
+    // forked / merged).
+    let dir = tempfile::tempdir().unwrap();
+    let store = TranscriptStore::new(dir.path().to_path_buf());
+    let sid = "mo-session";
+    store
+        .append_message(sid, &make_user_entry("u1", sid, "p"))
+        .unwrap();
+
+    // Two commits for our session, one for a different session.
+    store
+        .append_marble_origami_commit(sid, json!({"sessionId": sid, "id": "c1"}))
+        .unwrap();
+    store
+        .append_marble_origami_commit(sid, json!({"sessionId": "other", "id": "c-other"}))
+        .unwrap();
+    store
+        .append_marble_origami_commit(sid, json!({"sessionId": sid, "id": "c2"}))
+        .unwrap();
+
+    // Two snapshots — last-wins by session_id; only the our-session one counts.
+    store
+        .append_marble_origami_snapshot(sid, json!({"sessionId": "other", "v": "ignore"}))
+        .unwrap();
+    store
+        .append_marble_origami_snapshot(sid, json!({"sessionId": sid, "v": "keep-1"}))
+        .unwrap();
+    store
+        .append_marble_origami_snapshot(sid, json!({"sessionId": sid, "v": "keep-2"}))
+        .unwrap();
+
+    let (commits, snapshot) = store.load_marble_origami_entries(sid).unwrap();
+    assert_eq!(commits.len(), 2, "off-session commit must be dropped");
+    assert_eq!(
+        commits[0].pointer("/id").and_then(|v| v.as_str()),
+        Some("c1")
+    );
+    assert_eq!(
+        commits[1].pointer("/id").and_then(|v| v.as_str()),
+        Some("c2")
+    );
+
+    let snap = snapshot.expect("snapshot should exist");
+    assert_eq!(
+        snap.pointer("/v").and_then(|v| v.as_str()),
+        Some("keep-2"),
+        "last-wins on snapshot for matching session",
+    );
+}
+
+/// Wire-format regression: TS Claude Code's JSONL transcript uses
+/// camelCase keys (`parentUuid`, `sessionId`, `isSidechain`, `gitBranch`,
+/// `costUsd`, `inputTokens`, `outputTokens`, `cacheReadTokens`, etc.).
+/// If anyone "corrects" our serde to snake_case, this test fails — and
+/// every prior on-disk transcript becomes unreadable for the next
+/// resume. Lock the wire shape here.
+#[test]
+fn test_transcript_entry_serializes_with_camelcase_keys() {
+    let entry = TranscriptEntry {
+        entry_type: "assistant".into(),
+        uuid: "uu".into(),
+        parent_uuid: Some("pp".into()),
+        session_id: "ss".into(),
+        cwd: "/tmp".into(),
+        timestamp: "2025-01-15T10:00:00Z".into(),
+        version: Some("1.0".into()),
+        git_branch: Some("main".into()),
+        is_sidechain: true,
+        message: Some(json!({"role": "assistant", "content": []})),
+        usage: Some(TranscriptUsage {
+            input_tokens: 1,
+            output_tokens: 2,
+            cache_read_tokens: Some(3),
+            cache_creation_tokens: Some(4),
+        }),
+        model: Some("claude-sonnet-4-6".into()),
+        cost_usd: Some(0.5),
+        extra: serde_json::Map::new(),
+    };
+    let v = serde_json::to_value(&entry).unwrap();
+    // Top-level transcript fields.
+    assert!(
+        v.get("parentUuid").is_some(),
+        "parentUuid must be camelCase"
+    );
+    assert!(v.get("sessionId").is_some());
+    assert!(v.get("isSidechain").is_some());
+    assert!(v.get("gitBranch").is_some());
+    assert!(v.get("costUsd").is_some());
+    // Snake_case versions must be ABSENT — sole source of truth is camelCase.
+    assert!(v.get("parent_uuid").is_none());
+    assert!(v.get("session_id").is_none());
+    assert!(v.get("is_sidechain").is_none());
+    // Nested usage block.
+    let usage = v.get("usage").expect("usage present");
+    assert!(usage.get("inputTokens").is_some());
+    assert!(usage.get("outputTokens").is_some());
+    assert!(usage.get("cacheReadTokens").is_some());
+    assert!(usage.get("cacheCreationTokens").is_some());
+}
+
+/// Same check for `MetadataEntry` — TS writes
+/// `{type:"custom-title", sessionId, customTitle}` (kebab-case
+/// discriminator + camelCase payload).
+#[test]
+fn test_metadata_entry_serializes_with_camelcase_payload() {
+    let m = MetadataEntry::CustomTitle {
+        session_id: "ss".into(),
+        custom_title: "My Bug Hunt".into(),
+    };
+    let v = serde_json::to_value(&m).unwrap();
+    assert_eq!(v.get("type").and_then(|t| t.as_str()), Some("custom-title"));
+    assert_eq!(v.get("sessionId").and_then(|t| t.as_str()), Some("ss"));
+    assert_eq!(
+        v.get("customTitle").and_then(|t| t.as_str()),
+        Some("My Bug Hunt"),
+    );
+    assert!(
+        v.get("custom_title").is_none(),
+        "snake_case payload must be gone"
+    );
 }

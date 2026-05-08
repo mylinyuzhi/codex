@@ -10,7 +10,7 @@ fn record_calls() -> (Arc<Mutex<Vec<String>>>, SummarizerFn) {
         let log = log_for_fn.clone();
         Box::pin(async move {
             log.lock().await.push(prompt.clone());
-            Ok::<_, anyhow::Error>(format!("MEMORY:\n{}", &prompt[..prompt.len().min(40)]))
+            Ok::<_, coco_error::BoxedError>(format!("MEMORY:\n{}", &prompt[..prompt.len().min(40)]))
         })
     });
     (log, summarizer)

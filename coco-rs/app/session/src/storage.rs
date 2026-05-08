@@ -23,8 +23,22 @@ const MAX_TRANSCRIPT_READ_BYTES: u64 = 50 * 1024 * 1024;
 // Entry types
 // ---------------------------------------------------------------------------
 
-/// Token usage for a single transcript entry.
+/// Closed set of `entry_type` discriminators we write to the JSONL.
+/// Centralised so `build_transcript_entry` (write side) and
+/// `reconstruct_message` (read side) can't drift, per the
+/// "no hardcoded strings for closed sets" rule in CLAUDE.md.
+pub mod entry_kind {
+    pub const USER: &str = "user";
+    pub const ASSISTANT: &str = "assistant";
+    pub const SYSTEM: &str = "system";
+    pub const ATTACHMENT: &str = "attachment";
+    pub const TOOL_RESULT: &str = "tool_result";
+}
+
+/// Token usage for a single transcript entry. Field names mirror
+/// TS `Usage` so transcripts are byte-compatible with `claude-code`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct TranscriptUsage {
     pub input_tokens: i64,
     pub output_tokens: i64,
@@ -35,7 +49,17 @@ pub struct TranscriptUsage {
 }
 
 /// A transcript message entry (user, assistant, system, attachment).
+///
+/// On-disk shape mirrors TS `SerializedMessage` from
+/// `types/logs.ts`: camelCase keys (`parentUuid`, `sessionId`,
+/// `isSidechain`, `gitBranch`, `costUsd`) so a JSONL written by
+/// coco-rs is wire-compatible with `claude-code`'s.
+///
+/// `timestamp` is an ISO 8601 / RFC 3339 string — the leaf walk in
+/// `recovery.rs` sorts leaves by lexicographic timestamp, which is
+/// only correct for that format.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct TranscriptEntry {
     #[serde(rename = "type")]
     pub entry_type: String,
@@ -72,25 +96,29 @@ pub struct TranscriptEntry {
 }
 
 /// Metadata entries that live alongside transcript messages in the JSONL.
+///
+/// Variants use `kebab-case` for the `type` discriminator (TS-aligned:
+/// `custom-title`, `last-prompt`, `marble-origami-commit`); inner
+/// fields use camelCase so the on-disk shape matches TS Claude Code
+/// (`{type:"custom-title", sessionId, customTitle}`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum MetadataEntry {
+    #[serde(rename_all = "camelCase")]
     CustomTitle {
         session_id: String,
         custom_title: String,
     },
-    Tag {
-        session_id: String,
-        tag: String,
-    },
+    #[serde(rename_all = "camelCase")]
+    Tag { session_id: String, tag: String },
+    #[serde(rename_all = "camelCase")]
     LastPrompt {
         session_id: String,
         last_prompt: String,
     },
-    Summary {
-        leaf_uuid: String,
-        summary: String,
-    },
+    #[serde(rename_all = "camelCase")]
+    Summary { leaf_uuid: String, summary: String },
+    #[serde(rename_all = "camelCase")]
     CostSummary {
         session_id: String,
         total_input_tokens: i64,
@@ -109,6 +137,7 @@ pub enum MetadataEntry {
     /// passthrough JSON blob to keep `coco-session` free of a
     /// `coco-context` dependency — `coco-context::FileHistorySnapshot`
     /// owns the typed shape and (de)serializes through this Value.
+    #[serde(rename_all = "camelCase")]
     FileHistorySnapshot {
         message_id: String,
         snapshot: serde_json::Value,
@@ -137,6 +166,7 @@ pub enum MetadataEntry {
 
 /// Per-model cost breakdown within a session.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct ModelCostEntry {
     pub input_tokens: i64,
     pub output_tokens: i64,
@@ -174,8 +204,10 @@ impl Serialize for Entry {
 
 /// Lightweight metadata extracted from a transcript file without loading
 /// every message. Mirrors the TS `LiteMetadata` / `LogOption` fields used
-/// by the session picker (`--resume`).
+/// by the session picker (`--resume`). Camel-case serde so the shape
+/// matches TS `LogOption`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct TranscriptMetadata {
     pub session_id: String,
     pub first_prompt: String,
@@ -208,6 +240,7 @@ pub struct TranscriptMetadata {
 ///
 /// Persisted as `<sessions_dir>/<session_id>/subagents/agent-<id>.meta.json`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentMetadata {
     /// Agent type used at original spawn (e.g. `general-purpose`,
     /// `Explore`). Resume reads this to route correctly when
@@ -289,7 +322,7 @@ impl TranscriptStore {
         session_id: &str,
         agent_id: &str,
         messages: &[serde_json::Value],
-    ) -> anyhow::Result<()> {
+    ) -> crate::Result<()> {
         if messages.is_empty() {
             return Ok(());
         }
@@ -318,7 +351,7 @@ impl TranscriptStore {
         &self,
         session_id: &str,
         agent_id: &str,
-    ) -> anyhow::Result<Option<Vec<serde_json::Value>>> {
+    ) -> crate::Result<Option<Vec<serde_json::Value>>> {
         let path = self.agent_transcript_path(session_id, agent_id);
         if !path.exists() {
             return Ok(None);
@@ -349,7 +382,7 @@ impl TranscriptStore {
         session_id: &str,
         agent_id: &str,
         metadata: &AgentMetadata,
-    ) -> anyhow::Result<()> {
+    ) -> crate::Result<()> {
         let path = self.agent_metadata_path(session_id, agent_id);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -365,7 +398,7 @@ impl TranscriptStore {
         &self,
         session_id: &str,
         agent_id: &str,
-    ) -> anyhow::Result<Option<AgentMetadata>> {
+    ) -> crate::Result<Option<AgentMetadata>> {
         let path = self.agent_metadata_path(session_id, agent_id);
         if !path.exists() {
             return Ok(None);
@@ -375,18 +408,18 @@ impl TranscriptStore {
     }
 
     /// Append a single entry to the transcript file (creates dirs if needed).
-    pub fn append_entry(&self, session_id: &str, entry: &Entry) -> anyhow::Result<()> {
+    pub fn append_entry(&self, session_id: &str, entry: &Entry) -> crate::Result<()> {
         let path = self.transcript_path(session_id);
         append_entry_to_file(&path, entry)
     }
 
     /// Append a transcript message, auto-filling session-level fields.
-    pub fn append_message(&self, session_id: &str, entry: &TranscriptEntry) -> anyhow::Result<()> {
+    pub fn append_message(&self, session_id: &str, entry: &TranscriptEntry) -> crate::Result<()> {
         self.append_entry(session_id, &Entry::Transcript(Box::new(entry.clone())))
     }
 
     /// Append a metadata entry (custom-title, tag, last-prompt, summary).
-    pub fn append_metadata(&self, session_id: &str, entry: &MetadataEntry) -> anyhow::Result<()> {
+    pub fn append_metadata(&self, session_id: &str, entry: &MetadataEntry) -> crate::Result<()> {
         self.append_entry(session_id, &Entry::Metadata(entry.clone()))
     }
 
@@ -405,7 +438,7 @@ impl TranscriptStore {
         message_id: &str,
         snapshot_json: serde_json::Value,
         is_snapshot_update: bool,
-    ) -> anyhow::Result<()> {
+    ) -> crate::Result<()> {
         self.append_metadata(
             session_id,
             &MetadataEntry::FileHistorySnapshot {
@@ -425,7 +458,7 @@ impl TranscriptStore {
         &self,
         session_id: &str,
         payload: serde_json::Value,
-    ) -> anyhow::Result<()> {
+    ) -> crate::Result<()> {
         self.append_metadata(session_id, &MetadataEntry::MarbleOrigamiCommit { payload })
     }
 
@@ -436,7 +469,7 @@ impl TranscriptStore {
         &self,
         session_id: &str,
         payload: serde_json::Value,
-    ) -> anyhow::Result<()> {
+    ) -> crate::Result<()> {
         self.append_metadata(
             session_id,
             &MetadataEntry::MarbleOrigamiSnapshot { payload },
@@ -454,7 +487,7 @@ impl TranscriptStore {
     pub fn load_marble_origami_entries(
         &self,
         session_id: &str,
-    ) -> anyhow::Result<(Vec<serde_json::Value>, Option<serde_json::Value>)> {
+    ) -> crate::Result<(Vec<serde_json::Value>, Option<serde_json::Value>)> {
         let entries = self.load_entries(session_id)?;
         let mut commits = Vec::new();
         let mut last_snapshot: Option<serde_json::Value> = None;
@@ -490,7 +523,7 @@ impl TranscriptStore {
     pub fn load_file_history_snapshots(
         &self,
         session_id: &str,
-    ) -> anyhow::Result<Vec<serde_json::Value>> {
+    ) -> crate::Result<Vec<serde_json::Value>> {
         let entries = self.load_entries(session_id)?;
         Ok(build_file_history_snapshot_chain(&entries))
     }
@@ -499,7 +532,7 @@ impl TranscriptStore {
     ///
     /// Skips blank and malformed lines (logged as `Unknown`). Refuses to
     /// read files larger than [`MAX_TRANSCRIPT_READ_BYTES`] to prevent OOM.
-    pub fn load_entries(&self, session_id: &str) -> anyhow::Result<Vec<Entry>> {
+    pub fn load_entries(&self, session_id: &str) -> crate::Result<Vec<Entry>> {
         let path = self.transcript_path(session_id);
         load_entries_from_file(&path)
     }
@@ -509,7 +542,7 @@ impl TranscriptStore {
     pub fn load_transcript_messages(
         &self,
         session_id: &str,
-    ) -> anyhow::Result<Vec<TranscriptEntry>> {
+    ) -> crate::Result<Vec<TranscriptEntry>> {
         let entries = self.load_entries(session_id)?;
         Ok(entries
             .into_iter()
@@ -523,18 +556,18 @@ impl TranscriptStore {
     /// Extract lightweight metadata from a transcript without loading all
     /// messages. Reads the first and last few KB of the file (like the TS
     /// `readLiteMetadata`).
-    pub fn read_metadata(&self, session_id: &str) -> anyhow::Result<TranscriptMetadata> {
+    pub fn read_metadata(&self, session_id: &str) -> crate::Result<TranscriptMetadata> {
         let path = self.transcript_path(session_id);
         read_transcript_metadata(&path, session_id)
     }
 
     /// List all session IDs that have transcript files, newest first.
-    pub fn list_sessions(&self) -> anyhow::Result<Vec<TranscriptMetadata>> {
+    pub fn list_sessions(&self) -> crate::Result<Vec<TranscriptMetadata>> {
         list_transcript_sessions(&self.sessions_dir)
     }
 
     /// List sessions, excluding sidechain transcripts.
-    pub fn list_main_sessions(&self) -> anyhow::Result<Vec<TranscriptMetadata>> {
+    pub fn list_main_sessions(&self) -> crate::Result<Vec<TranscriptMetadata>> {
         let all = self.list_sessions()?;
         Ok(all.into_iter().filter(|m| !m.is_sidechain).collect())
     }
@@ -545,7 +578,7 @@ impl TranscriptStore {
     }
 
     /// Delete a transcript file.
-    pub fn delete(&self, session_id: &str) -> anyhow::Result<()> {
+    pub fn delete(&self, session_id: &str) -> crate::Result<()> {
         let path = self.transcript_path(session_id);
         if path.exists() {
             std::fs::remove_file(&path)?;
@@ -596,7 +629,7 @@ fn matches_session(payload: &serde_json::Value, session_id: &str) -> bool {
 }
 
 /// Append a single JSON entry as one JSONL line.
-fn append_entry_to_file(path: &Path, entry: &Entry) -> anyhow::Result<()> {
+fn append_entry_to_file(path: &Path, entry: &Entry) -> crate::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -610,18 +643,20 @@ fn append_entry_to_file(path: &Path, entry: &Entry) -> anyhow::Result<()> {
 }
 
 /// Load and parse all JSONL entries from a file.
-fn load_entries_from_file(path: &Path) -> anyhow::Result<Vec<Entry>> {
+fn load_entries_from_file(path: &Path) -> crate::Result<Vec<Entry>> {
     if !path.exists() {
-        anyhow::bail!("transcript file not found: {}", path.display());
+        return Err(crate::SessionError::TranscriptNotFound {
+            path: path.to_path_buf(),
+        });
     }
 
     let meta = std::fs::metadata(path)?;
     if meta.len() > MAX_TRANSCRIPT_READ_BYTES {
-        anyhow::bail!(
+        return Err(crate::SessionError::generic(format!(
             "transcript file too large ({} bytes, max {MAX_TRANSCRIPT_READ_BYTES}): {}",
             meta.len(),
             path.display(),
-        );
+        )));
     }
 
     let file = std::fs::File::open(path)?;
@@ -656,11 +691,23 @@ fn parse_entry(line: &str) -> Entry {
     }
 }
 
+/// Lite-read window: when a transcript exceeds this size, scan only
+/// the first and last `LITE_READ_WINDOW` bytes rather than loading
+/// the whole file. Matches TS `LITE_METADATA_WINDOW = 64 KB` —
+/// session-picker metadata (`first_prompt`, `custom_title`, `tag`,
+/// `last_prompt`, `git_branch`, `cwd`) lives at the top of the
+/// transcript, while the re-appended-on-exit values land near the
+/// tail; 64 KB at each end is enough to capture both without
+/// streaming the multi-megabyte body.
+const LITE_READ_WINDOW: u64 = 64 * 1024;
+
 /// Read lightweight metadata from a transcript file without loading all
 /// messages. Scans the first and last portion of the file.
-fn read_transcript_metadata(path: &Path, session_id: &str) -> anyhow::Result<TranscriptMetadata> {
+fn read_transcript_metadata(path: &Path, session_id: &str) -> crate::Result<TranscriptMetadata> {
     if !path.exists() {
-        anyhow::bail!("transcript file not found: {}", path.display());
+        return Err(crate::SessionError::TranscriptNotFound {
+            path: path.to_path_buf(),
+        });
     }
 
     let file_meta = std::fs::metadata(path)?;
@@ -682,8 +729,17 @@ fn read_transcript_metadata(path: &Path, session_id: &str) -> anyhow::Result<Tra
         .as_millis()
         .to_string();
 
-    // For small files, load everything. For large files, read head + tail.
-    let content = std::fs::read_to_string(path)?;
+    // For small files (≤ 2× the lite window) load everything; for
+    // larger transcripts scan only the head and tail. The head pass
+    // captures `first_prompt`, `cwd`, `git_branch`, and the
+    // sidechain/message-count signal; the tail pass picks up the
+    // metadata entries (`custom-title`, `tag`, `last-prompt`) that
+    // TS re-appends on exit so they survive head-truncation.
+    let content = if file_size > LITE_READ_WINDOW * 2 {
+        read_head_and_tail(path, LITE_READ_WINDOW)?
+    } else {
+        std::fs::read_to_string(path)?
+    };
     let lines: Vec<&str> = content.lines().collect();
 
     let mut first_prompt = String::new();
@@ -758,8 +814,62 @@ fn read_transcript_metadata(path: &Path, session_id: &str) -> anyhow::Result<Tra
     })
 }
 
+/// Read the first `window` bytes and the last `window` bytes of
+/// `path`, joining them with a single newline. Drops any partial
+/// JSONL lines at the seams (the byte right after the head window
+/// and the byte at the start of the tail window may sit mid-record)
+/// so the caller's `parse_entry` loop only sees complete lines.
+///
+/// TS parity: `readSessionLite()` in `utils/listSessionsImpl.ts`.
+fn read_head_and_tail(path: &Path, window: u64) -> crate::Result<String> {
+    use std::io::Read;
+    use std::io::Seek;
+    use std::io::SeekFrom;
+
+    let mut file = std::fs::File::open(path)?;
+    let total = file.metadata()?.len();
+
+    let head_len = window.min(total);
+    let mut head_buf = vec![0u8; head_len as usize];
+    file.read_exact(&mut head_buf)?;
+    // Truncate at the last newline so we don't carry a partial
+    // record into `parse_entry` (which would surface as `Unknown`).
+    if let Some(idx) = find_last_newline(&head_buf) {
+        head_buf.truncate(idx);
+    }
+
+    let tail_len = window.min(total.saturating_sub(head_len));
+    let mut tail_buf = vec![0u8; tail_len as usize];
+    if tail_len > 0 {
+        file.seek(SeekFrom::End(-(tail_len as i64)))?;
+        file.read_exact(&mut tail_buf)?;
+        // Skip leading partial line (everything up to the first '\n').
+        if let Some(idx) = tail_buf.iter().position(|b| *b == b'\n') {
+            tail_buf.drain(..=idx);
+        } else {
+            // No newline in the tail window — every byte belongs to a
+            // single oversized line; drop it.
+            tail_buf.clear();
+        }
+    }
+
+    let mut combined = Vec::with_capacity(head_buf.len() + 1 + tail_buf.len());
+    combined.extend_from_slice(&head_buf);
+    combined.push(b'\n');
+    combined.extend_from_slice(&tail_buf);
+    String::from_utf8(combined)
+        .map_err(|e| crate::SessionError::generic(format!("transcript not utf-8: {e}")))
+}
+
+/// Index of the rightmost newline byte in `buf`, or `None` when no
+/// newline is present. Used by [`read_head_and_tail`] to drop partial
+/// records at the head/tail seams.
+fn find_last_newline(buf: &[u8]) -> Option<usize> {
+    buf.iter().rposition(|b| *b == b'\n')
+}
+
 /// List all transcript sessions from a directory, newest first.
-fn list_transcript_sessions(sessions_dir: &Path) -> anyhow::Result<Vec<TranscriptMetadata>> {
+fn list_transcript_sessions(sessions_dir: &Path) -> crate::Result<Vec<TranscriptMetadata>> {
     if !sessions_dir.exists() {
         return Ok(Vec::new());
     }

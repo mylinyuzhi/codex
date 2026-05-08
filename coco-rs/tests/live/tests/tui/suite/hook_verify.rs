@@ -55,7 +55,6 @@ pub async fn run() -> Result<()> {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: Some("recording pre-tool trace".into()),
     };
     let post_hook = HookDefinition {
@@ -72,7 +71,6 @@ pub async fn run() -> Result<()> {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: Some("recording post-tool trace".into()),
     };
 

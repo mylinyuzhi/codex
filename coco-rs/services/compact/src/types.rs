@@ -288,21 +288,63 @@ pub fn extract_discovered_tool_names(messages: &[Message]) -> BTreeSet<String> {
 }
 
 /// Compaction errors.
-#[derive(Debug, thiserror::Error)]
+#[coco_error::stack_trace_debug]
+#[derive(snafu::Snafu)]
+#[snafu(visibility(pub), module)]
 pub enum CompactError {
     /// LLM summarization call failed.
-    #[error("LLM call failed: {message}")]
-    LlmCallFailed { message: String },
+    #[snafu(display("LLM call failed: {message}"))]
+    LlmCallFailed {
+        message: String,
+        #[snafu(implicit)]
+        location: coco_error::Location,
+    },
     /// Token budget exceeded.
-    #[error("token budget exceeded: {actual} > {limit}")]
-    TokenBudgetExceeded { actual: i64, limit: i64 },
+    #[snafu(display("token budget exceeded: {actual} > {limit}"))]
+    TokenBudgetExceeded {
+        actual: i64,
+        limit: i64,
+        #[snafu(implicit)]
+        location: coco_error::Location,
+    },
     /// Cancelled by user.
-    #[error("compaction cancelled")]
-    Cancelled,
+    #[snafu(display("compaction cancelled"))]
+    Cancelled {
+        #[snafu(implicit)]
+        location: coco_error::Location,
+    },
     /// Stream retry exhausted.
-    #[error("stream retry exhausted after {attempts} attempts")]
-    StreamRetryExhausted { attempts: i32 },
+    #[snafu(display("stream retry exhausted after {attempts} attempts"))]
+    StreamRetryExhausted {
+        attempts: i32,
+        #[snafu(implicit)]
+        location: coco_error::Location,
+    },
     /// Prompt too long for summarization.
-    #[error("prompt too long: {message}")]
-    PromptTooLong { message: String },
+    #[snafu(display("prompt too long: {message}"))]
+    PromptTooLong {
+        message: String,
+        #[snafu(implicit)]
+        location: coco_error::Location,
+    },
 }
+
+impl coco_error::ErrorExt for CompactError {
+    fn status_code(&self) -> coco_error::StatusCode {
+        use coco_error::StatusCode;
+        match self {
+            Self::LlmCallFailed { .. } => StatusCode::ProviderError,
+            Self::TokenBudgetExceeded { .. } | Self::PromptTooLong { .. } => {
+                StatusCode::ContextWindowExceeded
+            }
+            Self::Cancelled { .. } => StatusCode::Cancelled,
+            Self::StreamRetryExhausted { .. } => StatusCode::StreamError,
+        }
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+pub use compact_error::*;

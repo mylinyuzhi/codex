@@ -21,7 +21,9 @@ disable-default-metrics-exporter = []
 
 [dependencies]
 chrono = { workspace = true }
+coco-error = { workspace = true }
 coco-utils-absolute-path = { workspace = true }
+coco-utils-common = { workspace = true }
 eventsource-stream = { workspace = true }
 opentelemetry = { workspace = true, features = ["logs", "metrics", "trace"] }
 opentelemetry-appender-tracing = { workspace = true }
@@ -47,8 +49,9 @@ strum = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+tracing-appender = { workspace = true }
 tracing-opentelemetry = { workspace = true }
-tracing-subscriber = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 
 [dev-dependencies]
 opentelemetry_sdk = { workspace = true, features = ["testing"] }

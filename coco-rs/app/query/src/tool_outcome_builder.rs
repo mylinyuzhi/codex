@@ -211,8 +211,20 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
             let rendered_error = format!("Error: {error_message}");
             warn!(tool = %tool_name, error = %error, "tool execution failed");
 
+            // TS `is_interrupt`: PostToolUseFailure carries `is_interrupt: true`
+            // when the failure was a user/runtime cancellation rather than a
+            // tool-internal error (TS `executePostToolUseFailureHooks` reads
+            // it from the AbortController's `signal.aborted`).
+            let is_interrupt = matches!(error, coco_tool_runtime::ToolError::Cancelled);
+
             let post = HookController::new(hooks, orchestration_ctx, hook_tx)
-                .run_post_tool_use_failure(&tool_name, &effective_input, &error_message)
+                .run_post_tool_use_failure(
+                    &tool_name,
+                    &tool_use_id,
+                    &effective_input,
+                    &error_message,
+                    is_interrupt,
+                )
                 .await;
 
             let tool_result_msg = create_error_tool_result(

@@ -75,6 +75,10 @@ pub enum Overlay {
     /// TS: `planApprovalOverlay` + `PlanApprovalRequest` flow in
     /// `tools/ExitPlanModeTool/ExitPlanModeV2Tool.ts`.
     PlanApproval(PlanApprovalOverlay),
+    /// `/memory` file-picker — list managed/user/project/local CLAUDE.md
+    /// entries and open the chosen file in `$VISUAL || $EDITOR`.
+    /// TS: `commands/memory/memory.tsx::Dialog<MemoryFileSelector>`.
+    MemoryDialog(MemoryDialogOverlay),
 }
 
 impl Overlay {
@@ -117,7 +121,8 @@ impl Overlay {
             | Self::TaskDetail(_)
             | Self::Doctor(_)
             | Self::ContextVisualization
-            | Self::Settings(_) => 7,
+            | Self::Settings(_)
+            | Self::MemoryDialog(_) => 7,
             // 8 — help (read-only reference)
             Self::Help => 8,
         }
@@ -584,6 +589,67 @@ impl PlanApprovalOverlay {
 
     pub fn is_approve_focused(&self) -> bool {
         self.focused == 0
+    }
+}
+
+/// `/memory` file-picker overlay state. Built from the
+/// `TuiOnlyEvent::OpenMemoryDialog` payload; entries are pre-resolved
+/// paths plus a label and scope tag. Selection is a simple index — there
+/// is no filter (the entry count is small and fixed per session).
+#[derive(Debug, Clone)]
+pub struct MemoryDialogOverlay {
+    pub entries: Vec<MemoryDialogEntry>,
+    pub selected: i32,
+}
+
+/// A single row in the memory picker — TUI-side mirror of
+/// `coco_types::MemoryDialogEntry` so the overlay struct stays free of
+/// the coco-types dependency at the field level.
+#[derive(Debug, Clone)]
+pub struct MemoryDialogEntry {
+    pub path: std::path::PathBuf,
+    pub label: String,
+    pub scope: MemoryDialogScope,
+}
+
+/// Scope tag for a memory file picker entry. Mirrors
+/// `coco_types::MemoryDialogScope`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryDialogScope {
+    Managed,
+    User,
+    Project,
+    ProjectLocal,
+    Subdir,
+}
+
+impl MemoryDialogScope {
+    /// Build from the wire payload variant.
+    pub fn from_wire(s: coco_types::MemoryDialogScope) -> Self {
+        match s {
+            coco_types::MemoryDialogScope::Managed => Self::Managed,
+            coco_types::MemoryDialogScope::User => Self::User,
+            coco_types::MemoryDialogScope::Project => Self::Project,
+            coco_types::MemoryDialogScope::ProjectLocal => Self::ProjectLocal,
+            coco_types::MemoryDialogScope::Subdir => Self::Subdir,
+        }
+    }
+}
+
+impl MemoryDialogOverlay {
+    /// Build from the wire payload (`TuiOnlyEvent::OpenMemoryDialog`).
+    pub fn from_wire(entries: Vec<coco_types::MemoryDialogEntry>) -> Self {
+        Self {
+            entries: entries
+                .into_iter()
+                .map(|e| MemoryDialogEntry {
+                    path: std::path::PathBuf::from(e.path),
+                    label: e.label,
+                    scope: MemoryDialogScope::from_wire(e.scope),
+                })
+                .collect(),
+            selected: 0,
+        }
     }
 }
 

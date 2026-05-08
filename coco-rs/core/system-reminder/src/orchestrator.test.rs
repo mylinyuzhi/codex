@@ -327,8 +327,8 @@ async fn with_default_generators_registers_all_builtins() {
         SystemReminderOrchestrator::new(SystemReminderConfig::default()).with_default_generators();
     assert_eq!(
         o.generator_count(),
-        42,
-        "Phase A/B/C (11) + Phase-1 (5) + Phase-2 (3) + Phase-3 (14) + Phase-4 user-input (3) + Memory (2) + Main IDE (2) + Silent native (2)"
+        50,
+        "Phase A/B/C (11) + Phase-1 (5) + Phase-2 (3) + Phase-3 (14) + Phase-4 user-input (3) + Memory (2) + Main IDE (2) + Silent native (2) + Audit-add (8)"
     );
 }
 
@@ -377,6 +377,8 @@ async fn default_registry_order_matches_ts_attachment_batches() {
             AtMentionedFiles,
             McpResources,
             AgentMentions,
+            // Audit-add UserPrompt tier
+            SkillDiscovery,
             // allThreadAttachments
             QueuedCommand,
             DateChange,
@@ -400,6 +402,10 @@ async fn default_registry_order_matches_ts_attachment_batches() {
             AgentPendingMessages,
             CriticalSystemReminder,
             CompactionReminder,
+            // Audit-add Core tier
+            CurrentSessionMemory,
+            DynamicSkill,
+            TeammateShutdownBatch,
             // mainThreadAttachments plus hook/invoked-skill renderers
             IdeSelection,
             IdeOpenedFile,
@@ -416,6 +422,11 @@ async fn default_registry_order_matches_ts_attachment_batches() {
             OutputTokenUsage,
             VerifyPlanReminder,
             InvokedSkills,
+            // Audit-add MainAgentOnly tier
+            MaxTurnsReached,
+            CommandPermissions,
+            StructuredOutput,
+            ContextEfficiency,
             // silent reminder-native attachments
             AlreadyReadFile,
             EditedImageFile,

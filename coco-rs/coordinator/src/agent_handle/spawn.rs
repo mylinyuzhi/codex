@@ -31,15 +31,76 @@ use super::SwarmAgentHandle;
 /// flag, attachment emitter) is approximated here — subagent-spawn
 /// hooks don't need the same wire-up the parent's per-turn hooks do.
 pub(super) fn hook_ctx_for_cwd(cwd: &str) -> coco_hooks::orchestration::OrchestrationContext {
+    hook_ctx_for_subagent(cwd, None, None)
+}
+
+/// Variant that stamps `agent_id` / `agent_type` onto the
+/// [`coco_hooks::orchestration::OrchestrationContext`] so every fired
+/// hook's `BaseHookInput` carries the subagent identity (TS parity:
+/// `createBaseHookInput()` in `utils/hooks.ts:301-328`).
+pub(super) fn hook_ctx_for_subagent(
+    cwd: &str,
+    agent_id: Option<&str>,
+    agent_type: Option<&str>,
+) -> coco_hooks::orchestration::OrchestrationContext {
     coco_hooks::orchestration::OrchestrationContext {
         session_id: String::new(),
         cwd: std::path::PathBuf::from(cwd),
         project_dir: Some(std::path::PathBuf::from(cwd)),
         permission_mode: None,
+        transcript_path: None,
+        agent_id: agent_id.map(str::to_string),
+        agent_type: agent_type.map(str::to_string),
         cancel: tokio_util::sync::CancellationToken::new(),
         disable_all_hooks: false,
         allow_managed_hooks_only: false,
         attachment_emitter: coco_messages::AttachmentEmitter::noop(),
+        // Subagent-spawn hooks aren't reminder-bearing in TS — their
+        // output flows back into the spawn's initial-user message via
+        // `additional_contexts`, not the per-turn reminder pipeline.
+        sync_event_sink: None,
+        http_url_allowlist: None,
+        http_env_var_policy: None,
+        async_registry: None,
+        llm_handle: None,
+        workspace_trust_accepted: None,
+    }
+}
+
+/// Free-function helper for `WorktreeCreate` (TS
+/// `executeWorktreeCreateHook(slug)` at `worktree.ts:716/913/1262`).
+/// Coco-rs does git creation directly (`AgentWorktreeManager::create_for`),
+/// so the hook is observe-only — non-zero exit codes are logged but
+/// don't roll back the worktree.
+pub(super) async fn fire_worktree_create_hook(
+    registry: Option<Arc<coco_hooks::HookRegistry>>,
+    cwd: &str,
+    name: &str,
+) {
+    let Some(registry) = registry else { return };
+    let ctx = hook_ctx_for_cwd(cwd);
+    if let Err(e) = coco_hooks::orchestration::execute_worktree_create(&registry, &ctx, name).await
+    {
+        tracing::warn!(error = %e, %name, "WorktreeCreate hook firing failed");
+    }
+}
+
+/// Free-function helper for `WorktreeRemove` (TS
+/// `executeWorktreeRemoveHook(path)` at `worktree.ts:827/968`). Fired
+/// only when `cleanup_if_unchanged` actually removed the worktree;
+/// `Kept` outcomes preserve the user's work so the remove notification
+/// is suppressed (TS parity).
+pub(super) async fn fire_worktree_remove_hook(
+    registry: Option<Arc<coco_hooks::HookRegistry>>,
+    cwd: &str,
+    worktree_path: &str,
+) {
+    let Some(registry) = registry else { return };
+    let ctx = hook_ctx_for_cwd(cwd);
+    if let Err(e) =
+        coco_hooks::orchestration::execute_worktree_remove(&registry, &ctx, worktree_path).await
+    {
+        tracing::warn!(error = %e, %worktree_path, "WorktreeRemove hook firing failed");
     }
 }
 
@@ -55,7 +116,7 @@ pub(super) async fn fire_subagent_start_for_task(
     let Some(registry) = registry else {
         return prompt.to_string();
     };
-    let ctx = hook_ctx_for_cwd(cwd);
+    let ctx = hook_ctx_for_subagent(cwd, Some(agent_id), Some(agent_type));
     match coco_hooks::orchestration::execute_subagent_start(&registry, &ctx, agent_type, agent_id)
         .await
     {
@@ -91,13 +152,15 @@ pub(super) async fn fire_subagent_stop_for_task(
     transcript_path: Option<&str>,
 ) {
     let Some(registry) = registry else { return };
-    let ctx = hook_ctx_for_cwd(cwd);
+    let ctx = hook_ctx_for_subagent(cwd, Some(agent_id), Some(agent_type));
     if let Err(e) = coco_hooks::orchestration::execute_subagent_stop(
         &registry,
         &ctx,
+        /*stop_hook_active*/ false,
         agent_type,
         agent_id,
-        transcript_path,
+        transcript_path.unwrap_or(""),
+        /*last_assistant_message*/ None,
     )
     .await
     {
@@ -200,7 +263,11 @@ impl SwarmAgentHandle {
         match coco_hooks::load_hooks_from_config(&def.hooks, coco_types::HookScope::Session) {
             Ok(hooks) if !hooks.is_empty() => {
                 let count = hooks.len();
-                registry.register_for_agent(agent_id.to_string(), hooks);
+                // `is_agent: true` — subagent termination fires
+                // SubagentStop, not Stop, so frontmatter Stop hooks
+                // need rewriting (parity with TS
+                // registerFrontmatterHooks.ts:38-45).
+                registry.register_for_agent(agent_id.to_string(), hooks, /*is_agent*/ true);
                 tracing::debug!(
                     agent_type = %def.agent_type,
                     %agent_id,
@@ -385,9 +452,11 @@ impl SwarmAgentHandle {
         match coco_hooks::orchestration::execute_subagent_stop(
             &registry,
             &ctx,
+            /*stop_hook_active*/ false,
             agent_type,
             agent_id,
-            transcript_path,
+            transcript_path.unwrap_or(""),
+            /*last_assistant_message*/ None,
         )
         .await
         {
@@ -448,6 +517,14 @@ impl SwarmAgentHandle {
                 .next()
                 .unwrap_or("0")
         );
+        tracing::info!(
+            agent_id = %agent_id,
+            agent_type = %agent_type,
+            run_in_background = request.run_in_background,
+            isolation = ?request.isolation,
+            spawn_mode = ?request.spawn_mode,
+            "subagent spawn dispatch"
+        );
 
         // Validation must complete BEFORE registering the agent state.
         // Earlier code pushed the entry first, then validated — leaving a
@@ -486,7 +563,20 @@ impl SwarmAgentHandle {
                             .collect::<String>()
                     );
                     match m.create_for(&slug) {
-                        Ok(s) => Some(s),
+                        Ok(s) => {
+                            // TS `executeWorktreeCreateHook(slug)` fires
+                            // here so user hooks can react to (or override
+                            // future creations of) per-agent worktrees.
+                            // Coco-rs always uses git internally — the
+                            // hook is observe-only for now (`worktree.ts:716`).
+                            fire_worktree_create_hook(
+                                self.hook_registry().cloned(),
+                                &self.cwd,
+                                &slug,
+                            )
+                            .await;
+                            Some(s)
+                        }
                         Err(e) => {
                             return Ok(spawn_failed(
                                 agent_id,
@@ -512,7 +602,10 @@ impl SwarmAgentHandle {
 
         let Some(engine) = self.execution_engine() else {
             if let (Some(m), Some(session)) = (self.worktree_manager(), worktree_session.clone()) {
+                let removed_path = session.path.display().to_string();
                 let _ = m.cleanup_if_unchanged(session);
+                fire_worktree_remove_hook(self.hook_registry().cloned(), &self.cwd, &removed_path)
+                    .await;
             }
             return Ok(spawn_failed(
                 agent_id,
@@ -798,12 +891,28 @@ impl SwarmAgentHandle {
         self.cleanup_per_agent_mcp(&agent_id).await;
 
         let (worktree_path, worktree_branch) = match (self.worktree_manager(), worktree_session) {
-            (Some(m), Some(session)) => match m.cleanup_if_unchanged(session) {
-                crate::worktree::WorktreeCleanupOutcome::Removed => (None, None),
-                crate::worktree::WorktreeCleanupOutcome::Kept { path, branch, .. } => {
-                    (Some(path), Some(branch))
+            (Some(m), Some(session)) => {
+                let session_path = session.path.display().to_string();
+                match m.cleanup_if_unchanged(session) {
+                    crate::worktree::WorktreeCleanupOutcome::Removed => {
+                        // TS `executeWorktreeRemoveHook(worktreePath)`
+                        // (`worktree.ts:827`) fires only when the
+                        // worktree was actually removed. Kept paths
+                        // mean the user's work is preserved → no
+                        // remove notification.
+                        fire_worktree_remove_hook(
+                            self.hook_registry().cloned(),
+                            &self.cwd,
+                            &session_path,
+                        )
+                        .await;
+                        (None, None)
+                    }
+                    crate::worktree::WorktreeCleanupOutcome::Kept { path, branch, .. } => {
+                        (Some(path), Some(branch))
+                    }
                 }
-            },
+            }
             _ => (None, None),
         };
 
@@ -819,6 +928,15 @@ impl SwarmAgentHandle {
 
         match query_result {
             Ok(qr) => {
+                tracing::info!(
+                    agent_id = %agent_id,
+                    agent_type = %agent_type,
+                    tool_use_count = qr.tool_use_count,
+                    tokens_in = qr.input_tokens,
+                    tokens_out = qr.output_tokens,
+                    duration_ms,
+                    "subagent spawn ok"
+                );
                 let response_text = self.classify_handoff_if_needed(agent_type, &qr).await;
                 self.summarize_handoff_if_needed(agent_type, &qr, &agent_id)
                     .await;
@@ -839,20 +957,29 @@ impl SwarmAgentHandle {
                     prompt: None,
                 })
             }
-            Err(e) => Ok(AgentSpawnResponse {
-                status: AgentSpawnStatus::Failed,
-                agent_id: Some(agent_id),
-                result: None,
-                error: Some(e.to_string()),
-                total_tool_use_count: 0,
-                total_tokens: 0,
-                duration_ms,
-                worktree_path,
-                worktree_branch,
-                output_file: None,
-                prompt: None,
-                ..Default::default()
-            }),
+            Err(e) => {
+                tracing::warn!(
+                    agent_id = %agent_id,
+                    agent_type = %agent_type,
+                    duration_ms,
+                    error = %e,
+                    "subagent spawn failed"
+                );
+                Ok(AgentSpawnResponse {
+                    status: AgentSpawnStatus::Failed,
+                    agent_id: Some(agent_id),
+                    result: None,
+                    error: Some(e.to_string()),
+                    total_tool_use_count: 0,
+                    total_tokens: 0,
+                    duration_ms,
+                    worktree_path,
+                    worktree_branch,
+                    output_file: None,
+                    prompt: None,
+                    ..Default::default()
+                })
+            }
         }
     }
 
@@ -876,7 +1003,10 @@ impl SwarmAgentHandle {
     ) -> Result<AgentSpawnResponse, String> {
         if worktree_session.is_some() {
             if let (Some(m), Some(session)) = (self.worktree_manager(), worktree_session.clone()) {
+                let removed_path = session.path.display().to_string();
                 let _ = m.cleanup_if_unchanged(session);
+                fire_worktree_remove_hook(self.hook_registry().cloned(), &self.cwd, &removed_path)
+                    .await;
             }
             return Ok(spawn_failed(
                 agent_id,
@@ -1115,7 +1245,10 @@ impl SwarmAgentHandle {
             // `cancel`; the extra select here covers a cancel mid-engine.
             let outcome = tokio::select! {
                 _ = cancel_for_task.cancelled() => {
-                    Err(anyhow::anyhow!("task cancelled by leader"))
+                    Err(Box::new(coco_error::PlainError::new(
+                        "task cancelled by leader",
+                        coco_error::StatusCode::Cancelled,
+                    )) as coco_error::BoxedError)
                 }
                 r = engine.execute_query(&effective_prompt, query_config) => r,
             };

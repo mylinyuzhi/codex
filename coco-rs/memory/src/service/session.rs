@@ -156,6 +156,12 @@ impl SessionMemoryService {
                 }
             }
         }
+        tracing::info!(
+            current_tokens,
+            tool_calls_in_last_turn,
+            had_tool_calls_last_turn,
+            "session-memory extract dispatch"
+        );
         self.run(current_tokens, tool_calls_in_last_turn).await
     }
 

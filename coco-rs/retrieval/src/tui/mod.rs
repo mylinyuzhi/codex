@@ -21,7 +21,7 @@
 //! use coco_retrieval::config::RetrievalConfig;
 //!
 //! #[tokio::main]
-//! async fn main() -> anyhow::Result<()> {
+//! async fn main() -> crate::Result<()> {
 //!     let config = RetrievalConfig::load(&std::env::current_dir()?, &coco_home)?;
 //!     run_tui(config).await
 //! }
@@ -66,7 +66,7 @@ use crate::facade::RetrievalFacade;
 pub async fn run_tui(
     config: RetrievalConfig,
     service: Option<Arc<RetrievalFacade>>,
-) -> anyhow::Result<()> {
+) -> crate::Result<()> {
     // Initialize terminal
     let mut terminal = init_terminal()?;
 
@@ -87,7 +87,7 @@ pub async fn run_tui(
 /// Loads configuration from the current directory.
 /// Note: This creates a display-only TUI without a service.
 /// Use `run_tui()` with a service parameter for full functionality.
-pub async fn run_tui_default() -> anyhow::Result<()> {
+pub async fn run_tui_default() -> crate::Result<()> {
     let workdir = std::env::current_dir()?;
     let coco_home = crate::find_coco_home();
     let config = RetrievalConfig::load(&workdir, &coco_home)?;

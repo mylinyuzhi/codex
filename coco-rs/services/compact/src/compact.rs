@@ -18,6 +18,27 @@ use coco_messages::UserMessage;
 use coco_types::CompactTrigger;
 use uuid::Uuid;
 
+/// Build a "compact summary" user message from a pre-computed summary
+/// string. Used by callers that already have a summary in hand
+/// (e.g., a slash-command handler returning
+/// [`coco_commands::CommandResult::Compact`]) and just need to mark it
+/// as a compact-boundary in history. Equivalent to the inline
+/// construction the LLM-summarized path uses.
+#[must_use]
+pub fn build_compact_summary_message(summary: &str) -> Message {
+    Message::User(UserMessage {
+        message: coco_messages::LlmMessage::user_text(summary),
+        uuid: Uuid::new_v4(),
+        timestamp: String::new(),
+        is_visible_in_transcript_only: true,
+        is_virtual: false,
+        is_compact_summary: true,
+        permission_mode: None,
+        origin: None,
+        parent_tool_use_id: None,
+    })
+}
+
 use crate::grouping::group_messages_by_api_round;
 use crate::tokens;
 use crate::types::CompactError;
@@ -90,6 +111,19 @@ pub type PostCompactAttachmentFn =
 ///
 /// The `summarize_fn` callback avoids depending on coco-inference:
 /// the caller provides an async function that takes a prompt and returns a summary.
+#[tracing::instrument(
+    skip_all,
+    name = "compaction",
+    fields(
+        trigger = ?config.trigger,
+        keep_recent = config.keep_recent_rounds,
+        message_count = messages.len(),
+        is_recompaction = config
+            .recompaction_info
+            .as_ref()
+            .is_some_and(|i| i.is_recompaction),
+    ),
+)]
 pub async fn compact_conversation<F, Fut>(
     messages: &[Message],
     config: &CompactRunOptions,
@@ -100,6 +134,7 @@ where
     F: Fn(String) -> Fut,
     Fut: std::future::Future<Output = Result<String, String>>,
 {
+    tracing::info!("compaction begin (full)");
     // Step 1: Strip images/documents to avoid prompt-too-long on media-heavy conversations
     let stripped = strip_images_from_messages(messages);
     let working_messages = strip_reinjected_attachments(&stripped);
@@ -108,6 +143,11 @@ where
     let rounds = group_messages_by_api_round(&working_messages);
 
     if rounds.len() <= config.keep_recent_rounds {
+        tracing::info!(
+            rounds = rounds.len(),
+            keep_recent = config.keep_recent_rounds,
+            "compaction skipped: insufficient rounds"
+        );
         let boundary = create_boundary_marker(config.trigger, 0, 0, None);
         return Ok(CompactResult {
             boundary_marker: boundary,
@@ -132,6 +172,13 @@ where
     let recent_rounds = &rounds[split_point..];
 
     let pre_tokens = tokens::estimate_tokens(messages);
+    tracing::debug!(
+        rounds_total = rounds.len(),
+        rounds_old = old_rounds.len(),
+        rounds_recent = recent_rounds.len(),
+        pre_tokens,
+        "compaction: rounds split, calling summarizer"
+    );
 
     // Step 4: Build summary prompt
     let summary_prompt = build_summary_prompt(old_rounds, config);
@@ -172,6 +219,14 @@ where
         + tokens::estimate_tokens(&messages_to_keep);
 
     let messages_summarized = old_rounds.iter().map(Vec::len).sum::<usize>() as i32;
+    tracing::info!(
+        pre_tokens,
+        post_tokens,
+        freed_tokens = pre_tokens - post_tokens,
+        messages_summarized,
+        kept_messages = messages_to_keep.len(),
+        "compaction summarizer succeeded"
+    );
     let mut boundary = create_boundary_marker(
         config.trigger,
         pre_tokens,
@@ -237,6 +292,16 @@ where
 /// Tool-pair safety: `messages_to_keep` is filtered against
 /// `is_compact_boundary_message` to avoid re-introducing stale
 /// boundaries after a re-compact (TS:798).
+#[tracing::instrument(
+    skip_all,
+    name = "compaction",
+    fields(
+        trigger = "partial",
+        direction = ?direction,
+        pivot_index = pivot_index,
+        message_count = all_messages.len(),
+    ),
+)]
 pub async fn partial_compact_conversation<F, Fut>(
     all_messages: &[Message],
     pivot_index: usize,
@@ -250,10 +315,17 @@ where
     F: Fn(String) -> Fut,
     Fut: std::future::Future<Output = Result<String, String>>,
 {
+    tracing::info!("compaction begin (partial)");
     if pivot_index > all_messages.len() {
-        return Err(CompactError::LlmCallFailed {
-            message: "partial compact pivot out of range".into(),
-        });
+        tracing::warn!(
+            pivot_index,
+            message_count = all_messages.len(),
+            "partial compaction pivot out of range"
+        );
+        return crate::types::LlmCallFailedSnafu {
+            message: "partial compact pivot out of range".to_string(),
+        }
+        .fail();
     }
 
     let (to_summarize, to_keep_raw): (Vec<Message>, Vec<Message>) = match direction {
@@ -268,16 +340,15 @@ where
     };
 
     if to_summarize.is_empty() {
-        return Err(CompactError::LlmCallFailed {
-            message: match direction {
-                PartialCompactDirection::Oldest => {
-                    "Nothing to summarize before the selected message.".into()
-                }
-                PartialCompactDirection::Newest => {
-                    "Nothing to summarize after the selected message.".into()
-                }
-            },
-        });
+        let message = match direction {
+            PartialCompactDirection::Oldest => {
+                "Nothing to summarize before the selected message.".to_string()
+            }
+            PartialCompactDirection::Newest => {
+                "Nothing to summarize after the selected message.".to_string()
+            }
+        };
+        return crate::types::LlmCallFailedSnafu { message }.fail();
     }
 
     // Filter progress + (for Oldest) old compact boundaries / summary
@@ -726,9 +797,10 @@ where
             match summarize_fn(prompt.clone()).await {
                 Ok(summary) => {
                     if summary.trim().is_empty() {
-                        return Err(CompactError::LlmCallFailed {
-                            message: "empty summary returned".into(),
-                        });
+                        return crate::types::LlmCallFailedSnafu {
+                            message: "empty summary returned".to_string(),
+                        }
+                        .fail();
                     }
                     return Ok(summary);
                 }
@@ -738,7 +810,7 @@ where
                     // "input length and `max_tokens` exceed context limit:
                     // X + Y > Z, decrease input length…"). Fallback to 20%.
                     if attempt >= MAX_PTL_RETRIES {
-                        return Err(CompactError::PromptTooLong { message: e });
+                        return crate::types::PromptTooLongSnafu { message: e }.fail();
                     }
                     let token_gap = parse_prompt_too_long_token_gap(&e);
                     let total = old_rounds.len() - head_skip;
@@ -762,7 +834,7 @@ where
                     head_skip += groups_to_drop;
 
                     if head_skip >= old_rounds.len() {
-                        return Err(CompactError::PromptTooLong { message: e });
+                        return crate::types::PromptTooLongSnafu { message: e }.fail();
                     }
                     tracing::warn!(
                         "prompt too long on compact attempt {attempt}, dropping {groups_to_drop} groups (gap={token_gap:?})"
@@ -774,9 +846,10 @@ where
                 Err(e) => {
                     // Transient error: retry stream
                     if stream_retry >= MAX_COMPACT_STREAMING_RETRIES {
-                        return Err(CompactError::StreamRetryExhausted {
+                        return crate::types::StreamRetryExhaustedSnafu {
                             attempts: MAX_COMPACT_STREAMING_RETRIES + 1,
-                        });
+                        }
+                        .fail();
                     }
                     tracing::warn!("compact stream error (retry {stream_retry}): {e}");
                     continue;
@@ -785,9 +858,10 @@ where
         }
     }
 
-    Err(CompactError::StreamRetryExhausted {
+    crate::types::StreamRetryExhaustedSnafu {
         attempts: MAX_PTL_RETRIES + 1,
-    })
+    }
+    .fail()
 }
 
 fn create_boundary_marker(

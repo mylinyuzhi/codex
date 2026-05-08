@@ -18,8 +18,9 @@ use crate::scan::memory_age_string;
 pub const MAX_RELEVANT: usize = 5;
 
 /// Per-memory body cap when injecting content into the recall prompt or
-/// the user-context attachment.
-pub const MAX_BODY_BYTES: usize = 2_048;
+/// the user-context attachment. Mirrors TS `MAX_MEMORY_BYTES` used by
+/// `readMemoriesForSurfacing` (`attachments.ts:277, 2298`).
+pub const MAX_BODY_BYTES: usize = 4_096;
 
 /// Cumulative cap on bytes injected per session so a single chatty
 /// memory directory can't blow the context budget.

@@ -12,6 +12,7 @@
 //! 5. Aggregates results into a single `AggregatedHookResult`
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -51,17 +52,29 @@ const SESSION_END_HOOK_TIMEOUT: Duration = Duration::from_millis(1500);
 // ---------------------------------------------------------------------------
 
 pub use crate::inputs::BaseHookInput;
-pub use crate::inputs::CompactHookInput;
+pub use crate::inputs::CompactTrigger;
+pub use crate::inputs::ConfigChangeSource;
+pub use crate::inputs::ElicitationAction;
+pub use crate::inputs::ElicitationMode;
+pub use crate::inputs::ExitReason;
+pub use crate::inputs::FileChangeEvent;
 pub use crate::inputs::HookInput;
+pub use crate::inputs::InstructionsLoadReason;
+pub use crate::inputs::MemoryType;
+pub use crate::inputs::PostCompactInput;
 pub use crate::inputs::PostToolUseFailureInput;
 pub use crate::inputs::PostToolUseInput;
+pub use crate::inputs::PreCompactInput;
 pub use crate::inputs::PreToolUseInput;
 pub use crate::inputs::SessionEndInput;
 pub use crate::inputs::SessionStartInput;
+pub use crate::inputs::SessionStartSource;
+pub use crate::inputs::SetupTrigger;
 pub use crate::inputs::StopFailureInput;
 pub use crate::inputs::StopInput;
 pub use crate::inputs::SubagentStartInput;
 pub use crate::inputs::SubagentStopInput;
+pub use crate::inputs::UserPromptSubmitInput;
 pub use crate::inputs::base_from_ctx;
 
 // ---------------------------------------------------------------------------
@@ -205,6 +218,34 @@ pub enum HookSpecificOutput {
     },
 }
 
+impl HookSpecificOutput {
+    /// The `hookEventName` discriminator the hook claimed in its
+    /// JSON output. Used by [`aggregate_results`] to enforce TS
+    /// parity with `processHookJSONOutput()` (`hooks.ts:583-590`):
+    /// when the hook firing for event X emits
+    /// `hookSpecificOutput.hookEventName: "Y"`, the mismatch is
+    /// flagged so output isn't applied to the wrong code path.
+    pub fn claimed_event(&self) -> HookEventType {
+        match self {
+            Self::PreToolUse { .. } => HookEventType::PreToolUse,
+            Self::PostToolUse { .. } => HookEventType::PostToolUse,
+            Self::PostToolUseFailure { .. } => HookEventType::PostToolUseFailure,
+            Self::UserPromptSubmit { .. } => HookEventType::UserPromptSubmit,
+            Self::SessionStart { .. } => HookEventType::SessionStart,
+            Self::Setup { .. } => HookEventType::Setup,
+            Self::SubagentStart { .. } => HookEventType::SubagentStart,
+            Self::PermissionDenied { .. } => HookEventType::PermissionDenied,
+            Self::Notification { .. } => HookEventType::Notification,
+            Self::PermissionRequest { .. } => HookEventType::PermissionRequest,
+            Self::Elicitation { .. } => HookEventType::Elicitation,
+            Self::ElicitationResult { .. } => HookEventType::ElicitationResult,
+            Self::CwdChanged { .. } => HookEventType::CwdChanged,
+            Self::FileChanged { .. } => HookEventType::FileChanged,
+            Self::WorktreeCreate { .. } => HookEventType::WorktreeCreate,
+        }
+    }
+}
+
 /// Decision from a PermissionRequest hook.
 ///
 /// TS: PermissionRequestResult — allow with optional updatedInput, or deny
@@ -331,6 +372,30 @@ pub struct SingleHookResult {
 // Environment variable injection
 // ---------------------------------------------------------------------------
 
+/// Workspace-trust gate.
+///
+/// TS: `shouldSkipHookDueToTrust()` (`utils/hooks.ts:286`) — a global
+/// guard that blocks ALL hook execution in interactive mode when the
+/// user has not yet accepted workspace trust for the current project.
+/// Returns `true` to skip hooks.
+///
+/// Coco-rs does not yet ship a workspace-trust dialog (see
+/// `crate-coco-hooks.md` Known Gaps), so the default is "trusted"
+/// unless the caller explicitly opts out via
+/// `OrchestrationContext.workspace_trust_accepted = Some(false)` or
+/// the runtime sets `COCO_WORKSPACE_TRUST_ACCEPTED=0`. Once the
+/// trust dialog ships, `OrchestrationContext` will carry the
+/// dialog-resolved value and this fallback becomes inert.
+pub fn should_skip_hook_due_to_trust(ctx: &OrchestrationContext) -> bool {
+    if let Some(accepted) = ctx.workspace_trust_accepted {
+        return !accepted;
+    }
+    matches!(
+        std::env::var("COCO_WORKSPACE_TRUST_ACCEPTED").as_deref(),
+        Ok("0")
+    )
+}
+
 /// Plugin context for hook environment variables.
 ///
 /// TS: execCommandHook() sets CLAUDE_PLUGIN_ROOT, CLAUDE_PLUGIN_DATA,
@@ -354,7 +419,7 @@ pub fn build_hook_env(
     session_id: &str,
     cwd: &str,
     tool_name: Option<&str>,
-    hook_event: &str,
+    hook_event: HookEventType,
     project_dir: Option<&str>,
 ) -> HashMap<String, String> {
     build_hook_env_with_plugin(
@@ -373,13 +438,14 @@ pub fn build_hook_env_with_plugin(
     session_id: &str,
     cwd: &str,
     tool_name: Option<&str>,
-    hook_event: &str,
+    hook_event: HookEventType,
     project_dir: Option<&str>,
     plugin_ctx: Option<&HookPluginContext>,
     hook_index: Option<usize>,
 ) -> HashMap<String, String> {
     let mut env = HashMap::new();
-    env.insert("HOOK_EVENT".to_string(), hook_event.to_string());
+    let hook_event_str = hook_event.as_str();
+    env.insert("HOOK_EVENT".to_string(), hook_event_str.to_string());
     env.insert("HOOK_SESSION_ID".to_string(), session_id.to_string());
     env.insert("HOOK_CWD".to_string(), cwd.to_string());
     if let Some(name) = tool_name {
@@ -427,13 +493,16 @@ pub fn build_hook_env_with_plugin(
     if let Some(idx) = hook_index
         && matches!(
             hook_event,
-            "SessionStart" | "Setup" | "CwdChanged" | "FileChanged"
+            HookEventType::SessionStart
+                | HookEventType::Setup
+                | HookEventType::CwdChanged
+                | HookEventType::FileChanged
         )
         && let Ok(tmp) = std::env::var("TMPDIR")
             .or_else(|_| std::env::var("TMP"))
             .or_else(|_| Ok::<String, std::env::VarError>("/tmp".to_string()))
     {
-        let env_file = format!("{tmp}/claude-hook-env-{session_id}-{hook_event}-{idx}.sh");
+        let env_file = format!("{tmp}/claude-hook-env-{session_id}-{hook_event_str}-{idx}.sh");
         env.insert("CLAUDE_ENV_FILE".to_string(), env_file);
     }
 
@@ -473,12 +542,31 @@ pub async fn execute_hooks_parallel(
         event_tx,
         attachment_emitter,
         /*allow_managed_hooks_only*/ false,
+        /*http_url_allowlist*/ None,
+        /*http_env_var_policy*/ None,
+        /*async_registry*/ None,
+        /*llm_handle*/ None,
+        /*workspace_trust_accepted*/ None,
     )
     .await
 }
 
-/// Execute hooks with managed-only filtering support.
+/// Execute hooks with managed-only + HTTP-policy filtering. Used by
+/// every orchestration entry point. `http_url_allowlist` and
+/// `http_env_var_policy` are typically pulled from
+/// `OrchestrationContext`; tests/the public `execute_hooks_parallel`
+/// shim default them to `None`. `async_registry` captures `is_async`
+/// hook output for delivery via the reminder pipeline.
 #[allow(clippy::too_many_arguments)]
+#[tracing::instrument(
+    skip_all,
+    name = "hook_event",
+    fields(
+        hook_event = ?event,
+        tool_name = ?tool_name,
+        managed_only = allow_managed_hooks_only,
+    ),
+)]
 async fn execute_hooks_parallel_filtered(
     registry: &HookRegistry,
     event: HookEventType,
@@ -490,7 +578,22 @@ async fn execute_hooks_parallel_filtered(
     event_tx: Option<&tokio::sync::mpsc::Sender<crate::HookExecutionEvent>>,
     attachment_emitter: &AttachmentEmitter,
     allow_managed_hooks_only: bool,
+    http_url_allowlist: Option<&[String]>,
+    http_env_var_policy: Option<&[String]>,
+    async_registry: Option<&std::sync::Arc<crate::async_registry::AsyncHookRegistry>>,
+    llm_handle: Option<&std::sync::Arc<dyn crate::llm_handle::HookLlmHandle>>,
+    workspace_trust_accepted: Option<bool>,
 ) -> Vec<SingleHookResult> {
+    // TS `shouldSkipHookDueToTrust()`: a global trust gate that bails
+    // out before matching any hooks. Same fail-closed shape — if the
+    // workspace is explicitly untrusted, no hook fires.
+    if matches!(workspace_trust_accepted, Some(false)) {
+        tracing::debug!(
+            event = ?event,
+            "skipping hooks: workspace trust not accepted"
+        );
+        return Vec::new();
+    }
     let matching = registry.find_matching(event, tool_name);
     if matching.is_empty() {
         return Vec::new();
@@ -505,6 +608,20 @@ async fn execute_hooks_parallel_filtered(
                 && matches!(h.handler, HookHandler::Http { .. })
             {
                 tracing::debug!("HTTP hooks not supported for {event:?}, skipping");
+                return false;
+            }
+            // Policy `allowedHttpHookUrls` enforcement (TS
+            // `execHttpHook.ts:137-145`). `None` = no restriction;
+            // `Some(empty)` = block all HTTP hooks; `Some(non-empty)` =
+            // URL must match one pattern.
+            if let HookHandler::Http { url, .. } = &h.handler
+                && let Some(allow) = http_url_allowlist
+                && !crate::ssrf::url_matches_allowlist(url, allow)
+            {
+                tracing::warn!(
+                    %url,
+                    "HTTP hook blocked: URL not in allowedHttpHookUrls policy"
+                );
                 return false;
             }
             // When allow_managed_hooks_only, skip non-managed hooks.
@@ -529,10 +646,42 @@ async fn execute_hooks_parallel_filtered(
         return Vec::new();
     }
 
+    tracing::info!(hook_count = matching.len(), "hook_event firing");
+
     let (tx, mut rx) = mpsc::channel::<SingleHookResult>(matching.len());
 
+    let policy_set: Option<HashSet<&str>> =
+        http_env_var_policy.map(|p| p.iter().map(String::as_str).collect());
+
     for (idx, hook) in matching.iter().enumerate() {
-        let handler = hook.handler.clone();
+        // Intersect per-hook `allowed_env_vars` with policy
+        // `httpHookAllowedEnvVars` when both are set (TS
+        // `execHttpHook.ts:163-167`). When policy is `None`, the per-hook
+        // list passes through untouched.
+        let handler = match (&hook.handler, policy_set.as_ref()) {
+            (
+                HookHandler::Http {
+                    url,
+                    headers,
+                    timeout_ms,
+                    allowed_env_vars,
+                },
+                Some(policy),
+            ) => {
+                let intersected: Vec<String> = allowed_env_vars
+                    .iter()
+                    .filter(|v| policy.contains(v.as_str()))
+                    .cloned()
+                    .collect();
+                HookHandler::Http {
+                    url: url.clone(),
+                    headers: headers.clone(),
+                    timeout_ms: *timeout_ms,
+                    allowed_env_vars: intersected,
+                }
+            }
+            _ => hook.handler.clone(),
+        };
         let cancel = cancel.clone();
         let env = env_vars.clone();
         let input_json = hook_input_json.to_string();
@@ -542,9 +691,28 @@ async fn execute_hooks_parallel_filtered(
         let hook_event_str = format!("{event:?}");
         let event_tx = event_tx.cloned();
         let emitter = attachment_emitter.clone();
+        let llm_handle_clone = llm_handle.cloned();
         let is_async = hook.is_async;
-        // Only clone sender for sync hooks — async hooks are fire-and-forget.
+        let async_rewake = hook.async_rewake;
+        // Only clone sender for sync hooks. Async hooks deliver
+        // out-of-band through `async_registry`; their result is later
+        // surfaced to the model via the reminder pipeline
+        // (TS `getAsyncHookResponseAttachments()`).
         let tx = if is_async { None } else { Some(tx.clone()) };
+        // Per-spawn handle to the async registry. Cloned outside the
+        // spawn so the registry can be `Some(...)` and the spawn can
+        // call `.register()` / completion methods.
+        let async_reg_for_spawn = if is_async {
+            async_registry.cloned()
+        } else {
+            None
+        };
+        let async_hook_id = if is_async {
+            format!("hook-{idx}-{}", uuid::Uuid::new_v4().simple())
+        } else {
+            String::new()
+        };
+        let async_event_label = format!("{event:?}");
 
         // Emit Started event before spawning the task.
         if let Some(etx) = &event_tx {
@@ -609,7 +777,16 @@ async fn execute_hooks_parallel_filtered(
                         async_rewake: false,
                     }
                 }
-                res = tokio::time::timeout(timeout, execute_hook(&handler, &env, Some(&input_json))) => {
+                res = tokio::time::timeout(
+                    timeout,
+                    run_hook_via_handle_or_fallback(
+                        &handler,
+                        &env,
+                        Some(&input_json),
+                        llm_handle_clone.as_ref(),
+                        timeout,
+                    ),
+                ) => {
                     match res {
                         Ok(Ok(exec_result)) => process_execution_result(exec_result, &command_label),
                         Ok(Err(e)) => {
@@ -682,8 +859,47 @@ async fn execute_hooks_parallel_filtered(
                     .await;
             }
 
-            // Async hooks are fire-and-forget — don't block on result.
-            // TS: executeInBackground() for hooks with async flag.
+            // Async hooks: stash the completed result in the
+            // `AsyncHookRegistry` so the reminder pipeline can deliver
+            // it on a later turn. TS parity:
+            // `registerPendingAsyncHook` + `checkForAsyncHookResponses`.
+            // `async_rewake: true` would additionally enqueue a
+            // task-notification on exit-code-2 (TS
+            // `executeInBackground`); that wake path is tracked as a
+            // P3 follow-up — see `crate-coco-hooks.md`.
+            if is_async && let Some(reg) = async_reg_for_spawn {
+                reg.register(
+                    async_hook_id.clone(),
+                    result.command.clone(),
+                    async_event_label.clone(),
+                    /*timeout*/ None,
+                )
+                .await;
+                let exit_code = match &result.outcome {
+                    HookOutcome::Success => 0,
+                    HookOutcome::Blocking => 2,
+                    HookOutcome::NonBlockingError => 1,
+                    HookOutcome::Cancelled => -1,
+                };
+                reg.update_output(&async_hook_id, &result.output, "").await;
+                reg.complete(&async_hook_id, exit_code).await;
+                if async_rewake && exit_code == 2 {
+                    // TS `asyncRewake: true` + exit-code-2 rewake-on-block:
+                    // enqueue a task-notification and `wakeIfIdle()` so the
+                    // model resumes. Coco-rs marks the registry entry —
+                    // `CombinedHookEventsSource` then surfaces it through the
+                    // reminder pipeline, and the engine's between-turn poll
+                    // observes `rewake_requested` to drive the actual wake.
+                    reg.mark_rewake(&async_hook_id).await;
+                    tracing::debug!(
+                        hook = %result.command,
+                        "asyncRewake exit-code-2: rewake marked on async registry"
+                    );
+                }
+            }
+
+            // Sync result delivery. Async hooks already returned via
+            // the registry above, so `tx` is `None` for them.
             if let Some(tx) = tx {
                 let _ = tx.send(result).await;
             }
@@ -697,14 +913,41 @@ async fn execute_hooks_parallel_filtered(
     while let Some(r) = rx.recv().await {
         results.push(r);
     }
+    let blocked = results.iter().filter(|r| r.blocked).count();
+    let errored = results.iter().filter(|r| !r.succeeded).count();
+    tracing::info!(
+        completed = results.len(),
+        blocked,
+        errored,
+        "hook_event done"
+    );
     results
 }
 
 /// Aggregate individual hook results into a single `AggregatedHookResult`.
 ///
 /// TS: result aggregation inside the executeHooks() async generator and
-/// processHookJSONOutput().
+/// `processHookJSONOutput()`.
+///
+/// Backwards-compatible shim that calls
+/// [`aggregate_results_for_event`] without the
+/// `hookSpecificOutput.hookEventName` cross-check. Prefer the
+/// `_for_event` variant in new code so mismatched event names are
+/// rejected (TS parity: `hooks.ts:583-590`).
 pub fn aggregate_results(results: &[SingleHookResult]) -> AggregatedHookResult {
+    aggregate_results_for_event(results, None)
+}
+
+/// Same as [`aggregate_results`] but enforces TS's
+/// `hookSpecificOutput.hookEventName === expected` invariant. When a
+/// hook firing for event `Some(expected)` emits a `hookSpecificOutput`
+/// claiming a different event, the nested output is ignored and a
+/// warning is logged. Flat-format fields (decision, additional_context,
+/// etc.) are still honored — they aren't event-tagged.
+pub fn aggregate_results_for_event(
+    results: &[SingleHookResult],
+    expected_event: Option<HookEventType>,
+) -> AggregatedHookResult {
     let mut agg = AggregatedHookResult::default();
 
     for r in results {
@@ -832,7 +1075,23 @@ pub fn aggregate_results(results: &[SingleHookResult]) -> AggregatedHookResult {
                 // Process hookSpecificOutput (TS-style nested output).
                 // Fields from hookSpecificOutput override flat-format fields.
                 if let Some(specific) = &json.hook_specific_output {
-                    apply_hook_specific_output(&mut agg, specific, &r.command);
+                    let claimed = specific.claimed_event();
+                    let mismatch = expected_event.map(|exp| exp != claimed).unwrap_or(false);
+                    if mismatch {
+                        // TS `processHookJSONOutput` throws here
+                        // (`hooks.ts:583-590`). We log + skip instead so
+                        // a misconfigured hook doesn't poison every
+                        // result in the batch — the flat-format fields
+                        // above are still applied.
+                        tracing::warn!(
+                            expected = ?expected_event,
+                            claimed = ?claimed,
+                            command = %r.command,
+                            "hook returned hookSpecificOutput.hookEventName mismatch; ignoring nested fields"
+                        );
+                    } else {
+                        apply_hook_specific_output(&mut agg, specific, &r.command);
+                    }
                 }
             }
             ParsedHookOutput::PlainText(text) => {
@@ -1032,15 +1291,60 @@ pub struct OrchestrationContext {
     pub cwd: PathBuf,
     pub project_dir: Option<PathBuf>,
     pub permission_mode: Option<String>,
+    /// Path to the active session transcript, threaded into every
+    /// hook input's `transcript_path` field (TS parity:
+    /// `createBaseHookInput()` in `utils/hooks.ts:301-328`).
+    pub transcript_path: Option<String>,
+    /// Subagent identifier — `Some` when the orchestration runs inside
+    /// an `AgentTool` worker. Plumbed onto every fired hook's base input.
+    pub agent_id: Option<String>,
+    /// Subagent type (e.g. `"Explore"`, `"Review"`) — see
+    /// `BaseHookInput::agent_type`.
+    pub agent_type: Option<String>,
     pub cancel: CancellationToken,
     /// When true, all hooks are disabled and execute_event returns immediately.
     pub disable_all_hooks: bool,
     /// When true, only managed (policy-level) hooks are allowed.
     pub allow_managed_hooks_only: bool,
+    /// Workspace-trust gate (TS `shouldSkipHookDueToTrust()`):
+    /// `Some(true)` = trust accepted, hooks may run; `Some(false)` =
+    /// not yet accepted, all hooks skipped; `None` = no dialog has run
+    /// (defaults to "trusted" in coco-rs until the dialog ships).
+    pub workspace_trust_accepted: Option<bool>,
     /// Sink for silent `AttachmentMessage`s produced by hook execution
     /// (cancel / error / timeout). Use [`AttachmentEmitter::noop`] in tests
     /// or when no session-scoped sink is available.
     pub attachment_emitter: AttachmentEmitter,
+    /// Sink for sync hook events that should surface as per-turn
+    /// reminders (`hook_success` / `hook_blocking_error` /
+    /// `hook_additional_context` / `hook_stopped_continuation`).
+    /// Wired by `SessionRuntime` for SessionStart and UserPromptSubmit;
+    /// `None` for other events that aren't reminder-bearing.
+    pub sync_event_sink: Option<crate::SyncHookEventBuffer>,
+    /// Glob-style allowlist for HTTP hook URLs from policy settings
+    /// (`allowedHttpHookUrls`). `None` = no restriction; `Some(empty)`
+    /// = block every HTTP hook; `Some(non-empty)` = URL must match one
+    /// pattern. Parity with `execHttpHook.ts:137-145`. Patterns support
+    /// `*` as wildcard.
+    pub http_url_allowlist: Option<Vec<String>>,
+    /// Policy-level env-var allowlist
+    /// (`policySettings.httpHookAllowedEnvVars`). When `Some`, the
+    /// per-hook `allowed_env_vars` is intersected with this set before
+    /// interpolation runs (TS `execHttpHook.ts:163-167`).
+    pub http_env_var_policy: Option<Vec<String>>,
+    /// Registry that captures stdout/stderr/exit-code of `is_async`
+    /// hooks so the reminder pipeline can deliver them on later turns.
+    /// `None` = legacy fire-and-forget behaviour. TS parity:
+    /// `AsyncHookRegistry.ts` + `getAsyncHookResponseAttachments()`
+    /// (`utils/attachments.ts:3464`).
+    pub async_registry: Option<std::sync::Arc<crate::async_registry::AsyncHookRegistry>>,
+    /// Callback the orchestration uses to drive `Prompt` / `Agent`
+    /// hook handlers through the parent session's LLM. `None` falls
+    /// back to a passthrough that returns the prompt text verbatim
+    /// and logs a warning. Implementations live in `coco-query` (where
+    /// `ApiClient` is reachable) and are installed by
+    /// `coco-cli::session_runtime`.
+    pub llm_handle: Option<std::sync::Arc<dyn crate::llm_handle::HookLlmHandle>>,
 }
 
 /// Generic event execution — builds env, runs hooks in parallel, aggregates.
@@ -1055,7 +1359,7 @@ pub async fn execute_event(
     match_value: Option<&str>,
     input: &crate::inputs::HookInput,
     timeout: Duration,
-) -> anyhow::Result<AggregatedHookResult> {
+) -> crate::Result<AggregatedHookResult> {
     if ctx.disable_all_hooks {
         return Ok(AggregatedHookResult::default());
     }
@@ -1064,7 +1368,7 @@ pub async fn execute_event(
         &ctx.session_id,
         &ctx.cwd.to_string_lossy(),
         match_value,
-        &format!("{event:?}"),
+        event,
         ctx.project_dir.as_deref().and_then(|p| p.to_str()),
     );
 
@@ -1079,10 +1383,15 @@ pub async fn execute_event(
         /*event_tx*/ None,
         &ctx.attachment_emitter,
         ctx.allow_managed_hooks_only,
+        ctx.http_url_allowlist.as_deref(),
+        ctx.http_env_var_policy.as_deref(),
+        ctx.async_registry.as_ref(),
+        ctx.llm_handle.as_ref(),
+        ctx.workspace_trust_accepted,
     )
     .await;
 
-    Ok(aggregate_results(&results))
+    Ok(aggregate_results_for_event(&results, Some(event)))
 }
 
 /// Execute PreToolUse hooks and return the aggregated result.
@@ -1095,10 +1404,10 @@ pub async fn execute_pre_tool_use(
     tool_use_id: &str,
     tool_input: &serde_json::Value,
     event_tx: Option<&tokio::sync::mpsc::Sender<crate::HookExecutionEvent>>,
-) -> anyhow::Result<AggregatedHookResult> {
+) -> crate::Result<AggregatedHookResult> {
     let input = PreToolUseInput {
         base: base_from_ctx(ctx),
-        hook_event_name: "PreToolUse".to_string(),
+        hook_event_name: HookEventType::PreToolUse,
         tool_name: tool_name.to_string(),
         tool_input: tool_input.clone(),
         tool_use_id: tool_use_id.to_string(),
@@ -1109,7 +1418,7 @@ pub async fn execute_pre_tool_use(
         &ctx.session_id,
         &ctx.cwd.to_string_lossy(),
         Some(tool_name),
-        "PreToolUse",
+        HookEventType::PreToolUse,
         ctx.project_dir.as_deref().and_then(|p| p.to_str()),
     );
 
@@ -1124,10 +1433,18 @@ pub async fn execute_pre_tool_use(
         event_tx,
         &ctx.attachment_emitter,
         ctx.allow_managed_hooks_only,
+        ctx.http_url_allowlist.as_deref(),
+        ctx.http_env_var_policy.as_deref(),
+        ctx.async_registry.as_ref(),
+        ctx.llm_handle.as_ref(),
+        ctx.workspace_trust_accepted,
     )
     .await;
 
-    Ok(aggregate_results(&results))
+    Ok(aggregate_results_for_event(
+        &results,
+        Some(HookEventType::PreToolUse),
+    ))
 }
 
 /// Execute PostToolUse hooks and return the aggregated result.
@@ -1141,10 +1458,10 @@ pub async fn execute_post_tool_use(
     tool_input: &serde_json::Value,
     tool_response: &serde_json::Value,
     event_tx: Option<&tokio::sync::mpsc::Sender<crate::HookExecutionEvent>>,
-) -> anyhow::Result<AggregatedHookResult> {
+) -> crate::Result<AggregatedHookResult> {
     let input = PostToolUseInput {
         base: base_from_ctx(ctx),
-        hook_event_name: "PostToolUse".to_string(),
+        hook_event_name: HookEventType::PostToolUse,
         tool_name: tool_name.to_string(),
         tool_input: tool_input.clone(),
         tool_response: tool_response.clone(),
@@ -1156,7 +1473,7 @@ pub async fn execute_post_tool_use(
         &ctx.session_id,
         &ctx.cwd.to_string_lossy(),
         Some(tool_name),
-        "PostToolUse",
+        HookEventType::PostToolUse,
         ctx.project_dir.as_deref().and_then(|p| p.to_str()),
     );
 
@@ -1171,31 +1488,43 @@ pub async fn execute_post_tool_use(
         event_tx,
         &ctx.attachment_emitter,
         ctx.allow_managed_hooks_only,
+        ctx.http_url_allowlist.as_deref(),
+        ctx.http_env_var_policy.as_deref(),
+        ctx.async_registry.as_ref(),
+        ctx.llm_handle.as_ref(),
+        ctx.workspace_trust_accepted,
     )
     .await;
 
-    Ok(aggregate_results(&results))
+    Ok(aggregate_results_for_event(
+        &results,
+        Some(HookEventType::PostToolUse),
+    ))
 }
 
 /// Execute PostToolUseFailure hooks and return the aggregated result.
 ///
-/// TS: executePostToolUseFailureHooks()
+/// TS: `executePostToolUseFailureHooks()` —
+/// `{tool_name, tool_input, tool_use_id, error, is_interrupt?}`.
+#[allow(clippy::too_many_arguments)]
 pub async fn execute_post_tool_use_failure(
     registry: &HookRegistry,
     ctx: &OrchestrationContext,
     tool_name: &str,
+    tool_use_id: &str,
     tool_input: &serde_json::Value,
     error: &str,
-    error_type: Option<&str>,
+    is_interrupt: Option<bool>,
     event_tx: Option<&tokio::sync::mpsc::Sender<crate::HookExecutionEvent>>,
-) -> anyhow::Result<AggregatedHookResult> {
+) -> crate::Result<AggregatedHookResult> {
     let input = PostToolUseFailureInput {
         base: base_from_ctx(ctx),
-        hook_event_name: "PostToolUseFailure".to_string(),
+        hook_event_name: HookEventType::PostToolUseFailure,
         tool_name: tool_name.to_string(),
         tool_input: tool_input.clone(),
+        tool_use_id: tool_use_id.to_string(),
         error: error.to_string(),
-        error_type: error_type.map(str::to_string),
+        is_interrupt,
     };
 
     let json_input = serde_json::to_string(&input)?;
@@ -1203,7 +1532,7 @@ pub async fn execute_post_tool_use_failure(
         &ctx.session_id,
         &ctx.cwd.to_string_lossy(),
         Some(tool_name),
-        "PostToolUseFailure",
+        HookEventType::PostToolUseFailure,
         ctx.project_dir.as_deref().and_then(|p| p.to_str()),
     );
 
@@ -1218,10 +1547,18 @@ pub async fn execute_post_tool_use_failure(
         event_tx,
         &ctx.attachment_emitter,
         ctx.allow_managed_hooks_only,
+        ctx.http_url_allowlist.as_deref(),
+        ctx.http_env_var_policy.as_deref(),
+        ctx.async_registry.as_ref(),
+        ctx.llm_handle.as_ref(),
+        ctx.workspace_trust_accepted,
     )
     .await;
 
-    Ok(aggregate_results(&results))
+    Ok(aggregate_results_for_event(
+        &results,
+        Some(HookEventType::PostToolUseFailure),
+    ))
 }
 
 /// Execute PreCompact hooks and return custom instructions / display messages.
@@ -1230,15 +1567,14 @@ pub async fn execute_post_tool_use_failure(
 pub async fn execute_pre_compact(
     registry: &HookRegistry,
     ctx: &OrchestrationContext,
-    trigger: &str,
+    trigger: CompactTrigger,
     custom_instructions: Option<&str>,
-) -> anyhow::Result<PreCompactResult> {
-    let input = CompactHookInput {
+) -> crate::Result<PreCompactResult> {
+    let input = PreCompactInput {
         base: base_from_ctx(ctx),
-        hook_event_name: "PreCompact".to_string(),
-        trigger: trigger.to_string(),
+        hook_event_name: HookEventType::PreCompact,
+        trigger,
         custom_instructions: custom_instructions.map(String::from),
-        compact_summary: None,
     };
 
     let json_input = serde_json::to_string(&input)?;
@@ -1246,7 +1582,7 @@ pub async fn execute_pre_compact(
         &ctx.session_id,
         &ctx.cwd.to_string_lossy(),
         None,
-        "PreCompact",
+        HookEventType::PreCompact,
         ctx.project_dir.as_deref().and_then(|p| p.to_str()),
     );
 
@@ -1261,6 +1597,11 @@ pub async fn execute_pre_compact(
         /*event_tx*/ None,
         &ctx.attachment_emitter,
         ctx.allow_managed_hooks_only,
+        ctx.http_url_allowlist.as_deref(),
+        ctx.http_env_var_policy.as_deref(),
+        ctx.async_registry.as_ref(),
+        ctx.llm_handle.as_ref(),
+        ctx.workspace_trust_accepted,
     )
     .await;
 
@@ -1313,15 +1654,14 @@ pub struct PreCompactResult {
 pub async fn execute_post_compact(
     registry: &HookRegistry,
     ctx: &OrchestrationContext,
-    trigger: &str,
+    trigger: CompactTrigger,
     compact_summary: &str,
-) -> anyhow::Result<PostCompactResult> {
-    let input = CompactHookInput {
+) -> crate::Result<PostCompactResult> {
+    let input = PostCompactInput {
         base: base_from_ctx(ctx),
-        hook_event_name: "PostCompact".to_string(),
-        trigger: trigger.to_string(),
-        custom_instructions: None,
-        compact_summary: Some(compact_summary.to_string()),
+        hook_event_name: HookEventType::PostCompact,
+        trigger,
+        compact_summary: compact_summary.to_string(),
     };
 
     let json_input = serde_json::to_string(&input)?;
@@ -1329,7 +1669,7 @@ pub async fn execute_post_compact(
         &ctx.session_id,
         &ctx.cwd.to_string_lossy(),
         None,
-        "PostCompact",
+        HookEventType::PostCompact,
         ctx.project_dir.as_deref().and_then(|p| p.to_str()),
     );
 
@@ -1344,6 +1684,11 @@ pub async fn execute_post_compact(
         /*event_tx*/ None,
         &ctx.attachment_emitter,
         ctx.allow_managed_hooks_only,
+        ctx.http_url_allowlist.as_deref(),
+        ctx.http_env_var_policy.as_deref(),
+        ctx.async_registry.as_ref(),
+        ctx.llm_handle.as_ref(),
+        ctx.workspace_trust_accepted,
     )
     .await;
 
@@ -1390,14 +1735,14 @@ pub struct PostCompactResult {
 pub async fn execute_session_start(
     registry: &HookRegistry,
     ctx: &OrchestrationContext,
-    source: &str,
+    source: SessionStartSource,
     agent_type: Option<&str>,
     model: Option<&str>,
-) -> anyhow::Result<AggregatedHookResult> {
+) -> crate::Result<AggregatedHookResult> {
     let input = SessionStartInput {
         base: base_from_ctx(ctx),
-        hook_event_name: "SessionStart".to_string(),
-        source: source.to_string(),
+        hook_event_name: HookEventType::SessionStart,
+        source,
         agent_type: agent_type.map(String::from),
         model: model.map(String::from),
     };
@@ -1407,14 +1752,14 @@ pub async fn execute_session_start(
         &ctx.session_id,
         &ctx.cwd.to_string_lossy(),
         None,
-        "SessionStart",
+        HookEventType::SessionStart,
         ctx.project_dir.as_deref().and_then(|p| p.to_str()),
     );
 
     let results = execute_hooks_parallel_filtered(
         registry,
         HookEventType::SessionStart,
-        Some(source),
+        Some(source.as_wire_str()),
         &json_input,
         &env,
         &ctx.cancel,
@@ -1422,10 +1767,156 @@ pub async fn execute_session_start(
         /*event_tx*/ None,
         &ctx.attachment_emitter,
         ctx.allow_managed_hooks_only,
+        ctx.http_url_allowlist.as_deref(),
+        ctx.http_env_var_policy.as_deref(),
+        ctx.async_registry.as_ref(),
+        ctx.llm_handle.as_ref(),
+        ctx.workspace_trust_accepted,
     )
     .await;
 
-    Ok(aggregate_results(&results))
+    let agg = aggregate_results_for_event(&results, Some(HookEventType::SessionStart));
+    push_sync_hook_events(ctx, HookEventType::SessionStart, &results, &agg).await;
+    Ok(agg)
+}
+
+/// Execute UserPromptSubmit hooks before each turn's LLM call.
+///
+/// TS: `executeUserPromptSubmitHooks()` consumed by
+/// `processUserInput.ts:182-263`. Returns the aggregated result so the
+/// caller can:
+/// - emit a system warning on `blocking_error` (suppressing the turn),
+/// - skip the turn on `prevent_continuation` (keeping the prompt),
+/// - drop `additional_contexts` (already pushed onto the sync buffer
+///   as `HookEvent::AdditionalContext` so the reminder pipeline emits
+///   `hook_additional_context` for the next turn).
+pub async fn execute_user_prompt_submit(
+    registry: &HookRegistry,
+    ctx: &OrchestrationContext,
+    prompt_text: &str,
+) -> crate::Result<AggregatedHookResult> {
+    if ctx.disable_all_hooks {
+        return Ok(AggregatedHookResult::default());
+    }
+    let input = UserPromptSubmitInput {
+        base: base_from_ctx(ctx),
+        hook_event_name: HookEventType::UserPromptSubmit,
+        prompt: prompt_text.to_string(),
+    };
+
+    let json_input = serde_json::to_string(&input)?;
+    let env = build_hook_env(
+        &ctx.session_id,
+        &ctx.cwd.to_string_lossy(),
+        None,
+        HookEventType::UserPromptSubmit,
+        ctx.project_dir.as_deref().and_then(|p| p.to_str()),
+    );
+
+    let results = execute_hooks_parallel_filtered(
+        registry,
+        HookEventType::UserPromptSubmit,
+        /*matcher*/ None,
+        &json_input,
+        &env,
+        &ctx.cancel,
+        DEFAULT_HOOK_TIMEOUT,
+        /*event_tx*/ None,
+        &ctx.attachment_emitter,
+        ctx.allow_managed_hooks_only,
+        ctx.http_url_allowlist.as_deref(),
+        ctx.http_env_var_policy.as_deref(),
+        ctx.async_registry.as_ref(),
+        ctx.llm_handle.as_ref(),
+        ctx.workspace_trust_accepted,
+    )
+    .await;
+
+    let agg = aggregate_results_for_event(&results, Some(HookEventType::UserPromptSubmit));
+    push_sync_hook_events(ctx, HookEventType::UserPromptSubmit, &results, &agg).await;
+    Ok(agg)
+}
+
+/// Push the reminder-bearing slice of an aggregated hook result onto
+/// `ctx.sync_event_sink`. No-op if no sink is wired.
+///
+/// Mirrors TS `processSessionStartHooks` /
+/// `executeUserPromptSubmitHooks` which synthesize attachment messages
+/// per-result and per-aggregate. Render gates (TS
+/// `messages.ts:4099-4115` `normalizeAttachmentForAPI`):
+/// - `hook_success` only renders when `hookEvent` is `SessionStart` or
+///   `UserPromptSubmit` AND content is non-empty.
+/// - The other three reminder kinds always render given non-empty
+///   data, so we push them unconditionally per result.
+async fn push_sync_hook_events(
+    ctx: &OrchestrationContext,
+    event: HookEventType,
+    results: &[SingleHookResult],
+    agg: &AggregatedHookResult,
+) {
+    let Some(buf) = ctx.sync_event_sink.as_ref() else {
+        return;
+    };
+
+    let kind = match event {
+        HookEventType::SessionStart => coco_system_reminder::HookEventKind::SessionStart,
+        HookEventType::UserPromptSubmit => coco_system_reminder::HookEventKind::UserPromptSubmit,
+        _ => coco_system_reminder::HookEventKind::Other,
+    };
+    let event_label = match event {
+        HookEventType::SessionStart | HookEventType::UserPromptSubmit => event.as_str(),
+        _ => "",
+    };
+
+    let mut events: Vec<coco_system_reminder::HookEvent> = Vec::new();
+
+    for r in results {
+        let trimmed = r.output.trim();
+        if r.succeeded
+            && !trimmed.is_empty()
+            && matches!(
+                kind,
+                coco_system_reminder::HookEventKind::SessionStart
+                    | coco_system_reminder::HookEventKind::UserPromptSubmit
+            )
+        {
+            events.push(coco_system_reminder::HookEvent::Success {
+                hook_name: r.command.clone(),
+                hook_event: kind,
+                content: r.output.clone(),
+            });
+        }
+        if r.blocked {
+            let err = agg
+                .blocking_error
+                .as_ref()
+                .map(|e| e.blocking_error.clone())
+                .unwrap_or_else(|| r.output.clone());
+            events.push(coco_system_reminder::HookEvent::BlockingError {
+                hook_name: r.command.clone(),
+                command: r.command.clone(),
+                error: err,
+            });
+        }
+    }
+
+    if !agg.additional_contexts.is_empty() {
+        events.push(coco_system_reminder::HookEvent::AdditionalContext {
+            hook_name: event_label.to_string(),
+            content: agg.additional_contexts.clone(),
+        });
+    }
+
+    if agg.prevent_continuation {
+        events.push(coco_system_reminder::HookEvent::StoppedContinuation {
+            hook_name: event_label.to_string(),
+            message: agg.stop_reason.clone().unwrap_or_default(),
+        });
+    }
+
+    if !events.is_empty() {
+        buf.extend(events).await;
+    }
 }
 
 /// Execute SubagentStart hooks before a subagent begins running.
@@ -1439,13 +1930,13 @@ pub async fn execute_subagent_start(
     ctx: &OrchestrationContext,
     agent_type: &str,
     agent_id: &str,
-) -> anyhow::Result<AggregatedHookResult> {
+) -> crate::Result<AggregatedHookResult> {
     if ctx.disable_all_hooks {
         return Ok(AggregatedHookResult::default());
     }
     let input = SubagentStartInput {
         base: base_from_ctx(ctx),
-        hook_event_name: "SubagentStart".to_string(),
+        hook_event_name: HookEventType::SubagentStart,
         agent_type: agent_type.to_string(),
         agent_id: agent_id.to_string(),
     };
@@ -1455,7 +1946,7 @@ pub async fn execute_subagent_start(
         &ctx.session_id,
         &ctx.cwd.to_string_lossy(),
         None,
-        "SubagentStart",
+        HookEventType::SubagentStart,
         ctx.project_dir.as_deref().and_then(|p| p.to_str()),
     );
 
@@ -1470,31 +1961,48 @@ pub async fn execute_subagent_start(
         /*event_tx*/ None,
         &ctx.attachment_emitter,
         ctx.allow_managed_hooks_only,
+        ctx.http_url_allowlist.as_deref(),
+        ctx.http_env_var_policy.as_deref(),
+        ctx.async_registry.as_ref(),
+        ctx.llm_handle.as_ref(),
+        ctx.workspace_trust_accepted,
     )
     .await;
 
-    Ok(aggregate_results(&results))
+    Ok(aggregate_results_for_event(
+        &results,
+        Some(HookEventType::SubagentStart),
+    ))
 }
 
 /// Execute SubagentStop hooks after a subagent finishes (success, failure,
-/// or cancel). The optional `transcript_path` mirrors TS
-/// `SubagentStopInput.agent_transcript_path`.
+/// or cancel).
+///
+/// TS: `SubagentStopHookInputSchema` (`coreSchemas.ts:550-567`):
+/// `{stop_hook_active, agent_id, agent_transcript_path, agent_type, last_assistant_message?}`.
+/// `agent_transcript_path` is required on the wire — pass an empty
+/// string when the subagent does not persist a transcript.
+#[allow(clippy::too_many_arguments)]
 pub async fn execute_subagent_stop(
     registry: &HookRegistry,
     ctx: &OrchestrationContext,
+    stop_hook_active: bool,
     agent_type: &str,
     agent_id: &str,
-    transcript_path: Option<&str>,
-) -> anyhow::Result<AggregatedHookResult> {
+    agent_transcript_path: &str,
+    last_assistant_message: Option<&str>,
+) -> crate::Result<AggregatedHookResult> {
     if ctx.disable_all_hooks {
         return Ok(AggregatedHookResult::default());
     }
     let input = SubagentStopInput {
         base: base_from_ctx(ctx),
-        hook_event_name: "SubagentStop".to_string(),
+        hook_event_name: HookEventType::SubagentStop,
+        stop_hook_active,
         agent_type: agent_type.to_string(),
         agent_id: agent_id.to_string(),
-        agent_transcript_path: transcript_path.map(String::from),
+        agent_transcript_path: agent_transcript_path.to_string(),
+        last_assistant_message: last_assistant_message.map(String::from),
     };
 
     let json_input = serde_json::to_string(&input)?;
@@ -1502,7 +2010,7 @@ pub async fn execute_subagent_stop(
         &ctx.session_id,
         &ctx.cwd.to_string_lossy(),
         None,
-        "SubagentStop",
+        HookEventType::SubagentStop,
         ctx.project_dir.as_deref().and_then(|p| p.to_str()),
     );
 
@@ -1517,10 +2025,18 @@ pub async fn execute_subagent_stop(
         /*event_tx*/ None,
         &ctx.attachment_emitter,
         ctx.allow_managed_hooks_only,
+        ctx.http_url_allowlist.as_deref(),
+        ctx.http_env_var_policy.as_deref(),
+        ctx.async_registry.as_ref(),
+        ctx.llm_handle.as_ref(),
+        ctx.workspace_trust_accepted,
     )
     .await;
 
-    Ok(aggregate_results(&results))
+    Ok(aggregate_results_for_event(
+        &results,
+        Some(HookEventType::SubagentStop),
+    ))
 }
 
 /// Execute SessionEnd hooks with a tighter timeout.
@@ -1529,13 +2045,13 @@ pub async fn execute_subagent_stop(
 pub async fn execute_session_end(
     registry: &HookRegistry,
     ctx: &OrchestrationContext,
-    reason: &str,
-) -> anyhow::Result<Vec<SingleHookResult>> {
+    reason: ExitReason,
+) -> crate::Result<Vec<SingleHookResult>> {
     let timeout = session_end_timeout();
     let input = SessionEndInput {
         base: base_from_ctx(ctx),
-        hook_event_name: "SessionEnd".to_string(),
-        reason: reason.to_string(),
+        hook_event_name: HookEventType::SessionEnd,
+        reason,
     };
 
     let json_input = serde_json::to_string(&input)?;
@@ -1543,14 +2059,14 @@ pub async fn execute_session_end(
         &ctx.session_id,
         &ctx.cwd.to_string_lossy(),
         None,
-        "SessionEnd",
+        HookEventType::SessionEnd,
         ctx.project_dir.as_deref().and_then(|p| p.to_str()),
     );
 
     let results = execute_hooks_parallel_filtered(
         registry,
         HookEventType::SessionEnd,
-        Some(reason),
+        Some(reason.as_wire_str()),
         &json_input,
         &env,
         &ctx.cancel,
@@ -1558,6 +2074,11 @@ pub async fn execute_session_end(
         /*event_tx*/ None,
         &ctx.attachment_emitter,
         ctx.allow_managed_hooks_only,
+        ctx.http_url_allowlist.as_deref(),
+        ctx.http_env_var_policy.as_deref(),
+        ctx.async_registry.as_ref(),
+        ctx.llm_handle.as_ref(),
+        ctx.workspace_trust_accepted,
     )
     .await;
 
@@ -1573,27 +2094,35 @@ pub async fn execute_session_end(
 /// A blocking Stop hook's feedback is injected back into the conversation and
 /// the loop continues — matching TS `query.ts` `handleStopHooks()` behavior.
 ///
+/// `stop_hook_active` mirrors TS `StopHookInputSchema` — it is `true`
+/// when this Stop firing is the loop's reentrant call after a previous
+/// Stop hook blocked. `last_assistant_message` carries the final
+/// assistant-text payload so hooks can read it without parsing the
+/// transcript file.
+///
 /// TS: `services/tools/stopHooks.ts` + `handleStopHooks()` in query.ts.
 pub async fn execute_stop(
     registry: &HookRegistry,
     ctx: &OrchestrationContext,
-    reason: Option<&str>,
+    stop_hook_active: bool,
+    last_assistant_message: Option<&str>,
     event_tx: Option<&tokio::sync::mpsc::Sender<crate::HookExecutionEvent>>,
-) -> anyhow::Result<AggregatedHookResult> {
+) -> crate::Result<AggregatedHookResult> {
     if ctx.disable_all_hooks {
         return Ok(AggregatedHookResult::default());
     }
     let input = StopInput {
         base: base_from_ctx(ctx),
-        hook_event_name: "Stop".to_string(),
-        reason: reason.map(String::from),
+        hook_event_name: HookEventType::Stop,
+        stop_hook_active,
+        last_assistant_message: last_assistant_message.map(String::from),
     };
     let json_input = serde_json::to_string(&input)?;
     let env = build_hook_env(
         &ctx.session_id,
         &ctx.cwd.to_string_lossy(),
         None,
-        "Stop",
+        HookEventType::Stop,
         ctx.project_dir.as_deref().and_then(|p| p.to_str()),
     );
 
@@ -1608,10 +2137,18 @@ pub async fn execute_stop(
         event_tx,
         &ctx.attachment_emitter,
         ctx.allow_managed_hooks_only,
+        ctx.http_url_allowlist.as_deref(),
+        ctx.http_env_var_policy.as_deref(),
+        ctx.async_registry.as_ref(),
+        ctx.llm_handle.as_ref(),
+        ctx.workspace_trust_accepted,
     )
     .await;
 
-    Ok(aggregate_results(&results))
+    Ok(aggregate_results_for_event(
+        &results,
+        Some(HookEventType::Stop),
+    ))
 }
 
 pub async fn execute_stop_failure(
@@ -1620,10 +2157,10 @@ pub async fn execute_stop_failure(
     error: &str,
     error_details: Option<&str>,
     last_assistant_message: Option<&str>,
-) -> anyhow::Result<Vec<SingleHookResult>> {
+) -> crate::Result<Vec<SingleHookResult>> {
     let input = StopFailureInput {
         base: base_from_ctx(ctx),
-        hook_event_name: "StopFailure".to_string(),
+        hook_event_name: HookEventType::StopFailure,
         error: error.to_string(),
         error_details: error_details.map(String::from),
         last_assistant_message: last_assistant_message.map(String::from),
@@ -1634,7 +2171,7 @@ pub async fn execute_stop_failure(
         &ctx.session_id,
         &ctx.cwd.to_string_lossy(),
         None,
-        "StopFailure",
+        HookEventType::StopFailure,
         ctx.project_dir.as_deref().and_then(|p| p.to_str()),
     );
 
@@ -1649,10 +2186,777 @@ pub async fn execute_stop_failure(
         /*event_tx*/ None,
         &ctx.attachment_emitter,
         ctx.allow_managed_hooks_only,
+        ctx.http_url_allowlist.as_deref(),
+        ctx.http_env_var_policy.as_deref(),
+        ctx.async_registry.as_ref(),
+        ctx.llm_handle.as_ref(),
+        ctx.workspace_trust_accepted,
     )
     .await;
 
     Ok(results)
+}
+
+// ---------------------------------------------------------------------------
+// Round-out: 14 remaining event-specific entry points (TS parity)
+// ---------------------------------------------------------------------------
+//
+// Each helper builds the appropriate input, populates the env, runs
+// `execute_hooks_parallel_filtered`, and aggregates with the matching
+// `expected_event`. Trigger sites in coco-rs subsystems call these
+// directly — none of them need anything beyond `OrchestrationContext`.
+
+/// Execute Setup hooks (init / maintenance triggers).
+/// TS: `executeSetupHooks()` (`utils/hooks.ts:3902`).
+pub async fn execute_setup(
+    registry: &HookRegistry,
+    ctx: &OrchestrationContext,
+    trigger: SetupTrigger,
+) -> crate::Result<AggregatedHookResult> {
+    if ctx.disable_all_hooks {
+        return Ok(AggregatedHookResult::default());
+    }
+    let input = crate::inputs::SetupInput {
+        base: base_from_ctx(ctx),
+        hook_event_name: HookEventType::Setup,
+        trigger,
+    };
+    let json_input = serde_json::to_string(&input)?;
+    let env = build_hook_env(
+        &ctx.session_id,
+        &ctx.cwd.to_string_lossy(),
+        None,
+        HookEventType::Setup,
+        ctx.project_dir.as_deref().and_then(|p| p.to_str()),
+    );
+    let results = execute_hooks_parallel_filtered(
+        registry,
+        HookEventType::Setup,
+        Some(trigger.as_wire_str()),
+        &json_input,
+        &env,
+        &ctx.cancel,
+        DEFAULT_HOOK_TIMEOUT,
+        None,
+        &ctx.attachment_emitter,
+        ctx.allow_managed_hooks_only,
+        ctx.http_url_allowlist.as_deref(),
+        ctx.http_env_var_policy.as_deref(),
+        ctx.async_registry.as_ref(),
+        ctx.llm_handle.as_ref(),
+        ctx.workspace_trust_accepted,
+    )
+    .await;
+    Ok(aggregate_results_for_event(
+        &results,
+        Some(HookEventType::Setup),
+    ))
+}
+
+/// Execute Notification hooks (e.g. permission_prompt, idle_prompt).
+///
+/// TS: `executeNotificationHooks()` + `NotificationHookInputSchema`
+/// (`coreSchemas.ts:473-482`): `{message, title?, notification_type}`.
+pub async fn execute_notification(
+    registry: &HookRegistry,
+    ctx: &OrchestrationContext,
+    notification_type: &str,
+    message: &str,
+    title: Option<&str>,
+) -> crate::Result<AggregatedHookResult> {
+    if ctx.disable_all_hooks {
+        return Ok(AggregatedHookResult::default());
+    }
+    let input = crate::inputs::NotificationInput {
+        base: base_from_ctx(ctx),
+        hook_event_name: HookEventType::Notification,
+        notification_type: notification_type.to_string(),
+        message: message.to_string(),
+        title: title.map(String::from),
+    };
+    let json_input = serde_json::to_string(&input)?;
+    let env = build_hook_env(
+        &ctx.session_id,
+        &ctx.cwd.to_string_lossy(),
+        None,
+        HookEventType::Notification,
+        ctx.project_dir.as_deref().and_then(|p| p.to_str()),
+    );
+    let results = execute_hooks_parallel_filtered(
+        registry,
+        HookEventType::Notification,
+        Some(notification_type),
+        &json_input,
+        &env,
+        &ctx.cancel,
+        DEFAULT_HOOK_TIMEOUT,
+        None,
+        &ctx.attachment_emitter,
+        ctx.allow_managed_hooks_only,
+        ctx.http_url_allowlist.as_deref(),
+        ctx.http_env_var_policy.as_deref(),
+        ctx.async_registry.as_ref(),
+        ctx.llm_handle.as_ref(),
+        ctx.workspace_trust_accepted,
+    )
+    .await;
+    Ok(aggregate_results_for_event(
+        &results,
+        Some(HookEventType::Notification),
+    ))
+}
+
+/// Execute PermissionRequest hooks. Output `hookSpecificOutput.decision`
+/// drives the dialog's allow / deny outcome.
+///
+/// TS: `executePermissionRequestHooks()` + `PermissionRequestHookInputSchema`
+/// (`coreSchemas.ts:425-434`): `{tool_name, tool_input, permission_suggestions?}`
+/// — note that TS does NOT include `tool_use_id` on this event.
+pub async fn execute_permission_request(
+    registry: &HookRegistry,
+    ctx: &OrchestrationContext,
+    tool_name: &str,
+    tool_input: &serde_json::Value,
+    permission_suggestions: Option<&serde_json::Value>,
+) -> crate::Result<AggregatedHookResult> {
+    if ctx.disable_all_hooks {
+        return Ok(AggregatedHookResult::default());
+    }
+    let input = crate::inputs::PermissionRequestInput {
+        base: base_from_ctx(ctx),
+        hook_event_name: HookEventType::PermissionRequest,
+        tool_name: tool_name.to_string(),
+        tool_input: tool_input.clone(),
+        permission_suggestions: permission_suggestions.cloned(),
+    };
+    let json_input = serde_json::to_string(&input)?;
+    let env = build_hook_env(
+        &ctx.session_id,
+        &ctx.cwd.to_string_lossy(),
+        Some(tool_name),
+        HookEventType::PermissionRequest,
+        ctx.project_dir.as_deref().and_then(|p| p.to_str()),
+    );
+    let results = execute_hooks_parallel_filtered(
+        registry,
+        HookEventType::PermissionRequest,
+        Some(tool_name),
+        &json_input,
+        &env,
+        &ctx.cancel,
+        DEFAULT_HOOK_TIMEOUT,
+        None,
+        &ctx.attachment_emitter,
+        ctx.allow_managed_hooks_only,
+        ctx.http_url_allowlist.as_deref(),
+        ctx.http_env_var_policy.as_deref(),
+        ctx.async_registry.as_ref(),
+        ctx.llm_handle.as_ref(),
+        ctx.workspace_trust_accepted,
+    )
+    .await;
+    Ok(aggregate_results_for_event(
+        &results,
+        Some(HookEventType::PermissionRequest),
+    ))
+}
+
+/// Execute PermissionDenied hooks (after the auto-mode classifier rules
+/// the call out). Output's `retry: true` lets the model retry.
+///
+/// TS: `executePermissionDeniedHooks()` + `PermissionDeniedHookInputSchema`
+/// (`coreSchemas.ts:461-471`): `{tool_name, tool_input, tool_use_id, reason}`.
+pub async fn execute_permission_denied(
+    registry: &HookRegistry,
+    ctx: &OrchestrationContext,
+    tool_name: &str,
+    tool_use_id: &str,
+    tool_input: &serde_json::Value,
+    reason: &str,
+) -> crate::Result<AggregatedHookResult> {
+    if ctx.disable_all_hooks {
+        return Ok(AggregatedHookResult::default());
+    }
+    let input = crate::inputs::PermissionDeniedInput {
+        base: base_from_ctx(ctx),
+        hook_event_name: HookEventType::PermissionDenied,
+        tool_name: tool_name.to_string(),
+        tool_input: tool_input.clone(),
+        tool_use_id: tool_use_id.to_string(),
+        reason: reason.to_string(),
+    };
+    let json_input = serde_json::to_string(&input)?;
+    let env = build_hook_env(
+        &ctx.session_id,
+        &ctx.cwd.to_string_lossy(),
+        Some(tool_name),
+        HookEventType::PermissionDenied,
+        ctx.project_dir.as_deref().and_then(|p| p.to_str()),
+    );
+    let results = execute_hooks_parallel_filtered(
+        registry,
+        HookEventType::PermissionDenied,
+        Some(tool_name),
+        &json_input,
+        &env,
+        &ctx.cancel,
+        DEFAULT_HOOK_TIMEOUT,
+        None,
+        &ctx.attachment_emitter,
+        ctx.allow_managed_hooks_only,
+        ctx.http_url_allowlist.as_deref(),
+        ctx.http_env_var_policy.as_deref(),
+        ctx.async_registry.as_ref(),
+        ctx.llm_handle.as_ref(),
+        ctx.workspace_trust_accepted,
+    )
+    .await;
+    Ok(aggregate_results_for_event(
+        &results,
+        Some(HookEventType::PermissionDenied),
+    ))
+}
+
+/// Execute Elicitation hooks (MCP elicitation gating).
+///
+/// TS: `executeElicitationHooks()` + `ElicitationHookInputSchema`
+/// (`coreSchemas.ts:627-643`):
+/// `{mcp_server_name, message, mode?, url?, elicitation_id?, requested_schema?}`.
+#[allow(clippy::too_many_arguments)]
+pub async fn execute_elicitation(
+    registry: &HookRegistry,
+    ctx: &OrchestrationContext,
+    mcp_server_name: &str,
+    message: &str,
+    mode: Option<ElicitationMode>,
+    url: Option<&str>,
+    elicitation_id: Option<&str>,
+    requested_schema: Option<&serde_json::Value>,
+) -> crate::Result<AggregatedHookResult> {
+    if ctx.disable_all_hooks {
+        return Ok(AggregatedHookResult::default());
+    }
+    let input = crate::inputs::ElicitationInput {
+        base: base_from_ctx(ctx),
+        hook_event_name: HookEventType::Elicitation,
+        mcp_server_name: mcp_server_name.to_string(),
+        message: message.to_string(),
+        mode,
+        url: url.map(String::from),
+        elicitation_id: elicitation_id.map(String::from),
+        requested_schema: requested_schema.cloned(),
+    };
+    let json_input = serde_json::to_string(&input)?;
+    let env = build_hook_env(
+        &ctx.session_id,
+        &ctx.cwd.to_string_lossy(),
+        None,
+        HookEventType::Elicitation,
+        ctx.project_dir.as_deref().and_then(|p| p.to_str()),
+    );
+    let results = execute_hooks_parallel_filtered(
+        registry,
+        HookEventType::Elicitation,
+        Some(mcp_server_name),
+        &json_input,
+        &env,
+        &ctx.cancel,
+        DEFAULT_HOOK_TIMEOUT,
+        None,
+        &ctx.attachment_emitter,
+        ctx.allow_managed_hooks_only,
+        ctx.http_url_allowlist.as_deref(),
+        ctx.http_env_var_policy.as_deref(),
+        ctx.async_registry.as_ref(),
+        ctx.llm_handle.as_ref(),
+        ctx.workspace_trust_accepted,
+    )
+    .await;
+    Ok(aggregate_results_for_event(
+        &results,
+        Some(HookEventType::Elicitation),
+    ))
+}
+
+/// Execute ElicitationResult hooks (after the user responds to MCP).
+///
+/// TS: `executeElicitationResultHooks()` + `ElicitationResultHookInputSchema`
+/// (`coreSchemas.ts:645-660`):
+/// `{mcp_server_name, elicitation_id?, mode?, action, content?}`.
+pub async fn execute_elicitation_result(
+    registry: &HookRegistry,
+    ctx: &OrchestrationContext,
+    mcp_server_name: &str,
+    elicitation_id: Option<&str>,
+    mode: Option<ElicitationMode>,
+    action: ElicitationAction,
+    content: Option<&serde_json::Value>,
+) -> crate::Result<AggregatedHookResult> {
+    if ctx.disable_all_hooks {
+        return Ok(AggregatedHookResult::default());
+    }
+    let input = crate::inputs::ElicitationResultInput {
+        base: base_from_ctx(ctx),
+        hook_event_name: HookEventType::ElicitationResult,
+        mcp_server_name: mcp_server_name.to_string(),
+        elicitation_id: elicitation_id.map(String::from),
+        mode,
+        action,
+        content: content.cloned(),
+    };
+    let json_input = serde_json::to_string(&input)?;
+    let env = build_hook_env(
+        &ctx.session_id,
+        &ctx.cwd.to_string_lossy(),
+        None,
+        HookEventType::ElicitationResult,
+        ctx.project_dir.as_deref().and_then(|p| p.to_str()),
+    );
+    let results = execute_hooks_parallel_filtered(
+        registry,
+        HookEventType::ElicitationResult,
+        Some(mcp_server_name),
+        &json_input,
+        &env,
+        &ctx.cancel,
+        DEFAULT_HOOK_TIMEOUT,
+        None,
+        &ctx.attachment_emitter,
+        ctx.allow_managed_hooks_only,
+        ctx.http_url_allowlist.as_deref(),
+        ctx.http_env_var_policy.as_deref(),
+        ctx.async_registry.as_ref(),
+        ctx.llm_handle.as_ref(),
+        ctx.workspace_trust_accepted,
+    )
+    .await;
+    Ok(aggregate_results_for_event(
+        &results,
+        Some(HookEventType::ElicitationResult),
+    ))
+}
+
+/// Execute ConfigChange hooks (settings file mutated mid-session).
+/// TS: `executeConfigChangeHooks()` (`utils/hooks.ts:4214`).
+pub async fn execute_config_change(
+    registry: &HookRegistry,
+    ctx: &OrchestrationContext,
+    source: ConfigChangeSource,
+    file_path: Option<&str>,
+) -> crate::Result<AggregatedHookResult> {
+    if ctx.disable_all_hooks {
+        return Ok(AggregatedHookResult::default());
+    }
+    let input = crate::inputs::ConfigChangeInput {
+        base: base_from_ctx(ctx),
+        hook_event_name: HookEventType::ConfigChange,
+        source,
+        file_path: file_path.map(String::from),
+    };
+    let json_input = serde_json::to_string(&input)?;
+    let env = build_hook_env(
+        &ctx.session_id,
+        &ctx.cwd.to_string_lossy(),
+        None,
+        HookEventType::ConfigChange,
+        ctx.project_dir.as_deref().and_then(|p| p.to_str()),
+    );
+    let results = execute_hooks_parallel_filtered(
+        registry,
+        HookEventType::ConfigChange,
+        Some(source.as_wire_str()),
+        &json_input,
+        &env,
+        &ctx.cancel,
+        DEFAULT_HOOK_TIMEOUT,
+        None,
+        &ctx.attachment_emitter,
+        ctx.allow_managed_hooks_only,
+        ctx.http_url_allowlist.as_deref(),
+        ctx.http_env_var_policy.as_deref(),
+        ctx.async_registry.as_ref(),
+        ctx.llm_handle.as_ref(),
+        ctx.workspace_trust_accepted,
+    )
+    .await;
+    Ok(aggregate_results_for_event(
+        &results,
+        Some(HookEventType::ConfigChange),
+    ))
+}
+
+/// Execute InstructionsLoaded hooks (CLAUDE.md / rule discovery).
+///
+/// TS: `executeInstructionsLoadedHooks()` + `InstructionsLoadedHookInputSchema`
+/// (`coreSchemas.ts:695-706`):
+/// `{file_path, memory_type, load_reason, globs?, trigger_file_path?, parent_file_path?}`.
+#[allow(clippy::too_many_arguments)]
+pub async fn execute_instructions_loaded(
+    registry: &HookRegistry,
+    ctx: &OrchestrationContext,
+    file_path: &str,
+    memory_type: MemoryType,
+    load_reason: InstructionsLoadReason,
+    globs: Option<Vec<String>>,
+    trigger_file_path: Option<&str>,
+    parent_file_path: Option<&str>,
+) -> crate::Result<AggregatedHookResult> {
+    if ctx.disable_all_hooks {
+        return Ok(AggregatedHookResult::default());
+    }
+    let input = crate::inputs::InstructionsLoadedInput {
+        base: base_from_ctx(ctx),
+        hook_event_name: HookEventType::InstructionsLoaded,
+        file_path: file_path.to_string(),
+        memory_type,
+        load_reason,
+        globs,
+        trigger_file_path: trigger_file_path.map(String::from),
+        parent_file_path: parent_file_path.map(String::from),
+    };
+    let json_input = serde_json::to_string(&input)?;
+    let env = build_hook_env(
+        &ctx.session_id,
+        &ctx.cwd.to_string_lossy(),
+        None,
+        HookEventType::InstructionsLoaded,
+        ctx.project_dir.as_deref().and_then(|p| p.to_str()),
+    );
+    let results = execute_hooks_parallel_filtered(
+        registry,
+        HookEventType::InstructionsLoaded,
+        Some(load_reason.as_wire_str()),
+        &json_input,
+        &env,
+        &ctx.cancel,
+        DEFAULT_HOOK_TIMEOUT,
+        None,
+        &ctx.attachment_emitter,
+        ctx.allow_managed_hooks_only,
+        ctx.http_url_allowlist.as_deref(),
+        ctx.http_env_var_policy.as_deref(),
+        ctx.async_registry.as_ref(),
+        ctx.llm_handle.as_ref(),
+        ctx.workspace_trust_accepted,
+    )
+    .await;
+    Ok(aggregate_results_for_event(
+        &results,
+        Some(HookEventType::InstructionsLoaded),
+    ))
+}
+
+/// Execute CwdChanged hooks (working directory swap).
+/// TS: `executeCwdChangedHooks()` (`utils/hooks.ts:4260`).
+pub async fn execute_cwd_changed(
+    registry: &HookRegistry,
+    ctx: &OrchestrationContext,
+    old_cwd: &str,
+    new_cwd: &str,
+) -> crate::Result<AggregatedHookResult> {
+    if ctx.disable_all_hooks {
+        return Ok(AggregatedHookResult::default());
+    }
+    let input = crate::inputs::CwdChangedInput {
+        base: base_from_ctx(ctx),
+        hook_event_name: HookEventType::CwdChanged,
+        old_cwd: old_cwd.to_string(),
+        new_cwd: new_cwd.to_string(),
+    };
+    let json_input = serde_json::to_string(&input)?;
+    let env = build_hook_env(
+        &ctx.session_id,
+        new_cwd,
+        None,
+        HookEventType::CwdChanged,
+        ctx.project_dir.as_deref().and_then(|p| p.to_str()),
+    );
+    let results = execute_hooks_parallel_filtered(
+        registry,
+        HookEventType::CwdChanged,
+        None,
+        &json_input,
+        &env,
+        &ctx.cancel,
+        DEFAULT_HOOK_TIMEOUT,
+        None,
+        &ctx.attachment_emitter,
+        ctx.allow_managed_hooks_only,
+        ctx.http_url_allowlist.as_deref(),
+        ctx.http_env_var_policy.as_deref(),
+        ctx.async_registry.as_ref(),
+        ctx.llm_handle.as_ref(),
+        ctx.workspace_trust_accepted,
+    )
+    .await;
+    Ok(aggregate_results_for_event(
+        &results,
+        Some(HookEventType::CwdChanged),
+    ))
+}
+
+/// Execute FileChanged hooks (a watched file changed).
+/// TS: `executeFileChangedHooks()` (`utils/hooks.ts:4278`). Coco-rs does
+/// not yet ship a chokidar-equivalent watcher (P4 / `crate-coco-hooks.md`),
+/// so callers wire this from external file-watch infrastructure.
+pub async fn execute_file_changed(
+    registry: &HookRegistry,
+    ctx: &OrchestrationContext,
+    file_path: &str,
+    event: FileChangeEvent,
+) -> crate::Result<AggregatedHookResult> {
+    if ctx.disable_all_hooks {
+        return Ok(AggregatedHookResult::default());
+    }
+    let input = crate::inputs::FileChangedInput {
+        base: base_from_ctx(ctx),
+        hook_event_name: HookEventType::FileChanged,
+        file_path: file_path.to_string(),
+        event,
+    };
+    let json_input = serde_json::to_string(&input)?;
+    let env = build_hook_env(
+        &ctx.session_id,
+        &ctx.cwd.to_string_lossy(),
+        None,
+        HookEventType::FileChanged,
+        ctx.project_dir.as_deref().and_then(|p| p.to_str()),
+    );
+    // TS matches FileChanged hooks against the basename of `file_path`.
+    let basename = std::path::Path::new(file_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(str::to_string);
+    let results = execute_hooks_parallel_filtered(
+        registry,
+        HookEventType::FileChanged,
+        basename.as_deref(),
+        &json_input,
+        &env,
+        &ctx.cancel,
+        DEFAULT_HOOK_TIMEOUT,
+        None,
+        &ctx.attachment_emitter,
+        ctx.allow_managed_hooks_only,
+        ctx.http_url_allowlist.as_deref(),
+        ctx.http_env_var_policy.as_deref(),
+        ctx.async_registry.as_ref(),
+        ctx.llm_handle.as_ref(),
+        ctx.workspace_trust_accepted,
+    )
+    .await;
+    Ok(aggregate_results_for_event(
+        &results,
+        Some(HookEventType::FileChanged),
+    ))
+}
+
+/// Execute WorktreeCreate hook (TS one-shot:
+/// `executeWorktreeCreateHook()`). The hook's stdout (or
+/// `hookSpecificOutput.worktreePath`) holds the absolute worktree path.
+pub async fn execute_worktree_create(
+    registry: &HookRegistry,
+    ctx: &OrchestrationContext,
+    name: &str,
+) -> crate::Result<AggregatedHookResult> {
+    if ctx.disable_all_hooks {
+        return Ok(AggregatedHookResult::default());
+    }
+    let input = crate::inputs::WorktreeCreateInput {
+        base: base_from_ctx(ctx),
+        hook_event_name: HookEventType::WorktreeCreate,
+        name: name.to_string(),
+    };
+    let json_input = serde_json::to_string(&input)?;
+    let env = build_hook_env(
+        &ctx.session_id,
+        &ctx.cwd.to_string_lossy(),
+        None,
+        HookEventType::WorktreeCreate,
+        ctx.project_dir.as_deref().and_then(|p| p.to_str()),
+    );
+    let results = execute_hooks_parallel_filtered(
+        registry,
+        HookEventType::WorktreeCreate,
+        None,
+        &json_input,
+        &env,
+        &ctx.cancel,
+        DEFAULT_HOOK_TIMEOUT,
+        None,
+        &ctx.attachment_emitter,
+        ctx.allow_managed_hooks_only,
+        ctx.http_url_allowlist.as_deref(),
+        ctx.http_env_var_policy.as_deref(),
+        ctx.async_registry.as_ref(),
+        ctx.llm_handle.as_ref(),
+        ctx.workspace_trust_accepted,
+    )
+    .await;
+    Ok(aggregate_results_for_event(
+        &results,
+        Some(HookEventType::WorktreeCreate),
+    ))
+}
+
+/// Execute WorktreeRemove hook.
+/// TS: `executeWorktreeRemoveHook()` (`utils/hooks.ts:4967`).
+pub async fn execute_worktree_remove(
+    registry: &HookRegistry,
+    ctx: &OrchestrationContext,
+    worktree_path: &str,
+) -> crate::Result<AggregatedHookResult> {
+    if ctx.disable_all_hooks {
+        return Ok(AggregatedHookResult::default());
+    }
+    let input = crate::inputs::WorktreeRemoveInput {
+        base: base_from_ctx(ctx),
+        hook_event_name: HookEventType::WorktreeRemove,
+        worktree_path: worktree_path.to_string(),
+    };
+    let json_input = serde_json::to_string(&input)?;
+    let env = build_hook_env(
+        &ctx.session_id,
+        &ctx.cwd.to_string_lossy(),
+        None,
+        HookEventType::WorktreeRemove,
+        ctx.project_dir.as_deref().and_then(|p| p.to_str()),
+    );
+    let results = execute_hooks_parallel_filtered(
+        registry,
+        HookEventType::WorktreeRemove,
+        None,
+        &json_input,
+        &env,
+        &ctx.cancel,
+        DEFAULT_HOOK_TIMEOUT,
+        None,
+        &ctx.attachment_emitter,
+        ctx.allow_managed_hooks_only,
+        ctx.http_url_allowlist.as_deref(),
+        ctx.http_env_var_policy.as_deref(),
+        ctx.async_registry.as_ref(),
+        ctx.llm_handle.as_ref(),
+        ctx.workspace_trust_accepted,
+    )
+    .await;
+    Ok(aggregate_results_for_event(
+        &results,
+        Some(HookEventType::WorktreeRemove),
+    ))
+}
+
+/// Run one of the task-shaped events through the parallel executor.
+/// `task_type` is the matcher field (TS uses `task_type` on TaskCreated /
+/// TaskCompleted matchers; TeammateIdle has no matcher in TS but we
+/// allow `None` to match-all here).
+async fn run_event_with_input<I: serde::Serialize>(
+    registry: &HookRegistry,
+    ctx: &OrchestrationContext,
+    event: HookEventType,
+    matcher: Option<&str>,
+    input: &I,
+) -> crate::Result<AggregatedHookResult> {
+    if ctx.disable_all_hooks {
+        return Ok(AggregatedHookResult::default());
+    }
+    let json_input = serde_json::to_string(input)?;
+    let env = build_hook_env(
+        &ctx.session_id,
+        &ctx.cwd.to_string_lossy(),
+        None,
+        event,
+        ctx.project_dir.as_deref().and_then(|p| p.to_str()),
+    );
+    let results = execute_hooks_parallel_filtered(
+        registry,
+        event,
+        matcher,
+        &json_input,
+        &env,
+        &ctx.cancel,
+        DEFAULT_HOOK_TIMEOUT,
+        None,
+        &ctx.attachment_emitter,
+        ctx.allow_managed_hooks_only,
+        ctx.http_url_allowlist.as_deref(),
+        ctx.http_env_var_policy.as_deref(),
+        ctx.async_registry.as_ref(),
+        ctx.llm_handle.as_ref(),
+        ctx.workspace_trust_accepted,
+    )
+    .await;
+    Ok(aggregate_results_for_event(&results, Some(event)))
+}
+
+/// Execute TaskCreated hooks.
+///
+/// TS: `executeTaskCreatedHooks()` + `TaskCreatedHookInputSchema`
+/// (`coreSchemas.ts:601-612`):
+/// `{task_id, task_subject, task_description?, teammate_name?, team_name?}`.
+pub async fn execute_task_created(
+    registry: &HookRegistry,
+    ctx: &OrchestrationContext,
+    task_id: &str,
+    task_subject: &str,
+    task_description: Option<&str>,
+    teammate_name: Option<&str>,
+    team_name: Option<&str>,
+) -> crate::Result<AggregatedHookResult> {
+    let input = crate::inputs::TaskCreatedInput {
+        base: base_from_ctx(ctx),
+        hook_event_name: HookEventType::TaskCreated,
+        task_id: task_id.to_string(),
+        task_subject: task_subject.to_string(),
+        task_description: task_description.map(String::from),
+        teammate_name: teammate_name.map(String::from),
+        team_name: team_name.map(String::from),
+    };
+    run_event_with_input(registry, ctx, HookEventType::TaskCreated, None, &input).await
+}
+
+/// Execute TaskCompleted hooks.
+///
+/// TS: `executeTaskCompletedHooks()` + `TaskCompletedHookInputSchema`
+/// (`coreSchemas.ts:614-625`).
+pub async fn execute_task_completed(
+    registry: &HookRegistry,
+    ctx: &OrchestrationContext,
+    task_id: &str,
+    task_subject: &str,
+    task_description: Option<&str>,
+    teammate_name: Option<&str>,
+    team_name: Option<&str>,
+) -> crate::Result<AggregatedHookResult> {
+    let input = crate::inputs::TaskCompletedInput {
+        base: base_from_ctx(ctx),
+        hook_event_name: HookEventType::TaskCompleted,
+        task_id: task_id.to_string(),
+        task_subject: task_subject.to_string(),
+        task_description: task_description.map(String::from),
+        teammate_name: teammate_name.map(String::from),
+        team_name: team_name.map(String::from),
+    };
+    run_event_with_input(registry, ctx, HookEventType::TaskCompleted, None, &input).await
+}
+
+/// Execute TeammateIdle hooks.
+///
+/// TS: `executeTeammateIdleHooks()` + `TeammateIdleHookInputSchema`
+/// (`coreSchemas.ts:591-599`): `{teammate_name, team_name}`.
+pub async fn execute_teammate_idle(
+    registry: &HookRegistry,
+    ctx: &OrchestrationContext,
+    teammate_name: &str,
+    team_name: &str,
+) -> crate::Result<AggregatedHookResult> {
+    let input = crate::inputs::TeammateIdleInput {
+        base: base_from_ctx(ctx),
+        hook_event_name: HookEventType::TeammateIdle,
+        teammate_name: teammate_name.to_string(),
+        team_name: team_name.to_string(),
+    };
+    run_event_with_input(registry, ctx, HookEventType::TeammateIdle, None, &input).await
 }
 
 // ---------------------------------------------------------------------------
@@ -1679,28 +2983,97 @@ pub fn format_stop_hook_message(error: &HookBlockingError) -> String {
 
 // base_from_ctx() is now in crate::inputs and re-exported above.
 
+/// Bridge between the spawn loop and `HookHandler::Prompt` /
+/// `HookHandler::Agent` execution paths.
+///
+/// When `llm_handle` is `Some`, Prompt and Agent handlers route through
+/// the LLM and yield a `CommandOutput` shaped to match a TS hook's
+/// stdout JSON `{"decision": "block", "reason": "..."}` so the existing
+/// JSON-output code path in `aggregate_results` interprets the
+/// blocking/success state without any new branches. When `llm_handle`
+/// is `None`, falls back to the legacy passthrough in [`execute_hook`].
+async fn run_hook_via_handle_or_fallback(
+    handler: &HookHandler,
+    env_vars: &std::collections::HashMap<String, String>,
+    stdin_input: Option<&str>,
+    llm_handle: Option<&std::sync::Arc<dyn crate::llm_handle::HookLlmHandle>>,
+    timeout: Duration,
+) -> crate::Result<HookExecutionResult> {
+    use crate::llm_handle::HookEvaluationResult;
+
+    let Some(llm) = llm_handle else {
+        return execute_hook(handler, env_vars, stdin_input).await;
+    };
+
+    let (prompt, model, is_agent) = match handler {
+        HookHandler::Prompt { prompt, model, .. } => (prompt.clone(), model.clone(), false),
+        HookHandler::Agent { prompt, model, .. } => (prompt.clone(), model.clone(), true),
+        // Command / Http aren't LLM-driven — pass through.
+        _ => return execute_hook(handler, env_vars, stdin_input).await,
+    };
+
+    // TS hooks substitute `$ARGUMENTS` (and `$0`/`$1`/...) with the
+    // serialized hook input JSON before the LLM call. Stand-in: if
+    // `stdin_input` is `Some`, we splice it into a `$ARGUMENTS`
+    // placeholder so users get the same UX. Implementations that want
+    // richer substitution can do it inside `evaluate_*`.
+    let processed = match stdin_input {
+        Some(args) => prompt.replace("$ARGUMENTS", args),
+        None => prompt,
+    };
+
+    let outcome = if is_agent {
+        llm.evaluate_agent(&processed, model.as_deref(), timeout)
+            .await
+    } else {
+        llm.evaluate_prompt(&processed, model.as_deref(), timeout)
+            .await
+    };
+
+    // Map evaluation outcomes back onto the JSON-output shape that
+    // `aggregate_results` already understands. exit_code 2 = blocking
+    // (TS convention), 1 = non-blocking error, 0 = success.
+    let (exit_code, stdout, stderr) = match outcome {
+        HookEvaluationResult::Ok => (0, String::new(), String::new()),
+        HookEvaluationResult::Blocking { reason } => {
+            let body = serde_json::json!({
+                "decision": "block",
+                "reason": reason,
+            })
+            .to_string();
+            (2, body, String::new())
+        }
+        HookEvaluationResult::Cancelled => (1, String::new(), "hook cancelled".to_string()),
+        HookEvaluationResult::NonBlockingError { error } => (1, String::new(), error),
+    };
+    Ok(HookExecutionResult::CommandOutput {
+        exit_code,
+        stdout,
+        stderr,
+    })
+}
+
 /// Resolve timeout for a hook handler — uses the handler's explicit timeout if set.
 fn resolve_timeout(handler: &HookHandler, default: Duration) -> Duration {
-    match handler {
-        HookHandler::Command { timeout_ms, .. } => timeout_ms
-            .and_then(|ms| u64::try_from(ms).ok())
-            .map(Duration::from_millis)
-            .unwrap_or(default),
-        HookHandler::Http { timeout_ms, .. } => timeout_ms
-            .and_then(|ms| u64::try_from(ms).ok())
-            .map(Duration::from_millis)
-            .unwrap_or(default),
-        _ => default,
-    }
+    let explicit = match handler {
+        HookHandler::Command { timeout_ms, .. } => *timeout_ms,
+        HookHandler::Http { timeout_ms, .. } => *timeout_ms,
+        HookHandler::Prompt { timeout_ms, .. } => *timeout_ms,
+        HookHandler::Agent { timeout_ms, .. } => *timeout_ms,
+    };
+    explicit
+        .and_then(|ms| u64::try_from(ms).ok())
+        .map(Duration::from_millis)
+        .unwrap_or(default)
 }
 
 /// Human-readable label for a hook handler (used in result reporting).
 fn handler_label(handler: &HookHandler) -> String {
     match handler {
         HookHandler::Command { command, .. } => command.clone(),
-        HookHandler::Prompt { prompt } => format!("prompt:{prompt}"),
+        HookHandler::Prompt { prompt, .. } => format!("prompt:{prompt}"),
         HookHandler::Http { url, .. } => url.clone(),
-        HookHandler::Agent { agent_name, .. } => format!("agent:{agent_name}"),
+        HookHandler::Agent { prompt, .. } => format!("agent:{prompt}"),
     }
 }
 

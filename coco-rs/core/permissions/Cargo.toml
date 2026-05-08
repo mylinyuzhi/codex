@@ -9,12 +9,12 @@ workspace = true
 
 [dependencies]
 coco-types.workspace = true
+coco-error.workspace = true
 coco-messages.workspace = true
 coco-config.workspace = true
 
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-anyhow.workspace = true
 tracing.workspace = true
 regex.workspace = true
 

@@ -74,14 +74,14 @@ pub trait McpHandle: Send + Sync {
     async fn list_resources(
         &self,
         server_name: Option<&str>,
-    ) -> anyhow::Result<Vec<McpResourceInfo>>;
+    ) -> Result<Vec<McpResourceInfo>, coco_error::BoxedError>;
 
     /// Read a resource from an MCP server.
     async fn read_resource(
         &self,
         server_name: &str,
         resource_uri: &str,
-    ) -> anyhow::Result<McpResourceContent>;
+    ) -> Result<McpResourceContent, coco_error::BoxedError>;
 
     /// Call an MCP tool.
     async fn call_tool(
@@ -89,10 +89,10 @@ pub trait McpHandle: Send + Sync {
         server_name: &str,
         tool_name: &str,
         arguments: Option<Value>,
-    ) -> anyhow::Result<McpToolCallResult>;
+    ) -> Result<McpToolCallResult, coco_error::BoxedError>;
 
     /// Initiate authentication for an MCP server.
-    async fn authenticate(&self, server_name: &str) -> anyhow::Result<String>;
+    async fn authenticate(&self, server_name: &str) -> Result<String, coco_error::BoxedError>;
 
     /// Get names of all connected servers.
     async fn connected_servers(&self) -> Vec<String>;
@@ -116,15 +116,22 @@ pub trait McpHandle: Send + Sync {
     /// `config` is the JSON body of `McpServerConfig` (transport,
     /// command, env, …). The default impl returns an error so
     /// handles without a real MCP layer surface a clean failure.
-    async fn add_dynamic_server(&self, _name: &str, _config: Value) -> anyhow::Result<()> {
-        anyhow::bail!("MCP add_dynamic_server not supported in this context")
+    async fn add_dynamic_server(
+        &self,
+        _name: &str,
+        _config: Value,
+    ) -> Result<(), coco_error::BoxedError> {
+        Err(Box::new(coco_error::PlainError::new(
+            "MCP add_dynamic_server not supported in this context",
+            coco_error::StatusCode::Internal,
+        )))
     }
 
     /// Disconnect + deregister a dynamically-added server. Mirror of
     /// `add_dynamic_server`. Called at SubagentStop for every server
     /// that was spun up via inline config so agent-private servers
     /// don't outlive their agent.
-    async fn remove_dynamic_server(&self, _name: &str) -> anyhow::Result<()> {
+    async fn remove_dynamic_server(&self, _name: &str) -> Result<(), coco_error::BoxedError> {
         Ok(())
     }
 }
@@ -137,22 +144,38 @@ pub struct NoOpMcpHandle;
 
 #[async_trait::async_trait]
 impl McpHandle for NoOpMcpHandle {
-    async fn list_resources(&self, _: Option<&str>) -> anyhow::Result<Vec<McpResourceInfo>> {
+    async fn list_resources(
+        &self,
+        _: Option<&str>,
+    ) -> Result<Vec<McpResourceInfo>, coco_error::BoxedError> {
         Ok(vec![])
     }
-    async fn read_resource(&self, _: &str, _: &str) -> anyhow::Result<McpResourceContent> {
-        anyhow::bail!("MCP not available in this context")
+    async fn read_resource(
+        &self,
+        _: &str,
+        _: &str,
+    ) -> Result<McpResourceContent, coco_error::BoxedError> {
+        Err(Box::new(coco_error::PlainError::new(
+            "MCP not available in this context",
+            coco_error::StatusCode::Internal,
+        )))
     }
     async fn call_tool(
         &self,
         _: &str,
         _: &str,
         _: Option<Value>,
-    ) -> anyhow::Result<McpToolCallResult> {
-        anyhow::bail!("MCP not available in this context")
+    ) -> Result<McpToolCallResult, coco_error::BoxedError> {
+        Err(Box::new(coco_error::PlainError::new(
+            "MCP not available in this context",
+            coco_error::StatusCode::Internal,
+        )))
     }
-    async fn authenticate(&self, _: &str) -> anyhow::Result<String> {
-        anyhow::bail!("MCP not available in this context")
+    async fn authenticate(&self, _: &str) -> Result<String, coco_error::BoxedError> {
+        Err(Box::new(coco_error::PlainError::new(
+            "MCP not available in this context",
+            coco_error::StatusCode::Internal,
+        )))
     }
     async fn connected_servers(&self) -> Vec<String> {
         vec![]
