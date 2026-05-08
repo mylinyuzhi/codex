@@ -16,9 +16,9 @@
 //!
 //! If the keyring is not available or fails, we fall back to CODEX_HOME/.credentials.json which is consistent with other coding CLI agents.
 
-use anyhow::Context;
-use anyhow::Error;
-use anyhow::Result;
+use crate::Result;
+use crate::ResultExt;
+use crate::RmcpClientError;
 use oauth2::AccessToken;
 use oauth2::EmptyExtraTokenFields;
 use oauth2::RefreshToken;
@@ -108,7 +108,7 @@ pub(crate) fn load_oauth_tokens(
         }
         OAuthCredentialsStoreMode::Keyring => {
             load_oauth_tokens_from_keyring(&keyring_store, server_name, url)
-                .with_context(|| "failed to read OAuth tokens from keyring".to_string())
+                .with_ctx("failed to read OAuth tokens from keyring")
         }
     }
 }
@@ -150,7 +150,7 @@ fn load_oauth_tokens_from_keyring_with_fallback_to_file<K: KeyringStore>(
         Err(error) => {
             warn!("failed to read OAuth tokens from keyring: {error}");
             load_oauth_tokens_from_file(server_name, url, config_home)
-                .with_context(|| format!("failed to read OAuth tokens from keyring: {error}"))
+                .with_ctx_lazy(|| format!("failed to read OAuth tokens from keyring: {error}"))
         }
     }
 }
@@ -164,12 +164,12 @@ fn load_oauth_tokens_from_keyring<K: KeyringStore>(
     match keyring_store.load(KEYRING_SERVICE, &key) {
         Ok(Some(serialized)) => {
             let mut tokens: StoredOAuthTokens = serde_json::from_str(&serialized)
-                .context("failed to deserialize OAuth tokens from keyring")?;
+                .with_ctx("failed to deserialize OAuth tokens from keyring")?;
             refresh_expires_in_from_timestamp(&mut tokens);
             Ok(Some(tokens))
         }
         Ok(None) => Ok(None),
-        Err(error) => Err(Error::new(error.into_error())),
+        Err(error) => Err(error.into_error().into()),
     }
 }
 
@@ -200,7 +200,7 @@ fn save_oauth_tokens_with_keyring<K: KeyringStore>(
     tokens: &StoredOAuthTokens,
     config_home: &std::path::Path,
 ) -> Result<()> {
-    let serialized = serde_json::to_string(tokens).context("failed to serialize OAuth tokens")?;
+    let serialized = serde_json::to_string(tokens).with_ctx("failed to serialize OAuth tokens")?;
 
     let key = compute_store_key(server_name, &tokens.url)?;
     match keyring_store.save(KEYRING_SERVICE, &key, &serialized) {
@@ -216,7 +216,7 @@ fn save_oauth_tokens_with_keyring<K: KeyringStore>(
                 error.message()
             );
             warn!("{message}");
-            Err(Error::new(error.into_error()).context(message))
+            Err(RmcpClientError::Generic { message })
         }
     }
 }
@@ -233,7 +233,7 @@ fn save_oauth_tokens_with_keyring_with_fallback_to_file<K: KeyringStore>(
             let message = error.to_string();
             warn!("falling back to file storage for OAuth tokens: {message}");
             save_oauth_tokens_to_file(tokens, config_home)
-                .with_context(|| format!("failed to write OAuth tokens to keyring: {message}"))
+                .with_ctx_lazy(|| format!("failed to write OAuth tokens to keyring: {message}"))
         }
     }
 }
@@ -271,7 +271,7 @@ fn delete_oauth_tokens_from_keyring_and_file<K: KeyringStore>(
             match store_mode {
                 OAuthCredentialsStoreMode::Auto | OAuthCredentialsStoreMode::Keyring => {
                     return Err(error.into_error())
-                        .context("failed to delete OAuth tokens from keyring");
+                        .with_ctx("failed to delete OAuth tokens from keyring");
                 }
                 OAuthCredentialsStoreMode::File => false,
             }
@@ -390,7 +390,7 @@ impl OAuthPersistor {
         {
             let manager = self.inner.authorization_manager.clone();
             let guard = manager.lock().await;
-            guard.refresh_token().await.with_context(|| {
+            guard.refresh_token().await.with_ctx_lazy(|| {
                 format!(
                     "failed to refresh OAuth tokens for server {}",
                     self.inner.server_name
@@ -568,7 +568,7 @@ fn compute_store_key(server_name: &str, server_url: &str) -> Result<String> {
     Ok(format!("{server_name}|{truncated}"))
 }
 
-fn fallback_file_path(config_home: &std::path::Path) -> anyhow::Result<PathBuf> {
+fn fallback_file_path(config_home: &std::path::Path) -> Result<PathBuf> {
     Ok(config_home.join(FALLBACK_FILENAME))
 }
 
@@ -578,19 +578,16 @@ fn read_fallback_file(config_home: &std::path::Path) -> Result<Option<FallbackFi
         Ok(contents) => contents,
         Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
         Err(err) => {
-            return Err(err).context(format!(
-                "failed to read credentials file at {}",
-                path.display()
-            ));
+            return Err(err).with_ctx_lazy(|| {
+                format!("failed to read credentials file at {}", path.display())
+            });
         }
     };
 
     match serde_json::from_str::<FallbackFile>(&contents) {
         Ok(store) => Ok(Some(store)),
-        Err(e) => Err(e).context(format!(
-            "failed to parse credentials file at {}",
-            path.display()
-        )),
+        Err(e) => Err(e)
+            .with_ctx_lazy(|| format!("failed to parse credentials file at {}", path.display())),
     }
 }
 
@@ -623,7 +620,7 @@ fn write_fallback_file(store: &FallbackFile, config_home: &std::path::Path) -> R
 
 fn sha_256_prefix(value: &Value) -> Result<String> {
     let serialized =
-        serde_json::to_string(&value).context("failed to serialize MCP OAuth key payload")?;
+        serde_json::to_string(&value).with_ctx("failed to serialize MCP OAuth key payload")?;
     let mut hasher = Sha256::new();
     hasher.update(serialized.as_bytes());
     let digest = hasher.finalize();

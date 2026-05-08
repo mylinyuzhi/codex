@@ -75,7 +75,7 @@ impl PaneBackend for ITermBackend {
         &self,
         _name: &str,
         _color: AgentColorName,
-    ) -> anyhow::Result<CreatePaneResult> {
+    ) -> crate::Result<CreatePaneResult> {
         let _lock = self.pane_creation_lock.lock().await;
 
         let is_first = {
@@ -112,7 +112,9 @@ impl PaneBackend for ITermBackend {
                 Ok(stdout) => {
                     let pane_id = parse_split_output(&stdout);
                     if pane_id.is_empty() {
-                        anyhow::bail!("Failed to parse pane ID from it2 split output");
+                        return Err(crate::CoordinatorError::generic(
+                            "Failed to parse pane ID from it2 split output",
+                        ));
                     }
 
                     // Track the new session
@@ -141,13 +143,15 @@ impl PaneBackend for ITermBackend {
                         }
                     }
                     // Session alive but split failed — surface error
-                    anyhow::bail!("iTerm2 split failed: {e}");
+                    return Err(crate::CoordinatorError::generic(format!(
+                        "iTerm2 split failed: {e}"
+                    )));
                 }
             }
         }
     }
 
-    async fn send_command_to_pane(&self, pane_id: &PaneId, command: &str) -> anyhow::Result<()> {
+    async fn send_command_to_pane(&self, pane_id: &PaneId, command: &str) -> crate::Result<()> {
         let args = if pane_id.is_empty() {
             vec!["session", "run", command]
         } else {
@@ -162,7 +166,7 @@ impl PaneBackend for ITermBackend {
         &self,
         _pane_id: &PaneId,
         _color: AgentColorName,
-    ) -> anyhow::Result<()> {
+    ) -> crate::Result<()> {
         Ok(())
     }
 
@@ -172,21 +176,21 @@ impl PaneBackend for ITermBackend {
         _pane_id: &PaneId,
         _name: &str,
         _color: AgentColorName,
-    ) -> anyhow::Result<()> {
+    ) -> crate::Result<()> {
         Ok(())
     }
 
     /// No-op: iTerm2 shows titles in tabs automatically.
-    async fn enable_pane_border_status(&self, _window_target: Option<&str>) -> anyhow::Result<()> {
+    async fn enable_pane_border_status(&self, _window_target: Option<&str>) -> crate::Result<()> {
         Ok(())
     }
 
     /// No-op: iTerm2 handles pane balancing automatically.
-    async fn rebalance_panes(&self, _window_target: &str, _has_leader: bool) -> anyhow::Result<()> {
+    async fn rebalance_panes(&self, _window_target: &str, _has_leader: bool) -> crate::Result<()> {
         Ok(())
     }
 
-    async fn kill_pane(&self, pane_id: &PaneId) -> anyhow::Result<bool> {
+    async fn kill_pane(&self, pane_id: &PaneId) -> crate::Result<bool> {
         // -f flag required: bypasses "Confirm before closing" preference
         let result = run_it2(&["session", "close", "-f", "-s", pane_id]).await;
 
@@ -201,7 +205,7 @@ impl PaneBackend for ITermBackend {
     }
 
     /// Not supported by iTerm2.
-    async fn hide_pane(&self, _pane_id: &PaneId) -> anyhow::Result<bool> {
+    async fn hide_pane(&self, _pane_id: &PaneId) -> crate::Result<bool> {
         Ok(false)
     }
 
@@ -210,7 +214,7 @@ impl PaneBackend for ITermBackend {
         &self,
         _pane_id: &PaneId,
         _target_window_or_pane: &str,
-    ) -> anyhow::Result<bool> {
+    ) -> crate::Result<bool> {
         Ok(false)
     }
 }
@@ -218,7 +222,7 @@ impl PaneBackend for ITermBackend {
 // ── Helpers ──
 
 /// Run an it2 CLI command and return stdout.
-async fn run_it2(args: &[&str]) -> anyhow::Result<String> {
+async fn run_it2(args: &[&str]) -> crate::Result<String> {
     let output = tokio::process::Command::new(IT2_COMMAND)
         .args(args)
         .output()
@@ -226,7 +230,9 @@ async fn run_it2(args: &[&str]) -> anyhow::Result<String> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("it2 command failed: {stderr}");
+        return Err(crate::CoordinatorError::generic(format!(
+            "it2 command failed: {stderr}"
+        )));
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())

@@ -387,8 +387,16 @@ impl StreamingToolExecutor {
     async fn execute_single(&self, call: PendingToolCall, ctx: &ToolUseContext) -> ToolCallResult {
         let tool_id = call.tool.id();
         let tool_use_id = call.tool_use_id.clone();
+        let tool_name = call.tool.name().to_string();
         let start = std::time::Instant::now();
         let input = call.input;
+
+        tracing::info!(
+            tool_use_id = %tool_use_id,
+            tool_name = %tool_name,
+            batch_type = "single_unsafe",
+            "tool batch execute (serial)"
+        );
 
         // Track in-progress
         {
@@ -447,6 +455,22 @@ impl StreamingToolExecutor {
 
         let duration_ms = start.elapsed().as_millis() as i64;
 
+        match &result {
+            Ok(_) => tracing::info!(
+                tool_use_id = %tool_use_id,
+                tool_name = %tool_name,
+                duration_ms,
+                "tool batch ok (serial)"
+            ),
+            Err(e) => tracing::warn!(
+                tool_use_id = %tool_use_id,
+                tool_name = %tool_name,
+                duration_ms,
+                error = %e,
+                "tool batch failed (serial)"
+            ),
+        }
+
         ToolCallResult {
             tool_use_id,
             tool_id,
@@ -478,6 +502,12 @@ impl StreamingToolExecutor {
         let shared_ctx = Arc::new(ctx.clone_for_concurrent());
         let sibling_cancel = CancellationToken::new();
         let call_count = calls.len();
+        tracing::info!(
+            batch_type = "concurrent_safe",
+            call_count,
+            max_concurrency = self.max_concurrency,
+            "tool batch execute (concurrent)"
+        );
         let model_order_tool_use_ids: Vec<String> =
             calls.iter().map(|call| call.tool_use_id.clone()).collect();
         let mut handles = FuturesUnordered::new();
@@ -491,6 +521,11 @@ impl StreamingToolExecutor {
             let tool_id = tool.id();
             let tool_name = tool.name().to_string();
             let sibling_tok = sibling_cancel.clone();
+            tracing::debug!(
+                tool_use_id = %tool_use_id,
+                tool_name = %tool_name,
+                "concurrent tool spawn"
+            );
 
             // Capture IDs before spawn for join-error fallback
             let saved_tool_use_id = tool_use_id.clone();
@@ -539,10 +574,31 @@ impl StreamingToolExecutor {
                     && (tool_name.as_str() == ToolName::Bash.as_str()
                         || tool_name.as_str() == ToolName::PowerShell.as_str())
                 {
+                    tracing::warn!(
+                        tool_use_id = %tool_use_id,
+                        tool_name = %tool_name,
+                        "shell tool failed; aborting concurrent siblings"
+                    );
                     sibling_tok.cancel();
                 }
 
                 let duration_ms = start.elapsed().as_millis() as i64;
+
+                match &result {
+                    Ok(_) => tracing::debug!(
+                        tool_use_id = %tool_use_id,
+                        tool_name = %tool_name,
+                        duration_ms,
+                        "concurrent tool ok"
+                    ),
+                    Err(e) => tracing::warn!(
+                        tool_use_id = %tool_use_id,
+                        tool_name = %tool_name,
+                        duration_ms,
+                        error = %e,
+                        "concurrent tool failed"
+                    ),
+                }
 
                 ToolCallResult {
                     tool_use_id,

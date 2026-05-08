@@ -36,13 +36,18 @@ pub struct HookMatcher {
 }
 
 /// TS discriminates via `type` field: "command", "prompt", "http", "agent".
+/// In coco-rs the `once` / `async` / `if` / `statusMessage` fields are
+/// hoisted to the outer `HookDefinition` (TS exposes them per-variant
+/// in the schema; the loader reads them from raw JSON). Each variant
+/// now carries its own `timeout_ms` field — TS allows `timeout` on
+/// every handler kind.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum HookCommand {
-    Command { command: String, shell: Option<ShellKind>, timeout: Option<i64>, once: bool, r#async: bool },
-    Prompt { prompt: String, model: Option<String>, timeout: Option<i64>, once: bool },
-    Http { url: String, headers: HashMap<String, String>, timeout: Option<i64>, once: bool },
-    Agent { prompt: String, model: Option<String>, timeout: Option<i64>, once: bool },
+pub enum HookHandler {
+    Command { command: String, timeout_ms: Option<i64>, shell: Option<String> },
+    Prompt { prompt: String, model: Option<String>, timeout_ms: Option<i64> },
+    Http { url: String, headers: Option<HashMap<String, String>>, timeout_ms: Option<i64>, allowed_env_vars: Vec<String> },
+    Agent { prompt: String, model: Option<String>, timeout_ms: Option<i64> },
 }
 ```
 

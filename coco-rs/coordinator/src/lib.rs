@@ -34,6 +34,10 @@
 /// dispatch), `spawn.rs` (subagent dispatch — sync + background),
 /// `handoff.rs` (post-spawn classifier + AgentSummary), `resume.rs`
 /// (TS-aligned background-spawn resume).
+mod error;
+pub use error::CoordinatorError;
+pub use error::Result;
+
 pub mod agent_handle;
 /// File-based teammate inboxes (`~/.claude/teams/{team}/inboxes/{agent}.json`)
 /// + structured protocol message envelopes.

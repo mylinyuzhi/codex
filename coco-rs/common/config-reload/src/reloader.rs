@@ -4,7 +4,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::anyhow;
 use coco_config::CatalogPaths;
 use coco_config::EnvSnapshot;
 use coco_config::RuntimeConfig;
@@ -143,9 +142,13 @@ impl RuntimeReloader {
     /// by exact path in `classify`, so a first-time `touch` of
     /// `~/.coco/providers.json` triggers a rebuild even though the
     /// file did not exist at watcher-install time.
-    pub fn spawn(opts: ReloadOptions) -> anyhow::Result<Self> {
-        Handle::try_current()
-            .map_err(|_| anyhow!("RuntimeReloader::spawn must be called from a Tokio runtime"))?;
+    pub fn spawn(opts: ReloadOptions) -> Result<Self, coco_error::BoxedError> {
+        Handle::try_current().map_err(|_| {
+            coco_error::boxed_err(coco_error::PlainError::new(
+                "RuntimeReloader::spawn must be called from a Tokio runtime",
+                coco_error::StatusCode::Internal,
+            ))
+        })?;
 
         let ReloadOptions {
             cwd,
@@ -216,7 +219,8 @@ impl RuntimeReloader {
                     })
                 },
                 |_old, new| new,
-            )?;
+            )
+            .map_err(|e| coco_error::boxed(e, coco_error::StatusCode::IoError))?;
 
         let install_failures = install_watches(&watcher, &watch_set);
         if install_failures > 0 {
@@ -290,6 +294,17 @@ impl RuntimeReloader {
         self.publisher.clone()
     }
 
+    /// Subscribe to raw [`ConfigChange`] events — one item per detected
+    /// settings/catalog file change, keyed by the change source. Use
+    /// this to fire the `ConfigChange` hook (TS
+    /// `executeConfigChangeHooks(source, path)`) without re-running
+    /// the reload pipeline. Each subscriber gets an independent
+    /// `broadcast::Receiver`; lagging subscribers see a `RecvError::Lagged`
+    /// rather than blocking the reload loop.
+    pub fn subscribe_changes(&self) -> tokio::sync::broadcast::Receiver<ConfigChange> {
+        self.watcher.subscribe()
+    }
+
     /// Read the latest snapshot.
     pub fn current(&self) -> Arc<RuntimeConfig> {
         self.publisher.current()
@@ -328,14 +343,22 @@ fn build_with(
     env: &EnvSnapshot,
     overrides: &RuntimeOverrides,
     catalogs: &CatalogPaths,
-) -> anyhow::Result<RuntimeConfig> {
+) -> Result<RuntimeConfig, coco_error::BoxedError> {
+    let to_boxed = |e| {
+        coco_error::boxed_err(coco_error::PlainError::new(
+            format!("{e}"),
+            coco_error::StatusCode::InvalidConfig,
+        ))
+    };
     let settings = load_settings_with(
         cwd,
         flag_settings,
         &catalogs.user_settings,
         &catalogs.managed_settings,
-    )?;
+    )
+    .map_err(to_boxed)?;
     build_runtime_config_with(settings, env.clone(), overrides.clone(), catalogs.clone())
+        .map_err(to_boxed)
 }
 
 /// Install every watch in `watch_set`, returning the count of

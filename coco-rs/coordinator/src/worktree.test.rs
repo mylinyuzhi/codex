@@ -389,7 +389,7 @@ fn test_has_worktree_create_hook_returns_false_for_empty_registry() {
 fn test_has_worktree_create_hook_returns_true_when_hook_registered() {
     use coco_types::HookEventType;
     use coco_types::HookScope;
-    let mut registry = coco_hooks::HookRegistry::new();
+    let registry = coco_hooks::HookRegistry::new();
     registry.register(coco_hooks::HookDefinition {
         event: HookEventType::WorktreeCreate,
         matcher: None,
@@ -404,7 +404,6 @@ fn test_has_worktree_create_hook_returns_true_when_hook_registered() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     });
     assert!(AgentWorktreeManager::has_worktree_create_hook(&registry));

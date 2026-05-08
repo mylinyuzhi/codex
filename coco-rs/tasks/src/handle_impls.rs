@@ -83,6 +83,10 @@ fn claim_to_outcome(c: ClaimResult) -> TaskClaimOutcome {
     }
 }
 
+fn boxed(e: crate::TasksError) -> coco_error::BoxedError {
+    Box::new(e)
+}
+
 #[async_trait::async_trait]
 impl TaskListHandle for TaskListStore {
     async fn create_task(
@@ -91,38 +95,44 @@ impl TaskListHandle for TaskListStore {
         description: String,
         active_form: Option<String>,
         metadata: Option<HashMap<String, serde_json::Value>>,
-    ) -> anyhow::Result<TaskRecord> {
+    ) -> Result<TaskRecord, coco_error::BoxedError> {
         self.create_task(subject, description, active_form, metadata)
             .await
             .map(task_to_record)
+            .map_err(boxed)
     }
 
-    async fn get_task(&self, task_id: &str) -> anyhow::Result<Option<TaskRecord>> {
-        self.get_task(task_id).await.map(|o| o.map(task_to_record))
+    async fn get_task(&self, task_id: &str) -> Result<Option<TaskRecord>, coco_error::BoxedError> {
+        self.get_task(task_id)
+            .await
+            .map(|o| o.map(task_to_record))
+            .map_err(boxed)
     }
 
-    async fn list_tasks(&self) -> anyhow::Result<Vec<TaskRecord>> {
+    async fn list_tasks(&self) -> Result<Vec<TaskRecord>, coco_error::BoxedError> {
         self.list_tasks()
             .await
             .map(|v| v.into_iter().map(task_to_record).collect())
+            .map_err(boxed)
     }
 
     async fn update_task(
         &self,
         task_id: &str,
         updates: TaskRecordUpdate,
-    ) -> anyhow::Result<Option<TaskRecord>> {
+    ) -> Result<Option<TaskRecord>, coco_error::BoxedError> {
         self.update_task(task_id, update_from_wire(updates))
             .await
             .map(|o| o.map(task_to_record))
+            .map_err(boxed)
     }
 
-    async fn delete_task(&self, task_id: &str) -> anyhow::Result<bool> {
-        self.delete_task(task_id).await
+    async fn delete_task(&self, task_id: &str) -> Result<bool, coco_error::BoxedError> {
+        self.delete_task(task_id).await.map_err(boxed)
     }
 
-    async fn block_task(&self, from_id: &str, to_id: &str) -> anyhow::Result<bool> {
-        self.block_task(from_id, to_id).await
+    async fn block_task(&self, from_id: &str, to_id: &str) -> Result<bool, coco_error::BoxedError> {
+        self.block_task(from_id, to_id).await.map_err(boxed)
     }
 
     async fn claim_task(
@@ -130,10 +140,11 @@ impl TaskListHandle for TaskListStore {
         task_id: &str,
         claimant: &str,
         check_agent_busy: bool,
-    ) -> anyhow::Result<TaskClaimOutcome> {
+    ) -> Result<TaskClaimOutcome, coco_error::BoxedError> {
         self.claim_task(task_id, claimant, check_agent_busy)
             .await
             .map(claim_to_outcome)
+            .map_err(boxed)
     }
 
     async fn should_nudge_verification(&self, just_completed: bool, is_main_thread: bool) -> bool {

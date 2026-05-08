@@ -93,7 +93,7 @@ pub fn load_mcpb(
     archive_bytes: &[u8],
     cache_root: &Path,
     user_config: &HashMap<String, serde_json::Value>,
-) -> anyhow::Result<McpbLoadStatus> {
+) -> crate::Result<McpbLoadStatus> {
     let sha = compute_sha256(archive_bytes);
     let target_dir = cache_root.join(&sha);
 
@@ -148,7 +148,7 @@ fn compute_sha256(bytes: &[u8]) -> String {
 
 /// Extract `archive_bytes` (ZIP) into `target_dir`, returning the parsed
 /// `manifest.json` from the root of the archive.
-fn extract_archive(archive_bytes: &[u8], target_dir: &Path) -> anyhow::Result<McpbManifest> {
+fn extract_archive(archive_bytes: &[u8], target_dir: &Path) -> crate::Result<McpbManifest> {
     use std::io::Read;
     use zip::ZipArchive;
 
@@ -161,7 +161,9 @@ fn extract_archive(archive_bytes: &[u8], target_dir: &Path) -> anyhow::Result<Mc
         let mut file = archive.by_index(i)?;
         let entry_name = file
             .enclosed_name()
-            .ok_or_else(|| anyhow::anyhow!("MCPB archive contains unsafe path"))?
+            .ok_or_else(|| {
+                crate::PluginError::generic("mcpb", "MCPB archive contains unsafe path")
+            })?
             .to_path_buf();
         // Path-traversal guard.
         if entry_name.components().any(|c| {
@@ -170,10 +172,13 @@ fn extract_archive(archive_bytes: &[u8], target_dir: &Path) -> anyhow::Result<Mc
                 std::path::Component::ParentDir | std::path::Component::Prefix(_)
             )
         }) {
-            anyhow::bail!(
-                "MCPB archive entry escapes target dir: {}",
-                entry_name.display()
-            );
+            return Err(crate::PluginError::generic(
+                "mcpb",
+                format!(
+                    "MCPB archive entry escapes target dir: {}",
+                    entry_name.display()
+                ),
+            ));
         }
         let dest = target_dir.join(&entry_name);
         if file.is_dir() {
@@ -191,7 +196,8 @@ fn extract_archive(archive_bytes: &[u8], target_dir: &Path) -> anyhow::Result<Mc
         }
     }
 
-    manifest.ok_or_else(|| anyhow::anyhow!("MCPB archive missing manifest.json"))
+    manifest
+        .ok_or_else(|| crate::PluginError::generic("mcpb", "MCPB archive missing manifest.json"))
 }
 
 fn validate_config(
@@ -227,7 +233,7 @@ fn merge_env(
     serde_json::to_value(merged).unwrap_or(serde_json::Value::Null)
 }
 
-fn write_metadata(target_dir: &Path, source_url: &str, sha: &str) -> anyhow::Result<()> {
+fn write_metadata(target_dir: &Path, source_url: &str, sha: &str) -> crate::Result<()> {
     let metadata_path = target_dir.join(".mcpb-metadata.json");
     let now = chrono::Utc::now();
     let existing: Option<McpbCacheMetadata> = std::fs::read_to_string(&metadata_path)

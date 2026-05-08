@@ -14,7 +14,6 @@ pub mod path_validation;
 pub mod read_only;
 pub mod result;
 pub mod safety;
-pub mod sandbox;
 pub mod security;
 pub mod sed_parser;
 pub mod semantics;

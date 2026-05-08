@@ -6,6 +6,9 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 
+use coco_error::BoxedError;
+use coco_error::StatusCode;
+use coco_error::boxed;
 use serde::Deserialize;
 use serde::Serialize;
 use tracing::info;
@@ -126,7 +129,7 @@ impl OAuthTokenStore {
     }
 
     /// Load tokens for a specific server key.
-    pub fn load(&self, server_key: &str) -> anyhow::Result<Option<OAuthTokens>> {
+    pub fn load(&self, server_key: &str) -> Result<Option<OAuthTokens>, BoxedError> {
         let file = self.read_file()?;
         Ok(file
             .mcp_oauth
@@ -135,7 +138,7 @@ impl OAuthTokenStore {
     }
 
     /// Store tokens for a specific server key.
-    pub fn save(&self, server_key: &str, tokens: &OAuthTokens) -> anyhow::Result<()> {
+    pub fn save(&self, server_key: &str, tokens: &OAuthTokens) -> Result<(), BoxedError> {
         let mut file = self.read_file()?;
         file.mcp_oauth
             .insert(server_key.to_string(), StoredTokenEntry::from(tokens));
@@ -145,7 +148,7 @@ impl OAuthTokenStore {
     }
 
     /// Remove tokens for a specific server key.
-    pub fn remove(&self, server_key: &str) -> anyhow::Result<()> {
+    pub fn remove(&self, server_key: &str) -> Result<(), BoxedError> {
         let mut file = self.read_file()?;
         file.mcp_oauth.remove(server_key);
         self.write_file(&file)?;
@@ -163,27 +166,30 @@ impl OAuthTokenStore {
     }
 
     /// Read the storage file, returning an empty store if not found.
-    fn read_file(&self) -> anyhow::Result<OAuthStorageFile> {
+    fn read_file(&self) -> Result<OAuthStorageFile, BoxedError> {
         match std::fs::read_to_string(&self.storage_path) {
             Ok(content) => {
-                let file: OAuthStorageFile = serde_json::from_str(&content)?;
+                let file: OAuthStorageFile = serde_json::from_str(&content)
+                    .map_err(|e| boxed(e, StatusCode::InvalidJson))?;
                 Ok(file)
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(OAuthStorageFile::default()),
-            Err(e) => Err(e.into()),
+            Err(e) => Err(boxed(e, StatusCode::IoError)),
         }
     }
 
     /// Write the storage file atomically (write to temp, rename).
-    fn write_file(&self, file: &OAuthStorageFile) -> anyhow::Result<()> {
+    fn write_file(&self, file: &OAuthStorageFile) -> Result<(), BoxedError> {
         if let Some(parent) = self.storage_path.parent() {
-            std::fs::create_dir_all(parent)?;
+            std::fs::create_dir_all(parent).map_err(|e| boxed(e, StatusCode::IoError))?;
         }
 
         let tmp_path = self.storage_path.with_extension("json.tmp");
-        let content = serde_json::to_string_pretty(file)?;
-        std::fs::write(&tmp_path, content)?;
-        std::fs::rename(&tmp_path, &self.storage_path)?;
+        let content =
+            serde_json::to_string_pretty(file).map_err(|e| boxed(e, StatusCode::Internal))?;
+        std::fs::write(&tmp_path, content).map_err(|e| boxed(e, StatusCode::IoError))?;
+        std::fs::rename(&tmp_path, &self.storage_path)
+            .map_err(|e| boxed(e, StatusCode::IoError))?;
         Ok(())
     }
 }

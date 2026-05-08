@@ -55,13 +55,13 @@ pub enum BridgeOutMessage {
 }
 
 /// Encode a message as NDJSON (newline-delimited JSON).
-pub fn encode_ndjson(msg: &BridgeOutMessage) -> anyhow::Result<String> {
+pub fn encode_ndjson(msg: &BridgeOutMessage) -> crate::Result<String> {
     let json = serde_json::to_string(msg)?;
     Ok(format!("{json}\n"))
 }
 
 /// Decode an incoming NDJSON message.
-pub fn decode_ndjson(line: &str) -> anyhow::Result<BridgeInMessage> {
+pub fn decode_ndjson(line: &str) -> crate::Result<BridgeInMessage> {
     let msg: BridgeInMessage = serde_json::from_str(line.trim())?;
     Ok(msg)
 }

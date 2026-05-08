@@ -46,37 +46,39 @@ const MAX_SLUG_LENGTH: usize = 64;
 ///
 /// Forward slashes are allowed for nesting (e.g., `user/feature`); each
 /// segment is validated independently.
-pub fn validate_slug(slug: &str) -> anyhow::Result<()> {
+pub fn validate_slug(slug: &str) -> crate::Result<()> {
     if slug.is_empty() {
-        anyhow::bail!("Worktree slug cannot be empty");
+        return Err(crate::ContextError::worktree_invalid(
+            "Worktree slug cannot be empty",
+        ));
     }
 
     if slug.len() > MAX_SLUG_LENGTH {
-        anyhow::bail!(
+        return Err(crate::ContextError::worktree_invalid(format!(
             "Worktree slug must be {MAX_SLUG_LENGTH} characters or fewer (got {})",
             slug.len()
-        );
+        )));
     }
 
     for segment in slug.split('/') {
         if segment == "." || segment == ".." {
-            anyhow::bail!(
+            return Err(crate::ContextError::worktree_invalid(format!(
                 "Invalid worktree name \"{slug}\": must not contain \".\" or \"..\" path segments"
-            );
+            )));
         }
         if segment.is_empty() {
-            anyhow::bail!(
+            return Err(crate::ContextError::worktree_invalid(format!(
                 "Invalid worktree name \"{slug}\": empty segment (leading/trailing slash)"
-            );
+            )));
         }
         if !segment
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
         {
-            anyhow::bail!(
+            return Err(crate::ContextError::worktree_invalid(format!(
                 "Invalid worktree name \"{slug}\": each segment must contain only \
                  letters, digits, dots, underscores, and dashes"
-            );
+            )));
         }
     }
 
@@ -118,7 +120,7 @@ pub fn create_worktree(
     repo_root: &Path,
     slug: &str,
     base_branch: Option<&str>,
-) -> anyhow::Result<WorktreeCreateResult> {
+) -> crate::Result<WorktreeCreateResult> {
     validate_slug(slug)?;
 
     let worktree_path = worktree_dir(repo_root, slug);
@@ -145,8 +147,9 @@ pub fn create_worktree(
     let base = base_branch.unwrap_or("HEAD");
 
     // Resolve base SHA
-    let base_sha = run_git(repo_root, &["rev-parse", base])
-        .map_err(|e| anyhow::anyhow!("Failed to resolve base branch \"{base}\": {e}"))?;
+    let base_sha = run_git(repo_root, &["rev-parse", base]).map_err(|e| {
+        crate::ContextError::git_failed(format!("Failed to resolve base branch \"{base}\": {e}"))
+    })?;
 
     // Create the worktree with -B to reset any orphan branch
     let worktree_path_str = worktree_path.display().to_string();
@@ -165,7 +168,9 @@ pub fn create_worktree(
             },
             base_branch: Some(base.to_string()),
         }),
-        Err(e) => Err(anyhow::anyhow!("Failed to create worktree: {e}")),
+        Err(e) => Err(crate::ContextError::git_failed(format!(
+            "Failed to create worktree: {e}"
+        ))),
     }
 }
 
@@ -173,7 +178,7 @@ pub fn create_worktree(
 ///
 /// Uses `git worktree remove --force` to clean up the worktree directory
 /// and unregister it from the git worktree list.
-pub fn remove_worktree(repo_root: &Path, slug: &str) -> anyhow::Result<()> {
+pub fn remove_worktree(repo_root: &Path, slug: &str) -> crate::Result<()> {
     validate_slug(slug)?;
 
     let worktree_path = worktree_dir(repo_root, slug);
@@ -183,7 +188,7 @@ pub fn remove_worktree(repo_root: &Path, slug: &str) -> anyhow::Result<()> {
         repo_root,
         &["worktree", "remove", "--force", &worktree_path_str],
     )
-    .map_err(|e| anyhow::anyhow!("Failed to remove worktree: {e}"))?;
+    .map_err(|e| crate::ContextError::git_failed(format!("Failed to remove worktree: {e}")))?;
 
     // Also try to delete the branch (best-effort)
     let branch = worktree_branch_name(slug);
@@ -195,7 +200,7 @@ pub fn remove_worktree(repo_root: &Path, slug: &str) -> anyhow::Result<()> {
 /// List all git worktrees for this repository.
 ///
 /// Parses the output of `git worktree list --porcelain`.
-pub fn list_worktrees(repo_root: &Path) -> anyhow::Result<Vec<WorktreeInfo>> {
+pub fn list_worktrees(repo_root: &Path) -> crate::Result<Vec<WorktreeInfo>> {
     let output = run_git(repo_root, &["worktree", "list", "--porcelain"])?;
     let mut worktrees = Vec::new();
     let mut path = None;
@@ -238,7 +243,7 @@ pub fn list_worktrees(repo_root: &Path) -> anyhow::Result<Vec<WorktreeInfo>> {
 ///
 /// Runs `git status --porcelain` in the worktree directory and returns
 /// `true` if there is any output (indicating changes).
-pub fn has_changes(worktree_path: &Path) -> anyhow::Result<bool> {
+pub fn has_changes(worktree_path: &Path) -> crate::Result<bool> {
     let output = run_git(worktree_path, &["status", "--porcelain"])?;
     Ok(!output.trim().is_empty())
 }
@@ -307,21 +312,22 @@ fn resolve_head_ref(head_content: &str, git_dir: &Path) -> Option<String> {
 }
 
 /// Run a git command and return its stdout.
-fn run_git(cwd: &Path, args: &[&str]) -> anyhow::Result<String> {
+fn run_git(cwd: &Path, args: &[&str]) -> crate::Result<String> {
     let output = Command::new("git")
         .args(args)
         .current_dir(cwd)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_ASKPASS", "")
         .output()
-        .map_err(|e| anyhow::anyhow!("Failed to run git: {e}"))?;
+        .map_err(|e| crate::ContextError::git_failed(format!("Failed to run git: {e}")))?;
 
     if output.status.success() {
-        String::from_utf8(output.stdout)
-            .map_err(|e| anyhow::anyhow!("git output is not valid UTF-8: {e}"))
+        String::from_utf8(output.stdout).map_err(|e| {
+            crate::ContextError::git_failed(format!("git output is not valid UTF-8: {e}"))
+        })
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("{}", stderr.trim())
+        Err(crate::ContextError::git_failed(stderr.trim().to_string()))
     }
 }
 

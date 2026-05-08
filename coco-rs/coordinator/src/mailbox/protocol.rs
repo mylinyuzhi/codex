@@ -180,7 +180,7 @@ pub fn send_shutdown_request(
     team_name: &str,
     from: &str,
     reason: Option<&str>,
-) -> anyhow::Result<String> {
+) -> crate::Result<String> {
     let request_id = format!("shutdown-{}", uuid::Uuid::new_v4());
     let timestamp = chrono::Utc::now().to_rfc3339();
 
@@ -254,7 +254,7 @@ pub fn resolved_permissions_dir(team_name: &str) -> PathBuf {
 }
 
 /// Ensure permission directories exist.
-pub fn ensure_permission_dirs(team_name: &str) -> anyhow::Result<()> {
+pub fn ensure_permission_dirs(team_name: &str) -> crate::Result<()> {
     std::fs::create_dir_all(pending_permissions_dir(team_name))?;
     std::fs::create_dir_all(resolved_permissions_dir(team_name))?;
     Ok(())
@@ -264,7 +264,7 @@ pub fn ensure_permission_dirs(team_name: &str) -> anyhow::Result<()> {
 pub fn write_pending_permission(
     team_name: &str,
     request: &crate::types::SwarmPermissionRequest,
-) -> anyhow::Result<()> {
+) -> crate::Result<()> {
     ensure_permission_dirs(team_name)?;
     let path = pending_permissions_dir(team_name).join(format!("{}.json", request.id));
     let content = serde_json::to_string_pretty(request)?;
@@ -276,7 +276,7 @@ pub fn write_pending_permission(
 pub fn read_resolved_permission(
     team_name: &str,
     request_id: &str,
-) -> anyhow::Result<Option<serde_json::Value>> {
+) -> crate::Result<Option<serde_json::Value>> {
     let path = resolved_permissions_dir(team_name).join(format!("{request_id}.json"));
     if !path.exists() {
         return Ok(None);
@@ -292,7 +292,7 @@ pub fn read_resolved_permission(
 /// TS: `readPendingPermissions(teamName?)`
 pub fn read_pending_permissions(
     team_name: &str,
-) -> anyhow::Result<Vec<crate::types::SwarmPermissionRequest>> {
+) -> crate::Result<Vec<crate::types::SwarmPermissionRequest>> {
     let dir = pending_permissions_dir(team_name);
     if !dir.is_dir() {
         return Ok(Vec::new());
@@ -316,7 +316,7 @@ pub fn resolve_permission(
     team_name: &str,
     request_id: &str,
     resolution: &serde_json::Value,
-) -> anyhow::Result<()> {
+) -> crate::Result<()> {
     ensure_permission_dirs(team_name)?;
     let pending = pending_permissions_dir(team_name).join(format!("{request_id}.json"));
     let resolved = resolved_permissions_dir(team_name).join(format!("{request_id}.json"));
@@ -329,7 +329,7 @@ pub fn resolve_permission(
 /// Clean up old resolved permissions.
 ///
 /// TS: `cleanupOldResolutions(teamName?, maxAgeMs?)`
-pub fn cleanup_old_resolutions(team_name: &str, max_age_ms: i64) -> anyhow::Result<()> {
+pub fn cleanup_old_resolutions(team_name: &str, max_age_ms: i64) -> crate::Result<()> {
     let dir = resolved_permissions_dir(team_name);
     if !dir.is_dir() {
         return Ok(());
@@ -360,14 +360,14 @@ pub fn cleanup_old_resolutions(team_name: &str, max_age_ms: i64) -> anyhow::Resu
 pub fn poll_for_response(
     team_name: &str,
     request_id: &str,
-) -> anyhow::Result<Option<serde_json::Value>> {
+) -> crate::Result<Option<serde_json::Value>> {
     read_resolved_permission(team_name, request_id)
 }
 
 /// Remove a worker's resolved response file.
 ///
 /// TS: `removeWorkerResponse(requestId, agentName?, teamName?)`
-pub fn remove_worker_response(team_name: &str, request_id: &str) -> anyhow::Result<()> {
+pub fn remove_worker_response(team_name: &str, request_id: &str) -> crate::Result<()> {
     let path = resolved_permissions_dir(team_name).join(format!("{request_id}.json"));
     if path.exists() {
         std::fs::remove_file(&path)?;
@@ -380,7 +380,7 @@ pub fn remove_worker_response(team_name: &str, request_id: &str) -> anyhow::Resu
 /// TS: `sendPermissionRequestViaMailbox(request)`
 pub fn send_permission_request_via_mailbox(
     request: &crate::types::SwarmPermissionRequest,
-) -> anyhow::Result<()> {
+) -> crate::Result<()> {
     let text = serde_json::to_string(&ProtocolMessage::PermissionRequest {
         request_id: request.id.clone(),
         agent_id: request.worker_id.clone(),
@@ -414,7 +414,7 @@ pub fn send_permission_response_via_mailbox(
     approved: bool,
     feedback: Option<&str>,
     team_name: &str,
-) -> anyhow::Result<()> {
+) -> crate::Result<()> {
     let subtype = if approved { "success" } else { "error" };
     let text = serde_json::to_string(&ProtocolMessage::PermissionResponse {
         request_id: request_id.to_string(),
@@ -446,7 +446,7 @@ pub fn send_sandbox_permission_request_via_mailbox(
     request_id: &str,
     host: &str,
     team_name: &str,
-) -> anyhow::Result<()> {
+) -> crate::Result<()> {
     let text = serde_json::to_string(&ProtocolMessage::SandboxPermissionRequest {
         request_id: request_id.to_string(),
         worker_id: worker_id.to_string(),
@@ -475,7 +475,7 @@ pub fn send_sandbox_permission_response_via_mailbox(
     host: &str,
     allow: bool,
     team_name: &str,
-) -> anyhow::Result<()> {
+) -> crate::Result<()> {
     let text = serde_json::to_string(&ProtocolMessage::SandboxPermissionResponse {
         request_id: request_id.to_string(),
         host: host.to_string(),

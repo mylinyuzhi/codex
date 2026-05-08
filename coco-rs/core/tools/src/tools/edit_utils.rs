@@ -296,6 +296,26 @@ impl std::fmt::Display for EditError {
 
 impl std::error::Error for EditError {}
 
+impl coco_error::StackError for EditError {
+    fn debug_fmt(&self, layer: usize, buf: &mut Vec<String>) {
+        buf.push(format!("{layer}: {self}"));
+    }
+
+    fn next(&self) -> Option<&dyn coco_error::StackError> {
+        None
+    }
+}
+
+impl coco_error::ErrorExt for EditError {
+    fn status_code(&self) -> coco_error::StatusCode {
+        coco_error::StatusCode::InvalidArguments
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
 // ── De-sanitization ──
 
 /// Sanitized tag mapping for reversing API-layer sanitization.

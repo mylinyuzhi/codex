@@ -10,9 +10,11 @@ workspace = true
 [dependencies]
 coco-types.workspace = true
 coco-config.workspace = true
+coco-error.workspace = true
 coco-inference.workspace = true
 coco-tool-runtime.workspace = true
 coco-tools.workspace = true
+coco-sandbox.workspace = true
 coco-messages.workspace = true
 coco-context.workspace = true
 coco-compact.workspace = true
@@ -33,7 +35,6 @@ lru.workspace = true
 
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-anyhow.workspace = true
 async-trait.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 tokio-util.workspace = true
@@ -41,6 +42,7 @@ tracing.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
+anyhow.workspace = true
 pretty_assertions.workspace = true
 tokio = { workspace = true, features = ["rt", "macros"] }
 coco-tools.workspace = true

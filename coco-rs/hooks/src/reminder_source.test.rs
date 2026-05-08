@@ -1,7 +1,13 @@
-use super::*;
-use crate::async_registry::AsyncHookRegistry;
-use coco_system_reminder::HookEvent;
+use std::sync::Arc;
 use std::time::Duration;
+
+use coco_system_reminder::HookEvent;
+use coco_system_reminder::HookEventKind;
+use coco_system_reminder::HookEventsSource;
+
+use super::CombinedHookEventsSource;
+use crate::async_registry::AsyncHookRegistry;
+use crate::sync_hook_buffer::SyncHookEventBuffer;
 
 #[tokio::test]
 async fn drain_returns_empty_when_no_pending_hooks() {
@@ -67,4 +73,32 @@ async fn drain_packs_stderr_into_additional_context_with_hook_name() {
         panic!("expected AsyncResponse");
     };
     assert_eq!(additional_context.as_deref(), Some("[linter] warning here"));
+}
+
+#[tokio::test]
+async fn combined_drain_orders_async_then_sync() {
+    let async_reg = Arc::new(AsyncHookRegistry::new());
+    async_reg
+        .register("a".into(), "async-hook".into(), "SessionStart".into(), None)
+        .await;
+    async_reg.update_output("a", "async-out", "").await;
+    async_reg.complete("a", 0).await;
+
+    let sync = SyncHookEventBuffer::new();
+    sync.push(HookEvent::Success {
+        hook_name: "sync-hook".into(),
+        hook_event: HookEventKind::SessionStart,
+        content: "sync-out".into(),
+    })
+    .await;
+
+    let combined = CombinedHookEventsSource::new(async_reg, sync.clone());
+    let events = combined.drain(None).await;
+
+    assert_eq!(events.len(), 2, "expected one async + one sync");
+    matches!(events[0], HookEvent::AsyncResponse { .. });
+    matches!(events[1], HookEvent::Success { .. });
+    // Both buffers drained.
+    assert!(sync.is_empty().await);
+    assert!(combined.drain(None).await.is_empty());
 }

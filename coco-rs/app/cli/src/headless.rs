@@ -189,7 +189,7 @@ pub fn build_runtime_config_for_cli(cli: &Cli, cwd: &Path) -> Result<coco_config
     if let Some(path) = cli.settings.as_deref() {
         builder = builder.with_flag_settings(path);
     }
-    builder.build()
+    Ok(builder.build()?)
 }
 
 /// Build the primary `ApiClient` for the session.
@@ -432,6 +432,12 @@ pub struct RunChatOptions {
     /// Non-empty = continue from the prior turns; the engine drives
     /// `run_with_messages(prior + user_prompt)` instead of `run`.
     pub prior_messages: Vec<coco_messages::Message>,
+    /// Override the engine's session id. Used by `--resume` /
+    /// `--continue` / `--fork-session` so the resumed run writes
+    /// transcript entries under the source (or fork) session id
+    /// instead of a fresh per-process uuid. `None` keeps the
+    /// engine's default empty-session-id behavior.
+    pub session_id_override: Option<String>,
 }
 
 /// Drive one headless agent run with default options. See
@@ -474,6 +480,14 @@ pub async fn run_chat_with_options(
     } else {
         std::env::current_dir()?
     };
+    tracing::info!(
+        target: "coco_cli::headless",
+        cwd = %cwd.display(),
+        prompt_len = prompt.len(),
+        has_prior_messages = !opts.prior_messages.is_empty(),
+        "headless run starting"
+    );
+
     let runtime_config = build_runtime_config_for_cli(cli, &cwd)?;
     let settings = &runtime_config.settings;
 
@@ -485,21 +499,48 @@ pub async fn run_chat_with_options(
     let recovery_policy = runtime_config
         .model_roles
         .recovery(coco_types::ModelRole::Main);
+    tracing::info!(
+        target: "coco_cli::headless",
+        provider = client.provider(),
+        model_id = %model_id,
+        real_provider = provider_api.is_some(),
+        fallback_count = installed_fallback_count,
+        recovery_policy_set = recovery_policy.is_some(),
+        "model client resolved"
+    );
 
     let registry = ToolRegistry::new();
     coco_tools::register_all_tools(&registry);
+    let tool_count = registry.len();
     let tools = Arc::new(registry);
     let cancel = opts.cancel.unwrap_or_default();
 
     let startup = resolve_startup_permission_state(cli, &settings.merged)?;
     let permission_mode = startup.mode;
     let bypass_permissions_available = startup.bypass_available;
+    tracing::info!(
+        target: "coco_cli::headless",
+        permission_mode = ?permission_mode,
+        bypass_available = bypass_permissions_available,
+        permission_notification = startup.notification.is_some(),
+        tool_count,
+        sandbox_mode = ?runtime_config.sandbox.mode,
+        "permissions + tools ready"
+    );
 
     let system_prompt =
         compose_system_prompt(cli, &cwd, &runtime_config, client.provider(), &model_id)?;
 
     let config = QueryEngineConfig {
         model_id: model_id.clone(),
+        // `--resume` / `--continue` / `--fork-session` route through
+        // `RunChatOptions::session_id_override`; absent it the engine
+        // defaults to a per-run uuid (TS parity: anonymous headless
+        // runs aren't keyed against a persistent transcript).
+        session_id: opts
+            .session_id_override
+            .clone()
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
         permission_mode,
         bypass_permissions_available,
         context_window: 200_000,
@@ -527,6 +568,7 @@ pub async fn run_chat_with_options(
         system_reminder: settings.merged.system_reminder.clone(),
         tool_config: runtime_config.tool.clone(),
         sandbox_config: runtime_config.sandbox.clone(),
+        sandbox_state: crate::session_runtime::build_sandbox_state(&runtime_config, &cwd)?,
         memory_config: runtime_config.memory.clone(),
         shell_config: runtime_config.shell.clone(),
         web_fetch_config: runtime_config.web_fetch.clone(),
@@ -537,28 +579,78 @@ pub async fn run_chat_with_options(
         ..Default::default()
     };
 
+    tracing::info!(
+        target: "coco_cli::headless",
+        max_turns = config.max_turns,
+        max_tokens = ?config.max_tokens,
+        context_window = config.context_window,
+        streaming_tools = config.streaming_tool_execution,
+        plan_mode = ?config.plan_mode_settings,
+        "engine config built"
+    );
+
+    // Per-call FileReadState — gives the Read tool's dedup AND the
+    // shared @-mention pipeline a session-scoped cache. One-shot scope
+    // (dies with the function) matches `coco -p` semantics.
+    let file_read_state = Arc::new(tokio::sync::RwLock::new(coco_context::FileReadState::new()));
+
+    let session_id_for_engine = config.session_id.clone();
     let mut engine = QueryEngine::new(config, client, tools, cancel, /*hooks*/ None)
-        .with_fallback_clients(fallback_clients);
+        .with_fallback_clients(fallback_clients)
+        .with_file_read_state(file_read_state.clone());
     if let Some(policy) = recovery_policy {
         engine = engine.with_recovery_policy(policy);
     }
+    // Wire the JSONL transcript writer for resume / continue runs so
+    // headless turns persist into the same `<sessions_dir>/<id>.jsonl`
+    // the TUI / SDK paths use. Pre-populate the dedup set with the
+    // resumed messages' uuids — those entries are already on disk
+    // and re-appending them would corrupt the chain.
+    if opts.session_id_override.is_some() {
+        let store = Arc::new(coco_session::TranscriptStore::new(
+            crate::paths::sessions_dir(),
+        ));
+        let mut seen: std::collections::HashSet<uuid::Uuid> = std::collections::HashSet::new();
+        for msg in &opts.prior_messages {
+            if let Some(uuid) = msg.uuid() {
+                seen.insert(*uuid);
+            }
+        }
+        let dedup = Arc::new(tokio::sync::Mutex::new(seen));
+        engine = engine
+            .with_transcript_store(store, session_id_for_engine)
+            .with_transcript_dedup(dedup);
+    }
 
-    // Session continuation: when the caller threaded prior_messages, drive
-    // the engine through `run_with_messages` so the prior history is
-    // visible to every turn. Otherwise use the lighter `run` entrypoint.
-    let result = if opts.prior_messages.is_empty() {
-        engine.run(prompt).await?
+    // Resolve `@`-mentions in the prompt to file-content system-reminder
+    // messages. TS parity: `getAttachmentMessages` from
+    // `processUserInput.ts:504`. Both branches below now share one
+    // expansion pipeline so headless behaves like TUI / SDK.
+    let inputs =
+        crate::at_mention_turn::resolve_turn_inputs_text_only(prompt, &cwd, &file_read_state).await;
+    let new_turn_messages = crate::at_mention_turn::build_messages_for_turn(&inputs);
+    let messages: Vec<coco_messages::Message> = if opts.prior_messages.is_empty() {
+        new_turn_messages
     } else {
-        let mut messages = opts.prior_messages;
-        messages.push(coco_messages::create_user_message(prompt));
-        let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(64);
-        // Drain events to /dev/null — callers wanting events should drop
-        // down to `coco_query::QueryEngine::run_with_events` directly.
-        let drainer = tokio::spawn(async move { while event_rx.recv().await.is_some() {} });
-        let result = engine.run_with_messages(messages, event_tx).await?;
-        drainer.abort();
-        result
+        let mut combined = opts.prior_messages;
+        combined.extend(new_turn_messages);
+        combined
     };
+    if !inputs.mentioned_paths.is_empty() {
+        engine
+            .note_mentioned_paths(inputs.mentioned_paths.clone())
+            .await;
+    }
+
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(64);
+    // Drain events to /dev/null — callers wanting events should drop
+    // down to `coco_query::QueryEngine::run_with_events` directly.
+    let drainer = tokio::spawn(async move { while event_rx.recv().await.is_some() {} });
+    let result = engine
+        .run_with_messages(messages, event_tx)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    drainer.abort();
 
     let additional_dirs = resolve_additional_dirs(cli, &cwd);
     let tool_filter_summary = summarize_tool_filter(cli);

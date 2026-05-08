@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 
 use coco_types::PermissionMode;
-use coco_types::SandboxMode;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -348,70 +347,6 @@ impl ShellConfig {
         }
         if env.is_truthy(EnvKey::CocoDisableShellSnapshot) {
             config.disable_snapshot = true;
-        }
-        config
-    }
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct PartialSandboxSettings {
-    pub mode: Option<SandboxMode>,
-    pub excluded_commands: Option<Vec<String>>,
-    pub allow_network: Option<bool>,
-}
-
-/// Sandbox subsystem parameters. Whether the subsystem is **active** is
-/// gated upstream by `Feature::Sandbox`; this struct only carries
-/// "how it operates when on".
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SandboxConfig {
-    pub mode: SandboxMode,
-    pub excluded_commands: Vec<String>,
-    pub allow_network: bool,
-}
-
-impl Default for SandboxConfig {
-    fn default() -> Self {
-        Self {
-            mode: SandboxMode::ReadOnly,
-            excluded_commands: Vec::new(),
-            allow_network: false,
-        }
-    }
-}
-
-impl SandboxConfig {
-    pub fn resolve(settings: &Settings, env: &EnvSnapshot) -> Self {
-        let mut config = Self::default();
-        if let Some(v) = settings.sandbox.mode {
-            config.mode = v;
-        }
-        if let Some(commands) = &settings.sandbox.excluded_commands {
-            config.excluded_commands.clone_from(commands);
-        }
-        if let Some(v) = settings.sandbox.allow_network {
-            config.allow_network = v;
-        }
-
-        if let Some(raw) = env.get(EnvKey::CocoSandboxMode) {
-            config.mode = match raw {
-                "workspace_write" | "workspace-write" | "strict" => SandboxMode::WorkspaceWrite,
-                "full_access" | "full-access" | "none" => SandboxMode::FullAccess,
-                "external_sandbox" | "external-sandbox" => SandboxMode::ExternalSandbox,
-                _ => SandboxMode::ReadOnly,
-            };
-        }
-        if let Some(raw) = env.get(EnvKey::CocoSandboxExcludedCommands) {
-            config.excluded_commands = raw
-                .split([':', ','])
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string)
-                .collect();
-        }
-        if env.is_truthy(EnvKey::CocoSandboxAllowNetwork) {
-            config.allow_network = true;
         }
         config
     }

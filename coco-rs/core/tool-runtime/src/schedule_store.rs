@@ -37,20 +37,24 @@ pub trait ScheduleStore: Send + Sync {
         name: &str,
         schedule: &str,
         command: &str,
-    ) -> anyhow::Result<ScheduleEntry>;
-    async fn delete_schedule(&self, id: &str) -> anyhow::Result<()>;
-    async fn list_schedules(&self) -> anyhow::Result<Vec<ScheduleEntry>>;
+    ) -> Result<ScheduleEntry, coco_error::BoxedError>;
+    async fn delete_schedule(&self, id: &str) -> Result<(), coco_error::BoxedError>;
+    async fn list_schedules(&self) -> Result<Vec<ScheduleEntry>, coco_error::BoxedError>;
 
     // ── Trigger CRUD ──
     async fn create_trigger(
         &self,
         name: &str,
         description: Option<&str>,
-    ) -> anyhow::Result<TriggerEntry>;
-    async fn list_triggers(&self) -> anyhow::Result<Vec<TriggerEntry>>;
-    async fn get_trigger(&self, id: &str) -> anyhow::Result<TriggerEntry>;
-    async fn update_trigger(&self, id: &str, body: Value) -> anyhow::Result<TriggerEntry>;
-    async fn run_trigger(&self, id: &str) -> anyhow::Result<String>;
+    ) -> Result<TriggerEntry, coco_error::BoxedError>;
+    async fn list_triggers(&self) -> Result<Vec<TriggerEntry>, coco_error::BoxedError>;
+    async fn get_trigger(&self, id: &str) -> Result<TriggerEntry, coco_error::BoxedError>;
+    async fn update_trigger(
+        &self,
+        id: &str,
+        body: Value,
+    ) -> Result<TriggerEntry, coco_error::BoxedError>;
+    async fn run_trigger(&self, id: &str) -> Result<String, coco_error::BoxedError>;
 }
 
 pub type ScheduleStoreRef = Arc<dyn ScheduleStore>;
@@ -66,32 +70,54 @@ impl ScheduleStore for NoOpScheduleStore {
         _name: &str,
         _schedule: &str,
         _command: &str,
-    ) -> anyhow::Result<ScheduleEntry> {
-        anyhow::bail!("scheduling not available in this context")
+    ) -> Result<ScheduleEntry, coco_error::BoxedError> {
+        Err(Box::new(coco_error::PlainError::new(
+            "scheduling not available in this context",
+            coco_error::StatusCode::Internal,
+        )))
     }
-    async fn delete_schedule(&self, _id: &str) -> anyhow::Result<()> {
-        anyhow::bail!("scheduling not available in this context")
+    async fn delete_schedule(&self, _id: &str) -> Result<(), coco_error::BoxedError> {
+        Err(Box::new(coco_error::PlainError::new(
+            "scheduling not available in this context",
+            coco_error::StatusCode::Internal,
+        )))
     }
-    async fn list_schedules(&self) -> anyhow::Result<Vec<ScheduleEntry>> {
+    async fn list_schedules(&self) -> Result<Vec<ScheduleEntry>, coco_error::BoxedError> {
         Ok(vec![])
     }
     async fn create_trigger(
         &self,
         _name: &str,
         _description: Option<&str>,
-    ) -> anyhow::Result<TriggerEntry> {
-        anyhow::bail!("scheduling not available in this context")
+    ) -> Result<TriggerEntry, coco_error::BoxedError> {
+        Err(Box::new(coco_error::PlainError::new(
+            "scheduling not available in this context",
+            coco_error::StatusCode::Internal,
+        )))
     }
-    async fn list_triggers(&self) -> anyhow::Result<Vec<TriggerEntry>> {
+    async fn list_triggers(&self) -> Result<Vec<TriggerEntry>, coco_error::BoxedError> {
         Ok(vec![])
     }
-    async fn get_trigger(&self, id: &str) -> anyhow::Result<TriggerEntry> {
-        anyhow::bail!("trigger '{id}' not found (scheduling not available)")
+    async fn get_trigger(&self, id: &str) -> Result<TriggerEntry, coco_error::BoxedError> {
+        return Err(Box::new(coco_error::PlainError::new(
+            format!("trigger '{id}' not found (scheduling not available)"),
+            coco_error::StatusCode::Internal,
+        )));
     }
-    async fn update_trigger(&self, id: &str, _body: Value) -> anyhow::Result<TriggerEntry> {
-        anyhow::bail!("trigger '{id}' not found (scheduling not available)")
+    async fn update_trigger(
+        &self,
+        id: &str,
+        _body: Value,
+    ) -> Result<TriggerEntry, coco_error::BoxedError> {
+        return Err(Box::new(coco_error::PlainError::new(
+            format!("trigger '{id}' not found (scheduling not available)"),
+            coco_error::StatusCode::Internal,
+        )));
     }
-    async fn run_trigger(&self, id: &str) -> anyhow::Result<String> {
-        anyhow::bail!("trigger '{id}' not found (scheduling not available)")
+    async fn run_trigger(&self, id: &str) -> Result<String, coco_error::BoxedError> {
+        return Err(Box::new(coco_error::PlainError::new(
+            format!("trigger '{id}' not found (scheduling not available)"),
+            coco_error::StatusCode::Internal,
+        )));
     }
 }

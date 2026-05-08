@@ -16,6 +16,8 @@ use tokio::sync::mpsc;
 use tokio::time::interval;
 use tokio_stream::StreamExt;
 
+use std::time::Duration;
+
 use crate::autocomplete::FileSearchEvent;
 use crate::autocomplete::FileSearchManager;
 use crate::autocomplete::SymbolSearchEvent;
@@ -36,6 +38,14 @@ use crate::update::handle_command;
 use coco_types::CoreEvent;
 
 use crate::server_notification_handler;
+
+/// Idle threshold for the `idle_prompt` notification.
+///
+/// TS `messageIdleNotifThresholdMs` defaults to 60_000 ms
+/// (`utils/config.ts:612`). Configurable in the TS REPL via global
+/// config; coco-rs hardcodes the default — wire to `settings.json`
+/// later if the cadence proves wrong.
+const IDLE_PROMPT_THRESHOLD: Duration = Duration::from_secs(60);
 
 /// Create the TUI ↔ Core communication channels.
 ///
@@ -294,6 +304,11 @@ impl App {
                 if key.code == crossterm::event::KeyCode::Esc {
                     self.state.ui.last_esc_time = Some(std::time::Instant::now());
                 }
+                // TS App.tsx:452 — every Ink input event bumps the
+                // last-interaction timestamp so the idle-prompt timer
+                // restarts from "now" rather than firing while the
+                // user is actively typing.
+                self.state.session.last_user_interaction_at = std::time::Instant::now();
                 // Delegate all key mapping to keybinding_bridge
                 if let Some(cmd) = keybinding_bridge::map_key(&self.state, key) {
                     handle_command(&mut self.state, cmd, &self.command_tx).await
@@ -304,6 +319,7 @@ impl App {
             TuiEvent::Tick => {
                 let had_toasts = self.state.ui.has_toasts();
                 self.state.ui.expire_toasts();
+                self.maybe_fire_idle_prompt().await;
                 had_toasts && !self.state.ui.has_toasts()
             }
             TuiEvent::SpinnerTick => {
@@ -314,6 +330,7 @@ impl App {
                 }
             }
             TuiEvent::Paste(text) => {
+                self.state.session.last_user_interaction_at = std::time::Instant::now();
                 for c in text.chars() {
                     self.state.ui.input.insert_char(c);
                 }
@@ -350,6 +367,44 @@ impl App {
                 true
             }
         }
+    }
+
+    /// Fire the `idle_prompt` notification once per turn-completion if
+    /// the user has been idle past `IDLE_PROMPT_THRESHOLD`.
+    ///
+    /// TS `REPL.tsx:3920-3939` runs this check inside a `setTimeout`
+    /// scheduled when `lastQueryCompletionTime` updates. Coco-rs
+    /// instead polls on the existing 250 ms tick — same outcome,
+    /// avoids spawning extra timer tasks. Skips when an overlay is
+    /// open (TS `focusedInputDialogRef.current === undefined`) or
+    /// the agent is busy.
+    async fn maybe_fire_idle_prompt(&mut self) {
+        let session = &self.state.session;
+        let Some(qct) = session.last_query_completion_at else {
+            return;
+        };
+        if session.idle_prompt_fired {
+            return;
+        }
+        if session.is_busy() {
+            return;
+        }
+        if self.state.ui.overlay.is_some() {
+            return;
+        }
+        if session.last_user_interaction_at > qct {
+            return;
+        }
+        if qct.elapsed() < IDLE_PROMPT_THRESHOLD {
+            return;
+        }
+        let _ = self
+            .command_tx
+            .send(UserCommand::FireIdleNotification {
+                message: "Coco is waiting for your input".to_string(),
+            })
+            .await;
+        self.state.session.idle_prompt_fired = true;
     }
 }
 

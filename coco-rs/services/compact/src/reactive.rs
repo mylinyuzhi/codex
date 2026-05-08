@@ -195,7 +195,13 @@ pub fn peel_head_for_ptl_retry(messages: &[Message], tokens_to_free: i64) -> Opt
 /// variant build a config via
 /// [`crate::api_compact::get_api_context_management`].
 pub fn api_microcompact(messages: &mut [Message], tokens_to_free: i64) {
+    tracing::debug!(
+        tokens_to_free,
+        message_count = messages.len(),
+        "api_microcompact begin (reactive)"
+    );
     let mut freed = 0i64;
+    let mut cleared: i32 = 0;
     for msg in messages.iter_mut() {
         if freed >= tokens_to_free {
             break;
@@ -217,10 +223,17 @@ pub fn api_microcompact(messages: &mut [Message], tokens_to_free: i64) {
                     )],
                     provider_options: None,
                 };
+                cleared += 1;
                 freed += est;
             }
         }
     }
+    tracing::info!(
+        cleared,
+        freed_tokens = freed,
+        target_tokens = tokens_to_free,
+        "api_microcompact done (reactive)"
+    );
 }
 
 #[cfg(test)]

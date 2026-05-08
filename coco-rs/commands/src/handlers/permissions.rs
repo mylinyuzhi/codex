@@ -23,7 +23,7 @@ const RULE_SOURCES: &[(&str, &str)] = &[
 /// Async handler for `/permissions [allow|deny|reset|list]`.
 pub fn handler(
     args: String,
-) -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>> {
+) -> Pin<Box<dyn std::future::Future<Output = crate::Result<String>> + Send>> {
     Box::pin(async move {
         let subcommand = args.trim().to_string();
 
@@ -66,7 +66,7 @@ pub fn handler(
 }
 
 /// Gather and display permission rules from all sources.
-async fn list_permissions() -> anyhow::Result<String> {
+async fn list_permissions() -> crate::Result<String> {
     let mut out = String::from("## Permission Rules\n\n");
 
     out.push_str("Rule sources (highest to lowest priority):\n\n");
@@ -130,7 +130,7 @@ async fn list_permissions() -> anyhow::Result<String> {
 /// (`tui_runner::dispatch_permissions_mutation`) handles `allow` / `deny`
 /// before this handler runs and mutates `engine_config` directly. Outside
 /// the TUI we surface a hint pointing at file-based rules.
-async fn add_permission_rule(action: &str, tool: &str) -> anyhow::Result<String> {
+async fn add_permission_rule(action: &str, tool: &str) -> crate::Result<String> {
     if tool.is_empty() {
         return Ok(format!("Usage: /permissions {action} <tool-name>"));
     }

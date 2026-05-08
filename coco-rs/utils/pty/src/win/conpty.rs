@@ -64,13 +64,14 @@ pub struct RawConPty {
 }
 
 impl RawConPty {
-    pub fn new(cols: i16, rows: i16) -> anyhow::Result<Self> {
+    pub fn new(cols: i16, rows: i16) -> crate::PtyResult<Self> {
         let (con, input_write, output_read) = create_conpty_handles(PtySize {
             rows: rows as u16,
             cols: cols as u16,
             pixel_width: 0,
             pixel_height: 0,
-        })?;
+        })
+        .map_err(|e| crate::PtyError::ConPty(e.to_string()))?;
         Ok(Self {
             con,
             input_write,

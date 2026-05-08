@@ -315,12 +315,12 @@ impl ReplBridge {
     /// `MAX_OUTBOUND_BUFFER`. Returns `Ok(())` even when buffered.
     ///
     /// TS: replBridge.ts — writeMessages / writeSdkMessages.
-    pub async fn send(&self, msg: ReplOutMessage) -> anyhow::Result<()> {
+    pub async fn send(&self, msg: ReplOutMessage) -> crate::Result<()> {
         if self.state() == BridgeState::Connected {
             self.outgoing_tx
                 .send(msg)
                 .await
-                .map_err(|_| anyhow::anyhow!("outgoing channel closed"))?;
+                .map_err(|_| crate::BridgeError::ChannelClosed)?;
         } else {
             let mut buf = self.buffer.lock().await;
             if buf.len() >= MAX_OUTBOUND_BUFFER {
@@ -339,7 +339,7 @@ impl ReplBridge {
     /// Drain buffered messages after reconnection.
     ///
     /// TS: replBridge.ts — drain on transport connect callback.
-    pub async fn drain_buffer(&self) -> anyhow::Result<()> {
+    pub async fn drain_buffer(&self) -> crate::Result<()> {
         let messages: Vec<ReplOutMessage> = {
             let mut buf = self.buffer.lock().await;
             buf.drain(..).collect()
@@ -350,7 +350,7 @@ impl ReplBridge {
             self.outgoing_tx
                 .send(msg)
                 .await
-                .map_err(|_| anyhow::anyhow!("outgoing channel closed"))?;
+                .map_err(|_| crate::BridgeError::ChannelClosed)?;
         }
 
         if count > 0 {
@@ -367,7 +367,7 @@ impl ReplBridge {
     /// Send a result message and transition to idle.
     ///
     /// TS: replBridge.ts — sendResult().
-    pub async fn send_result(&self, text: String) -> anyhow::Result<()> {
+    pub async fn send_result(&self, text: String) -> crate::Result<()> {
         self.send(ReplOutMessage::Result {
             text,
             session_id: Some(self.session_id.clone()),
@@ -376,7 +376,7 @@ impl ReplBridge {
     }
 
     /// Send an error message.
-    pub async fn send_error(&self, message: String) -> anyhow::Result<()> {
+    pub async fn send_error(&self, message: String) -> crate::Result<()> {
         self.send(ReplOutMessage::Error { message }).await
     }
 
@@ -387,13 +387,13 @@ impl ReplBridge {
 }
 
 /// Decode an NDJSON line into a REPL inbound message.
-pub fn decode_repl_ndjson(line: &str) -> anyhow::Result<ReplInMessage> {
+pub fn decode_repl_ndjson(line: &str) -> crate::Result<ReplInMessage> {
     let msg: ReplInMessage = serde_json::from_str(line.trim())?;
     Ok(msg)
 }
 
 /// Encode a REPL outbound message as NDJSON.
-pub fn encode_repl_ndjson(msg: &ReplOutMessage) -> anyhow::Result<String> {
+pub fn encode_repl_ndjson(msg: &ReplOutMessage) -> crate::Result<String> {
     let json = serde_json::to_string(msg)?;
     Ok(format!("{json}\n"))
 }

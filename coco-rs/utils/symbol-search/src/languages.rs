@@ -4,6 +4,8 @@ use std::path::Path;
 
 use tree_sitter_tags::TagsConfiguration;
 
+use crate::error::SymbolSearchError;
+
 /// Supported programming languages for symbol extraction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SymbolLanguage {
@@ -47,11 +49,15 @@ impl SymbolLanguage {
     }
 
     /// Get tags configuration for this language.
-    pub fn tags_configuration(&self) -> anyhow::Result<TagsConfiguration> {
+    pub fn tags_configuration(&self) -> Result<TagsConfiguration, SymbolSearchError> {
         let language = self.tree_sitter_language();
         let query = self.tags_query();
-        TagsConfiguration::new(language, query, "")
-            .map_err(|e| anyhow::anyhow!("Failed to create tags config for {self:?}: {e}"))
+        TagsConfiguration::new(language, query, "").map_err(|e| {
+            SymbolSearchError::TagsConfiguration {
+                language: format!("{self:?}"),
+                message: e.to_string(),
+            }
+        })
     }
 
     #[allow(clippy::trivially_copy_pass_by_ref)]

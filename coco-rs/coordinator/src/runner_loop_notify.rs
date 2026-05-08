@@ -16,7 +16,7 @@ pub fn send_message_to_leader(
     text: &str,
     color: Option<&str>,
     team_name: &str,
-) -> anyhow::Result<()> {
+) -> crate::Result<()> {
     let message = mailbox::TeammateMessage {
         from: from.to_string(),
         text: text.to_string(),
@@ -37,7 +37,7 @@ pub fn send_idle_notification(
     team_name: &str,
     idle_reason: Option<&str>,
     summary: Option<&str>,
-) -> anyhow::Result<()> {
+) -> crate::Result<()> {
     let idle_text = mailbox::create_idle_notification(agent_name, idle_reason, summary);
     let message = mailbox::TeammateMessage {
         from: agent_name.to_string(),

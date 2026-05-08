@@ -29,6 +29,26 @@ pub enum PathValidationError {
     Escape,
 }
 
+impl coco_error::StackError for PathValidationError {
+    fn debug_fmt(&self, layer: usize, buf: &mut Vec<String>) {
+        buf.push(format!("{layer}: {self}"));
+    }
+
+    fn next(&self) -> Option<&dyn coco_error::StackError> {
+        None
+    }
+}
+
+impl coco_error::ErrorExt for PathValidationError {
+    fn status_code(&self) -> coco_error::StatusCode {
+        coco_error::StatusCode::InvalidArguments
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
 /// Validate a relative memory file path.
 ///
 /// Rejects: empty, null bytes, UNC (`\\server\share`), absolute paths,

@@ -138,6 +138,22 @@ impl SandboxApprovalBridge for SdkSandboxApprovalBridge {
             }
         };
 
+        // TS `permission_prompt` notification (`PermissionRequest.tsx:190`):
+        // fire the Notification hook before blocking on the SDK client so
+        // the same hook fires regardless of whether the prompt comes from
+        // a regular tool or a sandbox-level deny. Best-effort — runtime
+        // not yet installed (e.g. tests) leaves the hook unfired.
+        if let Some(runtime) = self.state.session_runtime.read().await.clone() {
+            let title = format!("Sandbox prompt: {tool_name}");
+            runtime
+                .fire_notification_hooks(
+                    "permission_prompt",
+                    "Claude Code needs your permission for a sandboxed operation",
+                    Some(&title),
+                )
+                .await;
+        }
+
         let reply = match self
             .state
             .send_server_request(&transport, "approval/askForApproval", params)

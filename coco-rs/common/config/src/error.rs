@@ -5,6 +5,9 @@
 //! `build_model_registry`. Surface-level callers convert into `anyhow`
 //! at the runtime-config builder boundary.
 
+use coco_error::ErrorExt;
+use coco_error::StackError;
+use coco_error::StatusCode;
 use std::fmt;
 use std::path::PathBuf;
 use thiserror::Error;
@@ -100,4 +103,84 @@ pub enum ConfigError {
         "provider `{name}`: invalid timeout_secs {value} — must be >= 0 (use 0 to disable per-request timeout)"
     )]
     InvalidTimeoutSecs { name: String, value: i64 },
+
+    #[error("io error: {source}")]
+    Io {
+        #[from]
+        source: std::io::Error,
+    },
+
+    #[error("json error: {source}")]
+    Json {
+        #[from]
+        source: serde_json::Error,
+    },
+
+    #[error("{message}")]
+    Generic { message: String },
+}
+
+impl ConfigError {
+    pub fn generic(message: impl Into<String>) -> Self {
+        Self::Generic {
+            message: message.into(),
+        }
+    }
+}
+
+/// Anyhow-style `.context()` adapter for non-`anyhow::Result` paths.
+pub trait ResultExt<T> {
+    fn with_ctx(self, msg: impl Into<String>) -> Result<T, ConfigError>;
+    fn with_ctx_lazy<F: FnOnce() -> String>(self, msg: F) -> Result<T, ConfigError>;
+}
+
+impl<T, E: std::fmt::Display> ResultExt<T> for Result<T, E> {
+    fn with_ctx(self, msg: impl Into<String>) -> Result<T, ConfigError> {
+        self.map_err(|e| ConfigError::Generic {
+            message: format!("{}: {e}", msg.into()),
+        })
+    }
+
+    fn with_ctx_lazy<F: FnOnce() -> String>(self, msg: F) -> Result<T, ConfigError> {
+        self.map_err(|e| ConfigError::Generic {
+            message: format!("{}: {e}", msg()),
+        })
+    }
+}
+
+pub type Result<T, E = ConfigError> = std::result::Result<T, E>;
+
+impl StackError for ConfigError {
+    fn debug_fmt(&self, layer: usize, buf: &mut Vec<String>) {
+        buf.push(format!("{layer}: {self}"));
+    }
+
+    fn next(&self) -> Option<&dyn StackError> {
+        None
+    }
+}
+
+impl ErrorExt for ConfigError {
+    fn status_code(&self) -> StatusCode {
+        match self {
+            Self::IncompleteProviderEntry { .. } | Self::IncompleteModelEntry { .. } => {
+                StatusCode::InvalidConfig
+            }
+            Self::NonPositiveTokens { .. } | Self::NonPositiveCount { .. } => {
+                StatusCode::InvalidArguments
+            }
+            Self::BaseInstructionsRead { .. } | Self::CatalogRead { .. } => StatusCode::IoError,
+            Self::CatalogParse { .. } => StatusCode::ParseError,
+            Self::UnknownProvider { .. } => StatusCode::ProviderNotFound,
+            Self::UnknownModel { .. } => StatusCode::ModelNotFound,
+            Self::InvalidTimeoutSecs { .. } => StatusCode::InvalidArguments,
+            Self::Io { .. } => StatusCode::IoError,
+            Self::Json { .. } => StatusCode::InvalidJson,
+            Self::Generic { .. } => StatusCode::Internal,
+        }
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }

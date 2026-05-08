@@ -82,10 +82,13 @@ fn test_register_builtins() {
     let mut registry = CommandRegistry::new();
     register_builtins(&mut registry);
 
-    // /commit and /pr were promoted out of register_builtins:
-    // /commit lives in register_ts_parity_handlers (Prompt command);
-    // /pr was a coco-only alias and is removed (TS uses /commit-push-pr).
-    assert_eq!(registry.len(), 23);
+    // Drift notes:
+    // - /commit and /pr were promoted out of register_builtins
+    //   (/commit lives in register_ts_parity_handlers; /pr removed —
+    //   TS uses /commit-push-pr).
+    // - /login, /logout, /bug, /ant-trace are deliberately not ported;
+    //   see commands/CLAUDE.md "Deliberately Not Ported".
+    assert_eq!(registry.len(), 20);
     assert!(registry.get("help").is_some());
     assert!(registry.get("clear").is_some());
     assert!(registry.get("compact").is_some());
@@ -95,7 +98,6 @@ fn test_register_builtins() {
     assert!(registry.get("diff").is_some());
     assert!(registry.get("mcp").is_some());
     assert!(registry.get("doctor").is_some());
-    assert!(registry.get("login").is_some());
 }
 
 #[test]
@@ -189,6 +191,6 @@ fn test_all_builtins_are_visible() {
     register_builtins(&mut registry);
 
     // All built-in commands should be visible (not hidden). Count tracks
-    // register_builtins (23 after parity-trim — see test_register_builtins).
-    assert_eq!(registry.visible().len(), 23);
+    // register_builtins (20 after parity-trim — see test_register_builtins).
+    assert_eq!(registry.visible().len(), 20);
 }

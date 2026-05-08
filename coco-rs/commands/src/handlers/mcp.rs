@@ -19,7 +19,7 @@ struct McpServer {
 /// Async handler for `/mcp [list|add|remove|enable|disable]`.
 pub fn handler(
     args: String,
-) -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>> {
+) -> Pin<Box<dyn std::future::Future<Output = crate::Result<String>> + Send>> {
     Box::pin(async move {
         let subcommand = args.trim().to_string();
 
@@ -51,7 +51,7 @@ pub fn handler(
 }
 
 /// List all MCP servers from config files.
-async fn list_mcp_servers() -> anyhow::Result<String> {
+async fn list_mcp_servers() -> crate::Result<String> {
     let mut servers = Vec::new();
 
     // Load from .claude/settings.json
@@ -170,7 +170,7 @@ async fn load_servers_from_file(path: &Path, source_label: &str, servers: &mut V
 }
 
 /// Enable or disable a server by updating .claude/settings.json.
-async fn toggle_server(name: &str, enable: bool) -> anyhow::Result<String> {
+async fn toggle_server(name: &str, enable: bool) -> crate::Result<String> {
     let path = Path::new(".claude/settings.json");
     let action = if enable { "Enabling" } else { "Disabling" };
 
@@ -212,7 +212,7 @@ async fn toggle_server(name: &str, enable: bool) -> anyhow::Result<String> {
 }
 
 /// Add a new MCP server to .claude/settings.json.
-async fn add_server(input: &str) -> anyhow::Result<String> {
+async fn add_server(input: &str) -> crate::Result<String> {
     let parts: Vec<&str> = input.splitn(2, ' ').collect();
     if parts.len() < 2 {
         return Ok("Usage: /mcp add <name> <command> [args...]\n\n\
@@ -236,7 +236,9 @@ async fn add_server(input: &str) -> anyhow::Result<String> {
     };
 
     let Some(root_obj) = parsed.as_object_mut() else {
-        anyhow::bail!("settings.json root is not a JSON object");
+        return Err(crate::CommandsError::generic(
+            "settings.json root is not a JSON object",
+        ));
     };
     let mcp_servers = root_obj
         .entry("mcpServers")
@@ -261,7 +263,7 @@ async fn add_server(input: &str) -> anyhow::Result<String> {
 }
 
 /// Remove an MCP server from .claude/settings.json.
-async fn remove_server(name: &str) -> anyhow::Result<String> {
+async fn remove_server(name: &str) -> crate::Result<String> {
     let path = Path::new(".claude/settings.json");
 
     let Ok(content) = tokio::fs::read_to_string(path).await else {

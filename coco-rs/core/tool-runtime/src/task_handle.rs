@@ -234,10 +234,16 @@ pub fn matches_interactive_prompt(tail: &str) -> bool {
 pub trait TaskHandle: Send + Sync {
     /// Spawn a background shell task.
     /// Returns the task ID immediately.
-    async fn spawn_shell_task(&self, request: BackgroundShellRequest) -> anyhow::Result<String>;
+    async fn spawn_shell_task(
+        &self,
+        request: BackgroundShellRequest,
+    ) -> Result<String, coco_error::BoxedError>;
 
     /// Get the status of a background task.
-    async fn get_task_status(&self, task_id: &str) -> anyhow::Result<BackgroundTaskInfo>;
+    async fn get_task_status(
+        &self,
+        task_id: &str,
+    ) -> Result<BackgroundTaskInfo, coco_error::BoxedError>;
 
     /// Read incremental output from a background task.
     ///
@@ -246,10 +252,10 @@ pub trait TaskHandle: Send + Sync {
         &self,
         task_id: &str,
         from_offset: i64,
-    ) -> anyhow::Result<TaskOutputDelta>;
+    ) -> Result<TaskOutputDelta, coco_error::BoxedError>;
 
     /// Kill a running background task.
-    async fn kill_task(&self, task_id: &str) -> anyhow::Result<()>;
+    async fn kill_task(&self, task_id: &str) -> Result<(), coco_error::BoxedError>;
 
     /// List all active background tasks.
     async fn list_tasks(&self) -> Vec<BackgroundTaskInfo>;
@@ -351,7 +357,7 @@ pub trait AgentTranscriptStore: Send + Sync {
         session_id: &str,
         agent_id: &str,
         messages: Vec<serde_json::Value>,
-    ) -> anyhow::Result<()>;
+    ) -> Result<(), coco_error::BoxedError>;
 
     /// Read every persisted message for an agent in conversation
     /// order. Returns `Ok(None)` when no transcript exists (no
@@ -361,7 +367,7 @@ pub trait AgentTranscriptStore: Send + Sync {
         &self,
         session_id: &str,
         agent_id: &str,
-    ) -> anyhow::Result<Option<Vec<serde_json::Value>>>;
+    ) -> Result<Option<Vec<serde_json::Value>>, coco_error::BoxedError>;
 
     /// Write the metadata sidecar for an agent.
     async fn write_agent_metadata(
@@ -369,14 +375,14 @@ pub trait AgentTranscriptStore: Send + Sync {
         session_id: &str,
         agent_id: &str,
         metadata: &AgentSpawnMetadata,
-    ) -> anyhow::Result<()>;
+    ) -> Result<(), coco_error::BoxedError>;
 
     /// Read the metadata sidecar; `Ok(None)` when no sidecar exists.
     async fn read_agent_metadata(
         &self,
         session_id: &str,
         agent_id: &str,
-    ) -> anyhow::Result<Option<AgentSpawnMetadata>>;
+    ) -> Result<Option<AgentSpawnMetadata>, coco_error::BoxedError>;
 }
 
 pub type AgentTranscriptStoreRef = Arc<dyn AgentTranscriptStore>;
@@ -387,17 +393,36 @@ pub struct NoOpTaskHandle;
 
 #[async_trait::async_trait]
 impl TaskHandle for NoOpTaskHandle {
-    async fn spawn_shell_task(&self, _: BackgroundShellRequest) -> anyhow::Result<String> {
-        anyhow::bail!("Background tasks not available in this context")
+    async fn spawn_shell_task(
+        &self,
+        _: BackgroundShellRequest,
+    ) -> Result<String, coco_error::BoxedError> {
+        Err(Box::new(coco_error::PlainError::new(
+            "Background tasks not available in this context",
+            coco_error::StatusCode::Internal,
+        )))
     }
-    async fn get_task_status(&self, _: &str) -> anyhow::Result<BackgroundTaskInfo> {
-        anyhow::bail!("Background tasks not available in this context")
+    async fn get_task_status(&self, _: &str) -> Result<BackgroundTaskInfo, coco_error::BoxedError> {
+        Err(Box::new(coco_error::PlainError::new(
+            "Background tasks not available in this context",
+            coco_error::StatusCode::Internal,
+        )))
     }
-    async fn get_task_output_delta(&self, _: &str, _: i64) -> anyhow::Result<TaskOutputDelta> {
-        anyhow::bail!("Background tasks not available in this context")
+    async fn get_task_output_delta(
+        &self,
+        _: &str,
+        _: i64,
+    ) -> Result<TaskOutputDelta, coco_error::BoxedError> {
+        Err(Box::new(coco_error::PlainError::new(
+            "Background tasks not available in this context",
+            coco_error::StatusCode::Internal,
+        )))
     }
-    async fn kill_task(&self, _: &str) -> anyhow::Result<()> {
-        anyhow::bail!("Background tasks not available in this context")
+    async fn kill_task(&self, _: &str) -> Result<(), coco_error::BoxedError> {
+        Err(Box::new(coco_error::PlainError::new(
+            "Background tasks not available in this context",
+            coco_error::StatusCode::Internal,
+        )))
     }
     async fn list_tasks(&self) -> Vec<BackgroundTaskInfo> {
         vec![]

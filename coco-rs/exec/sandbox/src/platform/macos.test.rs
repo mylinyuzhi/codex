@@ -429,3 +429,55 @@ fn test_generate_seatbelt_profile_denied_paths_also_deny_read() {
         "denied_paths should also generate file-read* deny rules"
     );
 }
+
+#[test]
+fn test_generate_seatbelt_profile_allow_read_emits_after_deny() {
+    // TS parity: `allow_read` carve-outs override matching `deny_read` rules.
+    // Seatbelt is bottom-to-top last-match-wins, so the allow rule has to
+    // appear AFTER the deny rule in the profile text.
+    let config = SandboxConfig {
+        enforcement: EnforcementLevel::WorkspaceWrite,
+        writable_roots: vec![],
+        denied_paths: vec![],
+        denied_read_paths: vec![std::path::PathBuf::from("/etc/shadow")],
+        allowed_read_paths: vec![std::path::PathBuf::from("/etc/shadow/public")],
+        allow_network: true,
+        ..Default::default()
+    };
+
+    let profile = generate_seatbelt_profile(&config, "ls", "_test_SBX");
+    let deny_idx = profile
+        .find("(deny file-read* (subpath \"/etc/shadow\"))")
+        .expect("deny rule should be present");
+    let allow_idx = profile
+        .find("(allow file-read* (subpath \"/etc/shadow/public\"))")
+        .expect("allow_read carve-out should be present");
+    assert!(
+        allow_idx > deny_idx,
+        "allow_read rule must appear AFTER deny_read so Seatbelt's \
+         last-match-wins resolution lets the carve-out win for matching paths"
+    );
+    assert!(
+        profile.contains("allow_read carve-outs"),
+        "Profile should include the carve-out section header"
+    );
+}
+
+#[test]
+fn test_generate_seatbelt_profile_no_allow_read_section_when_empty() {
+    let config = SandboxConfig {
+        enforcement: EnforcementLevel::ReadOnly,
+        writable_roots: vec![],
+        denied_paths: vec![],
+        denied_read_paths: vec![],
+        allowed_read_paths: vec![],
+        allow_network: true,
+        ..Default::default()
+    };
+
+    let profile = generate_seatbelt_profile(&config, "ls", "_test_SBX");
+    assert!(
+        !profile.contains("allow_read carve-outs"),
+        "Profile should NOT have allow_read section when no carve-outs configured"
+    );
+}

@@ -100,7 +100,7 @@ impl PromptHistory {
     }
 
     /// Add an entry (no pasted content).
-    pub fn add(&self, display: &str) -> anyhow::Result<()> {
+    pub fn add(&self, display: &str) -> crate::Result<()> {
         self.add_with_pastes(display, &HashMap::new())
     }
 
@@ -112,7 +112,7 @@ impl PromptHistory {
         &self,
         display: &str,
         pasted_contents: &HashMap<i32, String>,
-    ) -> anyhow::Result<()> {
+    ) -> crate::Result<()> {
         let mut stored: HashMap<i32, PastedContentRef> = HashMap::new();
         for (id, content) in pasted_contents {
             if content.len() <= MAX_PASTED_CONTENT_LENGTH {
@@ -282,7 +282,7 @@ impl PromptHistory {
     }
 
     /// Read all log entries from the JSONL file.
-    fn read_all_entries(&self) -> anyhow::Result<Vec<HistoryLogEntry>> {
+    fn read_all_entries(&self) -> crate::Result<Vec<HistoryLogEntry>> {
         if !self.history_path.exists() {
             return Ok(Vec::new());
         }
@@ -302,7 +302,7 @@ impl PromptHistory {
     }
 
     /// Write a paste blob to the content-addressed store.
-    fn write_paste(&self, hash: &str, content: &str) -> anyhow::Result<()> {
+    fn write_paste(&self, hash: &str, content: &str) -> crate::Result<()> {
         std::fs::create_dir_all(&self.paste_store_dir)?;
         let path = self.paste_store_dir.join(format!("{hash}.txt"));
         if path.exists() {

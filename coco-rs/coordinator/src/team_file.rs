@@ -45,7 +45,7 @@ pub fn get_team_file_path(team_name: &str) -> PathBuf {
 /// Read a team file from disk.
 ///
 /// TS: `readTeamFile(teamName)`
-pub fn read_team_file(team_name: &str) -> anyhow::Result<Option<TeamFile>> {
+pub fn read_team_file(team_name: &str) -> crate::Result<Option<TeamFile>> {
     let path = get_team_file_path(team_name);
     if !path.exists() {
         return Ok(None);
@@ -58,7 +58,7 @@ pub fn read_team_file(team_name: &str) -> anyhow::Result<Option<TeamFile>> {
 /// Write a team file to disk.
 ///
 /// TS: `writeTeamFileAsync(teamName, teamFile)`
-pub fn write_team_file(team_name: &str, team_file: &TeamFile) -> anyhow::Result<()> {
+pub fn write_team_file(team_name: &str, team_file: &TeamFile) -> crate::Result<()> {
     let path = get_team_file_path(team_name);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -71,7 +71,7 @@ pub fn write_team_file(team_name: &str, team_file: &TeamFile) -> anyhow::Result<
 /// Remove a teammate from the team file by agent ID.
 ///
 /// TS: `removeMemberByAgentId(teamName, agentId)`
-pub fn remove_member_by_agent_id(team_name: &str, agent_id: &str) -> anyhow::Result<bool> {
+pub fn remove_member_by_agent_id(team_name: &str, agent_id: &str) -> crate::Result<bool> {
     let Some(mut team_file) = read_team_file(team_name)? else {
         return Ok(false);
     };
@@ -88,7 +88,7 @@ pub fn remove_member_by_agent_id(team_name: &str, agent_id: &str) -> anyhow::Res
 /// Remove a teammate by name.
 ///
 /// TS: `removeTeammateFromTeamFile(teamName, { name })`
-pub fn remove_member_by_name(team_name: &str, member_name: &str) -> anyhow::Result<bool> {
+pub fn remove_member_by_name(team_name: &str, member_name: &str) -> crate::Result<bool> {
     let Some(mut team_file) = read_team_file(team_name)? else {
         return Ok(false);
     };
@@ -109,7 +109,7 @@ pub fn set_member_mode(
     team_name: &str,
     member_name: &str,
     mode: coco_types::PermissionMode,
-) -> anyhow::Result<bool> {
+) -> crate::Result<bool> {
     let Some(mut team_file) = read_team_file(team_name)? else {
         return Ok(false);
     };
@@ -128,7 +128,7 @@ pub fn set_member_mode(
 pub fn set_multiple_member_modes(
     team_name: &str,
     updates: &[(String, coco_types::PermissionMode)],
-) -> anyhow::Result<bool> {
+) -> crate::Result<bool> {
     let Some(mut team_file) = read_team_file(team_name)? else {
         return Ok(false);
     };
@@ -148,11 +148,7 @@ pub fn set_multiple_member_modes(
 /// Set a member's active status.
 ///
 /// TS: `setMemberActive(teamName, memberName, isActive)`
-pub fn set_member_active(
-    team_name: &str,
-    member_name: &str,
-    is_active: bool,
-) -> anyhow::Result<()> {
+pub fn set_member_active(team_name: &str, member_name: &str, is_active: bool) -> crate::Result<()> {
     let Some(mut team_file) = read_team_file(team_name)? else {
         return Ok(());
     };
@@ -166,7 +162,7 @@ pub fn set_member_active(
 /// Add a hidden pane ID.
 ///
 /// TS: `addHiddenPaneId(teamName, paneId)`
-pub fn add_hidden_pane_id(team_name: &str, pane_id: &str) -> anyhow::Result<bool> {
+pub fn add_hidden_pane_id(team_name: &str, pane_id: &str) -> crate::Result<bool> {
     let Some(mut team_file) = read_team_file(team_name)? else {
         return Ok(false);
     };
@@ -182,7 +178,7 @@ pub fn add_hidden_pane_id(team_name: &str, pane_id: &str) -> anyhow::Result<bool
 /// Remove a hidden pane ID.
 ///
 /// TS: `removeHiddenPaneId(teamName, paneId)`
-pub fn remove_hidden_pane_id(team_name: &str, pane_id: &str) -> anyhow::Result<bool> {
+pub fn remove_hidden_pane_id(team_name: &str, pane_id: &str) -> crate::Result<bool> {
     let Some(mut team_file) = read_team_file(team_name)? else {
         return Ok(false);
     };
@@ -224,7 +220,7 @@ pub fn list_team_names() -> Vec<String> {
 /// Clean up team directories (remove team dir and its contents).
 ///
 /// TS: `cleanupTeamDirectories(teamName)`
-pub fn cleanup_team_directories(team_name: &str) -> anyhow::Result<()> {
+pub fn cleanup_team_directories(team_name: &str) -> crate::Result<()> {
     let dir = get_team_dir(team_name);
     if dir.is_dir() {
         std::fs::remove_dir_all(&dir)?;
@@ -235,7 +231,7 @@ pub fn cleanup_team_directories(team_name: &str) -> anyhow::Result<()> {
 /// Clean up teams owned by the current session.
 ///
 /// TS: `cleanupSessionTeams()`
-pub fn cleanup_session_teams(session_id: &str) -> anyhow::Result<()> {
+pub fn cleanup_session_teams(session_id: &str) -> crate::Result<()> {
     for name in list_team_names() {
         if let Ok(Some(tf)) = read_team_file(&name)
             && tf.lead_session_id.as_deref() == Some(session_id)
@@ -249,7 +245,7 @@ pub fn cleanup_session_teams(session_id: &str) -> anyhow::Result<()> {
 /// Destroy a git worktree.
 ///
 /// TS: `destroyWorktree(worktreePath)` — runs `git worktree remove`, falls back to rm.
-pub fn destroy_worktree(worktree_path: &str) -> anyhow::Result<()> {
+pub fn destroy_worktree(worktree_path: &str) -> crate::Result<()> {
     let path = std::path::Path::new(worktree_path);
     if !path.exists() {
         return Ok(());
@@ -306,7 +302,7 @@ pub fn get_session_cleanup_teams() -> Vec<String> {
 /// Kill all pane-based teammates for a team.
 ///
 /// TS: `killOrphanedTeammatePanes(teamName)`
-pub fn kill_orphaned_teammate_panes(team_name: &str) -> anyhow::Result<()> {
+pub fn kill_orphaned_teammate_panes(team_name: &str) -> crate::Result<()> {
     let Some(team_file) = read_team_file(team_name)? else {
         return Ok(());
     };

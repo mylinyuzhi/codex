@@ -20,7 +20,6 @@ use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 
-use anyhow::Result;
 #[cfg(not(windows))]
 use portable_pty::native_pty_system;
 use portable_pty::CommandBuilder;
@@ -34,6 +33,12 @@ use crate::process::PtyHandles;
 use crate::process::PtyMasterHandle;
 use crate::process::SpawnedProcess;
 use crate::process::TerminalSize;
+use crate::PtyError;
+use crate::PtyResult;
+
+fn portable_pty_err<E: std::fmt::Display>(e: E) -> PtyError {
+    PtyError::PortablePty(e.to_string())
+}
 
 /// Returns true when ConPTY support is available (Windows only).
 #[cfg(windows)]
@@ -106,7 +111,7 @@ pub async fn spawn_process(
     env: &HashMap<String, String>,
     arg0: &Option<String>,
     size: TerminalSize,
-) -> Result<SpawnedProcess> {
+) -> PtyResult<SpawnedProcess> {
     spawn_process_with_inherited_fds(program, args, cwd, env, arg0, size, &[]).await
 }
 
@@ -120,9 +125,9 @@ pub async fn spawn_process_with_inherited_fds(
     arg0: &Option<String>,
     size: TerminalSize,
     inherited_fds: &[i32],
-) -> Result<SpawnedProcess> {
+) -> PtyResult<SpawnedProcess> {
     if program.is_empty() {
-        anyhow::bail!("missing program for PTY spawn");
+        return Err(PtyError::MissingProgram);
     }
 
     #[cfg(not(unix))]
@@ -144,9 +149,9 @@ async fn spawn_process_portable(
     env: &HashMap<String, String>,
     arg0: &Option<String>,
     size: TerminalSize,
-) -> Result<SpawnedProcess> {
+) -> PtyResult<SpawnedProcess> {
     let pty_system = platform_native_pty_system();
-    let pair = pty_system.openpty(size.into())?;
+    let pair = pty_system.openpty(size.into()).map_err(portable_pty_err)?;
 
     let mut command_builder = CommandBuilder::new(arg0.as_ref().unwrap_or(&program.to_string()));
     command_builder.cwd(cwd);
@@ -158,7 +163,10 @@ async fn spawn_process_portable(
         command_builder.env(key, value);
     }
 
-    let mut child = pair.slave.spawn_command(command_builder)?;
+    let mut child = pair
+        .slave
+        .spawn_command(command_builder)
+        .map_err(portable_pty_err)?;
     #[cfg(unix)]
     // portable-pty establishes the spawned PTY child as a new session leader on
     // Unix, so PID == PGID and we can reuse the pipe backend's process-group
@@ -169,7 +177,7 @@ async fn spawn_process_portable(
     let (writer_tx, mut writer_rx) = mpsc::channel::<Vec<u8>>(128);
     let (stdout_tx, stdout_rx) = mpsc::channel::<Vec<u8>>(128);
     let (_stderr_tx, stderr_rx) = mpsc::channel::<Vec<u8>>(1);
-    let mut reader = pair.master.try_clone_reader()?;
+    let mut reader = pair.master.try_clone_reader().map_err(portable_pty_err)?;
     let reader_handle: JoinHandle<()> = tokio::task::spawn_blocking(move || {
         let mut buf = [0u8; 8_192];
         loop {
@@ -188,7 +196,7 @@ async fn spawn_process_portable(
         }
     });
 
-    let writer = pair.master.take_writer()?;
+    let writer = pair.master.take_writer().map_err(portable_pty_err)?;
     let writer = Arc::new(tokio::sync::Mutex::new(writer));
     let writer_handle: JoinHandle<()> = tokio::spawn({
         let writer = Arc::clone(&writer);
@@ -261,7 +269,7 @@ async fn spawn_process_preserving_fds(
     arg0: &Option<String>,
     size: TerminalSize,
     inherited_fds: &[RawFd],
-) -> Result<SpawnedProcess> {
+) -> PtyResult<SpawnedProcess> {
     let (master, slave) = open_unix_pty(size)?;
     let mut command = StdCommand::new(program);
     if let Some(arg0) = arg0 {
@@ -406,7 +414,7 @@ async fn spawn_process_preserving_fds(
 }
 
 #[cfg(unix)]
-fn open_unix_pty(size: TerminalSize) -> Result<(File, File)> {
+fn open_unix_pty(size: TerminalSize) -> PtyResult<(File, File)> {
     let mut master: RawFd = -1;
     let mut slave: RawFd = -1;
     let mut size = libc::winsize {
@@ -427,7 +435,7 @@ fn open_unix_pty(size: TerminalSize) -> Result<(File, File)> {
         )
     };
     if result != 0 {
-        anyhow::bail!("failed to openpty: {:?}", std::io::Error::last_os_error());
+        return Err(PtyError::OpenPty(std::io::Error::last_os_error()));
     }
 
     set_cloexec(master)?;

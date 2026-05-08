@@ -1,47 +1,128 @@
-use std::fmt;
+use coco_error::ErrorExt;
+use coco_error::Location;
+use coco_error::StatusCode;
+use coco_error::stack_trace_debug;
+use snafu::Snafu;
+use std::time::Duration;
+
+// Re-export the snafu-generated context selectors so callers can use
+// `crate::errors::ProviderErrorSnafu { ... }.build()` ergonomically.
+// `#[snafu(module)]` placed selectors into the `inference_error` sub-module.
+pub use inference_error::*;
 
 /// Inference error categories.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Variant fields are positional-compatible with prior hand-rolled enum
+/// (every variant adds a `location` captured by `#[snafu(implicit)]` for
+/// virtual-stack debug rendering). Pattern matches in callers should use
+/// `..` rest patterns.
+#[stack_trace_debug]
+#[derive(Snafu)]
+#[snafu(visibility(pub), module)]
 pub enum InferenceError {
     /// Authentication failure (invalid key, expired token).
-    AuthenticationFailed { message: String },
+    #[snafu(display("authentication failed: {message}"))]
+    AuthenticationFailed {
+        message: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+
     /// Rate limited by provider (429).
+    #[snafu(display("rate limited: {message}"))]
     RateLimited {
         retry_after_ms: Option<i64>,
         message: String,
+        #[snafu(implicit)]
+        location: Location,
     },
+
     /// Context window exceeded.
-    ContextWindowExceeded { max_tokens: i64, requested: i64 },
+    #[snafu(display("context window exceeded: {requested} > {max_tokens}"))]
+    ContextWindowExceeded {
+        max_tokens: i64,
+        requested: i64,
+        #[snafu(implicit)]
+        location: Location,
+    },
+
     /// Provider returned an error response.
-    ProviderError { status: i32, message: String },
+    #[snafu(display("provider error ({status}): {message}"))]
+    ProviderError {
+        status: i32,
+        message: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+
     /// Network error (connection, timeout).
-    NetworkError { message: String },
+    #[snafu(display("network error: {message}"))]
+    NetworkError {
+        message: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+
     /// Stream interrupted.
-    StreamInterrupted { message: String },
+    #[snafu(display("stream interrupted: {message}"))]
+    StreamInterrupted {
+        message: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+
     /// Request cancelled.
-    Cancelled,
-    /// Overloaded (503).
-    Overloaded { retry_after_ms: Option<i64> },
+    #[snafu(display("request cancelled"))]
+    Cancelled {
+        #[snafu(implicit)]
+        location: Location,
+    },
+
+    /// Overloaded (503 / 529).
+    #[snafu(display("provider overloaded"))]
+    Overloaded {
+        retry_after_ms: Option<i64>,
+        #[snafu(implicit)]
+        location: Location,
+    },
+
     /// Invalid request (400).
-    InvalidRequest { message: String },
+    #[snafu(display("invalid request: {message}"))]
+    InvalidRequest {
+        message: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+
+    /// Model spec references a provider not registered in `RuntimeConfig`.
+    #[snafu(display(
+        "model spec references unknown provider `{provider}`; \
+         add it to ~/.coco/providers.json or settings.providers"
+    ))]
+    UnknownProvider {
+        provider: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+
+    /// Wrapped failure from a provider-specific builder — anthropic /
+    /// google / openai-compatible `language_model`, or
+    /// `parse_provider_options`.
+    #[snafu(display("{provider} provider `{provider_name}`: {message}"))]
+    ProviderBuildFailed {
+        provider: &'static str,
+        provider_name: String,
+        message: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
 impl InferenceError {
-    /// Whether this error is retryable.
-    pub fn is_retryable(&self) -> bool {
-        matches!(
-            self,
-            Self::RateLimited { .. }
-                | Self::NetworkError { .. }
-                | Self::StreamInterrupted { .. }
-                | Self::Overloaded { .. }
-        )
-    }
-
     /// Suggested retry delay in milliseconds.
     pub fn retry_after_ms(&self) -> Option<i64> {
         match self {
-            Self::RateLimited { retry_after_ms, .. } | Self::Overloaded { retry_after_ms } => {
+            Self::RateLimited { retry_after_ms, .. } | Self::Overloaded { retry_after_ms, .. } => {
                 *retry_after_ms
             }
             _ => None,
@@ -52,42 +133,45 @@ impl InferenceError {
     pub fn from_http_status(status: i32, body: &str, retry_after: Option<i64>) -> Self {
         match status {
             400 => {
-                // Check for context window overflow in body
                 if body.contains("context_length_exceeded")
                     || body.contains("max_tokens")
                     || body.contains("too many tokens")
                 {
-                    Self::ContextWindowExceeded {
-                        max_tokens: 0,
-                        requested: 0,
+                    inference_error::ContextWindowExceededSnafu {
+                        max_tokens: 0_i64,
+                        requested: 0_i64,
                     }
+                    .build()
                 } else {
-                    Self::InvalidRequest {
+                    inference_error::InvalidRequestSnafu {
                         message: truncate_body(body),
                     }
+                    .build()
                 }
             }
-            401 | 403 => Self::AuthenticationFailed {
+            401 | 403 => inference_error::AuthenticationFailedSnafu {
                 message: truncate_body(body),
-            },
-            429 => Self::RateLimited {
+            }
+            .build(),
+            429 => inference_error::RateLimitedSnafu {
                 retry_after_ms: retry_after,
                 message: truncate_body(body),
-            },
-            500 | 502 => Self::ProviderError {
+            }
+            .build(),
+            500 | 502 => inference_error::ProviderSnafu {
                 status,
                 message: truncate_body(body),
-            },
-            503 => Self::Overloaded {
+            }
+            .build(),
+            503 | 529 => inference_error::OverloadedSnafu {
                 retry_after_ms: retry_after,
-            },
-            529 => Self::Overloaded {
-                retry_after_ms: retry_after,
-            },
-            _ => Self::ProviderError {
+            }
+            .build(),
+            _ => inference_error::ProviderSnafu {
                 status,
                 message: truncate_body(body),
-            },
+            }
+            .build(),
         }
     }
 
@@ -100,10 +184,50 @@ impl InferenceError {
             Self::ProviderError { .. } => "provider_error",
             Self::NetworkError { .. } => "network",
             Self::StreamInterrupted { .. } => "stream_interrupted",
-            Self::Cancelled => "cancelled",
+            Self::Cancelled { .. } => "cancelled",
             Self::Overloaded { .. } => "overloaded",
             Self::InvalidRequest { .. } => "invalid_request",
+            Self::UnknownProvider { .. } => "unknown_provider",
+            Self::ProviderBuildFailed { .. } => "provider_build_failed",
         }
+    }
+}
+
+impl ErrorExt for InferenceError {
+    fn status_code(&self) -> StatusCode {
+        match self {
+            Self::AuthenticationFailed { .. } => StatusCode::AuthenticationFailed,
+            Self::RateLimited { .. } => StatusCode::RateLimited,
+            Self::ContextWindowExceeded { .. } => StatusCode::ContextWindowExceeded,
+            Self::ProviderError { .. } => StatusCode::ProviderError,
+            Self::NetworkError { .. } => StatusCode::NetworkError,
+            Self::StreamInterrupted { .. } => StatusCode::StreamError,
+            Self::Cancelled { .. } => StatusCode::Cancelled,
+            Self::Overloaded { .. } => StatusCode::ServiceUnavailable,
+            Self::InvalidRequest { .. } => StatusCode::InvalidRequest,
+            Self::UnknownProvider { .. } => StatusCode::ProviderNotFound,
+            Self::ProviderBuildFailed { .. } => StatusCode::ProviderError,
+        }
+    }
+
+    fn retry_after(&self) -> Option<Duration> {
+        self.retry_after_ms()
+            .map(|ms| Duration::from_millis(ms as u64))
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+/// Backwards-compatible: pre-migration callers used `error.is_retryable()`
+/// directly. `ErrorExt::is_retryable()` (default impl delegates to
+/// `status_code().is_retryable()`) provides this; this inherent method
+/// keeps `error.is_retryable()` ergonomic without `use coco_error::ErrorExt`
+/// at every call site.
+impl InferenceError {
+    pub fn is_retryable(&self) -> bool {
+        ErrorExt::is_retryable(self)
     }
 }
 
@@ -114,33 +238,6 @@ fn truncate_body(body: &str) -> String {
         body.to_string()
     }
 }
-
-impl fmt::Display for InferenceError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::AuthenticationFailed { message } => {
-                write!(f, "authentication failed: {message}")
-            }
-            Self::RateLimited { message, .. } => write!(f, "rate limited: {message}"),
-            Self::ContextWindowExceeded {
-                max_tokens,
-                requested,
-            } => {
-                write!(f, "context window exceeded: {requested} > {max_tokens}")
-            }
-            Self::ProviderError { status, message } => {
-                write!(f, "provider error ({status}): {message}")
-            }
-            Self::NetworkError { message } => write!(f, "network error: {message}"),
-            Self::StreamInterrupted { message } => write!(f, "stream interrupted: {message}"),
-            Self::Cancelled => write!(f, "request cancelled"),
-            Self::Overloaded { .. } => write!(f, "provider overloaded"),
-            Self::InvalidRequest { message } => write!(f, "invalid request: {message}"),
-        }
-    }
-}
-
-impl std::error::Error for InferenceError {}
 
 #[cfg(test)]
 #[path = "errors.test.rs"]

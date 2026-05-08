@@ -28,6 +28,7 @@ members = [
     "utils/readiness",
     "utils/rustls-provider",
     "utils/secret-redact",
+    "utils/shell-discovery",
     "utils/shell-parser",
     "utils/sleep-inhibitor",
     "utils/stdio-to-uds",
@@ -130,6 +131,7 @@ coco-utils-pty = { path = "utils/pty" }
 coco-utils-readiness = { path = "utils/readiness" }
 coco-utils-string = { path = "utils/string" }
 coco-stdio-to-uds = { path = "utils/stdio-to-uds" }
+coco-shell-discovery = { path = "utils/shell-discovery" }
 coco-shell-parser = { path = "utils/shell-parser" }
 coco-utils-rustls-provider = { path = "utils/rustls-provider" }
 coco-utils-stream-parser = { path = "utils/stream-parser" }

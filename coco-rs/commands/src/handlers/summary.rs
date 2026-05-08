@@ -33,7 +33,7 @@ pub fn parse_summary_sentinel(handler_output: &str) -> Option<SummaryRequest> {
 /// Async handler for `/summary`.
 pub fn handler(
     _args: String,
-) -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>> {
+) -> Pin<Box<dyn std::future::Future<Output = crate::Result<String>> + Send>> {
     Box::pin(async move {
         let mut out = String::from(SUMMARY_SENTINEL);
         out.push('\n');

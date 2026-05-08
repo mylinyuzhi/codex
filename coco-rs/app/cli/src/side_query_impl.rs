@@ -89,8 +89,16 @@ impl std::fmt::Debug for SideQueryAdapter {
 
 #[async_trait]
 impl SideQuery for SideQueryAdapter {
-    async fn query(&self, request: SideQueryRequest) -> anyhow::Result<SideQueryResponse> {
-        let client = self.resolve_client(&request).await?;
+    async fn query(
+        &self,
+        request: SideQueryRequest,
+    ) -> Result<SideQueryResponse, coco_error::BoxedError> {
+        let client = self.resolve_client(&request).await.map_err(|e| {
+            Box::new(coco_error::PlainError::new(
+                e.to_string(),
+                coco_error::StatusCode::Internal,
+            )) as coco_error::BoxedError
+        })?;
 
         // Build the prompt: system message + user/assistant turns from
         // `request.messages`. Tool definitions are forwarded when
@@ -152,7 +160,12 @@ impl SideQuery for SideQueryAdapter {
             cache: None,
         };
 
-        let result = client.query(&params).await?;
+        let result = client.query(&params).await.map_err(|e| {
+            Box::new(coco_error::PlainError::new(
+                e.to_string(),
+                coco_error::StatusCode::ProviderError,
+            )) as coco_error::BoxedError
+        })?;
 
         // Marshal the `AssistantContent` blocks back into the
         // structured `SideQueryResponse` shape. Text blocks

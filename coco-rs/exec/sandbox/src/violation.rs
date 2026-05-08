@@ -120,6 +120,20 @@ impl ViolationStore {
         }
 
         let is_non_benign = !violation.benign;
+        // Emit a structured log line on every non-benign violation. The
+        // OTel layer in `coco-otel` subscribes to the `tracing`
+        // dispatcher, so this becomes an observable event without
+        // adding a direct dep on the otel crate (and without inverting
+        // the dependency graph — `coco-otel` lives at L1).
+        if is_non_benign {
+            tracing::warn!(
+                target: "coco_sandbox::violation",
+                operation = %violation.operation,
+                path = violation.path.as_deref().unwrap_or(""),
+                command_tag = violation.command_tag.as_deref().unwrap_or(""),
+                "sandbox violation"
+            );
+        }
         self.total_count += 1;
         if self.violations.len() as i32 >= self.max_size {
             self.violations.pop_front();

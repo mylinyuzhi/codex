@@ -149,6 +149,16 @@ pub async fn handle_command(
             if !overlay::rewind_cancel(state) {
                 return true; // phase-back; keep overlay
             }
+            // /memory cancel surfaces a toast (TS:
+            // `commands/memory/memory.tsx::onCancel` → "Cancelled memory editing").
+            if matches!(
+                state.ui.overlay,
+                Some(crate::state::Overlay::MemoryDialog(_))
+            ) {
+                state.ui.add_toast(crate::state::ui::Toast::info(
+                    crate::i18n::t!("toast.memory_cancelled").to_string(),
+                ));
+            }
             if state.has_overlay() {
                 state.ui.dismiss_overlay();
             }

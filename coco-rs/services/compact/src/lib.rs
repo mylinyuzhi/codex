@@ -46,6 +46,7 @@ pub use auto_trigger::should_auto_compact_guarded_with_collapse;
 pub use compact::CompactRunOptions;
 pub use compact::PostCompactAttachmentFn;
 pub use compact::annotate_boundary_with_preserved_segment;
+pub use compact::build_compact_summary_message;
 pub use compact::build_post_compact_messages;
 pub use compact::compact_conversation;
 pub use compact::merge_hook_instructions;

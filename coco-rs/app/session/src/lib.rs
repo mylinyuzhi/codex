@@ -2,11 +2,13 @@
 //!
 //! TS: bootstrap/state.ts + session management + history.ts
 
+pub mod error;
 pub mod history;
 pub mod recovery;
 pub mod storage;
 pub mod title_generator;
 
+pub use error::SessionError;
 pub use history::HistoryEntry;
 pub use history::PromptHistory;
 pub use storage::AgentMetadata;
@@ -26,6 +28,11 @@ use serde::Serialize;
 use std::path::Path;
 use std::path::PathBuf;
 
+/// Crate-local Result alias. Default error type is `SessionError` but the
+/// generic stays open so `Result::ok` / 2-arg `Result<T, E>` callsites
+/// still resolve against `std::result::Result`.
+pub type Result<T, E = SessionError> = std::result::Result<T, E>;
+
 /// A session record.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
@@ -43,6 +50,10 @@ pub struct Session {
     /// Total tokens used.
     #[serde(default)]
     pub total_tokens: i64,
+    /// Searchable tags applied via `/tag`. Persisted alongside title for
+    /// session browsing/filtering. TS: session metadata `tags?: string[]`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
 }
 
 /// Session manager — create, load, save, list, resume sessions.
@@ -56,7 +67,7 @@ impl SessionManager {
     }
 
     /// Create a new session.
-    pub fn create(&self, model: &str, cwd: &Path) -> anyhow::Result<Session> {
+    pub fn create(&self, model: &str, cwd: &Path) -> crate::Result<Session> {
         let id = uuid::Uuid::new_v4().to_string();
         let session = Session {
             id,
@@ -67,13 +78,42 @@ impl SessionManager {
             title: None,
             message_count: 0,
             total_tokens: 0,
+            tags: Vec::new(),
         };
         self.save(&session)?;
         Ok(session)
     }
 
+    /// Set the session title (`/rename <name>`). Loads the session,
+    /// updates `title`, bumps `updated_at`, and writes it back. Errors
+    /// when the session id isn't on disk.
+    pub fn set_title(&self, id: &str, title: &str) -> crate::Result<Session> {
+        let mut session = self.load(id)?;
+        session.title = Some(title.to_string());
+        session.updated_at = Some(timestamp_now());
+        self.save(&session)?;
+        Ok(session)
+    }
+
+    /// Toggle a tag on/off (`/tag <name>`). If the tag is present, it's
+    /// removed; otherwise appended. Mirrors the TS toggle semantics
+    /// where re-running `/tag X` removes a previously-added X.
+    pub fn toggle_tag(&self, id: &str, tag: &str) -> crate::Result<(Session, bool)> {
+        let mut session = self.load(id)?;
+        let added = if let Some(idx) = session.tags.iter().position(|t| t == tag) {
+            session.tags.remove(idx);
+            false
+        } else {
+            session.tags.push(tag.to_string());
+            true
+        };
+        session.updated_at = Some(timestamp_now());
+        self.save(&session)?;
+        Ok((session, added))
+    }
+
     /// Save/update a session.
-    pub fn save(&self, session: &Session) -> anyhow::Result<()> {
+    pub fn save(&self, session: &Session) -> crate::Result<()> {
         std::fs::create_dir_all(&self.sessions_dir)?;
         let session_file = self.sessions_dir.join(format!("{}.json", session.id));
         let json = serde_json::to_string_pretty(session)?;
@@ -82,7 +122,7 @@ impl SessionManager {
     }
 
     /// Load a session by ID.
-    pub fn load(&self, id: &str) -> anyhow::Result<Session> {
+    pub fn load(&self, id: &str) -> crate::Result<Session> {
         let session_file = self.sessions_dir.join(format!("{id}.json"));
         let content = std::fs::read_to_string(&session_file)?;
         let session: Session = serde_json::from_str(&content)?;
@@ -90,7 +130,7 @@ impl SessionManager {
     }
 
     /// Resume a session — loads it and updates the timestamp.
-    pub fn resume(&self, id: &str) -> anyhow::Result<Session> {
+    pub fn resume(&self, id: &str) -> crate::Result<Session> {
         let mut session = self.load(id)?;
         session.updated_at = Some(timestamp_now());
         self.save(&session)?;
@@ -98,7 +138,7 @@ impl SessionManager {
     }
 
     /// List all sessions, newest first.
-    pub fn list(&self) -> anyhow::Result<Vec<Session>> {
+    pub fn list(&self) -> crate::Result<Vec<Session>> {
         let mut sessions = Vec::new();
         if !self.sessions_dir.exists() {
             return Ok(sessions);
@@ -118,7 +158,7 @@ impl SessionManager {
     }
 
     /// Delete a session.
-    pub fn delete(&self, id: &str) -> anyhow::Result<()> {
+    pub fn delete(&self, id: &str) -> crate::Result<()> {
         let session_file = self.sessions_dir.join(format!("{id}.json"));
         match std::fs::remove_file(session_file) {
             Ok(()) => Ok(()),
@@ -128,13 +168,13 @@ impl SessionManager {
     }
 
     /// Get the most recent session.
-    pub fn most_recent(&self) -> anyhow::Result<Option<Session>> {
+    pub fn most_recent(&self) -> crate::Result<Option<Session>> {
         let sessions = self.list()?;
         Ok(sessions.into_iter().next())
     }
 
     /// Clean up old sessions beyond a limit.
-    pub fn cleanup(&self, keep_count: usize) -> anyhow::Result<i32> {
+    pub fn cleanup(&self, keep_count: usize) -> crate::Result<i32> {
         let sessions = self.list()?;
         let mut removed = 0;
         for session in sessions.iter().skip(keep_count) {
@@ -152,10 +192,10 @@ impl SessionManager {
     /// corrupt session file doesn't prevent cleanup.
     ///
     /// Returns the number of sessions removed.
-    pub fn cleanup_older_than(&self, older_than: std::time::Duration) -> anyhow::Result<i32> {
+    pub fn cleanup_older_than(&self, older_than: std::time::Duration) -> crate::Result<i32> {
         let cutoff = std::time::SystemTime::now()
             .checked_sub(older_than)
-            .ok_or_else(|| anyhow::anyhow!("duration exceeds current time"))?;
+            .ok_or(SessionError::DurationOverflow)?;
         if !self.sessions_dir.exists() {
             return Ok(0);
         }

@@ -15,6 +15,7 @@
 //! empty state; adding a field is a one-line edit here, not a string key
 //! coordination across three crates.
 
+use crate::AgentColorName;
 use crate::PermissionMode;
 use crate::PermissionRulesBySource;
 use serde::{Deserialize, Serialize};
@@ -239,6 +240,15 @@ pub struct ToolAppState {
     /// at session bootstrap; the env var maps onto this field
     /// without a separate signal path.
     pub agent_progress_summaries_enabled: bool,
+
+    // ── Session presentation ────────────────────────────────────────
+    /// Color of the prompt bar / standalone-agent badge for this session.
+    /// `None` = the default theme color. Set by `/color <name>`, cleared
+    /// by `/color default|reset|none|gray|grey`. Teammates inherit this
+    /// from the leader's swarm assignment and ignore `/color`.
+    ///
+    /// TS parity: `appState.standaloneAgentContext.color` (`commands/color/color.ts:54-89`).
+    pub agent_color: Option<AgentColorName>,
 }
 
 /// A user-prompt suggestion produced by the post-turn forked

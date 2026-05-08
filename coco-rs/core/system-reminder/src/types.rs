@@ -280,6 +280,39 @@ pub enum AttachmentType {
     /// that can't be diffed textually. Silent marker; UI may highlight
     /// the changed file.
     EditedImageFile,
+
+    // ── Audit-add (May 2026) — TS-parity reminders not previously ported.
+    // Generators are registered so the parity test passes; some emit
+    // `None` until upstream snapshot data is wired (see per-generator
+    // doc comments).
+    /// TS `max_turns_reached` (`attachments.ts:657-660`). Fires when the
+    /// engine has hit the configured turn budget. MainAgentOnly tier.
+    MaxTurnsReached,
+    /// TS `current_session_memory` (`attachments.ts:662-666`). Injects a
+    /// pre-formatted summary of the current session's memory snapshot.
+    /// Core tier.
+    CurrentSessionMemory,
+    /// TS `command_permissions` (`attachments.ts:605-608`). Surfaces a
+    /// snapshot of currently-allowed/denied permission rules so the
+    /// model has accurate context. MainAgentOnly tier.
+    CommandPermissions,
+    /// TS `dynamic_skill` (`attachments.ts:525-530`). Lists dynamically
+    /// loaded skill directories made available this turn. Core tier.
+    DynamicSkill,
+    /// TS `skill_discovery` (`attachments.ts:538-542`). Heuristic skill
+    /// suggestions for the current prompt. UserPrompt tier.
+    SkillDiscovery,
+    /// TS `structured_output` (`attachments.ts:639-641`). Tool-emitted
+    /// structured output rendered as a reminder for the next turn.
+    /// MainAgentOnly tier.
+    StructuredOutput,
+    /// TS `teammate_shutdown_batch` (`attachments.ts:668-670`). Batched
+    /// shutdown signal from swarm teammates. Core tier.
+    TeammateShutdownBatch,
+    /// TS `context_efficiency` (`attachments.ts:675-676`). Nudges the
+    /// agent to compact / snip when context is full but not auto-
+    /// compactable. MainAgentOnly tier.
+    ContextEfficiency,
 }
 
 impl AttachmentType {
@@ -308,12 +341,18 @@ impl AttachmentType {
             | Self::TeamContext
             | Self::AgentPendingMessages
             | Self::NestedMemory
-            | Self::RelevantMemories => ReminderTier::Core,
+            | Self::RelevantMemories
+            // Audit-add (May 2026)
+            | Self::CurrentSessionMemory
+            | Self::DynamicSkill
+            | Self::TeammateShutdownBatch => ReminderTier::Core,
             // TS `userInputAttachments` batch (`attachments.ts:773-814`) —
             // only fires when the user submitted input this turn.
-            Self::AtMentionedFiles | Self::McpResources | Self::AgentMentions => {
-                ReminderTier::UserPrompt
-            }
+            Self::AtMentionedFiles
+            | Self::McpResources
+            | Self::AgentMentions
+            // Audit-add: skill discovery is a per-prompt heuristic.
+            | Self::SkillDiscovery => ReminderTier::UserPrompt,
             // TS `mainThreadAttachments` batch (`attachments.ts:944`).
             Self::VerifyPlanReminder
             | Self::TokenUsage
@@ -334,7 +373,12 @@ impl AttachmentType {
             // MainAgentOnly since the dedup/change bookkeeping is
             // main-thread concern (subagents see parent context).
             | Self::AlreadyReadFile
-            | Self::EditedImageFile => ReminderTier::MainAgentOnly,
+            | Self::EditedImageFile
+            // Audit-add: per-turn snapshots of main-agent state.
+            | Self::MaxTurnsReached
+            | Self::CommandPermissions
+            | Self::StructuredOutput
+            | Self::ContextEfficiency => ReminderTier::MainAgentOnly,
         }
     }
 
@@ -384,7 +428,16 @@ impl AttachmentType {
             // Silent variants wrap for UI consistency; injection pipeline
             // drops them from the model-visible path regardless.
             | Self::AlreadyReadFile
-            | Self::EditedImageFile => XmlTag::SystemReminder,
+            | Self::EditedImageFile
+            // Audit-add: standard wrap.
+            | Self::MaxTurnsReached
+            | Self::CurrentSessionMemory
+            | Self::CommandPermissions
+            | Self::DynamicSkill
+            | Self::SkillDiscovery
+            | Self::StructuredOutput
+            | Self::TeammateShutdownBatch
+            | Self::ContextEfficiency => XmlTag::SystemReminder,
             // TS `diagnostics` wraps its content in `<new-diagnostics>`
             // before the outer `<system-reminder>`. For simplicity the
             // generator bakes the inner tag into the body text; the
@@ -438,6 +491,14 @@ impl AttachmentType {
             Self::RelevantMemories => "relevant_memories",
             Self::AlreadyReadFile => "already_read_file",
             Self::EditedImageFile => "edited_image_file",
+            Self::MaxTurnsReached => "max_turns_reached",
+            Self::CurrentSessionMemory => "current_session_memory",
+            Self::CommandPermissions => "command_permissions",
+            Self::DynamicSkill => "dynamic_skill",
+            Self::SkillDiscovery => "skill_discovery",
+            Self::StructuredOutput => "structured_output",
+            Self::TeammateShutdownBatch => "teammate_shutdown_batch",
+            Self::ContextEfficiency => "context_efficiency",
         }
     }
 
@@ -488,6 +549,14 @@ impl AttachmentType {
             Self::RelevantMemories,
             Self::AlreadyReadFile,
             Self::EditedImageFile,
+            Self::MaxTurnsReached,
+            Self::CurrentSessionMemory,
+            Self::CommandPermissions,
+            Self::DynamicSkill,
+            Self::SkillDiscovery,
+            Self::StructuredOutput,
+            Self::TeammateShutdownBatch,
+            Self::ContextEfficiency,
         ]
     }
 }
@@ -561,6 +630,15 @@ impl From<AttachmentType> for coco_types::AttachmentKind {
             AttachmentType::RelevantMemories => K::RelevantMemories,
             AttachmentType::AlreadyReadFile => K::AlreadyReadFile,
             AttachmentType::EditedImageFile => K::EditedImageFile,
+            // Audit-add: 1:1 mapping onto existing AttachmentKind variants.
+            AttachmentType::MaxTurnsReached => K::MaxTurnsReached,
+            AttachmentType::CurrentSessionMemory => K::CurrentSessionMemory,
+            AttachmentType::CommandPermissions => K::CommandPermissions,
+            AttachmentType::DynamicSkill => K::DynamicSkill,
+            AttachmentType::SkillDiscovery => K::SkillDiscovery,
+            AttachmentType::StructuredOutput => K::StructuredOutput,
+            AttachmentType::TeammateShutdownBatch => K::TeammateShutdownBatch,
+            AttachmentType::ContextEfficiency => K::ContextEfficiency,
         }
     }
 }
@@ -579,14 +657,24 @@ pub enum MessageRole {
 
 /// Content block inside a multi-message reminder.
 ///
-/// Mirrors TS's Anthropic content-block shapes (`text` / `tool_use` /
-/// `tool_result`) in `messages.ts` so multi-message reminders can produce
-/// exact-equivalent API payloads.
+/// Mirrors TS's Anthropic content-block shapes (`text` / `image` /
+/// `tool_use` / `tool_result`) in `messages.ts` so multi-message reminders
+/// can produce exact-equivalent API payloads.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentBlock {
     /// Plain text block.
     Text { text: String },
+    /// Image block — TS `attachment.prompt: ContentBlockParam[]` may carry
+    /// `{ type: 'image', ... }` blocks for mid-turn image pastes routed
+    /// through the queued-command path (`attachments.ts:1062-1075`).
+    Image {
+        /// IANA media type (e.g. `image/png`, `image/jpeg`).
+        media_type: String,
+        /// Base64-encoded image payload. Mirrors
+        /// `coco_context::ImageAttachment::base64_data`.
+        data_base64: String,
+    },
     /// Synthetic tool-use block.
     ToolUse {
         id: String,
@@ -616,6 +704,26 @@ impl ReminderMessage {
         Self {
             role: MessageRole::User,
             blocks: vec![ContentBlock::Text { text: text.into() }],
+            is_meta: true,
+        }
+    }
+
+    /// Construct a user message with a single text block followed by image
+    /// blocks. Mirrors TS `attachments.ts:1067-1075` where queued commands
+    /// with image pastes emit `[text, ...imageBlocks]` so both reach the API.
+    /// `images` is a list of `(media_type, base64_data)` pairs; an empty
+    /// vec is equivalent to [`Self::user_text`].
+    pub fn user_text_with_images(text: impl Into<String>, images: Vec<(String, String)>) -> Self {
+        let mut blocks = vec![ContentBlock::Text { text: text.into() }];
+        for (media_type, data_base64) in images {
+            blocks.push(ContentBlock::Image {
+                media_type,
+                data_base64,
+            });
+        }
+        Self {
+            role: MessageRole::User,
+            blocks,
             is_meta: true,
         }
     }
@@ -769,6 +877,25 @@ impl SystemReminder {
             output: ReminderOutput::Text(content.into()),
             is_meta: true,
             is_silent: false,
+            metadata: None,
+        }
+    }
+
+    /// Build a silent text reminder. Same shape as [`Self::new`] but with
+    /// `is_silent = true`, so the inject pipeline routes the body to
+    /// `NormalizedMessages::display_only` (UI / transcript) and never
+    /// emits an API-visible `AttachmentMessage::api(...)`.
+    ///
+    /// Use this for kinds whose [`AttachmentKind::is_api_visible`] is
+    /// `false` (TS `normalizeAttachmentForAPI` returns `[]`) but whose
+    /// body is still useful to UI consumers — e.g. the audit-add
+    /// reminders ported from TS runtime-bookkeeping kinds.
+    pub fn silent_text(attachment_type: AttachmentType, content: impl Into<String>) -> Self {
+        Self {
+            attachment_type,
+            output: ReminderOutput::Text(content.into()),
+            is_meta: true,
+            is_silent: true,
             metadata: None,
         }
     }

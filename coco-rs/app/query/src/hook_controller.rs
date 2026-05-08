@@ -157,11 +157,53 @@ impl<'a> HookController<'a> {
         }
     }
 
+    /// Fire `PermissionDenied` hooks (TS `executePermissionDeniedHooks`).
+    ///
+    /// Called from `tool_call_preparer::prepare_one_pending_tool_call`
+    /// when an auto-mode classifier denial is observed, before the
+    /// `PermissionController` writes the error tool_result. Returns the
+    /// aggregated `retry` flag so the caller can hint the model that the
+    /// hook says it may retry. Mirrors TS `toolExecution.ts:1075-1101`.
+    pub(crate) async fn run_permission_denied(
+        &self,
+        tool_name: &str,
+        tool_use_id: &str,
+        tool_input: &serde_json::Value,
+        reason: &str,
+    ) -> bool {
+        let Some(hooks) = self.hooks else {
+            return false;
+        };
+
+        match orchestration::execute_permission_denied(
+            hooks,
+            &self.ctx,
+            tool_name,
+            tool_use_id,
+            tool_input,
+            reason,
+        )
+        .await
+        {
+            Ok(agg) => agg.retry,
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    tool = tool_name,
+                    "PermissionDenied hook failed (non-blocking)"
+                );
+                false
+            }
+        }
+    }
+
     pub(crate) async fn run_post_tool_use_failure(
         &self,
         tool_name: &str,
+        tool_use_id: &str,
         tool_input: &serde_json::Value,
         error: &str,
+        is_interrupt: bool,
     ) -> PostToolUseFailureOutcome {
         let Some(hooks) = self.hooks else {
             return PostToolUseFailureOutcome::default();
@@ -171,9 +213,10 @@ impl<'a> HookController<'a> {
             hooks,
             &self.ctx,
             tool_name,
+            tool_use_id,
             tool_input,
             error,
-            Some("execution_error"),
+            Some(is_interrupt),
             self.hook_tx,
         )
         .await

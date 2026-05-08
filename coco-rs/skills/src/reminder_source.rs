@@ -20,18 +20,29 @@ use crate::SkillManager;
 
 #[async_trait]
 impl SkillsSource for SkillManager {
-    async fn listing(&self, _agent_id: Option<&str>) -> Option<String> {
+    async fn listing(&self, agent_id: Option<&str>) -> Option<String> {
         if self.is_empty() {
             return None;
         }
-        // Sort by name for stable render order (prompt-cache stability).
+        // Build the canonical sorted list once for stable order.
         let mut entries: Vec<(&str, &str)> = self
             .all()
             .map(|s| (s.name.as_str(), s.description.as_str()))
             .collect();
         entries.sort_by(|a, b| a.0.cmp(b.0));
+        let names: Vec<&str> = entries.iter().map(|(n, _)| *n).collect();
+
+        // TS `attachments.ts:2718-2730`: only announce skills the agent
+        // has not seen yet. Returns `None` once everything is announced
+        // so subsequent turns skip the redundant injection.
+        let (delta, _is_initial) = self.take_unannounced_skills(agent_id, &names);
+        if delta.is_empty() {
+            return None;
+        }
+        let delta_set: std::collections::HashSet<&str> = delta.iter().map(String::as_str).collect();
         let body = entries
             .iter()
+            .filter(|(name, _)| delta_set.contains(*name))
             .map(|(name, desc)| {
                 if desc.is_empty() {
                     format!("- {name}")

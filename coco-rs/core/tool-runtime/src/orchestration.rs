@@ -43,6 +43,11 @@ pub async fn run_tools(
     let mut denied_tools = Vec::new();
     let mut pending = Vec::new();
 
+    tracing::info!(
+        tool_count = tool_calls.len(),
+        "orchestration: running tool batch"
+    );
+
     // Phase 1: Permission checks
     for (tool_use_id, tool_name, input) in &tool_calls {
         let tool_id: ToolId = tool_name
@@ -53,6 +58,12 @@ pub async fn run_tools(
             let decision = tool.check_permissions(input, ctx).await;
             match decision {
                 coco_types::PermissionDecision::Deny { .. } => {
+                    tracing::info!(
+                        tool_use_id = %tool_use_id,
+                        tool_name = %tool_name,
+                        permission_decision = "deny",
+                        "orchestration: tool denied"
+                    );
                     denied_tools.push(tool_name.clone());
                     continue;
                 }
@@ -65,6 +76,12 @@ pub async fn run_tools(
                 tool: tool.clone(),
                 input: input.clone(),
             });
+        } else {
+            tracing::warn!(
+                tool_use_id = %tool_use_id,
+                tool_name = %tool_name,
+                "orchestration: tool not found in registry"
+            );
         }
     }
 
@@ -81,6 +98,15 @@ pub async fn run_tools(
     }
 
     let total_duration_ms = start.elapsed().as_millis() as i64;
+    let succeeded = tool_results.iter().filter(|r| r.result.is_ok()).count();
+    tracing::info!(
+        succeeded,
+        failed = tool_results.len() - succeeded,
+        denied = denied_tools.len(),
+        new_message_count = new_messages.len(),
+        duration_ms = total_duration_ms,
+        "orchestration: tool batch complete"
+    );
 
     OrchestratedResult {
         tool_results,

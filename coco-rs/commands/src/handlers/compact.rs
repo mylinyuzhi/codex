@@ -53,7 +53,7 @@ pub fn parse_compact_sentinel(handler_output: &str) -> Option<CompactRequest> {
 /// Async handler for `/compact [instructions]`.
 pub fn handler(
     args: String,
-) -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>> {
+) -> Pin<Box<dyn std::future::Future<Output = crate::Result<String>> + Send>> {
     Box::pin(async move {
         let custom_instructions = args.trim();
         let mut out = format!("{COMPACT_SENTINEL} {custom_instructions}\n");

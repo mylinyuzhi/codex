@@ -4,10 +4,6 @@ use std::string::String;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Context;
-use anyhow::Result;
-use anyhow::anyhow;
-use anyhow::bail;
 use reqwest::ClientBuilder;
 use rmcp::transport::auth::OAuthState;
 use tiny_http::Response;
@@ -17,6 +13,9 @@ use tokio::time::timeout;
 use urlencoding::decode;
 
 use crate::OAuthCredentialsStoreMode;
+use crate::Result;
+use crate::ResultExt;
+use crate::RmcpClientError;
 use crate::StoredOAuthTokens;
 use crate::WrappedOAuthTokenResponse;
 use crate::oauth::compute_expires_at_millis;
@@ -182,9 +181,9 @@ impl OauthLoginHandle {
     }
 
     pub async fn wait(self) -> Result<()> {
-        self.completion
-            .await
-            .map_err(|err| anyhow!("OAuth login task was cancelled: {err}"))?
+        self.completion.await.map_err(|err| {
+            RmcpClientError::generic(format!("OAuth login task was cancelled: {err}"))
+        })?
     }
 }
 
@@ -204,9 +203,9 @@ struct OauthLoginFlow {
 fn resolve_callback_port(callback_port: Option<u16>) -> Result<Option<u16>> {
     if let Some(config_port) = callback_port {
         if config_port == 0 {
-            bail!(
+            return Err(RmcpClientError::generic(format!(
                 "invalid MCP OAuth callback port `{config_port}`: port must be between 1 and 65535"
-            );
+            )));
         }
         return Ok(Some(config_port));
     }
@@ -235,7 +234,9 @@ impl OauthLoginFlow {
             None => "127.0.0.1:0".to_string(),
         };
 
-        let server = Arc::new(Server::http(&bind_addr).map_err(|err| anyhow!(err))?);
+        let server = Arc::new(
+            Server::http(&bind_addr).map_err(|err| RmcpClientError::generic(err.to_string()))?,
+        );
         let guard = CallbackServerGuard {
             server: Arc::clone(&server),
         };
@@ -252,7 +253,11 @@ impl OauthLoginFlow {
                 format!("http://[{ip}]:{port}/callback")
             }
             #[cfg(not(target_os = "windows"))]
-            _ => return Err(anyhow!("unable to determine callback address")),
+            _ => {
+                return Err(RmcpClientError::generic(
+                    "unable to determine callback address",
+                ));
+            }
         };
 
         let (tx, rx) = oneshot::channel();
@@ -308,21 +313,22 @@ impl OauthLoginFlow {
         let result = async {
             let (code, csrf_state) = timeout(self.timeout, &mut self.rx)
                 .await
-                .context("timed out waiting for OAuth callback")?
-                .context("OAuth callback was cancelled")?;
+                .with_ctx("timed out waiting for OAuth callback")?
+                .with_ctx("OAuth callback was cancelled")?;
 
             self.oauth_state
                 .handle_callback(&code, &csrf_state)
                 .await
-                .context("failed to handle OAuth callback")?;
+                .with_ctx("failed to handle OAuth callback")?;
 
             let (client_id, credentials_opt) = self
                 .oauth_state
                 .get_credentials()
                 .await
-                .context("failed to retrieve OAuth credentials")?;
-            let credentials = credentials_opt
-                .ok_or_else(|| anyhow!("OAuth provider did not return credentials"))?;
+                .with_ctx("failed to retrieve OAuth credentials")?;
+            let credentials = credentials_opt.ok_or_else(|| {
+                RmcpClientError::oauth("OAuth provider did not return credentials")
+            })?;
 
             let expires_at = compute_expires_at_millis(&credentials);
             let stored = StoredOAuthTokens {

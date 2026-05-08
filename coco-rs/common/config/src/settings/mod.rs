@@ -16,12 +16,12 @@ use crate::model::ModelSelectionSettings;
 use crate::prompt_cache_settings::PartialAccountSettings;
 use crate::prompt_cache_settings::PartialPromptCacheSettings;
 use crate::provider::PartialProviderConfig;
+use crate::sandbox_settings::SandboxSettings;
 use crate::sections::PartialApiSettings;
 use crate::sections::PartialLoopSettings;
 use crate::sections::PartialMcpRuntimeSettings;
 use crate::sections::PartialMemorySettings;
 use crate::sections::PartialPathSettings;
-use crate::sections::PartialSandboxSettings;
 use crate::sections::PartialShellSettings;
 use crate::sections::PartialToolSettings;
 use crate::sections::PartialWebFetchSettings;
@@ -77,7 +77,7 @@ pub struct Settings {
     #[serde(default)]
     pub shell: PartialShellSettings,
     #[serde(default)]
-    pub sandbox: PartialSandboxSettings,
+    pub sandbox: SandboxSettings,
     #[serde(default)]
     pub memory: PartialMemorySettings,
     #[serde(default, rename = "mcp")]
@@ -369,7 +369,7 @@ fn default_true() -> bool {
 }
 
 /// Load settings from a JSON string.
-pub fn parse_settings(json: &str) -> anyhow::Result<Settings> {
+pub fn parse_settings(json: &str) -> crate::Result<Settings> {
     let settings: Settings = serde_json::from_str(json)?;
     Ok(settings)
 }
@@ -379,7 +379,7 @@ pub fn parse_settings(json: &str) -> anyhow::Result<Settings> {
 pub fn load_settings(
     cwd: &std::path::Path,
     flag_settings: Option<&std::path::Path>,
-) -> anyhow::Result<SettingsWithSource> {
+) -> crate::Result<SettingsWithSource> {
     load_settings_with(
         cwd,
         flag_settings,
@@ -404,9 +404,9 @@ pub fn load_settings_with(
     flag_settings: Option<&std::path::Path>,
     user_path: &std::path::Path,
     managed_path: &std::path::Path,
-) -> anyhow::Result<SettingsWithSource> {
+) -> crate::Result<SettingsWithSource> {
+    use crate::ResultExt;
     use crate::global_config;
-    use anyhow::Context;
 
     let mut per_source = HashMap::new();
     let mut merged = serde_json::Value::Object(serde_json::Map::new());
@@ -448,7 +448,7 @@ pub fn load_settings_with(
     }
 
     let settings: Settings = serde_json::from_value(merged)
-        .context("failed to deserialize merged settings into Settings struct")?;
+        .with_ctx("failed to deserialize merged settings into Settings struct")?;
 
     Ok(SettingsWithSource {
         merged: settings,
@@ -465,12 +465,12 @@ fn load_and_merge(
     merged: &mut serde_json::Value,
     source: SettingSource,
     path: &std::path::Path,
-) -> anyhow::Result<()> {
-    use anyhow::Context;
+) -> crate::Result<()> {
+    use crate::ResultExt;
     let contents = std::fs::read_to_string(path)
-        .with_context(|| format!("failed to read settings file: {}", path.display()))?;
+        .with_ctx_lazy(|| format!("failed to read settings file: {}", path.display()))?;
     let value: serde_json::Value = serde_json::from_str(&contents)
-        .with_context(|| format!("failed to parse JSON in settings file: {}", path.display()))?;
+        .with_ctx_lazy(|| format!("failed to parse JSON in settings file: {}", path.display()))?;
     per_source.insert(source, value.clone());
     merge::deep_merge(merged, &value);
     Ok(())

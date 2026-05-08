@@ -12,6 +12,7 @@
 //! multiple statuses emitted this turn with `\n\n`.
 
 use async_trait::async_trait;
+use coco_types::ToolName;
 
 use crate::error::Result;
 use crate::generator::AttachmentGenerator;
@@ -52,6 +53,8 @@ impl AttachmentGenerator for TaskStatusGenerator {
 }
 
 fn render_one(t: &TaskStatusSnapshot) -> String {
+    let send_message = ToolName::SendMessage.as_str();
+    let task_output = ToolName::TaskOutput.as_str();
     match t.status {
         TaskRunStatus::Killed => format!(
             "Task \"{desc}\" ({id}) was stopped by the user.",
@@ -59,6 +62,10 @@ fn render_one(t: &TaskStatusSnapshot) -> String {
             id = t.task_id
         ),
         TaskRunStatus::Running => {
+            // TS `messages.ts:3973-3995`: parts joined by space, with
+            // tool-name refs threaded through the anti-duplicate line so
+            // the model knows the affordances (`SendMessage` /
+            // `TaskOutput`) for steering / inspecting the running agent.
             let mut parts = vec![format!(
                 "Background agent \"{desc}\" ({id}) is still running.",
                 desc = t.description,
@@ -69,36 +76,42 @@ fn render_one(t: &TaskStatusSnapshot) -> String {
             }
             if let Some(p) = t.output_file_path.as_deref() {
                 parts.push(format!(
-                    "Do NOT spawn a duplicate. You will be notified when it completes. You can read partial output at {p}."
+                    "Do NOT spawn a duplicate. You will be notified when it completes. You can read partial output at {p} or send it a message with {send_message}."
                 ));
             } else {
-                parts.push(
-                    "Do NOT spawn a duplicate. You will be notified when it completes.".to_string(),
-                );
+                parts.push(format!(
+                    "Do NOT spawn a duplicate. You will be notified when it completes. You can check its progress with the {task_output} tool or send it a message with {send_message}."
+                ));
             }
-            parts.join("\n")
+            parts.join(" ")
         }
-        TaskRunStatus::Completed => {
-            let header = format!(
-                "Task \"{desc}\" ({id}) completed.",
-                desc = t.description,
-                id = t.task_id
-            );
-            match t.delta_summary.as_deref() {
-                Some(s) => format!("{header}\nResult: {s}"),
-                None => header,
+        TaskRunStatus::Completed | TaskRunStatus::Failed => {
+            // TS `messages.ts:3997-4017`: `Task {id} (type: ...) (status: ...)
+            // (description: ...) [Delta: ...] [Read the output file...
+            //  | You can check its output using the {TASK_OUTPUT_TOOL_NAME} tool.]`
+            // joined by single space.
+            let display_status = match t.status {
+                TaskRunStatus::Completed => "completed",
+                TaskRunStatus::Failed => "failed",
+                _ => unreachable!("outer match restricts to Completed|Failed"),
+            };
+            let mut parts = vec![
+                format!("Task {id}", id = t.task_id),
+                format!("(type: {tt})", tt = t.task_type),
+                format!("(status: {display_status})"),
+                format!("(description: {desc})", desc = t.description),
+            ];
+            if let Some(s) = t.delta_summary.as_deref() {
+                parts.push(format!("Delta: {s}"));
             }
-        }
-        TaskRunStatus::Failed => {
-            let header = format!(
-                "Task \"{desc}\" ({id}) failed.",
-                desc = t.description,
-                id = t.task_id
-            );
-            match t.delta_summary.as_deref() {
-                Some(s) => format!("{header}\nError: {s}"),
-                None => header,
+            if let Some(p) = t.output_file_path.as_deref() {
+                parts.push(format!("Read the output file to retrieve the result: {p}"));
+            } else {
+                parts.push(format!(
+                    "You can check its output using the {task_output} tool."
+                ));
             }
+            parts.join(" ")
         }
     }
 }

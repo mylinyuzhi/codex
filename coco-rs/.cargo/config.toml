@@ -2,7 +2,7 @@
 rustc-wrapper = "sccache"
 
 [env]
-SCCACHE_CACHE_SIZE = "20G"
+SCCACHE_CACHE_SIZE = "40G"
 SCCACHE_IDLE_TIMEOUT = "0"
 
 [profile.dev]

@@ -48,13 +48,52 @@ async fn initial_emits_header_plus_concurrency_note() {
 }
 
 #[tokio::test]
-async fn non_initial_uses_new_header_and_omits_concurrency_note() {
+async fn non_initial_uses_new_header_and_still_includes_concurrency_note() {
+    // coco-rs divergence from TS: the concurrency hint fires on every
+    // delta, not just the initial one. TS gates `isInitial && showNote`
+    // because the flag itself encodes a subscription tier — we have no
+    // such tier, so we surface the reminder whenever new agent types
+    // arrive (which is the only time the renderer runs).
     let c = SystemReminderConfig::default();
     let info = AgentListingDeltaInfo {
         added_lines: vec!["- foo: New agent".to_string()],
         removed_types: vec!["bar".to_string()],
         is_initial: false,
-        show_concurrency_note: true, // honored only when is_initial
+        show_concurrency_note: true,
+    };
+    let ctx = GeneratorContext::builder(&c)
+        .agent_listing_delta(Some(info))
+        .build();
+    let text = AgentListingDeltaGenerator
+        .generate(&ctx)
+        .await
+        .unwrap()
+        .unwrap()
+        .content()
+        .unwrap()
+        .to_string();
+    assert!(text.contains("New agent types are now available for the Agent tool:"));
+    assert!(
+        text.contains("Launch multiple agents concurrently"),
+        "concurrency note must fire on every delta in coco-rs"
+    );
+    // Removed section lists each with `- ` prefix.
+    assert!(text.contains("- bar"));
+    assert!(text.contains("The following agent types are no longer available:"));
+}
+
+#[tokio::test]
+async fn omits_concurrency_note_when_flag_is_false() {
+    // Defensive: callers that explicitly pass `show_concurrency_note:
+    // false` still suppress the hint (e.g. future settings-driven
+    // opt-out). compute_agents_delta itself sets it to `true`
+    // unconditionally today.
+    let c = SystemReminderConfig::default();
+    let info = AgentListingDeltaInfo {
+        added_lines: vec!["- foo: New agent".to_string()],
+        removed_types: vec![],
+        is_initial: false,
+        show_concurrency_note: false,
     };
     let ctx = GeneratorContext::builder(&c)
         .agent_listing_delta(Some(info))
@@ -69,9 +108,6 @@ async fn non_initial_uses_new_header_and_omits_concurrency_note() {
         .to_string();
     assert!(text.contains("New agent types are now available for the Agent tool:"));
     assert!(!text.contains("Launch multiple agents concurrently"));
-    // Removed section lists each with `- ` prefix.
-    assert!(text.contains("- bar"));
-    assert!(text.contains("The following agent types are no longer available:"));
 }
 
 #[tokio::test]

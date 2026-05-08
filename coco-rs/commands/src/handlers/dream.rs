@@ -43,7 +43,7 @@ pub fn parse_dream_sentinel(handler_output: &str) -> Option<DreamRequest> {
 /// Async handler for `/dream`.
 pub fn handler(
     _args: String,
-) -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>> {
+) -> Pin<Box<dyn std::future::Future<Output = crate::Result<String>> + Send>> {
     Box::pin(async move {
         let mut out = String::from(DREAM_SENTINEL);
         out.push('\n');

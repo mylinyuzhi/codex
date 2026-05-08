@@ -16,11 +16,15 @@
 //! `is_todo_v2_enabled()` — they're never both active. Running tasks
 //! are orthogonal and always on.
 
+mod error;
 pub mod handle_impls;
 pub mod reminder_source;
 pub mod running;
 pub mod task_list;
 pub mod todos;
+
+pub use error::Result;
+pub use error::TasksError;
 
 // Re-export the canonical surface so callers don't have to pierce the
 // module tree for every type.

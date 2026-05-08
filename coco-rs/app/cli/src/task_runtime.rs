@@ -278,22 +278,32 @@ impl AgentTaskRegistry for TaskRuntime {
     }
 }
 
+fn boxed_msg(msg: impl Into<String>, code: coco_error::StatusCode) -> coco_error::BoxedError {
+    Box::new(coco_error::PlainError::new(msg, code))
+}
+
 #[async_trait]
 impl TaskHandle for TaskRuntime {
-    async fn spawn_shell_task(&self, _: BackgroundShellRequest) -> anyhow::Result<String> {
-        // AgentTool registration goes through `register_agent_task`;
-        // shell tasks need a separate `BashTool` integration that
-        // doesn't exist yet. Surface the limitation explicitly so
-        // bash's `run_in_background` doesn't silently 404.
-        anyhow::bail!(
+    async fn spawn_shell_task(
+        &self,
+        _: BackgroundShellRequest,
+    ) -> Result<String, coco_error::BoxedError> {
+        Err(boxed_msg(
             "Shell-task background spawning is not wired through TaskRuntime yet. \
-             AgentTool background spawns work; Bash run_in_background does not."
-        )
+             AgentTool background spawns work; Bash run_in_background does not.",
+            coco_error::StatusCode::Internal,
+        ))
     }
 
-    async fn get_task_status(&self, task_id: &str) -> anyhow::Result<BackgroundTaskInfo> {
+    async fn get_task_status(
+        &self,
+        task_id: &str,
+    ) -> Result<BackgroundTaskInfo, coco_error::BoxedError> {
         let Some(state) = self.manager.get(task_id).await else {
-            anyhow::bail!("No running task found with ID: {task_id}");
+            return Err(boxed_msg(
+                format!("No running task found with ID: {task_id}"),
+                coco_error::StatusCode::FileNotFound,
+            ));
         };
         Ok(state_to_info(&state))
     }
@@ -302,9 +312,12 @@ impl TaskHandle for TaskRuntime {
         &self,
         task_id: &str,
         from_offset: i64,
-    ) -> anyhow::Result<TaskOutputDelta> {
+    ) -> Result<TaskOutputDelta, coco_error::BoxedError> {
         let Some(state) = self.manager.get(task_id).await else {
-            anyhow::bail!("No running task found with ID: {task_id}");
+            return Err(boxed_msg(
+                format!("No running task found with ID: {task_id}"),
+                coco_error::StatusCode::FileNotFound,
+            ));
         };
         // Disk-backed delta read. Flush the drain queue first so a
         // freshly-appended chunk is visible — TS `getTaskOutputDelta`
@@ -330,7 +343,7 @@ impl TaskHandle for TaskRuntime {
         })
     }
 
-    async fn kill_task(&self, task_id: &str) -> anyhow::Result<()> {
+    async fn kill_task(&self, task_id: &str) -> Result<(), coco_error::BoxedError> {
         let cancel = self
             .entries
             .read()
@@ -338,7 +351,10 @@ impl TaskHandle for TaskRuntime {
             .get(task_id)
             .map(|e| e.cancel.clone());
         let Some(cancel) = cancel else {
-            anyhow::bail!("No running task found with ID: {task_id}");
+            return Err(boxed_msg(
+                format!("No running task found with ID: {task_id}"),
+                coco_error::StatusCode::FileNotFound,
+            ));
         };
         cancel.cancel();
         self.manager

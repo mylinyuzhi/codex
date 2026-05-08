@@ -82,14 +82,17 @@ pub fn load_all_plugin_hooks_v2(plugins: &[&LoadedPluginV2]) -> Vec<HookDefiniti
 }
 
 /// Register all plugin hooks into a `HookRegistry` (V1), deduplicating.
-pub fn register_plugin_hooks(registry: &mut HookRegistry, plugins: &[&LoadedPlugin]) {
+///
+/// Uses interior mutability — callers can pass `&Arc<HookRegistry>::deref()`
+/// or a freshly-built `&HookRegistry`.
+pub fn register_plugin_hooks(registry: &HookRegistry, plugins: &[&LoadedPlugin]) {
     for hook in load_all_plugin_hooks(plugins) {
         registry.register_deduped(hook);
     }
 }
 
 /// Register all plugin hooks into a `HookRegistry` (V2), deduplicating.
-pub fn register_plugin_hooks_v2(registry: &mut HookRegistry, plugins: &[&LoadedPluginV2]) {
+pub fn register_plugin_hooks_v2(registry: &HookRegistry, plugins: &[&LoadedPluginV2]) {
     for hook in load_all_plugin_hooks_v2(plugins) {
         registry.register_deduped(hook);
     }

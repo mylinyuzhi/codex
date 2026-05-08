@@ -129,7 +129,7 @@ fn render_task_reminder_body(tasks: &[TaskRecord]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    out.push_str("\n\n\nHere are the existing tasks:\n\n");
+    out.push_str("\n\nHere are the existing tasks:\n\n");
     out.push_str(&items);
     out
 }

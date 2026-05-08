@@ -20,7 +20,7 @@ impl AgentExecutionEngine for MockEngine {
         &self,
         _prompt: &str,
         _config: AgentQueryConfig,
-    ) -> anyhow::Result<AgentQueryResult> {
+    ) -> crate::Result<AgentQueryResult> {
         Ok(AgentQueryResult {
             messages: vec![serde_json::json!({"role": "assistant", "content": self.response})],
             token_count: 100,
@@ -42,8 +42,8 @@ impl AgentExecutionEngine for ErrorEngine {
         &self,
         _prompt: &str,
         _config: AgentQueryConfig,
-    ) -> anyhow::Result<AgentQueryResult> {
-        anyhow::bail!("API error: rate limited")
+    ) -> crate::Result<AgentQueryResult> {
+        Err(crate::CoordinatorError::generic("API error: rate limited"))
     }
 }
 
@@ -75,6 +75,8 @@ fn make_config(cancelled: Arc<AtomicBool>) -> InProcessRunnerConfig {
         tool_overrides: None,
         parent_tool_filter: None,
         plan_mode_required: false,
+        hooks: None,
+        orchestration_ctx: None,
     }
 }
 
@@ -202,7 +204,7 @@ impl AgentExecutionEngine for CompactingEngine {
         &self,
         _prompt: &str,
         _config: AgentQueryConfig,
-    ) -> anyhow::Result<AgentQueryResult> {
+    ) -> crate::Result<AgentQueryResult> {
         Ok(AgentQueryResult {
             messages: vec![
                 serde_json::json!({"role": "user", "content": "ask"}),
@@ -222,7 +224,7 @@ impl AgentExecutionEngine for CompactingEngine {
         &self,
         messages: Vec<serde_json::Value>,
         total_tokens: i64,
-    ) -> anyhow::Result<Vec<serde_json::Value>> {
+    ) -> crate::Result<Vec<serde_json::Value>> {
         self.compact_calls.lock().await.push(total_tokens);
         // Return a strictly smaller history so the runner uses our
         // result instead of falling through to the safety valve.

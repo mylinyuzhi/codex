@@ -17,11 +17,14 @@ fn test_env_key_as_str() {
 fn test_std_env_var_accepts_env_key() {
     // SAFETY: tests run single-threaded for env-mutating cases.
     unsafe {
-        std::env::set_var(EnvKey::CocoAntTrace, "1");
+        std::env::set_var(EnvKey::CocoAgentName, "test-agent");
     }
-    assert_eq!(var(EnvKey::CocoAntTrace).ok().as_deref(), Some("1"));
+    assert_eq!(
+        var(EnvKey::CocoAgentName).ok().as_deref(),
+        Some("test-agent")
+    );
     unsafe {
-        std::env::remove_var(EnvKey::CocoAntTrace);
+        std::env::remove_var(EnvKey::CocoAgentName);
     }
 }
 

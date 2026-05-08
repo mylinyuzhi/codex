@@ -10,6 +10,7 @@ use coco_utils_common::fuzzy_match;
 
 use crate::SymbolKind;
 use crate::SymbolSearchResult;
+use crate::error::SymbolSearchError;
 use crate::extractor::SymbolExtractor;
 use crate::languages::SymbolLanguage;
 
@@ -40,7 +41,7 @@ impl SymbolIndex {
     /// Build index by scanning all supported files under root.
     ///
     /// This is CPU-bound; call from `spawn_blocking`.
-    pub fn build(root: &Path) -> anyhow::Result<Self> {
+    pub fn build(root: &Path) -> Result<Self, SymbolSearchError> {
         let mut extractor = SymbolExtractor::new();
         let mut entries_by_file: HashMap<String, Vec<SymbolEntry>> = HashMap::new();
 
@@ -107,7 +108,11 @@ impl SymbolIndex {
     }
 
     /// Re-extract tags for changed files, update index in-place.
-    pub fn update_files(&mut self, root: &Path, changed: &[PathBuf]) -> anyhow::Result<()> {
+    pub fn update_files(
+        &mut self,
+        root: &Path,
+        changed: &[PathBuf],
+    ) -> Result<(), SymbolSearchError> {
         let mut extractor = SymbolExtractor::new();
 
         for path in changed {

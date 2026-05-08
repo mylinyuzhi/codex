@@ -247,7 +247,7 @@ pub trait AgentQueryEngine: Send + Sync {
         &self,
         prompt: &str,
         config: AgentQueryConfig,
-    ) -> anyhow::Result<AgentQueryResult>;
+    ) -> Result<AgentQueryResult, coco_error::BoxedError>;
 }
 
 /// Shared handle type for dependency injection.
@@ -263,7 +263,10 @@ impl AgentQueryEngine for NoOpAgentQueryEngine {
         &self,
         _prompt: &str,
         _config: AgentQueryConfig,
-    ) -> anyhow::Result<AgentQueryResult> {
-        anyhow::bail!("Agent query execution not available in this context")
+    ) -> Result<AgentQueryResult, coco_error::BoxedError> {
+        Err(Box::new(coco_error::PlainError::new(
+            "Agent query execution not available in this context",
+            coco_error::StatusCode::Internal,
+        )))
     }
 }

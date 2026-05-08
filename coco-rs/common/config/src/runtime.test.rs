@@ -39,7 +39,7 @@ fn build_isolated(
     let catalogs = CatalogPaths::empty_in(tmp.path());
     let runtime = build_runtime_config_with(settings, env, overrides, catalogs);
     drop(tmp);
-    runtime
+    Ok(runtime?)
 }
 
 fn model_spec(provider: &str, api: ProviderApi, model_id: &str) -> ModelSpec {

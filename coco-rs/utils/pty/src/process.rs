@@ -6,7 +6,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 
-use anyhow::anyhow;
 use portable_pty::MasterPty;
 use portable_pty::PtySize;
 use portable_pty::SlavePty;
@@ -140,16 +139,16 @@ impl ProcessHandle {
     }
 
     /// Resize the PTY in character cells.
-    pub fn resize(&self, size: TerminalSize) -> anyhow::Result<()> {
+    pub fn resize(&self, size: TerminalSize) -> crate::PtyResult<()> {
         let handles = self
             ._pty_handles
             .lock()
-            .map_err(|_| anyhow!("failed to lock PTY handles"))?;
-        let handles = handles
-            .as_ref()
-            .ok_or_else(|| anyhow!("process is not attached to a PTY"))?;
+            .map_err(|_| crate::PtyError::PtyHandlesPoisoned)?;
+        let handles = handles.as_ref().ok_or(crate::PtyError::NotAPty)?;
         match &handles._master {
-            PtyMasterHandle::Resizable(master) => master.resize(size.into()),
+            PtyMasterHandle::Resizable(master) => master
+                .resize(size.into())
+                .map_err(|e| crate::PtyError::PortablePty(e.to_string())),
             #[cfg(unix)]
             PtyMasterHandle::Opaque { raw_fd, .. } => resize_raw_pty(*raw_fd, size),
         }
@@ -206,7 +205,7 @@ impl Drop for ProcessHandle {
 }
 
 #[cfg(unix)]
-fn resize_raw_pty(raw_fd: RawFd, size: TerminalSize) -> anyhow::Result<()> {
+fn resize_raw_pty(raw_fd: RawFd, size: TerminalSize) -> crate::PtyResult<()> {
     let mut winsize = libc::winsize {
         ws_row: size.rows,
         ws_col: size.cols,

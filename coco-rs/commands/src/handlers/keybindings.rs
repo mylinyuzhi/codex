@@ -26,13 +26,13 @@ const TEMPLATE: &str = r#"{
 
 pub fn handler(
     _args: String,
-) -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>> {
+) -> Pin<Box<dyn std::future::Future<Output = crate::Result<String>> + Send>> {
     Box::pin(async move { handler_with_overrides(default_home(), default_editor()).await })
 }
 
 /// Test-friendly variant: callers pass an explicit `$HOME` and editor command
 /// so parallel tests don't race on process-wide env vars.
-pub async fn handler_with_overrides(home: PathBuf, editor: String) -> anyhow::Result<String> {
+pub async fn handler_with_overrides(home: PathBuf, editor: String) -> crate::Result<String> {
     let path = keybindings_path(&home);
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent).await?;

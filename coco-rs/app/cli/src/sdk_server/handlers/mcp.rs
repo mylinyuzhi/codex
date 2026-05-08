@@ -117,29 +117,52 @@ async fn deregister_server_tools(ctx: &HandlerContext, server_name: &str) {
     }
 }
 
-/// No-op `SendElicitation` callback used when the SDK server's MCP
-/// lifecycle handlers trigger a connect that surfaces an elicitation
-/// from the upstream server.
+/// `SendElicitation` factory for SDK-driven MCP connects.
 ///
-/// In the SDK design, elicitations from MCP servers should propagate
-/// to the SDK client via a `ServerRequest::RequestElicitation` and
-/// `elicitation/resolve` round-trip. Wiring that bridge is a future
-/// follow-up — until then, this stub immediately rejects any
-/// elicitation so connect either succeeds (no auth needed) or errors
-/// out (auth required) without blocking forever.
-fn no_op_send_elicitation() -> coco_mcp::SendElicitation {
+/// The base closure rejects every elicitation because the SDK server
+/// doesn't bridge elicitations to clients yet (a future follow-up).
+/// However, when a session runtime with a hook registry is wired, we
+/// wrap the closure so `Elicitation` / `ElicitationResult` hooks fire
+/// first — TS parity (`elicitationHandler.ts:91-107`). A hook can
+/// program-respond with accept/decline and skip the bridge entirely.
+async fn build_send_elicitation(
+    ctx: &HandlerContext,
+    server_name: &str,
+) -> coco_mcp::SendElicitation {
     use std::future::Future;
     use std::pin::Pin;
-    Box::new(
-        |_request_id, _elicitation| -> Pin<
-            Box<dyn Future<Output = anyhow::Result<coco_mcp::ElicitationResponse>> + Send>,
+    let base: coco_mcp::SendElicitation = Box::new(
+        |_request_id,
+         _elicitation|
+         -> Pin<
+            Box<
+                dyn Future<
+                        Output = std::result::Result<
+                            coco_mcp::ElicitationResponse,
+                            coco_mcp::RmcpClientError,
+                        >,
+                    > + Send,
+            >,
         > {
             Box::pin(async move {
-                Err(anyhow::anyhow!(
-                    "elicitation rejected: SDK server does not yet bridge elicitations to clients"
+                Err(coco_mcp::RmcpClientError::generic(
+                    "elicitation rejected: SDK server does not yet bridge elicitations to clients",
                 ))
             })
         },
+    );
+    let runtime = {
+        let guard = ctx.state.session_runtime.read().await;
+        guard.clone()
+    };
+    let Some(runtime) = runtime else { return base };
+    let registry = runtime.hook_registry.clone();
+    let factory = runtime.orchestration_ctx_factory();
+    crate::elicitation_hooks::wrap_send_elicitation_with_hooks(
+        server_name.to_string(),
+        registry,
+        factory,
+        base,
     )
 }
 
@@ -235,12 +258,10 @@ pub(super) async fn handle_mcp_reconnect(
         Ok(m) => m,
         Err(e) => return e,
     };
+    let send_elicitation = build_send_elicitation(ctx, &params.server_name).await;
     let manager = manager_arc.lock().await;
     manager.disconnect(&params.server_name).await;
-    match manager
-        .connect(&params.server_name, no_op_send_elicitation())
-        .await
-    {
+    match manager.connect(&params.server_name, send_elicitation).await {
         Ok(()) => {
             info!(server = %params.server_name, "SdkServer: mcp/reconnect ok");
             let schemas = collect_server_schemas(&manager, &params.server_name).await;
@@ -273,12 +294,10 @@ pub(super) async fn handle_mcp_toggle(
         Ok(m) => m,
         Err(e) => return e,
     };
+    let send_elicitation = build_send_elicitation(ctx, &params.server_name).await;
     let manager = manager_arc.lock().await;
     if params.enabled {
-        match manager
-            .connect(&params.server_name, no_op_send_elicitation())
-            .await
-        {
+        match manager.connect(&params.server_name, send_elicitation).await {
             Ok(()) => {
                 info!(server = %params.server_name, "SdkServer: mcp/toggle (enabled)");
                 let schemas = collect_server_schemas(&manager, &params.server_name).await;

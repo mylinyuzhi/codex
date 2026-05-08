@@ -52,3 +52,63 @@ async fn test_tui_hook_verify() -> Result<()> {
 async fn test_tui_keyboard_dispatch() -> Result<()> {
     tui::suite::keyboard_dispatch::run().await
 }
+
+#[tokio::test]
+async fn test_tui_tool_error() -> Result<()> {
+    tui::suite::tool_error::run().await
+}
+
+#[tokio::test]
+async fn test_tui_parallel_tools() -> Result<()> {
+    tui::suite::parallel_tools::run().await
+}
+
+#[tokio::test]
+async fn test_tui_thinking_block() -> Result<()> {
+    tui::suite::thinking_block::run().await
+}
+
+#[tokio::test]
+async fn test_tui_bash_capture() -> Result<()> {
+    tui::suite::bash_capture::run().await
+}
+
+#[tokio::test]
+async fn test_tui_input_editing() -> Result<()> {
+    tui::suite::input_editing::run().await
+}
+
+#[tokio::test]
+async fn test_tui_empty_submit() -> Result<()> {
+    tui::suite::empty_submit::run().await
+}
+
+#[tokio::test]
+async fn test_tui_slash_copy() -> Result<()> {
+    tui::suite::slash_copy::run().await
+}
+
+#[tokio::test]
+async fn test_tui_slash_clear() -> Result<()> {
+    tui::suite::slash_clear::run().await
+}
+
+#[tokio::test]
+async fn test_tui_rewind_overlay() -> Result<()> {
+    tui::suite::rewind_overlay::run().await
+}
+
+#[tokio::test]
+async fn test_tui_interrupt_inflight() -> Result<()> {
+    tui::suite::interrupt_inflight::run().await
+}
+
+#[tokio::test]
+async fn test_tui_permission_round_trip() -> Result<()> {
+    tui::suite::permission_round_trip::run().await
+}
+
+#[tokio::test]
+async fn test_tui_compact_round_trip() -> Result<()> {
+    tui::suite::compact_round_trip::run().await
+}

@@ -115,6 +115,15 @@ pub fn micro_compact(messages: &mut [Message], keep_recent: usize) -> Microcompa
         cleared += 1;
     }
 
+    if cleared > 0 {
+        tracing::debug!(
+            cleared,
+            tokens_freed,
+            keep_recent,
+            "micro-compaction cleared old tool results"
+        );
+    }
+
     MicrocompactResult {
         messages_cleared: cleared,
         tokens_saved_estimate: tokens_freed,

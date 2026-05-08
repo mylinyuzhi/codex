@@ -9,9 +9,9 @@ name = "coco_symbol_search"
 path = "src/lib.rs"
 
 [dependencies]
-anyhow = { workspace = true }
 coco-file-ignore = { workspace = true }
 coco-utils-common = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync", "rt", "time"] }
 notify = { workspace = true }
 tracing = { workspace = true }

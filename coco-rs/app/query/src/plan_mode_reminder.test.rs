@@ -241,14 +241,14 @@ impl coco_tool_runtime::MailboxHandle for FakeMailbox {
         _recipient: &str,
         _team: &str,
         _m: coco_tool_runtime::MailboxEnvelope,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), coco_error::BoxedError> {
         Ok(())
     }
     async fn read_unread(
         &self,
         agent: &str,
         team: &str,
-    ) -> anyhow::Result<Vec<coco_tool_runtime::InboxMessage>> {
+    ) -> Result<Vec<coco_tool_runtime::InboxMessage>, coco_error::BoxedError> {
         Ok(self
             .inboxes
             .lock()
@@ -257,7 +257,12 @@ impl coco_tool_runtime::MailboxHandle for FakeMailbox {
             .cloned()
             .unwrap_or_default())
     }
-    async fn mark_read(&self, agent: &str, team: &str, index: usize) -> anyhow::Result<()> {
+    async fn mark_read(
+        &self,
+        agent: &str,
+        team: &str,
+        index: usize,
+    ) -> Result<(), coco_error::BoxedError> {
         self.marked
             .lock()
             .unwrap()

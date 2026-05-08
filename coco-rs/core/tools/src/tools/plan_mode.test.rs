@@ -528,7 +528,7 @@ impl coco_tool_runtime::MailboxHandle for CapturingMailbox {
         recipient: &str,
         team_name: &str,
         message: coco_tool_runtime::MailboxEnvelope,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), coco_error::BoxedError> {
         self.captured
             .lock()
             .await
@@ -539,10 +539,15 @@ impl coco_tool_runtime::MailboxHandle for CapturingMailbox {
         &self,
         _agent: &str,
         _team: &str,
-    ) -> anyhow::Result<Vec<coco_tool_runtime::InboxMessage>> {
+    ) -> Result<Vec<coco_tool_runtime::InboxMessage>, coco_error::BoxedError> {
         Ok(Vec::new())
     }
-    async fn mark_read(&self, _agent: &str, _team: &str, _index: usize) -> anyhow::Result<()> {
+    async fn mark_read(
+        &self,
+        _agent: &str,
+        _team: &str,
+        _index: usize,
+    ) -> Result<(), coco_error::BoxedError> {
         Ok(())
     }
 }

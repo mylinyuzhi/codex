@@ -8,8 +8,12 @@ version.workspace = true
 workspace = true
 
 [dependencies]
+# anyhow is required transitively because the vendored Windows ConPty code
+# implements `portable_pty::PtySystem` / `MasterPty` / `SlavePty`, whose trait
+# methods use `anyhow::Result`. Public crate API does NOT return anyhow::Result.
 anyhow = { workspace = true }
 portable-pty = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
 
 [dev-dependencies]

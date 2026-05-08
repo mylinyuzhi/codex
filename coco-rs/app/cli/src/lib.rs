@@ -4,24 +4,30 @@
 
 pub mod agent_handle_factory;
 pub mod agent_transcript_persistence;
+pub mod at_mention_turn;
 pub mod disk_task_output;
+pub mod elicitation_hooks;
+pub mod file_changed_watcher;
 pub mod fork_dispatcher;
 pub mod headless;
 pub mod mcp_handle_adapter;
 pub mod output;
 pub mod paths;
+pub mod resume_resolver;
+pub mod sandbox_reload;
 pub mod sdk_server;
 pub mod session_bootstrap;
 pub mod session_runtime;
 pub mod side_query_impl;
 pub mod task_runtime;
+pub mod tracing_init;
 pub mod tui_permission_bridge;
 
 use clap::Parser;
 use clap::Subcommand;
 
 /// The coco CLI.
-#[derive(Parser)]
+#[derive(Clone, Parser)]
 #[command(name = "coco", about = "AI coding agent", version)]
 pub struct Cli {
     /// Prompt to send (non-interactive mode).
@@ -266,6 +272,38 @@ pub struct Cli {
     #[arg(long)]
     pub permission_prompt_tool: Option<String>,
 
+    // ── Tracing / log dev knobs ──
+    /// Tracing-filter directive applied to all logs. Highest-priority
+    /// override; takes precedence over `COCO_LOG` and `RUST_LOG`.
+    ///
+    /// Accepts either a bare level (`debug`) or a full `EnvFilter`
+    /// directive (`coco=trace,coco_inference::stream=trace,info`). A
+    /// bare level is expanded to `coco=<level>,<level>` so coco crates
+    /// stay verbose without flooding third-party output.
+    #[arg(long, value_name = "DIRECTIVE")]
+    pub log_level: Option<String>,
+
+    /// Log output format: `pretty | compact | json`. Default depends
+    /// on mode (json for SDK, compact for TUI/headless).
+    #[arg(long, value_name = "FORMAT")]
+    pub log_format: Option<String>,
+
+    /// Override the default rotating log file path
+    /// (`<config_home>/logs/coco.log`).
+    #[arg(long, value_name = "PATH")]
+    pub log_file: Option<String>,
+
+    /// Force-enable a stderr fmt layer in addition to the file sink.
+    /// Useful for `--print` debugging sessions where you want to see
+    /// logs alongside the response.
+    #[arg(long)]
+    pub log_stderr: bool,
+
+    /// Timezone for log timestamps: `local | utc`. Defaults to `local`.
+    /// Higher priority than `COCO_LOG_TIMEZONE`.
+    #[arg(long, value_name = "TZ")]
+    pub log_timezone: Option<String>,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -273,7 +311,7 @@ pub struct Cli {
 /// CLI subcommands.
 ///
 /// TS: Commands enum + handlers/
-#[derive(Subcommand)]
+#[derive(Clone, Subcommand)]
 pub enum Commands {
     /// Start a new conversation.
     Chat {
@@ -394,7 +432,7 @@ pub enum Commands {
 }
 
 /// Config subcommand actions.
-#[derive(Subcommand)]
+#[derive(Clone, Subcommand)]
 pub enum ConfigAction {
     /// Get a configuration value.
     Get {
@@ -415,7 +453,7 @@ pub enum ConfigAction {
 }
 
 /// MCP subcommand actions.
-#[derive(Subcommand)]
+#[derive(Clone, Subcommand)]
 pub enum McpAction {
     /// List connected servers.
     List,
@@ -434,7 +472,7 @@ pub enum McpAction {
 }
 
 /// Plugin subcommand actions.
-#[derive(Subcommand)]
+#[derive(Clone, Subcommand)]
 pub enum PluginAction {
     /// List installed plugins.
     List,

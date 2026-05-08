@@ -143,8 +143,11 @@ fn extract_host(url: &str) -> Option<&str> {
 ///
 /// Returns `Ok(true)` if the address is blocked (should not be reached).
 /// Returns `Ok(false)` if all resolved addresses are allowed.
-pub async fn check_url_ssrf(url: &str) -> anyhow::Result<bool> {
-    let host = extract_host(url).ok_or_else(|| anyhow::anyhow!("URL has no host: {url}"))?;
+pub async fn check_url_ssrf(url: &str) -> crate::Result<bool> {
+    let host = extract_host(url).ok_or_else(|| crate::HooksError::SsrfFailed {
+        url: url.to_string(),
+        message: "URL has no host".to_string(),
+    })?;
 
     // If it's already an IP literal, check directly
     if let Ok(ip) = host.parse::<IpAddr>() {
@@ -154,7 +157,10 @@ pub async fn check_url_ssrf(url: &str) -> anyhow::Result<bool> {
     // DNS resolution — use port 80 as placeholder (only need IP addresses)
     let addrs = tokio::net::lookup_host(format!("{host}:80"))
         .await
-        .map_err(|e| anyhow::anyhow!("DNS resolution failed for {host}: {e}"))?;
+        .map_err(|e| crate::HooksError::SsrfFailed {
+            url: url.to_string(),
+            message: format!("DNS resolution failed for {host}: {e}"),
+        })?;
 
     for addr in addrs {
         if is_blocked_address(&addr.ip()) {

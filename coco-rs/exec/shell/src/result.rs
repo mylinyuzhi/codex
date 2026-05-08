@@ -2,6 +2,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 /// Result of a shell command execution.
@@ -50,8 +51,16 @@ pub struct ExecOptions {
     pub timeout_ms: Option<i64>,
     /// Prevent CWD changes.
     pub prevent_cwd_changes: bool,
-    /// Whether to use sandbox.
-    pub should_use_sandbox: bool,
+    /// Optional sandbox runtime state. When `Some` and the command isn't
+    /// excluded by the sandbox settings, the executor wraps the command
+    /// with platform enforcement (bwrap/Seatbelt) before spawning. `None`
+    /// runs unsandboxed — used by tests and contexts where sandbox is
+    /// disabled.
+    pub sandbox: Option<Arc<coco_sandbox::SandboxState>>,
+    /// Sandbox bypass requested via `dangerouslyDisableSandbox` parameter.
+    /// Only meaningful when `sandbox` is `Some` and
+    /// `SandboxSettings.allow_unsandboxed_commands` is `true`.
+    pub sandbox_bypass: coco_sandbox::SandboxBypass,
     /// Extra environment variables.
     pub extra_env: HashMap<String, String>,
     /// CWD override.
@@ -67,7 +76,8 @@ impl Default for ExecOptions {
         Self {
             timeout_ms: Some(120_000), // 2 minutes default
             prevent_cwd_changes: false,
-            should_use_sandbox: false,
+            sandbox: None,
+            sandbox_bypass: coco_sandbox::SandboxBypass::No,
             extra_env: HashMap::new(),
             cwd_override: None,
             cancel: None,

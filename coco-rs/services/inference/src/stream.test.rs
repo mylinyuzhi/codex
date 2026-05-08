@@ -57,41 +57,49 @@ async fn synthetic_stream_emits_events_in_content_order() {
         events.push(ev);
     }
 
-    // Expected: ReasoningDelta, TextDelta, ToolCallStart, ToolCallDelta, ToolCallEnd, Finish.
-    // The Start/End bracket variants for text/reasoning are filtered out by
-    // `process_stream` (they're not produced as StreamEvent).
-    assert_eq!(events.len(), 6);
+    // Expected: ReasoningDelta, ReasoningEnd, TextDelta, ToolCallStart,
+    // ToolCallDelta, ToolCallEnd, Finish.
+    //
+    // `ReasoningEnd` is emitted by `process_stream` as a distinct
+    // `StreamEvent::ReasoningEnd` (see `stream.rs:138-140`); only
+    // `TextStart`/`TextEnd` and `ReasoningStart` brackets are filtered out.
+    assert_eq!(events.len(), 7);
     assert!(
         matches!(&events[0], StreamEvent::ReasoningDelta { text } if text == "thinking about it"),
         "first event should be ReasoningDelta, got {:?}",
         &events[0]
     );
     assert!(
-        matches!(&events[1], StreamEvent::TextDelta { text } if text == "Hello, world."),
-        "second event should be TextDelta, got {:?}",
+        matches!(&events[1], StreamEvent::ReasoningEnd { .. }),
+        "second event should be ReasoningEnd, got {:?}",
         &events[1]
     );
     assert!(
-        matches!(
-            &events[2],
-            StreamEvent::ToolCallStart { id, tool_name }
-                if id == "call_42" && tool_name == "Bash"
-        ),
-        "third event should be ToolCallStart, got {:?}",
+        matches!(&events[2], StreamEvent::TextDelta { text } if text == "Hello, world."),
+        "third event should be TextDelta, got {:?}",
         &events[2]
     );
     assert!(
-        matches!(&events[3], StreamEvent::ToolCallDelta { id, delta }
-            if id == "call_42" && delta.contains("echo hi")),
-        "fourth event should be ToolCallDelta with serialized input, got {:?}",
+        matches!(
+            &events[3],
+            StreamEvent::ToolCallStart { id, tool_name }
+                if id == "call_42" && tool_name == "Bash"
+        ),
+        "fourth event should be ToolCallStart, got {:?}",
         &events[3]
     );
     assert!(
-        matches!(&events[4], StreamEvent::ToolCallEnd { id } if id == "call_42"),
-        "fifth event should be ToolCallEnd, got {:?}",
+        matches!(&events[4], StreamEvent::ToolCallDelta { id, delta }
+            if id == "call_42" && delta.contains("echo hi")),
+        "fifth event should be ToolCallDelta with serialized input, got {:?}",
         &events[4]
     );
-    match &events[5] {
+    assert!(
+        matches!(&events[5], StreamEvent::ToolCallEnd { id } if id == "call_42"),
+        "sixth event should be ToolCallEnd, got {:?}",
+        &events[5]
+    );
+    match &events[6] {
         StreamEvent::Finish { metrics, .. } => {
             assert!(metrics.ttft_ms.is_some());
             assert_eq!(metrics.stall_count, 0);

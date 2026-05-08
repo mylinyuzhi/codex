@@ -10,46 +10,31 @@ argument-hint: <base-commit-id>
 - Git status: !`git status --short`
 - Base commit: $ARGUMENTS
 
-## Task
+## Why
 
-Execute git squash workflow for all commits from `$ARGUMENTS` to HEAD.
+Collapse a branch's WIP history into one coherent commit before merge — easier
+to review, revert, and cherry-pick than a noisy fixup series.
 
-### Step 1: Pre-squash Safety
+## What
 
-1. **Check for uncommitted changes**: If there are any uncommitted changes (staged or unstaged), commit them first with message `"wip: uncommitted changes before squash"`
-2. **Backup to remote**: Push current branch to origin as backup: `git push origin <current-branch> -f`
+Squash every commit in `$ARGUMENTS..HEAD` into a single commit.
 
-### Step 2: Analyze Commits to be Squashed
+- **Back up first.** Push the current branch to origin before resetting; the
+  squash is locally destructive.
+- **Don't drop uncommitted work.** Fold any staged or unstaged changes into the
+  squash so nothing escapes.
+- **Synthesize across the whole range** when writing the message — not from the
+  tip commit alone.
+- **Tree must be byte-identical** to the pre-squash range (same files, same
+  insertions, same deletions).
 
-Before squashing, gather information about all commits:
+## Commit message
 
-1. List commits: `git log --oneline $ARGUMENTS..HEAD`
-2. Get detailed info with body: `git log --format="%h %s%n%b---" $ARGUMENTS..HEAD`
-3. Get file change stats: `git log --oneline --stat $ARGUMENTS..HEAD`
-4. Count total commits and record the stats for later verification
+Follow the project's `CLAUDE.md` Conventional Commits rules:
 
-### Step 3: Execute Squash
-
-1. Run `git reset --soft $ARGUMENTS` to squash all commits while keeping changes staged
-2. Analyze:
-   - All original commit messages and their intent
-   - The staged changes (`git diff --cached --stat`)
-   - Group related changes into logical categories
-3. Generate an excellent commit message following conventional commits format:
-   - **Title**: `<type>(<scope>): <concise summary>` (max 72 chars)
-   - **Body**: Organized sections describing major changes by category
-   - Types: feat, fix, refactor, test, docs, chore, perf
-4. Create the squashed commit with the generated message
-
-### Step 4: Review & Verify
-
-1. Show new commit: `git log --oneline -3`
-2. Verify changes preserved: `git diff $ARGUMENTS..HEAD --stat`
-3. Compare with pre-squash stats:
-   - Same number of files changed
-   - Same total insertions/deletions
-4. Report:
-   - Original commit count
-   - New single commit hash and message
-   - Confirmation that all changes are preserved
-   - Any discrepancies found (should be none)
+- **Subject:** `<type>(<scope>): <summary>` — imperative, ≤72 chars, no period.
+  Types: `feat | fix | refactor | test | docs | chore | perf | ci | build | style | revert`.
+- **Body:** 4–8 bullets, grouped by theme, each explaining *why*. No per-file
+  recaps, no test counts, no rote "verified" lines.
+- **Synthesize** — don't paste per-commit bodies.
+- **Footers:** `BREAKING CHANGE:` and `Co-Authored-By:` only.

@@ -60,39 +60,36 @@ pub trait PaneBackend: Send + Sync {
         &self,
         name: &str,
         color: AgentColorName,
-    ) -> anyhow::Result<CreatePaneResult>;
+    ) -> crate::Result<CreatePaneResult>;
 
-    async fn send_command_to_pane(&self, pane_id: &PaneId, command: &str) -> anyhow::Result<()>;
+    async fn send_command_to_pane(&self, pane_id: &PaneId, command: &str) -> crate::Result<()>;
 
     async fn set_pane_border_color(
         &self,
         pane_id: &PaneId,
         color: AgentColorName,
-    ) -> anyhow::Result<()>;
+    ) -> crate::Result<()>;
 
     async fn set_pane_title(
         &self,
         pane_id: &PaneId,
         name: &str,
         color: AgentColorName,
-    ) -> anyhow::Result<()>;
+    ) -> crate::Result<()>;
 
     /// Enable pane border status display (shows pane titles).
     ///
     /// TS: `enablePaneBorderStatus(windowTarget?, useExternalSession?)`
-    async fn enable_pane_border_status(&self, window_target: Option<&str>) -> anyhow::Result<()>;
+    async fn enable_pane_border_status(&self, window_target: Option<&str>) -> crate::Result<()>;
 
-    async fn rebalance_panes(&self, window_target: &str, has_leader: bool) -> anyhow::Result<()>;
+    async fn rebalance_panes(&self, window_target: &str, has_leader: bool) -> crate::Result<()>;
 
-    async fn kill_pane(&self, pane_id: &PaneId) -> anyhow::Result<bool>;
+    async fn kill_pane(&self, pane_id: &PaneId) -> crate::Result<bool>;
 
-    async fn hide_pane(&self, pane_id: &PaneId) -> anyhow::Result<bool>;
+    async fn hide_pane(&self, pane_id: &PaneId) -> crate::Result<bool>;
 
-    async fn show_pane(
-        &self,
-        pane_id: &PaneId,
-        target_window_or_pane: &str,
-    ) -> anyhow::Result<bool>;
+    async fn show_pane(&self, pane_id: &PaneId, target_window_or_pane: &str)
+    -> crate::Result<bool>;
 }
 
 // ── TeammateExecutor Trait ──
@@ -170,11 +167,11 @@ pub trait TeammateExecutor: Send + Sync {
         &self,
         agent_id: &str,
         message: mailbox::TeammateMessage,
-    ) -> anyhow::Result<()>;
+    ) -> crate::Result<()>;
 
-    async fn terminate(&self, agent_id: &str, reason: Option<&str>) -> anyhow::Result<bool>;
+    async fn terminate(&self, agent_id: &str, reason: Option<&str>) -> crate::Result<bool>;
 
-    async fn kill(&self, agent_id: &str) -> anyhow::Result<bool>;
+    async fn kill(&self, agent_id: &str) -> crate::Result<bool>;
 
     async fn is_active(&self, agent_id: &str) -> bool;
 }

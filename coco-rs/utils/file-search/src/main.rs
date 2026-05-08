@@ -9,14 +9,13 @@ use coco_file_search::run_main;
 use serde_json::json;
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<(), coco_file_search::FileSearchError> {
     let cli = Cli::parse();
     let reporter = StdioReporter {
         write_output_as_json: cli.json,
         show_indices: cli.compute_indices && std::io::stdout().is_terminal(),
     };
-    run_main(cli, reporter).await?;
-    Ok(())
+    run_main(cli, reporter).await
 }
 
 struct StdioReporter {

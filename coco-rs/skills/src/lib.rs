@@ -3,11 +3,20 @@
 //! TS: skills/ (SkillDefinition, SkillManager, bundled + user + project + plugin skills)
 
 pub mod bundled;
+pub mod error;
 pub mod extraction;
 pub mod prompt_render;
 pub mod reminder_source;
 pub mod shell_exec;
 pub mod watcher;
+
+pub use error::SkillsError;
+
+/// Crate-local Result alias. Default error type is `SkillsError` but the
+/// generic stays open so `Result::ok` / 2-arg `Result<T, E>` callsites
+/// (e.g. `entries.filter_map(Result::ok)` over `io::Error`) still resolve
+/// against `std::result::Result`.
+pub type Result<T, E = SkillsError> = std::result::Result<T, E>;
 
 use coco_types::Feature;
 use coco_types::Features;
@@ -177,14 +186,49 @@ pub enum SkillSource {
 }
 
 /// Skill manager — discovery, loading, deduplication.
+///
+/// Tracks per-agent skill-listing dedup state so reminder regeneration only
+/// surfaces skills the agent has not seen yet (TS `sentSkillNames` Map keyed
+/// by agentId at `attachments.ts:2700-2730`). The dedup set is mutated through
+/// a `Mutex` because `SkillsSource::listing` takes `&self`, and the source
+/// trait is consumed concurrently with read-only `all()` / `visible()` calls.
 #[derive(Default, Debug)]
 pub struct SkillManager {
     skills: HashMap<String, SkillDefinition>,
+    /// Skills already announced in a `skill_listing` reminder, keyed by
+    /// `agent_id.unwrap_or("")` so the main thread (empty key) and each
+    /// subagent get their own turn-0 listing — matching TS's per-agent Map.
+    sent_skills: std::sync::Mutex<HashMap<String, HashSet<String>>>,
 }
 
 impl SkillManager {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Compute the set of skill names not yet announced to `agent_id`,
+    /// then mark them as sent. Returns `(new_skills, is_initial)` where
+    /// `is_initial` is true on the first non-empty announcement for this
+    /// agent (TS `attachments.ts:2725` `sent.size === 0` check).
+    pub fn take_unannounced_skills(
+        &self,
+        agent_id: Option<&str>,
+        current: &[&str],
+    ) -> (Vec<String>, bool) {
+        let key = agent_id.unwrap_or("").to_string();
+        let mut guard = self
+            .sent_skills
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let sent = guard.entry(key).or_default();
+        let is_initial = sent.is_empty();
+        let mut delta = Vec::new();
+        for name in current {
+            if sent.insert((*name).to_string()) {
+                delta.push((*name).to_string());
+            }
+        }
+        (delta, is_initial)
     }
 
     pub fn register(&mut self, skill: SkillDefinition) {
@@ -320,9 +364,10 @@ pub struct SkillScopes {
 /// - First line `# Name` → skill name
 /// - Optional YAML-like frontmatter between `---` markers (description, allowed_tools, model)
 /// - Remaining content → prompt field
-pub fn load_skill_from_file(path: &Path) -> anyhow::Result<SkillDefinition> {
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| anyhow::anyhow!("failed to read skill file {}: {e}", path.display()))?;
+pub fn load_skill_from_file(path: &Path) -> crate::Result<SkillDefinition> {
+    let content = std::fs::read_to_string(path).map_err(|e| {
+        crate::SkillsError::generic(format!("failed to read skill file {}: {e}", path.display()))
+    })?;
 
     parse_skill_markdown(&content, path)
 }
@@ -549,7 +594,7 @@ fn parse_argument_names_field(value: &str) -> Vec<String> {
 }
 
 /// Parse skill markdown content into a `SkillDefinition`.
-fn parse_skill_markdown(content: &str, path: &Path) -> anyhow::Result<SkillDefinition> {
+fn parse_skill_markdown(content: &str, path: &Path) -> crate::Result<SkillDefinition> {
     let mut lines = content.lines();
 
     // Extract name from first heading line `# Name`
@@ -560,9 +605,11 @@ fn parse_skill_markdown(content: &str, path: &Path) -> anyhow::Result<SkillDefin
                 break line.trim_start_matches("# ").trim().to_string();
             }
             Some(line) => {
-                anyhow::bail!("expected `# Name` heading as first non-empty line, got: {line:?}");
+                return Err(crate::SkillsError::generic(format!(
+                    "expected `# Name` heading as first non-empty line, got: {line:?}"
+                )));
             }
-            None => anyhow::bail!("skill file is empty"),
+            None => return Err(crate::SkillsError::generic("skill file is empty")),
         }
     };
 

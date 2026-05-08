@@ -50,7 +50,10 @@ async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
         home.path().join("sessions"),
     ));
 
-    let command_registry = Arc::new(coco_commands::CommandRegistry::new());
+    let command_registry = Arc::new(tokio::sync::RwLock::new(Arc::new(
+        coco_commands::CommandRegistry::new(),
+    )));
+    let skill_manager = Arc::new(coco_skills::SkillManager::new());
 
     SessionRuntime::build(SessionRuntimeBuildOpts {
         cli: &cli,
@@ -68,6 +71,7 @@ async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
         fast_model_spec: None,
         permission_bridge: None,
         command_registry,
+        skill_manager,
     })
     .await
     .expect("build SessionRuntime")

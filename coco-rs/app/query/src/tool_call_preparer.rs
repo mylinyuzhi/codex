@@ -150,6 +150,14 @@ pub(crate) async fn prepare_one_pending_tool_call(
     )
     .await;
 
+    // TS `toolExecution.ts:1075-1101`: when an auto-mode classifier
+    // denial lands, fire `PermissionDenied` hooks. If any hook returns
+    // `retry: true`, the model is hinted that it may retry. We extend
+    // the deny message in-place so the existing controller path stays
+    // unchanged.
+    let decision =
+        maybe_fire_permission_denied_hook(&hook_controller, tc, &effective_input, decision).await;
+
     let permission_outcome = PermissionController::new(
         args.event_tx,
         args.history,
@@ -158,6 +166,8 @@ pub(crate) async fn prepare_one_pending_tool_call(
         args.permission_bridge,
         args.session_id,
         args.cancel,
+        args.hooks,
+        Some(&args.orchestration_ctx),
     )
     .resolve(decision, tc, &effective_input, &tool_id)
     .await;
@@ -395,6 +405,49 @@ async fn resolve_effective_input_from_permission(
             }
             Some(effective_input)
         }
+    }
+}
+
+/// TS `executePermissionDeniedHooks` wiring — only fires when the
+/// decision is a classifier-driven `Deny`. Returns the (possibly
+/// rewritten) decision; on `retry: true` we append a hint so the model
+/// learns the hook approved the retry.
+async fn maybe_fire_permission_denied_hook(
+    hook_controller: &HookController<'_>,
+    tool_call: &ToolCallPart,
+    effective_input: &Value,
+    decision: PermissionDecision,
+) -> PermissionDecision {
+    let PermissionDecision::Deny { message, reason } = decision else {
+        return decision;
+    };
+    let coco_types::PermissionDecisionReason::Classifier {
+        reason: classifier_reason,
+        ..
+    } = &reason
+    else {
+        return PermissionDecision::Deny { message, reason };
+    };
+
+    let retry = hook_controller
+        .run_permission_denied(
+            &tool_call.tool_name,
+            &tool_call.tool_call_id,
+            effective_input,
+            classifier_reason,
+        )
+        .await;
+    if !retry {
+        return PermissionDecision::Deny { message, reason };
+    }
+
+    let updated_message = format!(
+        "{message}\n\nThe PermissionDenied hook indicated this command is now \
+         approved. You may retry it if you would like."
+    );
+    PermissionDecision::Deny {
+        message: updated_message,
+        reason,
     }
 }
 

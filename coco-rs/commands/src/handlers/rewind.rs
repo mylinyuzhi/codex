@@ -23,7 +23,7 @@ pub struct RewindHandler;
 
 #[async_trait]
 impl CommandHandler for RewindHandler {
-    async fn execute_command(&self, _args: &str) -> anyhow::Result<CommandResult> {
+    async fn execute_command(&self, _args: &str) -> crate::Result<CommandResult> {
         Ok(CommandResult::OpenDialog(DialogSpec::MessageSelector))
     }
 

@@ -116,7 +116,7 @@ pub trait AgentExecutionEngine: Send + Sync {
         &self,
         prompt: &str,
         config: AgentQueryConfig,
-    ) -> anyhow::Result<AgentQueryResult>;
+    ) -> crate::Result<AgentQueryResult>;
 
     /// Semantically compact the worker's message history when it grows
     /// past the auto-compact threshold. Implementers route through
@@ -135,7 +135,7 @@ pub trait AgentExecutionEngine: Send + Sync {
         &self,
         messages: Vec<serde_json::Value>,
         _total_tokens: i64,
-    ) -> anyhow::Result<Vec<serde_json::Value>> {
+    ) -> crate::Result<Vec<serde_json::Value>> {
         // No-op default: keep the input. Real engines should override.
         Ok(messages)
     }
@@ -146,7 +146,7 @@ pub trait AgentExecutionEngine: Send + Sync {
 /// Configuration for running an in-process teammate.
 ///
 /// TS: `InProcessRunnerConfig` in inProcessRunner.ts
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct InProcessRunnerConfig {
     /// Teammate identity.
     pub identity: TeammateIdentity,
@@ -192,6 +192,16 @@ pub struct InProcessRunnerConfig {
     /// remainder of the session. TS parity: `inProcessRunner.ts`
     /// plan-mode-entry hook.
     pub plan_mode_required: bool,
+    /// Optional hook registry + orchestration context for firing the
+    /// `TeammateIdle` event when the teammate transitions to idle. TS:
+    /// `executeTeammateIdleHooks` (`utils/hooks.ts:3709`). When the
+    /// hook returns blocking, the teammate stays in working state and
+    /// receives the hook's feedback as the next prompt instead of
+    /// going idle. `None` means no hook firing (legacy / tests).
+    pub hooks: Option<std::sync::Arc<coco_hooks::HookRegistry>>,
+    /// Hook orchestration context, paired with `hooks`. Cloned for
+    /// each TeammateIdle firing.
+    pub orchestration_ctx: Option<coco_hooks::orchestration::OrchestrationContext>,
 }
 
 /// Result from running an in-process teammate to completion.
@@ -461,6 +471,44 @@ pub async fn run_in_process_teammate(
 
         // Transition to idle
         if !was_idle {
+            // TeammateIdle hook: TS `executeTeammateIdleHooks`
+            // (`utils/hooks.ts:3709`). A blocking hook prevents idle —
+            // the teammate continues working with the hook's feedback
+            // injected as the next prompt.
+            if let (Some(registry), Some(ctx)) =
+                (config.hooks.as_ref(), config.orchestration_ctx.as_ref())
+                && !ctx.disable_all_hooks
+            {
+                match coco_hooks::orchestration::execute_teammate_idle(
+                    registry,
+                    ctx,
+                    &config.identity.agent_name,
+                    &config.identity.team_name,
+                )
+                .await
+                {
+                    Ok(agg) => {
+                        if let Some(err) = agg.blocking_error.as_ref() {
+                            tracing::info!(
+                                teammate = %config.identity.agent_name,
+                                "TeammateIdle hook blocked idle transition; continuing work"
+                            );
+                            current_prompt = teammate::format_as_teammate_message(
+                                TEAM_LEAD_NAME,
+                                &format!("TeammateIdle hook feedback:\n{}", err.blocking_error),
+                                None,
+                                Some("idle prevented"),
+                            );
+                            was_idle = false;
+                            continue;
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "TeammateIdle hook failed; proceeding with idle");
+                    }
+                }
+            }
+
             // Send idle notification to leader
             let idle_text = mailbox::create_idle_notification(
                 &config.identity.agent_name,

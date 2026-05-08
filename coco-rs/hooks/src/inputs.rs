@@ -1,47 +1,276 @@
-//! Hook input types for all 32 event types.
+//! Hook input types for all 27 TS-canonical event types.
 //!
 //! Each event-specific struct embeds `BaseHookInput` via `#[serde(flatten)]`
 //! and carries a `hook_event_name` field identifying the event.
+//!
+//! Field shapes mirror `entrypoints/sdk/coreSchemas.ts` from claude-code TS.
 
+use coco_types::HookEventType;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::orchestration::OrchestrationContext;
 
+// ---------------------------------------------------------------------------
+// Enum-typed fields (TS zod enums)
+// ---------------------------------------------------------------------------
+
+/// SessionStart `source`. TS: `enum(['startup','resume','clear','compact'])`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionStartSource {
+    Startup,
+    Resume,
+    Clear,
+    Compact,
+}
+
+/// Setup `trigger`. TS: `enum(['init','maintenance'])`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SetupTrigger {
+    Init,
+    Maintenance,
+}
+
+/// Pre/PostCompact `trigger`. TS: `enum(['manual','auto'])`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactTrigger {
+    Manual,
+    Auto,
+}
+
+/// SessionEnd `reason`. TS:
+/// `enum(['clear','resume','logout','prompt_input_exit','other','bypass_permissions_disabled'])`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExitReason {
+    Clear,
+    Resume,
+    Logout,
+    PromptInputExit,
+    Other,
+    BypassPermissionsDisabled,
+}
+
+/// FileChanged `event`. TS: `enum(['change','add','unlink'])`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileChangeEvent {
+    Change,
+    Add,
+    Unlink,
+}
+
+/// ConfigChange `source`. TS:
+/// `enum(['user_settings','project_settings','local_settings','policy_settings','skills'])`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigChangeSource {
+    UserSettings,
+    ProjectSettings,
+    LocalSettings,
+    PolicySettings,
+    Skills,
+}
+
+/// InstructionsLoaded `memory_type`. TS:
+/// `enum(['User','Project','Local','Managed'])`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MemoryType {
+    User,
+    Project,
+    Local,
+    Managed,
+}
+
+/// InstructionsLoaded `load_reason`. TS:
+/// `enum(['session_start','nested_traversal','path_glob_match','include','compact'])`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstructionsLoadReason {
+    SessionStart,
+    NestedTraversal,
+    PathGlobMatch,
+    Include,
+    Compact,
+}
+
+/// Elicitation `mode`. TS: `enum(['form','url'])`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ElicitationMode {
+    Form,
+    Url,
+}
+
+/// ElicitationResult `action`. TS: `enum(['accept','decline','cancel'])`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ElicitationAction {
+    Accept,
+    Decline,
+    Cancel,
+}
+
+impl SessionStartSource {
+    pub fn as_wire_str(&self) -> &'static str {
+        match self {
+            Self::Startup => "startup",
+            Self::Resume => "resume",
+            Self::Clear => "clear",
+            Self::Compact => "compact",
+        }
+    }
+}
+
+impl SetupTrigger {
+    pub fn as_wire_str(&self) -> &'static str {
+        match self {
+            Self::Init => "init",
+            Self::Maintenance => "maintenance",
+        }
+    }
+}
+
+impl CompactTrigger {
+    pub fn as_wire_str(&self) -> &'static str {
+        match self {
+            Self::Manual => "manual",
+            Self::Auto => "auto",
+        }
+    }
+}
+
+impl ExitReason {
+    pub fn as_wire_str(&self) -> &'static str {
+        match self {
+            Self::Clear => "clear",
+            Self::Resume => "resume",
+            Self::Logout => "logout",
+            Self::PromptInputExit => "prompt_input_exit",
+            Self::Other => "other",
+            Self::BypassPermissionsDisabled => "bypass_permissions_disabled",
+        }
+    }
+}
+
+impl FileChangeEvent {
+    pub fn as_wire_str(&self) -> &'static str {
+        match self {
+            Self::Change => "change",
+            Self::Add => "add",
+            Self::Unlink => "unlink",
+        }
+    }
+}
+
+impl ConfigChangeSource {
+    pub fn as_wire_str(&self) -> &'static str {
+        match self {
+            Self::UserSettings => "user_settings",
+            Self::ProjectSettings => "project_settings",
+            Self::LocalSettings => "local_settings",
+            Self::PolicySettings => "policy_settings",
+            Self::Skills => "skills",
+        }
+    }
+}
+
+impl MemoryType {
+    pub fn as_wire_str(&self) -> &'static str {
+        match self {
+            Self::User => "User",
+            Self::Project => "Project",
+            Self::Local => "Local",
+            Self::Managed => "Managed",
+        }
+    }
+}
+
+impl InstructionsLoadReason {
+    pub fn as_wire_str(&self) -> &'static str {
+        match self {
+            Self::SessionStart => "session_start",
+            Self::NestedTraversal => "nested_traversal",
+            Self::PathGlobMatch => "path_glob_match",
+            Self::Include => "include",
+            Self::Compact => "compact",
+        }
+    }
+}
+
+impl ElicitationMode {
+    pub fn as_wire_str(&self) -> &'static str {
+        match self {
+            Self::Form => "form",
+            Self::Url => "url",
+        }
+    }
+}
+
+impl ElicitationAction {
+    pub fn as_wire_str(&self) -> &'static str {
+        match self {
+            Self::Accept => "accept",
+            Self::Decline => "decline",
+            Self::Cancel => "cancel",
+        }
+    }
+}
+
 /// Common base fields for all hook inputs.
 ///
-/// TS: createBaseHookInput()
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// TS: `BaseHookInputSchema` (`coreSchemas.ts:387-411`). All four base
+/// fields (`session_id`, `transcript_path`, `cwd`) are required; in
+/// practice TS callers default `transcript_path` to an empty string
+/// when no transcript file is being persisted, so we mirror that here
+/// (the field is `String`, defaulting to `""` via `base_from_ctx`).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct BaseHookInput {
     pub session_id: String,
     pub cwd: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub transcript_path: Option<String>,
+    /// Path to the on-disk transcript file. Empty string when the
+    /// session is not persisting a transcript (matches TS practice of
+    /// always emitting a string value). Defaults to `""` on
+    /// deserialize so older fixtures missing the field still parse.
+    #[serde(default)]
+    pub transcript_path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_mode: Option<String>,
+    /// Subagent identifier — present only when the hook fires from
+    /// within a subagent (e.g. a tool called by an `AgentTool` worker).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+    /// Subagent type (e.g. `"Explore"`, `"Review"`) — set on subagent
+    /// hooks AND on main-thread hooks when the session was launched
+    /// via `--agent` (TS parity).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_type: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
 // Tool-related inputs
 // ---------------------------------------------------------------------------
 
-/// Input for PreToolUse hooks.
+/// Input for PreToolUse hooks. TS: `PreToolUseHookInputSchema`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PreToolUseInput {
     #[serde(flatten)]
     pub base: BaseHookInput,
-    pub hook_event_name: String,
+    pub hook_event_name: HookEventType,
     pub tool_name: String,
     pub tool_input: serde_json::Value,
     pub tool_use_id: String,
 }
 
-/// Input for PostToolUse hooks.
+/// Input for PostToolUse hooks. TS: `PostToolUseHookInputSchema`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PostToolUseInput {
     #[serde(flatten)]
     pub base: BaseHookInput,
-    pub hook_event_name: String,
+    pub hook_event_name: HookEventType,
     pub tool_name: String,
     pub tool_input: serde_json::Value,
     pub tool_response: serde_json::Value,
@@ -49,69 +278,83 @@ pub struct PostToolUseInput {
 }
 
 /// Input for PostToolUseFailure hooks.
+///
+/// TS: `PostToolUseFailureHookInputSchema` (`coreSchemas.ts:448-459`):
+/// `{tool_name, tool_input, tool_use_id, error, is_interrupt?}`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PostToolUseFailureInput {
     #[serde(flatten)]
     pub base: BaseHookInput,
-    pub hook_event_name: String,
+    pub hook_event_name: HookEventType,
     pub tool_name: String,
     pub tool_input: serde_json::Value,
+    pub tool_use_id: String,
     pub error: String,
+    /// `true` when the tool call was aborted because the user
+    /// interrupted the turn (TS `processInterrupt` path).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error_type: Option<String>,
+    pub is_interrupt: Option<bool>,
 }
 
 // ---------------------------------------------------------------------------
 // Session lifecycle inputs
 // ---------------------------------------------------------------------------
 
-/// Input for SessionStart hooks.
+/// Input for SessionStart hooks. TS: `SessionStartHookInputSchema`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionStartInput {
     #[serde(flatten)]
     pub base: BaseHookInput,
-    pub hook_event_name: String,
-    pub source: String,
+    pub hook_event_name: HookEventType,
+    pub source: SessionStartSource,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
 }
 
-/// Input for SessionEnd hooks.
+/// Input for SessionEnd hooks. TS: `SessionEndHookInputSchema`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionEndInput {
     #[serde(flatten)]
     pub base: BaseHookInput,
-    pub hook_event_name: String,
-    pub reason: String,
+    pub hook_event_name: HookEventType,
+    pub reason: ExitReason,
 }
 
-/// Input for Setup hooks.
+/// Input for Setup hooks. TS: `SetupHookInputSchema`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SetupInput {
     #[serde(flatten)]
     pub base: BaseHookInput,
-    pub hook_event_name: String,
-    pub trigger: String,
+    pub hook_event_name: HookEventType,
+    pub trigger: SetupTrigger,
 }
 
 /// Input for Stop hooks.
+///
+/// TS: `StopHookInputSchema` (`coreSchemas.ts:513-527`):
+/// `{stop_hook_active, last_assistant_message?}`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StopInput {
     #[serde(flatten)]
     pub base: BaseHookInput,
-    pub hook_event_name: String,
+    pub hook_event_name: HookEventType,
+    /// `true` when the Stop hook is firing recursively (a previous
+    /// Stop hook blocked, the loop continued, and Stop is firing
+    /// again). Hooks should typically pass through to avoid infinite
+    /// loops.
+    pub stop_hook_active: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
+    pub last_assistant_message: Option<String>,
 }
 
-/// Input for StopFailure hooks.
+/// Input for StopFailure hooks. TS: `StopFailureHookInputSchema`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StopFailureInput {
     #[serde(flatten)]
     pub base: BaseHookInput,
-    pub hook_event_name: String,
+    pub hook_event_name: HookEventType,
     pub error: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_details: Option<String>,
@@ -123,76 +366,114 @@ pub struct StopFailureInput {
 // Compact inputs
 // ---------------------------------------------------------------------------
 
-/// Input for PreCompact / PostCompact hooks.
+/// Input for PreCompact hooks.
+///
+/// TS: `PreCompactHookInputSchema` (`coreSchemas.ts:569-577`):
+/// `{trigger: enum('manual','auto'), custom_instructions: string | null}`.
+/// `custom_instructions` is **nullable, not optional** — the field is
+/// always present on the wire, with `null` indicating no instructions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CompactHookInput {
+pub struct PreCompactInput {
     #[serde(flatten)]
     pub base: BaseHookInput,
-    pub hook_event_name: String,
-    pub trigger: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hook_event_name: HookEventType,
+    pub trigger: CompactTrigger,
+    /// `None` serializes to JSON `null` (TS-nullable parity); the
+    /// field is intentionally NOT skip_serializing_if so it always
+    /// appears on the wire.
     pub custom_instructions: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub compact_summary: Option<String>,
+}
+
+/// Input for PostCompact hooks.
+///
+/// TS: `PostCompactHookInputSchema` (`coreSchemas.ts:579-589`):
+/// `{trigger: enum('manual','auto'), compact_summary: string}`. Both
+/// fields are required.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PostCompactInput {
+    #[serde(flatten)]
+    pub base: BaseHookInput,
+    pub hook_event_name: HookEventType,
+    pub trigger: CompactTrigger,
+    pub compact_summary: String,
 }
 
 // ---------------------------------------------------------------------------
 // Subagent inputs
 // ---------------------------------------------------------------------------
 
-/// Input for SubagentStart hooks.
+/// Input for SubagentStart hooks. TS: `SubagentStartHookInputSchema`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubagentStartInput {
     #[serde(flatten)]
     pub base: BaseHookInput,
-    pub hook_event_name: String,
+    pub hook_event_name: HookEventType,
     pub agent_type: String,
     pub agent_id: String,
 }
 
 /// Input for SubagentStop hooks.
+///
+/// TS: `SubagentStopHookInputSchema` (`coreSchemas.ts:550-567`):
+/// `{stop_hook_active, agent_id, agent_transcript_path, agent_type, last_assistant_message?}`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubagentStopInput {
     #[serde(flatten)]
     pub base: BaseHookInput,
-    pub hook_event_name: String,
+    pub hook_event_name: HookEventType,
+    pub stop_hook_active: bool,
     pub agent_type: String,
     pub agent_id: String,
+    /// Path to the subagent's transcript file. Empty string when the
+    /// subagent is not persisting one (TS marks this required).
+    pub agent_transcript_path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_transcript_path: Option<String>,
+    pub last_assistant_message: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
 // User interaction inputs
 // ---------------------------------------------------------------------------
 
-/// Input for UserPromptSubmit hooks.
+/// Input for UserPromptSubmit hooks. TS: `UserPromptSubmitHookInputSchema`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserPromptSubmitInput {
     #[serde(flatten)]
     pub base: BaseHookInput,
-    pub hook_event_name: String,
+    pub hook_event_name: HookEventType,
     pub prompt: String,
 }
 
 /// Input for PermissionRequest hooks.
+///
+/// TS: `PermissionRequestHookInputSchema` (`coreSchemas.ts:425-434`):
+/// `{tool_name, tool_input, permission_suggestions?}` — note that TS
+/// does NOT include `tool_use_id` on this event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionRequestInput {
     #[serde(flatten)]
     pub base: BaseHookInput,
-    pub hook_event_name: String,
+    pub hook_event_name: HookEventType,
     pub tool_name: String,
     pub tool_input: serde_json::Value,
-    pub tool_use_id: String,
+    /// Suggested permission updates from upstream classifiers. JSON
+    /// pass-through to match TS `PermissionUpdate[]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_suggestions: Option<serde_json::Value>,
 }
 
 /// Input for PermissionDenied hooks.
+///
+/// TS: `PermissionDeniedHookInputSchema` (`coreSchemas.ts:461-471`):
+/// `{tool_name, tool_input, tool_use_id, reason}`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionDeniedInput {
     #[serde(flatten)]
     pub base: BaseHookInput,
-    pub hook_event_name: String,
+    pub hook_event_name: HookEventType,
     pub tool_name: String,
+    pub tool_input: serde_json::Value,
+    pub tool_use_id: String,
     pub reason: String,
 }
 
@@ -201,35 +482,56 @@ pub struct PermissionDeniedInput {
 // ---------------------------------------------------------------------------
 
 /// Input for Notification hooks.
+///
+/// TS: `NotificationHookInputSchema` (`coreSchemas.ts:473-482`):
+/// `{message, title?, notification_type}`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NotificationInput {
     #[serde(flatten)]
     pub base: BaseHookInput,
-    pub hook_event_name: String,
-    pub notification_type: String,
+    pub hook_event_name: HookEventType,
     pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    pub notification_type: String,
 }
 
 /// Input for Elicitation hooks.
+///
+/// TS: `ElicitationHookInputSchema` (`coreSchemas.ts:627-643`):
+/// `{mcp_server_name, message, mode?, url?, elicitation_id?, requested_schema?}`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ElicitationInput {
     #[serde(flatten)]
     pub base: BaseHookInput,
-    pub hook_event_name: String,
+    pub hook_event_name: HookEventType,
     pub mcp_server_name: String,
     pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<ElicitationMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elicitation_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requested_schema: Option<serde_json::Value>,
 }
 
 /// Input for ElicitationResult hooks.
+///
+/// TS: `ElicitationResultHookInputSchema` (`coreSchemas.ts:645-660`):
+/// `{mcp_server_name, elicitation_id?, mode?, action, content?}`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ElicitationResultInput {
     #[serde(flatten)]
     pub base: BaseHookInput,
-    pub hook_event_name: String,
+    pub hook_event_name: HookEventType,
     pub mcp_server_name: String,
-    pub action: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elicitation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<ElicitationMode>,
+    pub action: ElicitationAction,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<serde_json::Value>,
 }
@@ -238,43 +540,53 @@ pub struct ElicitationResultInput {
 // File / config / environment change inputs
 // ---------------------------------------------------------------------------
 
-/// Input for FileChanged hooks.
+/// Input for FileChanged hooks. TS: `FileChangedHookInputSchema`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileChangedInput {
     #[serde(flatten)]
     pub base: BaseHookInput,
-    pub hook_event_name: String,
+    pub hook_event_name: HookEventType,
     pub file_path: String,
-    pub event: String,
+    pub event: FileChangeEvent,
 }
 
-/// Input for ConfigChange hooks.
+/// Input for ConfigChange hooks. TS: `ConfigChangeHookInputSchema`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfigChangeInput {
     #[serde(flatten)]
     pub base: BaseHookInput,
-    pub hook_event_name: String,
-    pub source: String,
+    pub hook_event_name: HookEventType,
+    pub source: ConfigChangeSource,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_path: Option<String>,
 }
 
 /// Input for InstructionsLoaded hooks.
+///
+/// TS: `InstructionsLoadedHookInputSchema` (`coreSchemas.ts:695-706`):
+/// `{file_path, memory_type, load_reason, globs?, trigger_file_path?, parent_file_path?}`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstructionsLoadedInput {
     #[serde(flatten)]
     pub base: BaseHookInput,
-    pub hook_event_name: String,
+    pub hook_event_name: HookEventType,
     pub file_path: String,
-    pub load_reason: String,
+    pub memory_type: MemoryType,
+    pub load_reason: InstructionsLoadReason,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub globs: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger_file_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_file_path: Option<String>,
 }
 
-/// Input for CwdChanged hooks.
+/// Input for CwdChanged hooks. TS: `CwdChangedHookInputSchema`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CwdChangedInput {
     #[serde(flatten)]
     pub base: BaseHookInput,
-    pub hook_event_name: String,
+    pub hook_event_name: HookEventType,
     pub old_cwd: String,
     pub new_cwd: String,
 }
@@ -283,21 +595,21 @@ pub struct CwdChangedInput {
 // Worktree inputs
 // ---------------------------------------------------------------------------
 
-/// Input for WorktreeCreate hooks.
+/// Input for WorktreeCreate hooks. TS: `WorktreeCreateHookInputSchema`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorktreeCreateInput {
     #[serde(flatten)]
     pub base: BaseHookInput,
-    pub hook_event_name: String,
+    pub hook_event_name: HookEventType,
     pub name: String,
 }
 
-/// Input for WorktreeRemove hooks.
+/// Input for WorktreeRemove hooks. TS: `WorktreeRemoveHookInputSchema`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorktreeRemoveInput {
     #[serde(flatten)]
     pub base: BaseHookInput,
-    pub hook_event_name: String,
+    pub hook_event_name: HookEventType,
     pub worktree_path: String,
 }
 
@@ -305,68 +617,62 @@ pub struct WorktreeRemoveInput {
 // Task inputs
 // ---------------------------------------------------------------------------
 
-/// Input for TaskCreated / TaskCompleted / TeammateIdle hooks.
+/// Input for TaskCreated hooks.
+///
+/// TS: `TaskCreatedHookInputSchema` (`coreSchemas.ts:601-612`):
+/// `{task_id, task_subject, task_description?, teammate_name?, team_name?}`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TaskEventInput {
+pub struct TaskCreatedInput {
     #[serde(flatten)]
     pub base: BaseHookInput,
-    pub hook_event_name: String,
+    pub hook_event_name: HookEventType,
     pub task_id: String,
+    pub task_subject: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub task_type: Option<String>,
+    pub task_description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub teammate_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team_name: Option<String>,
 }
 
-// ---------------------------------------------------------------------------
-// Model / resource / query inputs
-// ---------------------------------------------------------------------------
-
-/// Input for ModelSwitch hooks.
+/// Input for TaskCompleted hooks.
+///
+/// TS: `TaskCompletedHookInputSchema` (`coreSchemas.ts:614-625`):
+/// `{task_id, task_subject, task_description?, teammate_name?, team_name?}`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModelSwitchInput {
+pub struct TaskCompletedInput {
     #[serde(flatten)]
     pub base: BaseHookInput,
-    pub hook_event_name: String,
+    pub hook_event_name: HookEventType,
+    pub task_id: String,
+    pub task_subject: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub from_model: Option<String>,
-    pub to_model: String,
+    pub task_description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub teammate_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team_name: Option<String>,
 }
 
-/// Input for ContextOverflow / BudgetWarning hooks.
+/// Input for TeammateIdle hooks.
+///
+/// TS: `TeammateIdleHookInputSchema` (`coreSchemas.ts:591-599`):
+/// `{teammate_name, team_name}`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ResourcePressureInput {
+pub struct TeammateIdleInput {
     #[serde(flatten)]
     pub base: BaseHookInput,
-    pub hook_event_name: String,
-    pub pressure_type: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub details: Option<String>,
-}
-
-/// Input for QueryStart hooks.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QueryStartInput {
-    #[serde(flatten)]
-    pub base: BaseHookInput,
-    pub hook_event_name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub query: Option<String>,
-}
-
-/// Input for NotebookCellExecute hooks.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NotebookCellExecuteInput {
-    #[serde(flatten)]
-    pub base: BaseHookInput,
-    pub hook_event_name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cell_id: Option<String>,
+    pub hook_event_name: HookEventType,
+    pub teammate_name: String,
+    pub team_name: String,
 }
 
 // ---------------------------------------------------------------------------
 // Unified enum
 // ---------------------------------------------------------------------------
 
-/// Generic hook input -- wraps any event-specific payload as serialized JSON.
+/// Generic hook input — wraps any event-specific payload as serialized JSON.
 ///
 /// Used as the unified type for `execute_hooks_parallel`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -380,7 +686,8 @@ pub enum HookInput {
     Setup(SetupInput),
     Stop(StopInput),
     StopFailure(StopFailureInput),
-    Compact(CompactHookInput),
+    PreCompact(PreCompactInput),
+    PostCompact(PostCompactInput),
     SubagentStart(SubagentStartInput),
     SubagentStop(SubagentStopInput),
     UserPromptSubmit(UserPromptSubmitInput),
@@ -395,46 +702,48 @@ pub enum HookInput {
     CwdChanged(CwdChangedInput),
     WorktreeCreate(WorktreeCreateInput),
     WorktreeRemove(WorktreeRemoveInput),
-    TaskEvent(TaskEventInput),
-    ModelSwitch(ModelSwitchInput),
-    ResourcePressure(ResourcePressureInput),
-    QueryStart(QueryStartInput),
-    NotebookCellExecute(NotebookCellExecuteInput),
+    TaskCreated(TaskCreatedInput),
+    TaskCompleted(TaskCompletedInput),
+    TeammateIdle(TeammateIdleInput),
 }
 
 impl HookInput {
-    /// The hook event name for this input.
-    pub fn event_name(&self) -> &str {
+    /// The hook event for this input.
+    pub fn event(&self) -> HookEventType {
         match self {
-            Self::PreToolUse(i) => &i.hook_event_name,
-            Self::PostToolUse(i) => &i.hook_event_name,
-            Self::PostToolUseFailure(i) => &i.hook_event_name,
-            Self::SessionStart(i) => &i.hook_event_name,
-            Self::SessionEnd(i) => &i.hook_event_name,
-            Self::Setup(i) => &i.hook_event_name,
-            Self::Stop(i) => &i.hook_event_name,
-            Self::StopFailure(i) => &i.hook_event_name,
-            Self::Compact(i) => &i.hook_event_name,
-            Self::SubagentStart(i) => &i.hook_event_name,
-            Self::SubagentStop(i) => &i.hook_event_name,
-            Self::UserPromptSubmit(i) => &i.hook_event_name,
-            Self::PermissionRequest(i) => &i.hook_event_name,
-            Self::PermissionDenied(i) => &i.hook_event_name,
-            Self::Notification(i) => &i.hook_event_name,
-            Self::Elicitation(i) => &i.hook_event_name,
-            Self::ElicitationResult(i) => &i.hook_event_name,
-            Self::FileChanged(i) => &i.hook_event_name,
-            Self::ConfigChange(i) => &i.hook_event_name,
-            Self::InstructionsLoaded(i) => &i.hook_event_name,
-            Self::CwdChanged(i) => &i.hook_event_name,
-            Self::WorktreeCreate(i) => &i.hook_event_name,
-            Self::WorktreeRemove(i) => &i.hook_event_name,
-            Self::TaskEvent(i) => &i.hook_event_name,
-            Self::ModelSwitch(i) => &i.hook_event_name,
-            Self::ResourcePressure(i) => &i.hook_event_name,
-            Self::QueryStart(i) => &i.hook_event_name,
-            Self::NotebookCellExecute(i) => &i.hook_event_name,
+            Self::PreToolUse(i) => i.hook_event_name,
+            Self::PostToolUse(i) => i.hook_event_name,
+            Self::PostToolUseFailure(i) => i.hook_event_name,
+            Self::SessionStart(i) => i.hook_event_name,
+            Self::SessionEnd(i) => i.hook_event_name,
+            Self::Setup(i) => i.hook_event_name,
+            Self::Stop(i) => i.hook_event_name,
+            Self::StopFailure(i) => i.hook_event_name,
+            Self::PreCompact(i) => i.hook_event_name,
+            Self::PostCompact(i) => i.hook_event_name,
+            Self::SubagentStart(i) => i.hook_event_name,
+            Self::SubagentStop(i) => i.hook_event_name,
+            Self::UserPromptSubmit(i) => i.hook_event_name,
+            Self::PermissionRequest(i) => i.hook_event_name,
+            Self::PermissionDenied(i) => i.hook_event_name,
+            Self::Notification(i) => i.hook_event_name,
+            Self::Elicitation(i) => i.hook_event_name,
+            Self::ElicitationResult(i) => i.hook_event_name,
+            Self::FileChanged(i) => i.hook_event_name,
+            Self::ConfigChange(i) => i.hook_event_name,
+            Self::InstructionsLoaded(i) => i.hook_event_name,
+            Self::CwdChanged(i) => i.hook_event_name,
+            Self::WorktreeCreate(i) => i.hook_event_name,
+            Self::WorktreeRemove(i) => i.hook_event_name,
+            Self::TaskCreated(i) => i.hook_event_name,
+            Self::TaskCompleted(i) => i.hook_event_name,
+            Self::TeammateIdle(i) => i.hook_event_name,
         }
+    }
+
+    /// The hook event name (TS wire-format string) for this input.
+    pub fn event_name(&self) -> &'static str {
+        self.event().as_str()
     }
 }
 
@@ -443,11 +752,21 @@ impl HookInput {
 // ---------------------------------------------------------------------------
 
 /// Build base input from orchestration context.
+///
+/// `transcript_path` defaults to `""` when the context does not carry
+/// one — TS marks the field required, and emitting an empty string
+/// rather than `null` matches its serde shape.
 pub fn base_from_ctx(ctx: &OrchestrationContext) -> BaseHookInput {
     BaseHookInput {
         session_id: ctx.session_id.clone(),
         cwd: ctx.cwd.to_string_lossy().to_string(),
-        transcript_path: None,
+        transcript_path: ctx.transcript_path.clone().unwrap_or_default(),
         permission_mode: ctx.permission_mode.clone(),
+        agent_id: ctx.agent_id.clone(),
+        agent_type: ctx.agent_type.clone(),
     }
 }
+
+#[cfg(test)]
+#[path = "inputs.test.rs"]
+mod tests;

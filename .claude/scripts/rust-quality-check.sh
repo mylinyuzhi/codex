@@ -41,10 +41,9 @@ fi
 
 cd "$WORKSPACE"
 
-# Workaround: virtiofs (macOS Podman) caps open FDs at ~700, too low for a
-# full-workspace cargo build.  Place target dir on the container-local overlay
-# filesystem, keyed by workspace path so concurrent worktrees stay isolated.
-export CARGO_TARGET_DIR="/tmp/cargo-target-$(echo "$PWD" | md5sum | cut -c1-12)"
+# `CARGO_TARGET_DIR` deliberately unset — cargo's default workspace-relative
+# `target/` already isolates worktrees. Override per-shell if you need the
+# old `/tmp/cargo-target-<md5>` shim for virtiofs FD limits.
 
 echo "Rust changes detected — running quality checks..." >&2
 

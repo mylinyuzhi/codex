@@ -7,6 +7,8 @@ use crate::i18n::t;
 use crate::state::CommandPaletteOverlay;
 use crate::state::ExportOverlay;
 use crate::state::McpServerSelectOverlay;
+use crate::state::MemoryDialogOverlay;
+use crate::state::MemoryDialogScope;
 use crate::state::ModelPickerOverlay;
 use crate::state::QuickOpenOverlay;
 use crate::state::SessionBrowserOverlay;
@@ -180,6 +182,41 @@ pub(super) fn export_content(e: &ExportOverlay, theme: &Theme) -> (String, Strin
         ),
         theme.primary,
     )
+}
+
+pub(super) fn memory_dialog_content(
+    m: &MemoryDialogOverlay,
+    theme: &Theme,
+) -> (String, String, Color) {
+    let items: Vec<String> = m
+        .entries
+        .iter()
+        .enumerate()
+        .map(|(i, entry)| {
+            let marker = if i as i32 == m.selected { "▸ " } else { "  " };
+            let scope_tag = match entry.scope {
+                MemoryDialogScope::Managed => "[managed]",
+                MemoryDialogScope::User => "[user]",
+                MemoryDialogScope::Project => "[project]",
+                MemoryDialogScope::ProjectLocal => "[project-local]",
+                MemoryDialogScope::Subdir => "[subdir]",
+            };
+            format!("{marker}{scope_tag} {}", entry.label)
+        })
+        .collect();
+
+    let body = if items.is_empty() {
+        t!("dialog.memory_no_files").to_string()
+    } else {
+        format!(
+            "{}\n\n{}\n\n{}",
+            t!("dialog.memory_select"),
+            items.join("\n"),
+            t!("dialog.hints_nav_select_cancel"),
+        )
+    };
+
+    (t!("dialog.title_memory").to_string(), body, theme.primary)
 }
 
 pub(super) fn mcp_server_select_content(

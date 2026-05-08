@@ -71,7 +71,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
         &self,
         prompt: &str,
         config: AgentQueryConfig,
-    ) -> anyhow::Result<AgentQueryResult> {
+    ) -> Result<AgentQueryResult, coco_error::BoxedError> {
         // Resolve the subagent's permission mode. Parent is expected to
         // have applied the TS inheritance rule before calling; we just
         // parse/fall back. TS: runAgent.ts:412-434.
@@ -118,6 +118,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
             allow_rules: Default::default(),
             deny_rules: Default::default(),
             ask_rules: Default::default(),
+            session_additional_dirs: Default::default(),
             // Propagate the subagent's cwd_override (set by worktree
             // isolation or explicit `cwd:` input) so the child
             // engine's ToolContextFactory installs it onto every
@@ -135,7 +136,12 @@ impl AgentQueryEngine for QueryEngineAdapter {
             compact: coco_config::CompactConfig::default(),
             system_reminder: coco_config::SystemReminderConfig::default(),
             tool_config: coco_config::ToolConfig::default(),
-            sandbox_config: coco_config::SandboxConfig::default(),
+            sandbox_config: coco_config::SandboxSettings::default(),
+            // Subagent spawn path does not yet propagate parent sandbox
+            // state — `AgentQueryConfig` carries no slot for it. Children
+            // run unsandboxed via this entry point; revisit when
+            // teammate/swarm flows need parity with the CLI bootstrap.
+            sandbox_state: None,
             memory_config: coco_config::MemoryConfig::default(),
             shell_config: coco_config::ShellConfig::default(),
             web_fetch_config: coco_config::WebFetchConfig::default(),
@@ -178,6 +184,15 @@ impl AgentQueryEngine for QueryEngineAdapter {
             },
             // Sandboxed write fence — propagated as-is. Empty = no fence.
             allowed_write_roots: config.allowed_write_roots.clone(),
+            // Subagents inherit the SDK opt-in: stay false by default
+            // so background subagent runs don't flood the parent's
+            // SDK stream with hook events.
+            include_hook_events: false,
+            // Subagents get their own mailbox: nothing the parent has
+            // queued is relevant to the child's first turn, and a
+            // shared mailbox would let the child observe reminders
+            // intended for the parent. Cheap: an empty `Mutex<State>`.
+            reminder_mailbox: coco_system_reminder::ReminderMailbox::new(),
         };
 
         // Role resolution: the adapter threads the subagent's role
@@ -230,12 +245,28 @@ impl AgentQueryEngine for QueryEngineAdapter {
             }
             // Append the new user prompt after the fork history.
             messages.push(coco_messages::create_user_message(prompt));
-            engine.run_with_messages(messages, event_tx).await?
+            engine
+                .run_with_messages(messages, event_tx)
+                .await
+                .map_err(|e| {
+                    Box::new(coco_error::PlainError::new(
+                        e.to_string(),
+                        coco_error::StatusCode::Internal,
+                    )) as coco_error::BoxedError
+                })?
         } else {
             // The single-prompt path uses `run_with_events` so the
             // caller's `event_tx` (or our discarded fallback) drives
             // the same emission stream as the fork path.
-            engine.run_with_events(prompt, event_tx).await?
+            engine
+                .run_with_events(prompt, event_tx)
+                .await
+                .map_err(|e| {
+                    Box::new(coco_error::PlainError::new(
+                        e.to_string(),
+                        coco_error::StatusCode::Internal,
+                    )) as coco_error::BoxedError
+                })?
         };
 
         // Count ToolResult messages as a proxy for tool_use_count —
