@@ -52,7 +52,7 @@ impl Default for CommitPromptHandler {
 
 #[async_trait]
 impl CommandHandler for CommitPromptHandler {
-    async fn execute_command(&self, args: &str) -> anyhow::Result<CommandResult> {
+    async fn execute_command(&self, args: &str) -> crate::Result<CommandResult> {
         let cwd = self.resolved_cwd();
         let in_repo = run_git(&cwd, &["rev-parse", "--is-inside-work-tree"]).await;
         if in_repo.is_err() {
@@ -95,18 +95,18 @@ impl CommandHandler for CommitPromptHandler {
     }
 }
 
-async fn run_git(cwd: &Path, args: &[&str]) -> anyhow::Result<String> {
+async fn run_git(cwd: &Path, args: &[&str]) -> crate::Result<String> {
     let output = tokio::process::Command::new("git")
         .current_dir(cwd)
         .args(args)
         .output()
         .await?;
     if !output.status.success() {
-        anyhow::bail!(
+        return Err(crate::CommandsError::git_failed(format!(
             "git {} failed: {}",
             args.join(" "),
             String::from_utf8_lossy(&output.stderr)
-        );
+        )));
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }

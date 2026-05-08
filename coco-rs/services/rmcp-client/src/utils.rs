@@ -1,9 +1,6 @@
 use std::collections::HashMap;
 use std::env;
 
-use anyhow::Context;
-use anyhow::Result;
-use anyhow::anyhow;
 use coco_mcp_types::CallToolResult;
 use reqwest::ClientBuilder;
 use reqwest::header::HeaderMap;
@@ -11,6 +8,9 @@ use reqwest::header::HeaderName;
 use reqwest::header::HeaderValue;
 use rmcp::model::CallToolResult as RmcpCallToolResult;
 use serde_json::Value;
+
+use crate::Result;
+use crate::ResultExt;
 
 pub(crate) fn convert_call_tool_result(result: RmcpCallToolResult) -> Result<CallToolResult> {
     let mut value = serde_json::to_value(result)?;
@@ -20,7 +20,7 @@ pub(crate) fn convert_call_tool_result(result: RmcpCallToolResult) -> Result<Cal
     {
         obj.insert("content".to_string(), Value::Array(Vec::new()));
     }
-    serde_json::from_value(value).context("failed to convert call tool result")
+    serde_json::from_value(value).with_ctx("failed to convert call tool result")
 }
 
 /// Convert from mcp-types to Rust SDK types.
@@ -34,7 +34,7 @@ where
     U: serde::de::DeserializeOwned,
 {
     let json = serde_json::to_value(value)?;
-    serde_json::from_value(json).map_err(|err| anyhow!(err))
+    Ok(serde_json::from_value(json)?)
 }
 
 /// Convert from Rust SDK types to mcp-types.
@@ -48,7 +48,7 @@ where
     U: serde::de::DeserializeOwned,
 {
     let json = serde_json::to_value(value)?;
-    serde_json::from_value(json).map_err(|err| anyhow!(err))
+    Ok(serde_json::from_value(json)?)
 }
 
 pub(crate) fn create_env_for_mcp_server(

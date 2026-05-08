@@ -486,6 +486,70 @@ async fn test_sdk_unknown_method_returns_error() -> Result<()> {
     Ok(())
 }
 
+// ─── Reminder coverage (full SessionRuntime layer) ────────────────────
+
+#[tokio::test]
+async fn test_sdk_reminder_hook_additional_context_deepseek_openai() -> Result<()> {
+    let _t = require_live!("deepseek-openai", MODEL, "tools");
+    sdk_server::suite::reminders::hook_additional_context::run("deepseek-openai", MODEL).await
+}
+
+#[tokio::test]
+async fn test_sdk_reminder_hook_stopped_continuation_deepseek_openai() -> Result<()> {
+    let _t = require_live!("deepseek-openai", MODEL, "tools");
+    sdk_server::suite::reminders::hook_stopped_continuation::run("deepseek-openai", MODEL).await
+}
+
+#[tokio::test]
+async fn test_sdk_reminder_plan_mode_transitions_deepseek_openai() -> Result<()> {
+    let _t = require_live!("deepseek-openai", MODEL, "text");
+    sdk_server::suite::reminders::plan_mode_transitions::run("deepseek-openai", MODEL).await
+}
+
+#[tokio::test]
+async fn test_sdk_reminder_hook_session_start_deepseek_openai() -> Result<()> {
+    let _t = require_live!("deepseek-openai", MODEL, "text");
+    sdk_server::suite::reminders::hook_session_start::run("deepseek-openai", MODEL).await
+}
+
+#[tokio::test]
+async fn test_sdk_reminder_hook_user_prompt_submit_deepseek_openai() -> Result<()> {
+    let _t = require_live!("deepseek-openai", MODEL, "text");
+    sdk_server::suite::reminders::hook_user_prompt_submit::run("deepseek-openai", MODEL).await
+}
+
+#[tokio::test]
+async fn test_sdk_reminder_skill_listing_runtime_deepseek_openai() -> Result<()> {
+    let _t = require_live!("deepseek-openai", MODEL, "text");
+    sdk_server::suite::reminders::skill_listing_runtime::run("deepseek-openai", MODEL).await
+}
+
+// ─── Round A: engine hot-path coverage ───────────────────────────────
+
+#[tokio::test]
+async fn test_sdk_session_resume_roundtrip_deepseek_openai() -> Result<()> {
+    let _t = require_live!("deepseek-openai", MODEL, "text");
+    sdk_server::suite::session_resume_roundtrip::run("deepseek-openai", MODEL).await
+}
+
+#[tokio::test]
+async fn test_sdk_set_model_mid_session_deepseek_openai() -> Result<()> {
+    let _t = require_live!("deepseek-openai", MODEL, "text");
+    sdk_server::suite::set_model_mid_session::run("deepseek-openai", MODEL).await
+}
+
+#[tokio::test]
+async fn test_sdk_session_archive_emits_aggregate_deepseek_openai() -> Result<()> {
+    let _t = require_live!("deepseek-openai", MODEL, "text");
+    sdk_server::suite::session_archive_emits_aggregate::run("deepseek-openai", MODEL).await
+}
+
+#[tokio::test]
+async fn test_sdk_cancel_during_tool_deepseek_openai() -> Result<()> {
+    let _t = require_live!("deepseek-openai", MODEL, "tools");
+    sdk_server::suite::cancel_during_tool::run("deepseek-openai", MODEL).await
+}
+
 // ─── Token-usage report (alphabetically last) ────────────────────────
 
 #[tokio::test]

@@ -6,7 +6,6 @@ license.workspace = true
 description = "Shell command parsing and security analysis"
 
 [dependencies]
-anyhow.workspace = true
 once_cell.workspace = true
 regex.workspace = true
 serde = { workspace = true, features = ["derive"] }
@@ -18,6 +17,7 @@ tree-sitter.workspace = true
 tree-sitter-bash.workspace = true
 
 [dev-dependencies]
+anyhow.workspace = true
 pretty_assertions.workspace = true
 
 [lints]

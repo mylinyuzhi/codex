@@ -8,10 +8,13 @@
 //! Hermetic by design: each `LiveSession` owns a tempdir used as `cwd`
 //! and `project_dir` so `bypassPermissions` writes can't escape.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Context as _;
 use anyhow::Result;
+use coco_hooks::HookRegistry;
+use coco_query::CommandQueue;
 use coco_query::QueryEngine;
 use coco_query::QueryEngineConfig;
 use coco_query::QueryResult;
@@ -46,7 +49,7 @@ use crate::common::runtime::build_client;
 
 /// Knobs the CLI suite tweaks per scenario. Defaults aim at "tiny but
 /// realistic" so live tests stay fast and cheap.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SessionConfig {
     /// Triggers compaction earlier when set small. Default 200_000
     /// (matches the production `run_chat` default).
@@ -63,6 +66,35 @@ pub struct SessionConfig {
     /// Optional system-prompt override — `None` lets the engine use
     /// its own composed system prompt.
     pub system_prompt: Option<String>,
+    /// Engine-side permission mode. Reminder tests flip this to `Plan`
+    /// or `Auto` to trigger `PlanMode` / `AutoMode` reminders.
+    pub permission_mode: PermissionMode,
+    /// `system_reminder` engine config — controls which reminder
+    /// generators are enabled and supplies `critical_instruction`.
+    /// Defaults to the prod default (most reminders on).
+    pub system_reminder: coco_config::SystemReminderConfig,
+    /// Budget cap; when `Some`, fires the `BudgetUsd` reminder every
+    /// turn. `None` disables the reminder.
+    pub max_budget_usd: Option<f64>,
+    /// Pre-built `SessionBootstrap`. Reminders that source from
+    /// bootstrap (`OutputStyle`, `SkillListing` listing-only path)
+    /// require this. `None` means the engine runs without a bootstrap
+    /// — fine for most tests.
+    pub session_bootstrap: Option<coco_query::SessionBootstrap>,
+    /// Files to drop into the workdir before the engine starts. Each
+    /// entry is `(relative_path, content)`. Parent dirs are created.
+    /// Used by tests that need pre-populated `CLAUDE.md`,
+    /// `.coco/skills/<name>/SKILL.md`, or custom slash commands.
+    pub pre_workdir_files: Vec<(PathBuf, String)>,
+    /// Hook registry to install on the engine. `None` means no hooks
+    /// (the production default for `coco -p`). Tests targeting
+    /// PreToolUse / PostToolUse / Stop hook behavior pass `Some`.
+    pub hooks: Option<Arc<HookRegistry>>,
+    /// Override the `Features` flag set. `None` keeps
+    /// `Features::with_defaults()`. Tests that assert on feature-gated
+    /// tool registry shape (e.g. WebSearch off → tool absent) supply
+    /// a custom set.
+    pub features: Option<Features>,
 }
 
 impl Default for SessionConfig {
@@ -74,6 +106,13 @@ impl Default for SessionConfig {
             max_tokens: None,
             event_buffer: 1024,
             system_prompt: None,
+            permission_mode: PermissionMode::BypassPermissions,
+            system_reminder: coco_config::SystemReminderConfig::default(),
+            max_budget_usd: None,
+            session_bootstrap: None,
+            pre_workdir_files: Vec::new(),
+            hooks: None,
+            features: None,
         }
     }
 }
@@ -97,6 +136,13 @@ impl SessionConfig {
 pub struct SessionOutcome {
     pub result: QueryResult,
     pub events: Vec<CoreEvent>,
+    /// Workdir path so tests can read files the agent wrote without
+    /// peeking past the `_workdir` `TempDir`. Cloned from
+    /// `_workdir.path()` at construction time. Allow-dead-code so
+    /// future tests reading agent file output don't trip the lint;
+    /// the field is part of the public test surface.
+    #[allow(dead_code)]
+    pub workdir_path: PathBuf,
     /// Tempdir that backed `cwd`. Owned by the outcome so files the
     /// agent wrote stay readable for follow-up assertions; cleaned up
     /// when the outcome drops. Underscore-prefixed because tests
@@ -120,6 +166,19 @@ pub async fn run_session(
         .with_context(|| "create cwd tempdir under /tmp")?;
     let workdir_path = workdir.path().to_path_buf();
 
+    // Pre-populate workdir with caller-supplied fixtures (CLAUDE.md,
+    // SKILL.md, slash command markdown, …) before the engine starts so
+    // its initial context-assembly + skill discovery picks them up.
+    for (rel_path, content) in &session_cfg.pre_workdir_files {
+        let target = workdir_path.join(rel_path);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create parent dirs for {target:?}"))?;
+        }
+        std::fs::write(&target, content)
+            .with_context(|| format!("write pre-workdir file {target:?}"))?;
+    }
+
     let api_client = build_client(provider_name, model_id)
         .with_context(|| format!("build api client for {provider_name}/{model_id}"))?;
 
@@ -129,10 +188,16 @@ pub async fn run_session(
 
     let cancel = CancellationToken::new();
 
+    let permission_mode = session_cfg.permission_mode;
+    let bypass_available = matches!(permission_mode, PermissionMode::BypassPermissions);
+    let features = session_cfg
+        .features
+        .clone()
+        .unwrap_or_else(Features::with_defaults);
     let config = QueryEngineConfig {
         model_id: model_id.to_string(),
-        permission_mode: PermissionMode::BypassPermissions,
-        bypass_permissions_available: true,
+        permission_mode,
+        bypass_permissions_available: bypass_available,
         context_window: session_cfg.context_window,
         max_output_tokens: session_cfg.max_output_tokens,
         max_turns: session_cfg.max_turns,
@@ -141,12 +206,17 @@ pub async fn run_session(
         is_non_interactive: true,
         project_dir: Some(workdir_path.clone()),
         cwd_override: Some(workdir_path.clone()),
-        features: Arc::new(Features::with_defaults()),
+        features: Arc::new(features),
         tool_overrides: Arc::new(ToolOverrides::none()),
+        system_reminder: session_cfg.system_reminder,
+        max_budget_usd: session_cfg.max_budget_usd,
         ..QueryEngineConfig::default()
     };
 
-    let engine = QueryEngine::new(config, api_client, tools, cancel, /*hooks*/ None);
+    let mut engine = QueryEngine::new(config, api_client, tools, cancel, session_cfg.hooks.clone());
+    if let Some(bootstrap) = session_cfg.session_bootstrap.clone() {
+        engine = engine.with_session_bootstrap(bootstrap);
+    }
 
     let (event_tx, mut event_rx) = mpsc::channel::<CoreEvent>(session_cfg.event_buffer);
     let drainer = tokio::spawn(async move {
@@ -160,7 +230,9 @@ pub async fn run_session(
     let result = engine
         .run_with_events(prompt, event_tx)
         .await
-        .with_context(|| format!("engine.run_with_events on {provider_name}/{model_id}"))?;
+        .map_err(|e| {
+            anyhow::anyhow!("engine.run_with_events on {provider_name}/{model_id}: {e}")
+        })?;
 
     // CLI sessions can fan out to many LLM HTTP calls per prompt
     // (multi-turn agent loop, tool reflection, compaction). Use the
@@ -179,6 +251,113 @@ pub async fn run_session(
     Ok(SessionOutcome {
         result,
         events,
+        workdir_path,
+        _workdir: workdir,
+    })
+}
+
+/// Variant that exposes the engine's `CommandQueue` so callers can
+/// enqueue mid-turn while `engine.run_with_events` is in flight. The
+/// queue is `Clone` and internally `Arc`-shared, so the same handle on
+/// both ends drains the same backing storage.
+///
+/// Usage pattern: spawn a task that waits a short delay, then calls
+/// `queue.enqueue(...)`. The engine drains the queue between turns, so
+/// a long-running first turn (e.g. one that calls Bash with a small
+/// sleep) gives the parallel task time to inject before the loop drains.
+pub async fn run_session_with_steering(
+    provider_name: &str,
+    model_id: &str,
+    session_cfg: SessionConfig,
+    prompt: &str,
+    steer: impl FnOnce(CommandQueue) -> tokio::task::JoinHandle<()> + Send + 'static,
+) -> Result<SessionOutcome> {
+    let workdir = crate::common::tmpdir::make("coco-tests-cli-")
+        .with_context(|| "create cwd tempdir under /tmp")?;
+    let workdir_path = workdir.path().to_path_buf();
+
+    for (rel_path, content) in &session_cfg.pre_workdir_files {
+        let target = workdir_path.join(rel_path);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create parent dirs for {target:?}"))?;
+        }
+        std::fs::write(&target, content)
+            .with_context(|| format!("write pre-workdir file {target:?}"))?;
+    }
+
+    let api_client = build_client(provider_name, model_id)
+        .with_context(|| format!("build api client for {provider_name}/{model_id}"))?;
+
+    let tool_registry = ToolRegistry::new();
+    register_suite_tools(&tool_registry);
+    let tools = Arc::new(tool_registry);
+
+    let cancel = CancellationToken::new();
+    let permission_mode = session_cfg.permission_mode;
+    let bypass_available = matches!(permission_mode, PermissionMode::BypassPermissions);
+    let features = session_cfg
+        .features
+        .clone()
+        .unwrap_or_else(Features::with_defaults);
+    let config = QueryEngineConfig {
+        model_id: model_id.to_string(),
+        permission_mode,
+        bypass_permissions_available: bypass_available,
+        context_window: session_cfg.context_window,
+        max_output_tokens: session_cfg.max_output_tokens,
+        max_turns: session_cfg.max_turns,
+        max_tokens: session_cfg.max_tokens,
+        system_prompt: session_cfg.system_prompt,
+        is_non_interactive: true,
+        project_dir: Some(workdir_path.clone()),
+        cwd_override: Some(workdir_path.clone()),
+        features: Arc::new(features),
+        tool_overrides: Arc::new(ToolOverrides::none()),
+        system_reminder: session_cfg.system_reminder,
+        max_budget_usd: session_cfg.max_budget_usd,
+        ..QueryEngineConfig::default()
+    };
+
+    let mut engine = QueryEngine::new(config, api_client, tools, cancel, session_cfg.hooks.clone());
+    if let Some(bootstrap) = session_cfg.session_bootstrap.clone() {
+        engine = engine.with_session_bootstrap(bootstrap);
+    }
+
+    let queue: CommandQueue = engine.command_queue().clone();
+    let steer_task = steer(queue);
+
+    let (event_tx, mut event_rx) = mpsc::channel::<CoreEvent>(session_cfg.event_buffer);
+    let drainer = tokio::spawn(async move {
+        let mut events = Vec::new();
+        while let Some(evt) = event_rx.recv().await {
+            events.push(evt);
+        }
+        events
+    });
+
+    let result = engine
+        .run_with_events(prompt, event_tx)
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!("engine.run_with_events on {provider_name}/{model_id}: {e}")
+        })?;
+    let _ = steer_task.await;
+
+    let llm_calls = result.cost_tracker.total_api_calls.max(0) as u64;
+    crate::common::usage_report::record_with_llm_calls(
+        provider_name,
+        model_id,
+        "cli.run_session_with_steering",
+        &result.total_usage,
+        llm_calls,
+    );
+
+    let events = drainer.await.unwrap_or_default();
+    Ok(SessionOutcome {
+        result,
+        events,
+        workdir_path,
         _workdir: workdir,
     })
 }

@@ -164,6 +164,10 @@ impl ExtractService {
             let mut state = self.state.lock().await;
             if state.in_progress {
                 state.pending_trailing = true;
+                tracing::debug!(
+                    message_count = input.message_count,
+                    "auto-memory extract skipped: in progress (queued trailing)"
+                );
                 return ExtractOutcome::Skipped(SkipReason::InProgress);
             }
             if input.has_memory_writes {
@@ -171,21 +175,38 @@ impl ExtractService {
                     .emit(MemoryEvent::ExtractionSkippedDirectWrite {
                         message_count: input.message_count,
                     });
+                tracing::debug!(
+                    message_count = input.message_count,
+                    "auto-memory extract skipped: model wrote memory directly"
+                );
                 return ExtractOutcome::Skipped(SkipReason::DirectWrite);
             }
             state.turns_since_last += 1;
             if state.turns_since_last < self.config.extraction_throttle {
+                tracing::debug!(
+                    turns_since_last = state.turns_since_last,
+                    throttle = self.config.extraction_throttle,
+                    "auto-memory extract skipped: throttled"
+                );
                 return ExtractOutcome::Skipped(SkipReason::Throttled);
             }
             state.turns_since_last = 0;
             state.in_progress = true;
         }
+        tracing::info!(
+            message_count = input.message_count,
+            "auto-memory extract dispatch (forking agent)"
+        );
 
         // Materialize the slice once now that we know we'll fire.
         // Reused for both the primary run and any trailing run so the
         // caller's closure stays `FnOnce`.
         let fork_context = (input.fork_messages)();
         let outcome = self.run(input.message_count, fork_context.clone()).await;
+        tracing::info!(
+            outcome = ?std::mem::discriminant(&outcome),
+            "auto-memory extract done"
+        );
 
         {
             let mut state = self.state.lock().await;

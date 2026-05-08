@@ -227,17 +227,24 @@ fn resolve_cloud_provider_from_env() -> Option<AuthMethod> {
 // ── OAuth token persistence ──
 
 /// Save OAuth tokens to disk for session persistence.
-pub fn save_oauth_tokens(config_dir: &Path, tokens: &OAuthTokens) -> anyhow::Result<()> {
-    std::fs::create_dir_all(config_dir)?;
+pub fn save_oauth_tokens(
+    config_dir: &Path,
+    tokens: &OAuthTokens,
+) -> Result<(), coco_error::BoxedError> {
+    use coco_error::StatusCode;
+    use coco_error::boxed;
+
+    std::fs::create_dir_all(config_dir).map_err(|e| boxed(e, StatusCode::IoError))?;
     let path = config_dir.join(OAUTH_TOKEN_FILE);
-    let json = serde_json::to_string_pretty(tokens)?;
+    let json = serde_json::to_string_pretty(tokens).map_err(|e| boxed(e, StatusCode::Internal))?;
 
     // Write atomically via temp file
     let tmp_path = path.with_extension("tmp");
-    let mut file = std::fs::File::create(&tmp_path)?;
-    file.write_all(json.as_bytes())?;
-    file.sync_all()?;
-    std::fs::rename(tmp_path, path)?;
+    let mut file = std::fs::File::create(&tmp_path).map_err(|e| boxed(e, StatusCode::IoError))?;
+    file.write_all(json.as_bytes())
+        .map_err(|e| boxed(e, StatusCode::IoError))?;
+    file.sync_all().map_err(|e| boxed(e, StatusCode::IoError))?;
+    std::fs::rename(tmp_path, path).map_err(|e| boxed(e, StatusCode::IoError))?;
 
     Ok(())
 }
@@ -251,10 +258,13 @@ pub fn load_stored_oauth_tokens(config_dir: Option<&Path>) -> Option<OAuthTokens
 }
 
 /// Remove stored OAuth tokens (logout).
-pub fn clear_stored_oauth_tokens(config_dir: &Path) -> anyhow::Result<()> {
+pub fn clear_stored_oauth_tokens(config_dir: &Path) -> Result<(), coco_error::BoxedError> {
+    use coco_error::StatusCode;
+    use coco_error::boxed;
+
     let path = config_dir.join(OAUTH_TOKEN_FILE);
     if path.exists() {
-        std::fs::remove_file(path)?;
+        std::fs::remove_file(path).map_err(|e| boxed(e, StatusCode::IoError))?;
     }
     Ok(())
 }

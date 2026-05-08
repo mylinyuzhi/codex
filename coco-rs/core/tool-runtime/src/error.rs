@@ -50,6 +50,38 @@ impl std::error::Error for ToolError {
     }
 }
 
+// `ToolError` keeps its hand-rolled shape (callers across the workspace
+// build variants directly via `Self::Variant { .. }`); we layer the
+// `coco-error` traits on top so callers can match on `StatusCode` without
+// the mass-rewrite that a full snafu migration would require.
+impl coco_error::StackError for ToolError {
+    fn debug_fmt(&self, layer: usize, buf: &mut Vec<String>) {
+        buf.push(format!("{layer}: {self}"));
+    }
+
+    fn next(&self) -> Option<&dyn coco_error::StackError> {
+        None
+    }
+}
+
+impl coco_error::ErrorExt for ToolError {
+    fn status_code(&self) -> coco_error::StatusCode {
+        use coco_error::StatusCode;
+        match self {
+            Self::NotFound { .. } => StatusCode::ProviderNotFound,
+            Self::InvalidInput { .. } => StatusCode::InvalidArguments,
+            Self::ExecutionFailed { .. } => StatusCode::Internal,
+            Self::PermissionDenied { .. } => StatusCode::PermissionDenied,
+            Self::Timeout { .. } => StatusCode::Timeout,
+            Self::Cancelled => StatusCode::Cancelled,
+        }
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
 /// Format a tool error for model consumption. Truncated at 10,000 chars.
 /// TS: formatToolError() — handles AbortError, ShellError, general errors.
 pub fn format_tool_error(error: &ToolError) -> String {

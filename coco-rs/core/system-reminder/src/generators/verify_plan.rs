@@ -23,8 +23,10 @@
 //! 1. Config flag enabled (`config.attachments.verify_plan_reminder`).
 //! 2. Main-agent only (enforced by tier filter in the orchestrator).
 //! 3. `ctx.has_pending_plan_verification` (set by `ExitPlanModeTool`).
-//! 4. `ctx.turns_since_plan_exit >= 10 && ctx.turns_since_plan_exit % 10 == 0`
-//!    — fires on turns 10, 20, 30, … matching TS cadence.
+//! 4. `ctx.turns_since_plan_exit % 10 == 0` (and `>= 0`) — fires on
+//!    turns 0, 10, 20, … matching TS `attachments.ts:3919-3922`
+//!    (`turnCount % VERIFY_PLAN_REMINDER_CONFIG.TURNS_BETWEEN_REMINDERS !== 0`
+//!    is the only skip condition, so turn 0 itself fires).
 
 use async_trait::async_trait;
 
@@ -75,7 +77,7 @@ impl AttachmentGenerator for VerifyPlanReminderGenerator {
             return Ok(None);
         }
         let n = ctx.turns_since_plan_exit;
-        if n <= 0 || n % TURNS_BETWEEN_REMINDERS != 0 {
+        if n < 0 || n % TURNS_BETWEEN_REMINDERS != 0 {
             return Ok(None);
         }
         Ok(Some(SystemReminder::new(

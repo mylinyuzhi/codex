@@ -61,8 +61,8 @@ async fn commands_walks_registry_visible_list() {
         is_enabled: None,
     });
 
-    let boot =
-        CliInitializeBootstrap::new("default".into()).with_command_registry(Arc::new(registry));
+    let boot = CliInitializeBootstrap::new("default".into())
+        .with_command_registry(Arc::new(tokio::sync::RwLock::new(Arc::new(registry))));
     let commands = boot.commands().await;
     assert_eq!(commands.len(), 1);
     assert_eq!(commands[0].name, "visible-cmd");
@@ -126,8 +126,8 @@ async fn commands_filters_sensitive_commands() {
         is_enabled: None,
     });
 
-    let boot =
-        CliInitializeBootstrap::new("default".into()).with_command_registry(Arc::new(registry));
+    let boot = CliInitializeBootstrap::new("default".into())
+        .with_command_registry(Arc::new(tokio::sync::RwLock::new(Arc::new(registry))));
     let commands = boot.commands().await;
     let names: Vec<&str> = commands.iter().map(|c| c.name.as_str()).collect();
     assert!(names.contains(&"public-cmd"));
@@ -165,8 +165,8 @@ async fn missing_argument_hint_becomes_empty_string() {
         is_enabled: None,
     });
 
-    let boot =
-        CliInitializeBootstrap::new("default".into()).with_command_registry(Arc::new(registry));
+    let boot = CliInitializeBootstrap::new("default".into())
+        .with_command_registry(Arc::new(tokio::sync::RwLock::new(Arc::new(registry))));
     let commands = boot.commands().await;
     assert_eq!(commands.len(), 1);
     // TS `argumentHint` is REQUIRED; we default to empty string when None.

@@ -1,6 +1,7 @@
 //! Layered configuration: settings, model selection, providers, effort, fast mode.
 //!
-//! Depends on coco-types for shared enums. Uses anyhow for error handling.
+//! Depends on coco-types for shared enums. Uses `coco_error` + typed
+//! `ConfigError` (Tier 3 main-trunk policy).
 
 pub mod analytics;
 pub mod compact_settings;
@@ -16,6 +17,7 @@ pub mod positive;
 pub mod prompt_cache_settings;
 pub mod provider;
 pub mod runtime;
+pub mod sandbox_settings;
 pub mod secret;
 pub mod sections;
 pub mod settings;
@@ -44,6 +46,8 @@ pub use env::EnvKey;
 pub use env::EnvOnlyConfig;
 pub use env::EnvSnapshot;
 pub use error::ConfigError;
+pub use error::Result;
+pub(crate) use error::ResultExt;
 pub use fast_mode::CooldownReason;
 pub use fast_mode::FastModeState;
 pub use global_config::GlobalConfig;
@@ -78,6 +82,15 @@ pub use runtime::RuntimeConfigBuilder;
 pub use runtime::RuntimePublisher;
 pub use runtime::build_runtime_config;
 pub use runtime::build_runtime_config_with;
+pub use sandbox_settings::FilesystemConfig;
+pub use sandbox_settings::IgnoreViolationsConfig;
+pub use sandbox_settings::MitmProxyConfig;
+pub use sandbox_settings::NetworkConfig;
+pub use sandbox_settings::NetworkMode;
+pub use sandbox_settings::RipgrepConfig;
+pub use sandbox_settings::SandboxBypass;
+pub use sandbox_settings::SandboxSettings;
+pub use sandbox_settings::SourcedRule;
 pub use secret::RedactedSecret;
 pub use sections::ApiConfig;
 pub use sections::ApiRetryConfig;
@@ -86,7 +99,6 @@ pub use sections::LoopConfig;
 pub use sections::McpRuntimeConfig;
 pub use sections::MemoryConfig;
 pub use sections::PathConfig;
-pub use sections::SandboxConfig;
 pub use sections::ShellConfig;
 pub use sections::ToolConfig;
 pub use sections::WebFetchConfig;

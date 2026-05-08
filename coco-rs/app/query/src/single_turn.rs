@@ -27,7 +27,7 @@ pub async fn single_turn_query(
     system_prompt: &str,
     user_message: &str,
     max_tokens: Option<i64>,
-) -> anyhow::Result<SingleTurnResult> {
+) -> Result<SingleTurnResult, coco_error::BoxedError> {
     let start = std::time::Instant::now();
 
     let prompt: LanguageModelPrompt = vec![
@@ -51,10 +51,12 @@ pub async fn single_turn_query(
         cache: None,
     };
 
-    let result = client
-        .query(&params)
-        .await
-        .map_err(|e| anyhow::anyhow!("single-turn query failed: {e}"))?;
+    let result = client.query(&params).await.map_err(|e| {
+        Box::new(coco_error::PlainError::new(
+            format!("single-turn query failed: {e}"),
+            coco_error::StatusCode::ProviderError,
+        )) as coco_error::BoxedError
+    })?;
 
     // Extract text from response
     let text = result
@@ -87,7 +89,7 @@ pub async fn side_query(
     client: &Arc<ApiClient>,
     system_prompt: &str,
     user_message: &str,
-) -> anyhow::Result<String> {
+) -> Result<String, coco_error::BoxedError> {
     let result = single_turn_query(client, system_prompt, user_message, Some(4096)).await?;
     Ok(result.text)
 }

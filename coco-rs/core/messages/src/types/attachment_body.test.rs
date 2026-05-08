@@ -78,6 +78,20 @@ fn silent_payload_round_trips_with_every_silent_attachment_kind() {
             AttachmentKind::EditedImageFile => {
                 AttachmentMessage::silent_edited_image_file(EditedImageFilePayload::default())
             }
+            // Audit-add (May 2026): these silent reminders are emitted by
+            // generators in `coco-system-reminder` directly, not via
+            // sister-crate `silent_*` constructors. They don't need a typed
+            // payload here; their bodies are formatted strings produced at
+            // generation time. Skip without panicking.
+            // (`CommandPermissions` already has a typed constructor above —
+            // the audit kept it on the typed path so callers can route
+            // structured permission snapshots without going through the
+            // reminder pipeline.)
+            AttachmentKind::MaxTurnsReached
+            | AttachmentKind::CurrentSessionMemory
+            | AttachmentKind::TeammateShutdownBatch
+            | AttachmentKind::ContextEfficiency
+            | AttachmentKind::SkillDiscovery => continue,
             other => panic!("silent kind {other:?} has no constructor"),
         };
         assert_eq!(msg.kind, *kind);
@@ -93,8 +107,11 @@ fn api_constructor_rejects_non_api_visible_in_debug() {
 
 #[test]
 fn unit_constructor_works_for_runtime_bookkeeping() {
-    let msg = AttachmentMessage::unit(AttachmentKind::MaxTurnsReached);
-    assert_eq!(msg.kind, AttachmentKind::MaxTurnsReached);
+    // Audit-add (May 2026) ported MaxTurnsReached / CurrentSessionMemory /
+    // TeammateShutdownBatch as `SilentReminder` generators, leaving
+    // `BagelConsole` as the only remaining `RuntimeBookkeeping` kind.
+    let msg = AttachmentMessage::unit(AttachmentKind::BagelConsole);
+    assert_eq!(msg.kind, AttachmentKind::BagelConsole);
     assert!(matches!(msg.body, AttachmentBody::Unit));
 }
 

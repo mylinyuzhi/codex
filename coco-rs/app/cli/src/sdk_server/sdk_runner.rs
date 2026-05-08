@@ -131,6 +131,7 @@ impl TurnRunner for QueryEngineRunner {
                 session_id: handoff.session_id.clone(),
                 tool_config: runtime_config.tool.clone(),
                 sandbox_config: runtime_config.sandbox.clone(),
+                sandbox_state: runtime.sandbox_state(),
                 memory_config: runtime_config.memory.clone(),
                 shell_config: runtime_config.shell.clone(),
                 web_fetch_config: runtime_config.web_fetch.clone(),
@@ -138,6 +139,10 @@ impl TurnRunner for QueryEngineRunner {
                 compact: runtime_config.compact.clone(),
                 features: std::sync::Arc::new(runtime_config.features.clone()),
                 tool_overrides: runtime_config.tool_overrides.clone(),
+                // Inherit `--include-hook-events` from the runtime's
+                // stored engine config so SDK turns honour the flag the
+                // session was started with.
+                include_hook_events: runtime.current_engine_config().await.include_hook_events,
                 ..Default::default()
             };
 
@@ -277,12 +282,72 @@ impl TurnRunner for QueryEngineRunner {
                 return Ok(());
             }
 
-            let new_user_msg = coco_messages::create_user_message(&prompt);
+            // TS parity (`processUserInput.ts:182-263`): fire
+            // UserPromptSubmit hooks BEFORE the LLM call. Output
+            // surfaces as `hook_*` reminders on the next reminder pass;
+            // a blocking_error suppresses the turn (warns instead);
+            // prevent_continuation keeps the prompt but skips the
+            // engine.
+            let prompt_hook_result = runtime.fire_user_prompt_submit_hooks(&prompt).await;
+            if let Some(blocking) = &prompt_hook_result.blocking_error {
+                let warning = format!(
+                    "UserPromptSubmit hook blocked the turn: {}\n\nOriginal prompt: {prompt}",
+                    blocking.blocking_error,
+                );
+                {
+                    let mut h = history_handle.lock().await;
+                    h.push(coco_messages::create_user_message(&warning));
+                }
+                let _ = event_tx
+                    .send(CoreEvent::Protocol(
+                        coco_types::ServerNotification::TurnFailed(coco_types::TurnFailedParams {
+                            error: warning.clone(),
+                        }),
+                    ))
+                    .await;
+                return Ok(());
+            }
+            if prompt_hook_result.prevent_continuation {
+                let stop_msg = prompt_hook_result
+                    .stop_reason
+                    .clone()
+                    .map(|r| format!("Operation stopped by hook: {r}"))
+                    .unwrap_or_else(|| "Operation stopped by hook".to_string());
+                {
+                    let mut h = history_handle.lock().await;
+                    h.push(coco_messages::create_user_message(&prompt));
+                    h.push(coco_messages::create_user_message(&stop_msg));
+                }
+                return Ok(());
+            }
+
+            // Resolve `@`-mentions in the prompt to file-content
+            // system-reminder messages. TS parity:
+            // `getAttachmentMessages` from `processUserInput.ts:504` /
+            // `query.ts:1580`. Shared helper now drives TUI / headless / SDK
+            // identically — without this, headless and SDK clients
+            // sending `@path/to/file` got the literal string instead of
+            // the file's contents (the `at_mentioned_files` reminder
+            // body claims content is "loaded into context" — this is
+            // what makes that true).
+            let cwd_path = std::path::Path::new(&handoff.cwd);
+            let inputs = crate::at_mention_turn::resolve_turn_inputs_text_only(
+                &prompt,
+                cwd_path,
+                &runtime.file_read_state,
+            )
+            .await;
+            let new_msgs = crate::at_mention_turn::build_messages_for_turn(&inputs);
             let combined: Vec<coco_messages::Message> = {
                 let mut h = history_handle.lock().await;
-                h.push(new_user_msg);
+                h.extend(new_msgs.iter().cloned());
                 h.clone()
             };
+            if !inputs.mentioned_paths.is_empty() {
+                engine
+                    .note_mentioned_paths(inputs.mentioned_paths.clone())
+                    .await;
+            }
 
             // Clone the event channel so we can still emit on the
             // error path (the engine takes ownership of the original).
@@ -386,7 +451,7 @@ impl TurnRunner for QueryEngineRunner {
                             coco_types::ServerNotification::SessionResult(Box::new(error_params)),
                         ))
                         .await;
-                    Err(e)
+                    Err(anyhow::anyhow!("{e}"))
                 }
             }
         })

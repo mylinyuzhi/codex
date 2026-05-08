@@ -13,6 +13,8 @@
 //! `powershellPermissions.ts`, `clmTypes.ts`.
 
 use coco_messages::ToolResult;
+use coco_sandbox::SandboxBypass;
+use coco_sandbox::SandboxState;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
@@ -23,6 +25,7 @@ use coco_types::ToolInputSchema;
 use coco_types::ToolName;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use super::powershell::analyze_ps_security;
 use super::powershell::classify_ps_command;
@@ -206,7 +209,22 @@ impl Tool for PowerShellTool {
             return execute_background(command, &input, ctx).await;
         }
 
-        execute_foreground(command, &input).await
+        // Sandbox decision parity with Bash. Resolve the active state +
+        // bypass flag here; the foreground helper applies the platform
+        // wrap before spawning pwsh.
+        let sandbox_state = if ctx.features.enabled(coco_types::Feature::Sandbox) {
+            ctx.sandbox_state.clone()
+        } else {
+            None
+        };
+        let sandbox_bypass = SandboxBypass::from_flag(
+            input
+                .get("dangerouslyDisableSandbox")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
+        );
+
+        execute_foreground(command, &input, sandbox_state, sandbox_bypass).await
     }
 }
 
@@ -254,23 +272,42 @@ async fn execute_background(
     })
 }
 
-/// Foreground execution with UTF-16 output decode.
-async fn execute_foreground(command: &str, input: &Value) -> Result<ToolResult<Value>, ToolError> {
+/// Foreground execution with UTF-16 output decode and optional sandbox wrap.
+async fn execute_foreground(
+    command: &str,
+    input: &Value,
+    sandbox_state: Option<Arc<SandboxState>>,
+    sandbox_bypass: SandboxBypass,
+) -> Result<ToolResult<Value>, ToolError> {
     let timeout_ms = input
         .get("timeout")
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(DEFAULT_TIMEOUT_MS)
         .min(MAX_TIMEOUT_MS);
 
-    let child = tokio::process::Command::new("pwsh")
-        .args(["-NoProfile", "-NonInteractive", "-Command", command])
+    let mut cmd = tokio::process::Command::new("pwsh");
+    cmd.args(["-NoProfile", "-NonInteractive", "-Command", command])
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| ToolError::ExecutionFailed {
-            message: format!("Failed to start pwsh: {e}. Ensure PowerShell (pwsh) is installed."),
-            source: None,
-        })?;
+        .stderr(std::process::Stdio::piped());
+
+    let violations_baseline = if let Some(state) = &sandbox_state {
+        Some(state.violations_total_snapshot().await)
+    } else {
+        None
+    };
+
+    if let Some(state) = &sandbox_state {
+        state
+            .try_wrap_command(command, sandbox_bypass, &mut cmd)
+            .map_err(|e| ToolError::PermissionDenied {
+                message: format!("PowerShell sandbox wrap failed: {e}"),
+            })?;
+    }
+
+    let child = cmd.spawn().map_err(|e| ToolError::ExecutionFailed {
+        message: format!("Failed to start pwsh: {e}. Ensure PowerShell (pwsh) is installed."),
+        source: None,
+    })?;
 
     let result = tokio::time::timeout(
         std::time::Duration::from_millis(timeout_ms),
@@ -284,7 +321,17 @@ async fn execute_foreground(command: &str, input: &Value) -> Result<ToolResult<V
             // transparently handles both encodings and falls back to
             // UTF-8 for everything else.
             let stdout = decode_ps_output(&output.stdout);
-            let stderr = decode_ps_output(&output.stderr);
+            let mut stderr = decode_ps_output(&output.stderr);
+            if let (Some(state), Some(prev)) = (&sandbox_state, violations_baseline)
+                && let Some(annotation) = state.format_violations_since(prev).await
+            {
+                if stderr.is_empty() {
+                    stderr = annotation;
+                } else {
+                    stderr.push('\n');
+                    stderr.push_str(&annotation);
+                }
+            }
             let exit_code = output.status.code().unwrap_or(-1);
             Ok(ToolResult {
                 data: serde_json::json!({

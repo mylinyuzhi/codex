@@ -18,6 +18,12 @@ pub mod security;
 pub mod skill_bridge;
 pub mod versioning;
 
+pub use errors::PluginError;
+
+/// Crate-local Result alias. Default error is `PluginError`; the open
+/// generic preserves `Result::ok` and 2-arg `Result<T, E>` resolution.
+pub type Result<T, E = PluginError> = std::result::Result<T, E>;
+
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -60,7 +66,7 @@ pub enum PluginSource {
 }
 
 /// Load a plugin manifest from a PLUGIN.toml file.
-pub fn load_plugin_manifest(path: &Path) -> anyhow::Result<PluginManifest> {
+pub fn load_plugin_manifest(path: &Path) -> crate::Result<PluginManifest> {
     let content = std::fs::read_to_string(path)?;
     let manifest: PluginManifest = toml::from_str(&content)?;
     Ok(manifest)

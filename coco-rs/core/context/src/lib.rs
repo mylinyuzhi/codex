@@ -7,11 +7,15 @@
 pub mod attachment;
 pub mod changed_files;
 pub mod environment;
+mod error;
 pub mod file_cache;
 pub mod file_history;
 pub mod file_read_state;
 pub mod git_operations;
 pub mod git_utils;
+
+pub use error::ContextError;
+pub use error::Result;
 pub mod memory;
 pub mod memory_discovery;
 pub mod memory_filenames;

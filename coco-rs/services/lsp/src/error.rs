@@ -100,3 +100,52 @@ pub enum LspErr {
     #[error(transparent)]
     Json(#[from] serde_json::Error),
 }
+
+// `LspErr` keeps its `thiserror` shape (callers throughout the LSP crate
+// construct variants directly via `Self::Variant { .. }`); we layer the
+// `coco-error` traits on top so callers can match on `StatusCode` for
+// retry / classification without the mass-rewrite that a full snafu
+// migration would require. The status mapping intentionally favors
+// existing `coco_error::StatusCode` variants over introducing new ones.
+impl coco_error::StackError for LspErr {
+    fn debug_fmt(&self, layer: usize, buf: &mut Vec<String>) {
+        buf.push(format!("{layer}: {self}"));
+    }
+
+    fn next(&self) -> Option<&dyn coco_error::StackError> {
+        None
+    }
+}
+
+impl coco_error::ErrorExt for LspErr {
+    fn status_code(&self) -> coco_error::StatusCode {
+        use coco_error::StatusCode;
+        match self {
+            Self::ServerNotFound { .. } | Self::ServerNotInstalled { .. } => {
+                StatusCode::ProviderNotFound
+            }
+            Self::ServerStartFailed { .. } | Self::ServerFailed { .. } => {
+                StatusCode::ConnectionFailed
+            }
+            Self::InitializationTimeout { .. } | Self::RequestTimeout { .. } => StatusCode::Timeout,
+            Self::ServerRestarting { .. } => StatusCode::ResourcesExhausted,
+            Self::HealthCheckFailed { .. } | Self::ConnectionClosed => StatusCode::NetworkError,
+            Self::JsonRpc { .. } => StatusCode::ProviderError,
+            Self::NoServerForExtension { .. } | Self::OperationNotSupported { .. } => {
+                StatusCode::Unsupported
+            }
+            Self::SymbolNotFound { .. } => StatusCode::InvalidArguments,
+            Self::FileNotFound { .. } => StatusCode::FileNotFound,
+            Self::MissingCommand { .. } | Self::ConfigError(_) => StatusCode::InvalidConfig,
+            Self::InvalidUtf8(_) => StatusCode::ParseError,
+            Self::InstallError(_) => StatusCode::External,
+            Self::Internal(_) => StatusCode::Internal,
+            Self::Io(_) => StatusCode::IoError,
+            Self::Json(_) => StatusCode::InvalidJson,
+        }
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}

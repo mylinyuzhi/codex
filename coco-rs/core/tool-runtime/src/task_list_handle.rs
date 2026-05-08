@@ -51,28 +51,28 @@ pub trait TaskListHandle: Send + Sync {
         description: String,
         active_form: Option<String>,
         metadata: Option<HashMap<String, serde_json::Value>>,
-    ) -> anyhow::Result<TaskRecord>;
+    ) -> Result<TaskRecord, coco_error::BoxedError>;
 
-    async fn get_task(&self, task_id: &str) -> anyhow::Result<Option<TaskRecord>>;
+    async fn get_task(&self, task_id: &str) -> Result<Option<TaskRecord>, coco_error::BoxedError>;
 
-    async fn list_tasks(&self) -> anyhow::Result<Vec<TaskRecord>>;
+    async fn list_tasks(&self) -> Result<Vec<TaskRecord>, coco_error::BoxedError>;
 
     async fn update_task(
         &self,
         task_id: &str,
         updates: TaskRecordUpdate,
-    ) -> anyhow::Result<Option<TaskRecord>>;
+    ) -> Result<Option<TaskRecord>, coco_error::BoxedError>;
 
-    async fn delete_task(&self, task_id: &str) -> anyhow::Result<bool>;
+    async fn delete_task(&self, task_id: &str) -> Result<bool, coco_error::BoxedError>;
 
-    async fn block_task(&self, from_id: &str, to_id: &str) -> anyhow::Result<bool>;
+    async fn block_task(&self, from_id: &str, to_id: &str) -> Result<bool, coco_error::BoxedError>;
 
     async fn claim_task(
         &self,
         task_id: &str,
         claimant: &str,
         check_agent_busy: bool,
-    ) -> anyhow::Result<TaskClaimOutcome>;
+    ) -> Result<TaskClaimOutcome, coco_error::BoxedError>;
 
     /// Should we emit a verification-agent nudge after this update?
     /// Implementations check "main-thread, all completed, ≥3 tasks,
@@ -124,7 +124,7 @@ impl TaskListHandle for InMemoryTaskListHandle {
         description: String,
         active_form: Option<String>,
         metadata: Option<HashMap<String, serde_json::Value>>,
-    ) -> anyhow::Result<TaskRecord> {
+    ) -> Result<TaskRecord, coco_error::BoxedError> {
         let mut guard = self
             .inner
             .lock()
@@ -150,7 +150,7 @@ impl TaskListHandle for InMemoryTaskListHandle {
         Ok(task)
     }
 
-    async fn get_task(&self, task_id: &str) -> anyhow::Result<Option<TaskRecord>> {
+    async fn get_task(&self, task_id: &str) -> Result<Option<TaskRecord>, coco_error::BoxedError> {
         Ok(self
             .inner
             .lock()
@@ -160,7 +160,7 @@ impl TaskListHandle for InMemoryTaskListHandle {
             .cloned())
     }
 
-    async fn list_tasks(&self) -> anyhow::Result<Vec<TaskRecord>> {
+    async fn list_tasks(&self) -> Result<Vec<TaskRecord>, coco_error::BoxedError> {
         Ok(self
             .inner
             .lock()
@@ -175,7 +175,7 @@ impl TaskListHandle for InMemoryTaskListHandle {
         &self,
         task_id: &str,
         updates: TaskRecordUpdate,
-    ) -> anyhow::Result<Option<TaskRecord>> {
+    ) -> Result<Option<TaskRecord>, coco_error::BoxedError> {
         let mut guard = self
             .inner
             .lock()
@@ -212,7 +212,7 @@ impl TaskListHandle for InMemoryTaskListHandle {
         Ok(Some(task.clone()))
     }
 
-    async fn delete_task(&self, task_id: &str) -> anyhow::Result<bool> {
+    async fn delete_task(&self, task_id: &str) -> Result<bool, coco_error::BoxedError> {
         let mut guard = self
             .inner
             .lock()
@@ -234,7 +234,7 @@ impl TaskListHandle for InMemoryTaskListHandle {
         Ok(removed)
     }
 
-    async fn block_task(&self, from_id: &str, to_id: &str) -> anyhow::Result<bool> {
+    async fn block_task(&self, from_id: &str, to_id: &str) -> Result<bool, coco_error::BoxedError> {
         let mut guard = self
             .inner
             .lock()
@@ -263,7 +263,7 @@ impl TaskListHandle for InMemoryTaskListHandle {
         task_id: &str,
         claimant: &str,
         check_agent_busy: bool,
-    ) -> anyhow::Result<TaskClaimOutcome> {
+    ) -> Result<TaskClaimOutcome, coco_error::BoxedError> {
         let mut guard = self
             .inner
             .lock()
@@ -356,28 +356,33 @@ impl TaskListHandle for NoOpTaskListHandle {
         _description: String,
         _active_form: Option<String>,
         _metadata: Option<HashMap<String, serde_json::Value>>,
-    ) -> anyhow::Result<TaskRecord> {
-        Err(anyhow::anyhow!(
-            "task-list handle not configured (no persistent store)"
-        ))
+    ) -> Result<TaskRecord, coco_error::BoxedError> {
+        Err(Box::new(coco_error::PlainError::new(
+            "task-list handle not configured (no persistent store)",
+            coco_error::StatusCode::Internal,
+        )))
     }
-    async fn get_task(&self, _task_id: &str) -> anyhow::Result<Option<TaskRecord>> {
+    async fn get_task(&self, _task_id: &str) -> Result<Option<TaskRecord>, coco_error::BoxedError> {
         Ok(None)
     }
-    async fn list_tasks(&self) -> anyhow::Result<Vec<TaskRecord>> {
+    async fn list_tasks(&self) -> Result<Vec<TaskRecord>, coco_error::BoxedError> {
         Ok(Vec::new())
     }
     async fn update_task(
         &self,
         _task_id: &str,
         _updates: TaskRecordUpdate,
-    ) -> anyhow::Result<Option<TaskRecord>> {
+    ) -> Result<Option<TaskRecord>, coco_error::BoxedError> {
         Ok(None)
     }
-    async fn delete_task(&self, _task_id: &str) -> anyhow::Result<bool> {
+    async fn delete_task(&self, _task_id: &str) -> Result<bool, coco_error::BoxedError> {
         Ok(false)
     }
-    async fn block_task(&self, _from_id: &str, _to_id: &str) -> anyhow::Result<bool> {
+    async fn block_task(
+        &self,
+        _from_id: &str,
+        _to_id: &str,
+    ) -> Result<bool, coco_error::BoxedError> {
         Ok(false)
     }
     async fn claim_task(
@@ -385,7 +390,7 @@ impl TaskListHandle for NoOpTaskListHandle {
         _task_id: &str,
         _claimant: &str,
         _check_agent_busy: bool,
-    ) -> anyhow::Result<TaskClaimOutcome> {
+    ) -> Result<TaskClaimOutcome, coco_error::BoxedError> {
         Ok(TaskClaimOutcome::TaskNotFound)
     }
     async fn should_nudge_verification(

@@ -40,6 +40,7 @@ use coco_tool_runtime::HookHandle;
 use coco_tool_runtime::HookPermission;
 use coco_tool_runtime::PostToolUseOutcome;
 use coco_tool_runtime::PreToolUseOutcome;
+use coco_tool_runtime::TaskHookOutcome;
 use coco_types::PermissionBehavior;
 use serde_json::Value;
 use tokio::sync::mpsc;
@@ -137,7 +138,7 @@ impl HookHandle for QueryHookHandle {
     async fn run_post_tool_use_failure(
         &self,
         tool_name: &str,
-        _tool_use_id: &str,
+        tool_use_id: &str,
         tool_input: &Value,
         error_message: &str,
     ) -> PostToolUseOutcome {
@@ -148,9 +149,10 @@ impl HookHandle for QueryHookHandle {
             &self.registry,
             &self.ctx,
             tool_name,
+            tool_use_id,
             tool_input,
             error_message,
-            Some("execution_error"),
+            /*is_interrupt*/ None,
             self.hook_tx.as_ref(),
         )
         .await
@@ -163,6 +165,76 @@ impl HookHandle for QueryHookHandle {
                     "PostToolUseFailure hook orchestration failed; treating as non-blocking"
                 );
                 PostToolUseOutcome::default()
+            }
+        }
+    }
+
+    async fn run_task_created(
+        &self,
+        task_id: &str,
+        task_subject: &str,
+        task_description: Option<&str>,
+        teammate_name: Option<&str>,
+        team_name: Option<&str>,
+    ) -> TaskHookOutcome {
+        if self.ctx.disable_all_hooks {
+            return TaskHookOutcome::default();
+        }
+        match orchestration::execute_task_created(
+            &self.registry,
+            &self.ctx,
+            task_id,
+            task_subject,
+            task_description,
+            teammate_name,
+            team_name,
+        )
+        .await
+        {
+            Ok(agg) => TaskHookOutcome {
+                blocking_reason: agg
+                    .blocking_error
+                    .as_ref()
+                    .map(|e| e.blocking_error.clone()),
+            },
+            Err(e) => {
+                warn!(error = %e, "TaskCreated hook orchestration failed; treating as non-blocking");
+                TaskHookOutcome::default()
+            }
+        }
+    }
+
+    async fn run_task_completed(
+        &self,
+        task_id: &str,
+        task_subject: &str,
+        task_description: Option<&str>,
+        teammate_name: Option<&str>,
+        team_name: Option<&str>,
+    ) -> TaskHookOutcome {
+        if self.ctx.disable_all_hooks {
+            return TaskHookOutcome::default();
+        }
+        match orchestration::execute_task_completed(
+            &self.registry,
+            &self.ctx,
+            task_id,
+            task_subject,
+            task_description,
+            teammate_name,
+            team_name,
+        )
+        .await
+        {
+            Ok(agg) => TaskHookOutcome {
+                blocking_reason: agg
+                    .blocking_error
+                    .as_ref()
+                    .map(|e| e.blocking_error.clone()),
+            },
+            Err(e) => {
+                warn!(error = %e, "TaskCompleted hook orchestration failed; treating as non-blocking");
+                TaskHookOutcome::default()
             }
         }
     }

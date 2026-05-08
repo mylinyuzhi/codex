@@ -9,7 +9,7 @@
 //! mappings, sequences of mappings, multi-line strings, and the
 //! standard YAML scalar types. Earlier versions used a hand-written
 //! flat parser that could not represent the inline `mcpServers:
-//! {name: config}` or nested `hooks: {pre_tool_use: [...]}` shapes
+//! {name: config}` or nested `hooks: {PreToolUse: [...]}` shapes
 //! agent frontmatter uses.
 
 use std::collections::BTreeMap;

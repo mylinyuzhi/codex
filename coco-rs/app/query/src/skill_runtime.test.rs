@@ -186,7 +186,7 @@ impl AgentQueryEngine for StubEngine {
         &self,
         prompt: &str,
         _config: AgentQueryConfig,
-    ) -> anyhow::Result<AgentQueryResult> {
+    ) -> Result<AgentQueryResult, coco_error::BoxedError> {
         Ok(AgentQueryResult {
             response_text: Some(format!("child got: {prompt}")),
             messages: Vec::new(),

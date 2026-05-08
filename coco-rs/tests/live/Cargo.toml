@@ -40,6 +40,7 @@ clap = { workspace = true }
 # `run_sdk_mode` wires (SessionManager, CommandRegistry).
 coco-commands.workspace = true
 coco-session.workspace = true
+coco-skills.workspace = true
 
 # tui_mock suite: drives the in-process TUI state machine + render with a
 # scripted (no-API-key) ScriptedModel and a curated tool/hook setup.

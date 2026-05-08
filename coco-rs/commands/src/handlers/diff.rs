@@ -14,7 +14,7 @@ const MAX_DIFF_CHARS: usize = 6000;
 /// files, then formats a combined report.
 pub fn handler(
     args: String,
-) -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>> {
+) -> Pin<Box<dyn std::future::Future<Output = crate::Result<String>> + Send>> {
     Box::pin(async move {
         let extra_args = args.trim().to_string();
 
@@ -104,7 +104,7 @@ pub fn handler(
 }
 
 /// Run a git command and return stdout as a String.
-async fn run_git(args: &[&str]) -> anyhow::Result<String> {
+async fn run_git(args: &[&str]) -> crate::Result<String> {
     let output = tokio::process::Command::new("git")
         .args(args)
         .output()
@@ -112,7 +112,10 @@ async fn run_git(args: &[&str]) -> anyhow::Result<String> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("git {} failed: {stderr}", args.join(" "));
+        return Err(crate::CommandsError::generic(format!(
+            "git {} failed: {stderr}",
+            args.join(" ")
+        )));
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())

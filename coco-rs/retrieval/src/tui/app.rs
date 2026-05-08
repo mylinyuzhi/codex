@@ -158,7 +158,7 @@ impl App {
     }
 
     /// Run the main application loop.
-    pub async fn run(&mut self, terminal: &mut Tui) -> anyhow::Result<()> {
+    pub async fn run(&mut self, terminal: &mut Tui) -> crate::Result<()> {
         // Subscribe to retrieval events
         let mut retrieval_rx = event_emitter::subscribe();
         let event_tx = self.event_tx.clone();

@@ -1486,7 +1486,7 @@ async fn pre_tool_use_updated_input_reaches_execution() {
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
 
-    let mut hooks = coco_hooks::HookRegistry::new();
+    let hooks = coco_hooks::HookRegistry::new();
     hooks.register(coco_hooks::HookDefinition {
         event: coco_types::HookEventType::PreToolUse,
         matcher: Some("hook_echo".into()),
@@ -1501,7 +1501,6 @@ async fn pre_tool_use_updated_input_reaches_execution() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     });
 
@@ -1542,7 +1541,7 @@ async fn post_tool_use_receives_effective_input() {
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
 
-    let mut hooks = coco_hooks::HookRegistry::new();
+    let hooks = coco_hooks::HookRegistry::new();
     hooks.register(coco_hooks::HookDefinition {
         event: coco_types::HookEventType::PreToolUse,
         matcher: Some("hook_echo".into()),
@@ -1557,7 +1556,6 @@ async fn post_tool_use_receives_effective_input() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     });
     hooks.register(coco_hooks::HookDefinition {
@@ -1574,7 +1572,6 @@ async fn post_tool_use_receives_effective_input() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     });
 
@@ -1612,7 +1609,7 @@ async fn post_tool_use_updated_mcp_output_rewrites_mcp_result() {
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
 
-    let mut hooks = coco_hooks::HookRegistry::new();
+    let hooks = coco_hooks::HookRegistry::new();
     hooks.register(coco_hooks::HookDefinition {
         event: coco_types::HookEventType::PostToolUse,
         matcher: Some("hook_mcp".into()),
@@ -1629,7 +1626,6 @@ async fn post_tool_use_updated_mcp_output_rewrites_mcp_result() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     });
 
@@ -1688,7 +1684,7 @@ async fn post_tool_use_updated_mcp_output_is_ignored_for_non_mcp_tool() {
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
 
-    let mut hooks = coco_hooks::HookRegistry::new();
+    let hooks = coco_hooks::HookRegistry::new();
     hooks.register(coco_hooks::HookDefinition {
         event: coco_types::HookEventType::PostToolUse,
         matcher: Some("hook_echo".into()),
@@ -1705,7 +1701,6 @@ async fn post_tool_use_updated_mcp_output_is_ignored_for_non_mcp_tool() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     });
 
@@ -1745,7 +1740,7 @@ async fn post_tool_use_additional_context_is_injected() {
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
 
-    let mut hooks = coco_hooks::HookRegistry::new();
+    let hooks = coco_hooks::HookRegistry::new();
     hooks.register(coco_hooks::HookDefinition {
         event: coco_types::HookEventType::PostToolUse,
         matcher: Some("hook_echo".into()),
@@ -1760,7 +1755,6 @@ async fn post_tool_use_additional_context_is_injected() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     });
 
@@ -1803,7 +1797,7 @@ async fn post_tool_use_prevent_continuation_stops_next_turn() {
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
 
-    let mut hooks = coco_hooks::HookRegistry::new();
+    let hooks = coco_hooks::HookRegistry::new();
     hooks.register(coco_hooks::HookDefinition {
         event: coco_types::HookEventType::PostToolUse,
         matcher: Some("hook_echo".into()),
@@ -1819,7 +1813,6 @@ async fn post_tool_use_prevent_continuation_stops_next_turn() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     });
 
@@ -1861,7 +1854,7 @@ async fn non_mcp_success_path_orders_post_hook_messages_before_new_messages() {
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
 
-    let mut hooks = coco_hooks::HookRegistry::new();
+    let hooks = coco_hooks::HookRegistry::new();
     hooks.register(coco_hooks::HookDefinition {
         event: coco_types::HookEventType::PostToolUse,
         matcher: Some("hook_ordering".into()),
@@ -1876,7 +1869,6 @@ async fn non_mcp_success_path_orders_post_hook_messages_before_new_messages() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     });
 
@@ -1929,7 +1921,7 @@ async fn mcp_success_path_defers_post_hook_messages_until_after_prevent() {
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
 
-    let mut hooks = coco_hooks::HookRegistry::new();
+    let hooks = coco_hooks::HookRegistry::new();
     hooks.register(coco_hooks::HookDefinition {
         event: coco_types::HookEventType::PostToolUse,
         matcher: Some("hook_ordering_mcp".into()),
@@ -1944,7 +1936,6 @@ async fn mcp_success_path_defers_post_hook_messages_until_after_prevent() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     });
 
@@ -1997,7 +1988,7 @@ async fn failure_path_orders_error_result_before_post_tool_use_failure_context()
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
 
-    let mut hooks = coco_hooks::HookRegistry::new();
+    let hooks = coco_hooks::HookRegistry::new();
     hooks.register(coco_hooks::HookDefinition {
         event: coco_types::HookEventType::PostToolUseFailure,
         matcher: Some("hook_fail".into()),
@@ -2012,7 +2003,6 @@ async fn failure_path_orders_error_result_before_post_tool_use_failure_context()
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     });
 
@@ -2106,7 +2096,7 @@ async fn pre_tool_use_permission_deny_records_denial() {
     let tools = Arc::new(registry);
     let cancel = CancellationToken::new();
 
-    let mut hooks = coco_hooks::HookRegistry::new();
+    let hooks = coco_hooks::HookRegistry::new();
     hooks.register(coco_hooks::HookDefinition {
         event: coco_types::HookEventType::PreToolUse,
         matcher: Some("hook_echo".into()),
@@ -2123,7 +2113,6 @@ async fn pre_tool_use_permission_deny_records_denial() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     });
 
@@ -2818,7 +2807,7 @@ async fn pre_tool_use_block_runs_before_permission_ask() {
     let cancel = CancellationToken::new();
 
     let bridge = Arc::new(RecordingBridge::new(ToolPermissionDecision::Approved));
-    let mut hooks = coco_hooks::HookRegistry::new();
+    let hooks = coco_hooks::HookRegistry::new();
     hooks.register(coco_hooks::HookDefinition {
         event: coco_types::HookEventType::PreToolUse,
         matcher: Some("asking_mock".into()),
@@ -2833,7 +2822,6 @@ async fn pre_tool_use_block_runs_before_permission_ask() {
         once: false,
         is_async: false,
         async_rewake: false,
-        shell: None,
         status_message: None,
     });
 

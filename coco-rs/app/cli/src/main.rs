@@ -11,12 +11,15 @@ use coco_cli::headless::create_api_client;
 use coco_cli::paths::output_style_dirs;
 use coco_cli::paths::sessions_dir;
 use coco_cli::paths::standard_agent_search_paths;
+use coco_cli::resume_resolver;
+use coco_cli::resume_resolver::ResumePlan;
 use coco_cli::sdk_server::QueryEngineRunner;
 use coco_cli::sdk_server::SdkServer;
 use coco_cli::sdk_server::StdioTransport;
 use coco_cli::sdk_server::cli_bootstrap::CliInitializeBootstrap;
 use coco_cli::session_bootstrap::build_engine_resources;
 use coco_cli::session_bootstrap::install_session_late_binds;
+use coco_cli::tracing_init;
 use coco_config::global_config;
 use coco_session::SessionManager;
 
@@ -27,6 +30,19 @@ use coco_cli::session_runtime;
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    // Bind the handle for the lifetime of `main` so the non-blocking
+    // file appender flushes on drop. `Mode::Skip` (status/doctor/etc.)
+    // returns `None` and never installs a global subscriber.
+    let _tracing_handle = tracing_init::install(&cli)?;
+
+    tracing::info!(
+        target: "coco_cli::startup",
+        version = env!("CARGO_PKG_VERSION"),
+        subcommand = ?cli.command.as_ref().map(std::mem::discriminant),
+        has_prompt = cli.prompt.is_some(),
+        "coco entry"
+    );
 
     if let Some(cmd) = &cli.command {
         match cmd {
@@ -45,7 +61,23 @@ async fn main() -> Result<()> {
                 return bin_handlers::sessions::handle_sessions();
             }
             Commands::Resume { session_id } => {
-                return bin_handlers::sessions::handle_resume(session_id.as_deref());
+                // Synthesize the same effect as `coco --resume <id>`
+                // (or `coco --continue` when no id is given) and
+                // hand off to the interactive TUI so the user can
+                // actually continue the conversation, not just
+                // inspect metadata. TS parity: `coco resume` is the
+                // discoverable entry point for `--resume`/`--continue`.
+                let mut cli_for_resume = cli.clone();
+                match session_id.clone() {
+                    Some(id) => cli_for_resume.resume = Some(id),
+                    None => cli_for_resume.continue_session = true,
+                }
+                let plan = resume_resolver::resolve(&cli_for_resume, &sessions_dir())?;
+                if plan.is_none() {
+                    println!("No sessions to resume.");
+                    return Ok(());
+                }
+                return tui_runner::run_tui(&cli_for_resume, plan).await;
             }
             Commands::Config { action } => {
                 return bin_handlers::config::handle_config(action);
@@ -179,9 +211,26 @@ async fn main() -> Result<()> {
     let is_piped = !std::io::IsTerminal::is_terminal(&std::io::stdout());
     if cli.prompt.is_some() || is_piped {
         let prompt = cli.prompt.as_deref().unwrap_or("Hello!");
+        tracing::info!(
+            target: "coco_cli::startup",
+            mode = "headless",
+            piped = is_piped,
+            prompt_len = prompt.len(),
+            "running headless chat"
+        );
         run_chat(&cli, Some(prompt)).await
     } else {
-        tui_runner::run_tui(&cli).await
+        // Resolve `--resume` / `--continue` / `--fork-session` once
+        // and hand off to the TUI runner. `None` keeps the default
+        // fresh-session bootstrap.
+        let plan: Option<ResumePlan> = resume_resolver::resolve(&cli, &sessions_dir())?;
+        tracing::info!(
+            target: "coco_cli::startup",
+            mode = "tui",
+            resuming = plan.is_some(),
+            "launching interactive TUI"
+        );
+        tui_runner::run_tui(&cli, plan).await
     }
 }
 
@@ -189,13 +238,44 @@ async fn main() -> Result<()> {
 ///
 /// TS: runHeadless() in cli/print.ts
 async fn run_chat(cli: &Cli, prompt: Option<&str>) -> Result<()> {
-    let outcome = coco_cli::headless::run_chat(cli, prompt).await?;
+    // Resolve `--resume` / `--continue` / `--fork-session` once at
+    // the boot edge so headless and TUI share identical semantics.
+    // `None` means no resume flag was set; fall through to a fresh
+    // session.
+    let plan = resume_resolver::resolve(cli, &sessions_dir())?;
+    if let Some(p) = &plan {
+        eprintln!(
+            "{} session {} ({} prior message(s))",
+            if p.is_fork { "Forked" } else { "Resumed" },
+            p.source_session_id,
+            p.prior_messages.len(),
+        );
+    }
+    let opts = match plan {
+        Some(p) => coco_cli::headless::RunChatOptions {
+            prior_messages: p.prior_messages,
+            session_id_override: Some(p.session_id),
+            ..Default::default()
+        },
+        None => coco_cli::headless::RunChatOptions::default(),
+    };
+    let outcome = coco_cli::headless::run_chat_with_options(cli, prompt, opts).await?;
     if let Some(msg) = &outcome.permission_notification {
+        tracing::warn!(target: "coco_cli::headless", notice = %msg, "headless permission notice");
         eprintln!("warning: {msg}");
     }
     let mode = outcome
         .provider_api
         .map_or("mock", coco_types::ProviderApi::as_str);
+    tracing::info!(
+        target: "coco_cli::headless",
+        provider_mode = mode,
+        model_id = %outcome.model_id,
+        turns = outcome.turns,
+        tokens_in = outcome.total_usage.input_tokens,
+        tokens_out = outcome.total_usage.output_tokens,
+        "headless chat complete"
+    );
     eprintln!("coco-rs ({mode} mode) — model: {}\n", outcome.model_id);
     println!("{}", outcome.response_text);
     eprintln!(
@@ -210,6 +290,11 @@ async fn run_chat(cli: &Cli, prompt: Option<&str>) -> Result<()> {
 /// TS reference: `src/cli/structuredIO.ts` — the `StructuredIO` loop.
 async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     let cwd = std::env::current_dir()?;
+    tracing::info!(
+        target: "coco_cli::sdk",
+        cwd = %cwd.display(),
+        "sdk mode starting"
+    );
     let runtime_config = build_runtime_config_for_cli(cli, &cwd)?;
 
     let resources = build_engine_resources(cli, &runtime_config, &cwd)?;
@@ -233,6 +318,7 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     // `initialize.commands` advertisement and the TUI dispatch chain
     // (`tui_runner::dispatch_slash_command`) read from the same Arc.
     let command_registry = resources.command_registry.clone();
+    let skill_manager = resources.skill_manager.clone();
 
     let current_output_style = "default".to_string();
     let agent_search_paths = standard_agent_search_paths(&global_config::config_home(), &cwd);
@@ -302,6 +388,7 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
             fast_model_spec: None,
             permission_bridge: Some(bridge),
             command_registry: command_registry.clone(),
+            skill_manager: skill_manager.clone(),
         },
     )
     .await?;
@@ -311,10 +398,31 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     // fork dispatcher. Wraps the SDK-bootstrapped `McpConnectionManager`
     // in an `McpManagerAdapter` so `mcp/setServers` and the per-engine
     // `mcp_handle` slot share one source of truth.
+    // Install elicitation hook context so dynamic-MCP-server elicitations
+    // fire `Elicitation` / `ElicitationResult` hooks before falling back
+    // to the no-op dialog stub. TS parity: `elicitationHandler.ts:91-107`.
+    let elicit_registry = session_runtime.hook_registry();
+    let elicit_factory = session_runtime.orchestration_ctx_factory();
     let mcp_handle: coco_tool_runtime::McpHandleRef = Arc::new(
-        coco_cli::mcp_handle_adapter::McpManagerAdapter::new(mcp_manager.clone()),
+        coco_cli::mcp_handle_adapter::McpManagerAdapter::new(mcp_manager.clone())
+            .with_elicitation_hooks(elicit_registry, elicit_factory),
     );
     install_session_late_binds(session_runtime.clone(), &cwd, Some(mcp_handle)).await?;
+
+    // TS parity (`main.tsx:2437/2577/2607`): SessionStart hooks fire
+    // once at session bootstrap; output queues onto the shared
+    // sync-hook buffer and surfaces as `hook_*` reminders on the
+    // first turn's reminder pass.
+    session_runtime.fire_session_start_hooks("startup").await;
+
+    // TS `executeSetupHooks('maintenance')` runs at every interactive
+    // bootstrap to give project setup hooks a chance to refresh state
+    // (env files, build artefacts, …). The 'init' trigger is reserved
+    // for the explicit `coco init` flow, which runs in a separate
+    // entry path. Failure is logged + tolerated.
+    session_runtime
+        .fire_setup_hooks(coco_hooks::orchestration::SetupTrigger::Maintenance)
+        .await;
 
     let file_history_for_server = session_runtime.file_history.clone().unwrap_or_else(|| {
         Arc::new(tokio::sync::RwLock::new(
@@ -333,7 +441,18 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     ));
     server.set_turn_runner(runner).await;
 
+    tracing::info!(
+        target: "coco_cli::sdk",
+        permission_mode = ?permission_mode,
+        bypass_available = bypass_permissions_available,
+        "sdk server entering dispatch loop"
+    );
     if let Err(e) = server.run().await {
+        tracing::error!(
+            target: "coco_cli::sdk",
+            error = %e,
+            "sdk dispatch loop exited with error"
+        );
         eprintln!("sdk mode: dispatch loop exited with error: {e}");
         return Err(anyhow::anyhow!("sdk dispatch failed: {e}"));
     }

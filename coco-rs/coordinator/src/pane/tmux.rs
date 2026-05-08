@@ -74,7 +74,7 @@ impl PaneBackend for TmuxBackend {
         &self,
         name: &str,
         color: AgentColorName,
-    ) -> anyhow::Result<CreatePaneResult> {
+    ) -> crate::Result<CreatePaneResult> {
         let _lock = self.pane_creation_lock.lock().await;
 
         let is_first = {
@@ -93,7 +93,7 @@ impl PaneBackend for TmuxBackend {
         }
     }
 
-    async fn send_command_to_pane(&self, pane_id: &PaneId, command: &str) -> anyhow::Result<()> {
+    async fn send_command_to_pane(&self, pane_id: &PaneId, command: &str) -> crate::Result<()> {
         run_tmux(&["send-keys", "-t", pane_id, command, "Enter"]).await?;
         Ok(())
     }
@@ -102,7 +102,7 @@ impl PaneBackend for TmuxBackend {
         &self,
         pane_id: &PaneId,
         color: AgentColorName,
-    ) -> anyhow::Result<()> {
+    ) -> crate::Result<()> {
         let tmux_color = agent_color_to_tmux(color);
         // Three-step sequence mirroring TS `TmuxBackend.ts:178-202`. Step 1
         // sets the pane's foreground colour for the border; steps 2-3 set
@@ -143,17 +143,17 @@ impl PaneBackend for TmuxBackend {
         pane_id: &PaneId,
         name: &str,
         _color: AgentColorName,
-    ) -> anyhow::Result<()> {
+    ) -> crate::Result<()> {
         run_tmux(&["select-pane", "-t", pane_id, "-T", name]).await?;
         Ok(())
     }
 
-    async fn enable_pane_border_status(&self, _window_target: Option<&str>) -> anyhow::Result<()> {
+    async fn enable_pane_border_status(&self, _window_target: Option<&str>) -> crate::Result<()> {
         run_tmux(&["set-option", "-g", "pane-border-status", "top"]).await?;
         Ok(())
     }
 
-    async fn rebalance_panes(&self, window_target: &str, has_leader: bool) -> anyhow::Result<()> {
+    async fn rebalance_panes(&self, window_target: &str, has_leader: bool) -> crate::Result<()> {
         if has_leader {
             self.rebalance_panes_with_leader(window_target).await
         } else {
@@ -161,12 +161,12 @@ impl PaneBackend for TmuxBackend {
         }
     }
 
-    async fn kill_pane(&self, pane_id: &PaneId) -> anyhow::Result<bool> {
+    async fn kill_pane(&self, pane_id: &PaneId) -> crate::Result<bool> {
         let output = run_tmux(&["kill-pane", "-t", pane_id]).await;
         Ok(output.is_ok())
     }
 
-    async fn hide_pane(&self, pane_id: &PaneId) -> anyhow::Result<bool> {
+    async fn hide_pane(&self, pane_id: &PaneId) -> crate::Result<bool> {
         // Ensure hidden session exists
         let has_hidden = run_tmux(&["has-session", "-t", HIDDEN_SESSION_NAME])
             .await
@@ -194,7 +194,7 @@ impl PaneBackend for TmuxBackend {
         &self,
         pane_id: &PaneId,
         target_window_or_pane: &str,
-    ) -> anyhow::Result<bool> {
+    ) -> crate::Result<bool> {
         let result = run_tmux(&[
             "join-pane",
             "-d",
@@ -219,7 +219,7 @@ impl TmuxBackend {
         name: &str,
         color: AgentColorName,
         is_first: bool,
-    ) -> anyhow::Result<CreatePaneResult> {
+    ) -> crate::Result<CreatePaneResult> {
         let split_args = if is_first {
             // First teammate: horizontal split, 70% right
             vec!["split-window", "-h", "-p", "70", "-P", "-F", "#{pane_id}"]
@@ -254,7 +254,7 @@ impl TmuxBackend {
         name: &str,
         _color: AgentColorName,
         is_first: bool,
-    ) -> anyhow::Result<CreatePaneResult> {
+    ) -> crate::Result<CreatePaneResult> {
         let socket_name = crate::constants::swarm_socket_name();
 
         if is_first {
@@ -304,7 +304,7 @@ impl TmuxBackend {
     }
 
     /// Rebalance panes with leader (30% leader, 70% teammates).
-    async fn rebalance_panes_with_leader(&self, window_target: &str) -> anyhow::Result<()> {
+    async fn rebalance_panes_with_leader(&self, window_target: &str) -> crate::Result<()> {
         run_tmux(&["select-layout", "-t", window_target, "main-vertical"]).await?;
         // Set leader pane width to 30%
         run_tmux(&["set-option", "-t", window_target, "main-pane-width", "30%"]).await?;
@@ -312,7 +312,7 @@ impl TmuxBackend {
     }
 
     /// Rebalance panes without leader (tiled layout).
-    async fn rebalance_panes_tiled(&self, window_target: &str) -> anyhow::Result<()> {
+    async fn rebalance_panes_tiled(&self, window_target: &str) -> crate::Result<()> {
         run_tmux(&["select-layout", "-t", window_target, "tiled"]).await?;
         Ok(())
     }
@@ -321,7 +321,7 @@ impl TmuxBackend {
 // ── Tmux Helpers ──
 
 /// Run a tmux command and return stdout.
-async fn run_tmux(args: &[&str]) -> anyhow::Result<String> {
+async fn run_tmux(args: &[&str]) -> crate::Result<String> {
     let output = tokio::process::Command::new(TMUX_COMMAND)
         .args(args)
         .output()
@@ -329,14 +329,16 @@ async fn run_tmux(args: &[&str]) -> anyhow::Result<String> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("tmux command failed: {stderr}");
+        return Err(crate::CoordinatorError::generic(format!(
+            "tmux command failed: {stderr}"
+        )));
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 /// Run a tmux command with a specific socket.
-async fn run_tmux_with_socket(socket: &str, args: &[&str]) -> anyhow::Result<String> {
+async fn run_tmux_with_socket(socket: &str, args: &[&str]) -> crate::Result<String> {
     let output = tokio::process::Command::new(TMUX_COMMAND)
         .arg("-L")
         .arg(socket)
@@ -346,7 +348,9 @@ async fn run_tmux_with_socket(socket: &str, args: &[&str]) -> anyhow::Result<Str
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("tmux command failed: {stderr}");
+        return Err(crate::CoordinatorError::generic(format!(
+            "tmux command failed: {stderr}"
+        )));
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())

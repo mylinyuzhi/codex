@@ -8,6 +8,9 @@
 
 use crate::dependency::DemotionReason;
 use crate::identifier::PluginId;
+use coco_error::ErrorExt;
+use coco_error::StackError;
+use coco_error::StatusCode;
 use std::path::PathBuf;
 use thiserror::Error;
 
@@ -117,6 +120,96 @@ pub enum PluginError {
 
     #[error("generic plugin error from {origin}: {message}")]
     Generic { origin: String, message: String },
+
+    /// `std::io::Error` flattened to a string so `PluginError` stays `Clone`
+    /// (the existing variants are all string-typed; downstream registries
+    /// rely on `Clone`).
+    #[error("io error: {0}")]
+    Io(String),
+
+    /// `serde_json::Error` flattened to a string for the same reason.
+    #[error("json error: {0}")]
+    Json(String),
+}
+
+impl PluginError {
+    /// Construct a `Generic` variant. Convenience for boundary conversions.
+    pub fn generic(origin: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::Generic {
+            origin: origin.into(),
+            message: message.into(),
+        }
+    }
+}
+
+impl From<std::io::Error> for PluginError {
+    fn from(e: std::io::Error) -> Self {
+        Self::Io(e.to_string())
+    }
+}
+
+impl From<serde_json::Error> for PluginError {
+    fn from(e: serde_json::Error) -> Self {
+        Self::Json(e.to_string())
+    }
+}
+
+impl From<zip::result::ZipError> for PluginError {
+    fn from(e: zip::result::ZipError) -> Self {
+        Self::generic("mcpb", format!("zip error: {e}"))
+    }
+}
+
+impl From<toml::de::Error> for PluginError {
+    fn from(e: toml::de::Error) -> Self {
+        Self::generic("manifest", format!("toml parse error: {e}"))
+    }
+}
+
+impl StackError for PluginError {
+    fn debug_fmt(&self, layer: usize, buf: &mut Vec<String>) {
+        buf.push(format!("{layer}: {self}"));
+    }
+
+    fn next(&self) -> Option<&dyn StackError> {
+        None
+    }
+}
+
+impl ErrorExt for PluginError {
+    fn status_code(&self) -> StatusCode {
+        match self {
+            Self::GitAuthFailed { .. } => StatusCode::AuthenticationFailed,
+            Self::GitCloneFailed { .. } | Self::DownloadFailed { .. } => {
+                StatusCode::ConnectionFailed
+            }
+            Self::NetworkError { .. } => StatusCode::NetworkError,
+            Self::NpmInstallFailed { .. } | Self::PipInstallFailed { .. } => StatusCode::External,
+            Self::ArchiveExtractFailed { .. } | Self::CacheDirError { .. } => StatusCode::IoError,
+            Self::ManifestParseError { .. } => StatusCode::ParseError,
+            Self::ManifestNotFound { .. } => StatusCode::FileNotFound,
+            Self::PluginNotFound { .. } => StatusCode::FileNotFound,
+            Self::ManifestValidationFailed { .. }
+            | Self::DependencyCycle { .. }
+            | Self::DependencyUnsatisfied { .. }
+            | Self::CrossMarketplaceDependency { .. }
+            | Self::ContributionConflict { .. }
+            | Self::VersionMismatch { .. } => StatusCode::InvalidConfig,
+            Self::PathTraversal { .. }
+            | Self::Impersonation { .. }
+            | Self::BlockedByPolicy { .. } => StatusCode::PermissionDenied,
+            Self::MigrationFailed { .. }
+            | Self::HookLoadFailed { .. }
+            | Self::McpbLoadFailed { .. }
+            | Self::Generic { .. } => StatusCode::Internal,
+            Self::Io(_) => StatusCode::IoError,
+            Self::Json(_) => StatusCode::InvalidJson,
+        }
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 impl PluginError {
@@ -147,6 +240,8 @@ impl PluginError {
             Self::HookLoadFailed { .. } => "hook_load_failed",
             Self::McpbLoadFailed { .. } => "mcpb_load_failed",
             Self::Generic { .. } => "generic",
+            Self::Io(_) => "io",
+            Self::Json(_) => "json",
         }
     }
 }

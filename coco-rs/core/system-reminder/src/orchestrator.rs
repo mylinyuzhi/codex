@@ -6,6 +6,13 @@
 //! Generators that time out or return `Err` contribute zero reminders; the
 //! turn always proceeds.
 //!
+//! TS uses a single shared AbortController for the whole batch — when 1000ms
+//! elapses, every still-running generator is aborted simultaneously. We mirror
+//! that with a top-level [`tokio::time::timeout`] around `join_all`. The
+//! per-generator timeout is kept as a 2x safety net so a hung generator
+//! cannot wedge the batch indefinitely if for some reason the join_all
+//! polling stalls.
+//!
 //! Gate order (each must pass):
 //!
 //! 1. [`SystemReminderConfig::enabled`] — master switch.
@@ -90,23 +97,29 @@ impl SystemReminderOrchestrator {
             AgentListingDeltaGenerator, AgentMentionsGenerator, AgentPendingMessagesGenerator,
             AlreadyReadFileGenerator, AsyncHookResponseGenerator, AtMentionedFilesGenerator,
             AutoModeEnterGenerator, AutoModeExitGenerator, BudgetUsdGenerator,
-            CompactionReminderGenerator, CompanionIntroGenerator, CriticalSystemReminderGenerator,
-            DateChangeGenerator, DeferredToolsDeltaGenerator, DiagnosticsGenerator,
-            EditedImageFileGenerator, HookAdditionalContextGenerator, HookBlockingErrorGenerator,
+            CommandPermissionsGenerator, CompactionReminderGenerator, CompanionIntroGenerator,
+            ContextEfficiencyGenerator, CriticalSystemReminderGenerator,
+            CurrentSessionMemoryGenerator, DateChangeGenerator, DeferredToolsDeltaGenerator,
+            DiagnosticsGenerator, DynamicSkillGenerator, EditedImageFileGenerator,
+            HookAdditionalContextGenerator, HookBlockingErrorGenerator,
             HookStoppedContinuationGenerator, HookSuccessGenerator, IdeOpenedFileGenerator,
-            IdeSelectionGenerator, InvokedSkillsGenerator, McpInstructionsDeltaGenerator,
-            McpResourcesGenerator, NestedMemoryGenerator, OutputStyleGenerator,
-            OutputTokenUsageGenerator, PlanModeEnterGenerator, PlanModeExitGenerator,
-            PlanModeReentryGenerator, QueuedCommandGenerator, RelevantMemoriesGenerator,
-            SkillListingGenerator, TaskRemindersGenerator, TaskStatusGenerator,
-            TeamContextGenerator, TeammateMailboxGenerator, TodoRemindersGenerator,
-            TokenUsageGenerator, UltrathinkEffortGenerator, VerifyPlanReminderGenerator,
+            IdeSelectionGenerator, InvokedSkillsGenerator, MaxTurnsReachedGenerator,
+            McpInstructionsDeltaGenerator, McpResourcesGenerator, NestedMemoryGenerator,
+            OutputStyleGenerator, OutputTokenUsageGenerator, PlanModeEnterGenerator,
+            PlanModeExitGenerator, PlanModeReentryGenerator, QueuedCommandGenerator,
+            RelevantMemoriesGenerator, SkillDiscoveryGenerator, SkillListingGenerator,
+            StructuredOutputGenerator, TaskRemindersGenerator, TaskStatusGenerator,
+            TeamContextGenerator, TeammateMailboxGenerator, TeammateShutdownBatchGenerator,
+            TodoRemindersGenerator, TokenUsageGenerator, UltrathinkEffortGenerator,
+            VerifyPlanReminderGenerator,
         };
 
         // TS userInputAttachments (`attachments.ts:773-814`).
         self.add_generator(Arc::new(AtMentionedFilesGenerator));
         self.add_generator(Arc::new(McpResourcesGenerator));
         self.add_generator(Arc::new(AgentMentionsGenerator));
+        // Audit-add — UserPrompt tier.
+        self.add_generator(Arc::new(SkillDiscoveryGenerator));
 
         // TS allThreadAttachments (`attachments.ts:822-941`), plus
         // relevant_memories which TS prefetches outside getAttachments but
@@ -133,6 +146,10 @@ impl SystemReminderOrchestrator {
         self.add_generator(Arc::new(AgentPendingMessagesGenerator));
         self.add_generator(Arc::new(CriticalSystemReminderGenerator));
         self.add_generator(Arc::new(CompactionReminderGenerator));
+        // Audit-add — Core tier.
+        self.add_generator(Arc::new(CurrentSessionMemoryGenerator));
+        self.add_generator(Arc::new(DynamicSkillGenerator));
+        self.add_generator(Arc::new(TeammateShutdownBatchGenerator));
 
         // TS mainThreadAttachments (`attachments.ts:944-995`) plus hook
         // attachments produced by hook executors and rendered here.
@@ -151,6 +168,11 @@ impl SystemReminderOrchestrator {
         self.add_generator(Arc::new(OutputTokenUsageGenerator));
         self.add_generator(Arc::new(VerifyPlanReminderGenerator));
         self.add_generator(Arc::new(InvokedSkillsGenerator));
+        // Audit-add — MainAgentOnly tier.
+        self.add_generator(Arc::new(MaxTurnsReachedGenerator));
+        self.add_generator(Arc::new(CommandPermissionsGenerator));
+        self.add_generator(Arc::new(StructuredOutputGenerator));
+        self.add_generator(Arc::new(ContextEfficiencyGenerator));
 
         // Silent reminder-native attachments: display/transcript only.
         self.add_generator(Arc::new(AlreadyReadFileGenerator));
@@ -248,12 +270,32 @@ impl SystemReminderOrchestrator {
         );
 
         let ctx_ref = &ctx;
-        let timeout_duration = self.timeout;
+        // Per-generator deadline = batch deadline. Per-generator hard cap as
+        // a safety net is 2x the configured budget so an individual hung
+        // generator cannot wedge the join_all even if the batch-level
+        // timeout fires while polling.
+        let batch_timeout = self.timeout;
+        let per_generator_timeout = batch_timeout.saturating_mul(2);
         let futures = applicable
             .iter()
-            .map(|g| run_one_generator(Arc::clone(g), timeout_duration, ctx_ref));
+            .map(|g| run_one_generator(Arc::clone(g), per_generator_timeout, ctx_ref));
+        let join = future::join_all(futures);
+
+        // Top-level batch timeout matching TS's single AbortController. When
+        // it fires, generators still in flight are dropped (and thus
+        // cancelled) and we return whatever finished in time.
         let results: Vec<Option<(crate::types::AttachmentType, SystemReminder)>> =
-            future::join_all(futures).await;
+            match tokio::time::timeout(batch_timeout, join).await {
+                Ok(out) => out,
+                Err(_) => {
+                    tracing::warn!(
+                        timeout_ms = batch_timeout.as_millis() as u64,
+                        turn = ctx.turn_number,
+                        "system-reminder batch timed out; dropping in-flight generators"
+                    );
+                    Vec::new()
+                }
+            };
 
         let mut reminders = Vec::new();
         for (at, reminder) in results.into_iter().flatten() {

@@ -98,6 +98,10 @@ pub fn generate_plan_approval_request_id(agent_name: &str, team_name: &str) -> S
 #[derive(Debug, Default)]
 pub struct SwarmMailboxHandle;
 
+fn boxed_coordinator_err(e: crate::CoordinatorError) -> coco_error::BoxedError {
+    Box::new(e)
+}
+
 #[async_trait::async_trait]
 impl coco_tool_runtime::MailboxHandle for SwarmMailboxHandle {
     async fn write_to_mailbox(
@@ -105,7 +109,7 @@ impl coco_tool_runtime::MailboxHandle for SwarmMailboxHandle {
         recipient: &str,
         team_name: &str,
         message: coco_tool_runtime::MailboxEnvelope,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), coco_error::BoxedError> {
         let msg = TeammateMessage {
             from: message.from,
             text: message.text,
@@ -114,14 +118,14 @@ impl coco_tool_runtime::MailboxHandle for SwarmMailboxHandle {
             color: None,
             summary: None,
         };
-        write_to_mailbox(recipient, msg, team_name)
+        write_to_mailbox(recipient, msg, team_name).map_err(boxed_coordinator_err)
     }
 
     async fn read_unread(
         &self,
         agent_name: &str,
         team_name: &str,
-    ) -> anyhow::Result<Vec<coco_tool_runtime::InboxMessage>> {
+    ) -> Result<Vec<coco_tool_runtime::InboxMessage>, coco_error::BoxedError> {
         // We need indices from the FULL mailbox (to support
         // `mark_read(index)`), so read the full list and filter to
         // unread in-place.
@@ -144,8 +148,8 @@ impl coco_tool_runtime::MailboxHandle for SwarmMailboxHandle {
         agent_name: &str,
         team_name: &str,
         index: usize,
-    ) -> anyhow::Result<()> {
-        mark_message_as_read_by_index(agent_name, team_name, index)
+    ) -> Result<(), coco_error::BoxedError> {
+        mark_message_as_read_by_index(agent_name, team_name, index).map_err(boxed_coordinator_err)
     }
 }
 

@@ -53,10 +53,7 @@ impl SkillChangeDetector {
     ///
     /// The detector immediately subscribes to filesystem events and will
     /// reload the SkillManager when .md files change.
-    pub fn new(
-        manager: Arc<Mutex<SkillManager>>,
-        skill_dirs: Vec<PathBuf>,
-    ) -> anyhow::Result<Self> {
+    pub fn new(manager: Arc<Mutex<SkillManager>>, skill_dirs: Vec<PathBuf>) -> crate::Result<Self> {
         let (change_tx, _) = broadcast::channel(32);
         let change_tx_clone = change_tx.clone();
         let manager_clone = Arc::clone(&manager);
@@ -86,7 +83,8 @@ impl SkillChangeDetector {
                     acc.changed_paths.extend(new.changed_paths);
                     acc
                 },
-            )?;
+            )
+            .map_err(|e| crate::SkillsError::generic(format!("file-watch build failed: {e}")))?;
 
         // Watch all skill directories recursively
         for dir in &skill_dirs {

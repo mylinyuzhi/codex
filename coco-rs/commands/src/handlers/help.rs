@@ -97,8 +97,8 @@ const CATEGORIES: &[Category] = &[
             CommandEntry {
                 name: "color",
                 aliases: &[],
-                description: "Configure terminal colors",
-                usage: "/color [mode]",
+                description: "Set the prompt bar color for this session",
+                usage: "/color <color|default>",
             },
             CommandEntry {
                 name: "vim",
@@ -307,18 +307,6 @@ const CATEGORIES: &[Category] = &[
                 usage: "/doctor",
             },
             CommandEntry {
-                name: "login",
-                aliases: &[],
-                description: "Sign in with your Anthropic account",
-                usage: "/login",
-            },
-            CommandEntry {
-                name: "logout",
-                aliases: &[],
-                description: "Clear authentication credentials",
-                usage: "/logout",
-            },
-            CommandEntry {
                 name: "feedback",
                 aliases: &["bug"],
                 description: "Submit feedback",
@@ -346,7 +334,7 @@ const CATEGORIES: &[Category] = &[
 /// With a command name, shows detailed help for that command.
 pub fn handler(
     args: String,
-) -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>> {
+) -> Pin<Box<dyn std::future::Future<Output = crate::Result<String>> + Send>> {
     Box::pin(async move {
         let query = args.trim().to_string();
 

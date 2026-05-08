@@ -51,6 +51,8 @@ impl QueryEngine {
             tools,
             cancel,
             hooks,
+            async_hook_registry: None,
+            hook_llm_handle: None,
             command_queue: CommandQueue::new(),
             inbox: Inbox::new(),
             file_read_state: None,
@@ -98,19 +100,54 @@ impl QueryEngine {
                 std::collections::VecDeque::new(),
             )),
             pending_reactive_context_management: Arc::new(tokio::sync::Mutex::new(None)),
+            pending_just_compacted: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             transcript_store: None,
             transcript_session_id: None,
+            transcript_dedup: None,
             pending_nested_memory: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             loaded_nested_memory_paths: Arc::new(tokio::sync::Mutex::new(
                 std::collections::HashSet::new(),
             )),
+            sync_hook_buffer: None,
         }
     }
 
+    /// Install a shared sync-hook-event buffer. The same buffer instance
+    /// must back the `CombinedHookEventsSource` registered via
+    /// [`Self::with_reminder_sources`], so SessionStart /
+    /// UserPromptSubmit hook output pushed during this turn drains into
+    /// the per-turn reminder pipeline.
+    pub fn with_sync_hook_buffer(mut self, buf: coco_hooks::SyncHookEventBuffer) -> Self {
+        self.sync_hook_buffer = Some(buf);
+        self
+    }
+
+    /// Install the shared `AsyncHookRegistry` so engine-fired async
+    /// hooks (PreToolUse / PostToolUse / Stop / SubagentStop with
+    /// `is_async: true`) deliver their output through the same
+    /// reminder-pipeline channel as session-runtime hooks.
+    pub fn with_async_hook_registry(
+        mut self,
+        registry: Arc<coco_hooks::async_registry::AsyncHookRegistry>,
+    ) -> Self {
+        self.async_hook_registry = Some(registry);
+        self
+    }
+
+    /// Install the LLM-driven hook handler so `Prompt` / `Agent` hook
+    /// handlers route through `ApiClient` instead of falling back to
+    /// passthrough text. `SessionRuntime` builds one
+    /// `Arc<dyn HookLlmHandle>` per session and clones it onto every
+    /// engine via this method.
+    pub fn with_hook_llm_handle(mut self, handle: Arc<dyn coco_hooks::HookLlmHandle>) -> Self {
+        self.hook_llm_handle = Some(handle);
+        self
+    }
+
     /// Install a transcript store for marble-origami persistence and
-    /// future on-disk session writes. `session_id` keys the transcript
-    /// path; absent it the engine writes to a fresh in-memory ledger
-    /// only (commits are lost on restart).
+    /// per-turn user/assistant JSONL writes. `session_id` keys the
+    /// transcript path; absent it the engine writes to a fresh
+    /// in-memory ledger only (commits are lost on restart).
     pub fn with_transcript_store(
         mut self,
         store: Arc<coco_session::TranscriptStore>,
@@ -118,6 +155,20 @@ impl QueryEngine {
     ) -> Self {
         self.transcript_store = Some(store);
         self.transcript_session_id = Some(session_id);
+        self
+    }
+
+    /// Install the cross-engine dedup set for transcript message
+    /// writes. `SessionRuntime` owns one `Arc<Mutex<HashSet<Uuid>>>`
+    /// per session and clones it into every per-turn engine so
+    /// already-persisted messages don't get rewritten on each new
+    /// engine instance. TS parity: `Project.recordTranscript` skips
+    /// already-persisted entries by uuid.
+    pub fn with_transcript_dedup(
+        mut self,
+        seen: Arc<tokio::sync::Mutex<std::collections::HashSet<uuid::Uuid>>>,
+    ) -> Self {
+        self.transcript_dedup = Some(seen);
         self
     }
 

@@ -11,9 +11,9 @@ TS source: `src/utils/bash/` (12K LOC), `src/utils/Shell.ts`, `src/utils/shell/`
 
 ```
 coco-shell depends on:
-  - coco-types       (SandboxMode, PermissionMode)
+  - coco-types       (PermissionMode; `SandboxMode` is consumed indirectly through `coco-sandbox`)
   - utils/shell-parser (KEEP: 24 risk type analyzers, AST parsing — extend with TS's 23 SecurityCheckId validators, read-only allowlist, destructive patterns)
-  - coco-sandbox     (SandboxSettings, sandbox enforcement)
+  - coco-sandbox     (`SandboxState`, `SandboxBypass` — `ExecOptions.sandbox` is an `Arc<SandboxState>`; the executor calls `state.try_wrap_command(...)` before each spawn. The previous local `coco_shell::sandbox` mirror module has been deleted.)
   - tokio, tokio-util (CancellationToken, process spawning)
 
 coco-shell does NOT depend on:

@@ -135,4 +135,12 @@ pub enum UserCommand {
     },
     /// Shutdown the application.
     Shutdown,
+    /// Fire an `idle_prompt` Notification hook. The TUI emits this
+    /// once per turn-completion epoch when the user has been idle
+    /// past the configured threshold. TS parity:
+    /// `screens/REPL.tsx:3934-3937` (`sendNotification({
+    /// notificationType: 'idle_prompt' })`). The runtime translates
+    /// this into a `coco_hooks::orchestration::execute_notification`
+    /// call so registered `Notification` hooks can react.
+    FireIdleNotification { message: String },
 }

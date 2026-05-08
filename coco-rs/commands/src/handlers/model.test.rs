@@ -64,12 +64,41 @@ async fn test_handler_no_args() {
     assert!(output.contains("sonnet"));
 }
 
+/// Run `f` with `COCO_CONFIG_DIR` pointed at a fresh tempdir so the
+/// settings-write side effect of `/model` doesn't touch the developer's
+/// real `~/.coco/settings.json`.
+async fn with_tmp_config_dir<F, Fut, T>(f: F) -> T
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = T>,
+{
+    let tmp = tempfile::tempdir().unwrap();
+    // SAFETY: tests run with --test-threads=1 by default in nextest;
+    // the env var is restored on scope exit. This mirrors the pattern
+    // used in `commands/handlers/keybindings.test.rs`.
+    let prev = std::env::var_os("COCO_CONFIG_DIR");
+    unsafe {
+        std::env::set_var("COCO_CONFIG_DIR", tmp.path());
+    }
+    let result = f().await;
+    unsafe {
+        match prev {
+            Some(v) => std::env::set_var("COCO_CONFIG_DIR", v),
+            None => std::env::remove_var("COCO_CONFIG_DIR"),
+        }
+    }
+    result
+}
+
 #[tokio::test]
 async fn test_handler_valid_model() {
-    let output = handler("opus".to_string()).await.unwrap();
-    assert!(output.contains("switched to"));
+    let output = with_tmp_config_dir(|| handler("opus".to_string()))
+        .await
+        .unwrap();
+    assert!(output.contains("set to"));
     assert!(output.contains("claude-opus-4-20250514"));
     assert!(output.contains("Pricing"));
+    assert!(output.contains("Saved to"));
 }
 
 #[tokio::test]
@@ -80,6 +109,9 @@ async fn test_handler_unknown_model() {
 
 #[tokio::test]
 async fn test_handler_custom_provider_model() {
-    let output = handler("openai/gpt-4-turbo".to_string()).await.unwrap();
+    let output = with_tmp_config_dir(|| handler("openai/gpt-4-turbo".to_string()))
+        .await
+        .unwrap();
     assert!(output.contains("custom model"));
+    assert!(output.contains("Saved to"));
 }

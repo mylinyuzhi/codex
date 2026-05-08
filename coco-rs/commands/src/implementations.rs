@@ -12,8 +12,6 @@ use crate::CommandRegistry;
 use crate::RegisteredCommand;
 use crate::builtin_base_ext;
 use crate::handlers;
-use coco_config::EnvKey;
-use coco_config::env;
 use coco_types::CommandSafety;
 use coco_types::CommandType;
 use coco_types::LocalCommandData;
@@ -72,8 +70,6 @@ pub mod names {
 
     // System
     pub const DOCTOR: &str = "doctor";
-    pub const LOGIN: &str = "login";
-    pub const LOGOUT: &str = "logout";
     pub const UPGRADE: &str = "upgrade";
     pub const USAGE: &str = "usage";
 
@@ -93,29 +89,12 @@ pub mod names {
     pub const RELOAD_PLUGINS: &str = "reload-plugins";
     pub const SECURITY_REVIEW: &str = "security-review";
     pub const INSIGHTS: &str = "insights";
-    // /advisor, /ultrareview and /context-non-interactive are intentionally
-    // not ported. /advisor is an Anthropic API server-side beta tool
-    // (`advisor-tool-2026-03-01`) gated to first-party Claude — outside
-    // coco-rs's multi-provider scope. /ultrareview is a Claude-Code-on-Web
-    // entry point with no local execution path; /context-non-interactive
-    // is a hidden TS command surfaced only when `getIsNonInteractiveSession()`
-    // is true, and the coco-rs TUI is always interactive.
 
-    // ── PR-G4 batch 1: dev tooling + integrations ──
-    // /brief, /voice, /issue, /autofix-pr, /bughunter are intentionally
-    // not ported. They are first-party-only or hidden in TS:
-    //   - /brief: KAIROS-only (`feature('KAIROS_BRIEF')` + GrowthBook
-    //     gate `tengu_kairos_brief_config.enable_slash_command`); depends
-    //     on the Anthropic-internal BriefTool that coco-rs doesn't ship.
-    //   - /voice: `availability: ['claude-ai']` + GrowthBook gate
-    //     `isVoiceGrowthBookEnabled`; needs voiceStreamSTT (Anthropic),
-    //     SoX, microphone permission probes.
-    //   - /issue, /autofix-pr, /bughunter: TS source files literally
-    //     `export default { isEnabled: () => false, isHidden: true,
-    //     name: 'stub' }` — never reachable to users.
+    // Slash commands deliberately NOT ported live in `commands/CLAUDE.md`
+    // (Deliberately Not Ported). Audits and parity reviews should consult
+    // that list before flagging a missing TS command as a gap.
     pub const ENV: &str = "env";
     pub const DEBUG_TOOL_CALL: &str = "debug-tool-call";
-    pub const ANT_TRACE: &str = "ant-trace";
 }
 
 /// (name, description, aliases, handler, is_overlay, safety, argument_hint)
@@ -136,7 +115,7 @@ type AsyncSpec = (
     &'static [&'static str],
     fn(
         String,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::Result<String>> + Send>>,
     bool,
     CommandSafety,
     Option<&'static str>,
@@ -193,7 +172,7 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
         ),
         (
             names::OUTPUT_STYLE,
-            "Configure output style",
+            "Deprecated: use /config to change output style",
             &[],
             output_style_handler,
             true,
@@ -202,12 +181,12 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
         ),
         (
             names::COLOR,
-            "Configure terminal colors",
+            "Set the prompt bar color for this session",
             &[],
             color_handler,
             true,
             AlwaysSafe,
-            Some("[mode]"),
+            Some("<color|default>"),
         ),
         (
             names::SANDBOX,
@@ -389,15 +368,6 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
             LocalOnly,
             Some("[call-id]"),
         ),
-        (
-            names::ANT_TRACE,
-            "Toggle internal tracing (debug-only)",
-            &[],
-            ant_trace_handler,
-            false,
-            LocalOnly,
-            Some("[on|off]"),
-        ),
     ];
 
     for (name, description, aliases, handler_fn, is_overlay, safety, arg_hint) in sync_specs {
@@ -431,24 +401,11 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
             BridgeSafe,
             Some("[instructions]"),
         ),
-        (
-            names::DREAM,
-            "Force auto-memory consolidation now (skips three-gate scheduler)",
-            &[],
-            handlers::dream::handler,
-            false,
-            LocalOnly,
-            None,
-        ),
-        (
-            names::SUMMARY,
-            "Force a 9-section session-memory update now",
-            &[],
-            handlers::summary::handler,
-            false,
-            LocalOnly,
-            None,
-        ),
+        // /dream and /summary are gated on Feature::AutoMemory and live in
+        // `register_ts_parity_handlers` so they only appear when the
+        // memory subsystem is wired. Registering them unconditionally
+        // here surfaces them in /-typeahead and silently no-ops when the
+        // feature is off (tui_runner.rs:1212 / 1228 just log and return).
         (
             names::CONTEXT,
             "Show context window usage breakdown",
@@ -558,24 +515,6 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
             None,
         ),
         (
-            names::LOGIN,
-            "Sign in with your Anthropic account",
-            &[],
-            login_handler_async,
-            true,
-            LocalOnly,
-            None,
-        ),
-        (
-            names::LOGOUT,
-            "Clear authentication credentials",
-            &[],
-            logout_handler_async,
-            /*overlay*/ true,
-            LocalOnly,
-            None,
-        ),
-        (
             names::MCP,
             "Manage MCP servers",
             &[],
@@ -613,7 +552,7 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
         ),
         (
             names::FILES,
-            "List files currently tracked in context",
+            "List git-tracked files in this repository",
             &[],
             handlers::files::handler,
             /*overlay*/ false,
@@ -686,6 +625,16 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
         });
     }
 
+    // Hide Rust-only debug commands from `/-typeahead`. They stay
+    // enabled (so power users can still invoke them by name) but the
+    // TS counterparts are literal `isEnabled:false, isHidden:true`
+    // stubs — keeping them hidden mirrors that visibility contract.
+    registry.set_hidden(names::ENV, true);
+    registry.set_hidden(names::DEBUG_TOOL_CALL, true);
+    // `/output-style` is a deprecation stub; TS marks it hidden so it
+    // doesn't surface in `/-typeahead`. Match that here.
+    registry.set_hidden(names::OUTPUT_STYLE, true);
+
     // /security-review, /insights, /pr-comments — registered with their
     // static prompt bodies in `register_ts_parity_handlers`, not here.
     // (Earlier this block held handler-less Prompt stubs; they were dead
@@ -739,13 +688,22 @@ fn branch_handler(args: &str) -> String {
 }
 
 fn theme_handler(args: &str) -> String {
-    match args.trim() {
-        "" => "Current theme: default\n\n\
-               Available themes:\n\
-               dark (default), light, solarized, monokai\n\n\
-               Use /theme <name> to switch."
-            .to_string(),
-        name => format!("Theme changed to: {name}"),
+    let name = args.trim();
+    if name.is_empty() {
+        return "Current theme: (load from settings.json)\n\n\
+                Available themes: dark, light, dark-pastel, light-pastel, terminal\n\n\
+                Use /theme <name> to switch — applies on next session."
+            .to_string();
+    }
+    match coco_config::global_config::write_user_setting(
+        "theme",
+        serde_json::Value::String(name.to_string()),
+    ) {
+        Ok(path) => format!(
+            "Theme set to `{name}` in {} (effective on next session).",
+            path.display()
+        ),
+        Err(e) => format!("Failed to persist theme: {e}"),
     }
 }
 
@@ -779,19 +737,31 @@ fn version_handler(_args: &str) -> String {
 }
 
 fn sandbox_handler(args: &str) -> String {
-    match args.trim() {
-        "" => "Sandbox mode: disabled\n\n\
-               Modes:\n\
-                 none     — No sandboxing (default)\n\
-                 readonly — Read-only filesystem access\n\
-                 strict   — Full sandboxing with restricted execution\n\n\
-               Use /sandbox <mode> to change.\n\
-               Use /sandbox exclude \"pattern\" to add exclusions."
-            .to_string(),
-        "none" | "off" | "disable" => "Sandbox mode disabled.".to_string(),
-        "readonly" => "Sandbox mode set to: readonly".to_string(),
-        "strict" => "Sandbox mode set to: strict".to_string(),
-        other => format!("Sandbox: {other}"),
+    let arg = args.trim();
+    if arg.is_empty() {
+        return "Sandbox mode: (read from settings.json `sandbox.mode`)\n\n\
+                Modes:\n\
+                  none     — No sandboxing (default)\n\
+                  readonly — Read-only filesystem access\n\
+                  strict   — Full sandboxing with restricted execution\n\n\
+                Use /sandbox <mode> to change — persisted, effective on next session."
+            .to_string();
+    }
+    let mode = match arg {
+        "none" | "off" | "disable" => "none",
+        "readonly" => "readonly",
+        "strict" => "strict",
+        other => return format!("Unknown sandbox mode: {other}. Use none, readonly, or strict."),
+    };
+    match coco_config::global_config::write_user_setting(
+        "sandbox.mode",
+        serde_json::Value::String(mode.to_string()),
+    ) {
+        Ok(path) => format!(
+            "Sandbox mode set to `{mode}` in {} (effective on next session).",
+            path.display()
+        ),
+        Err(e) => format!("Failed to persist sandbox mode: {e}"),
     }
 }
 
@@ -811,10 +781,39 @@ fn upgrade_handler(_args: &str) -> String {
 fn add_dir_handler(args: &str) -> String {
     let path = args.trim();
     if path.is_empty() {
-        "Usage: /add-dir <path> — Add a directory as a working directory.".to_string()
-    } else {
-        format!("Added working directory: {path}")
+        return "Usage: /add-dir <path> — Add a directory to the permission scope for this session.".to_string();
     }
+    // Resolve + validate before emitting the sentinel so the runner
+    // sees only well-formed paths. `/add-dir` is a Session-source
+    // mutation: TS persists nothing, just widens the in-memory
+    // additional_dirs map for the duration of the session. Runners
+    // pick up the sentinel and call `runtime.update_engine_config`.
+    let absolute = match std::path::PathBuf::from(path).canonicalize() {
+        Ok(p) => p,
+        Err(e) => return format!("Cannot add directory `{path}`: {e}"),
+    };
+    if !absolute.is_dir() {
+        return format!(
+            "Cannot add directory `{}`: not a directory",
+            absolute.display()
+        );
+    }
+    format!(
+        "{ADD_DIR_SENTINEL} {}\nAdded working directory: {}",
+        absolute.display(),
+        absolute.display()
+    )
+}
+
+/// Parse a `__COCO_ADD_DIR__ <abs-path>` first line. Returns the
+/// trimmed path when present, `None` otherwise.
+#[must_use]
+pub fn parse_add_dir_sentinel(handler_output: &str) -> Option<String> {
+    let parsed = handlers::sentinel::parse_sentinel(handler_output, ADD_DIR_SENTINEL)?;
+    if parsed.args.is_empty() {
+        return None;
+    }
+    Some(parsed.args.to_string())
 }
 
 fn ide_handler(args: &str) -> String {
@@ -831,23 +830,54 @@ fn ide_handler(args: &str) -> String {
     }
 }
 
-fn output_style_handler(args: &str) -> String {
-    match args.trim() {
-        "" => "Output style: default\n\
-               Use /config to change output style settings."
-            .to_string(),
-        style => format!("Output style set to: {style}"),
-    }
+/// `/output-style` — deprecated stub. TS equivalent
+/// (`commands/output-style/output-style.tsx`) prints a redirect message
+/// to `/config`; we mirror that text verbatim so users on either CLI
+/// see the same deprecation hint.
+fn output_style_handler(_args: &str) -> String {
+    "/output-style has been deprecated. Use /config to change your output style, \
+     or set it in your settings file. Changes take effect on the next session."
+        .to_string()
 }
 
+/// Reset aliases that TS treats as "restore the default color"
+/// (`commands/color/color.ts:18`). The TUI intercept (`dispatch_color`
+/// in `coco-cli`) carries its own copy — kept in sync with this list.
+const COLOR_RESET_ALIASES: &[&str] = &["default", "reset", "none", "gray", "grey"];
+
+/// `/color <name|default>` — set the prompt bar color for this session.
+///
+/// Pure text-shape mirror of TS `commands/color/color.ts`. Persistence
+/// (writing to `ToolAppState.agent_color`) happens in
+/// `tui_runner::dispatch_color`, which intercepts this command before
+/// the registry to gate on `is_teammate()` and mutate runtime state.
+/// This handler is the SDK / non-TUI fallback that produces the same
+/// user-visible text without runtime context.
 fn color_handler(args: &str) -> String {
-    match args.trim() {
-        "" => "Color mode: auto\n\n\
-               Options: auto, always, never\n\n\
-               Use /color <mode> to change."
-            .to_string(),
-        "auto" | "always" | "never" => format!("Color mode set to: {}", args.trim()),
-        other => format!("Unknown color mode: {other}. Use auto, always, or never."),
+    use coco_types::AgentColorName;
+    let trimmed = args.trim();
+    if trimmed.is_empty() {
+        let list = AgentColorName::ALL
+            .iter()
+            .map(|c| c.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return format!("Please provide a color. Available colors: {list}, default");
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if COLOR_RESET_ALIASES.contains(&lower.as_str()) {
+        return "Session color reset to default".to_string();
+    }
+    match lower.parse::<AgentColorName>() {
+        Ok(color) => format!("Session color set to: {color}"),
+        Err(_) => {
+            let list = AgentColorName::ALL
+                .iter()
+                .map(|c| c.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("Invalid color \"{lower}\". Available colors: {list}, default")
+        }
     }
 }
 
@@ -867,38 +897,99 @@ fn status_extended_handler(_args: &str) -> String {
 }
 
 fn effort_extended_handler(args: &str) -> String {
-    match args.trim() {
-        "" => "Reasoning effort: medium\n\n\
-               Levels:\n\
-                 low    — Faster, less thorough\n\
-                 medium — Balanced (default)\n\
-                 high   — Deeper reasoning, slower\n\n\
-               Use /effort <level> to change."
-            .to_string(),
-        "low" | "medium" | "high" => format!("Reasoning effort set to: {}", args.trim()),
-        other => format!("Unknown effort level: {other}. Use low, medium, or high."),
+    let level = args.trim();
+    if level.is_empty() {
+        return "Reasoning effort levels:\n\
+                  low      — Faster, less thorough\n\
+                  medium   — Balanced (default)\n\
+                  high     — Deeper reasoning, slower\n\
+                  max      — Maximum effort\n\
+                  auto     — Provider-default\n\n\
+                Use /effort <level> to change — persisted to settings.json, effective on next session."
+            .to_string();
+    }
+    if !matches!(level, "low" | "medium" | "high" | "max" | "auto") {
+        return format!("Unknown effort level: {level}. Use low / medium / high / max / auto.");
+    }
+    match coco_config::global_config::write_user_setting(
+        "effort",
+        serde_json::Value::String(level.to_string()),
+    ) {
+        Ok(path) => format!(
+            "Reasoning effort set to `{level}` in {} (effective on next session).",
+            path.display()
+        ),
+        Err(e) => format!("Failed to persist effort: {e}"),
     }
 }
 
 fn config_extended_handler(args: &str) -> String {
     let subcommand = args.trim();
     if subcommand.is_empty() {
-        "Configuration:\n\n\
-         Use /config <setting> to view a setting\n\
-         Use /config <setting> <value> to change\n\n\
-         Common settings:\n\
-           model, theme, editorMode, verbose\n\
-           autoCompactEnabled, autoMemoryEnabled\n\
-           fileCheckpointingEnabled\n\
-           terminalProgressBarEnabled\n\
-           showTurnDuration\n\n\
-         See settings docs for all options."
-            .to_string()
-    } else if let Some((key, value)) = subcommand.split_once(' ') {
-        format!("Setting {key} = {value}")
-    } else {
-        format!("Current value of '{subcommand}': (not set)")
+        return "Configuration:\n\n\
+                Use /config <key>           — view current value\n\
+                Use /config <key> <value>   — set value (auto-typed: bool/int/JSON)\n\n\
+                Common keys:\n\
+                  theme, effort, output_style, color_mode\n\
+                  sandbox.mode, compact.auto.enabled, web_search.enabled\n\
+                  features.<name>\n\n\
+                Writes go to ~/.coco/settings.json — effective on next session."
+            .to_string();
     }
+    let path = coco_config::global_config::user_settings_path();
+    if let Some((key, value_str)) = subcommand.split_once(' ') {
+        let value = parse_config_value(value_str.trim());
+        match coco_config::global_config::write_user_setting(key, value.clone()) {
+            Ok(p) => format!(
+                "Set `{key}` = {} in {} (effective on next session).",
+                value,
+                p.display()
+            ),
+            Err(e) => format!("Failed to write `{key}`: {e}"),
+        }
+    } else {
+        // Read-only view of one key.
+        let raw = match std::fs::read_to_string(&path) {
+            Ok(s) if !s.trim().is_empty() => s,
+            _ => return format!("Current value of `{subcommand}`: (settings.json not present)"),
+        };
+        let json: serde_json::Value = match serde_json::from_str(&raw) {
+            Ok(v) => v,
+            Err(e) => return format!("Failed to parse settings.json: {e}"),
+        };
+        let value = lookup_dotted(&json, subcommand);
+        match value {
+            Some(v) => format!("Current value of `{subcommand}`: {v}"),
+            None => format!("Current value of `{subcommand}`: (not set)"),
+        }
+    }
+}
+
+/// Coerce a CLI-typed value string into a `serde_json::Value`. Tries
+/// `bool` → `i64` → JSON parse → fallback to plain `String`. Mirrors
+/// the relaxed coercion users expect from a CLI (`/config foo true`
+/// stores boolean true, not the string "true").
+fn parse_config_value(s: &str) -> serde_json::Value {
+    if let Ok(b) = s.parse::<bool>() {
+        return serde_json::Value::Bool(b);
+    }
+    if let Ok(n) = s.parse::<i64>() {
+        return serde_json::Value::Number(n.into());
+    }
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(s) {
+        return v;
+    }
+    serde_json::Value::String(s.to_string())
+}
+
+/// Walk dotted key path through a `Value`. Returns `None` for missing
+/// keys or non-object intermediates.
+fn lookup_dotted<'a>(json: &'a serde_json::Value, key: &str) -> Option<&'a serde_json::Value> {
+    let mut cur = json;
+    for part in key.split('.') {
+        cur = cur.get(part)?;
+    }
+    Some(cur)
 }
 
 fn tasks_extended_handler(args: &str) -> String {
@@ -916,29 +1007,88 @@ fn tasks_extended_handler(args: &str) -> String {
 // ── TS-parity: additional local handler functions ──
 
 fn reload_plugins_handler(_args: &str) -> String {
-    // Real plugin-reload requires a thread-safe handle to the live
-    // PluginManager (held in AppState). Without the TUI seam this stub is
-    // intentionally a status string — wiring through `UserCommand::ReloadPlugins`
-    // happens when the runtime exposes the manager handle.
-    "Reload requested. Active plugins will refresh on the next turn.".to_string()
+    // Sentinel that runners pick up to call
+    // `SessionRuntime::reload_plugins`, which rescans plugin + skill
+    // dirs and atomically swaps the live `CommandRegistry`. The
+    // status line below is what the user sees in the transcript.
+    format!("{RELOAD_PLUGINS_SENTINEL}\nReloading plugins…")
+}
+
+/// Parse a `__COCO_RELOAD_PLUGINS__` first line. Returns `Some(())` on
+/// match (no payload), `None` otherwise.
+#[must_use]
+pub fn parse_reload_plugins_sentinel(handler_output: &str) -> Option<()> {
+    handlers::sentinel::parse_sentinel(handler_output, RELOAD_PLUGINS_SENTINEL).map(|_| ())
+}
+
+/// Sentinel emitted by `/rename <name>`. Runners parse the first line
+/// and call `SessionManager::set_title` on the live session id.
+pub const RENAME_SENTINEL: &str = "__COCO_RENAME__";
+/// Sentinel emitted by `/tag <name>`. Runners toggle the tag via
+/// `SessionManager::toggle_tag`.
+pub const TAG_SENTINEL: &str = "__COCO_TAG__";
+/// Sentinel emitted by `/add-dir <path>`. Runners push the resolved
+/// absolute path into the engine's `session_additional_dirs`.
+pub const ADD_DIR_SENTINEL: &str = "__COCO_ADD_DIR__";
+/// Sentinel emitted by `/reload-plugins`. Runners rebuild the plugin
+/// + skill + command registry and atomically swap it in via
+///   `SessionRuntime::reload_plugins`.
+pub const RELOAD_PLUGINS_SENTINEL: &str = "__COCO_RELOAD_PLUGINS__";
+/// Sentinel emitted by `/hooks reload`. Runners reload the live
+/// `HookRegistry` from the latest `RuntimeConfig` snapshot via
+/// `SessionRuntime::reload_hooks`. TS parity:
+/// `updateHooksConfigSnapshot()` (`utils/hooks/hooksConfigSnapshot.ts`).
+///
+/// Mirrors RELOAD_PLUGINS_SENTINEL: only fires from a slash command,
+/// which runs only at turn boundaries (QueryGuard idle), so pre/post
+/// hook consistency within a turn is preserved.
+pub const RELOAD_HOOKS_SENTINEL: &str = "__COCO_RELOAD_HOOKS__";
+
+/// Parse a `__COCO_RELOAD_HOOKS__` first line. Returns `Some(())` on
+/// match (no payload), `None` otherwise.
+#[must_use]
+pub fn parse_reload_hooks_sentinel(handler_output: &str) -> Option<()> {
+    handlers::sentinel::parse_sentinel(handler_output, RELOAD_HOOKS_SENTINEL).map(|_| ())
 }
 
 fn rename_handler(args: &str) -> String {
     let name = args.trim();
     if name.is_empty() {
-        "Usage: /rename <name> — Rename the current conversation.".to_string()
-    } else {
-        format!("Conversation renamed to: {name}")
+        return "Usage: /rename <name> — Rename the current conversation.".to_string();
     }
+    // Sentinel + status line: runners parse the first line for the new
+    // name and dispatch to SessionManager. The second line is what the
+    // user sees in the transcript when the runner echoes our text.
+    format!("{RENAME_SENTINEL} {name}\nRenaming conversation to: {name}")
 }
 
 fn tag_handler(args: &str) -> String {
     let tag = args.trim();
     if tag.is_empty() {
-        "Usage: /tag <name> — Toggle a searchable tag on the current session.".to_string()
-    } else {
-        format!("Tag toggled: {tag}")
+        return "Usage: /tag <name> — Toggle a searchable tag on the current session.".to_string();
     }
+    format!("{TAG_SENTINEL} {tag}\nToggling tag: {tag}")
+}
+
+/// Parse a `__COCO_RENAME__ <name>` first line. Returns the trimmed
+/// new name when present, `None` otherwise.
+#[must_use]
+pub fn parse_rename_sentinel(handler_output: &str) -> Option<String> {
+    let parsed = handlers::sentinel::parse_sentinel(handler_output, RENAME_SENTINEL)?;
+    if parsed.args.is_empty() {
+        return None;
+    }
+    Some(parsed.args.to_string())
+}
+
+/// Parse a `__COCO_TAG__ <name>` first line.
+#[must_use]
+pub fn parse_tag_sentinel(handler_output: &str) -> Option<String> {
+    let parsed = handlers::sentinel::parse_sentinel(handler_output, TAG_SENTINEL)?;
+    if parsed.args.is_empty() {
+        return None;
+    }
+    Some(parsed.args.to_string())
 }
 
 fn export_handler(args: &str) -> String {
@@ -962,7 +1112,7 @@ fn export_handler(args: &str) -> String {
 
 fn resume_handler_async(
     args: String,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>> {
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::Result<String>> + Send>> {
     Box::pin(async move {
         let session_id = args.trim().to_string();
 
@@ -1012,7 +1162,7 @@ fn resume_handler_async(
 
 fn init_handler_async(
     _args: String,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>> {
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::Result<String>> + Send>> {
     Box::pin(async move {
         let claude_md_exists = tokio::fs::metadata("CLAUDE.md").await.is_ok();
         let claude_dir_exists = tokio::fs::metadata(".claude").await.is_ok();
@@ -1103,7 +1253,7 @@ fn init_handler_async(
 
 fn doctor_handler_async(
     _args: String,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>> {
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::Result<String>> + Send>> {
     Box::pin(async move {
         let mut out = String::from("Running diagnostics...\n\n");
 
@@ -1190,60 +1340,9 @@ fn doctor_handler_async(
     })
 }
 
-fn login_handler_async(
-    _args: String,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>> {
-    Box::pin(async move {
-        // Check for existing API key
-        let has_api_key = std::env::var("ANTHROPIC_API_KEY").is_ok();
-
-        let mut out = String::new();
-        if has_api_key {
-            out.push_str("ANTHROPIC_API_KEY is set in environment.\n");
-            out.push_str("Use /login to switch accounts or re-authenticate.\n");
-        } else {
-            out.push_str("No API key found.\n\n");
-            out.push_str("Authentication methods:\n");
-            out.push_str("  1. Set ANTHROPIC_API_KEY environment variable\n");
-            out.push_str("  2. Use OAuth flow (interactive login)\n");
-            out.push_str("  3. Use Claude AI subscription\n\n");
-            out.push_str("Opening authentication flow...");
-        }
-
-        Ok(out)
-    })
-}
-
-fn logout_handler_async(
-    _args: String,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>> {
-    Box::pin(async move {
-        let mut out = String::from("Logging out...\n\n");
-
-        // Check for stored credentials
-        let cred_path = dirs::home_dir().map(|h| h.join(".cocode").join("credentials.json"));
-
-        if let Some(path) = cred_path {
-            if path.exists() {
-                out.push_str(&format!("Credentials file: {}\n", path.display()));
-                out.push_str("Credentials cleared.\n");
-            } else {
-                out.push_str("No stored credentials found.\n");
-            }
-        }
-
-        if std::env::var("ANTHROPIC_API_KEY").is_ok() {
-            out.push_str("Note: ANTHROPIC_API_KEY is set in your environment.\n");
-            out.push_str("Unset it to fully log out: unset ANTHROPIC_API_KEY");
-        }
-
-        Ok(out)
-    })
-}
-
 fn review_handler_async(
     args: String,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>> {
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::Result<String>> + Send>> {
     Box::pin(async move {
         let pr_number = args.trim().to_string();
 
@@ -1364,35 +1463,6 @@ fn debug_tool_call_handler(args: &str) -> String {
     }
 }
 
-/// `/ant-trace` — toggle the internal coco trace (debug-only telemetry).
-/// Persists via a well-known env var so subsequent turns see it.
-fn ant_trace_handler(args: &str) -> String {
-    let arg = args.trim().to_ascii_lowercase();
-    match arg.as_str() {
-        "on" => {
-            // SAFETY: slash commands run on the single-threaded UI task.
-            unsafe {
-                std::env::set_var(EnvKey::CocoAntTrace, "1");
-            }
-            "ant-trace enabled for this session (COCO_ANT_TRACE=1)".into()
-        }
-        "off" => {
-            unsafe {
-                std::env::remove_var(EnvKey::CocoAntTrace);
-            }
-            "ant-trace disabled".into()
-        }
-        _ => format!(
-            "Usage: /ant-trace [on|off]\nCurrent: {}",
-            if env::var(EnvKey::CocoAntTrace).ok().as_deref() == Some("1") {
-                "on"
-            } else {
-                "off"
-            }
-        ),
-    }
-}
-
 // ────────────────────────────────────────────────────────────────────────────
 // TS-parity handlers (Round 11)
 // ────────────────────────────────────────────────────────────────────────────
@@ -1456,7 +1526,7 @@ pub fn register_ts_parity_handlers(
         );
         base.loaded_from = Some(CommandSource::Builtin);
         let handler = handlers::memory_dialog::MemoryDialogHandler::new(
-            project_root,
+            project_root.clone(),
             user_home,
             managed_root,
         );
@@ -1482,7 +1552,8 @@ pub fn register_ts_parity_handlers(
         base.loaded_from = Some(CommandSource::Builtin);
         let handler = handlers::init_prompt::InitPromptHandler {
             user_type,
-            features,
+            features: features.clone(),
+            project_root: Some(project_root),
         };
         registry.register(RegisteredCommand {
             base,
@@ -1494,15 +1565,44 @@ pub fn register_ts_parity_handlers(
         });
     }
 
-    // /security-review — moved-to-plugin TS: commands/security-review.ts
-    register_static_prompt(
-        registry,
-        names::SECURITY_REVIEW,
-        "Complete a security review of the pending changes on the current branch",
-        "analyzing code changes for security risks",
-        SECURITY_REVIEW_PROMPT,
-        false,
-    );
+    // /security-review — moved-to-plugin TS: commands/security-review.ts.
+    // Uses ShellExpandingPromptHandler so `!`git ...`` markers in the
+    // prompt body are pre-resolved before the prompt is fed to the model
+    // (matches TS `executeShellCommandsInPrompt`). Pre-allows the
+    // tools the TS frontmatter declares so the agent can drive the
+    // review without prompting the user for permission on every step.
+    {
+        let mut base = crate::builtin_base_ext(
+            names::SECURITY_REVIEW,
+            "Complete a security review of the pending changes on the current branch",
+            &[],
+            CommandSafety::LocalOnly,
+            None,
+        );
+        base.loaded_from = Some(CommandSource::Builtin);
+        registry.register(RegisteredCommand {
+            base,
+            command_type: CommandType::Prompt(coco_types::PromptCommandData {
+                progress_message: "analyzing code changes for security risks".to_string(),
+                content_length: SECURITY_REVIEW_PROMPT.len() as i64,
+                allowed_tools: Some(security_review_allowed_tools()),
+                model: None,
+                context: coco_types::CommandContext::Inline,
+                agent: None,
+                thinking_level: None,
+                hooks: None,
+            }),
+            handler: Some(Arc::new(
+                handlers::prompt_command::ShellExpandingPromptHandler {
+                    name: "security-review",
+                    progress_message: "analyzing code changes for security risks",
+                    body: SECURITY_REVIEW_PROMPT,
+                    append_task: false,
+                },
+            )),
+            is_enabled: None,
+        });
+    }
 
     // /pr-comments — TS: commands/pr_comments/index.ts. Args (if any) are
     // appended verbatim under "## Task" so the agent can scope to a
@@ -1597,6 +1697,54 @@ pub fn register_ts_parity_handlers(
         STATUSLINE_PROMPT,
         true,
     );
+
+    // /dream + /summary — auto-memory subsystem entry points. Only register
+    // when Feature::AutoMemory is on; the runner's `run_dream_consolidation`
+    // and `run_session_memory_force` no-op when the runtime has no
+    // MemoryRuntime, but surfacing the commands in /-typeahead under those
+    // conditions is misleading. TS gates `/dream` on `KAIROS|KAIROS_DREAM`;
+    // the closest coco-rs gate is the AutoMemory feature.
+    if features.enabled(coco_types::Feature::AutoMemory) {
+        let mut dream_base = crate::builtin_base_ext(
+            names::DREAM,
+            "Force auto-memory consolidation now (skips three-gate scheduler)",
+            &[],
+            CommandSafety::LocalOnly,
+            None,
+        );
+        dream_base.loaded_from = Some(CommandSource::Builtin);
+        registry.register(RegisteredCommand {
+            base: dream_base,
+            command_type: CommandType::Local(LocalCommandData {
+                handler: names::DREAM.to_string(),
+            }),
+            handler: Some(Arc::new(AsyncBuiltinCommand::new(
+                names::DREAM,
+                handlers::dream::handler,
+            ))),
+            is_enabled: None,
+        });
+
+        let mut summary_base = crate::builtin_base_ext(
+            names::SUMMARY,
+            "Force a 9-section session-memory update now",
+            &[],
+            CommandSafety::LocalOnly,
+            None,
+        );
+        summary_base.loaded_from = Some(CommandSource::Builtin);
+        registry.register(RegisteredCommand {
+            base: summary_base,
+            command_type: CommandType::Local(LocalCommandData {
+                handler: names::SUMMARY.to_string(),
+            }),
+            handler: Some(Arc::new(AsyncBuiltinCommand::new(
+                names::SUMMARY,
+                handlers::summary::handler,
+            ))),
+            is_enabled: None,
+        });
+    }
 }
 
 /// Bash patterns auto-allowed during a `/commit` Prompt turn. Mirrors TS
@@ -1606,6 +1754,26 @@ fn commit_allowed_tools() -> Vec<String> {
         "Bash(git add:*)".to_string(),
         "Bash(git status:*)".to_string(),
         "Bash(git commit:*)".to_string(),
+    ]
+}
+
+/// Tools auto-allowed during a `/security-review` Prompt turn. Mirrors
+/// TS `commands/security-review.ts` frontmatter `allowed-tools` (the
+/// markdown declares: Bash(git diff:*), Bash(git status:*),
+/// Bash(git log:*), Bash(git show:*), Bash(git remote show:*), Read,
+/// Glob, Grep, LS, Task).
+fn security_review_allowed_tools() -> Vec<String> {
+    vec![
+        "Bash(git diff:*)".to_string(),
+        "Bash(git status:*)".to_string(),
+        "Bash(git log:*)".to_string(),
+        "Bash(git show:*)".to_string(),
+        "Bash(git remote show:*)".to_string(),
+        "Read".to_string(),
+        "Glob".to_string(),
+        "Grep".to_string(),
+        "LS".to_string(),
+        "Task".to_string(),
     ]
 }
 
@@ -1623,6 +1791,9 @@ fn commit_push_pr_allowed_tools() -> Vec<String> {
         "Bash(gh pr edit:*)".to_string(),
         "Bash(gh pr view:*)".to_string(),
         "Bash(gh pr merge:*)".to_string(),
+        "ToolSearch".to_string(),
+        "mcp__slack__send_message".to_string(),
+        "mcp__claude_ai_Slack__slack_send_message".to_string(),
     ]
 }
 

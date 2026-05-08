@@ -9,12 +9,14 @@
 //! - Violation tracking via ring buffer store
 //! - Runtime state management shared across the system via `Arc`
 
+pub mod adapter;
 pub mod bootstrap;
 pub mod bridge;
 pub mod checker;
 pub mod config;
 pub mod deps;
 pub mod error;
+pub mod glob_expansion;
 pub mod monitor;
 pub mod platform;
 pub mod proxy;
@@ -22,8 +24,14 @@ pub mod seccomp;
 pub mod state;
 pub mod violation;
 
+pub use adapter::{
+    AdapterInputs, AdapterOutput, bare_repo_scrub_paths, build_runtime_config,
+    detect_worktree_main_repo, resolve_filesystem_path, resolve_permission_rule_path,
+    sandbox_unavailable_reason, scrub_bare_repo_files,
+};
 pub use bootstrap::EnableCheckResult;
 pub use bootstrap::check_enable_gates;
+pub use bootstrap::current_platform_supported;
 pub use bridge::{
     NoOpSandboxApprovalBridge, SandboxApprovalBridge, SandboxApprovalBridgeRef,
     SandboxApprovalDecision, SandboxApprovalRequest, SandboxOperation,

@@ -71,6 +71,7 @@ pub use hook_handle::HookPermission;
 pub use hook_handle::NoOpHookHandle;
 pub use hook_handle::PostToolUseOutcome;
 pub use hook_handle::PreToolUseOutcome;
+pub use hook_handle::TaskHookOutcome;
 pub use mailbox_handle::InboxMessage;
 pub use mailbox_handle::MailboxEnvelope;
 pub use mailbox_handle::MailboxHandle;

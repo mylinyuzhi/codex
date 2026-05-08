@@ -14,10 +14,12 @@
 //! focused on per-turn mechanics.
 
 use tokio_util::sync::CancellationToken;
+use tracing::info;
 use tracing::warn;
 
 use coco_hooks::orchestration::OrchestrationContext;
 use coco_messages::Message;
+use coco_messages::MessageHistory;
 use coco_messages::create_user_message;
 use coco_types::TokenUsage;
 
@@ -27,6 +29,7 @@ use crate::config::QueryResult;
 use crate::emit::emit_protocol;
 use crate::emit::emit_protocol_owned;
 use crate::engine::QueryEngine;
+use crate::helpers::extract_last_assistant_text;
 use crate::helpers::hook_outcome_to_status;
 use crate::session_state::SessionStateTracker;
 
@@ -36,7 +39,7 @@ impl QueryEngine {
         &self,
         user_prompt: &str,
         event_tx: tokio::sync::mpsc::Sender<CoreEvent>,
-    ) -> anyhow::Result<QueryResult> {
+    ) -> Result<QueryResult, coco_error::BoxedError> {
         let user_msg = create_user_message(user_prompt);
         self.run_internal_with_messages(vec![user_msg], Some(event_tx))
             .await
@@ -47,16 +50,19 @@ impl QueryEngine {
         &self,
         messages: Vec<Message>,
         event_tx: tokio::sync::mpsc::Sender<CoreEvent>,
-    ) -> anyhow::Result<QueryResult> {
+    ) -> Result<QueryResult, coco_error::BoxedError> {
         if messages.is_empty() {
-            anyhow::bail!("No messages to process");
+            return Err(Box::new(coco_error::PlainError::new(
+                "No messages to process",
+                coco_error::StatusCode::InvalidArguments,
+            )));
         }
         self.run_internal_with_messages(messages, Some(event_tx))
             .await
     }
 
     /// Run the agent loop with an initial user prompt (no event streaming).
-    pub async fn run(&self, user_prompt: &str) -> anyhow::Result<QueryResult> {
+    pub async fn run(&self, user_prompt: &str) -> Result<QueryResult, coco_error::BoxedError> {
         let user_msg = create_user_message(user_prompt);
         self.run_internal_with_messages(vec![user_msg], None).await
     }
@@ -75,11 +81,28 @@ impl QueryEngine {
     ///
     /// Steps 1/2/4/5 fire regardless of success or error so SDK consumers
     /// always see a complete session envelope.
+    #[tracing::instrument(
+        skip_all,
+        name = "session",
+        fields(
+            session_id = %self.config.session_id,
+            agent_id = ?self.config.agent_id,
+            model_id = %self.config.model_id,
+            permission_mode = ?self.config.permission_mode,
+        ),
+    )]
     pub(crate) async fn run_internal_with_messages(
         &self,
         turn_messages: Vec<Message>,
         event_tx: Option<tokio::sync::mpsc::Sender<CoreEvent>>,
-    ) -> anyhow::Result<QueryResult> {
+    ) -> Result<QueryResult, coco_error::BoxedError> {
+        info!(
+            turn_message_count = turn_messages.len(),
+            streaming_tools = self.config.streaming_tool_execution,
+            max_turns = self.config.max_turns,
+            "session entering agent loop"
+        );
+
         // Single choke point for all SessionStateChanged emissions. Dedupes
         // consecutive identical states so the wire stream sees exactly one
         // emission per real edge. See plan file WS-4.
@@ -103,26 +126,38 @@ impl QueryEngine {
         // hook execution path; in Rust we use this child task so
         // orchestration stays independent of the coco-query event type.
         let hook_cancel = self.cancel.child_token();
-        let (hook_tx_opt, hook_forwarder_handle) = if event_tx.is_some() {
-            let (hook_event_tx, hook_event_rx) =
-                tokio::sync::mpsc::channel::<coco_hooks::HookExecutionEvent>(64);
-            let core_tx = event_tx.clone();
-            let handle = tokio::spawn(Self::forward_hook_events(
-                hook_event_rx,
-                core_tx,
-                hook_cancel.clone(),
-            ));
-            (Some(hook_event_tx), Some(handle))
-        } else {
-            (None, None)
-        };
+        // TS `--include-hook-events` opt-in: only emit
+        // `SDKHookStarted/Progress/Response` to the SDK stream when the
+        // session was started with the flag. When disabled, skip the
+        // forwarder channel entirely so the orchestration layer never
+        // sees a sender (cheaper than emitting + dropping).
+        let (hook_tx_opt, hook_forwarder_handle) =
+            if event_tx.is_some() && self.config.include_hook_events {
+                let (hook_event_tx, hook_event_rx) =
+                    tokio::sync::mpsc::channel::<coco_hooks::HookExecutionEvent>(64);
+                let core_tx = event_tx.clone();
+                let handle = tokio::spawn(Self::forward_hook_events(
+                    hook_event_rx,
+                    core_tx,
+                    hook_cancel.clone(),
+                ));
+                (Some(hook_event_tx), Some(handle))
+            } else {
+                (None, None)
+            };
 
+        // History is owned here so StopFailure can carry the last assistant
+        // message text on the error path (TS parity: `executeStopFailureHooks`
+        // pulls the text out of `messages` at the call site). On success the
+        // QueryResult already exposes `response_text`.
+        let mut history = MessageHistory::new();
         let result = self
             .run_session_loop(
                 turn_messages,
                 event_tx.clone(),
                 &state_tracker,
                 hook_tx_opt.clone(),
+                &mut history,
             )
             .await;
 
@@ -161,6 +196,33 @@ impl QueryEngine {
             self.client.cache_break_cleanup_agent(agent_id).await;
         }
 
+        // StopFailure — fire-and-forget hooks when the turn ended in an
+        // API / runtime error rather than a clean stop. TS:
+        // `executeStopFailureHooks()` (`utils/hooks.ts:3594`). Output
+        // and exit codes are intentionally ignored — this is observability
+        // only, not a recovery path. We swallow registry-level failures
+        // so a misconfigured hook can't suppress the user-visible error.
+        if let (Err(e), Some(hooks)) = (&result, &self.hooks) {
+            let err_msg = e.to_string();
+            let hook_ctx = self.orchestration_ctx();
+            let last_text = extract_last_assistant_text(&history);
+            let last_assistant_message = (!last_text.is_empty()).then_some(last_text);
+            // TS classifies via a small enum (`rate_limit` / `auth` / …).
+            // Without classification infrastructure here we pass a single
+            // bucket; users match on `error_details` for the raw text.
+            if let Err(hook_err) = coco_hooks::orchestration::execute_stop_failure(
+                hooks,
+                &hook_ctx,
+                /*error_label*/ "unknown",
+                Some(err_msg.as_str()),
+                last_assistant_message.as_deref(),
+            )
+            .await
+            {
+                warn!(error = %hook_err, "StopFailure hook execution failed");
+            }
+        }
+
         // SessionResult — always emitted. On Err, we synthesize a minimal
         // QueryResult-like view so SDK consumers see a terminal `result`
         // event matching TS SDKResultErrorMessage.
@@ -168,6 +230,23 @@ impl QueryEngine {
             Ok(qr) => self.build_session_result_params(qr, /*error_messages*/ Vec::new()),
             Err(e) => self.build_session_error_params(e.to_string()),
         };
+        match &result {
+            Ok(qr) => info!(
+                turns = qr.turns,
+                duration_ms = qr.duration_ms,
+                duration_api_ms = qr.duration_api_ms,
+                tokens_in = qr.total_usage.input_tokens,
+                tokens_out = qr.total_usage.output_tokens,
+                cancelled = qr.cancelled,
+                budget_exhausted = qr.budget_exhausted,
+                stop_reason = ?qr.stop_reason,
+                "session complete"
+            ),
+            Err(e) => warn!(
+                error = %e,
+                "session terminated with error"
+            ),
+        }
         let _delivered = emit_protocol(
             &event_tx,
             ServerNotification::SessionResult(Box::new(params)),
@@ -325,10 +404,22 @@ impl QueryEngine {
             cwd: std::env::current_dir().unwrap_or_default(),
             project_dir: self.config.project_dir.clone(),
             permission_mode: Some(format!("{:?}", self.config.permission_mode)),
+            // Main-thread orchestration: no subagent identity. Per-spawn
+            // contexts are constructed in `coco-coordinator` via
+            // `hook_ctx_for_subagent`.
+            transcript_path: None,
+            agent_id: None,
+            agent_type: None,
             cancel: self.cancel.clone(),
             disable_all_hooks: self.config.disable_all_hooks,
             allow_managed_hooks_only: self.config.allow_managed_hooks_only,
             attachment_emitter: self.attachment_emitter(),
+            sync_event_sink: self.sync_hook_buffer.clone(),
+            http_url_allowlist: None,
+            http_env_var_policy: None,
+            async_registry: self.async_hook_registry.clone(),
+            llm_handle: self.hook_llm_handle.clone(),
+            workspace_trust_accepted: None,
         }
     }
 

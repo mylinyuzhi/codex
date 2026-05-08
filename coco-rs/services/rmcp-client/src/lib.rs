@@ -1,4 +1,5 @@
 mod auth_status;
+mod error;
 mod logging_client_handler;
 mod mcp_auth_status;
 mod oauth;
@@ -6,6 +7,10 @@ mod perform_oauth_login;
 mod program_resolver;
 mod rmcp_client;
 mod utils;
+
+pub use error::Result;
+pub(crate) use error::ResultExt;
+pub use error::RmcpClientError;
 
 pub use auth_status::determine_streamable_http_auth_status;
 pub use auth_status::supports_oauth_login;

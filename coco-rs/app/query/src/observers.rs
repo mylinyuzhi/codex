@@ -16,6 +16,7 @@ use tokio::sync::RwLock;
 use tracing::warn;
 
 use coco_compact::{CompactResult, CompactionObserver};
+use coco_error::BoxedError;
 use coco_messages::Message;
 
 /// Observer that drops `FileReadState` LRU entries after a successful
@@ -39,7 +40,7 @@ impl CompactionObserver for FileReadStateObserver {
         &self,
         _result: &CompactResult,
         _is_main_agent: bool,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), BoxedError> {
         let mut frs = self.file_read_state.write().await;
         // Don't fully clear — `try_full_compact`'s snapshot+clear has
         // already done so for the LLM path. We just defensively clear
@@ -70,7 +71,7 @@ impl CompactionObserver for ApprovalsObserver {
         &self,
         _result: &CompactResult,
         is_main_agent: bool,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), BoxedError> {
         if !is_main_agent {
             return Ok(());
         }
@@ -108,7 +109,7 @@ impl CompactionObserver for ToolAppStateObserver {
         &self,
         _result: &CompactResult,
         is_main_agent: bool,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), BoxedError> {
         if !is_main_agent {
             return Ok(());
         }
@@ -118,7 +119,7 @@ impl CompactionObserver for ToolAppStateObserver {
         Ok(())
     }
 
-    async fn on_post_compact(&self, _new_messages: &[Message]) -> anyhow::Result<()> {
+    async fn on_post_compact(&self, _new_messages: &[Message]) -> Result<(), BoxedError> {
         Ok(())
     }
 }

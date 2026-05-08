@@ -430,98 +430,79 @@ async fn test_bash_with_progress_channel() {
 // R6-T18: sandbox decision
 // ---------------------------------------------------------------------------
 
-use super::shell_sandbox_config_from_runtime;
+use super::active_sandbox_state;
 
+/// `Feature::Sandbox` disabled → no sandbox state surfaces, even if
+/// the bootstrap layer installed one. Callsite gate for the runtime.
 #[test]
-fn test_shell_sandbox_config_feature_disabled() {
-    let cfg = shell_sandbox_config_from_runtime(
-        &coco_config::SandboxConfig::default(),
-        /*feature_enabled*/ false,
-    );
-    assert!(
-        !cfg.mode.is_active(),
-        "Feature::Sandbox disabled → no sandbox"
-    );
+fn test_active_sandbox_state_feature_disabled_returns_none() {
+    let mut ctx = ToolUseContext::test_default();
+    ctx.features = std::sync::Arc::new(coco_types::Features::empty());
+    ctx.sandbox_state = Some(std::sync::Arc::new(coco_sandbox::SandboxState::disabled()));
+    assert!(active_sandbox_state(&ctx).is_none());
 }
 
+/// `Feature::Sandbox` enabled but no state installed (test/headless path)
+/// → returns None.
 #[test]
-fn test_shell_sandbox_config_feature_enabled_defaults_readonly() {
-    let runtime = coco_config::SandboxConfig::default();
-    let cfg = shell_sandbox_config_from_runtime(&runtime, /*feature_enabled*/ true);
-    assert!(cfg.mode.is_active());
-    assert_eq!(
-        cfg.mode,
-        coco_shell::sandbox::SandboxMode::ReadOnly,
-        "default enabled mode should be ReadOnly"
-    );
+fn test_active_sandbox_state_no_bootstrap_returns_none() {
+    let mut ctx = ToolUseContext::test_default();
+    let mut features = coco_types::Features::empty();
+    features.set_enabled(coco_types::Feature::Sandbox, true);
+    ctx.features = std::sync::Arc::new(features);
+    ctx.sandbox_state = None;
+    assert!(active_sandbox_state(&ctx).is_none());
 }
 
+/// Decision evaluation belongs on `SandboxState::command_snapshot`.
+/// Verify the snapshot reads the `dangerouslyDisableSandbox` bypass
+/// path when the state is `external` (so platform_active doesn't
+/// matter for the test).
 #[test]
-fn test_shell_sandbox_config_mode_workspace_write_maps_to_strict() {
-    let runtime = coco_config::SandboxConfig {
-        mode: coco_types::SandboxMode::WorkspaceWrite,
+fn test_sandbox_state_bypass_unsandboxes() {
+    let settings = coco_sandbox::SandboxSettings {
+        enabled: true,
+        allow_unsandboxed_commands: true,
         ..Default::default()
     };
-    let cfg = shell_sandbox_config_from_runtime(&runtime, /*feature_enabled*/ true);
-    assert_eq!(cfg.mode, coco_shell::sandbox::SandboxMode::Strict);
-}
-
-#[test]
-fn test_shell_sandbox_config_excluded_commands_preserved() {
-    let runtime = coco_config::SandboxConfig {
-        excluded_commands: vec!["git".into(), "npm".into(), "cargo".into()],
-        ..Default::default()
-    };
-    let cfg = shell_sandbox_config_from_runtime(&runtime, /*feature_enabled*/ true);
-    assert_eq!(
-        cfg.excluded_commands,
-        vec!["git".to_string(), "npm".to_string(), "cargo".to_string()]
+    let state = coco_sandbox::SandboxState::external(
+        coco_sandbox::EnforcementLevel::WorkspaceWrite,
+        settings,
+        coco_sandbox::SandboxConfig::default(),
     );
+    let snap = state.command_snapshot("rm -rf /", coco_sandbox::SandboxBypass::Requested);
+    assert!(!snap.should_wrap, "bypass + allow_unsandboxed → no wrap");
 }
 
-/// With sandbox enabled, a non-excluded command is sandboxed.
 #[test]
-fn test_sandbox_decision_non_excluded_command() {
-    use coco_shell::sandbox::BypassRequest;
-    use coco_shell::sandbox::should_sandbox_command;
-    let runtime = coco_config::SandboxConfig::default();
-    let cfg = shell_sandbox_config_from_runtime(&runtime, /*feature_enabled*/ true);
-    let decision = should_sandbox_command(&cfg, "ls -la", BypassRequest::No);
-    assert!(
-        decision.is_sandboxed(),
-        "enabled + non-excluded → sandboxed"
-    );
-}
-
-/// With sandbox enabled, an excluded command bypasses the sandbox.
-#[test]
-fn test_sandbox_decision_excluded_command() {
-    use coco_shell::sandbox::BypassRequest;
-    use coco_shell::sandbox::should_sandbox_command;
-    let runtime = coco_config::SandboxConfig {
+fn test_sandbox_state_excluded_command_unsandboxes() {
+    let settings = coco_sandbox::SandboxSettings {
+        enabled: true,
         excluded_commands: vec!["git".into()],
         ..Default::default()
     };
-    let cfg = shell_sandbox_config_from_runtime(&runtime, /*feature_enabled*/ true);
-    let decision = should_sandbox_command(&cfg, "git status", BypassRequest::No);
-    assert!(
-        !decision.is_sandboxed(),
-        "excluded command must be unsandboxed"
+    let state = coco_sandbox::SandboxState::external(
+        coco_sandbox::EnforcementLevel::WorkspaceWrite,
+        settings,
+        coco_sandbox::SandboxConfig::default(),
     );
+    let snap = state.command_snapshot("git status", coco_sandbox::SandboxBypass::No);
+    assert!(!snap.should_wrap, "excluded command → no wrap");
 }
 
-/// `dangerouslyDisableSandbox` → bypass is requested → unsandboxed.
 #[test]
-fn test_sandbox_decision_bypass_respected() {
-    use coco_shell::sandbox::BypassRequest;
-    use coco_shell::sandbox::should_sandbox_command;
-    let runtime = coco_config::SandboxConfig::default();
-    let cfg = shell_sandbox_config_from_runtime(&runtime, /*feature_enabled*/ true);
-    let decision = should_sandbox_command(&cfg, "rm -rf /", BypassRequest::Requested);
-    assert!(
-        !decision.is_sandboxed(),
-        "bypass should unsandbox (allow_bypass=true in our config)"
+fn test_sandbox_state_active_non_excluded_wraps() {
+    let settings = coco_sandbox::SandboxSettings {
+        enabled: true,
+        ..Default::default()
+    };
+    let state = coco_sandbox::SandboxState::external(
+        coco_sandbox::EnforcementLevel::WorkspaceWrite,
+        settings,
+        coco_sandbox::SandboxConfig::default(),
     );
+    let snap = state.command_snapshot("ls -la", coco_sandbox::SandboxBypass::No);
+    assert!(snap.should_wrap, "active + non-excluded → wrap");
 }
 
 /// R6-T19: runtime-config gate for auto-background-on-timeout.

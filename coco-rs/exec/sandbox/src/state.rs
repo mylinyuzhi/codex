@@ -265,6 +265,19 @@ impl SandboxState {
         config
     }
 
+    /// Build a fresh [`PermissionChecker`] from the live config snapshot.
+    ///
+    /// Used by tool pre-flight checks (Read/Write/Edit) so SDK consumers
+    /// can intercept disallowed file accesses *before* the tool spawns
+    /// any I/O — the platform sandboxes (bwrap/Seatbelt) catch the same
+    /// violation at the kernel level, but only after the syscall has
+    /// already issued. Constructing per-call (rather than caching) means
+    /// the checker automatically observes hot-reloaded config changes
+    /// without extra wiring; cost is negligible compared to file I/O.
+    pub fn permission_checker(&self) -> crate::checker::PermissionChecker {
+        crate::checker::PermissionChecker::new(self.config())
+    }
+
     /// Get the session-unique tag for log filtering and command correlation.
     pub fn session_tag(&self) -> &str {
         &self.session_tag
@@ -438,6 +451,14 @@ impl SandboxState {
             .collect();
         deny_read.dedup();
 
+        // Collect allow_read carve-outs (re-allow within deny regions).
+        let mut allow_read: Vec<String> = cfg
+            .allowed_read_paths
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect();
+        allow_read.dedup();
+
         // Collect all write-denied paths (denied_paths + deny_write_paths).
         let mut deny_write: Vec<String> = cfg
             .denied_paths
@@ -463,8 +484,17 @@ impl SandboxState {
             })
             .collect();
 
+        // Read block carries denyOnly always; allowOnly only when allow_read
+        // carve-outs were configured (omits the empty key for compactness
+        // and TS-shape compatibility).
+        let read_block = if allow_read.is_empty() {
+            serde_json::json!({ "denyOnly": deny_read })
+        } else {
+            serde_json::json!({ "denyOnly": deny_read, "allowOnly": allow_read })
+        };
+
         let desc = serde_json::json!({
-            "read": { "denyOnly": deny_read },
+            "read": read_block,
             "write": { "allowOnly": allow_write, "denyOnly": deny_write },
         });
         desc.to_string()
@@ -513,6 +543,87 @@ impl SandboxState {
                 .writable_roots
                 .push(crate::config::WritableRoot::new(path));
         }
+    }
+
+    /// Snapshot the current total violation count. Pair with
+    /// [`Self::format_violations_since`] to summarize anything that
+    /// landed during a single command's execution. TS parity:
+    /// `annotateStderrWithSandboxFailures` (`sandbox-adapter.ts:961`).
+    pub async fn violations_total_snapshot(&self) -> i32 {
+        self.violations.lock().await.total_count()
+    }
+
+    /// Format violations recorded since `prev_total` as a single
+    /// `<sandbox_violations>` block, ready to splice into a command's
+    /// stderr. Returns `None` when no new non-benign violations occurred.
+    ///
+    /// Output shape (one violation per line, kept short for stderr):
+    ///
+    /// ```text
+    /// <sandbox_violations>
+    /// op=file-write-data path=/etc/passwd
+    /// op=network-outbound path=evil.example.com
+    /// </sandbox_violations>
+    /// ```
+    pub async fn format_violations_since(&self, prev_total: i32) -> Option<String> {
+        let store = self.violations.lock().await;
+        let current = store.total_count();
+        if current <= prev_total {
+            return None;
+        }
+        let new_count = (current - prev_total).min(store.count());
+        // `recent(n)` returns the n most recently pushed entries; that's
+        // the slice we want. `count()` caps at the ring size, so for very
+        // bursty commands we may underreport — accept that vs. unbounded
+        // memory.
+        let recent = store.recent(new_count);
+        let lines: Vec<String> = recent
+            .iter()
+            .filter(|v| !v.benign && !v.is_benign_pattern())
+            .map(|v| match &v.path {
+                Some(p) => format!("op={op} path={p}", op = v.operation),
+                None => format!("op={op}", op = v.operation),
+            })
+            .collect();
+        if lines.is_empty() {
+            return None;
+        }
+        Some(format!(
+            "<sandbox_violations>\n{}\n</sandbox_violations>",
+            lines.join("\n")
+        ))
+    }
+
+    /// Apply platform sandbox enforcement to a `tokio::process::Command`.
+    ///
+    /// One-shot helper that combines `command_snapshot` + platform-wrap so
+    /// callers outside the shell crate (PowerShell tool, future custom
+    /// runners) don't replicate the snapshot logic. Returns `Ok(false)`
+    /// if the command should run unsandboxed (excluded, bypass, sandbox
+    /// inactive, etc.); returns `Ok(true)` after the wrap is applied.
+    ///
+    /// On platform-wrap failure (e.g., bwrap binary missing at exec
+    /// time), returns the [`crate::SandboxError`] — callers should
+    /// fail-closed and refuse to spawn the command unsandboxed.
+    pub fn try_wrap_command(
+        &self,
+        command: &str,
+        bypass: SandboxBypass,
+        cmd: &mut tokio::process::Command,
+    ) -> crate::error::Result<bool> {
+        let snap = self.command_snapshot(command, bypass);
+        let Some(config) = snap.config else {
+            return Ok(false);
+        };
+        if !snap.should_wrap {
+            return Ok(false);
+        }
+        self.platform
+            .wrap_command(&config, command, &self.session_tag, cmd)?;
+        for (k, v) in &snap.proxy_env {
+            cmd.env(k, v);
+        }
+        Ok(true)
     }
 
     /// Hot-reload sandbox configuration.

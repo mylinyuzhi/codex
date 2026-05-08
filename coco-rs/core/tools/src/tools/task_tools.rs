@@ -283,12 +283,38 @@ impl Tool for TaskCreateTool {
 
         let task = ctx
             .task_list
-            .create_task(subject, description, active_form, metadata)
+            .create_task(subject.clone(), description.clone(), active_form, metadata)
             .await
             .map_err(|e| ToolError::ExecutionFailed {
                 message: format!("task_list.create_task failed: {e}"),
                 source: None,
             })?;
+
+        // TS `TaskCreateTool.ts:122-152` — fire TaskCreated hooks AFTER
+        // the task is persisted. A blocking hook rolls the task back so
+        // the model sees the failure and the store stays consistent.
+        if let Some(handle) = ctx.hook_handle.as_ref() {
+            let outcome = handle
+                .run_task_created(
+                    &task.id,
+                    &subject,
+                    if description.is_empty() {
+                        None
+                    } else {
+                        Some(description.as_str())
+                    },
+                    /*teammate_name*/ None,
+                    /*team_name*/ None,
+                )
+                .await;
+            if let Some(reason) = outcome.blocking_reason {
+                let _ = ctx.task_list.delete_task(&task.id).await;
+                return Err(ToolError::ExecutionFailed {
+                    message: format!("TaskCreated hook feedback:\n{reason}"),
+                    source: None,
+                });
+            }
+        }
 
         // TS `TaskCreateTool.ts:116-119` — auto-expand the task panel.
         let patch = build_task_list_patch(&ctx.task_list, false).await;
@@ -656,6 +682,32 @@ impl Tool for TaskUpdateTool {
             if !merge.is_empty() {
                 update.metadata_merge = Some(merge);
                 updated_fields.push("metadata");
+            }
+        }
+
+        // TaskCompleted hook fires BEFORE the status flip is persisted
+        // so a blocking hook leaves the task in its current state. TS:
+        // `executeTaskCompletedHooks` (`utils/hooks.ts:3789`) runs from
+        // `TaskUpdateTool.ts:232-265` before the store write.
+        if newly_completed && let Some(handle) = ctx.hook_handle.as_ref() {
+            let outcome = handle
+                .run_task_completed(
+                    &task_id,
+                    &existing.subject,
+                    if existing.description.is_empty() {
+                        None
+                    } else {
+                        Some(existing.description.as_str())
+                    },
+                    /*teammate_name*/ None,
+                    /*team_name*/ None,
+                )
+                .await;
+            if let Some(reason) = outcome.blocking_reason {
+                return Err(ToolError::ExecutionFailed {
+                    message: format!("TaskCompleted hook feedback:\n{reason}"),
+                    source: None,
+                });
             }
         }
 

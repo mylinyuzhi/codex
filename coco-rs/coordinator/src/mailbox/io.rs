@@ -55,7 +55,7 @@ pub fn inbox_path(agent_name: &str, team_name: &str) -> PathBuf {
 /// Read all messages from an agent's inbox.
 ///
 /// TS: `readMailbox(agentName, teamName)`
-pub fn read_mailbox(agent_name: &str, team_name: &str) -> anyhow::Result<Vec<TeammateMessage>> {
+pub fn read_mailbox(agent_name: &str, team_name: &str) -> crate::Result<Vec<TeammateMessage>> {
     let path = inbox_path(agent_name, team_name);
     if !path.exists() {
         return Ok(Vec::new());
@@ -74,7 +74,7 @@ pub fn read_mailbox(agent_name: &str, team_name: &str) -> anyhow::Result<Vec<Tea
 pub fn read_unread_messages(
     agent_name: &str,
     team_name: &str,
-) -> anyhow::Result<Vec<TeammateMessage>> {
+) -> crate::Result<Vec<TeammateMessage>> {
     let all = read_mailbox(agent_name, team_name)?;
     Ok(all.into_iter().filter(|m| !m.read).collect())
 }
@@ -91,7 +91,7 @@ pub fn write_to_mailbox(
     recipient_name: &str,
     message: TeammateMessage,
     team_name: &str,
-) -> anyhow::Result<()> {
+) -> crate::Result<()> {
     let path = inbox_path(recipient_name, team_name);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -111,7 +111,7 @@ pub fn write_to_mailbox(
 /// Mark all messages as read.
 ///
 /// TS: `markMessagesAsRead(agentName, teamName)`
-pub fn mark_messages_as_read(agent_name: &str, team_name: &str) -> anyhow::Result<()> {
+pub fn mark_messages_as_read(agent_name: &str, team_name: &str) -> crate::Result<()> {
     let path = inbox_path(agent_name, team_name);
     if !path.exists() {
         return Ok(());
@@ -132,7 +132,7 @@ pub fn mark_message_as_read_by_index(
     agent_name: &str,
     team_name: &str,
     index: usize,
-) -> anyhow::Result<()> {
+) -> crate::Result<()> {
     let path = inbox_path(agent_name, team_name);
     let mut messages = read_mailbox(agent_name, team_name)?;
     if let Some(msg) = messages.get_mut(index) {
@@ -150,7 +150,7 @@ pub fn mark_messages_as_read_by_predicate(
     agent_name: &str,
     team_name: &str,
     predicate: impl Fn(&TeammateMessage) -> bool,
-) -> anyhow::Result<()> {
+) -> crate::Result<()> {
     let path = inbox_path(agent_name, team_name);
     if !path.exists() {
         return Ok(());
@@ -169,7 +169,7 @@ pub fn mark_messages_as_read_by_predicate(
 /// Clear an agent's inbox.
 ///
 /// TS: `clearMailbox(agentName, teamName)`
-pub fn clear_mailbox(agent_name: &str, team_name: &str) -> anyhow::Result<()> {
+pub fn clear_mailbox(agent_name: &str, team_name: &str) -> crate::Result<()> {
     let path = inbox_path(agent_name, team_name);
     if path.exists() {
         std::fs::remove_file(&path)?;

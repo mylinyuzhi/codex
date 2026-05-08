@@ -670,6 +670,13 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
 /// (`restoreMessageSyncRef` on user-cancel).
 fn on_turn_completed(state: &mut AppState, p: coco_types::TurnCompletedParams) -> bool {
     state.session.set_busy(false);
+    // TS REPL.tsx:3901 — `updateLastInteractionTime(true)` also fires
+    // here so the idle window starts ticking from "user has had a
+    // chance to read the response", not "agent stopped".
+    let now = std::time::Instant::now();
+    state.session.last_query_completion_at = Some(now);
+    state.session.last_user_interaction_at = now;
+    state.session.idle_prompt_fired = false;
     state.session.update_tokens(TokenUsage {
         input_tokens: p.usage.input_tokens,
         output_tokens: p.usage.output_tokens,

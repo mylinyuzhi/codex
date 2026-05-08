@@ -547,7 +547,7 @@ pub struct InstalledPluginsManager {
 
 impl InstalledPluginsManager {
     /// Load from the given path, or create empty V2 if file doesn't exist.
-    pub fn load(file_path: PathBuf) -> anyhow::Result<Self> {
+    pub fn load(file_path: PathBuf) -> crate::Result<Self> {
         let data = if file_path.exists() {
             let content = std::fs::read_to_string(&file_path)?;
             let raw: serde_json::Value = serde_json::from_str(&content)?;
@@ -619,7 +619,7 @@ impl InstalledPluginsManager {
     }
 
     /// Persist the current state to disk.
-    pub fn save(&self) -> anyhow::Result<()> {
+    pub fn save(&self) -> crate::Result<()> {
         if let Some(parent) = self.file_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -635,7 +635,7 @@ impl InstalledPluginsManager {
 }
 
 /// Migrate V1 format to V2 format.
-fn migrate_v1_to_v2(raw: &serde_json::Value) -> anyhow::Result<InstalledPluginsFileV2> {
+fn migrate_v1_to_v2(raw: &serde_json::Value) -> crate::Result<InstalledPluginsFileV2> {
     let plugins_raw = raw
         .get("plugins")
         .and_then(serde_json::Value::as_object)

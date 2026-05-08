@@ -243,6 +243,23 @@ pub(super) fn handle(state: &mut AppState, event: TuiOnlyEvent) -> bool {
             }
             true
         }
+        // === Open the /memory file picker overlay ===
+        // Entries are pre-built by the slash dispatcher (no extra state
+        // lookup needed here). On select the TUI creates the file +
+        // launches `$VISUAL || $EDITOR`; on cancel it emits a toast.
+        // TS: `commands/memory/memory.tsx`'s pre-flight render.
+        TuiOnlyEvent::OpenMemoryDialog { entries } => {
+            if entries.is_empty() {
+                state
+                    .ui
+                    .add_toast(Toast::warning(t!("dialog.memory_no_files").to_string()));
+            } else {
+                state.ui.set_overlay(crate::state::Overlay::MemoryDialog(
+                    crate::state::MemoryDialogOverlay::from_wire(entries),
+                ));
+            }
+            true
+        }
         TuiOnlyEvent::SlashCommandStatus { name, kind } => {
             use coco_types::SlashCommandStatusKind;
             let text = match kind {

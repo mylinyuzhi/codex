@@ -7,6 +7,7 @@
 //! to the inner stage using the coco binary's `--apply-seccomp` arg0
 //! dispatch. This eliminates external binary dependencies.
 
+use std::path::Path;
 use std::path::PathBuf;
 
 use tracing::info;
@@ -196,6 +197,59 @@ fn build_bwrap_args(config: &SandboxConfig) -> Vec<String> {
     for path in &config.extra_bind_ro {
         let path_str = path.display().to_string();
         args.extend(["--ro-bind".to_string(), path_str.clone(), path_str]);
+    }
+
+    // Deny-read enforcement on Linux is implemented by mounting /dev/null
+    // over each denied path — same trick codex-rs uses for symlink attack
+    // mitigation. Globs are expanded under the writable roots first
+    // (bounded by `glob_scan_max_depth`).
+    //
+    // `allow_read` carve-outs: bwrap can't do precision per-file deny
+    // within a directory bind, so if an allow_read path is the same as or
+    // a descendant of a deny path, we skip the deny (the broader allow
+    // wins). This matches the user intent ("re-allow this subtree") at the
+    // cost of also exposing siblings of the allow path. macOS Seatbelt
+    // gets precise carve-outs via rule order — Linux trades a strict
+    // narrow allow for a loose broader allow.
+    let writable_root_paths: Vec<PathBuf> = config
+        .writable_roots
+        .iter()
+        .map(|r| r.path.clone())
+        .collect();
+    let glob_expanded = crate::glob_expansion::expand(
+        &writable_root_paths,
+        &config.denied_read_globs,
+        config.glob_scan_max_depth.max(0) as usize,
+    );
+    let allow_read_overrides_deny = |deny_path: &Path| -> bool {
+        config
+            .allowed_read_paths
+            .iter()
+            .any(|allow| allow.starts_with(deny_path))
+    };
+    for path in config
+        .denied_read_paths
+        .iter()
+        .chain(&config.denied_paths)
+        .chain(&glob_expanded)
+    {
+        if !path.exists() {
+            continue;
+        }
+        if allow_read_overrides_deny(path) {
+            tracing::debug!(
+                deny = %path.display(),
+                "Skipping deny-read on Linux: allow_read carves out a descendant; \
+                 broader allow wins because bwrap can't precision-deny"
+            );
+            continue;
+        }
+        let path_str = path.display().to_string();
+        args.extend([
+            "--ro-bind-try".to_string(),
+            "/dev/null".to_string(),
+            path_str,
+        ]);
     }
 
     // Process hardening: clear dangerous env vars

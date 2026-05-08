@@ -16,7 +16,8 @@
 //! sections joined by `"\n\n"`:
 //! - Added (header depends on `is_initial`).
 //! - Removed agent types.
-//! - Concurrency note (only on `is_initial && show_concurrency_note`).
+//! - Concurrency note (whenever `show_concurrency_note` is set; coco-rs
+//!   diverges from TS here — TS additionally gates on `is_initial`).
 
 use async_trait::async_trait;
 
@@ -80,7 +81,14 @@ fn render(info: &AgentListingDeltaInfo) -> String {
             list.join("\n")
         ));
     }
-    if info.is_initial && info.show_concurrency_note {
+    // Divergence from TS (`utils/messages.ts:4207` gates on
+    // `attachment.isInitial && attachment.showConcurrencyNote`):
+    // coco-rs has no subscription/OAuth concept, so we drop the
+    // initial-only gate and emit the parallelism hint on every delta
+    // — every time new agent types become available, the model gets
+    // reminded that multi-agent dispatch should fan out in one
+    // assistant message.
+    if info.show_concurrency_note {
         parts.push(
             "Launch multiple agents concurrently whenever possible, to maximize performance; to do that, use a single message with multiple tool uses."
                 .to_string(),

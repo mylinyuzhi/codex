@@ -37,8 +37,10 @@ use nucleo::pattern::AtomKind;
 use nucleo::pattern::Pattern;
 
 mod cli;
+mod error;
 pub mod index;
 
+pub use error::FileSearchError;
 pub use index::CACHE_TTL_SECS;
 pub use index::DiscoveryResult;
 pub use index::FileIndex;
@@ -157,7 +159,7 @@ pub fn create_session(
     search_directory: &Path,
     options: FileSearchOptions,
     reporter: Arc<dyn SessionReporter>,
-) -> anyhow::Result<FileSearchSession> {
+) -> Result<FileSearchSession, FileSearchError> {
     create_session_inner(
         vec![search_directory.to_path_buf()],
         options,
@@ -171,7 +173,7 @@ fn create_session_inner(
     options: FileSearchOptions,
     reporter: Arc<dyn SessionReporter>,
     cancel_flag: Option<Arc<AtomicBool>>,
-) -> anyhow::Result<FileSearchSession> {
+) -> Result<FileSearchSession, FileSearchError> {
     let FileSearchOptions {
         limit,
         exclude,
@@ -181,7 +183,7 @@ fn create_session_inner(
     } = options;
 
     let Some(primary_search_directory) = search_directories.first() else {
-        anyhow::bail!("at least one search directory is required");
+        return Err(FileSearchError::MissingSearchRoot);
     };
     // Only build the override matcher when gitignore is disabled — when enabled,
     // IgnoreService handles excludes via `with_excludes()` internally.
@@ -245,7 +247,7 @@ pub async fn run_main<T: Reporter>(
         threads,
     }: Cli,
     reporter: T,
-) -> anyhow::Result<()> {
+) -> Result<(), FileSearchError> {
     let search_directory = match cwd {
         Some(dir) => dir,
         None => std::env::current_dir()?,
@@ -311,7 +313,7 @@ pub fn run(
     roots: Vec<PathBuf>,
     options: FileSearchOptions,
     cancel_flag: Option<Arc<AtomicBool>>,
-) -> anyhow::Result<FileSearchResults> {
+) -> Result<FileSearchResults, FileSearchError> {
     let reporter = Arc::new(RunReporter::default());
     let session = create_session_inner(roots, options, reporter.clone(), cancel_flag)?;
 
@@ -383,16 +385,23 @@ enum WorkSignal {
 fn build_override_matcher(
     search_directory: &Path,
     exclude: &[String],
-) -> anyhow::Result<Option<ignore::overrides::Override>> {
+) -> Result<Option<ignore::overrides::Override>, FileSearchError> {
     if exclude.is_empty() {
         return Ok(None);
     }
     let mut override_builder = OverrideBuilder::new(search_directory);
     for exclude in exclude {
         let exclude_pattern = format!("!{exclude}");
-        override_builder.add(&exclude_pattern)?;
+        override_builder
+            .add(&exclude_pattern)
+            .map_err(|e| FileSearchError::InvalidOverride {
+                pattern: exclude_pattern,
+                source: e,
+            })?;
     }
-    let matcher = override_builder.build()?;
+    let matcher = override_builder
+        .build()
+        .map_err(FileSearchError::OverrideBuild)?;
     Ok(Some(matcher))
 }
 
@@ -502,7 +511,7 @@ fn matcher_worker(
     inner: Arc<SessionInner>,
     work_rx: Receiver<WorkSignal>,
     mut nucleo: Nucleo<Arc<str>>,
-) -> anyhow::Result<()> {
+) {
     const TICK_TIMEOUT_MS: u64 = 10;
     let config = Config::DEFAULT.match_paths();
     let mut indices_matcher = inner.compute_indices.then(|| Matcher::new(config.clone()));
@@ -611,8 +620,6 @@ fn matcher_worker(
 
     // If we cancelled or otherwise exited the loop, make sure the reporter is notified.
     inner.reporter.on_complete();
-
-    Ok(())
 }
 
 #[derive(Default)]

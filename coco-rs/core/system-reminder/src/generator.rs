@@ -384,6 +384,28 @@ pub struct GeneratorContext<'a> {
     /// change. Non-empty → generator emits silent attachment.
     pub edited_image_file_paths: Vec<PathBuf>,
 
+    // ── Audit-add (May 2026) — TS-parity reminders. Engine threads
+    // pre-formatted bodies through these `Option<String>` slots; for
+    // boolean signals, the engine sets the flag when the threshold trips.
+    /// Engine-set flag: turn budget exhausted this iteration. Drives
+    /// [`MaxTurnsReachedGenerator`](crate::generators::audit_add::MaxTurnsReachedGenerator).
+    pub max_turns_reached_signal: bool,
+    /// Pre-formatted session-memory summary from `coco-memory`.
+    pub current_session_memory: Option<String>,
+    /// Pre-formatted permission-rule snapshot from `coco-permissions`.
+    pub command_permissions: Option<String>,
+    /// Pre-formatted dynamic-skill listing from `coco-skills`.
+    pub dynamic_skill: Option<String>,
+    /// Pre-formatted skill-discovery suggestion from `coco-skills`
+    /// (UserPrompt tier).
+    pub skill_discovery: Option<String>,
+    /// Pre-formatted tool structured-output blob from `coco-tool-runtime`.
+    pub structured_output: Option<String>,
+    /// Pre-formatted swarm teammate shutdown notice.
+    pub teammate_shutdown_batch: Option<String>,
+    /// Engine-set flag: context approaching capacity, nudge to compact.
+    pub context_efficiency_signal: bool,
+
     // ── Pre-computed flags (filled by orchestrator before generate()) ──
     /// Per-reminder Full-vs-Sparse decision. The orchestrator consults the
     /// [`ThrottleManager`](crate::throttle::ThrottleManager) *before* running
@@ -478,6 +500,14 @@ pub struct GeneratorContextBuilder<'a> {
     relevant_memories: Vec<crate::generators::memory::RelevantMemoryInfo>,
     already_read_file_paths: Vec<PathBuf>,
     edited_image_file_paths: Vec<PathBuf>,
+    max_turns_reached_signal: bool,
+    current_session_memory: Option<String>,
+    command_permissions: Option<String>,
+    dynamic_skill: Option<String>,
+    skill_discovery: Option<String>,
+    structured_output: Option<String>,
+    teammate_shutdown_batch: Option<String>,
+    context_efficiency_signal: bool,
     full_content_flags: HashMap<AttachmentType, bool>,
 }
 
@@ -549,6 +579,14 @@ impl<'a> GeneratorContextBuilder<'a> {
             relevant_memories: Vec::new(),
             already_read_file_paths: Vec::new(),
             edited_image_file_paths: Vec::new(),
+            max_turns_reached_signal: false,
+            current_session_memory: None,
+            command_permissions: None,
+            dynamic_skill: None,
+            skill_discovery: None,
+            structured_output: None,
+            teammate_shutdown_batch: None,
+            context_efficiency_signal: false,
             full_content_flags: HashMap::new(),
         }
     }
@@ -884,6 +922,46 @@ impl<'a> GeneratorContextBuilder<'a> {
         self
     }
 
+    pub fn max_turns_reached_signal(mut self, b: bool) -> Self {
+        self.max_turns_reached_signal = b;
+        self
+    }
+
+    pub fn current_session_memory(mut self, body: Option<String>) -> Self {
+        self.current_session_memory = body;
+        self
+    }
+
+    pub fn command_permissions(mut self, body: Option<String>) -> Self {
+        self.command_permissions = body;
+        self
+    }
+
+    pub fn dynamic_skill(mut self, body: Option<String>) -> Self {
+        self.dynamic_skill = body;
+        self
+    }
+
+    pub fn skill_discovery(mut self, body: Option<String>) -> Self {
+        self.skill_discovery = body;
+        self
+    }
+
+    pub fn structured_output(mut self, body: Option<String>) -> Self {
+        self.structured_output = body;
+        self
+    }
+
+    pub fn teammate_shutdown_batch(mut self, body: Option<String>) -> Self {
+        self.teammate_shutdown_batch = body;
+        self
+    }
+
+    pub fn context_efficiency_signal(mut self, b: bool) -> Self {
+        self.context_efficiency_signal = b;
+        self
+    }
+
     /// Replace the full-content flag map wholesale (used by tests).
     pub fn full_content_flags(mut self, flags: HashMap<AttachmentType, bool>) -> Self {
         self.full_content_flags = flags;
@@ -964,6 +1042,14 @@ impl<'a> GeneratorContextBuilder<'a> {
             relevant_memories: self.relevant_memories,
             already_read_file_paths: self.already_read_file_paths,
             edited_image_file_paths: self.edited_image_file_paths,
+            max_turns_reached_signal: self.max_turns_reached_signal,
+            current_session_memory: self.current_session_memory,
+            command_permissions: self.command_permissions,
+            dynamic_skill: self.dynamic_skill,
+            skill_discovery: self.skill_discovery,
+            structured_output: self.structured_output,
+            teammate_shutdown_batch: self.teammate_shutdown_batch,
+            context_efficiency_signal: self.context_efficiency_signal,
             full_content_flags: self.full_content_flags,
         }
     }
@@ -1082,26 +1168,51 @@ pub struct OutputStyleSnapshot {
 }
 
 /// Queued-command replay snapshot. TS reinjects drained queue items
-/// via `wrapInSystemReminder` (for system-origin) or plain user text
-/// (for human-origin). `origin_system` distinguishes the two.
+/// as `queued_command` attachments wrapped via `wrapCommandText`
+/// (`messages.ts:5496`) — each origin variant gets its own framing
+/// sentence so the model knows how urgently / trustingly to treat the
+/// interruption. When the queued item carried images (mid-turn paste of
+/// a screenshot, …), TS appends them after the wrapped text via
+/// `[{ type: 'text', text: textValue }, ...imageBlocks]`
+/// (`attachments.ts:1062-1075`); coco-rs mirrors that by emitting a
+/// `ReminderMessage` with text + image content blocks.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct QueuedCommandInfo {
     pub content: String,
-    /// True when the queued command originated from a system injection
-    /// (task-notification etc.) rather than human input drained mid-turn.
-    pub origin_system: bool,
+    /// Origin tag carried over from the queue. `None` is treated as
+    /// `Human` by [`crate::wrap_command_text`].
+    pub origin: Option<crate::queue_origin::QueueOrigin>,
+    /// Image attachments paired with the queued text. Mirrors TS
+    /// `imageBlocks` extracted from `attachment.prompt: ContentBlockParam[]`.
+    /// Empty for text-only queued commands, which is the common case.
+    pub images: Vec<QueuedCommandImage>,
+}
+
+/// One image paired with a queued command. Wire-shape mirrors
+/// `coco_context::ImageAttachment` (media_type + base64) but lives here
+/// so the system-reminder crate stays self-contained.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct QueuedCommandImage {
+    /// IANA media type (e.g. `image/png`).
+    pub media_type: String,
+    /// Base64-encoded image payload.
+    pub data_base64: String,
 }
 
 /// Background-task status snapshot — TS `task_status`. Rendered
 /// differently per status: `killed` emits a brief "stopped by user"
 /// note; `running` warns against duplicate spawns with optional delta
 /// summary + output-file pointer; `completed` / `failed` surface the
-/// final outcome.
+/// full delta with `(type: ...) (status: ...) (description: ...)`
+/// metadata so the agent can route a follow-up.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskStatusSnapshot {
     pub task_id: String,
     pub description: String,
     pub status: TaskRunStatus,
+    /// TS `attachment.taskType` (`messages.ts:4000`). Used in the
+    /// `(type: ...)` metadata for completed / failed renderings.
+    pub task_type: String,
     pub delta_summary: Option<String>,
     pub output_file_path: Option<String>,
 }

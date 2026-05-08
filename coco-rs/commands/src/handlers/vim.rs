@@ -13,13 +13,13 @@ const VALID_MODES: &[&str] = &["normal", "vim"];
 
 pub fn handler(
     args: String,
-) -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>> {
+) -> Pin<Box<dyn std::future::Future<Output = crate::Result<String>> + Send>> {
     Box::pin(async move { handler_with_home(default_home(), args).await })
 }
 
 /// Test-friendly variant: callers pass an explicit `$HOME` so parallel tests
 /// don't race via process-wide `std::env::set_var("HOME", ...)`.
-pub async fn handler_with_home(home: PathBuf, args: String) -> anyhow::Result<String> {
+pub async fn handler_with_home(home: PathBuf, args: String) -> crate::Result<String> {
     let path = state_file_path(&home);
     let current = read_mode(&path).await;
 
@@ -63,7 +63,7 @@ async fn read_mode(path: &std::path::Path) -> String {
         .unwrap_or_else(|_| "normal".to_string())
 }
 
-async fn write_mode(path: &std::path::Path, mode: &str) -> anyhow::Result<()> {
+async fn write_mode(path: &std::path::Path, mode: &str) -> crate::Result<()> {
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }

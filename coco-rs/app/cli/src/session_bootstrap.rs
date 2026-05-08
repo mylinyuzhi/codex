@@ -54,8 +54,17 @@ pub struct EngineResources {
     /// order (builtins → extended → skills → plugin contributions →
     /// TS-parity P1 handlers). Both the SDK `initialize.commands`
     /// advertisement and the TUI `dispatch_slash_command` chain
-    /// resolve through this Arc.
-    pub command_registry: Arc<CommandRegistry>,
+    /// resolve through this slot. Wrapped in `RwLock` so
+    /// `/reload-plugins` can hot-swap the inner `Arc<CommandRegistry>`
+    /// without rebuilding the session — consumers snapshot the inner
+    /// `Arc` once per dispatch (see
+    /// [`crate::session_runtime::SessionRuntime::current_command_registry`]).
+    pub command_registry: Arc<tokio::sync::RwLock<Arc<CommandRegistry>>>,
+    /// Session-scoped `SkillManager`. Hoisted out of
+    /// [`build_session_command_registry`] so the same instance is
+    /// shared with the per-engine reminder pipeline (`SkillsSource`)
+    /// instead of being dropped after building the command registry.
+    pub skill_manager: Arc<coco_skills::SkillManager>,
 }
 
 /// Build the shared engine resources from a resolved `RuntimeConfig`.
@@ -68,6 +77,12 @@ pub fn build_engine_resources(
     runtime_config: &RuntimeConfig,
     cwd: &Path,
 ) -> Result<EngineResources> {
+    tracing::info!(
+        target: "coco_cli::session_bootstrap",
+        cwd = %cwd.display(),
+        "building engine resources"
+    );
+
     let retry: coco_inference::RetryConfig = runtime_config.api.retry.clone().into();
     let (client, provider_api, model_id) = create_api_client(runtime_config, retry.clone());
 
@@ -76,6 +91,7 @@ pub fn build_engine_resources(
 
     let registry = ToolRegistry::new();
     coco_tools::register_all_tools(&registry);
+    let tool_count = registry.len();
     let tools = Arc::new(registry);
 
     let system_prompt =
@@ -83,7 +99,39 @@ pub fn build_engine_resources(
 
     let startup = resolve_startup_permission_state(cli, &runtime_config.settings.merged)?;
 
-    let command_registry = Arc::new(build_session_command_registry(runtime_config, cwd));
+    let (command_registry, skill_manager) = build_session_command_registry(runtime_config, cwd);
+    let command_count = command_registry.len();
+    let skill_count = skill_manager.len();
+
+    tracing::info!(
+        target: "coco_cli::session_bootstrap",
+        provider = client.provider(),
+        model_id = %model_id,
+        real_provider = provider_api.is_some(),
+        fallback_count = fallback_clients.len(),
+        recovery_policy_set = recovery_policy.is_some(),
+        tool_count,
+        command_count,
+        skill_count,
+        permission_mode = ?startup.mode,
+        bypass_available = startup.bypass_available,
+        sandbox_mode = ?runtime_config.sandbox.mode,
+        system_prompt_chars = system_prompt.len(),
+        "engine resources built"
+    );
+    tracing::debug!(
+        target: "coco_cli::session_bootstrap",
+        max_turns = ?runtime_config.loop_config.max_turns,
+        max_tokens = ?runtime_config.loop_config.max_tokens,
+        streaming_tools = runtime_config.loop_config.enable_streaming_tools,
+        auto_compact_enabled = runtime_config.compact.auto.enabled,
+        auto_compact_disabled_by_env = runtime_config.compact.auto.auto_disabled_by_env,
+        memory_extraction = runtime_config.memory.extraction_enabled,
+        web_fetch_enabled = runtime_config.features.enabled(coco_types::Feature::WebFetch),
+        web_search_enabled = runtime_config.features.enabled(coco_types::Feature::WebSearch),
+        retrieval_enabled = runtime_config.features.enabled(coco_types::Feature::Retrieval),
+        "runtime config public knobs"
+    );
 
     Ok(EngineResources {
         client,
@@ -94,32 +142,39 @@ pub fn build_engine_resources(
         model_id,
         provider_api,
         startup,
-        command_registry,
+        command_registry: Arc::new(tokio::sync::RwLock::new(Arc::new(command_registry))),
+        skill_manager,
     })
 }
 
 /// Construct the TS-parity slash-command registry (builtins → extended
-/// → skills → plugin contributions → TS-parity P1 handlers). Pulled out
-/// of [`build_engine_resources`] so the per-step manager loads stay
-/// self-contained.
-fn build_session_command_registry(runtime_config: &RuntimeConfig, cwd: &Path) -> CommandRegistry {
+/// → skills → plugin contributions → TS-parity P1 handlers) AND return
+/// the `SkillManager` Arc that backed the skill-derived commands. The
+/// caller threads the manager into `SessionRuntime` so the per-turn
+/// reminder pipeline's `SkillsSource` reads the same in-memory catalog.
+fn build_session_command_registry(
+    runtime_config: &RuntimeConfig,
+    cwd: &Path,
+) -> (CommandRegistry, Arc<coco_skills::SkillManager>) {
     let config_home = global_config::config_home();
 
     let mut skill_manager = coco_skills::SkillManager::new();
     skill_manager.load_from_dirs(&[config_home.join("skills"), cwd.join(".coco").join("skills")]);
+    let skill_manager = Arc::new(skill_manager);
 
     let mut plugin_manager = coco_plugins::PluginManager::new();
     plugin_manager.load_from_dirs(&coco_plugins::get_plugin_dirs(&config_home, cwd));
 
-    build_command_registry(
-        &skill_manager,
+    let registry = build_command_registry(
+        skill_manager.as_ref(),
         &plugin_manager,
         UserType::from_env(),
         runtime_config.features.clone(),
         cwd.to_path_buf(),
         dirs::home_dir().unwrap_or_else(|| cwd.to_path_buf()),
         /*managed_root*/ None,
-    )
+    );
+    (registry, skill_manager)
 }
 
 /// Install the post-`SessionRuntime::build` late-binds shared by TUI

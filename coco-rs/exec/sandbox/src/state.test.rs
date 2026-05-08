@@ -332,6 +332,50 @@ fn test_describe_filesystem_empty_config() {
 }
 
 #[test]
+fn test_describe_filesystem_allow_read_carve_out() {
+    // When allow_read is non-empty, the read block carries both `denyOnly`
+    // and `allowOnly`. When empty, only `denyOnly` (existing TS shape).
+    let config = SandboxConfig {
+        enforcement: EnforcementLevel::WorkspaceWrite,
+        denied_read_paths: vec![std::path::PathBuf::from("/etc/shadow")],
+        allowed_read_paths: vec![std::path::PathBuf::from("/etc/shadow/public")],
+        ..Default::default()
+    };
+    let settings = SandboxSettings::enabled();
+    let platform = crate::platform::create_platform();
+    let state = SandboxState::new(EnforcementLevel::WorkspaceWrite, settings, config, platform);
+
+    let desc = state.describe_filesystem();
+    let parsed: serde_json::Value = serde_json::from_str(&desc).expect("valid JSON");
+
+    assert_eq!(parsed["read"]["denyOnly"][0].as_str(), Some("/etc/shadow"));
+    assert_eq!(
+        parsed["read"]["allowOnly"][0].as_str(),
+        Some("/etc/shadow/public")
+    );
+}
+
+#[test]
+fn test_describe_filesystem_omits_allow_read_key_when_empty() {
+    let config = SandboxConfig {
+        enforcement: EnforcementLevel::WorkspaceWrite,
+        denied_read_paths: vec![std::path::PathBuf::from("/etc/shadow")],
+        allowed_read_paths: vec![],
+        ..Default::default()
+    };
+    let settings = SandboxSettings::enabled();
+    let platform = crate::platform::create_platform();
+    let state = SandboxState::new(EnforcementLevel::WorkspaceWrite, settings, config, platform);
+
+    let desc = state.describe_filesystem();
+    let parsed: serde_json::Value = serde_json::from_str(&desc).expect("valid JSON");
+
+    // `denyOnly` present, `allowOnly` absent (compact / TS-shape).
+    assert!(parsed["read"]["denyOnly"].is_array());
+    assert!(parsed["read"].get("allowOnly").is_none());
+}
+
+#[test]
 fn test_describe_network_blocked() {
     let config = SandboxConfig {
         enforcement: EnforcementLevel::WorkspaceWrite,

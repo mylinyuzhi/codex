@@ -18,6 +18,9 @@ use std::sync::Arc;
 use coco_compact::SessionMemoryExtractionInputs;
 use coco_compact::SessionMemoryExtractionThresholds;
 use coco_compact::should_extract_memory;
+use coco_error::BoxedError;
+use coco_error::StatusCode;
+use coco_error::boxed;
 use tokio::fs;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
@@ -38,7 +41,7 @@ pub type SummarizerFn = Arc<
     dyn Fn(
             String,
         ) -> std::pin::Pin<
-            Box<dyn std::future::Future<Output = Result<String, anyhow::Error>> + Send>,
+            Box<dyn std::future::Future<Output = Result<String, BoxedError>> + Send>,
         > + Send
         + Sync,
 >;
@@ -177,7 +180,7 @@ impl SessionMemoryService {
 
     /// Best-effort load of any existing on-disk summary into the
     /// in-memory cache. Call once at startup. Missing file ⇒ no-op.
-    pub async fn load_from_disk(&self) -> anyhow::Result<()> {
+    pub async fn load_from_disk(&self) -> Result<(), BoxedError> {
         let path = self.path();
         match fs::read_to_string(&path).await {
             Ok(body) => {
@@ -186,7 +189,7 @@ impl SessionMemoryService {
                 Ok(())
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(e.into()),
+            Err(e) => Err(boxed(e, StatusCode::IoError)),
         }
     }
 
@@ -334,16 +337,22 @@ impl SessionMemoryService {
         format!("{template}\n\n--- transcript ---\n{transcript}\n")
     }
 
-    async fn write_atomic(&self, body: &str) -> anyhow::Result<()> {
+    async fn write_atomic(&self, body: &str) -> Result<(), BoxedError> {
         let path = self.path();
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).await?;
+            fs::create_dir_all(parent)
+                .await
+                .map_err(|e| boxed(e, StatusCode::IoError))?;
         }
         // Tempfile-and-rename for atomic on-disk swap. Mirrors TS
         // `await fs.writeFile(tmp, body); await fs.rename(tmp, path)`.
         let tmp = path.with_extension("md.tmp");
-        fs::write(&tmp, body).await?;
-        fs::rename(&tmp, &path).await?;
+        fs::write(&tmp, body)
+            .await
+            .map_err(|e| boxed(e, StatusCode::IoError))?;
+        fs::rename(&tmp, &path)
+            .await
+            .map_err(|e| boxed(e, StatusCode::IoError))?;
         Ok(())
     }
 }

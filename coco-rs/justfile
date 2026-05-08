@@ -73,11 +73,18 @@ test-crate crate *args:
 check-seam:
     bash "{{justfile_directory()}}/scripts/check-vercel-ai-seam.sh"
 
+# Enforce: utils/* and vercel-ai/* are libraries. Their public API may
+# not return `anyhow::Result<…>` — declare a typed `thiserror` enum
+# instead. See coco-rs/CLAUDE.md → Error Handling for the three-tier
+# policy.
+check-error-policy:
+    bash "{{justfile_directory()}}/scripts/check-error-policy.sh"
+
 # Fast validation: same chain as `pre-commit` minus the test run. Use
-# during iteration when you want fmt + seam guard + clippy (which is a
+# during iteration when you want fmt + seam guards + clippy (which is a
 # superset of `cargo check`) but don't yet need to pay for nextest.
 # Promote to `pre-commit` before committing.
-quick-check: fmt check-seam clippy-affected
+quick-check: fmt check-seam check-error-policy clippy-affected
 
 # REQUIRED before commit. Uses incremental clippy (changed crates + reverse-dep
 # closure) to avoid recompiling the whole workspace on small commits. Falls
@@ -87,7 +94,7 @@ quick-check: fmt check-seam clippy-affected
 # superset of `cargo check`, and `test` compiles everything `clippy --tests`
 # already linted, so the manual chain just duplicates work. For iteration
 # without a test run, use `quick-check`.
-pre-commit: fmt check-seam clippy-affected test
+pre-commit: fmt check-seam check-error-policy clippy-affected test
 
 # ============================================================================
 # Running

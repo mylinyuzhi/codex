@@ -113,6 +113,8 @@ pub use event::LocalCommandOutputParams;
 pub use event::McpServerInit;
 pub use event::McpStartupCompleteParams;
 pub use event::McpStartupStatusParams;
+pub use event::MemoryDialogEntry;
+pub use event::MemoryDialogScope;
 pub use event::ModelFallbackParams;
 pub use event::NotificationMethod;
 pub use event::PermissionDenialInfo;
@@ -369,6 +371,8 @@ pub use tool::ToolId;
 pub use tool::ToolInputSchema;
 pub use tool::ToolName;
 pub use tool::ToolProgress;
+pub use tool::legacy_tool_name_aliases_of;
+pub use tool::normalize_legacy_tool_name;
 
 // Extended types (ported from TS hooks.ts, command.ts, permissions.ts, logs.ts)
 pub use extended::{

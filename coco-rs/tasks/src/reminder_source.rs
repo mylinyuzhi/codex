@@ -21,6 +21,7 @@ use coco_system_reminder::TaskStatusSource;
 use coco_types::TaskStatus;
 
 use crate::running::TaskManager;
+use crate::running::task_type_wire_name;
 
 #[async_trait]
 impl TaskStatusSource for TaskManager {
@@ -40,6 +41,7 @@ impl TaskStatusSource for TaskManager {
                 task_id: t.id,
                 description: t.description,
                 status: map_status(t.status),
+                task_type: task_type_wire_name(t.task_type).to_string(),
                 // Delta summary + output-file path come from deeper
                 // integration (LocalAgentTask progress summaries); for
                 // now the reminder omits them and the generator

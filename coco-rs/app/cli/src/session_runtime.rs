@@ -102,6 +102,115 @@ impl FileHistorySnapshotSink for TranscriptFileHistorySink {
     }
 }
 
+/// Map a coco-config-reload [`TrackedKind`] to the TS-aligned
+/// `ConfigChangeSource` wire string consumed by the
+/// `ConfigChange` hook (TS `utils/hooks.ts:4194`). Catalog files
+/// (`providers.json`, `models.json`) live alongside the user
+/// settings in `~/.coco/`, so they share the `user_settings`
+/// source. `flag_settings` falls back to `user_settings` since the
+/// TS hook source enum doesn't have a flag-settings variant.
+fn config_change_source_for_kind(
+    kind: coco_config_reload::TrackedKind,
+) -> coco_hooks::orchestration::ConfigChangeSource {
+    use coco_config::SettingSource;
+    use coco_config::WatchedKind;
+    use coco_config_reload::TrackedKind;
+    use coco_hooks::orchestration::ConfigChangeSource;
+    match kind {
+        TrackedKind::Settings(WatchedKind::Settings(SettingSource::User)) => {
+            ConfigChangeSource::UserSettings
+        }
+        TrackedKind::Settings(WatchedKind::Settings(SettingSource::Project)) => {
+            ConfigChangeSource::ProjectSettings
+        }
+        TrackedKind::Settings(WatchedKind::Settings(SettingSource::Local)) => {
+            ConfigChangeSource::LocalSettings
+        }
+        TrackedKind::Settings(WatchedKind::Settings(SettingSource::Policy)) => {
+            ConfigChangeSource::PolicySettings
+        }
+        TrackedKind::Settings(WatchedKind::Settings(
+            SettingSource::Plugin | SettingSource::Flag,
+        ))
+        | TrackedKind::Settings(WatchedKind::ProvidersCatalog | WatchedKind::ModelsCatalog)
+        | TrackedKind::FlagSettings => ConfigChangeSource::UserSettings,
+    }
+}
+
+/// Populate a `HookRegistry` from the current `RuntimeConfig` snapshot
+/// + the plugin directories rooted at `config_home`/`cwd`.
+///
+/// Used both at session bootstrap (`SessionRuntime::new`) and at
+/// `/hooks reload` time (`SessionRuntime::reload_hooks`). Settings
+/// sources are loaded in lowest-precedence-first order so the registry
+/// vec mirrors TS settings layering for deterministic iteration. TS
+/// keys hook source per entry (`hooksSettings.ts:103-141`); collapsing
+/// to a single scope drops scope-precedence sorting in `find_matching`
+/// (`hooks/src/lib.rs:296-300`).
+fn populate_hook_registry(
+    registry: &HookRegistry,
+    runtime_config: &coco_config::RuntimeConfig,
+    config_home: &std::path::Path,
+    cwd: &std::path::Path,
+) {
+    let policy = coco_hooks::LoaderPolicy {
+        disable_all_hooks: runtime_config.settings.merged.disable_all_hooks,
+        allow_managed_hooks_only: runtime_config.settings.merged.allow_managed_hooks_only,
+    };
+    for source in [
+        coco_config::SettingSource::User,
+        coco_config::SettingSource::Project,
+        coco_config::SettingSource::Local,
+        coco_config::SettingSource::Flag,
+        coco_config::SettingSource::Policy,
+    ] {
+        let Some(value) = runtime_config.settings.per_source.get(&source) else {
+            continue;
+        };
+        let Some(hooks_value) = value.get("hooks") else {
+            continue;
+        };
+        let scope = match source {
+            coco_config::SettingSource::User => coco_types::HookScope::User,
+            coco_config::SettingSource::Project => coco_types::HookScope::Project,
+            coco_config::SettingSource::Local => coco_types::HookScope::Local,
+            // Flag is treated as Local — closest to user's
+            // explicit per-invocation override. TS lacks a
+            // distinct flag scope; this matches its precedence.
+            coco_config::SettingSource::Flag => coco_types::HookScope::Local,
+            coco_config::SettingSource::Policy => coco_types::HookScope::Policy,
+            coco_config::SettingSource::Plugin => coco_types::HookScope::Plugin,
+        };
+        match coco_hooks::load_hooks_from_config_with_policy(hooks_value, scope, policy) {
+            Ok(definitions) => {
+                for def in definitions {
+                    registry.register_deduped(def);
+                }
+            }
+            Err(e) => {
+                warn!(error = %e, source = %source, "failed to load hooks from settings — source skipped");
+            }
+        }
+    }
+    let plugin_dirs = coco_plugins::get_plugin_dirs(config_home, cwd);
+    let mut plugin_manager = coco_plugins::PluginManager::new();
+    plugin_manager.load_from_dirs(&plugin_dirs);
+    let plugin_count = plugin_manager.len();
+    if plugin_count > 0 {
+        info!(
+            plugins = plugin_count,
+            "loaded {plugin_count} plugin(s) from {} dir(s)",
+            plugin_dirs.len()
+        );
+    }
+    // `register_plugin_hooks` uses `register_deduped` internally
+    // so a plugin re-declaring a settings hook stays single-fire.
+    let plugin_refs: Vec<&coco_plugins::LoadedPlugin> = plugin_manager.enabled();
+    if !plugin_refs.is_empty() {
+        coco_plugins::hook_bridge::register_plugin_hooks(registry, &plugin_refs);
+    }
+}
+
 /// Options for building a [`SessionRuntime`].
 pub struct SessionRuntimeBuildOpts<'a> {
     pub cli: &'a Cli,
@@ -124,7 +233,15 @@ pub struct SessionRuntimeBuildOpts<'a> {
     /// `coco_commands::build_command_registry`. Both the typed
     /// `/foo` path (`process_submit_turn`) and the command-palette
     /// path (`UserCommand::ExecuteSkill`) dispatch through this.
-    pub command_registry: Arc<CommandRegistry>,
+    /// Wrapped in `RwLock` so `/reload-plugins` can rebuild and swap
+    /// without restarting the session — consumers snapshot the inner
+    /// `Arc<CommandRegistry>` once per dispatch via
+    /// [`SessionRuntime::current_command_registry`].
+    pub command_registry: Arc<RwLock<Arc<CommandRegistry>>>,
+    /// Session-scoped `SkillManager` — same Arc that backed
+    /// `command_registry`'s skill load, kept alive so the per-turn
+    /// reminder pipeline (`SkillsSource`) reads the same catalog.
+    pub skill_manager: Arc<coco_skills::SkillManager>,
 }
 
 /// All per-session state shared by both runners. Construction at startup
@@ -145,7 +262,17 @@ pub struct SessionRuntime {
     /// Slash-command registry. Read by
     /// [`crate::tui_runner::dispatch_slash_command`] to resolve every
     /// `/foo` typed by the user or selected from the command palette.
-    pub command_registry: Arc<CommandRegistry>,
+    /// Wrapped in `RwLock` so `/reload-plugins` can rebuild and swap
+    /// without restarting the session — consumers snapshot the inner
+    /// `Arc<CommandRegistry>` once per dispatch via
+    /// [`Self::current_command_registry`] so a concurrent swap can't
+    /// invalidate borrows.
+    pub command_registry: Arc<RwLock<Arc<CommandRegistry>>>,
+    /// Session-scoped skill catalog. Cloned into `ReminderSources`
+    /// (`SkillsSource`) on every per-turn engine so the model receives
+    /// the `skill_listing` reminder that gates on
+    /// `skill_manager.is_empty()`.
+    pub(crate) skill_manager: Arc<coco_skills::SkillManager>,
     pub config_home: PathBuf,
     pub runtime_config: Arc<RuntimeConfig>,
     pub session_manager: Arc<SessionManager>,
@@ -191,6 +318,34 @@ pub struct SessionRuntime {
     /// on every engine + driven by SessionStart / SessionEnd in
     /// [`Self::clear_conversation`].
     pub(crate) hook_registry: Arc<HookRegistry>,
+    /// LLM-driven hook handler — implements
+    /// [`coco_hooks::HookLlmHandle`] for `Prompt` (full impl) and
+    /// `Agent` (stub returning Cancelled — TS-aligned silent fallback)
+    /// hook handlers. Threaded into every `OrchestrationContext` so
+    /// settings hooks of `type: "prompt"` / `type: "agent"` actually
+    /// reach an LLM instead of falling back to passthrough text.
+    pub(crate) hook_llm_handle: Arc<dyn coco_hooks::HookLlmHandle>,
+    /// Shared sync-hook-event buffer. SessionStart and UserPromptSubmit
+    /// orchestration calls push `HookEvent`s here; the
+    /// [`coco_hooks::reminder_source::CombinedHookEventsSource`]
+    /// installed on every per-turn engine drains them into the
+    /// reminder pipeline. Lifetime spans the whole session — same
+    /// instance flows through `OrchestrationContext.sync_event_sink`
+    /// and `QueryEngine::sync_hook_buffer`.
+    pub(crate) sync_hook_buffer: coco_hooks::SyncHookEventBuffer,
+    /// Async hook bookkeeping. Currently no production code path
+    /// registers async hooks, but the slot is wired into the combined
+    /// reminder source so when async hook execution lands it surfaces
+    /// `async_hook_response` reminders without further plumbing.
+    /// TS parity: `AsyncHookRegistry`.
+    pub(crate) async_hook_registry: Arc<coco_hooks::async_registry::AsyncHookRegistry>,
+    /// FileChanged hook watcher. Populated when the runtime's hook
+    /// registry has any handlers for the `FileChanged` event;
+    /// `None` otherwise. TS:
+    /// `utils/hooks/fileChangedWatcher.ts`. Paths are registered
+    /// lazily from `SessionStart` / `CwdChanged` hook output.
+    pub(crate) file_changed_watcher:
+        tokio::sync::RwLock<Option<crate::file_changed_watcher::FileChangedHookWatcher>>,
     /// Multi-turn agent transcript. Each turn snapshots, appends, and
     /// rewrites this on success.
     pub history: Arc<Mutex<Vec<Message>>>,
@@ -240,6 +395,18 @@ pub struct SessionRuntime {
     /// installs it onto the SwarmAgentHandle when wiring agent-
     /// team support.
     agent_transcript_store: Arc<RwLock<Option<coco_tool_runtime::AgentTranscriptStoreRef>>>,
+    /// Main-session transcript store. JSONL writes for the user /
+    /// assistant / attachment / tool_result chain land here, keyed
+    /// by the live session id (rotates on `/clear`). Cloned into
+    /// every per-turn engine via [`Self::wire_engine`]. TS parity:
+    /// `Project` from `utils/sessionStorage.ts`.
+    transcript_store: Arc<TranscriptStore>,
+    /// Cross-engine dedup set of message UUIDs already persisted to
+    /// the JSONL transcript. Lives on the runtime (not the engine)
+    /// so a fresh per-turn engine doesn't re-write history. Reset to
+    /// empty by [`Self::clear_conversation`] when the session id
+    /// regenerates.
+    transcript_dedup: Arc<tokio::sync::Mutex<std::collections::HashSet<uuid::Uuid>>>,
     /// MCP handle installed on every per-turn engine via `wire_engine`.
     /// Late-bound so CLI bootstrap can construct the
     /// `McpManagerAdapter` (or any other McpHandle impl) after
@@ -248,6 +415,19 @@ pub struct SessionRuntime {
     /// MCP filter degrades to fail-closed (hides MCP-required
     /// agents).
     mcp_handle: Arc<RwLock<Option<coco_tool_runtime::McpHandleRef>>>,
+    /// Session-scoped sandbox state. Built once at startup via
+    /// [`build_sandbox_state`] and inherited by every per-turn engine
+    /// (TUI), every SDK control message handler, and every fork
+    /// dispatch — so all paths share the same `Arc<SandboxState>` and
+    /// hot-reloads via `update_config` are seen everywhere.
+    /// `None` when sandbox is disabled.
+    sandbox_state: Option<Arc<coco_sandbox::SandboxState>>,
+    /// Inter-turn reminder mailbox shared with the engine. Producers
+    /// outside the tool path (slash commands, swarm coordinator, skill
+    /// loader) push event-driven reminder snapshots through
+    /// [`Self::reminder_mailbox_handle`]; the engine drains via
+    /// [`coco_system_reminder::ReminderMailbox::drain`].
+    reminder_mailbox: Arc<coco_system_reminder::ReminderMailbox>,
 }
 
 impl SessionRuntime {
@@ -270,6 +450,7 @@ impl SessionRuntime {
             fast_model_spec,
             permission_bridge,
             command_registry,
+            skill_manager,
         } = opts;
 
         let config_home = coco_config::global_config::config_home();
@@ -319,7 +500,8 @@ impl SessionRuntime {
                                     agentic: false,
                                     cache: None,
                                 };
-                                let result = client.query(&params).await?;
+                                let result =
+                                    client.query(&params).await.map_err(coco_error::boxed_err)?;
                                 let text = result
                                     .content
                                     .iter()
@@ -500,39 +682,8 @@ impl SessionRuntime {
         // proper `Arc<PluginManager>` field; until then we don't pay
         // for the storage.
         let hook_registry = {
-            let mut registry = HookRegistry::new();
-            if let Some(hooks_value) = &runtime_config.settings.merged.hooks {
-                match coco_hooks::load_hooks_from_config(
-                    hooks_value,
-                    coco_types::HookScope::Project,
-                ) {
-                    Ok(definitions) => {
-                        for def in definitions {
-                            registry.register_deduped(def);
-                        }
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "failed to load hooks from settings — hooks disabled this session");
-                    }
-                }
-            }
-            let plugin_dirs = coco_plugins::get_plugin_dirs(&config_home, &cwd);
-            let mut plugin_manager = coco_plugins::PluginManager::new();
-            plugin_manager.load_from_dirs(&plugin_dirs);
-            let plugin_count = plugin_manager.len();
-            if plugin_count > 0 {
-                info!(
-                    plugins = plugin_count,
-                    "loaded {plugin_count} plugin(s) from {} dir(s)",
-                    plugin_dirs.len()
-                );
-            }
-            // `register_plugin_hooks` uses `register_deduped` internally
-            // so a plugin re-declaring a settings hook stays single-fire.
-            let plugin_refs: Vec<&coco_plugins::LoadedPlugin> = plugin_manager.enabled();
-            if !plugin_refs.is_empty() {
-                coco_plugins::hook_bridge::register_plugin_hooks(&mut registry, &plugin_refs);
-            }
+            let registry = HookRegistry::new();
+            populate_hook_registry(&registry, &runtime_config, &config_home, &cwd);
             Arc::new(registry)
         };
 
@@ -553,6 +704,22 @@ impl SessionRuntime {
         } else {
             system_prompt
         };
+
+        // Bootstrap the sandbox runtime state from settings + permission
+        // rules. The adapter mirrors TS `convertToSandboxRuntimeConfig`;
+        // when sandbox isn't enabled or required dependencies are missing
+        // the bootstrap returns `None` (degrade to unsandboxed) — unless
+        // `sandbox.fail_if_unavailable` is set, in which case it returns
+        // an error and we exit before the REPL starts.
+        let sandbox_state = build_sandbox_state(&runtime_config, &cwd)?;
+
+        // Single inter-turn reminder mailbox for the session. Engine
+        // owns the concrete type (drains it per turn);
+        // `ToolUseContext.reminder_mailbox` gets the type-erased handle
+        // for producer subsystems (slash commands, tools, skill loader,
+        // swarm coordinator). Closes the producer-wiring deferral
+        // documented in `audit-gaps.md` Round 13.
+        let reminder_mailbox = coco_system_reminder::ReminderMailbox::new();
 
         // Build the engine config — owns most settings drawn from
         // RuntimeConfig + CLI overrides.
@@ -578,6 +745,7 @@ impl SessionRuntime {
             system_reminder: runtime_config.settings.merged.system_reminder.clone(),
             tool_config: runtime_config.tool.clone(),
             sandbox_config: runtime_config.sandbox.clone(),
+            sandbox_state: sandbox_state.clone(),
             memory_config: runtime_config.memory.clone(),
             shell_config: runtime_config.shell.clone(),
             web_fetch_config: runtime_config.web_fetch.clone(),
@@ -585,18 +753,37 @@ impl SessionRuntime {
             compact: runtime_config.compact.clone(),
             features: Arc::new(runtime_config.features.clone()),
             tool_overrides: runtime_config.tool_overrides.clone(),
+            include_hook_events: cli.include_hook_events,
+            reminder_mailbox: reminder_mailbox.clone(),
             ..Default::default()
         };
 
         let auto_title_enabled = runtime_config.settings.merged.session.auto_title;
 
         let client_for_main_init = client.clone();
+        // Build the LLM-driven hook handler once. Same `ApiClient` the
+        // main loop uses — Prompt hooks fire as side-channel queries
+        // (TS `execPromptHook` / `execAgentHook` uses
+        // `queryModelWithoutStreaming` / `query()` against the same
+        // session model).
+        let hook_llm_handle: Arc<dyn coco_hooks::HookLlmHandle> =
+            Arc::new(coco_query::hook_llm::QueryHookLlm::new(client.clone()));
+        // Main-session transcript store. Constructed once so the
+        // file-history sink, the per-turn message append in
+        // `engine_finalize_turn`, and the agent-transcript persistence
+        // path all share the same `TranscriptStore` instance keyed at
+        // `<config_home>/sessions/`.
+        let transcript_store = Arc::new(TranscriptStore::new(config_home.join("sessions")));
+        let transcript_dedup = Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::<
+            uuid::Uuid,
+        >::new()));
         Ok(Arc::new(Self {
             client,
             fallback_clients,
             recovery_policy,
             tools,
             command_registry,
+            skill_manager,
             config_home,
             runtime_config,
             session_manager,
@@ -607,6 +794,7 @@ impl SessionRuntime {
             cancel: CancellationToken::new(),
             session_id: Arc::new(RwLock::new(session_id)),
             engine_config: Arc::new(RwLock::new(engine_config)),
+            sandbox_state,
             file_read_state,
             file_history,
             app_state,
@@ -614,6 +802,10 @@ impl SessionRuntime {
             memory_runtime,
             swarm_agent_handle,
             hook_registry,
+            hook_llm_handle,
+            sync_hook_buffer: coco_hooks::SyncHookEventBuffer::new(),
+            async_hook_registry: Arc::new(coco_hooks::async_registry::AsyncHookRegistry::new()),
+            file_changed_watcher: tokio::sync::RwLock::new(None),
             history: Arc::new(Mutex::new(Vec::new())),
             file_history_sink_session_id,
             role_clients: tokio::sync::RwLock::new({
@@ -632,7 +824,21 @@ impl SessionRuntime {
             task_runtime: Arc::new(RwLock::new(None)),
             agent_transcript_store: Arc::new(RwLock::new(None)),
             mcp_handle: Arc::new(RwLock::new(None)),
+            reminder_mailbox,
+            transcript_store,
+            transcript_dedup,
         }))
+    }
+
+    /// Producer-only handle to the inter-turn reminder mailbox.
+    ///
+    /// Subsystems outside the per-tool-call code path (e.g. slash
+    /// command handlers, the swarm coordinator) push event-driven
+    /// reminder snapshots through this. The trait object hides
+    /// [`coco_system_reminder::ReminderMailbox::drain`], which is
+    /// engine-only.
+    pub fn reminder_mailbox_handle(&self) -> Arc<dyn coco_system_reminder::ReminderMailboxRef> {
+        self.reminder_mailbox.clone().handle()
     }
 
     /// The tool registry shared by every engine instance.
@@ -642,6 +848,13 @@ impl SessionRuntime {
     /// via its interior-mutability API.
     pub fn tools(&self) -> &Arc<ToolRegistry> {
         &self.tools
+    }
+
+    /// Session-scoped sandbox state. Cheap-clone via `Arc`; consumers
+    /// (fork dispatch, SDK handler) inherit the same instance so
+    /// `SandboxState::update_config` hot-reloads propagate everywhere.
+    pub fn sandbox_state(&self) -> Option<Arc<coco_sandbox::SandboxState>> {
+        self.sandbox_state.clone()
     }
 
     /// Install the MCP handle that every per-turn engine receives via
@@ -660,6 +873,17 @@ impl SessionRuntime {
     /// Snapshot the current session id (cheap clone of the inner String).
     pub async fn current_session_id(&self) -> String {
         self.session_id.read().await.clone()
+    }
+
+    /// Seed the transcript dedup set with uuids that are already
+    /// persisted on disk. Called on resume / fork so the first
+    /// post-load turn doesn't re-write the loaded messages.
+    pub async fn seed_transcript_dedup<I>(&self, uuids: I)
+    where
+        I: IntoIterator<Item = uuid::Uuid>,
+    {
+        let mut g = self.transcript_dedup.lock().await;
+        g.extend(uuids);
     }
 
     /// Borrow the optional `MemoryRuntime`. `None` when
@@ -740,6 +964,51 @@ impl SessionRuntime {
         self.wire_engine(engine, None).await
     }
 
+    /// Public accessor for the hook registry. Same `Arc` as the one
+    /// installed on every per-turn engine; safe to clone.
+    pub fn hook_registry(&self) -> Arc<HookRegistry> {
+        self.hook_registry.clone()
+    }
+
+    /// Build a closure that materialises an
+    /// [`coco_hooks::orchestration::OrchestrationContext`] tied to the
+    /// current session's identity / cwd / disable flags.
+    ///
+    /// Used by detached hook firings (e.g. the `Elicitation` /
+    /// `ElicitationResult` wrapper around `SendElicitation`, the
+    /// FileChanged file watcher) that need a context built from inside
+    /// a sync closure. Each call snapshots the current session id and
+    /// engine config via `blocking_read` — short locks, never held
+    /// across `.await`.
+    pub fn orchestration_ctx_factory(
+        self: &Arc<Self>,
+    ) -> Arc<dyn Fn() -> coco_hooks::orchestration::OrchestrationContext + Send + Sync> {
+        let runtime = self.clone();
+        Arc::new(move || {
+            let cfg = runtime.engine_config.blocking_read().clone();
+            let session_id = runtime.session_id.blocking_read().clone();
+            coco_hooks::orchestration::OrchestrationContext {
+                session_id,
+                cwd: std::env::current_dir().unwrap_or_default(),
+                project_dir: cfg.project_dir.clone(),
+                permission_mode: None,
+                transcript_path: None,
+                agent_id: None,
+                agent_type: None,
+                cancel: runtime.cancel.clone(),
+                disable_all_hooks: cfg.disable_all_hooks,
+                allow_managed_hooks_only: cfg.allow_managed_hooks_only,
+                attachment_emitter: coco_messages::AttachmentEmitter::noop(),
+                sync_event_sink: None,
+                http_url_allowlist: None,
+                http_env_var_policy: None,
+                async_registry: Some(runtime.async_hook_registry.clone()),
+                llm_handle: Some(runtime.hook_llm_handle.clone()),
+                workspace_trust_accepted: None,
+            }
+        })
+    }
+
     /// Build a fresh `QueryEngine` from a caller-provided
     /// `QueryEngineConfig`. Used by SDK paths whose per-turn config
     /// fields (model, session_id, max_*) come from the
@@ -799,21 +1068,53 @@ impl SessionRuntime {
         // SendMessageTool / TeamCreateTool reach the swarm runtime
         // on every engine instance.
         engine = engine.with_agent_handle(self.swarm_agent_handle.clone());
+        // Install the per-engine sync-hook-event buffer so the
+        // `OrchestrationContext.sync_event_sink` constructed from this
+        // engine's `orchestration_ctx()` writes into the same buffer
+        // that the reminder source below drains.
+        engine = engine.with_sync_hook_buffer(self.sync_hook_buffer.clone());
+        // Same wiring for async hooks: the engine's `orchestration_ctx`
+        // populates `async_registry` so engine-fired async hooks
+        // (PreToolUse / PostToolUse / Stop / SubagentStop with
+        // `is_async: true`) deliver via `CombinedHookEventsSource`.
+        engine = engine.with_async_hook_registry(self.async_hook_registry.clone());
+        // Same wiring for the LLM-driven hook handler so the engine's
+        // `orchestration_ctx` carries it on every fired event — Prompt
+        // / Agent settings hooks reach the LLM via `QueryHookLlm`.
+        engine = engine.with_hook_llm_handle(self.hook_llm_handle.clone());
         if let Some(runtime) = &self.memory_runtime {
             engine = engine.with_memory_runtime(runtime.clone());
-            // Install the MemoryAdapter as the system-reminder
-            // pipeline's MemorySource — `RelevantMemoryGenerator`
-            // calls into it each turn to pick up to 5 ranked memory
-            // files. Without this wiring the runtime ranks memories
-            // that the reminder layer never sees.
-            let sources = coco_system_reminder::ReminderSources {
-                memory: Some(Arc::new(coco_query::reminder_adapters::MemoryAdapter::new(
-                    runtime.clone(),
-                ))),
-                ..Default::default()
-            };
-            engine = engine.with_reminder_sources(sources);
         }
+        // Reminder sources — populated unconditionally so non-memory
+        // sessions still get hook + skill reminders. Each slot is
+        // optional and silently skips if its data is empty (TS parity:
+        // `getAttachments` returns `[]` when the underlying source
+        // has nothing to surface).
+        let sources = coco_system_reminder::ReminderSources {
+            // Combined hook source: async-hook registry drains first,
+            // then the sync-hook buffer that orchestration just wrote.
+            // TS parity: `getAsyncHookResponseAttachments` +
+            // sync-hook attachments produced inline by
+            // `processSessionStartHooks` / `executeUserPromptSubmitHooks`.
+            hook_events: Some(Arc::new(
+                coco_hooks::reminder_source::CombinedHookEventsSource::new(
+                    self.async_hook_registry.clone(),
+                    self.sync_hook_buffer.clone(),
+                ),
+            )),
+            // Memory source: only when the runtime is built (gated on
+            // `Feature::AutoMemory` upstream).
+            memory: self.memory_runtime.as_ref().map(|runtime| {
+                Arc::new(coco_query::reminder_adapters::MemoryAdapter::new(
+                    runtime.clone(),
+                )) as Arc<dyn coco_system_reminder::MemorySource>
+            }),
+            // Skills source: in-process `SkillManager` Arc kept alive
+            // for the session. Empty manager ⇒ generator short-circuits.
+            skills: Some(self.skill_manager.clone() as Arc<dyn coco_system_reminder::SkillsSource>),
+            ..Default::default()
+        };
+        engine = engine.with_reminder_sources(sources);
         // Build observers fresh per call so the FileReadState and
         // AppState observers reference the engine's actual handles.
         // Cheap — the registry is just a Vec of Arc<dyn Observer>.
@@ -838,6 +1139,17 @@ impl SessionRuntime {
         if let Some(bridge) = &self.permission_bridge {
             engine = engine.with_permission_bridge(bridge.clone());
         }
+        // Main-session transcript persistence. Same `TranscriptStore`
+        // instance feeds both the per-turn user / assistant JSONL
+        // append in `engine_finalize_turn::record_transcript_tail`
+        // and the marble-origami metadata writes already wired
+        // there. The dedup set lives on `SessionRuntime` so a fresh
+        // per-turn engine doesn't re-write history each time.
+        // TS parity: `Project.recordTranscript` keys writes by
+        // session id and skips already-persisted uuids.
+        let live_session_id = self.session_id.read().await.clone();
+        engine = engine.with_transcript_store(self.transcript_store.clone(), live_session_id);
+        engine = engine.with_transcript_dedup(self.transcript_dedup.clone());
         // Agent handle (P1): only installed when `attach_agent_handle`
         // ran at bootstrap (i.e. `Feature::AgentTeams` is on). Without
         // it, the engine factory's default `NoOpAgentHandle` answers
@@ -945,6 +1257,411 @@ impl SessionRuntime {
     /// - cache-break detector on `client` + each `fallback_clients`
     ///   (baseline drop on first new-session call won't false-positive)
     ///
+    /// Fire SessionStart hooks with the given `source` string ("startup",
+    /// "resume", "compact", "clear"). Output flows into the shared
+    /// `sync_hook_buffer` so it surfaces as `hook_*` reminders on the
+    /// next turn — TS parity with `processSessionStartHooks(source)`.
+    ///
+    /// Runners call this once at session bootstrap (TUI / SDK) so the
+    /// first turn's reminder pass picks up the events. Failure is
+    /// logged + tolerated; no panic on hook misconfig.
+    pub async fn fire_session_start_hooks(&self, source: &str) {
+        // TS `SessionStartHookInputSchema.source` is the closed enum
+        // `('startup' | 'resume' | 'clear' | 'compact')`. Parse here so
+        // callers using bare strings still work, but log + skip if the
+        // string is unrecognised to avoid wiring an out-of-spec value.
+        let parsed_source = match source {
+            "startup" => coco_hooks::orchestration::SessionStartSource::Startup,
+            "resume" => coco_hooks::orchestration::SessionStartSource::Resume,
+            "clear" => coco_hooks::orchestration::SessionStartSource::Clear,
+            "compact" => coco_hooks::orchestration::SessionStartSource::Compact,
+            other => {
+                warn!(
+                    source = other,
+                    "SessionStart hook fired with unrecognised source; skipping"
+                );
+                return;
+            }
+        };
+        let cfg = self.current_engine_config().await;
+        let session_id = self.current_session_id().await;
+        let ctx = coco_hooks::orchestration::OrchestrationContext {
+            session_id,
+            cwd: std::env::current_dir().unwrap_or_default(),
+            project_dir: cfg.project_dir.clone(),
+            permission_mode: None,
+            transcript_path: None,
+            agent_id: None,
+            agent_type: None,
+            cancel: self.cancel.clone(),
+            disable_all_hooks: cfg.disable_all_hooks,
+            allow_managed_hooks_only: cfg.allow_managed_hooks_only,
+            attachment_emitter: coco_messages::AttachmentEmitter::noop(),
+            sync_event_sink: Some(self.sync_hook_buffer.clone()),
+            http_url_allowlist: None,
+            http_env_var_policy: None,
+            async_registry: Some(self.async_hook_registry.clone()),
+            llm_handle: Some(self.hook_llm_handle.clone()),
+            workspace_trust_accepted: None,
+        };
+        let model_arg = if cfg.model_id.is_empty() {
+            None
+        } else {
+            Some(cfg.model_id.as_str())
+        };
+        match coco_hooks::orchestration::execute_session_start(
+            &self.hook_registry,
+            &ctx,
+            parsed_source,
+            /*agent_type*/ None,
+            model_arg,
+        )
+        .await
+        {
+            Ok(agg) => {
+                // TS `SessionStartHookSpecificOutputSchema.watchPaths` —
+                // hook output may register paths the FileChanged watcher
+                // should monitor. We hand them off to the runtime's
+                // shared watcher so subsequent file events fire
+                // FileChanged hooks. Empty vec is a no-op.
+                if !agg.watch_paths.is_empty() {
+                    self.add_file_watch_paths(agg.watch_paths.clone()).await;
+                }
+            }
+            Err(e) => {
+                warn!(error = %e, source, "SessionStart hook execution failed at startup");
+            }
+        }
+    }
+
+    /// Fire Setup hooks (TS `executeSetupHooks(trigger)`).
+    ///
+    /// Called at session bootstrap with `Maintenance`, and at explicit
+    /// `coco init` entry with `Init`. Output is fire-and-forget — TS
+    /// treats Setup as observability-only (no blocking, no continuation
+    /// signals). Failure is logged.
+    pub async fn fire_setup_hooks(&self, trigger: coco_hooks::orchestration::SetupTrigger) {
+        let cfg = self.current_engine_config().await;
+        let session_id = self.current_session_id().await;
+        let ctx = coco_hooks::orchestration::OrchestrationContext {
+            session_id,
+            cwd: std::env::current_dir().unwrap_or_default(),
+            project_dir: cfg.project_dir.clone(),
+            permission_mode: None,
+            transcript_path: None,
+            agent_id: None,
+            agent_type: None,
+            cancel: self.cancel.clone(),
+            disable_all_hooks: cfg.disable_all_hooks,
+            allow_managed_hooks_only: cfg.allow_managed_hooks_only,
+            attachment_emitter: coco_messages::AttachmentEmitter::noop(),
+            sync_event_sink: Some(self.sync_hook_buffer.clone()),
+            http_url_allowlist: None,
+            http_env_var_policy: None,
+            async_registry: Some(self.async_hook_registry.clone()),
+            llm_handle: Some(self.hook_llm_handle.clone()),
+            workspace_trust_accepted: None,
+        };
+        if let Err(e) =
+            coco_hooks::orchestration::execute_setup(&self.hook_registry, &ctx, trigger).await
+        {
+            warn!(error = %e, ?trigger, "Setup hook execution failed");
+        }
+    }
+
+    /// Fire UserPromptSubmit hooks for the given prompt text. Output
+    /// flows into the shared `sync_hook_buffer`. Returns the aggregated
+    /// result so the caller can honour `blocking_error` (suppress the
+    /// turn) and `prevent_continuation` (skip the turn but keep the
+    /// prompt) — TS parity with
+    /// `executeUserPromptSubmitHooks` consumed by
+    /// `processUserInput.ts:182-263`.
+    pub async fn fire_user_prompt_submit_hooks(
+        &self,
+        prompt: &str,
+    ) -> coco_hooks::orchestration::AggregatedHookResult {
+        let cfg = self.current_engine_config().await;
+        let session_id = self.current_session_id().await;
+        let ctx = coco_hooks::orchestration::OrchestrationContext {
+            session_id,
+            cwd: std::env::current_dir().unwrap_or_default(),
+            project_dir: cfg.project_dir.clone(),
+            permission_mode: Some(format!("{:?}", cfg.permission_mode)),
+            transcript_path: None,
+            agent_id: None,
+            agent_type: None,
+            cancel: self.cancel.clone(),
+            disable_all_hooks: cfg.disable_all_hooks,
+            allow_managed_hooks_only: cfg.allow_managed_hooks_only,
+            attachment_emitter: coco_messages::AttachmentEmitter::noop(),
+            sync_event_sink: Some(self.sync_hook_buffer.clone()),
+            http_url_allowlist: None,
+            http_env_var_policy: None,
+            async_registry: Some(self.async_hook_registry.clone()),
+            llm_handle: Some(self.hook_llm_handle.clone()),
+            workspace_trust_accepted: None,
+        };
+        match coco_hooks::orchestration::execute_user_prompt_submit(
+            &self.hook_registry,
+            &ctx,
+            prompt,
+        )
+        .await
+        {
+            Ok(agg) => agg,
+            Err(e) => {
+                warn!(error = %e, "UserPromptSubmit hook execution failed");
+                coco_hooks::orchestration::AggregatedHookResult::default()
+            }
+        }
+    }
+
+    /// Fire Notification hooks (TS `executeNotificationHooks(notif)`).
+    ///
+    /// Called from `TuiPermissionBridge` / `SdkPermissionBridge` when
+    /// the user is about to be asked for input (`permission_prompt`),
+    /// and from any future idle / elicitation prompts. Output is
+    /// fire-and-forget — TS `notifier.ts:25` awaits the hook only to
+    /// preserve ordering before the actual UI notification, never to
+    /// block the prompt itself.
+    pub async fn fire_notification_hooks(
+        &self,
+        notification_type: &str,
+        message: &str,
+        title: Option<&str>,
+    ) {
+        let cfg = self.current_engine_config().await;
+        let session_id = self.current_session_id().await;
+        let ctx = coco_hooks::orchestration::OrchestrationContext {
+            session_id,
+            cwd: std::env::current_dir().unwrap_or_default(),
+            project_dir: cfg.project_dir.clone(),
+            permission_mode: Some(format!("{:?}", cfg.permission_mode)),
+            transcript_path: None,
+            agent_id: None,
+            agent_type: None,
+            cancel: self.cancel.clone(),
+            disable_all_hooks: cfg.disable_all_hooks,
+            allow_managed_hooks_only: cfg.allow_managed_hooks_only,
+            attachment_emitter: coco_messages::AttachmentEmitter::noop(),
+            sync_event_sink: Some(self.sync_hook_buffer.clone()),
+            http_url_allowlist: None,
+            http_env_var_policy: None,
+            async_registry: Some(self.async_hook_registry.clone()),
+            llm_handle: Some(self.hook_llm_handle.clone()),
+            workspace_trust_accepted: None,
+        };
+        if let Err(e) = coco_hooks::orchestration::execute_notification(
+            &self.hook_registry,
+            &ctx,
+            notification_type,
+            message,
+            title,
+        )
+        .await
+        {
+            warn!(
+                error = %e,
+                notification_type,
+                "Notification hook execution failed"
+            );
+        }
+    }
+
+    /// Append paths to the `FileChanged` watcher, lazily constructing
+    /// it on first call. TS parity: `fileChangedWatcher.ts:add` lazily
+    /// boots the chokidar instance the first time a hook returns a
+    /// `watchPaths` array. Empty input is a no-op.
+    pub async fn add_file_watch_paths(&self, paths: Vec<String>) {
+        if paths.is_empty() {
+            return;
+        }
+        let path_bufs: Vec<std::path::PathBuf> =
+            paths.into_iter().map(std::path::PathBuf::from).collect();
+        let mut slot = self.file_changed_watcher.write().await;
+        if slot.is_none() {
+            // Build the watcher lazily — most sessions never register
+            // any watch paths, so we avoid spinning up the notify
+            // backend unconditionally.
+            let registry = self.hook_registry.clone();
+            // Capture a static cwd snapshot for the orchestration ctx.
+            // The session-level fields we need (session_id, cwd,
+            // disable flag) don't change mid-session in a way that
+            // would invalidate the watcher's hook firings.
+            let session_id = self.current_session_id().await;
+            let cfg = self.current_engine_config().await;
+            let disable_all_hooks = cfg.disable_all_hooks;
+            let allow_managed_hooks_only = cfg.allow_managed_hooks_only;
+            let project_dir = cfg.project_dir;
+            let cwd = std::env::current_dir().unwrap_or_default();
+            let cancel = self.cancel.clone();
+            let async_registry = self.async_hook_registry.clone();
+            let llm_handle = self.hook_llm_handle.clone();
+            let factory: std::sync::Arc<
+                dyn Fn() -> coco_hooks::orchestration::OrchestrationContext + Send + Sync,
+            > = std::sync::Arc::new(move || coco_hooks::orchestration::OrchestrationContext {
+                session_id: session_id.clone(),
+                cwd: cwd.clone(),
+                project_dir: project_dir.clone(),
+                permission_mode: None,
+                transcript_path: None,
+                agent_id: None,
+                agent_type: None,
+                cancel: cancel.clone(),
+                disable_all_hooks,
+                allow_managed_hooks_only,
+                attachment_emitter: coco_messages::AttachmentEmitter::noop(),
+                sync_event_sink: None,
+                http_url_allowlist: None,
+                http_env_var_policy: None,
+                async_registry: Some(async_registry.clone()),
+                llm_handle: Some(llm_handle.clone()),
+                workspace_trust_accepted: None,
+            });
+            *slot = crate::file_changed_watcher::FileChangedHookWatcher::new(registry, factory);
+        }
+        if let Some(watcher) = slot.as_ref() {
+            watcher.add_paths(path_bufs);
+        }
+    }
+
+    /// Fire CwdChanged hooks (TS `executeCwdChangedHooks(oldCwd, newCwd)`).
+    ///
+    /// Callers must capture the old cwd before mutating
+    /// `std::env::current_dir`. TS only fires this from
+    /// `fileChangedWatcher.ts:148` (chokidar-equivalent watcher); coco-rs
+    /// will gain that watcher as part of P4. In the meantime, surfacing
+    /// the helper lets ad-hoc cwd-mutating code paths (worktree exit,
+    /// SDK setCwd control) wire the hook without re-implementing the
+    /// orchestration context build.
+    pub async fn fire_cwd_changed_hooks(&self, old_cwd: &str, new_cwd: &str) {
+        let cfg = self.current_engine_config().await;
+        let session_id = self.current_session_id().await;
+        let ctx = coco_hooks::orchestration::OrchestrationContext {
+            session_id,
+            cwd: std::path::PathBuf::from(new_cwd),
+            project_dir: cfg.project_dir.clone(),
+            permission_mode: Some(format!("{:?}", cfg.permission_mode)),
+            transcript_path: None,
+            agent_id: None,
+            agent_type: None,
+            cancel: self.cancel.clone(),
+            disable_all_hooks: cfg.disable_all_hooks,
+            allow_managed_hooks_only: cfg.allow_managed_hooks_only,
+            attachment_emitter: coco_messages::AttachmentEmitter::noop(),
+            sync_event_sink: Some(self.sync_hook_buffer.clone()),
+            http_url_allowlist: None,
+            http_env_var_policy: None,
+            async_registry: Some(self.async_hook_registry.clone()),
+            llm_handle: Some(self.hook_llm_handle.clone()),
+            workspace_trust_accepted: None,
+        };
+        match coco_hooks::orchestration::execute_cwd_changed(
+            &self.hook_registry,
+            &ctx,
+            old_cwd,
+            new_cwd,
+        )
+        .await
+        {
+            Ok(agg) => {
+                // TS `CwdChangedHookSpecificOutputSchema.watchPaths` —
+                // the cwd swap is a natural moment for hooks to update
+                // the FileChanged watch list (e.g. add the new project's
+                // `.envrc`).
+                if !agg.watch_paths.is_empty() {
+                    self.add_file_watch_paths(agg.watch_paths.clone()).await;
+                }
+            }
+            Err(e) => {
+                warn!(error = %e, old_cwd, new_cwd, "CwdChanged hook execution failed");
+            }
+        }
+    }
+
+    /// Fire ConfigChange hooks (TS `executeConfigChangeHooks`).
+    ///
+    /// Called from the per-session config-change watcher task spawned
+    /// by [`Self::spawn_config_change_watcher`]. Output is fire-and-forget;
+    /// TS uses the result for `hasBlockingResult` checks but coco-rs's
+    /// reload pipeline already publishes the new `RuntimeConfig` before
+    /// hooks fire, so the hook is observe-only here.
+    pub async fn fire_config_change_hooks(
+        &self,
+        source: coco_hooks::orchestration::ConfigChangeSource,
+        file_path: Option<&str>,
+    ) {
+        let cfg = self.current_engine_config().await;
+        let session_id = self.current_session_id().await;
+        let ctx = coco_hooks::orchestration::OrchestrationContext {
+            session_id,
+            cwd: std::env::current_dir().unwrap_or_default(),
+            project_dir: cfg.project_dir.clone(),
+            permission_mode: Some(format!("{:?}", cfg.permission_mode)),
+            transcript_path: None,
+            agent_id: None,
+            agent_type: None,
+            cancel: self.cancel.clone(),
+            disable_all_hooks: cfg.disable_all_hooks,
+            allow_managed_hooks_only: cfg.allow_managed_hooks_only,
+            attachment_emitter: coco_messages::AttachmentEmitter::noop(),
+            sync_event_sink: Some(self.sync_hook_buffer.clone()),
+            http_url_allowlist: None,
+            http_env_var_policy: None,
+            async_registry: Some(self.async_hook_registry.clone()),
+            llm_handle: Some(self.hook_llm_handle.clone()),
+            workspace_trust_accepted: None,
+        };
+        if let Err(e) = coco_hooks::orchestration::execute_config_change(
+            &self.hook_registry,
+            &ctx,
+            source,
+            file_path,
+        )
+        .await
+        {
+            warn!(error = %e, source = ?source, "ConfigChange hook execution failed");
+        }
+    }
+
+    /// Spawn a tokio task that subscribes to a [`coco_config_reload::ConfigChange`]
+    /// stream and fires the corresponding TS-aligned `ConfigChange` hook
+    /// for each event. Returns the [`tokio::task::JoinHandle`] so the
+    /// caller can hold it for the session lifetime; dropping it aborts
+    /// the watcher.
+    ///
+    /// `cancel` lets callers terminate the watcher proactively
+    /// (typically the session-level [`Self::cancel`] token); when the
+    /// broadcast channel closes (reloader dropped), the loop exits on
+    /// its own.
+    pub fn spawn_config_change_watcher(
+        self: &Arc<Self>,
+        mut rx: tokio::sync::broadcast::Receiver<coco_config_reload::ConfigChange>,
+    ) -> tokio::task::JoinHandle<()> {
+        let runtime = Arc::clone(self);
+        let cancel = self.cancel.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = cancel.cancelled() => break,
+                    recv = rx.recv() => match recv {
+                        Ok(change) => {
+                            let source = config_change_source_for_kind(change.kind);
+                            let path = change.path.to_string_lossy().into_owned();
+                            runtime
+                                .fire_config_change_hooks(source, Some(&path))
+                                .await;
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                            warn!(skipped, "ConfigChange watcher lagged; events dropped");
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            }
+        })
+    }
+
     /// What stays:
     /// - `hook_registry`, `tools`, `client` (and Arc identity), other
     ///   process-level resources — these are correctly cross-session.
@@ -1009,6 +1726,118 @@ impl SessionRuntime {
         f(&mut g);
     }
 
+    /// Snapshot the current command registry. Cheap (single Arc clone).
+    /// Callers should hold the snapshot for the duration of one
+    /// dispatch — a concurrent `/reload-plugins` may swap the inner
+    /// Arc, but existing snapshots stay live until dropped.
+    pub async fn current_command_registry(&self) -> Arc<CommandRegistry> {
+        self.command_registry.read().await.clone()
+    }
+
+    /// Rebuild the slash-command registry from disk and atomically
+    /// swap it in. Triggered by `/reload-plugins` so the user can pick
+    /// up plugin / skill / command edits without restarting the
+    /// session. New `SkillManager` + `PluginManager` are constructed
+    /// fresh each call; resolution order matches the original
+    /// bootstrap (`commands::build_command_registry`).
+    ///
+    /// Returns the count of registered commands in the new registry
+    /// so the caller can show the user a confirmation.
+    pub async fn reload_plugins(&self, cwd: &std::path::Path) -> usize {
+        let mut skill_manager = coco_skills::SkillManager::new();
+        skill_manager.load_from_dirs(&[
+            self.config_home.join("skills"),
+            cwd.join(".coco").join("skills"),
+        ]);
+        let mut plugin_manager = coco_plugins::PluginManager::new();
+        plugin_manager.load_from_dirs(&coco_plugins::get_plugin_dirs(&self.config_home, cwd));
+        let registry = coco_commands::build_command_registry(
+            &skill_manager,
+            &plugin_manager,
+            coco_types::UserType::from_env(),
+            self.runtime_config.features.clone(),
+            cwd.to_path_buf(),
+            dirs::home_dir().unwrap_or_else(|| cwd.to_path_buf()),
+            None,
+        );
+        let count = registry.len();
+        let new_registry = Arc::new(registry);
+        let mut slot = self.command_registry.write().await;
+        *slot = new_registry;
+        count
+    }
+
+    /// Reload the live `HookRegistry` from the latest `RuntimeConfig`
+    /// snapshot (settings + plugin hooks). Triggered by `/hooks reload`.
+    ///
+    /// TS parity: `updateHooksConfigSnapshot()`
+    /// (`utils/hooks/hooksConfigSnapshot.ts`).
+    ///
+    /// Atomic semantics:
+    /// - Settings hooks (User/Project/Local/Flag/Policy scopes) and
+    ///   plugin hooks are both rebuilt.
+    /// - `fired_once` set is **preserved** so a `once` hook that
+    ///   already fired this session doesn't re-fire after reload.
+    /// - Per-agent `agent_scoped` overlay is **preserved** — those are
+    ///   owned by the coordinator's spawn lifecycle, not by settings.
+    /// - Slash commands run only at turn boundaries (`QueryGuard::Idle`),
+    ///   so PreToolUse/PostToolUse for an in-flight call cannot see
+    ///   different hook sets.
+    ///
+    /// Returns the count of hooks now registered.
+    pub async fn reload_hooks(&self) -> Result<usize> {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| self.config_home.clone());
+        let policy = coco_hooks::LoaderPolicy {
+            disable_all_hooks: self.runtime_config.settings.merged.disable_all_hooks,
+            allow_managed_hooks_only: self.runtime_config.settings.merged.allow_managed_hooks_only,
+        };
+
+        // Build (scope, value) pairs for every active settings source.
+        // Plugin hooks are layered separately because they live on
+        // disk inside plugin directories, not in settings.json.
+        let mut sources: Vec<(coco_types::HookScope, serde_json::Value)> = Vec::new();
+        for source in [
+            coco_config::SettingSource::User,
+            coco_config::SettingSource::Project,
+            coco_config::SettingSource::Local,
+            coco_config::SettingSource::Flag,
+            coco_config::SettingSource::Policy,
+        ] {
+            let Some(value) = self.runtime_config.settings.per_source.get(&source) else {
+                continue;
+            };
+            let Some(hooks_value) = value.get("hooks") else {
+                continue;
+            };
+            let scope = match source {
+                coco_config::SettingSource::User => coco_types::HookScope::User,
+                coco_config::SettingSource::Project => coco_types::HookScope::Project,
+                coco_config::SettingSource::Local => coco_types::HookScope::Local,
+                coco_config::SettingSource::Flag => coco_types::HookScope::Local,
+                coco_config::SettingSource::Policy => coco_types::HookScope::Policy,
+                coco_config::SettingSource::Plugin => coco_types::HookScope::Plugin,
+            };
+            sources.push((scope, hooks_value.clone()));
+        }
+
+        // Atomic settings-hook swap.
+        let settings_count = self
+            .hook_registry
+            .reload_from_runtime(&sources, policy)
+            .map_err(|e| anyhow::anyhow!("hook reload failed: {e}"))?;
+
+        // Re-layer plugin hooks on top — they aren't in settings.json
+        // so `reload_from_runtime` doesn't see them.
+        let mut plugin_manager = coco_plugins::PluginManager::new();
+        plugin_manager.load_from_dirs(&coco_plugins::get_plugin_dirs(&self.config_home, &cwd));
+        let plugin_refs: Vec<&coco_plugins::LoadedPlugin> = plugin_manager.enabled();
+        if !plugin_refs.is_empty() {
+            coco_plugins::hook_bridge::register_plugin_hooks(&self.hook_registry, &plugin_refs);
+        }
+
+        Ok(self.hook_registry.len().max(settings_count))
+    }
+
     /// TS `clearConversation` (commands/clear/conversation.ts):
     /// SessionEnd hooks → drop subsystem caches → regen session id →
     /// SessionStart hooks (whose result messages seed the new transcript).
@@ -1032,15 +1861,26 @@ impl SessionRuntime {
                 cwd: std::env::current_dir().unwrap_or_default(),
                 project_dir: cfg.project_dir.clone(),
                 permission_mode: None,
+                transcript_path: None,
+                agent_id: None,
+                agent_type: None,
                 cancel: self.cancel.clone(),
                 disable_all_hooks: cfg.disable_all_hooks,
                 allow_managed_hooks_only: cfg.allow_managed_hooks_only,
                 attachment_emitter: coco_messages::AttachmentEmitter::noop(),
+                // SessionEnd doesn't surface as a reminder in TS, so
+                // no sink needed here.
+                sync_event_sink: None,
+                http_url_allowlist: None,
+                http_env_var_policy: None,
+                async_registry: Some(self.async_hook_registry.clone()),
+                llm_handle: Some(self.hook_llm_handle.clone()),
+                workspace_trust_accepted: None,
             };
             if let Err(e) = coco_hooks::orchestration::execute_session_end(
                 &self.hook_registry,
                 &pre_ctx,
-                "clear",
+                coco_hooks::orchestration::ExitReason::Clear,
             )
             .await
             {
@@ -1079,6 +1919,12 @@ impl SessionRuntime {
         // on the next `--resume` of the pre-clear session.
         let new_session_id = uuid::Uuid::new_v4().to_string();
         self.adopt_session_id(&new_session_id).await;
+        // Reset the transcript dedup set so the new session writes a
+        // fresh JSONL from message #1 — without this, the post-clear
+        // turn would skip persisting any UUID that happened to match
+        // a pre-clear message (impossible in practice, but the empty
+        // set is the correct invariant per TS `clearSessionCaches`).
+        self.transcript_dedup.lock().await.clear();
 
         // Step 5 (TS conversation.ts:245): SessionStart hooks. Result
         // messages seed the post-clear transcript.
@@ -1088,39 +1934,180 @@ impl SessionRuntime {
             cwd: std::env::current_dir().unwrap_or_default(),
             project_dir: cfg.project_dir.clone(),
             permission_mode: None,
+            transcript_path: None,
+            agent_id: None,
+            agent_type: None,
             cancel: self.cancel.clone(),
             disable_all_hooks: cfg.disable_all_hooks,
             allow_managed_hooks_only: cfg.allow_managed_hooks_only,
             attachment_emitter: coco_messages::AttachmentEmitter::noop(),
+            // Surface SessionStart hook output as `hook_*` reminders on
+            // the next turn — TS parity with `processSessionStartHooks`
+            // emitting `createAttachmentMessage({ hookEvent:'SessionStart', ... })`.
+            sync_event_sink: Some(self.sync_hook_buffer.clone()),
+            http_url_allowlist: None,
+            http_env_var_policy: None,
+            async_registry: Some(self.async_hook_registry.clone()),
+            llm_handle: Some(self.hook_llm_handle.clone()),
+            workspace_trust_accepted: None,
         };
         let model_arg = if cfg.model_id.is_empty() {
             None
         } else {
             Some(cfg.model_id.as_str())
         };
-        match coco_hooks::orchestration::execute_session_start(
+        // Clear the in-memory transcript before invoking SessionStart
+        // hooks. The hook output flows into the sync hook buffer
+        // (`post_ctx.sync_event_sink`) and surfaces as `hook_*`
+        // reminders on the next turn — TS parity with
+        // `processSessionStartHooks('clear')` returning attachment
+        // messages that the conversation engine appends post-clear.
+        {
+            let mut h = self.history.lock().await;
+            h.clear();
+        }
+        if let Err(e) = coco_hooks::orchestration::execute_session_start(
             &self.hook_registry,
             &post_ctx,
-            "clear",
+            coco_hooks::orchestration::SessionStartSource::Clear,
             /*agent_type*/ None,
             model_arg,
         )
         .await
         {
-            Ok(result) => {
-                let mut h = self.history.lock().await;
-                h.clear();
-                for ctx_text in result.additional_contexts {
-                    if !ctx_text.trim().is_empty() {
-                        h.push(coco_messages::create_user_message(&ctx_text));
-                    }
-                }
-            }
-            Err(e) => {
-                warn!(error = %e, "SessionStart hook execution failed during /clear");
-            }
+            warn!(error = %e, "SessionStart hook execution failed during /clear");
         }
 
         Ok(())
     }
+}
+
+/// Construct an `Arc<SandboxState>` for the active session, or return `None`
+/// when sandbox is disabled / unavailable. Drives TS-equivalent bootstrap
+/// (`SandboxManager.initialize`) without re-implementing the npm runtime —
+/// the heavy lifting lives in the `coco_sandbox` crate.
+///
+/// Returns `Ok(None)` when:
+/// - `Feature::Sandbox` is off, or
+/// - mode is `FullAccess`, or
+/// - bootstrap gates fail AND `sandbox.fail_if_unavailable` is `false`
+///   (commands will run unsandboxed; user gets a startup banner).
+///
+/// Returns `Err` when bootstrap gates fail AND
+/// `sandbox.fail_if_unavailable` is `true` — the caller propagates this so
+/// coco exits before the REPL starts, matching TS
+/// `sandbox.failIfUnavailable` (`entrypoints/sandboxTypes.ts:95`).
+pub(crate) fn build_sandbox_state(
+    runtime_config: &RuntimeConfig,
+    cwd: &std::path::Path,
+) -> anyhow::Result<Option<Arc<coco_sandbox::SandboxState>>> {
+    use coco_sandbox::adapter::AdapterInputs;
+
+    if !runtime_config
+        .features
+        .enabled(coco_types::Feature::Sandbox)
+    {
+        return Ok(None);
+    }
+
+    let mode = runtime_config.sandbox.mode;
+    if matches!(mode, coco_types::SandboxMode::FullAccess) {
+        return Ok(None);
+    }
+
+    // `runtime_config.sandbox` is now the rich, TS-parity `SandboxSettings`
+    // type owned by coco-config — no manual bridging needed. We mark it
+    // `enabled = true` because reaching this point already implies the
+    // feature gate passed and the user requested an enforcing mode.
+    let mut sandbox_settings = runtime_config.sandbox.clone();
+    sandbox_settings.enabled = true;
+
+    let gate = coco_sandbox::check_enable_gates(&sandbox_settings);
+    if !matches!(gate, coco_sandbox::EnableCheckResult::Enabled) {
+        // Surface a TS-parity startup banner via `sandbox_unavailable_reason`
+        // so the user understands *why* sandboxing is degraded. When
+        // `fail_if_unavailable` is set, this is a hard error.
+        let missing_deps: Vec<String> = match &gate {
+            coco_sandbox::EnableCheckResult::DisabledByMissingDeps { missing } => missing.clone(),
+            _ => Vec::new(),
+        };
+        let reason = coco_sandbox::sandbox_unavailable_reason(
+            &sandbox_settings,
+            coco_sandbox::current_platform_supported(),
+            sandbox_settings.is_platform_enabled(),
+            &missing_deps,
+        );
+
+        if sandbox_settings.fail_if_unavailable {
+            let detail = reason.unwrap_or_else(|| format!("sandbox bootstrap failed: {gate:?}"));
+            return Err(anyhow::anyhow!(
+                "sandbox.fail_if_unavailable is set but sandbox cannot start: {detail}"
+            ));
+        }
+
+        if let Some(banner) = reason {
+            // stderr so the message survives any TUI redirection.
+            eprintln!("[coco] sandbox unavailable: {banner}");
+            warn!(?gate, banner, "sandbox enabled but runtime cannot start");
+        } else {
+            warn!(?gate, "sandbox enabled but runtime cannot start");
+        }
+        return Ok(None);
+    }
+
+    let settings_root = runtime_config
+        .paths
+        .project_dir
+        .clone()
+        .unwrap_or_else(|| cwd.to_path_buf());
+
+    let permission_allow_rules: Vec<String> =
+        runtime_config.settings.merged.permissions.allow.clone();
+    let permission_deny_rules: Vec<String> =
+        runtime_config.settings.merged.permissions.deny.clone();
+    let additional_directories: Vec<PathBuf> = runtime_config
+        .settings
+        .merged
+        .permissions
+        .additional_directories
+        .iter()
+        .map(PathBuf::from)
+        .collect();
+
+    let coco_temp_dir = std::env::temp_dir().join("coco");
+    let worktree = coco_sandbox::detect_worktree_main_repo(cwd);
+
+    // Per-source rule plumbing — drives the `allow_managed_*_only`
+    // gates. The adapter needs source provenance because the merged
+    // `SandboxSettings` collapses every layer; only allow rules need
+    // sourcing (TS always honors all-source denies).
+    let (sourced_allow_rules, _sourced_deny_rules) =
+        runtime_config.settings.sourced_permission_rules();
+    let sourced_fs_allow_read = runtime_config.settings.sourced_filesystem_allow_read();
+
+    let inputs = AdapterInputs {
+        settings: &sandbox_settings,
+        mode,
+        settings_root: &settings_root,
+        original_cwd: cwd,
+        current_cwd: cwd,
+        permission_allow_rules: &permission_allow_rules,
+        permission_deny_rules: &permission_deny_rules,
+        additional_directories: &additional_directories,
+        coco_temp_dir: &coco_temp_dir,
+        settings_files: &[],
+        worktree_main_repo: worktree.as_deref(),
+        sourced_permission_allow_rules: Some(&sourced_allow_rules),
+        sourced_filesystem_allow_read: Some(&sourced_fs_allow_read),
+    };
+    let out = coco_sandbox::build_runtime_config(inputs);
+
+    let platform = coco_sandbox::platform::create_platform();
+    let state = match mode {
+        coco_types::SandboxMode::ExternalSandbox => {
+            coco_sandbox::SandboxState::external(out.enforcement, out.settings, out.config)
+        }
+        _ => coco_sandbox::SandboxState::new(out.enforcement, out.settings, out.config, platform),
+    };
+    Ok(Some(Arc::new(state)))
 }

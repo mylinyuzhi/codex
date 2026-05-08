@@ -194,7 +194,7 @@ fn test_load_from_markdown_hooks_json() {
     let content = "\
 # test
 ---
-hooks: {\"pre_tool_use\": \"echo hi\"}
+hooks: {\"PreToolUse\": \"echo hi\"}
 ---
 
 Test skill.
@@ -203,7 +203,7 @@ Test skill.
     assert!(skill.hooks.is_some());
     let hooks = skill.hooks.unwrap();
     assert!(hooks.is_object());
-    assert!(hooks.get("pre_tool_use").is_some());
+    assert!(hooks.get("PreToolUse").is_some());
 }
 
 #[test]

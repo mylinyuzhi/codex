@@ -152,12 +152,18 @@ impl SettingsPermissionStore {
     }
 
     /// Write a settings JSON value to disk, creating directories as needed.
-    fn write_settings_json(path: &Path, value: &serde_json::Value) -> anyhow::Result<()> {
+    fn write_settings_json(
+        path: &Path,
+        value: &serde_json::Value,
+    ) -> Result<(), coco_error::BoxedError> {
+        use coco_error::StatusCode;
+        use coco_error::boxed;
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
+            std::fs::create_dir_all(parent).map_err(|e| boxed(e, StatusCode::IoError))?;
         }
-        let contents = serde_json::to_string_pretty(value)?;
-        std::fs::write(path, contents)?;
+        let contents =
+            serde_json::to_string_pretty(value).map_err(|e| boxed(e, StatusCode::Internal))?;
+        std::fs::write(path, contents).map_err(|e| boxed(e, StatusCode::IoError))?;
         Ok(())
     }
 
@@ -177,7 +183,7 @@ impl SettingsPermissionStore {
         &self,
         rules: &[PermissionRule],
         dest: PermissionUpdateDestination,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), coco_error::BoxedError> {
         if rules.is_empty() {
             return Ok(());
         }
@@ -252,7 +258,7 @@ impl SettingsPermissionStore {
         &self,
         rules: &[PermissionRule],
         dest: PermissionUpdateDestination,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), coco_error::BoxedError> {
         if rules.is_empty() {
             return Ok(());
         }
@@ -357,7 +363,7 @@ impl PermissionStore for SettingsPermissionStore {
             .unwrap_or_default()
     }
 
-    fn persist_update(&self, update: &PermissionUpdate) -> anyhow::Result<()> {
+    fn persist_update(&self, update: &PermissionUpdate) -> Result<(), coco_error::BoxedError> {
         match update {
             PermissionUpdate::AddRules { rules, destination } => {
                 self.persist_add_rules(rules, *destination)

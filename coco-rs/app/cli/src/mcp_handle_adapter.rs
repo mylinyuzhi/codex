@@ -27,11 +27,38 @@ use tokio::sync::Mutex;
 /// implements `McpHandle`.
 pub struct McpManagerAdapter {
     manager: Arc<Mutex<McpConnectionManager>>,
+    /// Optional hook registry for firing `Elicitation` /
+    /// `ElicitationResult` hooks when an MCP server requests user
+    /// input. `None` keeps the legacy no-op behaviour. TS:
+    /// `services/mcp/elicitationHandler.ts`.
+    hook_registry: Option<Arc<coco_hooks::HookRegistry>>,
+    /// Builder that produces an `OrchestrationContext` per elicitation
+    /// firing — same shape used elsewhere when session state is needed
+    /// inside detached closures.
+    elicitation_ctx_factory:
+        Option<Arc<dyn Fn() -> coco_hooks::orchestration::OrchestrationContext + Send + Sync>>,
 }
 
 impl McpManagerAdapter {
     pub fn new(manager: Arc<Mutex<McpConnectionManager>>) -> Self {
-        Self { manager }
+        Self {
+            manager,
+            hook_registry: None,
+            elicitation_ctx_factory: None,
+        }
+    }
+
+    /// Install hook context so dynamic-MCP-server elicitations fire
+    /// `Elicitation` / `ElicitationResult` hooks. Without this the
+    /// adapter falls back to the legacy no-op send_elicitation closure.
+    pub fn with_elicitation_hooks(
+        mut self,
+        registry: Arc<coco_hooks::HookRegistry>,
+        ctx_factory: Arc<dyn Fn() -> coco_hooks::orchestration::OrchestrationContext + Send + Sync>,
+    ) -> Self {
+        self.hook_registry = Some(registry);
+        self.elicitation_ctx_factory = Some(ctx_factory);
+        self
     }
 }
 
@@ -40,7 +67,7 @@ impl McpHandle for McpManagerAdapter {
     async fn list_resources(
         &self,
         server_name: Option<&str>,
-    ) -> anyhow::Result<Vec<McpResourceInfo>> {
+    ) -> Result<Vec<McpResourceInfo>, coco_error::BoxedError> {
         let manager = self.manager.lock().await;
         let connected = manager.connected_servers().await;
         let mut out = Vec::new();
@@ -66,17 +93,12 @@ impl McpHandle for McpManagerAdapter {
         &self,
         _server_name: &str,
         _resource_uri: &str,
-    ) -> anyhow::Result<McpResourceContent> {
-        // `McpConnectionManager` doesn't expose a typed `read_resource`
-        // surface yet — the tool layer's `ReadMcpResourceTool` reads
-        // resources through the rmcp client directly. Keeping this as
-        // a clean error preserves the no-op contract for callers that
-        // touch this trait method through `McpHandle` (which only
-        // `tools/agent/agent_tool::check_mcp_ready` does today).
-        anyhow::bail!(
+    ) -> Result<McpResourceContent, coco_error::BoxedError> {
+        Err(Box::new(coco_error::PlainError::new(
             "McpHandle::read_resource not implemented through manager adapter; \
-             tools should call ReadMcpResourceTool directly"
-        )
+             tools should call ReadMcpResourceTool directly",
+            coco_error::StatusCode::Internal,
+        )))
     }
 
     async fn call_tool(
@@ -84,12 +106,17 @@ impl McpHandle for McpManagerAdapter {
         server_name: &str,
         tool_name: &str,
         arguments: Option<Value>,
-    ) -> anyhow::Result<McpToolCallResult> {
+    ) -> Result<McpToolCallResult, coco_error::BoxedError> {
         let manager = self.manager.lock().await;
         let result = manager
             .call_tool(server_name, tool_name, arguments)
             .await
-            .map_err(|e| anyhow::anyhow!("MCP tool call failed: {e}"))?;
+            .map_err(|e| {
+                Box::new(coco_error::PlainError::new(
+                    format!("MCP tool call failed: {e}"),
+                    coco_error::StatusCode::External,
+                )) as coco_error::BoxedError
+            })?;
         // Translate rmcp `CallToolResult` into the trait's content
         // blocks. Text blocks pass through; non-text blocks render as
         // an `Image` placeholder (the trait only carries text + image
@@ -124,13 +151,12 @@ impl McpHandle for McpManagerAdapter {
         })
     }
 
-    async fn authenticate(&self, _server_name: &str) -> anyhow::Result<String> {
-        // Auth flow is owned by `McpAuthTool` which goes through the
-        // RmcpClient OAuth port directly; no need to surface here.
-        anyhow::bail!(
+    async fn authenticate(&self, _server_name: &str) -> Result<String, coco_error::BoxedError> {
+        Err(Box::new(coco_error::PlainError::new(
             "McpHandle::authenticate not implemented through manager adapter; \
-             use McpAuthTool"
-        )
+             use McpAuthTool",
+            coco_error::StatusCode::Internal,
+        )))
     }
 
     async fn connected_servers(&self) -> Vec<String> {
@@ -163,13 +189,17 @@ impl McpHandle for McpManagerAdapter {
         &self,
         name: &str,
         config: serde_json::Value,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), coco_error::BoxedError> {
         // Deserialise the JSON body into the typed `McpServerConfig`
         // discriminated union. TS validates with Zod
         // (`McpServerConfigSchema`); coco-rs relies on serde's
         // `#[serde(tag = "transport")]` to do the same.
-        let typed: coco_mcp::McpServerConfig = serde_json::from_value(config)
-            .map_err(|e| anyhow::anyhow!("invalid inline MCP server config for '{name}': {e}"))?;
+        let typed: coco_mcp::McpServerConfig = serde_json::from_value(config).map_err(|e| {
+            Box::new(coco_error::PlainError::new(
+                format!("invalid inline MCP server config for '{name}': {e}"),
+                coco_error::StatusCode::InvalidJson,
+            )) as coco_error::BoxedError
+        })?;
         let scoped = coco_mcp::ScopedMcpServerConfig {
             name: name.to_string(),
             config: typed,
@@ -184,25 +214,46 @@ impl McpHandle for McpManagerAdapter {
         // tools — we surface the error so the agent's spawn can
         // decide).
         //
-        // SendElicitation is a no-op closure here — dynamic agent-
-        // private servers shouldn't block on a UI elicitation prompt
-        // mid-spawn. If a server requires elicitation it'll fail at
-        // connect time; the agent then runs without that tool.
-        let no_elicitation: coco_mcp::SendElicitation = Box::new(|_id, _req| {
+        // Base SendElicitation: no UI dialog yet, so dialog-required
+        // elicitations error out. The wrapper below makes hooks fire
+        // first — if a hook returns a decision, we never reach this.
+        let base_elicitation: coco_mcp::SendElicitation = Box::new(|_id, _req| {
             Box::pin(async move {
-                Err(anyhow::anyhow!(
-                    "elicitation not supported for dynamically-added agent MCP servers"
+                Err(coco_mcp::RmcpClientError::generic(
+                    "elicitation not supported for dynamically-added agent MCP servers",
                 ))
             })
         });
-        manager
-            .connect(name, no_elicitation)
-            .await
-            .map_err(|e| anyhow::anyhow!("MCP connect '{name}' failed: {e}"))?;
+        // TS parity: `services/mcp/elicitationHandler.ts:91-107` runs
+        // hooks BEFORE showing the dialog. When hook context is
+        // installed, wrap the base closure so `Elicitation` /
+        // `ElicitationResult` hooks fire around every elicit/create
+        // request (and the `elicitation_response` Notification fires
+        // on completion).
+        let send_elicitation = match (
+            self.hook_registry.as_ref(),
+            self.elicitation_ctx_factory.as_ref(),
+        ) {
+            (Some(registry), Some(factory)) => {
+                crate::elicitation_hooks::wrap_send_elicitation_with_hooks(
+                    name.to_string(),
+                    registry.clone(),
+                    factory.clone(),
+                    base_elicitation,
+                )
+            }
+            _ => base_elicitation,
+        };
+        manager.connect(name, send_elicitation).await.map_err(|e| {
+            Box::new(coco_error::PlainError::new(
+                format!("MCP connect '{name}' failed: {e}"),
+                coco_error::StatusCode::ConnectionFailed,
+            )) as coco_error::BoxedError
+        })?;
         Ok(())
     }
 
-    async fn remove_dynamic_server(&self, name: &str) -> anyhow::Result<()> {
+    async fn remove_dynamic_server(&self, name: &str) -> Result<(), coco_error::BoxedError> {
         let manager = self.manager.lock().await;
         manager.disconnect(name).await;
         Ok(())

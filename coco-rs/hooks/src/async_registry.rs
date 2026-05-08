@@ -41,6 +41,14 @@ pub struct PendingAsyncHook {
     pub exit_code: Option<i32>,
     /// Whether the response has been delivered to the caller.
     pub delivered: bool,
+    /// `asyncRewake: true` + exit code 2 — the agent should wake on
+    /// completion to inject the hook's stderr as a `<system-reminder>`
+    /// task notification. TS parity:
+    /// `executeInBackground()` ENQUEUES a `task-notification` and
+    /// `wakeIfIdle()` resumes the model. Coco-rs consumers (reminder
+    /// source, queue processor) read this flag to drive equivalent
+    /// behaviour.
+    pub rewake_requested: bool,
 }
 
 /// Response from a completed async hook.
@@ -53,6 +61,12 @@ pub struct AsyncHookResponse {
     pub stderr: String,
     pub exit_code: i32,
     pub timed_out: bool,
+    /// True when the hook was registered with `asyncRewake: true` and
+    /// completed with the rewake-on-block exit code (2). Consumers
+    /// (reminder pipeline / queue processor) should surface this as a
+    /// task-notification and wake the model. TS:
+    /// `getAsyncHookResponseAttachments()` + `wakeIfIdle()`.
+    pub rewake_requested: bool,
 }
 
 /// Registry for managing pending async hooks.
@@ -86,8 +100,17 @@ impl AsyncHookRegistry {
             stderr: String::new(),
             exit_code: None,
             delivered: false,
+            rewake_requested: false,
         };
         self.pending.lock().await.insert(hook_id, hook);
+    }
+
+    /// Mark a pending async hook as needing rewake on completion.
+    /// TS: `asyncRewake: true` + exit-code-2 → `wakeIfIdle()`.
+    pub async fn mark_rewake(&self, hook_id: &str) {
+        if let Some(hook) = self.pending.lock().await.get_mut(hook_id) {
+            hook.rewake_requested = true;
+        }
     }
 
     /// Update the output of a pending async hook.
@@ -131,6 +154,7 @@ impl AsyncHookRegistry {
                     stderr: hook.stderr.clone(),
                     exit_code: hook.exit_code.unwrap_or(-1),
                     timed_out,
+                    rewake_requested: hook.rewake_requested,
                 });
             }
         }
@@ -171,6 +195,7 @@ impl AsyncHookRegistry {
                     stderr: hook.stderr.clone(),
                     exit_code: hook.exit_code.unwrap_or(-1),
                     timed_out: hook.exit_code.is_none(),
+                    rewake_requested: hook.rewake_requested,
                 });
             }
         }

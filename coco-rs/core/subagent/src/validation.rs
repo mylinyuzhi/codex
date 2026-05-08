@@ -6,6 +6,9 @@
 
 use std::path::PathBuf;
 
+use coco_error::ErrorExt;
+use coco_error::StackError;
+use coco_error::StatusCode;
 use coco_types::AgentDefinition;
 use thiserror::Error;
 
@@ -42,6 +45,30 @@ pub enum ValidationError {
     EmptyBody,
     #[error("file read error: {message}")]
     Io { message: String },
+}
+
+impl StackError for ValidationError {
+    fn debug_fmt(&self, layer: usize, buf: &mut Vec<String>) {
+        buf.push(format!("{layer}: {self}"));
+    }
+
+    fn next(&self) -> Option<&dyn StackError> {
+        None
+    }
+}
+
+impl ErrorExt for ValidationError {
+    fn status_code(&self) -> StatusCode {
+        match self {
+            Self::InvalidFrontmatter { .. } | Self::InvalidJson { .. } => StatusCode::ParseError,
+            Self::Io { .. } => StatusCode::IoError,
+            _ => StatusCode::InvalidArguments,
+        }
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 /// One validation finding tied to a source location.

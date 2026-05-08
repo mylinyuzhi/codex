@@ -332,6 +332,14 @@ impl QueryEngine {
             } else {
                 coco_system_reminder::DEFAULT_TIMEOUT_MS as u64
             });
+        // One-shot flag: every successful compaction (full / SM / reactive)
+        // sets it; the next reminder build consumes (swap-to-false) so
+        // `task_status` only fires on the immediately-following turn —
+        // matching TS `getUnifiedTaskAttachments` post-compact emission
+        // surface (`attachments.ts:962`).
+        let just_compacted = self
+            .pending_just_compacted
+            .swap(false, std::sync::atomic::Ordering::SeqCst);
         let materialized = self
             .reminder_sources
             .materialize(coco_system_reminder::MaterializeContext {
@@ -339,9 +347,7 @@ impl QueryEngine {
                 agent_id: self.config.agent_id.as_deref(),
                 user_input: reminder_user_input.as_deref(),
                 mentioned_paths: &reminder_mentioned_paths,
-                // `just_compacted` is wired in P3 when services/compact
-                // exposes the per-turn boundary signal.
-                just_compacted: false,
+                just_compacted,
                 per_source_timeout: reminder_source_timeout,
             })
             .await;
@@ -382,6 +388,13 @@ impl QueryEngine {
             } else {
                 Vec::new()
             };
+
+        // Drain event-driven reminders accumulated since the last turn.
+        // Subsystems push to the mailbox out-of-band (slash commands,
+        // skill loader, tool runtime, swarm) — this is the single point
+        // of consumption per turn. "Latest snapshot wins" so a producer
+        // racing the drain just lands in the next turn.
+        let mailbox_state = self.config.reminder_mailbox.drain();
 
         let reminder_input = TurnReminderInput {
             config: reminder_orchestrator.config(),
@@ -507,6 +520,33 @@ impl QueryEngine {
             // drift detection would need a parallel cache.
             already_read_file_paths: reminder_already_read_file_paths,
             edited_image_file_paths: Vec::new(),
+            // Audit-add silent reminders (TS-parity, May 2026).
+            //
+            // `max_turns_reached_signal`: TS query.ts:1508 fires when
+            // `turnCount + 1 > maxTurns`. coco-rs has not yet incremented
+            // for this turn at this point, so the equivalent gate is
+            // `turn_number + 1 > max_turns` with `max_turns > 0` to
+            // preserve the unbounded default.
+            max_turns_reached_signal: self.config.max_turns > 0
+                && reminder_human_turn_number.saturating_add(1) > self.config.max_turns,
+            // `context_efficiency` is gated behind TS `feature('HISTORY_SNIP')`;
+            // coco-rs does not port HISTORY_SNIP (see root CLAUDE.md
+            // "Compaction — three generic strategies only"), so the signal
+            // stays `false`.
+            context_efficiency_signal: false,
+            // Event-time reminders flow through `ReminderMailbox`: subsystems
+            // (slash commands, skill loader, tool runtime, swarm
+            // coordinator) push snapshots when their event fires; the
+            // engine drains the mailbox once per turn to populate the
+            // `TurnReminderInput` slots. `current_session_memory` and
+            // `skill_discovery` have no TS creator yet (audit-gaps Round
+            // 13) — kept `None` until upstream lands them.
+            current_session_memory: None,
+            command_permissions: mailbox_state.command_permissions,
+            dynamic_skill: mailbox_state.dynamic_skill,
+            skill_discovery: None,
+            structured_output: mailbox_state.structured_output,
+            teammate_shutdown_batch: mailbox_state.teammate_shutdown_batch,
         };
         let reminders = run_turn_reminders(reminder_orchestrator, reminder_input).await;
 

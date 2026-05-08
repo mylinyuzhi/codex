@@ -19,7 +19,8 @@
 REPO_ROOT="${CLAUDE_PROJECT_DIR:?CLAUDE_PROJECT_DIR not set}"
 cd "$REPO_ROOT/cocode-rs"
 
-export CARGO_TARGET_DIR="/tmp/cargo-target-$(echo "$PWD" | md5sum | cut -c1-12)"
+# `CARGO_TARGET_DIR` deliberately unset — cargo's default workspace-relative
+# `target/` already isolates worktrees.
 
 # ── Step 1: detect protocol source changes ──
 CHANGED_FILES=$(git diff --name-only HEAD 2>/dev/null || true)

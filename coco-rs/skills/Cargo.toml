@@ -9,12 +9,13 @@ workspace = true
 
 [dependencies]
 coco-types.workspace = true
+coco-error.workspace = true
 coco-file-watch.workspace = true
 coco-system-reminder.workspace = true
 async-trait.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-anyhow.workspace = true
+thiserror.workspace = true
 tracing.workspace = true
 tokio = { workspace = true, features = ["sync", "process", "time", "rt", "macros", "fs", "io-util"] }
 walkdir.workspace = true

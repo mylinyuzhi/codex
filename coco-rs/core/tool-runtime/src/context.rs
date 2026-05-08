@@ -98,8 +98,24 @@ pub struct ToolUseContext {
     pub verbose: bool,
     /// Resolved tool runtime configuration.
     pub tool_config: coco_config::ToolConfig,
-    /// Resolved sandbox runtime configuration.
-    pub sandbox_config: coco_config::SandboxConfig,
+    /// Resolved sandbox runtime configuration. Tools read this for the
+    /// user-facing mode + excluded-commands list. Actual enforcement
+    /// (wrapping commands with bwrap/Seatbelt) is driven by
+    /// [`Self::sandbox_state`].
+    pub sandbox_config: coco_config::SandboxSettings,
+    /// Active sandbox runtime state. `None` when sandbox is disabled or not
+    /// bootstrapped (test contexts, headless runs without sandbox). Tools
+    /// must consult this — not `sandbox_config` — to decide whether a
+    /// command runs sandboxed and to obtain the per-command snapshot used
+    /// by the shell executor.
+    pub sandbox_state: Option<std::sync::Arc<coco_sandbox::SandboxState>>,
+    /// Producer-side handle to the inter-turn reminder mailbox. Tools
+    /// push event-driven reminder snapshots
+    /// (`structured_output`, `dynamic_skill`, etc.) here; the engine
+    /// drains the concrete [`coco_system_reminder::ReminderMailbox`]
+    /// at turn start. Defaults to a no-op for tests / SDK contexts
+    /// without an orchestrating engine.
+    pub reminder_mailbox: Arc<dyn coco_system_reminder::ReminderMailboxRef>,
     /// Resolved memory runtime configuration.
     pub memory_config: coco_config::MemoryConfig,
     /// Resolved shell runtime configuration. Consumed by Bash tool
@@ -451,6 +467,8 @@ impl ToolUseContext {
             verbose: self.verbose,
             tool_config: self.tool_config.clone(),
             sandbox_config: self.sandbox_config.clone(),
+            sandbox_state: self.sandbox_state.clone(),
+            reminder_mailbox: self.reminder_mailbox.clone(),
             memory_config: self.memory_config.clone(),
             shell_config: self.shell_config.clone(),
             web_fetch_config: self.web_fetch_config.clone(),
@@ -551,7 +569,9 @@ impl ToolUseContext {
             debug: false,
             verbose: false,
             tool_config: coco_config::ToolConfig::default(),
-            sandbox_config: coco_config::SandboxConfig::default(),
+            sandbox_config: coco_config::SandboxSettings::default(),
+            sandbox_state: None,
+            reminder_mailbox: coco_system_reminder::noop_reminder_mailbox(),
             memory_config: coco_config::MemoryConfig::default(),
             shell_config: coco_config::ShellConfig::default(),
             web_fetch_config: coco_config::WebFetchConfig::default(),

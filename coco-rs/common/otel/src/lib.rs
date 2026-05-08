@@ -2,6 +2,7 @@ pub mod config;
 pub mod events;
 pub mod metrics;
 pub mod otel_provider;
+pub mod subscriber;
 pub mod traces;
 
 mod otlp;

@@ -34,6 +34,15 @@ impl QueryEngine {
     /// `CompactionStarted` → `ContextCompacted` notifications. Shared by both
     /// `prompt_too_long` recovery sites (stream-open failure and mid-stream
     /// failure) — keeps the two paths bit-identical.
+    #[tracing::instrument(
+        skip_all,
+        name = "compaction",
+        fields(
+            trigger = "reactive",
+            session_id = %self.config.session_id,
+            history_len = history.messages.len(),
+        ),
+    )]
     pub(crate) async fn do_reactive_compact(
         &self,
         history: &mut MessageHistory,
@@ -232,6 +241,11 @@ impl QueryEngine {
         self.client
             .notify_compaction(qs, self.config.agent_id.as_deref())
             .await;
+
+        // TS `getUnifiedTaskAttachments(ctx)` only fires post-compaction; the
+        // next reminder build consumes (and clears) this flag.
+        self.pending_just_compacted
+            .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Finalize a turn after tools have executed: drain queued commands + inbox,
@@ -553,6 +567,22 @@ impl QueryEngine {
             }
         }
 
+        // Per-turn JSONL transcript append. Walks `history` and writes
+        // any user/assistant/system/attachment message whose uuid isn't
+        // already in the cross-engine dedup set. Skips silently when
+        // the store / session id / dedup set aren't all wired (e.g.
+        // tests, headless runs without persistence). TS parity:
+        // `Project.recordTranscript` flushes the per-message queue at
+        // turn end.
+        self.record_transcript_tail(history).await;
+
+        info!(
+            turn_id = %turn_id,
+            tokens_in = usage.input_tokens,
+            tokens_out = usage.output_tokens,
+            history_len = history.messages.len(),
+            "turn completed"
+        );
         let _ = emit_protocol(
             event_tx,
             ServerNotification::TurnCompleted(coco_types::TurnCompletedParams {
@@ -561,6 +591,57 @@ impl QueryEngine {
             }),
         )
         .await;
+    }
+
+    /// Append every history message whose uuid isn't already in the
+    /// dedup set to the JSONL transcript, with parent_uuid linking to
+    /// the previous message in the chain. No-op when transcript
+    /// persistence isn't wired (`with_transcript_store` +
+    /// `with_transcript_dedup` not both called).
+    pub(crate) async fn record_transcript_tail(&self, history: &MessageHistory) {
+        let (Some(store), Some(sid), Some(seen)) = (
+            self.transcript_store.as_ref(),
+            self.transcript_session_id.as_deref(),
+            self.transcript_dedup.as_ref(),
+        ) else {
+            return;
+        };
+
+        let mut seen_guard = seen.lock().await;
+        let cwd = std::env::current_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
+        let now = chrono::Utc::now().to_rfc3339();
+        let mut prev_uuid: Option<String> = None;
+
+        for msg in &history.messages {
+            let Some(uuid) = msg.uuid().copied() else {
+                continue;
+            };
+            // Track chain order even for already-written entries so the
+            // next *new* entry's parent_uuid points to the most recent
+            // message rather than the last new one.
+            if !seen_guard.insert(uuid) {
+                prev_uuid = Some(uuid.to_string());
+                continue;
+            }
+            let entry =
+                match build_transcript_entry(msg, &uuid, prev_uuid.as_deref(), sid, &cwd, &now) {
+                    Some(e) => e,
+                    None => {
+                        prev_uuid = Some(uuid.to_string());
+                        continue;
+                    }
+                };
+            if let Err(e) = store.append_message(sid, &entry) {
+                warn!(error = %e, "failed to append transcript entry");
+                // Don't mark uuid as written when the append fails —
+                // a retry on the next turn can recover, mirroring TS
+                // best-effort persistence semantics.
+                seen_guard.remove(&uuid);
+            }
+            prev_uuid = Some(uuid.to_string());
+        }
     }
 
     /// Spawn the post-turn promptSuggestion fork in a detached task
@@ -719,6 +800,87 @@ fn main_agent_wrote_memory(
         return false;
     }
     false
+}
+
+/// Build a `coco_session::TranscriptEntry` from a [`coco_messages::Message`].
+///
+/// Returns `None` for messages we don't persist (`Progress`,
+/// `Tombstone`, `ToolUseSummary` — none round-trip through resume).
+/// TS parity: `Project.recordTranscript` in `utils/sessionStorage.ts`
+/// writes user/assistant/system/attachment/tool_result entries, with
+/// `isSidechain` set for subagent transcripts.
+fn build_transcript_entry(
+    msg: &coco_messages::Message,
+    uuid: &uuid::Uuid,
+    parent_uuid: Option<&str>,
+    session_id: &str,
+    cwd: &str,
+    timestamp: &str,
+) -> Option<coco_session::TranscriptEntry> {
+    use coco_messages::Message;
+    use coco_session::storage::entry_kind;
+    let (entry_type, message_value, model, usage, cost_usd) = match msg {
+        Message::User(u) => (
+            entry_kind::USER,
+            serde_json::to_value(&u.message).ok(),
+            None,
+            None,
+            None,
+        ),
+        Message::Assistant(a) => {
+            let usage = a.usage.as_ref().map(|u| coco_session::TranscriptUsage {
+                input_tokens: u.input_tokens,
+                output_tokens: u.output_tokens,
+                cache_read_tokens: Some(u.input_token_details.cache_read_tokens),
+                cache_creation_tokens: Some(u.input_token_details.cache_write_tokens),
+            });
+            (
+                entry_kind::ASSISTANT,
+                serde_json::to_value(&a.message).ok(),
+                Some(a.model.clone()).filter(|m| !m.is_empty()),
+                usage,
+                a.cost_usd,
+            )
+        }
+        Message::System(s) => (
+            entry_kind::SYSTEM,
+            serde_json::to_value(s).ok(),
+            None,
+            None,
+            None,
+        ),
+        Message::Attachment(att) => (
+            entry_kind::ATTACHMENT,
+            serde_json::to_value(&att.body).ok(),
+            None,
+            None,
+            None,
+        ),
+        Message::ToolResult(t) => (
+            entry_kind::TOOL_RESULT,
+            serde_json::to_value(t).ok(),
+            None,
+            None,
+            None,
+        ),
+        Message::Progress(_) | Message::Tombstone(_) | Message::ToolUseSummary(_) => return None,
+    };
+    Some(coco_session::TranscriptEntry {
+        entry_type: entry_type.to_string(),
+        uuid: uuid.to_string(),
+        parent_uuid: parent_uuid.map(str::to_string),
+        session_id: session_id.to_string(),
+        cwd: cwd.to_string(),
+        timestamp: timestamp.to_string(),
+        version: Some(env!("CARGO_PKG_VERSION").to_string()),
+        git_branch: None,
+        is_sidechain: false,
+        message: message_value,
+        usage,
+        model,
+        cost_usd,
+        extra: serde_json::Map::new(),
+    })
 }
 
 /// Wrap a teammate's inbox message in the `<teammate-message>` envelope

@@ -44,7 +44,7 @@
 //! leader's overlay automatically — no per-spawn install needed.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use async_trait::async_trait;
 use coco_query::CoreEvent;
@@ -54,6 +54,8 @@ use coco_tool_runtime::{
 use coco_types::TuiOnlyEvent;
 use tokio::sync::{RwLock, mpsc, oneshot};
 use tracing::warn;
+
+use crate::session_runtime::SessionRuntime;
 
 /// Shared sender side of pending approvals — keyed by `request_id` so
 /// `resolve_pending` can route the matching response back.
@@ -74,6 +76,13 @@ pub fn new_pending_map() -> PendingApprovals {
 pub struct TuiPermissionBridge {
     notification_tx: mpsc::Sender<CoreEvent>,
     pending: PendingApprovals,
+    /// Late-bound `Weak<SessionRuntime>` used to fire the
+    /// `Notification` hook (TS `executeNotificationHooks`) when an
+    /// `Ask` permission lands in front of the user. Set by
+    /// [`Self::set_notification_runtime`] from `tui_runner` after
+    /// `SessionRuntime::build` returns. Weak avoids extending the
+    /// runtime's lifetime through the bridge.
+    notification_runtime: RwLock<Option<Weak<SessionRuntime>>>,
 }
 
 impl TuiPermissionBridge {
@@ -81,7 +90,15 @@ impl TuiPermissionBridge {
         Self {
             notification_tx,
             pending,
+            notification_runtime: RwLock::new(None),
         }
+    }
+
+    /// Install the runtime weak-ref used to fire `Notification` hooks
+    /// when prompting the user. Call once after `SessionRuntime::build`
+    /// returns. Safe to skip — bridge degrades to no hook fire.
+    pub async fn set_notification_runtime(&self, weak: Weak<SessionRuntime>) {
+        *self.notification_runtime.write().await = Some(weak);
     }
 }
 
@@ -99,6 +116,28 @@ impl ToolPermissionBridge for TuiPermissionBridge {
         {
             let mut pending = self.pending.write().await;
             pending.insert(request.id.clone(), tx);
+        }
+
+        // TS `useNotifyAfterTimeout('Claude Code is waiting for your input',
+        // 'permission_prompt')` (`PermissionRequest.tsx:190`): fire the
+        // Notification hook before the overlay is shown so user-defined
+        // notifiers run in lockstep with TS. Best-effort — no runtime
+        // installed (e.g. tests) leaves the hook unfired.
+        if let Some(runtime) = self
+            .notification_runtime
+            .read()
+            .await
+            .as_ref()
+            .and_then(Weak::upgrade)
+        {
+            let title = format!("Permission request: {}", request.tool_name);
+            runtime
+                .fire_notification_hooks(
+                    "permission_prompt",
+                    "Claude Code needs your permission to use a tool",
+                    Some(&title),
+                )
+                .await;
         }
 
         // Step 2: emit ApprovalRequired onto the TUI event channel.

@@ -54,6 +54,67 @@ pub(super) fn try_local_command(state: &mut AppState, trimmed: &str) -> bool {
     false
 }
 
+/// Try to handle `trimmed` as `/exit` or `/quit`. Sends
+/// `UserCommand::Shutdown` so the runtime tears down cleanly. TS:
+/// `commands/exit/exit.tsx::call` exits the React process; coco-rs
+/// signals the runtime to shut down via the command channel.
+pub(super) async fn try_local_exit(trimmed: &str, command_tx: &mpsc::Sender<UserCommand>) -> bool {
+    if trimmed != "/exit" && trimmed != "/quit" {
+        return false;
+    }
+    let _ = command_tx.send(UserCommand::Shutdown).await;
+    true
+}
+
+/// Try to handle `trimmed` as `/status`. Reads live session state
+/// (model / permission mode / fast mode / plan mode / mcp / plugins)
+/// and pushes it inline as a system message — the previous handler
+/// returned a canned string with placeholders. TS:
+/// `commands/status/index.ts` opens a status overlay component.
+pub(super) fn try_local_status(state: &mut AppState, trimmed: &str) -> bool {
+    if trimmed != "/status" && trimmed != "/st" {
+        return false;
+    }
+    let mode = format!("{:?}", state.session.permission_mode);
+    let model = if state.session.model.is_empty() {
+        "(default)".to_string()
+    } else {
+        state.session.model.clone()
+    };
+    let plan_mode = if state.session.permission_mode == coco_types::PermissionMode::Plan {
+        "on"
+    } else {
+        "off"
+    };
+    let fast = if state.session.fast_mode { "on" } else { "off" };
+    let mcp_count = state.session.mcp_servers.len();
+    let plugin_count = state.session.available_plugins.len();
+    let session_id = state
+        .session
+        .session_id
+        .as_deref()
+        .unwrap_or("(not yet assigned)");
+    let body = format!(
+        "Session status:\n\
+         Session ID: {session_id}\n\
+         Model: {model}\n\
+         Permission mode: {mode}\n\
+         Plan mode: {plan_mode}\n\
+         Fast mode: {fast}\n\
+         MCP servers: {mcp_count} connected\n\
+         Plugins: {plugin_count} loaded\n\
+         Bypass available: {}",
+        state.session.bypass_permissions_available,
+    );
+    state
+        .session
+        .add_message(crate::state::session::ChatMessage::system_text(
+            uuid::Uuid::new_v4().to_string(),
+            body,
+        ));
+    true
+}
+
 /// Try to handle `trimmed` as `/compact [instructions]`. Routes to
 /// the engine's manual compact entry-point so the user's directive
 /// flows into the summary prompt. TS: `commands/compact/compact.ts:40`.
@@ -185,6 +246,14 @@ pub(super) async fn submit(state: &mut AppState, command_tx: &mpsc::Sender<UserC
     if try_local_compact(state, trimmed, command_tx).await {
         return true;
     }
+    // /exit / /quit — clean shutdown via the command channel.
+    if try_local_exit(trimmed, command_tx).await {
+        return true;
+    }
+    // /status — read live session state directly (no engine round-trip).
+    if try_local_status(state, trimmed) {
+        return true;
+    }
 
     state.ui.input.add_to_history(text.clone());
     let resolved = state.ui.paste_manager.resolve_structured(&text);
@@ -227,6 +296,10 @@ pub(super) async fn submit(state: &mut AppState, command_tx: &mpsc::Sender<UserC
     state.ui.paste_manager.clear();
     state.ui.scroll_offset = 0;
     state.ui.user_scrolled = false;
+    // Reset idle-prompt window: the user has just spoken, so any
+    // pending firing must wait for the *next* turn-completion.
+    state.session.last_query_completion_at = None;
+    state.session.idle_prompt_fired = false;
     true
 }
 

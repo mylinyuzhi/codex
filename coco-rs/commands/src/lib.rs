@@ -2,8 +2,12 @@
 //!
 //! TS: commands.ts + commands/ (slash commands like /help, /compact, /model, /effort)
 
+mod error;
 pub mod handlers;
 pub mod implementations;
+
+pub use error::CommandsError;
+pub use error::Result;
 
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -16,7 +20,17 @@ use coco_types::CommandSource;
 use coco_types::CommandType;
 use coco_types::LocalCommandData;
 
+pub use implementations::ADD_DIR_SENTINEL;
+pub use implementations::RELOAD_HOOKS_SENTINEL;
+pub use implementations::RELOAD_PLUGINS_SENTINEL;
+pub use implementations::RENAME_SENTINEL;
+pub use implementations::TAG_SENTINEL;
 pub use implementations::names;
+pub use implementations::parse_add_dir_sentinel;
+pub use implementations::parse_reload_hooks_sentinel;
+pub use implementations::parse_reload_plugins_sentinel;
+pub use implementations::parse_rename_sentinel;
+pub use implementations::parse_tag_sentinel;
 pub use implementations::register_extended_builtins;
 
 /// Trait for command execution handlers.
@@ -28,16 +42,18 @@ pub trait CommandHandler: Send + Sync {
     /// supports — Text, InjectPrompt, Compact, Skip — plus OpenDialog for
     /// `local-jsx` modal commands and Prompt for prompt-type commands that
     /// expand to model input.
-    async fn execute_command(&self, args: &str) -> anyhow::Result<CommandResult> {
+    async fn execute_command(&self, args: &str) -> crate::Result<CommandResult> {
         let text = self.execute(args).await?;
         Ok(CommandResult::Text(text))
     }
 
     /// Backwards-compatible string-only shim used by simple builtins. Most
     /// new commands should override `execute_command` instead.
-    async fn execute(&self, args: &str) -> anyhow::Result<String> {
+    async fn execute(&self, args: &str) -> crate::Result<String> {
         let _ = args;
-        anyhow::bail!("command provides only execute_command")
+        Err(crate::CommandsError::generic(
+            "command provides only execute_command",
+        ))
     }
 
     /// Short name for debug output.
@@ -218,10 +234,22 @@ impl CommandRegistry {
         self.commands.is_empty()
     }
 
+    /// Toggle `is_hidden` on a registered command. No-op when the
+    /// command is unknown. Used by `register_extended_builtins` to
+    /// mark Rust-only debug commands (`/env`, `/debug-tool-call`)
+    /// as hidden — they are enabled but should not surface in
+    /// `/-typeahead` (matches TS where the corresponding sources are
+    /// literal `isEnabled:false, isHidden:true` stubs).
+    pub fn set_hidden(&mut self, name: &str, hidden: bool) {
+        if let Some(cmd) = self.commands.get_mut(name) {
+            cmd.base.is_hidden = hidden;
+        }
+    }
+
     /// Execute a command by name (or alias), passing the given arguments.
     /// Returns the legacy String shape — for the typed [`CommandResult`] use
     /// [`Self::execute_command`].
-    pub async fn execute(&self, name: &str, args: &str) -> anyhow::Result<String> {
+    pub async fn execute(&self, name: &str, args: &str) -> crate::Result<String> {
         match self.execute_command(name, args).await? {
             CommandResult::Text(s) => Ok(s),
             CommandResult::InjectPrompt(s) => Ok(s),
@@ -240,19 +268,70 @@ impl CommandRegistry {
     }
 
     /// Execute a command by name (or alias) and return the typed result.
-    pub async fn execute_command(&self, name: &str, args: &str) -> anyhow::Result<CommandResult> {
-        let cmd = self
-            .get(name)
-            .ok_or_else(|| anyhow::anyhow!("unknown command: /{name}"))?;
+    pub async fn execute_command(&self, name: &str, args: &str) -> crate::Result<CommandResult> {
+        let start = std::time::Instant::now();
+        tracing::info!(
+            command = %name,
+            args_len = args.len(),
+            "slash command dispatch"
+        );
+        let cmd = self.get(name).ok_or_else(|| {
+            tracing::warn!(command = %name, "slash command unknown");
+            crate::CommandsError::generic(format!("unknown command: /{name}"))
+        })?;
 
         if !cmd.is_active() {
-            anyhow::bail!("command /{name} is not available in the current configuration");
+            tracing::warn!(
+                command = %cmd.base.name,
+                "slash command inactive in current config"
+            );
+            return Err(crate::CommandsError::generic(format!(
+                "command /{name} is not available in the current configuration"
+            )));
         }
 
         match &cmd.handler {
-            Some(handler) => handler.execute_command(args).await,
-            None => anyhow::bail!("command /{name} has no handler"),
+            Some(handler) => {
+                let result = handler.execute_command(args).await;
+                let duration_ms = start.elapsed().as_millis() as i64;
+                match &result {
+                    Ok(cr) => tracing::info!(
+                        command = %cmd.base.name,
+                        duration_ms,
+                        result_kind = command_result_kind(cr),
+                        "slash command ok"
+                    ),
+                    Err(e) => tracing::warn!(
+                        command = %cmd.base.name,
+                        duration_ms,
+                        error = %e,
+                        "slash command failed"
+                    ),
+                }
+                result
+            }
+            None => {
+                tracing::warn!(
+                    command = %cmd.base.name,
+                    "slash command has no handler"
+                );
+                Err(crate::CommandsError::generic(format!(
+                    "command /{name} has no handler"
+                )))
+            }
         }
+    }
+}
+
+/// Tag for a `CommandResult` variant, used in tracing fields.
+fn command_result_kind(r: &CommandResult) -> &'static str {
+    match r {
+        CommandResult::Text(_) => "text",
+        CommandResult::InjectPrompt(_) => "inject_prompt",
+        CommandResult::Compact { .. } => "compact",
+        CommandResult::Prompt { .. } => "prompt",
+        CommandResult::OpenDialog(_) => "open_dialog",
+        CommandResult::Skip => "skip",
     }
 }
 
@@ -392,7 +471,7 @@ struct SkillPromptHandler {
 
 #[async_trait]
 impl CommandHandler for SkillPromptHandler {
-    async fn execute_command(&self, args: &str) -> anyhow::Result<CommandResult> {
+    async fn execute_command(&self, args: &str) -> crate::Result<CommandResult> {
         // TS-mirroring argument substitution via the canonical implementation
         // in `coco_skills::prompt_render`.
         let args_opt = (!args.is_empty()).then_some(args);
@@ -460,10 +539,10 @@ mod seam_tests {
             std::path::PathBuf::from("/home/test"),
             None,
         );
-        // Gated skills MUST NOT appear when features are off. (`/dream` is also
-        // registered as an extended-builtin handler so we can't assert its
-        // absence — `loop`, `schedule`, `claude-api`, `hunter`, `claude-in-chrome`,
-        // `run-skill-generator` are skill-only and serve as the gate test.)
+        // Gated skills/commands MUST NOT appear when features are off.
+        // `/dream` and `/summary` are gated on Feature::AutoMemory in
+        // `register_ts_parity_handlers`; the rest are skill-only and serve
+        // as the gate test.
         for missing in [
             "loop",
             "schedule",
@@ -471,6 +550,8 @@ mod seam_tests {
             "hunter",
             "claude-in-chrome",
             "run-skill-generator",
+            "dream",
+            "summary",
         ] {
             assert!(
                 reg.get(missing).is_none(),
@@ -483,7 +564,8 @@ mod seam_tests {
         features
             .enable(coco_types::Feature::AgentTriggers)
             .enable(coco_types::Feature::AgentTriggersRemote)
-            .enable(coco_types::Feature::BuildingClaudeApps);
+            .enable(coco_types::Feature::BuildingClaudeApps)
+            .enable(coco_types::Feature::AutoMemory);
         let reg2 = build_command_registry(
             &sm,
             &pm,
@@ -496,6 +578,8 @@ mod seam_tests {
         assert!(reg2.get("loop").is_some());
         assert!(reg2.get("schedule").is_some());
         assert!(reg2.get("claude-api").is_some());
+        assert!(reg2.get("dream").is_some());
+        assert!(reg2.get("summary").is_some());
     }
 
     #[tokio::test]
@@ -525,7 +609,7 @@ struct PluginCommandStub {
 
 #[async_trait]
 impl CommandHandler for PluginCommandStub {
-    async fn execute_command(&self, _args: &str) -> anyhow::Result<CommandResult> {
+    async fn execute_command(&self, _args: &str) -> crate::Result<CommandResult> {
         Ok(CommandResult::Text(format!(
             "Plugin command /{} not yet bound to a handler.",
             self.name
@@ -552,7 +636,7 @@ impl BuiltinCommand {
 
 #[async_trait]
 impl CommandHandler for BuiltinCommand {
-    async fn execute(&self, args: &str) -> anyhow::Result<String> {
+    async fn execute(&self, args: &str) -> crate::Result<String> {
         Ok((self.execute_fn)(args))
     }
 
@@ -563,7 +647,7 @@ impl CommandHandler for BuiltinCommand {
 
 /// Function pointer for async command bodies.
 pub type AsyncCommandFn =
-    fn(String) -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>>;
+    fn(String) -> Pin<Box<dyn std::future::Future<Output = crate::Result<String>> + Send>>;
 
 /// Async built-in command handler for commands that need I/O (git, filesystem).
 pub struct AsyncBuiltinCommand {
@@ -579,7 +663,7 @@ impl AsyncBuiltinCommand {
 
 #[async_trait]
 impl CommandHandler for AsyncBuiltinCommand {
-    async fn execute(&self, args: &str) -> anyhow::Result<String> {
+    async fn execute(&self, args: &str) -> crate::Result<String> {
         (self.execute_fn)(args.to_string()).await
     }
 
@@ -726,19 +810,11 @@ pub fn register_builtins(registry: &mut CommandRegistry) {
         ("tasks", "List active tasks", &["todo"], tasks_handler),
         // ── System ──
         ("doctor", "Run diagnostic checks", &[], doctor_handler),
-        ("bug", "Report a bug or issue", &[], bug_handler),
         (
             "init",
             "Initialize project with .claude/ directory",
             &[],
             init_handler,
-        ),
-        ("login", "Authenticate with Anthropic", &[], login_handler),
-        (
-            "logout",
-            "Clear authentication credentials",
-            &[],
-            logout_handler,
         ),
     ];
 
@@ -778,7 +854,6 @@ fn help_handler(_args: &str) -> String {
      /plugin - Plugin management\n\
      /doctor - Diagnostics\n\
      /init - Initialize project\n\
-     /login - Authenticate\n\
      \nUse /help <command> for details."
         .to_string()
 }
@@ -911,23 +986,11 @@ fn doctor_handler(_args: &str) -> String {
         .to_string()
 }
 
-fn bug_handler(_args: &str) -> String {
-    "To report a bug, visit: https://github.com/anthropics/claude-code/issues".to_string()
-}
-
 fn init_handler(_args: &str) -> String {
     "Initializing project...\n\
      Created .claude/ directory\n\
      Created .claude/settings.json"
         .to_string()
-}
-
-fn login_handler(_args: &str) -> String {
-    "Opening authentication flow...".to_string()
-}
-
-fn logout_handler(_args: &str) -> String {
-    "Logged out. Credentials cleared.".to_string()
 }
 
 #[cfg(test)]

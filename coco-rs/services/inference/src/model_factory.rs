@@ -39,6 +39,7 @@ use coco_types::WireApi;
 use tracing::warn;
 
 use crate::ApiClient;
+use crate::InferenceError;
 use crate::LanguageModel;
 use crate::Provider;
 use crate::ProviderClientFingerprint;
@@ -98,13 +99,12 @@ fn warn_unused_client_options(provider_name: &str, api: ProviderApi, opts: &Prov
 pub fn build_language_model_from_runtime(
     runtime: &RuntimeConfig,
     spec: &ModelSpec,
-) -> anyhow::Result<Arc<dyn LanguageModel>> {
+) -> Result<Arc<dyn LanguageModel>, InferenceError> {
     let provider_cfg = runtime.providers.get(&spec.provider).ok_or_else(|| {
-        anyhow::anyhow!(
-            "model spec references unknown provider `{}`; \
-             add it to ~/.coco/providers.json or settings.providers",
-            spec.provider
-        )
+        crate::errors::UnknownProviderSnafu {
+            provider: spec.provider.clone(),
+        }
+        .build()
     })?;
     let api_model_name = resolve_api_model_name(provider_cfg, &spec.model_id);
     warn_unused_client_options(&provider_cfg.name, spec.api, &provider_cfg.client_options);
@@ -145,9 +145,12 @@ pub fn build_api_client(
     runtime: &RuntimeConfig,
     spec: &ModelSpec,
     retry: RetryConfig,
-) -> anyhow::Result<Arc<ApiClient>> {
+) -> Result<Arc<ApiClient>, InferenceError> {
     let provider_cfg = runtime.providers.get(&spec.provider).ok_or_else(|| {
-        anyhow::anyhow!("model spec references unknown provider `{}`", spec.provider)
+        crate::errors::UnknownProviderSnafu {
+            provider: spec.provider.clone(),
+        }
+        .build()
     })?;
     let api_model_name = resolve_api_model_name(provider_cfg, &spec.model_id);
     let model_info = runtime
@@ -185,7 +188,7 @@ pub fn build_fallback_clients_for_role(
     runtime: &RuntimeConfig,
     role: ModelRole,
     retry: RetryConfig,
-) -> anyhow::Result<Vec<Arc<ApiClient>>> {
+) -> Result<Vec<Arc<ApiClient>>, InferenceError> {
     runtime
         .model_roles
         .fallbacks(role)
@@ -211,7 +214,7 @@ fn build_anthropic(
     api_model: &str,
     timeout_secs: i64,
     model_info: Option<&ModelInfo>,
-) -> anyhow::Result<Arc<dyn LanguageModel>> {
+) -> Result<Arc<dyn LanguageModel>, InferenceError> {
     let opts = &provider_cfg.client_options;
     let capabilities = anthropic_caps_from(model_info.and_then(|i| i.capabilities.as_ref()));
     let account_kind = match runtime.account.kind {
@@ -225,10 +228,12 @@ fn build_anthropic(
     // process startup rather than the next request.
     let knobs = vercel_ai_anthropic::parse_provider_options(&provider_cfg.provider_options)
         .map_err(|e| {
-            anyhow::anyhow!(
-                "anthropic provider `{}` provider_options: {e}",
-                provider_cfg.name
-            )
+            crate::errors::ProviderBuildFailedSnafu {
+                provider: "anthropic",
+                provider_name: provider_cfg.name.clone(),
+                message: format!("provider_options: {e}"),
+            }
+            .build()
         })?;
     let settings = vercel_ai_anthropic::AnthropicProviderSettings {
         base_url: Some(provider_cfg.base_url.clone()),
@@ -253,9 +258,14 @@ fn build_anthropic(
         in_overage: runtime.account.in_overage,
     };
     let provider = vercel_ai_anthropic::create_anthropic(settings);
-    provider
-        .language_model(api_model)
-        .map_err(|e| anyhow::anyhow!("anthropic provider `{}`: {e}", provider_cfg.name))
+    provider.language_model(api_model).map_err(|e| {
+        crate::errors::ProviderBuildFailedSnafu {
+            provider: "anthropic",
+            provider_name: provider_cfg.name.clone(),
+            message: e.to_string(),
+        }
+        .build()
+    })
 }
 
 /// Translate `coco_types::Capability` flags into the adapter-local
@@ -298,7 +308,7 @@ fn build_openai(
     provider_cfg: &ProviderConfig,
     api_model: &str,
     timeout_secs: i64,
-) -> anyhow::Result<Arc<dyn LanguageModel>> {
+) -> Result<Arc<dyn LanguageModel>, InferenceError> {
     let opts = &provider_cfg.client_options;
     let settings = vercel_ai_openai::OpenAIProviderSettings {
         base_url: Some(provider_cfg.base_url.clone()),
@@ -325,7 +335,7 @@ fn build_openai(
 fn build_google(
     provider_cfg: &ProviderConfig,
     api_model: &str,
-) -> anyhow::Result<Arc<dyn LanguageModel>> {
+) -> Result<Arc<dyn LanguageModel>, InferenceError> {
     let opts = &provider_cfg.client_options;
     let settings = vercel_ai_google::GoogleGenerativeAIProviderSettings {
         base_url: Some(provider_cfg.base_url.clone()),
@@ -334,16 +344,21 @@ fn build_google(
         name: Some(provider_cfg.name.clone()),
     };
     let provider = vercel_ai_google::create_google_generative_ai(settings);
-    provider
-        .language_model(api_model)
-        .map_err(|e| anyhow::anyhow!("google provider `{}`: {e}", provider_cfg.name))
+    provider.language_model(api_model).map_err(|e| {
+        crate::errors::ProviderBuildFailedSnafu {
+            provider: "google",
+            provider_name: provider_cfg.name.clone(),
+            message: e.to_string(),
+        }
+        .build()
+    })
 }
 
 fn build_openai_compat(
     provider_cfg: &ProviderConfig,
     api_model: &str,
     timeout_secs: i64,
-) -> anyhow::Result<Arc<dyn LanguageModel>> {
+) -> Result<Arc<dyn LanguageModel>, InferenceError> {
     let opts = &provider_cfg.client_options;
     let settings = vercel_ai_openai_compatible::OpenAICompatibleProviderSettings {
         base_url: Some(provider_cfg.base_url.clone()),
@@ -366,9 +381,14 @@ fn build_openai_compat(
         full_url: Some(opts.full_url),
     };
     let provider = vercel_ai_openai_compatible::create_openai_compatible(settings);
-    provider
-        .language_model(api_model)
-        .map_err(|e| anyhow::anyhow!("openai-compat provider `{}`: {e}", provider_cfg.name))
+    provider.language_model(api_model).map_err(|e| {
+        crate::errors::ProviderBuildFailedSnafu {
+            provider: "openai-compat",
+            provider_name: provider_cfg.name.clone(),
+            message: e.to_string(),
+        }
+        .build()
+    })
 }
 
 /// Convert `ProviderClientOptions.headers` (BTreeMap, deterministic)

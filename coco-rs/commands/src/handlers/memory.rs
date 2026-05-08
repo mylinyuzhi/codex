@@ -10,7 +10,7 @@ use std::pin::Pin;
 /// Async handler for `/memory [refresh]`.
 pub fn handler(
     args: String,
-) -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>> {
+) -> Pin<Box<dyn std::future::Future<Output = crate::Result<String>> + Send>> {
     Box::pin(async move {
         match args.trim() {
             "refresh" => Ok("Memory files will be reloaded on the next turn.\n\
@@ -55,7 +55,7 @@ struct MemoryFile {
 }
 
 /// List all memory files with their stats.
-async fn list_memory_files() -> anyhow::Result<String> {
+async fn list_memory_files() -> crate::Result<String> {
     let home = dirs::home_dir();
     let mut files: Vec<MemoryFile> = Vec::new();
 

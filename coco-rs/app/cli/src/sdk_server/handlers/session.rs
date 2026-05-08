@@ -192,6 +192,7 @@ pub(super) async fn handle_session_start(
             title: None,
             message_count: 0,
             total_tokens: 0,
+            tags: Vec::new(),
         };
         let save_result = tokio::task::spawn_blocking(move || manager.save(&record)).await;
         match save_result {
@@ -676,22 +677,24 @@ pub(super) async fn handle_session_read(
 }
 
 /// `session/resume` — load a persisted session from disk and install
-/// it as the active session.
+/// it as the active session, including the JSONL message history so
+/// the next turn the SDK client drives sees the prior chain.
 ///
 /// Replaces the current session slot (if any) with a fresh
 /// `SessionHandle` built from the persisted metadata. Any in-flight
 /// turn on the previous session is cancelled first to prevent
-/// orphaned state.
-///
-/// Note: this restores session metadata (id, model, cwd) but does NOT
-/// reload the message history from the JSONL transcript — the resumed
-/// session starts with an empty history. A follow-up will thread the
-/// transcript reader in.
+/// orphaned state. When a `SessionRuntime` is wired, the runtime's
+/// session id is repointed and `runtime.history` is seeded with the
+/// loaded messages; the transcript dedup set is pre-populated so the
+/// per-turn JSONL append doesn't re-write entries already on disk.
+/// TS parity: `processResumedConversation()` in
+/// `bootstrap/sessionRestore.ts`.
 ///
 /// Errors:
 /// - `INVALID_REQUEST` if no session manager is wired
 /// - `INVALID_REQUEST` if the session_id is not found on disk
 /// - `INTERNAL_ERROR` if the session manager's resume operation fails
+///   or the JSONL transcript fails to load
 pub(super) async fn handle_session_resume(
     params: coco_types::SessionResumeParams,
     ctx: &HandlerContext,
@@ -728,6 +731,29 @@ pub(super) async fn handle_session_resume(
         }
     };
 
+    // Load the JSONL transcript so the resumed run sees its own
+    // history. Best-effort: a missing transcript leaves the runtime
+    // with an empty history (TS-aligned — `loadMessagesFromJsonlPath`
+    // returns null when the file isn't readable, and the resumed
+    // session starts cold rather than failing the resume call).
+    let transcript_path = coco_session::TranscriptStore::new(crate::paths::sessions_dir())
+        .transcript_path(&session.id);
+    let recovered = if transcript_path.exists() {
+        match coco_session::recovery::load_conversation_for_resume(&transcript_path) {
+            Ok(r) => Some(r),
+            Err(e) => {
+                warn!(
+                    session_id = %session.id,
+                    error = %e,
+                    "session/resume: transcript load failed; resuming with empty history"
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     // Install as the active session. If a session is already active,
     // cancel any in-flight turn and replace it — `session/resume`
     // implicitly archives the prior session.
@@ -747,8 +773,30 @@ pub(super) async fn handle_session_resume(
         session.working_dir.to_string_lossy().into_owned(),
         session.model.clone(),
     ));
+    drop(slot);
 
-    info!(session_id = %session.id, "SdkServer: session/resume");
+    // When a `SessionRuntime` is wired (the production path), repoint
+    // its session id at the resumed target and seed the in-memory
+    // history + transcript dedup so the next turn's prompt build sees
+    // the loaded chain rather than starting cold.
+    if let Some(runtime) = ctx.state.session_runtime.read().await.clone() {
+        runtime.start_new_session(session.id.clone()).await;
+        if let Some(rec) = &recovered {
+            {
+                let mut h = runtime.history.lock().await;
+                *h = rec.messages.clone();
+            }
+            runtime
+                .seed_transcript_dedup(rec.messages.iter().filter_map(|m| m.uuid().copied()))
+                .await;
+        }
+    }
+
+    info!(
+        session_id = %session.id,
+        prior_messages = recovered.as_ref().map(|r| r.messages.len()).unwrap_or(0),
+        "SdkServer: session/resume"
+    );
     HandlerResult::ok(coco_types::SessionResumeResult {
         session: session_to_summary(&session),
     })

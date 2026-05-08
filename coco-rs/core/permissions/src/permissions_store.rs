@@ -33,10 +33,10 @@ pub trait PermissionStore: Send + Sync {
     ///
     /// Only updates with persistable destinations (userSettings, localSettings,
     /// projectSettings) are written. Session/cliArg updates are ignored.
-    fn persist_update(&self, update: &PermissionUpdate) -> anyhow::Result<()>;
+    fn persist_update(&self, update: &PermissionUpdate) -> Result<(), coco_error::BoxedError>;
 
     /// Persist multiple updates.
-    fn persist_updates(&self, updates: &[PermissionUpdate]) -> anyhow::Result<()> {
+    fn persist_updates(&self, updates: &[PermissionUpdate]) -> Result<(), coco_error::BoxedError> {
         for update in updates {
             self.persist_update(update)?;
         }

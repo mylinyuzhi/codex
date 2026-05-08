@@ -84,10 +84,17 @@ pub(crate) struct ToolCallRunner<'a> {
 
 impl<'a> ToolCallRunner<'a> {
     pub(crate) async fn run(self) -> ToolCallRunOutcome {
+        let tool_names: Vec<&str> = self
+            .tool_calls
+            .iter()
+            .map(|c| c.tool_name.as_str())
+            .collect();
         info!(
             turn = self.turn,
+            session_id = %self.session_id,
             tool_count = self.tool_calls.len(),
-            "executing tool calls"
+            tools = ?tool_names,
+            "executing tool batch"
         );
 
         // 1. Per-tool preparation (pre-hook + permission + re-validate).

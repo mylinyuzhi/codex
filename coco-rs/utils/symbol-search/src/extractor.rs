@@ -3,6 +3,7 @@
 use tree_sitter_tags::TagsContext;
 
 use crate::SymbolKind;
+use crate::error::SymbolSearchError;
 use crate::languages::SymbolLanguage;
 
 /// An extracted symbol tag.
@@ -41,14 +42,16 @@ impl SymbolExtractor {
         &mut self,
         source: &str,
         language: SymbolLanguage,
-    ) -> anyhow::Result<Vec<SymbolTag>> {
+    ) -> Result<Vec<SymbolTag>, SymbolSearchError> {
         let config = language.tags_configuration()?;
         let source_bytes = source.as_bytes();
 
         let (tags, _errors) = self
             .context
             .generate_tags(&config, source_bytes, None)
-            .map_err(|e| anyhow::anyhow!("Failed to generate tags: {e:?}"))?;
+            .map_err(|e| SymbolSearchError::TagsGeneration {
+                message: format!("{e:?}"),
+            })?;
 
         let mut result = Vec::new();
 
@@ -82,10 +85,19 @@ impl SymbolExtractor {
     }
 
     /// Extract symbol tags from a file.
-    pub fn extract_file(&mut self, path: &std::path::Path) -> anyhow::Result<Vec<SymbolTag>> {
-        let source = std::fs::read_to_string(path)?;
-        let language = SymbolLanguage::from_path(path)
-            .ok_or_else(|| anyhow::anyhow!("Unsupported language: {}", path.display()))?;
+    pub fn extract_file(
+        &mut self,
+        path: &std::path::Path,
+    ) -> Result<Vec<SymbolTag>, SymbolSearchError> {
+        let source = std::fs::read_to_string(path).map_err(|e| SymbolSearchError::Io {
+            path: path.to_path_buf(),
+            source: e,
+        })?;
+        let language = SymbolLanguage::from_path(path).ok_or_else(|| {
+            SymbolSearchError::UnsupportedLanguage {
+                path: path.to_path_buf(),
+            }
+        })?;
         self.extract(&source, language)
     }
 }

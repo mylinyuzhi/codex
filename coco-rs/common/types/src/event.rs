@@ -1379,6 +1379,47 @@ pub enum TuiOnlyEvent {
     /// without round-tripping through `CoreEvent`). The TUI consumes
     /// the current `session.messages` to build the picker.
     OpenRewindPicker,
+    /// Tell the TUI to open the `/memory` file-picker overlay. The slash
+    /// dispatcher pre-builds entries via
+    /// `coco_commands::handlers::memory_dialog::MemoryDialogHandler::entries`
+    /// and carries them through here so the TUI doesn't recompute paths.
+    /// On selection the TUI creates the file (`mode wx` semantics), opens
+    /// `$VISUAL || $EDITOR`, and emits a system message; on cancel it
+    /// emits "Cancelled memory editing". TS parity:
+    /// `commands/memory/memory.tsx`.
+    OpenMemoryDialog { entries: Vec<MemoryDialogEntry> },
+}
+
+/// One row in the `/memory` file-picker overlay. Built by the slash
+/// dispatcher and shipped to the TUI via [`TuiOnlyEvent::OpenMemoryDialog`].
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryDialogEntry {
+    /// Filesystem path of the memory file (also the editor target).
+    pub path: String,
+    /// Display label shown in the picker row.
+    pub label: String,
+    /// Scope tag (drives ordering and color hint).
+    pub scope: MemoryDialogScope,
+}
+
+/// Scope tag for a memory file picker entry. Mirrors
+/// `coco_commands::MemoryScope` — kept in `coco-types` so the TUI can
+/// consume the event without depending on `coco-commands`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryDialogScope {
+    /// Enterprise / managed (typically read-only for the user).
+    Managed,
+    /// User-global (`~/.coco/CLAUDE.md` or `~/CLAUDE.md`).
+    User,
+    /// Project (`./CLAUDE.md`).
+    Project,
+    /// Project-local (`./CLAUDE.local.md`, gitignored).
+    ProjectLocal,
+    /// Subdirectory CLAUDE.md (auto-loaded under cwd).
+    Subdir,
 }
 
 /// Categorization of a `SlashCommandStatus` payload. Each variant maps to

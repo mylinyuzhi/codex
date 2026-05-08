@@ -9,6 +9,7 @@
 
 use std::sync::Arc;
 
+use coco_error::BoxedError;
 use coco_messages::Message;
 
 use crate::types::CompactResult;
@@ -25,13 +26,13 @@ pub trait CompactionObserver: Send + Sync {
         &self,
         result: &CompactResult,
         is_main_agent: bool,
-    ) -> anyhow::Result<()>;
+    ) -> Result<(), BoxedError>;
 
     /// Called after compaction with the final compacted message list.
     ///
     /// Default implementation is a no-op so existing observers that only
     /// care about `on_compaction_complete` do not need to implement this.
-    async fn on_post_compact(&self, _compacted_messages: &[Message]) -> anyhow::Result<()> {
+    async fn on_post_compact(&self, _compacted_messages: &[Message]) -> Result<(), BoxedError> {
         Ok(())
     }
 }

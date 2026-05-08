@@ -53,11 +53,65 @@ pub struct LiveSdkServer {
     /// the duration of the test so per-session JSONL writes don't
     /// race the cleanup.
     pub _sessions_dir: TempDir,
+    /// Cwd tempdir kept alive so per-turn workdir writes survive
+    /// assertions. Reminder tests (`skill_listing`) plant files here
+    /// pre-build; using `keep()` would leak the dir, so we own it.
+    pub _cwd_dir: TempDir,
+    /// Reference to the running session runtime. Held to keep the
+    /// runtime's per-session subsystems alive for the lifetime of
+    /// the harness. Note: the SDK runner's per-turn engine writes
+    /// history to `SessionHandle.history` (read via
+    /// [`Self::history_snapshot`]), NOT to `runtime.history` — so
+    /// reminder assertions go through the server-state path, not
+    /// this field directly.
+    #[allow(dead_code)]
+    pub session_runtime: Arc<coco_cli::session_runtime::SessionRuntime>,
+    /// `Arc<SdkServer>` retained so the harness can peek at the active
+    /// `SessionHandle.history` (which is what `QueryEngineRunner` writes
+    /// per-turn — `runtime.history` is not the live SDK history).
+    pub server: Arc<SdkServer>,
     /// Resolved (provider, model) for the harness, for diagnostic use.
     /// Underscore-prefixed because no test reads them today; future
     /// failure messages may want to grab them via field access.
     pub _provider: String,
     pub _model_id: String,
+}
+
+impl LiveSdkServer {
+    /// Snapshot the **active session's** history — that's the
+    /// `SessionHandle.history` mutex `QueryEngineRunner` writes to per
+    /// turn. `runtime.history` is a parallel mutex on `SessionRuntime`
+    /// that the SDK runner doesn't update; reading it would always
+    /// return empty.
+    ///
+    /// **Race**: the engine emits `turn/completed` before the SDK
+    /// runner's post-engine `*h = result.final_messages` write
+    /// finishes. Tests that block on the wire-level terminal
+    /// notification can race past that write. To make the snapshot
+    /// reliable, we poll for up to ~3s for history to grow past the
+    /// pre-engine user-message-only state. Returns whatever's there
+    /// after the timeout.
+    pub async fn history_snapshot(&self) -> Vec<coco_messages::Message> {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            let snapshot = self.history_snapshot_now().await;
+            // Heuristic: if history has anything beyond a single
+            // user message, the engine write has landed.
+            if snapshot.len() > 1 || tokio::time::Instant::now() >= deadline {
+                return snapshot;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+
+    async fn history_snapshot_now(&self) -> Vec<coco_messages::Message> {
+        let state = self.server.state();
+        let guard = state.session.read().await;
+        let Some(handle) = guard.as_ref() else {
+            return Vec::new();
+        };
+        handle.history.lock().await.clone()
+    }
 }
 
 impl LiveSdkServer {
@@ -91,8 +145,42 @@ pub fn cli_for(provider: &str, model: &str, extra: &[&str]) -> Cli {
 /// `(provider, model)`. The runner uses DeepSeek live; `DEEPSEEK_API_KEY`
 /// must be set or the harness errors before reaching the server.
 pub async fn build_live_server(provider: &str, model: &str) -> Result<LiveSdkServer> {
-    let cli = cli_for(provider, model, &[]);
-    let cwd = common::tmpdir::make("coco-tests-sdk-cwd-")?.keep();
+    build_live_server_with_options(provider, model, BuildOptions::default()).await
+}
+
+/// Optional knobs for [`build_live_server_with_options`].
+#[derive(Default)]
+pub struct BuildOptions {
+    /// Pre-minted cwd. When `None` the harness creates one. Tests that
+    /// need to plant files (`.coco/skills/*.md`, nested `CLAUDE.md`,
+    /// `settings.json`) before the runtime boots pass the dir here so
+    /// they can compute paths in advance.
+    pub cwd: Option<TempDir>,
+    /// Path to a settings.json passed via `--settings`. Used by reminder
+    /// tests to install hooks (`session_start`, `user_prompt_submit`,
+    /// `stop`) and toggle `system_reminder.attachments.*` flags through
+    /// the production settings-merge path.
+    pub settings_path: Option<std::path::PathBuf>,
+}
+
+/// Same as [`build_live_server`], with optional knobs. See [`BuildOptions`].
+pub async fn build_live_server_with_options(
+    provider: &str,
+    model: &str,
+    opts: BuildOptions,
+) -> Result<LiveSdkServer> {
+    let mut extra: Vec<String> = Vec::new();
+    if let Some(p) = &opts.settings_path {
+        extra.push("--settings".to_string());
+        extra.push(p.to_string_lossy().into_owned());
+    }
+    let extra_refs: Vec<&str> = extra.iter().map(String::as_str).collect();
+    let cli = cli_for(provider, model, &extra_refs);
+    let cwd_dir = match opts.cwd {
+        Some(d) => d,
+        None => common::tmpdir::make("coco-tests-sdk-cwd-")?,
+    };
+    let cwd = cwd_dir.path().to_path_buf();
     let sessions_dir = common::tmpdir::make("coco-tests-sdk-sessions-")?;
 
     let runtime_config = headless::build_runtime_config_for_cli(&cli, &cwd)?;
@@ -146,7 +234,14 @@ pub async fn build_live_server(provider: &str, model: &str) -> Result<LiveSdkSer
     // CliInitializeBootstrap consume it.
     let mut command_registry = CommandRegistry::new();
     register_extended_builtins(&mut command_registry);
-    let command_registry = Arc::new(command_registry);
+    let command_registry = Arc::new(tokio::sync::RwLock::new(Arc::new(command_registry)));
+
+    // Mirror `build_session_command_registry`'s skill load so any
+    // `<cwd>/.coco/skills/<name>/SKILL.md` planted by the test fixture
+    // is discovered and threaded into `ReminderSources.skills`.
+    let mut skill_manager = coco_skills::SkillManager::new();
+    skill_manager.load_from_dirs(&[cwd.join(".coco").join("skills")]);
+    let skill_manager = Arc::new(skill_manager);
 
     let session_runtime = SessionRuntime::build(SessionRuntimeBuildOpts {
         cli: &cli,
@@ -164,9 +259,15 @@ pub async fn build_live_server(provider: &str, model: &str) -> Result<LiveSdkSer
         fast_model_spec: None,
         permission_bridge: None,
         command_registry: command_registry.clone(),
+        skill_manager,
     })
     .await
     .with_context(|| format!("build SessionRuntime for {provider}/{model_id}"))?;
+
+    // Mirror `run_sdk_mode`: fire SessionStart hooks once at bootstrap
+    // so settings.json hook entries surface as `hook_*` reminders on
+    // the first turn.
+    session_runtime.fire_session_start_hooks("startup").await;
 
     let bootstrap = Arc::new(
         CliInitializeBootstrap::new("default".to_string()).with_command_registry(command_registry),
@@ -191,21 +292,28 @@ pub async fn build_live_server(provider: &str, model: &str) -> Result<LiveSdkSer
         .with_session_runtime(session_runtime.clone());
 
     let runner = Arc::new(QueryEngineRunner::new(
-        session_runtime,
+        session_runtime.clone(),
         cli.max_tokens.unwrap_or(2_048),
         cli.max_turns.unwrap_or(8),
         Some(system_prompt),
     ));
     server.set_turn_runner(runner).await;
 
+    // Hold an `Arc<SdkServer>` so the harness can peek at server.state()
+    // (active SessionHandle) without consuming the server in the spawn.
+    let server_arc = Arc::new(server);
+    let server_for_task = server_arc.clone();
     let server_task = tokio::spawn(async move {
-        let _ = server.run().await;
+        let _ = server_for_task.run().await;
     });
 
     Ok(LiveSdkServer {
         client: client_end,
         server_task,
+        server: server_arc,
         _sessions_dir: sessions_dir,
+        _cwd_dir: cwd_dir,
+        session_runtime,
         _provider: provider_name,
         _model_id: model_id,
     })

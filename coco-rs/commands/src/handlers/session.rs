@@ -20,7 +20,7 @@ struct SessionInfo {
 /// Async handler for `/session [list|delete <id>|info <id>]`.
 pub fn handler(
     args: String,
-) -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>> {
+) -> Pin<Box<dyn std::future::Future<Output = crate::Result<String>> + Send>> {
     Box::pin(async move {
         let subcommand = args.trim().to_string();
         let sessions_dir = dirs::home_dir()
@@ -49,7 +49,7 @@ pub fn handler(
 }
 
 /// List all sessions, sorted by modification time (newest first).
-async fn list_sessions(sessions_dir: &Path) -> anyhow::Result<String> {
+async fn list_sessions(sessions_dir: &Path) -> crate::Result<String> {
     if !sessions_dir.exists() {
         return Ok(
             "No sessions found.\n\nSessions are stored in ~/.cocode/sessions/\n\
@@ -90,7 +90,7 @@ async fn list_sessions(sessions_dir: &Path) -> anyhow::Result<String> {
 }
 
 /// Delete a session by ID (prefix match).
-async fn delete_session(sessions_dir: &Path, id: &str) -> anyhow::Result<String> {
+async fn delete_session(sessions_dir: &Path, id: &str) -> crate::Result<String> {
     let sessions = scan_sessions(sessions_dir).await;
 
     let matching: Vec<&SessionInfo> = sessions.iter().filter(|s| s.id.starts_with(id)).collect();
@@ -114,7 +114,7 @@ async fn delete_session(sessions_dir: &Path, id: &str) -> anyhow::Result<String>
 }
 
 /// Show detailed info for a specific session.
-async fn session_info(sessions_dir: &Path, id: &str) -> anyhow::Result<String> {
+async fn session_info(sessions_dir: &Path, id: &str) -> crate::Result<String> {
     let sessions = scan_sessions(sessions_dir).await;
 
     let session = sessions.iter().find(|s| s.id.starts_with(id));

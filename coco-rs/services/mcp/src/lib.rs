@@ -63,7 +63,11 @@ pub use types::McpTransport;
 pub use types::ScopedMcpServerConfig;
 
 // Re-export rmcp client types for consumers that need direct access
+/// Re-export the rmcp wire enum so consumers (CLI / SDK) can build
+/// elicitation responses without depending on `rmcp` directly.
+pub use coco_rmcp_client::ElicitationAction as RmcpElicitationAction;
 pub use coco_rmcp_client::ElicitationResponse;
 pub use coco_rmcp_client::McpAuthStatus;
 pub use coco_rmcp_client::RmcpClient;
+pub use coco_rmcp_client::RmcpClientError;
 pub use coco_rmcp_client::SendElicitation;

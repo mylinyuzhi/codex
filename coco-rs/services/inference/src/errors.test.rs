@@ -51,16 +51,17 @@ fn test_classify_500_as_provider_error() {
 
 #[test]
 fn test_network_error_is_retryable() {
-    let err = InferenceError::NetworkError {
-        message: "connection reset".into(),
-    };
+    let err = NetworkSnafu {
+        message: "connection reset".to_string(),
+    }
+    .build();
     assert!(err.is_retryable());
     assert_eq!(err.error_class(), "network");
 }
 
 #[test]
 fn test_cancelled_not_retryable() {
-    let err = InferenceError::Cancelled;
+    let err = CancelledSnafu.build();
     assert!(!err.is_retryable());
     assert_eq!(err.error_class(), "cancelled");
 }

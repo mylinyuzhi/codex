@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 
+use crate::Result;
+use crate::RmcpClientError;
 use crate::mcp_auth_status::McpAuthStatus;
-use anyhow::Error;
-use anyhow::Result;
 use reqwest::Client;
 use reqwest::StatusCode;
 use reqwest::Url;
@@ -59,14 +59,14 @@ pub async fn supports_oauth_login(url: &str) -> Result<bool> {
 }
 
 async fn supports_oauth_login_with_headers(url: &str, default_headers: &HeaderMap) -> Result<bool> {
-    let base_url = Url::parse(url)?;
+    let base_url = Url::parse(url).map_err(|err| RmcpClientError::generic(err.to_string()))?;
 
     // Use no_proxy to avoid a bug in the system-configuration crate that
     // can result in a panic. See #8912.
     let builder = Client::builder().timeout(DISCOVERY_TIMEOUT).no_proxy();
     let client = apply_default_headers(builder, default_headers).build()?;
 
-    let mut last_error: Option<Error> = None;
+    let mut last_error: Option<RmcpClientError> = None;
     for candidate_path in discovery_paths(base_url.path()) {
         let mut discovery_url = base_url.clone();
         discovery_url.set_path(&candidate_path);

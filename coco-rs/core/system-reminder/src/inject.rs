@@ -62,6 +62,13 @@ pub enum InjectedMessage {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InjectedBlock {
     Text(String),
+    /// Image block — base64 + media type, routed to `UserContentPart::File`
+    /// via `FilePart::image_base64` at injection time so vendor-specific
+    /// image encoding stays inside `coco-messages` / `coco-inference`.
+    Image {
+        media_type: String,
+        data_base64: String,
+    },
     ToolUse {
         id: String,
         name: String,
@@ -165,6 +172,13 @@ pub fn normalize_injected_messages(reminders: Vec<SystemReminder>) -> Normalized
                                 // tag — matches TS per-block wrapping behavior.
                                 InjectedBlock::Text(wrap_with_tag(&text, tag))
                             }
+                            ContentBlock::Image {
+                                media_type,
+                                data_base64,
+                            } => InjectedBlock::Image {
+                                media_type,
+                                data_base64,
+                            },
                             ContentBlock::ToolUse { id, name, input } => {
                                 InjectedBlock::ToolUse { id, name, input }
                             }
@@ -275,6 +289,7 @@ pub fn inject_reminders(
 }
 
 fn user_llm_from_blocks(blocks: Vec<InjectedBlock>) -> LlmMessage {
+    use coco_messages::FileContent;
     use coco_messages::TextContent;
     use coco_messages::UserContent;
     let mut content: Vec<UserContent> = Vec::with_capacity(blocks.len());
@@ -285,6 +300,18 @@ fn user_llm_from_blocks(blocks: Vec<InjectedBlock>) -> LlmMessage {
                     text,
                     provider_metadata: None,
                 }));
+            }
+            InjectedBlock::Image {
+                media_type,
+                data_base64,
+            } => {
+                // TS `attachments.ts:1067-1075` keeps queued-command image
+                // pastes alongside the wrapped text — vercel-ai-v4 carries
+                // them through `UserContentPart::File` with a base64 payload.
+                content.push(UserContent::File(FileContent::from_base64(
+                    data_base64,
+                    media_type,
+                )));
             }
             // vercel-ai-v4 routes tool_result / tool_use through the `Tool` /
             // `Assistant` message variants, not `User`. Drop these defensively
@@ -326,8 +353,13 @@ fn assistant_llm_from_blocks(blocks: Vec<InjectedBlock>) -> LlmMessage {
                     provider_metadata: None,
                 }));
             }
-            InjectedBlock::ToolResult { .. } => {
-                tracing::warn!("dropping unexpected tool_result block in AssistantBlocks reminder");
+            InjectedBlock::ToolResult { .. } | InjectedBlock::Image { .. } => {
+                // Assistant content has no Image variant, and tool_result
+                // belongs on a Tool message — drop with a warning if a
+                // generator ever emits one of these in an assistant block.
+                tracing::warn!(
+                    "dropping unsupported block in AssistantBlocks reminder (image / tool_result not assistant-routable)"
+                );
             }
         }
     }

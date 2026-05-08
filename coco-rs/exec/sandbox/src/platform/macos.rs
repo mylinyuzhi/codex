@@ -152,15 +152,50 @@ fn generate_seatbelt_profile(config: &SandboxConfig, command: &str, session_tag:
     }
     profile.push('\n');
 
-    // Denied read paths (from config.denied_read_paths + config.denied_paths).
-    // In Seatbelt, explicit deny rules override allow rules for the same or
-    // more specific paths, regardless of order in the profile.
-    let has_denied_reads = !config.denied_read_paths.is_empty() || !config.denied_paths.is_empty();
+    // Denied read paths (from config.denied_read_paths + config.denied_paths
+    // + glob-expanded `denied_read_globs`).
+    //
+    // Seatbelt evaluates filter rules bottom-to-top and applies the first
+    // matching rule, so emitting `allow_read` carve-outs **after** the deny
+    // block lets a more-specific allow win for matching paths while broader
+    // deny rules still cover their non-allowed siblings. Matches the TS
+    // shape of `entrypoints/sandboxTypes.ts:71-77` where `allowRead`
+    // takes precedence over `denyRead` for matching paths.
+    let writable_root_paths: Vec<std::path::PathBuf> = config
+        .writable_roots
+        .iter()
+        .map(|r| r.path.clone())
+        .collect();
+    let glob_expanded = crate::glob_expansion::expand(
+        &writable_root_paths,
+        &config.denied_read_globs,
+        config.glob_scan_max_depth.max(0) as usize,
+    );
+    let has_denied_reads = !config.denied_read_paths.is_empty()
+        || !config.denied_paths.is_empty()
+        || !glob_expanded.is_empty();
     if has_denied_reads {
         profile.push_str("; Explicitly denied read paths\n");
-        for path in config.denied_read_paths.iter().chain(&config.denied_paths) {
+        for path in config
+            .denied_read_paths
+            .iter()
+            .chain(&config.denied_paths)
+            .chain(&glob_expanded)
+        {
             let escaped = escape_sbpl_path(&path.display().to_string());
             let _ = writeln!(profile, "(deny file-read* (subpath \"{escaped}\"))");
+        }
+        profile.push('\n');
+    }
+
+    // Re-allow reads carved out of the deny regions above. Emitted AFTER
+    // the deny block so Seatbelt's last-match-wins semantics let these
+    // override the matching deny entries.
+    if !config.allowed_read_paths.is_empty() {
+        profile.push_str("; allow_read carve-outs (override matching denies)\n");
+        for path in &config.allowed_read_paths {
+            let escaped = escape_sbpl_path(&path.display().to_string());
+            let _ = writeln!(profile, "(allow file-read* (subpath \"{escaped}\"))");
         }
         profile.push('\n');
     }

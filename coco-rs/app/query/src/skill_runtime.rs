@@ -88,25 +88,36 @@ impl SkillHandle for QuerySkillRuntime {
         inherit: SubagentInheritance,
     ) -> Result<SkillInvocationResult, SkillInvocationError> {
         let name = coco_tools::tools::skill_advanced::normalize_skill_name(name);
+        tracing::info!(skill_name = %name, args_len = args.len(), "skill invoke");
         let manager = self.manager.read().await;
-        let skill = manager
-            .get(name)
-            .cloned()
-            .ok_or_else(|| SkillInvocationError::NotFound {
+        let skill = manager.get(name).cloned().ok_or_else(|| {
+            tracing::warn!(skill_name = %name, "skill not found");
+            SkillInvocationError::NotFound {
                 name: name.to_string(),
-            })?;
+            }
+        })?;
         drop(manager);
 
         if skill.disabled {
+            tracing::warn!(skill_name = %skill.name, "skill disabled");
             return Err(SkillInvocationError::Disabled {
                 name: skill.name.clone(),
             });
         }
         if skill.disable_model_invocation {
+            tracing::warn!(
+                skill_name = %skill.name,
+                "skill hidden from model"
+            );
             return Err(SkillInvocationError::HiddenFromModel {
                 name: skill.name.clone(),
             });
         }
+        tracing::debug!(
+            skill_name = %skill.name,
+            context = ?skill.context,
+            "skill resolved, expanding prompt"
+        );
 
         // Expand argument substitutions. TS parity:
         // `SkillTool.ts:565-597` runs the expander before either
@@ -124,6 +135,11 @@ impl SkillHandle for QuerySkillRuntime {
                 // caller is responsible for tagging
                 // `parent_tool_use_id` before pushing to history.
                 let expanded_message = coco_messages::create_user_message(&expanded_prompt);
+                tracing::info!(
+                    skill_name = %skill.name,
+                    prompt_chars = expanded_prompt.len(),
+                    "skill inline expanded"
+                );
                 let summary = format!(
                     "Inline skill '{}' expanded ({} chars)",
                     skill.name,
@@ -208,15 +224,33 @@ impl SkillHandle for QuerySkillRuntime {
                     event_tx: None,
                 };
 
+                tracing::info!(
+                    skill_name = %skill.name,
+                    agent_id = %agent_id,
+                    "skill fork dispatch"
+                );
                 let query_result = engine
                     .execute_query(&expanded_prompt, config)
                     .await
-                    .map_err(|e| SkillInvocationError::Forked {
-                        reason: e.to_string(),
+                    .map_err(|e| {
+                        tracing::warn!(
+                            skill_name = %skill.name,
+                            error = %e,
+                            "skill fork failed"
+                        );
+                        SkillInvocationError::Forked {
+                            reason: e.to_string(),
+                        }
                     })?;
                 let output = query_result
                     .response_text
                     .unwrap_or_else(|| "(no output)".into());
+                tracing::info!(
+                    skill_name = %skill.name,
+                    agent_id = %agent_id,
+                    output_chars = output.len(),
+                    "skill fork ok"
+                );
                 Ok(SkillInvocationResult::Forked { agent_id, output })
             }
         }

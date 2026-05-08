@@ -6,8 +6,6 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
-use anyhow::anyhow;
 use coco_mcp_types::CallToolRequestParams;
 use coco_mcp_types::CallToolResult;
 use coco_mcp_types::InitializeRequestParams;
@@ -65,6 +63,8 @@ use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
+use crate::Result;
+use crate::RmcpClientError;
 use crate::load_oauth_tokens;
 use crate::logging_client_handler::LoggingClientHandler;
 use crate::oauth::OAuthCredentialsStoreMode;
@@ -94,6 +94,29 @@ enum SessionAwareHttpError {
     SessionExpired404,
     #[error(transparent)]
     Reqwest(#[from] reqwest::Error),
+}
+
+impl coco_error::StackError for SessionAwareHttpError {
+    fn debug_fmt(&self, layer: usize, buf: &mut Vec<String>) {
+        buf.push(format!("{layer}: {self}"));
+    }
+
+    fn next(&self) -> Option<&dyn coco_error::StackError> {
+        None
+    }
+}
+
+impl coco_error::ErrorExt for SessionAwareHttpError {
+    fn status_code(&self) -> coco_error::StatusCode {
+        match self {
+            Self::SessionExpired404 => coco_error::StatusCode::AuthenticationFailed,
+            Self::Reqwest(_) => coco_error::StatusCode::NetworkError,
+        }
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 /// A reqwest-based HTTP client that detects HTTP 404 when a session ID is
@@ -314,6 +337,40 @@ enum ClientOperationError {
     Timeout { label: String, duration: Duration },
 }
 
+impl coco_error::StackError for ClientOperationError {
+    fn debug_fmt(&self, layer: usize, buf: &mut Vec<String>) {
+        buf.push(format!("{layer}: {self}"));
+    }
+
+    fn next(&self) -> Option<&dyn coco_error::StackError> {
+        None
+    }
+}
+
+impl coco_error::ErrorExt for ClientOperationError {
+    fn status_code(&self) -> coco_error::StatusCode {
+        match self {
+            Self::Service(_) => coco_error::StatusCode::ProviderError,
+            Self::Timeout { .. } => coco_error::StatusCode::Timeout,
+        }
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+impl From<ClientOperationError> for RmcpClientError {
+    fn from(err: ClientOperationError) -> Self {
+        match err {
+            ClientOperationError::Service(e) => Self::Service(e),
+            ClientOperationError::Timeout { label, duration } => Self::Generic {
+                message: format!("timed out awaiting {label} after {duration:?}"),
+            },
+        }
+    }
+}
+
 pub type Elicitation = CreateElicitationRequestParam;
 pub type ElicitationResponse = CreateElicitationResult;
 
@@ -427,10 +484,9 @@ impl RmcpClient {
             Self::connect_pending_transport_from_state(&self.state, client_handler, timeout)
                 .await?;
 
-        let initialize_result_rmcp = service
-            .peer()
-            .peer_info()
-            .ok_or_else(|| anyhow!("handshake succeeded but server info was missing"))?;
+        let initialize_result_rmcp = service.peer().peer_info().ok_or_else(|| {
+            RmcpClientError::generic("handshake succeeded but server info was missing")
+        })?;
         let initialize_result: InitializeResult = convert_to_mcp(initialize_result_rmcp)?;
 
         {
@@ -747,7 +803,7 @@ impl RmcpClient {
             .lock()
             .await
             .clone()
-            .ok_or_else(|| anyhow!("cannot recover before initialize succeeds"))?;
+            .ok_or_else(|| RmcpClientError::generic("cannot recover before initialize succeeds"))?;
 
         let transport = Self::create_pending_transport(&self.transport_recipe).await?;
 
@@ -797,8 +853,7 @@ impl RmcpClient {
             } => {
                 let program_name = program.to_string_lossy().into_owned();
                 let envs = create_env_for_mcp_server(env.clone(), env_vars);
-                let resolved_program =
-                    program_resolver::resolve(program.clone(), &envs).map_err(|e| anyhow!(e))?;
+                let resolved_program = program_resolver::resolve(program.clone(), &envs)?;
 
                 let mut command = Command::new(resolved_program);
                 command
@@ -814,8 +869,7 @@ impl RmcpClient {
 
                 let (transport, stderr) = TokioChildProcess::builder(command)
                     .stderr(Stdio::piped())
-                    .spawn()
-                    .map_err(|e| anyhow!(e))?;
+                    .spawn()?;
 
                 if let Some(stderr) = stderr {
                     tokio::spawn(async move {
@@ -923,20 +977,34 @@ impl RmcpClient {
                         service::serve_client(client_handler.clone(), t).boxed(),
                         Some(oauth_persistor),
                     ),
-                    None => return Err(anyhow!("client already initializing")),
+                    None => {
+                        return Err(RmcpClientError::InvalidState {
+                            state: "already initializing",
+                        });
+                    }
                 },
-                ClientState::Ready { .. } => return Err(anyhow!("client already initialized")),
+                ClientState::Ready { .. } => {
+                    return Err(RmcpClientError::InvalidState {
+                        state: "already initialized",
+                    });
+                }
             }
         };
 
         let service = match timeout {
             Some(duration) => time::timeout(duration, transport_fut)
                 .await
-                .map_err(|_| anyhow!("timed out handshaking with MCP server after {duration:?}"))?
-                .map_err(|err| anyhow!("handshaking with MCP server failed: {err}"))?,
-            None => transport_fut
-                .await
-                .map_err(|err| anyhow!("handshaking with MCP server failed: {err}"))?,
+                .map_err(|_| {
+                    RmcpClientError::generic(format!(
+                        "timed out handshaking with MCP server after {duration:?}"
+                    ))
+                })?
+                .map_err(|err| {
+                    RmcpClientError::generic(format!("handshaking with MCP server failed: {err}"))
+                })?,
+            None => transport_fut.await.map_err(|err| {
+                RmcpClientError::generic(format!("handshaking with MCP server failed: {err}"))
+            })?,
         };
 
         Ok((service, oauth_persistor))
@@ -950,7 +1018,9 @@ impl RmcpClient {
         let guard = self.state.lock().await;
         match &*guard {
             ClientState::Ready { service, .. } => Ok(Arc::clone(service)),
-            ClientState::Connecting { .. } => Err(anyhow!("MCP client not initialized")),
+            ClientState::Connecting { .. } => Err(RmcpClientError::InvalidState {
+                state: "not initialized",
+            }),
         }
     }
 
@@ -1011,7 +1081,9 @@ async fn create_oauth_transport_and_runtime(
         OAuthState::Authorized(manager) => manager,
         OAuthState::Unauthorized(manager) => manager,
         OAuthState::Session(_) | OAuthState::AuthorizedHttpClient(_) => {
-            return Err(anyhow!("unexpected OAuth state during client setup"));
+            return Err(RmcpClientError::InvalidState {
+                state: "unexpected OAuth state during client setup",
+            });
         }
     };
 

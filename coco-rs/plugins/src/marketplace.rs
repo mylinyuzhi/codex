@@ -181,7 +181,7 @@ impl InstallCountsCache {
     }
 
     /// Persist to disk.
-    pub fn save(&self, path: &Path) -> anyhow::Result<()> {
+    pub fn save(&self, path: &Path) -> crate::Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -259,7 +259,7 @@ impl MarketplaceManager {
     }
 
     /// Save `known_marketplaces.json`.
-    pub fn save_known_marketplaces(&self, config: &KnownMarketplacesFile) -> anyhow::Result<()> {
+    pub fn save_known_marketplaces(&self, config: &KnownMarketplacesFile) -> crate::Result<()> {
         let path = self.known_marketplaces_path();
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -275,12 +275,12 @@ impl MarketplaceManager {
         name: &str,
         source: MarketplaceSource,
         install_location: &str,
-    ) -> anyhow::Result<()> {
+    ) -> crate::Result<()> {
         if let Some(err) = validate_marketplace_name(name) {
-            anyhow::bail!("{err}");
+            return Err(crate::PluginError::generic("marketplace", err));
         }
         if let Some(err) = validate_official_name_source(name, &source) {
-            anyhow::bail!("{err}");
+            return Err(crate::PluginError::generic("marketplace", err));
         }
 
         let mut known = self.load_known_marketplaces();
@@ -306,7 +306,7 @@ impl MarketplaceManager {
     /// For directory-based caches, looks for `marketplace.json` or
     /// `.claude-plugin/marketplace.json` inside the directory.
     /// For file-based caches, reads the JSON file directly.
-    pub fn load_cached_marketplace(&mut self, name: &str) -> anyhow::Result<&PluginMarketplace> {
+    pub fn load_cached_marketplace(&mut self, name: &str) -> crate::Result<&PluginMarketplace> {
         // Check in-memory cache first.
         if self.marketplace_cache.contains_key(name) {
             return Ok(&self.marketplace_cache[name]);
@@ -314,7 +314,10 @@ impl MarketplaceManager {
 
         let known = self.load_known_marketplaces();
         let entry = known.get(name).ok_or_else(|| {
-            anyhow::anyhow!("marketplace '{name}' not found in known_marketplaces.json")
+            crate::PluginError::generic(
+                "marketplace",
+                format!("marketplace '{name}' not found in known_marketplaces.json"),
+            )
         })?;
 
         let install_loc = Path::new(&entry.install_location);
@@ -392,11 +395,14 @@ impl MarketplaceManager {
         marketplace_name: &str,
         entry: &PluginMarketplaceEntry,
         scope: PluginScope,
-    ) -> anyhow::Result<PathBuf> {
+    ) -> crate::Result<PathBuf> {
         let known = self.load_known_marketplaces();
-        let mkt_entry = known
-            .get(marketplace_name)
-            .ok_or_else(|| anyhow::anyhow!("marketplace '{marketplace_name}' is not registered"))?;
+        let mkt_entry = known.get(marketplace_name).ok_or_else(|| {
+            crate::PluginError::generic(
+                "marketplace",
+                format!("marketplace '{marketplace_name}' is not registered"),
+            )
+        })?;
 
         let cache_dir = self
             .plugins_dir
@@ -423,10 +429,13 @@ impl MarketplaceManager {
                 };
 
                 if !source_dir.is_dir() {
-                    anyhow::bail!(
-                        "plugin source directory not found: {}",
-                        source_dir.display()
-                    );
+                    return Err(crate::PluginError::generic(
+                        "marketplace",
+                        format!(
+                            "plugin source directory not found: {}",
+                            source_dir.display()
+                        ),
+                    ));
                 }
 
                 copy_dir_contents(&source_dir, &version_dir)?;
@@ -463,7 +472,7 @@ impl MarketplaceManager {
 ///
 /// Handles both file (`.json`) and directory (with inner `marketplace.json`
 /// or `.claude-plugin/marketplace.json`) formats.
-fn read_cached_marketplace(path: &Path) -> anyhow::Result<PluginMarketplace> {
+fn read_cached_marketplace(path: &Path) -> crate::Result<PluginMarketplace> {
     let json_path = if path.is_dir() {
         let direct = path.join("marketplace.json");
         if direct.exists() {
@@ -473,7 +482,10 @@ fn read_cached_marketplace(path: &Path) -> anyhow::Result<PluginMarketplace> {
             if nested.exists() {
                 nested
             } else {
-                anyhow::bail!("no marketplace.json found in {}", path.display());
+                return Err(crate::PluginError::generic(
+                    "marketplace",
+                    format!("no marketplace.json found in {}", path.display()),
+                ));
             }
         }
     } else {
@@ -526,9 +538,12 @@ fn sanitize_for_path(s: &str) -> String {
 }
 
 /// Recursively copy directory contents (files only, shallow).
-fn copy_dir_contents(src: &Path, dst: &Path) -> anyhow::Result<()> {
+fn copy_dir_contents(src: &Path, dst: &Path) -> crate::Result<()> {
     if !src.is_dir() {
-        anyhow::bail!("source is not a directory: {}", src.display());
+        return Err(crate::PluginError::generic(
+            "marketplace",
+            format!("source is not a directory: {}", src.display()),
+        ));
     }
     std::fs::create_dir_all(dst)?;
 
@@ -601,7 +616,7 @@ pub fn load_flagged_plugins(plugins_dir: &Path) -> Vec<FlaggedPlugin> {
 }
 
 /// Save flagged plugins to disk.
-pub fn save_flagged_plugins(plugins_dir: &Path, flagged: &[FlaggedPlugin]) -> anyhow::Result<()> {
+pub fn save_flagged_plugins(plugins_dir: &Path, flagged: &[FlaggedPlugin]) -> crate::Result<()> {
     let path = plugins_dir.join("flagged_plugins.json");
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -616,7 +631,7 @@ pub fn flag_delisted_plugin(
     plugins_dir: &Path,
     plugin_id: &str,
     marketplace_name: &str,
-) -> anyhow::Result<()> {
+) -> crate::Result<()> {
     let mut flagged = load_flagged_plugins(plugins_dir);
     if flagged.iter().any(|f| f.plugin_id == plugin_id) {
         return Ok(());

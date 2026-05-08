@@ -9,12 +9,14 @@ workspace = true
 
 [dependencies]
 coco-config.workspace = true
+coco-error.workspace = true
 coco-types.workspace = true
 coco-messages.workspace = true
 coco-subagent.workspace = true
 coco-tool-runtime.workspace = true
 coco-context.workspace = true
 coco-permissions.workspace = true
+coco-sandbox.workspace = true
 coco-shell.workspace = true
 coco-skills.workspace = true
 coco-memory.workspace = true
@@ -28,7 +30,6 @@ coco-utils-absolute-path.workspace = true
 
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-anyhow.workspace = true
 chrono.workspace = true
 async-trait.workspace = true
 base64.workspace = true
@@ -49,6 +50,7 @@ tracing.workspace = true
 reqwest = { workspace = true, features = ["rustls-tls", "stream"] }
 
 [dev-dependencies]
+anyhow.workspace = true
 pretty_assertions.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tempfile.workspace = true

@@ -27,7 +27,6 @@
 //!   when present so mid-session mutations (e.g. `EnterPlanMode`) are
 //!   visible on the next batch.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -184,6 +183,10 @@ impl ToolContextFactory {
             verbose: false,
             tool_config: self.config.tool_config.clone(),
             sandbox_config: self.config.sandbox_config.clone(),
+            sandbox_state: self.config.sandbox_state.clone(),
+            // Type-erase the concrete `Arc<ReminderMailbox>` to the
+            // producer-only trait so tools can `put_*` but not `drain`.
+            reminder_mailbox: self.config.reminder_mailbox.clone().handle(),
             memory_config: self.config.memory_config.clone(),
             shell_config: self.config.shell_config.clone(),
             web_fetch_config: self.config.web_fetch_config.clone(),
@@ -205,7 +208,11 @@ impl ToolContextFactory {
             messages: Arc::new(RwLock::new(Vec::new())),
             permission_context: ToolPermissionContext {
                 mode: live_mode,
-                additional_dirs: HashMap::new(),
+                // Per-session additional dirs from `/add-dir <path>`,
+                // threaded via QueryEngineConfig. Empty by default;
+                // populated by the runtime's session_additional_dirs
+                // map when the user widens the allowlist mid-session.
+                additional_dirs: self.config.session_additional_dirs.clone(),
                 // Permission rules from settings.json (user /
                 // project / policy). TS parity: loaded via
                 // `loadPermissionRules` at session bootstrap and

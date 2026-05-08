@@ -66,6 +66,7 @@ use coco_types::Features;
 use coco_types::PermissionMode;
 use coco_types::ServerNotification;
 use coco_types::ToolOverrides;
+use coco_types::TuiOnlyEvent;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -199,6 +200,20 @@ pub struct TuiHarness {
     pub workdir: TempDir,
     /// Reference to the ScriptedModel so tests can read `call_count`.
     pub model: Arc<ScriptedModel>,
+    /// Pending permission approvals — request_id → oneshot::Sender.
+    /// Same shape production uses for the TUI ↔ engine approval
+    /// round-trip. Tests resolve via [`Self::approve`] / [`Self::reject`]
+    /// once they observe an `ApprovalRequired` event.
+    pending_approvals: coco_cli::tui_permission_bridge::PendingApprovals,
+    /// Engine handle exposed for tests that drive engine methods directly
+    /// (e.g. `/compact` calls `run_manual_compact`). The driver task holds
+    /// its own clone — both refer to the same engine instance.
+    engine: Arc<QueryEngine>,
+    /// Cloneable sender into the same `event_rx` the driver uses. Tests
+    /// running engine methods outside the driver pass this clone so
+    /// events still flow into AppState via [`Self::pump_until_idle`] /
+    /// [`Self::drain_pending_events`].
+    event_tx: mpsc::Sender<CoreEvent>,
     driver_task: Option<JoinHandle<()>>,
     cancel: CancellationToken,
 }
@@ -240,7 +255,7 @@ impl TuiHarness {
         let hooks = if cfg.hooks.is_empty() {
             None
         } else {
-            let mut reg = HookRegistry::new();
+            let reg = HookRegistry::new();
             for h in cfg.hooks {
                 reg.register(h);
             }
@@ -267,18 +282,29 @@ impl TuiHarness {
             tool_overrides: Arc::new(ToolOverrides::none()),
             ..QueryEngineConfig::default()
         };
-        let engine = Arc::new(QueryEngine::new(
-            engine_cfg,
-            api_client,
-            tools,
-            cancel.clone(),
-            hooks,
-        ));
 
         // Channels — same shapes `coco_tui::create_channels` produces,
         // sized for the harness rather than a real TUI session.
         let (command_tx, command_rx) = mpsc::channel::<UserCommand>(64);
         let (event_tx, event_rx) = mpsc::channel::<CoreEvent>(512);
+
+        // Permission bridge: production `TuiPermissionBridge` reused
+        // verbatim — it surfaces `ApprovalRequired` over the same
+        // `event_tx` the engine uses, and awaits a oneshot the test
+        // resolves via `approve()` / `reject()`. Wiring this even when
+        // the test runs in BypassPermissions is harmless — the engine
+        // only consults the bridge on `PermissionDecision::Ask`.
+        let pending_approvals = coco_cli::tui_permission_bridge::new_pending_map();
+        let bridge: Arc<dyn coco_tool_runtime::ToolPermissionBridge> =
+            Arc::new(coco_cli::tui_permission_bridge::TuiPermissionBridge::new(
+                event_tx.clone(),
+                pending_approvals.clone(),
+            ));
+        let engine = QueryEngine::new(engine_cfg, api_client, tools, cancel.clone(), hooks)
+            .with_permission_bridge(bridge);
+        let engine = Arc::new(engine);
+        let engine_for_driver = engine.clone();
+        let event_tx_for_driver = event_tx.clone();
 
         // Spawn the agent driver: a stripped-down version of
         // `app/cli/src/tui_runner.rs::run_agent_driver`. Production
@@ -287,7 +313,11 @@ impl TuiHarness {
         // test here, so the harness only handles `SubmitInput` (the path
         // every conversational test exercises) and `Shutdown` (so drop
         // can join cleanly).
-        let driver_task = tokio::spawn(run_test_agent_driver(engine, command_rx, event_tx));
+        let driver_task = tokio::spawn(run_test_agent_driver(
+            engine_for_driver,
+            command_rx,
+            event_tx_for_driver,
+        ));
 
         // Build the TestBackend-backed terminal. AppState starts empty —
         // production fills it via `app.state_mut()` post-`new`; we don't
@@ -308,6 +338,9 @@ impl TuiHarness {
             events: Vec::new(),
             workdir,
             model,
+            pending_approvals,
+            engine,
+            event_tx,
             driver_task: Some(driver_task),
             cancel,
         })
@@ -446,6 +479,151 @@ impl TuiHarness {
         self.workdir.path().to_path_buf()
     }
 
+    /// Drain the engine's event stream until the next
+    /// `TuiOnlyEvent::ApprovalRequired` arrives, folding intermediate
+    /// events into AppState along the way (so render snapshots taken
+    /// after this call reflect the full mid-turn state).
+    ///
+    /// Returns the `(request_id, tool_name)` of the request so the
+    /// test can route an `approve` / `reject` to it. If `SessionResult`
+    /// arrives first (engine finished without ever asking), returns
+    /// an error — that's a test setup bug (e.g. mode/tool combo didn't
+    /// trigger an Ask).
+    pub async fn pump_until_approval_request(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<ApprovalRequest> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(anyhow!(
+                    "TuiHarness: timed out after {:?} waiting for ApprovalRequired \
+                     ({} events drained)",
+                    timeout,
+                    self.events.len()
+                ));
+            }
+            let next = match tokio::time::timeout(remaining, self.event_rx.recv()).await {
+                Ok(Some(evt)) => evt,
+                Ok(None) => {
+                    return Err(anyhow!(
+                        "TuiHarness: event channel closed before ApprovalRequired"
+                    ));
+                }
+                Err(_) => continue,
+            };
+            handle_core_event(&mut self.state, next.clone());
+            // Bail early if the session ended before an Ask fired —
+            // the test's premise is that an approval *will* be requested.
+            if matches!(
+                &next,
+                CoreEvent::Protocol(ServerNotification::SessionResult(_))
+            ) {
+                self.events.push(next);
+                return Err(anyhow!(
+                    "TuiHarness: SessionResult arrived before ApprovalRequired — \
+                     the engine completed without requesting an approval. Mode/tool \
+                     combo may not trigger an Ask decision."
+                ));
+            }
+            // Capture the approval payload, then push to the events buffer.
+            let approval = if let CoreEvent::Tui(TuiOnlyEvent::ApprovalRequired {
+                request_id,
+                tool_name,
+                input_preview,
+                ..
+            }) = &next
+            {
+                Some(ApprovalRequest {
+                    request_id: request_id.clone(),
+                    tool_name: tool_name.clone(),
+                    input_preview: input_preview.clone(),
+                })
+            } else {
+                None
+            };
+            self.events.push(next);
+            if let Some(req) = approval {
+                return Ok(req);
+            }
+        }
+    }
+
+    /// Resolve a pending approval as **approved**. Mirrors what
+    /// `tui_runner.rs`'s `UserCommand::ApprovalResponse` arm does in
+    /// production via `tui_permission_bridge::resolve_pending`.
+    /// Returns `true` if the request_id matched a pending oneshot.
+    pub async fn approve(&self, request_id: &str) -> bool {
+        coco_cli::tui_permission_bridge::resolve_pending(
+            &self.pending_approvals,
+            request_id,
+            true,
+            None,
+        )
+        .await
+    }
+
+    /// Resolve a pending approval as **rejected**.
+    pub async fn reject(&self, request_id: &str, feedback: Option<String>) -> bool {
+        coco_cli::tui_permission_bridge::resolve_pending(
+            &self.pending_approvals,
+            request_id,
+            false,
+            feedback,
+        )
+        .await
+    }
+
+    /// Cloneable engine handle. Tests that exercise engine methods that
+    /// the driver doesn't expose (currently: `run_manual_compact`) can
+    /// call them directly via this.
+    pub fn engine(&self) -> Arc<QueryEngine> {
+        self.engine.clone()
+    }
+
+    /// Cloneable event sender — for handing into engine methods called
+    /// outside the driver so their `CoreEvent`s land on the same channel
+    /// `pump_until_idle` / `drain_pending_events` reads from.
+    pub fn event_tx(&self) -> mpsc::Sender<CoreEvent> {
+        self.event_tx.clone()
+    }
+
+    /// Pump every queued event into AppState, returning when the channel
+    /// goes quiet for `quiet_for`. Unlike [`Self::pump_until_idle`] this
+    /// does NOT block on a `SessionResult` — useful for engine methods
+    /// (compact, dream, …) that don't produce a session terminator.
+    ///
+    /// Returns the number of events drained on this call.
+    pub async fn drain_pending_events(&mut self, quiet_for: Duration) -> usize {
+        let mut drained = 0;
+        loop {
+            match tokio::time::timeout(quiet_for, self.event_rx.recv()).await {
+                Ok(Some(evt)) => {
+                    handle_core_event(&mut self.state, evt.clone());
+                    self.events.push(evt);
+                    drained += 1;
+                }
+                Ok(None) => break, // channel closed
+                Err(_) => break,   // quiet window elapsed
+            }
+        }
+        drained
+    }
+
+    /// Clone of the engine's cancel token. Tests that drive
+    /// interrupt/cancel paths fire it from a side task while
+    /// `pump_until_idle` is awaiting on the main task.
+    ///
+    /// One-shot: cancelling permanently disables the engine for the
+    /// rest of the harness's lifetime (production rebuilds the engine
+    /// per turn with a fresh child token; the harness keeps a single
+    /// engine for simplicity). Tests that cancel must not run more
+    /// turns afterwards.
+    pub fn cancel_token(&self) -> CancellationToken {
+        self.cancel.clone()
+    }
+
     /// Stop the agent driver task and wait for it to exit. `drop` does
     /// the same with a 2s budget; tests that want a deterministic
     /// shutdown order can call this explicitly.
@@ -505,6 +683,18 @@ async fn run_test_agent_driver(
             _ => {}
         }
     }
+}
+
+/// What [`TuiHarness::pump_until_approval_request`] returns. Just the
+/// fields a test typically asserts on — `request_id` to route the
+/// approve/reject, `tool_name` for sanity-checking, and the rendered
+/// `input_preview` (JSON-stringified) for substring assertions on
+/// what the engine asked about.
+#[derive(Debug, Clone)]
+pub struct ApprovalRequest {
+    pub request_id: String,
+    pub tool_name: String,
+    pub input_preview: String,
 }
 
 /// One-line debug summary used in timeout error messages.

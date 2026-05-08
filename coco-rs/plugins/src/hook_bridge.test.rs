@@ -33,13 +33,14 @@ fn test_load_hooks_from_hooks_dir() {
     let dir = tempfile::tempdir().unwrap();
     let hooks_dir = dir.path().join("hooks");
     std::fs::create_dir(&hooks_dir).unwrap();
+    let hooks_json = serde_json::json!({
+        HookEventType::PreToolUse.as_str(): [
+            { "type": "command", "command": "echo pre", "matcher": "Bash" }
+        ]
+    });
     std::fs::write(
         hooks_dir.join("hooks.json"),
-        r#"{
-            "pre_tool_use": [
-                { "type": "command", "command": "echo pre", "matcher": "Bash" }
-            ]
-        }"#,
+        serde_json::to_vec(&hooks_json).unwrap(),
     )
     .unwrap();
 
@@ -61,7 +62,7 @@ fn test_load_hooks_from_manifest_inline() {
     let dir = tempfile::tempdir().unwrap();
     let mut manifest_hooks = HashMap::new();
     manifest_hooks.insert(
-        "session_start".to_string(),
+        HookEventType::SessionStart.as_str().to_string(),
         serde_json::json!([{ "type": "prompt", "prompt": "hello from plugin" }]),
     );
 
@@ -101,17 +102,18 @@ fn test_load_hooks_deduplication() {
     // hooks/hooks.json has the same hook as the manifest
     let hooks_dir = dir.path().join("hooks");
     std::fs::create_dir(&hooks_dir).unwrap();
+    let make_def = || serde_json::json!([{ "type": "command", "command": "echo dup" }]);
+    let hooks_json = serde_json::json!({
+        HookEventType::PreToolUse.as_str(): make_def()
+    });
     std::fs::write(
         hooks_dir.join("hooks.json"),
-        r#"{ "pre_tool_use": [{ "type": "command", "command": "echo dup" }] }"#,
+        serde_json::to_vec(&hooks_json).unwrap(),
     )
     .unwrap();
 
     let mut manifest_hooks = HashMap::new();
-    manifest_hooks.insert(
-        "pre_tool_use".to_string(),
-        serde_json::json!([{ "type": "command", "command": "echo dup" }]),
-    );
+    manifest_hooks.insert(HookEventType::PreToolUse.as_str().to_string(), make_def());
 
     let plugin = LoadedPlugin {
         name: "dup-plugin".to_string(),
@@ -133,8 +135,8 @@ fn test_load_hooks_deduplication() {
     assert_eq!(hooks.len(), 2);
 
     // register_plugin_hooks deduplicates via register_deduped
-    let mut registry = HookRegistry::new();
-    register_plugin_hooks(&mut registry, &[&plugin]);
+    let registry = HookRegistry::new();
+    register_plugin_hooks(&registry, &[&plugin]);
     // The two hooks have the same command, so one is deduplicated
     assert_eq!(registry.len(), 1);
 }
@@ -154,17 +156,27 @@ fn test_load_all_plugin_hooks_multiple_plugins() {
 
     let hooks_dir1 = dir1.path().join("hooks");
     std::fs::create_dir(&hooks_dir1).unwrap();
+    let p1_json = serde_json::json!({
+        HookEventType::PreToolUse.as_str(): [
+            { "type": "command", "command": "echo p1" }
+        ]
+    });
     std::fs::write(
         hooks_dir1.join("hooks.json"),
-        r#"{ "pre_tool_use": [{ "type": "command", "command": "echo p1" }] }"#,
+        serde_json::to_vec(&p1_json).unwrap(),
     )
     .unwrap();
 
     let hooks_dir2 = dir2.path().join("hooks");
     std::fs::create_dir(&hooks_dir2).unwrap();
+    let p2_json = serde_json::json!({
+        HookEventType::SessionStart.as_str(): [
+            { "type": "prompt", "prompt": "hi" }
+        ]
+    });
     std::fs::write(
         hooks_dir2.join("hooks.json"),
-        r#"{ "session_start": [{ "type": "prompt", "prompt": "hi" }] }"#,
+        serde_json::to_vec(&p2_json).unwrap(),
     )
     .unwrap();
 
@@ -182,13 +194,14 @@ fn test_status_message_preserves_existing() {
     let dir = tempfile::tempdir().unwrap();
     let hooks_dir = dir.path().join("hooks");
     std::fs::create_dir(&hooks_dir).unwrap();
+    let hooks_json = serde_json::json!({
+        HookEventType::PreToolUse.as_str(): [
+            { "type": "command", "command": "echo x", "status_message": "linting code" }
+        ]
+    });
     std::fs::write(
         hooks_dir.join("hooks.json"),
-        r#"{
-            "pre_tool_use": [
-                { "type": "command", "command": "echo x", "status_message": "linting code" }
-            ]
-        }"#,
+        serde_json::to_vec(&hooks_json).unwrap(),
     )
     .unwrap();
 

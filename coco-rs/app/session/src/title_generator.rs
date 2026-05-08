@@ -121,7 +121,7 @@ pub fn apply_title(
     manager: &crate::SessionManager,
     session_id: &str,
     title: String,
-) -> anyhow::Result<bool> {
+) -> crate::Result<bool> {
     let mut session = manager.load(session_id)?;
     if session.title.as_deref().is_some_and(|t| !t.is_empty()) {
         return Ok(false);

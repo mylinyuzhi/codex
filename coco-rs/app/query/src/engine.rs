@@ -110,6 +110,18 @@ pub struct QueryEngine {
     pub(crate) tools: Arc<ToolRegistry>,
     pub(crate) cancel: CancellationToken,
     pub(crate) hooks: Option<Arc<HookRegistry>>,
+    /// Captures `is_async` hook output so the reminder pipeline can
+    /// deliver it on later turns. Wired by `engine_builder` from the
+    /// shared `SessionRuntime`-owned `AsyncHookRegistry`. `None` means
+    /// async hooks fired through this engine are dropped — the
+    /// session-runtime path stays the canonical wiring.
+    pub(crate) async_hook_registry: Option<Arc<coco_hooks::async_registry::AsyncHookRegistry>>,
+    /// LLM-driven hook handler used by `Prompt` / `Agent` hook
+    /// handlers. Wired by `engine_builder` from the
+    /// `SessionRuntime`-owned `Arc<dyn HookLlmHandle>`. `None` means
+    /// LLM-driven handlers fall back to passthrough text — orchestration
+    /// already handles that path with a `tracing::warn!`.
+    pub(crate) hook_llm_handle: Option<Arc<dyn coco_hooks::HookLlmHandle>>,
     /// Mid-turn command queue for steering.
     pub(crate) command_queue: CommandQueue,
     /// Inbox for teammate messages.
@@ -319,14 +331,31 @@ pub struct QueryEngine {
     /// otherwise perform.
     pub(crate) pending_reactive_context_management:
         Arc<tokio::sync::Mutex<Option<serde_json::Value>>>,
-    /// Transcript writer used for marble-origami persistence. `None`
-    /// disables persistence (in-memory ledger only). Caller wires this
-    /// via `with_transcript_store`.
+    /// One-shot post-compaction signal. Set to `true` whenever
+    /// `do_reactive_compact` / full-compaction / SM-compaction succeeds;
+    /// consumed (swap-to-false) by the next `engine_turn_reminders` build.
+    /// Mirrors TS `getUnifiedTaskAttachments(ctx)` post-compact emission
+    /// surface — only the immediately-following turn surfaces background
+    /// task status reminders.
+    pub(crate) pending_just_compacted: Arc<std::sync::atomic::AtomicBool>,
+    /// Transcript writer used for marble-origami persistence and the
+    /// per-turn user/assistant JSONL append. `None` disables
+    /// persistence (in-memory ledger only). Caller wires this via
+    /// `with_transcript_store`.
     pub(crate) transcript_store: Option<Arc<coco_session::TranscriptStore>>,
     /// Session id (string form) used for transcript path resolution.
     /// Distinct from `staged_session_id` because TranscriptStore keys
     /// off the session id string used by the rest of the system.
     pub(crate) transcript_session_id: Option<String>,
+    /// Dedup set of message UUIDs already written to the transcript
+    /// JSONL during this session. Lives on `SessionRuntime` and is
+    /// cloned into every per-turn engine via `with_transcript_dedup`
+    /// so the same set survives across engine instances. `None`
+    /// disables per-turn message persistence (only marble-origami
+    /// metadata is written). TS parity: `Project.recordTranscript`
+    /// dedups by uuid in `utils/sessionStorage.ts:1408`.
+    pub(crate) transcript_dedup:
+        Option<Arc<tokio::sync::Mutex<std::collections::HashSet<uuid::Uuid>>>>,
     /// Engine-side delivery channel for nested-memory entries surfaced
     /// by [`crate::engine_attachments::QueryEngine::drain_nested_memory_triggers`]
     /// at end-of-batch. Consumed by `engine_turn_reminders` right before
@@ -346,6 +375,13 @@ pub struct QueryEngine {
     /// [`crate::engine_attachments::QueryEngine::clear_loaded_nested_memory_paths`].
     pub(crate) loaded_nested_memory_paths:
         std::sync::Arc<tokio::sync::Mutex<std::collections::HashSet<std::path::PathBuf>>>,
+    /// Sync hook event buffer shared with `SessionRuntime` so that
+    /// SessionStart and UserPromptSubmit hook output surfaces as
+    /// per-turn `hook_*` reminders. `None` disables sync-event
+    /// surfacing — the orchestration layer's push then becomes a
+    /// no-op. Installed on per-turn engines via
+    /// [`Self::with_sync_hook_buffer`].
+    pub(crate) sync_hook_buffer: Option<coco_hooks::SyncHookEventBuffer>,
 }
 
 // `new`, every `with_*` builder, and small accessor methods live in
@@ -363,10 +399,10 @@ impl QueryEngine {
         event_tx: Option<tokio::sync::mpsc::Sender<crate::CoreEvent>>,
         state_tracker: &SessionStateTracker,
         hook_tx_opt: Option<tokio::sync::mpsc::Sender<coco_hooks::HookExecutionEvent>>,
-    ) -> anyhow::Result<QueryResult> {
+        history: &mut MessageHistory,
+    ) -> Result<QueryResult, coco_error::BoxedError> {
         let start_time = std::time::Instant::now();
         let mut api_time_ms: i64 = 0;
-        let mut history = MessageHistory::new();
         let mut total_usage = TokenUsage::default();
         let mut cost_tracker = CostTracker::new();
 
@@ -400,6 +436,10 @@ impl QueryEngine {
         let mut reminder_last_user_input_uuid: Option<uuid::Uuid> = None;
         let mut turn = 0;
         let mut last_continue_reason: Option<ContinueReason> = None;
+        // TS `stop_hook_active`: set to true once a Stop hook has
+        // blocked the loop, so subsequent Stop firings advertise the
+        // re-entry to the hook. Mirrors `query.ts handleStopHooks()`.
+        let mut stop_hook_active = false;
         // max-output-tokens recovery state (TS: query.ts State.maxOutputTokensOverride + maxOutputTokensRecoveryCount)
         let mut max_tokens_override: Option<i64> = None;
         let mut max_tokens_recovery_count: i32 = 0;
@@ -588,7 +628,7 @@ impl QueryEngine {
             match budget.check(turn) {
                 BudgetDecision::Stop { reason } => {
                     warn!(%reason, "budget stop");
-                    let last_text = extract_last_assistant_text(&history);
+                    let last_text = extract_last_assistant_text(history);
                     return Ok(make_query_result(
                         last_text,
                         turn,
@@ -622,8 +662,20 @@ impl QueryEngine {
             }
 
             turn += 1;
-            info!(turn, "starting turn");
             let turn_id = format!("turn-{turn}");
+            // The `turn` canonical anchor cannot be a single async span guard
+            // here: this loop body has many `.await` points, and
+            // `EnteredSpan` is sync-only. Per-step turn correlation is
+            // provided via the `turn` / `turn_id` fields stamped on each
+            // structured event below — pivots on `turn_id` reconstruct the
+            // turn without an enclosing span.
+            info!(
+                turn,
+                turn_id = %turn_id,
+                history_len = history.messages.len(),
+                active_model = model_runtime.current_model_id(),
+                "turn start"
+            );
             let _delivered = emit_protocol(
                 &event_tx,
                 crate::ServerNotification::TurnStarted(coco_types::TurnStartedParams {
@@ -640,7 +692,7 @@ impl QueryEngine {
             // `crate::engine_turn_reminders` to keep this loop legible.
             let app_state_snapshot = self
                 .run_turn_reminder_pipeline(crate::engine_turn_reminders::TurnReminderContext {
-                    history: &mut history,
+                    history: &mut *history,
                     plan_reminder: &mut plan_reminder,
                     orchestrator: &reminder_orchestrator,
                     last_user_input_uuid: &mut reminder_last_user_input_uuid,
@@ -653,7 +705,7 @@ impl QueryEngine {
                 .await;
 
             // Build prompt from history
-            let prompt = self.build_prompt(&history);
+            let prompt = self.build_prompt(history);
             let tool_defs = self.build_tool_definitions(&app_state_snapshot).await;
 
             // StreamRequestStart has no direct protocol equivalent; it was
@@ -857,11 +909,30 @@ impl QueryEngine {
             // calls reach the active provider. When no fallback is
             // configured this is identical to `self.client.query_stream`.
             let active_client = model_runtime.current_client();
+            tracing::debug!(
+                turn,
+                turn_id = %turn_id,
+                provider = active_client.provider(),
+                model_id = active_client.model_id(),
+                max_tokens = ?effective_max_tokens,
+                tool_count = params.tools.as_ref().map(Vec::len).unwrap_or(0),
+                prompt_messages = params.prompt.len(),
+                agentic = params.agentic,
+                probing = was_probing,
+                "opening LLM stream"
+            );
             let mut rx = match active_client.query_stream(&params).await {
                 Ok(rx) => {
                     // Success resets the capacity-error streak —
                     // isolated 529s must not accumulate across turns.
                     consecutive_capacity_errors = 0;
+                    tracing::debug!(
+                        turn,
+                        turn_id = %turn_id,
+                        provider = active_client.provider(),
+                        model_id = active_client.model_id(),
+                        "LLM stream opened"
+                    );
                     // Probe succeeded at stream-open — clear
                     // recovery state and announce the switch-back.
                     if was_probing {
@@ -904,14 +975,24 @@ impl QueryEngine {
                         // using the reverted fallback slot.
                         continue;
                     }
-                    if err_msg.contains("prompt_too_long") || err_msg.contains("context_length") {
+                    if matches!(
+                        &e,
+                        coco_inference::InferenceError::ContextWindowExceeded { .. }
+                    ) || err_msg.contains("prompt_too_long")
+                        || err_msg.contains("context_length")
+                    {
                         warn!("prompt too long (stream open), attempting reactive compaction");
-                        self.do_reactive_compact(&mut history, &event_tx).await;
+                        self.do_reactive_compact(&mut *history, &event_tx).await;
                         last_continue_reason = Some(ContinueReason::ReactiveCompactRetry);
                         budget.reset_continuations();
                         continue;
                     }
-                    if is_capacity_error_message(&err_msg) {
+                    let is_capacity = matches!(
+                        &e,
+                        coco_inference::InferenceError::Overloaded { .. }
+                            | coco_inference::InferenceError::RateLimited { .. }
+                    ) || is_capacity_error_message(&err_msg);
+                    if is_capacity {
                         consecutive_capacity_errors += 1;
                         if consecutive_capacity_errors < MAX_CONSECUTIVE_CAPACITY_ERRORS {
                             // Below threshold: log and retry the
@@ -967,7 +1048,10 @@ impl QueryEngine {
                             }
                         }
                     }
-                    return Err(anyhow::anyhow!("LLM stream open failed: {e}"));
+                    return Err(Box::new(coco_error::PlainError::new(
+                        format!("LLM stream open failed: {e}"),
+                        coco_error::StatusCode::ProviderError,
+                    )));
                 }
             };
 
@@ -1137,7 +1221,7 @@ impl QueryEngine {
                             let slice = std::slice::from_ref(&tcp);
                             let mut prep_args = crate::tool_call_preparer::PendingToolPreparation {
                                 event_tx: &event_tx,
-                                history: &mut history,
+                                history: &mut *history,
                                 ctx: ctx_arc.as_ref(),
                                 tool_calls: slice,
                                 tools: &self.tools,
@@ -1196,11 +1280,32 @@ impl QueryEngine {
                     StreamEvent::Finish {
                         usage, stop_reason, ..
                     } => {
+                        tracing::debug!(
+                            turn,
+                            turn_id = %turn_id,
+                            stop_reason = %stop_reason,
+                            tokens_in = usage.input_tokens,
+                            tokens_out = usage.output_tokens,
+                            cache_read = usage.cache_read_input_tokens(),
+                            cache_creation = usage.cache_creation_input_tokens(),
+                            text_chars = response_text.len(),
+                            reasoning_chars = reasoning_text.len(),
+                            tool_call_count = tool_order.len(),
+                            "LLM stream finished"
+                        );
                         stream_usage = Some(usage);
                         stream_stop_reason = Some(stop_reason);
                         break;
                     }
                     StreamEvent::Error { message, .. } => {
+                        warn!(
+                            turn,
+                            turn_id = %turn_id,
+                            error = %message,
+                            text_chars = response_text.len(),
+                            tool_call_count = tool_order.len(),
+                            "LLM stream errored"
+                        );
                         stream_error = Some(message);
                         break;
                     }
@@ -1239,7 +1344,7 @@ impl QueryEngine {
                 }
                 if err_msg.contains("prompt_too_long") || err_msg.contains("context_length") {
                     warn!("prompt too long (stream), attempting reactive compaction");
-                    self.do_reactive_compact(&mut history, &event_tx).await;
+                    self.do_reactive_compact(&mut *history, &event_tx).await;
                     last_continue_reason = Some(ContinueReason::ReactiveCompactRetry);
                     budget.reset_continuations();
                     continue;
@@ -1293,7 +1398,10 @@ impl QueryEngine {
                         }
                     }
                 }
-                return Err(anyhow::anyhow!("LLM stream failed: {err_msg}"));
+                return Err(Box::new(coco_error::PlainError::new(
+                    format!("LLM stream failed: {err_msg}"),
+                    coco_error::StatusCode::ProviderError,
+                )));
             }
             // Stream closed without error — reset the capacity streak
             // so an isolated failure followed by a successful turn
@@ -1480,7 +1588,7 @@ impl QueryEngine {
             if let Some(handle) = streaming_handle.take()
                 && streaming_executed
             {
-                let history_ref = &mut history;
+                let history_ref = &mut *history;
                 let prevent_slot = &mut streaming_control_prevent;
                 let events_ref = &mut streaming_completed_events;
                 handle
@@ -1525,10 +1633,16 @@ impl QueryEngine {
                 // model. TS: `query.ts` `handleStopHooks()` around line 1050.
                 if let Some(hooks) = &self.hooks {
                     let hook_ctx = self.orchestration_ctx();
+                    let last_assistant_message = if response_text.is_empty() {
+                        None
+                    } else {
+                        Some(response_text.as_str())
+                    };
                     match orchestration::execute_stop(
                         hooks,
                         &hook_ctx,
-                        Some("end_turn"),
+                        stop_hook_active,
+                        last_assistant_message,
                         hook_tx_opt.as_ref(),
                     )
                     .await
@@ -1539,6 +1653,10 @@ impl QueryEngine {
                                 warn!(%feedback, "Stop hook blocked session completion");
                                 history.push(coco_messages::create_meta_message(&feedback));
                                 last_continue_reason = Some(ContinueReason::StopHookBlocking);
+                                // Mark the recursion so the next Stop
+                                // firing carries `stop_hook_active: true`
+                                // (TS parity).
+                                stop_hook_active = true;
                                 continue;
                             }
                         }
@@ -1561,11 +1679,17 @@ impl QueryEngine {
                     info!(turn, pct, "token budget continuation");
                     continue;
                 }
-                info!(turn, "no tool calls, conversation complete");
+                info!(
+                    turn,
+                    response_chars = response_text.len(),
+                    tokens_in = usage.input_tokens,
+                    tokens_out = usage.output_tokens,
+                    "no tool calls, conversation complete"
+                );
                 // D8: text-only end-of-turn — `finalize_turn_post_tools`
                 // never runs on this path, so save the cache-safe
                 // params here for post-turn fork features.
-                self.save_post_turn_cache_params(&history).await;
+                self.save_post_turn_cache_params(history).await;
                 // SDK protocol contract: every turn that emitted a
                 // `TurnStarted` must close with a terminal turn event.
                 // The tool-execution branches reach `TurnCompleted` via
@@ -1603,7 +1727,7 @@ impl QueryEngine {
             // drain below to preserve tool_use/tool_result pairing in history.
             drain_command_queue_into_history(
                 &self.command_queue,
-                &mut history,
+                &mut *history,
                 &event_tx,
                 QueuePriority::Now,
                 None,
@@ -1626,7 +1750,7 @@ impl QueryEngine {
                 if let Some(ref c) = streaming_ctx {
                     self.drain_nested_memory_triggers(c).await;
                 }
-                self.finalize_turn_post_tools(&mut history, &event_tx, turn_id, usage)
+                self.finalize_turn_post_tools(&mut *history, &event_tx, turn_id, usage)
                     .await;
                 if let Some(stop_reason) = streaming_control_prevent {
                     return Ok(make_query_result(
@@ -1666,7 +1790,7 @@ impl QueryEngine {
 
             let tool_run_outcome = ToolCallRunner {
                 event_tx: &event_tx,
-                history: &mut history,
+                history: &mut *history,
                 ctx: &ctx,
                 tool_calls: &tool_calls,
                 turn,
@@ -1692,7 +1816,7 @@ impl QueryEngine {
             // `getNestedMemoryAttachments` runs between batch + next
             // API call.
             self.drain_nested_memory_triggers(&ctx).await;
-            self.finalize_turn_post_tools(&mut history, &event_tx, turn_id, usage)
+            self.finalize_turn_post_tools(&mut *history, &event_tx, turn_id, usage)
                 .await;
             if !tool_run_outcome.continue_after_tools {
                 return Ok(make_query_result(

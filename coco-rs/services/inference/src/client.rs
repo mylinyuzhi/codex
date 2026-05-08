@@ -22,6 +22,7 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tracing::debug;
 use tracing::info;
 use tracing::warn;
 use vercel_ai_provider::AssistantContentPart;
@@ -307,9 +308,24 @@ impl ApiClient {
     /// constructor, `with_default_fingerprint`) skip the merged-extra
     /// snapshot and feed an empty `BTreeMap` to the detector — this
     /// preserves existing detection behavior on the mock path.
+    #[tracing::instrument(
+        skip_all,
+        name = "api_call",
+        fields(
+            provider = %self.model.provider(),
+            model_id = %self.model.model_id(),
+            mode = "blocking",
+            query_source = ?params.query_source,
+            agent_id = ?params.agent_id,
+            agentic = params.agentic,
+            tool_count = params.tools.as_ref().map(Vec::len).unwrap_or(0),
+            prompt_messages = params.prompt.len(),
+        ),
+    )]
     pub async fn query(&self, params: &QueryParams) -> Result<QueryResult, InferenceError> {
         let start = std::time::Instant::now();
         let mut attempt = 0;
+        debug!("api_call begin");
 
         // Build call options exactly once. Same options reused across
         // retries and used as the input fed to detector hashing — no
@@ -345,6 +361,18 @@ impl ApiClient {
                     result.retries = attempt;
                     result.total_duration_ms =
                         i64::try_from(start.elapsed().as_millis()).unwrap_or(i64::MAX);
+
+                    info!(
+                        attempt,
+                        duration_ms = result.total_duration_ms,
+                        tokens_in = result.usage.input_tokens,
+                        tokens_out = result.usage.output_tokens,
+                        cache_read = result.usage.cache_read_input_tokens(),
+                        cache_creation = result.usage.cache_creation_input_tokens(),
+                        stop_reason = ?result.stop_reason,
+                        model_id = %result.model,
+                        "api_call ok"
+                    );
 
                     let mut usage = self.usage.lock().await;
                     usage.record(&result.model, result.usage);
@@ -513,19 +541,35 @@ impl ApiClient {
     }
 
     /// Execute a streaming query with explicit stream processor config.
+    #[tracing::instrument(
+        skip_all,
+        name = "api_call",
+        fields(
+            provider = %self.model.provider(),
+            model_id = %self.model.model_id(),
+            mode = "stream",
+            query_source = ?params.query_source,
+            agent_id = ?params.agent_id,
+            agentic = params.agentic,
+            tool_count = params.tools.as_ref().map(Vec::len).unwrap_or(0),
+            prompt_messages = params.prompt.len(),
+        ),
+    )]
     pub async fn query_stream_with_config(
         &self,
         params: &QueryParams,
         stream_config: crate::stream::StreamProcessorConfig,
     ) -> Result<tokio::sync::mpsc::Receiver<crate::stream::StreamEvent>, InferenceError> {
+        debug!("api_call stream begin");
         let options = self.build_options(params);
 
-        let result = self
-            .model
-            .do_stream(options)
-            .await
-            .map_err(|e| self.wrap_provider_error(e))?;
+        let result = self.model.do_stream(options).await.map_err(|e| {
+            let err = self.wrap_provider_error(e);
+            warn!(error = %err, "api_call stream open failed");
+            err
+        })?;
 
+        debug!("api_call stream opened");
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         tokio::spawn(crate::stream::process_stream_with_config(
             result.stream,
@@ -549,8 +593,8 @@ impl ApiClient {
     /// doesn't carry HTTP status — typed status codes are recovered at
     /// the next layer up via [`crate::errors`] classification.
     fn wrap_provider_error(&self, e: vercel_ai_provider::AISdkError) -> InferenceError {
-        InferenceError::ProviderError {
-            status: 0,
+        crate::errors::ProviderSnafu {
+            status: 0_i32,
             message: format!(
                 "Provider '{}' error for model '{}': {}",
                 self.model.provider(),
@@ -558,6 +602,7 @@ impl ApiClient {
                 e
             ),
         }
+        .build()
     }
 
     /// Build [`LanguageModelV4CallOptions`] for a query, returning the

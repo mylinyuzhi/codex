@@ -160,7 +160,7 @@ impl PsuedoCon {
         Ok(())
     }
 
-    pub fn spawn_command(&self, cmd: CommandBuilder) -> anyhow::Result<WinChild> {
+    pub(crate) fn spawn_command(&self, cmd: CommandBuilder) -> anyhow::Result<WinChild> {
         let mut si: STARTUPINFOEXW = unsafe { mem::zeroed() };
         si.StartupInfo.cb = mem::size_of::<STARTUPINFOEXW>() as u32;
         si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;

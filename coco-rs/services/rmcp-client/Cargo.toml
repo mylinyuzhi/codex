@@ -12,11 +12,11 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
-anyhow.workspace = true
 axum = { workspace = true, default-features = false, features = [
     "http1",
     "tokio",
 ] }
+coco-error.workspace = true
 coco-keyring-store.workspace = true
 coco-mcp-types = { path = "../mcp-types" }
 futures = { workspace = true, default-features = false, features = ["std"] }
@@ -60,6 +60,7 @@ webbrowser.workspace = true
 which.workspace = true
 
 [dev-dependencies]
+anyhow.workspace = true
 coco-utils-cargo-bin.workspace = true
 pretty_assertions.workspace = true
 serial_test.workspace = true
