@@ -45,9 +45,9 @@ use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::SearchReadInfo;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
+use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_tool_runtime::ValidationResult;
-use coco_types::PermissionDecision;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
 use coco_types::ToolName;
@@ -375,6 +375,16 @@ impl Tool for GrepTool {
         20_000
     }
 
+    /// The execute path already builds the final user-facing string for
+    /// each output_mode (content / files_with_matches / count) — see
+    /// `format_content`, `format_files_with_matches`, `format_count`.
+    /// The default render would JSON-stringify the wrapper string,
+    /// escaping every match line; instead emit it as a bare Text part.
+    /// TS parity: `GrepTool.ts::mapToolResultToToolResultBlockParam`.
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        coco_tool_runtime::render_text_or_json(data)
+    }
+
     fn get_activity_description(&self, input: &Value) -> Option<String> {
         let pattern = input.get("pattern").and_then(|v| v.as_str())?;
         Some(format!("Searching for {pattern}"))
@@ -390,12 +400,13 @@ impl Tool for GrepTool {
     /// R6-T20: refuse to search a root the user has marked as ignored.
     /// Individual files under the root are filtered during the walk by
     /// `is_read_ignored_with_matcher` inside `search_one_file`.
-    async fn check_permissions(&self, input: &Value, ctx: &ToolUseContext) -> PermissionDecision {
+    async fn check_permissions(
+        &self,
+        input: &Value,
+        ctx: &ToolUseContext,
+    ) -> coco_types::ToolCheckResult {
         let Some(path) = input.get("path").and_then(|v| v.as_str()) else {
-            return PermissionDecision::Allow {
-                updated_input: None,
-                feedback: None,
-            };
+            return coco_types::ToolCheckResult::Passthrough;
         };
         let matcher = crate::tools::read_permissions::file_read_ignore_matcher_from_patterns(
             &ctx.tool_config.file_read_ignore_patterns,

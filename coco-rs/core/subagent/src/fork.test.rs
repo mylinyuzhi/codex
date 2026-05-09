@@ -98,11 +98,12 @@ fn test_build_fork_child_message_blank_line_before_directive() {
 }
 
 #[test]
-fn test_build_worktree_notice() {
-    let notice = build_worktree_notice("/parent/dir", "/worktree/dir");
-    assert!(notice.contains("/parent/dir"));
-    assert!(notice.contains("/worktree/dir"));
-    assert!(notice.contains("isolated git worktree"));
+fn test_build_worktree_notice_ts_byte_faithful() {
+    // TS `forkSubagent.ts:205-210`. Lock the full text — the brevity
+    // of the old assertion let a 110-char rewrite slip through.
+    let got = build_worktree_notice("/parent/dir", "/worktree/dir");
+    let expected = "You've inherited the conversation context above from a parent agent working in /parent/dir. You are operating in an isolated git worktree at /worktree/dir \u{2014} same repository, same relative file structure, separate working copy. Paths in the inherited context refer to the parent's working directory; translate them to your worktree root. Re-read files before editing if the parent may have modified them since they appear in the context. Your changes stay in this worktree and will not affect the parent's files.";
+    assert_eq!(got, expected);
 }
 
 #[test]

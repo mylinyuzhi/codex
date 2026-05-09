@@ -1,3 +1,6 @@
+use super::bash_advanced::ASSISTANT_BLOCKING_BUDGET_MS;
+use super::shell_render::build_persisted_output_message;
+use super::shell_render::strip_leading_blank_lines;
 use coco_messages::ToolResult;
 use coco_sandbox::SandboxBypass;
 use coco_sandbox::SandboxState;
@@ -9,6 +12,7 @@ use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolProgress;
+use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_tool_runtime::ValidationResult;
 use coco_types::ToolId;
@@ -292,6 +296,160 @@ impl Tool for BashTool {
     /// cross-runtime sessions handle large outputs identically.
     fn max_result_size_chars(&self) -> i64 {
         30_000
+    }
+
+    /// Render the structured `data` envelope into model-visible content
+    /// parts. TS parity: `BashTool.tsx::mapToolResultToToolResultBlockParam`.
+    ///
+    /// Branches:
+    /// 1. **User-backgrounded** (`task_id` + `status: "background"`): emit
+    ///    the prebuilt `message` field as a single Text part — that path
+    ///    has no stdout/stderr and the message is already user-facing.
+    /// 2. **structuredContent present** (image stdout): decode each block
+    ///    into a `FileData` (image) part. This is what enables Anthropic /
+    ///    Gemini 3+ to actually see image bytes captured by `cat foo.png`.
+    /// 3. **Normal foreground**: build a single Text part by joining
+    ///    `[processedStdout, errorMessage, backgroundInfo]` with `\n`,
+    ///    skipping empty pieces. `processedStdout` strips leading
+    ///    blank-only lines + trims trailing whitespace; if
+    ///    `persistedOutputPath` is set, replace it with a
+    ///    `<persisted-output>` envelope containing a 2KB preview.
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        // Branch 1: user-backgrounded path (different shape entirely).
+        if data
+            .get("status")
+            .and_then(Value::as_str)
+            .is_some_and(|s| s == "background")
+        {
+            let msg = data
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Command is running in the background.");
+            return vec![ToolResultContentPart::Text {
+                text: msg.to_string(),
+                provider_options: None,
+            }];
+        }
+
+        // Branch 2: image stdout — decode the structuredContent envelope
+        // into FileData parts so multimodal-capable providers see the
+        // raw image bytes.
+        if let Some(arr) = data.get("structuredContent").and_then(Value::as_array) {
+            let parts: Vec<ToolResultContentPart> = arr
+                .iter()
+                .filter_map(|block| {
+                    let kind = block.get("type")?.as_str()?;
+                    match kind {
+                        "image" => {
+                            let source = block.get("source")?;
+                            let media_type = source.get("media_type")?.as_str()?.to_string();
+                            let b64 = source.get("data")?.as_str()?.to_string();
+                            Some(ToolResultContentPart::FileData {
+                                data: b64,
+                                media_type,
+                                filename: None,
+                                provider_options: None,
+                            })
+                        }
+                        "text" => {
+                            let text = block.get("text")?.as_str()?.to_string();
+                            Some(ToolResultContentPart::Text {
+                                text,
+                                provider_options: None,
+                            })
+                        }
+                        _ => None,
+                    }
+                })
+                .collect();
+            if !parts.is_empty() {
+                return parts;
+            }
+        }
+
+        // Branch 3: text path.
+        let stdout = data.get("stdout").and_then(Value::as_str).unwrap_or("");
+        let stderr = data.get("stderr").and_then(Value::as_str).unwrap_or("");
+        let interrupted = data
+            .get("interrupted")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+
+        let mut processed = strip_leading_blank_lines(stdout).trim_end().to_string();
+
+        if let Some(path) = data.get("persistedOutputPath").and_then(Value::as_str) {
+            let original_size = data
+                .get("persistedOutputSize")
+                .and_then(Value::as_u64)
+                .unwrap_or(0) as usize;
+            processed = build_persisted_output_message(path, original_size, &processed);
+        }
+
+        let mut error_message = stderr.trim().to_string();
+        if interrupted {
+            if !error_message.is_empty() {
+                error_message.push('\n');
+            }
+            error_message.push_str("<error>Command was aborted before completion</error>");
+        }
+
+        // Background-info text mirrors TS `BashTool.tsx:606-616`. Three
+        // branches:
+        //   1. `assistantAutoBackgrounded` — fg→bg auto-promotion fired
+        //      because the command exceeded the assistant blocking
+        //      budget. Verbose message names the budget so the model
+        //      knows to delegate next time.
+        //   2. `backgroundedByUser` — present in TS via Ctrl+B but not
+        //      yet wired in coco-rs (no TUI keystroke path); kept for
+        //      future-proofing so adding the keybinding is a one-line
+        //      data-side change.
+        //   3. Default `run_in_background: true` — short message.
+        // coco-rs has no on-disk task output path (TS exposes
+        // `getTaskOutputPath`), so all three messages name "the task
+        // output" rather than a real path.
+        let background_info = data
+            .get("backgroundTaskId")
+            .and_then(Value::as_str)
+            .map(|task_id| {
+                let auto = data
+                    .get("assistantAutoBackgrounded")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let by_user = data
+                    .get("backgroundedByUser")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                if auto {
+                    let budget_seconds = ASSISTANT_BLOCKING_BUDGET_MS / 1000;
+                    format!(
+                        "Command exceeded the assistant-mode blocking budget ({budget_seconds}s) and was moved to the background with ID: {task_id}. It is still running — you will be notified when it completes. Output is being written to the task output. In assistant mode, delegate long-running work to a subagent or use run_in_background to keep this conversation responsive."
+                    )
+                } else if by_user {
+                    format!(
+                        "Command was manually backgrounded by user with ID: {task_id}. Output is being written to the task output."
+                    )
+                } else {
+                    format!(
+                        "Command running in background with ID: {task_id}. Output is being written to the task output."
+                    )
+                }
+            })
+            .unwrap_or_default();
+
+        let combined = [
+            processed.as_str(),
+            error_message.as_str(),
+            background_info.as_str(),
+        ]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<&str>>()
+        .join("\n");
+
+        vec![ToolResultContentPart::Text {
+            text: combined,
+            provider_options: None,
+        }]
     }
 
     fn validate_input(&self, input: &Value, ctx: &ToolUseContext) -> ValidationResult {

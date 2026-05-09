@@ -438,35 +438,115 @@ impl QueryEngine {
         }
 
         // Auto-memory turn-end fan-out (TS feature `AutoMemory`): fire
-        // the 9-section session memory and forked extraction services
-        // concurrently. Both gate internally; the lazy `fork_messages`
-        // closure defers per-message serialization until extraction
-        // actually fires.
+        // the 9-section session memory, the forked extraction service,
+        // and the auto-dream gate-check concurrently. All three gate
+        // internally; the lazy `fork_messages` closure defers
+        // per-message serialization until extraction actually fires,
+        // and `tick_dream` invokes its session enumerator only after
+        // its time+scan gates pass. TS parity: `handleStopHooks`
+        // dispatches `executeExtractMemories` + `executeAutoDream` on
+        // every turn-end alongside session-memory updates.
         if let Some(runtime) = self.memory_runtime.clone()
             && self.config.agent_id.is_none()
         {
             let last_cursor = runtime.extract.last_cursor().await;
-            let has_memory_writes =
-                main_agent_wrote_memory(&history.messages, runtime.personal_dir());
+            // Walk all assistant messages since the cursor — TS
+            // `hasMemoryWritesSince` (`extractMemories.ts:121-148`).
+            // Older single-turn-only behavior missed the case where
+            // an earlier assistant turn in the slice wrote memory
+            // and the latest didn't.
+            let has_memory_writes = main_agent_wrote_memory(
+                &history.messages,
+                runtime.personal_dir(),
+                last_cursor.as_deref(),
+            );
+            // SessionMemory's cursor is independent of ExtractService's —
+            // the two services advance their cursors at different
+            // points (TS module-level `lastMemoryMessageUuid` per
+            // service). Compute cumulative tool calls since SM's
+            // cursor for the SM gate (TS
+            // `countToolCallsSince(messages, lastMemoryMessageUuid)`).
+            let session_memory = runtime.session_memory.clone();
+            let sm_cursor = session_memory.last_extraction_message_id().await;
+            let tool_calls_since_sm =
+                count_tool_calls_since(&history.messages, sm_cursor.as_deref());
+            // TS parity (`extractMemories.ts:432-434` /
+            // `sessionMemory.ts:173-176`): use the **last message** uuid
+            // (which can be tool_result / system / attachment), NOT the
+            // last assistant uuid. After `handleStopHooks` they're often
+            // the same (no-tool turn), but on tool-using turns the last
+            // message is the assistant's tool_use → following tool_result
+            // pair; the cursor needs to advance past the tool_result so
+            // the next gate's `countToolCallsSince` doesn't double-count.
+            let last_msg_id = history
+                .messages
+                .last()
+                .and_then(|m| m.uuid())
+                .map(uuid::Uuid::to_string);
+            // TS `countModelVisibleMessagesSince` (`extractMemories.ts:82-110`)
+            // — only user/assistant messages count; progress / system /
+            // attachment / tombstone are not "model-visible." The
+            // extraction prompt template surfaces this count to the
+            // subagent, so over-counting (history.len()) inflates the
+            // "analyze the most recent ~N messages" guidance.
+            let extract_message_count =
+                count_model_visible_since(&history.messages, last_cursor.as_deref());
             let messages_for_fork = history.messages.clone();
             let extract_input = coco_memory::service::extract::TurnInput {
                 fork_messages: Box::new(move || {
                     serialize_messages_since(&messages_for_fork, last_cursor.as_deref())
                 }),
-                message_count: history.messages.len() as i32,
-                last_message_id: last_assistant_uuid.map(|u| u.to_string()),
+                message_count: extract_message_count,
+                last_message_id: last_msg_id.clone(),
                 has_memory_writes,
             };
-            let session_memory = runtime.session_memory.clone();
             let extract = runtime.extract.clone();
-            let (_sm, _ex) = tokio::join!(
-                session_memory.maybe_extract(
-                    estimated_tokens,
-                    tool_calls_last_turn,
-                    tool_calls_last_turn > 0
-                ),
+            let dream_runtime = runtime.clone();
+            let now_ms = coco_memory::service::dream::DreamService::now_ms();
+            // TS `sessionMemory.ts:360-371`: SM is gated on auto-compact
+            // being enabled (its primary consumer is the SM-first
+            // compact branch). When auto-compact is off, skip SM
+            // dispatch entirely so we don't burn turns on a feature the
+            // operator has disabled.
+            let auto_compact_enabled = self.config.is_auto_compact_active();
+            let (_sm, _ex, _dr) = tokio::join!(
+                async {
+                    if auto_compact_enabled {
+                        session_memory
+                            .maybe_extract(
+                                estimated_tokens,
+                                tool_calls_since_sm,
+                                tool_calls_last_turn > 0,
+                                last_msg_id,
+                            )
+                            .await
+                    } else {
+                        coco_memory::service::session::SessionMemoryOutcome::Skipped(
+                            coco_memory::service::session::SkipReason::Disabled,
+                        )
+                    }
+                },
                 extract.maybe_extract(extract_input),
+                dream_runtime.tick_dream(now_ms),
             );
+            // Drain user-visible save notices and inject one
+            // `SystemMemorySavedMessage` per notice. TS parity:
+            // `appendSystemMessage(createMemorySavedMessage(paths))`
+            // in `extractMemories.ts:495` and `autoDream.ts:243-247`.
+            // Empty `written_paths` lists are filtered upstream
+            // (services skip pushing when no topic file changed), so
+            // here we only see real save events.
+            for notice in runtime.drain_user_notices() {
+                history.push(coco_messages::Message::System(
+                    coco_messages::SystemMessage::MemorySaved(
+                        coco_messages::SystemMemorySavedMessage {
+                            uuid: uuid::Uuid::new_v4(),
+                            written_paths: notice.written_paths,
+                            verb: notice.verb.as_str().to_string(),
+                        },
+                    ),
+                ));
+            }
         }
         // Collapse-aware guard: when staged_compact is active it owns
         // the threshold ladder, so proactive autocompact suppresses.
@@ -744,23 +824,97 @@ fn serialize_messages_since(
         .collect()
 }
 
-/// Detect whether the main agent's last assistant turn wrote into the
+/// Count user + assistant messages strictly after `since_uuid` —
+/// TS `countModelVisibleMessagesSince` (`extractMemories.ts:82-110`).
+/// "Model-visible" = anything sent in API calls; excludes progress,
+/// system, attachment, tombstone, tool_use_summary. Threaded into
+/// the extraction agent's prompt so the "~N messages" guidance is
+/// accurate (using `history.len()` would over-count).
+///
+/// Fall-through: when `since_uuid` is `None` or doesn't match any
+/// message in `messages` (e.g. compaction trimmed the cursor), count
+/// the whole history — matches TS so a stale cursor doesn't permanently
+/// zero the count.
+fn count_model_visible_since(messages: &[coco_messages::Message], since_uuid: Option<&str>) -> i32 {
+    use coco_messages::Message;
+    let is_visible = |m: &Message| matches!(m, Message::User(_) | Message::Assistant(_));
+    let cursor_idx = since_uuid.and_then(|c| {
+        messages
+            .iter()
+            .position(|m| m.uuid().map(|u| u.to_string() == c).unwrap_or(false))
+    });
+    let start = match cursor_idx {
+        Some(i) => i + 1,
+        None => 0,
+    };
+    messages[start..].iter().filter(|m| is_visible(m)).count() as i32
+}
+
+/// Count cumulative `tool_use` blocks across all assistant messages
+/// strictly after `since_uuid` (or all messages when the cursor is
+/// `None` / not found). TS parity with `countToolCallsSince`
+/// (`services/SessionMemory/sessionMemory.ts:108-132`) — the gate
+/// signal SessionMemoryService uses to decide if enough work has
+/// accumulated since the last extraction.
+fn count_tool_calls_since(messages: &[coco_messages::Message], since_uuid: Option<&str>) -> i32 {
+    use coco_messages::AssistantContent;
+    use coco_messages::LlmMessage;
+    use coco_messages::Message;
+    let cursor_idx = since_uuid.and_then(|c| {
+        messages
+            .iter()
+            .position(|m| m.uuid().map(|u| u.to_string() == c).unwrap_or(false))
+    });
+    let start = match cursor_idx {
+        Some(i) => i + 1,
+        None => 0,
+    };
+    let mut count: i32 = 0;
+    for msg in &messages[start..] {
+        if let Message::Assistant(assistant) = msg
+            && let LlmMessage::Assistant { content, .. } = &assistant.message
+        {
+            for block in content {
+                if matches!(block, AssistantContent::ToolCall(_)) {
+                    count = count.saturating_add(1);
+                }
+            }
+        }
+    }
+    count
+}
+
+/// Detect whether any assistant turn since `since_uuid` wrote into the
 /// memory directory via Write / Edit / NotebookEdit. Used by
 /// `ExtractService::maybe_extract` to skip extraction when the user
-/// just curated memory directly — TS `hasMemoryWritesSince`.
+/// just curated memory directly — TS `hasMemoryWritesSince`
+/// (`extractMemories.ts:121-148`). When `since_uuid` is `None` (or
+/// the cursor uuid isn't found, e.g. compaction trimmed it), walk the
+/// entire history — matches TS's fall-through that scans all
+/// messages so a stale cursor doesn't permanently mask writes.
 fn main_agent_wrote_memory(
     messages: &[coco_messages::Message],
     memory_dir: &std::path::Path,
+    since_uuid: Option<&str>,
 ) -> bool {
     use coco_messages::AssistantContent;
     use coco_messages::LlmMessage;
     use coco_messages::Message;
-    for msg in messages.iter().rev() {
+    let cursor_idx = since_uuid.and_then(|c| {
+        messages
+            .iter()
+            .position(|m| m.uuid().map(|u| u.to_string() == c).unwrap_or(false))
+    });
+    let start = match cursor_idx {
+        Some(i) => i + 1,
+        None => 0,
+    };
+    for msg in &messages[start..] {
         let Message::Assistant(assistant) = msg else {
             continue;
         };
         let LlmMessage::Assistant { content, .. } = &assistant.message else {
-            return false;
+            continue;
         };
         for block in content {
             let AssistantContent::ToolCall(call) = block else {
@@ -795,9 +949,6 @@ fn main_agent_wrote_memory(
                 return true;
             }
         }
-        // Only consider the single most-recent assistant turn — older
-        // tool uses aren't relevant to "did the model just write?"
-        return false;
     }
     false
 }

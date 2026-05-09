@@ -43,6 +43,13 @@ pub struct MaterializeContext<'a> {
     /// nested-memory traversal.
     pub mentioned_paths: &'a [std::path::PathBuf],
 
+    /// Tool names successfully invoked since the last user turn — TS
+    /// `collectRecentSuccessfulTools(messages, lastUserMessage)`. Fed
+    /// into the relevant-memories ranker so it can deprioritize
+    /// reference docs for tools the model is actively exercising.
+    /// Empty slice → no signal yet (e.g. the very first turn).
+    pub recent_tools: &'a [String],
+
     /// True when the engine crossed a compaction boundary on this
     /// turn. Gates `task_status` (TS emits post-compaction only).
     pub just_compacted: bool,

@@ -460,6 +460,72 @@ async fn test_spawn_teammate_drives_engine_when_installed() {
 }
 
 #[tokio::test]
+async fn test_spawn_subagent_fresh_threads_definition_system_prompt() {
+    // Regression: the Fresh branch of spawn_subagent used to seed
+    // `AgentQueryConfig.system_prompt` with `String::new()`, dropping
+    // the agent's role instructions. TS `runAgent.ts` calls
+    // `agentDefinition.getSystemPrompt(...)` to build the prompt; the
+    // Rust analogue is `AgentDefinition.system_prompt`. This test
+    // installs a stub engine that captures the AgentQueryConfig and
+    // asserts the definition's system_prompt body is present.
+    use async_trait::async_trait;
+    use coco_tool_runtime::AgentQueryConfig;
+    use coco_tool_runtime::AgentQueryEngine;
+    use coco_tool_runtime::AgentQueryResult;
+
+    struct CapturingEngine {
+        captured: Arc<tokio::sync::Mutex<Option<String>>>,
+    }
+
+    #[async_trait]
+    impl AgentQueryEngine for CapturingEngine {
+        async fn execute_query(
+            &self,
+            _prompt: &str,
+            config: AgentQueryConfig,
+        ) -> Result<AgentQueryResult, coco_error::BoxedError> {
+            *self.captured.lock().await = Some(config.system_prompt);
+            Ok(AgentQueryResult {
+                response_text: Some("ok".into()),
+                messages: Vec::new(),
+                turns: 1,
+                input_tokens: 0,
+                output_tokens: 0,
+                tool_use_count: 0,
+                cancelled: false,
+            })
+        }
+    }
+
+    let captured = Arc::new(tokio::sync::Mutex::new(None));
+    let mut handle = create_test_handle();
+    handle.set_execution_engine(Arc::new(CapturingEngine {
+        captured: captured.clone(),
+    }));
+
+    let definition = std::sync::Arc::new(coco_types::AgentDefinition {
+        name: "Explore".into(),
+        agent_type: coco_types::AgentTypeId::Builtin(coco_types::SubagentType::Explore),
+        system_prompt: Some("EXPLORE ROLE INSTRUCTIONS".into()),
+        ..Default::default()
+    });
+
+    let request = AgentSpawnRequest {
+        prompt: "do work".into(),
+        subagent_type: Some("Explore".into()),
+        definition: Some(definition),
+        ..Default::default()
+    };
+    let response = handle.spawn_agent(request).await.unwrap();
+    assert_eq!(response.status, AgentSpawnStatus::Completed);
+    let observed = captured.lock().await.clone().expect("engine ran");
+    assert!(
+        observed.contains("EXPLORE ROLE INSTRUCTIONS"),
+        "Fresh spawn must seed system_prompt from definition; got: {observed:?}"
+    );
+}
+
+#[tokio::test]
 async fn test_spawn_teammate_uses_base_system_prompt_when_no_initial_prompt() {
     // Pre-fix: spawn_teammate ignored the leader's resolved system
     // prompt and passed only `request.initial_prompt` (usually `None`)

@@ -141,6 +141,15 @@ fn render_show(snapshot: &coco_subagent::AgentCatalogSnapshot, name: &str) -> St
             .join(", ");
         out.push_str(&format!("MCP servers:   {formatted}\n"));
     }
+    if let Some(ts) = &def.pending_snapshot_update {
+        // TS parity: `loadAgentsDir.ts:262-294` — surface drift
+        // between project snapshot and synced local memory dir.
+        // The CLI bootstrap (app/cli) wires the inspector that
+        // populates this field; the slash command displays it when
+        // present. `None` when no inspector is wired or the local
+        // memory is already in sync.
+        out.push_str(&format!("Pending sync:  {ts}\n"));
+    }
     if let Some(prompt) = &def.initial_prompt {
         let preview = prompt.lines().take(10).collect::<Vec<_>>().join("\n");
         out.push_str(&format!("\nPrompt preview:\n{preview}\n"));

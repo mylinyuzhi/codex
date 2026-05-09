@@ -42,18 +42,30 @@ pub struct ToolPermissionRequest {
 }
 
 /// Leader's decision on a permission request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolPermissionDecision {
     Approved,
+    #[default]
     Rejected,
 }
 
 /// Resolution of a permission request.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ToolPermissionResolution {
     pub decision: ToolPermissionDecision,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub feedback: Option<String>,
+    /// Permission updates the user authorized at decision time.
+    /// The bridge consumer (TUI / SDK runner) is expected to have
+    /// already applied these to the live engine config and persisted
+    /// them to disk for User/Project/Local destinations. This field
+    /// carries the *intent* through the resolution so audit/logging
+    /// downstream of the bridge can see which rules a user agreed to.
+    /// Empty when the user picked one-shot Approve / Reject without
+    /// "Always Allow".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub applied_updates: Vec<coco_types::PermissionUpdate>,
 }
 
 /// Trait for forwarding permission requests from agents to the leader.
@@ -89,6 +101,7 @@ impl ToolPermissionBridge for NoOpPermissionBridge {
         Ok(ToolPermissionResolution {
             decision: ToolPermissionDecision::Rejected,
             feedback: Some("Permission forwarding not available".into()),
+            applied_updates: Vec::new(),
         })
     }
 }

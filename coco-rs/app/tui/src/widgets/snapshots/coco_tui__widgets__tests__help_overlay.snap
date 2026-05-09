@@ -4,25 +4,25 @@ expression: output
 ---
  | opus-4                                                                       
             ┌ Help ────────────────────────────────────────────────┐            
-            │Tab           Toggle plan mode                        │            
-            │Shift+Tab     Cycle permission mode                   │            
-            │Ctrl+T        Cycle thinking level                    │            
-            │Ctrl+M        Cycle model                             │            
-            │Ctrl+C        Interrupt                               │            
-            │Ctrl+L        Clear screen                            │            
-            │Ctrl+K        Kill to end of line                     │            
-            │Ctrl+Y        Yank killed text                        │            
-            │Ctrl+E        External editor                         │            
-            │Ctrl+P        Command palette                         │            
-            │Ctrl+S        Session browser                         │            
-            │Ctrl+F        Kill all agents                         │            
-            │Ctrl+Shift+F  Toggle fast mode                        │            
-            │Ctrl+O        Quick open file                         │            
-            │Ctrl+W        Context window                          │            
-            │F6            Focus next panel                        │            
-            │Ctrl+Q        Quit                                    │            
-            │?/F1          This help                               │            
- Input ─────│Esc           Close overlay                           │────────────
-> Type a mes│PageUp/Down   Scroll                                  │            
+            │tab            Toggle plan mode                       │            
+            │shift+tab      Cycle permission mode                  │            
+            │ctrl+t         Toggle tasks / teammates panel         │            
+            │ctrl+m         Cycle model                            │            
+            │ctrl+c         Interrupt                              │            
+            │ctrl+l         Clear screen                           │            
+            │ctrl+k         Kill to end of line                    │            
+            │ctrl+y         Yank killed text                       │            
+            │ctrl+x ctrl+e  External editor                        │            
+            │ctrl+p         Command palette                        │            
+            │ctrl+s         Stash / restore input draft            │            
+            │ctrl+x ctrl+k  Kill all agents                        │            
+            │alt+o          Toggle fast mode                       │            
+            │ctrl+shift+f   Global search                          │            
+            │ctrl+o         Toggle transcript view                 │            
+            │ctrl+shift+o   Toggle teammate message preview        │            
+            │ctrl+shift+p   Quick open file                        │            
+            │ctrl+w         Context window                         │            
+ Input ─────│f6             Focus next panel                       │────────────
+> Type a mes│ctrl+d         Quit                                   │            
             └──────────────────────────────────────────────────────┘            
  opus-4 | Default | 0 msgs

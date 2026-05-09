@@ -904,3 +904,178 @@ async fn test_agent_tool_threads_none_when_catalog_absent() {
         "without a catalog, no definition should be threaded",
     );
 }
+
+// ---------------------------------------------------------------------------
+// render_for_model — TS parity with AgentTool.tsx::mapToolResultToToolResultBlockParam
+// (4 branches: teammate_spawned / async_launched / completed / failed)
+// ---------------------------------------------------------------------------
+
+mod render_for_model_tests {
+    use super::*;
+    use coco_tool_runtime::ToolResultContentPart;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    #[test]
+    fn teammate_spawned_emits_spawn_message() {
+        // TS `AgentTool.tsx:1308-1312`: agent_id + name + team_name +
+        // mailbox hint are the four required signals.
+        let data = json!({
+            "status": "teammate_spawned",
+            "agentId": "agent-7",
+            "name": "alice",
+            "team_name": "alpha-team",
+        });
+        let parts = AgentTool.render_for_model(&data);
+        let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected Text part");
+        };
+        assert!(text.contains("Spawned successfully"), "got: {text}");
+        assert!(text.contains("agent_id: agent-7"), "got: {text}");
+        assert!(text.contains("name: alice"), "got: {text}");
+        assert!(text.contains("team_name: alpha-team"), "got: {text}");
+        assert!(text.contains("mailbox"), "got: {text}");
+    }
+
+    #[test]
+    fn teammate_spawned_omitted_fields_render_as_empty_lines() {
+        // When the spawn input omits `name` or `team_name` (e.g. a
+        // partially-populated test fixture), the data envelope just
+        // doesn't include those keys. Render still emits the labels
+        // with empty values so downstream parsers see a consistent
+        // 4-line shape.
+        let data = json!({
+            "status": "teammate_spawned",
+            "agentId": "agent-9",
+        });
+        let parts = AgentTool.render_for_model(&data);
+        let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected Text part");
+        };
+        assert!(text.contains("agent_id: agent-9"), "got: {text}");
+        assert!(text.contains("name: \n"), "got: {text}");
+        assert!(text.contains("team_name: \n"), "got: {text}");
+    }
+
+    #[test]
+    fn async_launched_with_output_file_includes_file_path() {
+        let data = json!({
+            "status": "async_launched",
+            "agentId": "agent-99",
+            "prompt": "Run the test suite",
+            "description": "test",
+            "outputFile": "/tmp/agent-99.log",
+        });
+        let parts = AgentTool.render_for_model(&data);
+        let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected Text part");
+        };
+        assert!(text.contains("Async agent launched"), "got: {text}");
+        assert!(text.contains("agent-99"), "got: {text}");
+        assert!(text.contains("/tmp/agent-99.log"), "got: {text}");
+        assert!(text.contains("non-overlapping"), "got: {text}");
+    }
+
+    #[test]
+    fn async_launched_without_output_file_uses_brief_instruction() {
+        let data = json!({
+            "status": "async_launched",
+            "agentId": "agent-100",
+            "prompt": "Watch metrics",
+            "description": "watch",
+        });
+        let parts = AgentTool.render_for_model(&data);
+        let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected Text part");
+        };
+        assert!(text.contains("Briefly tell the user"), "got: {text}");
+        assert!(!text.contains("output_file"), "got: {text}");
+    }
+
+    #[test]
+    fn completed_includes_content_agent_id_usage_trailer() {
+        let data = json!({
+            "status": "completed",
+            "content": "Found 3 bugs in auth.rs",
+            "prompt": "investigate",
+            "totalToolUseCount": 5,
+            "totalTokens": 12345,
+            "durationMs": 30000,
+            "oneShot": false,
+            "agentId": "agent-x",
+        });
+        let parts = AgentTool.render_for_model(&data);
+        let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected Text part");
+        };
+        assert!(text.starts_with("Found 3 bugs in auth.rs"), "got: {text}");
+        assert!(text.contains("agentId: agent-x"), "got: {text}");
+        assert!(text.contains("<usage>"), "got: {text}");
+        assert!(text.contains("total_tokens: 12345"), "got: {text}");
+        assert!(text.contains("tool_uses: 5"), "got: {text}");
+        assert!(text.contains("duration_ms: 30000"), "got: {text}");
+    }
+
+    #[test]
+    fn completed_one_shot_drops_trailer() {
+        // Explore / Plan are one-shot built-ins — they cannot be
+        // re-addressed via SendMessage, so the agentId hint and
+        // <usage> block are dead weight (~135 chars per call).
+        let data = json!({
+            "status": "completed",
+            "content": "Architecture summary: ...",
+            "prompt": "summarize",
+            "totalToolUseCount": 8,
+            "totalTokens": 22000,
+            "durationMs": 45000,
+            "oneShot": true,
+            "agentId": "agent-explore-1",
+        });
+        let parts = AgentTool.render_for_model(&data);
+        let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected Text part");
+        };
+        assert_eq!(text, "Architecture summary: ...");
+        assert!(!text.contains("agentId"), "trailer must be dropped");
+        assert!(!text.contains("<usage>"), "usage block must be dropped");
+    }
+
+    #[test]
+    fn completed_with_worktree_keeps_trailer_even_when_one_shot() {
+        // Worktree info is load-bearing for cleanup — even one-shot
+        // agents that ran in a worktree must surface its path.
+        let data = json!({
+            "status": "completed",
+            "content": "Refactor done",
+            "prompt": "refactor",
+            "totalToolUseCount": 12,
+            "totalTokens": 30000,
+            "durationMs": 60000,
+            "oneShot": true,
+            "agentId": "agent-wt",
+            "worktreePath": "/tmp/wt",
+            "worktreeBranch": "feat/x",
+        });
+        let parts = AgentTool.render_for_model(&data);
+        let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected Text part");
+        };
+        assert!(text.contains("Refactor done"));
+        assert!(text.contains("worktreePath: /tmp/wt"));
+        assert!(text.contains("worktreeBranch: feat/x"));
+        assert!(text.contains("<usage>"));
+    }
+
+    #[test]
+    fn failed_emits_error_message() {
+        let data = json!({
+            "status": "failed",
+            "error": "agent crashed: connection refused",
+        });
+        let parts = AgentTool.render_for_model(&data);
+        let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected Text part");
+        };
+        assert_eq!(text, "Agent failed: agent crashed: connection refused");
+    }
+}

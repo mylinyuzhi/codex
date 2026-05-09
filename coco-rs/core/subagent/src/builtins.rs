@@ -2,17 +2,28 @@
 //!
 //! TS source: `tools/AgentTool/built-in/*.ts` and `builtInAgents.ts:22-72`.
 //! Each built-in here mirrors the TS contract for `agentType`, `whenToUse`,
-//! `tools`/`disallowedTools`, `model`, `color`, `background`, and
-//! `omitClaudeMd`. The system prompt body is left empty here — runtime
-//! supplies the prompt text via a `getSystemPrompt` analogue. The `name`
-//! field doubles as the catalog ID and the lookup key in store snapshots.
+//! `tools`/`disallowedTools`, `model`, `color`, `background`,
+//! `omitClaudeMd`, and `system_prompt` (the body the model receives — TS
+//! `getSystemPrompt()`). The `name` field doubles as the catalog ID and
+//! the lookup key in store snapshots.
 //!
-//! Optional built-ins (Explore, Plan, verification, claude-code-guide) are
+//! Built-in `system_prompt` bodies live in [`crate::builtin_prompts`]
+//! (one constant or factory per agent). Variants that depend on the
+//! host build (`hasEmbeddedSearchTools()`) are threaded through
+//! [`BuiltinAgentCatalog::has_embedded_search_tools`].
+//!
+//! Optional built-ins (Explore, Plan, verification, coco-guide) are
 //! gated by booleans on `BuiltinAgentCatalog`; consumers (CLI bootstrap)
 //! map these from feature flags / GrowthBook gates.
 
 use coco_types::{
     AgentColorName, AgentDefinition, AgentSource, AgentTypeId, SubagentType, ToolName,
+};
+
+use crate::builtin_prompts::{
+    STATUSLINE_SETUP_SYSTEM_PROMPT, VERIFICATION_CRITICAL_SYSTEM_REMINDER,
+    coco_guide_system_prompt, explore_system_prompt, general_purpose_system_prompt,
+    plan_system_prompt, verification_system_prompt,
 };
 
 /// What the SDK / CLI / TUI passes in to choose which optional built-ins
@@ -23,10 +34,18 @@ pub struct BuiltinAgentCatalog {
     pub include_explore_plan: bool,
     /// `VERIFICATION_AGENT` + `tengu_hive_evidence`.
     pub include_verification: bool,
-    /// `claude-code-guide` is included for non-SDK entrypoints (CLI/TUI).
-    pub include_claude_code_guide: bool,
+    /// `coco-guide` is included for non-SDK entrypoints (CLI/TUI).
+    pub include_coco_guide: bool,
     /// SDK noninteractive mode disables the entire built-in roster.
     pub disable_all: bool,
+    /// Host build embeds search tools (`bfs` / `ugrep`) into the Bash
+    /// tool. When true, `coco-guide`'s default tool list swaps
+    /// the dedicated `Glob` / `Grep` tools for `Bash`. TS parity:
+    /// `claudeCodeGuideAgent.ts:103-118` reads `hasEmbeddedSearchTools()`
+    /// to choose between the two lists. coco-rs is a 3p build by
+    /// default — leave this `false` unless the host explicitly
+    /// disabled the `Glob`/`Grep` tools.
+    pub has_embedded_search_tools: bool,
 }
 
 impl BuiltinAgentCatalog {
@@ -35,8 +54,9 @@ impl BuiltinAgentCatalog {
         Self {
             include_explore_plan: true,
             include_verification: false,
-            include_claude_code_guide: true,
+            include_coco_guide: true,
             disable_all: false,
+            has_embedded_search_tools: false,
         }
     }
 
@@ -55,8 +75,9 @@ impl BuiltinAgentCatalog {
         Self {
             include_explore_plan: true,
             include_verification: true,
-            include_claude_code_guide: true,
+            include_coco_guide: true,
             disable_all: false,
+            has_embedded_search_tools: false,
         }
     }
 }
@@ -67,49 +88,54 @@ pub fn builtin_definitions(catalog: BuiltinAgentCatalog) -> Vec<AgentDefinition>
         return Vec::new();
     }
 
+    let embedded = catalog.has_embedded_search_tools;
     let mut out = Vec::with_capacity(6);
     out.push(general_purpose());
     out.push(statusline_setup());
     if catalog.include_explore_plan {
-        out.push(explore());
-        out.push(plan());
+        out.push(explore(embedded));
+        out.push(plan(embedded));
     }
     if catalog.include_verification {
         out.push(verification());
     }
-    if catalog.include_claude_code_guide {
-        out.push(claude_code_guide());
+    if catalog.include_coco_guide {
+        out.push(coco_guide_with(embedded));
     }
     out
 }
 
 /// Lookup a single built-in by canonical (case-sensitive) `agent_type`.
+///
+/// The lookup has no `BuiltinAgentCatalog` context, so it defaults to the
+/// non-embedded variant (3p build). Embedded-host callers should iterate
+/// [`builtin_definitions`] with the catalog flag set instead.
 pub fn builtin_definition(agent_type: &str) -> Option<AgentDefinition> {
     SubagentType::ALL.iter().find_map(|s| {
         if s.as_str() == agent_type {
-            Some(builtin_for(*s))
+            Some(builtin_for(*s, false))
         } else {
             None
         }
     })
 }
 
-fn builtin_for(t: SubagentType) -> AgentDefinition {
+fn builtin_for(t: SubagentType, has_embedded_search_tools: bool) -> AgentDefinition {
     match t {
         SubagentType::GeneralPurpose => general_purpose(),
         SubagentType::StatusLine => statusline_setup(),
-        SubagentType::Explore => explore(),
-        SubagentType::Plan => plan(),
+        SubagentType::Explore => explore(has_embedded_search_tools),
+        SubagentType::Plan => plan(has_embedded_search_tools),
         SubagentType::Verification => verification(),
-        SubagentType::ClaudeCodeGuide => claude_code_guide(),
+        SubagentType::CocoGuide => coco_guide_with(has_embedded_search_tools),
     }
 }
 
 // ── individual built-ins ──
 //
 // Each builder mirrors the TS file `tools/AgentTool/built-in/<name>.ts`.
-// The `system_prompt` is left None: built-in prompts are dynamic (parent
-// context drives them), so the runtime renders them on spawn.
+// `system_prompt` is the body returned by TS `getSystemPrompt()` — sourced
+// from [`crate::builtin_prompts`].
 
 fn base(t: SubagentType, when_to_use: &str) -> AgentDefinition {
     AgentDefinition {
@@ -124,11 +150,17 @@ fn base(t: SubagentType, when_to_use: &str) -> AgentDefinition {
 }
 
 fn general_purpose() -> AgentDefinition {
-    // Verbatim TS `built-in/generalPurposeAgent.ts:27-29`.
-    base(
-        SubagentType::GeneralPurpose,
-        "General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks. When you are searching for a keyword or file and are not confident that you will find the right match in the first few tries use this agent to perform the search for you.",
-    )
+    AgentDefinition {
+        // TS `generalPurposeAgent.ts:29` — `tools: ['*']` means "all
+        // tools". coco-rs encodes wildcard as the empty list (see
+        // `AgentToolFilter::plan` `uses_default_allow_list`).
+        system_prompt: Some(general_purpose_system_prompt()),
+        ..base(
+            SubagentType::GeneralPurpose,
+            // Verbatim TS `built-in/generalPurposeAgent.ts:27-29`.
+            "General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks. When you are searching for a keyword or file and are not confident that you will find the right match in the first few tries use this agent to perform the search for you.",
+        )
+    }
 }
 
 fn read_only_disallowed() -> Vec<String> {
@@ -151,6 +183,7 @@ fn statusline_setup() -> AgentDefinition {
             ToolName::Read.as_str().into(),
             ToolName::Edit.as_str().into(),
         ],
+        system_prompt: Some(STATUSLINE_SETUP_SYSTEM_PROMPT.into()),
         ..base(
             SubagentType::StatusLine,
             "Use this agent to configure the user's Claude Code status line setting.",
@@ -158,7 +191,7 @@ fn statusline_setup() -> AgentDefinition {
     }
 }
 
-fn explore() -> AgentDefinition {
+fn explore(has_embedded_search_tools: bool) -> AgentDefinition {
     AgentDefinition {
         // TS exploreAgent.ts:78: `process.env.USER_TYPE === 'ant' ? 'inherit' : 'haiku'`.
         // Default 3P/SDK build → haiku (cheaper, cache-friendly fast explore).
@@ -166,6 +199,7 @@ fn explore() -> AgentDefinition {
         model: Some("haiku".into()),
         omit_claude_md: true,
         disallowed_tools: read_only_disallowed(),
+        system_prompt: Some(explore_system_prompt(has_embedded_search_tools)),
         ..base(
             SubagentType::Explore,
             // Verbatim TS `built-in/exploreAgent.ts:60-61` `EXPLORE_WHEN_TO_USE`.
@@ -174,11 +208,12 @@ fn explore() -> AgentDefinition {
     }
 }
 
-fn plan() -> AgentDefinition {
+fn plan(has_embedded_search_tools: bool) -> AgentDefinition {
     AgentDefinition {
         model: Some("inherit".into()),
         omit_claude_md: true,
         disallowed_tools: read_only_disallowed(),
+        system_prompt: Some(plan_system_prompt(has_embedded_search_tools)),
         ..base(
             SubagentType::Plan,
             // Verbatim TS `built-in/planAgent.ts:75-77` whenToUse.
@@ -193,6 +228,10 @@ fn verification() -> AgentDefinition {
         color: Some(AgentColorName::Red),
         background: true,
         disallowed_tools: read_only_disallowed(),
+        system_prompt: Some(verification_system_prompt()),
+        // TS `verificationAgent.ts:150-151`
+        // `criticalSystemReminder_EXPERIMENTAL`.
+        critical_system_reminder: Some(VERIFICATION_CRITICAL_SYSTEM_REMINDER.into()),
         ..base(
             SubagentType::Verification,
             // Verbatim TS `built-in/verificationAgent.ts:131-133`
@@ -202,26 +241,52 @@ fn verification() -> AgentDefinition {
     }
 }
 
-fn claude_code_guide() -> AgentDefinition {
-    // TS claudeCodeGuideAgent.ts: default branch tools = [Glob, Grep, Read,
-    // WebFetch, WebSearch], permissionMode: 'dontAsk'.
-    AgentDefinition {
-        model: Some("haiku".into()),
-        permission_mode: Some("dontAsk".into()),
-        allowed_tools: vec![
+/// TS `claudeCodeGuideAgent.ts:103-118`: when `hasEmbeddedSearchTools()`
+/// is true, the host build aliases `Glob`/`Grep` to `Bash` (with
+/// embedded `bfs` / `ugrep`), so the agent's tool list swaps the
+/// dedicated tools for `Bash`. coco-rs is a 3p build by default; the
+/// flag is plumbed through `BuiltinAgentCatalog::has_embedded_search_tools`.
+///
+/// The system prompt embeds the same flag — see
+/// [`crate::builtin_prompts::coco_guide_system_prompt`]. The dynamic
+/// context sections TS appends at spawn time (custom skills, custom
+/// agents, MCP servers, plugin commands, settings.json) are not folded
+/// in here — they belong on the spawn-time prompt assembler, not on
+/// the static catalog entry.
+///
+/// **Coco-rs rename**: TS calls this agent `claude-code-guide`; coco-rs
+/// owns the identifier as `coco-guide` (see
+/// [`coco_types::SubagentType::CocoGuide`]).
+fn coco_guide_with(has_embedded_search_tools: bool) -> AgentDefinition {
+    let allowed_tools = if has_embedded_search_tools {
+        vec![
+            ToolName::Bash.as_str().into(),
+            ToolName::Read.as_str().into(),
+            ToolName::WebFetch.as_str().into(),
+            ToolName::WebSearch.as_str().into(),
+        ]
+    } else {
+        vec![
             ToolName::Glob.as_str().into(),
             ToolName::Grep.as_str().into(),
             ToolName::Read.as_str().into(),
             ToolName::WebFetch.as_str().into(),
             ToolName::WebSearch.as_str().into(),
-        ],
+        ]
+    };
+    AgentDefinition {
+        model: Some("haiku".into()),
+        permission_mode: Some("dontAsk".into()),
+        allowed_tools,
+        system_prompt: Some(coco_guide_system_prompt(has_embedded_search_tools)),
         ..base(
-            SubagentType::ClaudeCodeGuide,
-            // Verbatim TS `built-in/claudeCodeGuideAgent.ts:100`. The TS
-            // template references `${SEND_MESSAGE_TOOL_NAME}` (= "SendMessage")
-            // — inlined here as the constant value for byte-faithful prompt
-            // rendering.
-            "Use this agent when the user asks questions (\"Can Claude...\", \"Does Claude...\", \"How do I...\") about: (1) Claude Code (the CLI tool) - features, hooks, slash commands, MCP servers, settings, IDE integrations, keyboard shortcuts; (2) Claude Agent SDK - building custom agents; (3) Claude API (formerly Anthropic API) - API usage, tool use, Anthropic SDK usage. **IMPORTANT:** Before spawning a new agent, check if there is already a running or recently completed claude-code-guide agent that you can continue via SendMessage.",
+            SubagentType::CocoGuide,
+            // Adapted from TS `built-in/claudeCodeGuideAgent.ts:100` —
+            // the agent identifier is renamed to `coco-guide` for
+            // coco-rs. The TS template references
+            // `${SEND_MESSAGE_TOOL_NAME}` (= "SendMessage"); inlined
+            // here as the literal constant value.
+            "Use this agent when the user asks questions (\"Can Claude...\", \"Does Claude...\", \"How do I...\") about: (1) Claude Code (the CLI tool) - features, hooks, slash commands, MCP servers, settings, IDE integrations, keyboard shortcuts; (2) Claude Agent SDK - building custom agents; (3) Claude API (formerly Anthropic API) - API usage, tool use, Anthropic SDK usage. **IMPORTANT:** Before spawning a new agent, check if there is already a running or recently completed coco-guide agent that you can continue via SendMessage.",
         )
     }
 }

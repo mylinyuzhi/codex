@@ -358,8 +358,34 @@ fn serialize_tool_result_content(content: &ToolResultContent) -> String {
             reason.clone().unwrap_or_else(|| "Execution denied".into())
         }
         ToolResultContent::Content { value, .. } => {
-            // Serialize the full content value as JSON (matches TS JSON.stringify behavior)
-            serde_json::to_string(value).unwrap_or_default()
+            // OpenAI-Compatible providers (DeepSeek / xAI / Groq /
+            // Together / …) inherit OpenAI Chat Completions' single-
+            // string `tool` role message — they can't carry image or
+            // document blocks. Match the OpenAI chat degradation: pass
+            // Text parts through, replace non-Text parts with a
+            // visible marker so the model knows *something* was there.
+            // Pre-refactor this branch JSON-stringified the whole Vec
+            // (model saw `[{"type":"file-data","data":"iVBOR..."}]`),
+            // a leak that wasted tokens with no upside.
+            use vercel_ai_provider::ToolResultContentPart;
+            let parts: Vec<String> = value
+                .iter()
+                .map(|part| match part {
+                    ToolResultContentPart::Text { text, .. } => text.clone(),
+                    ToolResultContentPart::FileData { media_type, .. }
+                    | ToolResultContentPart::FileUrl { media_type, .. } => format!(
+                        "[{media_type} content omitted — provider doesn't support multimodal tool results]"
+                    ),
+                    ToolResultContentPart::FileReference { .. } => {
+                        "[file reference omitted — provider doesn't support multimodal tool results]"
+                            .into()
+                    }
+                    ToolResultContentPart::Custom { .. } => {
+                        "[custom provider-specific content omitted]".into()
+                    }
+                })
+                .collect();
+            parts.join("\n")
         }
     }
 }

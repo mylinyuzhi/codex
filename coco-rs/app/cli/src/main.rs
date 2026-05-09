@@ -8,7 +8,6 @@ use coco_cli::Commands;
 use coco_cli::McpAction;
 use coco_cli::headless::build_runtime_config_for_cli;
 use coco_cli::headless::create_api_client;
-use coco_cli::paths::output_style_dirs;
 use coco_cli::paths::sessions_dir;
 use coco_cli::paths::standard_agent_search_paths;
 use coco_cli::resume_resolver;
@@ -320,7 +319,24 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     let command_registry = resources.command_registry.clone();
     let skill_manager = resources.skill_manager.clone();
 
-    let current_output_style = "default".to_string();
+    // Use the manager built inside `build_engine_resources` — the
+    // active style already shaped the system prompt, and we surface
+    // the same name + catalog on the SDK init message so TS clients
+    // and TUI status lines stay consistent.
+    let output_style_manager = resources.output_style_manager.clone();
+    let current_output_style = output_style_manager.active_name_for_sdk();
+    let mut available_output_styles = output_style_manager.names();
+    // TS exposes `default` as a selectable option in the picker even
+    // though it isn't in the catalog (it represents "no style"). The
+    // SDK schema lists every name a client can set on `outputStyle`,
+    // so we prepend the sentinel here.
+    if !available_output_styles
+        .iter()
+        .any(|n| n == coco_output_styles::DEFAULT_OUTPUT_STYLE_NAME)
+    {
+        available_output_styles
+            .insert(0, coco_output_styles::DEFAULT_OUTPUT_STYLE_NAME.to_string());
+    }
     let agent_search_paths = standard_agent_search_paths(&global_config::config_home(), &cwd);
 
     let auth_method = if is_real_anthropic {
@@ -344,8 +360,8 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
 
     let mut bootstrap_builder = CliInitializeBootstrap::new(current_output_style)
         .with_command_registry(command_registry.clone())
-        .with_output_style_dirs(output_style_dirs())
-        .with_agent_search_paths(agent_search_paths);
+        .with_available_output_styles(available_output_styles)
+        .with_agent_search_paths(agent_search_paths.clone());
     if let Some(auth) = auth_method {
         bootstrap_builder = bootstrap_builder.with_auth_method(auth);
     }
@@ -368,8 +384,9 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
         std::sync::atomic::Ordering::Relaxed,
     );
 
-    let bridge: Arc<dyn coco_tool_runtime::ToolPermissionBridge> =
-        Arc::new(coco_cli::sdk_server::SdkPermissionBridge::new(state));
+    let bridge: Arc<dyn coco_tool_runtime::ToolPermissionBridge> = Arc::new(
+        coco_cli::sdk_server::SdkPermissionBridge::new(state.clone()),
+    );
 
     let session_runtime = crate::session_runtime::SessionRuntime::build(
         crate::session_runtime::SessionRuntimeBuildOpts {
@@ -389,6 +406,12 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
             permission_bridge: Some(bridge),
             command_registry: command_registry.clone(),
             skill_manager: skill_manager.clone(),
+            // Same paths the SDK `initialize.agents` listing reads —
+            // per-session AgentDefinitionStore is built from these.
+            agent_search_paths: agent_search_paths.clone(),
+            // Interactive sessions get the full built-in roster;
+            // SDK noninteractive paths can override.
+            builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
         },
     )
     .await?;
@@ -447,7 +470,25 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
         bypass_available = bypass_permissions_available,
         "sdk server entering dispatch loop"
     );
-    if let Err(e) = server.run().await {
+    let dispatch_result = server.run().await;
+
+    // Wait for any in-flight auto-memory extraction to complete before
+    // we exit so partial writes aren't dropped on process shutdown. TS
+    // parity: `print.ts` awaits `drainPendingExtraction(60_000)` before
+    // emitting the lifecycle exit. Done after `server.run()` so the
+    // dispatch loop has already stopped accepting new turns.
+    let session_runtime_guard = state.session_runtime.read().await;
+    if let Some(session_runtime) = session_runtime_guard.as_ref()
+        && let Some(memory_runtime) = session_runtime.memory_runtime()
+    {
+        let _ = memory_runtime
+            .extract
+            .drain(coco_memory::service::extract::DEFAULT_DRAIN_TIMEOUT)
+            .await;
+    }
+    drop(session_runtime_guard);
+
+    if let Err(e) = dispatch_result {
         tracing::error!(
             target: "coco_cli::sdk",
             error = %e,

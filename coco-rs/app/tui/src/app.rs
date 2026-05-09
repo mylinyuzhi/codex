@@ -78,6 +78,12 @@ pub struct App {
     /// firing a duplicate search when only the cursor moved within the
     /// same query window.
     last_dispatched: Option<(SuggestionKind, String)>,
+    /// Optional channel of keybinding-validation issues. The bootstrap
+    /// (in `app/cli::tui_runner`) wires a tokio task that subscribes
+    /// to `KeybindingsWatcher` and forwards every reload's warnings
+    /// here so the TUI surfaces them as toasts. `None` in tests /
+    /// headless paths.
+    kb_warnings_rx: Option<mpsc::Receiver<Vec<coco_keybindings::ValidationIssue>>>,
 }
 
 impl App {
@@ -111,6 +117,7 @@ impl App {
             symbol_search: SymbolSearchManager::new(sym_tx),
             symbol_search_rx: sym_rx,
             last_dispatched: None,
+            kb_warnings_rx: None,
         })
     }
 
@@ -134,6 +141,7 @@ impl App {
             symbol_search: SymbolSearchManager::new(sym_tx),
             symbol_search_rx: sym_rx,
             last_dispatched: None,
+            kb_warnings_rx: None,
         }
     }
 
@@ -141,6 +149,21 @@ impl App {
     /// and by the CLI that already runs `discover_files` for other panels).
     pub fn with_file_index(mut self, index: SharedFileIndex) -> Self {
         self.file_search.set_index(index);
+        self
+    }
+
+    /// Wire a channel of keybinding-validation issues into the
+    /// running TUI. Each `recv()` produces the **full** set of
+    /// warnings from the most recent load (defaults-only sessions
+    /// emit empty vectors); the App surfaces non-empty vectors as
+    /// toasts. Bootstrap (in `app/cli::tui_runner`) creates the tx
+    /// half and the forwarding task that reads from
+    /// `KeybindingsWatcher::subscribe`.
+    pub fn with_keybinding_warnings(
+        mut self,
+        rx: mpsc::Receiver<Vec<coco_keybindings::ValidationIssue>>,
+    ) -> Self {
+        self.kb_warnings_rx = Some(rx);
         self
     }
 
@@ -201,6 +224,13 @@ impl App {
                 // Async symbol-search results (from @#symbol triggers).
                 Some(evt) = self.symbol_search_rx.recv() => {
                     needs_redraw = handle_symbol_search_event(&mut self.state, evt);
+                }
+                // Keybinding-config validation issues from hot-reload.
+                // Each non-empty batch becomes a stream of toasts so
+                // users see new errors after editing keybindings.json
+                // without restarting.
+                Some(issues) = recv_optional(&mut self.kb_warnings_rx), if self.kb_warnings_rx.is_some() => {
+                    needs_redraw = surface_keybinding_warnings(&mut self.state, issues);
                 }
                 // Tick timer
                 _ = tick_interval.tick() => {
@@ -320,7 +350,12 @@ impl App {
                 let had_toasts = self.state.ui.has_toasts();
                 self.state.ui.expire_toasts();
                 self.maybe_fire_idle_prompt().await;
-                had_toasts && !self.state.ui.has_toasts()
+                // Drive the chord-timeout from the tick so a pending
+                // chord auto-cancels after the 1 s window without
+                // requiring another keypress (mirrors TS
+                // CHORD_TIMEOUT_MS in `KeybindingProviderSetup.tsx:30`).
+                let chord_cancelled = self.state.ui.kb_handle.tick(std::time::Instant::now());
+                (had_toasts && !self.state.ui.has_toasts()) || chord_cancelled
             }
             TuiEvent::SpinnerTick => {
                 if let Some(ref mut streaming) = self.state.ui.streaming {
@@ -431,3 +466,36 @@ fn handle_symbol_search_event(state: &mut AppState, evt: SymbolSearchEvent) -> b
 }
 
 use crate::autocomplete::apply_async_result;
+
+/// Helper: receive from an `Option<Receiver<T>>`. Returns `None`
+/// (the receiver-closed case) when the option itself is None — the
+/// `if self.kb_warnings_rx.is_some()` guard in `tokio::select!`
+/// already ensures we never enter the `match` arm without a channel.
+async fn recv_optional<T>(rx: &mut Option<mpsc::Receiver<T>>) -> Option<T> {
+    match rx.as_mut() {
+        Some(r) => r.recv().await,
+        None => std::future::pending().await,
+    }
+}
+
+/// Push every keybinding warning as its own toast (error vs warning
+/// styling). Empty input is a no-op (returned by hot-reload paths
+/// where the new config is clean). Returns `true` if at least one
+/// toast was added so the caller redraws.
+fn surface_keybinding_warnings(
+    state: &mut AppState,
+    issues: Vec<coco_keybindings::ValidationIssue>,
+) -> bool {
+    if issues.is_empty() {
+        return false;
+    }
+    for issue in issues {
+        let line = coco_keybindings::format_issue_oneline(&issue);
+        let toast = match issue.severity {
+            coco_keybindings::Severity::Error => crate::state::ui::Toast::error(line),
+            coco_keybindings::Severity::Warning => crate::state::ui::Toast::warning(line),
+        };
+        state.ui.add_toast(toast);
+    }
+    true
+}

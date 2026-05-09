@@ -230,6 +230,7 @@ One-line purposes. For key types and details, open each crate's own `CLAUDE.md`.
 | `memory` | Persistent cross-session: CLAUDE.md mgmt, auto-extraction, session memory, KAIROS auto-dream, team sync |
 | `plugins` | Plugin system via `PLUGIN.toml` (contributions, marketplace, hot-reload) |
 | `keybindings` | Shortcuts with context-based resolution and chord support |
+| `output-styles` | Built-in catalog (`Explanatory` / `Learning`) + project / user / managed dir loader + plugin loader (`force-for-plugin`) + system-prompt section + `OutputStyleManager` |
 
 ### App
 
@@ -458,7 +459,7 @@ Every crate in `coco-rs/` has its own `CLAUDE.md` (path = `coco-rs/<layer>/<crat
 - **Services**: inference, compact, mcp, lsp
 - **Core**: tool-runtime, tools, permissions, messages, context, system-reminder, subagent
 - **Exec**: shell, sandbox, process-hardening, exec-server, apply-patch
-- **Root**: commands, skills, hooks, tasks, memory, plugins, keybindings
+- **Root**: commands, skills, hooks, tasks, memory, plugins, keybindings, output-styles
 - **App**: cli, tui, query, state, session
 - **Standalone**: bridge, retrieval
 - **Utils**: each of the 26 utils/ crates has one

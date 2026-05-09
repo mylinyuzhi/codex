@@ -601,7 +601,8 @@ fn test_sourced_permission_rules_pulls_per_source_arrays() {
     let user_raw = serde_json::json!({
         "permissions": {
             "allow": ["WebFetch(domain:user.com)"],
-            "deny":  ["Read(/etc/user-secret)"]
+            "deny":  ["Read(/etc/user-secret)"],
+            "ask":   ["Bash(rm:*)"]
         }
     });
     let policy_raw = serde_json::json!({
@@ -617,7 +618,7 @@ fn test_sourced_permission_rules_pulls_per_source_arrays() {
         merged: Settings::default(),
         per_source,
     };
-    let (allow, deny) = swith.sourced_permission_rules();
+    let (allow, deny, ask) = swith.sourced_permission_rules();
 
     let allow_pairs: Vec<(&str, SettingSource)> =
         allow.iter().map(|r| (r.rule.as_str(), r.source)).collect();
@@ -634,6 +635,12 @@ fn test_sourced_permission_rules_pulls_per_source_arrays() {
         deny.iter()
             .any(|r| r.rule == "Read(/etc/user-secret)" && r.source == SettingSource::User),
         "user deny rule tagged with User source"
+    );
+
+    assert!(
+        ask.iter()
+            .any(|r| r.rule == "Bash(rm:*)" && r.source == SettingSource::User),
+        "user ask rule tagged with User source"
     );
 }
 
@@ -689,8 +696,9 @@ fn test_sourced_helpers_handle_missing_keys_gracefully() {
         per_source,
     };
 
-    let (allow, deny) = swith.sourced_permission_rules();
+    let (allow, deny, ask) = swith.sourced_permission_rules();
     assert!(allow.is_empty());
     assert!(deny.is_empty());
+    assert!(ask.is_empty());
     assert!(swith.sourced_filesystem_allow_read().is_empty());
 }

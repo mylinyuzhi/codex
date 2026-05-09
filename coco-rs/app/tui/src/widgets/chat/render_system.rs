@@ -202,8 +202,22 @@ pub(super) fn try_render<'a>(
                 ));
             }
             if summary.lines().count() > 8 {
+                // Render the actual user-bound shortcut for
+                // `app:toggleTranscript` (defaults to `ctrl+o`) so
+                // user customizations show through. Falls back to
+                // the default literal when nothing's bound.
+                let shortcut = w
+                    .kb_handle
+                    .and_then(|h| {
+                        h.display_for(
+                            &coco_keybindings::KeybindingAction::AppToggleTranscript,
+                            crate::keybinding_bridge::KeybindingContext::Chat,
+                        )
+                    })
+                    .unwrap_or_else(|| "ctrl+o".to_string());
                 lines.push(Line::from(
-                    Span::raw("    …(ctrl+o to see full summary)").fg(w.theme.text_dim),
+                    Span::raw(format!("    …({shortcut} to see full summary)"))
+                        .fg(w.theme.text_dim),
                 ));
             }
             Some(())

@@ -6,7 +6,7 @@
 //!    - `Explore` → `ModelRole::Explore`
 //!    - `Plan` → `ModelRole::Plan`
 //!    - `Verification` → `ModelRole::Review`
-//!    - `GeneralPurpose` / `StatusLine` / `ClaudeCodeGuide` → `ModelRole::Subagent`
+//!    - `GeneralPurpose` / `StatusLine` / `CocoGuide` → `ModelRole::Subagent`
 //! 3. Custom agent (no built-in mapping) → `ModelRole::Subagent`
 //!
 //! No TS counterpart — TS uses model alias strings (`'haiku'`/`'sonnet'`)
@@ -33,7 +33,7 @@ pub const fn role_for_builtin(t: SubagentType) -> ModelRole {
         SubagentType::Explore => ModelRole::Explore,
         SubagentType::Plan => ModelRole::Plan,
         SubagentType::Verification => ModelRole::Review,
-        SubagentType::GeneralPurpose | SubagentType::StatusLine | SubagentType::ClaudeCodeGuide => {
+        SubagentType::GeneralPurpose | SubagentType::StatusLine | SubagentType::CocoGuide => {
             ModelRole::Subagent
         }
     }

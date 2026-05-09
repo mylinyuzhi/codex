@@ -11,7 +11,6 @@
 //! ApiClient auth exposure) return stub values today and will be
 //! filled in as their data sources grow an accessor.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -33,8 +32,12 @@ use crate::sdk_server::handlers::InitializeBootstrap;
 /// `OUTPUT_STYLE_CONFIG` at `constants/outputStyles.ts:41-135` which uses
 /// a lowercase `"default"` sentinel plus capitalized `"Explanatory"` and
 /// `"Learning"`. Case matters: TS clients looking up a style by name do
-/// an exact-string match.
-pub const BUILTIN_OUTPUT_STYLES: &[&str] = &["default", "Explanatory", "Learning"];
+/// an exact-string match. Used as the fallback when no manager is wired.
+pub const BUILTIN_OUTPUT_STYLES: &[&str] = &[
+    coco_output_styles::DEFAULT_OUTPUT_STYLE_NAME,
+    coco_output_styles::EXPLANATORY_STYLE_NAME,
+    coco_output_styles::LEARNING_STYLE_NAME,
+];
 
 /// Concrete [`InitializeBootstrap`] wired from CLI startup.
 ///
@@ -50,13 +53,14 @@ pub struct CliInitializeBootstrap {
     /// by subsequent `initialize` calls without rebuilding the
     /// bootstrap.
     pub command_registry: Option<Arc<tokio::sync::RwLock<Arc<CommandRegistry>>>>,
-    /// Current output style from `Settings.output_style`; defaults to
-    /// `"default"`.
+    /// Resolved active output style name. Defaults to `"default"` and
+    /// reflects [`coco_output_styles::OutputStyleManager::active_name_for_sdk`].
     pub output_style: String,
-    /// User / project directories to walk for custom output-style
-    /// markdown files. Built-ins from [`BUILTIN_OUTPUT_STYLES`] are
-    /// always included.
-    pub output_style_dirs: Vec<PathBuf>,
+    /// All output style names the SDK should advertise as selectable
+    /// (`available_output_styles`). The CLI seeds this from
+    /// [`coco_output_styles::OutputStyleManager::names`] and prepends
+    /// the `default` sentinel.
+    pub available_styles: Vec<String>,
     /// Search paths for custom agent definition markdown files. Built-ins
     /// resolved through [`coco_subagent::BuiltinAgentCatalog::interactive`]
     /// are always included on top.
@@ -74,7 +78,7 @@ impl CliInitializeBootstrap {
         Self {
             command_registry: None,
             output_style,
-            output_style_dirs: Vec::new(),
+            available_styles: BUILTIN_OUTPUT_STYLES.iter().map(|s| (*s).into()).collect(),
             agent_search_paths: AgentSearchPaths::empty(),
             auth_method: None,
         }
@@ -88,8 +92,13 @@ impl CliInitializeBootstrap {
         self
     }
 
-    pub fn with_output_style_dirs(mut self, dirs: Vec<PathBuf>) -> Self {
-        self.output_style_dirs = dirs;
+    /// Override the SDK-advertised output style name list. The CLI
+    /// builds this from the resolved `OutputStyleManager` — the wire
+    /// list includes built-ins (`Explanatory`, `Learning`) plus any
+    /// custom dir / plugin styles, with the `default` sentinel
+    /// prepended to match TS `available_output_styles` semantics.
+    pub fn with_available_output_styles(mut self, styles: Vec<String>) -> Self {
+        self.available_styles = styles;
         self
     }
 
@@ -134,8 +143,18 @@ impl InitializeBootstrap for CliInitializeBootstrap {
 
     async fn agents(&self) -> Vec<SdkAgentInfo> {
         let paths = self.agent_search_paths.clone();
+        // TS parity: `loadAgentsDir.ts:262-294` — decorate every loaded
+        // definition with its `pendingSnapshotUpdate` timestamp so the
+        // SDK's `initialize.agents` listing surfaces drift to clients.
+        // The closure runs blocking IO inside the spawn_blocking
+        // closure below, so its captured paths are owned `PathBuf`s.
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
         tokio::task::spawn_blocking(move || {
             let mut store = AgentDefinitionStore::new(BuiltinAgentCatalog::interactive(), paths);
+            store.set_snapshot_inspector(Some(
+                coco_memory::agent_memory_snapshot::build_pending_inspector(cwd, home),
+            ));
             store.load();
             // The store already applies source precedence — built-ins under
             // user/project markdown overrides — so iterating `active()` gives
@@ -173,10 +192,7 @@ impl InitializeBootstrap for CliInitializeBootstrap {
     }
 
     async fn available_output_styles(&self) -> Vec<String> {
-        let dirs = self.output_style_dirs.clone();
-        tokio::task::spawn_blocking(move || discover_output_styles(&dirs))
-            .await
-            .unwrap_or_else(|_| BUILTIN_OUTPUT_STYLES.iter().map(|s| (*s).into()).collect())
+        self.available_styles.clone()
     }
 
     async fn fast_mode_state(&self) -> Option<FastModeState> {
@@ -246,33 +262,6 @@ pub fn auth_method_to_account(auth: &AuthMethod) -> SdkAccountInfo {
             SdkAccountInfo::default()
         }
     }
-}
-
-/// Walk the given dirs for `*.md` output style definitions, merge with
-/// the built-in list, sort and deduplicate. File names (without
-/// extension) become style identifiers.
-pub fn discover_output_styles(dirs: &[std::path::PathBuf]) -> Vec<String> {
-    let mut styles: Vec<String> = BUILTIN_OUTPUT_STYLES
-        .iter()
-        .map(|s| (*s).to_string())
-        .collect();
-    for dir in dirs {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("md") {
-                continue;
-            }
-            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                styles.push(stem.to_string());
-            }
-        }
-    }
-    styles.sort();
-    styles.dedup();
-    styles
 }
 
 #[cfg(test)]

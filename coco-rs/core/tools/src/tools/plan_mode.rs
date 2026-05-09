@@ -17,9 +17,9 @@ use coco_tool_runtime::PlanApprovalRequest;
 use coco_tool_runtime::PromptOptions;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
+use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_tool_runtime::ValidationResult;
-use coco_types::PermissionDecision;
 use coco_types::PermissionMode;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
@@ -69,31 +69,107 @@ struct ExitPlanModeOutput {
     request_id: Option<String>,
 }
 
+/// Build the cross-turn `AppStatePatch` that flips state into plan
+/// mode. Captures the current mode (so `ExitPlanMode` knows where to
+/// restore) and stamps the entry timestamp so a future
+/// `VerifyPlanExecution` can compare against the plan-file mtime.
+///
+/// TS parity: the inline closure inside `EnterPlanModeTool.ts::call`
+/// at lines 88-94 — `setAppState(prev => ({ ...prev, prePlanMode:
+/// currentMode, planModeEntryMs: Date.now() }))`. The same shape is
+/// applied at two entry sites in coco-rs: the tool's own `execute`
+/// and the `/plan <description>` slash command, which (per TS
+/// `commands/plan/plan.tsx:73-91`) flips state directly without
+/// re-prompting the user.
+pub fn build_enter_plan_mode_patch(current_mode: PermissionMode) -> coco_types::AppStatePatch {
+    let entry_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or_default();
+    Box::new(move |state| {
+        if current_mode != PermissionMode::Plan {
+            state.pre_plan_mode = Some(current_mode);
+        }
+        state.permission_mode = Some(PermissionMode::Plan);
+        // Clear stale exit-banner flag: rapid Plan→Default→Plan
+        // toggles shouldn't emit a banner on re-entry.
+        state.needs_plan_mode_exit_attachment = false;
+        // Stamp entry timestamp for VerifyPlanExecution on exit.
+        state.plan_mode_entry_ms = Some(entry_ms);
+    })
+}
+
 // ── EnterPlanModeTool ──
 
 pub struct EnterPlanModeTool;
 
 /// Full prompt text for the model.
 ///
-/// TS: tools/EnterPlanModeTool/prompt.ts — getEnterPlanModeToolPromptExternal()
-const ENTER_PLAN_MODE_PROMPT: &str = "\
-Use this tool proactively when you're about to start a non-trivial implementation task. \
-Getting user sign-off on your approach before writing code prevents wasted effort and ensures \
-alignment. This tool transitions you into plan mode where you can explore the codebase and \
-design an implementation approach for user approval.
+/// TS: `tools/EnterPlanModeTool/prompt.ts` — `getEnterPlanModeToolPromptExternal()`.
+/// The Ant arm (`getEnterPlanModeToolPromptAnt`) and the
+/// `USER_TYPE === 'ant'` dispatcher are intentionally NOT ported
+/// (root `CLAUDE.md` "no Ant gates"). Interpolates
+/// `ToolName::AskUserQuestion.as_str()` so a future tool rename
+/// propagates without a doc edit, mirroring TS's
+/// `${ASK_USER_QUESTION_TOOL_NAME}` substitution. Names like
+/// `EnterPlanMode` / `ExitPlanMode` stay as literals — TS does the
+/// same.
+fn enter_plan_mode_prompt(is_plan_interview_phase: bool) -> String {
+    let aq = coco_types::ToolName::AskUserQuestion.as_str();
+    // Mirrors TS `WHAT_HAPPENS_SECTION` interpolation: empty string
+    // when the iterative interview workflow is active (the model
+    // gets the detailed loop via the plan-mode attachment instead).
+    let what_happens = if is_plan_interview_phase {
+        String::new()
+    } else {
+        format!(
+            "## What Happens in Plan Mode
+
+In plan mode, you'll:
+1. Thoroughly explore the codebase using Glob, Grep, and Read tools
+2. Understand existing patterns and architecture
+3. Design an implementation approach
+4. Present your plan to the user for approval
+5. Use {aq} if you need to clarify approaches
+6. Exit plan mode with ExitPlanMode when ready to implement
+
+"
+        )
+    };
+    format!(
+        "Use this tool proactively when you're about to start a non-trivial implementation task. Getting user sign-off on your approach before writing code prevents wasted effort and ensures alignment. This tool transitions you into plan mode where you can explore the codebase and design an implementation approach for user approval.
 
 ## When to Use This Tool
 
-**Prefer using EnterPlanMode** for implementation tasks unless they're simple. Use it when \
-ANY of these conditions apply:
+**Prefer using EnterPlanMode** for implementation tasks unless they're simple. Use it when ANY of these conditions apply:
 
 1. **New Feature Implementation**: Adding meaningful new functionality
+   - Example: \"Add a logout button\" - where should it go? What should happen on click?
+   - Example: \"Add form validation\" - what rules? What error messages?
+
 2. **Multiple Valid Approaches**: The task can be solved in several different ways
+   - Example: \"Add caching to the API\" - could use Redis, in-memory, file-based, etc.
+   - Example: \"Improve performance\" - many optimization strategies possible
+
 3. **Code Modifications**: Changes that affect existing behavior or structure
+   - Example: \"Update the login flow\" - what exactly should change?
+   - Example: \"Refactor this component\" - what's the target architecture?
+
 4. **Architectural Decisions**: The task requires choosing between patterns or technologies
+   - Example: \"Add real-time updates\" - WebSockets vs SSE vs polling
+   - Example: \"Implement state management\" - Redux vs Context vs custom solution
+
 5. **Multi-File Changes**: The task will likely touch more than 2-3 files
+   - Example: \"Refactor the authentication system\"
+   - Example: \"Add a new API endpoint with tests\"
+
 6. **Unclear Requirements**: You need to explore before understanding the full scope
+   - Example: \"Make the app faster\" - need to profile and identify bottlenecks
+   - Example: \"Fix the bug in checkout\" - need to investigate root cause
+
 7. **User Preferences Matter**: The implementation could reasonably go multiple ways
+   - If you would use {aq} to clarify the approach, use EnterPlanMode instead
+   - Plan mode lets you explore first, then present options with context
 
 ## When NOT to Use This Tool
 
@@ -103,21 +179,42 @@ Only skip EnterPlanMode for simple tasks:
 - Tasks where the user has given very specific, detailed instructions
 - Pure research/exploration tasks (use the Agent tool with explore agent instead)
 
-## What Happens in Plan Mode
+{what_happens}## Examples
 
-In plan mode, you'll:
-1. Thoroughly explore the codebase using Glob, Grep, and Read tools
-2. Understand existing patterns and architecture
-3. Design an implementation approach
-4. Present your plan to the user for approval
-5. Use AskUserQuestion if you need to clarify approaches
-6. Exit plan mode with ExitPlanMode when ready to implement
+### GOOD - Use EnterPlanMode:
+User: \"Add user authentication to the app\"
+- Requires architectural decisions (session vs JWT, where to store tokens, middleware structure)
+
+User: \"Optimize the database queries\"
+- Multiple approaches possible, need to profile first, significant impact
+
+User: \"Implement dark mode\"
+- Architectural decision on theme system, affects many components
+
+User: \"Add a delete button to the user profile\"
+- Seems simple but involves: where to place it, confirmation dialog, API call, error handling, state updates
+
+User: \"Update the error handling in the API\"
+- Affects multiple files, user should approve the approach
+
+### BAD - Don't use EnterPlanMode:
+User: \"Fix the typo in the README\"
+- Straightforward, no planning needed
+
+User: \"Add a console.log to debug this function\"
+- Simple, obvious implementation
+
+User: \"What files handle routing?\"
+- Research task, not implementation planning
 
 ## Important Notes
 
 - This tool REQUIRES user approval - they must consent to entering plan mode
-- If unsure whether to use it, err on the side of planning
-- Users appreciate being consulted before significant changes are made to their codebase";
+- If unsure whether to use it, err on the side of planning - it's better to get alignment upfront than to redo work
+- Users appreciate being consulted before significant changes are made to their codebase
+"
+    )
+}
 
 #[async_trait::async_trait]
 impl Tool for EnterPlanModeTool {
@@ -132,8 +229,8 @@ impl Tool for EnterPlanModeTool {
          exploration and design"
             .into()
     }
-    async fn prompt(&self, _options: &PromptOptions) -> String {
-        ENTER_PLAN_MODE_PROMPT.to_string()
+    async fn prompt(&self, options: &PromptOptions) -> String {
+        enter_plan_mode_prompt(options.is_plan_interview_phase)
     }
     fn user_facing_name(&self) -> &str {
         ""
@@ -182,53 +279,88 @@ impl Tool for EnterPlanModeTool {
                 .unwrap_or(ctx.permission_context.mode),
             None => ctx.permission_context.mode,
         };
-        let entry_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as i64)
-            .unwrap_or_default();
 
         // Queue the mutation. Executor applies post-execute under a
         // write lock. Tools can no longer `.write()` on app_state
         // directly — the type system blocks it (`AppStateReadHandle`
         // has no write surface). TS parity:
-        // `orchestration.ts:queuedContextModifiers`.
-        let patch: coco_types::AppStatePatch = Box::new(move |state| {
-            if current_mode != PermissionMode::Plan {
-                state.pre_plan_mode = Some(current_mode);
-            }
-            state.permission_mode = Some(PermissionMode::Plan);
-            // Clear stale exit-banner flag: rapid Plan→Default→Plan
-            // toggles shouldn't emit a banner on re-entry.
-            state.needs_plan_mode_exit_attachment = false;
-            // Stamp entry timestamp for VerifyPlanExecution on exit.
-            state.plan_mode_entry_ms = Some(entry_ms);
-        });
+        // `orchestration.ts:queuedContextModifiers`. The patch
+        // builder is shared with `dispatch_plan` so a typed `/plan
+        // <description>` and a tool-driven entry land identical
+        // app-state shape.
+        let patch = build_enter_plan_mode_patch(current_mode);
 
-        Ok(ToolResult::data(serde_json::json!({
-            "message": "Entered plan mode. You should now focus on exploring \
-                        the codebase and designing an implementation approach.",
-        }))
-        .with_patch(patch))
+        // TS parity: `EnterPlanModeTool.ts::call` returns only the
+        // short confirmation in `data.message`. The post-processing
+        // splice (6-step list vs interview-phase short form) lives in
+        // `mapToolResultToToolResultBlockParam` — i.e.
+        // [`Tool::render_for_model`] below. We carry
+        // `is_plan_interview_phase` on `data` so the renderer (which
+        // doesn't see `ToolUseContext`) can pick the right variant.
+        Ok(
+            ToolResult::data(serde_json::json!({
+                "message": "Entered plan mode. You should now focus on exploring the codebase and designing an implementation approach.",
+                "isInterviewPhase": ctx.is_plan_interview_phase,
+            }))
+            .with_patch(patch),
+        )
+    }
+
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        // TS parity: `mapToolResultToToolResultBlockParam` in
+        // `EnterPlanModeTool.ts:103-118`. Reads `data.message` (short
+        // confirmation written by `execute`) and `data.isInterviewPhase`
+        // (workflow-mode flag also written by `execute`) and emits the
+        // splice. The renderer is a pure projection over `data` —
+        // doesn't have access to `ToolUseContext`, which is why
+        // `execute` stashes the flag.
+        let message = data
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let is_interview = data
+            .get("isInterviewPhase")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        vec![ToolResultContentPart::Text {
+            text: Self::build_instructions(message, is_interview),
+            provider_options: None,
+        }]
     }
 }
 
 impl EnterPlanModeTool {
     /// Build the instructions text returned to the model as tool_result content.
     ///
-    /// TS: `mapToolResultToToolResultBlockParam` in EnterPlanModeTool.ts
-    pub fn build_instructions(confirmation: &str) -> String {
-        format!(
-            "{confirmation}\n\n\
-             In plan mode, you should:\n\
-             1. Thoroughly explore the codebase to understand existing patterns\n\
-             2. Identify similar features and architectural approaches\n\
-             3. Consider multiple approaches and their trade-offs\n\
-             4. Use AskUserQuestion if you need to clarify the approach\n\
-             5. Design a concrete implementation strategy\n\
-             6. When ready, use ExitPlanMode to present your plan for approval\n\n\
-             Remember: DO NOT write or edit any files yet. This is a read-only \
-             exploration and planning phase."
-        )
+    /// TS: `mapToolResultToToolResultBlockParam` in
+    /// `tools/EnterPlanModeTool/EnterPlanModeTool.ts:103-118`. Two
+    /// byte-precise variants gated on the interview-phase flag — the
+    /// terse "DO NOT write" version when the iterative interview
+    /// workflow will deliver detailed steps via the plan-mode
+    /// attachment, otherwise the 6-step fallback that doubles as the
+    /// workflow primer.
+    pub fn build_instructions(confirmation: &str, is_plan_interview_phase: bool) -> String {
+        if is_plan_interview_phase {
+            format!(
+                "{confirmation}
+
+DO NOT write or edit any files except the plan file. Detailed workflow instructions will follow."
+            )
+        } else {
+            format!(
+                "{confirmation}
+
+In plan mode, you should:
+1. Thoroughly explore the codebase to understand existing patterns
+2. Identify similar features and architectural approaches
+3. Consider multiple approaches and their trade-offs
+4. Use AskUserQuestion if you need to clarify the approach
+5. Design a concrete implementation strategy
+6. When ready, use ExitPlanMode to present your plan for approval
+
+Remember: DO NOT write or edit any files yet. This is a read-only exploration and planning phase."
+            )
+        }
     }
 }
 
@@ -238,31 +370,33 @@ pub struct ExitPlanModeTool;
 
 /// Full prompt text for the model.
 ///
-/// TS: tools/ExitPlanModeTool/prompt.ts — EXIT_PLAN_MODE_V2_TOOL_PROMPT
-const EXIT_PLAN_MODE_PROMPT: &str = "\
-Use this tool when you are in plan mode and have finished writing your plan to the plan file \
-and are ready for user approval.
-
-## How This Tool Works
-- You should have already written your plan to the plan file specified in the plan mode system \
-message
-- This tool does NOT take the plan content as a parameter - it will read the plan from the file \
-you wrote
-- This tool simply signals that you're done planning and ready for the user to review and approve
-- The user will see the contents of your plan file when they review it
-
-## When to Use This Tool
-IMPORTANT: Only use this tool when the task requires planning the implementation steps of a task \
-that requires writing code. For research tasks where you're gathering information, searching \
-files, reading files or in general trying to understand the codebase - do NOT use this tool.
-
-## Before Using This Tool
-Ensure your plan is complete and unambiguous:
-- If you have unresolved questions about requirements or approach, use AskUserQuestion first
-- Once your plan is finalized, use THIS tool to request approval
-
-**Important:** Do NOT use AskUserQuestion to ask \"Is this plan okay?\" or \"Should I proceed?\" \
-- that's exactly what THIS tool does. ExitPlanMode inherently requests user approval of your plan.";
+/// TS: tools/ExitPlanModeTool/prompt.ts — `EXIT_PLAN_MODE_V2_TOOL_PROMPT`.
+/// Interpolates `ToolName::AskUserQuestion.as_str()` so a future rename of
+/// the AskUserQuestion tool propagates without a doc edit, mirroring TS's
+/// `${ASK_USER_QUESTION_TOOL_NAME}` substitution.
+fn exit_plan_mode_prompt() -> String {
+    let aq = coco_types::ToolName::AskUserQuestion.as_str();
+    format!(
+        "Use this tool when you are in plan mode and have finished writing your plan to the plan file and are ready for user approval.\n\
+         \n\
+         ## How This Tool Works\n\
+         - You should have already written your plan to the plan file specified in the plan mode system message\n\
+         - This tool does NOT take the plan content as a parameter - it will read the plan from the file you wrote\n\
+         - This tool simply signals that you're done planning and ready for the user to review and approve\n\
+         - The user will see the contents of your plan file when they review it\n\
+         \n\
+         ## When to Use This Tool\n\
+         IMPORTANT: Only use this tool when the task requires planning the implementation steps of a task that requires writing code. For research tasks where you're gathering information, searching files, reading files or in general trying to understand the codebase - do NOT use this tool.\n\
+         \n\
+         ## Before Using This Tool\n\
+         Ensure your plan is complete and unambiguous:\n\
+         - If you have unresolved questions about requirements or approach, use {aq} first (in earlier phases)\n\
+         - Once your plan is finalized, use THIS tool to request approval\n\
+         \n\
+         **Important:** Do NOT use {aq} to ask \"Is this plan okay?\" or \"Should I proceed?\" - that's exactly what THIS tool does. ExitPlanMode inherently requests user approval of your plan.\n\
+         "
+    )
+}
 
 #[async_trait::async_trait]
 impl Tool for ExitPlanModeTool {
@@ -276,7 +410,7 @@ impl Tool for ExitPlanModeTool {
         "Prompts the user to exit plan mode and start coding".into()
     }
     async fn prompt(&self, _options: &PromptOptions) -> String {
-        EXIT_PLAN_MODE_PROMPT.to_string()
+        exit_plan_mode_prompt()
     }
     fn user_facing_name(&self) -> &str {
         ""
@@ -342,18 +476,24 @@ impl Tool for ExitPlanModeTool {
     /// Teammates bypass the permission UI entirely. The call() method handles
     /// their behavior: isPlanModeRequired() sends plan_approval_request to
     /// leader, otherwise exits locally.
-    async fn check_permissions(&self, _input: &Value, ctx: &ToolUseContext) -> PermissionDecision {
-        // Teammates bypass the permission UI (TS: isTeammate() check)
+    async fn check_permissions(
+        &self,
+        _input: &Value,
+        ctx: &ToolUseContext,
+    ) -> coco_types::ToolCheckResult {
+        // Teammates bypass the permission UI (TS: isTeammate() check).
+        // Use explicit Allow rather than Passthrough — we want the
+        // evaluator to short-circuit on this positive opinion before
+        // rule / mode-fallthrough lookups.
         if ctx.is_teammate {
-            return PermissionDecision::Allow {
+            return coco_types::ToolCheckResult::Allow {
                 updated_input: None,
                 feedback: None,
             };
         }
-        // Non-teammates: require user confirmation
-        PermissionDecision::Ask {
+        // Non-teammates: require user confirmation.
+        coco_types::ToolCheckResult::Ask {
             message: "Exit plan mode?".into(),
-            suggestions: vec![],
         }
     }
 
@@ -625,6 +765,20 @@ impl Tool for ExitPlanModeTool {
             ..Default::default()
         };
         Ok(ToolResult::data(serde_json::to_value(&out).unwrap_or_default()).with_patch(patch))
+    }
+
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        // TS parity: `mapToolResultToToolResultBlockParam` in
+        // `ExitPlanModeV2Tool.ts:419-492`. The four-variant
+        // formatting (teammate-awaiting / sub-agent / empty / approved)
+        // already lives in [`ExitPlanModeTool::build_instructions`];
+        // this is the trait hook that finally wires it up to the
+        // executor's render path. Pre-refactor this method was dead
+        // code — `tool_outcome_builder.rs` JSON-stringified `data`.
+        vec![ToolResultContentPart::Text {
+            text: Self::build_instructions(data),
+            provider_options: None,
+        }]
     }
 }
 

@@ -204,6 +204,14 @@ impl ToolContextFactory {
                 .or_else(|| self.config.agent_id.clone()),
             team_name: env::env_opt(EnvKey::CocoTeamName),
             plan_verify_execution: self.config.plan_mode_settings.verify_execution,
+            // TS parity: `isPlanModeInterviewPhaseEnabled()` —
+            // settings-only in coco-rs (no Growthbook, no
+            // `USER_TYPE=ant`, no env var). Drives the
+            // EnterPlanMode post-execute instruction-text variant.
+            is_plan_interview_phase: matches!(
+                self.config.plan_mode_settings.workflow,
+                coco_config::PlanModeWorkflow::Interview
+            ),
             cancel: self.cancel.clone(),
             messages: Arc::new(RwLock::new(Vec::new())),
             permission_context: ToolPermissionContext {

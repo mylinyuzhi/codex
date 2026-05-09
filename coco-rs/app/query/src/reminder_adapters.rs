@@ -303,14 +303,19 @@ impl MemorySource for MemoryAdapter {
         &self,
         _agent_id: Option<&str>,
         input: &str,
+        recent_tools: &[String],
     ) -> Vec<RelevantMemoryInfo> {
         // Delegate to the runtime — it picks the LLM ranker
         // (`ModelRole::Memory` side-query) when a `SideQueryHandle`
         // was wired in at session bootstrap, otherwise the recency
         // heuristic. Either way we get up to 5 freshness-tagged
         // entries the system-reminder generator renders.
+        // `recent_tools` is the engine's
+        // `collect_recent_successful_tools(history)` snapshot — TS
+        // parity threads it into the ranker's user prompt so reference
+        // docs for tools the model is actively exercising rank lower.
         self.runtime
-            .recall(input, &[])
+            .recall(input, recent_tools)
             .await
             .into_iter()
             .map(|m| RelevantMemoryInfo {

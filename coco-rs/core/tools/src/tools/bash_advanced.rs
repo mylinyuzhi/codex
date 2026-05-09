@@ -18,7 +18,7 @@ const PROGRESS_THRESHOLD_MS: u64 = 2000;
 
 /// Auto-background blocking commands after this budget in assistant mode.
 /// TS: ASSISTANT_BLOCKING_BUDGET_MS = 15_000
-const ASSISTANT_BLOCKING_BUDGET_MS: u64 = 15_000;
+pub(crate) const ASSISTANT_BLOCKING_BUDGET_MS: u64 = 15_000;
 
 /// Maximum image file size for base64 detection (20 MB).
 const MAX_IMAGE_FILE_SIZE: usize = 20 * 1024 * 1024;

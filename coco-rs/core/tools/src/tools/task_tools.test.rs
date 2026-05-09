@@ -1176,3 +1176,412 @@ async fn test_task_update_auto_owner_skipped_outside_swarm() {
         .any(|v| v.as_str() == Some("owner"));
     assert!(!has_owner, "non-teammate must not auto-claim");
 }
+
+// ---------------------------------------------------------------------------
+// TodoWrite render_for_model — TS parity with TodoWriteTool.ts
+// ---------------------------------------------------------------------------
+
+mod todo_write_render_tests {
+    use crate::tools::task_tools::TodoWriteTool;
+    use coco_tool_runtime::Tool;
+    use coco_tool_runtime::ToolResultContentPart;
+    use serde_json::json;
+
+    #[test]
+    fn render_emits_base_message_when_no_nudge() {
+        let data = json!({
+            "oldTodos": [],
+            "newTodos": [{"content": "task", "status": "pending", "activeForm": "Doing task"}],
+            "verificationNudgeNeeded": false,
+        });
+        let parts = TodoWriteTool.render_for_model(&data);
+        let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected Text part");
+        };
+        assert!(text.starts_with("Todos have been modified successfully."));
+        assert!(!text.contains("verification agent"));
+    }
+
+    #[test]
+    fn render_appends_verification_nudge_when_needed() {
+        let data = json!({
+            "oldTodos": [],
+            "newTodos": [],
+            "verificationNudgeNeeded": true,
+        });
+        let parts = TodoWriteTool.render_for_model(&data);
+        let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected Text part");
+        };
+        assert!(text.contains("Todos have been modified successfully."));
+        assert!(text.contains("verification agent"));
+    }
+}
+
+// ── render_for_model — Task* tools ────────────────────────────────────
+
+mod task_render_tests {
+    use crate::tools::task_tools::TaskCreateTool;
+    use crate::tools::task_tools::TaskGetTool;
+    use crate::tools::task_tools::TaskListTool;
+    use crate::tools::task_tools::TaskOutputTool;
+    use crate::tools::task_tools::TaskStopTool;
+    use crate::tools::task_tools::TaskUpdateTool;
+    use coco_tool_runtime::Tool;
+    use coco_tool_runtime::ToolResultContentPart;
+    use serde_json::json;
+
+    #[test]
+    fn task_create_render_emits_subject_line() {
+        let data = json!({"task": {"id": "t-1", "subject": "Investigate auth"}});
+        let parts = TaskCreateTool.render_for_model(&data);
+        let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected Text part");
+        };
+        // TS parity: `Task #${id} created successfully: ${subject}`.
+        assert_eq!(text, "Task #t-1 created successfully: Investigate auth");
+    }
+
+    #[test]
+    fn task_get_render_found_includes_status_and_blockers() {
+        let data = json!({
+            "task": {
+                "id": "t-1",
+                "subject": "Refactor auth",
+                "description": "Replace legacy middleware",
+                "status": "in_progress",
+                "blocks": [],
+                "blockedBy": ["t-2", "t-3"],
+            }
+        });
+        let parts = TaskGetTool.render_for_model(&data);
+        let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected Text part");
+        };
+        // TS parity: `Task #{id}: {subject}` + Status + Description +
+        // `Blocked by: #id1, #id2`.
+        assert!(text.starts_with("Task #t-1: Refactor auth"), "got: {text}");
+        assert!(text.contains("Status: in_progress"));
+        assert!(text.contains("Description: Replace legacy middleware"));
+        assert!(text.contains("Blocked by: #t-2, #t-3"));
+    }
+
+    #[test]
+    fn task_get_render_not_found() {
+        let data = json!({"task": null});
+        let parts = TaskGetTool.render_for_model(&data);
+        let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected Text part");
+        };
+        // TS: `Task not found` — no trailing period.
+        assert_eq!(text, "Task not found");
+    }
+
+    #[test]
+    fn task_list_render_empty() {
+        let data = json!({"tasks": []});
+        let parts = TaskListTool.render_for_model(&data);
+        let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected Text part");
+        };
+        // TS: `No tasks found`.
+        assert_eq!(text, "No tasks found");
+    }
+
+    #[test]
+    fn task_list_render_summarizes_tasks() {
+        let data = json!({
+            "tasks": [
+                {"id": "t-1", "subject": "First", "status": "pending", "blockedBy": []},
+                {"id": "t-2", "subject": "Second", "status": "in_progress", "blockedBy": []},
+            ]
+        });
+        let parts = TaskListTool.render_for_model(&data);
+        let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected Text part");
+        };
+        // TS shape: `#{id} [{status}] {subject}` per line.
+        assert!(text.contains("#t-1 [pending] First"), "got: {text}");
+        assert!(text.contains("#t-2 [in_progress] Second"), "got: {text}");
+    }
+
+    #[test]
+    fn task_list_render_includes_owner_and_blockers() {
+        let data = json!({
+            "tasks": [
+                {
+                    "id": "t-3",
+                    "subject": "Pair task",
+                    "status": "pending",
+                    "blockedBy": ["t-1", "t-2"],
+                    "owner": "alice",
+                },
+            ]
+        });
+        let parts = TaskListTool.render_for_model(&data);
+        let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected Text part");
+        };
+        // TS: `#id [status] subject (owner) [blocked by #id1, #id2]`.
+        assert_eq!(
+            text,
+            "#t-3 [pending] Pair task (alice) [blocked by #t-1, #t-2]"
+        );
+    }
+
+    #[test]
+    fn task_update_render_success_lists_fields() {
+        let data = json!({
+            "success": true,
+            "taskId": "t-1",
+            "updatedFields": ["status", "owner"],
+            "verificationNudgeNeeded": false,
+            "statusChange": {"from": "pending", "to": "in_progress"},
+        });
+        let parts = TaskUpdateTool.render_for_model(&data);
+        let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected Text part");
+        };
+        // TS shape: `Updated task #{id} {fields}` (no `Status: a → b` —
+        // TS doesn't include the status change in the render).
+        assert_eq!(text, "Updated task #t-1 status, owner");
+    }
+
+    #[test]
+    fn task_update_render_appends_verification_nudge() {
+        let data = json!({
+            "success": true,
+            "taskId": "t-1",
+            "updatedFields": ["status"],
+            "verificationNudgeNeeded": true,
+            "statusChange": {"from": "in_progress", "to": "completed"},
+        });
+        let parts = TaskUpdateTool.render_for_model(&data);
+        let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected Text part");
+        };
+        assert!(text.starts_with("Updated task #t-1 status"));
+        assert!(text.contains("verification agent (subagent_type=\"verification-agent\")"));
+        assert!(text.contains("only the verifier issues a verdict"));
+    }
+
+    #[test]
+    fn task_update_render_appends_teammate_completed_nudge() {
+        // TS `TaskUpdateTool.ts:386-394`: when a swarm teammate
+        // transitions a task to completed, append the "Call TaskList
+        // now" nudge so the agent picks up downstream work.
+        let data = json!({
+            "success": true,
+            "taskId": "t-1",
+            "updatedFields": ["status"],
+            "verificationNudgeNeeded": false,
+            "completedNudgeNeeded": true,
+            "statusChange": {"from": "in_progress", "to": "completed"},
+        });
+        let parts = TaskUpdateTool.render_for_model(&data);
+        let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected Text part");
+        };
+        assert!(text.starts_with("Updated task #t-1 status"));
+        assert!(text.contains("Task completed. Call TaskList now"));
+        assert!(text.contains("see if your work unblocked others"));
+    }
+
+    #[test]
+    fn task_update_render_completed_then_verification_nudges_in_order() {
+        // Both nudges fire when a teammate completes their 3rd+ task
+        // without verification. Completed nudge precedes verification
+        // nudge in the render output (TS gates the verification
+        // append after the completion text in `TaskUpdateTool.ts:396`).
+        let data = json!({
+            "success": true,
+            "taskId": "t-9",
+            "updatedFields": ["status"],
+            "completedNudgeNeeded": true,
+            "verificationNudgeNeeded": true,
+            "statusChange": {"from": "in_progress", "to": "completed"},
+        });
+        let parts = TaskUpdateTool.render_for_model(&data);
+        let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected Text part");
+        };
+        let completed_idx = text.find("Task completed").expect("completed nudge");
+        let verify_idx = text.find("verification agent").expect("verification nudge");
+        assert!(
+            completed_idx < verify_idx,
+            "completed nudge must precede verification nudge: {text}"
+        );
+    }
+
+    #[test]
+    fn task_update_render_omits_completed_nudge_when_flag_false() {
+        let data = json!({
+            "success": true,
+            "taskId": "t-1",
+            "updatedFields": ["status"],
+            "completedNudgeNeeded": false,
+            "verificationNudgeNeeded": false,
+            "statusChange": {"from": "in_progress", "to": "completed"},
+        });
+        let parts = TaskUpdateTool.render_for_model(&data);
+        let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected Text part");
+        };
+        assert_eq!(text, "Updated task #t-1 status");
+    }
+
+    #[test]
+    fn task_update_render_error_uses_error_field_directly() {
+        // TS: `error || \`Task #${taskId} not found\``.
+        let data = json!({
+            "success": false,
+            "taskId": "t-99",
+            "updatedFields": [],
+            "error": "Permission denied",
+        });
+        let parts = TaskUpdateTool.render_for_model(&data);
+        let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected Text part");
+        };
+        assert_eq!(text, "Permission denied");
+    }
+
+    #[test]
+    fn task_update_render_error_falls_back_to_not_found() {
+        let data = json!({"success": false, "taskId": "t-99", "updatedFields": []});
+        let parts = TaskUpdateTool.render_for_model(&data);
+        let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected Text part");
+        };
+        assert_eq!(text, "Task #t-99 not found");
+    }
+
+    #[test]
+    fn task_stop_render_uses_default_json_impl() {
+        // TS `TaskStopTool.ts:98-103` emits `jsonStringify(output)` —
+        // matches the trait default exactly. No override.
+        let data = json!({
+            "message": "Successfully stopped task: bg-1",
+            "task_id": "bg-1",
+            "task_type": "background",
+        });
+        let parts = TaskStopTool.render_for_model(&data);
+        let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected Text part");
+        };
+        // Default impl JSON-stringifies the whole envelope.
+        assert!(text.starts_with("{"), "got: {text}");
+        assert!(text.contains("Successfully stopped task: bg-1"));
+        assert!(text.contains("\"task_id\":\"bg-1\""));
+    }
+
+    #[test]
+    fn task_output_render_success_emits_xml_tagged_block() {
+        let data = json!({
+            "retrieval_status": "success",
+            "task": {
+                "task_id": "bg-1",
+                "task_type": "background",
+                "status": "completed",
+                "description": "",
+                "output": "stdout line 1\nstdout line 2",
+                "exitCode": 0,
+            }
+        });
+        let parts = TaskOutputTool.render_for_model(&data);
+        let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected Text part");
+        };
+        assert_eq!(
+            text,
+            "<retrieval_status>success</retrieval_status>\n\n\
+             <task_id>bg-1</task_id>\n\n\
+             <task_type>background</task_type>\n\n\
+             <status>completed</status>\n\n\
+             <exit_code>0</exit_code>\n\n\
+             <output>\nstdout line 1\nstdout line 2\n</output>"
+        );
+    }
+
+    #[test]
+    fn task_output_render_not_ready_emits_just_status_tag() {
+        let data = json!({
+            "retrieval_status": "not_ready",
+            "task": {"task_id": "bg-2", "task_type": "background", "status": "unknown", "description": "", "output": ""}
+        });
+        let parts = TaskOutputTool.render_for_model(&data);
+        let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected Text part");
+        };
+        assert!(text.starts_with("<retrieval_status>not_ready</retrieval_status>"));
+        assert!(text.contains("<task_id>bg-2</task_id>"));
+        // Empty output is suppressed (TS: `if (data.task.output?.trim())`).
+        assert!(!text.contains("<output>"), "got: {text}");
+    }
+
+    #[test]
+    fn task_output_render_skips_exit_code_when_absent() {
+        // TS: `exitCode !== undefined && exitCode !== null` gate.
+        let data = json!({
+            "retrieval_status": "success",
+            "task": {
+                "task_id": "bg-3",
+                "task_type": "agent",
+                "status": "completed",
+                "output": "result",
+            }
+        });
+        let parts = TaskOutputTool.render_for_model(&data);
+        let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected Text part");
+        };
+        assert!(!text.contains("<exit_code>"), "got: {text}");
+        assert!(text.contains("<output>\nresult\n</output>"));
+    }
+}
+
+// ── TaskV2 feature gate ───────────────────────────────────────────────
+//
+// V1/V2 mutual exclusion at tool level (TS `isTodoV2Enabled()` →
+// `isEnabled()` on each tool). When `Feature::TaskV2` is on (default),
+// V2 tools are exposed and TodoWrite is hidden; when off, the inverse.
+// `TaskOutput` and `TaskStop` operate on the background-task namespace
+// (Bash `run_in_background`, agent spawns) and stay enabled either way —
+// they're orthogonal to the V1/V2 plan-item dichotomy.
+
+fn ctx_with_task_v2(enabled: bool) -> ToolUseContext {
+    let mut features = coco_types::Features::with_defaults();
+    features.set_enabled(coco_types::Feature::TaskV2, enabled);
+    let mut ctx = ToolUseContext::test_default();
+    ctx.features = Arc::new(features);
+    ctx
+}
+
+#[test]
+fn task_v2_on_exposes_v2_hides_todo_write() {
+    let ctx = ctx_with_task_v2(true);
+    assert!(
+        !TodoWriteTool.is_enabled(&ctx),
+        "V2 mode → TodoWrite hidden"
+    );
+    assert!(TaskCreateTool.is_enabled(&ctx));
+    assert!(TaskGetTool.is_enabled(&ctx));
+    assert!(TaskListTool.is_enabled(&ctx));
+    assert!(TaskUpdateTool.is_enabled(&ctx));
+    // Background-task tools unaffected by the V1/V2 gate.
+    assert!(TaskOutputTool.is_enabled(&ctx));
+    assert!(TaskStopTool.is_enabled(&ctx));
+}
+
+#[test]
+fn task_v2_off_exposes_todo_write_hides_v2() {
+    let ctx = ctx_with_task_v2(false);
+    assert!(TodoWriteTool.is_enabled(&ctx), "V1 mode → TodoWrite shown");
+    assert!(!TaskCreateTool.is_enabled(&ctx));
+    assert!(!TaskGetTool.is_enabled(&ctx));
+    assert!(!TaskListTool.is_enabled(&ctx));
+    assert!(!TaskUpdateTool.is_enabled(&ctx));
+    // Background-task tools unaffected by the V1/V2 gate.
+    assert!(TaskOutputTool.is_enabled(&ctx));
+    assert!(TaskStopTool.is_enabled(&ctx));
+}

@@ -71,6 +71,13 @@ pub enum Feature {
     Mcp,
     /// Expose the `notebook_edit` tool to the model.
     NotebookEdit,
+    /// V2 task tooling: expose `TaskCreate`/`TaskGet`/`TaskList`/`TaskUpdate`.
+    /// When disabled, `TodoWrite` (V1) is exposed instead. `TaskOutput` and
+    /// `TaskStop` operate on the background-task namespace (Bash
+    /// `run_in_background`, agent spawns) and stay enabled regardless of
+    /// this gate.
+    /// TS: `isTodoV2Enabled()` in `utils/tasks.ts:133-139`.
+    TaskV2,
 
     // Behavior / safety gate (Stable, default=false for risk-conservative).
     /// Run shell commands inside a sandbox.
@@ -262,6 +269,12 @@ const FEATURES: &[FeatureSpec] = &[
         key: "notebook_edit",
         stage: Stage::Stable,
         default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::TaskV2,
+        key: "task_v2",
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     // Behavior / safety gate.
     FeatureSpec {

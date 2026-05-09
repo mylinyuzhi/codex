@@ -1,147 +1,128 @@
-use super::*;
+use super::Keybinding;
+use super::KeybindingAction;
+use super::KeybindingBlock;
+use super::KeybindingContext;
+use super::KeybindingsConfig;
+use std::collections::BTreeMap;
+
+fn block_with(context: KeybindingContext, entries: &[(&str, KeybindingAction)]) -> KeybindingBlock {
+    let mut bindings = BTreeMap::new();
+    for (chord, action) in entries {
+        bindings.insert((*chord).to_string(), Some(action.clone()));
+    }
+    KeybindingBlock { context, bindings }
+}
 
 #[test]
-fn test_keybinding_resolution() {
-    let mut registry = KeybindingRegistry::new();
-    registry.register(Keybinding {
-        key: "ctrl+c".into(),
-        action: "interrupt".into(),
-        context: None,
-        when: None,
-    });
-    registry.register(Keybinding {
-        key: "ctrl+c".into(),
-        action: "cancel_tool".into(),
-        context: Some("tool_running".into()),
-        when: None,
-    });
+fn keybinding_constructors_parse_chord() {
+    let kb = Keybinding::new(
+        "ctrl+c",
+        KeybindingAction::AppInterrupt,
+        KeybindingContext::Global,
+    )
+    .unwrap();
+    assert_eq!(kb.action, Some(KeybindingAction::AppInterrupt));
+    assert_eq!(kb.context, KeybindingContext::Global);
+    assert!(kb.chord.is_single());
+}
 
-    // Context-specific wins
+#[test]
+fn keybinding_unbind_has_none_action() {
+    let kb = Keybinding::unbind("ctrl+c", KeybindingContext::Chat).unwrap();
+    assert_eq!(kb.action, None);
+}
+
+#[test]
+fn config_from_json_parses_object_wrapper() {
+    let json = r#"{
+        "$schema": "https://example/schema.json",
+        "$docs": "https://example/docs",
+        "bindings": [
+            {
+                "context": "Chat",
+                "bindings": {
+                    "ctrl+c": "chat:cancel",
+                    "ctrl+x ctrl+k": null
+                }
+            }
+        ]
+    }"#;
+
+    let config = KeybindingsConfig::from_json(json).unwrap();
     assert_eq!(
-        registry.resolve("ctrl+c", "tool_running"),
-        Some("cancel_tool")
+        config.schema.as_deref(),
+        Some("https://example/schema.json")
     );
-    // Global fallback
-    assert_eq!(registry.resolve("ctrl+c", "idle"), Some("interrupt"));
-    // Unknown key
-    assert_eq!(registry.resolve("ctrl+z", "idle"), None);
+    assert_eq!(config.docs.as_deref(), Some("https://example/docs"));
+    assert_eq!(config.bindings.len(), 1);
+
+    let block = &config.bindings[0];
+    assert_eq!(block.context, KeybindingContext::Chat);
+    assert_eq!(
+        block.bindings.get("ctrl+c"),
+        Some(&Some(KeybindingAction::ChatCancel)),
+    );
+    assert_eq!(block.bindings.get("ctrl+x ctrl+k"), Some(&None));
 }
 
 #[test]
-fn test_default_keybindings() {
-    let defaults = load_default_keybindings();
-    assert_eq!(defaults.len(), 7);
+fn config_to_json_pretty_round_trip() {
+    let config = KeybindingsConfig {
+        schema: None,
+        docs: None,
+        bindings: vec![block_with(
+            KeybindingContext::Global,
+            &[("ctrl+c", KeybindingAction::AppInterrupt)],
+        )],
+    };
 
-    // Verify all expected bindings are present
-    let actions: Vec<&str> = defaults.iter().map(|b| b.action.as_str()).collect();
-    assert!(actions.contains(&"interrupt"));
-    assert!(actions.contains(&"quit"));
-    assert!(actions.contains(&"submit"));
-    assert!(actions.contains(&"cancel"));
-    assert!(actions.contains(&"autocomplete"));
-    assert!(actions.contains(&"clear"));
-    assert!(actions.contains(&"compact"));
-
-    // Verify ctrl+c maps to interrupt in input context
-    let ctrl_c = defaults
-        .iter()
-        .find(|b| b.key == "ctrl+c")
-        .expect("ctrl+c should exist");
-    assert_eq!(ctrl_c.action, "interrupt");
-    assert_eq!(ctrl_c.context.as_deref(), Some("input"));
+    let json = config.to_json_pretty().unwrap();
+    assert!(json.ends_with('\n'), "trailing newline expected");
+    let reparsed = KeybindingsConfig::from_json(&json).unwrap();
+    assert_eq!(reparsed, config);
 }
 
 #[test]
-fn test_with_defaults() {
-    let registry = KeybindingRegistry::with_defaults();
+fn parse_bindings_skips_unparseable_chord() {
+    let mut bindings = BTreeMap::new();
+    bindings.insert("ctrl+c".to_string(), Some(KeybindingAction::AppInterrupt));
+    bindings.insert(String::new(), Some(KeybindingAction::AppExit));
+    let config = KeybindingsConfig {
+        schema: None,
+        docs: None,
+        bindings: vec![KeybindingBlock {
+            context: KeybindingContext::Global,
+            bindings,
+        }],
+    };
 
-    assert_eq!(registry.resolve("ctrl+c", "input"), Some("interrupt"));
-    assert_eq!(registry.resolve("ctrl+d", "input"), Some("quit"));
-    assert_eq!(registry.resolve("enter", "input"), Some("submit"));
-    assert_eq!(registry.resolve("escape", "dialog"), Some("cancel"));
-    assert_eq!(registry.resolve("tab", "input"), Some("autocomplete"));
-    assert_eq!(registry.resolve("ctrl+l", "global"), Some("clear"));
-    assert_eq!(registry.resolve("ctrl+o", "global"), Some("compact"));
+    let parsed = config.parse_bindings();
+    assert_eq!(parsed.len(), 1);
+    assert_eq!(parsed[0].action, Some(KeybindingAction::AppInterrupt));
 }
 
 #[test]
-fn test_resolve_by_context() {
-    let registry = KeybindingRegistry::with_defaults();
+fn parse_bindings_preserves_unbind() {
+    let mut bindings = BTreeMap::new();
+    bindings.insert("ctrl+c".to_string(), None);
+    let config = KeybindingsConfig {
+        schema: None,
+        docs: None,
+        bindings: vec![KeybindingBlock {
+            context: KeybindingContext::Chat,
+            bindings,
+        }],
+    };
 
-    let input_bindings = registry.all_for_context("input");
-    assert_eq!(input_bindings.len(), 4); // ctrl+c, ctrl+d, enter, tab
-
-    let dialog_bindings = registry.all_for_context("dialog");
-    assert_eq!(dialog_bindings.len(), 1); // escape
-
-    let global_bindings = registry.all_for_context("global");
-    assert_eq!(global_bindings.len(), 2); // ctrl+l, ctrl+o
-
-    let empty = registry.all_for_context("nonexistent");
-    assert!(empty.is_empty());
+    let parsed = config.parse_bindings();
+    assert_eq!(parsed.len(), 1);
+    assert_eq!(parsed[0].action, None);
 }
 
 #[test]
-fn test_register_custom() {
-    let mut registry = KeybindingRegistry::with_defaults();
-
-    // Custom binding overrides default in its context
-    registry.register(Keybinding {
-        key: "ctrl+c".into(),
-        action: "copy".into(),
-        context: Some("editor".into()),
-        when: None,
-    });
-
-    // New context uses custom binding
-    assert_eq!(registry.resolve("ctrl+c", "editor"), Some("copy"));
-    // Original context still works
-    assert_eq!(registry.resolve("ctrl+c", "input"), Some("interrupt"));
-}
-
-#[test]
-fn test_register_custom_global_fallback() {
-    let mut registry = KeybindingRegistry::new();
-
-    // Register a global binding (no context)
-    registry.register(Keybinding {
-        key: "f1".into(),
-        action: "help".into(),
-        context: None,
-        when: None,
-    });
-
-    // Should resolve in any context via global fallback
-    assert_eq!(registry.resolve("f1", "input"), Some("help"));
-    assert_eq!(registry.resolve("f1", "dialog"), Some("help"));
-    assert_eq!(registry.resolve("f1", "global"), Some("help"));
-}
-
-#[test]
-fn test_all_for_context_returns_correct_bindings() {
-    let mut registry = KeybindingRegistry::new();
-    registry.register(Keybinding {
-        key: "a".into(),
-        action: "action_a".into(),
-        context: Some("ctx".into()),
-        when: None,
-    });
-    registry.register(Keybinding {
-        key: "b".into(),
-        action: "action_b".into(),
-        context: Some("ctx".into()),
-        when: None,
-    });
-    registry.register(Keybinding {
-        key: "c".into(),
-        action: "action_c".into(),
-        context: Some("other".into()),
-        when: None,
-    });
-
-    let ctx_bindings = registry.all_for_context("ctx");
-    assert_eq!(ctx_bindings.len(), 2);
-    let keys: Vec<&str> = ctx_bindings.iter().map(|b| b.key.as_str()).collect();
-    assert!(keys.contains(&"a"));
-    assert!(keys.contains(&"b"));
+fn config_default_is_empty() {
+    let config = KeybindingsConfig::default();
+    assert!(config.schema.is_none());
+    assert!(config.docs.is_none());
+    assert!(config.bindings.is_empty());
 }

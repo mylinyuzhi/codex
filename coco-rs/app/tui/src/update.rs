@@ -16,8 +16,11 @@ use crate::update_rewind;
 
 mod clipboard;
 mod edit;
+mod expanded_view;
 mod overlay;
 mod show;
+mod stash;
+mod transcript;
 
 #[cfg(test)]
 #[path = "update.test.rs"]
@@ -426,6 +429,24 @@ pub async fn handle_command(
                 .await;
             true
         }
+        TuiCommand::ExecuteSlashCommand(name) => {
+            // Synthesize a SubmitInput as if the user typed `/foo<Enter>`.
+            // The agent driver's existing slash-command parser handles
+            // it the same way. `display_text: None` keeps the chat
+            // history clean — the rendered slash command shows up via
+            // the agent driver's own ChatMessage emission.
+            let user_message_id = uuid::Uuid::new_v4().to_string();
+            let content = format!("/{name}");
+            let _ = command_tx
+                .send(UserCommand::SubmitInput {
+                    user_message_id,
+                    content: content.clone(),
+                    display_text: Some(content),
+                    images: Vec::new(),
+                })
+                .await;
+            true
+        }
 
         // ── Task management ──
         TuiCommand::BackgroundAllTasks => {
@@ -470,6 +491,27 @@ pub async fn handle_command(
             state.quit();
             true
         }
+
+        // ── Stash ──
+        TuiCommand::StashInputDraft => {
+            stash::swap_input_draft(state);
+            true
+        }
+
+        // ── Expanded right-rail view ──
+        TuiCommand::ToggleExpandedTasksView => {
+            expanded_view::cycle(state);
+            true
+        }
+        TuiCommand::ToggleTeammateMessagePreview => {
+            state.ui.show_teammate_message_preview = !state.ui.show_teammate_message_preview;
+            true
+        }
+        TuiCommand::ToggleTranscript => {
+            transcript::toggle(state);
+            true
+        }
+        TuiCommand::ToggleTranscriptShowAll => transcript::toggle_show_all(state),
     };
 
     if state.ui.input.text != text_before || state.ui.input.cursor != cursor_before {

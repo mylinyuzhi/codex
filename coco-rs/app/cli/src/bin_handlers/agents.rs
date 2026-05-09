@@ -17,6 +17,13 @@ pub async fn run_agents_subcommand() -> Result<()> {
         coco_subagent::BuiltinAgentCatalog::interactive(),
         paths.clone(),
     );
+    // TS parity: `loadAgentsDir.ts:262-294` — surface
+    // `pendingSnapshotUpdate` per definition so `coco agents` can flag
+    // drift between project snapshots and local memory dirs.
+    let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
+    store.set_snapshot_inspector(Some(
+        coco_memory::agent_memory_snapshot::build_pending_inspector(cwd, home),
+    ));
     store.load();
     let snapshot = store.snapshot();
 
@@ -39,6 +46,15 @@ pub async fn run_agents_subcommand() -> Result<()> {
         let model = agent.model.as_deref().unwrap_or("inherit");
         let desc = agent.description.as_deref().unwrap_or("(no description)");
         println!("  {} · {model}  — {desc}", agent.name);
+        // TS parity: `loadAgentsDir.ts:262-294` flags definitions
+        // whose project snapshot is newer than the synced local
+        // memory. coco-rs auto-applies snapshots at session bootstrap
+        // (so the field is mostly informational outside the CLI
+        // listing), but surfacing it here lets the user see which
+        // agents drifted between launches.
+        if let Some(ts) = &agent.pending_snapshot_update {
+            println!("      ↳ pending memory snapshot update from {ts}");
+        }
     }
     Ok(())
 }

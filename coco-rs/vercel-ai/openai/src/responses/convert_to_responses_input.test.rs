@@ -83,3 +83,132 @@ fn converts_tool_result() {
     assert_eq!(items[0]["call_id"], "call_1");
     assert_eq!(items[0]["output"], "72F");
 }
+
+#[test]
+fn tool_result_content_image_data_passes_through_as_input_image() {
+    // Responses API natively supports images in tool results via
+    // `input_image` with a `data:` URL. Pre-refactor the FileData branch
+    // didn't exist on this conversion path.
+    use vercel_ai_provider::ToolResultContentPart;
+    let prompt = vec![LanguageModelV4Message::Tool {
+        content: vec![ToolContentPart::ToolResult(ToolResultPart {
+            tool_call_id: "call_img".into(),
+            tool_name: "FileRead".into(),
+            output: ToolResultContent::Content {
+                value: vec![ToolResultContentPart::FileData {
+                    data: "iVBOR...".into(),
+                    media_type: "image/png".into(),
+                    filename: None,
+                    provider_options: None,
+                }],
+                provider_options: None,
+            },
+            is_error: false,
+            provider_metadata: None,
+        })],
+        provider_options: None,
+    }];
+    let (items, _) = convert_to_openai_responses_input(&prompt, SystemMessageMode::System);
+    let output = &items[0]["output"];
+    assert_eq!(output[0]["type"], "input_image");
+    let url = output[0]["image_url"].as_str().unwrap();
+    assert!(
+        url.starts_with("data:image/png;base64,iVBOR"),
+        "expected data URL, got: {url}"
+    );
+}
+
+#[test]
+fn tool_result_content_image_url_passes_through_as_input_image() {
+    use vercel_ai_provider::ToolResultContentPart;
+    let prompt = vec![LanguageModelV4Message::Tool {
+        content: vec![ToolContentPart::ToolResult(ToolResultPart {
+            tool_call_id: "call_url".into(),
+            tool_name: "FileRead".into(),
+            output: ToolResultContent::Content {
+                value: vec![ToolResultContentPart::FileUrl {
+                    url: "https://example.com/cat.png".into(),
+                    media_type: "image/png".into(),
+                    provider_options: None,
+                }],
+                provider_options: None,
+            },
+            is_error: false,
+            provider_metadata: None,
+        })],
+        provider_options: None,
+    }];
+    let (items, _) = convert_to_openai_responses_input(&prompt, SystemMessageMode::System);
+    let output = &items[0]["output"];
+    assert_eq!(output[0]["type"], "input_image");
+    assert_eq!(output[0]["image_url"], "https://example.com/cat.png");
+}
+
+#[test]
+fn tool_result_content_pdf_data_degrades_to_input_text_marker() {
+    // Responses API only accepts images in tool_result blocks — PDFs and
+    // other documents are degraded to an explicit text marker rather
+    // than silently dropped.
+    use vercel_ai_provider::ToolResultContentPart;
+    let prompt = vec![LanguageModelV4Message::Tool {
+        content: vec![ToolContentPart::ToolResult(ToolResultPart {
+            tool_call_id: "call_pdf".into(),
+            tool_name: "FileRead".into(),
+            output: ToolResultContent::Content {
+                value: vec![ToolResultContentPart::FileData {
+                    data: "JVBER...".into(),
+                    media_type: "application/pdf".into(),
+                    filename: None,
+                    provider_options: None,
+                }],
+                provider_options: None,
+            },
+            is_error: false,
+            provider_metadata: None,
+        })],
+        provider_options: None,
+    }];
+    let (items, _) = convert_to_openai_responses_input(&prompt, SystemMessageMode::System);
+    let output = &items[0]["output"];
+    assert_eq!(output[0]["type"], "input_text");
+    let text = output[0]["text"].as_str().unwrap();
+    assert!(text.contains("application/pdf"), "got: {text}");
+    assert!(
+        text.contains("only accepts images"),
+        "expected document degradation marker, got: {text}"
+    );
+}
+
+#[test]
+fn tool_result_content_mixed_text_and_image_emits_both_parts() {
+    use vercel_ai_provider::ToolResultContentPart;
+    let prompt = vec![LanguageModelV4Message::Tool {
+        content: vec![ToolContentPart::ToolResult(ToolResultPart {
+            tool_call_id: "call_mix".into(),
+            tool_name: "FileRead".into(),
+            output: ToolResultContent::Content {
+                value: vec![
+                    ToolResultContentPart::Text {
+                        text: "explanation".into(),
+                        provider_options: None,
+                    },
+                    ToolResultContentPart::FileData {
+                        data: "iVBOR...".into(),
+                        media_type: "image/png".into(),
+                        filename: None,
+                        provider_options: None,
+                    },
+                ],
+                provider_options: None,
+            },
+            is_error: false,
+            provider_metadata: None,
+        })],
+        provider_options: None,
+    }];
+    let (items, _) = convert_to_openai_responses_input(&prompt, SystemMessageMode::System);
+    let output = &items[0]["output"];
+    assert_eq!(output[0]["type"], "input_text");
+    assert_eq!(output[0]["text"], "explanation");
+    assert_eq!(output[1]["type"], "input_image");
+}

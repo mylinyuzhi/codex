@@ -34,6 +34,7 @@ use coco_types::UserType;
 
 use crate::Cli;
 use crate::headless::StartupPermissionState;
+use crate::headless::build_output_style_manager;
 use crate::headless::build_system_prompt_for_model;
 use crate::headless::create_api_client;
 use crate::headless::resolve_startup_permission_state;
@@ -65,6 +66,15 @@ pub struct EngineResources {
     /// shared with the per-engine reminder pipeline (`SkillsSource`)
     /// instead of being dropped after building the command registry.
     pub skill_manager: Arc<coco_skills::SkillManager>,
+    /// Resolved output-style catalog + active style. The CLI threads
+    /// this into:
+    /// - [`Self::system_prompt`] (already injected at build time)
+    /// - `SessionBootstrap.output_style` (name only, for SDK init +
+    ///   the per-turn reminder generator)
+    /// - `CliInitializeBootstrap.{output_style, available_styles}`
+    ///
+    /// Stored here so SDK / TUI bootstraps don't each re-build it.
+    pub output_style_manager: coco_output_styles::OutputStyleManager,
 }
 
 /// Build the shared engine resources from a resolved `RuntimeConfig`.
@@ -94,8 +104,18 @@ pub fn build_engine_resources(
     let tool_count = registry.len();
     let tools = Arc::new(registry);
 
-    let system_prompt =
-        build_system_prompt_for_model(cwd, runtime_config, client.provider(), &model_id);
+    // Resolve the active output style up front: it shapes the system
+    // prompt cache prefix and surfaces on the SDK init message + the
+    // per-turn reminder generator.
+    let output_style_manager = build_output_style_manager(runtime_config, cwd, &[]);
+
+    let system_prompt = build_system_prompt_for_model(
+        cwd,
+        runtime_config,
+        client.provider(),
+        &model_id,
+        output_style_manager.active(),
+    );
 
     let startup = resolve_startup_permission_state(cli, &runtime_config.settings.merged)?;
 
@@ -144,6 +164,7 @@ pub fn build_engine_resources(
         startup,
         command_registry: Arc::new(tokio::sync::RwLock::new(Arc::new(command_registry))),
         skill_manager,
+        output_style_manager,
     })
 }
 

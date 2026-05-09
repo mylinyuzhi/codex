@@ -631,6 +631,34 @@ impl ChatMessage {
         }
     }
 
+    /// Create a teammate-attributed message for the leader's view.
+    ///
+    /// Tagged `is_meta=true` so the chat widget hides it from the
+    /// regular scroll (the filter at `widgets/chat/mod.rs` skips
+    /// `is_meta && !show_system_reminders`); the transcript overlay
+    /// passes `show_all` into `show_system_reminders` so these surface
+    /// there. `is_visible_in_transcript_only=true` also marks the
+    /// message as a non-rewindable anchor (`update_rewind` skips it).
+    /// ID is `teammate:{agent}:{uuid}` so concurrent teammates
+    /// can't collide.
+    pub fn teammate_message(teammate: impl Into<String>, content: impl Into<String>) -> Self {
+        let teammate = teammate.into();
+        let uuid = uuid::Uuid::new_v4();
+        Self {
+            id: format!("teammate:{teammate}:{uuid}"),
+            role: ChatRole::User,
+            content: MessageContent::TeammateMessage {
+                teammate,
+                content: content.into(),
+            },
+            is_meta: true,
+            created_at_ms: now_ms(),
+            is_compact_summary: false,
+            is_visible_in_transcript_only: true,
+            permission_mode: None,
+        }
+    }
+
     /// Get the text content for simple display.
     pub fn text_content(&self) -> &str {
         match &self.content {

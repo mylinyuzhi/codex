@@ -66,6 +66,37 @@ fn manifest_formats_each_entry() {
     );
     let scanned = scan_memory_files(temp.path());
     let m = format_memory_manifest(&scanned);
-    assert!(m.contains("[project] x.md"));
+    // TS `formatMemoryManifest` line shape: `- [type] file (iso-ts): desc`
+    assert!(m.starts_with("- [project] x.md ("), "got: {m}");
     assert!(m.contains("short hook"));
+    // ISO-8601 with millisecond precision and trailing Z.
+    let re = regex::Regex::new(r"\(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\)").unwrap();
+    assert!(re.is_match(&m), "expected ISO timestamp in: {m}");
+}
+
+#[test]
+fn manifest_empty_input_returns_empty_string() {
+    // TS parity: an empty memory list yields `''` so the caller
+    // (extract prompt builder) drops the whole `## Existing memory
+    // files` section instead of rendering an empty stub.
+    assert_eq!(format_memory_manifest(&[]), "");
+}
+
+#[test]
+fn manifest_omits_type_tag_when_no_frontmatter() {
+    let temp = tempdir().unwrap();
+    write_file(temp.path(), "loose.md", "no frontmatter at all\n");
+    let scanned = scan_memory_files(temp.path());
+    let m = format_memory_manifest(&scanned);
+    assert!(
+        m.starts_with("- loose.md ("),
+        "expected no [type] tag when frontmatter absent, got: {m}"
+    );
+    // ISO timestamp has internal `:` chars; the description suffix
+    // is what we want to assert is absent — that's the `): ` pattern
+    // that immediately follows the closing paren of the timestamp.
+    assert!(
+        !m.contains("): "),
+        "expected no description suffix when frontmatter absent, got: {m}"
+    );
 }

@@ -4,7 +4,7 @@ use super::*;
 fn read_only_agents_recognised() {
     assert!(is_read_only_agent("Explore"));
     assert!(is_read_only_agent("Plan"));
-    assert!(is_read_only_agent("claude-code-guide"));
+    assert!(is_read_only_agent("coco-guide"));
     assert!(!is_read_only_agent("general-purpose"));
     assert!(!is_read_only_agent("statusline-setup"));
 }
@@ -17,21 +17,34 @@ fn should_classify_skips_read_only_and_zero_tool_runs() {
 }
 
 #[test]
-fn stage1_prompts_include_agent_metadata_and_transcript() {
+fn stage1_prompts_include_handoff_review_text_and_metadata() {
     let (sys, user) = stage1_prompts("worker", "[user] hello\n[assistant] hi", 3);
-    assert!(sys.contains("safety classifier"));
-    assert!(user.contains("Agent type: worker"));
+    assert!(sys.contains("hand-off"));
+    // TS-faithful hand-off review framing must appear verbatim — the
+    // classifier's training surface anchors on this exact phrasing
+    // (`agentToolUtils.ts:417`).
+    assert!(user.contains(HANDOFF_REVIEW_USER_PROMPT));
+    assert!(user.contains("Sub-agent type: worker"));
     assert!(user.contains("Tool uses: 3"));
     assert!(user.contains("[user] hello"));
-    assert!(user.contains("Respond with SAFE"));
+    assert!(user.contains("`SAFE`"));
 }
 
 #[test]
-fn stage2_prompts_carry_stage1_verdict() {
+fn stage2_prompts_carry_stage1_verdict_and_review_framing() {
     let (sys, user) = stage2_prompts("BLOCKED: rm -rf /", "transcript body");
     assert!(sys.contains("second-stage"));
+    assert!(user.contains(HANDOFF_REVIEW_USER_PROMPT));
     assert!(user.contains("BLOCKED: rm -rf /"));
     assert!(user.contains("transcript body"));
+}
+
+#[test]
+fn handoff_classifier_active_requires_auto_mode_and_feature() {
+    assert!(handoff_classifier_active(Some("auto"), true));
+    assert!(!handoff_classifier_active(Some("auto"), false));
+    assert!(!handoff_classifier_active(Some("acceptEdits"), true));
+    assert!(!handoff_classifier_active(None, true));
 }
 
 #[test]
@@ -76,13 +89,16 @@ fn parse_unmatched_response_treats_as_blocked() {
 }
 
 #[test]
-fn render_block_message_wraps_reason() {
+fn render_block_message_uses_ts_warning_format() {
     let m = render_block_message(&HandoffClassification::Blocked {
         reason: "deleted prod credentials".to_string(),
     });
     let msg = m.expect("Some for blocked");
-    assert!(msg.starts_with("SECURITY:"));
-    assert!(msg.contains("deleted prod credentials"));
+    // TS-faithful prefix from `agentToolUtils.ts:476`.
+    assert!(msg.starts_with("SECURITY WARNING:"));
+    assert!(msg.contains("violate security policy"));
+    assert!(msg.contains("Reason: deleted prod credentials"));
+    assert!(msg.contains("Review the sub-agent's actions carefully"));
 }
 
 #[test]
@@ -92,17 +108,14 @@ fn render_block_message_returns_none_for_safe() {
 
 #[test]
 fn render_block_message_handles_empty_reason() {
-    // Classifier returning bare "BLOCKED" parses to `reason = ""`. Without
-    // a fallback the rendered payload would end on a dangling em-dash —
-    // collapse to "unspecified safety concern" so the model gets a
-    // self-contained sentence.
+    // Classifier returning bare "BLOCKED" parses to `reason = ""`. The
+    // payload still has to be a self-contained sentence — collapse the
+    // empty reason to "unspecified safety concern" so neither the
+    // `Reason: .` nor the trailing review hint reads broken.
     let bare_blocked = parse_classifier_response("BLOCKED");
     let msg = render_block_message(&bare_blocked).expect("Some for blocked");
-    assert!(
-        !msg.ends_with("— "),
-        "rendered payload must not end on a dangling em-dash; got {msg:?}"
-    );
     assert!(msg.contains("unspecified safety concern"));
+    assert!(!msg.contains("Reason: ."), "got: {msg}");
 }
 
 #[test]

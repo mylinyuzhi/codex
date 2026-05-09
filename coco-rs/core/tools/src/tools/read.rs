@@ -4,9 +4,9 @@ use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::SearchReadInfo;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
+use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_tool_runtime::ValidationResult;
-use coco_types::PermissionDecision;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
 use coco_types::ToolName;
@@ -203,13 +203,16 @@ impl Tool for ReadTool {
     /// `checkReadPermissionForTool`; coco-rs matches by consulting the
     /// resolved `ctx.tool_config.file_read_ignore_patterns` matcher
     /// (JSON-first, env override via `COCO_FILE_READ_IGNORE_PATTERNS`).
-    /// Paths matching any deny glob are rejected before disk access.
-    async fn check_permissions(&self, input: &Value, ctx: &ToolUseContext) -> PermissionDecision {
+    /// Paths matching any deny glob are denied at the central
+    /// evaluator's step-1c slot; everything else passes through to
+    /// rule + mode-fallthrough evaluation.
+    async fn check_permissions(
+        &self,
+        input: &Value,
+        ctx: &ToolUseContext,
+    ) -> coco_types::ToolCheckResult {
         let Some(file_path) = input.get("file_path").and_then(|v| v.as_str()) else {
-            return PermissionDecision::Allow {
-                updated_input: None,
-                feedback: None,
-            };
+            return coco_types::ToolCheckResult::Passthrough;
         };
         let matcher = crate::tools::read_permissions::file_read_ignore_matcher_from_patterns(
             &ctx.tool_config.file_read_ignore_patterns,
@@ -614,6 +617,187 @@ impl Tool for ReadTool {
             app_state_patch: None,
         })
     }
+
+    /// Project the structured read output into model-facing content
+    /// parts.
+    ///
+    /// TS parity: `FileReadTool.ts::mapToolResultToToolResultBlockParam`
+    /// — a `switch (data.type)` over the discriminated union. Each
+    /// branch picks the most natural wire shape:
+    ///
+    ///   - **`image`** → multimodal [`ToolResultContentPart::FileData`].
+    ///     Anthropic + Gemini 3+ pass the bytes through to a vision
+    ///     model. OpenAI / OpenAI-Compatible degrade to a marker text
+    ///     in the provider conversion layer.
+    ///   - **`text`** → cat-style line-numbered text. The `content`
+    ///     field already carries the formatted body (built by the
+    ///     `output` string in `execute`), so we hand it back unchanged
+    ///     — replaces the JSON-wrapped envelope at the wire layer for
+    ///     a 5–15% token saving on large files.
+    ///   - **`pdf`** → page-headed extracted text (already formatted in
+    ///     `read_pdf`).
+    ///   - **`file_unchanged`** → TS `FILE_UNCHANGED_STUB` system-reminder.
+    ///   - **`notebook`** → a single Text part rendering of cells
+    ///     (per-cell `--- Cell N (type) ---` header + source + outputs).
+    ///     Image outputs in notebook cells are NOT promoted to
+    ///     ImageBlocks at the renderer layer in this Phase — TS does
+    ///     image-aware merging via `mapNotebookCellsToToolResult`;
+    ///     porting that is a follow-up. Most notebook cells are text.
+    ///
+    /// Anything else (synthetic `file_unchanged` / placeholder
+    /// branches that already produce a `text` envelope) falls through
+    /// to the default JSON-stringify via the trait's default impl.
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        let kind = data.get("type").and_then(Value::as_str).unwrap_or("");
+        let file = data.get("file");
+        match kind {
+            "image" => {
+                let base64 = file
+                    .and_then(|f| f.get("base64"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                let media_type = file
+                    .and_then(|f| f.get("type"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("application/octet-stream");
+                vec![ToolResultContentPart::FileData {
+                    data: base64.to_string(),
+                    media_type: media_type.to_string(),
+                    filename: None,
+                    provider_options: None,
+                }]
+            }
+            "text" | "pdf" => {
+                let content = file
+                    .and_then(|f| f.get("content"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                vec![ToolResultContentPart::Text {
+                    text: content,
+                    provider_options: None,
+                }]
+            }
+            "file_unchanged" => {
+                // TS `FileReadTool/prompt.ts::FILE_UNCHANGED_STUB`. Bare
+                // text — TS does NOT wrap in `<system-reminder>`.
+                vec![ToolResultContentPart::Text {
+                    text: "File unchanged since last read. The content from the earlier Read tool_result in this conversation is still current — refer to that instead of re-reading.".to_string(),
+                    provider_options: None,
+                }]
+            }
+            "notebook" => render_notebook_cells(data, file),
+            _ => vec![ToolResultContentPart::Text {
+                text: serde_json::to_string(data).unwrap_or_default(),
+                provider_options: None,
+            }],
+        }
+    }
+}
+
+/// Render notebook cells as TS-shaped multi-block content. TS
+/// `notebook.ts::cellContentToToolResult` + `cellOutputToToolResult`:
+///
+/// - Cell content: `<cell id="X">[<cell_type>Y</cell_type>][<language>Z</language>]source</cell id="X">`
+///   (cell_type tag only when `!= 'code'`; language tag only when code
+///   AND `!= 'python'`)
+/// - Each output as a separate block:
+///   - text → Text part with leading `\n`
+///   - image → FileData part (multimodal pass-through to providers
+///     that support it; degraded with marker by OpenAI Chat / Compat)
+///
+/// Final pass folds adjacent Text parts into one (joined with `'\n'`)
+/// to mirror TS `notebook.ts:198-213` `allResults.reduce` — keeps the
+/// wire payload tight and matches the TS shape that providers expect.
+/// Image parts break the chain.
+fn render_notebook_cells(data: &Value, file: Option<&Value>) -> Vec<ToolResultContentPart> {
+    let Some(cells) = file.and_then(|f| f.get("cells")).and_then(Value::as_array) else {
+        return vec![ToolResultContentPart::Text {
+            text: serde_json::to_string(data).unwrap_or_default(),
+            provider_options: None,
+        }];
+    };
+    let mut parts: Vec<ToolResultContentPart> = Vec::new();
+    for cell in cells {
+        let cell_type = cell
+            .get("cellType")
+            .and_then(Value::as_str)
+            .unwrap_or("code");
+        let cell_id = cell.get("cell_id").and_then(Value::as_str).unwrap_or("");
+        let language = cell.get("language").and_then(Value::as_str).unwrap_or("");
+        let source = cell.get("source").and_then(Value::as_str).unwrap_or("");
+
+        let mut metadata = String::new();
+        if cell_type != "code" {
+            metadata.push_str(&format!("<cell_type>{cell_type}</cell_type>"));
+        }
+        if cell_type == "code" && !language.is_empty() && language != "python" {
+            metadata.push_str(&format!("<language>{language}</language>"));
+        }
+        let cell_text =
+            format!("<cell id=\"{cell_id}\">{metadata}{source}</cell id=\"{cell_id}\">");
+        parts.push(ToolResultContentPart::Text {
+            text: cell_text,
+            provider_options: None,
+        });
+
+        if let Some(outputs) = cell.get("outputs").and_then(Value::as_array) {
+            for out in outputs {
+                if let Some(text) = out.get("text").and_then(Value::as_str)
+                    && !text.is_empty()
+                {
+                    parts.push(ToolResultContentPart::Text {
+                        text: format!("\n{text}"),
+                        provider_options: None,
+                    });
+                }
+                if let Some(image) = out.get("image") {
+                    let image_data = image
+                        .get("image_data")
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    let media_type = image
+                        .get("media_type")
+                        .and_then(Value::as_str)
+                        .unwrap_or("image/png");
+                    if !image_data.is_empty() {
+                        parts.push(ToolResultContentPart::FileData {
+                            data: image_data.to_string(),
+                            media_type: media_type.to_string(),
+                            filename: None,
+                            provider_options: None,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    merge_adjacent_text_parts(parts)
+}
+
+/// Fold runs of adjacent [`ToolResultContentPart::Text`] entries into a
+/// single Text part joined by `'\n'`. Mirrors TS `notebook.ts:198-213`
+/// `allResults.reduce(...)` — image parts break the chain so the
+/// caller-provided ordering is preserved.
+fn merge_adjacent_text_parts(parts: Vec<ToolResultContentPart>) -> Vec<ToolResultContentPart> {
+    let mut out: Vec<ToolResultContentPart> = Vec::with_capacity(parts.len());
+    for part in parts {
+        if let ToolResultContentPart::Text {
+            text: ref curr_text,
+            provider_options: None,
+        } = part
+            && let Some(ToolResultContentPart::Text {
+                text: prev_text,
+                provider_options: None,
+            }) = out.last_mut()
+        {
+            prev_text.push('\n');
+            prev_text.push_str(curr_text);
+            continue;
+        }
+        out.push(part);
+    }
+    out
 }
 
 /// Build the TS-shaped `text` discriminated-union variant for Read

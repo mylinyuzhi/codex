@@ -30,6 +30,7 @@ use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
+use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
@@ -75,6 +76,21 @@ impl Tool for NotebookEditTool {
             serde_json::json!({"type": "string", "enum": ["replace", "insert", "delete"], "description": "Edit operation: replace (default), insert (new cell), or delete"}),
         );
         ToolInputSchema { properties: p }
+    }
+
+    /// Render the edit envelope as the prebuilt `message` field so the
+    /// model gets the human-readable summary directly. notebook_path /
+    /// cell_index / cell_id are TUI/state concerns.
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        let text = data
+            .get("message")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| serde_json::to_string(data).unwrap_or_default());
+        vec![ToolResultContentPart::Text {
+            text,
+            provider_options: None,
+        }]
     }
 
     async fn execute(
@@ -184,6 +200,19 @@ impl Tool for NotebookEditTool {
         let mut resolved_cell_id: Option<String> = None;
         let mut new_cell_id: Option<String> = None;
 
+        // TS `NotebookEditTool.ts:380-390`: the id surfaced to the
+        // model is `cell_id` from input for replace/delete and a
+        // freshly-generated 13-char base-36 string for insert — but
+        // only when nbformat ≥ 4.5. Older notebooks have no cell-id
+        // field, so TS renders the literal string `undefined`.
+        let supports_ids = nbformat > 4 || (nbformat == 4 && nbformat_minor >= 5);
+        let displayed_cell_id = |id: Option<&str>| -> String {
+            match id {
+                Some(s) if supports_ids && !s.is_empty() => s.to_string(),
+                _ => "undefined".to_string(),
+            }
+        };
+
         let result_msg = match edit_mode {
             "replace" => {
                 let new_source = input
@@ -214,7 +243,8 @@ impl Tool for NotebookEditTool {
                 cells[cell_index]["execution_count"] = Value::Null;
                 cells[cell_index]["outputs"] = Value::Array(vec![]);
 
-                format!("Replaced cell {cell_index} in '{notebook_path}'")
+                let id = displayed_cell_id(Some(cell_id));
+                format!("Updated cell {id} with {new_source}")
             }
             "insert" => {
                 let new_source = input
@@ -242,7 +272,7 @@ impl Tool for NotebookEditTool {
                 // which is a 13-char base-36 alphanumeric. We match that
                 // with a rand::thread_rng-based generator so new cells
                 // look identical to TS-written ones.
-                if nbformat > 4 || (nbformat == 4 && nbformat_minor >= 5) {
+                if supports_ids {
                     let generated = generate_cell_id();
                     new_cell["id"] = Value::String(generated.clone());
                     new_cell_id = Some(generated);
@@ -251,7 +281,8 @@ impl Tool for NotebookEditTool {
                 let insert_at = cell_index.min(cells.len());
                 cells.insert(insert_at, new_cell);
 
-                format!("Inserted {cell_type} cell at index {insert_at} in '{notebook_path}'")
+                let id = displayed_cell_id(new_cell_id.as_deref());
+                format!("Inserted cell {id} with {new_source}")
             }
             "delete" => {
                 if cell_index >= cells.len() {
@@ -269,7 +300,8 @@ impl Tool for NotebookEditTool {
                     .and_then(|v| v.as_str())
                     .map(String::from);
                 cells.remove(cell_index);
-                format!("Deleted cell {cell_index} from '{notebook_path}'")
+                let id = displayed_cell_id(Some(cell_id));
+                format!("Deleted cell {id}")
             }
             other => {
                 return Err(ToolError::InvalidInput {

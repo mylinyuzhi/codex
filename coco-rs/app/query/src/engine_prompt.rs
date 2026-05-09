@@ -152,6 +152,38 @@ impl QueryEngine {
             &self.config.features,
             self.config.is_non_interactive,
         );
+        // TS parity: `isPlanModeInterviewPhaseEnabled()` —
+        // settings-only in coco-rs (no Growthbook, no
+        // `USER_TYPE=ant`, no env var). See `core/context/CLAUDE.md`.
+        let is_plan_interview_phase = matches!(
+            self.config.plan_mode_settings.workflow,
+            coco_config::PlanModeWorkflow::Interview
+        );
+
+        // TS `prompt.ts:222-231,259-283` — these flags shape the
+        // model-visible AgentTool description. We resolve them from
+        // env / config / runtime state and let
+        // `AgentToolPromptRenderer` swap section bodies accordingly.
+        let background_tasks_disabled =
+            coco_config::env::is_env_truthy(coco_config::EnvKey::CocoBackgroundTasksDisable);
+        let agent_list_via_attachment =
+            coco_config::env::is_env_truthy(coco_config::EnvKey::CocoAgentListInMessages);
+        // 3p builds (the default) keep `ant_build` off — coco-rs ships
+        // only worktree isolation. The flag is wired here so an internal
+        // build can flip it via config without re-rendering callers.
+        let ant_build = false;
+        // `has_embedded_search_tools` is host-build dependent. Coco-rs
+        // ships the dedicated `Glob`/`Grep` tools, so the flag stays
+        // off — the AgentTool description points at them rather than
+        // `find` / `grep` via Bash.
+        let has_embedded_search_tools = false;
+        // Subscription tier and teammate flags do not yet have a
+        // resolved source in coco-rs. Defaulting to `false` keeps the
+        // inline concurrency hint and full subagent prompt — the most
+        // permissive 3p shape.
+        let is_pro_subscription = false;
+        let is_in_process_teammate = false;
+        let is_teammate = false;
 
         let prompt_options = coco_tool_runtime::PromptOptions {
             is_non_interactive: self.config.is_non_interactive,
@@ -164,6 +196,14 @@ impl QueryEngine {
             ready_mcp_servers,
             coordinator_mode,
             fork_enabled,
+            is_plan_interview_phase,
+            has_embedded_search_tools,
+            is_in_process_teammate,
+            is_teammate,
+            agent_list_via_attachment,
+            is_pro_subscription,
+            background_tasks_disabled,
+            ant_build,
         };
 
         let mut out = Vec::with_capacity(loaded.len());

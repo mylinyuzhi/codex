@@ -140,6 +140,7 @@ impl MemorySource for NoOpMemorySource {
         &self,
         _agent_id: Option<&str>,
         _input: &str,
+        _recent_tools: &[String],
     ) -> Vec<RelevantMemoryInfo> {
         Vec::new()
     }

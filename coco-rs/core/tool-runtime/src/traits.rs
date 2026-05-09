@@ -1,6 +1,6 @@
-use coco_messages::Message;
 use coco_messages::ToolResult;
-use coco_types::PermissionDecision;
+use coco_messages::ToolResultContentPart;
+use coco_types::ToolCheckResult;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
 use serde::Deserialize;
@@ -100,6 +100,50 @@ pub struct PromptOptions {
     /// guidance section. TS parity: `isForkSubagentEnabled()` gating
     /// in `getPrompt`.
     pub fork_enabled: bool,
+    /// Plan-mode interview-phase flag. When true, `EnterPlanModeTool::prompt`
+    /// omits the `## What Happens in Plan Mode` section because the
+    /// detailed iterative workflow already arrives via the plan-mode
+    /// attachment. TS parity: `isPlanModeInterviewPhaseEnabled()` —
+    /// in coco-rs the source is `settings.plan_mode.workflow ==
+    /// Interview` only (no Growthbook / no `USER_TYPE=ant` / no env
+    /// var; see `core/context/CLAUDE.md`).
+    pub is_plan_interview_phase: bool,
+    /// Host build embeds search tools (`bfs` / `ugrep`) inside the Bash
+    /// tool. `AgentTool::prompt` swaps the "When NOT to use" section's
+    /// FileRead/Glob/Grep hints for `find` / `grep` via Bash. TS parity:
+    /// `hasEmbeddedSearchTools()` in `prompt.ts:222-231`.
+    pub has_embedded_search_tools: bool,
+    /// Parent session is itself an in-process teammate. Drops the
+    /// run_in_background / name / team_name / mode bullets and adds the
+    /// "only synchronous subagents" notice in the AgentTool prompt. TS
+    /// parity: `isInProcessTeammate()` in `prompt.ts:277-279`.
+    pub is_in_process_teammate: bool,
+    /// Parent session is a (non in-process) teammate. Drops the name /
+    /// team_name / mode bullets in the AgentTool prompt. TS parity:
+    /// `isTeammate()` in `prompt.ts:280-282`.
+    pub is_teammate: bool,
+    /// Inject the agent listing into a system-reminder attachment
+    /// instead of inline in the tool description. Stabilises the
+    /// tools-block prompt cache against MCP / plugin / permission
+    /// changes. TS parity: `shouldInjectAgentListInMessages()` in
+    /// `prompt.ts:59-64` (env `COCO_AGENT_LIST_IN_MESSAGES`).
+    pub agent_list_via_attachment: bool,
+    /// Pro subscriptions skip the inline "Launch multiple agents
+    /// concurrently" usage-notes bullet because the same guidance is
+    /// shown by the agent_listing_delta attachment for them. TS parity:
+    /// `getSubscriptionType() !== 'pro'` in `prompt.ts:246`.
+    pub is_pro_subscription: bool,
+    /// Host disabled background tasks via
+    /// `COCO_BACKGROUND_TASKS_DISABLE`. Suppresses the run_in_background
+    /// paragraphs in AgentTool's prompt. TS parity:
+    /// `process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` in
+    /// `prompt.ts:259`.
+    pub background_tasks_disabled: bool,
+    /// Internal-build flag enabling the `isolation: "remote"` bullet.
+    /// 3p builds keep this off because coco-rs ships only the local
+    /// `worktree` isolation runtime. TS parity: `process.env.USER_TYPE
+    /// === 'ant'` in `prompt.ts:273`.
+    pub ant_build: bool,
 }
 
 impl PromptOptions {
@@ -460,12 +504,24 @@ pub trait Tool: Send + Sync {
 
     // -- Permissions --
 
-    /// Check permissions for this tool invocation.
-    async fn check_permissions(&self, _input: &Value, _ctx: &ToolUseContext) -> PermissionDecision {
-        PermissionDecision::Allow {
-            updated_input: None,
-            feedback: None,
-        }
+    /// Tool's own opinion at the central evaluator's step-1c slot.
+    ///
+    /// TS parity: `tool.checkPermissions(parsedInput, context)` in
+    /// `permissions.ts`. Tools that need content-specific safety
+    /// checks (Read/Grep/Glob path safety, Bash subcommand parsing,
+    /// Write path validation) override this to return `Deny`/`Ask`
+    /// for unsafe inputs and `Passthrough` otherwise. The default
+    /// `Passthrough` defers entirely to the rule pipeline; this
+    /// matches TS where tools without a `checkPermissions` impl
+    /// behave the same as `() => ({ behavior: 'passthrough' })`.
+    ///
+    /// The result is consumed by
+    /// `coco_permissions::PermissionEvaluator::evaluate_with_tool_check`
+    /// inside `app/query::tool_call_preparer::resolve_permission_decision`.
+    /// Returning `Allow { updated_input }` here propagates the
+    /// normalized input onto the resulting `PermissionDecision::Allow`.
+    async fn check_permissions(&self, _input: &Value, _ctx: &ToolUseContext) -> ToolCheckResult {
+        ToolCheckResult::Passthrough
     }
 
     /// Prepare a permission matcher string for hook matching.
@@ -509,11 +565,87 @@ pub trait Tool: Send + Sync {
 
     // -- Result Mapping --
 
-    /// Map tool result to API-compatible content blocks.
-    fn map_tool_result_to_block(&self, result: &ToolResult<Value>) -> Vec<Message> {
-        let _ = result;
-        Vec::new()
+    /// Render the tool's structured output as a sequence of content
+    /// parts (text + images + documents) that the model sees in the
+    /// `tool_result` block.
+    ///
+    /// TS parity: `mapToolResultToToolResultBlockParam(data, toolUseId)`
+    /// in every TS Tool. The Rust signature drops `tool_use_id`
+    /// because the executor wraps the parts at message-creation time,
+    /// not the tool.
+    ///
+    /// # Default behaviour
+    ///
+    /// The default impl emits a single [`ToolResultContentPart::Text`]
+    /// with `serde_json::to_string(&data)` — byte-identical to the
+    /// pre-`render_for_model` codepath that did
+    /// `serde_json::to_string(&output_data)` in
+    /// `app/query/src/tool_outcome_builder.rs`. Tools opt into custom
+    /// rendering (token efficiency, multimodal images, etc.) by
+    /// overriding.
+    ///
+    /// # Path 1 only
+    ///
+    /// This method is **only** for tool results — i.e. content blocks
+    /// that pair with a real `tool_use_id` from the assistant's prior
+    /// `tool_use`. Synthesizing a `tool_result` without a paired
+    /// `tool_use_id` is rejected by every major provider (Anthropic
+    /// 400, OpenAI "Invalid parameter…", Gemini schema mismatch).
+    /// Slash command output, system reminders, and attachments use
+    /// their own user-message-text paths and do NOT go through here.
+    ///
+    /// # Provider degradation
+    ///
+    /// Multi-block parts (image / document) flow through to providers
+    /// that support them (Anthropic, Gemini 3+). Text-only providers
+    /// (OpenAI Chat, OpenAI-Compatible: DeepSeek/xAI/Groq) replace
+    /// non-Text parts with a visible marker at the provider boundary
+    /// — see `vercel-ai-openai/src/messages/...` for the conversion.
+    ///
+    /// # Purity
+    ///
+    /// Implementations must be pure (no IO, no async, no global
+    /// state). If a tool needs async work to format its output, do
+    /// the work in [`Tool::execute`] and stash the rendered form in
+    /// `data`.
+    ///
+    /// # Common pattern
+    ///
+    /// Tools whose `data` is already the human-readable string (e.g.
+    /// Glob, Grep, ListMcpResources) call [`render_text_or_json`]
+    /// instead of duplicating the bare-string-or-JSON unwrap
+    /// boilerplate.
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        vec![ToolResultContentPart::Text {
+            text: serde_json::to_string(data).unwrap_or_default(),
+            provider_options: None,
+        }]
     }
+}
+
+/// Helper for the common `render_for_model` pattern: emit a single
+/// [`ToolResultContentPart::Text`] containing either the bare string
+/// payload (when `data` is `Value::String`) or the JSON-stringified
+/// `data` for any other shape.
+///
+/// This is what TS tools whose `mapToolResultToToolResultBlockParam`
+/// returns plain text do — the model sees the underlying message
+/// without a `"…"` JSON-quote wrapper. Tools that already build their
+/// confirmation string in `execute()` (Glob, Grep, MCP*, AskUserQuestion,
+/// SendMessage, …) use this so they don't each carry the same
+/// 6-line `data.as_str().map(...).unwrap_or_else(...)` boilerplate.
+///
+/// Tools needing custom branches (Bash, Read, Edit, plan-mode, agent,
+/// scheduling, brief, …) override `Tool::render_for_model` directly.
+pub fn render_text_or_json(data: &Value) -> Vec<ToolResultContentPart> {
+    let text = data
+        .as_str()
+        .map(str::to_string)
+        .unwrap_or_else(|| serde_json::to_string(data).unwrap_or_default());
+    vec![ToolResultContentPart::Text {
+        text,
+        provider_options: None,
+    }]
 }
 
 #[cfg(test)]

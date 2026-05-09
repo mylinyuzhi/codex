@@ -1006,3 +1006,235 @@ async fn test_bash_simulated_sed_edit_does_not_run_command() {
     assert_eq!(result.data["exitCode"], 0);
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "after\n");
 }
+
+// ---------------------------------------------------------------------------
+// render_for_model — TS parity with BashTool.tsx::mapToolResultToToolResultBlockParam
+// ---------------------------------------------------------------------------
+
+mod render_for_model_tests {
+    use super::*;
+    use coco_tool_runtime::ToolResultContentPart;
+    use serde_json::json;
+
+    #[test]
+    fn user_backgrounded_path_emits_message_text_only() {
+        // The user-backgrounded path returns a different shape entirely
+        // (`{task_id, status: "background", message}`) — render_for_model
+        // must detect it and emit the prebuilt message rather than fall
+        // through to the structured stdout/stderr branch.
+        let data = json!({
+            "task_id": "task-42",
+            "status": "background",
+            "message": "Command is running in the background. Task ID: task-42.",
+        });
+        let parts = BashTool.render_for_model(&data);
+        assert_eq!(parts.len(), 1);
+        let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected Text part, got {:?}", parts[0]);
+        };
+        assert!(
+            text.contains("task-42"),
+            "expected message to contain task id, got: {text}"
+        );
+        assert!(
+            !text.contains("status"),
+            "should not leak JSON, got: {text}"
+        );
+    }
+
+    #[test]
+    fn structured_content_image_decodes_to_filedata_part() {
+        // When stdout was an image, `structuredContent` carries a single
+        // image block. render_for_model must convert it to FileData so
+        // multimodal-capable providers (Anthropic, Gemini 3+) see the
+        // raw bytes instead of a base64 string.
+        let data = json!({
+            "stdout": "(binary image data)",
+            "stderr": "",
+            "exitCode": 0,
+            "interrupted": false,
+            "isImage": true,
+            "structuredContent": [{
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": "iVBORw0KGgo...",
+                }
+            }],
+        });
+        let parts = BashTool.render_for_model(&data);
+        assert_eq!(parts.len(), 1);
+        match &parts[0] {
+            ToolResultContentPart::FileData {
+                data,
+                media_type,
+                filename,
+                ..
+            } => {
+                assert_eq!(data, "iVBORw0KGgo...");
+                assert_eq!(media_type, "image/png");
+                assert!(filename.is_none());
+            }
+            other => panic!("expected FileData, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn text_path_strips_leading_blank_lines() {
+        let data = json!({
+            "stdout": "  \n\n   \nactual content\n",
+            "stderr": "",
+            "exitCode": 0,
+            "interrupted": false,
+        });
+        let parts = BashTool.render_for_model(&data);
+        let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected Text part");
+        };
+        // Leading whitespace-only lines stripped; trailing newline trimmed.
+        assert_eq!(text, "actual content");
+    }
+
+    #[test]
+    fn text_path_includes_stderr_when_present() {
+        let data = json!({
+            "stdout": "ok",
+            "stderr": "warning: bad input",
+            "exitCode": 0,
+            "interrupted": false,
+        });
+        let parts = BashTool.render_for_model(&data);
+        let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected Text part");
+        };
+        assert_eq!(text, "ok\nwarning: bad input");
+    }
+
+    #[test]
+    fn interrupted_appends_error_marker_and_keeps_stderr() {
+        let data = json!({
+            "stdout": "partial",
+            "stderr": "halt",
+            "exitCode": -1,
+            "interrupted": true,
+        });
+        let parts = BashTool.render_for_model(&data);
+        let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected Text part");
+        };
+        assert!(text.contains("partial"), "got: {text}");
+        assert!(text.contains("halt"), "got: {text}");
+        assert!(
+            text.contains("<error>Command was aborted before completion</error>"),
+            "got: {text}"
+        );
+    }
+
+    #[test]
+    fn persisted_output_replaces_stdout_with_envelope() {
+        // When stdout overflowed the inline budget, the model sees a
+        // <persisted-output> envelope with the file path + a 2KB
+        // preview, not the truncated stdout directly.
+        let data = json!({
+            "stdout": "(short preview)",
+            "stderr": "",
+            "exitCode": 0,
+            "interrupted": false,
+            "persistedOutputPath": "/tmp/coco-bash-output/bash-1-2.out",
+            "persistedOutputSize": 50_000,
+        });
+        let parts = BashTool.render_for_model(&data);
+        let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected Text part");
+        };
+        assert!(text.starts_with("<persisted-output>"), "got: {text}");
+        assert!(text.contains("/tmp/coco-bash-output/bash-1-2.out"));
+        assert!(text.contains("(short preview)"));
+        assert!(text.ends_with("</persisted-output>"));
+    }
+
+    #[test]
+    fn background_task_id_assistant_auto_uses_budget_message() {
+        // TS `BashTool.tsx:609-610`: when the fg→bg auto-promotion fires
+        // (assistantAutoBackgrounded), the model sees a verbose message
+        // that names the blocking budget so it learns to delegate next
+        // time. The default short message is wrong here.
+        let data = json!({
+            "stdout": "",
+            "stderr": "",
+            "exitCode": -1,
+            "interrupted": true,
+            "backgroundTaskId": "task-99",
+            "assistantAutoBackgrounded": true,
+        });
+        let parts = BashTool.render_for_model(&data);
+        let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected Text part");
+        };
+        assert!(text.contains("<error>Command was aborted"), "got: {text}");
+        assert!(
+            text.contains("Command exceeded the assistant-mode blocking budget (15s)"),
+            "got: {text}"
+        );
+        assert!(text.contains("task-99"), "got: {text}");
+        assert!(text.contains("delegate long-running work"), "got: {text}");
+    }
+
+    #[test]
+    fn background_task_id_user_initiated_uses_manual_message() {
+        // TS `BashTool.tsx:611-612` `backgroundedByUser` branch — Ctrl+B
+        // path. Coco-rs's TUI doesn't yet wire the keystroke, but the
+        // renderer already keys on the `backgroundedByUser` field so
+        // adding the keybinding is data-only.
+        let data = json!({
+            "stdout": "running\n",
+            "stderr": "",
+            "exitCode": 0,
+            "interrupted": false,
+            "backgroundTaskId": "task-7",
+            "backgroundedByUser": true,
+        });
+        let parts = BashTool.render_for_model(&data);
+        let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected Text part");
+        };
+        assert!(
+            text.contains("Command was manually backgrounded by user with ID: task-7"),
+            "got: {text}"
+        );
+    }
+
+    #[test]
+    fn background_task_id_default_uses_short_message() {
+        // Default path (`run_in_background: true` issued by the model)
+        // — TS `BashTool.tsx:613-614`. Short message; no budget mention.
+        let data = json!({
+            "stdout": "",
+            "stderr": "",
+            "exitCode": 0,
+            "interrupted": false,
+            "backgroundTaskId": "task-3",
+        });
+        let parts = BashTool.render_for_model(&data);
+        let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected Text part");
+        };
+        assert!(
+            text.contains("Command running in background with ID: task-3"),
+            "got: {text}"
+        );
+        assert!(
+            !text.contains("blocking budget"),
+            "default branch must not mention the budget, got: {text}"
+        );
+        assert!(
+            !text.contains("manually backgrounded"),
+            "default branch must not say 'manually backgrounded', got: {text}"
+        );
+    }
+
+    // `format_byte_size` lives in `shell_render.rs`; its byte-identity
+    // contract test (TS `utils/format.ts::formatFileSize`) lives in
+    // `shell_render.test.rs` next to the implementation.
+}

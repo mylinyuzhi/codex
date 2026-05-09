@@ -89,3 +89,102 @@ async fn test_cron_list_returns_jobs_wrapper_when_empty() {
     );
     assert_eq!(result.data["jobs"].as_array().unwrap().len(), 0);
 }
+
+// ── render_for_model — TS parity for cron tool envelopes ──────────────
+
+#[test]
+fn cron_create_render_recurring_durable() {
+    use coco_tool_runtime::ToolResultContentPart;
+    let data = json!({
+        "id": "abc-123",
+        "humanSchedule": "every Monday at 09:00",
+        "recurring": true,
+        "durable": true,
+        "status": "created",
+    });
+    let parts = CronCreateTool.render_for_model(&data);
+    let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+        panic!("expected Text part");
+    };
+    // TS `CronCreateTool.ts:151` recurring branch: id, schedule,
+    // durable persistence string, TTL-in-days, CronDelete hint.
+    assert!(
+        text.starts_with("Scheduled recurring job abc-123"),
+        "got: {text}"
+    );
+    assert!(text.contains("(every Monday at 09:00)"), "got: {text}");
+    assert!(
+        text.contains("Persisted to .claude/scheduled_tasks.json"),
+        "got: {text}"
+    );
+    assert!(text.contains("Auto-expires after 7 days"), "got: {text}");
+    assert!(text.contains("CronDelete"), "got: {text}");
+}
+
+#[test]
+fn cron_create_render_one_shot_in_memory() {
+    use coco_tool_runtime::ToolResultContentPart;
+    let data = json!({
+        "id": "x",
+        "humanSchedule": "Feb 28 14:30",
+        "recurring": false,
+        "durable": false,
+        "status": "created",
+    });
+    let parts = CronCreateTool.render_for_model(&data);
+    let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+        panic!("expected Text part");
+    };
+    // TS `CronCreateTool.ts:152` one-shot branch.
+    assert!(text.starts_with("Scheduled one-shot task x"), "got: {text}");
+    assert!(text.contains("Session-only"), "got: {text}");
+    assert!(
+        text.contains("It will fire once then auto-delete."),
+        "got: {text}"
+    );
+}
+
+#[test]
+fn cron_delete_render_uses_cancelled_verb() {
+    use super::CronDeleteTool;
+    use coco_tool_runtime::ToolResultContentPart;
+    // TS `CronDeleteTool.ts:90`: `Cancelled job ${id}.`.
+    let data = json!({"id": "job-42"});
+    let parts = CronDeleteTool.render_for_model(&data);
+    let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+        panic!("expected Text part");
+    };
+    assert_eq!(text, "Cancelled job job-42.");
+}
+
+#[test]
+fn cron_list_render_empty_branch() {
+    use coco_tool_runtime::ToolResultContentPart;
+    let data = json!({"jobs": []});
+    let parts = CronListTool.render_for_model(&data);
+    let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+        panic!("expected Text part");
+    };
+    assert_eq!(text, "No scheduled tasks.");
+}
+
+#[test]
+fn cron_list_render_summarizes_jobs() {
+    use coco_tool_runtime::ToolResultContentPart;
+    let data = json!({
+        "jobs": [
+            {"id": "job-1", "humanSchedule": "every 5 min", "prompt": "ping"},
+            {"id": "job-2", "humanSchedule": "Monday 9am", "prompt": "weekly review"},
+        ]
+    });
+    let parts = CronListTool.render_for_model(&data);
+    let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+        panic!("expected Text part");
+    };
+    assert!(text.starts_with("2 scheduled tasks:"), "got: {text}");
+    assert!(text.contains("job-1: every 5 min → ping"), "got: {text}");
+    assert!(
+        text.contains("job-2: Monday 9am → weekly review"),
+        "got: {text}"
+    );
+}

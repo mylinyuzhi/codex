@@ -32,7 +32,7 @@ fn test_role_for_builtin_general_purpose_falls_through_to_subagent() {
         ModelRole::Subagent
     );
     assert_eq!(
-        role_for_builtin(SubagentType::ClaudeCodeGuide),
+        role_for_builtin(SubagentType::CocoGuide),
         ModelRole::Subagent
     );
 }

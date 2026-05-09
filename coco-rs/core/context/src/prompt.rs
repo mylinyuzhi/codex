@@ -1,6 +1,11 @@
 //! System prompt building.
 //!
-//! TS: systemPromptType.ts — assembles the system prompt from sections.
+//! TS: `constants/prompts.ts::getSystemPrompt`. coco-rs assembles the
+//! prompt as an ordered list of `SystemPromptBlock`s with explicit
+//! cache breakpoints; the final cache-prefix mirrors TS's
+//! `SYSTEM_PROMPT_DYNAMIC_BOUNDARY` placement (static identity +
+//! style + project instructions cached together; environment +
+//! memory + custom-append placed after).
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -54,16 +59,51 @@ impl SystemPrompt {
     }
 }
 
+/// Borrowed view of an active output style for the prompt builder.
+///
+/// Defined locally so `coco-context` does not depend on
+/// `coco-output-styles` (which would break the
+/// `core/` → `root/` layering rule). The CLI converts an
+/// `OutputStyleConfig` to this view at the boundary.
+///
+/// TS source: `constants/prompts.ts::getOutputStyleSection` +
+/// `getSimpleIntroSection` (the `outputStyleConfig !== null` branch
+/// alters intro framing) + the `keepCodingInstructions` gate that
+/// suppresses the standard "Doing tasks" block when `false`.
+#[derive(Debug, Clone, Copy)]
+pub struct OutputStyleSection<'a> {
+    /// Display name (e.g., `Explanatory`, `alpha:concise`).
+    pub name: &'a str,
+    /// Full prompt body.
+    pub prompt: &'a str,
+    /// When `true`, the standard coding instructions stay on top of
+    /// the style. When `false`, the style replaces them. Built-in
+    /// styles set this to `true`; custom styles default to `None`
+    /// (treated as `true` for safety — coco-rs keeps the standard
+    /// guidance unless the author opts out explicitly).
+    pub keep_coding_instructions: bool,
+}
+
 /// Build a complete system prompt from all context sources.
 ///
-/// TS: buildEffectiveSystemPrompt() — assembles identity, CLAUDE.md,
-/// environment info, tool policies, and injections.
+/// TS: `getSystemPrompt()` — assembles identity, output style,
+/// project instructions, environment, skills, memory, and custom
+/// append. The `output_style` parameter mirrors the
+/// `getOutputStyleSection` block; when present it is injected
+/// immediately after the identity block (and before the cache
+/// breakpoint) so the cached prefix covers identity + style + project
+/// instructions, matching TS's static-prefix layout.
 ///
-/// `memory_section` is the pre-rendered auto-memory block — typically
-/// produced by `coco_memory::prompt::build_system_prompt_section`. We
-/// take it as an opaque `&str` so this crate stays free of a memory
-/// dependency; the caller (app/cli session bootstrap) builds it
-/// against the configured `MemoryRuntime` and threads it through.
+/// Note: TS additionally toggles the intro phrasing
+/// (`with software engineering tasks` vs `according to your "Output
+/// Style" below`) and conditionally emits the "Doing tasks" section
+/// based on `keepCodingInstructions`. coco-rs uses a static identity
+/// string passed by the caller, so the intro toggle isn't applied
+/// here — callers that want full TS parity build the identity string
+/// with awareness of the output-style presence (e.g., the binary
+/// embedded prompt swap). The `keep_coding_instructions` flag is
+/// surfaced on `OutputStyleSection` for future use; it does not
+/// short-circuit the current static identity.
 pub fn build_system_prompt(
     identity: &str,
     claude_md_files: &[crate::MemoryFile],
@@ -71,11 +111,24 @@ pub fn build_system_prompt(
     skill_listing: Option<&str>,
     memory_section: Option<&str>,
     custom_append: Option<&str>,
+    output_style: Option<OutputStyleSection<'_>>,
 ) -> SystemPrompt {
     let mut prompt = SystemPrompt::new();
 
     // Identity block (who the assistant is)
     prompt.add_text(identity);
+
+    // Output style — placed immediately after identity so the cached
+    // static prefix covers it. TS:
+    // `getOutputStyleSection(outputStyleConfig)` rendered as
+    // `# Output Style: <name>\n<prompt>`.
+    if let Some(style) = output_style {
+        prompt.add_text(format!(
+            "\n# Output Style: {}\n{}",
+            style.name, style.prompt
+        ));
+    }
+
     prompt.add_cache_breakpoint();
 
     // CLAUDE.md files (project instructions)
@@ -139,5 +192,10 @@ pub fn build_minimal_prompt(cwd: &std::path::Path) -> SystemPrompt {
         None,
         None,
         None,
+        None,
     )
 }
+
+#[cfg(test)]
+#[path = "prompt.test.rs"]
+mod tests;

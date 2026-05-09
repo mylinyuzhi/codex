@@ -14,6 +14,7 @@ use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
+use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
@@ -50,6 +51,21 @@ impl Tool for EnterWorktreeTool {
             serde_json::json!({"type": "string", "description": "Path for the worktree directory (optional, defaults to ../worktrees/<branch>)"}),
         );
         ToolInputSchema { properties: p }
+    }
+
+    /// Emit the prebuilt `message` field as plain text — the model
+    /// doesn't need the path/branch fields separately, they're already
+    /// in the message. Skips JSON envelope overhead.
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        let text = data
+            .get("message")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| serde_json::to_string(data).unwrap_or_default());
+        vec![ToolResultContentPart::Text {
+            text,
+            provider_options: None,
+        }]
     }
 
     async fn execute(
@@ -179,6 +195,20 @@ impl Tool for ExitWorktreeTool {
             }),
         );
         ToolInputSchema { properties: p }
+    }
+
+    /// Emit the prebuilt `message` field; restoration metadata is for
+    /// the query-engine cleanup hook, not the model.
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        let text = data
+            .get("message")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| serde_json::to_string(data).unwrap_or_default());
+        vec![ToolResultContentPart::Text {
+            text,
+            provider_options: None,
+        }]
     }
 
     async fn execute(

@@ -4,7 +4,7 @@
 //! don't touch process env.
 
 use super::*;
-use coco_types::PermissionDecision;
+use coco_types::ToolCheckResult;
 
 /// Build a matcher from a list of patterns for testing.
 fn build_test_matcher(patterns: &[&str]) -> GlobSet {
@@ -54,13 +54,14 @@ fn test_empty_patterns_allow_everything() {
     assert!(!is_ignored_with(patterns, "private.key"));
 }
 
-/// `check_read_permission_with_matcher` returns Allow for unrelated
-/// paths when the matcher holds no patterns.
+/// `check_read_permission_with_matcher` returns Passthrough for
+/// unrelated paths when the matcher holds no patterns (defers to
+/// rule pipeline).
 #[test]
-fn test_check_read_permission_allows_unrelated_paths() {
+fn test_check_read_permission_passes_through_unrelated_paths() {
     let matcher = build_test_matcher(&[]);
     let result = check_read_permission_with_matcher(Path::new("src/main.rs"), &matcher);
-    assert!(matches!(result, PermissionDecision::Allow { .. }));
+    assert!(matches!(result, ToolCheckResult::Passthrough));
 }
 
 /// Unicode + path with special chars: glob matching should still work

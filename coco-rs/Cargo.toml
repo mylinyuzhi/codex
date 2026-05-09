@@ -75,7 +75,7 @@ members = [
     "exec/exec-server",
     "exec/apply-patch",
 
-    # ─── root modules (8) ───
+    # ─── root modules (9) ───
     "commands",
     "skills",
     "hooks",
@@ -84,6 +84,7 @@ members = [
     "plugins",
     "keybindings",
     "coordinator",
+    "output-styles",
 
     # ─── app/ (5) ───
     "app/query",
@@ -185,6 +186,7 @@ coco-memory = { path = "memory" }
 coco-plugins = { path = "plugins" }
 coco-keybindings = { path = "keybindings" }
 coco-coordinator = { path = "coordinator" }
+coco-output-styles = { path = "output-styles" }
 
 # Internal - app
 coco-query = { path = "app/query" }

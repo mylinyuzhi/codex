@@ -217,6 +217,7 @@ pub async fn build_live_server_with_options(
         &runtime_config,
         client_api.provider(),
         &model_id,
+        None,
     );
     let session_manager = Arc::new(SessionManager::new(sessions_dir.path().to_path_buf()));
 
@@ -260,6 +261,11 @@ pub async fn build_live_server_with_options(
         permission_bridge: None,
         command_registry: command_registry.clone(),
         skill_manager,
+        // Empty search paths keep tests deterministic — only
+        // built-ins land in the catalog, so AgentTool's dynamic
+        // prompt is reproducible across runs.
+        agent_search_paths: coco_subagent::definition_store::AgentSearchPaths::empty(),
+        builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
     })
     .await
     .with_context(|| format!("build SessionRuntime for {provider}/{model_id}"))?;

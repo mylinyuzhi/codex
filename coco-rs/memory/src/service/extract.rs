@@ -33,7 +33,7 @@ use crate::telemetry::NoopEmitter;
 pub const DEFAULT_DRAIN_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Cross-turn extraction state.
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct ExtractState {
     /// Last message UUID that's been folded into an extraction. The
     /// extraction analyzes only messages newer than this.
@@ -42,8 +42,26 @@ struct ExtractState {
     turns_since_last: i32,
     /// True while a fork is running. New triggers stash for trailing.
     in_progress: bool,
-    /// One trailing run is queued when a turn ends mid-extraction.
-    pending_trailing: bool,
+    /// Latest stashed `TurnInput` queued during an in-flight run.
+    /// TS parity (`extractMemories.ts:506-521`): the trailing run
+    /// uses **the most recent** stashed context — overwriting prior
+    /// stashes — so it picks up messages that arrived during the
+    /// primary run rather than re-running on the same stale slice.
+    /// Carrying the full `TurnInput` here means the closure
+    /// (`fork_messages`) is captured at stash time, so it serializes
+    /// the latest history when invoked.
+    pending_trailing: Option<TurnInput>,
+}
+
+impl std::fmt::Debug for ExtractState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExtractState")
+            .field("last_cursor", &self.last_cursor)
+            .field("turns_since_last", &self.turns_since_last)
+            .field("in_progress", &self.in_progress)
+            .field("pending_trailing", &self.pending_trailing.is_some())
+            .finish()
+    }
 }
 
 /// Shared swappable cell for the agent handle. The runtime owns the
@@ -60,6 +78,11 @@ pub struct ExtractService {
     config: MemoryConfig,
     agent: AgentSlot,
     telemetry: Arc<dyn MemoryTelemetryEmitter>,
+    /// User-visible save notices land here on a successful
+    /// extraction; the engine drains it once per turn and injects a
+    /// `SystemMemorySavedMessage` into history. TS parity:
+    /// `extractMemories.ts:491-496 appendSystemMessage(createMemorySavedMessage(...))`.
+    notices: crate::notice::NoticeInbox,
     state: Mutex<ExtractState>,
 }
 
@@ -143,11 +166,30 @@ impl ExtractService {
         agent: AgentSlot,
         telemetry: Arc<dyn MemoryTelemetryEmitter>,
     ) -> Self {
+        Self::with_shared_agent_and_notices(
+            memory_dir,
+            config,
+            agent,
+            telemetry,
+            crate::notice::NoticeInbox::default(),
+        )
+    }
+
+    /// Full constructor — `MemoryRuntimeBuilder` uses this so the
+    /// inbox is shared with the runtime's drain endpoint.
+    pub fn with_shared_agent_and_notices(
+        memory_dir: PathBuf,
+        config: MemoryConfig,
+        agent: AgentSlot,
+        telemetry: Arc<dyn MemoryTelemetryEmitter>,
+        notices: crate::notice::NoticeInbox,
+    ) -> Self {
         Self {
             memory_dir,
             config,
             agent,
             telemetry,
+            notices,
             state: Mutex::new(ExtractState::default()),
         }
     }
@@ -163,14 +205,29 @@ impl ExtractService {
         {
             let mut state = self.state.lock().await;
             if state.in_progress {
-                state.pending_trailing = true;
+                let message_count = input.message_count;
+                // TS parity (`extractMemories.ts:557-563`): stash the
+                // **latest** context and let the trailing run use it.
+                // Overwrites any prior stash so we always replay the
+                // freshest message slice, not the one that triggered
+                // the in-flight run.
+                state.pending_trailing = Some(input);
                 tracing::debug!(
-                    message_count = input.message_count,
+                    message_count,
                     "auto-memory extract skipped: in progress (queued trailing)"
                 );
+                self.telemetry.emit(MemoryEvent::ExtractionCoalesced);
                 return ExtractOutcome::Skipped(SkipReason::InProgress);
             }
             if input.has_memory_writes {
+                // TS parity (`extractMemories.ts:347-360`): when the
+                // main agent wrote memory directly this turn, skip
+                // the fork AND advance the cursor past the range so
+                // the next eligible turn doesn't re-consider these
+                // already-handled messages.
+                if let Some(ref id) = input.last_message_id {
+                    state.last_cursor = Some(id.clone());
+                }
                 self.telemetry
                     .emit(MemoryEvent::ExtractionSkippedDirectWrite {
                         message_count: input.message_count,
@@ -198,11 +255,12 @@ impl ExtractService {
             "auto-memory extract dispatch (forking agent)"
         );
 
-        // Materialize the slice once now that we know we'll fire.
-        // Reused for both the primary run and any trailing run so the
-        // caller's closure stays `FnOnce`.
-        let fork_context = (input.fork_messages)();
-        let outcome = self.run(input.message_count, fork_context.clone()).await;
+        // Primary run uses the caller's input. Decompose so we can
+        // advance the cursor + invoke the fork-messages closure once.
+        let primary_message_count = input.message_count;
+        let primary_last_id = input.last_message_id.clone();
+        let primary_fork_context = (input.fork_messages)();
+        let outcome = self.run(primary_message_count, primary_fork_context).await;
         tracing::info!(
             outcome = ?std::mem::discriminant(&outcome),
             "auto-memory extract done"
@@ -211,29 +269,37 @@ impl ExtractService {
         {
             let mut state = self.state.lock().await;
             state.in_progress = false;
-            if let Some(id) = input.last_message_id {
+            if let Some(id) = primary_last_id {
                 state.last_cursor = Some(id);
             }
         }
 
-        // Drain trailing runs in a loop — one queued at a time.
+        // Drain trailing runs in a loop. Each iteration takes the
+        // latest stashed `TurnInput` (set during this primary's
+        // window) and runs it against its own fresh fork-messages
+        // slice. Cursor advances per trailing input so the next
+        // primary's `last_cursor` reflects the most recent fold.
         loop {
-            let should_trail = {
+            let pending = {
                 let mut state = self.state.lock().await;
-                let trail = state.pending_trailing;
-                state.pending_trailing = false;
-                trail
+                state.pending_trailing.take()
             };
-            if !should_trail {
+            let Some(trailing_input) = pending else {
                 break;
-            }
+            };
             {
                 let mut state = self.state.lock().await;
                 state.in_progress = true;
             }
-            let _trailing = self.run(input.message_count, fork_context.clone()).await;
+            let trailing_count = trailing_input.message_count;
+            let trailing_last_id = trailing_input.last_message_id.clone();
+            let trailing_fork_context = (trailing_input.fork_messages)();
+            let _trailing = self.run(trailing_count, trailing_fork_context).await;
             let mut state = self.state.lock().await;
             state.in_progress = false;
+            if let Some(id) = trailing_last_id {
+                state.last_cursor = Some(id);
+            }
         }
 
         outcome
@@ -291,7 +357,12 @@ impl ExtractService {
     ) -> ExtractOutcome {
         let start = Instant::now();
         let manifest = scan::format_memory_manifest(&scan::scan_memory_files(&self.memory_dir));
-        let prompt = build_extract_prompt(message_count, &manifest, self.config.skip_index);
+        let prompt = build_extract_prompt(
+            message_count,
+            &manifest,
+            self.config.skip_index,
+            self.config.team_memory_enabled,
+        );
         tracing::info!(
             target: "coco_memory::extract",
             message_count,
@@ -321,6 +392,12 @@ impl ExtractService {
                 max_turns: Some(self.config.extraction_max_turns),
                 allowed_write_roots: vec![self.memory_dir.clone()],
             }),
+            // TS `runForkedAgent({skipTranscript: true})`
+            // (`extractMemories.ts:421-423`): the background agent
+            // must not record per-message entries to the user's
+            // transcript — its tool-uses race the main thread's
+            // writer and pollute the JSONL.
+            skip_transcript: true,
             ..Default::default()
         };
 
@@ -328,16 +405,36 @@ impl ExtractService {
         match agent.spawn_agent(request).await {
             Ok(response) => {
                 let duration_ms = start.elapsed().as_millis() as i64;
-                // Sum file-mutation invocations the agent performed
-                // via the canonical typed `ToolName::*::as_str()` keys.
-                let files_written: i32 = [
-                    coco_types::ToolName::Write.as_str(),
-                    coco_types::ToolName::Edit.as_str(),
-                    coco_types::ToolName::NotebookEdit.as_str(),
-                ]
-                .iter()
-                .map(|t| response.tool_use_counts.get(*t).copied().unwrap_or(0))
-                .sum::<i64>() as i32;
+                // Prefer the explicit `paths_written` list when the
+                // spawn driver populated it — this lets us mirror TS
+                // `extractMemories.ts:465-467` and exclude `MEMORY.md`
+                // from the user-facing "Saved" count (the index file
+                // is mechanical). Fall back to `tool_use_counts` for
+                // legacy / minimal driver impls that haven't wired
+                // the path list yet.
+                let entrypoint = crate::store::ENTRYPOINT_NAME;
+                let topic_paths: Vec<String> = response
+                    .paths_written
+                    .iter()
+                    .filter(|p| {
+                        p.file_name()
+                            .and_then(|n| n.to_str())
+                            .is_some_and(|n| n != entrypoint)
+                    })
+                    .map(|p| p.display().to_string())
+                    .collect();
+                let files_written: i32 = if !response.paths_written.is_empty() {
+                    topic_paths.len() as i32
+                } else {
+                    [
+                        coco_types::ToolName::Write.as_str(),
+                        coco_types::ToolName::Edit.as_str(),
+                        coco_types::ToolName::NotebookEdit.as_str(),
+                    ]
+                    .iter()
+                    .map(|t| response.tool_use_counts.get(*t).copied().unwrap_or(0))
+                    .sum::<i64>() as i32
+                };
                 tracing::info!(
                     target: "coco_memory::extract",
                     duration_ms,
@@ -345,23 +442,40 @@ impl ExtractService {
                     turn_count = response.total_tool_use_count,
                     input_tokens = response.input_tokens,
                     output_tokens = response.output_tokens,
+                    cache_read = response.cache_read_tokens,
+                    cache_create = response.cache_creation_tokens,
                     "extraction complete"
                 );
                 self.telemetry.emit(MemoryEvent::ExtractionCompleted {
                     turn_count: response.total_tool_use_count as i32,
                     input_tokens: response.input_tokens,
                     output_tokens: response.output_tokens,
+                    cache_read_tokens: response.cache_read_tokens,
+                    cache_creation_tokens: response.cache_creation_tokens,
                     files_written,
                     duration_ms,
                 });
+                // TS `extractMemories.ts:490-496`: only push a
+                // user-visible notice when at least one topic file
+                // was written (the index doesn't count).
+                if !topic_paths.is_empty() {
+                    self.notices.push(crate::notice::MemoryUserNotice {
+                        written_paths: topic_paths,
+                        verb: crate::notice::NoticeVerb::Saved,
+                    });
+                }
                 ExtractOutcome::Completed { duration_ms }
             }
             Err(e) => {
+                let duration_ms = start.elapsed().as_millis() as i64;
                 tracing::warn!(
                     target: "coco_memory::extract",
                     error = %e,
+                    duration_ms,
                     "extraction subagent failed"
                 );
+                self.telemetry
+                    .emit(MemoryEvent::ExtractionError { duration_ms });
                 ExtractOutcome::Failed { reason: e }
             }
         }
