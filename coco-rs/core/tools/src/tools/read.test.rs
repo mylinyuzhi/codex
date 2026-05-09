@@ -1,6 +1,7 @@
 use crate::tools::read::ReadTool;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::Tool;
+use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use serde_json::json;
 
@@ -572,17 +573,17 @@ async fn test_read_utf16le_bom() {
 // ---------------------------------------------------------------------------
 
 /// When `file_path` has no matching ignore pattern, check_permissions
-/// returns Allow. This is the default (no env var set) scenario.
+/// returns `Passthrough` (defer to rule pipeline).
 #[tokio::test]
-async fn test_read_check_permissions_allows_default() {
-    use coco_types::PermissionDecision;
+async fn test_read_check_permissions_passthrough_default() {
+    use coco_types::ToolCheckResult;
     let decision = ReadTool
         .check_permissions(
             &json!({"file_path": "/tmp/ordinary.txt"}),
             &ToolUseContext::test_default(),
         )
         .await;
-    assert!(matches!(decision, PermissionDecision::Allow { .. }));
+    assert!(matches!(decision, ToolCheckResult::Passthrough));
 }
 
 // ---------------------------------------------------------------------------
@@ -1199,4 +1200,267 @@ async fn test_read_dedup_skipped_after_edit() {
         .as_str()
         .expect("expected text, got stub");
     assert!(text.contains("post-edit content"), "got: {text}");
+}
+
+// ── render_for_model branches (Phase 3) ──
+
+#[test]
+fn render_for_model_image_emits_filedata_part() {
+    // The multimodal payoff: image data goes to providers as a typed
+    // FileData block, NOT as JSON-stringified base64. Anthropic +
+    // Gemini 3+ pass through to the vision model; OpenAI degrades at
+    // the provider boundary.
+    let data = json!({
+        "type": "image",
+        "file": {
+            "base64": "iVBORw0KGgoAAAANS",
+            "type": "image/png",
+            "originalSize": 1024,
+            "dimensions": { "originalWidth": 100, "originalHeight": 100 },
+        },
+    });
+    let parts = ReadTool.render_for_model(&data);
+    assert_eq!(
+        parts,
+        vec![ToolResultContentPart::FileData {
+            data: "iVBORw0KGgoAAAANS".into(),
+            media_type: "image/png".into(),
+            filename: None,
+            provider_options: None,
+        }]
+    );
+}
+
+#[test]
+fn render_for_model_text_emits_content_only_no_json_wrapper() {
+    // The token-efficiency payoff: cat-style content already lives in
+    // `data.file.content`; the renderer hands it through as a single
+    // Text part. Pre-refactor the model saw JSON `{"type":"text","file":{"content":"...","numLines":...}}`
+    // — extra ~10–15% tokens from the envelope and escapes.
+    let data = json!({
+        "type": "text",
+        "file": {
+            "filePath": "/tmp/foo.py",
+            "content": "1\tdef foo():\n2\t    return 42\n",
+            "numLines": 2,
+            "startLine": 1,
+            "totalLines": 2,
+        },
+    });
+    let parts = ReadTool.render_for_model(&data);
+    assert_eq!(
+        parts,
+        vec![ToolResultContentPart::Text {
+            text: "1\tdef foo():\n2\t    return 42\n".into(),
+            provider_options: None,
+        }]
+    );
+}
+
+#[test]
+fn render_for_model_pdf_emits_extracted_content() {
+    let data = json!({
+        "type": "pdf",
+        "file": {
+            "filePath": "/tmp/spec.pdf",
+            "content": "[PDF file: /tmp/spec.pdf, 3 page(s), showing page(s) 1-3]\n\n--- Page 1 ---\nIntroduction\n\n",
+            "totalPages": 3,
+        },
+    });
+    let parts = ReadTool.render_for_model(&data);
+    let [ToolResultContentPart::Text { text, .. }] = parts.as_slice() else {
+        panic!("expected single Text part, got {parts:?}");
+    };
+    assert!(text.starts_with("[PDF file: /tmp/spec.pdf"));
+    assert!(text.contains("--- Page 1 ---"));
+}
+
+#[test]
+fn render_for_model_file_unchanged_uses_ts_stub_phrasing() {
+    // TS `FILE_UNCHANGED_STUB` is a bare string — no `<system-reminder>`
+    // wrapper, no per-path interpolation. The model recognizes the
+    // literal phrase as "skip the re-read".
+    let data = json!({
+        "type": "file_unchanged",
+        "file": { "filePath": "/tmp/foo.py" },
+    });
+    let parts = ReadTool.render_for_model(&data);
+    let [ToolResultContentPart::Text { text, .. }] = parts.as_slice() else {
+        panic!("expected single Text part, got {parts:?}");
+    };
+    assert_eq!(
+        text,
+        "File unchanged since last read. The content from the earlier Read tool_result in this conversation is still current — refer to that instead of re-reading."
+    );
+}
+
+#[test]
+fn render_for_model_notebook_merges_adjacent_text_into_one_part() {
+    // TS `notebook.ts::cellContentToToolResult` shape:
+    // `<cell id="X">[<cell_type>Y</cell_type>][<language>Z</language>]source</cell id="X">`.
+    // Markdown cells get a `<cell_type>` tag; non-python code cells get
+    // a `<language>` tag; python code cells get neither. Adjacent text
+    // blocks fold into a single Text part joined with `'\n'` — TS
+    // `notebook.ts:198-213` `allResults.reduce(...)`.
+    let data = json!({
+        "type": "notebook",
+        "file": {
+            "filePath": "/tmp/nb.ipynb",
+            "cells": [
+                {
+                    "cellType": "markdown",
+                    "source": "# Title\n",
+                    "cell_id": "cell-0",
+                },
+                {
+                    "cellType": "code",
+                    "source": "print(42)\n",
+                    "cell_id": "cell-1",
+                    "execution_count": 5,
+                    "language": "python",
+                    "outputs": [
+                        { "output_type": "stream", "text": "42\n" }
+                    ],
+                },
+            ],
+        },
+    });
+    let parts = ReadTool.render_for_model(&data);
+    assert_eq!(
+        parts.len(),
+        1,
+        "expected merged single Text part, got {parts:?}"
+    );
+    let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+        panic!("part 0 should be Text, got {parts:?}");
+    };
+    assert_eq!(
+        text,
+        "<cell id=\"cell-0\"><cell_type>markdown</cell_type># Title\n</cell id=\"cell-0\">\n<cell id=\"cell-1\">print(42)\n</cell id=\"cell-1\">\n\n42\n"
+    );
+}
+
+#[test]
+fn render_for_model_notebook_image_output_becomes_filedata_part() {
+    // Multimodal pass-through: image outputs from notebook cells
+    // surface as FileData parts (real images on Anthropic/Gemini,
+    // text marker on OpenAI/OpenAI-Compatible via provider degradation).
+    // Adjacent text parts fold into one; the image breaks the chain so
+    // we end up with `[Text(cell + output_text), FileData(image)]`.
+    let data = json!({
+        "type": "notebook",
+        "file": {
+            "filePath": "/tmp/plot.ipynb",
+            "cells": [
+                {
+                    "cellType": "code",
+                    "source": "plt.show()\n",
+                    "cell_id": "cell-0",
+                    "language": "python",
+                    "outputs": [
+                        {
+                            "output_type": "display_data",
+                            "text": "<Figure>",
+                            "image": {
+                                "image_data": "iVBOR...",
+                                "media_type": "image/png",
+                            }
+                        }
+                    ],
+                },
+            ],
+        },
+    });
+    let parts = ReadTool.render_for_model(&data);
+    assert_eq!(parts.len(), 2, "expected [Text, FileData], got {parts:?}");
+    let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+        panic!("part 0 should be Text, got {parts:?}");
+    };
+    assert_eq!(
+        text,
+        "<cell id=\"cell-0\">plt.show()\n</cell id=\"cell-0\">\n\n<Figure>"
+    );
+    match &parts[1] {
+        ToolResultContentPart::FileData {
+            data,
+            media_type,
+            filename,
+            ..
+        } => {
+            assert_eq!(data, "iVBOR...");
+            assert_eq!(media_type, "image/png");
+            assert!(filename.is_none());
+        }
+        other => panic!("expected FileData for image output, got {other:?}"),
+    }
+}
+
+#[test]
+fn render_for_model_notebook_image_between_text_keeps_three_parts() {
+    // Image breaks the merge chain. `[text-1, image, text-2]` must stay
+    // as three parts — the image cleanly separates the text runs.
+    let data = json!({
+        "type": "notebook",
+        "file": {
+            "filePath": "/tmp/mixed.ipynb",
+            "cells": [
+                {
+                    "cellType": "code",
+                    "source": "plot()\n",
+                    "cell_id": "cell-0",
+                    "language": "python",
+                    "outputs": [
+                        {
+                            "output_type": "display_data",
+                            "image": {
+                                "image_data": "AAAA",
+                                "media_type": "image/png",
+                            }
+                        }
+                    ],
+                },
+                {
+                    "cellType": "code",
+                    "source": "after()\n",
+                    "cell_id": "cell-1",
+                    "language": "python",
+                },
+            ],
+        },
+    });
+    let parts = ReadTool.render_for_model(&data);
+    assert_eq!(
+        parts.len(),
+        3,
+        "expected [Text, FileData, Text], got {parts:?}"
+    );
+    assert!(matches!(parts[0], ToolResultContentPart::Text { .. }));
+    assert!(matches!(parts[1], ToolResultContentPart::FileData { .. }));
+    assert!(matches!(parts[2], ToolResultContentPart::Text { .. }));
+}
+
+#[test]
+fn render_for_model_notebook_non_python_code_cell_emits_language_tag() {
+    let data = json!({
+        "type": "notebook",
+        "file": {
+            "filePath": "/tmp/r.ipynb",
+            "cells": [
+                {
+                    "cellType": "code",
+                    "source": "x <- 1",
+                    "cell_id": "cell-0",
+                    "language": "R",
+                },
+            ],
+        },
+    });
+    let parts = ReadTool.render_for_model(&data);
+    let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+        panic!("expected Text part");
+    };
+    assert_eq!(
+        text,
+        "<cell id=\"cell-0\"><language>R</language>x <- 1</cell id=\"cell-0\">"
+    );
 }

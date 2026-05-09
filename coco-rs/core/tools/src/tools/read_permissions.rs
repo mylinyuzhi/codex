@@ -28,8 +28,7 @@
 //! `shouldUseSandbox.ts` — the ignore patterns are a convenience to
 //! hide sensitive files from the model, not a guarantee.
 
-use coco_types::PermissionDecision;
-use coco_types::PermissionDecisionReason;
+use coco_types::ToolCheckResult;
 use globset::Glob;
 use globset::GlobSet;
 use globset::GlobSetBuilder;
@@ -91,13 +90,17 @@ pub fn is_read_ignored_with_matcher(path: &Path, matcher: &GlobSet) -> bool {
     false
 }
 
-/// Helper: build a `PermissionDecision::Deny` when the target path is
-/// in the ignore list, else `Allow`.
+/// Build a `ToolCheckResult::Deny` when the target path matches the
+/// file-read ignore list, else `Passthrough` so the central evaluator
+/// continues with rule-based checks (TS step 2 onward).
 ///
 /// R6-T20. Used by `Tool::check_permissions` overrides in Read/Grep/Glob.
-pub fn check_read_permission_with_matcher(path: &Path, matcher: &GlobSet) -> PermissionDecision {
+/// `Passthrough` (rather than `Allow`) is correct because path safety is
+/// a *negative* gate — passing the gate doesn't prove the operation is
+/// allowed; it just means rules + mode-fallthrough should run next.
+pub fn check_read_permission_with_matcher(path: &Path, matcher: &GlobSet) -> ToolCheckResult {
     if is_read_ignored_with_matcher(path, matcher) {
-        PermissionDecision::Deny {
+        ToolCheckResult::Deny {
             message: format!(
                 "Path `{}` is blocked by file-read ignore patterns. \
                  This is a session-level filter intended to keep \
@@ -106,16 +109,9 @@ pub fn check_read_permission_with_matcher(path: &Path, matcher: &GlobSet) -> Per
                  `COCO_FILE_READ_IGNORE_PATTERNS`) if you need access.",
                 path.display()
             ),
-            reason: PermissionDecisionReason::Classifier {
-                classifier: "file_read_ignore".into(),
-                reason: "path matches file_read_ignore_patterns".into(),
-            },
         }
     } else {
-        PermissionDecision::Allow {
-            updated_input: None,
-            feedback: None,
-        }
+        ToolCheckResult::Passthrough
     }
 }
 

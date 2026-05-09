@@ -152,3 +152,105 @@ fn test_show_always_allow_options_default_true() {
     let store = SettingsPermissionStore::new(dir.path());
     assert!(store.show_always_allow_options());
 }
+
+// ── persistPermissionUpdate parity for directories + replace ─────────
+
+#[test]
+fn test_persist_add_directories_appends_without_duplicates() {
+    // TS `PermissionUpdate.ts:244-265`: append new dirs, drop existing.
+    let (dir, settings_path) =
+        setup_temp_settings(r#"{ "permissions": { "additionalDirectories": ["/already"] } }"#);
+    let store = SettingsPermissionStore::new(dir.path());
+
+    let update = PermissionUpdate::AddDirectories {
+        directories: vec!["/already".into(), "/fresh".into()],
+        destination: PermissionUpdateDestination::ProjectSettings,
+    };
+    store.persist_update(&update).expect("persist update");
+
+    let contents = std::fs::read_to_string(&settings_path).expect("read settings");
+    let value: serde_json::Value = serde_json::from_str(&contents).expect("parse JSON");
+    let dirs = value["permissions"]["additionalDirectories"]
+        .as_array()
+        .expect("additionalDirectories array");
+    assert_eq!(dirs.len(), 2, "duplicate /already must not appear twice");
+    assert_eq!(dirs[0], "/already");
+    assert_eq!(dirs[1], "/fresh");
+}
+
+#[test]
+fn test_persist_remove_directories_filters_array() {
+    // TS `PermissionUpdate.ts:296-313`: filter out matching dirs from
+    // the existing additionalDirectories array.
+    let (dir, settings_path) = setup_temp_settings(
+        r#"{ "permissions": { "additionalDirectories": ["/a", "/b", "/c"] } }"#,
+    );
+    let store = SettingsPermissionStore::new(dir.path());
+
+    let update = PermissionUpdate::RemoveDirectories {
+        directories: vec!["/b".into()],
+        destination: PermissionUpdateDestination::ProjectSettings,
+    };
+    store.persist_update(&update).expect("persist update");
+
+    let contents = std::fs::read_to_string(&settings_path).expect("read settings");
+    let value: serde_json::Value = serde_json::from_str(&contents).expect("parse JSON");
+    let dirs = value["permissions"]["additionalDirectories"]
+        .as_array()
+        .expect("additionalDirectories array");
+    let names: Vec<&str> = dirs.iter().filter_map(|v| v.as_str()).collect();
+    assert_eq!(names, vec!["/a", "/c"]);
+}
+
+#[test]
+fn test_persist_replace_rules_overwrites_array_wholesale() {
+    // TS `PermissionUpdate.ts:329-340`: writes the rule list
+    // wholesale, replacing whatever was there for that behavior.
+    let (dir, settings_path) =
+        setup_temp_settings(r#"{ "permissions": { "allow": ["Read", "Write"] } }"#);
+    let store = SettingsPermissionStore::new(dir.path());
+
+    let update = PermissionUpdate::ReplaceRules {
+        rules: vec![PermissionRule {
+            source: PermissionRuleSource::ProjectSettings,
+            behavior: PermissionBehavior::Allow,
+            value: PermissionRuleValue {
+                tool_pattern: "Bash".into(),
+                rule_content: Some("git *".into()),
+            },
+        }],
+        destination: PermissionUpdateDestination::ProjectSettings,
+    };
+    store.persist_update(&update).expect("persist update");
+
+    let contents = std::fs::read_to_string(&settings_path).expect("read settings");
+    let value: serde_json::Value = serde_json::from_str(&contents).expect("parse JSON");
+    let allow = value["permissions"]["allow"]
+        .as_array()
+        .expect("allow array");
+    assert_eq!(allow.len(), 1);
+    assert_eq!(allow[0], "Bash(git *)");
+}
+
+#[test]
+fn test_persist_replace_rules_empty_is_noop() {
+    // coco-rs `PermissionUpdate::ReplaceRules` lacks the explicit
+    // `behavior` field TS carries, so an empty rules vec can't safely
+    // target a specific behavior list. Documented as a no-op rather
+    // than a guess (could otherwise silently clear the wrong list).
+    let (dir, settings_path) =
+        setup_temp_settings(r#"{ "permissions": { "allow": ["Read"], "deny": ["Bash"] } }"#);
+    let store = SettingsPermissionStore::new(dir.path());
+
+    let update = PermissionUpdate::ReplaceRules {
+        rules: vec![],
+        destination: PermissionUpdateDestination::ProjectSettings,
+    };
+    store.persist_update(&update).expect("persist update");
+
+    let contents = std::fs::read_to_string(&settings_path).expect("read settings");
+    let value: serde_json::Value = serde_json::from_str(&contents).expect("parse JSON");
+    // Both lists must be untouched.
+    assert_eq!(value["permissions"]["allow"][0], "Read");
+    assert_eq!(value["permissions"]["deny"][0], "Bash");
+}

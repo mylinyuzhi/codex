@@ -13,6 +13,7 @@ use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::PromptOptions;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
+use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
@@ -145,6 +146,51 @@ impl Tool for AskUserQuestionTool {
     /// serializing.
     fn is_concurrency_safe(&self, _: &Value) -> bool {
         true
+    }
+
+    /// Render the user's answers as TS-shaped prose. The TUI/CLI
+    /// layer splices answers (and optional `annotations` for preview /
+    /// notes) into the tool result before the model sees it; this fn
+    /// reads that envelope and produces:
+    ///
+    ///   `User has answered your questions: "Q1"="A1" selected
+    ///   preview:\n... user notes: ..., "Q2"="A2". You can now
+    ///   continue with the user's answers in mind.`
+    ///
+    /// When the splicer hasn't run (test fixtures, dialog declined),
+    /// fall back to the defensive JSON-or-string emit.
+    /// TS: `AskUserQuestionTool.tsx:224-249 mapToolResultToToolResultBlockParam`.
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        let answers = data
+            .get("answers")
+            .and_then(Value::as_object)
+            .filter(|m| !m.is_empty());
+        let Some(answers) = answers else {
+            return coco_tool_runtime::render_text_or_json(data);
+        };
+        let annotations = data.get("annotations").and_then(Value::as_object);
+        let mut entries: Vec<String> = Vec::with_capacity(answers.len());
+        for (question, answer_v) in answers {
+            let answer = answer_v.as_str().unwrap_or("");
+            let mut parts = vec![format!("\"{question}\"=\"{answer}\"")];
+            if let Some(annotation) = annotations.and_then(|a| a.get(question)) {
+                if let Some(preview) = annotation.get("preview").and_then(Value::as_str) {
+                    parts.push(format!("selected preview:\n{preview}"));
+                }
+                if let Some(notes) = annotation.get("notes").and_then(Value::as_str) {
+                    parts.push(format!("user notes: {notes}"));
+                }
+            }
+            entries.push(parts.join(" "));
+        }
+        let answers_text = entries.join(", ");
+        let text = format!(
+            "User has answered your questions: {answers_text}. You can now continue with the user's answers in mind."
+        );
+        vec![ToolResultContentPart::Text {
+            text,
+            provider_options: None,
+        }]
     }
 
     async fn execute(

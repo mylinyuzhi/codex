@@ -614,3 +614,125 @@ async fn test_notebook_rejects_edit_on_mtime_drift() {
         "error should mention modification"
     );
 }
+
+// ── render_for_model — TS parity for cell-edit confirmations ─────────
+
+/// Replace on a 4.5+ notebook must surface the input `cell_id` in the
+/// model-visible message. TS `NotebookEditTool.ts:150`:
+/// `Updated cell ${cell_id} with ${new_source}`.
+#[tokio::test]
+async fn test_notebook_replace_message_uses_cell_id() {
+    let mut notebook = minimal_notebook(5);
+    notebook["cells"] = json!([{
+        "cell_type": "code",
+        "id": "abc-123",
+        "source": ["old\n"],
+        "metadata": {},
+        "execution_count": null,
+        "outputs": [],
+    }]);
+    let file = write_notebook(&notebook);
+    let ctx = ToolUseContext::test_default();
+    let result = NotebookEditTool
+        .execute(
+            json!({
+                "notebook_path": file.path().to_str().unwrap(),
+                "cell_id": "abc-123",
+                "edit_mode": "replace",
+                "new_source": "new code"
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+    let msg = result.data["message"].as_str().unwrap();
+    assert_eq!(msg, "Updated cell abc-123 with new code");
+}
+
+/// Pre-4.5 notebooks have no cell IDs in the file format. TS surfaces
+/// `undefined` (template-literal stringification of an undefined
+/// JS value). coco-rs mirrors that with the literal string
+/// `"undefined"`.
+#[tokio::test]
+async fn test_notebook_replace_message_emits_undefined_on_pre_45() {
+    let mut notebook = minimal_notebook(4);
+    notebook["cells"] = json!([{
+        "cell_type": "code",
+        "source": ["old\n"],
+        "metadata": {},
+        "execution_count": null,
+        "outputs": [],
+    }]);
+    let file = write_notebook(&notebook);
+    let ctx = ToolUseContext::test_default();
+    let result = NotebookEditTool
+        .execute(
+            json!({
+                "notebook_path": file.path().to_str().unwrap(),
+                "cell_id": "0",
+                "edit_mode": "replace",
+                "new_source": "new"
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+    let msg = result.data["message"].as_str().unwrap();
+    assert_eq!(msg, "Updated cell undefined with new");
+}
+
+/// Insert on a 4.5+ notebook must use the freshly-generated cell ID,
+/// matching TS `NotebookEditTool.ts:156`:
+/// `Inserted cell ${cell_id} with ${new_source}`.
+#[tokio::test]
+async fn test_notebook_insert_message_uses_generated_id() {
+    let notebook = minimal_notebook(5);
+    let file = write_notebook(&notebook);
+    let ctx = ToolUseContext::test_default();
+    let result = NotebookEditTool
+        .execute(
+            json!({
+                "notebook_path": file.path().to_str().unwrap(),
+                "cell_id": "0",
+                "edit_mode": "insert",
+                "cell_type": "code",
+                "new_source": "x = 1"
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+    let msg = result.data["message"].as_str().unwrap();
+    let new_id = result.data["new_cell_id"].as_str().unwrap();
+    assert_eq!(msg, format!("Inserted cell {new_id} with x = 1"));
+}
+
+/// Delete on a 4.5+ notebook must echo the input `cell_id`.
+/// TS `NotebookEditTool.ts:162`: `Deleted cell ${cell_id}`.
+#[tokio::test]
+async fn test_notebook_delete_message_uses_cell_id() {
+    let mut notebook = minimal_notebook(5);
+    notebook["cells"] = json!([{
+        "cell_type": "code",
+        "id": "doomed-cell",
+        "source": ["x\n"],
+        "metadata": {},
+        "execution_count": null,
+        "outputs": [],
+    }]);
+    let file = write_notebook(&notebook);
+    let ctx = ToolUseContext::test_default();
+    let result = NotebookEditTool
+        .execute(
+            json!({
+                "notebook_path": file.path().to_str().unwrap(),
+                "cell_id": "doomed-cell",
+                "edit_mode": "delete"
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+    let msg = result.data["message"].as_str().unwrap();
+    assert_eq!(msg, "Deleted cell doomed-cell");
+}

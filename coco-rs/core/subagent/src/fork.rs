@@ -144,14 +144,12 @@ pub fn build_fork_child_rules() -> String {
 
 /// Build a worktree notice for forked agents in isolated worktrees.
 ///
-/// TS: buildWorktreeNotice(parentCwd, worktreeCwd)
+/// Byte-faithful to TS `forkSubagent.ts:205-210` `buildWorktreeNotice`.
+/// Em-dash is U+2014. Produces a single line with no embedded newlines —
+/// the caller appends it to the inherited context.
 pub fn build_worktree_notice(parent_cwd: &str, worktree_cwd: &str) -> String {
     format!(
-        "You've inherited the conversation context above from a parent agent \
-         working in {parent_cwd}. You are operating in an isolated git worktree \
-         at {worktree_cwd} \u{2014} same repo, separate working copy. Translate \
-         paths accordingly. Re-read files before editing. Your changes stay \
-         isolated until explicitly merged."
+        "You've inherited the conversation context above from a parent agent working in {parent_cwd}. You are operating in an isolated git worktree at {worktree_cwd} \u{2014} same repository, same relative file structure, separate working copy. Paths in the inherited context refer to the parent's working directory; translate them to your worktree root. Re-read files before editing if the parent may have modified them since they appear in the context. Your changes stay in this worktree and will not affect the parent's files."
     )
 }
 

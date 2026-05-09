@@ -2,6 +2,7 @@ use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
+use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_tool_runtime::ValidationResult;
 use coco_types::ToolId;
@@ -88,6 +89,23 @@ impl Tool for WriteTool {
             return ValidationResult::invalid("missing required field: content");
         }
         ValidationResult::Valid
+    }
+
+    /// Branch on `data["type"]` ∈ {"create", "update"} to emit the
+    /// TS-shaped confirmation message. TS parity:
+    /// `FileWriteTool.ts:418-433::mapToolResultToToolResultBlockParam`.
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        let file_path = data.get("filePath").and_then(Value::as_str).unwrap_or("");
+        let op_type = data.get("type").and_then(Value::as_str).unwrap_or("");
+        let text = match op_type {
+            "create" => format!("File created successfully at: {file_path}"),
+            "update" => format!("The file {file_path} has been updated successfully."),
+            _ => serde_json::to_string(data).unwrap_or_default(),
+        };
+        vec![ToolResultContentPart::Text {
+            text,
+            provider_options: None,
+        }]
     }
 
     async fn execute(
@@ -220,19 +238,15 @@ impl Tool for WriteTool {
         // a full content replacement — the model sent explicit line endings
         // in `content` and meant them. Do not rewrite them." We honor the
         // same decision — only encoding is preserved, not line endings.
-        let (old_content, detected_encoding): (Option<String>, coco_file_encoding::Encoding) =
-            if !is_new {
-                match std::fs::read(file_path) {
-                    Ok(raw) => {
-                        let enc = coco_file_encoding::detect_encoding(&raw);
-                        let decoded = enc.decode(&raw).ok();
-                        (decoded, enc)
-                    }
-                    Err(_) => (None, coco_file_encoding::Encoding::Utf8),
-                }
-            } else {
-                (None, coco_file_encoding::Encoding::Utf8)
-            };
+        // For existing files, sniff the original encoding so we can
+        // preserve it on overwrite (TS `FileWriteTool.ts:268-277`).
+        let detected_encoding: coco_file_encoding::Encoding = if !is_new {
+            std::fs::read(file_path)
+                .map(|raw| coco_file_encoding::detect_encoding(&raw))
+                .unwrap_or(coco_file_encoding::Encoding::Utf8)
+        } else {
+            coco_file_encoding::Encoding::Utf8
+        };
 
         // Ensure parent directory exists
         if let Some(parent) = path.parent()
@@ -260,24 +274,6 @@ impl Tool for WriteTool {
             source: None,
         })?;
 
-        let line_count = content.lines().count();
-        let byte_count = content.len();
-
-        let action = if is_new { "created" } else { "updated" };
-        let mut msg = format!(
-            "File {action} successfully at: {file_path} ({line_count} lines, {byte_count} bytes)"
-        );
-
-        // Generate simple diff summary for updates
-        if let Some(ref old) = old_content {
-            let old_lines = old.lines().count();
-            let diff_lines = (line_count as i64 - old_lines as i64).abs();
-            let diff_direction = if line_count > old_lines { "+" } else { "-" };
-            msg.push_str(&format!(
-                "\nDiff: {old_lines} → {line_count} lines ({diff_direction}{diff_lines})"
-            ));
-        }
-
         crate::record_file_edit(ctx, path, content.to_string()).await;
         // TS `FileWriteTool.ts` mirrors `FileReadTool.ts:578-591` skill
         // auto-discovery — when a write touches a path under a nested
@@ -285,8 +281,15 @@ impl Tool for WriteTool {
         // skill on the next batch boundary.
         crate::track_skill_discovery(ctx, path).await;
 
+        // TS `FileWriteTool.ts:418-433` — return structured `{type, filePath}`
+        // so render_for_model can branch on the operation type. The
+        // wire output is built in render_for_model, not here.
+        let op_type = if is_new { "create" } else { "update" };
         Ok(ToolResult {
-            data: serde_json::json!(msg),
+            data: serde_json::json!({
+                "type": op_type,
+                "filePath": file_path,
+            }),
             new_messages: vec![],
             app_state_patch: None,
         })

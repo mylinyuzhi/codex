@@ -11,6 +11,7 @@ use async_trait::async_trait;
 use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::Tool;
+use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_tool_runtime::error::ToolError;
 use coco_types::ToolId;
@@ -60,6 +61,32 @@ impl Tool for ApplyPatchTool {
 
     fn is_read_only(&self, _: &Value) -> bool {
         false
+    }
+
+    /// Render `{stdout, stderr}` by joining stdout + stderr with a
+    /// newline (skip empty pieces). Same shape as a simplified Bash.
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        let stdout = data
+            .get("stdout")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim_end()
+            .to_string();
+        let stderr = data
+            .get("stderr")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let combined = [stdout.as_str(), stderr.as_str()]
+            .into_iter()
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<&str>>()
+            .join("\n");
+        vec![ToolResultContentPart::Text {
+            text: combined,
+            provider_options: None,
+        }]
     }
 
     async fn execute(

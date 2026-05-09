@@ -8,6 +8,7 @@ use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
+use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_tool_runtime::ValidationResult;
 use coco_types::ToolId;
@@ -21,6 +22,12 @@ use std::collections::HashMap;
 /// in `validate_input` so the model gets a clear error before the
 /// store rejects.
 const MAX_CRON_JOBS: usize = 50;
+
+/// Recurring jobs auto-expire after this many days. TS
+/// `cronTasks.ts:354` `recurringMaxAgeMs = 7 * 24 * 60 * 60 * 1000`
+/// → `DEFAULT_MAX_AGE_DAYS = 7` (`prompt.ts:8-9`). Surfaced in the
+/// model-visible confirmation so the model can warn the user.
+const DEFAULT_MAX_AGE_DAYS: u32 = 7;
 
 /// Lightweight 5-field cron expression validator. TS uses
 /// `parseCronExpression()` from `utils/cron.ts` for full RFC parsing
@@ -136,6 +143,42 @@ impl Tool for CronCreateTool {
             }),
         );
         ToolInputSchema { properties: p }
+    }
+
+    /// Render the create envelope as a single-line confirmation. TS
+    /// parity: `CronCreateTool.ts:143-154 mapToolResultToToolResultBlockParam`.
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        let id = data.get("id").and_then(Value::as_str).unwrap_or("?");
+        let schedule = data
+            .get("humanSchedule")
+            .and_then(Value::as_str)
+            .unwrap_or("?");
+        let recurring = data
+            .get("recurring")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        let durable = data
+            .get("durable")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let where_str = if durable {
+            "Persisted to .claude/scheduled_tasks.json"
+        } else {
+            "Session-only (not written to disk, dies when Claude exits)"
+        };
+        let text = if recurring {
+            format!(
+                "Scheduled recurring job {id} ({schedule}). {where_str}. Auto-expires after {DEFAULT_MAX_AGE_DAYS} days. Use CronDelete to cancel sooner."
+            )
+        } else {
+            format!(
+                "Scheduled one-shot task {id} ({schedule}). {where_str}. It will fire once then auto-delete."
+            )
+        };
+        vec![ToolResultContentPart::Text {
+            text,
+            provider_options: None,
+        }]
     }
 
     /// TS `CronCreateTool.ts:82-103` `validateInput`: pre-flight checks
@@ -256,6 +299,16 @@ impl Tool for CronDeleteTool {
         );
         ToolInputSchema { properties: p }
     }
+
+    /// TS `CronDeleteTool.ts:86-92 mapToolResultToToolResultBlockParam`.
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        let id = data.get("id").and_then(Value::as_str).unwrap_or("?");
+        vec![ToolResultContentPart::Text {
+            text: format!("Cancelled job {id}."),
+            provider_options: None,
+        }]
+    }
+
     async fn execute(
         &self,
         input: Value,
@@ -312,6 +365,38 @@ impl Tool for CronListTool {
     fn is_concurrency_safe(&self, _: &Value) -> bool {
         true
     }
+
+    /// Render `{jobs: [...]}` as a human-readable summary list.
+    /// Empty list → "No scheduled tasks." Otherwise: count + bulleted
+    /// `- {id}: {humanSchedule} → {prompt}` per job.
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        let jobs = data.get("jobs").and_then(Value::as_array);
+        let text = match jobs {
+            Some(arr) if arr.is_empty() => "No scheduled tasks.".to_string(),
+            Some(arr) => {
+                let n = arr.len();
+                let plural = if n == 1 { "task" } else { "tasks" };
+                let mut buf = format!("{n} scheduled {plural}:");
+                for job in arr {
+                    let id = job.get("id").and_then(Value::as_str).unwrap_or("?");
+                    let schedule = job
+                        .get("humanSchedule")
+                        .and_then(Value::as_str)
+                        .or_else(|| job.get("cron").and_then(Value::as_str))
+                        .unwrap_or("?");
+                    let prompt = job.get("prompt").and_then(Value::as_str).unwrap_or("");
+                    buf.push_str(&format!("\n- {id}: {schedule} → {prompt}"));
+                }
+                buf
+            }
+            None => serde_json::to_string(data).unwrap_or_default(),
+        };
+        vec![ToolResultContentPart::Text {
+            text,
+            provider_options: None,
+        }]
+    }
+
     async fn execute(
         &self,
         _input: Value,
@@ -415,6 +500,34 @@ impl Tool for RemoteTriggerTool {
     }
     fn is_concurrency_safe(&self, _: &Value) -> bool {
         true
+    }
+
+    /// Render trigger envelopes per-action. Most paths return a small
+    /// `{id, name, status}` shape; `update` returns the full trigger.
+    /// Pick a one-line confirmation for actions; fall back to JSON
+    /// for unknown shapes.
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        let status = data.get("status").and_then(Value::as_str);
+        let id = data
+            .get("id")
+            .or_else(|| data.get("trigger_id"))
+            .and_then(Value::as_str);
+        let text = match status {
+            Some("created") => {
+                let name = data
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unnamed");
+                format!("Trigger created. id: {}. name: {name}.", id.unwrap_or("?"))
+            }
+            Some("triggered") => format!("Trigger {} fired.", id.unwrap_or("?")),
+            Some("deleted") => format!("Trigger {} deleted.", id.unwrap_or("?")),
+            _ => serde_json::to_string(data).unwrap_or_default(),
+        };
+        vec![ToolResultContentPart::Text {
+            text,
+            provider_options: None,
+        }]
     }
 
     fn validate_input(

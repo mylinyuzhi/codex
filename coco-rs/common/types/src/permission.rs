@@ -207,6 +207,37 @@ pub enum PermissionDecisionReason {
     Sandboxed,
 }
 
+/// Result of a tool's own permission opinion (the step-1c slot in
+/// the central evaluator pipeline).
+///
+/// TS: `tool.checkPermissions()` returns
+/// `{ behavior: 'allow' | 'ask' | 'deny', updatedInput?, feedback? }`
+/// or is absent (== passthrough). `Passthrough` is the explicit
+/// "no opinion — defer to rule pipeline" signal. Tools that don't
+/// implement content-specific safety checks return `Passthrough`.
+///
+/// Lives in `coco-types` rather than `coco-permissions` so the
+/// `coco_tool_runtime::Tool::check_permissions` trait method can
+/// reference it without the L4 Tool trait depending on the L3
+/// permissions evaluator.
+#[derive(Debug, Clone)]
+pub enum ToolCheckResult {
+    /// Tool has no opinion — continue with rule-based checks.
+    Passthrough,
+    /// Tool explicitly allows this input. `updated_input` carries
+    /// any normalization the tool applied (TS `updatedInput`);
+    /// `feedback` carries an optional user-facing rationale that
+    /// the evaluator threads onto the resulting `PermissionDecision`.
+    Allow {
+        updated_input: Option<serde_json::Value>,
+        feedback: Option<String>,
+    },
+    /// Tool requires user confirmation for this input.
+    Ask { message: String },
+    /// Tool denies this input.
+    Deny { message: String },
+}
+
 /// The result of a permission check.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -257,6 +288,21 @@ pub enum PermissionUpdate {
         directories: Vec<String>,
         destination: PermissionUpdateDestination,
     },
+}
+
+impl PermissionUpdate {
+    /// Destination of this update, if any. `SetMode` has no destination
+    /// (it changes session state, not a settings layer).
+    pub const fn destination(&self) -> Option<PermissionUpdateDestination> {
+        match self {
+            Self::AddRules { destination, .. }
+            | Self::ReplaceRules { destination, .. }
+            | Self::RemoveRules { destination, .. }
+            | Self::AddDirectories { destination, .. }
+            | Self::RemoveDirectories { destination, .. } => Some(*destination),
+            Self::SetMode { .. } => None,
+        }
+    }
 }
 
 /// Destination for persisting permission updates.

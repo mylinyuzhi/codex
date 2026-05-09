@@ -97,6 +97,77 @@ fn converts_tool_result() {
 }
 
 #[test]
+fn tool_result_content_image_degrades_to_marker() {
+    // OpenAI-compatible Chat Completions can only carry a single string in the
+    // `tool` role message — image content cannot pass through. The
+    // serializer must replace FileData with a visible marker so the
+    // model knows *something* was there. Pre-refactor this branch
+    // silently dropped non-Text parts.
+    use vercel_ai_provider::ToolResultContentPart;
+    let prompt = vec![LanguageModelV4Message::Tool {
+        content: vec![ToolContentPart::ToolResult(ToolResultPart {
+            tool_call_id: "call_img".into(),
+            tool_name: "FileRead".into(),
+            output: ToolResultContent::Content {
+                value: vec![ToolResultContentPart::FileData {
+                    data: "iVBOR...".into(),
+                    media_type: "image/png".into(),
+                    filename: None,
+                    provider_options: None,
+                }],
+                provider_options: None,
+            },
+            is_error: false,
+            provider_metadata: None,
+        })],
+        provider_options: None,
+    }];
+    let (msgs, _) = convert_to_openai_compatible_chat_messages(&prompt).unwrap();
+    let content = msgs[0]["content"].as_str().unwrap();
+    assert!(content.contains("image/png"), "got: {content}");
+    assert!(
+        content.contains("doesn't support multimodal"),
+        "expected degradation marker, got: {content}"
+    );
+}
+
+#[test]
+fn tool_result_content_mixed_text_and_image_keeps_text_drops_image() {
+    use vercel_ai_provider::ToolResultContentPart;
+    let prompt = vec![LanguageModelV4Message::Tool {
+        content: vec![ToolContentPart::ToolResult(ToolResultPart {
+            tool_call_id: "call_mix".into(),
+            tool_name: "FileRead".into(),
+            output: ToolResultContent::Content {
+                value: vec![
+                    ToolResultContentPart::Text {
+                        text: "explanation".into(),
+                        provider_options: None,
+                    },
+                    ToolResultContentPart::FileData {
+                        data: "iVBOR...".into(),
+                        media_type: "image/png".into(),
+                        filename: None,
+                        provider_options: None,
+                    },
+                ],
+                provider_options: None,
+            },
+            is_error: false,
+            provider_metadata: None,
+        })],
+        provider_options: None,
+    }];
+    let (msgs, _) = convert_to_openai_compatible_chat_messages(&prompt).unwrap();
+    let content = msgs[0]["content"].as_str().unwrap();
+    assert!(content.contains("explanation"), "got: {content}");
+    assert!(
+        content.contains("image/png"),
+        "expected marker for image, got: {content}"
+    );
+}
+
+#[test]
 fn includes_reasoning_content_in_assistant_message() {
     let prompt = vec![LanguageModelV4Message::Assistant {
         content: vec![

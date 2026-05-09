@@ -10,6 +10,7 @@ use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
+use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
@@ -57,6 +58,12 @@ impl Tool for TeamCreateTool {
         );
         ToolInputSchema { properties: p }
     }
+
+    /// `data` is the bare confirmation string from `agent.create_team`.
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        coco_tool_runtime::render_text_or_json(data)
+    }
+
     async fn execute(
         &self,
         input: Value,
@@ -116,6 +123,21 @@ impl Tool for TeamDeleteTool {
             properties: HashMap::new(),
         }
     }
+
+    /// Render the prebuilt `message` field — `success` flag is for
+    /// callers that key off `data["success"]`.
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        let text = data
+            .get("message")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| serde_json::to_string(data).unwrap_or_default());
+        vec![ToolResultContentPart::Text {
+            text,
+            provider_options: None,
+        }]
+    }
+
     async fn execute(
         &self,
         _input: Value,

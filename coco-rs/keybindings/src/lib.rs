@@ -1,197 +1,188 @@
-//! Keyboard shortcut management — 18 contexts, 50+ actions.
+//! Keyboard shortcut management — TS port of `keybindings/`.
 //!
-//! TS: keybindings/ (context-based resolution, chord support, platform defaults)
+//! Two complementary representations:
+//!
+//! * [`KeybindingsConfig`] / [`KeybindingBlock`] — the JSON shape from
+//!   `~/.coco/keybindings.json` (mirrors TS `KeybindingsSchema` /
+//!   `KeybindingBlock`). Used by the loader and template generator.
+//! * [`Keybinding`] (parsed) — the resolver's working unit: a typed
+//!   `(KeyChord, Option<KeybindingAction>, KeybindingContext)` triple.
+//!   Mirrors TS `ParsedBinding`.
+//!
+//! Use [`KeybindingsConfig::parse_bindings`] to convert from the wire
+//! shape to the resolver's parsed form, surfacing parse errors as a
+//! separate channel.
+//!
+//! Closed enums for [`KeybindingAction`] (~98 variants) and
+//! [`KeybindingContext`] (20 variants — 18 user-rebindable, 2 internal)
+//! mirror TS `KEYBINDING_ACTIONS` / `KEYBINDING_CONTEXTS` exactly. See
+//! the per-module docs for the TS-source citations.
 
+pub mod action;
+pub mod context;
+pub mod defaults;
+pub mod display;
 pub mod parser;
+pub mod reserved;
 pub mod resolver;
+pub mod template;
 pub mod validator;
 
+#[cfg(feature = "crossterm")]
+pub mod adapter;
+
+#[cfg(feature = "loader")]
+pub mod loader;
+
+pub use action::KeybindingAction;
+pub use action::UnknownAction;
+pub use action::UnknownActionReason;
+pub use context::KeybindingContext;
+pub use context::UnknownContext;
+pub use display::DisplayPlatform;
+pub use display::chord_to_display_string;
+pub use display::chord_to_string;
+pub use display::keystroke_to_display_string;
+pub use display::keystroke_to_string;
 pub use parser::KeyChord;
 pub use parser::KeyCombo;
+pub use parser::ParseError;
 pub use parser::parse_chord;
 pub use parser::parse_combo;
+pub use reserved::ReservedShortcut;
+pub use reserved::get_reserved_shortcuts;
+pub use reserved::lookup_reserved;
+pub use reserved::normalize_key_for_comparison;
+pub use resolver::CHORD_TIMEOUT;
 pub use resolver::ChordResolver;
 pub use resolver::ResolveOutcome;
+pub use template::generate_template;
+pub use validator::Severity;
 pub use validator::ValidationIssue;
+pub use validator::ValidationKind;
+pub use validator::format_issue;
+pub use validator::format_issue_oneline;
 pub use validator::validate;
+
+#[cfg(feature = "crossterm")]
+pub use adapter::from_crossterm;
+
+#[cfg(feature = "loader")]
+pub use loader::KeybindingsLoadResult;
+#[cfg(feature = "loader")]
+pub use loader::KeybindingsWatcher;
+#[cfg(feature = "loader")]
+pub use loader::default_keybindings_path;
+#[cfg(feature = "loader")]
+pub use loader::load_keybindings;
 
 use serde::Deserialize;
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
-/// A keybinding definition.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A parsed keybinding — what the resolver consumes.
+///
+/// `action: None` represents a TS `null` unbind: when the chord matches,
+/// the resolver returns [`ResolveOutcome::Unbound`] so the caller can
+/// swallow the keystroke without falling through to lower-priority
+/// handlers (`keybindings/schema.ts:199`).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Keybinding {
-    pub key: String,
-    pub action: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub context: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub when: Option<String>,
+    pub chord: KeyChord,
+    pub action: Option<KeybindingAction>,
+    pub context: KeybindingContext,
 }
 
-/// Load the default set of keybindings for common input/dialog/global contexts.
-pub fn load_default_keybindings() -> Vec<Keybinding> {
-    vec![
-        Keybinding {
-            key: "ctrl+c".into(),
-            action: "interrupt".into(),
-            context: Some("input".into()),
-            when: None,
-        },
-        Keybinding {
-            key: "ctrl+d".into(),
-            action: "quit".into(),
-            context: Some("input".into()),
-            when: None,
-        },
-        Keybinding {
-            key: "enter".into(),
-            action: "submit".into(),
-            context: Some("input".into()),
-            when: None,
-        },
-        Keybinding {
-            key: "escape".into(),
-            action: "cancel".into(),
-            context: Some("dialog".into()),
-            when: None,
-        },
-        Keybinding {
-            key: "tab".into(),
-            action: "autocomplete".into(),
-            context: Some("input".into()),
-            when: None,
-        },
-        Keybinding {
-            key: "ctrl+l".into(),
-            action: "clear".into(),
-            context: Some("global".into()),
-            when: None,
-        },
-        Keybinding {
-            key: "ctrl+o".into(),
-            action: "compact".into(),
-            context: Some("global".into()),
-            when: None,
-        },
-    ]
+impl Keybinding {
+    /// Convenience constructor — parses the chord string and wraps
+    /// the action.
+    pub fn new(
+        chord: &str,
+        action: KeybindingAction,
+        context: KeybindingContext,
+    ) -> Result<Self, ParseError> {
+        Ok(Self {
+            chord: parse_chord(chord)?,
+            action: Some(action),
+            context,
+        })
+    }
+
+    /// Convenience constructor for null-unbinds (`"action": null` in JSON).
+    pub fn unbind(chord: &str, context: KeybindingContext) -> Result<Self, ParseError> {
+        Ok(Self {
+            chord: parse_chord(chord)?,
+            action: None,
+            context,
+        })
+    }
 }
 
-/// Keybinding registry with context-based resolution.
-#[derive(Default)]
-pub struct KeybindingRegistry {
-    bindings: Vec<Keybinding>,
-    context_map: HashMap<String, Vec<usize>>,
+/// One block from `keybindings.json`: a context plus a chord-keyed map
+/// of actions. `BTreeMap` so serialized output is deterministic.
+///
+/// TS source: `KeybindingBlock` in `keybindings/types.ts`; schema in
+/// `keybindings/schema.ts:177-208`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeybindingBlock {
+    pub context: KeybindingContext,
+    /// Chord string (e.g. `"ctrl+x ctrl+k"`) → action, or `None` to
+    /// unbind. Whitespace separates chord steps; comma is a literal key.
+    pub bindings: BTreeMap<String, Option<KeybindingAction>>,
 }
 
-impl KeybindingRegistry {
-    pub fn new() -> Self {
-        Self::default()
+/// Top-level `keybindings.json` shape.
+///
+/// TS source: `KeybindingsSchema` in `keybindings/schema.ts:214-229`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct KeybindingsConfig {
+    /// `"$schema"` URL for editor validation. Optional.
+    #[serde(rename = "$schema", default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
+    /// `"$docs"` URL for the user-facing docs. Optional.
+    #[serde(rename = "$docs", default, skip_serializing_if = "Option::is_none")]
+    pub docs: Option<String>,
+    /// Ordered blocks. Later blocks/entries override earlier ones at
+    /// resolution time (last-wins, mirrors TS `findLast`).
+    #[serde(default)]
+    pub bindings: Vec<KeybindingBlock>,
+}
+
+impl KeybindingsConfig {
+    /// Parse the config from JSON content. Strict — does not merge with
+    /// defaults; that's the loader's job.
+    pub fn from_json(content: &str) -> Result<Self, serde_json::Error> {
+        serde_json::from_str(content)
     }
 
-    /// Create a registry pre-loaded with the default keybindings.
-    pub fn with_defaults() -> Self {
-        let mut registry = Self::new();
-        for binding in load_default_keybindings() {
-            registry.register(binding);
-        }
-        registry
+    /// Serialize to pretty JSON with the documented two-space indent
+    /// (mirrors `keybindings/template.ts:46-51`).
+    pub fn to_json_pretty(&self) -> Result<String, serde_json::Error> {
+        let mut s = serde_json::to_string_pretty(self)?;
+        s.push('\n');
+        Ok(s)
     }
 
-    pub fn register(&mut self, binding: Keybinding) {
-        let idx = self.bindings.len();
-        if let Some(ref ctx) = binding.context {
-            self.context_map.entry(ctx.clone()).or_default().push(idx);
-        }
-        self.bindings.push(binding);
-    }
-
-    /// Resolve a key press in a given context.
-    pub fn resolve(&self, key: &str, context: &str) -> Option<&str> {
-        // Check context-specific bindings first
-        if let Some(indices) = self.context_map.get(context) {
-            for &idx in indices.iter().rev() {
-                if self.bindings[idx].key == key {
-                    return Some(&self.bindings[idx].action);
+    /// Convert each block into parsed [`Keybinding`]s. Chord strings
+    /// that fail to parse are skipped here — surface them via
+    /// [`validator::validate`] instead.
+    pub fn parse_bindings(&self) -> Vec<Keybinding> {
+        let mut out = Vec::with_capacity(self.bindings.iter().map(|b| b.bindings.len()).sum());
+        for block in &self.bindings {
+            for (chord_str, action) in &block.bindings {
+                if let Ok(chord) = parse_chord(chord_str) {
+                    out.push(Keybinding {
+                        chord,
+                        action: action.clone(),
+                        context: block.context,
+                    });
                 }
             }
         }
-        // Fall back to global bindings
-        self.bindings
-            .iter()
-            .rev()
-            .find(|b| b.key == key && b.context.is_none())
-            .map(|b| b.action.as_str())
-    }
-
-    /// Return all keybindings matching a specific context.
-    pub fn all_for_context(&self, context: &str) -> Vec<&Keybinding> {
-        self.context_map
-            .get(context)
-            .map(|indices| indices.iter().map(|&idx| &self.bindings[idx]).collect())
-            .unwrap_or_default()
+        out
     }
 }
 
 #[cfg(test)]
 #[path = "lib.test.rs"]
 mod tests;
-
-/// All known keybinding contexts.
-///
-/// TS: keybindings types (3.2K LOC)
-pub const ALL_CONTEXTS: &[&str] = &[
-    "global",
-    "input",
-    "conversation",
-    "permission",
-    "search",
-    "plan",
-    "diff",
-    "agent",
-    "worktree",
-];
-
-/// Default keybinding map — context → (key → action).
-///
-/// TS: getDefaultKeybindings()
-pub fn get_all_defaults() -> Vec<(&'static str, &'static str, &'static str)> {
-    vec![
-        // Global
-        ("global", "ctrl+c", "interrupt"),
-        ("global", "ctrl+d", "exit"),
-        ("global", "ctrl+l", "clear_screen"),
-        ("global", "ctrl+\\", "force_quit"),
-        ("global", "escape", "cancel"),
-        // Input
-        ("input", "enter", "submit"),
-        ("input", "shift+enter", "newline"),
-        ("input", "up", "history_prev"),
-        ("input", "down", "history_next"),
-        ("input", "ctrl+r", "history_search"),
-        ("input", "tab", "autocomplete"),
-        ("input", "ctrl+a", "move_start"),
-        ("input", "ctrl+e", "move_end"),
-        ("input", "ctrl+u", "clear_line"),
-        ("input", "ctrl+w", "delete_word"),
-        ("input", "ctrl+k", "kill_to_end"),
-        // Conversation
-        ("conversation", "ctrl+c", "interrupt_generation"),
-        ("conversation", "escape", "cancel_tool"),
-        // Permission
-        ("permission", "y", "approve"),
-        ("permission", "n", "deny"),
-        ("permission", "a", "approve_always"),
-        ("permission", "escape", "deny"),
-        // Search
-        ("search", "enter", "select"),
-        ("search", "escape", "close"),
-        ("search", "up", "prev_result"),
-        ("search", "down", "next_result"),
-    ]
-}
-
-pub mod context;
-pub use context::KeyContext;
-pub use context::KeybindingResolver;

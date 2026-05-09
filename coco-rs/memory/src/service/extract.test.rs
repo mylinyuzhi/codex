@@ -41,6 +41,20 @@ async fn skips_when_main_agent_wrote_memory() {
 }
 
 #[tokio::test]
+async fn direct_write_skip_advances_cursor() {
+    // TS parity (`extractMemories.ts:347-360`): when the main agent
+    // wrote memory directly we still bump the cursor so the next
+    // eligible turn doesn't reconsider the same range.
+    let temp = tempdir().unwrap();
+    let handle = std::sync::Arc::new(RecordingHandle::default());
+    let svc = ExtractService::new(temp.path().into(), config(), handle.clone());
+    assert!(svc.last_cursor().await.is_none());
+    let outcome = svc.maybe_extract(turn_input(20, true)).await;
+    assert_eq!(outcome, ExtractOutcome::Skipped(SkipReason::DirectWrite));
+    assert_eq!(svc.last_cursor().await.as_deref(), Some("uuid"));
+}
+
+#[tokio::test]
 async fn throttle_skips_until_threshold() {
     let temp = tempdir().unwrap();
     let cfg = MemoryConfig {

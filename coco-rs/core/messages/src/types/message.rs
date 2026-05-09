@@ -541,10 +541,28 @@ pub struct SystemBridgeStatusMessage {
     pub message: Option<String>,
 }
 
+/// Surfaced to the user's transcript when the auto-memory subsystem
+/// has just landed new memory writes. TS parity:
+/// `utils/messages.ts::createMemorySavedMessage(writtenPaths)` +
+/// `services/autoDream/autoDream.ts:244-247` (which overrides
+/// `verb` to `"Improved"` for dream consolidations vs. the default
+/// `"Saved"` for extract).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemMemorySavedMessage {
     pub uuid: Uuid,
-    pub memory_file: String,
+    /// Paths the subagent wrote (or improved). TS `writtenPaths`. Excludes
+    /// `MEMORY.md` — the index file is mechanical and not user-relevant.
+    #[serde(default)]
+    pub written_paths: Vec<String>,
+    /// Display verb. `"Saved"` for extract; `"Improved"` for auto-dream
+    /// consolidation. `#[serde(default)]` accepts older transcripts
+    /// produced before this field was added.
+    #[serde(default = "default_memory_saved_verb")]
+    pub verb: String,
+}
+
+fn default_memory_saved_verb() -> String {
+    "Saved".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

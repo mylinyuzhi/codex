@@ -2,6 +2,7 @@ use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
+use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
@@ -37,6 +38,18 @@ impl Tool for SleepTool {
     }
     fn is_concurrency_safe(&self, _: &Value) -> bool {
         true
+    }
+
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        let text = data
+            .get("message")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| serde_json::to_string(data).unwrap_or_default());
+        vec![ToolResultContentPart::Text {
+            text,
+            provider_options: None,
+        }]
     }
 
     async fn execute(
@@ -155,6 +168,12 @@ impl Tool for SyntheticOutputTool {
     }
     fn is_concurrency_safe(&self, _: &Value) -> bool {
         true
+    }
+
+    /// `data` is the verbatim output string. Unwrap to avoid JSON
+    /// escaping the raw text.
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        coco_tool_runtime::render_text_or_json(data)
     }
 
     async fn execute(

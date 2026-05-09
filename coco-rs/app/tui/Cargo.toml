@@ -13,6 +13,7 @@ coco-types.workspace = true
 coco-context.workspace = true
 coco-file-search.workspace = true
 coco-file-watch.workspace = true
+coco-keybindings = { workspace = true, features = ["crossterm", "loader"] }
 dirs.workspace = true
 
 serde = { workspace = true, features = ["derive"] }

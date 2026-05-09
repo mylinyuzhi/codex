@@ -155,6 +155,20 @@ impl PasteManager {
     pub fn clear(&mut self) {
         self.entries.clear();
     }
+
+    /// Take ownership of all entries, leaving the manager empty.
+    /// Used by `chat:stash` to snapshot paste state alongside text +
+    /// cursor (TS `handleStash` saves `pastedContents`).
+    pub fn take_entries(&mut self) -> Vec<PasteEntry> {
+        std::mem::take(&mut self.entries)
+    }
+
+    /// Replace all entries — counterpart to [`Self::take_entries`].
+    /// Used on stash-pop to restore the saved paste state. Replaces
+    /// rather than appends so pop is symmetric with push.
+    pub fn replace_entries(&mut self, entries: Vec<PasteEntry>) {
+        self.entries = entries;
+    }
 }
 
 #[cfg(test)]

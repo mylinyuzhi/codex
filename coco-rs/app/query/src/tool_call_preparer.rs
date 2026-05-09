@@ -268,7 +268,7 @@ async fn resolve_permission_decision(
                 reason: hook_permission_reason,
             },
         },
-        None => tool.check_permissions(effective_input, ctx).await,
+        None => evaluate_with_rules(tool, effective_input, ctx).await,
     };
 
     if matches!(decision, PermissionDecision::Ask { .. })
@@ -295,6 +295,47 @@ async fn resolve_permission_decision(
     }
 
     decision
+}
+
+/// Run the central rule evaluator against a tool call.
+///
+/// TS parity: `hasPermissionsToUseToolInner` in `permissions.ts`.
+/// The tool's own opinion (`Tool::check_permissions`) is captured
+/// once and supplied as the step-1c slot to
+/// [`coco_permissions::PermissionEvaluator::evaluate_with_tool_check`],
+/// so the same `ToolCheckResult` passes through deny rules → tool
+/// opinion → allow rules → ask rules → path safety → MCP server
+/// rules → mode fallthrough exactly as TS does.
+///
+/// Returning `Allow { updated_input: Some(_) }` from the tool's
+/// opinion survives an evaluator-side `Allow` decision — TS keeps
+/// `updatedInput` on downstream allows so a tool can normalize
+/// input even when a user-allow rule is present.
+async fn evaluate_with_rules(
+    tool: &Arc<dyn Tool>,
+    effective_input: &Value,
+    ctx: &ToolUseContext,
+) -> PermissionDecision {
+    use coco_types::ToolCheckResult;
+
+    let tool_opinion = tool.check_permissions(effective_input, ctx).await;
+    let tool_check = move |_id: &ToolId,
+                           _input: &Value,
+                           _pc: &coco_types::ToolPermissionContext|
+          -> ToolCheckResult { tool_opinion.clone() };
+
+    let tool_id = tool.id();
+    // `evaluate_with_tool_check` step 1c short-circuits with the
+    // tool's own `Allow { updated_input, feedback }` before any rule
+    // evaluation, so the returned decision already preserves
+    // `updated_input` when the tool returned one. No post-processing
+    // needed here.
+    coco_permissions::PermissionEvaluator::evaluate_with_tool_check(
+        &tool_id,
+        effective_input,
+        &ctx.permission_context,
+        Some(&tool_check),
+    )
 }
 
 #[allow(clippy::too_many_arguments)]

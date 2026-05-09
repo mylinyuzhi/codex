@@ -20,6 +20,7 @@ use anyhow::Result;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::sync::mpsc;
+use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
@@ -222,6 +223,15 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
             permission_bridge: Some(tui_permission_bridge),
             command_registry: command_registry.clone(),
             skill_manager: skill_manager.clone(),
+            // TS parity: load `~/.coco/agents` + `<cwd>/.claude/agents`
+            // and surface them in AgentTool's per-turn dynamic prompt
+            // listing. Worktree fallback is applied inside
+            // `standard_agent_search_paths`.
+            agent_search_paths: coco_cli::paths::standard_agent_search_paths(
+                &coco_config::global_config::config_home(),
+                &cwd,
+            ),
+            builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
         },
     )
     .await?;
@@ -332,6 +342,37 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
             .ui
             .add_toast(coco_tui::state::ui::Toast::warning(msg));
     }
+
+    // Boot the keybindings stack via the TUI helper: builds a
+    // watcher-backed handle (which hot-reloads on file changes via
+    // `KeybindingsWatcher`) and gives back a channel of post-startup
+    // validation warnings to plumb into the App's event loop.
+    let kb_setup = coco_tui::keybinding_setup::install_keybindings().await;
+
+    // Surface **startup** warnings as toasts immediately (subsequent
+    // reloads flow through the `kb_setup.warnings_rx` channel below).
+    for issue in &kb_setup.initial.warnings {
+        let line = coco_keybindings::format_issue_oneline(issue);
+        let toast = match issue.severity {
+            coco_keybindings::Severity::Error => coco_tui::state::ui::Toast::error(line),
+            coco_keybindings::Severity::Warning => coco_tui::state::ui::Toast::warning(line),
+        };
+        app.state_mut().ui.add_toast(toast);
+    }
+
+    // Install the watcher-backed handle into AppState — replaces the
+    // defaults-only handle `UiState::new()` initialized. Reads + chord
+    // state both flow through this clone.
+    app.state_mut().ui.kb_handle = kb_setup.handle;
+
+    // Plug the warnings receiver into the App so post-startup reloads
+    // (user edits `keybindings.json` while the TUI is running) also
+    // surface as toasts.
+    app = app.with_keybinding_warnings(kb_setup.warnings_rx);
+
+    // Hold onto the watcher for the TUI's lifetime — dropping it
+    // stops the hot-reload background task.
+    let _kb_watcher_guard = kb_setup.watcher;
 
     // Spawn agent driver — owns the SessionRuntime + transports.
     let driver_handle = tokio::spawn(run_agent_driver(
@@ -746,21 +787,155 @@ async fn run_agent_driver(
             UserCommand::ApprovalResponse {
                 request_id,
                 approved,
-                always_allow: _, // TS persists rule via permission_updates; today we route the boolean
+                always_allow,
                 feedback,
                 updated_input: _, // TS edits the tool input pre-approval; that path lands later
-                permission_updates: _, // applied separately via the permission ruleset
+                permission_updates,
             } => {
-                // P0: route the user's Approve / Deny back to the
-                // pending oneshot the `TuiPermissionBridge` is awaiting.
-                // Stale request_ids (already resolved or timed-out)
-                // are logged and dropped — TS does the same when an
-                // overlay closes after the engine moved on.
+                // Apply any rule additions the user authorized
+                // ("Always Allow" or future destination-picker
+                // selections) BEFORE resolving the bridge. Order
+                // matches TS `applyPermissionUpdate` →
+                // `persistPermissionUpdates` so subsequent same-tool
+                // calls within the turn pick up the rule.
+                if approved && !permission_updates.is_empty() {
+                    let updates_for_apply = permission_updates.clone();
+                    runtime
+                        .update_engine_config(move |cfg| {
+                            // Build a transient `ToolPermissionContext`
+                            // view over the engine config's rule maps,
+                            // run the typed apply helper, write the
+                            // mutated maps back. `apply_permission_updates`
+                            // is the single source of truth for rule
+                            // mutation (TS `PermissionUpdate.ts`); we
+                            // never edit the maps inline so audit logs
+                            // and persistence consumers see one shape.
+                            let ctx = coco_types::ToolPermissionContext {
+                                mode: cfg.permission_mode,
+                                additional_dirs: cfg.session_additional_dirs.clone(),
+                                allow_rules: cfg.allow_rules.clone(),
+                                deny_rules: cfg.deny_rules.clone(),
+                                ask_rules: cfg.ask_rules.clone(),
+                                bypass_available: cfg.bypass_permissions_available,
+                                pre_plan_mode: None,
+                                stripped_dangerous_rules: None,
+                                session_plan_file: None,
+                            };
+                            let updated =
+                                coco_permissions::apply_permission_updates(ctx, &updates_for_apply);
+                            cfg.allow_rules = updated.allow_rules;
+                            cfg.deny_rules = updated.deny_rules;
+                            cfg.ask_rules = updated.ask_rules;
+                            cfg.session_additional_dirs = updated.additional_dirs;
+                            // Mode updates are normally driven by the
+                            // `/permission-mode` slash command path,
+                            // not the dialog. But if a future caller
+                            // bundles `SetMode` into the same update
+                            // batch, honor it on the engine_config so
+                            // subsequent turns see the change.
+                            cfg.permission_mode = updated.mode;
+                        })
+                        .await;
+
+                    // Persist updates whose destination wires to a
+                    // settings.json layer (User / Project / Local).
+                    // Session / CliArg / Command destinations are
+                    // in-memory only — matches TS
+                    // `persistPermissionUpdates` which no-ops on
+                    // non-persistable destinations.
+                    //
+                    // Phase A: TUI dialog only emits Session-scoped
+                    // updates today, so the persist branch is
+                    // exercised once Phase B adds the destination
+                    // sub-picker. The store is constructed cheaply
+                    // per-call (just holds cwd + optional flag-
+                    // settings path) so we don't need to thread an
+                    // `Arc<PermissionStore>` through SessionRuntime
+                    // until Phase B.
+                    let cwd =
+                        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                    let store = coco_permissions::SettingsPermissionStore::new(cwd);
+                    use coco_permissions::permissions_store::PermissionStore;
+                    for update in &permission_updates {
+                        let Some(dest) = update.destination() else {
+                            continue;
+                        };
+                        if !coco_permissions::permission_updates::supports_persistence(dest) {
+                            continue;
+                        }
+                        if let Err(e) = store.persist_update(update) {
+                            warn!(error = %e, "failed to persist permission update");
+                        }
+                    }
+
+                    // Mirror `dispatch_permissions_mutation`
+                    // (`/permissions allow|deny|reset`) and push a
+                    // `command_permissions` system-reminder so the
+                    // next turn's prompt informs the model that the
+                    // permission ruleset changed. Without this, a
+                    // dialog "Always Allow Bash" would silently take
+                    // effect — the slash-command path already does
+                    // this for symmetry.
+                    let mailbox = runtime.reminder_mailbox_handle();
+                    for update in &permission_updates {
+                        if let coco_types::PermissionUpdate::AddRules { rules, destination } =
+                            update
+                        {
+                            for rule in rules {
+                                let scope = match destination {
+                                    coco_types::PermissionUpdateDestination::Session => {
+                                        "session scope"
+                                    }
+                                    coco_types::PermissionUpdateDestination::UserSettings => {
+                                        "user settings"
+                                    }
+                                    coco_types::PermissionUpdateDestination::ProjectSettings => {
+                                        "project settings"
+                                    }
+                                    coco_types::PermissionUpdateDestination::LocalSettings => {
+                                        "local settings"
+                                    }
+                                    coco_types::PermissionUpdateDestination::CliArg => "CLI flag",
+                                };
+                                let behavior = match rule.behavior {
+                                    coco_types::PermissionBehavior::Allow => "allow",
+                                    coco_types::PermissionBehavior::Deny => "deny",
+                                    coco_types::PermissionBehavior::Ask => "ask",
+                                };
+                                mailbox.put_command_permissions(format!(
+                                    "Permission rule added: {behavior} `{tool}` ({scope}).",
+                                    tool = rule.value.tool_pattern,
+                                ));
+                            }
+                        }
+                    }
+                }
+
+                // Always-allow with empty `permission_updates` is the
+                // legacy path (pre-Phase A). Treat as one-shot approve
+                // — the rule plumbing the dialog produced was lost
+                // somewhere between overlay and runner. Log and move
+                // on rather than failing.
+                if always_allow && permission_updates.is_empty() {
+                    debug!(
+                        %request_id,
+                        "always_allow set without permission_updates; treating as one-shot approve"
+                    );
+                }
+
+                // Route the user's Approve / Deny back to the pending
+                // oneshot the `TuiPermissionBridge` is awaiting.
+                // `applied_updates` are forwarded so audit/logging
+                // downstream sees the user's intent. Stale request_ids
+                // (already resolved or timed-out) are logged and
+                // dropped — TS does the same when an overlay closes
+                // after the engine moved on.
                 let resolved = coco_cli::tui_permission_bridge::resolve_pending(
                     &pending_approvals,
                     &request_id,
                     approved,
                     feedback,
+                    permission_updates,
                 )
                 .await;
                 if !resolved {
@@ -778,6 +953,7 @@ async fn run_agent_driver(
                 // flush through `event_tx` ahead of the lifecycle
                 // notification.
                 drain_active_turn(&active_turn).await;
+                drain_pending_memory_extraction(&runtime).await;
                 let _ = event_tx
                     .send(CoreEvent::Protocol(ServerNotification::SessionEnded(
                         coco_types::SessionEndedParams {
@@ -822,9 +998,30 @@ async fn run_agent_driver(
     }
 
     // Driver loop exited (sender dropped or Shutdown). Drain any
-    // turn that's still running so we don't leak a JoinHandle.
+    // turn that's still running so we don't leak a JoinHandle, and
+    // wait briefly on any pending auto-memory extraction so partial
+    // writes don't get cut off.
     drain_active_turn(&active_turn).await;
+    drain_pending_memory_extraction(&runtime).await;
     info!("Agent driver stopped");
+}
+
+/// Wait up to `coco_memory::service::extract::DEFAULT_DRAIN_TIMEOUT`
+/// (60s) for an in-flight extraction fork to finish before the session
+/// shuts down. TS parity: `print.ts` awaits
+/// `drainPendingExtraction(60_000)` before emitting the lifecycle exit.
+/// Silently no-ops when `Feature::AutoMemory` is off (no runtime).
+async fn drain_pending_memory_extraction(runtime: &Arc<crate::session_runtime::SessionRuntime>) {
+    let Some(memory_runtime) = runtime.memory_runtime() else {
+        return;
+    };
+    if !memory_runtime
+        .extract
+        .drain(coco_memory::service::extract::DEFAULT_DRAIN_TIMEOUT)
+        .await
+    {
+        warn!("auto-memory extraction did not drain within timeout — continuing shutdown");
+    }
 }
 
 /// Body of `UserCommand::SubmitInput` extracted into an async fn so
@@ -1278,15 +1475,39 @@ async fn dispatch_slash_command(
     }
 }
 
+/// Pure decision used by `dispatch_plan`: after a `/plan <description>`
+/// successfully flips into plan mode, should the slash command fire a
+/// query for the description? TS parity: `commands/plan/plan.tsx:84-89`
+/// — `description && description !== 'open'` selects `shouldQuery: true`.
+/// Returns `Some(trimmed_description)` when a query should fire, else
+/// `None`. Pure so the TS-parity rule is regression-tested without a
+/// `SessionRuntime` fixture.
+fn plan_command_query_after_flip(args: &str) -> Option<&str> {
+    let trimmed = args.trim();
+    if trimmed.is_empty() || trimmed == "open" {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
 /// `/plan` dispatch with full session-runtime context.
 ///
-/// Mirrors TS `commands/plan/plan.tsx`:
-/// - `""` → show current plan content (or "no plan yet" hint)
-/// - `"open"` → ensure file exists, launch `$EDITOR` (or `vi`) on it
-/// - `"<description>"` → emit a Prompt that asks the model to call
-///   EnterPlanMode and plan for the description (TS sets app-state
-///   directly + triggers a query; coco-rs routes this through the
-///   EnterPlanMode tool, which is the canonical mode-entry path)
+/// Mirrors TS `commands/plan/plan.tsx:64-121` byte-for-byte intent:
+/// typing `/plan` IS the consent to enter plan mode, so the dispatcher
+/// flips state directly via the same dual-write path
+/// `UserCommand::SetPermissionMode` uses (engine_config + app_state)
+/// plus the plan-mode-specific patch (`pre_plan_mode`,
+/// `plan_mode_entry_ms`, `needs_plan_mode_exit_attachment` cleared).
+/// The model never sees a redundant `EnterPlanMode` Yes/No dialog.
+///
+/// Per-arg behaviour matches TS:
+/// - `""`         → flip if needed, then show current plan or hint
+/// - `"open"`     → flip if needed, ensure file, launch `$EDITOR`/`vi`
+/// - `<description>` → flip if needed; if state changed, fire a query
+///   with the description (TS `shouldQuery: true`); if already in
+///   plan mode, ignore the description and show the plan (TS lines
+///   92-119).
 async fn dispatch_plan(
     args: &str,
     runtime: &Arc<crate::session_runtime::SessionRuntime>,
@@ -1300,31 +1521,80 @@ async fn dispatch_plan(
         /*setting*/ None,
     );
 
+    // TS `commands/plan/plan.tsx:70-91` reads `appState.toolPermissionContext.mode`
+    // first; coco-rs does the same — live cross-turn state
+    // (`app_state.permission_mode`) wins when present, else fall
+    // back to the engine_config value (covers the "app_state not yet
+    // primed" case at the start of a fresh session).
+    let live_app_mode = runtime.app_state.read().await.permission_mode;
+    let prev_mode = match live_app_mode {
+        Some(m) => m,
+        None => runtime.current_engine_config().await.permission_mode,
+    };
+    let was_in_plan = prev_mode == coco_types::PermissionMode::Plan;
+
+    // TS `commands/plan/plan.tsx:73-82` flips state for ALL `/plan`
+    // invocations when not already in plan mode — bare `/plan`,
+    // `/plan open`, and `/plan <description>` all consent to plan
+    // mode equally.
+    if !was_in_plan {
+        runtime
+            .update_engine_config(|cfg| cfg.permission_mode = coco_types::PermissionMode::Plan)
+            .await;
+        let patch = coco_tools::build_enter_plan_mode_patch(prev_mode);
+        {
+            let mut guard = runtime.app_state.write().await;
+            patch(&mut guard);
+            // Auto-mode entry/exit hooks are still relevant if
+            // prev_mode was Auto — `apply_auto_transition_to_app_state`
+            // restores stripped dangerous rules on Auto→non-Auto.
+            // Plan is non-Auto, so this matters when leaving Auto for
+            // Plan.
+            coco_permissions::apply_auto_transition_to_app_state(
+                &mut guard,
+                prev_mode,
+                coco_types::PermissionMode::Plan,
+            );
+        }
+        info!(
+            session_id = %session_id,
+            from = ?prev_mode,
+            to = ?coco_types::PermissionMode::Plan,
+            "TUI /plan: direct-toggle to Plan mode (TS commands/plan/plan.tsx parity)",
+        );
+    }
+
+    // Path to the (resolved) session plan file — used by every arm.
+    let plan_path =
+        coco_context::get_plan_file_path(&session_id, &plans_dir, /*agent_id*/ None);
+
     if args.is_empty() {
-        let path =
-            coco_context::get_plan_file_path(&session_id, &plans_dir, /*agent_id*/ None);
         let content = coco_context::get_plan(&session_id, &plans_dir, /*agent_id*/ None);
-        let text = match content {
+        let body = match content {
             Some(body) if !body.trim().is_empty() => format!(
                 "## Current Plan\n\n*{}*\n\n{}\n\nRun `/plan open` to edit in $EDITOR.",
-                path.display(),
+                plan_path.display(),
                 body
             ),
             _ => format!(
                 "No plan written yet for this session.\n\n\
                  Plan file: `{}`\n\n\
-                 Run `/plan <description>` to ask the model to enter plan mode \
-                 for a task, or `/plan open` to start an empty plan in $EDITOR.",
-                path.display()
+                 Run `/plan <description>` to plan for a task in plan mode, \
+                 or `/plan open` to start an empty plan in $EDITOR.",
+                plan_path.display()
             ),
+        };
+        let text = if was_in_plan {
+            body
+        } else {
+            format!("Enabled plan mode.\n\n{body}")
         };
         emit_slash_text(event_tx, "plan", &text).await;
         return SlashOutcome::Handled;
     }
 
     if args == "open" {
-        let path = coco_context::get_plan_file_path(&session_id, &plans_dir, None);
-        if let Some(parent) = path.parent()
+        if let Some(parent) = plan_path.parent()
             && let Err(e) = tokio::fs::create_dir_all(parent).await
         {
             emit_slash_text(
@@ -1335,28 +1605,60 @@ async fn dispatch_plan(
             .await;
             return SlashOutcome::Handled;
         }
-        if !path.exists() {
-            let _ = tokio::fs::write(&path, "").await;
+        if !plan_path.exists() {
+            let _ = tokio::fs::write(&plan_path, "").await;
         }
         let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
-        let text = match tokio::process::Command::new(&editor).arg(&path).spawn() {
-            Ok(_) => format!("Opened plan in {editor}: {}", path.display()),
+        let editor_msg = match tokio::process::Command::new(&editor)
+            .arg(&plan_path)
+            .spawn()
+        {
+            Ok(_) => format!("Opened plan in {editor}: {}", plan_path.display()),
             Err(e) => format!(
                 "Failed to launch editor `{editor}`: {e}\n\nPlan file: {}",
-                path.display()
+                plan_path.display()
             ),
+        };
+        let text = if was_in_plan {
+            editor_msg
+        } else {
+            format!("Enabled plan mode.\n\n{editor_msg}")
         };
         emit_slash_text(event_tx, "plan", &text).await;
         return SlashOutcome::Handled;
     }
 
-    // /plan <description> — TS sets plan-mode + triggers a query. coco-rs
-    // analog: feed the description back as a user message asking the
-    // model to use EnterPlanMode (the canonical entry path) and plan
-    // for the task.
-    let body =
-        format!("Use the EnterPlanMode tool to enter plan mode, then create a plan for: {args}");
-    SlashOutcome::RunEngine { content: body }
+    // `/plan <description>` —
+    // - TS lines 73-91: flipped to plan mode → fire query with the
+    //   user input (`shouldQuery: true`). coco-rs returns
+    //   `RunEngine { content: <description> }`.
+    // - TS lines 92-119: already in plan mode → ignore the
+    //   description, just show the plan. coco-rs matches.
+    if was_in_plan {
+        let content = coco_context::get_plan(&session_id, &plans_dir, /*agent_id*/ None);
+        let text = match content {
+            Some(body) if !body.trim().is_empty() => format!(
+                "Already in plan mode.\n\n## Current Plan\n\n*{}*\n\n{}\n\n\
+                 Run `/plan open` to edit in $EDITOR.",
+                plan_path.display(),
+                body
+            ),
+            _ => "Already in plan mode. No plan written yet.".to_string(),
+        };
+        emit_slash_text(event_tx, "plan", &text).await;
+        return SlashOutcome::Handled;
+    }
+    match plan_command_query_after_flip(args) {
+        Some(desc) => SlashOutcome::RunEngine {
+            content: desc.to_string(),
+        },
+        None => {
+            // Unreachable in practice — bare `/plan` and `/plan open`
+            // are handled by the earlier branches. Kept defensive so
+            // future edits to the cascade can't silently fall through.
+            SlashOutcome::Handled
+        }
+    }
 }
 
 /// In-flight turn handle. Each `SubmitInput` / `ExecuteSkill` spawns
@@ -1428,18 +1730,25 @@ async fn run_clear_conversation(
 }
 
 /// Force auto-memory consolidation now (skips the three-gate scheduler).
-/// Mirrors the SDK runner's `/dream` short-circuit (`sdk_runner.rs:199`).
-/// Silently no-ops when `Feature::AutoMemory` is off — matches TS.
+/// Mirrors the SDK runner's `/dream` short-circuit. Silently no-ops
+/// when `Feature::AutoMemory` is off — matches TS.
+///
+/// Uses [`coco_memory::DreamService::force`] so the time / session /
+/// scan-throttle gates are bypassed; the PID + mtime CAS lock is still
+/// acquired so this can't race with an in-flight auto-dream.
 async fn run_dream_consolidation(runtime: &Arc<crate::session_runtime::SessionRuntime>) {
     let Some(memory_runtime) = runtime.memory_runtime().cloned() else {
         info!("/dream: no MemoryRuntime (Feature::AutoMemory off); skipping");
         return;
     };
-    let transcript_dir = std::path::PathBuf::from(".");
+    let transcript_dir = memory_runtime
+        .transcript_dir()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
     let now_ms = coco_memory::service::dream::DreamService::now_ms();
     let _ = memory_runtime
         .dream
-        .maybe_consolidate(&transcript_dir, &[], now_ms)
+        .force(&transcript_dir, Vec::new, now_ms)
         .await;
 }
 
@@ -1453,7 +1762,21 @@ async fn run_session_memory_force(runtime: &Arc<crate::session_runtime::SessionR
     };
     let history_msgs = runtime.history.lock().await.clone();
     let tokens = coco_compact::estimate_tokens(&history_msgs);
-    let _ = memory_runtime.session_memory.force(tokens).await;
+    // TS parity (`sessionMemory.ts:441-442`): manual /summary still
+    // walks history to decide whether to advance the safely-summarized
+    // cursor. last_message_id is the latest history uuid; the cursor
+    // only advances inside `force` when the previous assistant turn
+    // had no tool calls.
+    let last_msg_id = history_msgs
+        .last()
+        .and_then(|m| m.uuid())
+        .map(uuid::Uuid::to_string);
+    let had_tool_calls =
+        coco_session_memory::count_tool_calls_in_last_assistant_turn(&history_msgs) > 0;
+    let _ = memory_runtime
+        .session_memory
+        .force(tokens, last_msg_id, had_tool_calls)
+        .await;
 }
 
 /// `/rename <name>` runner — sets the session title via `SessionManager`

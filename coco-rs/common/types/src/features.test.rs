@@ -20,6 +20,7 @@ fn defaults_for_token_economy_gates() {
     assert!(f.enabled(Feature::WebSearch));
     assert!(f.enabled(Feature::WebFetch));
     assert!(f.enabled(Feature::Mcp));
+    assert!(f.enabled(Feature::TaskV2));
 }
 
 #[test]

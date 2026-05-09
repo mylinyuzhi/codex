@@ -225,6 +225,35 @@ pub fn mark_snapshot_synced(
     )
 }
 
+/// Boxed closure type returned by [`build_pending_inspector`]. Aliased
+/// so the public signature reads cleanly and clippy doesn't trip on
+/// `type_complexity`. Matches the shape of
+/// `coco_subagent::SnapshotInspectorFn`.
+pub type PendingSnapshotInspector = Box<dyn Fn(&str, MemoryScope) -> Option<String> + Send + Sync>;
+
+/// Build the closure consumed by
+/// `coco_subagent::AgentDefinitionStore::set_snapshot_inspector`. Each
+/// invocation runs [`check_agent_memory_snapshot`] for the
+/// `(agent_type, scope)` pair and returns the snapshot timestamp when
+/// the local memory is still behind it (`PromptUpdate` /
+/// `Initialize`). Returns `None` when the memory is already synced
+/// (`None` action), so callers see drift only after the bootstrap
+/// auto-sync runs.
+///
+/// The returned closure is `Send + Sync`; the captured paths are
+/// cloned into the closure so the loader can run in any blocking-pool
+/// task without lifetime coupling. TS parity:
+/// `loadAgentsDir.ts:262-294`.
+pub fn build_pending_inspector(cwd: PathBuf, home: PathBuf) -> PendingSnapshotInspector {
+    Box::new(move |agent_type: &str, scope: MemoryScope| {
+        match check_agent_memory_snapshot(agent_type, scope, &cwd, &home) {
+            SnapshotAction::None => None,
+            SnapshotAction::Initialize { snapshot_timestamp }
+            | SnapshotAction::PromptUpdate { snapshot_timestamp } => Some(snapshot_timestamp),
+        }
+    })
+}
+
 #[cfg(test)]
 #[path = "agent_memory_snapshot.test.rs"]
 mod tests;

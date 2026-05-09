@@ -38,9 +38,9 @@ use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::SearchReadInfo;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
+use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_tool_runtime::ValidationResult;
-use coco_types::PermissionDecision;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
 use coco_types::ToolName;
@@ -119,6 +119,16 @@ impl Tool for GlobTool {
         100_000
     }
 
+    /// The execute path already builds the final user-facing string
+    /// (`"Found N files\nfile1\nfile2..."`) and stores it as a JSON
+    /// string in `data`. The default render would JSON-stringify that
+    /// again, escaping every newline. Skip the JSON wrapper and emit
+    /// the bare string as a single Text part. TS parity:
+    /// `GlobTool.ts::mapToolResultToToolResultBlockParam`.
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        coco_tool_runtime::render_text_or_json(data)
+    }
+
     fn get_activity_description(&self, input: &Value) -> Option<String> {
         let pattern = input.get("pattern").and_then(|v| v.as_str())?;
         Some(format!("Searching for {pattern}"))
@@ -134,12 +144,13 @@ impl Tool for GlobTool {
     /// R6-T20: block globbing under a path that's in the ignore list.
     /// Individual results matching an ignore glob are also filtered
     /// inside `run_glob_search`.
-    async fn check_permissions(&self, input: &Value, ctx: &ToolUseContext) -> PermissionDecision {
+    async fn check_permissions(
+        &self,
+        input: &Value,
+        ctx: &ToolUseContext,
+    ) -> coco_types::ToolCheckResult {
         let Some(path) = input.get("path").and_then(|v| v.as_str()) else {
-            return PermissionDecision::Allow {
-                updated_input: None,
-                feedback: None,
-            };
+            return coco_types::ToolCheckResult::Passthrough;
         };
         let matcher = crate::tools::read_permissions::file_read_ignore_matcher_from_patterns(
             &ctx.tool_config.file_read_ignore_patterns,

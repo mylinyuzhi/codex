@@ -18,9 +18,11 @@ use coco_tool_runtime::TodoListHandleRef;
 use coco_tool_runtime::TodoRecord;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
+use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::AppStatePatch;
 use coco_types::ExpandedView;
+use coco_types::Feature;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
 use coco_types::ToolName;
@@ -90,12 +92,14 @@ fn project_update(
     updated_fields: Vec<&'static str>,
     status_change: Option<(String, String)>,
     verification_nudge: bool,
+    completed_nudge: bool,
 ) -> Value {
     let mut out = serde_json::json!({
         "success": true,
         "taskId": task_id,
         "updatedFields": updated_fields,
         "verificationNudgeNeeded": verification_nudge,
+        "completedNudgeNeeded": completed_nudge,
     });
     if let Some((from, to)) = status_change {
         out["statusChange"] = serde_json::json!({ "from": from, "to": to });
@@ -253,8 +257,30 @@ impl Tool for TaskCreateTool {
         ToolInputSchema { properties: p }
     }
 
+    fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
+        ctx.features.enabled(Feature::TaskV2)
+    }
+
     fn is_concurrency_safe(&self, _: &Value) -> bool {
         true
+    }
+
+    /// Render the create envelope as `Task #{id} created successfully: {subject}`.
+    /// TS parity: `TaskCreateTool.ts:130-135::mapToolResultToToolResultBlockParam`.
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        let task = data.get("task");
+        let id = task
+            .and_then(|t| t.get("id"))
+            .and_then(Value::as_str)
+            .unwrap_or("?");
+        let subject = task
+            .and_then(|t| t.get("subject"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        vec![ToolResultContentPart::Text {
+            text: format!("Task #{id} created successfully: {subject}"),
+            provider_options: None,
+        }]
     }
 
     async fn execute(
@@ -349,11 +375,29 @@ impl Tool for TaskGetTool {
         );
         ToolInputSchema { properties: p }
     }
+    fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
+        ctx.features.enabled(Feature::TaskV2)
+    }
     fn is_read_only(&self, _: &Value) -> bool {
         true
     }
     fn is_concurrency_safe(&self, _: &Value) -> bool {
         true
+    }
+
+    /// Render the task envelope as a multi-line text block, or
+    /// "Task not found" when `task` is null. TS parity:
+    /// `TaskGetTool.ts:99-128::mapToolResultToToolResultBlockParam`.
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        let task = data.get("task");
+        let text = match task {
+            Some(t) if !t.is_null() => format_task_full(t),
+            _ => "Task not found".to_string(),
+        };
+        vec![ToolResultContentPart::Text {
+            text,
+            provider_options: None,
+        }]
     }
 
     async fn execute(
@@ -388,6 +432,40 @@ impl Tool for TaskGetTool {
     }
 }
 
+/// Render a task object into the multi-line TaskGet text block. TS
+/// parity: `TaskGetTool.ts:107-122` — uses `#` prefix on every id, and
+/// always includes the Description line (TS doesn't conditionally
+/// suppress on empty).
+fn format_task_full(task: &Value) -> String {
+    let id = task.get("id").and_then(Value::as_str).unwrap_or("?");
+    let subject = task.get("subject").and_then(Value::as_str).unwrap_or("");
+    let status = task.get("status").and_then(Value::as_str).unwrap_or("?");
+    let description = task
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let mut out = format!("Task #{id}: {subject}\nStatus: {status}\nDescription: {description}");
+    if let Some(arr) = task.get("blockedBy").and_then(Value::as_array)
+        && !arr.is_empty()
+    {
+        let ids: Vec<String> = arr
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| format!("#{s}")))
+            .collect();
+        out.push_str(&format!("\nBlocked by: {}", ids.join(", ")));
+    }
+    if let Some(arr) = task.get("blocks").and_then(Value::as_array)
+        && !arr.is_empty()
+    {
+        let ids: Vec<String> = arr
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| format!("#{s}")))
+            .collect();
+        out.push_str(&format!("\nBlocks: {}", ids.join(", ")));
+    }
+    out
+}
+
 // ── TaskListTool ──────────────────────────────────────────────────────
 
 pub struct TaskListTool;
@@ -408,11 +486,56 @@ impl Tool for TaskListTool {
             properties: HashMap::new(),
         }
     }
+    fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
+        ctx.features.enabled(Feature::TaskV2)
+    }
     fn is_read_only(&self, _: &Value) -> bool {
         true
     }
     fn is_concurrency_safe(&self, _: &Value) -> bool {
         true
+    }
+
+    /// Render `{tasks: [...]}` as `#{id} [{status}] {subject}{owner}{blocked}`
+    /// per line. Empty list collapses to "No tasks found". TS parity:
+    /// `TaskListTool.ts:91-115::mapToolResultToToolResultBlockParam`.
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        let tasks = data.get("tasks").and_then(Value::as_array);
+        let text = match tasks {
+            Some(arr) if arr.is_empty() => "No tasks found".to_string(),
+            Some(arr) => arr
+                .iter()
+                .map(|t| {
+                    let id = t.get("id").and_then(Value::as_str).unwrap_or("?");
+                    let subject = t.get("subject").and_then(Value::as_str).unwrap_or("");
+                    let status = t.get("status").and_then(Value::as_str).unwrap_or("?");
+                    let owner = t
+                        .get("owner")
+                        .and_then(Value::as_str)
+                        .map(|o| format!(" ({o})"))
+                        .unwrap_or_default();
+                    let blocked = t
+                        .get("blockedBy")
+                        .and_then(Value::as_array)
+                        .filter(|a| !a.is_empty())
+                        .map(|arr| {
+                            let ids: Vec<String> = arr
+                                .iter()
+                                .filter_map(|v| v.as_str().map(|s| format!("#{s}")))
+                                .collect();
+                            format!(" [blocked by {}]", ids.join(", "))
+                        })
+                        .unwrap_or_default();
+                    format!("#{id} [{status}] {subject}{owner}{blocked}")
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+            None => serde_json::to_string(data).unwrap_or_default(),
+        };
+        vec![ToolResultContentPart::Text {
+            text,
+            provider_options: None,
+        }]
     }
 
     async fn execute(
@@ -521,8 +644,60 @@ impl Tool for TaskUpdateTool {
         ToolInputSchema { properties: p }
     }
 
+    fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
+        ctx.features.enabled(Feature::TaskV2)
+    }
+
     fn is_concurrency_safe(&self, _: &Value) -> bool {
         true
+    }
+
+    /// Render the update envelope. TS parity:
+    /// `TaskUpdateTool.ts:364-405::mapToolResultToToolResultBlockParam`.
+    /// Error: surface the `error` field directly (or `Task #{id} not
+    /// found` fallback). Success: `Updated task #{id} {fields...}` with
+    /// optional teammate-completion + verification nudges.
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        let success = data
+            .get("success")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let task_id = data.get("taskId").and_then(Value::as_str).unwrap_or("?");
+        let text = if success {
+            let updated_fields: Vec<&str> = data
+                .get("updatedFields")
+                .and_then(Value::as_array)
+                .map(|arr| arr.iter().filter_map(Value::as_str).collect())
+                .unwrap_or_default();
+            let mut out = format!("Updated task #{task_id} {}", updated_fields.join(", "));
+            // TS `TaskUpdateTool.ts:386-394`: teammate-completion
+            // nudge fires before the verification nudge when both
+            // would apply.
+            if data
+                .get("completedNudgeNeeded")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                out.push_str("\n\nTask completed. Call TaskList now to find your next available task or see if your work unblocked others.");
+            }
+            if data
+                .get("verificationNudgeNeeded")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                out.push_str("\n\nNOTE: You just closed out 3+ tasks and none of them was a verification step. Before writing your final summary, spawn the verification agent (subagent_type=\"verification-agent\"). You cannot self-assign PARTIAL by listing caveats in your summary — only the verifier issues a verdict.");
+            }
+            out
+        } else {
+            data.get("error")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("Task #{task_id} not found"))
+        };
+        vec![ToolResultContentPart::Text {
+            text,
+            provider_options: None,
+        }]
     }
 
     async fn execute(
@@ -579,7 +754,8 @@ impl Tool for TaskUpdateTool {
                 None
             };
             let data = if deleted {
-                let mut out = project_update(&task_id, vec!["deleted"], status_change, false);
+                let mut out =
+                    project_update(&task_id, vec!["deleted"], status_change, false, false);
                 out["success"] = Value::Bool(true);
                 out
             } else {
@@ -799,10 +975,22 @@ impl Tool for TaskUpdateTool {
             .should_nudge_verification(newly_completed, is_main_thread)
             .await;
 
+        // Teammate completion nudge — TS `TaskUpdateTool.ts:386-394`.
+        // Fires when a swarm teammate (in-process or otherwise)
+        // transitions a task to completed; primes the next TaskList
+        // call so the agent picks up unblocked downstream work.
+        let completed_nudge = newly_completed && ctx.is_teammate;
+
         // TS `TaskUpdateTool.ts:140-143` — auto-expand on update.
         let patch = build_task_list_patch(&ctx.task_list, verification_nudge).await;
         Ok(ToolResult {
-            data: project_update(&task_id, updated_fields, status_change, verification_nudge),
+            data: project_update(
+                &task_id,
+                updated_fields,
+                status_change,
+                verification_nudge,
+                completed_nudge,
+            ),
             new_messages: vec![],
             app_state_patch: Some(patch),
         })
@@ -871,6 +1059,11 @@ impl Tool for TaskStopTool {
     fn is_concurrency_safe(&self, _: &Value) -> bool {
         true
     }
+
+    // TS `TaskStopTool.ts:98-103` emits `jsonStringify(output)` —
+    // i.e. the entire `{message, task_id, task_type}` envelope as
+    // JSON. This matches the trait's default `render_for_model` impl
+    // exactly, so no override is needed.
 
     async fn execute(
         &self,
@@ -945,9 +1138,11 @@ impl Tool for TaskOutputTool {
         ToolName::TaskOutput.as_str()
     }
     fn description(&self, _: &Value, _: &DescriptionOptions) -> String {
-        "Read the output of a completed or running task. With block=true (default), \
-         waits for the task to complete (or reach `timeout` milliseconds) before \
-         returning. Works for both TODO plan items and background shell/agent tasks."
+        "Retrieves output from a running or completed background task — a shell \
+         launched with `run_in_background`, an async agent spawn, or a remote \
+         session. With block=true (default), waits for the task to complete \
+         (or reach `timeout` milliseconds) before returning. For plan items \
+         created via TaskCreate, use TaskGet — they live in a separate namespace."
             .into()
     }
     fn input_schema(&self) -> ToolInputSchema {
@@ -988,6 +1183,61 @@ impl Tool for TaskOutputTool {
     }
     fn is_concurrency_safe(&self, _: &Value) -> bool {
         true
+    }
+
+    /// Render the retrieval envelope as TS-shaped XML tags. TS parity:
+    /// `TaskOutputTool.tsx:283-308::mapToolResultToToolResultBlockParam`.
+    /// Format:
+    /// ```text
+    /// <retrieval_status>STATUS</retrieval_status>
+    ///
+    /// <task_id>ID</task_id>
+    ///
+    /// <task_type>TYPE</task_type>
+    ///
+    /// <status>TASK_STATUS</status>
+    ///
+    /// <exit_code>N</exit_code>      # only when present
+    ///
+    /// <output>
+    /// CAPTURED_OUTPUT
+    /// </output>                     # only when output is non-empty
+    ///
+    /// <error>...</error>            # only when present
+    /// ```
+    /// Pieces are joined with `\n\n`. Missing fields are skipped (TS
+    /// `if (data.task.exitCode !== undefined && data.task.exitCode !== null)`).
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        let status = data
+            .get("retrieval_status")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let mut parts: Vec<String> = vec![format!("<retrieval_status>{status}</retrieval_status>")];
+        if let Some(task) = data.get("task")
+            && !task.is_null()
+        {
+            let task_id = task.get("task_id").and_then(Value::as_str).unwrap_or("");
+            let task_type = task.get("task_type").and_then(Value::as_str).unwrap_or("");
+            let task_status = task.get("status").and_then(Value::as_str).unwrap_or("");
+            parts.push(format!("<task_id>{task_id}</task_id>"));
+            parts.push(format!("<task_type>{task_type}</task_type>"));
+            parts.push(format!("<status>{task_status}</status>"));
+            if let Some(code) = task.get("exitCode").and_then(Value::as_i64) {
+                parts.push(format!("<exit_code>{code}</exit_code>"));
+            }
+            if let Some(output) = task.get("output").and_then(Value::as_str)
+                && !output.trim().is_empty()
+            {
+                parts.push(format!("<output>\n{}\n</output>", output.trim_end()));
+            }
+            if let Some(err) = task.get("error").and_then(Value::as_str) {
+                parts.push(format!("<error>{err}</error>"));
+            }
+        }
+        vec![ToolResultContentPart::Text {
+            text: parts.join("\n\n"),
+            provider_options: None,
+        }]
     }
 
     async fn execute(
@@ -1121,6 +1371,9 @@ impl Tool for TodoWriteTool {
          the prior list is replaced. Each item requires content, status, and activeForm."
             .into()
     }
+    fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
+        !ctx.features.enabled(Feature::TaskV2)
+    }
     fn input_schema(&self) -> ToolInputSchema {
         let mut p = HashMap::new();
         p.insert(
@@ -1148,6 +1401,29 @@ impl Tool for TodoWriteTool {
             }),
         );
         ToolInputSchema { properties: p }
+    }
+
+    /// TS parity: `TodoWriteTool.ts::mapToolResultToToolResultBlockParam`.
+    /// The model only needs the success message + optional verification
+    /// nudge — `oldTodos`/`newTodos` arrays are TUI/state concerns, not
+    /// model-visible content. JSON-stringifying them wastes tokens.
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        let nudge_needed = data
+            .get("verificationNudgeNeeded")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let base = "Todos have been modified successfully. Ensure that you continue to use the todo list to track your progress. Please proceed with the current tasks if applicable";
+        let text = if nudge_needed {
+            format!(
+                "{base}\n\nNOTE: You just closed out 3+ tasks and none of them was a verification step. Before writing your final summary, spawn the verification agent. You cannot self-assign PARTIAL by listing caveats in your summary — only the verifier issues a verdict."
+            )
+        } else {
+            base.to_string()
+        };
+        vec![ToolResultContentPart::Text {
+            text,
+            provider_options: None,
+        }]
     }
 
     async fn execute(

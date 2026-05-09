@@ -27,6 +27,7 @@ use crate::scan::scan_memory_files;
 use crate::service::DreamService;
 use crate::service::ExtractService;
 use crate::service::SessionMemoryService;
+use crate::telemetry::MemoryEvent;
 use crate::telemetry::MemoryTelemetryEmitter;
 use crate::telemetry::NoopEmitter;
 
@@ -37,6 +38,13 @@ const RECALL_QUERY_SOURCE: &str = "memory_recall";
 /// output. Mirrors TS `selectRelevantMemories`'s `tool_choice` shape.
 const RECALL_TOOL_NAME: &str = "select_memories";
 
+/// Lazy enumerator returning session IDs that have produced
+/// transcripts since the last consolidation. The auto-dream
+/// scheduler invokes the closure **only** after the time + scan
+/// throttle gates pass — TS parity with `listSessionsTouchedSince`,
+/// which TS calls only after the time gate (`autoDream.ts:155`).
+pub type SessionEnumerator = Arc<dyn Fn() -> Vec<String> + Send + Sync>;
+
 /// Composed memory runtime — one per session.
 pub struct MemoryRuntime {
     pub directories: MemoryDir,
@@ -44,6 +52,11 @@ pub struct MemoryRuntime {
     pub extract: Arc<ExtractService>,
     pub dream: Arc<DreamService>,
     pub session_memory: Arc<SessionMemoryService>,
+    /// Project session-transcript root — TS `getProjectDir(getOriginalCwd())`.
+    /// Substituted into the dream prompt's grep examples and the
+    /// optional searching-past-context section. `None` leaves the
+    /// `{TRANSCRIPT_DIR}` placeholder in prompt copy.
+    transcript_dir: Option<PathBuf>,
     /// Cross-turn recall state. Encapsulated — external callers reach
     /// it through [`MemoryRuntime::recall`] and [`MemoryRuntime::reset`].
     recall_state: Arc<PrefetchState>,
@@ -57,6 +70,18 @@ pub struct MemoryRuntime {
     /// heuristic. Use [`MemoryRuntime::install_side_query`] to plug in
     /// a `coco-inference` adapter once it's built.
     side_query: tokio::sync::RwLock<Option<SideQueryHandle>>,
+    /// Lazy session enumerator used by [`Self::tick_dream`]. The
+    /// session-runtime wires this with a closure that reads the
+    /// project's `TranscriptStore`. `None` ⇒ tick_dream sees an empty
+    /// list, which keeps the session-gate as the limiting factor and
+    /// matches the pre-wire baseline.
+    session_enumerator: tokio::sync::RwLock<Option<SessionEnumerator>>,
+    /// Shared inbox for user-visible save notices. Extract / dream
+    /// push into it on success; the engine drains it once per turn
+    /// in `finalize_turn_post_tools` and injects a
+    /// `SystemMemorySavedMessage` into history. TS parity:
+    /// `appendSystemMessage(createMemorySavedMessage(...))`.
+    notices: crate::notice::NoticeInbox,
 }
 
 impl std::fmt::Debug for MemoryRuntime {
@@ -79,6 +104,16 @@ pub struct MemoryRuntimeBuilder {
     pub agent: AgentHandleRef,
     pub telemetry: Arc<dyn MemoryTelemetryEmitter>,
     pub side_query: Option<SideQueryHandle>,
+    /// Optional pre-resolved project transcript directory (TS
+    /// `getProjectDir(getOriginalCwd())`). Surfaces into the dream
+    /// prompt's grep example and the searching-past-context block.
+    pub transcript_dir: Option<PathBuf>,
+    /// Whether auto-compact is active for this session — TS
+    /// `isAutoCompactEnabled()` (`compact/autoCompact.ts`). Only
+    /// affects telemetry: SM still constructs and the engine layer
+    /// gates its dispatch separately. Defaults to `true` so legacy
+    /// callers don't accidentally suppress the init event.
+    pub auto_compact_enabled: bool,
 }
 
 impl MemoryRuntimeBuilder {
@@ -97,7 +132,17 @@ impl MemoryRuntimeBuilder {
             agent,
             telemetry: Arc::new(NoopEmitter),
             side_query: None,
+            transcript_dir: None,
+            auto_compact_enabled: true,
         }
+    }
+
+    /// Tell the runtime whether auto-compact is active for this
+    /// session — surfaced by the SM init telemetry event so dashboards
+    /// can correlate SM activity with compact configuration.
+    pub fn with_auto_compact_enabled(mut self, enabled: bool) -> Self {
+        self.auto_compact_enabled = enabled;
+        self
     }
 
     pub fn with_telemetry(mut self, telemetry: Arc<dyn MemoryTelemetryEmitter>) -> Self {
@@ -113,7 +158,23 @@ impl MemoryRuntimeBuilder {
         self
     }
 
+    /// Pre-resolve the project transcript directory (TS
+    /// `getProjectDir`). When unset the prompt copy keeps the
+    /// `{TRANSCRIPT_DIR}` placeholder for the model to fill.
+    pub fn with_transcript_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.transcript_dir = Some(dir.into());
+        self
+    }
+
     pub fn build(self) -> MemoryRuntime {
+        // TS `sessionMemory.ts:362-367 logEvent('tengu_session_memory_init', ...)`
+        // — fired once at registration time so dashboards can count
+        // SM-enabled sessions vs auto-compact-disabled ones.
+        if self.config.session_memory_enabled {
+            self.telemetry.emit(MemoryEvent::SessionMemoryInit {
+                auto_compact_enabled: self.auto_compact_enabled,
+            });
+        }
         let directories = MemoryDir::resolve(
             &self.config_home,
             &self.project_root,
@@ -124,17 +185,25 @@ impl MemoryRuntimeBuilder {
         // and observes any later `install_agent` swap.
         let agent_slot: crate::service::extract::AgentSlot =
             Arc::new(tokio::sync::RwLock::new(self.agent.clone()));
-        let extract = Arc::new(ExtractService::with_shared_agent(
+        // Single shared notice inbox — `extract` and `dream` push
+        // user-visible save notices here on success; the engine
+        // drains via `MemoryRuntime::drain_user_notices()`. SM also
+        // shares the inbox even though TS doesn't push from it,
+        // keeping the API uniform if a future surface lands.
+        let notices = crate::notice::NoticeInbox::default();
+        let extract = Arc::new(ExtractService::with_shared_agent_and_notices(
             directories.personal.clone(),
             self.config.clone(),
             agent_slot.clone(),
             self.telemetry.clone(),
+            notices.clone(),
         ));
-        let dream = Arc::new(DreamService::with_shared_agent(
+        let dream = Arc::new(DreamService::with_shared_agent_and_notices(
             directories.personal.clone(),
             self.config.clone(),
             agent_slot.clone(),
             self.telemetry.clone(),
+            notices.clone(),
         ));
         let session_memory = Arc::new(SessionMemoryService::with_shared_agent(
             self.session_id,
@@ -149,9 +218,12 @@ impl MemoryRuntimeBuilder {
             extract,
             dream,
             session_memory,
+            transcript_dir: self.transcript_dir,
             recall_state: Arc::new(PrefetchState::new()),
             agent_slot,
             side_query: tokio::sync::RwLock::new(self.side_query),
+            session_enumerator: tokio::sync::RwLock::new(None),
+            notices,
         }
     }
 }
@@ -171,6 +243,49 @@ impl MemoryRuntime {
     /// falls back to the recency heuristic.
     pub async fn install_side_query(&self, handle: SideQueryHandle) {
         *self.side_query.write().await = Some(handle);
+    }
+
+    /// Install a [`SessionEnumerator`] used by [`Self::tick_dream`].
+    /// The session-runtime wires this with a closure backed by the
+    /// project's `TranscriptStore`; before installation `tick_dream`
+    /// sees an empty list and the session gate stays the limiting
+    /// factor. Idempotent — later installs replace earlier ones.
+    pub async fn install_session_enumerator(&self, enumerator: SessionEnumerator) {
+        *self.session_enumerator.write().await = Some(enumerator);
+    }
+
+    /// Drain user-visible memory save notices accumulated since the
+    /// last call. The engine invokes this from
+    /// `finalize_turn_post_tools` and injects a
+    /// `SystemMemorySavedMessage` into history for each entry. TS
+    /// parity: `appendSystemMessage(createMemorySavedMessage(paths))`
+    /// in `extractMemories.ts:495` and `autoDream.ts:243`.
+    pub fn drain_user_notices(&self) -> Vec<crate::notice::MemoryUserNotice> {
+        self.notices.drain()
+    }
+
+    /// Per-turn auto-dream tick — TS parity with `executeAutoDream`
+    /// fired from `handleStopHooks`. Runs the three-gate scheduler
+    /// (time → scan throttle → session); `enumerate_sessions` is the
+    /// installed enumerator (see [`Self::install_session_enumerator`])
+    /// and is invoked **only** when the gates require it. Without an
+    /// enumerator the call effectively no-ops.
+    pub async fn tick_dream(&self, now_ms: i64) -> crate::service::dream::DreamOutcome {
+        let enumerator = self.session_enumerator.read().await.clone();
+        let transcript_dir = self
+            .transcript_dir
+            .clone()
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        self.dream
+            .maybe_consolidate(
+                &transcript_dir,
+                move || match enumerator {
+                    Some(e) => e(),
+                    None => Vec::new(),
+                },
+                now_ms,
+            )
+            .await
     }
 
     /// Reset per-conversation state across all services + recall.
@@ -193,6 +308,14 @@ impl MemoryRuntime {
     /// Convenience — current team memory directory.
     pub fn team_dir(&self) -> &Path {
         &self.directories.team
+    }
+
+    /// Project session-transcript directory (TS
+    /// `getProjectDir(getOriginalCwd())`). `None` when callers built
+    /// the runtime without `with_transcript_dir(..)` — prompt copy
+    /// then keeps the `{TRANSCRIPT_DIR}` placeholder.
+    pub fn transcript_dir(&self) -> Option<&Path> {
+        self.transcript_dir.as_deref()
     }
 
     /// Render the auto-memory system-prompt block for this session.
@@ -228,6 +351,7 @@ impl MemoryRuntime {
             None
         };
 
+        let transcript_dir = self.transcript_dir.as_deref();
         Some(build_system_prompt_section(
             variant,
             &self.directories.personal,
@@ -239,6 +363,8 @@ impl MemoryRuntime {
             personal_index.as_deref(),
             team_index.as_deref(),
             self.config.skip_index,
+            self.config.searching_past_context_enabled,
+            transcript_dir,
             None,
         ))
     }

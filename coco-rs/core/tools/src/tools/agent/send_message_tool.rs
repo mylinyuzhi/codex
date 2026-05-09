@@ -8,6 +8,7 @@ use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
+use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
@@ -68,6 +69,23 @@ impl Tool for SendMessageTool {
         );
         ToolInputSchema { properties: p }
     }
+
+    /// Render either the prebuilt `message` field (auto-resumed path)
+    /// or the bare confirmation string returned by `agent.send_message`.
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        let text = if let Some(s) = data.as_str() {
+            s.to_string()
+        } else if let Some(msg) = data.get("message").and_then(Value::as_str) {
+            msg.to_string()
+        } else {
+            serde_json::to_string(data).unwrap_or_default()
+        };
+        vec![ToolResultContentPart::Text {
+            text,
+            provider_options: None,
+        }]
+    }
+
     async fn execute(
         &self,
         input: Value,

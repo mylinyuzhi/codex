@@ -8,6 +8,7 @@ use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
+use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
@@ -53,6 +54,28 @@ impl Tool for BriefTool {
     /// same turn are independent and stamped with their own timestamps.
     fn is_concurrency_safe(&self, _: &Value) -> bool {
         true
+    }
+
+    /// TS parity: `BriefTool.ts::mapToolResultToToolResultBlockParam`.
+    /// The model only needs the delivery confirmation; the message body
+    /// + attachments + timestamp are TUI/state concerns and would waste
+    /// tokens if JSON-stringified for the model.
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        let n = data
+            .get("attachments")
+            .and_then(Value::as_array)
+            .map_or(0, std::vec::Vec::len);
+        let suffix = if n == 0 {
+            String::new()
+        } else if n == 1 {
+            " (1 attachment included)".to_string()
+        } else {
+            format!(" ({n} attachments included)")
+        };
+        vec![ToolResultContentPart::Text {
+            text: format!("Message delivered to user.{suffix}"),
+            provider_options: None,
+        }]
     }
 
     async fn execute(

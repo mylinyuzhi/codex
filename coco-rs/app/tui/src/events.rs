@@ -153,6 +153,11 @@ pub enum TuiCommand {
     // ── Commands & overlays ──
     /// Execute a skill.
     ExecuteSkill(String),
+    /// Execute a slash command by name (no leading `/`). Triggered by
+    /// a `command:foo` keybinding from the user's `keybindings.json`
+    /// — fires through the same handler as if the user typed `/foo`
+    /// and hit Enter.
+    ExecuteSlashCommand(String),
     /// Show help overlay.
     ShowHelp,
     /// Show command palette overlay.
@@ -231,4 +236,30 @@ pub enum TuiCommand {
     // ── Application ──
     /// Quit the application.
     Quit,
+
+    // ── Stash ──
+    /// Push to / pop from the input-draft stash slot. TS
+    /// `chat:stash` semantics from
+    /// `PromptInput.tsx::handleStash`: empty input + stash present
+    /// → pop; non-empty input → push (overwrites).
+    StashInputDraft,
+
+    // ── Expanded view ──
+    /// Cycle the right-rail `expanded_view` between `None`, `Tasks`,
+    /// and (when teammates are running) `Teammates`. TS
+    /// `app:toggleTodos` (`useGlobalKeybindings.tsx::handleToggleTodos`).
+    ToggleExpandedTasksView,
+    /// Toggle whether teammate spinner lines show recent message
+    /// preview text. TS `app:toggleTeammatePreview`
+    /// (`AppStateStore.ts::showTeammateMessagePreview`).
+    ToggleTeammateMessagePreview,
+    /// Open / close the transcript overlay. TS `app:toggleTranscript`
+    /// (`useGlobalKeybindings.tsx::handleToggleTranscript`) — verbose,
+    /// scrollable, all-messages view.
+    ToggleTranscript,
+    /// Toggle `show_all` on the active transcript overlay (include /
+    /// hide meta messages). TS `transcript:toggleShowAll`
+    /// (`Ctrl+E` while the transcript screen is mounted). No-op when
+    /// the active overlay is not a transcript.
+    ToggleTranscriptShowAll,
 }

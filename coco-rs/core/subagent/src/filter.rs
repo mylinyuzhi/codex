@@ -56,6 +56,27 @@ pub const ASYNC_AGENT_ALLOWED_TOOLS: &[&str] = &[
     ToolName::ExitWorktree.as_str(),
 ];
 
+/// Tools allowed only for in-process teammates (in addition to
+/// [`ASYNC_AGENT_ALLOWED_TOOLS`]). Mirrors TS
+/// `IN_PROCESS_TEAMMATE_ALLOWED_TOOLS` (`constants/tools.ts:77-88`).
+///
+/// In-process teammates need these to coordinate via the shared task
+/// list and inter-teammate mailbox. The `AGENT_TRIGGERS`-gated cron
+/// tools (`CronCreate` / `CronDelete` / `CronList`) are included
+/// unconditionally here — the feature gate is enforced upstream by
+/// `Tool::is_enabled` so listing them costs nothing when the gate is
+/// off.
+pub const IN_PROCESS_TEAMMATE_ALLOWED_TOOLS: &[&str] = &[
+    ToolName::TaskCreate.as_str(),
+    ToolName::TaskGet.as_str(),
+    ToolName::TaskList.as_str(),
+    ToolName::TaskUpdate.as_str(),
+    ToolName::SendMessage.as_str(),
+    ToolName::CronCreate.as_str(),
+    ToolName::CronDelete.as_str(),
+    ToolName::CronList.as_str(),
+];
+
 /// Inputs that drive `AgentToolFilter::plan`.
 #[derive(Debug, Clone)]
 pub struct ToolFilterContext<'a> {
@@ -69,6 +90,14 @@ pub struct ToolFilterContext<'a> {
     /// to over-restrict an agent for a specific invocation. Set to `None`
     /// for TS-parity behavior.
     pub extra_allow_list: Option<&'a [String]>,
+    /// True when the spawn target is an in-process teammate AND
+    /// agent-teams (TS `isAgentSwarmsEnabled()` ≈ coco-rs
+    /// `Feature::AgentTeams`) is on. When set, the async filter
+    /// re-admits `Agent` plus
+    /// [`IN_PROCESS_TEAMMATE_ALLOWED_TOOLS`] (Task* + SendMessage +
+    /// Cron*) so teammates can coordinate via the shared task list and
+    /// mailbox. TS parity: `agentToolUtils.ts:101-110`.
+    pub is_in_process_teammate: bool,
 }
 
 /// Output of the filter plan: ready to feed into a child `ToolRegistry`.
@@ -102,6 +131,7 @@ impl AgentToolFilter {
     /// extension) intersects further.
     pub fn plan(def: &AgentDefinition, ctx: ToolFilterContext<'_>) -> ToolFilterPlan {
         let exit_plan_mode = ToolName::ExitPlanMode.as_str();
+        let agent_tool = ToolName::Agent.as_str();
         let allowed_by_first_pass = |name: &&str| -> bool {
             // 1. MCP tools always pass.
             if name.starts_with(MCP_TOOL_PREFIX) {
@@ -113,14 +143,36 @@ impl AgentToolFilter {
             }
             // 3. Universal block.
             if ALL_AGENT_DISALLOWED_TOOLS.contains(name) {
+                // TS `agentToolUtils.ts:101-110`: in-process teammates
+                // re-admit `Agent` so they can spawn synchronous
+                // subagents (validated upstream by `AgentTool::execute`
+                // to prevent background / teammate spawning). The
+                // teammate MUST itself be running async — sync
+                // teammates don't trigger this exception.
+                if ctx.is_async && ctx.is_in_process_teammate && *name == agent_tool {
+                    return true;
+                }
                 return false;
             }
             // 4. Custom agent extras.
             if !ctx.is_builtin && CUSTOM_AGENT_DISALLOWED_TOOLS.contains(name) {
+                if ctx.is_async && ctx.is_in_process_teammate && *name == agent_tool {
+                    return true;
+                }
                 return false;
             }
             // 5. Async allow-list.
             if ctx.is_async && !ASYNC_AGENT_ALLOWED_TOOLS.contains(name) {
+                // TS `agentToolUtils.ts:101-110`: in-process teammates
+                // also keep the IN_PROCESS_TEAMMATE_ALLOWED_TOOLS set
+                // (TaskCreate/Get/List/Update + SendMessage + Cron*)
+                // so teammates can coordinate via the shared task list
+                // and the inter-teammate mailbox.
+                if ctx.is_in_process_teammate
+                    && (*name == agent_tool || IN_PROCESS_TEAMMATE_ALLOWED_TOOLS.contains(name))
+                {
+                    return true;
+                }
                 return false;
             }
             true

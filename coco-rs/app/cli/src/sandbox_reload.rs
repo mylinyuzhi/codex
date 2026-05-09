@@ -122,7 +122,10 @@ fn reapply_sandbox(
     let worktree = coco_sandbox::detect_worktree_main_repo(cwd);
 
     // Per-source rule plumbing — drives the `allow_managed_*_only` gates.
-    let (sourced_allow_rules, _sourced_deny_rules) = runtime.settings.sourced_permission_rules();
+    // Sandbox only consumes allow provenance; deny/ask are handled at
+    // the engine config layer (see `permission_rule_loader`).
+    let (sourced_allow_rules, _sourced_deny_rules, _sourced_ask_rules) =
+        runtime.settings.sourced_permission_rules();
     let sourced_fs_allow_read = runtime.settings.sourced_filesystem_allow_read();
 
     let inputs = AdapterInputs {

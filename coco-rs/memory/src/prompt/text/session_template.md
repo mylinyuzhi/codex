@@ -1,29 +1,29 @@
 # Session Title
-_A short and distinctive 5-10 word descriptive title_
+_A short and distinctive 5-10 word descriptive title for the session. Super info dense, no filler_
 
 # Current State
-_What is actively being worked on? Pending tasks, immediate next steps_
+_What is actively being worked on right now? Pending tasks not yet completed. Immediate next steps._
 
 # Task specification
-_What did the user ask to build? Design decisions, explanatory context_
+_What did the user ask to build? Any design decisions or other explanatory context_
 
 # Files and Functions
-_Important files, what they contain, why relevant_
+_What are the important files? In short, what do they contain and why are they relevant?_
 
 # Workflow
-_Bash commands usually run and in what order?_
+_What bash commands are usually run and in what order? How to interpret their output if not obvious?_
 
 # Errors & Corrections
-_Errors encountered, fixes, approaches that failed_
+_Errors encountered and how they were fixed. What did the user correct? What approaches failed and should not be tried again?_
 
 # Codebase and System Documentation
-_Important system components, how they work/fit together_
+_What are the important system components? How do they work/fit together?_
 
 # Learnings
-_What worked well, what not, what to avoid?_
+_What has worked well? What has not? What to avoid? Do not duplicate items from other sections_
 
 # Key results
-_Specific output user requested (table, answer, document)_
+_If the user asked a specific output such as an answer to a question, a table, or other document, repeat the exact result here_
 
 # Worklog
-_Step-by-step summary, very terse per step_
+_Step by step, what was attempted, done? Very terse summary for each step_

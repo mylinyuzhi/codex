@@ -8,6 +8,7 @@
 //! are synchronous `std::fs` reads triggered by an explicit `load()` call.
 //! See `docs/coco-rs/subagent-refactor-plan.md` § D8 for ownership boundary.
 
+pub mod builtin_prompts;
 pub mod builtins;
 pub mod coordinator_mode;
 pub mod definition_store;
@@ -15,6 +16,7 @@ pub mod filter;
 pub mod fork;
 pub mod frontmatter;
 pub mod handoff;
+pub mod json;
 pub mod prompt;
 pub mod snapshot;
 pub mod spawn_resolution;
@@ -31,7 +33,10 @@ pub use coordinator_mode::{
     is_fork_subagent_active, looks_like_task_notification, parse_task_notification,
     render_task_notification, session_mode_switch_action, worker_tool_pool,
 };
-pub use definition_store::{AgentDefinitionStore, AgentLoadReport, LoadedAgentDefinition};
+pub use definition_store::{
+    AgentDefinitionStore, AgentLoadReport, AgentSearchPaths, LoadedAgentDefinition,
+    SnapshotInspectorFn,
+};
 pub use filter::{AgentToolFilter, AllowedAgentTypes, ToolFilterPlan, parse_allowed_agent_types};
 pub use fork::{
     FORK_BOILERPLATE_TAG, FORK_DIRECTIVE_PREFIX, FORK_PLACEHOLDER, ForkContext,
@@ -43,10 +48,12 @@ pub use frontmatter::{
     parse_memory_value,
 };
 pub use handoff::{
-    HandoffClassification, build_transcript_summary as build_handoff_transcript_summary,
+    HANDOFF_REVIEW_USER_PROMPT, HandoffClassification, UNAVAILABLE_WARNING,
+    build_transcript_summary as build_handoff_transcript_summary, handoff_classifier_active,
     is_read_only_agent, parse_classifier_response, render_block_message, should_classify,
     stage1_prompts as handoff_stage1_prompts, stage2_prompts as handoff_stage2_prompts,
 };
+pub use json::{parse_agent_json, parse_agents_json};
 pub use prompt::{AgentToolPromptRenderer, PromptOptions, format_tools_description};
 pub use snapshot::AgentCatalogSnapshot;
 pub use snapshot::filter_agents_by_mcp_requirements;

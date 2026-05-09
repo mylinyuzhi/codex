@@ -45,6 +45,17 @@ struct SessionState {
     initialized: bool,
     last_extraction_tokens: i64,
     last_extraction_tool_calls: i32,
+    /// Last message UUID folded into a successful extraction. Cumulative
+    /// tool-call counts are computed since this cursor — TS parity with
+    /// `lastMemoryMessageUuid` in `services/SessionMemory/sessionMemory.ts`.
+    last_extraction_message_uuid: Option<String>,
+    /// Last message UUID up to which the SM file is **safely** caught
+    /// up — only advances when the previous assistant turn had no
+    /// tool calls, matching TS `updateLastSummarizedMessageIdIfSafe`
+    /// (`sessionMemory.ts:488-494`). Used by compact/summary readers
+    /// that need to know "where SM has covered to" without risking
+    /// orphaned tool_results in a downstream summary.
+    last_summarized_message_uuid: Option<String>,
     in_progress: bool,
     extraction_started_at: Option<Instant>,
 }
@@ -125,17 +136,31 @@ impl SessionMemoryService {
     }
 
     /// Decide whether to fire a session-memory update.
+    ///
+    /// `tool_calls_since_last_extraction` mirrors TS
+    /// `countToolCallsSince(messages, lastMemoryMessageUuid)` —
+    /// **cumulative** across all turns since the last successful
+    /// extraction (or session start), not just the last assistant
+    /// turn. The engine computes this by walking from
+    /// [`Self::last_extraction_message_id`].
+    /// `had_tool_calls_in_last_turn` is the natural-break signal —
+    /// TS `hasToolCallsInLastAssistantTurn(messages)`. When the last
+    /// assistant turn used no tools, extraction can fire even when
+    /// the cumulative tool-call gate hasn't met threshold. `last_message_id`
+    /// is advanced into the cursor on a successful gate pass so the
+    /// next call's cumulative count starts from the right boundary.
     pub async fn maybe_extract(
         &self,
         current_tokens: i64,
-        tool_calls_in_last_turn: i32,
-        had_tool_calls_last_turn: bool,
+        tool_calls_since_last_extraction: i32,
+        had_tool_calls_in_last_turn: bool,
+        last_message_id: Option<String>,
     ) -> SessionMemoryOutcome {
         if !self.config.session_memory_enabled {
             return SessionMemoryOutcome::Skipped(SkipReason::Disabled);
         }
         {
-            let state = self.state.lock().await;
+            let mut state = self.state.lock().await;
             if state.in_progress {
                 return SessionMemoryOutcome::Skipped(SkipReason::InProgress);
             }
@@ -149,25 +174,127 @@ impl SessionMemoryService {
                     return SessionMemoryOutcome::Skipped(SkipReason::BelowUpdateThreshold);
                 }
                 let tool_call_gate =
-                    tool_calls_in_last_turn >= self.config.session_memory_tool_calls;
-                let natural_break = !had_tool_calls_last_turn;
+                    tool_calls_since_last_extraction >= self.config.session_memory_tool_calls;
+                let natural_break = !had_tool_calls_in_last_turn;
                 if !tool_call_gate && !natural_break {
                     return SessionMemoryOutcome::Skipped(SkipReason::NeitherToolCallsNorBreak);
                 }
             }
+            // Gate passed — advance the cursor BEFORE dispatching so a
+            // concurrent call (caught by `in_progress` above) sees the
+            // updated boundary if it lands during the run. TS sets
+            // `lastMemoryMessageUuid` inside `shouldExtractMemory`
+            // (`sessionMemory.ts:174-176`) right when the boolean
+            // returns true, with the same forward-looking semantics.
+            if let Some(id) = &last_message_id {
+                state.last_extraction_message_uuid = Some(id.clone());
+            }
         }
         tracing::info!(
             current_tokens,
-            tool_calls_in_last_turn,
-            had_tool_calls_last_turn,
+            tool_calls_since_last_extraction,
+            had_tool_calls_in_last_turn,
             "session-memory extract dispatch"
         );
-        self.run(current_tokens, tool_calls_in_last_turn).await
+        self.run(
+            current_tokens,
+            tool_calls_since_last_extraction,
+            last_message_id,
+            had_tool_calls_in_last_turn,
+        )
+        .await
     }
 
     /// Force a fresh extraction regardless of gates — `/summary`.
-    pub async fn force(&self, current_tokens: i64) -> SessionMemoryOutcome {
-        self.run(current_tokens, 0).await
+    ///
+    /// `last_message_id` and `had_tool_calls_in_last_turn` mirror
+    /// TS `manuallyExtractSessionMemory` →
+    /// `updateLastSummarizedMessageIdIfSafe(messages)`
+    /// (`sessionMemory.ts:441-442` + `488-494`): the summarized
+    /// cursor only advances when the last assistant turn has no tool
+    /// calls, so a downstream compact summary can't orphan
+    /// tool_results. Callers that don't have those signals (legacy
+    /// callers / minimal embeddings) should pass `None` + `false` —
+    /// the cursor simply won't advance.
+    pub async fn force(
+        &self,
+        current_tokens: i64,
+        last_message_id: Option<String>,
+        had_tool_calls_in_last_turn: bool,
+    ) -> SessionMemoryOutcome {
+        // TS parity (`sessionMemory.ts:436`
+        // `tengu_session_memory_manual_extraction`) — the manual
+        // /summary path emits its own telemetry event so the auto vs
+        // manual cadence is measurable independently.
+        self.telemetry
+            .emit(MemoryEvent::SessionMemoryManualExtraction);
+        self.run(
+            current_tokens,
+            0,
+            last_message_id,
+            had_tool_calls_in_last_turn,
+        )
+        .await
+    }
+
+    /// Cursor uuid the engine should walk from when computing
+    /// cumulative tool-call counts for the next [`Self::maybe_extract`]
+    /// call. `None` until the first successful extraction.
+    pub async fn last_extraction_message_id(&self) -> Option<String> {
+        self.state.lock().await.last_extraction_message_uuid.clone()
+    }
+
+    /// Last "safely summarized" message UUID — TS parity with
+    /// `lastSummarizedMessageId` (`sessionMemoryUtils.ts:44-69`). Only
+    /// advances after a successful run when the prior assistant turn
+    /// had no tool calls, so compact / summary readers can use it as
+    /// an orphan-safe cursor. `None` until the first eligible
+    /// extraction completes.
+    pub async fn last_summarized_message_id(&self) -> Option<String> {
+        self.state.lock().await.last_summarized_message_uuid.clone()
+    }
+
+    /// Whether the SM file currently holds nothing but the seed
+    /// template — TS `isSessionMemoryEmpty` (`prompts.ts:220-224`).
+    /// Compact readers use this to fall back to LLM summarization
+    /// when SM hasn't yet been populated with real content.
+    /// Returns `true` when the file is missing (nothing to read).
+    pub async fn is_empty(&self) -> bool {
+        let template = self.load_template().await;
+        match tokio::fs::read_to_string(&self.file_path).await {
+            Ok(content) => content.trim() == template.trim(),
+            Err(_) => true,
+        }
+    }
+
+    /// Read the optional template override from
+    /// `<session_memory_dir>/config/template.md` — TS
+    /// `loadSessionMemoryTemplate` (`prompts.ts:86-104`). Falls back
+    /// to the static 9-section default on ENOENT or read error.
+    async fn load_template(&self) -> String {
+        if let Some(parent) = self.file_path.parent() {
+            let path = parent.join("config").join("template.md");
+            if let Ok(s) = tokio::fs::read_to_string(&path).await
+                && !s.trim().is_empty()
+            {
+                return s;
+            }
+        }
+        build_session_memory_template().to_string()
+    }
+
+    /// Read the optional update-prompt override from
+    /// `<session_memory_dir>/config/prompt.md` — TS
+    /// `loadSessionMemoryPrompt` (`prompts.ts:111-129`). When present
+    /// it replaces the default update prompt body; the
+    /// `{{currentNotes}}` and `{{notesPath}}` placeholders are
+    /// substituted by [`build_session_memory_update_prompt`].
+    /// `None` ⇒ use the static default.
+    async fn load_prompt_override(&self) -> Option<String> {
+        let parent = self.file_path.parent()?;
+        let path = parent.join("config").join("prompt.md");
+        let s = tokio::fs::read_to_string(&path).await.ok()?;
+        if s.trim().is_empty() { None } else { Some(s) }
     }
 
     /// Wait up to `timeout` (default 15s) for an in-flight extraction
@@ -200,6 +327,12 @@ impl SessionMemoryService {
     /// doesn't exist yet (no extraction has fired).
     pub async fn current_content(&self) -> Option<String> {
         let raw = tokio::fs::read_to_string(&self.file_path).await.ok()?;
+        // TS parity (`sessionMemoryUtils.ts:117 logEvent
+        // tengu_session_memory_loaded`) — fires whenever a downstream
+        // consumer (compact, /summary surface) loads SM content.
+        self.telemetry.emit(MemoryEvent::SessionMemoryLoaded {
+            content_length: raw.len() as i64,
+        });
         Some(truncate_session_memory_for_compact(
             &raw,
             self.config.session_memory_per_section_tokens,
@@ -226,7 +359,13 @@ impl SessionMemoryService {
         *state = SessionState::default();
     }
 
-    async fn run(&self, current_tokens: i64, tool_calls_in_last_turn: i32) -> SessionMemoryOutcome {
+    async fn run(
+        &self,
+        current_tokens: i64,
+        tool_calls_since_last_extraction: i32,
+        last_message_id: Option<String>,
+        had_tool_calls_in_last_turn: bool,
+    ) -> SessionMemoryOutcome {
         let start = Instant::now();
         {
             let mut state = self.state.lock().await;
@@ -256,11 +395,14 @@ impl SessionMemoryService {
         }
 
         // Seed the file with the 9-section template if missing.
+        // The template can be overridden via
+        // `<session_memory_dir>/config/template.md` (TS parity:
+        // `loadSessionMemoryTemplate`).
+        let template = self.load_template().await;
         let current = match tokio::fs::read_to_string(&self.file_path).await {
             Ok(s) => s,
             Err(_) => {
-                let template = build_session_memory_template();
-                if let Err(e) = tokio::fs::write(&self.file_path, template).await {
+                if let Err(e) = tokio::fs::write(&self.file_path, &template).await {
                     self.unmark_in_progress().await;
                     return SessionMemoryOutcome::Failed {
                         reason: format!("write session-memory seed: {e}"),
@@ -275,11 +417,24 @@ impl SessionMemoryService {
                     )
                     .await;
                 }
-                template.to_string()
+                template.clone()
             }
         };
 
-        let prompt = build_session_memory_update_prompt(&current, &self.file_path);
+        // Optional user-provided prompt template override.
+        let prompt_override = self.load_prompt_override().await;
+        let prompt = build_session_memory_update_prompt(
+            &current,
+            &self.file_path,
+            prompt_override.as_deref(),
+            self.config.session_memory_per_section_tokens,
+            self.config.session_memory_total_tokens,
+        );
+        // TS parity (`sessionMemory.ts:228 logEvent
+        // tengu_session_memory_file_read`).
+        self.telemetry.emit(MemoryEvent::SessionMemoryFileRead {
+            content_length: current.len() as i64,
+        });
         let request = AgentSpawnRequest {
             prompt,
             description: Some("session memory update".into()),
@@ -293,6 +448,13 @@ impl SessionMemoryService {
                     .map(|p| vec![p.to_path_buf()])
                     .unwrap_or_default(),
             }),
+            // TS `runForkedAgent({skipTranscript: false})` is the
+            // default in TS sessionMemory — but Rust's choice is to
+            // suppress per-message transcript writes for SM too,
+            // since the user-facing transcript shouldn't surface the
+            // SM file's read/edit machinery. Matches our consistent
+            // policy across all three memory subagents.
+            skip_transcript: true,
             ..Default::default()
         };
 
@@ -300,7 +462,7 @@ impl SessionMemoryService {
             target: "coco_memory::session",
             session_id = %self.session_id,
             current_tokens,
-            tool_calls_in_last_turn,
+            tool_calls_since_last_extraction,
             "spawning session-memory update subagent"
         );
 
@@ -319,12 +481,23 @@ impl SessionMemoryService {
                 self.telemetry.emit(MemoryEvent::SessionMemoryExtracted {
                     input_tokens: resp.input_tokens,
                     output_tokens: resp.output_tokens,
+                    cache_read_tokens: resp.cache_read_tokens,
+                    cache_creation_tokens: resp.cache_creation_tokens,
                     duration_ms,
                 });
                 let mut state = self.state.lock().await;
                 state.initialized = true;
                 state.last_extraction_tokens = current_tokens;
-                state.last_extraction_tool_calls = tool_calls_in_last_turn;
+                state.last_extraction_tool_calls = tool_calls_since_last_extraction;
+                // TS parity (`sessionMemory.ts:488-494`
+                // updateLastSummarizedMessageIdIfSafe): advance the
+                // "safely summarized" cursor only when the prior
+                // assistant turn had no tool calls. This prevents a
+                // downstream compact summary from orphaning a
+                // tool_result whose tool_use isn't in the SM body.
+                if !had_tool_calls_in_last_turn && let Some(id) = last_message_id {
+                    state.last_summarized_message_uuid = Some(id);
+                }
                 SessionMemoryOutcome::Completed { duration_ms }
             }
             Err(e) => {

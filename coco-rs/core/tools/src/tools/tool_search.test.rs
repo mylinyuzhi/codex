@@ -75,3 +75,81 @@ fn test_parse_select_query_preserves_tool_name_case() {
         Some(vec!["MyCustomTool".into()])
     );
 }
+
+// ── render_for_model — TS parity for ToolSearch envelopes ─────────────
+
+mod render_tests {
+    use super::super::ToolSearchTool;
+    use coco_tool_runtime::Tool;
+    use coco_tool_runtime::ToolResultContentPart;
+    use serde_json::json;
+
+    #[test]
+    fn matches_emits_text_list() {
+        let data = json!({
+            "matches": ["Read", "Grep"],
+            "query": "file",
+            "total_deferred_tools": 12,
+        });
+        let parts = ToolSearchTool.render_for_model(&data);
+        let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected Text part");
+        };
+        assert!(text.starts_with("Matched tools:"), "got: {text}");
+        assert!(text.contains("Read"), "got: {text}");
+        assert!(text.contains("Grep"), "got: {text}");
+    }
+
+    #[test]
+    fn empty_matches_without_pending_uses_bare_message() {
+        // TS `ToolSearchTool.ts:449`: `'No matching deferred tools found'`
+        // (no trailing period).
+        let data = json!({
+            "matches": [],
+            "query": "missing",
+            "total_deferred_tools": 0,
+        });
+        let parts = ToolSearchTool.render_for_model(&data);
+        let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected Text part");
+        };
+        assert_eq!(text, "No matching deferred tools found");
+    }
+
+    #[test]
+    fn empty_matches_with_pending_appends_retry_hint() {
+        // TS `ToolSearchTool.ts:454` appends a `. Some MCP servers ...`
+        // suffix when servers are still in handshake. The list is
+        // joined with `, ` and the suffix ends with a period.
+        let data = json!({
+            "matches": [],
+            "query": "missing",
+            "total_deferred_tools": 0,
+            "pending_mcp_servers": ["server-a", "server-b"],
+        });
+        let parts = ToolSearchTool.render_for_model(&data);
+        let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected Text part");
+        };
+        assert!(
+            text.starts_with("No matching deferred tools found. Some MCP servers are still connecting: server-a, server-b."),
+            "got: {text}"
+        );
+        assert!(text.ends_with("try searching again."), "got: {text}");
+    }
+
+    #[test]
+    fn empty_matches_with_empty_pending_array_omits_suffix() {
+        let data = json!({
+            "matches": [],
+            "query": "missing",
+            "total_deferred_tools": 0,
+            "pending_mcp_servers": [],
+        });
+        let parts = ToolSearchTool.render_for_model(&data);
+        let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected Text part");
+        };
+        assert_eq!(text, "No matching deferred tools found");
+    }
+}

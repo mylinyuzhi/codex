@@ -2,6 +2,7 @@ use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
+use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_tool_runtime::ValidationResult;
 use coco_types::ToolId;
@@ -115,6 +116,29 @@ impl Tool for EditTool {
             return ValidationResult::invalid("old_string and new_string must be different");
         }
         ValidationResult::Valid
+    }
+
+    /// Branch on `replaceAll` to emit the TS-shaped confirmation. TS
+    /// parity: `FileEditTool.ts:575-595::mapToolResultToToolResultBlockParam`.
+    /// `userModified` is always false in coco-rs (no TUI accept-with-edits
+    /// overlay) — the corresponding modifiedNote branch never fires.
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        let file_path = data.get("filePath").and_then(Value::as_str).unwrap_or("");
+        let replace_all = data
+            .get("replaceAll")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let text = if replace_all {
+            format!(
+                "The file {file_path} has been updated. All occurrences were successfully replaced."
+            )
+        } else {
+            format!("The file {file_path} has been updated successfully.")
+        };
+        vec![ToolResultContentPart::Text {
+            text,
+            provider_options: None,
+        }]
     }
 
     async fn execute(
@@ -330,14 +354,6 @@ impl Tool for EditTool {
             source: None,
         })?;
 
-        let replacements = if replace_all {
-            format!("{count} replacement(s)")
-        } else {
-            "1 replacement".to_string()
-        };
-        let result_msg =
-            format!("The file {file_path} has been updated successfully. ({replacements})");
-
         crate::record_file_edit(ctx, path, new_content).await;
         // TS `FileEditTool.ts` mirrors `FileReadTool.ts:578-591` skill
         // auto-discovery — when an edit touches a path under a nested
@@ -345,8 +361,17 @@ impl Tool for EditTool {
         // on the next batch boundary.
         crate::track_skill_discovery(ctx, path).await;
 
+        // TS `FileEditTool.ts:567-568` returns `{filePath, replaceAll, userModified}`
+        // and render_for_model branches on those flags. coco-rs doesn't
+        // currently track `userModified` (that's a TUI overlay state for
+        // a feature we don't have); always emit it as false.
         Ok(ToolResult {
-            data: serde_json::json!(result_msg),
+            data: serde_json::json!({
+                "filePath": file_path,
+                "replaceAll": replace_all,
+                "userModified": false,
+                "replacementCount": count,
+            }),
             new_messages: vec![],
             app_state_patch: None,
         })

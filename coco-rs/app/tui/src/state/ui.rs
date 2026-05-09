@@ -10,6 +10,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::constants;
+use crate::keybinding_resolver::KeybindingHandle;
 use crate::state::overlay::Overlay;
 use crate::theme::Theme;
 use crate::widgets::suggestion_popup::SuggestionItem;
@@ -64,6 +65,45 @@ pub struct UiState {
     /// and renders a popup above the input. Recomputed after every input
     /// mutation in `autocomplete::refresh_suggestions`.
     pub active_suggestions: Option<ActiveSuggestions>,
+    /// Keybinding resolver + warnings + display platform. Cheap to clone
+    /// (`Arc` internally). Defaults to a from-defaults handle; the
+    /// CLI bootstrap (`tui_runner`) replaces it with a watcher-backed
+    /// handle so `~/.coco/keybindings.json` customizations + hot reload
+    /// take effect.
+    ///
+    /// Lives in state (not a process-wide global) so each test gets
+    /// its own handle and `cargo test --lib` runs without
+    /// `serial_test` guards.
+    pub kb_handle: KeybindingHandle,
+    /// Whether teammate spinner lines show recent message preview.
+    /// TS `AppStateStore.ts::showTeammateMessagePreview` (default
+    /// false). Toggled via `app:toggleTeammatePreview` (Ctrl+Shift+O).
+    pub show_teammate_message_preview: bool,
+    /// Stashed input draft from `chat:stash` (Ctrl+S in defaults).
+    ///
+    /// Mirrors TS `PromptInput.tsx::handleStash` (single-slot push/pop
+    /// semantics). Three cases:
+    /// * empty input + stash present → pop stash into input
+    /// * non-empty input → push to stash (overwriting any prior),
+    ///   clear input
+    /// * empty input + empty stash → silent no-op
+    pub stashed_input: Option<StashedInput>,
+}
+
+/// One slot of stashed input. Mirrors TS `StashedPrompt` shape
+/// (`PromptInput.tsx:1359-1365`): text + cursor + paste-manager state.
+#[derive(Debug, Clone)]
+pub struct StashedInput {
+    /// Stashed text content.
+    pub text: String,
+    /// Cursor position (character index) at stash time. Restored
+    /// alongside `text` on pop.
+    pub cursor: i32,
+    /// Snapshot of paste-pill entries (TS `pastedContents`) at stash
+    /// time. Restored on pop so pill labels in the stashed `text`
+    /// (e.g. `[Pasted text #1]`) still resolve to the original
+    /// content. Empty `Vec` when the user hadn't pasted anything.
+    pub paste_entries: Vec<crate::paste::PasteEntry>,
 }
 
 impl UiState {
@@ -89,6 +129,9 @@ impl UiState {
             terminal_focused: true,
             clipboard_lease: None,
             active_suggestions: None,
+            kb_handle: KeybindingHandle::from_defaults(),
+            stashed_input: None,
+            show_teammate_message_preview: false,
         }
     }
 

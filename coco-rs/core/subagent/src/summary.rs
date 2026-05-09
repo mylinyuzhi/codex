@@ -36,24 +36,35 @@ pub fn should_summarize(agent_type: &str, total_tool_use_count: i64) -> bool {
 /// restate the previous summary — TS uses this for the periodic
 /// version; in coco-rs we only call once but keep the field for
 /// forward compatibility when the periodic mode lands.
+///
+/// **Byte-faithful with TS** `services/AgentSummary/agentSummary.ts::buildSummaryPrompt`
+/// — including the empty-line separation around `prev_line`. Use a
+/// concatenated raw-block layout instead of indented `\` continuations
+/// so leading-whitespace from rustfmt never sneaks into the prompt
+/// body (each continuation line in `format!("…\n\
+///      indented")` keeps the indent literal in the output, breaking
+/// cache parity with TS).
 pub fn build_summary_prompts(_agent_type: &str, previous: Option<&str>) -> (String, String) {
     let prev_line = match previous {
-        Some(p) if !p.is_empty() => format!("\nPrevious: \"{p}\" — say something NEW.\n"),
+        Some(p) if !p.is_empty() => {
+            format!("\nPrevious: \"{p}\" \u{2014} say something NEW.\n")
+        }
         _ => String::new(),
     };
 
     let user = format!(
         "Describe your most recent action in 3-5 words using present tense (-ing). \
-         Name the file or function, not the branch. Do not use tools.\n\
-         {prev_line}\
-         Good: \"Reading runAgent.ts\"\n\
-         Good: \"Fixing null check in validate.ts\"\n\
-         Good: \"Running auth module tests\"\n\
-         Good: \"Adding retry logic to fetchUser\"\n\n\
-         Bad (past tense): \"Analyzed the branch diff\"\n\
-         Bad (too vague): \"Investigating the issue\"\n\
-         Bad (too long): \"Reviewing full branch diff and AgentTool.tsx integration\"\n\
-         Bad (branch name): \"Analyzed adam/background-summary branch diff\"",
+Name the file or function, not the branch. Do not use tools.
+{prev_line}
+Good: \"Reading runAgent.ts\"
+Good: \"Fixing null check in validate.ts\"
+Good: \"Running auth module tests\"
+Good: \"Adding retry logic to fetchUser\"
+
+Bad (past tense): \"Analyzed the branch diff\"
+Bad (too vague): \"Investigating the issue\"
+Bad (too long): \"Reviewing full branch diff and AgentTool.tsx integration\"
+Bad (branch name): \"Analyzed adam/background-summary branch diff\""
     );
 
     (String::new(), user)

@@ -34,8 +34,24 @@ pub struct ScannedMemory {
 /// Sorted newest-first by mtime, capped at 200. Errors (unreadable
 /// directory, broken symlinks) are swallowed — return an empty vec.
 pub fn scan_memory_files(dir: &Path) -> Vec<ScannedMemory> {
+    scan_memory_files_with_cancel(dir, None)
+}
+
+/// Cancellable variant — bails early when `cancel` flips. TS parity:
+/// `memdir/memoryScan.ts::scanMemoryFiles(dir, signal)` accepts an
+/// `AbortSignal` so a long directory walk can be killed when the
+/// caller (recall ranker / extract subagent dispatch) is aborted.
+/// `None` means "no cancellation" — equivalent to passing a never-
+/// firing signal.
+pub fn scan_memory_files_with_cancel(
+    dir: &Path,
+    cancel: Option<&tokio_util::sync::CancellationToken>,
+) -> Vec<ScannedMemory> {
     let mut out = Vec::new();
     if !dir.is_dir() {
+        return out;
+    }
+    if cancel.is_some_and(tokio_util::sync::CancellationToken::is_cancelled) {
         return out;
     }
     let entries = match std::fs::read_dir(dir) {
@@ -43,6 +59,9 @@ pub fn scan_memory_files(dir: &Path) -> Vec<ScannedMemory> {
         Err(_) => return out,
     };
     for entry in entries.flatten() {
+        if cancel.is_some_and(tokio_util::sync::CancellationToken::is_cancelled) {
+            return Vec::new();
+        }
         let path = entry.path();
         let filename = match path.file_name().and_then(|s| s.to_str()) {
             Some(n) => n.to_string(),
@@ -81,28 +100,49 @@ pub fn scan_memory_files(dir: &Path) -> Vec<ScannedMemory> {
 
 /// Format scanned memories as a manifest line list for prompt injection.
 ///
-/// One line per file: `- [type] filename (age): description`. Mirrors TS
-/// `formatMemoryManifest`.
+/// TS parity: `memdir/memoryScan.ts::formatMemoryManifest`. One line
+/// per file: `- [type] filename (iso-timestamp): description`.
+///
+/// - The `[type] ` tag is rendered ONLY when frontmatter parsed (with
+///   trailing space). Files without frontmatter render as
+///   `- filename (iso): desc`.
+/// - The `: description` suffix is included only when frontmatter has
+///   a non-empty description.
+/// - Empty input → empty string (caller decides whether to render the
+///   "## Existing memory files" wrapper). This matches TS where an
+///   empty list yields `''` and the section is omitted entirely.
 pub fn format_memory_manifest(memories: &[ScannedMemory]) -> String {
-    let mut lines = Vec::with_capacity(memories.len() + 1);
-    lines.push("## Existing Memory Files".to_string());
     if memories.is_empty() {
-        lines.push("_(none)_".to_string());
-        return lines.join("\n");
+        return String::new();
     }
+    let mut lines = Vec::with_capacity(memories.len());
     for mem in memories {
-        let ty = mem
+        let tag = mem
             .frontmatter
             .as_ref()
-            .map_or("unknown", |fm| fm.memory_type.as_str());
+            .map(|fm| format!("[{}] ", fm.memory_type.as_str()))
+            .unwrap_or_default();
+        let ts = format_iso_timestamp(mem.mtime_ms);
         let desc = mem
             .frontmatter
             .as_ref()
-            .map_or("", |fm| fm.description.as_str());
-        let age = memory_age_string(mem.mtime_ms);
-        lines.push(format!("- [{ty}] {} ({age}): {desc}", mem.filename));
+            .map(|fm| fm.description.as_str())
+            .filter(|s| !s.is_empty());
+        let line = match desc {
+            Some(d) => format!("- {tag}{} ({ts}): {d}", mem.filename),
+            None => format!("- {tag}{} ({ts})", mem.filename),
+        };
+        lines.push(line);
     }
     lines.join("\n")
+}
+
+/// Render an mtime (ms since epoch) as an ISO-8601 UTC timestamp —
+/// matches TS `new Date(mtimeMs).toISOString()` (`memoryScan.ts:88`).
+fn format_iso_timestamp(mtime_ms: i64) -> String {
+    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(mtime_ms)
+        .map(|dt| dt.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
+        .unwrap_or_else(|| "1970-01-01T00:00:00.000Z".to_string())
 }
 
 /// Days since `mtime_ms`. 0 = today, 1 = yesterday, etc.

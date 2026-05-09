@@ -18,6 +18,7 @@ use coco_sandbox::SandboxState;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
+use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_tool_runtime::ValidationResult;
 use coco_types::ToolId;
@@ -144,6 +145,118 @@ impl Tool for PowerShellTool {
             ));
         }
         ValidationResult::Valid
+    }
+
+    /// Render the PowerShell envelope. TS parity:
+    /// `PowerShellTool.tsx:383-435 mapToolResultToToolResultBlockParam`.
+    ///
+    /// Branches mirror Bash's render so future fg→bg promotion / oversize
+    /// stdout persistence wiring requires only execute-side changes:
+    /// 1. **Status==background** (user-initiated `run_in_background:true`):
+    ///    emit prebuilt `message` field.
+    /// 2. **Foreground**: build `[processedStdout, errorMessage,
+    ///    backgroundInfo]` joined with `\n`, skipping empties.
+    ///    `processedStdout` strips leading blank lines + trims trailing
+    ///    whitespace; `persistedOutputPath` swaps it for a
+    ///    `<persisted-output>` envelope. `backgroundTaskId` triggers one
+    ///    of three messages (`assistantAutoBackgrounded` /
+    ///    `backgroundedByUser` / default).
+    ///
+    /// The `isImage` branch (TS:395-398) is intentionally unimplemented
+    /// because `execute_foreground` decodes UTF-16 stdout into a UTF-8
+    /// string before the data envelope is built — image bytes would be
+    /// mangled by that decode. Wire image detection into the execute path
+    /// (emit `structuredContent`) before adding the render branch.
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        if data
+            .get("status")
+            .and_then(Value::as_str)
+            .is_some_and(|s| s == "background")
+        {
+            let msg = data
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("PowerShell command running in background.");
+            return vec![ToolResultContentPart::Text {
+                text: msg.to_string(),
+                provider_options: None,
+            }];
+        }
+
+        let stdout = data.get("stdout").and_then(Value::as_str).unwrap_or("");
+        let stderr = data.get("stderr").and_then(Value::as_str).unwrap_or("");
+        let interrupted = data
+            .get("interrupted")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+
+        let mut processed = super::shell_render::strip_leading_blank_lines(stdout)
+            .trim_end()
+            .to_string();
+        if let Some(path) = data.get("persistedOutputPath").and_then(Value::as_str) {
+            let original_size = data
+                .get("persistedOutputSize")
+                .and_then(Value::as_u64)
+                .unwrap_or(0) as usize;
+            processed = super::shell_render::build_persisted_output_message(
+                path,
+                original_size,
+                &processed,
+            );
+        }
+
+        let mut error_message = stderr.trim().to_string();
+        if interrupted {
+            if !error_message.is_empty() {
+                error_message.push('\n');
+            }
+            error_message.push_str("<error>Command was aborted before completion</error>");
+        }
+
+        let background_info = data
+            .get("backgroundTaskId")
+            .and_then(Value::as_str)
+            .map(|task_id| {
+                let auto = data
+                    .get("assistantAutoBackgrounded")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let by_user = data
+                    .get("backgroundedByUser")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                if auto {
+                    let budget_seconds =
+                        super::bash_advanced::ASSISTANT_BLOCKING_BUDGET_MS / 1000;
+                    format!(
+                        "Command exceeded the assistant-mode blocking budget ({budget_seconds}s) and was moved to the background with ID: {task_id}. It is still running — you will be notified when it completes. Output is being written to the task output. In assistant mode, delegate long-running work to a subagent or use run_in_background to keep this conversation responsive."
+                    )
+                } else if by_user {
+                    format!(
+                        "Command was manually backgrounded by user with ID: {task_id}. Output is being written to the task output."
+                    )
+                } else {
+                    format!(
+                        "Command running in background with ID: {task_id}. Output is being written to the task output."
+                    )
+                }
+            })
+            .unwrap_or_default();
+
+        let combined = [
+            processed.as_str(),
+            error_message.as_str(),
+            background_info.as_str(),
+        ]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<&str>>()
+        .join("\n");
+
+        vec![ToolResultContentPart::Text {
+            text: combined,
+            provider_options: None,
+        }]
     }
 
     async fn execute(

@@ -14,6 +14,7 @@ mod question;
 mod rewind;
 mod search;
 mod settings;
+mod transcript;
 
 use ratatui::prelude::*;
 use ratatui::widgets::Block;
@@ -60,7 +61,7 @@ pub(crate) fn render_overlay(
 fn overlay_content(overlay: &Overlay, state: &AppState, theme: &Theme) -> (String, String, Color) {
     match overlay {
         Overlay::Permission(p) => permission::permission_content(p, theme),
-        Overlay::Help => help::help_content(theme),
+        Overlay::Help => help::help_content(state, theme),
         Overlay::Error(msg) => (
             t!("dialog.title_error").to_string(),
             msg.clone(),
@@ -98,5 +99,6 @@ fn overlay_content(overlay: &Overlay, state: &AppState, theme: &Theme) -> (Strin
         Overlay::Settings(s) => settings::settings_overlay_content(s, theme),
         Overlay::PlanApproval(p) => confirm::plan_approval_content(p, theme),
         Overlay::MemoryDialog(m) => pickers::memory_dialog_content(m, theme),
+        Overlay::Transcript(t) => transcript::transcript_overlay_content(state, t, theme),
     }
 }

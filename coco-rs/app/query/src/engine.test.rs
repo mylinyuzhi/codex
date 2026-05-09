@@ -1221,8 +1221,8 @@ impl coco_tool_runtime::Tool for PermissionRewriteTool {
         &self,
         _input: &serde_json::Value,
         _ctx: &coco_tool_runtime::ToolUseContext,
-    ) -> coco_types::PermissionDecision {
-        coco_types::PermissionDecision::Allow {
+    ) -> coco_types::ToolCheckResult {
+        coco_types::ToolCheckResult::Allow {
             updated_input: Some(serde_json::json!({"value": "rewritten"})),
             feedback: None,
         }
@@ -2363,10 +2363,9 @@ impl coco_tool_runtime::Tool for AskingTool {
         &self,
         _input: &serde_json::Value,
         _ctx: &coco_tool_runtime::ToolUseContext,
-    ) -> coco_types::PermissionDecision {
-        coco_types::PermissionDecision::Ask {
+    ) -> coco_types::ToolCheckResult {
+        coco_types::ToolCheckResult::Ask {
             message: "please approve".into(),
-            suggestions: vec![],
         }
     }
     async fn execute(
@@ -2579,7 +2578,6 @@ use coco_tool_runtime::ToolPermissionBridge;
 use coco_tool_runtime::ToolPermissionDecision;
 use coco_tool_runtime::ToolPermissionRequest;
 use coco_tool_runtime::ToolPermissionResolution;
-use coco_types::PermissionDecision;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
 use serde_json::Value;
@@ -2611,10 +2609,9 @@ impl Tool for AskingMockTool {
         &self,
         _input: &Value,
         _ctx: &coco_tool_runtime::ToolUseContext,
-    ) -> PermissionDecision {
-        PermissionDecision::Ask {
+    ) -> coco_types::ToolCheckResult {
+        coco_types::ToolCheckResult::Ask {
             message: "Mock needs permission".into(),
-            suggestions: Vec::new(),
         }
     }
     async fn execute(
@@ -2656,6 +2653,7 @@ impl ToolPermissionBridge for RecordingBridge {
         Ok(ToolPermissionResolution {
             decision: self.decision,
             feedback: Some("recorded".into()),
+            applied_updates: Vec::new(),
         })
     }
 }
@@ -3004,6 +3002,7 @@ impl ToolPermissionBridge for BlockingBridge {
         Ok(ToolPermissionResolution {
             decision: ToolPermissionDecision::Approved,
             feedback: None,
+            applied_updates: Vec::new(),
         })
     }
 }

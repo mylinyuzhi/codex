@@ -28,6 +28,7 @@ use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
+use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
@@ -98,6 +99,41 @@ impl Tool for ToolSearchTool {
     }
     fn is_concurrency_safe(&self, _: &Value) -> bool {
         true
+    }
+
+    /// Render the search envelope as a list of matched tool names. TS
+    /// `ToolSearchTool.ts:444-470` returns `tool_reference` content
+    /// blocks that Anthropic expands inline — coco-rs doesn't have
+    /// that primitive, so we emit a text list. The empty-match branch
+    /// matches TS exactly (`No matching deferred tools found` + the
+    /// pending-MCP-server suffix when servers are still connecting).
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        let matches: Vec<&str> = data
+            .get("matches")
+            .and_then(Value::as_array)
+            .map(|arr| arr.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        let text = if matches.is_empty() {
+            let mut out = "No matching deferred tools found".to_string();
+            if let Some(pending) = data.get("pending_mcp_servers").and_then(Value::as_array) {
+                let names: Vec<&str> = pending.iter().filter_map(Value::as_str).collect();
+                if !names.is_empty() {
+                    use std::fmt::Write;
+                    let _ = write!(
+                        out,
+                        ". Some MCP servers are still connecting: {}. Their tools will become available shortly — try searching again.",
+                        names.join(", ")
+                    );
+                }
+            }
+            out
+        } else {
+            format!("Matched tools:\n{}", matches.join("\n"))
+        };
+        vec![ToolResultContentPart::Text {
+            text,
+            provider_options: None,
+        }]
     }
 
     async fn execute(
@@ -232,12 +268,23 @@ impl Tool for ToolSearchTool {
             }
         }
 
+        // TS `ToolSearchTool.ts:422-433` only adds `pending_mcp_servers`
+        // in the keyword-mode empty-matches branch. Match that exactly
+        // so the model gets the retry hint when MCP servers are still
+        // mid-handshake but stays quiet otherwise.
+        let mut envelope = serde_json::json!({
+            "matches": matches,
+            "query": raw_query,
+            "total_deferred_tools": total_deferred_tools,
+        });
+        if matches.is_empty() {
+            let pending = ctx.mcp.pending_server_names().await;
+            if !pending.is_empty() {
+                envelope["pending_mcp_servers"] = serde_json::json!(pending);
+            }
+        }
         Ok(ToolResult {
-            data: serde_json::json!({
-                "matches": matches,
-                "query": raw_query,
-                "total_deferred_tools": total_deferred_tools,
-            }),
+            data: envelope,
             new_messages: vec![],
             app_state_patch: None,
         })

@@ -374,3 +374,31 @@ async fn test_glob_respects_cwd_override() {
     assert!(t.contains("real.rs"), "should find override file: {t}");
     assert!(!t.contains("decoy.rs"), "must not leak to outer: {t}");
 }
+
+// ---------------------------------------------------------------------------
+// render_for_model — emit bare string instead of JSON-stringified wrapper
+// ---------------------------------------------------------------------------
+
+#[test]
+fn render_for_model_unwraps_data_string_into_text_part() {
+    use coco_tool_runtime::ToolResultContentPart;
+    let data = json!("Found 2 files\n/abs/a.rs\n/abs/b.rs");
+    let parts = GlobTool.render_for_model(&data);
+    assert_eq!(parts.len(), 1);
+    let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+        panic!("expected Text part");
+    };
+    // Bare string — no escaped \n, no surrounding quotes.
+    assert_eq!(text, "Found 2 files\n/abs/a.rs\n/abs/b.rs");
+}
+
+#[test]
+fn render_for_model_no_files_branch() {
+    use coco_tool_runtime::ToolResultContentPart;
+    let data = json!("No files found");
+    let parts = GlobTool.render_for_model(&data);
+    let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+        panic!("expected Text part");
+    };
+    assert_eq!(text, "No files found");
+}

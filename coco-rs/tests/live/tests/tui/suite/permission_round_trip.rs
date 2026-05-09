@@ -6,14 +6,18 @@
 //!
 //! ## Forcing the Ask
 //!
-//! Builtin tools (Bash/Read/Write/...) all return `Allow` from
-//! `Tool::check_permissions` for ordinary inputs, and the engine has
-//! no rule-evaluator wired into the standard tool path (the
-//! `PermissionEvaluator` is reserved for SDK / classifier flows we
-//! don't exercise here). So the load-bearing trigger we use is a
-//! **PreToolUse hook** that emits `{"permission_decision": "ask"}` —
+//! Builtin tools (Bash/Read/Write/...) return `ToolCheckResult::Passthrough`
+//! from `Tool::check_permissions` for ordinary inputs, and the central
+//! evaluator (`coco_permissions::PermissionEvaluator`) — wired into
+//! `tool_call_preparer::resolve_permission_decision` — also resolves
+//! to `Allow` when no rule matches and the mode is Default. To force
+//! an `Ask` without seeding session rules, this test uses a
+//! **PreToolUse hook** that emits `{"permission_decision": "ask"}`;
 //! `tool_call_preparer.rs:247` translates that into
-//! `PermissionDecision::Ask` directly, no rule plumbing required.
+//! `PermissionDecision::Ask` ahead of the evaluator, so the rule
+//! plumbing is exercised independently elsewhere
+//! (`core/permissions/src/evaluate.test.rs` covers rule pipeline
+//! semantics).
 //!
 //! ## Round-trip
 //!

@@ -55,9 +55,13 @@ pub async fn run_tools(
             .unwrap_or_else(|_| ToolId::Custom(tool_name.clone()));
 
         if let Some(tool) = tools.get(&tool_id) {
+            // Tool-level opinion only. Production permission flow goes
+            // through `app/query::tool_call_preparer::resolve_permission_decision`
+            // which composes this opinion with the rule pipeline; this
+            // batch path consumes the opinion directly.
             let decision = tool.check_permissions(input, ctx).await;
             match decision {
-                coco_types::PermissionDecision::Deny { .. } => {
+                coco_types::ToolCheckResult::Deny { .. } => {
                     tracing::info!(
                         tool_use_id = %tool_use_id,
                         tool_name = %tool_name,
@@ -67,8 +71,9 @@ pub async fn run_tools(
                     denied_tools.push(tool_name.clone());
                     continue;
                 }
-                coco_types::PermissionDecision::Ask { .. }
-                | coco_types::PermissionDecision::Allow { .. } => {}
+                coco_types::ToolCheckResult::Ask { .. }
+                | coco_types::ToolCheckResult::Allow { .. }
+                | coco_types::ToolCheckResult::Passthrough => {}
             }
 
             pending.push(PendingToolCall {

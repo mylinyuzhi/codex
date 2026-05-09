@@ -12,7 +12,6 @@
 //! 7. Result processing + error classification
 
 use coco_messages::ToolResult;
-use coco_types::PermissionDecision;
 use coco_types::ToolId;
 use coco_types::ToolName;
 use serde_json::Value;
@@ -161,10 +160,19 @@ pub async fn execute_tool_call(
     // key starts with `_` is treated as internal and stripped here.
     let input = strip_internal_bash_fields(tool_name, input);
 
-    // Step 4: Check permissions
+    // Step 4: Check permissions (tool-level opinion only).
+    //
+    // Production permission decisions go through
+    // `app/query::tool_call_preparer::resolve_permission_decision`,
+    // which combines this tool opinion with rule + mode-fallthrough
+    // evaluation via `coco_permissions::PermissionEvaluator`. This
+    // path is used by direct callers (tests + the legacy batch
+    // entrypoint) that have already cleared the rule pipeline; it
+    // honors the tool's own `Deny` / `Ask` opinions but treats
+    // `Passthrough` and `Allow` as proceed-to-execute.
     let decision = tool.check_permissions(&input, ctx).await;
     match decision {
-        PermissionDecision::Deny { message, .. } => {
+        coco_types::ToolCheckResult::Deny { message } => {
             tracing::info!(
                 tool_use_id = %tool_use_id,
                 tool_name = %tool_name,
@@ -181,7 +189,7 @@ pub async fn execute_tool_call(
                 error_class: Some("permission_denied".to_string()),
             };
         }
-        PermissionDecision::Ask { .. } => {
+        coco_types::ToolCheckResult::Ask { .. } => {
             // In auto mode, treat as allow (TUI handles interactive prompts)
             tracing::debug!(
                 tool_use_id = %tool_use_id,
@@ -190,12 +198,12 @@ pub async fn execute_tool_call(
                 "tool requires permission ask (auto-mode allow)"
             );
         }
-        PermissionDecision::Allow { .. } => {
+        coco_types::ToolCheckResult::Allow { .. } | coco_types::ToolCheckResult::Passthrough => {
             tracing::debug!(
                 tool_use_id = %tool_use_id,
                 tool_name = %tool_name,
-                permission_decision = "allow",
-                "tool allowed by permission check"
+                permission_decision = "allow_or_passthrough",
+                "tool allowed (or no opinion) by check"
             );
         }
     }

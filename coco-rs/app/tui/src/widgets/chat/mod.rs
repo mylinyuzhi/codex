@@ -40,6 +40,11 @@ pub struct ChatWidget<'a> {
     collapsed_tools: Option<&'a HashSet<String>>,
     theme: &'a Theme,
     width: u16,
+    /// Keybinding handle for rendering live shortcuts (e.g. the
+    /// `…(<chord> to see full summary)` hint). `None` falls back to
+    /// the default literal — used in tests that build a ChatWidget
+    /// without an `AppState`.
+    pub(crate) kb_handle: Option<&'a crate::keybinding_resolver::KeybindingHandle>,
 }
 
 impl<'a> ChatWidget<'a> {
@@ -55,7 +60,13 @@ impl<'a> ChatWidget<'a> {
             collapsed_tools: None,
             theme,
             width: 80,
+            kb_handle: None,
         }
+    }
+
+    pub fn kb_handle(mut self, handle: &'a crate::keybinding_resolver::KeybindingHandle) -> Self {
+        self.kb_handle = Some(handle);
+        self
     }
 
     pub fn scroll(mut self, offset: i32) -> Self {
@@ -89,6 +100,27 @@ impl<'a> ChatWidget<'a> {
     pub fn width(mut self, w: u16) -> Self {
         self.width = w;
         self
+    }
+
+    /// Build lines that own their text — needed by the transcript
+    /// overlay which can't borrow from the widget across the
+    /// `(title, body, color)` return tuple. Cloned `Line`s are cheap
+    /// here because the transcript only renders on Esc / Ctrl+O, not
+    /// every frame.
+    pub fn build_lines_owned(&self) -> Vec<Line<'static>> {
+        self.build_lines()
+            .into_iter()
+            .map(|line| {
+                let spans: Vec<Span<'static>> = line
+                    .spans
+                    .into_iter()
+                    .map(|s| Span::styled(s.content.into_owned(), s.style))
+                    .collect();
+                Line::from(spans)
+                    .style(line.style)
+                    .alignment(line.alignment.unwrap_or_default())
+            })
+            .collect()
     }
 
     fn build_lines(&self) -> Vec<Line<'a>> {

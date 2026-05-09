@@ -23,21 +23,11 @@ use serde_json::Value;
 use crate::filesystem;
 use crate::shell_rules;
 
-/// Result of a tool-level permission check callback.
-///
-/// TS: tool.checkPermissions() returns behavior + optional suggestions.
-/// `Passthrough` means the tool has no opinion — continue pipeline.
-#[derive(Debug, Clone)]
-pub enum ToolCheckResult {
-    /// Tool has no opinion — continue with rule-based checks.
-    Passthrough,
-    /// Tool explicitly allows this input.
-    Allow,
-    /// Tool requires user confirmation for this input.
-    Ask { message: String },
-    /// Tool denies this input.
-    Deny { message: String },
-}
+// `ToolCheckResult` lives in `coco-types::permission` so the
+// `coco_tool_runtime::Tool::check_permissions` trait method can
+// reference it without `coco-tool-runtime` depending on
+// `coco-permissions`. Re-exported below for legacy import sites.
+pub use coco_types::ToolCheckResult;
 
 /// Callback for tool-level permission checks.
 ///
@@ -117,10 +107,13 @@ impl PermissionEvaluator {
                         reason: PermissionDecisionReason::Mode { mode: context.mode },
                     };
                 }
-                ToolCheckResult::Allow => {
+                ToolCheckResult::Allow {
+                    updated_input,
+                    feedback,
+                } => {
                     return PermissionDecision::Allow {
-                        updated_input: None,
-                        feedback: None,
+                        updated_input,
+                        feedback,
                     };
                 }
                 ToolCheckResult::Ask { message } => {

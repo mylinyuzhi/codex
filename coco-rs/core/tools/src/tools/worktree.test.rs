@@ -4,6 +4,7 @@
 //! add`/`remove` against a real repo, which is out of scope for unit
 //! tests — integration coverage lives separately.
 
+use super::EnterWorktreeTool;
 use super::ExitWorktreeTool;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolUseContext;
@@ -86,4 +87,40 @@ fn test_exit_worktree_schema_advertises_previous_cwd() {
         schema.properties.contains_key("force"),
         "schema must expose force parameter"
     );
+}
+
+// ---------------------------------------------------------------------------
+// render_for_model — both worktree tools surface the prebuilt `message` field
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enter_worktree_render_emits_message_text_only() {
+    use coco_tool_runtime::ToolResultContentPart;
+    use serde_json::json;
+    let data = json!({
+        "message": "Created worktree at '/tmp/wt' on branch 'feat/x'",
+        "path": "/tmp/wt",
+        "branch": "feat/x",
+    });
+    let parts = EnterWorktreeTool.render_for_model(&data);
+    let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+        panic!("expected Text part");
+    };
+    assert_eq!(text, "Created worktree at '/tmp/wt' on branch 'feat/x'");
+}
+
+#[test]
+fn exit_worktree_render_emits_message_text_only() {
+    use coco_tool_runtime::ToolResultContentPart;
+    use serde_json::json;
+    let data = json!({
+        "message": "Removed worktree at '/tmp/wt'",
+        "path": "/tmp/wt",
+        "restoration": {"cwd_restored": true},
+    });
+    let parts = ExitWorktreeTool.render_for_model(&data);
+    let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+        panic!("expected Text part");
+    };
+    assert_eq!(text, "Removed worktree at '/tmp/wt'");
 }

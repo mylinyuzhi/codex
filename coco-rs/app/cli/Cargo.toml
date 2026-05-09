@@ -35,12 +35,14 @@ coco-mcp.workspace = true
 coco-permissions.workspace = true
 coco-plugins.workspace = true
 coco-skills.workspace = true
+coco-output-styles.workspace = true
 coco-coordinator.workspace = true
 coco-tasks.workspace = true
 coco-state.workspace = true
 coco-git.workspace = true
 coco-subagent.workspace = true
 coco-tui.workspace = true
+coco-keybindings = { workspace = true, features = ["loader"] }
 coco-otel.workspace = true
 coco-file-watch.workspace = true
 uuid = { workspace = true, features = ["v4"] }

@@ -182,7 +182,7 @@ async fn output_style_round_trip() {
 }
 
 #[tokio::test]
-async fn available_output_styles_includes_builtins_when_dirs_empty() {
+async fn available_output_styles_defaults_to_builtins() {
     let boot = CliInitializeBootstrap::new("default".into());
     let styles = boot.available_output_styles().await;
     for builtin in BUILTIN_OUTPUT_STYLES {
@@ -194,21 +194,29 @@ async fn available_output_styles_includes_builtins_when_dirs_empty() {
 }
 
 #[tokio::test]
-async fn available_output_styles_merges_custom_markdown_files() {
-    let tempdir = tempfile::tempdir().unwrap();
-    std::fs::write(tempdir.path().join("custom-style.md"), "# Custom").unwrap();
-    std::fs::write(tempdir.path().join("another.md"), "# Another").unwrap();
-    // Non-markdown files are ignored.
-    std::fs::write(tempdir.path().join("ignored.txt"), "not a style").unwrap();
-
-    let boot = CliInitializeBootstrap::new("default".into())
-        .with_output_style_dirs(vec![tempdir.path().to_path_buf()]);
+async fn with_available_output_styles_replaces_default_list() {
+    // Caller-provided list (CLI passes the resolved `OutputStyleManager`
+    // catalog + the `default` sentinel) is returned verbatim. Aggregation
+    // and dir / plugin walking lives in `coco-output-styles`, not here.
+    let boot =
+        CliInitializeBootstrap::new("custom-style".into()).with_available_output_styles(vec![
+            "default".into(),
+            "Explanatory".into(),
+            "Learning".into(),
+            "custom-style".into(),
+            "alpha:plugin-style".into(),
+        ]);
     let styles = boot.available_output_styles().await;
-    assert!(styles.contains(&"custom-style".to_string()));
-    assert!(styles.contains(&"another".to_string()));
-    assert!(!styles.contains(&"ignored".to_string()));
-    // Built-ins still present.
-    assert!(styles.contains(&"default".to_string()));
+    assert_eq!(
+        styles,
+        vec![
+            "default".to_string(),
+            "Explanatory".into(),
+            "Learning".into(),
+            "custom-style".into(),
+            "alpha:plugin-style".into(),
+        ]
+    );
 }
 
 #[tokio::test]
@@ -315,7 +323,7 @@ async fn agents_returns_builtins_when_no_dirs_configured() {
     let boot = CliInitializeBootstrap::new("default".into());
     let agents = boot.agents().await;
     // `BuiltinAgentCatalog::interactive()` enables general-purpose +
-    // statusline-setup + Explore + Plan + claude-code-guide (5 entries).
+    // statusline-setup + Explore + Plan + coco-guide (5 entries).
     // Verification ships behind a separate gate (`include_verification`)
     // and is not part of the interactive default. Assert presence of the
     // canonical names so adding verification later (or any future
@@ -330,7 +338,7 @@ async fn agents_returns_builtins_when_no_dirs_configured() {
     assert!(names.contains(&"Explore"));
     assert!(names.contains(&"Plan"));
     assert!(names.contains(&"statusline-setup"));
-    assert!(names.contains(&"claude-code-guide"));
+    assert!(names.contains(&"coco-guide"));
     // Descriptions come through non-empty for every built-in.
     for agent in &agents {
         assert!(

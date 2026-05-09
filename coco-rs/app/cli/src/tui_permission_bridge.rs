@@ -176,11 +176,20 @@ impl ToolPermissionBridge for TuiPermissionBridge {
 /// Pops the matching oneshot and sends the resolution. Returns `true`
 /// when the request_id matched a pending entry, `false` otherwise
 /// (stale response after the bridge dropped the sender).
+///
+/// `permission_updates` are forwarded into
+/// [`ToolPermissionResolution::applied_updates`] so audit/logging
+/// downstream of the bridge sees what the user authorized. Persistence
+/// (settings.json writes) and live engine_config mutation are
+/// performed by the consumer (`tui_runner::ApprovalResponse` arm)
+/// before this fn is called — by the time the resolution lands on
+/// the bridge the rules are already effective.
 pub async fn resolve_pending(
     pending: &PendingApprovals,
     request_id: &str,
     approved: bool,
     feedback: Option<String>,
+    permission_updates: Vec<coco_types::PermissionUpdate>,
 ) -> bool {
     let sender = {
         let mut map = pending.write().await;
@@ -197,6 +206,7 @@ pub async fn resolve_pending(
             ToolPermissionDecision::Rejected
         },
         feedback,
+        applied_updates: permission_updates,
     };
     tx.send(resolution).is_ok()
 }

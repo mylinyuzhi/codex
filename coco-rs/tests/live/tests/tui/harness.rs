@@ -560,6 +560,7 @@ impl TuiHarness {
             request_id,
             true,
             None,
+            Vec::new(),
         )
         .await
     }
@@ -571,6 +572,7 @@ impl TuiHarness {
             request_id,
             false,
             feedback,
+            Vec::new(),
         )
         .await
     }

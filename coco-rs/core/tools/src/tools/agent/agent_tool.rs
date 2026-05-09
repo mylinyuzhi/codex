@@ -10,6 +10,7 @@ use coco_tool_runtime::AgentSpawnStatus;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
+use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
@@ -65,6 +66,13 @@ impl Tool for AgentTool {
             ready_mcp_servers: options.ready_mcp_servers.clone(),
             coordinator_mode: options.coordinator_mode,
             fork_enabled: options.fork_enabled,
+            has_embedded_search_tools: options.has_embedded_search_tools,
+            is_in_process_teammate: options.is_in_process_teammate,
+            is_teammate: options.is_teammate,
+            list_via_attachment: options.agent_list_via_attachment,
+            is_pro_subscription: options.is_pro_subscription,
+            background_tasks_disabled: options.background_tasks_disabled,
+            ant_build: options.ant_build,
         };
         renderer.full_prompt(&render_opts)
     }
@@ -228,6 +236,99 @@ impl Tool for AgentTool {
         );
         ToolInputSchema { properties: p }
     }
+
+    /// Render the spawn-result envelope into model-visible text per
+    /// `data["status"]`. TS parity: `AgentTool.tsx::mapToolResultToToolResultBlockParam`
+    /// (4 branches: teammate_spawned / async_launched / completed / failed).
+    /// `remote_launched` is CCR-specific and has no coco-rs producer.
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        let status = data.get("status").and_then(Value::as_str).unwrap_or("");
+        let text = match status {
+            "teammate_spawned" => {
+                // TS `AgentTool.tsx:1308-1312`. `name` and `team_name`
+                // come from the spawn input (not from the response) and
+                // are emitted as separate lines so the parent can grep
+                // by either.
+                let agent_id = data.get("agentId").and_then(Value::as_str).unwrap_or("");
+                let name = data.get("name").and_then(Value::as_str).unwrap_or("");
+                let team_name = data.get("team_name").and_then(Value::as_str).unwrap_or("");
+                format!(
+                    "Spawned successfully.\nagent_id: {agent_id}\nname: {name}\nteam_name: {team_name}\nThe agent is now running and will receive instructions via mailbox."
+                )
+            }
+            "async_launched" => {
+                let agent_id = data.get("agentId").and_then(Value::as_str).unwrap_or("");
+                let output_file = data
+                    .get("outputFile")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let prefix = format!(
+                    "Async agent launched successfully.\nagentId: {agent_id} (internal ID - do not mention to user. Use SendMessage with to: '{agent_id}' to continue this agent.)\nThe agent is working in the background. You will be notified automatically when it completes."
+                );
+                let instructions = if output_file.is_empty() {
+                    "Briefly tell the user what you launched and end your response. Do not generate any other text — agent results will arrive in a subsequent message.".to_string()
+                } else {
+                    format!(
+                        "Do not duplicate this agent's work — avoid working with the same files or topics it is using. Work on non-overlapping tasks, or briefly tell the user what you launched and end your response.\noutput_file: {output_file}\nIf asked, you can check progress before completion by using FileRead or Bash tail on the output file."
+                    )
+                };
+                format!("{prefix}\n{instructions}")
+            }
+            "completed" => {
+                let content = data.get("content").and_then(Value::as_str).unwrap_or("");
+                let one_shot = data
+                    .get("oneShot")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let worktree_path = data.get("worktreePath").and_then(Value::as_str);
+                let worktree_branch = data.get("worktreeBranch").and_then(Value::as_str);
+                let has_worktree = worktree_path.is_some();
+
+                // One-shot built-ins (Explore, Plan): drop the agentId
+                // trailer + <usage> block when there's no worktree info,
+                // since they cannot be re-addressed via SendMessage. TS
+                // `AgentTool.tsx:1355-1361`.
+                if one_shot && !has_worktree {
+                    return vec![ToolResultContentPart::Text {
+                        text: content.to_string(),
+                        provider_options: None,
+                    }];
+                }
+
+                let agent_id = data.get("agentId").and_then(Value::as_str).unwrap_or("");
+                let total_tokens = data.get("totalTokens").and_then(Value::as_u64).unwrap_or(0);
+                let total_tool_uses = data
+                    .get("totalToolUseCount")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                let duration_ms = data.get("durationMs").and_then(Value::as_u64).unwrap_or(0);
+
+                let mut worktree_info = String::new();
+                if let Some(wt) = worktree_path {
+                    worktree_info.push_str(&format!("\nworktreePath: {wt}"));
+                    if let Some(wb) = worktree_branch {
+                        worktree_info.push_str(&format!("\nworktreeBranch: {wb}"));
+                    }
+                }
+                format!(
+                    "{content}\nagentId: {agent_id} (use SendMessage with to: '{agent_id}' to continue this agent){worktree_info}\n<usage>total_tokens: {total_tokens}\ntool_uses: {total_tool_uses}\nduration_ms: {duration_ms}</usage>"
+                )
+            }
+            "failed" => {
+                let error = data
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .unwrap_or("Unknown error");
+                format!("Agent failed: {error}")
+            }
+            _ => serde_json::to_string(data).unwrap_or_default(),
+        };
+        vec![ToolResultContentPart::Text {
+            text,
+            provider_options: None,
+        }]
+    }
+
     async fn execute(
         &self,
         input: Value,
@@ -508,6 +609,11 @@ impl Tool for AgentTool {
             // child inherits the engine's standard caps.
             constraints: None,
             fork_context_messages: Vec::new(),
+            // User-driven AgentTool spawns are user-visible work; the
+            // subagent's tool-use entries SHOULD land in the
+            // transcript. Memory-side forks set this true via their
+            // own service.
+            skip_transcript: false,
         };
 
         let request_description = request.description.clone();
@@ -546,6 +652,7 @@ impl Tool for AgentTool {
                     "status": "completed",
                     "content": content,
                     "prompt": response.prompt.as_deref().unwrap_or(prompt),
+                    "agentId": response.agent_id,
                     "totalToolUseCount": response.total_tool_use_count,
                     "totalTokens": response.total_tokens,
                     "durationMs": response.duration_ms,
@@ -572,11 +679,25 @@ impl Tool for AgentTool {
                 result
             }
             AgentSpawnStatus::TeammateSpawned => {
-                serde_json::json!({
+                // TS `AgentTool.tsx:1308-1312` exposes `name` and
+                // `team_name` (not `prompt`) so the parent agent can
+                // address the teammate by stable identifiers in
+                // SendMessage payloads.
+                let mut spawn = serde_json::json!({
                     "status": "teammate_spawned",
                     "agentId": response.agent_id,
-                    "prompt": response.prompt.as_deref().unwrap_or(prompt),
-                })
+                });
+                if let Some(name) = input.get("name").and_then(|v| v.as_str())
+                    && !name.is_empty()
+                {
+                    spawn["name"] = serde_json::json!(name);
+                }
+                if let Some(team_name) = input.get("team_name").and_then(|v| v.as_str())
+                    && !team_name.is_empty()
+                {
+                    spawn["team_name"] = serde_json::json!(team_name);
+                }
+                spawn
             }
             AgentSpawnStatus::Failed => {
                 serde_json::json!({

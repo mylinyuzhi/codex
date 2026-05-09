@@ -20,7 +20,7 @@ prompt rendering, tool filter planning, validation diagnostics.
 | `AgentDefinitionStore` | Loads built-ins + per-source markdown agents; exposes a snapshot |
 | `AgentCatalogSnapshot` | Immutable per-turn view of active / all definitions; returned as `Arc<...>` for cheap sharing |
 | `AgentLoadReport` | Diagnostics from the most recent load |
-| `BuiltinAgentCatalog` | Toggle set for optional built-ins (Explore/Plan, verification, claude-code-guide, SDK disable) |
+| `BuiltinAgentCatalog` | Toggle set for optional built-ins (Explore/Plan, verification, coco-guide, SDK disable) |
 | `AgentToolPromptRenderer` | TS-parity AgentTool prompt strings |
 | `AgentToolFilter` + `ToolFilterPlan` | Pure tool filter computation; `app/state` applies the plan to the child `ToolRegistry` |
 | `AllowedAgentTypes` + `parse_allowed_agent_types` | Parse `Agent(...)` / `Task(...)` permission entries |
@@ -34,9 +34,11 @@ Constants: `ONE_SHOT_BUILTIN_AGENT_TYPES = ["Explore", "Plan"]` (case-sensitive)
 
 - **TS-canonical case is contract.** `Explore` and `Plan` are PascalCase
   everywhere — output, lookup, the one-shot set. `general-purpose`,
-  `statusline-setup`, `verification`, `claude-code-guide` are kebab-case
+  `statusline-setup`, `verification`, `coco-guide` are kebab-case
   lowercase. Aliases like `explore` only exist on input parsing; serialization
-  always emits canonical case.
+  always emits canonical case. (`coco-guide` is the coco-rs identifier for
+  the agent TS calls `claude-code-guide` — the legacy TS string is NOT
+  accepted as an alias per the project's no-backward-compat rule.)
 - **Source precedence (later wins):** `built-in < plugin < userSettings <
   projectSettings < flagSettings < policySettings`. Same `agent_type` from a
   higher source overrides lower.

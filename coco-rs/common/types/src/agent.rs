@@ -14,8 +14,13 @@ use crate::ModelRole;
 /// (consumed by the case-sensitive one-shot set in `constants.ts`, by user
 /// permission rules like `Agent(Explore)`, and by the
 /// `tengu_agent_tool_selected` telemetry attribute). The remaining built-ins
-/// (`general-purpose`, `statusline-setup`, `verification`, `claude-code-guide`)
+/// (`general-purpose`, `statusline-setup`, `verification`, `coco-guide`)
 /// stay lowercase. See `subagent-refactor-plan.md` § "Naming decision".
+///
+/// **Coco-rs rename**: TS `claude-code-guide` is renamed to `coco-guide`
+/// to match the project identity. Per project policy (no backward-compat
+/// shims) the TS string is not accepted as an alias — only `coco-guide`
+/// (and its `coco_guide` underscore form) parses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SubagentType {
     GeneralPurpose,
@@ -23,7 +28,7 @@ pub enum SubagentType {
     Explore,
     Plan,
     Verification,
-    ClaudeCodeGuide,
+    CocoGuide,
 }
 
 impl SubagentType {
@@ -35,7 +40,7 @@ impl SubagentType {
             Self::Explore => "Explore",
             Self::Plan => "Plan",
             Self::Verification => "verification",
-            Self::ClaudeCodeGuide => "claude-code-guide",
+            Self::CocoGuide => "coco-guide",
         }
     }
 
@@ -46,7 +51,7 @@ impl SubagentType {
         Self::Explore,
         Self::Plan,
         Self::Verification,
-        Self::ClaudeCodeGuide,
+        Self::CocoGuide,
     ];
 }
 
@@ -69,7 +74,7 @@ impl FromStr for SubagentType {
             "Explore" | "explore" => Ok(Self::Explore),
             "Plan" | "plan" => Ok(Self::Plan),
             "verification" => Ok(Self::Verification),
-            "claude-code-guide" | "claude_code_guide" => Ok(Self::ClaudeCodeGuide),
+            "coco-guide" | "coco_guide" => Ok(Self::CocoGuide),
             _ => Err(format!("unknown subagent type: {s}")),
         }
     }
@@ -581,6 +586,19 @@ pub struct AgentDefinition {
     /// `Null` ⇒ no per-agent hooks.
     #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
     pub hooks: serde_json::Value,
+
+    /// Snapshot timestamp this agent's local memory dir is *behind*.
+    /// `None` ⇒ either no snapshot is published for this agent or the
+    /// local memory is already up-to-date. Populated by the loader
+    /// (`AgentDefinitionStore`) at load time via a caller-supplied
+    /// inspector closure that consults
+    /// [`coco_memory::agent_memory_snapshot::check_agent_memory_snapshot`].
+    /// TS parity: `pendingSnapshotUpdate?: string` in
+    /// `loadAgentsDir.ts` — set when `checkAgentMemorySnapshot` returns
+    /// `prompt-update`. Consumed by `/agents show` to flag drifted
+    /// agents and (future) by an interactive resync prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_snapshot_update: Option<String>,
 }
 
 impl Default for AgentDefinition {
@@ -614,6 +632,7 @@ impl Default for AgentDefinition {
             omit_claude_md: false,
             critical_system_reminder: None,
             hooks: serde_json::Value::Null,
+            pending_snapshot_update: None,
         }
     }
 }
