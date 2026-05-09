@@ -279,6 +279,7 @@ impl ToolPermissionBridge for AllowAllPermissionBridge {
         Ok(ToolPermissionResolution {
             decision: ToolPermissionDecision::Approved,
             feedback: None,
+            applied_updates: Vec::new(),
         })
     }
 }

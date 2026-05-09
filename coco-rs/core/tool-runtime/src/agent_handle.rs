@@ -262,6 +262,14 @@ pub struct AgentSpawnRequest {
     /// `subagent_type → ModelRole` mapping alone.
     #[serde(skip)]
     pub definition: Option<Arc<AgentDefinition>>,
+    /// Suppress per-message transcript persistence for this spawn.
+    /// TS parity (`utils/forkedAgent.ts` `runForkedAgent({skipTranscript:
+    /// true})` — used by extract/auto-dream/session-memory forks so
+    /// the background subagent's tool-uses don't pollute the user's
+    /// main JSONL transcript and don't race the main thread's
+    /// transcript writer.
+    #[serde(default)]
+    pub skip_transcript: bool,
 }
 
 /// Response from spawning a subagent.
@@ -299,6 +307,27 @@ pub struct AgentSpawnResponse {
     /// extraction agent without re-parsing the agent's transcript.
     #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
     pub tool_use_counts: std::collections::HashMap<String, i64>,
+    /// Cache-read tokens (TS `cache_read_input_tokens`) — the portion
+    /// of the input that hit the prompt cache. Memory's extract / dream
+    /// telemetry surfaces this as the cache hit-rate metric so we can
+    /// measure whether forked-agent prompt-cache sharing is working.
+    /// `0` when the underlying engine doesn't report it.
+    #[serde(default)]
+    pub cache_read_tokens: i64,
+    /// Cache-creation tokens (TS `cache_creation_input_tokens`) — the
+    /// portion of the input that wrote into the prompt cache. Memory
+    /// telemetry pairs this with `cache_read_tokens` for hit-rate.
+    #[serde(default)]
+    pub cache_creation_tokens: i64,
+    /// Absolute file paths the agent wrote during this spawn, in call
+    /// order. Populated by the spawn driver from observed
+    /// `Write` / `Edit` / `NotebookEdit` tool_use blocks. Memory
+    /// telemetry filters this to exclude the `MEMORY.md` index when
+    /// reporting `files_written` (TS parity:
+    /// `extractMemories.ts:465-467` — `writtenPaths.filter(p =>
+    /// basename(p) !== ENTRYPOINT_NAME)`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paths_written: Vec<PathBuf>,
     /// Duration in milliseconds.
     #[serde(default)]
     pub duration_ms: i64,

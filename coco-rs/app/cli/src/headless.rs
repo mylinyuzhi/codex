@@ -224,15 +224,69 @@ pub fn create_api_client(
     )
 }
 
+// ─── Output style manager ────────────────────────────────────────────
+
+/// Build a [`coco_output_styles::OutputStyleManager`] from settings,
+/// the standard on-disk dirs ([`crate::paths::user_output_style_dir`],
+/// [`crate::paths::project_output_style_dir`],
+/// [`crate::paths::managed_output_style_dir`]), and the supplied
+/// plugin sources.
+///
+/// Headless and SDK paths share this helper so a future addition (e.g.,
+/// project-tree ancestor walk) lands in one place. The plugin
+/// pipeline isn't yet plumbed in headless — pass an empty slice.
+pub fn build_output_style_manager(
+    runtime_config: &coco_config::RuntimeConfig,
+    cwd: &Path,
+    plugin_sources: &[coco_output_styles::PluginOutputStyleSource],
+) -> coco_output_styles::OutputStyleManager {
+    coco_output_styles::OutputStyleManager::builder()
+        .settings_name(runtime_config.settings.merged.output_style.clone())
+        .user_dir(Some(crate::paths::user_output_style_dir()))
+        .project_dirs(vec![crate::paths::project_output_style_dir(cwd)])
+        .managed_dir(Some(crate::paths::managed_output_style_dir()))
+        .plugins(plugin_sources.to_vec())
+        .build()
+}
+
 // ─── System prompt assembly ──────────────────────────────────────────
 
+/// Convert a resolved [`OutputStyleConfig`] into the borrowed view the
+/// `coco-context` prompt builder accepts. Built-in styles set
+/// `keep_coding_instructions: Some(true)`; for unset (custom dir
+/// styles that omitted the key), default to `true` so the standard
+/// coding instructions stay on top — TS does the same.
+fn output_style_section(
+    style: &coco_output_styles::OutputStyleConfig,
+) -> coco_context::prompt::OutputStyleSection<'_> {
+    coco_context::prompt::OutputStyleSection {
+        name: &style.name,
+        prompt: &style.prompt,
+        keep_coding_instructions: style.keep_coding_instructions.unwrap_or(true),
+    }
+}
+
 /// Build the system prompt with environment context and CLAUDE.md content.
-pub fn build_system_prompt(cwd: &Path, model_id: &str, base_instructions: Option<&str>) -> String {
+pub fn build_system_prompt(
+    cwd: &Path,
+    model_id: &str,
+    base_instructions: Option<&str>,
+    output_style: Option<&coco_output_styles::OutputStyleConfig>,
+) -> String {
     let claude_files = coco_context::discover_memory_files(cwd);
     let env_info = coco_context::get_environment_info(cwd, model_id);
     let identity = base_instructions.unwrap_or(DEFAULT_SYSTEM_PROMPT_IDENTITY);
-    coco_context::build_system_prompt(identity, &claude_files, &env_info, None, None, None)
-        .full_text()
+    let section = output_style.map(output_style_section);
+    coco_context::build_system_prompt(
+        identity,
+        &claude_files,
+        &env_info,
+        None,
+        None,
+        None,
+        section,
+    )
+    .full_text()
 }
 
 /// Resolve model-specific instructions from runtime config, then build
@@ -242,12 +296,13 @@ pub fn build_system_prompt_for_model(
     runtime_config: &coco_config::RuntimeConfig,
     provider: &str,
     model_id: &str,
+    output_style: Option<&coco_output_styles::OutputStyleConfig>,
 ) -> String {
     let resolved = runtime_config.model_registry.resolve(provider, model_id);
     let base_instructions = resolved
         .as_ref()
         .and_then(|model| model.info.base_instructions.as_deref());
-    build_system_prompt(cwd, model_id, base_instructions)
+    build_system_prompt(cwd, model_id, base_instructions, output_style)
 }
 
 // ─── Permission resolution ───────────────────────────────────────────
@@ -491,6 +546,14 @@ pub async fn run_chat_with_options(
     let runtime_config = build_runtime_config_for_cli(cli, &cwd)?;
     let settings = &runtime_config.settings;
 
+    // Resolve the active output style once — fed into the system
+    // prompt builder + threaded onto `SessionBootstrap` for the
+    // per-turn reminder generator. Plugin styles aren't loaded in the
+    // headless path (no plugin discovery yet); user / project /
+    // managed dirs are walked.
+    let output_style_manager = build_output_style_manager(&runtime_config, &cwd, &[]);
+    let active_output_style = output_style_manager.active().cloned();
+
     let retry: coco_inference::RetryConfig = runtime_config.api.retry.clone().into();
     let (client, provider_api, model_id) = create_api_client(&runtime_config, retry.clone());
     let fallback_clients =
@@ -528,8 +591,21 @@ pub async fn run_chat_with_options(
         "permissions + tools ready"
     );
 
-    let system_prompt =
-        compose_system_prompt(cli, &cwd, &runtime_config, client.provider(), &model_id)?;
+    let system_prompt = compose_system_prompt(
+        cli,
+        &cwd,
+        &runtime_config,
+        client.provider(),
+        &model_id,
+        active_output_style.as_ref(),
+    )?;
+
+    // Bootstrap the per-source permission rule maps; see
+    // `crate::permission_rule_loader` for the conversion path. Mirrors
+    // TS `loadPermissionRules()` so headless runs honor the same
+    // settings.json deny/allow/ask rules as the TUI.
+    let (allow_rules, deny_rules, ask_rules) =
+        crate::permission_rule_loader::typed_permission_rules(&runtime_config.settings);
 
     let config = QueryEngineConfig {
         model_id: model_id.clone(),
@@ -543,6 +619,9 @@ pub async fn run_chat_with_options(
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
         permission_mode,
         bypass_permissions_available,
+        allow_rules,
+        deny_rules,
+        ask_rules,
         context_window: 200_000,
         max_output_tokens: 16_384,
         max_turns: cli
@@ -652,6 +731,16 @@ pub async fn run_chat_with_options(
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     drainer.abort();
 
+    // Wait for any in-flight auto-memory extraction to complete before
+    // we return so partial writes aren't dropped on process exit. TS
+    // parity: `print.ts` awaits `drainPendingExtraction(60_000)` here.
+    if let Some(memory_runtime) = engine.memory_runtime() {
+        let _ = memory_runtime
+            .extract
+            .drain(coco_memory::service::extract::DEFAULT_DRAIN_TIMEOUT)
+            .await;
+    }
+
     let additional_dirs = resolve_additional_dirs(cli, &cwd);
     let tool_filter_summary = summarize_tool_filter(cli);
 
@@ -687,13 +776,14 @@ fn compose_system_prompt(
     runtime_config: &coco_config::RuntimeConfig,
     provider: &str,
     model_id: &str,
+    output_style: Option<&coco_output_styles::OutputStyleConfig>,
 ) -> Result<String> {
     // 1. Base layer: `--system-prompt` wholly replaces the default
     //    identity + CLAUDE.md discovery. Otherwise build the default.
     let mut prompt = if let Some(custom) = cli.system_prompt.as_deref() {
         custom.to_string()
     } else {
-        build_system_prompt_for_model(cwd, runtime_config, provider, model_id)
+        build_system_prompt_for_model(cwd, runtime_config, provider, model_id, output_style)
     };
     // 2. Append from `--append-system-prompt` (verbatim).
     if let Some(append) = cli.append_system_prompt.as_deref() {

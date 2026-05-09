@@ -1080,3 +1080,40 @@ async fn test_grep_respects_cwd_override() {
     assert!(t.contains("real.txt"), "should find override file: {t}");
     assert!(!t.contains("decoy.txt"), "must not leak to outer: {t}");
 }
+
+// ---------------------------------------------------------------------------
+// render_for_model — emit bare string instead of JSON-stringified wrapper
+// ---------------------------------------------------------------------------
+
+#[test]
+fn render_for_model_unwraps_files_with_matches() {
+    use coco_tool_runtime::ToolResultContentPart;
+    let data = json!("Found 2 files\n/abs/a.rs\n/abs/b.rs");
+    let parts = GrepTool.render_for_model(&data);
+    let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+        panic!("expected Text part");
+    };
+    assert_eq!(text, "Found 2 files\n/abs/a.rs\n/abs/b.rs");
+}
+
+#[test]
+fn render_for_model_unwraps_content_mode() {
+    use coco_tool_runtime::ToolResultContentPart;
+    let data = json!("/abs/a.rs:1:fn main() {}\n/abs/b.rs:5:fn helper() {}");
+    let parts = GrepTool.render_for_model(&data);
+    let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+        panic!("expected Text part");
+    };
+    assert_eq!(text, "/abs/a.rs:1:fn main() {}\n/abs/b.rs:5:fn helper() {}");
+}
+
+#[test]
+fn render_for_model_no_matches_branch() {
+    use coco_tool_runtime::ToolResultContentPart;
+    let data = json!("No matches found");
+    let parts = GrepTool.render_for_model(&data);
+    let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+        panic!("expected Text part");
+    };
+    assert_eq!(text, "No matches found");
+}

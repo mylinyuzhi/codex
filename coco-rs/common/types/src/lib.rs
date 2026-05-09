@@ -288,6 +288,7 @@ pub use permission::PermissionRuleValue;
 pub use permission::PermissionRulesBySource;
 pub use permission::PermissionUpdate;
 pub use permission::PermissionUpdateDestination;
+pub use permission::ToolCheckResult;
 pub use permission::ToolPermissionContext;
 pub use permission::WorkingDirectorySource;
 pub use permission::content_matches;

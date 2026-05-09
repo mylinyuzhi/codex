@@ -218,6 +218,55 @@ fn test_theme_handler() {
     assert!(theme_handler("dark").contains("dark"));
 }
 
+/// `/output-style` is the deprecated stub from TS
+/// `commands/output-style/output-style.tsx`. The handler must:
+///   1. Return the verbatim TS deprecation message regardless of args.
+///   2. Be registered in the extended-builtins registry.
+///   3. Be marked `is_hidden: true` so it doesn't show up in
+///      typeahead/picker (matches TS `isHidden: true`).
+///   4. Stay reachable by name via `/help output-style` lookups.
+#[test]
+fn test_output_style_handler_returns_ts_deprecation_message() {
+    // Args ignored — TS handler accepts but ignores them too.
+    let expected = "/output-style has been deprecated. Use /config to change your output style, \
+                    or set it in your settings file. Changes take effect on the next session.";
+    assert_eq!(output_style_handler(""), expected);
+    assert_eq!(output_style_handler("Explanatory"), expected);
+    assert_eq!(output_style_handler("anything else"), expected);
+}
+
+#[test]
+fn test_output_style_command_registered_and_hidden() {
+    let mut registry = CommandRegistry::new();
+    register_extended_builtins(&mut registry);
+
+    let cmd = registry
+        .get(names::OUTPUT_STYLE)
+        .expect("/output-style must be registered");
+    assert_eq!(cmd.base.name, "output-style");
+    assert!(
+        cmd.base.is_hidden,
+        "/output-style must be hidden to mirror TS isHidden:true"
+    );
+    assert_eq!(
+        cmd.base.description,
+        "Deprecated: use /config to change output style"
+    );
+    assert!(
+        cmd.handler.is_some(),
+        "/output-style must carry the deprecation handler"
+    );
+    // Visibility filters drop it from typeahead — verify behavior, not
+    // just the flag.
+    assert!(
+        !registry
+            .visible()
+            .iter()
+            .any(|c| c.base.name == names::OUTPUT_STYLE),
+        "/output-style must not appear in registry.visible()"
+    );
+}
+
 #[test]
 fn test_color_handler_empty_lists_ts_palette() {
     // Empty args mirrors TS commands/color/color.ts:34-39.

@@ -152,6 +152,50 @@ pub fn create_error_tool_result(
     )
 }
 
+/// Create a tool result message from a sequence of typed content
+/// parts (text + images + documents).
+///
+/// Used by the executor when a tool's [`Tool::render_for_model`]
+/// returns more than a single Text part — e.g. `FileReadTool` reading
+/// a PNG returns one [`ToolResultContentPart::FileData`] block. The
+/// underlying SDK enum [`coco_inference::ToolResultContent::Content`]
+/// is the canonical multimodal carrier; provider crates already know
+/// how to translate it (Anthropic / Gemini 3+ pass through; OpenAI /
+/// OpenAI-Compatible degrade non-Text parts to a visible text marker).
+///
+/// Sibling of [`create_tool_result_message`], which takes a single
+/// `&str` and stays the fast path for tools that just return
+/// formatted text. The two paths produce semantically identical
+/// `Message::ToolResult` envelopes — only the `output` variant
+/// differs (`Text` / `ErrorText` vs `Content`).
+///
+/// `is_error` rides on the outer `ToolResultPart.is_error` flag (the
+/// `Content` enum variant has no explicit error form, matching TS
+/// `mapToolResultToToolResultBlockParam` shape).
+pub fn create_tool_result_message_with_parts(
+    tool_call_id: &str,
+    tool_name: &str,
+    tool_id: ToolId,
+    parts: Vec<crate::ToolResultContentPart>,
+    is_error: bool,
+) -> Message {
+    let result_content = ToolResultContent::content_parts(parts);
+    let tool_result = crate::ToolResultContent {
+        tool_call_id: tool_call_id.to_string(),
+        tool_name: tool_name.to_string(),
+        output: result_content,
+        is_error,
+        provider_metadata: None,
+    };
+    Message::ToolResult(ToolResultMessage {
+        uuid: Uuid::new_v4(),
+        message: LlmMessage::tool(vec![ToolContent::ToolResult(tool_result)]),
+        tool_use_id: tool_call_id.to_string(),
+        tool_id,
+        is_error,
+    })
+}
+
 /// Create a compact boundary system message recording token counts before/after compaction.
 pub fn create_compact_boundary_message(tokens_before: i64, tokens_after: i64) -> Message {
     Message::System(SystemMessage::CompactBoundary(

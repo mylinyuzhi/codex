@@ -1,4 +1,4 @@
-use coco_types::{AgentColorName, AgentSource, SubagentType};
+use coco_types::{AgentColorName, AgentSource, SubagentType, ToolName};
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -24,7 +24,7 @@ fn builtin_catalog_includes_required_when_enabled() {
             "Explore",
             "Plan",
             "verification",
-            "claude-code-guide",
+            "coco-guide",
         ]
     );
 }
@@ -64,7 +64,15 @@ fn explore_built_in_omits_claude_md_and_blocks_writes() {
     assert_eq!(def.model.as_deref(), Some("haiku"));
     // TS exploreAgent.ts:67-73 uses FILE_EDIT_TOOL_NAME = "Edit" and
     // FILE_WRITE_TOOL_NAME = "Write" — NOT "FileEdit"/"FileWrite".
-    for blocked in ["Edit", "Write", "NotebookEdit", "Agent", "ExitPlanMode"] {
+    // Tool names go through `ToolName::*::as_str()` so renames stay
+    // consistent.
+    for blocked in [
+        ToolName::Edit.as_str(),
+        ToolName::Write.as_str(),
+        ToolName::NotebookEdit.as_str(),
+        ToolName::Agent.as_str(),
+        ToolName::ExitPlanMode.as_str(),
+    ] {
         assert!(
             def.disallowed_tools.iter().any(|t| t == blocked),
             "Explore should block {blocked}; actual: {:?}",
@@ -74,14 +82,20 @@ fn explore_built_in_omits_claude_md_and_blocks_writes() {
 }
 
 #[test]
-fn claude_code_guide_uses_dont_ask_permission_mode() {
+fn coco_guide_uses_dont_ask_permission_mode() {
     // TS claudeCodeGuideAgent.ts:120 sets permissionMode: 'dontAsk' so the
     // guide can run its allow-listed tools without prompting.
-    let def = builtins::builtin_definition("claude-code-guide").unwrap();
+    let def = builtins::builtin_definition("coco-guide").unwrap();
     assert_eq!(def.permission_mode.as_deref(), Some("dontAsk"));
     assert_eq!(
         def.allowed_tools,
-        vec!["Glob", "Grep", "Read", "WebFetch", "WebSearch"]
+        vec![
+            ToolName::Glob.as_str(),
+            ToolName::Grep.as_str(),
+            ToolName::Read.as_str(),
+            ToolName::WebFetch.as_str(),
+            ToolName::WebSearch.as_str(),
+        ]
     );
 }
 
@@ -97,7 +111,80 @@ fn statusline_built_in_uses_orange_color_and_sonnet() {
     let def = builtins::builtin_definition("statusline-setup").unwrap();
     assert_eq!(def.color, Some(AgentColorName::Orange));
     assert_eq!(def.model.as_deref(), Some("sonnet"));
-    assert_eq!(def.allowed_tools, vec!["Read", "Edit"]);
+    assert_eq!(
+        def.allowed_tools,
+        vec![ToolName::Read.as_str(), ToolName::Edit.as_str()]
+    );
+}
+
+#[test]
+fn every_builtin_definition_carries_a_system_prompt() {
+    // Without `system_prompt`, the spawn path falls through to the
+    // engine's generic default and the agent loses its role
+    // instructions. Pin all six built-ins.
+    for name in [
+        "general-purpose",
+        "statusline-setup",
+        "Explore",
+        "Plan",
+        "verification",
+        "coco-guide",
+    ] {
+        let def =
+            builtins::builtin_definition(name).unwrap_or_else(|| panic!("missing built-in {name}"));
+        let body = def
+            .system_prompt
+            .as_deref()
+            .unwrap_or_else(|| panic!("{name} must declare system_prompt"));
+        assert!(
+            body.len() > 200,
+            "{name} system_prompt looks suspiciously short ({} bytes)",
+            body.len()
+        );
+    }
+}
+
+#[test]
+fn verification_carries_critical_system_reminder() {
+    // TS verificationAgent.ts:150-151 pins this reminder on the
+    // agent definition so the per-turn `<system-reminder>` injector
+    // can re-emit it.
+    let def = builtins::builtin_definition("verification").unwrap();
+    let reminder = def.critical_system_reminder.as_deref().unwrap();
+    assert!(reminder.starts_with("CRITICAL: This is a VERIFICATION-ONLY task."));
+    assert!(reminder.contains("VERDICT: PASS"));
+}
+
+#[test]
+fn explore_built_in_system_prompt_swaps_for_embedded_search() {
+    use crate::builtins::BuiltinAgentCatalog;
+    let glob = ToolName::Glob.as_str();
+    let bash = ToolName::Bash.as_str();
+    // Default 3p build → Glob/Grep wording.
+    let defs = builtins::builtin_definitions(BuiltinAgentCatalog::all_enabled());
+    let def_default = defs.iter().find(|d| d.name == "Explore").unwrap();
+    assert!(
+        def_default
+            .system_prompt
+            .as_deref()
+            .unwrap()
+            .contains(&format!("- Use {glob} for broad file pattern matching"))
+    );
+
+    // Embedded host → find/grep via Bash wording.
+    let embedded = BuiltinAgentCatalog {
+        has_embedded_search_tools: true,
+        ..BuiltinAgentCatalog::all_enabled()
+    };
+    let defs = builtins::builtin_definitions(embedded);
+    let def_embedded = defs.iter().find(|d| d.name == "Explore").unwrap();
+    assert!(
+        def_embedded
+            .system_prompt
+            .as_deref()
+            .unwrap()
+            .contains(&format!("- Use `find` via {bash}"))
+    );
 }
 
 // ── one-shot constants ──
@@ -206,6 +293,7 @@ fn ctx<'a>(tools: &'a [String]) -> ToolFilterContext<'a> {
         is_async: false,
         plan_mode: false,
         extra_allow_list: None,
+        is_in_process_teammate: false,
     }
 }
 
@@ -540,6 +628,65 @@ fn filter_plan_extra_allow_list_intersects() {
     assert_eq!(plan.allowed_tools, vec!["Read", "Grep"]);
 }
 
+#[test]
+fn filter_plan_in_process_teammate_async_admits_agent_and_task_tools() {
+    // TS `agentToolUtils.ts:101-110` — when the spawn target is an
+    // async, in-process teammate, the filter re-admits `Agent` plus
+    // IN_PROCESS_TEAMMATE_ALLOWED_TOOLS even though they're outside
+    // ASYNC_AGENT_ALLOWED_TOOLS / ALL_AGENT_DISALLOWED_TOOLS.
+    let tools: Vec<String> = vec![
+        "Agent".into(),
+        "TaskCreate".into(),
+        "TaskGet".into(),
+        "TaskList".into(),
+        "TaskUpdate".into(),
+        "SendMessage".into(),
+        "TaskStop".into(),
+        "AskUserQuestion".into(),
+    ];
+    let def = agent("teammate", &[], &[]);
+    let mut filter_ctx = ctx(&tools);
+    filter_ctx.is_async = true;
+    filter_ctx.is_in_process_teammate = true;
+    let plan = AgentToolFilter::plan(&def, filter_ctx);
+    let mut got = plan.allowed_tools;
+    got.sort();
+    assert_eq!(
+        got,
+        vec![
+            "Agent".to_owned(),
+            "SendMessage".to_owned(),
+            "TaskCreate".to_owned(),
+            "TaskGet".to_owned(),
+            "TaskList".to_owned(),
+            "TaskUpdate".to_owned(),
+        ],
+        "in-process teammate should admit Agent + Task* + SendMessage; \
+         TaskStop / AskUserQuestion stay blocked"
+    );
+}
+
+#[test]
+fn filter_plan_non_async_in_process_teammate_keeps_universal_block() {
+    // The teammate exception applies only to async spawns. A sync
+    // teammate still hits the universal block-list (TS only re-admits
+    // when both is_async + is_in_process_teammate are true).
+    let tools: Vec<String> = vec!["Agent".into(), "TaskCreate".into()];
+    let def = agent("teammate", &[], &[]);
+    let mut filter_ctx = ctx(&tools);
+    filter_ctx.is_async = false;
+    filter_ctx.is_in_process_teammate = true;
+    let plan = AgentToolFilter::plan(&def, filter_ctx);
+    assert!(
+        !plan.allowed_tools.iter().any(|t| t == "Agent"),
+        "sync teammate must not bypass the Agent universal block; got {:?}",
+        plan.allowed_tools
+    );
+    // TaskCreate is *outside* both ALL_AGENT_DISALLOWED_TOOLS and the
+    // async path — sync filter keeps it through.
+    assert!(plan.allowed_tools.iter().any(|t| t == "TaskCreate"));
+}
+
 // ── definition store + prompt rendering ──
 
 fn write_md(dir: &std::path::Path, name: &str, content: &str) -> PathBuf {
@@ -713,6 +860,143 @@ fn frontmatter_tools_csv_string_is_split_on_commas() {
     let snap = store.snapshot();
     let def = snap.find_active("csv").unwrap();
     assert_eq!(def.allowed_tools, vec!["Read", "Edit", "Write"]);
+}
+
+#[test]
+fn auto_memory_injection_adds_read_edit_write_when_enabled() {
+    // TS `loadAgentsDir.ts:455-467` adds Read/Edit/Write to non-wildcard
+    // tool lists when AutoMemory is on AND the agent declares a `memory`
+    // scope. Coco-rs runs the same transform once the store's
+    // `auto_memory_enabled` flag is set.
+    let project = TempDir::new().unwrap();
+    write_md(
+        project.path(),
+        "scribe.md",
+        "---\n\
+         name: scribe\n\
+         description: writes to its own memory\n\
+         tools:\n  - Bash\n  - Grep\n\
+         memory: project\n\
+         ---\n\
+         body",
+    );
+    let mut store = AgentDefinitionStore::new(
+        BuiltinAgentCatalog::default(),
+        AgentSearchPaths {
+            project_dirs: vec![project.path().to_path_buf()],
+            ..Default::default()
+        },
+    );
+    store.set_auto_memory_enabled(true);
+    store.load();
+    let snap = store.snapshot();
+    let def = snap.find_active("scribe").unwrap();
+    let mut tools = def.allowed_tools.clone();
+    tools.sort();
+    assert_eq!(
+        tools,
+        vec![
+            "Bash".to_owned(),
+            "Edit".to_owned(),
+            "Grep".to_owned(),
+            "Read".to_owned(),
+            "Write".to_owned(),
+        ],
+        "expected Bash + Grep (original) + Read/Edit/Write (injected)"
+    );
+}
+
+#[test]
+fn auto_memory_injection_skipped_for_wildcard_agents() {
+    // TS guards on `tools !== undefined`; coco-rs collapses `['*']` to
+    // an empty allow-list ("use default"). Either way the injection is
+    // a no-op because the agent already sees every tool.
+    let project = TempDir::new().unwrap();
+    write_md(
+        project.path(),
+        "wild.md",
+        "---\n\
+         name: wild\n\
+         description: wildcard\n\
+         tools:\n  - '*'\n\
+         memory: project\n\
+         ---\n\
+         body",
+    );
+    let mut store = AgentDefinitionStore::new(
+        BuiltinAgentCatalog::default(),
+        AgentSearchPaths {
+            project_dirs: vec![project.path().to_path_buf()],
+            ..Default::default()
+        },
+    );
+    store.set_auto_memory_enabled(true);
+    store.load();
+    let snap = store.snapshot();
+    let def = snap.find_active("wild").unwrap();
+    assert!(
+        def.allowed_tools.is_empty(),
+        "wildcard agent's allow-list must remain empty (= default), not {:?}",
+        def.allowed_tools
+    );
+}
+
+#[test]
+fn auto_memory_injection_no_op_without_memory_scope() {
+    // Memory scope unset → no injection even when AutoMemory is on.
+    let project = TempDir::new().unwrap();
+    write_md(
+        project.path(),
+        "plain.md",
+        "---\n\
+         name: plain\n\
+         description: no memory declared\n\
+         tools:\n  - Bash\n  - Grep\n\
+         ---\n\
+         body",
+    );
+    let mut store = AgentDefinitionStore::new(
+        BuiltinAgentCatalog::default(),
+        AgentSearchPaths {
+            project_dirs: vec![project.path().to_path_buf()],
+            ..Default::default()
+        },
+    );
+    store.set_auto_memory_enabled(true);
+    store.load();
+    let snap = store.snapshot();
+    let def = snap.find_active("plain").unwrap();
+    assert_eq!(def.allowed_tools, vec!["Bash", "Grep"]);
+}
+
+#[test]
+fn auto_memory_injection_off_by_default() {
+    // The flag defaults to false — pure-logic crate must not pre-suppose
+    // a feature surface. Without `set_auto_memory_enabled(true)` the
+    // tools list is unchanged.
+    let project = TempDir::new().unwrap();
+    write_md(
+        project.path(),
+        "scribe.md",
+        "---\n\
+         name: scribe\n\
+         description: writes to its own memory\n\
+         tools:\n  - Bash\n\
+         memory: project\n\
+         ---\n\
+         body",
+    );
+    let mut store = AgentDefinitionStore::new(
+        BuiltinAgentCatalog::default(),
+        AgentSearchPaths {
+            project_dirs: vec![project.path().to_path_buf()],
+            ..Default::default()
+        },
+    );
+    store.load();
+    let snap = store.snapshot();
+    let def = snap.find_active("scribe").unwrap();
+    assert_eq!(def.allowed_tools, vec!["Bash"]);
 }
 
 #[test]

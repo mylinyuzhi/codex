@@ -950,3 +950,61 @@ fn test_resolve_redirect_relative_path() {
         "https://example.com/dir/new"
     );
 }
+
+// ---------------------------------------------------------------------------
+// render_for_model — picks the right body field per execution branch
+// TS parity: WebFetchTool.ts::mapToolResultToToolResultBlockParam emits the
+// `result` field; coco-rs splits into `extracted` / `content` / `message`.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn webfetch_render_picks_extracted_when_llm_extraction_succeeded() {
+    use coco_tool_runtime::ToolResultContentPart;
+    let data = json!({
+        "url": "https://example.com",
+        "prompt": "what is the API?",
+        "extracted": "The API is documented at /docs.",
+        "truncated": false,
+        "extraction_mode": "llm",
+    });
+    let parts = WebFetchTool.render_for_model(&data);
+    let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+        panic!("expected Text part");
+    };
+    assert_eq!(text, "The API is documented at /docs.");
+}
+
+#[test]
+fn webfetch_render_falls_back_to_content_when_extraction_unavailable() {
+    use coco_tool_runtime::ToolResultContentPart;
+    let data = json!({
+        "url": "https://example.com",
+        "prompt": "what?",
+        "content": "# Page Title\n\nRaw markdown body.",
+        "truncated": false,
+        "extraction_mode": "raw",
+    });
+    let parts = WebFetchTool.render_for_model(&data);
+    let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+        panic!("expected Text part");
+    };
+    assert_eq!(text, "# Page Title\n\nRaw markdown body.");
+}
+
+#[test]
+fn webfetch_render_emits_redirect_blocked_message() {
+    use coco_tool_runtime::ToolResultContentPart;
+    let data = json!({
+        "url": "https://example.com",
+        "prompt": "what?",
+        "redirect_blocked": true,
+        "new_url": "https://other.example.com/",
+        "message": "The URL redirected to a different origin (https://other.example.com/). Please use WebFetch again.",
+    });
+    let parts = WebFetchTool.render_for_model(&data);
+    let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+        panic!("expected Text part");
+    };
+    assert!(text.contains("redirected"), "got: {text}");
+    assert!(text.contains("other.example.com"), "got: {text}");
+}

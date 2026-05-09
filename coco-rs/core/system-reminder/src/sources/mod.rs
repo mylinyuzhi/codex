@@ -71,6 +71,7 @@ impl ReminderSources {
             agent_id,
             user_input,
             mentioned_paths,
+            recent_tools,
             just_compacted,
             per_source_timeout,
         } = mctx;
@@ -256,12 +257,16 @@ impl ReminderSources {
                 .as_ref()
                 .filter(|_| config.attachments.relevant_memories);
             let input_owned = user_input.unwrap_or("").to_string();
+            let recent_tools_owned: Vec<String> = recent_tools.to_vec();
             async move {
                 match s {
                     Some(s) => {
                         let s = s.clone();
-                        match timeout(t, async move { s.relevant_memories(a, &input_owned).await })
-                            .await
+                        match timeout(t, async move {
+                            s.relevant_memories(a, &input_owned, &recent_tools_owned)
+                                .await
+                        })
+                        .await
                         {
                             Ok(v) => v,
                             Err(_) => {

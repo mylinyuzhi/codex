@@ -42,8 +42,10 @@ async fn test_edit_single_replacement() {
         .await
         .unwrap();
 
-    let text = result.data.as_str().unwrap();
-    assert!(text.contains("updated successfully"));
+    // TS shape: `{filePath, replaceAll, userModified, replacementCount}`.
+    assert_eq!(result.data["filePath"], file.to_str().unwrap());
+    assert_eq!(result.data["replaceAll"], false);
+    assert_eq!(result.data["replacementCount"], 1);
     let content = std::fs::read_to_string(&file).unwrap();
     assert!(content.contains("hello world"));
     assert!(!content.contains("\"hi\""));
@@ -69,8 +71,8 @@ async fn test_edit_replace_all() {
         .await
         .unwrap();
 
-    let text = result.data.as_str().unwrap();
-    assert!(text.contains("3 replacement(s)"));
+    assert_eq!(result.data["replaceAll"], true);
+    assert_eq!(result.data["replacementCount"], 3);
     let content = std::fs::read_to_string(&file).unwrap();
     assert_eq!(content, "qux bar qux baz qux");
 }
@@ -185,8 +187,9 @@ async fn test_edit_matches_curly_quotes() {
         .await
         .unwrap();
 
-    let text = result.data.as_str().unwrap();
-    assert!(text.contains("updated"));
+    // Structured result: presence of `filePath` is sufficient — the
+    // model-visible message is exercised in render_for_model tests.
+    assert_eq!(result.data["filePath"], file.to_str().unwrap());
     let content = std::fs::read_to_string(&file).unwrap();
     // preserve_quote_style should have re-applied curly quotes to new_string.
     assert!(
@@ -218,8 +221,9 @@ async fn test_edit_matches_curly_single_quotes() {
         .await
         .unwrap();
 
-    let text = result.data.as_str().unwrap();
-    assert!(text.contains("updated"));
+    // Structured result: presence of `filePath` is sufficient — the
+    // model-visible message is exercised in render_for_model tests.
+    assert_eq!(result.data["filePath"], file.to_str().unwrap());
     let content = std::fs::read_to_string(&file).unwrap();
     assert!(
         content.contains("that\u{2019}s"),
@@ -263,7 +267,11 @@ async fn test_edit_strips_trailing_whitespace_from_new_string() {
         )
         .await
         .unwrap();
-    assert!(result.data.as_str().unwrap().contains("updated"));
+    assert!(
+        result.data["filePath"].is_string(),
+        "expected filePath in data: {:?}",
+        result.data
+    );
 
     // Trailing spaces should NOT end up on disk.
     let content = std::fs::read_to_string(&file).unwrap();
@@ -300,7 +308,11 @@ async fn test_edit_preserves_trailing_whitespace_in_markdown() {
         )
         .await
         .unwrap();
-    assert!(result.data.as_str().unwrap().contains("updated"));
+    assert!(
+        result.data["filePath"].is_string(),
+        "expected filePath in data: {:?}",
+        result.data
+    );
 
     let content = std::fs::read_to_string(&file).unwrap();
     assert!(
@@ -329,7 +341,11 @@ async fn test_edit_markdown_extension_case_insensitive() {
             )
             .await
             .unwrap();
-        assert!(result.data.as_str().unwrap().contains("updated"));
+        assert!(
+            result.data["filePath"].is_string(),
+            "expected filePath in data: {:?}",
+            result.data
+        );
 
         let content = std::fs::read_to_string(&file).unwrap();
         assert!(
@@ -367,7 +383,11 @@ async fn test_edit_desanitizes_sanitized_tags_in_old_string() {
         )
         .await
         .unwrap();
-    assert!(result.data.as_str().unwrap().contains("updated"));
+    assert!(
+        result.data["filePath"].is_string(),
+        "expected filePath in data: {:?}",
+        result.data
+    );
 
     let content = std::fs::read_to_string(&file).unwrap();
     // The replacement should use the REAL tags, not the sanitized form.
@@ -427,4 +447,35 @@ async fn test_edit_detects_content_drift_in_race() {
     );
     // Content on disk must be unchanged.
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "current on disk");
+}
+
+// ---------------------------------------------------------------------------
+// render_for_model — TS parity for Edit branches
+// ---------------------------------------------------------------------------
+
+#[test]
+fn edit_render_single_replacement_branch() {
+    use coco_tool_runtime::ToolResultContentPart;
+    let data = json!({"filePath": "/abs/file.rs", "replaceAll": false, "userModified": false});
+    let parts = EditTool.render_for_model(&data);
+    let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+        panic!("expected Text part");
+    };
+    // TS parity: `The file PATH has been updated successfully.`
+    assert_eq!(text, "The file /abs/file.rs has been updated successfully.");
+}
+
+#[test]
+fn edit_render_replace_all_branch() {
+    use coco_tool_runtime::ToolResultContentPart;
+    let data = json!({"filePath": "/abs/multi.rs", "replaceAll": true, "userModified": false});
+    let parts = EditTool.render_for_model(&data);
+    let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+        panic!("expected Text part");
+    };
+    // TS parity: `The file PATH has been updated. All occurrences were successfully replaced.`
+    assert_eq!(
+        text,
+        "The file /abs/multi.rs has been updated. All occurrences were successfully replaced."
+    );
 }

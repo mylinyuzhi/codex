@@ -33,6 +33,11 @@ coco-hooks.workspace = true
 # including system-prompt assembly, fallback chain, permission resolution,
 # CLAUDE.md discovery — the user's actual entry point.
 coco-cli.workspace = true
+# Needed by both SDK and TUI harnesses to construct
+# `SessionRuntimeBuildOpts.agent_search_paths` /
+# `builtin_agent_catalog` — added when the runtime started owning the
+# per-session agent definition store.
+coco-subagent.workspace = true
 clap = { workspace = true }
 
 # sdk_server_deepseek suite: drives the real SdkServer with InMemoryTransport
@@ -52,6 +57,11 @@ crossterm.workspace = true
 anyhow.workspace = true
 dotenvy.workspace = true
 futures = { workspace = true }
+# multimodal_image suite: build real PNG/JPEG/WebP fixtures end-to-end so
+# the ReadTool → message → normalize pipeline is exercised on actual
+# image bytes, not synthetic strings. Keeping the encoder choice small
+# (jpeg/png/webp) matches `utils/image`.
+image = { workspace = true, features = ["jpeg", "png", "webp"] }
 pretty_assertions.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true

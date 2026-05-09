@@ -9,6 +9,7 @@ use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
+use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
@@ -67,6 +68,31 @@ impl Tool for ConfigTool {
     /// settings file, demote to input-conditional safety like BashTool.
     fn is_concurrency_safe(&self, _: &Value) -> bool {
         true
+    }
+
+    /// Render the prebuilt `message` field, optionally followed by the
+    /// list of available keys (for the `list` action). Skips JSON
+    /// envelope overhead — the model only needs the human prose.
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        let message = data
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let mut text = message.to_string();
+        if let Some(keys) = data.get("keys").and_then(Value::as_array)
+            && !keys.is_empty()
+        {
+            let names: Vec<&str> = keys.iter().filter_map(Value::as_str).collect();
+            text.push_str(":\n");
+            text.push_str(&names.join("\n"));
+        }
+        if text.is_empty() {
+            text = serde_json::to_string(data).unwrap_or_default();
+        }
+        vec![ToolResultContentPart::Text {
+            text,
+            provider_options: None,
+        }]
     }
 
     async fn execute(

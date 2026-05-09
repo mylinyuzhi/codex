@@ -27,6 +27,7 @@ use coco_system_reminder::TurnReminderInput;
 use coco_system_reminder::count_human_turns;
 use coco_system_reminder::inject_reminders;
 use coco_system_reminder::run_turn_reminders;
+use coco_types::Feature;
 use coco_types::PermissionMode;
 use coco_types::TokenUsage;
 use coco_types::ToolAppState;
@@ -205,17 +206,14 @@ impl QueryEngine {
         let reminder_is_auto_mode = reminder_permission_mode == PermissionMode::Auto
             || (reminder_permission_mode == PermissionMode::Plan
                 && reminder_auto_classifier_active);
-        // TS `isTodoV2Enabled()` — coco-rs derives this from whether the
-        // V2 task mutation tools are actually loaded into the session.
-        // `TASK_MANAGEMENT_TOOLS` is the `[TaskCreate, TaskUpdate]` set
-        // (matches TS `getTaskReminderTurnCounts`); V2 is active when
-        // either mutation tool is wired into the current registry —
-        // read-only task tools alone aren't enough.
-        let reminder_task_v2_enabled =
-            coco_system_reminder::TASK_MANAGEMENT_TOOLS.iter().any(|t| {
-                let wire = t.as_str();
-                reminder_tools.iter().any(|name| name == wire)
-            });
+        // TS `isTodoV2Enabled()` — coco-rs reads the explicit
+        // `Feature::TaskV2` gate (default-on) which drives the V1/V2
+        // mutual exclusion at tool level (`is_enabled` on TodoWrite vs
+        // TaskCreate/Get/List/Update). The flag is the source of truth;
+        // `TASK_MANAGEMENT_TOOLS` is still used by `turn_runner` for
+        // counting turns since the last task mutation, but no longer
+        // for V2-mode detection.
+        let reminder_task_v2_enabled = self.config.features.enabled(Feature::TaskV2);
         // TS `isAutoCompactEnabled()` — a user-facing toggle. coco-rs
         // resolves it through `QueryEngineConfig.compact.auto.is_active()`
         // (user toggle AND env kill switches) so the SDK / CLI / TUI
@@ -340,6 +338,13 @@ impl QueryEngine {
         let just_compacted = self
             .pending_just_compacted
             .swap(false, std::sync::atomic::Ordering::SeqCst);
+        // Tools the model successfully invoked since the previous human
+        // turn. TS `collectRecentSuccessfulTools` (`utils/attachments.ts`)
+        // feeds this into the `findRelevantMemories` ranker so it can
+        // deprioritize reference docs for tools the model is actively
+        // exercising. Empty when no human-turn boundary is established
+        // yet (start of conversation, or no successful tool runs).
+        let reminder_recent_tools = collect_recent_successful_tools(&history.messages);
         let materialized = self
             .reminder_sources
             .materialize(coco_system_reminder::MaterializeContext {
@@ -347,6 +352,7 @@ impl QueryEngine {
                 agent_id: self.config.agent_id.as_deref(),
                 user_input: reminder_user_input.as_deref(),
                 mentioned_paths: &reminder_mentioned_paths,
+                recent_tools: &reminder_recent_tools,
                 just_compacted,
                 per_source_timeout: reminder_source_timeout,
             })
@@ -662,4 +668,58 @@ impl QueryEngine {
 
         app_state_snapshot
     }
+}
+
+/// Tool names the assistant successfully invoked since the previous
+/// human turn. TS parity with `collectRecentSuccessfulTools`
+/// (`utils/attachments.ts`):
+///
+/// - Slice messages from the most recent user message to the end —
+///   that's "this human turn".
+/// - In that slice, harvest `tool_call_id → tool_name` from every
+///   assistant `ToolCall` block, and `tool_use_id → !is_error` from
+///   every `ToolResultMessage`.
+/// - Return the unique set of tool names whose result was non-error.
+///
+/// Empty when no human turn has happened yet (no Message::User in
+/// history) or no tool produced a non-error result. Order is
+/// unspecified — the recall ranker uses set membership only.
+fn collect_recent_successful_tools(messages: &[Message]) -> Vec<String> {
+    use coco_messages::AssistantContent;
+    use coco_messages::LlmMessage;
+    use std::collections::HashMap;
+
+    let Some(last_user_idx) = messages.iter().rposition(|m| matches!(m, Message::User(_))) else {
+        return Vec::new();
+    };
+
+    let mut use_id_to_name: HashMap<String, String> = HashMap::new();
+    let mut success_by_use_id: HashMap<String, bool> = HashMap::new();
+    for m in &messages[last_user_idx..] {
+        match m {
+            Message::Assistant(a) => {
+                if let LlmMessage::Assistant { content, .. } = &a.message {
+                    for block in content {
+                        if let AssistantContent::ToolCall(call) = block {
+                            use_id_to_name
+                                .insert(call.tool_call_id.clone(), call.tool_name.clone());
+                        }
+                    }
+                }
+            }
+            Message::ToolResult(tr) => {
+                success_by_use_id.insert(tr.tool_use_id.clone(), !tr.is_error);
+            }
+            _ => {}
+        }
+    }
+
+    let mut out: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for (use_id, name) in &use_id_to_name {
+        if success_by_use_id.get(use_id).copied().unwrap_or(false) && seen.insert(name.clone()) {
+            out.push(name.clone());
+        }
+    }
+    out
 }

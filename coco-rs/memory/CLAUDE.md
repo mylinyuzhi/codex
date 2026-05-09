@@ -50,6 +50,7 @@ src/
 | `RelevantMemory` | path + truncated content + freshness header |
 | `ExtractService` / `DreamService` / `SessionMemoryService` | the three async services |
 | `MemoryRuntime` / `MemoryRuntimeBuilder` | session-level composer |
+| `SessionEnumerator` | `Arc<dyn Fn() -> Vec<String>>` — TranscriptStore-backed lazy session lister wired by `install_session_enumerator`; consumed by `tick_dream` |
 | `MemoryEvent` / `OtelEmitter` | telemetry taxonomy + OTel adapter |
 
 ## Multi-Provider Notes
@@ -66,7 +67,10 @@ src/
 - Path resolution is anchored to `coco_git::find_canonical_git_root` so worktrees of one repo share one memdir.
 - `ExtractService::run` always sets `isolation = "fork"` + `fork_context_messages` so the child sees the parent's slice — TS parity (`AgentTool.tsx:622-632`).
 - The write fence resolves relative paths against `ToolUseContext::cwd_override` before checking, so a model passing `./notes.md` lands inside the fence as expected.
-- `DreamService` rolls the lock mtime back on failure so the time-gate doesn't reset to "now."
+- `DreamService::maybe_consolidate` checks gates in TS-parity order (time → scan throttle → session) and accepts `enumerate_sessions` as `FnOnce()` — the closure runs **only** after the time + scan gates pass so callers don't pay enumeration cost on every turn.
+- `DreamService` rolls the lock mtime back on failure so the time-gate doesn't reset to "now"; the failure path also emits `MemoryEvent::AutoDreamFailed` for telemetry parity with TS `tengu_auto_dream_failed`.
+- `MemoryRuntime::tick_dream` is the engine's per-turn entry point: it calls the installed `SessionEnumerator` (TranscriptStore-backed) lazily and threads the runtime's `transcript_dir`. Engine fans this out alongside extract + session-memory in `engine_finalize_turn`.
+- `ExtractService` emits `ExtractionCoalesced` when a request stashes for a trailing run and `ExtractionError` on subagent failure — full telemetry coverage of TS `tengu_extract_memories_*` events.
 - `SessionMemoryService` writes the 9-section template if missing, then asks the agent to Edit-only — never overwrites the file wholesale.
 - `MemoryEvent::ExtractionCompleted::files_written` sums real `Write + Edit + NotebookEdit` invocations from `AgentSpawnResponse::tool_use_counts` — no fabricated counts.
 

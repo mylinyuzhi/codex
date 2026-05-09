@@ -25,6 +25,7 @@ pub use aliases::TextContent;
 pub use aliases::ToolCallContent;
 pub use aliases::ToolContent;
 pub use aliases::ToolResultContent;
+pub use aliases::ToolResultContentPart;
 pub use aliases::UserContent;
 
 pub use attachment_body::AlreadyReadFilePayload;

@@ -97,6 +97,15 @@ pub trait McpHandle: Send + Sync {
     /// Get names of all connected servers.
     async fn connected_servers(&self) -> Vec<String>;
 
+    /// Names of servers still in the connecting / handshake phase. TS:
+    /// `getPendingServerNames()` (`mcpClient.ts`). Surfaced by
+    /// `ToolSearchTool` in its empty-match branch so the model knows
+    /// to retry once handshakes complete. Default impl returns empty —
+    /// handles without server-state tracking just say "no pending".
+    async fn pending_server_names(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// List all tools from all connected MCP servers.
     ///
     /// Used by MCPTool to discover and expose MCP server tools to the LLM.

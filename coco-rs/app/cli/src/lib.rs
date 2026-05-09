@@ -13,6 +13,7 @@ pub mod headless;
 pub mod mcp_handle_adapter;
 pub mod output;
 pub mod paths;
+pub mod permission_rule_loader;
 pub mod resume_resolver;
 pub mod sandbox_reload;
 pub mod sdk_server;

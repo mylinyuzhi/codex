@@ -101,3 +101,107 @@ async fn execute_echoes_questions_payload() {
     let out = t.execute(input.clone(), &ctx).await.expect("execute ok");
     assert_eq!(out.data["questions"], input["questions"]);
 }
+
+// ── render_for_model — TS parity for answer envelopes ────────────────
+
+mod render_tests {
+    use super::AskUserQuestionTool;
+    use coco_tool_runtime::Tool;
+    use coco_tool_runtime::ToolResultContentPart;
+    use serde_json::json;
+
+    fn text_of(parts: &[ToolResultContentPart]) -> &str {
+        match &parts[0] {
+            ToolResultContentPart::Text { text, .. } => text.as_str(),
+            _ => panic!("expected Text part"),
+        }
+    }
+
+    #[test]
+    fn formats_single_answer_with_trailing_continuation_clause() {
+        // TS `AskUserQuestionTool.tsx:241-244`:
+        // `User has answered your questions: "Q"="A". You can now
+        // continue with the user's answers in mind.`
+        let data = json!({
+            "answers": {"What's your name?": "Alice"},
+        });
+        let parts = AskUserQuestionTool.render_for_model(&data);
+        assert_eq!(
+            text_of(&parts),
+            "User has answered your questions: \"What's your name?\"=\"Alice\". You can now continue with the user's answers in mind."
+        );
+    }
+
+    #[test]
+    fn joins_multiple_answers_with_comma_space() {
+        // Order is not guaranteed (HashMap-backed) so check both
+        // entries are present and the boilerplate wraps them.
+        let data = json!({
+            "answers": {"Q1": "A1", "Q2": "A2"},
+        });
+        let parts = AskUserQuestionTool.render_for_model(&data);
+        let text = text_of(&parts);
+        assert!(text.starts_with("User has answered your questions: "));
+        assert!(text.contains("\"Q1\"=\"A1\""));
+        assert!(text.contains("\"Q2\"=\"A2\""));
+        assert!(text.ends_with(". You can now continue with the user's answers in mind."));
+    }
+
+    #[test]
+    fn appends_preview_and_notes_when_annotation_present() {
+        // TS `AskUserQuestionTool.tsx:230-234`: `selected preview:\n...`
+        // and `user notes: ...` join with single space.
+        let data = json!({
+            "answers": {"Pick a layout": "two-column"},
+            "annotations": {
+                "Pick a layout": {
+                    "preview": "+----+----+",
+                    "notes": "user prefers compact"
+                }
+            }
+        });
+        let parts = AskUserQuestionTool.render_for_model(&data);
+        let text = text_of(&parts);
+        assert!(text.contains("\"Pick a layout\"=\"two-column\""));
+        assert!(text.contains("selected preview:\n+----+----+"));
+        assert!(text.contains("user notes: user prefers compact"));
+    }
+
+    #[test]
+    fn preview_only_skips_notes_clause() {
+        let data = json!({
+            "answers": {"Q": "A"},
+            "annotations": {"Q": {"preview": "snip"}}
+        });
+        let parts = AskUserQuestionTool.render_for_model(&data);
+        let text = text_of(&parts);
+        assert!(text.contains("selected preview:\nsnip"));
+        assert!(!text.contains("user notes:"));
+    }
+
+    #[test]
+    fn missing_answers_falls_through_to_json_envelope() {
+        // Pre-splicer envelope (questions only) — the TUI hasn't
+        // collected answers yet. Defensive path emits the data as
+        // JSON-or-string text so nothing leaks unrendered.
+        let data = json!({
+            "questions": [{"question": "Pick", "options": [], "header": "h"}]
+        });
+        let parts = AskUserQuestionTool.render_for_model(&data);
+        let text = text_of(&parts);
+        assert!(
+            text.starts_with('{') || text.starts_with('"'),
+            "expected JSON or string fallback, got: {text}"
+        );
+    }
+
+    #[test]
+    fn empty_answers_object_falls_through() {
+        let data = json!({"answers": {}});
+        let parts = AskUserQuestionTool.render_for_model(&data);
+        let text = text_of(&parts);
+        // The defensive `render_text_or_json` JSON-stringifies the
+        // whole envelope when it can't extract a flat string.
+        assert!(text.contains("\"answers\""), "got: {text}");
+    }
+}

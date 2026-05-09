@@ -250,6 +250,185 @@ impl SettingsPermissionStore {
         Ok(())
     }
 
+    /// Replace the entire `[behavior]` rule array on a settings file.
+    ///
+    /// TS: `persistPermissionUpdate(replaceRules)` in `PermissionUpdate.ts:329-340`.
+    /// Unlike `persist_add_rules`, this overwrites the array
+    /// wholesale — used by the rules editor UI when a user reorders
+    /// or wholesale-edits permissions for a single source.
+    ///
+    /// Empty `rules` is a no-op: TS carries `behavior` on the update
+    /// envelope itself, but `PermissionUpdate::ReplaceRules` derives
+    /// behavior from the first rule. With no rules there's nothing
+    /// to anchor the target key, so we can't faithfully clear a
+    /// specific behavior list. Matches `permission_updates.rs:78-81`'s
+    /// in-memory variant of the same operation.
+    fn persist_replace_rules(
+        &self,
+        rules: &[PermissionRule],
+        dest: PermissionUpdateDestination,
+    ) -> Result<(), coco_error::BoxedError> {
+        let Some(first) = rules.first() else {
+            return Ok(());
+        };
+        let path = match self.path_for_destination(dest) {
+            Some(p) => p,
+            None => return Ok(()),
+        };
+        if self.is_managed_only() {
+            warn!("blocked: cannot replace rules — allowManagedPermissionRulesOnly is enabled");
+            return Ok(());
+        }
+        let behavior_key = match first.behavior {
+            PermissionBehavior::Allow => "allow",
+            PermissionBehavior::Deny => "deny",
+            PermissionBehavior::Ask => "ask",
+        };
+
+        let mut settings = Self::read_settings_json(&path);
+        if !settings.is_object() {
+            settings = serde_json::json!({});
+        }
+        let Some(settings_obj) = settings.as_object_mut() else {
+            return Ok(());
+        };
+        let permissions = settings_obj
+            .entry("permissions")
+            .or_insert_with(|| serde_json::json!({}));
+        if !permissions.is_object() {
+            *permissions = serde_json::json!({});
+        }
+        let Some(permissions_obj) = permissions.as_object_mut() else {
+            return Ok(());
+        };
+        let rule_strings: Vec<serde_json::Value> = rules
+            .iter()
+            .map(|r| serde_json::Value::String(rule_compiler::rule_value_to_string(&r.value)))
+            .collect();
+        permissions_obj.insert(
+            behavior_key.to_string(),
+            serde_json::Value::Array(rule_strings),
+        );
+
+        Self::write_settings_json(&path, &settings)?;
+        debug!("replaced {behavior_key} rules in {}", path.display());
+        Ok(())
+    }
+
+    /// Persist `additionalDirectories` additions to a settings file.
+    ///
+    /// TS: `persistPermissionUpdate(addDirectories)` in `PermissionUpdate.ts:244-265`.
+    /// Reads the existing list, appends new dirs while preserving
+    /// order and dropping duplicates, then rewrites the file.
+    fn persist_add_directories(
+        &self,
+        directories: &[String],
+        dest: PermissionUpdateDestination,
+    ) -> Result<(), coco_error::BoxedError> {
+        if directories.is_empty() {
+            return Ok(());
+        }
+        let path = match self.path_for_destination(dest) {
+            Some(p) => p,
+            None => return Ok(()),
+        };
+        if self.is_managed_only() {
+            warn!(
+                "blocked: cannot add additionalDirectories — allowManagedPermissionRulesOnly is enabled"
+            );
+            return Ok(());
+        }
+
+        let mut settings = Self::read_settings_json(&path);
+        if !settings.is_object() {
+            settings = serde_json::json!({});
+        }
+        let Some(settings_obj) = settings.as_object_mut() else {
+            return Ok(());
+        };
+        let permissions = settings_obj
+            .entry("permissions")
+            .or_insert_with(|| serde_json::json!({}));
+        if !permissions.is_object() {
+            *permissions = serde_json::json!({});
+        }
+        let Some(permissions_obj) = permissions.as_object_mut() else {
+            return Ok(());
+        };
+        let arr = permissions_obj
+            .entry("additionalDirectories")
+            .or_insert_with(|| serde_json::json!([]));
+        if !arr.is_array() {
+            *arr = serde_json::json!([]);
+        }
+        let Some(existing) = arr.as_array_mut() else {
+            return Ok(());
+        };
+
+        let existing_set: std::collections::HashSet<String> = existing
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect();
+
+        for dir in directories {
+            if !existing_set.contains(dir) {
+                existing.push(serde_json::Value::String(dir.clone()));
+            }
+        }
+
+        Self::write_settings_json(&path, &settings)?;
+        debug!("persisted additionalDirectories to {}", path.display());
+        Ok(())
+    }
+
+    /// Persist `additionalDirectories` removals to a settings file.
+    ///
+    /// TS: `persistPermissionUpdate(removeDirectories)` in `PermissionUpdate.ts:296-313`.
+    fn persist_remove_directories(
+        &self,
+        directories: &[String],
+        dest: PermissionUpdateDestination,
+    ) -> Result<(), coco_error::BoxedError> {
+        if directories.is_empty() {
+            return Ok(());
+        }
+        let path = match self.path_for_destination(dest) {
+            Some(p) => p,
+            None => return Ok(()),
+        };
+        if self.is_managed_only() {
+            warn!(
+                "blocked: cannot remove additionalDirectories — allowManagedPermissionRulesOnly is enabled"
+            );
+            return Ok(());
+        }
+
+        let mut settings = Self::read_settings_json(&path);
+        let permissions = match settings.get_mut("permissions") {
+            Some(p) => p,
+            None => return Ok(()),
+        };
+        let arr = match permissions.get_mut("additionalDirectories") {
+            Some(a) => a,
+            None => return Ok(()),
+        };
+        let existing = match arr.as_array_mut() {
+            Some(a) => a,
+            None => return Ok(()),
+        };
+
+        let to_remove: std::collections::HashSet<&str> =
+            directories.iter().map(String::as_str).collect();
+        existing.retain(|v| match v.as_str() {
+            Some(s) => !to_remove.contains(s),
+            None => true,
+        });
+
+        Self::write_settings_json(&path, &settings)?;
+        debug!("removed additionalDirectories from {}", path.display());
+        Ok(())
+    }
+
     /// Persist rule removal to a settings file.
     ///
     /// TS: `deletePermissionRuleFromSettings()` in permissionsLoader.ts
@@ -368,11 +547,23 @@ impl PermissionStore for SettingsPermissionStore {
             PermissionUpdate::AddRules { rules, destination } => {
                 self.persist_add_rules(rules, *destination)
             }
+            PermissionUpdate::ReplaceRules { rules, destination } => {
+                self.persist_replace_rules(rules, *destination)
+            }
             PermissionUpdate::RemoveRules { rules, destination } => {
                 self.persist_remove_rules(rules, *destination)
             }
-            // SetMode, directories — in-memory only
-            _ => Ok(()),
+            PermissionUpdate::AddDirectories {
+                directories,
+                destination,
+            } => self.persist_add_directories(directories, *destination),
+            PermissionUpdate::RemoveDirectories {
+                directories,
+                destination,
+            } => self.persist_remove_directories(directories, *destination),
+            // SetMode has no destination — it changes session state,
+            // not a settings layer.
+            PermissionUpdate::SetMode { .. } => Ok(()),
         }
     }
 

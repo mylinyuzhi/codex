@@ -163,6 +163,15 @@ pub enum EnvKey {
     /// of this flag (matches TS `AgentTool.tsx:750` ORing
     /// `isCoordinator || getSdkAgentProgressSummariesEnabled`).
     CocoAgentSummaryEnable,
+    /// Inject the AgentTool agent listing into a `<system-reminder>`
+    /// attachment instead of inline in the tool description. TS
+    /// parity: `CLAUDE_CODE_AGENT_LIST_IN_MESSAGES` in
+    /// `tools/AgentTool/prompt.ts:60-63` plus the
+    /// `tengu_agent_list_attach` GrowthBook gate. coco-rs has no
+    /// GrowthBook shim; the env var is the only source. Off by default
+    /// (= keep the listing inline) so the model-visible AgentTool
+    /// description matches the TS 3p default.
+    CocoAgentListInMessages,
     /// Terminal-multiplexer detection (third-party env vars, not
     /// COCO-prefixed). Surfaced through `EnvKey` so pane backends
     /// don't reach for `std::env::var` directly. The env names are
@@ -255,6 +264,7 @@ impl EnvKey {
             Self::CocoPromptSuggestionDisable => "COCO_PROMPT_SUGGESTION_DISABLE",
             Self::CocoBackgroundTasksDisable => "COCO_BACKGROUND_TASKS_DISABLE",
             Self::CocoAgentSummaryEnable => "COCO_AGENT_SUMMARY_ENABLE",
+            Self::CocoAgentListInMessages => "COCO_AGENT_LIST_IN_MESSAGES",
             Self::Tmux => "TMUX",
             Self::TmuxPane => "TMUX_PANE",
             Self::TermProgram => "TERM_PROGRAM",

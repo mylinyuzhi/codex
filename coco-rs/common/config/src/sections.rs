@@ -379,6 +379,10 @@ pub struct PartialMemorySettings {
     pub session_memory_tool_calls: Option<i32>,
     pub session_memory_per_section_tokens: Option<i64>,
     pub session_memory_total_tokens: Option<i64>,
+
+    // Optional "Searching past context" prompt block (TS
+    // `buildSearchingPastContextSection`, gated by `tengu_coral_fern`).
+    pub searching_past_context_enabled: Option<bool>,
 }
 
 /// Resolved auto-memory configuration.
@@ -419,6 +423,11 @@ pub struct MemoryConfig {
     pub session_memory_tool_calls: i32,
     pub session_memory_per_section_tokens: i64,
     pub session_memory_total_tokens: i64,
+
+    /// Inject the optional "Searching past context" guidance block in
+    /// the auto-memory system-prompt section. Off by default, mirroring
+    /// the TS `tengu_coral_fern` GrowthBook gate.
+    pub searching_past_context_enabled: bool,
 }
 
 impl Default for MemoryConfig {
@@ -440,6 +449,7 @@ impl Default for MemoryConfig {
             session_memory_tool_calls: 3,
             session_memory_per_section_tokens: 2_000,
             session_memory_total_tokens: 12_000,
+            searching_past_context_enabled: false,
         }
     }
 }
@@ -496,6 +506,9 @@ impl MemoryConfig {
         }
         if let Some(v) = s.session_memory_total_tokens {
             config.session_memory_total_tokens = v;
+        }
+        if let Some(v) = s.searching_past_context_enabled {
+            config.searching_past_context_enabled = v;
         }
 
         // Path override: `CocoMemoryPathOverride` is the operator-facing

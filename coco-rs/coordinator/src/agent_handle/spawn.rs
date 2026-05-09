@@ -658,21 +658,34 @@ impl SwarmAgentHandle {
         // Resolve the prior-history + system-prompt pair from the
         // requested spawn mode:
         //
-        // - Fresh     → no history, no inherited prompt; engine builds
-        //               the system prompt from `definition`.
+        // - Fresh     → no history; system prompt seeded from
+        //               `definition.system_prompt` (TS-parity
+        //               `runAgent.ts:906-932 getAgentSystemPrompt` →
+        //               `getSystemPrompt({...})`). Built-ins populate
+        //               this via [`coco_subagent::builtin_prompts`];
+        //               markdown agents via the body of their `.md`
+        //               file. Without this, the child would fall
+        //               through to the engine's generic default
+        //               instead of receiving its role instructions.
         // - Fork      → parent's pre-rendered system-prompt bytes
         //               verbatim (cache parity), parent history with
         //               `tool_result` blocks rewritten to
         //               `FORK_PLACEHOLDER` (TS `forkSubagent.ts`).
-        // - Resume    → empty system prompt (engine rebuilds from
-        //               `definition`), prior history kept verbatim
-        //               (NO placeholder rewrite — the child needs real
-        //               tool outputs to continue). TS
-        //               `resumeAgent.ts:resumeAgentBackground` for
-        //               non-fork agent types.
+        // - Resume    → seed from `definition.system_prompt` like
+        //               Fresh (TS `resumeAgent.ts` rebuilds from the
+        //               definition); prior history kept verbatim (NO
+        //               placeholder rewrite — the child needs real
+        //               tool outputs to continue).
         //
         // `preserve_tool_use_results` flips on for Fork and Resume so
         // downstream compaction doesn't strip the inherited results.
+        let definition_prompt = || {
+            request
+                .definition
+                .as_deref()
+                .and_then(|d| d.system_prompt.clone())
+                .unwrap_or_default()
+        };
         let (mut system_prompt, fork_context_messages, preserve_tool_use_results) =
             match &request.spawn_mode {
                 coco_tool_runtime::SpawnMode::Fork {
@@ -687,17 +700,23 @@ impl SwarmAgentHandle {
                     (prompt_str, ctx.messages, true)
                 }
                 coco_tool_runtime::SpawnMode::Resume { parent_messages } => {
-                    (String::new(), parent_messages.clone(), true)
+                    (definition_prompt(), parent_messages.clone(), true)
                 }
-                coco_tool_runtime::SpawnMode::Fresh => {
-                    (String::new(), request.fork_context_messages.clone(), false)
-                }
+                coco_tool_runtime::SpawnMode::Fresh => (
+                    definition_prompt(),
+                    request.fork_context_messages.clone(),
+                    false,
+                ),
                 // `SpawnMode` is `#[non_exhaustive]` (cross-crate), so the
                 // compiler forces a wildcard. Future variants need
                 // explicit handling at this seam.
                 other => {
                     tracing::warn!(?other, "unknown SpawnMode; treating as Fresh");
-                    (String::new(), request.fork_context_messages.clone(), false)
+                    (
+                        definition_prompt(),
+                        request.fork_context_messages.clone(),
+                        false,
+                    )
                 }
             };
 
@@ -950,6 +969,14 @@ impl SwarmAgentHandle {
                     input_tokens: qr.input_tokens,
                     output_tokens: qr.output_tokens,
                     tool_use_counts: count_tool_uses_in_messages(&qr.messages),
+                    // Cache stats + per-call paths_written are
+                    // populated by the engine's QueryResult once the
+                    // wiring lands; until then default to zero/empty
+                    // so memory's hit-rate dashboards stay flat
+                    // rather than spiking on garbage.
+                    cache_read_tokens: 0,
+                    cache_creation_tokens: 0,
+                    paths_written: Vec::new(),
                     duration_ms,
                     worktree_path,
                     worktree_branch,

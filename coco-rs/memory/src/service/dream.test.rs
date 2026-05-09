@@ -15,7 +15,7 @@ async fn skips_when_disabled() {
         cfg,
         std::sync::Arc::new(RecordingHandle::default()),
     );
-    let outcome = svc.maybe_consolidate(temp.path(), &[], 0).await;
+    let outcome = svc.maybe_consolidate(temp.path(), Vec::new, 0).await;
     assert_eq!(outcome, DreamOutcome::Skipped(SkipReason::Disabled));
 }
 
@@ -31,7 +31,7 @@ async fn skips_in_kairos_mode() {
         cfg,
         std::sync::Arc::new(RecordingHandle::default()),
     );
-    let outcome = svc.maybe_consolidate(temp.path(), &[], 0).await;
+    let outcome = svc.maybe_consolidate(temp.path(), Vec::new, 0).await;
     assert_eq!(outcome, DreamOutcome::Skipped(SkipReason::KairosMode));
 }
 
@@ -44,8 +44,9 @@ async fn skips_on_session_gate() {
         std::sync::Arc::new(RecordingHandle::default()),
     );
     // No prior consolidation → time gate passes (no last mtime).
+    // Closure invoked only after time gate, mirrors TS lazy enumerate.
     let outcome = svc
-        .maybe_consolidate(temp.path(), &["s1".into(), "s2".into()], 0)
+        .maybe_consolidate(temp.path(), || vec!["s1".into(), "s2".into()], 0)
         .await;
     match outcome {
         DreamOutcome::Skipped(SkipReason::SessionGate { sessions_seen }) => {
@@ -60,15 +61,20 @@ async fn fires_with_dream_constraints() {
     let temp = tempdir().unwrap();
     let handle = std::sync::Arc::new(RecordingHandle::default());
     let svc = DreamService::new(temp.path().into(), MemoryConfig::default(), handle.clone());
-    let sessions = vec![
-        "s1".into(),
-        "s2".into(),
-        "s3".into(),
-        "s4".into(),
-        "s5".into(),
-    ];
     let outcome = svc
-        .maybe_consolidate(temp.path(), &sessions, DreamService::now_ms())
+        .maybe_consolidate(
+            temp.path(),
+            || {
+                vec![
+                    "s1".into(),
+                    "s2".into(),
+                    "s3".into(),
+                    "s4".into(),
+                    "s5".into(),
+                ]
+            },
+            DreamService::now_ms(),
+        )
         .await;
     assert!(matches!(outcome, DreamOutcome::Completed { .. }));
     let calls = handle.calls();
@@ -82,22 +88,132 @@ async fn fires_with_dream_constraints() {
 }
 
 #[tokio::test]
-async fn second_call_within_throttle_skips() {
+async fn second_call_within_time_window_skips_on_time_gate() {
+    // TS parity (`autoDream.ts:140`): time gate is checked **before**
+    // scan throttle and session enumeration. The first call stamps the
+    // lock mtime at "now"; the second call's `hours_since` is 0, which
+    // fails the time gate before scan throttle can fire. Pre-refactor
+    // this test asserted ScanThrottled because gates were checked in
+    // the wrong order.
     let temp = tempdir().unwrap();
     let handle = std::sync::Arc::new(RecordingHandle::default());
     let svc = DreamService::new(temp.path().into(), MemoryConfig::default(), handle.clone());
-    let sessions = vec![
-        "s1".into(),
-        "s2".into(),
-        "s3".into(),
-        "s4".into(),
-        "s5".into(),
-    ];
     let _first = svc
-        .maybe_consolidate(temp.path(), &sessions, DreamService::now_ms())
+        .maybe_consolidate(
+            temp.path(),
+            || {
+                vec![
+                    "s1".into(),
+                    "s2".into(),
+                    "s3".into(),
+                    "s4".into(),
+                    "s5".into(),
+                ]
+            },
+            DreamService::now_ms(),
+        )
         .await;
     let second = svc
-        .maybe_consolidate(temp.path(), &sessions, DreamService::now_ms())
+        .maybe_consolidate(
+            temp.path(),
+            || {
+                vec![
+                    "s1".into(),
+                    "s2".into(),
+                    "s3".into(),
+                    "s4".into(),
+                    "s5".into(),
+                ]
+            },
+            DreamService::now_ms(),
+        )
+        .await;
+    match second {
+        DreamOutcome::Skipped(SkipReason::TimeGate { hours_since }) => {
+            assert!(
+                hours_since < 24,
+                "expected hours_since under min_hours, got {hours_since}"
+            );
+        }
+        other => panic!("expected TimeGate after first consolidation, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn scan_throttle_blocks_when_time_gate_passes() {
+    // Force-fire two consolidations under `dream_min_hours = 1` (clamp
+    // floor). The first stamps the lock at "now"; for the second, we
+    // pass `now + 2h` so the time gate passes. Scan throttle (10-min)
+    // then short-circuits the second call. Exercises the ScanThrottled
+    // branch that the time gate now masks under the standard config.
+    let temp = tempdir().unwrap();
+    let handle = std::sync::Arc::new(RecordingHandle::default());
+    let cfg = MemoryConfig {
+        dream_min_hours: 1,
+        ..MemoryConfig::default()
+    };
+    let svc = DreamService::new(temp.path().into(), cfg, handle.clone());
+    let sessions = || {
+        vec![
+            "s1".into(),
+            "s2".into(),
+            "s3".into(),
+            "s4".into(),
+            "s5".into(),
+        ]
+    };
+    let now = DreamService::now_ms();
+    let _first = svc.maybe_consolidate(temp.path(), sessions, now).await;
+    // 2h forward — past the 1h min — so the time gate passes; the
+    // 10-min scan throttle bumped during the first call still bites.
+    let second = svc
+        .maybe_consolidate(temp.path(), sessions, now + 2 * 60 * 60 * 1000)
         .await;
     assert_eq!(second, DreamOutcome::Skipped(SkipReason::ScanThrottled));
+}
+
+#[tokio::test]
+async fn force_bypasses_session_gate() {
+    // Manual /dream parity: no sessions, fresh-start time gate, but
+    // force() must still fire so the user sees consolidation.
+    let temp = tempdir().unwrap();
+    let handle = std::sync::Arc::new(RecordingHandle::default());
+    let svc = DreamService::new(temp.path().into(), MemoryConfig::default(), handle.clone());
+    let outcome = svc
+        .force(temp.path(), Vec::new, DreamService::now_ms())
+        .await;
+    assert!(matches!(outcome, DreamOutcome::Completed { .. }));
+    assert_eq!(handle.calls().len(), 1);
+}
+
+#[tokio::test]
+async fn force_still_respects_disabled() {
+    let temp = tempdir().unwrap();
+    let cfg = MemoryConfig {
+        dream_enabled: false,
+        ..MemoryConfig::default()
+    };
+    let svc = DreamService::new(
+        temp.path().into(),
+        cfg,
+        std::sync::Arc::new(RecordingHandle::default()),
+    );
+    let outcome = svc.force(temp.path(), Vec::new, 0).await;
+    assert_eq!(outcome, DreamOutcome::Skipped(SkipReason::Disabled));
+}
+
+#[tokio::test]
+async fn force_still_respects_kairos_mode() {
+    let temp = tempdir().unwrap();
+    let cfg = MemoryConfig {
+        kairos_mode: true,
+        ..MemoryConfig::default()
+    };
+    let svc = DreamService::new(
+        temp.path().into(),
+        cfg,
+        std::sync::Arc::new(RecordingHandle::default()),
+    );
+    let outcome = svc.force(temp.path(), Vec::new, 0).await;
+    assert_eq!(outcome, DreamOutcome::Skipped(SkipReason::KairosMode));
 }

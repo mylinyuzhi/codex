@@ -2,6 +2,76 @@
 
 TS source: `src/utils/permissions/` (26 files), `src/types/permissions.ts`
 
+## Integration Points
+
+The crate is decision-only — every consumer threads its own state into
+the evaluator. The live integration chain in coco-rs:
+
+```
+~/.cocode/settings.json              (and project / local / flag / policy layers)
+       │                              + CLI --dangerously-skip-permissions / --permission-mode flags
+       ▼
+coco_config::Settings  ──►  SettingsWithSource::sourced_permission_rules()
+                                            │  → (allow, deny, ask): Vec<SourcedRule>
+                                            ▼
+coco_cli::permission_rule_loader::typed_permission_rules
+                                            │  → (allow, deny, ask): PermissionRulesBySource
+                                            ▼
+QueryEngineConfig.{allow, deny, ask}_rules
+       │                                    ▲
+       │                                    │ apply_permission_updates / SettingsPermissionStore::persist_update
+       ▼                                    │
+ToolUseContext.permission_context           │
+       │                                    │
+       ▼                                    │
+app/query::tool_call_preparer::evaluate_with_rules
+   ├ tool.check_permissions(input, ctx) → ToolCheckResult         (step-1c slot)
+   └ PermissionEvaluator::evaluate_with_tool_check                (TS hasPermissionsToUseToolInner)
+       │
+       ▼ Decision = Allow | Ask | Deny
+       │
+       ├ Ask + auto-mode active  → classify_yolo_action (Stage 1 + Stage 2)
+       │
+       ▼
+PermissionController::resolve
+   ├ Allow  → PermissionOutcome::Allow { updated_input }
+   ├ Deny   → record denial + complete tool with PermissionDenied
+   └ Ask    → PermissionRequest hook → bridge.request_permission ──► TUI Overlay::Permission
+                                                                          │
+                                              UserCommand::ApprovalResponse {
+                                                approved, always_allow,
+                                                permission_updates: Vec<PermissionUpdate>
+                                              }
+                                                                          │
+                                                                          ▼
+                                              tui_runner: apply_permission_updates +
+                                                         persist_update (User/Project/Local) +
+                                                         resolve_pending(...applied_updates)
+```
+
+**Default tool opinion** — `Tool::check_permissions` defaults to
+`ToolCheckResult::Passthrough` (defer to rule pipeline). TS defaults
+to `{ behavior: 'allow', updatedInput }` (auto-allow safe tools);
+coco-rs is fail-secure here so a tool that forgets to override
+gets prompted in `Default` mode rather than silently allowed. See
+`core/permissions/CLAUDE.md` for the Passthrough vs Allow rationale.
+
+**Persistence destinations** (matches TS `PermissionUpdateDestination`):
+
+| Destination | Stored | TS parity |
+|-------------|--------|-----------|
+| `Session` | in-memory `engine_config.allow_rules[Session]` | session-only, evaporates on restart |
+| `CliArg` / `Command` | in-memory only | not persisted |
+| `UserSettings` | `~/.cocode/settings.json` | `~/.claude/settings.json` |
+| `ProjectSettings` | `.claude/settings.json` (checked in) | same |
+| `LocalSettings` | `.claude/settings.local.json` (gitignored) | same |
+| `FlagSettings` | from `--settings <path>` | same |
+| `PolicySettings` | managed/MDM | same (read-only) |
+
+The TUI dialog's "Always Allow" action emits a Session-scoped update;
+a destination sub-picker on the dialog (Phase B) extends this to
+User/Project/Local without changing the consumer side.
+
 ## Dependencies
 
 ```

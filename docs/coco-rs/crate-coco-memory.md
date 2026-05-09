@@ -1,394 +1,386 @@
 # coco-memory — Crate Plan
 
-TS source: `src/memdir/` (507 LOC), `src/services/extractMemories/`, `src/services/SessionMemory/`, `src/services/autoDream/`
+Persistent cross-session memory: per-project memory directory + 4-type
+taxonomy (User / Feedback / Project / Reference) + auto-extraction +
+auto-dream consolidation + per-session 9-section memory + KAIROS daily
+logs + LLM-ranked recall.
+
+## TS Source
+
+- `memdir/{memdir,memoryTypes,paths,memoryScan,memoryAge,findRelevantMemories,teamMemPaths,teamMemPrompts}.ts`
+- `services/extractMemories/{extractMemories,prompts}.ts`
+- `services/SessionMemory/{sessionMemory,sessionMemoryUtils,prompts}.ts`
+- `services/autoDream/{autoDream,config,consolidationLock,consolidationPrompt}.ts`
+- `commands/memory/{memory.tsx,index.ts}` (slash command + dialog)
+- `utils/memoryFileDetection.ts`
 
 ## Dependencies
 
 ```
 coco-memory depends on:
-  - coco-types (Message), coco-inference (ApiClient — LLM for auto-extraction + session memory + auto-dream)
-  - coco-config (Settings — autoDreamEnabled, session memory config)
-  - utils/frontmatter (YAML frontmatter parsing)
-  - utils/git (canonical git-root resolution for memory path)
+  - coco-types (Feature gate, ModelRole)
+  - coco-config (MemoryConfig — single source of truth for sub-toggles)
+  - coco-tool-runtime (AgentHandleRef, SideQueryHandle)
+  - coco-frontmatter, coco-git, coco-otel, coco-secret-redact
+  - utils/file-watch (team-memory watcher infrastructure)
 
 coco-memory does NOT depend on:
+  - coco-messages, coco-inference (services use AgentHandle / SideQuery
+    traits from coco-tool-runtime — keeps the layer rules clean)
   - coco-tools, coco-query, any app/ crate
+  - coco-compact (the inverse: coco-compact reads session-memory off
+    disk via `MemoryRuntime::session_memory.current_content().await`
+    plus the pure helper `compact_truncate::truncate_session_memory_for_compact`)
 ```
 
-## Data Definitions
+## Crate Layout
+
+```
+src/
+├── store/                pure data: types, frontmatter parse, MEMORY.md index + truncate
+├── path/                 git-canonical resolve, validate, scope, symlink walk
+├── scan.rs               single Scanner (200-cap, 30-line frontmatter read, mtime sort, manifest fmt)
+├── lock.rs               PID + mtime CAS lock (auto-dream); 1h dead-PID reclaim, rollback
+├── recall.rs             relevant-memory selection (LLM ranker prompt + heuristic fallback + PrefetchState)
+├── compact_truncate.rs   pure session-memory section truncation helper
+├── prompt/
+│   ├── builders.rs       compose system / extract / dream / session-update prompts
+│   └── text/*.md         verbatim include_str! blocks (taxonomy, what-not-to-save, dream, …)
+├── service/
+│   ├── extract.rs        ExtractService — turn-end fork via AgentHandle (max_turns=5, memdir-only fence, stash + trailing run, 60s drain)
+│   ├── dream.rs          DreamService — 3-gate scheduler (24h/5-session/10-min throttle), PID lock, 4-phase fork
+│   └── session.rs        SessionMemoryService — 10k/5k/3 trigger gates, 9-section template, 15s wait_for_extraction, file 0o600
+├── runtime.rs            MemoryRuntime + Builder; owns services, recall_state, optional SideQueryHandle for LLM ranker
+├── agent_memory.rs       per-agent persistent memory by scope (user/project/local)
+├── agent_memory_snapshot.rs  baseline snapshot sync between agent dirs
+├── config.rs             thin runtime adapter over `coco_config::MemoryConfig`
+├── team_sync/            team-memory subdir + HTTP types (skeleton: types complete; HTTP push/pull deferred)
+├── telemetry.rs          MemoryEvent enum + MemoryTelemetryEmitter trait + OtelEmitter adapter
+└── lib.rs                module declarations + re-exports
+```
+
+## Key Types
+
+| Type | Purpose |
+|------|---------|
+| `MemoryEntry` / `MemoryEntryType` / `MemoryFrontmatter` | parsed memory file (closed 4-type taxonomy: User / Feedback / Project / Reference) |
+| `MemoryIndex` / `MemoryIndexEntry` | parsed `MEMORY.md` pointer list |
+| `EntrypointTruncation` | line-then-byte truncation of `MEMORY.md` (caps 200 lines / 25KB) |
+| `MemoryDir` | resolved personal + team directory pair |
+| `PathValidationError` | path-validation taxonomy (null / UNC / drive-root / tilde / fullwidth / traversal) |
+| Free fns in `scan.rs` | `scan_memory_files`, `format_memory_manifest`, `memory_age_string`, `file_mtime_ms` |
+| `PrefetchState` | per-session already-surfaced + 60KB byte-budget tracker for recall |
+| `RelevantMemory` | path + truncated content + freshness header |
+| `PidLock` / `LockOutcome` | auto-dream CAS lock (PID body + mtime, 1h stale reclaim) |
+| `ExtractService` | turn-end forked-extraction service (cursor + throttle + stash + trailing run) |
+| `DreamService` | 3-gate consolidation scheduler |
+| `SessionMemoryService` | 9-section session memory with trigger gates |
+| `MemoryRuntime` / `MemoryRuntimeBuilder` | session-level composer; owns the three services + recall state + optional `SideQueryHandle` |
+| `MemoryConfig` | runtime adapter over `coco_config::MemoryConfig` (field-for-field identical) |
+| `MemoryEvent` / `MemoryTelemetryEmitter` / `OtelEmitter` | telemetry taxonomy + OTel adapter |
+
+## 4-Type Memory Taxonomy
+
+Closed enum — TS parity (`memdir/memoryTypes.ts`):
+
+| Type | Scope | When to save |
+|------|-------|--------------|
+| **User** | private always | Role, preferences, knowledge — tailor behavior |
+| **Feedback** | private default; team if project-wide convention | Corrections AND validated approaches; include the *why* |
+| **Project** | private or team; bias toward team | Ongoing work context not derivable from code/git (deadlines, incidents, rationale). Use absolute dates |
+| **Reference** | usually team | External system pointers (Linear projects, Slack channels, dashboards) |
+
+Frontmatter format:
+
+```markdown
+---
+name: <memory name>
+description: <one-line — used for relevance ranking>
+type: <user | feedback | project | reference>
+---
+
+<body — for feedback/project, structure as: rule/fact, then **Why:** and **How to apply:**>
+```
+
+## MemoryRuntime (the composer)
+
+One per session. Owns the three services plus recall state and a swappable agent handle / side-query handle.
 
 ```rust
-/// 4-type taxonomy with scope rules (from memdir/memoryTypes.ts 271 LOC):
-///   User: role, preferences, knowledge → tailor behavior
-///   Feedback: corrections AND confirmations → avoid repeating mistakes
-///   Project: goals, decisions, deadlines → understand context (convert relative dates)
-///   Reference: pointers to external systems → know where to look
-pub enum MemoryEntryType { User, Feedback, Project, Reference }
-
-pub struct MemoryEntry {
-    pub name: String,
-    pub description: String,        // One-line, used for relevance matching
-    pub entry_type: MemoryEntryType,
-    pub content: String,
-    pub file_path: PathBuf,
+pub struct MemoryRuntime {
+    pub directories: MemoryDir,
+    pub config: MemoryConfig,
+    pub extract: Arc<ExtractService>,
+    pub dream: Arc<DreamService>,
+    pub session_memory: Arc<SessionMemoryService>,
+    // private:
+    recall_state: Arc<PrefetchState>,
+    agent_slot: AgentSlot,                              // shared swappable Arc<RwLock<AgentHandleRef>>
+    side_query: tokio::sync::RwLock<Option<SideQueryHandle>>,
 }
 
-/// MEMORY.md index: one-line pointers, max 200 lines.
-/// Lines after 200 truncated with warning.
-/// Max 25KB total size for MEMORY.md.
-pub struct MemoryIndex {
-    pub entries: Vec<MemoryIndexEntry>,
-}
-
-pub struct MemoryIndexEntry {
-    pub title: String,
-    pub file: String,     // Relative path to .md file
-    pub hook: String,     // One-line description (<150 chars)
-}
-
-/// Session memory configuration thresholds.
-pub struct SessionMemoryConfig {
-    /// Minimum accumulated message tokens before first extraction (default 10000).
-    pub minimum_message_tokens_to_init: i64,
-    /// Minimum new tokens since last update before re-extraction allowed (default 5000).
-    pub minimum_tokens_between_update: i64,
-    /// Minimum tool calls since last update before re-extraction allowed (default 3).
-    pub tool_calls_between_updates: i64,
-}
-
-/// Per-section budget for session memory template.
-pub struct SessionMemorySectionBudget {
-    /// Max tokens per section (default 2000).
-    pub per_section: i64,
-    /// Max total tokens across all 9 sections (default 12000).
-    pub total: i64,
+impl MemoryRuntime {
+    pub async fn install_agent(&self, handle: AgentHandleRef);
+    pub async fn install_side_query(&self, handle: SideQueryHandle);
+    pub async fn reset(&self);                          // /clear hook
+    pub fn personal_dir(&self) -> &Path;
+    pub fn team_dir(&self) -> &Path;
+    pub fn transcript_dir(&self) -> Option<&Path>;       // TS `getProjectDir(getOriginalCwd())`
+    pub async fn render_system_prompt_section(&self) -> Option<String>;
+    pub async fn recall(&self, query: &str, recent_tools: &[String]) -> Vec<RelevantMemory>;
 }
 ```
 
-## Core Logic
+The `agent_slot` and `side_query` cells are filled after construction via `install_*`. This decouples memory bootstrap from the engine build order: `SessionRuntime` constructs the runtime up front (so callers can call `render_system_prompt_section`), then swaps in the real `SwarmAgentHandle` and an `inference`-backed `SideQueryHandle` once those are built.
+
+## ExtractService (turn-end forked extraction)
+
+TS source: `services/extractMemories/extractMemories.ts`.
+
+After every eligible turn, spawn a forked subagent with a 5-turn cap and a memdir-only write fence. The agent reads existing memories (manifest pre-injected into its prompt) then writes/edits memory files based on the conversation slice since the last cursor.
+
+Gate sequence (in order):
+
+1. `config.extraction_enabled` — TS `tengu_passport_quail`
+2. `coco_types::Feature::AutoMemory` enabled — TS `isAutoMemoryEnabled()`
+3. Coalesce: if a fork is in flight, stash this trigger as `pending_trailing` and exit
+4. Mutual exclusion: skip if main agent already wrote to memory since the cursor — **also advances the cursor past this turn** so the next eligible turn doesn't re-consider these messages (TS `extractMemories.ts:347-360`)
+5. Throttle: `state.turns_since_last >= config.extraction_throttle` (default 1)
+6. Cursor advance on success; on failure the cursor stays so the next attempt retries the same range
+
+Key constants:
+
+| Constant | Value | TS reference |
+|---------|-------|--------------|
+| `DEFAULT_DRAIN_TIMEOUT` | 60s | `drainPendingExtraction(60_000)` |
+| `extraction_max_turns` (config default) | 5 | `runForkedAgent({...maxTurns: 5})` |
+| `extraction_throttle` (config default) | 1 | `tengu_bramble_lintel` |
+
+Telemetry: `MemoryEvent::ExtractionCompleted | ExtractionSkippedDirectWrite | ExtractionToolDenied` map to TS `tengu_extract_memories_extraction / _skipped_direct_write / tengu_auto_mem_tool_denied`.
+
+The forked agent's tool fence is enforced by `AgentSpawnConstraints::allowed_write_roots = [memory_dir]`, mirroring TS `createAutoMemCanUseTool` (Read/Grep/Glob unrestricted; read-only Bash; Write/Edit/NotebookEdit only inside the memdir).
+
+`drain` (called from `app/cli/main.rs::run_sdk_mode`, `app/cli/tui_runner::drain_pending_memory_extraction`, and `app/cli/headless::run_chat_with_options`) waits up to 60s for an in-flight fork before letting the process exit, so partial writes don't get cut off.
+
+## DreamService (auto-dream consolidation)
+
+TS source: `services/autoDream/`.
+
+Background memory consolidation. Fires a forked subagent when the three gates plus the lock all pass. The dream agent merges related entries, resolves contradictions, and prunes stale `MEMORY.md` pointers.
+
+Gate sequence:
+
+1. **Time gate**: `hours_since(last_consolidation) >= dream_min_hours` (default 24)
+2. **Scan throttle**: at most one full session-set scan per `SCAN_THROTTLE = 10min` (`SESSION_SCAN_INTERVAL_MS` in TS)
+3. **Session gate**: at least `dream_min_sessions` (default 5) other sessions touched the project since the last consolidation
+4. **Lock acquire**: `lock.rs::try_acquire_lock` — PID body + mtime; stale at 60min OR dead-PID reclaim. Returns `prior_mtime` for rollback.
+
+The 4-phase consolidation prompt (Orient / Gather / Consolidate / Prune) is verbatim from TS `consolidationPrompt.ts`; see `prompt/text/dream.md`. `{MEMORY_ROOT}` and `{TRANSCRIPT_DIR}` placeholders are substituted at build time.
+
+On failure, `lock::rollback_lock_mtime` rewinds to the previous mtime (or unlinks when prior was 0) so the time gate doesn't reset to "now". KAIROS mode disables auto-dream (the daily-log paradigm doesn't compose with merge-style consolidation).
+
+**Manual `/dream`** uses [`DreamService::force`] which bypasses the time / session / scan-throttle gates but **still acquires the PID + mtime CAS lock**, so a manual run cannot race with an in-flight auto-dream. It also still respects `dream_enabled` / `kairos_mode` (TS parity: those settings turn the entire feature off, manual or not). Wired from `tui_runner::run_dream_consolidation` and `sdk_runner` `/dream` short-circuit.
+
+Telemetry: `MemoryEvent::AutoDreamFired | AutoDreamCompleted` map to `tengu_auto_dream_fired / _completed`.
+
+## SessionMemoryService (9-section per-session memory)
+
+TS source: `services/SessionMemory/` (~600 LOC).
+
+Persists a structured 9-section summary of the live conversation to disk so context can be restored after compaction or `--resume`.
+
+Trigger gate (both must hold):
+
+1. **Token gate**: `current_tokens - last_extraction_tokens >= session_memory_update_tokens` (default 5_000), or
+   `current_tokens >= session_memory_init_tokens` (default 10_000) for the first extraction.
+2. **Activity gate**: either
+   - tool calls in the last assistant turn `>= session_memory_tool_calls` (default 3), or
+   - natural break (zero tool calls in the last turn).
+
+Manual override: `force(tokens)` (bound to `/summary`).
+
+Storage: `<config_home>/session-memory/<session_id>.md`, file mode `0o600`, dir mode `0o700`.
+
+9-section template (verbatim from `prompt/text/session_template.md`):
+
+1. Session Title
+2. Current State
+3. Task Specification
+4. Files and Functions
+5. Workflow
+6. Errors & Corrections
+7. Codebase Documentation
+8. Learnings
+9. Key Results & Worklog
+
+Per-section budget: `session_memory_per_section_tokens` (2_000) ; total `session_memory_total_tokens` (12_000).
+
+`wait_for_extraction(timeout)` (default 15s) is awaited by the compaction path so a still-running extraction doesn't get clobbered.
+
+`compact_truncate::truncate_session_memory_for_compact` is a pure helper that the compact crate uses to fit the saved session memory inside the post-compact budget.
+
+## Path resolution + security
+
+Memory directories are anchored to the project's git root via `coco_git::find_canonical_git_root` so all worktrees of one repo share one memdir. The team directory is `<personal>/team/` (TS parity).
+
+Override precedence (first match wins):
+
+1. `COCO_MEMORY_PATH_OVERRIDE` env (operator)
+2. `COCO_REMOTE_MEMORY_DIR` env (swarm leader → teammate propagation)
+3. `settings.memory.directory`
+4. Default: `<config_home>/projects/<sanitized-cwd>/memory/`
+
+Validation rejects: null bytes, UNC paths, drive-root, unexpanded tilde, full-width unicode traversals, URL-encoded `../`, backslash absolutes. `is_within_memory_dir` plus a `realpath_deepest_existing` symlink walk guard the write fence.
+
+Sub-toggles + corresponding env force-disables:
+
+| Toggle | Env force-off |
+|--------|---------------|
+| `extraction_enabled` | `COCO_MEMORY_EXTRACTION_DISABLE` |
+| `dream_enabled` | `COCO_MEMORY_DREAM_DISABLE` |
+| `session_memory_enabled` | `COCO_MEMORY_SESSION_MEMORY_DISABLE` |
+| `kairos_mode` | `COCO_MEMORY_KAIROS` (truthy = enable) |
+
+The upstream gate is `coco_types::Feature::AutoMemory`. Sub-toggles are *not* `Feature` variants — they live flat on `MemoryConfig` per project convention.
+
+## Recall (LLM-ranked relevant-memory selection)
+
+TS source: `memdir/findRelevantMemories.ts`, `memdir/memoryScan.ts`.
+
+`MemoryRuntime::recall(query, recent_tools)`:
+
+1. Cold-start short-circuit: if `MEMORY.md` doesn't exist, return empty.
+2. `scan_memory_files(personal_dir)` — capped at 200 files, frontmatter-only first 30 lines, mtime descending.
+3. With a `SideQueryHandle` plugged in: `SideQueryRequest::with_forced_tool` against `ModelRole::Memory` to coerce a JSON `{selected_memories: string[5]}` response. TS `tool_choice: { type: "tool", name: "select_memories" }`.
+4. Without a handle: `select_heuristic` falls back to recency.
+5. `PrefetchState` enforces per-session already-surfaced dedup + a 60KB byte budget so memories don't snowball over a long session.
+
+The ranker honors `recent_tools` so usage-reference docs get deprioritized while the agent is actively driving those tools.
+
+## System-prompt block
+
+`MemoryRuntime::render_system_prompt_section()` returns the `# auto memory` block injected by `coco_context::build_system_prompt`. Three variants:
+
+| Variant | Trigger |
+|---------|---------|
+| **Auto** | `auto_memory` enabled, team off, KAIROS off |
+| **Combined** | `team_memory_enabled` true |
+| **Kairos** | `kairos_mode` true (assistant daily-log paradigm) |
+
+The block reads the truncated `MEMORY.md` (and team `MEMORY.md` for Combined) and concatenates verbatim taxonomy + how-to-save + when-to-access blocks (`prompt/text/*.md`).
+
+Optional sections:
+
+- `searching_past_context_enabled` (TS `tengu_coral_fern`): inserts a `## Searching past context` block with grep examples for the memory directory. Off by default.
+- `extra_guidelines`: arbitrary policy text from operator (e.g. `COCO_COWORK_MEMORY_EXTRA_GUIDELINES`).
+
+`skip_index` (TS `tengu_moth_copse`): when set, the model is told to write topic files only — skips the two-step indexing instruction.
+
+## Per-agent memory + snapshots
+
+`agent_memory.rs` and `agent_memory_snapshot.rs` give each subagent its own `MEMORY.md` namespace partitioned by `MemoryScope::{User, Project, Local}`. The snapshot module syncs a baseline between scopes (e.g. promote a project memory to user scope on demand). Loaded into the subagent's system prompt at spawn (`coordinator/agent_handle/spawn.rs`).
+
+## Team memory
+
+`team_sync/` (~880 LOC) implements the HTTP-backed team-memory sync:
+
+- Types: `TeamMemoryContent`, `TeamMemoryData`, `SyncState`, `TeamMemoryHashesResult`, `TeamMemorySyncFetchResult`, `TeamMemorySyncPushResult`, `PushEntry`, `SkippedSecretFile`
+- `service::pull(state, base_url, repo_slug, bearer, etag)` — `GET /api/...` with `If-None-Match`, 304 short-circuit, 404 = empty, updates `state.last_known_checksum` + `state.server_checksums`
+- `service::push(state, entries)` — delta upload (only entries whose `sha256:<hex>` doesn't match `state.server_checksums`), batched under `MAX_PUT_BODY_BYTES = 200_000`
+- `service::apply_pulled_content(dir, content)` — write server response to local team dir
+- `service::compute_content_hash` — `sha256:<hex>` matching the server format
+- `secret_scanner::scan_for_secrets` — filter sensitive files before push (delegates to `coco_secret_redact`)
+- `watcher::spawn_watcher(WatcherConfig)` — file-watch driven push trigger
+- Constants matching TS: `MAX_FILE_SIZE_BYTES = 250_000`, `MAX_PUT_BODY_BYTES = 200_000`, `SYNC_TIMEOUT_MS`
+
+**Wiring status**: implemented but not yet driven from `app/cli`. `team_memory_enabled` flips on the system-prompt Combined variant today; the watcher + auth-token plumbing into the session lifecycle is the remaining integration step. Path validation against URL-encoded / fullwidth traversals is the security check that should land alongside the wire-up.
+
+## Configuration (`coco_config::MemoryConfig`)
+
+Single source of truth — `MemoryConfig` in coco-memory is a field-for-field adapter.
+
+| Field | Default | Notes |
+|-------|---------|-------|
+| `directory` | `None` | Override: env or `settings.memory.directory` |
+| `skip_index` | `false` | TS `tengu_moth_copse` |
+| `kairos_mode` | `false` | Daily-log assistant mode |
+| `extraction_enabled` | `true` | TS `tengu_passport_quail` |
+| `extraction_throttle` | `1` | TS `tengu_bramble_lintel` (every Nth turn) |
+| `extraction_max_turns` | `5` | Forked-agent cap |
+| `team_memory_enabled` | `false` | TS `tengu_herring_clock` |
+| `dream_enabled` | `true` | Auto-dream consolidation |
+| `dream_min_hours` | `24` | TS `tengu_onyx_plover.minHours` |
+| `dream_min_sessions` | `5` | TS `tengu_onyx_plover.minSessions` |
+| `session_memory_enabled` | `true` | 9-section per-session memory |
+| `session_memory_init_tokens` | `10_000` | Floor before first extraction |
+| `session_memory_update_tokens` | `5_000` | Token-growth gate |
+| `session_memory_tool_calls` | `3` | Activity gate |
+| `session_memory_per_section_tokens` | `2_000` | Per-section cap |
+| `session_memory_total_tokens` | `12_000` | Aggregate cap |
+| `searching_past_context_enabled` | `false` | TS `tengu_coral_fern` |
+
+## Telemetry
 
 ```rust
-pub struct MemoryManager {
-    pub memory_dir: PathBuf,  // ~/.coco/projects/<hash>/memory/
-    pub index: MemoryIndex,
-}
-
-impl MemoryManager {
-    /// Load MEMORY.md index + all referenced memory files.
-    /// Truncation: If MEMORY.md exceeds 200 lines or 25KB, truncate with warning.
-    pub fn load(project_dir: &Path) -> Self;
-
-    /// Two-step save process:
-    /// 1. Write memory content to its own file (e.g., feedback_testing.md)
-    /// 2. Add one-line pointer to MEMORY.md index
-    /// Dedup: check existing memories before creating new one.
-    pub fn save(&mut self, entry: MemoryEntry) -> Result<(), MemoryError>;
-    pub fn delete(&mut self, name: &str) -> Result<(), MemoryError>;
-
-    /// Auto-extract memories from conversation (LLM call via ApiClient).
-    pub async fn auto_extract(&mut self, messages: &[Message], api: &ApiClient) -> Vec<MemoryEntry>;
-
-    /// Staleness detection (from memdir/memoryAge.ts 53 LOC):
-    /// Human-readable age ("47 days ago").
-    /// Caveat text for memories >1 day old: "this memory may be stale".
-    pub fn memory_age(entry: &MemoryEntry) -> String;
-    pub fn memory_freshness_text(entry: &MemoryEntry) -> Option<String>;
-
-    /// Sonnet-based recall selector (from memdir/findRelevantMemories.ts 141 LOC):
-    /// Filters 5 most relevant memory files based on current context.
-    pub async fn find_relevant_memories(
-        &self,
-        context: &str,
-        api: &ApiClient,
-    ) -> Vec<MemoryEntry>;
+pub enum MemoryEvent {
+    MemdirLoaded { line_count, byte_count, was_truncated, was_byte_truncated, has_team },
+    MemdirDisabled { reason: DisableReason },                  // EnvVar / Settings / BareMode / RemoteMode / FeatureGate
+    ExtractionToolDenied { tool_name },
+    ExtractionSkippedDirectWrite { message_count },
+    ExtractionCompleted { turn_count, input_tokens, output_tokens, files_written, duration_ms },
+    AutoDreamFired { hours_since_last, sessions_since_last },
+    AutoDreamCompleted { sessions_reviewed, files_changed, duration_ms },
+    SessionMemoryExtracted { input_tokens, output_tokens, duration_ms },
 }
 ```
 
-## Session Memory
-
-TS source: `src/services/SessionMemory/` (~600 LOC)
-
-Session memory persists a structured summary of the current conversation to disk,
-enabling context recovery after compaction or session resume.
-
-### Trigger Logic
-
-Extraction fires when BOTH conditions are met:
-1. Token gate: accumulated message tokens >= `minimum_tokens_between_update` (5000) since last update
-   (or >= `minimum_message_tokens_to_init` (10000) for first extraction).
-2. Activity gate: one of:
-   - Tool call gate: tool calls since last update >= `tool_calls_between_updates` (3), OR
-   - Natural break: token gate met AND zero tool calls in the interval (conversation pause).
-
-Manual trigger: `/summary` command bypasses all gates and runs extraction immediately.
-
-### Storage
-
-- Directory: `~/.coco/session-memory/` (TS: `~/.claude/session-memory/`)
-- File permissions: `0o600` (owner read/write only)
-- Directory permissions: `0o700` (owner only)
-- One file per session, keyed by session ID.
-
-### 9-Section Template
-
-The extraction prompt produces a structured document with these sections:
-
-1. **Session Title** -- concise title for the session
-2. **Current State** -- what the agent is currently doing or last completed
-3. **Task Specification** -- the user's original request and refined understanding
-4. **Files and Functions** -- key files/functions touched or referenced
-5. **Workflow** -- steps taken, sequence of operations
-6. **Errors & Corrections** -- mistakes made, how they were fixed
-7. **Codebase Documentation** -- discovered architecture, patterns, conventions
-8. **Learnings** -- insights about the codebase or user preferences
-9. **Key Results & Worklog** -- concrete outputs, changes made, remaining work
-
-Section-size budget: 2000 tokens per section, 12000 tokens total across all sections.
-
-### Custom Template/Prompt Override
-
-Users can override the default template and extraction prompt:
-- `~/.coco/session-memory/config/template.md` -- custom section template
-- `~/.coco/session-memory/config/prompt.md` -- custom extraction system prompt
-
-If present, these replace the built-in defaults entirely.
-
-### Compaction Integration
-
-`truncate_session_memory_for_compact()`: when the query loop triggers compaction,
-session memory is truncated to fit within the post-compact token budget. The
-session memory content is injected as context for the compaction summary so the
-model retains awareness of earlier work.
-
-### Async Extraction
-
-`wait_for_session_memory_extraction()`: blocks up to 15 seconds for an in-progress
-extraction to complete. Called during session save and shutdown to avoid data loss.
-
-```rust
-pub struct SessionMemoryManager {
-    config: SessionMemoryConfig,
-    session_dir: PathBuf,
-    last_extraction_tokens: i64,
-    last_extraction_tool_calls: i64,
-}
-
-impl SessionMemoryManager {
-    /// Check trigger conditions and run extraction if met.
-    pub async fn maybe_extract(
-        &mut self,
-        messages: &[Message],
-        current_tokens: i64,
-        current_tool_calls: i64,
-        api: &ApiClient,
-    ) -> Option<String>;
-
-    /// Force extraction regardless of gates (for /summary command).
-    pub async fn force_extract(
-        &mut self,
-        messages: &[Message],
-        api: &ApiClient,
-    ) -> String;
-
-    /// Truncate session memory to fit compact budget.
-    pub fn truncate_for_compact(&self, content: &str, budget_tokens: i64) -> String;
-
-    /// Block until pending extraction completes (15s timeout).
-    pub async fn wait_for_extraction(&self) -> Result<(), TimeoutError>;
-}
-```
-
-## Auto-Dream (Consolidation)
-
-TS source: `src/services/autoDream/` (~400 LOC)
-
-Auto-dream is a background consolidation process that periodically merges and prunes
-accumulated memory files across sessions. It runs as a forked background agent.
-
-### Three-Gate Scheduling
-
-All three gates must pass before consolidation starts:
-
-1. **Time gate**: at least `min_hours` (default 24h) since last consolidation.
-   `lastConsolidatedAt` is read from the lock file's mtime.
-2. **Scan throttle**: at most one scan attempt per 10 minutes (prevents busy-loop
-   on rapid session starts).
-3. **Session gate**: at least `min_sessions` (default 5) sessions since last
-   consolidation.
-
-### Lock File Protocol
-
-- Location: `.consolidate-lock` inside the memory directory.
-- The lock file's **mtime** serves as `lastConsolidatedAt` timestamp.
-- The lock file's **body** contains the holder's PID.
-- Dead-PID reclaim: if the lock is held but the PID is not running AND the lock
-  is older than 1 hour, it is considered stale and can be reclaimed.
-- `rollback_consolidation_lock()`: if the forked consolidation agent fails,
-  the lock file mtime is rolled back to its previous value so the next attempt
-  does not wait another full `min_hours` interval.
-
-### Four-Phase Prompt
-
-The consolidation agent executes a structured four-phase workflow:
-
-1. **Orient** -- read MEMORY.md index, understand the memory landscape.
-2. **Gather** -- read all referenced memory files, identify overlaps and conflicts.
-3. **Consolidate** -- merge related entries, resolve contradictions, update content.
-4. **Prune and index** -- delete redundant files, rewrite MEMORY.md index.
-
-### Exclusions
-
-- KAIROS mode: auto-dream is disabled when running in KAIROS mode.
-- Remote mode: auto-dream is disabled for remote sessions.
-
-### Configuration
-
-User-configurable via `settings.json`:
-- `auto_dream_enabled: bool` (default true) -- set to false to disable entirely.
-
-### UI Integration
-
-`DreamTask`: a cancelable background task that surfaces consolidation progress in the
-TUI. The user can cancel an in-progress consolidation without corrupting state (the
-lock file is rolled back).
-
-## Auto-Extraction Forked Agent
-
-TS source: `src/services/extractMemories/` (~500 LOC)
-
-The auto-extraction agent runs as a forked background process after each turn,
-analyzing the conversation for extractable memories.
-
-### Mutual Exclusion
-
-`has_memory_writes_since()`: before starting extraction, check whether any memory
-writes have occurred since the last extraction. If another agent or the user has
-written to memory files, skip this extraction cycle to avoid conflicts.
-
-### Cursor Tracking
-
-- Each extraction run tracks its position via a UUID-based cursor.
-- Per-turn incremental: only messages since the last cursor are analyzed.
-- The cursor is persisted so extraction resumes correctly after interruption.
-
-### Throttle Gate
-
-`turns_since_last_extraction` counter: extraction does not run on every turn.
-The counter must exceed the threshold before the agent is spawned.
-
-### Stash-and-Trailing-Run Pattern
-
-When extraction starts, pending messages are "stashed" (snapshot of conversation
-state at extraction start). If new messages arrive during extraction, a trailing
-run is scheduled to process the gap between the stash point and current state.
-
-### Shutdown Protocol
-
-`drain_pending_extraction()`: on session shutdown, wait up to 60 seconds for
-any in-progress extraction to complete. This prevents data loss when the user
-exits mid-extraction.
-
-### Tool Sandbox
-
-The forked extraction agent has a restricted tool set:
-- **Allowed**: Read, Grep, Glob, Bash (read-only), Write and Edit (within memdir only)
-- Write/Edit operations are path-restricted to the memory directory.
-- **Hard limit**: maximum 5 turns before the agent is forcibly terminated.
-
-## Memory Path Resolution and Security
-
-### Canonical Git-Root Resolution
-
-Memory directories are anchored to the project's git root. For git worktrees,
-the resolution follows symlinks to the shared `.git` directory so that all
-worktrees of the same repo share the same memory directory.
-
-### Path Security
-
-Memory path construction rejects the following:
-- **Null bytes**: any path containing `\0` is rejected.
-- **UNC paths**: Windows UNC paths (`\\server\share`) are rejected.
-- **Drive-root paths**: bare drive roots (`C:\`) are rejected to prevent writing
-  to filesystem root.
-- **Tilde expansion**: `~` is expanded to the actual home directory; unexpanded
-  tildes in stored paths are rejected.
-
-### Enable/Disable Priority
-
-`is_auto_memory_enabled()` checks in priority order (first match wins):
-1. Environment variable override (e.g., `COCO_AUTO_MEMORY=0`)
-2. `--bare` CLI flag (disables memory)
-3. CCR no-storage mode (disables memory)
-4. `settings.json` `auto_memory_enabled` field
-5. Default: enabled
-
-### KAIROS Daily Log
-
-In KAIROS mode, memories are written as daily logs instead of the standard
-taxonomy. Path format: `logs/YYYY/MM/YYYY-MM-DD.md` within the memory directory.
-
-## Memory Scanning
-
-TS source: `src/memdir/memoryFiles.ts`
-
-### scanMemoryFiles()
-
-Recursively scans the memory directory for `.md` files:
-- **Cap**: maximum 200 files. Files beyond this limit are silently dropped.
-- **Frontmatter-only**: only the first 30 lines of each file are read (enough
-  for YAML frontmatter extraction without loading full content).
-- **Sort order**: newest-first (by file mtime).
-
-### formatMemoryManifest()
-
-Formats the scanned memory files into a manifest string for injection into the
-model context:
-```
-[type] filename (ISO-date): description
-```
-Each line is one memory file. The type comes from frontmatter, the date is the
-file's last-modified time in ISO format, and the description is the frontmatter
-`description` field.
-
-### findRelevantMemories()
-
-Sonnet-based side-query to select the most relevant memories for the current context:
-- Sends the memory manifest + current conversation context to a fast model.
-- Returns up to **5** memory files.
-- **recentTools suppression**: memories that were already surfaced by recent tool
-  calls are excluded from candidates to avoid redundant injection.
-- **alreadySurfaced dedup**: tracks which memories have been surfaced in the
-  current session to prevent repeated injection of the same file.
-
-## Staleness
-
-### memoryFreshnessNote()
-
-System-reminder wrapper that generates a staleness note for the model context.
-When injected memories are older than a threshold, a caveat is prepended:
-
-```
-MEMORY_DRIFT_CAVEAT: "These memories were last updated N days ago and may not
-reflect the current state of the codebase. Verify before relying on them."
-```
-
-The caveat is injected as part of the system-reminder pipeline
-(`SystemReminderOrchestrator`), not as a standalone message.
-
-## Team Memory (TEAMMEM)
-
-### Dual-Directory Architecture
-
-Team memory maintains two separate directory trees:
-- **Private directory**: `~/.coco/projects/<hash>/memory/` -- per-user memories,
-  not shared with team members.
-- **Team directory**: `.coco/memory/` in the project root (committed to git) --
-  shared memories visible to all team members.
-
-### Per-Type Scope Tags
-
-Each memory entry carries a scope tag controlling visibility:
-- Entries in the private directory are always private.
-- Entries in the team directory are always shared.
-- The `MemoryEntryType` taxonomy (User, Feedback, Project, Reference) applies
-  equally to both directories. Type does not determine scope; directory does.
+Each variant maps to a TS `tengu_*` event (`tengu_memdir_loaded`, `tengu_memdir_disabled`, `tengu_auto_mem_tool_denied`, `tengu_extract_memories_skipped_direct_write`, `tengu_extract_memories_extraction`, `tengu_auto_dream_fired`, `tengu_auto_dream_completed`, `tengu_session_memory_extraction`). The trait `MemoryTelemetryEmitter` lets the SDK / TUI / headless callers route events into OTel via `OtelEmitter` (default) or a bespoke sink.
+
+## Integration sites (where the runtime is wired)
+
+| Site | What | When |
+|------|------|------|
+| `app/cli/src/session_runtime.rs::SessionRuntime::new` | Build `MemoryRuntime` (gated on `Feature::AutoMemory`); fire-and-forget dream gate-check; install agent + side-query | Session bootstrap |
+| `app/cli/src/session_runtime.rs::SessionRuntime::clear_conversation` | `runtime.reset().await` — clears recall state, extract cursor, session-memory init flag | `/clear` (full Conversation scope only) |
+| `app/query/src/engine_finalize_turn.rs::finalize_turn_post_tools` | `session_memory.maybe_extract` + `extract.maybe_extract` | Every turn end |
+| `coco-context::build_system_prompt` | Reads `runtime.render_system_prompt_section()` | Once per session, threaded through |
+| `app/cli/src/sdk_server/sdk_runner.rs` | `/dream` and `/summary` short-circuit paths call `dream.maybe_consolidate` and `session_memory.force` | Slash-command dispatch |
+| `app/cli/src/tui_runner.rs::drain_pending_memory_extraction` | `extract.drain(60s)` before `SessionEnded` | TUI shutdown |
+| `app/cli/src/main.rs::run_sdk_mode` | `extract.drain(60s)` after dispatch loop exits | SDK shutdown |
+| `app/cli/src/headless.rs::run_chat_with_options` | `extract.drain(60s)` after the single-shot turn | Headless one-shot |
+| `coordinator/src/agent_handle/spawn.rs` | Loads per-agent memory block via `agent_memory::load_agent_memory_prompt` | Subagent spawn |
+| `commands/src/handlers/memory_dialog.rs` + `app/tui/src/update/overlay.rs::open_memory_entry_async` | `/memory` file picker → write empty file (idempotent) → spawn `$VISUAL || $EDITOR` | `/memory` slash command |
+| `commands/src/handlers/dream.rs` (sentinel) → `app/cli/src/tui_runner.rs::run_dream_consolidation` | Manual dream trigger | `/dream` slash command |
+
+## Invariants
+
+- `MEMORY.md` is **model-curated**; the runtime never auto-regenerates it. It is read + truncated only.
+- `is_team_memory_path` uses an authoritative `MemoryDir` resolution + a `**/memory/team/**` substring fallback (gated by the secret detector).
+- Path resolution is anchored to `coco_git::find_canonical_git_root` so worktrees of one repo share one memdir.
+- `ExtractService::run` always sets `isolation = "fork"` + `fork_context_messages` so the child sees the parent's slice — TS parity (`AgentTool.tsx:622-632`).
+- The write fence resolves relative paths against `ToolUseContext::cwd_override` before checking, so a model passing `./notes.md` lands inside the fence.
+- `DreamService` rolls the lock mtime back on failure so the time gate doesn't reset to "now".
+- `SessionMemoryService` writes the 9-section template if missing, then asks the agent to Edit-only — never overwrites the file wholesale.
+- `MemoryEvent::ExtractionCompleted::files_written` sums real `Write + Edit + NotebookEdit` invocations from `AgentSpawnResponse::tool_use_counts` — no fabricated counts.
+
+## What this crate does NOT own
+
+- The system-prompt assembly seam (`coco-context::build_system_prompt`) — memory only renders its block via `prompt::build_system_prompt_section` and hands it through.
+- LLM client construction — see `coco-inference`.
+- Session storage, transcripts — see `coco-session`.
+- Team-memory wire-up from `app/cli` — the HTTP `pull`/`push` and the file-watch `spawn_watcher` live in `team_sync/`, but driving them from the session lifecycle (auth-token plumbing, watcher start/stop, push retry policy) is not in this crate.
+- Compaction logic — `coco-compact` reads session-memory off disk via `MemoryRuntime::session_memory.current_content().await` and uses our pure `compact_truncate::truncate_session_memory_for_compact` helper.
+
+## Deferred / not ported
+
+- **Team-memory wire-up from `app/cli`** — `team_sync::{pull, push, spawn_watcher}` are implemented; no caller drives them yet (no auth-token plumbing, no session-lifecycle integration). `team_memory_enabled` only affects the system-prompt Combined variant today.
+- **`tengu_memory_recall_shape` telemetry** — TS `findRelevantMemories.ts:66-72`. Optional analytics on selection-rate. Skipped to keep telemetry surface minimal; reintroduce if recall quality needs measurement.
+- **TS `#` prefix shortcut for memory-add** — only orphaned renderers (`UserMemoryInputMessage.tsx`, `MemoryUpdateNotification.tsx`) remain in current TS. Producer side was removed upstream; not porting is correct parity.
+- **TS `USER_TYPE='ant'` gates** — intentionally dropped per `CLAUDE.md` (Anthropic-internal visibility).
+
+## Multi-Provider Notes
+
+- All LLM calls go through `coco-tool-runtime::SideQuery` or `AgentHandle`. **Never hardcode a model_id.**
+- The recall ranker uses `SideQueryRequest::with_model_role(ModelRole::Memory)` so the operator picks provider+model in `settings.models.memory`.
+- The forked extraction / dream agents inherit the parent session's `tool_overrides`, `features`, `parent_tool_filter`. The constraints layer (`AgentSpawnConstraints`) only narrows: `max_turns: 5`, `allowed_write_roots: [memdir]`.
+- `MemoryConfig` (in `coco-config`) is the single source of truth for sub-toggles (extraction / team / dream / session-memory / kairos / searching-past-context). Sub-toggles never become `Feature` variants — `Feature::AutoMemory` is the one upstream gate.

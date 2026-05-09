@@ -415,25 +415,38 @@ fn serialize_tool_result_for_responses(content: &ToolResultContent) -> Value {
                 .unwrap_or_else(|| "Tool execution denied.".into()),
         ),
         ToolResultContent::Content { value, .. } => {
+            // Responses API takes a heterogeneous array. Images go to
+            // `input_image` natively; other non-Text parts (PDF /
+            // file-reference / custom) cannot be transmitted as-is so
+            // we degrade them to a visible `input_text` marker — same
+            // strategy as Chat Completions, just preserving the array
+            // shape.
             let parts: Vec<Value> = value
                 .iter()
-                .filter_map(|p| match p {
+                .map(|p| match p {
                     ToolResultContentPart::Text { text, .. } => {
-                        Some(json!({ "type": "input_text", "text": text }))
+                        json!({ "type": "input_text", "text": text })
                     }
-                    // image content is FileUrl with image/* media_type or
-                    // FileData with image/* media_type
                     ToolResultContentPart::FileUrl { url, media_type, .. }
                         if media_type.starts_with("image/") || media_type == "image" =>
                     {
-                        Some(json!({ "type": "input_image", "image_url": url }))
+                        json!({ "type": "input_image", "image_url": url })
                     }
                     ToolResultContentPart::FileData {
                         data, media_type, ..
-                    } if media_type.starts_with("image/") => Some(
-                        json!({ "type": "input_image", "image_url": format!("data:{media_type};base64,{data}") }),
-                    ),
-                    _ => None,
+                    } if media_type.starts_with("image/") => {
+                        json!({ "type": "input_image", "image_url": format!("data:{media_type};base64,{data}") })
+                    }
+                    ToolResultContentPart::FileData { media_type, .. }
+                    | ToolResultContentPart::FileUrl { media_type, .. } => {
+                        json!({ "type": "input_text", "text": format!("[{media_type} content omitted — Responses API only accepts images in tool results]") })
+                    }
+                    ToolResultContentPart::FileReference { .. } => {
+                        json!({ "type": "input_text", "text": "[file reference omitted — provider doesn't support multimodal tool results]" })
+                    }
+                    ToolResultContentPart::Custom { .. } => {
+                        json!({ "type": "input_text", "text": "[custom provider-specific content omitted]" })
+                    }
                 })
                 .collect();
             Value::Array(parts)

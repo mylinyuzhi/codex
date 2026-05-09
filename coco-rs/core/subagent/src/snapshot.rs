@@ -21,7 +21,7 @@ pub struct AgentCatalogSnapshot {
     /// Alphabetically ordered via `BTreeMap` keying — deterministic across
     /// platforms and reload cycles. Note byte-wise lex order means
     /// PascalCase entries (`Explore`, `Plan`) sort before lowercase
-    /// entries (`build`, `claude-code-guide`).
+    /// entries (`build`, `coco-guide`).
     active: BTreeMap<String, AgentDefinition>,
     /// All loaded definitions (including those overridden by higher-priority
     /// sources). Used by `/agents show` to display source chains.

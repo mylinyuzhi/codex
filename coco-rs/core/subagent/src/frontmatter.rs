@@ -61,11 +61,19 @@ pub fn parse_agent_markdown(
     frontmatter: &std::collections::HashMap<String, FrontmatterValue>,
     source: AgentSource,
 ) -> Result<(AgentDefinition, Vec<ValidationError>), FrontmatterParseError> {
-    let name = read_str(frontmatter, "name").ok_or(FrontmatterParseError::MissingName)?;
+    // TS `loadAgentsDir.ts:554`: `if (!agentType || typeof agentType !== 'string') return null`
+    // — the falsy check rejects empty string. Rust mirrors that here so a
+    // file with `name: ""` is treated the same as a missing key. The JSON
+    // path adds `prompt: z.string().min(1)`; bare-name validation in the
+    // markdown path is already non-empty by symmetry.
+    let name = read_str(frontmatter, "name")
+        .filter(|s| !s.trim().is_empty())
+        .ok_or(FrontmatterParseError::MissingName)?;
     // TS `loadAgentsDir.ts:565`: `whenToUse = whenToUse.replace(/\\n/g, '\n')`.
     // YAML keeps the literal `\n` token; restore the real newline.
     let description = read_str_aliased(frontmatter, &["description", "whenToUse", "when_to_use"])
         .map(|s| s.replace("\\n", "\n"))
+        .filter(|s| !s.trim().is_empty())
         .ok_or(FrontmatterParseError::MissingDescription)?;
 
     let body_trimmed = body.trim();

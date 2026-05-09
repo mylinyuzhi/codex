@@ -246,6 +246,13 @@ fn render_main_area(frame: &mut Frame, area: Rect, state: &AppState, theme: &The
     let show_plan_panel = matches!(state.session.expanded_view, coco_types::ExpandedView::Tasks)
         && wide_enough
         && (!state.session.plan_tasks.is_empty() || !state.session.todos_by_agent.is_empty());
+    // Same for `'teammates'` — `app:toggleTodos` cycles into this when
+    // there are running subagents.
+    let show_teammates_panel = matches!(
+        state.session.expanded_view,
+        coco_types::ExpandedView::Teammates
+    ) && wide_enough
+        && !state.session.subagents.is_empty();
 
     if show_plan_panel {
         let [main, side] = area.layout(&Layout::horizontal([
@@ -261,6 +268,17 @@ fn render_main_area(frame: &mut Frame, area: Rect, state: &AppState, theme: &The
             theme,
         );
         frame.render_widget(panel, side);
+    } else if show_teammates_panel {
+        let [main, side] = area.layout(&Layout::horizontal([
+            Constraint::Percentage(constants::NORMAL_TERMINAL_MAIN_PCT as u16),
+            Constraint::Percentage(constants::NORMAL_TERMINAL_SIDE_PCT as u16),
+        ]));
+        render_chat_and_input(frame, main, state, theme);
+        // ExpandedView::Teammates → subagent panel takes the entire
+        // right rail (no tool panel above it). Honors
+        // `state.ui.show_teammate_message_preview` for per-agent
+        // recent-message preview lines.
+        render_subagent_panel(frame, side, state, theme);
     } else if has_tools && wide_enough {
         let (main_pct, side_pct) = if area.width >= constants::WIDE_TERMINAL_WIDTH as u16 {
             (
@@ -362,7 +380,8 @@ fn render_conversation(frame: &mut Frame, state: &AppState, area: Rect, theme: &
         .show_thinking(state.ui.show_thinking)
         .show_system_reminders(state.ui.show_system_reminders)
         .tool_executions(&state.session.tool_executions)
-        .width(area.width);
+        .width(area.width)
+        .kb_handle(&state.ui.kb_handle);
 
     if !state.ui.collapsed_tools.is_empty() {
         chat = chat.collapsed_tools(&state.ui.collapsed_tools);
@@ -482,8 +501,11 @@ fn render_subagent_panel(frame: &mut Frame, area: Rect, state: &AppState, theme:
             .selected_index(state.session.focused_subagent_index);
         frame.render_widget(panel, area);
     } else {
-        let panel = crate::widgets::SubagentPanel::new(&state.session.subagents, theme)
+        let mut panel = crate::widgets::SubagentPanel::new(&state.session.subagents, theme)
             .focused_index(state.session.focused_subagent_index);
+        if state.ui.show_teammate_message_preview {
+            panel = panel.message_preview(&state.session.messages);
+        }
         frame.render_widget(panel, area);
     }
 }
@@ -516,6 +538,18 @@ fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState, theme: &Th
         format!("{:?}", state.session.permission_mode),
         Style::default().fg(theme.text_dim),
     ));
+
+    // Pending chord prefix (e.g. "ctrl+x …") — shown only while a
+    // chord is in flight so users see the resolver waiting for the
+    // next combo. Mirrors TS chord-status indicator from
+    // `KeybindingProviderSetup.tsx`.
+    if let Some(hint) = state.ui.kb_handle.pending_display() {
+        parts.push(Span::styled(" | ", Style::default().fg(theme.border)));
+        parts.push(Span::styled(
+            hint,
+            Style::default().fg(theme.warning).bold(),
+        ));
+    }
 
     // Token usage
     let tokens = &state.session.token_usage;

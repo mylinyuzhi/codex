@@ -72,6 +72,8 @@ async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
         permission_bridge: None,
         command_registry,
         skill_manager,
+        agent_search_paths: coco_subagent::definition_store::AgentSearchPaths::empty(),
+        builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
     })
     .await
     .expect("build SessionRuntime")

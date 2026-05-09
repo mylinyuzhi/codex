@@ -13,5 +13,6 @@ pub use coco_inference::ReasoningPart as ReasoningContent;
 pub use coco_inference::TextPart as TextContent;
 pub use coco_inference::ToolCallPart as ToolCallContent;
 pub use coco_inference::ToolContentPart as ToolContent;
+pub use coco_inference::ToolResultContentPart;
 pub use coco_inference::ToolResultPart as ToolResultContent;
 pub use coco_inference::UserContentPart as UserContent;

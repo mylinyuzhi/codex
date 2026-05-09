@@ -139,6 +139,44 @@ fn test_snapshot_with_help_overlay() {
 }
 
 #[test]
+fn test_snapshot_with_pending_chord() {
+    use crossterm::event::KeyCode;
+    use crossterm::event::KeyEvent;
+    use crossterm::event::KeyEventKind;
+    use crossterm::event::KeyEventState;
+    use crossterm::event::KeyModifiers;
+
+    let mut state = AppState::new();
+    state.session.model = "opus-4".to_string();
+
+    // Feed `ctrl+x` (a chord prefix from defaults — `ctrl+x ctrl+k`
+    // = chat:killAgents, `ctrl+x ctrl+e` = chat:externalEditor) so
+    // the per-state resolver enters Pending. The status bar should
+    // then render `"ctrl+x …"` between the permission-mode and token
+    // segments.
+    let event = KeyEvent {
+        code: KeyCode::Char('x'),
+        modifiers: KeyModifiers::CONTROL,
+        kind: KeyEventKind::Press,
+        state: KeyEventState::NONE,
+    };
+    let outcome = state
+        .ui
+        .kb_handle
+        .resolve_key(event, crate::keybinding_bridge::KeybindingContext::Chat);
+    // Sanity: resolver must really be in Pending — otherwise the
+    // status-bar hint won't render and the snapshot would silently
+    // drift.
+    assert!(
+        matches!(outcome, crate::keybinding_resolver::ResolverResult::Pending),
+        "expected Pending, got {outcome:?}",
+    );
+
+    let output = render_to_string(&state, 80, 24);
+    insta::assert_snapshot!("pending_chord", output);
+}
+
+#[test]
 fn test_snapshot_with_rate_limit_banner() {
     let mut state = AppState::new();
     state.session.model = "opus-4".to_string();

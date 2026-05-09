@@ -12,6 +12,7 @@ async fn empty_sources_materializes_all_defaults() {
             agent_id: None,
             user_input: None,
             mentioned_paths: &[],
+            recent_tools: &[],
             just_compacted: false,
             per_source_timeout: Duration::from_millis(1000),
         })
@@ -42,6 +43,7 @@ async fn noop_bundle_also_materializes_defaults_through_trait_dispatch() {
             agent_id: None,
             user_input: Some("hello"),
             mentioned_paths: &[],
+            recent_tools: &[],
             just_compacted: false,
             per_source_timeout: Duration::from_millis(1000),
         })
@@ -93,6 +95,7 @@ async fn disabled_config_skips_sources_even_when_present() {
             agent_id: None,
             user_input: None,
             mentioned_paths: &[],
+            recent_tools: &[],
             just_compacted: false,
             per_source_timeout: Duration::from_millis(1000),
         })

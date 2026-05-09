@@ -11,7 +11,7 @@ fn test_subagent_type_canonical_case() {
     assert_eq!(SubagentType::GeneralPurpose.as_str(), "general-purpose");
     assert_eq!(SubagentType::StatusLine.as_str(), "statusline-setup");
     assert_eq!(SubagentType::Verification.as_str(), "verification");
-    assert_eq!(SubagentType::ClaudeCodeGuide.as_str(), "claude-code-guide");
+    assert_eq!(SubagentType::CocoGuide.as_str(), "coco-guide");
 }
 
 #[test]
@@ -36,14 +36,19 @@ fn test_subagent_type_aliases_canonicalize_on_input() {
         SubagentType::from_str("statusline_setup").unwrap(),
         SubagentType::StatusLine
     );
+    // Coco-rs canonical name + snake_case alias.
     assert_eq!(
-        SubagentType::from_str("claude-code-guide").unwrap(),
-        SubagentType::ClaudeCodeGuide
+        SubagentType::from_str("coco-guide").unwrap(),
+        SubagentType::CocoGuide
     );
     assert_eq!(
-        SubagentType::from_str("claude_code_guide").unwrap(),
-        SubagentType::ClaudeCodeGuide
+        SubagentType::from_str("coco_guide").unwrap(),
+        SubagentType::CocoGuide
     );
+    // The legacy TS string is intentionally NOT accepted — coco-rs
+    // owns its own identifier (CLAUDE.md "no backward-compat shims").
+    assert!(SubagentType::from_str("claude-code-guide").is_err());
+    assert_eq!(SubagentType::CocoGuide.as_str(), "coco-guide");
 }
 
 #[test]

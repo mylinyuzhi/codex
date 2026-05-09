@@ -8,6 +8,7 @@ use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
+use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
@@ -47,6 +48,48 @@ impl Tool for SkillTool {
         );
         ToolInputSchema { properties: p }
     }
+
+    /// Render the skill envelope. TS parity:
+    /// `SkillTool.ts:843-862 mapToolResultToToolResultBlockParam`,
+    /// data shape per `SkillTool.ts:301-326 outputSchema`.
+    ///
+    /// Two branches keyed off the `status` field added by execute:
+    /// - `"inline"`: model sees `Launching skill: {commandName}` —
+    ///   the resolved prompt is fed back into the agent's history
+    ///   via `new_messages`, not the tool result.
+    /// - `"forked"`: model sees `Skill "{commandName}" completed
+    ///   (forked execution).\n\nResult:\n{result}` — the child
+    ///   agent ran in its own session and the aggregated output is
+    ///   echoed here.
+    ///
+    /// The pre-Phase-7 single-string envelope is supported as a
+    /// fallback so older transcripts and `NoOpSkillHandle` test
+    /// doubles still render sensibly.
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        let status = data.get("status").and_then(Value::as_str);
+        let command_name = data
+            .get("commandName")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let text = match status {
+            Some("forked") => {
+                let result = data.get("result").and_then(Value::as_str).unwrap_or("");
+                format!(
+                    "Skill \"{command_name}\" completed (forked execution).\n\nResult:\n{result}"
+                )
+            }
+            Some("inline") => format!("Launching skill: {command_name}"),
+            _ => data
+                .as_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| serde_json::to_string(data).unwrap_or_default()),
+        };
+        vec![ToolResultContentPart::Text {
+            text,
+            provider_options: None,
+        }]
+    }
+
     async fn execute(
         &self,
         input: Value,
@@ -87,8 +130,41 @@ impl Tool for SkillTool {
                 source: None,
             })?;
 
+        // Flatten `SkillInvocationResult` into a TS-shaped envelope so
+        // render can produce `Launching skill: ...` (inline) or
+        // `Skill "..." completed (forked execution).\n\nResult:\n...`
+        // (forked) per `SkillTool.ts:843-862`. Field names match the TS
+        // `outputSchema` at `SkillTool.ts:301-326` (`status`/`result`,
+        // not `mode`/`output`) so transcript readers see the same wire
+        // shape across runtimes. The inline `new_messages` are
+        // preserved on the data envelope as raw JSON `Value`s for the
+        // runtime to splice at the seam where Value→Message conversion
+        // lives — this tool's `new_messages: Vec<Message>` slot stays
+        // empty.
+        let data = match result {
+            coco_tool_runtime::SkillInvocationResult::Inline {
+                summary,
+                new_messages,
+            } => serde_json::json!({
+                "status": "inline",
+                "success": true,
+                "commandName": skill_name,
+                "summary": summary,
+                "new_messages": new_messages,
+            }),
+            coco_tool_runtime::SkillInvocationResult::Forked { agent_id, output } => {
+                serde_json::json!({
+                    "status": "forked",
+                    "success": true,
+                    "commandName": skill_name,
+                    "agentId": agent_id,
+                    "result": output,
+                })
+            }
+        };
+
         Ok(ToolResult {
-            data: serde_json::json!(result),
+            data,
             new_messages: vec![],
             app_state_patch: None,
         })

@@ -269,6 +269,7 @@ impl RealTuiHarness {
             startup,
             command_registry,
             skill_manager,
+            output_style_manager: _,
         } = build_engine_resources(&cli, &runtime_config, &cwd)
             .with_context(|| "build_engine_resources")?;
 
@@ -313,6 +314,8 @@ impl RealTuiHarness {
             permission_bridge: Some(bridge),
             command_registry,
             skill_manager,
+            agent_search_paths: coco_subagent::definition_store::AgentSearchPaths::empty(),
+            builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
         })
         .await
         .with_context(|| "SessionRuntime::build")?;
@@ -500,13 +503,20 @@ impl RealTuiHarness {
     /// Resolve a pending approval as approved (mirrors
     /// `UserCommand::ApprovalResponse` in prod).
     pub async fn approve(&self, request_id: &str) -> bool {
-        resolve_pending(&self.pending_approvals, request_id, true, None).await
+        resolve_pending(&self.pending_approvals, request_id, true, None, Vec::new()).await
     }
 
     /// Resolve a pending approval as rejected, with optional feedback
     /// echoed back to the engine as the rejection reason.
     pub async fn reject(&self, request_id: &str, feedback: Option<String>) -> bool {
-        resolve_pending(&self.pending_approvals, request_id, false, feedback).await
+        resolve_pending(
+            &self.pending_approvals,
+            request_id,
+            false,
+            feedback,
+            Vec::new(),
+        )
+        .await
     }
 
     /// Render `AppState` through `coco_tui::render` and return the
@@ -741,7 +751,14 @@ async fn run_real_agent_driver(
                 feedback,
                 ..
             } => {
-                let _ = resolve_pending(&pending_approvals, &request_id, approved, feedback).await;
+                let _ = resolve_pending(
+                    &pending_approvals,
+                    &request_id,
+                    approved,
+                    feedback,
+                    Vec::new(),
+                )
+                .await;
             }
 
             UserCommand::Interrupt => {

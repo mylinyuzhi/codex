@@ -33,15 +33,35 @@ pub enum MemoryEvent {
     /// TS: `tengu_extract_memories_skipped_direct_write`.
     ExtractionSkippedDirectWrite { message_count: i32 },
 
+    /// A new extraction request arrived while one was in-flight; the
+    /// service stashed the latest context for a single trailing run.
+    /// TS: `tengu_extract_memories_coalesced`.
+    ExtractionCoalesced,
+
     /// Background extraction completed.
     /// TS: `tengu_extract_memories_extraction`.
     ExtractionCompleted {
         turn_count: i32,
         input_tokens: i64,
         output_tokens: i64,
+        /// TS `cache_read_input_tokens` — input tokens served from
+        /// the prompt cache. Higher = better forked-agent hit-rate.
+        cache_read_tokens: i64,
+        /// TS `cache_creation_input_tokens` — input tokens written
+        /// into the prompt cache. Should be small per-turn after
+        /// the first one.
+        cache_creation_tokens: i64,
+        /// TS `files_written` — count after MEMORY.md is filtered
+        /// out (`extractMemories.ts:465-467`). The index file is
+        /// mechanical; only topic-file writes count as "saved".
         files_written: i32,
         duration_ms: i64,
     },
+
+    /// Background extraction subagent failed (turn budget exhausted,
+    /// permission denial cascade, runner error, etc).
+    /// TS: `tengu_extract_memories_error`.
+    ExtractionError { duration_ms: i64 },
 
     /// Auto-dream consolidation fired.
     /// TS: `tengu_auto_dream_fired`.
@@ -55,16 +75,49 @@ pub enum MemoryEvent {
     AutoDreamCompleted {
         sessions_reviewed: i32,
         files_changed: i32,
+        /// TS `cache_read` field on `tengu_auto_dream_completed`.
+        cache_read_tokens: i64,
+        /// TS `cache_created` field on `tengu_auto_dream_completed`.
+        cache_creation_tokens: i64,
+        /// TS `output` (output tokens) field.
+        output_tokens: i64,
         duration_ms: i64,
     },
+
+    /// Auto-dream consolidation subagent failed. Lock mtime is rolled
+    /// back so the next time-gate window doesn't restart at "now".
+    /// TS: `tengu_auto_dream_failed`.
+    AutoDreamFailed,
 
     /// Session-memory extraction fired.
     /// TS: `tengu_session_memory_extraction`.
     SessionMemoryExtracted {
         input_tokens: i64,
         output_tokens: i64,
+        cache_read_tokens: i64,
+        cache_creation_tokens: i64,
         duration_ms: i64,
     },
+
+    /// Session-memory subsystem registered its post-sampling hook
+    /// at session bootstrap.
+    /// TS: `tengu_session_memory_init`.
+    SessionMemoryInit { auto_compact_enabled: bool },
+
+    /// Session-memory file was just read into context (typically
+    /// from the setup pass before the forked update agent runs).
+    /// TS: `tengu_session_memory_file_read`.
+    SessionMemoryFileRead { content_length: i64 },
+
+    /// Session-memory content loaded for compaction or other
+    /// downstream consumers.
+    /// TS: `tengu_session_memory_loaded`.
+    SessionMemoryLoaded { content_length: i64 },
+
+    /// `/summary` command forced a session-memory update bypassing
+    /// the threshold gates.
+    /// TS: `tengu_session_memory_manual_extraction`.
+    SessionMemoryManualExtraction,
 }
 
 /// Reason auto-memory was disabled.
@@ -169,10 +222,24 @@ impl MemoryTelemetryEmitter for OtelEmitter {
                 self.manager
                     .histogram("extract.message_count", message_count as i64, &[]);
             }
+            MemoryEvent::ExtractionCoalesced => {
+                self.manager
+                    .counter("tengu_extract_memories_coalesced", 1, &[]);
+            }
+            MemoryEvent::ExtractionError { duration_ms } => {
+                self.manager.counter("tengu_extract_memories_error", 1, &[]);
+                self.manager.record_duration(
+                    "extract.duration",
+                    std::time::Duration::from_millis(duration_ms.max(0) as u64),
+                    &[("outcome", "error")],
+                );
+            }
             MemoryEvent::ExtractionCompleted {
                 turn_count,
                 input_tokens,
                 output_tokens,
+                cache_read_tokens,
+                cache_creation_tokens,
                 files_written,
                 duration_ms,
             } => {
@@ -184,6 +251,10 @@ impl MemoryTelemetryEmitter for OtelEmitter {
                     .histogram("extract.input_tokens", input_tokens, &[]);
                 self.manager
                     .histogram("extract.output_tokens", output_tokens, &[]);
+                self.manager
+                    .histogram("extract.cache_read_tokens", cache_read_tokens, &[]);
+                self.manager
+                    .histogram("extract.cache_creation_tokens", cache_creation_tokens, &[]);
                 self.manager
                     .histogram("extract.files_written", files_written as i64, &[]);
                 self.manager.record_duration(
@@ -208,6 +279,9 @@ impl MemoryTelemetryEmitter for OtelEmitter {
             MemoryEvent::AutoDreamCompleted {
                 sessions_reviewed,
                 files_changed,
+                cache_read_tokens,
+                cache_creation_tokens,
+                output_tokens,
                 duration_ms,
             } => {
                 self.manager.counter("tengu_auto_dream_completed", 1, &[]);
@@ -215,15 +289,26 @@ impl MemoryTelemetryEmitter for OtelEmitter {
                     .histogram("dream.sessions_reviewed", sessions_reviewed as i64, &[]);
                 self.manager
                     .histogram("dream.files_changed", files_changed as i64, &[]);
+                self.manager
+                    .histogram("dream.cache_read_tokens", cache_read_tokens, &[]);
+                self.manager
+                    .histogram("dream.cache_creation_tokens", cache_creation_tokens, &[]);
+                self.manager
+                    .histogram("dream.output_tokens", output_tokens, &[]);
                 self.manager.record_duration(
                     "dream.duration",
                     std::time::Duration::from_millis(duration_ms.max(0) as u64),
                     &[],
                 );
             }
+            MemoryEvent::AutoDreamFailed => {
+                self.manager.counter("tengu_auto_dream_failed", 1, &[]);
+            }
             MemoryEvent::SessionMemoryExtracted {
                 input_tokens,
                 output_tokens,
+                cache_read_tokens,
+                cache_creation_tokens,
                 duration_ms,
             } => {
                 self.manager
@@ -232,11 +317,42 @@ impl MemoryTelemetryEmitter for OtelEmitter {
                     .histogram("session_memory.input_tokens", input_tokens, &[]);
                 self.manager
                     .histogram("session_memory.output_tokens", output_tokens, &[]);
+                self.manager
+                    .histogram("session_memory.cache_read_tokens", cache_read_tokens, &[]);
+                self.manager.histogram(
+                    "session_memory.cache_creation_tokens",
+                    cache_creation_tokens,
+                    &[],
+                );
                 self.manager.record_duration(
                     "session_memory.duration",
                     std::time::Duration::from_millis(duration_ms.max(0) as u64),
                     &[],
                 );
+            }
+            MemoryEvent::SessionMemoryInit {
+                auto_compact_enabled,
+            } => {
+                self.manager.counter(
+                    "tengu_session_memory_init",
+                    1,
+                    &[("auto_compact_enabled", bool_str(auto_compact_enabled))],
+                );
+            }
+            MemoryEvent::SessionMemoryFileRead { content_length } => {
+                self.manager
+                    .counter("tengu_session_memory_file_read", 1, &[]);
+                self.manager
+                    .histogram("session_memory.file_read_length", content_length, &[]);
+            }
+            MemoryEvent::SessionMemoryLoaded { content_length } => {
+                self.manager.counter("tengu_session_memory_loaded", 1, &[]);
+                self.manager
+                    .histogram("session_memory.loaded_length", content_length, &[]);
+            }
+            MemoryEvent::SessionMemoryManualExtraction => {
+                self.manager
+                    .counter("tengu_session_memory_manual_extraction", 1, &[]);
             }
         }
     }

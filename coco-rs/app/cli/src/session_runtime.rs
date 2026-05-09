@@ -242,6 +242,17 @@ pub struct SessionRuntimeBuildOpts<'a> {
     /// `command_registry`'s skill load, kept alive so the per-turn
     /// reminder pipeline (`SkillsSource`) reads the same catalog.
     pub skill_manager: Arc<coco_skills::SkillManager>,
+    /// Where to look for markdown agent definitions. Threaded into the
+    /// runtime's [`coco_subagent::AgentDefinitionStore`] so AgentTool's
+    /// dynamic prompt (TS `prompt.ts:getPrompt`) sees the same set the
+    /// SDK `initialize.agents` listing reports. Empty = no on-disk
+    /// agents (built-ins only).
+    pub agent_search_paths: coco_subagent::definition_store::AgentSearchPaths,
+    /// Built-in catalog toggles. Defaults to [`coco_subagent::BuiltinAgentCatalog::interactive`]
+    /// (CLI / TUI sessions); SDK noninteractive callers may pass
+    /// [`coco_subagent::BuiltinAgentCatalog::sdk_noninteractive`] to
+    /// disable the entire built-in roster.
+    pub builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog,
 }
 
 /// All per-session state shared by both runners. Construction at startup
@@ -415,6 +426,23 @@ pub struct SessionRuntime {
     /// MCP filter degrades to fail-closed (hides MCP-required
     /// agents).
     mcp_handle: Arc<RwLock<Option<coco_tool_runtime::McpHandleRef>>>,
+    /// Where the agent loader looks for markdown agents. Cached so
+    /// `/agents reload` and the file-watcher reload paths can rebuild
+    /// the snapshot without re-resolving the paths from scratch.
+    agent_search_paths: coco_subagent::definition_store::AgentSearchPaths,
+    /// Built-in agent toggles applied to every reload. Set at
+    /// `SessionRuntime::build` and treated as immutable thereafter
+    /// (toggling the roster mid-session would require a full restart).
+    builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog,
+    /// Active per-session agent catalog snapshot. Installed on every
+    /// per-turn engine via [`Self::wire_engine`] so `AgentTool::prompt`
+    /// renders the dynamic agent listing (TS `prompt.ts:getPrompt`).
+    /// Wrapped in `RwLock<Arc<...>>` so a future reload (file watcher
+    /// or `/agents reload`) can swap the inner `Arc` without
+    /// invalidating in-flight per-turn engines (each engine snapshots
+    /// the inner Arc at wire time). `Arc<AgentCatalogSnapshot>` is
+    /// cheap to clone.
+    agent_catalog: Arc<RwLock<Arc<coco_subagent::AgentCatalogSnapshot>>>,
     /// Session-scoped sandbox state. Built once at startup via
     /// [`build_sandbox_state`] and inherited by every per-turn engine
     /// (TUI), every SDK control message handler, and every fork
@@ -451,6 +479,8 @@ impl SessionRuntime {
             permission_bridge,
             command_registry,
             skill_manager,
+            agent_search_paths,
+            builtin_agent_catalog,
         } = opts;
 
         let config_home = coco_config::global_config::config_home();
@@ -548,6 +578,10 @@ impl SessionRuntime {
             let agent: coco_tool_runtime::AgentHandleRef =
                 Arc::new(coco_tool_runtime::NoOpAgentHandle);
             let mem_cfg = coco_memory::MemoryConfig::from(runtime_config.memory.clone());
+            // TS `getProjectDir(getOriginalCwd())` lives at
+            // `<config_home>/sessions/<session_id>`; the parent dir is
+            // what the dream / searching-past-context prompts grep over.
+            let transcript_root = config_home.join("sessions");
             let runtime = coco_memory::runtime::MemoryRuntimeBuilder::new(
                 config_home.clone(),
                 cwd.clone(),
@@ -555,6 +589,7 @@ impl SessionRuntime {
                 mem_cfg,
                 agent,
             )
+            .with_transcript_dir(transcript_root)
             .build();
             info!(
                 personal_dir = %runtime.personal_dir().display(),
@@ -569,17 +604,48 @@ impl SessionRuntime {
             // transcripts since the last consolidation. TS parity:
             // `initAutoDream` schedules on session start.
             let runtime_arc = Arc::new(runtime);
+            // Wire the session enumerator backed by `TranscriptStore`
+            // so per-turn `tick_dream` can list real prior sessions.
+            // TS parity (`autoDream.ts:155-165`):
+            // `listSessionsTouchedSince(lastAt)` reads the project's
+            // session store, filters by mtime > lastAt, drops the
+            // current session. The closure here mirrors that
+            // contract; it is invoked **only** after the time + scan
+            // throttle gates pass inside `DreamService` so cost is
+            // bounded.
+            let enumerator_sessions_dir = config_home.join("sessions");
+            let enumerator_session_id = session_id.clone();
+            let enumerator_memory_dir = runtime_arc.personal_dir().to_path_buf();
+            let enumerator: coco_memory::SessionEnumerator = Arc::new(move || {
+                let store = coco_session::TranscriptStore::new(enumerator_sessions_dir.clone());
+                let last_ms =
+                    coco_memory::lock::last_consolidated_at(&enumerator_memory_dir).unwrap_or(0);
+                match store.list_main_sessions() {
+                    Ok(metas) => metas
+                        .into_iter()
+                        .filter(|m| m.session_id != enumerator_session_id)
+                        .filter(|m| {
+                            m.modified_at
+                                .parse::<i64>()
+                                .map(|t| t > last_ms)
+                                .unwrap_or(false)
+                        })
+                        .map(|m| m.session_id)
+                        .collect(),
+                    Err(_) => Vec::new(),
+                }
+            });
+            runtime_arc.install_session_enumerator(enumerator).await;
+            // Fire-and-forget gate-check at session start. With the
+            // enumerator installed, this can actually fire (vs the
+            // pre-wire empty-slice path that always tripped the
+            // session gate). TS parity: `initAutoDream` schedules on
+            // session start, then per-turn ticks via
+            // `executeAutoDream` from stop hooks.
             let dream_clone = runtime_arc.clone();
-            let transcript_dir = config_home.join("sessions");
             tokio::spawn(async move {
                 let now_ms = coco_memory::service::dream::DreamService::now_ms();
-                // No session enumeration yet — pass empty slice so
-                // the session gate stays the limiting factor until a
-                // real session-store iterator is plumbed in.
-                let outcome = dream_clone
-                    .dream
-                    .maybe_consolidate(&transcript_dir, &[], now_ms)
-                    .await;
+                let outcome = dream_clone.tick_dream(now_ms).await;
                 tracing::debug!(?outcome, "auto-dream gate check at session start");
             });
             Some(runtime_arc)
@@ -721,12 +787,25 @@ impl SessionRuntime {
         // documented in `audit-gaps.md` Round 13.
         let reminder_mailbox = coco_system_reminder::ReminderMailbox::new();
 
+        // Bootstrap the per-source permission rule maps. Mirrors TS
+        // `loadPermissionRules()`: parses every settings.json layer
+        // (user/project/local/flag/policy) into typed
+        // `PermissionRulesBySource` keyed by `PermissionRuleSource`.
+        // Default-empty maps before this wiring meant `permissions.allow`
+        // / `deny` / `ask` from settings.json were loaded but never
+        // consulted at evaluation time.
+        let (allow_rules, deny_rules, ask_rules) =
+            crate::permission_rule_loader::typed_permission_rules(&runtime_config.settings);
+
         // Build the engine config — owns most settings drawn from
         // RuntimeConfig + CLI overrides.
         let engine_config = QueryEngineConfig {
             model_id,
             permission_mode,
             bypass_permissions_available,
+            allow_rules,
+            deny_rules,
+            ask_rules,
             context_window: 200_000,
             max_output_tokens: 16_384,
             max_turns: runtime_config.loop_config.max_turns.unwrap_or(30),
@@ -777,6 +856,59 @@ impl SessionRuntime {
         let transcript_dedup = Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::<
             uuid::Uuid,
         >::new()));
+
+        // ── Agent definition catalog ──
+        //
+        // Build the per-session [`AgentDefinitionStore`] once at startup
+        // so AgentTool's dynamic prompt (TS `prompt.ts:getPrompt`) sees
+        // the same set the SDK `initialize.agents` listing returns. The
+        // snapshot inspector wires `pending_snapshot_update` per
+        // definition (TS `loadAgentsDir.ts:262-294`) so `/agents show`
+        // can flag drift without each consumer re-running the
+        // `check_agent_memory_snapshot` IO.
+        //
+        // Errors / missing dirs are non-fatal: the store keeps the
+        // built-in roster and the per-turn engine reads the resulting
+        // (mostly built-in) catalog. Snapshot is reload-able via
+        // [`Self::reload_agent_catalog`]; this initial build lives on
+        // the blocking pool because the markdown loader is sync IO.
+        let auto_memory_enabled = runtime_config
+            .features
+            .enabled(coco_types::Feature::AutoMemory);
+        let initial_agent_snapshot = {
+            let catalog = builtin_agent_catalog;
+            let paths = agent_search_paths.clone();
+            let cwd_for_inspector = cwd.clone();
+            let home_for_inspector =
+                dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
+            tokio::task::spawn_blocking(move || {
+                let mut store = coco_subagent::AgentDefinitionStore::new(catalog, paths);
+                store.set_snapshot_inspector(Some(
+                    coco_memory::agent_memory_snapshot::build_pending_inspector(
+                        cwd_for_inspector,
+                        home_for_inspector,
+                    ),
+                ));
+                // TS parity: `loadAgentsDir.ts:455-467` auto-adds
+                // `Read`/`Edit`/`Write` to non-wildcard agent
+                // tool-lists when AutoMemory is on AND the agent
+                // declares a `memory` scope. Forward the live
+                // feature gate so the catalog the engine sees
+                // includes the injected tools.
+                store.set_auto_memory_enabled(auto_memory_enabled);
+                store.load();
+                store.snapshot()
+            })
+            .await
+            .unwrap_or_else(|_| {
+                Arc::new(coco_subagent::AgentCatalogSnapshot::new(
+                    std::collections::BTreeMap::new(),
+                    Vec::new(),
+                ))
+            })
+        };
+        let agent_catalog = Arc::new(RwLock::new(initial_agent_snapshot));
+
         Ok(Arc::new(Self {
             client,
             fallback_clients,
@@ -824,10 +956,54 @@ impl SessionRuntime {
             task_runtime: Arc::new(RwLock::new(None)),
             agent_transcript_store: Arc::new(RwLock::new(None)),
             mcp_handle: Arc::new(RwLock::new(None)),
+            agent_search_paths,
+            builtin_agent_catalog,
+            agent_catalog,
             reminder_mailbox,
             transcript_store,
             transcript_dedup,
         }))
+    }
+
+    /// Re-scan the configured agent search paths and replace the
+    /// in-memory catalog snapshot. Subsequent per-turn engines built
+    /// via [`Self::wire_engine`] pick up the new snapshot; engines
+    /// already in flight keep the snapshot they captured at wire time.
+    ///
+    /// Triggered by `/agents reload`, `/reload-plugins`, and the
+    /// future agent-dir file watcher. TS parity:
+    /// `loadAgentsDir.ts::reloadAgents`.
+    pub async fn reload_agent_catalog(&self) {
+        let catalog = self.builtin_agent_catalog;
+        let paths = self.agent_search_paths.clone();
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
+        let auto_memory_enabled = self
+            .runtime_config
+            .features
+            .enabled(coco_types::Feature::AutoMemory);
+        let snapshot = tokio::task::spawn_blocking(move || {
+            let mut store = coco_subagent::AgentDefinitionStore::new(catalog, paths);
+            store.set_snapshot_inspector(Some(
+                coco_memory::agent_memory_snapshot::build_pending_inspector(cwd, home),
+            ));
+            store.set_auto_memory_enabled(auto_memory_enabled);
+            store.load();
+            store.snapshot()
+        })
+        .await
+        .ok();
+        if let Some(snapshot) = snapshot {
+            *self.agent_catalog.write().await = snapshot;
+        }
+    }
+
+    /// Cheap pointer-clone of the active catalog snapshot. The returned
+    /// `Arc` is stable for the lifetime of the caller — a concurrent
+    /// reload swaps the inner `Arc` but doesn't invalidate handles
+    /// previously taken.
+    pub async fn current_agent_catalog(&self) -> Arc<coco_subagent::AgentCatalogSnapshot> {
+        self.agent_catalog.read().await.clone()
     }
 
     /// Producer-only handle to the inter-turn reminder mailbox.
@@ -1133,6 +1309,15 @@ impl SessionRuntime {
         if let Some(mcp) = self.mcp_handle.read().await.clone() {
             engine = engine.with_mcp_handle(mcp);
         }
+        // Install the agent catalog snapshot so `AgentTool::prompt`
+        // renders the dynamic per-turn agent listing (TS parity:
+        // `tools/AgentTool/prompt.ts::getPrompt`). Without this the
+        // engine falls back to `AgentTool`'s static description and
+        // the model never sees the agents it can actually spawn.
+        // Each engine instance captures the inner `Arc<...>` once at
+        // wire time; concurrent `/agents reload` swaps land on the
+        // next per-turn engine, not the in-flight one.
+        engine = engine.with_agent_catalog(self.agent_catalog.read().await.clone());
         if let Some(fh) = &self.file_history {
             engine = engine.with_file_history(fh.clone(), self.config_home.clone());
         }
@@ -1912,6 +2097,17 @@ impl SessionRuntime {
             .set_last_summarized_message_id(None)
             .await;
 
+        // Reset the auto-memory runtime's per-conversation state — recall
+        // PrefetchState, extraction cursor + throttle counter, and the
+        // session-memory init flag. The on-disk MEMORY.md and topic
+        // files are deliberately left alone; they're cross-conversation
+        // memory that a /clear is not meant to wipe. TS parity:
+        // `MemoryRuntime::reset` mirrors the equivalent reset path in
+        // `clearConversation()` for forked-extraction state.
+        if let Some(runtime) = &self.memory_runtime {
+            runtime.reset().await;
+        }
+
         // Step 4 (TS conversation.ts:203): regenerate the session id and
         // propagate it to every id-keyed subsystem. Without this, post-
         // clear writes would land in the OLD session's directory and
@@ -2081,7 +2277,11 @@ pub(crate) fn build_sandbox_state(
     // gates. The adapter needs source provenance because the merged
     // `SandboxSettings` collapses every layer; only allow rules need
     // sourcing (TS always honors all-source denies).
-    let (sourced_allow_rules, _sourced_deny_rules) =
+    // The sandbox adapter only consumes allow-source provenance today
+    // (deny rules apply uniformly regardless of source). `_ask` is
+    // ignored here; the ask map is consumed at the engine config layer
+    // via `permission_rule_loader::typed_permission_rules`.
+    let (sourced_allow_rules, _sourced_deny_rules, _sourced_ask_rules) =
         runtime_config.settings.sourced_permission_rules();
     let sourced_fs_allow_read = runtime_config.settings.sourced_filesystem_allow_read();
 

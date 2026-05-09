@@ -130,6 +130,20 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
                     SubagentStatus::Completed
                 };
             }
+            // Surface the completion line in the teammate preview
+            // (TS getMessagePreview includes the final assistant
+            // message). Falls back to a canned status line when the
+            // result is empty.
+            let line = if p.result.is_empty() {
+                if p.is_error {
+                    t!("teammate.completed_failed").to_string()
+                } else {
+                    t!("teammate.completed_ok").to_string()
+                }
+            } else {
+                p.result.clone()
+            };
+            push_teammate_message(state, &p.agent_id, &line);
             true
         }
         ServerNotification::SubagentBackgrounded(p) => {
@@ -153,6 +167,12 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
                     )
                     .to_string(),
                 ));
+                // Push a TeammateMessage into session.messages so the
+                // teammate spinner-line preview (`showTeammateMessagePreview`)
+                // and the transcript overlay can pick it up. `is_meta=true`
+                // keeps it out of the regular chat scroll — it surfaces in
+                // the transcript and in the per-teammate preview only.
+                push_teammate_message(state, &p.agent_id, msg);
             }
             true
         }
@@ -739,4 +759,19 @@ fn on_turn_completed(state: &mut AppState, p: coco_types::TurnCompletedParams) -
     }
     state.session.was_interrupted = false;
     true
+}
+
+/// Push a teammate-attributed message into `session.messages` so the
+/// per-teammate spinner-line preview (`UiState::show_teammate_message_preview`)
+/// and the transcript overlay can surface it. Empty / whitespace-only
+/// content is dropped so progress pings without a body don't pollute
+/// the preview.
+fn push_teammate_message(state: &mut AppState, agent_id: &str, content: &str) {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    state
+        .session
+        .add_message(ChatMessage::teammate_message(agent_id, trimmed));
 }

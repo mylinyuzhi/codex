@@ -52,6 +52,7 @@ pub fn active_context(state: &AppState) -> KeybindingContext {
             | Overlay::DiffView(_)
             | Overlay::TaskDetail(_)
             | Overlay::Doctor(_)
+            | Overlay::Transcript(_)
             | Overlay::ContextVisualization => KeybindingContext::Scrollable,
 
             // Tabbed settings overlay
@@ -81,9 +82,43 @@ pub fn active_context(state: &AppState) -> KeybindingContext {
 }
 
 /// Map a key event to a TUI command based on the active context.
+///
+/// Resolution order:
+///
+/// 1. Run the [`coco_keybindings`] resolver against the TS default
+///    bindings. If it fires an action with a TUI handler in
+///    [`crate::keybinding_dispatch`], use it.
+/// 2. If the resolver explicitly consumed the keystroke (chord
+///    cancelled, null unbind), return `None` so it doesn't fall through.
+/// 3. Otherwise, dispatch through the legacy hardcoded cascade for
+///    TUI-only shortcuts (Ctrl+S session browser, F1 help, Ctrl+,
+///    settings, …) that aren't in the TS schema yet.
 pub fn map_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
     let ctx = active_context(state);
 
+    // Layer 1: TS-defined bindings via the resolver.
+    match state.ui.kb_handle.resolve_key(key, ctx) {
+        crate::keybinding_resolver::ResolverResult::Action(action) => {
+            if let Some(cmd) = crate::keybinding_dispatch::dispatch_action(&action, state) {
+                return Some(cmd);
+            }
+            // Resolver knew about this action but the TUI doesn't have
+            // a handler yet. Swallow the keystroke instead of falling
+            // through to the cascade — that path would do the wrong
+            // thing for a user who customized the chord.
+            return None;
+        }
+        crate::keybinding_resolver::ResolverResult::Pending => {
+            // Caller should render a "ctrl+x …" chord status hint.
+            // We don't have a dedicated TuiCommand for that yet, so
+            // swallow the keystroke. Status-bar wiring is P8 follow-up.
+            return None;
+        }
+        crate::keybinding_resolver::ResolverResult::Consumed => return None,
+        crate::keybinding_resolver::ResolverResult::NotResolved => {}
+    }
+
+    // Layer 2: legacy hardcoded cascade (TUI-only shortcuts).
     match ctx {
         KeybindingContext::Confirmation => map_confirmation_key(key),
         KeybindingContext::Picker => map_picker_key(key),

@@ -735,19 +735,24 @@ pub struct SourcedRule {
 }
 
 impl SettingsWithSource {
-    /// Flatten per-source `permissions.{allow,deny}` entries into
+    /// Flatten per-source `permissions.{allow,deny,ask}` entries into
     /// source-tagged rules. Used by the sandbox adapter to honor
-    /// `allow_managed_domains_only`.
+    /// `allow_managed_domains_only` and by the engine config builder
+    /// to populate `EngineConfigInput.{allow,deny,ask}_rules`.
     ///
     /// Walks `per_source: HashMap<SettingSource, Value>` and pulls each
-    /// source's raw `permissions/allow` and `permissions/deny` arrays
-    /// via JSON-pointer access. Plugin-contributed rules from
-    /// [`SettingSource::Plugin`] are not included (they aren't tracked
-    /// in `per_source` today). Order across sources isn't guaranteed —
-    /// callers that need priority order should sort by `source`.
-    pub fn sourced_permission_rules(&self) -> (Vec<SourcedRule>, Vec<SourcedRule>) {
+    /// source's raw `permissions/allow`, `permissions/deny`, and
+    /// `permissions/ask` arrays via JSON-pointer access. Plugin-
+    /// contributed rules from [`SettingSource::Plugin`] are not
+    /// included (they aren't tracked in `per_source` today). Order
+    /// across sources isn't guaranteed — callers that need priority
+    /// order should sort by `source`.
+    pub fn sourced_permission_rules(
+        &self,
+    ) -> (Vec<SourcedRule>, Vec<SourcedRule>, Vec<SourcedRule>) {
         let mut allow = Vec::new();
         let mut deny = Vec::new();
+        let mut ask = Vec::new();
         for (source, raw) in &self.per_source {
             extract_string_array(raw, "/permissions/allow", &mut |s| {
                 allow.push(SourcedRule {
@@ -761,8 +766,14 @@ impl SettingsWithSource {
                     source: *source,
                 });
             });
+            extract_string_array(raw, "/permissions/ask", &mut |s| {
+                ask.push(SourcedRule {
+                    rule: s.to_string(),
+                    source: *source,
+                });
+            });
         }
-        (allow, deny)
+        (allow, deny, ask)
     }
 
     /// Flatten per-source `sandbox.filesystem.allow_read` paths,

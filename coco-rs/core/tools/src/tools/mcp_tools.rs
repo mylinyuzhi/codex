@@ -3,6 +3,7 @@ use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::McpToolInfo;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
+use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
@@ -40,6 +41,12 @@ impl Tool for McpAuthTool {
     fn is_read_only(&self, _: &Value) -> bool {
         true
     }
+
+    /// `data` is a bare auth status string. Unwrap.
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        coco_tool_runtime::render_text_or_json(data)
+    }
+
     async fn execute(
         &self,
         input: Value,
@@ -109,6 +116,17 @@ impl Tool for ListMcpResourcesTool {
     fn is_concurrency_safe(&self, _: &Value) -> bool {
         true
     }
+
+    /// TS `ListMcpResourcesTool.ts:108-122`: empty branch emits a
+    /// specific message; non-empty branch emits `jsonStringify(content)`.
+    /// coco-rs execute() emits a bare string for the empty/error
+    /// branches and a JSON array for non-empty; this render unwraps
+    /// the bare string and JSON-stringifies the array — byte-identical
+    /// to TS in both cases.
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        coco_tool_runtime::render_text_or_json(data)
+    }
+
     async fn execute(
         &self,
         input: Value,
@@ -119,8 +137,11 @@ impl Tool for ListMcpResourcesTool {
         match ctx.mcp.list_resources(server_name).await {
             Ok(resources) => {
                 if resources.is_empty() {
+                    // TS `ListMcpResourcesTool.ts:113-115` empty-case message.
                     return Ok(ToolResult {
-                        data: serde_json::json!("No MCP resources available"),
+                        data: serde_json::json!(
+                            "No resources found. MCP servers may still provide tools even if they have no resources."
+                        ),
                         new_messages: vec![],
                         app_state_patch: None,
                     });
@@ -194,6 +215,16 @@ impl Tool for ReadMcpResourceTool {
     fn is_concurrency_safe(&self, _: &Value) -> bool {
         true
     }
+
+    /// TS `ReadMcpResourceTool.ts:151-157` emits `jsonStringify(content)`
+    /// for both success and error paths — equivalent to the trait's
+    /// default impl. The override exists only to unwrap the error-path
+    /// bare string (which would otherwise be JSON-quoted) so the wire
+    /// matches TS's plain string error format.
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        coco_tool_runtime::render_text_or_json(data)
+    }
+
     async fn execute(
         &self,
         input: Value,
@@ -339,6 +370,57 @@ impl Tool for McpTool {
         self.annotations.destructive_hint
     }
 
+    /// Decode the MCP server-provided content envelope back into typed
+    /// `ToolResultContentPart`s. The `execute` path serializes
+    /// `result.content` into a JSON array of `{type, ...}` blocks
+    /// (success: bare array; error: `{error, content: [...]}`).
+    /// `render_for_model` reverses that step so multimodal-capable
+    /// providers see the original Text + FileData (image) parts the
+    /// server emitted, instead of an opaque JSON-stringified envelope.
+    /// TS parity: MCPTool wraps server content unchanged in
+    /// `ToolResultBlockParam.content`.
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        let arr = data
+            .as_array()
+            .or_else(|| data.get("content").and_then(Value::as_array));
+        let Some(blocks) = arr else {
+            return vec![ToolResultContentPart::Text {
+                text: serde_json::to_string(data).unwrap_or_default(),
+                provider_options: None,
+            }];
+        };
+        let parts: Vec<ToolResultContentPart> = blocks
+            .iter()
+            .filter_map(|block| {
+                let kind = block.get("type")?.as_str()?;
+                match kind {
+                    "text" => Some(ToolResultContentPart::Text {
+                        text: block.get("text")?.as_str()?.to_string(),
+                        provider_options: None,
+                    }),
+                    "image" => Some(ToolResultContentPart::FileData {
+                        data: block.get("data")?.as_str()?.to_string(),
+                        media_type: block
+                            .get("mime_type")
+                            .and_then(Value::as_str)
+                            .unwrap_or("image/png")
+                            .to_string(),
+                        filename: None,
+                        provider_options: None,
+                    }),
+                    _ => None,
+                }
+            })
+            .collect();
+        if parts.is_empty() {
+            return vec![ToolResultContentPart::Text {
+                text: serde_json::to_string(data).unwrap_or_default(),
+                provider_options: None,
+            }];
+        }
+        parts
+    }
+
     async fn execute(
         &self,
         input: Value,
@@ -392,3 +474,7 @@ impl Tool for McpTool {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "mcp_tools.test.rs"]
+mod tests;

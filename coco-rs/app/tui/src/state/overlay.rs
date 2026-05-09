@@ -79,6 +79,12 @@ pub enum Overlay {
     /// entries and open the chosen file in `$VISUAL || $EDITOR`.
     /// TS: `commands/memory/memory.tsx::Dialog<MemoryFileSelector>`.
     MemoryDialog(MemoryDialogOverlay),
+    /// Verbose, scrollable view of the entire conversation including
+    /// hidden meta messages. TS `app:toggleTranscript` (`screen ===
+    /// 'transcript'` branch in `screens/REPL.tsx:4392`). coco-rs ports
+    /// the read-only essentials: full message dump with no truncation,
+    /// scrollable, dismissed via Esc / Ctrl+O.
+    Transcript(TranscriptOverlay),
 }
 
 impl Overlay {
@@ -122,6 +128,7 @@ impl Overlay {
             | Self::Doctor(_)
             | Self::ContextVisualization
             | Self::Settings(_)
+            | Self::Transcript(_)
             | Self::MemoryDialog(_) => 7,
             // 8 — help (read-only reference)
             Self::Help => 8,
@@ -649,6 +656,42 @@ impl MemoryDialogOverlay {
                 })
                 .collect(),
             selected: 0,
+        }
+    }
+}
+
+/// Transcript overlay — verbose, all-messages dump for `Ctrl+O`.
+///
+/// Mirrors TS `screen === 'transcript'` (`screens/REPL.tsx:4392`)
+/// minus the alt-screen virtual-scroll + search-bar layer (those
+/// require ratatui infra coco-rs hasn't built; can be added as a
+/// follow-up). Read-only: scroll position is the only state.
+///
+/// `show_all` mirrors TS `showAllInTranscript` — when true, hidden
+/// meta messages (`isVisibleInTranscriptOnly`) are included in the
+/// dump. Toggled inside the overlay via `transcript:toggleShowAll`
+/// → [`crate::events::TuiCommand::ToggleTranscriptShowAll`] →
+/// [`crate::update::transcript::toggle_show_all`]. coco-rs defaults
+/// to `true` because the popup is opened explicitly to inspect; TS
+/// defaults to `false` because its full-screen takeover doubles as a
+/// reading mode where meta noise would distract.
+#[derive(Debug, Clone, Default)]
+pub struct TranscriptOverlay {
+    /// Vertical scroll offset (line-count from top). Reset to 0 on
+    /// open so the dump starts from the first message.
+    pub scroll: i32,
+    /// Whether to render meta / system-reminder messages too. TS:
+    /// `showAllInTranscript`. Default `true` since the whole point of
+    /// transcript mode is "show me everything".
+    pub show_all: bool,
+}
+
+impl TranscriptOverlay {
+    /// Open with default state — scrolled to top, `show_all` on.
+    pub fn new() -> Self {
+        Self {
+            scroll: 0,
+            show_all: true,
         }
     }
 }

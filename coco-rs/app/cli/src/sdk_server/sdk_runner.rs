@@ -115,10 +115,18 @@ impl TurnRunner for QueryEngineRunner {
             // rebuilding from `from_process` would lose them and slow
             // every turn down by re-walking settings layers.
             let runtime_config = runtime.runtime_config.as_ref();
+            // SDK turns honor the same settings-layered permission rules
+            // as TUI / headless. Mirrors TS `loadPermissionRules()`;
+            // before this wiring SDK turns ran with empty rule maps.
+            let (allow_rules, deny_rules, ask_rules) =
+                crate::permission_rule_loader::typed_permission_rules(&runtime_config.settings);
             let config = QueryEngineConfig {
                 model_id: handoff.model.clone(),
                 permission_mode,
                 context_window: 200_000,
+                allow_rules,
+                deny_rules,
+                ask_rules,
                 max_output_tokens,
                 max_turns: if max_turns > 0 {
                     max_turns
@@ -205,15 +213,17 @@ impl TurnRunner for QueryEngineRunner {
             // SDK-side `/dream` short-circuit — fire auto-memory
             // consolidation directly. When the engine has no
             // `MemoryRuntime` (Feature::AutoMemory off), we silently
-            // no-op. TS parity: `/dream` slash command.
+            // no-op. TS parity: `/dream` slash command. Uses `force`
+            // so the time / session / scan-throttle gates are
+            // bypassed; the lock is still acquired.
             if coco_commands::handlers::dream::parse_dream_sentinel(&prompt).is_some() {
                 if let Some(runtime) = engine.memory_runtime() {
-                    let transcript_dir = std::path::PathBuf::from(".");
+                    let transcript_dir = runtime
+                        .transcript_dir()
+                        .map(std::path::Path::to_path_buf)
+                        .unwrap_or_else(|| std::path::PathBuf::from("."));
                     let now_ms = coco_memory::service::dream::DreamService::now_ms();
-                    let _ = runtime
-                        .dream
-                        .maybe_consolidate(&transcript_dir, &[], now_ms)
-                        .await;
+                    let _ = runtime.dream.force(&transcript_dir, Vec::new, now_ms).await;
                 }
                 return Ok(());
             }
@@ -227,7 +237,18 @@ impl TurnRunner for QueryEngineRunner {
                         h.clone()
                     };
                     let tokens = coco_compact::estimate_tokens(&combined);
-                    let _ = runtime.session_memory.force(tokens).await;
+                    // TS parity: walk history for the orphan-safe
+                    // cursor signals (`sessionMemory.ts:441-442`).
+                    let last_msg_id = combined
+                        .last()
+                        .and_then(|m| m.uuid())
+                        .map(uuid::Uuid::to_string);
+                    let had_tool_calls =
+                        coco_session_memory::count_tool_calls_in_last_assistant_turn(&combined) > 0;
+                    let _ = runtime
+                        .session_memory
+                        .force(tokens, last_msg_id, had_tool_calls)
+                        .await;
                 }
                 return Ok(());
             }

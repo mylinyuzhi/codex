@@ -250,6 +250,15 @@ pub struct ToolUseContext {
     /// Enabled via `settings.plan_mode.verify_execution` or the
     /// `COCO_VERIFY_PLAN` env var.
     pub plan_verify_execution: bool,
+    /// Plan-mode interview-phase flag — drives the `EnterPlanMode`
+    /// post-execute instruction text variant. TS parity:
+    /// `isPlanModeInterviewPhaseEnabled()`. In coco-rs the source is
+    /// `settings.plan_mode.workflow == Interview` only (no Growthbook,
+    /// no `USER_TYPE=ant`, no env var). Mirrors the same field on
+    /// `coco_tool_runtime::PromptOptions` and the
+    /// `is_plan_interview_phase` field on
+    /// `coco_system_reminder::GeneratorContext`.
+    pub is_plan_interview_phase: bool,
     /// Whether user modified input during permission prompt.
     pub user_modified: bool,
     /// Require can_use_tool check before execution.
@@ -499,6 +508,7 @@ impl ToolUseContext {
             agent_name: self.agent_name.clone(),
             team_name: self.team_name.clone(),
             plan_verify_execution: self.plan_verify_execution,
+            is_plan_interview_phase: self.is_plan_interview_phase,
             user_modified: false,
             require_can_use_tool: self.require_can_use_tool,
             preserve_tool_use_results: self.preserve_tool_use_results,
@@ -609,6 +619,7 @@ impl ToolUseContext {
             agent_name: None,
             team_name: None,
             plan_verify_execution: false,
+            is_plan_interview_phase: false,
             user_modified: false,
             require_can_use_tool: false,
             preserve_tool_use_results: false,

@@ -3,6 +3,7 @@ use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::SideQueryRequest;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
+use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
@@ -596,6 +597,29 @@ Usage notes:
             format!("Fetching {url}")
         };
         Some(display)
+    }
+
+    /// Pick the user-facing payload from the structured `data` envelope:
+    /// - `extracted` (LLM extraction succeeded): the model's answer
+    /// - `content` (raw fallback when LLM extraction failed): the
+    ///   original markdown body
+    /// - `message` (cross-origin redirect blocked): the SSRF guard
+    ///   suggesting the model issue a fresh fetch with the new URL
+    /// TS parity: `WebFetchTool.ts::mapToolResultToToolResultBlockParam`
+    /// emits the `result` field; coco-rs splits this across three
+    /// fields depending on the execution path.
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        let text = data
+            .get("extracted")
+            .or_else(|| data.get("content"))
+            .or_else(|| data.get("message"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| serde_json::to_string(data).unwrap_or_default());
+        vec![ToolResultContentPart::Text {
+            text,
+            provider_options: None,
+        }]
     }
 
     async fn execute(
@@ -1388,6 +1412,21 @@ IMPORTANT - Use the correct year in search queries:
     fn get_activity_description(&self, input: &Value) -> Option<String> {
         let query = input.get("query").and_then(|v| v.as_str())?;
         Some(format!("Searching for \"{query}\""))
+    }
+
+    /// Render the prebuilt `formatted` field — the structured `results`
+    /// array is for downstream consumers; the model only needs the
+    /// markdown-shaped digest.
+    fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        let text = data
+            .get("formatted")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| serde_json::to_string(data).unwrap_or_default());
+        vec![ToolResultContentPart::Text {
+            text,
+            provider_options: None,
+        }]
     }
 
     async fn execute(

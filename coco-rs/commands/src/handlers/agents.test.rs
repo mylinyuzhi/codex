@@ -16,7 +16,7 @@ fn empty_paths() -> AgentSearchPaths {
 fn list_with_only_builtins_renders_count_and_each_agent() {
     let out = render("list", empty_paths()).unwrap();
     // Built-in catalog (interactive) ships at least general-purpose +
-    // statusline-setup + Explore + Plan + claude-code-guide. Don't pin
+    // statusline-setup + Explore + Plan + coco-guide. Don't pin
     // exact count — just that the list is non-empty and well-formed.
     assert!(out.starts_with(|c: char| c.is_ascii_digit()), "got: {out}");
     assert!(out.contains("general-purpose"));

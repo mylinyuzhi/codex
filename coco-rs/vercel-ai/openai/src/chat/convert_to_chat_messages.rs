@@ -258,14 +258,32 @@ fn serialize_tool_result_content(content: &ToolResultContent) -> String {
             .clone()
             .unwrap_or_else(|| "Tool execution denied.".into()),
         ToolResultContent::Content { value, .. } => {
-            // Serialize content parts to a string representation
+            // OpenAI Chat Completions only accepts a single string for
+            // `tool` role messages. Non-Text parts (image / document /
+            // file-reference) cannot be transmitted natively, so we
+            // replace them with a visible marker so the model knows
+            // *something* was there and can react ("the user shared
+            // an image; ask them to describe it") rather than seeing
+            // a silent gap. Text parts pass through verbatim.
             let parts: Vec<String> = value
                 .iter()
-                .filter_map(|part| match part {
-                    vercel_ai_provider::ToolResultContentPart::Text { text, .. } => {
-                        Some(text.clone())
+                .map(|part| match part {
+                    vercel_ai_provider::ToolResultContentPart::Text { text, .. } => text.clone(),
+                    vercel_ai_provider::ToolResultContentPart::FileData {
+                        media_type, ..
                     }
-                    _ => None,
+                    | vercel_ai_provider::ToolResultContentPart::FileUrl { media_type, .. } => {
+                        format!(
+                            "[{media_type} content omitted — provider doesn't support multimodal tool results]"
+                        )
+                    }
+                    vercel_ai_provider::ToolResultContentPart::FileReference { .. } => {
+                        "[file reference omitted — provider doesn't support multimodal tool results]"
+                            .into()
+                    }
+                    vercel_ai_provider::ToolResultContentPart::Custom { .. } => {
+                        "[custom provider-specific content omitted]".into()
+                    }
                 })
                 .collect();
             parts.join("\n")

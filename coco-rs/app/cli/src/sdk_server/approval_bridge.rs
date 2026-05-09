@@ -130,6 +130,13 @@ impl ToolPermissionBridge for SdkPermissionBridge {
                 Ok(ToolPermissionResolution {
                     decision,
                     feedback: parsed.feedback,
+                    // SDK clients do not currently surface "always
+                    // allow → save to settings" via `approval/resolve`.
+                    // When the protocol grows a `permission_updates`
+                    // field the consumer in `tui_runner` already
+                    // applies + persists the same shape, so wiring it
+                    // here is a one-line addition.
+                    applied_updates: Vec::new(),
                 })
             }
             JsonRpcMessage::Error(e) => {
@@ -144,6 +151,7 @@ impl ToolPermissionBridge for SdkPermissionBridge {
                 Ok(ToolPermissionResolution {
                     decision: ToolPermissionDecision::Rejected,
                     feedback: Some(format!("approval error: {}", e.message)),
+                    applied_updates: Vec::new(),
                 })
             }
             other => Err(format!(

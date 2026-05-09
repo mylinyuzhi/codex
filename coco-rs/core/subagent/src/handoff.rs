@@ -31,7 +31,7 @@ pub enum HandoffClassification {
 /// agents whose tool surface cannot mutate state. Mirrors TS
 /// `READ_ONLY_AGENT_TYPES` exemption.
 pub fn is_read_only_agent(agent_type: &str) -> bool {
-    matches!(agent_type, "Explore" | "Plan" | "claude-code-guide")
+    matches!(agent_type, "Explore" | "Plan" | "coco-guide")
 }
 
 /// Whether classification should run for this turn. Skips read-only
@@ -40,21 +40,44 @@ pub fn should_classify(agent_type: &str, total_tool_use_count: i64) -> bool {
     !is_read_only_agent(agent_type) && total_tool_use_count > 0
 }
 
-/// Stage 1 system + user prompts. The model is asked to triage broadly:
-/// `SAFE` for clean transcripts, `BLOCKED: <reason>` otherwise.
+/// TS hand-off review user message — fed verbatim to the classifier so
+/// it knows the transcript represents a sub-agent returning control to
+/// the main agent (not a fresh tool call). Pulled from
+/// `tools/AgentTool/agentToolUtils.ts:417`. Keep byte-faithful — the
+/// classifier's training surface anchors on this exact phrasing.
+pub const HANDOFF_REVIEW_USER_PROMPT: &str = "Sub-agent has finished and is handing back control to the main agent. \
+     Review the sub-agent's work based on the block rules and let the main \
+     agent know if any file is dangerous (the main agent will see the reason).";
+
+/// Stage 1 system + user prompts. The model is asked to triage the
+/// sub-agent transcript using the hand-off review framing and respond
+/// with `SAFE` or `BLOCKED: <reason>`.
+///
+/// Coco-rs has no YOLO classifier system-prompt infrastructure, so the
+/// system message is a thin stand-in. The user message uses
+/// [`HANDOFF_REVIEW_USER_PROMPT`] verbatim, paired with the agent type,
+/// tool-use count, and the transcript so a stateless classifier has the
+/// same context the TS YOLO flow gets through `agentMessages`.
 pub fn stage1_prompts(
     agent_type: &str,
     transcript: &str,
     total_tool_use_count: i64,
 ) -> (String, String) {
-    let system = "You are a safety classifier. Analyze agent transcripts for concerning behavior."
-        .to_string();
+    // TS yoloClassifier system prompt is a 1.4 KB block-rules template
+    // we don't ship in coco-rs. Use a short stand-in that names the
+    // hand-off semantics so the classifier doesn't free-associate.
+    let system =
+        "You are a transcript safety classifier evaluating a sub-agent hand-off back to the \
+         main agent. Look for actions outside the sub-agent's scope or potentially dangerous \
+         file modifications. Respond with `SAFE` for clean hand-offs, or `BLOCKED: <reason>` \
+         if you flag something."
+            .to_string();
     let user = format!(
-        "Review this agent transcript for safety concerns.\n\
-         Agent type: {agent_type}\n\
+        "{HANDOFF_REVIEW_USER_PROMPT}\n\n\
+         Sub-agent type: {agent_type}\n\
          Tool uses: {total_tool_use_count}\n\n\
          Transcript:\n{transcript}\n\n\
-         Respond with SAFE if no concerns, or BLOCKED: <reason> if there are concerns."
+         Respond with `SAFE` if no concerns, or `BLOCKED: <reason>` if there are concerns.",
     );
     (system, user)
 }
@@ -62,14 +85,18 @@ pub fn stage1_prompts(
 /// Stage 2 system + user prompts. Only invoked when stage 1 raised a
 /// flag — confirms whether the concern is genuine or a false positive.
 pub fn stage2_prompts(stage1_verdict: &str, transcript: &str) -> (String, String) {
-    let system = "You are a safety classifier performing a second-stage review.".to_string();
+    let system = "You are a transcript safety classifier performing a second-stage review of \
+                  a sub-agent hand-off. Confirm only genuine policy violations; default to \
+                  `SAFE` for ambiguity."
+        .to_string();
     let user = format!(
-        "A previous safety check flagged this transcript with: {stage1_verdict}\n\n\
-         Re-examine the transcript and confirm if this is a genuine safety concern \
-         that should block the handoff.\n\n\
+        "{HANDOFF_REVIEW_USER_PROMPT}\n\n\
+         A previous review flagged this hand-off with: {stage1_verdict}\n\n\
+         Re-examine the transcript and confirm if this is a genuine safety concern that \
+         should block the hand-off, or a false positive.\n\n\
          Transcript:\n{transcript}\n\n\
-         Respond with SAFE if the concern is a false positive, or \
-         BLOCKED: <reason> if confirmed."
+         Respond with `SAFE` if the concern is a false positive, or `BLOCKED: <reason>` if \
+         confirmed.",
     );
     (system, user)
 }
@@ -98,14 +125,16 @@ pub fn parse_classifier_response(text: &str) -> HandoffClassification {
     HandoffClassification::Blocked { reason }
 }
 
-/// Compose a `<tool_use_error>` payload from a [`HandoffClassification::Blocked`]
-/// reason. Wraps the reason so the parent model sees a uniformly-shaped
-/// error block. Returns `None` for safe verdicts (caller passes the
-/// subagent's output through unchanged).
+/// Compose the TS-faithful warning payload for a confirmed block.
+/// Mirrors the literal returned by `classifyHandoffIfNeeded` in
+/// `agentToolUtils.ts:476` — keep the wording byte-faithful so model
+/// behaviour around the warning stays consistent across the TS and
+/// Rust runtimes. Returns `None` for safe verdicts (caller passes the
+/// sub-agent's output through unchanged).
 ///
 /// Empty reasons (e.g. classifier returned just `"BLOCKED"` with no
-/// detail) collapse to `"unspecified safety concern"` so the rendered
-/// payload doesn't end on a dangling em-dash.
+/// detail) collapse to `"unspecified safety concern"` so the message
+/// never ends on a dangling colon.
 pub fn render_block_message(verdict: &HandoffClassification) -> Option<String> {
     match verdict {
         HandoffClassification::Safe => None,
@@ -115,9 +144,30 @@ pub fn render_block_message(verdict: &HandoffClassification) -> Option<String> {
             } else {
                 reason.as_str()
             };
-            Some(format!("SECURITY: subagent output withheld — {reason}"))
+            Some(format!(
+                "SECURITY WARNING: This sub-agent performed actions that may violate security \
+                 policy. Reason: {reason}. Review the sub-agent's actions carefully before \
+                 acting on its output."
+            ))
         }
     }
+}
+
+/// Warning text returned when the classifier itself was unreachable.
+/// TS parity: `agentToolUtils.ts:469`. Surfaces as a model-visible
+/// hint so the parent agent knows the hand-off review didn't run, but
+/// still propagates the sub-agent's output (fail-open).
+pub const UNAVAILABLE_WARNING: &str = "Note: The safety classifier was unavailable when reviewing this sub-agent's work. \
+     Please carefully verify the sub-agent's actions and output before acting on them.";
+
+/// TS `agentToolUtils.ts:404-405` — handoff classification only runs
+/// when the parent's permission mode is `auto` AND the
+/// `TRANSCRIPT_CLASSIFIER` feature is on. Coco-rs surfaces the same
+/// gate as a pure predicate so callers don't re-derive it. The
+/// `feature_enabled` flag captures the feature-flag layer (TS
+/// `feature('TRANSCRIPT_CLASSIFIER')` ≈ coco-rs runtime config).
+pub fn handoff_classifier_active(permission_mode: Option<&str>, feature_enabled: bool) -> bool {
+    feature_enabled && permission_mode == Some("auto")
 }
 
 /// Build a transcript summary from agent messages for classification.

@@ -165,10 +165,15 @@ fn test_overlay_n_denies() {
 }
 
 #[test]
-fn test_ctrl_t_cycles_thinking() {
+fn test_ctrl_t_toggles_expanded_tasks_view() {
+    // TS `app:toggleTodos` (Ctrl+T) cycles the right-rail expanded
+    // view — coco-rs implements the same. The legacy
+    // `CycleThinkingLevel` mapping was a coco-rs invention from before
+    // the TS-aligned dispatch landed; now this binding fires the
+    // resolver path (`AppToggleTodos → ToggleExpandedTasksView`).
     let state = AppState::new();
     let cmd = map_key(&state, ctrl(KeyCode::Char('t')));
-    assert!(matches!(cmd, Some(TuiCommand::CycleThinkingLevel)));
+    assert!(matches!(cmd, Some(TuiCommand::ToggleExpandedTasksView)));
 }
 
 #[test]
@@ -187,8 +192,11 @@ fn test_ctrl_f_kills_all_agents() {
 }
 
 #[test]
-fn test_ctrl_shift_f_toggles_fast_mode() {
-    // Spec: crate-coco-tui.md §Keyboard Shortcuts — Ctrl+Shift+F = fast mode.
+fn test_ctrl_shift_f_opens_global_search() {
+    // TS `app:globalSearch` is bound to `ctrl+shift+f`
+    // (`defaultBindings.ts:53-58`, gated on QUICK_SEARCH which coco-rs
+    // doesn't gate). Fast mode moved off this key — TS binds it to
+    // `meta+o` (`alt+o`) only.
     let state = AppState::new();
     let key = KeyEvent {
         code: KeyCode::Char('f'),
@@ -197,7 +205,7 @@ fn test_ctrl_shift_f_toggles_fast_mode() {
         state: KeyEventState::NONE,
     };
     let cmd = map_key(&state, key);
-    assert!(matches!(cmd, Some(TuiCommand::ToggleFastMode)));
+    assert!(matches!(cmd, Some(TuiCommand::ShowGlobalSearch)));
 }
 
 #[test]

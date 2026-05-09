@@ -51,10 +51,15 @@ pub fn try_acquire(memory_dir: &Path) -> LockOutcome {
         if fresh && alive {
             return LockOutcome::Held;
         }
-        // Stale or dead — fall through and reclaim.
-        if let Err(e) = std::fs::remove_file(&lock_path) {
-            return LockOutcome::Error(format!("could not remove stale lock: {e}"));
-        }
+        // Stale or dead — fall through and reclaim. NB: do NOT
+        // `remove_file` here. TS parity (`consolidationLock.ts:71-81`)
+        // uses a single `writeFile` (POSIX `O_TRUNC | O_CREAT`) which
+        // atomically overwrites without an unlink window — two
+        // reclaimers racing both write, the read-back-and-verify below
+        // picks one winner. A `remove_file` step would open a TOCTOU
+        // gap where both reclaimers pass the staleness check, both
+        // unlink (one ENOENT-tolerated), both write, and the loser
+        // silently overwrites the winner before its read-back fires.
     }
 
     if let Some(parent) = lock_path.parent()

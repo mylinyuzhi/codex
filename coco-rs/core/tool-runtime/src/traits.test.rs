@@ -144,15 +144,76 @@ fn test_prompt_options_to_description_options() {
         is_non_interactive: true,
         tool_names: vec!["Read".into(), "Write".into()],
         agent_names: vec!["Explore".into()],
-        allowed_agent_types: None,
         skill_names: vec![],
-        permission_context: None,
-        agent_catalog: None,
-        ready_mcp_servers: None,
-        coordinator_mode: false,
-        fork_enabled: false,
+        ..Default::default()
     };
     let desc_opts = prompt_opts.as_description_options();
     assert!(desc_opts.is_non_interactive);
     assert_eq!(desc_opts.tool_names.len(), 2);
+}
+
+/// Byte-identity contract for the default `Tool::render_for_model`
+/// impl. Critical regression guard: the default impl MUST produce
+/// the same string as the pre-refactor `serde_json::to_string(&data)`
+/// path — this is what `app/query/src/tool_outcome_builder.rs`
+/// detects via the singleton-Text fast path. If this drifts, every
+/// non-overriding tool's wire output silently changes.
+#[test]
+fn render_for_model_default_is_singleton_json_text() {
+    let tool = EchoTool;
+    let data = json!({"foo": 42, "bar": ["a", "b"]});
+    let parts = tool.render_for_model(&data);
+
+    let expected = serde_json::to_string(&data).unwrap();
+    assert_eq!(
+        parts,
+        vec![ToolResultContentPart::Text {
+            text: expected,
+            provider_options: None,
+        }]
+    );
+}
+
+#[test]
+fn render_for_model_default_handles_null_data() {
+    let tool = EchoTool;
+    let parts = tool.render_for_model(&Value::Null);
+    assert_eq!(
+        parts,
+        vec![ToolResultContentPart::Text {
+            text: "null".into(),
+            provider_options: None,
+        }]
+    );
+}
+
+/// `render_text_or_json` unwraps a bare `Value::String` directly
+/// (no JSON quotes around the content). Used by tools whose
+/// `execute()` already builds the human-readable string.
+#[test]
+fn render_text_or_json_unwraps_bare_string() {
+    let parts = render_text_or_json(&Value::String("plain text\nwith newline".into()));
+    assert_eq!(
+        parts,
+        vec![ToolResultContentPart::Text {
+            text: "plain text\nwith newline".into(),
+            provider_options: None,
+        }]
+    );
+}
+
+/// Non-string `data` falls back to JSON-stringify — same shape as
+/// the trait's default impl. Guards against passing structured data
+/// to a tool that accidentally uses the helper without a custom branch.
+#[test]
+fn render_text_or_json_falls_back_to_json_for_structured_data() {
+    let data = json!({"id": 7, "ok": true});
+    let parts = render_text_or_json(&data);
+    assert_eq!(
+        parts,
+        vec![ToolResultContentPart::Text {
+            text: serde_json::to_string(&data).unwrap(),
+            provider_options: None,
+        }]
+    );
 }

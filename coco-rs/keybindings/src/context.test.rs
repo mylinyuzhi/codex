@@ -1,37 +1,58 @@
-use super::*;
+use super::KeybindingContext;
+use std::str::FromStr;
 
 #[test]
-fn test_resolve_specific_context() {
-    let mut resolver = KeybindingResolver::new();
-    resolver.register(Keybinding {
-        key: "enter".into(),
-        action: "submit".into(),
-        context: KeyContext::Input,
-        description: None,
-    });
-    let result = resolver.resolve(KeyContext::Input, "enter");
-    assert!(result.is_some());
-    assert_eq!(result.unwrap().action, "submit");
+fn all_has_20_contexts() {
+    // 18 user-rebindable + 2 internal (Scroll, MessageActions).
+    assert_eq!(KeybindingContext::ALL.len(), 20);
 }
 
 #[test]
-fn test_resolve_fallback_to_global() {
-    let mut resolver = KeybindingResolver::new();
-    resolver.register(Keybinding {
-        key: "ctrl+c".into(),
-        action: "interrupt".into(),
-        context: KeyContext::Global,
-        description: None,
-    });
-    let result = resolver.resolve(KeyContext::Input, "ctrl+c");
-    assert!(result.is_some());
-    assert_eq!(result.unwrap().action, "interrupt");
+fn all_user_has_18_contexts() {
+    // Mirrors KEYBINDING_CONTEXTS in keybindings/schema.ts:12-32.
+    assert_eq!(KeybindingContext::ALL_USER.len(), 18);
+    for ctx in KeybindingContext::ALL_USER {
+        assert!(
+            ctx.is_user_rebindable(),
+            "{ctx:?} should be user-rebindable"
+        );
+    }
 }
 
 #[test]
-fn test_load_defaults() {
-    let mut resolver = KeybindingResolver::new();
-    resolver.load_defaults();
-    let global = resolver.bindings_for_context(KeyContext::Global);
-    assert!(!global.is_empty());
+fn internal_contexts_not_user_rebindable() {
+    assert!(!KeybindingContext::Scroll.is_user_rebindable());
+    assert!(!KeybindingContext::MessageActions.is_user_rebindable());
+}
+
+#[test]
+fn round_trip_via_string() {
+    for ctx in KeybindingContext::ALL {
+        let s = ctx.as_str();
+        let parsed = KeybindingContext::from_str(s).unwrap();
+        assert_eq!(parsed, *ctx);
+    }
+}
+
+#[test]
+fn rejects_unknown_context() {
+    assert!(KeybindingContext::from_str("Bogus").is_err());
+    // Lowercase is rejected — TS uses PascalCase exclusively.
+    assert!(KeybindingContext::from_str("global").is_err());
+}
+
+#[test]
+fn serde_round_trip() {
+    let ctx = KeybindingContext::DiffDialog;
+    let json = serde_json::to_string(&ctx).unwrap();
+    assert_eq!(json, "\"DiffDialog\"");
+    let parsed: KeybindingContext = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed, ctx);
+}
+
+#[test]
+fn descriptions_are_non_empty() {
+    for ctx in KeybindingContext::ALL {
+        assert!(!ctx.description().is_empty(), "{ctx:?}");
+    }
 }

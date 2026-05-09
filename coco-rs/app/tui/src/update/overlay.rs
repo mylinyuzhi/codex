@@ -258,10 +258,34 @@ pub(super) async fn deny(state: &mut AppState, command_tx: &mpsc::Sender<UserCom
 }
 
 /// Handle `ApproveAll` (always-allow) for permission overlays.
+///
+/// Phase A: builds a Session-scoped allow rule for the tool. `tui_runner`
+/// consumes the update via `coco_permissions::apply_permission_updates`
+/// (live engine_config mutation) so subsequent same-tool calls in the
+/// session don't re-prompt. Matches the rule shape produced by the
+/// `/permissions allow <tool>` slash command in
+/// `tui_runner::dispatch_permissions_mutation`, so both UX paths land in
+/// the same place.
+///
+/// Phase B (out of scope): a destination sub-picker on the dialog will
+/// let the user pick User / Project / Local; the runner already calls
+/// `SettingsPermissionStore::persist_update` for those destinations.
 pub(super) async fn approve_all(state: &mut AppState, command_tx: &mpsc::Sender<UserCommand>) {
     if let Some(Overlay::Permission(ref p)) = state.ui.overlay
         && p.show_always_allow
     {
+        let update = coco_types::PermissionUpdate::AddRules {
+            rules: vec![coco_types::PermissionRule {
+                source: coco_types::PermissionRuleSource::Session,
+                behavior: coco_types::PermissionBehavior::Allow,
+                value: coco_types::PermissionRuleValue {
+                    tool_pattern: p.tool_name.clone(),
+                    rule_content: None,
+                },
+            }],
+            destination: coco_types::PermissionUpdateDestination::Session,
+        };
+
         let _ = command_tx
             .send(UserCommand::ApprovalResponse {
                 request_id: p.request_id.clone(),
@@ -269,7 +293,7 @@ pub(super) async fn approve_all(state: &mut AppState, command_tx: &mpsc::Sender<
                 always_allow: true,
                 feedback: None,
                 updated_input: None,
-                permission_updates: vec![],
+                permission_updates: vec![update],
             })
             .await;
         state.ui.dismiss_overlay();
@@ -649,6 +673,7 @@ pub(super) async fn confirm(state: &mut AppState, command_tx: &mpsc::Sender<User
             | Overlay::TaskDetail(_)
             | Overlay::Feedback(_)
             | Overlay::McpServerSelect(_)
+            | Overlay::Transcript(_)
             | Overlay::ContextVisualization,
         ) => {
             // Dismiss on confirm (Enter/Esc)

@@ -42,13 +42,14 @@
 | **Lifecycle gate** | UnderDevelopment, default=false | 实验/未稳定能力，驱动 `/experimental` 菜单 |
 | **行为/安全 gate** | Stable, default 视风险 | 影响安全/资源/隔离边界 |
 
-### 3.2 最终列表（8 项）
+### 3.2 最终列表
 
 ```rust
 pub enum Feature {
     // Token-economy gate（Stable，default=true，用户可关省 token）
     WebSearch,
     WebFetch,
+    TaskV2,                      // V2 task tooling vs V1 TodoWrite — 互斥
 
     // 行为/安全 gate（Stable，default=false 安全保守）
     Sandbox,
@@ -62,12 +63,13 @@ pub enum Feature {
 }
 ```
 
-完整 spec：
+完整 spec（节选 stable + experimental 主项；其余 skill/command 子 gate 见 `common/types/src/features.rs`）：
 
 ```rust
 const FEATURES: &[FeatureSpec] = &[
     FeatureSpec { id: WebSearch,  key: "web_search",  stage: Stable,            default_enabled: true  },
     FeatureSpec { id: WebFetch,   key: "web_fetch",   stage: Stable,            default_enabled: true  },
+    FeatureSpec { id: TaskV2,     key: "task_v2",     stage: Stable,            default_enabled: true  },
     FeatureSpec { id: Sandbox,    key: "sandbox",     stage: Stable,            default_enabled: false },
     FeatureSpec { id: AutoMemory, key: "auto_memory", stage: UnderDevelopment,  default_enabled: false },
     FeatureSpec { id: Retrieval,  key: "retrieval",   stage: UnderDevelopment,  default_enabled: false },
@@ -76,6 +78,8 @@ const FEATURES: &[FeatureSpec] = &[
     FeatureSpec { id: Lsp,        key: "lsp",         stage: UnderDevelopment,  default_enabled: false },
 ];
 ```
+
+**`Feature::TaskV2` 特殊语义**：这是**互斥开关**，不是单纯 token-economy。开 → `TaskCreate`/`TaskGet`/`TaskList`/`TaskUpdate` 暴露给模型、`TodoWrite` 隐藏；关 → 反之。`TaskOutput` 与 `TaskStop` 操作的是后台任务命名空间（Bash `run_in_background`、agent spawn），与 V1/V2 plan-item 正交，永不被这个 gate 影响。对应 TS `isTodoV2Enabled()` (`utils/tasks.ts:133-139`)。
 
 ### 3.3 与原分散字段的对应
 
@@ -353,6 +357,22 @@ impl Tool for LspTool {
         ctx.features.enabled(Feature::Lsp)
     }
 }
+
+// V1/V2 互斥示例（同一 gate 反向使用，TaskOutput/TaskStop 不重载）：
+impl Tool for TaskCreateTool {       // 同样 TaskGet/TaskList/TaskUpdate
+    fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
+        ctx.features.enabled(Feature::TaskV2)
+    }
+}
+
+impl Tool for TodoWriteTool {
+    fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
+        !ctx.features.enabled(Feature::TaskV2)
+    }
+}
+
+// TaskOutput / TaskStop 不实现 is_enabled — 它们读后台任务命名空间
+// (`ctx.task_handle`)，不是 V2 plan items，跨 V1/V2 共享。
 
 // OS 限制示例（无 Feature 关联）：
 impl Tool for AgentForkTool {
