@@ -1040,8 +1040,9 @@ pub const RELOAD_PLUGINS_SENTINEL: &str = "__COCO_RELOAD_PLUGINS__";
 /// `updateHooksConfigSnapshot()` (`utils/hooks/hooksConfigSnapshot.ts`).
 ///
 /// Mirrors RELOAD_PLUGINS_SENTINEL: only fires from a slash command,
-/// which runs only at turn boundaries (QueryGuard idle), so pre/post
-/// hook consistency within a turn is preserved.
+/// which runs only at turn boundaries (the dispatch loop in
+/// `tui_runner` `drain_active_turn`s before processing slash output),
+/// so pre/post hook consistency within a turn is preserved.
 pub const RELOAD_HOOKS_SENTINEL: &str = "__COCO_RELOAD_HOOKS__";
 
 /// Parse a `__COCO_RELOAD_HOOKS__` first line. Returns `Some(())` on

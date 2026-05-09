@@ -29,7 +29,11 @@ use coco_config::env;
 use coco_context::FileHistoryState;
 use coco_inference::ApiClient;
 use coco_query::CoreEvent;
+use coco_query::QueuePriority;
+use coco_query::QueuedCommand;
+use coco_query::QueuedImage;
 use coco_query::ServerNotification;
+use coco_system_reminder::QueueOrigin;
 use coco_tui::App;
 use coco_tui::ClearScope;
 use coco_tui::UserCommand;
@@ -680,6 +684,35 @@ async fn run_agent_driver(
                 }
             }
 
+            UserCommand::QueueCommand { prompt, images } => {
+                // User typed Enter while the agent was streaming.
+                // Push onto the session-scoped command queue so the
+                // running engine sees it at its next drain point
+                // (mid-turn `Now` drain or end-of-turn full drain).
+                // TS parity: `handlePromptSubmit.ts:336-343` — when
+                // `queryGuard.isActive`, the prompt is enqueued
+                // instead of starting a fresh turn.
+                if prompt.trim().is_empty() {
+                    continue;
+                }
+                let queued = QueuedCommand::new(prompt, QueuePriority::Next)
+                    .with_origin(QueueOrigin::Human)
+                    .with_images(image_data_to_queued(&images));
+                let id = queued.id;
+                let preview = queued.preview();
+                runtime.command_queue().enqueue(queued).await;
+                // Round-trip notify: the TUI display
+                // (`SessionState::queued_commands`) is a projection of
+                // engine state and waits for this event to update —
+                // see `update.rs::QueueInput` (no optimistic push).
+                let _ = event_tx
+                    .send(CoreEvent::Protocol(ServerNotification::CommandQueued {
+                        id: id.to_string(),
+                        preview,
+                    }))
+                    .await;
+            }
+
             UserCommand::Compact {
                 custom_instructions,
             } => {
@@ -1088,8 +1121,9 @@ enum SlashOutcome {
     /// Reload the live `HookRegistry` from the latest `RuntimeConfig`
     /// snapshot. Triggered by `/hooks reload`. TS:
     /// `updateHooksConfigSnapshot()` (`utils/hooks/hooksConfigSnapshot.ts`).
-    /// Slash commands run only at turn boundaries (`QueryGuard::Idle`),
-    /// so PreToolUse/PostToolUse for an in-flight call cannot see
+    /// Slash commands run only at turn boundaries (the dispatch loop
+    /// `drain_active_turn`s before invoking them), so
+    /// PreToolUse/PostToolUse for an in-flight call cannot see
     /// different hook sets.
     TriggerReloadHooks,
 }
@@ -2610,6 +2644,28 @@ fn spawn_auto_title_task(
         // user-set title — safe to always call.
         let _ = coco_session::title_generator::apply_title(&session_manager, &session_id, title);
     });
+}
+
+/// Encode TUI paste-pill image bytes as base64 [`QueuedImage`]s for
+/// `CommandQueue` storage. `QueuedImage` carries a base64 payload (the
+/// shape coco-rs uses for system-reminder image attachments) so we
+/// encode once at the bridge and the engine ships it through unchanged.
+///
+/// MIME defaults to `image/png` when missing — matches TS
+/// `attachments.ts:1119-1121` (`media_type ?? 'image/png'`).
+fn image_data_to_queued(images: &[coco_tui::paste::ImageData]) -> Vec<QueuedImage> {
+    use base64::Engine;
+    images
+        .iter()
+        .map(|img| QueuedImage {
+            media_type: if img.mime.is_empty() {
+                "image/png".to_string()
+            } else {
+                img.mime.clone()
+            },
+            data_base64: base64::engine::general_purpose::STANDARD.encode(&img.bytes),
+        })
+        .collect()
 }
 
 #[cfg(test)]

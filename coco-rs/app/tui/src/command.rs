@@ -86,7 +86,18 @@ pub enum UserCommand {
     /// Execute a skill by name.
     ExecuteSkill { name: String, args: Option<String> },
     /// Queue a command for mid-turn injection.
-    QueueCommand { prompt: String },
+    ///
+    /// Sent by [`crate::update::QueueInput`] when the user presses
+    /// Enter while the agent is streaming. The CLI bridge in
+    /// `tui_runner` forwards this to
+    /// `runtime.command_queue().enqueue(...)` so the engine sees the
+    /// prompt at the next drain point. `images` carries any pasted
+    /// images at submit time so mid-turn screenshot pastes survive
+    /// queueing — same shape as [`Self::SubmitInput`].
+    QueueCommand {
+        prompt: String,
+        images: Vec<crate::paste::ImageData>,
+    },
     /// Background all foreground tasks.
     BackgroundAllTasks,
     /// Kill all running agents.

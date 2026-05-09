@@ -35,7 +35,9 @@ const EVENT_DESCRIPTIONS: &[(&str, &str)] = &[
 /// - no args / `list` → list configured hooks (read-only file scan)
 /// - `reload` → emit `RELOAD_HOOKS_SENTINEL` so the runner reloads the
 ///   live `HookRegistry` from current settings; pre/post turn consistency
-///   is guaranteed because slash commands only run at `QueryGuard::Idle`.
+///   is guaranteed because slash commands only run at turn boundaries
+///   (the dispatch loop in `tui_runner` `drain_active_turn`s before
+///   handling slash commands).
 pub fn handler(
     args: String,
 ) -> Pin<Box<dyn std::future::Future<Output = crate::Result<String>> + Send>> {

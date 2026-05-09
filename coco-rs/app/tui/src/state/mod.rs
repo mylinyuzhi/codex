@@ -61,6 +61,7 @@ pub use session::ChatRole;
 pub use session::McpServerStatus;
 pub use session::MessageContent;
 pub use session::PlanAction;
+pub use session::QueuedCommandDisplay;
 pub use session::SavedSession;
 pub use session::SessionState;
 pub use session::SubagentInstance;

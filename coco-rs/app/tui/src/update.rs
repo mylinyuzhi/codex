@@ -97,10 +97,25 @@ pub async fn handle_command(
             if edit::try_local_command(state, text.trim()) {
                 return true;
             }
-            state.session.queued_commands.push_back(text.clone());
+            // Resolve paste pills the same way `submit` does so mid-turn
+            // pastes (text expansion + image attachments) survive queueing.
+            // TS parity: `handlePromptSubmit.ts:336-343` enqueues with
+            // `pastedContents` so images flow into the queued attachment.
+            let resolved = state.ui.paste_manager.resolve_structured(&text);
+            // The TUI display is now a projection of the engine queue
+            // state — the round-trip `CommandQueued` notification
+            // (server_notification_handler/protocol.rs) repopulates
+            // `state.session.queued_commands` from the engine's
+            // authoritative count. Keep no optimistic local push: a
+            // double-push (here + on the event) would double the
+            // displayed count.
             let _ = command_tx
-                .send(UserCommand::QueueCommand { prompt: text })
+                .send(UserCommand::QueueCommand {
+                    prompt: resolved.text,
+                    images: resolved.images,
+                })
                 .await;
+            state.ui.paste_manager.clear();
             true
         }
         TuiCommand::Interrupt => {
