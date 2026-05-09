@@ -32,6 +32,7 @@ fn sample_skill(
 ) -> SkillDefinition {
     SkillDefinition {
         name: name.into(),
+        display_name: None,
         description: format!("{name} description"),
         prompt: prompt.into(),
         source: SkillSource::Bundled,
@@ -52,6 +53,8 @@ fn sample_skill(
         disable_model_invocation: disable_model,
         shell: None,
         content_length: prompt.len() as i64,
+        has_user_specified_description: true,
+        progress_message: Some("running".to_string()),
         is_hidden: false,
         gated_by: None,
         files: std::collections::HashMap::new(),

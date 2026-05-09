@@ -156,6 +156,7 @@ async fn render_text_with_args() {
     use crate::SkillSource;
     let skill = SkillDefinition {
         name: "demo".into(),
+        display_name: None,
         description: "demo".into(),
         prompt: "Hello $name!".into(),
         source: SkillSource::Bundled,
@@ -176,6 +177,8 @@ async fn render_text_with_args() {
         disable_model_invocation: false,
         shell: None,
         content_length: 0,
+        has_user_specified_description: true,
+        progress_message: Some("running".to_string()),
         is_hidden: false,
         gated_by: None,
         files: std::collections::HashMap::new(),

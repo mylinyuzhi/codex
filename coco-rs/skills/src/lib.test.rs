@@ -5,6 +5,7 @@ use super::*;
 fn test_skill(name: &str, description: &str, prompt: &str, source: SkillSource) -> SkillDefinition {
     SkillDefinition {
         name: name.into(),
+        display_name: None,
         description: description.into(),
         prompt: prompt.into(),
         source,
@@ -25,6 +26,8 @@ fn test_skill(name: &str, description: &str, prompt: &str, source: SkillSource) 
         disable_model_invocation: false,
         shell: None,
         content_length: prompt.len() as i64,
+        has_user_specified_description: true,
+        progress_message: Some("running".to_string()),
         is_hidden: false,
         gated_by: None,
         files: std::collections::HashMap::new(),
@@ -96,19 +99,24 @@ fn test_skill_lookup_by_alias() {
 
 #[test]
 fn test_load_from_markdown_basic() {
-    let content = "# deploy\n\nRun the deployment pipeline.\n";
+    // No frontmatter, no heading: file body is preserved verbatim and
+    // the skill name comes from the file stem (TS `getRegularCommandName`).
+    // No frontmatter description → description is auto-extracted from the
+    // first body line via `extractDescriptionFromMarkdown`, and
+    // `has_user_specified_description` is false (TS parity).
+    let content = "Run the deployment pipeline.\n";
     let skill = parse_skill_markdown(content, Path::new("/tmp/deploy.md")).unwrap();
 
     assert_eq!(skill.name, "deploy");
     assert_eq!(skill.prompt, "Run the deployment pipeline.");
-    assert!(skill.description.is_empty());
+    assert_eq!(skill.description, "Run the deployment pipeline.");
+    assert!(!skill.has_user_specified_description);
     assert!(skill.allowed_tools.is_none());
 }
 
 #[test]
 fn test_load_from_markdown_with_frontmatter() {
     let content = "\
-# review-pr
 ---
 description: Review a pull request
 allowed-tools: Bash, Read, Grep
@@ -118,7 +126,7 @@ model: opus
 Carefully review the PR for correctness and style.
 Check for bugs, security issues, and performance.
 ";
-    let skill = parse_skill_markdown(content, Path::new("/tmp/review.md")).unwrap();
+    let skill = parse_skill_markdown(content, Path::new("/tmp/review-pr.md")).unwrap();
 
     assert_eq!(skill.name, "review-pr");
     assert_eq!(skill.description, "Review a pull request");
@@ -138,7 +146,6 @@ Check for bugs, security issues, and performance.
 #[test]
 fn test_load_from_markdown_allowed_tools_underscore() {
     let content = "\
-# test
 ---
 allowed_tools: Bash, Read
 ---
@@ -154,31 +161,48 @@ Do things.
 
 #[test]
 fn test_load_from_markdown_empty_frontmatter() {
-    let content = "# test-skill\n---\n---\n\nDo the thing.\n";
-    let skill = parse_skill_markdown(content, Path::new("/tmp/test.md")).unwrap();
+    let content = "---\n---\n\nDo the thing.\n";
+    let skill = parse_skill_markdown(content, Path::new("/tmp/test-skill.md")).unwrap();
 
     assert_eq!(skill.name, "test-skill");
     assert_eq!(skill.prompt, "Do the thing.");
-    assert!(skill.description.is_empty());
+    // Body fallback: extracted description = first non-empty body line.
+    assert_eq!(skill.description, "Do the thing.");
+    assert!(!skill.has_user_specified_description);
 }
 
 #[test]
-fn test_load_from_markdown_no_heading_fails() {
-    let content = "This has no heading.\n";
-    let result = parse_skill_markdown(content, Path::new("/tmp/bad.md"));
-    assert!(result.is_err());
+fn test_load_from_markdown_no_frontmatter_loads_body_as_prompt() {
+    // TS parity: a file without frontmatter is not an error — the whole
+    // file becomes the skill body and the name comes from the file stem.
+    let content = "This has no frontmatter, just body text.\n";
+    let skill = parse_skill_markdown(content, Path::new("/tmp/bare.md")).unwrap();
+    assert_eq!(skill.name, "bare");
+    assert_eq!(skill.prompt, "This has no frontmatter, just body text.");
+    // Body fallback supplies the description.
+    assert_eq!(
+        skill.description,
+        "This has no frontmatter, just body text."
+    );
+    assert!(!skill.has_user_specified_description);
 }
 
 #[test]
-fn test_load_from_markdown_empty_fails() {
-    let result = parse_skill_markdown("", Path::new("/tmp/empty.md"));
-    assert!(result.is_err());
+fn test_load_from_markdown_empty_loads_empty_skill() {
+    // TS parity: empty content yields an empty body, not an error. The
+    // name is still derived from the file path. Description falls back
+    // to the default label `'Skill'` (matches TS `extractDescriptionFromMarkdown`
+    // when content has no non-empty lines).
+    let skill = parse_skill_markdown("", Path::new("/tmp/empty.md")).unwrap();
+    assert_eq!(skill.name, "empty");
+    assert!(skill.prompt.is_empty());
+    assert_eq!(skill.description, "Skill");
+    assert!(!skill.has_user_specified_description);
 }
 
 #[test]
 fn test_load_from_markdown_aliases() {
     let content = "\
-# deploy
 ---
 aliases: d, dep
 ---
@@ -192,7 +216,6 @@ Deploy app.
 #[test]
 fn test_load_from_markdown_hooks_json() {
     let content = "\
-# test
 ---
 hooks: {\"PreToolUse\": \"echo hi\"}
 ---
@@ -209,7 +232,6 @@ Test skill.
 #[test]
 fn test_load_from_markdown_hooks_string() {
     let content = "\
-# test
 ---
 hooks: simple-hook
 ---
@@ -227,7 +249,6 @@ Test skill.
 #[test]
 fn test_load_from_markdown_shell_string() {
     let content = "\
-# test
 ---
 shell: bash
 ---
@@ -244,7 +265,6 @@ Test skill.
 #[test]
 fn test_load_from_markdown_shell_json() {
     let content = "\
-# test
 ---
 shell: {\"type\": \"powershell\"}
 ---
@@ -260,7 +280,6 @@ Test skill.
 #[test]
 fn test_load_from_markdown_user_invocable_false() {
     let content = "\
-# internal
 ---
 user-invocable: false
 ---
@@ -274,7 +293,6 @@ Internal skill.
 #[test]
 fn test_load_from_markdown_disable_model_invocation() {
     let content = "\
-# debug
 ---
 disable-model-invocation: true
 ---
@@ -294,13 +312,13 @@ fn test_discover_skill_md_directory_format() {
     std::fs::create_dir(&skill_dir).unwrap();
     std::fs::write(
         skill_dir.join("SKILL.md"),
-        "# ignored-heading\n---\ndescription: My skill\n---\nDo stuff.\n",
+        "---\ndescription: My skill\n---\nDo stuff.\n",
     )
     .unwrap();
 
     let skills = discover_skills(&[dir.path().to_path_buf()]);
     assert_eq!(skills.len(), 1);
-    // Name comes from directory, not heading
+    // Name always comes from the directory (TS `getSkillCommandName`).
     assert_eq!(skills[0].name, "my-skill");
     assert_eq!(skills[0].description, "My skill");
 }
@@ -392,11 +410,7 @@ fn test_load_from_dirs_with_legacy() {
 fn test_load_skill_from_file() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("greet.md");
-    std::fs::write(
-        &path,
-        "# greet\n---\ndescription: Say hello\n---\nHello world.\n",
-    )
-    .unwrap();
+    std::fs::write(&path, "---\ndescription: Say hello\n---\nHello world.\n").unwrap();
 
     let skill = load_skill_from_file(&path).unwrap();
     assert_eq!(skill.name, "greet");
@@ -411,8 +425,6 @@ fn test_load_from_markdown_extended_frontmatter() {
     // Comma-separation is the legacy disk format; we keep the legacy
     // alias keys but the TS-canonical key is `arguments`.
     let content = "\
-# deploy
-
 ---
 description: Deploy to production
 when-to-use: When the user asks to deploy
@@ -453,13 +465,13 @@ fn test_disabled_skill_skipped_in_discovery() {
 
     let active_dir = dir.path().join("active");
     std::fs::create_dir(&active_dir).unwrap();
-    std::fs::write(active_dir.join("SKILL.md"), "# active\n\nActive skill.\n").unwrap();
+    std::fs::write(active_dir.join("SKILL.md"), "Active skill.\n").unwrap();
 
     let disabled_dir = dir.path().join("disabled");
     std::fs::create_dir(&disabled_dir).unwrap();
     std::fs::write(
         disabled_dir.join("SKILL.md"),
-        "# disabled\n---\ndisabled: true\n---\nDisabled skill.\n",
+        "---\ndisabled: true\n---\nDisabled skill.\n",
     )
     .unwrap();
 
@@ -580,7 +592,6 @@ fn test_get_skill_paths_order() {
 #[test]
 fn test_frontmatter_paths_brace_expansion() {
     let content = "\
-# test
 ---
 paths: *.{ts,tsx}, src/**/*.{js,jsx}
 ---
@@ -670,8 +681,6 @@ fn test_discover_skill_dirs_no_skills_dir_returns_empty() {
 #[test]
 fn test_arguments_field_whitespace_split_filters_numeric() {
     let content = "\
-# deploy
-
 ---
 description: Test arg parsing
 arguments: env region 42 user
@@ -687,8 +696,6 @@ Body
 #[test]
 fn test_arguments_field_legacy_aliases_still_work() {
     let content = "\
-# deploy
-
 ---
 description: Test arg parsing
 argument-names: env region
@@ -716,4 +723,341 @@ fn test_discover_skill_dirs_dedupes_across_paths() {
     // resolve to it.
     assert_eq!(result.len(), 1);
     assert_eq!(result[0], project.join(".claude").join("skills"));
+}
+
+// ── TS-format SKILL.md compatibility ──
+//
+// The reference TS loader (`claude-code-kim/src/skills/loadSkillsDir.ts`)
+// puts YAML frontmatter at the top of the file and takes the skill name
+// from the directory. These tests cover that layout end-to-end, plus the
+// real-YAML features it exercises (nested mappings, sequence syntax).
+
+#[test]
+fn test_load_from_markdown_ts_format_frontmatter_first() {
+    // No `# Name` heading — frontmatter sits at the top of the file.
+    let content = "\
+---
+name: lark-base
+version: 1.2.0
+description: \"Operate Lark Base via lark-cli\"
+---
+
+Body content explaining the skill.
+";
+    let skill = parse_skill_markdown(content, Path::new("/tmp/lark-base.md")).unwrap();
+    assert_eq!(skill.name, "lark-base");
+    assert_eq!(skill.description, "Operate Lark Base via lark-cli");
+    assert_eq!(skill.version.as_deref(), Some("1.2.0"));
+    assert!(skill.prompt.starts_with("Body content"));
+}
+
+#[test]
+fn test_load_from_markdown_ts_format_nested_metadata_ignored() {
+    // The TS spec doesn't define `metadata`, but a real YAML parser must
+    // tolerate (and silently drop) unknown nested shapes — the rest of
+    // the file should still load.
+    let content = "\
+---
+name: lark-base
+description: \"Lark Base operations\"
+metadata:
+  requires:
+    bins: [\"lark-cli\"]
+  cliHelp: \"lark-cli base --help\"
+---
+
+Body.
+";
+    let skill = parse_skill_markdown(content, Path::new("/tmp/lark-base.md")).unwrap();
+    assert_eq!(skill.name, "lark-base");
+    assert_eq!(skill.description, "Lark Base operations");
+    assert_eq!(skill.prompt, "Body.");
+}
+
+#[test]
+fn test_load_from_markdown_ts_format_yaml_list_allowed_tools() {
+    // Real YAML supports list syntax for allowed-tools; both forms must
+    // produce the same result.
+    let content = "\
+---
+name: review-pr
+description: Review a PR
+allowed-tools:
+  - Bash
+  - Read
+  - Grep
+---
+
+Review the diff.
+";
+    let skill = parse_skill_markdown(content, Path::new("/tmp/review.md")).unwrap();
+    assert_eq!(
+        skill.allowed_tools,
+        Some(vec!["Bash".into(), "Read".into(), "Grep".into()])
+    );
+}
+
+#[test]
+fn test_load_from_markdown_ts_format_yaml_list_paths() {
+    let content = "\
+---
+name: rust-skill
+description: Rust skill
+paths:
+  - src/**/*.rs
+  - tests/**
+---
+
+Body.
+";
+    let skill = parse_skill_markdown(content, Path::new("/tmp/rust.md")).unwrap();
+    // Trailing `/**` stripped per TS `parseSkillPaths`.
+    assert_eq!(skill.paths, vec!["src/**/*.rs", "tests"]);
+}
+
+#[test]
+fn test_discover_ts_format_skill_md_takes_name_from_directory() {
+    // The actual lark-base scenario: TS-format SKILL.md inside a named
+    // directory. Name should come from the directory, not the (absent)
+    // heading or the frontmatter `name` field.
+    let dir = tempfile::tempdir().unwrap();
+    let skill_dir = dir.path().join("lark-base");
+    std::fs::create_dir(&skill_dir).unwrap();
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\n\
+name: this-is-overridden-by-dir\n\
+version: 1.2.0\n\
+description: \"Operate Lark Base\"\n\
+metadata:\n  \
+  requires:\n    \
+    bins: [\"lark-cli\"]\n\
+---\n\n\
+Body of the skill.\n",
+    )
+    .unwrap();
+
+    let skills = discover_skills(&[dir.path().to_path_buf()]);
+    assert_eq!(skills.len(), 1, "lark-base SKILL.md should load");
+    assert_eq!(
+        skills[0].name, "lark-base",
+        "name should come from the directory in SKILL.md format"
+    );
+    assert_eq!(skills[0].description, "Operate Lark Base");
+    assert_eq!(skills[0].version.as_deref(), Some("1.2.0"));
+}
+
+#[test]
+fn test_load_from_markdown_plain_prose_loads_as_body() {
+    // TS parity: plain prose is not an error — it becomes the skill body.
+    // The only way `parse_skill_markdown` returns Err is if the path has
+    // no usable file name (covered by `derive_skill_name_from_path`).
+    let content = "Just some plain text, not a skill at all.\n";
+    let skill = parse_skill_markdown(content, Path::new("/tmp/bad.md")).unwrap();
+    assert_eq!(skill.name, "bad");
+    assert_eq!(skill.prompt, "Just some plain text, not a skill at all.");
+}
+
+#[test]
+fn test_display_name_from_frontmatter_name() {
+    // TS: `displayName: frontmatter.name` (loadSkillsDir.ts:239). The
+    // path-derived name is unchanged; display_name overrides only the
+    // user-facing surface.
+    let content = "\
+---
+name: \"My Pretty Name\"
+description: A skill
+---
+body
+";
+    let skill = parse_skill_markdown(content, Path::new("/tmp/raw-name.md")).unwrap();
+    assert_eq!(skill.name, "raw-name", "name comes from path stem");
+    assert_eq!(
+        skill.display_name.as_deref(),
+        Some("My Pretty Name"),
+        "display_name comes from frontmatter `name` field"
+    );
+    assert_eq!(
+        skill.user_facing_name(),
+        "My Pretty Name",
+        "user_facing_name prefers display_name over name"
+    );
+}
+
+#[test]
+fn test_user_facing_name_falls_back_to_name() {
+    // TS: `userFacingName(): displayName || skillName`. With no
+    // frontmatter `name`, display_name is None and the canonical name
+    // is used.
+    let content = "---\ndescription: A skill\n---\nbody\n";
+    let skill = parse_skill_markdown(content, Path::new("/tmp/raw-name.md")).unwrap();
+    assert!(skill.display_name.is_none());
+    assert_eq!(skill.user_facing_name(), "raw-name");
+}
+
+#[test]
+fn test_display_name_does_not_change_lookup_identity() {
+    // SKILL.md in a directory: name comes from the directory; the
+    // frontmatter `name` populates display_name but does NOT change
+    // how the skill is keyed in the manager.
+    let dir = tempfile::tempdir().unwrap();
+    let skill_dir = dir.path().join("internal-id");
+    std::fs::create_dir(&skill_dir).unwrap();
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: \"Pretty Display\"\ndescription: x\n---\nbody\n",
+    )
+    .unwrap();
+
+    let skills = discover_skills(&[dir.path().to_path_buf()]);
+    assert_eq!(skills.len(), 1);
+    let s = &skills[0];
+    // Lookup name = directory; display_name = frontmatter name.
+    assert_eq!(s.name, "internal-id");
+    assert_eq!(s.display_name.as_deref(), Some("Pretty Display"));
+    assert_eq!(s.user_facing_name(), "Pretty Display");
+}
+
+// ── has_user_specified_description / extract_description_from_markdown ──
+
+#[test]
+fn test_has_user_specified_description_true_when_frontmatter_set() {
+    let content = "---\ndescription: Explicit user-supplied desc\n---\nbody\n";
+    let skill = parse_skill_markdown(content, Path::new("/tmp/x.md")).unwrap();
+    assert_eq!(skill.description, "Explicit user-supplied desc");
+    assert!(skill.has_user_specified_description);
+}
+
+#[test]
+fn test_has_user_specified_description_false_when_extracted_from_body() {
+    // No frontmatter description → fallback to first non-empty body line.
+    let content = "---\nname: foo\n---\n\n# My Skill Heading\nMore text.\n";
+    let skill = parse_skill_markdown(content, Path::new("/tmp/x.md")).unwrap();
+    // TS strips leading `# ` before storing the description.
+    assert_eq!(skill.description, "My Skill Heading");
+    assert!(!skill.has_user_specified_description);
+}
+
+#[test]
+fn test_extract_description_caps_at_100_chars() {
+    let long = "a".repeat(200);
+    let got = extract_description_from_markdown(&long, "Skill");
+    assert!(got.ends_with("..."), "long text gets ellipsis: {got}");
+    assert_eq!(got.chars().count(), 100, "exactly 97 chars + '...'");
+}
+
+#[test]
+fn test_extract_description_falls_back_to_default() {
+    let got = extract_description_from_markdown("\n\n   \n", "Skill");
+    assert_eq!(got, "Skill");
+}
+
+#[test]
+fn test_progress_message_defaults_to_running() {
+    let content = "---\ndescription: x\n---\nbody\n";
+    let skill = parse_skill_markdown(content, Path::new("/tmp/x.md")).unwrap();
+    assert_eq!(
+        skill.progress_message.as_deref(),
+        Some("running"),
+        "TS createSkillCommand hard-codes progressMessage = 'running'"
+    );
+}
+
+#[test]
+fn test_finance_skills_real_world_example_loads() {
+    // Verbatim SKILL.md from the alirezarezvani/claude-skills `finance`
+    // bundle. Exercises: quoted strings in frontmatter, YAML sequences
+    // (`tags`, `agents`), unknown fields (`author`, `license`, `tags`,
+    // `agents`) silently ignored, multi-segment version (`1.0.0` parsed as
+    // string), body containing its own `# Finance Skills` heading.
+    let content = "\
+---
+name: \"finance-skills\"
+description: \"Financial analyst agent skill and plugin for Claude Code, Codex, Gemini CLI, Cursor, OpenClaw. Ratio analysis, DCF valuation, budget variance, rolling forecasts. 4 Python tools (stdlib-only).\"
+version: 1.0.0
+author: Alireza Rezvani
+license: MIT
+tags:
+  - finance
+  - financial-analysis
+agents:
+  - claude-code
+  - codex-cli
+---
+
+# Finance Skills
+
+Production-ready financial analysis skill for strategic decision-making.
+
+## Quick Start
+
+### Claude Code
+```
+/read finance/financial-analyst/SKILL.md
+```
+
+### Codex CLI
+```bash
+npx agent-skills-cli add alirezarezvani/claude-skills/finance
+```
+
+## Skills Overview
+
+| Skill | Folder | Focus |
+|-------|--------|-------|
+| Financial Analyst | `financial-analyst/` | Ratio analysis, DCF, budget variance, forecasting |
+
+## Python Tools
+
+4 scripts, all stdlib-only:
+
+```bash
+python3 financial-analyst/scripts/ratio_calculator.py --help
+python3 financial-analyst/scripts/dcf_valuation.py --help
+```
+
+## Rules
+
+- Load only the specific skill SKILL.md you need
+- Always validate financial outputs against source data
+";
+
+    // Discover via the SKILL.md-in-directory convention so the name comes
+    // from the directory (TS-strict; the frontmatter `name` field is
+    // ignored for skill identity).
+    let dir = tempfile::tempdir().unwrap();
+    let skill_dir = dir.path().join("finance-skills");
+    std::fs::create_dir(&skill_dir).unwrap();
+    std::fs::write(skill_dir.join("SKILL.md"), content).unwrap();
+
+    let skills = discover_skills(&[dir.path().to_path_buf()]);
+    assert_eq!(skills.len(), 1, "finance-skills SKILL.md must load");
+
+    let s = &skills[0];
+    assert_eq!(s.name, "finance-skills");
+    assert!(
+        s.description
+            .starts_with("Financial analyst agent skill and plugin"),
+        "description must come from frontmatter (got: {:?})",
+        s.description
+    );
+    assert!(
+        s.description.contains("DCF valuation"),
+        "description must be the full quoted string"
+    );
+    assert_eq!(s.version.as_deref(), Some("1.0.0"));
+
+    // Body fields the schema does not model are silently ignored — the
+    // file still loads. Body is preserved verbatim including the heading
+    // `# Finance Skills` (TS does not strip Markdown headings from body).
+    assert!(s.prompt.starts_with("# Finance Skills"));
+    assert!(s.prompt.contains("Quick Start"));
+    assert!(s.prompt.contains("Python Tools"));
+
+    // Defaults that should not have been disturbed by unknown fields.
+    assert!(s.user_invocable);
+    assert!(!s.disable_model_invocation);
+    assert!(!s.disabled);
+    assert!(s.allowed_tools.is_none());
+    assert!(s.argument_names.is_empty());
 }

@@ -40,11 +40,13 @@ async fn handler_picks_up_project_skill_md() {
     let cwd = tmp.path().join("project");
     let skill_dir = cwd.join(".claude").join("skills").join("foo");
     fs::create_dir_all(&skill_dir).unwrap();
-    // Format: `# Name` heading first, then frontmatter between `---`,
-    // then prompt body. parse_skill_markdown requires this exact order.
+    // Strict TS-parity layout: frontmatter at the top of the file, no
+    // leading `# Name` heading. The skill name is taken from the parent
+    // directory (`foo`), never from a heading or the frontmatter `name`
+    // field — see TS `loadSkillsDir.ts:452 const skillName = entry.name`.
     fs::write(
         skill_dir.join("SKILL.md"),
-        "# foo\n\n---\ndescription: a project skill\n---\n\nbody",
+        "---\ndescription: a project skill\n---\n\nbody",
     )
     .unwrap();
 

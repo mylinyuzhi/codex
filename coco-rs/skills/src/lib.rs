@@ -46,6 +46,16 @@ pub enum SkillContext {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillDefinition {
     pub name: String,
+    /// User-facing override of `name`, populated from the frontmatter
+    /// `name` field. `None` falls back to `name` for display.
+    ///
+    /// TS: `displayName` on the prompt-command record (`loadSkillsDir.ts:239`,
+    /// rendered through `userFacingName(): displayName || skillName`).
+    /// Skill identity / lookup always uses `name` (which is path-derived);
+    /// `display_name` only changes how the skill is shown in typeahead,
+    /// help listings, and similar surfaces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
     pub description: String,
     pub prompt: String,
     pub source: SkillSource,
@@ -110,6 +120,21 @@ pub struct SkillDefinition {
     /// TS: `contentLength` on PromptCommand.
     #[serde(default)]
     pub content_length: i64,
+    /// Whether the description came verbatim from the frontmatter
+    /// `description` field (true) or was synthesised from the markdown
+    /// body via `extract_description_from_markdown` (false).
+    ///
+    /// TS: `hasUserSpecifiedDescription` on the prompt-command record
+    /// (`loadSkillsDir.ts:241`). Consumers like the bundled-skill listing
+    /// can decide to surface only user-written descriptions.
+    #[serde(default)]
+    pub has_user_specified_description: bool,
+    /// UI label shown while the skill is executing (e.g. spinner caption).
+    /// `None` falls back to the consumer-side default — TS hard-codes the
+    /// default string `'running'` in `createSkillCommand`
+    /// (`loadSkillsDir.ts:336`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress_message: Option<String>,
     /// Whether this skill is hidden from typeahead/help but still invocable.
     ///
     /// TS: `isHidden` — separate from `user_invocable` (which blocks user invocation entirely).
@@ -150,6 +175,16 @@ impl SkillDefinition {
             Some(feat) => features.enabled(feat),
             None => true,
         }
+    }
+
+    /// Name to surface in typeahead / help listings / `/skills`. Returns
+    /// the frontmatter-supplied [`Self::display_name`] when set, otherwise
+    /// falls back to the canonical [`Self::name`] used for lookup.
+    ///
+    /// TS: `Command.userFacingName(): displayName || skillName` from
+    /// `loadSkillsDir.ts:337-339`.
+    pub fn user_facing_name(&self) -> &str {
+        self.display_name.as_deref().unwrap_or(&self.name)
     }
 }
 
@@ -495,24 +530,14 @@ pub fn discover_skills_with_format(
                 if entry_path.is_dir() {
                     // Look for SKILL.md inside the directory (case-insensitive)
                     if let Some(skill_md) = find_skill_md(&entry_path) {
-                        try_load_skill(
-                            &skill_md,
-                            &mut skills,
-                            &mut seen_paths,
-                            /*name_from_dir*/ true,
-                        );
+                        try_load_skill(&skill_md, &mut skills, &mut seen_paths);
                     }
                 } else if format == SkillDirFormat::Legacy
                     && entry_path.extension().is_some_and(|ext| ext == "md")
                     && entry_path.is_file()
                 {
                     // Legacy: flat .md files in .claude/commands/
-                    try_load_skill(
-                        &entry_path,
-                        &mut skills,
-                        &mut seen_paths,
-                        /*name_from_dir*/ false,
-                    );
+                    try_load_skill(&entry_path, &mut skills, &mut seen_paths);
                 }
             }
         }
@@ -540,11 +565,13 @@ fn find_skill_md(dir: &Path) -> Option<PathBuf> {
 }
 
 /// Try to load a skill from a file, deduplicating by canonical path.
+///
+/// `parse_skill_markdown` derives the skill name from `path` (parent dir
+/// for SKILL.md, file stem otherwise), so callers don't need to pass it.
 fn try_load_skill(
     path: &Path,
     skills: &mut Vec<SkillDefinition>,
     seen_paths: &mut HashSet<PathBuf>,
-    name_from_dir: bool,
 ) {
     // Deduplicate by canonical path (TS: realpath)
     let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
@@ -557,20 +584,80 @@ fn try_load_skill(
         Ok(skill) if skill.disabled => {
             tracing::debug!("skipping disabled skill: {}", skill.name);
         }
-        Ok(mut skill) => {
-            // For SKILL.md format, derive name from parent directory
-            if name_from_dir
-                && let Some(parent) = path.parent()
-                && let Some(dir_name) = parent.file_name()
-            {
-                skill.name = dir_name.to_string_lossy().to_string();
-            }
-            skills.push(skill);
-        }
+        Ok(skill) => skills.push(skill),
         Err(e) => {
             tracing::warn!("failed to load skill from {}: {e}", path.display());
         }
     }
+}
+
+/// Derive a skill's canonical name from its file path. Mirrors
+/// First non-empty line of `content` as a description, with `# heading`
+/// markers stripped and the result capped at 100 characters.
+///
+/// Mirrors TS `extractDescriptionFromMarkdown` in
+/// `utils/markdownConfigLoader.ts:52-69`. Used by the skill loader as a
+/// fallback when `frontmatter.description` is missing — every skill ends
+/// up with *some* human-readable label even if the author skipped the
+/// frontmatter field.
+pub fn extract_description_from_markdown(content: &str, default_description: &str) -> String {
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        // Strip leading `#`/`##`/etc. heading markers, like TS `^#+\s+(.+)$`.
+        let body = trimmed.trim_start_matches('#').trim_start().to_string();
+        let text = if body.is_empty() {
+            trimmed.to_string()
+        } else {
+            body
+        };
+        // Cap at 100 chars (TS: substring(0, 97) + '...'). char_indices to
+        // stay UTF-8 safe.
+        if text.chars().count() > 100 {
+            let cut: String = text.chars().take(97).collect();
+            return format!("{cut}...");
+        }
+        return text;
+    }
+    default_description.to_string()
+}
+
+/// TS `getCommandName` (`loadSkillsDir.ts:554-559`):
+///
+/// - `<dir>/SKILL.md` (case-insensitive) → `<dir>` basename
+/// - `<dir>/<stem>.md` → `<stem>`
+///
+/// Returns an error if the path has no usable basename or its parent
+/// directory has no name (e.g. root `/SKILL.md`).
+fn derive_skill_name_from_path(path: &Path) -> crate::Result<String> {
+    let file_name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| crate::SkillsError::generic("skill path has no file name"))?;
+
+    if file_name.eq_ignore_ascii_case("SKILL.md") {
+        let parent = path.parent().ok_or_else(|| {
+            crate::SkillsError::generic(format!(
+                "SKILL.md at {} has no parent directory to derive a name from",
+                path.display()
+            ))
+        })?;
+        let dir_name = parent.file_name().and_then(|s| s.to_str()).ok_or_else(|| {
+            crate::SkillsError::generic(format!(
+                "SKILL.md parent {} has no usable directory name",
+                parent.display()
+            ))
+        })?;
+        return Ok(dir_name.to_string());
+    }
+
+    // Flat `.md` (legacy `.claude/commands/foo.md`): strip the extension.
+    let stem = path.file_stem().and_then(|s| s.to_str()).ok_or_else(|| {
+        crate::SkillsError::generic(format!("skill path {} has no file stem", path.display()))
+    })?;
+    Ok(stem.to_string())
 }
 
 /// Parse a comma-separated list from a frontmatter value.
@@ -594,62 +681,109 @@ fn parse_argument_names_field(value: &str) -> Vec<String> {
 }
 
 /// Parse skill markdown content into a `SkillDefinition`.
+///
+/// **Strict TS parity** — mirrors `claude-code-kim/src/skills/loadSkillsDir.ts`:
+///
+/// - The whole file is fed to [`coco_frontmatter::parse`]. Frontmatter
+///   only matches when `---` opens the file (TS regex `^---\s*\n…`); any
+///   leading `# heading` line is part of the body, not a name.
+/// - The skill `name` comes from the file path, never from a heading or
+///   from the frontmatter `name` field:
+///     - `<dir>/SKILL.md` (case-insensitive) → `<dir>` basename
+///     - `<dir>/<stem>.md` → `<stem>` (legacy `.claude/commands/` flat layout)
+/// - Frontmatter `name`, if present, is silently ignored. (TS exposes it
+///   as `displayName` on the command record; coco-rs `SkillDefinition`
+///   has no separate displayName field, so we drop it to avoid a
+///   misleading override of the path-derived name.)
 fn parse_skill_markdown(content: &str, path: &Path) -> crate::Result<SkillDefinition> {
-    let mut lines = content.lines();
+    use coco_frontmatter::FrontmatterValue;
 
-    // Extract name from first heading line `# Name`
-    let name = loop {
-        match lines.next() {
-            Some(line) if line.trim().is_empty() => continue,
-            Some(line) if line.starts_with("# ") => {
-                break line.trim_start_matches("# ").trim().to_string();
-            }
-            Some(line) => {
-                return Err(crate::SkillsError::generic(format!(
-                    "expected `# Name` heading as first non-empty line, got: {line:?}"
-                )));
-            }
-            None => return Err(crate::SkillsError::generic("skill file is empty")),
-        }
+    let name = derive_skill_name_from_path(path)?;
+
+    let frontmatter = coco_frontmatter::parse(content);
+    let data = &frontmatter.data;
+
+    // Look up a key under any of several aliases (kebab + snake variants).
+    let lookup = |aliases: &[&str]| -> Option<&FrontmatterValue> {
+        aliases.iter().find_map(|k| data.get(*k))
     };
+    let lookup_str = |aliases: &[&str]| -> Option<String> {
+        lookup(aliases)
+            .and_then(FrontmatterValue::as_str)
+            .map(str::to_owned)
+    };
+    let lookup_bool =
+        |aliases: &[&str]| -> Option<bool> { lookup(aliases).and_then(FrontmatterValue::as_bool) };
+    // Coerce scalars to strings — `version: 1.2.0` parses as a string,
+    // `version: 1.2` as a float, `version: 1` as an int. Skills accept any.
+    let lookup_scalar_string =
+        |aliases: &[&str]| -> Option<String> { lookup(aliases).and_then(scalar_to_string) };
 
-    // Collect remaining lines to parse frontmatter + prompt
-    let remaining: Vec<&str> = lines.collect();
-    let (frontmatter, prompt_lines) = extract_frontmatter(&remaining);
+    // TS `loadSkillsDir.ts:208-214`:
+    //   const validatedDescription = coerceDescriptionToString(...)
+    //   const description = validatedDescription
+    //     ?? extractDescriptionFromMarkdown(markdownContent, fallbackLabel)
+    //   const hasUserSpecifiedDescription = validatedDescription !== null
+    //
+    // Body fallback ensures every skill ends up with *some* human-readable
+    // description even if the author skipped the frontmatter field.
+    let raw_description = lookup_str(&["description"]).filter(|s| !s.trim().is_empty());
+    let has_user_specified_description = raw_description.is_some();
+    let description = raw_description
+        .unwrap_or_else(|| extract_description_from_markdown(&frontmatter.content, "Skill"));
 
-    let description = frontmatter.get("description").cloned().unwrap_or_default();
-    let allowed_tools = frontmatter
-        .get("allowed-tools")
-        .or(frontmatter.get("allowed_tools"))
-        .map(|v| parse_csv_list(v));
-    let model = frontmatter.get("model").cloned();
-    let when_to_use = frontmatter
-        .get("when-to-use")
-        .or(frontmatter.get("when_to_use"))
-        .cloned();
+    // TS `loadSkillsDir.ts:239`: `displayName: frontmatter.name != null ? String(...) : undefined`.
+    // Coerce numeric / bool scalars to string so authors can write
+    // `name: 42` without losing it. Sequences / mappings are not valid
+    // displayName shapes; treat them as absent.
+    let display_name = lookup(&["name"]).and_then(scalar_to_string);
+
+    // Lists accept either a YAML sequence (`[Bash, Read]`) or a CSV string
+    // (`Bash, Read, Grep`).
+    let allowed_tools = lookup(&["allowed-tools", "allowed_tools"]).map(value_to_csv_list);
+
+    let model = lookup_str(&["model"]);
+    let when_to_use = lookup_str(&["when-to-use", "when_to_use"]);
+
     // TS reads the `arguments` frontmatter key (`utils/argumentSubstitution.ts:50`).
     // Legacy `argument-names` / `argument_names` aliases are accepted for
     // disk skills that pre-date the rename. TS `parseArgumentNames` splits on
     // whitespace, not commas, and drops numeric-only names.
-    let argument_names = frontmatter
-        .get("arguments")
-        .or(frontmatter.get("argument-names"))
-        .or(frontmatter.get("argument_names"))
-        .map(|v| parse_argument_names_field(v))
+    let argument_names = lookup(&["arguments", "argument-names", "argument_names"])
+        .map(|v| match v {
+            FrontmatterValue::Sequence(_) => v
+                .as_string_list()
+                .map(|items| items.into_iter().map(str::to_owned).collect())
+                .unwrap_or_default(),
+            FrontmatterValue::String(s) => parse_argument_names_field(s),
+            _ => Vec::new(),
+        })
         .unwrap_or_default();
-    let aliases = frontmatter
-        .get("aliases")
-        .map(|v| parse_csv_list(v))
+
+    let aliases = lookup(&["aliases"])
+        .map(value_to_csv_list)
         .unwrap_or_default();
-    let paths: Vec<String> = frontmatter
-        .get("paths")
+
+    let paths: Vec<String> = lookup(&["paths"])
         .map(|v| {
-            // Use brace-aware splitting so *.{ts,tsx} isn't broken on the inner comma.
-            split_top_level_commas(v)
-                .into_iter()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .flat_map(expand_braces)
+            // YAML list (`[a, b]`) → take items as-is. CSV string → split
+            // on top-level commas, brace-aware so `*.{ts,tsx}` isn't broken
+            // on the inner comma.
+            let raw: Vec<String> = match v {
+                FrontmatterValue::Sequence(_) => v
+                    .as_string_list()
+                    .map(|items| items.into_iter().map(str::to_owned).collect())
+                    .unwrap_or_default(),
+                FrontmatterValue::String(s) => split_top_level_commas(s)
+                    .into_iter()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned)
+                    .collect(),
+                _ => Vec::new(),
+            };
+            raw.into_iter()
+                .flat_map(|p| expand_braces(&p))
                 // TS `parseSkillPaths` (`loadSkillsDir.ts:159-178`):
                 // strip trailing `/**` because the `ignore` library matches a
                 // bare path as both the path and everything inside it.
@@ -672,48 +806,42 @@ fn parse_skill_markdown(content: &str, path: &Path) -> crate::Result<SkillDefini
             }
         })
         .unwrap_or_default();
-    let effort = frontmatter.get("effort").cloned();
-    let context = match frontmatter.get("context").map(String::as_str) {
+
+    let effort = lookup_str(&["effort"]);
+    let context = match lookup_str(&["context"]).as_deref() {
         Some("fork") => SkillContext::Fork,
         _ => SkillContext::Inline,
     };
-    let agent = frontmatter.get("agent").cloned();
-    let version = frontmatter.get("version").cloned();
-    let disabled = frontmatter
-        .get("disabled")
-        .is_some_and(|v| v == "true" || v == "yes");
-    let argument_hint = frontmatter
-        .get("argument-hint")
-        .or(frontmatter.get("argument_hint"))
-        .cloned();
-    let user_invocable = frontmatter
-        .get("user-invocable")
-        .or(frontmatter.get("user_invocable"))
-        .is_none_or(|v| v != "false" && v != "no");
-    let disable_model_invocation = frontmatter
-        .get("disable-model-invocation")
-        .or(frontmatter.get("disable_model_invocation"))
-        .is_some_and(|v| v == "true" || v == "yes");
-    // Parse hooks as opaque JSON (single-line JSON object or plain string)
-    let hooks = frontmatter.get("hooks").and_then(|v| {
-        serde_json::from_str(v)
-            .ok()
-            .or_else(|| Some(serde_json::Value::String(v.clone())))
-    });
-    // Parse shell: plain string → Value::String, JSON object → Value::Object
-    let shell = frontmatter
-        .get("shell")
-        .map(|v| serde_json::from_str(v).unwrap_or_else(|_| serde_json::Value::String(v.clone())));
+    let agent = lookup_str(&["agent"]);
+    let version = lookup_scalar_string(&["version"]);
+    let disabled = lookup_bool(&["disabled"]).unwrap_or(false);
+    let argument_hint = lookup_str(&["argument-hint", "argument_hint"]);
+    // Default: user-invocable. Only an explicit false value disables it.
+    let user_invocable = lookup_bool(&["user-invocable", "user_invocable"]).unwrap_or(true);
+    let disable_model_invocation =
+        lookup_bool(&["disable-model-invocation", "disable_model_invocation"]).unwrap_or(false);
 
-    let prompt = prompt_lines.join("\n").trim().to_string();
+    // Hooks/shell are passed through as opaque JSON so coco-hooks /
+    // shell_exec interpret them. Mappings, sequences, and scalars all
+    // round-trip via `FrontmatterValue::to_json`.
+    let hooks = lookup(&["hooks"]).map(FrontmatterValue::to_json);
+    let shell = lookup(&["shell"]).map(FrontmatterValue::to_json);
+
+    let prompt = frontmatter.content.trim().to_string();
     let content_length = prompt.len() as i64;
     // TS: isHidden = !(userInvocable ?? true)
     let is_hidden = !user_invocable;
 
     Ok(SkillDefinition {
         name,
+        display_name,
         description,
         prompt,
+        // TS `createSkillCommand` hard-codes `progressMessage: 'running'`
+        // (`loadSkillsDir.ts:336`). Mirror it so consumers don't have to
+        // know the default.
+        progress_message: Some("running".to_string()),
+        has_user_specified_description,
         source: SkillSource::User {
             path: path.to_path_buf(),
         },
@@ -741,46 +869,32 @@ fn parse_skill_markdown(content: &str, path: &Path) -> crate::Result<SkillDefini
     })
 }
 
-/// Extract YAML-like frontmatter between `---` markers and return
-/// (key-value pairs, remaining lines after frontmatter).
-fn extract_frontmatter<'a>(lines: &'a [&'a str]) -> (HashMap<String, String>, Vec<&'a str>) {
-    let mut idx = 0;
-    let mut frontmatter = HashMap::new();
-
-    // Skip leading blank lines
-    while idx < lines.len() && lines[idx].trim().is_empty() {
-        idx += 1;
+/// Convert a frontmatter value to a CSV-style list of strings.
+/// Sequences pass through; strings split on commas; everything else → empty.
+fn value_to_csv_list(v: &coco_frontmatter::FrontmatterValue) -> Vec<String> {
+    use coco_frontmatter::FrontmatterValue;
+    match v {
+        FrontmatterValue::Sequence(_) => v
+            .as_string_list()
+            .map(|items| items.into_iter().map(str::to_owned).collect())
+            .unwrap_or_default(),
+        FrontmatterValue::String(s) => parse_csv_list(s),
+        _ => Vec::new(),
     }
+}
 
-    // Check for opening `---`
-    if idx < lines.len() && lines[idx].trim() == "---" {
-        idx += 1;
-        let start = idx;
-
-        // Find closing `---`
-        while idx < lines.len() && lines[idx].trim() != "---" {
-            idx += 1;
-        }
-
-        // Parse key: value pairs within frontmatter
-        for line in &lines[start..idx] {
-            if let Some((key, value)) = line.split_once(':') {
-                let key = key.trim().to_string();
-                let value = value.trim().to_string();
-                if !key.is_empty() {
-                    frontmatter.insert(key, value);
-                }
-            }
-        }
-
-        // Skip closing `---`
-        if idx < lines.len() {
-            idx += 1;
-        }
+/// Coerce a scalar YAML value (string / int / float / bool) to its string
+/// form. Sequences and mappings return `None` — a structured shape can't
+/// be a single scalar field like `version` or `model`.
+fn scalar_to_string(v: &coco_frontmatter::FrontmatterValue) -> Option<String> {
+    use coco_frontmatter::FrontmatterValue;
+    match v {
+        FrontmatterValue::String(s) => Some(s.clone()),
+        FrontmatterValue::Int(n) => Some(n.to_string()),
+        FrontmatterValue::Float(f) => Some(f.to_string()),
+        FrontmatterValue::Bool(b) => Some(b.to_string()),
+        _ => None,
     }
-
-    let remaining = lines[idx..].to_vec();
-    (frontmatter, remaining)
 }
 
 /// Platform-specific managed skills directory.

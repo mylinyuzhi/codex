@@ -1740,6 +1740,7 @@ dependencies = [
  "async-trait",
  "coco-error",
  "coco-file-watch",
+ "coco-frontmatter",
  "coco-system-reminder",
  "coco-types",
  "dirs 6.0.0",
