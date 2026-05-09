@@ -87,7 +87,6 @@ fn test_runtime_config_resolves_provider_overrides() {
             api: Some(ProviderApi::OpenaiCompat),
             env_key: Some("LOCAL_API_KEY".to_string()),
             base_url: Some("http://localhost:8080/v1".to_string()),
-            default_model: Some("local-model".to_string()),
             models: Some(model_entries),
             ..Default::default()
         },
@@ -117,9 +116,14 @@ fn test_runtime_config_resolves_provider_overrides() {
 
 #[test]
 fn test_runtime_providers_satisfy_identity_invariant() {
-    // Plan §15 Group B claim #2 (release-build invariant).
+    // Plan §15 Group B claim #2 (release-build invariant). Need an
+    // explicit Main model — there is no implicit default after the
+    // multi-LLM fallback removal.
     let runtime = build_isolated(
-        settings_with(Settings::default()),
+        settings_with(Settings {
+            model: Some("anthropic/claude-opus-4-7".into()),
+            ..Default::default()
+        }),
         EnvSnapshot::default(),
         RuntimeOverrides::default(),
     )
@@ -146,6 +150,9 @@ fn test_partial_provider_overlay_does_not_coerce_api() {
         },
     );
     let settings = settings_with(Settings {
+        // Main is mandatory now — the test asserts provider overlay
+        // behavior, so any valid model selection works.
+        model: Some("openai/gpt-5-5".into()),
         providers,
         ..Default::default()
     });
@@ -261,11 +268,14 @@ fn test_runtime_config_rejects_bare_env_model_override() {
 #[test]
 fn test_cli_fallback_model_overrides_populate_main_chain_in_order() {
     // `--fallback-model X --fallback-model Y` produces an ordered
-    // Main role fallback chain. Flag order = chain priority. Use
-    // model ids that don't match the anthropic builtin's
-    // `default_model` (`claude-sonnet-4-6`) so the chain has no
-    // duplicates with the auto-selected primary.
-    let settings = settings_with(Settings::default());
+    // Main role fallback chain. Flag order = chain priority. Main
+    // must be set explicitly (no implicit default in the multi-LLM
+    // SDK); pick an id distinct from the fallbacks so the chain has
+    // no duplicates with the primary.
+    let settings = settings_with(Settings {
+        model: Some("anthropic/claude-haiku-4-5".into()),
+        ..Default::default()
+    });
     let env = EnvSnapshot::default();
     let overrides = RuntimeOverrides {
         fallback_model_overrides: vec![
@@ -346,7 +356,13 @@ fn test_cli_fallback_model_rejects_duplicate_within_chain() {
 
 #[test]
 fn test_cli_fallback_model_with_unknown_provider_fails_startup() {
-    let settings = settings_with(Settings::default());
+    // Main is configured with a valid spec so resolution reaches the
+    // fallback-chain validation step (which is what this test is
+    // actually exercising).
+    let settings = settings_with(Settings {
+        model: Some("anthropic/claude-opus-4-7".into()),
+        ..Default::default()
+    });
     let env = EnvSnapshot::default();
     let overrides = RuntimeOverrides {
         fallback_model_overrides: vec![ModelSelection {
@@ -384,9 +400,16 @@ fn settings_inline_provider_block_equals_providers_json_split() {
         },
     );
 
+    // Both shapes need an explicit Main model — the multi-LLM SDK
+    // intentionally has no implicit default. Pick a builtin
+    // (anthropic) so neither shape needs the user-defined provider
+    // to resolve Main.
+    let main_model = "anthropic/claude-opus-4-7";
+
     // Path A: providers declared inline in settings.json.
     let inline_runtime = build_isolated(
         settings_with(Settings {
+            model: Some(main_model.into()),
             providers: providers_inline.clone(),
             ..Default::default()
         }),
@@ -404,7 +427,10 @@ fn settings_inline_provider_block_equals_providers_json_split() {
     )
     .unwrap();
     let split_runtime = build_runtime_config_with(
-        settings_with(Settings::default()),
+        settings_with(Settings {
+            model: Some(main_model.into()),
+            ..Default::default()
+        }),
         EnvSnapshot::default(),
         RuntimeOverrides::default(),
         CatalogPaths::rooted(tmp.path()),

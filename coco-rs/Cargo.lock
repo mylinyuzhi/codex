@@ -2014,6 +2014,7 @@ dependencies = [
  "coco-context",
  "coco-file-search",
  "coco-file-watch",
+ "coco-git",
  "coco-keybindings",
  "coco-types",
  "crossterm",

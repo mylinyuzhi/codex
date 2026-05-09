@@ -406,8 +406,13 @@ fn resolve_model_roles(
 ) -> crate::Result<ModelRoles> {
     let mut roles = ModelRoles::default();
 
-    // Main has the richest resolution precedence: CLI override > env
-    // override > settings.models.main > settings.model > default.
+    // Main resolution precedence: CLI override > env override >
+    // settings.models.main > settings.model. No silent fallback —
+    // this is a multi-provider SDK; the user MUST pick a model.
+    // Surfacing this as a startup error (instead of defaulting to a
+    // built-in like `anthropic/claude-sonnet-4-6`) keeps the choice
+    // of provider explicit and avoids charging the wrong account
+    // when an unconfigured deployment ships.
     let mut main_slots = if let Some(selection) = overrides.model_override.as_ref() {
         RoleSlots::new(resolve_model_selection(selection.clone(), providers)?)
     } else if let Some(selection) = env.model_override.as_deref() {
@@ -417,7 +422,10 @@ fn resolve_model_roles(
     } else if let Some(selection) = settings.merged.model.as_deref() {
         RoleSlots::new(model_spec_from_selection(selection, providers)?)
     } else {
-        RoleSlots::new(default_main_model_spec(providers)?)
+        return Err(crate::ConfigError::generic(
+            "no Main model configured: set `models.main` (or `model`) in settings.json, \
+             pass `--model <provider>/<model_id>`, or set `COCO_MODEL=<provider>/<model_id>`",
+        ));
     };
 
     // CLI `--fallback-model` overrides settings.json fallbacks for
@@ -615,57 +623,6 @@ fn resolve_model_selection(
         ))
     })?;
     Ok(selection.into_model_spec(provider.api))
-}
-
-fn default_main_model_spec(
-    providers: &BTreeMap<String, ProviderConfig>,
-) -> crate::Result<ModelSpec> {
-    // Iterate in a stable order so the fallback is deterministic. Builtin
-    // providers come first (in defined order); user-registered extras
-    // sorted by name follow.
-    //
-    // Intentionally does **not** probe `resolve_api_key()` — that reads the
-    // live process env and would break the `EnvSnapshot`-based determinism
-    // of `build_runtime_config`.
-    // Builtin slot keys for stable ordering. Reads the partial table
-    // directly (cheap) instead of re-running `from_partial`.
-    let builtin_order: Vec<String> = crate::provider::builtin::builtin_provider_partials()
-        .into_iter()
-        .map(|(name, _)| name.to_string())
-        .collect();
-    let mut ordered: Vec<&ProviderConfig> = Vec::with_capacity(providers.len());
-    for name in &builtin_order {
-        if let Some(p) = providers.get(name) {
-            ordered.push(p);
-        }
-    }
-    let mut extras: Vec<&ProviderConfig> = providers
-        .iter()
-        .filter(|(n, _)| !builtin_order.contains(n))
-        .map(|(_, p)| p)
-        .collect();
-    extras.sort_by(|a, b| a.name.cmp(&b.name));
-    ordered.extend(extras);
-
-    let pick = ordered
-        .into_iter()
-        .find(|p| p.default_model.is_some())
-        .or_else(|| providers.get("anthropic"))
-        .ok_or_else(|| {
-            crate::ConfigError::generic("no provider with a configured default model is available")
-        })?;
-    let model_id = pick.default_model.as_deref().ok_or_else(|| {
-        crate::ConfigError::generic(format!(
-            "default provider `{}` has no default model",
-            pick.name
-        ))
-    })?;
-    Ok(ModelSpec {
-        provider: pick.name.clone(),
-        api: pick.api,
-        model_id: model_id.to_string(),
-        display_name: model_id.to_string(),
-    })
 }
 
 /// Hot-reload publisher.

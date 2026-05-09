@@ -25,7 +25,12 @@ async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
     use clap::Parser;
 
     let settings = SettingsWithSource {
-        merged: Settings::default(),
+        merged: Settings {
+            // Multi-LLM SDK: Main is mandatory, no implicit default.
+            // Tests pin a builtin model so SessionRuntime can build.
+            model: Some("anthropic/claude-opus-4-7".into()),
+            ..Default::default()
+        },
         per_source: std::collections::HashMap::new(),
     };
     let runtime_config = coco_config::build_runtime_config_with(
