@@ -76,102 +76,14 @@ async fn test_get_commands_by_max_priority() {
 #[tokio::test]
 async fn test_remove_commands() {
     let queue = CommandQueue::new();
-    queue
-        .enqueue(QueuedCommand::new("keep".into(), QueuePriority::Next))
-        .await;
-    queue
-        .enqueue(QueuedCommand::new("remove".into(), QueuePriority::Next))
-        .await;
+    let keep = QueuedCommand::new("keep".into(), QueuePriority::Next);
+    let drop = QueuedCommand::new("remove".into(), QueuePriority::Next);
+    let drop_id = drop.id;
+    queue.enqueue(keep).await;
+    queue.enqueue(drop).await;
 
-    queue.remove(&["remove".into()]).await;
+    queue.remove_by_ids(&[drop_id]).await;
     assert_eq!(queue.len().await, 1);
-}
-
-#[tokio::test]
-async fn test_query_guard_lifecycle() {
-    let guard = QueryGuard::new();
-    assert_eq!(guard.status().await, QueryGuardStatus::Idle);
-
-    // Reserve.
-    assert!(guard.reserve().await);
-    assert_eq!(guard.status().await, QueryGuardStatus::Dispatching);
-
-    // Can't reserve again.
-    assert!(!guard.reserve().await);
-
-    // Start.
-    let generation = guard.try_start().await.unwrap();
-    assert_eq!(guard.status().await, QueryGuardStatus::Running);
-
-    // Can't start again.
-    assert!(guard.try_start().await.is_none());
-
-    // End with correct generation.
-    assert!(guard.end(generation).await);
-    assert_eq!(guard.status().await, QueryGuardStatus::Idle);
-}
-
-#[tokio::test]
-async fn test_query_guard_force_end() {
-    let guard = QueryGuard::new();
-    let _generation = guard.try_start().await.unwrap();
-    guard.force_end().await;
-    assert_eq!(guard.status().await, QueryGuardStatus::Idle);
-}
-
-#[tokio::test]
-async fn test_query_guard_cancel_reservation() {
-    let guard = QueryGuard::new();
-    guard.reserve().await;
-    guard.cancel_reservation().await;
-    assert_eq!(guard.status().await, QueryGuardStatus::Idle);
-}
-
-#[tokio::test]
-async fn test_inbox_drain() {
-    let inbox = Inbox::new();
-    inbox
-        .push(InboxMessage {
-            from_agent: "agent-1".into(),
-            content: "hello".into(),
-            consumed: false,
-            timestamp: 100,
-        })
-        .await;
-    inbox
-        .push(InboxMessage {
-            from_agent: "agent-2".into(),
-            content: "world".into(),
-            consumed: false,
-            timestamp: 200,
-        })
-        .await;
-
-    let drained = inbox.drain_unconsumed().await;
-    assert_eq!(drained.len(), 2);
-
-    // Second drain returns empty.
-    let drained2 = inbox.drain_unconsumed().await;
-    assert!(drained2.is_empty());
-}
-
-#[tokio::test]
-async fn test_inbox_unconsumed_count() {
-    let inbox = Inbox::new();
-    assert_eq!(inbox.unconsumed_count().await, 0);
-
-    inbox
-        .push(InboxMessage {
-            from_agent: "a".into(),
-            content: "msg".into(),
-            consumed: false,
-            timestamp: 0,
-        })
-        .await;
-    assert_eq!(inbox.unconsumed_count().await, 1);
-
-    inbox.drain_unconsumed().await;
-    assert_eq!(inbox.unconsumed_count().await, 0);
 }
 
 #[tokio::test]

@@ -11,9 +11,9 @@ def test_hook_decorator_creates_definition():
         return {"behavior": "allow"}
 
     assert isinstance(block_rm, HookDefinition)
-    assert block_rm.config.event == "PreToolUse"
-    assert block_rm.config.matcher == "Bash"
-    assert block_rm.config.callback_id  # UUID generated
+    assert block_rm.event == "PreToolUse"
+    assert block_rm.matcher == "Bash"
+    assert block_rm.callback_id  # UUID generated
 
 
 def test_hook_decorator_no_matcher():
@@ -21,8 +21,8 @@ def test_hook_decorator_no_matcher():
     async def log_all(callback_id, event_type, input):
         return {}
 
-    assert log_all.config.matcher is None
-    assert log_all.config.event == "PostToolUse"
+    assert log_all.matcher is None
+    assert log_all.event == "PostToolUse"
 
 
 def test_hook_decorator_with_timeout():
@@ -30,7 +30,7 @@ def test_hook_decorator_with_timeout():
     async def slow_hook(callback_id, event_type, input):
         return {"behavior": "allow"}
 
-    assert slow_hook.config.timeout_ms == 5000
+    assert slow_hook.timeout_ms == 5000
 
 
 def test_hook_unique_callback_ids():
@@ -42,7 +42,7 @@ def test_hook_unique_callback_ids():
     async def hook_b(cb_id, et, inp):
         return {}
 
-    assert hook_a.config.callback_id != hook_b.config.callback_id
+    assert hook_a.callback_id != hook_b.callback_id
 
 
 def test_hook_callable():
@@ -54,15 +54,3 @@ def test_hook_callable():
         my_hook("cb_1", "PreToolUse", {"tool_name": "Bash"})
     )
     assert result["behavior"] == "deny"
-
-
-def test_hook_config_serialization():
-    @hook(event="PreToolUse", matcher="Write", timeout_ms=3000)
-    async def my_hook(cb_id, et, inp):
-        return {}
-
-    data = my_hook.config.model_dump(exclude_none=True)
-    assert data["event"] == "PreToolUse"
-    assert data["matcher"] == "Write"
-    assert data["timeout_ms"] == 3000
-    assert "callback_id" in data

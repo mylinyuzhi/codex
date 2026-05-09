@@ -223,8 +223,10 @@ impl HookRegistry {
     /// risk `PreToolUse` and `PostToolUse` for the same call seeing
     /// different hook sets — TS deliberately gates this through
     /// `updateHooksConfigSnapshot()` only via `/hooks` UI, never
-    /// auto-reload. The slash command runner ensures `QueryGuard` is
-    /// `Idle` before invoking this.
+    /// auto-reload. In the Rust port the dispatch loop in
+    /// `tui_runner` serialises turns via `drain_active_turn`, so
+    /// slash-command handlers (which call this) only ever run between
+    /// turns.
     ///
     /// `sources` is the ordered list of `(scope, raw_settings_value)`
     /// the caller wants registered. Stable order: lowest precedence

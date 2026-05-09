@@ -122,12 +122,22 @@ async fn queue_input_of_plain_text_still_queues() {
     let (tx, mut rx) = drained_channel();
     handle_command(&mut state, TuiCommand::QueueInput, &tx).await;
 
-    assert_eq!(state.session.queued_commands.len(), 1);
-    assert_eq!(state.session.queued_commands[0], "write a haiku");
+    // The TUI display is repopulated from the engine via the
+    // `CommandQueued` notification round-trip (handled in
+    // `server_notification_handler::protocol`), so the local store
+    // stays empty until that event arrives. Asserting the channel
+    // payload pins the wire-side contract.
     assert!(
-        matches!(rx.try_recv(), Ok(UserCommand::QueueCommand { .. })),
-        "plain text should still propagate to core"
+        state.session.queued_commands.is_empty(),
+        "no optimistic local push — display reconciles from the engine"
     );
+    match rx.try_recv() {
+        Ok(UserCommand::QueueCommand { prompt, images }) => {
+            assert_eq!(prompt, "write a haiku");
+            assert!(images.is_empty());
+        }
+        other => panic!("expected QueueCommand on the wire, got {other:?}"),
+    }
 }
 
 #[tokio::test]

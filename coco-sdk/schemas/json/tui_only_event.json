@@ -182,6 +182,13 @@
           "type": "integer",
           "format": "int64"
         },
+        "file_paths": {
+          "description": "Path strings of changed files in display order. Empty when `files_changed == 0`. TS source: `DiffStats.filesChanged: string[]` (`utils/fileHistory.ts:55-61`). Used by the rewind picker to render basenames per row and the selected-file label on the confirm screen. `#[serde(default)]` keeps the wire backwards-compatible with older producers that didn't populate it.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "files_changed": {
           "type": "integer",
           "format": "int32"
@@ -469,6 +476,261 @@
           ]
         }
       }
+    },
+    {
+      "description": "Local slash-command produced a `CommandResult::Text` (or `Compact { display_text }`). Surfaced as a system-role chat message so it reads inline with the transcript. `text` is the pre-rendered body — never translated, since it carries the handler's actual output (often command-specific status / git output / prompt preview).",
+      "type": "object",
+      "required": [
+        "name",
+        "text",
+        "type"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "slash_command_result"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Dispatcher-side breadcrumb for slash commands the runtime couldn't fully execute (missing handler, handler error, empty Prompt body, dialog wiring pending). The TUI translates `kind` via the i18n catalog before rendering.",
+      "type": "object",
+      "required": [
+        "kind",
+        "name",
+        "type"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/SlashCommandStatusKind"
+        },
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "slash_command_status"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Tell the TUI to open the rewind picker overlay. Emitted when the slash dispatcher resolves `/rewind` from the command palette (typed `/rewind` is intercepted earlier in `update/edit.rs` without round-tripping through `CoreEvent`). The TUI consumes the current `session.messages` to build the picker.",
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "open_rewind_picker"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Tell the TUI to open the `/memory` file-picker overlay. The slash dispatcher pre-builds entries via `coco_commands::handlers::memory_dialog::MemoryDialogHandler::entries` and carries them through here so the TUI doesn't recompute paths. On selection the TUI creates the file (`mode wx` semantics), opens `$VISUAL || $EDITOR`, and emits a system message; on cancel it emits \"Cancelled memory editing\". TS parity: `commands/memory/memory.tsx`.",
+      "type": "object",
+      "required": [
+        "entries",
+        "type"
+      ],
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/MemoryDialogEntry"
+          }
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "open_memory_dialog"
+          ]
+        }
+      }
     }
-  ]
+  ],
+  "definitions": {
+    "MemoryDialogEntry": {
+      "description": "One row in the `/memory` file-picker overlay. Built by the slash dispatcher and shipped to the TUI via [`TuiOnlyEvent::OpenMemoryDialog`].",
+      "type": "object",
+      "required": [
+        "label",
+        "path",
+        "scope"
+      ],
+      "properties": {
+        "label": {
+          "description": "Display label shown in the picker row.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Filesystem path of the memory file (also the editor target).",
+          "type": "string"
+        },
+        "scope": {
+          "description": "Scope tag (drives ordering and color hint).",
+          "allOf": [
+            {
+              "$ref": "#/definitions/MemoryDialogScope"
+            }
+          ]
+        }
+      }
+    },
+    "MemoryDialogScope": {
+      "description": "Scope tag for a memory file picker entry. Mirrors `coco_commands::MemoryScope` — kept in `coco-types` so the TUI can consume the event without depending on `coco-commands`.",
+      "oneOf": [
+        {
+          "description": "Enterprise / managed (typically read-only for the user).",
+          "type": "string",
+          "enum": [
+            "managed"
+          ]
+        },
+        {
+          "description": "User-global (`~/.coco/CLAUDE.md` or `~/CLAUDE.md`).",
+          "type": "string",
+          "enum": [
+            "user"
+          ]
+        },
+        {
+          "description": "Project (`./CLAUDE.md`).",
+          "type": "string",
+          "enum": [
+            "project"
+          ]
+        },
+        {
+          "description": "Project-local (`./CLAUDE.local.md`, gitignored).",
+          "type": "string",
+          "enum": [
+            "project_local"
+          ]
+        },
+        {
+          "description": "Subdirectory CLAUDE.md (auto-loaded under cwd).",
+          "type": "string",
+          "enum": [
+            "subdir"
+          ]
+        }
+      ]
+    },
+    "SlashCommandStatusKind": {
+      "description": "Categorization of a `SlashCommandStatus` payload. Each variant maps to a `slash.status.*` key in the TUI locale catalog.\n\nWire format intentionally tagged so SDK clients can render their own localized strings instead of consuming the TUI's English fallback.",
+      "oneOf": [
+        {
+          "description": "Registered command has no `handler` — typically a plugin contribution stub that wasn't bridged.",
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "no_handler"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Handler returned `Err`. `error` is the formatted error message.",
+          "type": "object",
+          "required": [
+            "error",
+            "kind"
+          ],
+          "properties": {
+            "error": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "failed"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Handler returned `CommandResult::Prompt` with no text parts.",
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "empty_prompt"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Handler returned `CommandResult::OpenDialog`, but coco-rs has not yet bound this dialog kind to a TUI overlay. `dialog_kind` is a human-readable label like \"memory file selector\".",
+          "type": "object",
+          "required": [
+            "dialog_kind",
+            "kind"
+          ],
+          "properties": {
+            "dialog_kind": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "dialog_pending"
+              ]
+            }
+          }
+        },
+        {
+          "description": "`/permissions allow` invoked with no tool name. Dispatcher-side usage hint — the TUI translates via `slash.permissions.usage_allow`.",
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "permissions_usage_allow"
+              ]
+            }
+          }
+        },
+        {
+          "description": "`/permissions deny` invoked with no tool name. Dispatcher-side usage hint — the TUI translates via `slash.permissions.usage_deny`.",
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "permissions_usage_deny"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
 }

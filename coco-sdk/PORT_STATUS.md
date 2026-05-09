@@ -35,11 +35,15 @@ The full Rust → JSON Schema → Python pipeline is working:
    ```
    which invokes `coco-rs/common/types/examples/export_schema.rs`. It writes
    directly to `coco-sdk/schemas/json/`:
-   - 9 individual schema files (server_notification, agent_stream_event,
-     tui_only_event, client_request, server_request, jsonrpc_message,
-     thread_item, session_start_request, and the usage.json artifact)
-   - 1 bundled file `coco_app_server_protocol.schemas.json` with 111
-     definitions (every type the SDK needs)
+   - 11 individual schema files (server_notification, notification_method,
+     agent_stream_event, tui_only_event, client_request, client_request_method,
+     server_request, server_request_method, jsonrpc_message, thread_item,
+     session_start_request)
+   - 1 bundled file `coco_app_server_protocol.schemas.json` containing every
+     type reachable from a small set of entry points (the union envelopes plus
+     ProviderApi / ModelRole / ModelSpec / Capability / WireApi / ApplyPatchToolType).
+     New wire types appear automatically as long as they're reachable via `$ref`
+     from any entry point.
 
 2. **`generate_python.sh`** runs in three phases:
    - `postprocess_python.py` reads the bundle + individual schemas and emits

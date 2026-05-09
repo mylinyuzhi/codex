@@ -25,6 +25,17 @@ STATIC_EXPORTS = [
     "ToolDefinition",
     "tool",
     "TypedClient",
+    # Multi-provider helper namespace (mostly re-exports of schema-
+    # derived types from coco_sdk.generated.protocol; ModelSpec adds an
+    # ergonomic cli_arg/__str__ subclass; ModelAlias and DEEPSEEK are
+    # hand-written because they live in coco-rs/common/config, not
+    # coco-types). See coco_sdk/types.py.
+    "DEEPSEEK",
+    "ModelAlias",
+    "ModelRole",
+    "ModelSpec",
+    "ProviderApi",
+    "thinking",
     "CLIConnectionError",
     "CLINotFoundError",
     "CocoSDKError",
@@ -33,6 +44,22 @@ STATIC_EXPORTS = [
     "SessionNotFoundError",
     "TransportClosedError",
 ]
+
+# Names re-exported by coco_sdk.types that must NOT also appear in
+# the protocol-import block. Two reasons to filter:
+#   1. ModelSpec — types.py defines a cli_arg-aware subclass; the
+#      generated import would re-bind the name to the raw Pydantic
+#      class.
+#   2. ModelRole / ProviderApi — types.py re-exports the generated
+#      enums verbatim, so listing them in both import blocks would
+#      duplicate them in `__all__` (purely cosmetic; harmless but
+#      ugly). The types.py import wins; protocol.py keeps them at
+#      `coco_sdk.generated.protocol.X` for direct consumers.
+TYPES_PY_SHADOWS = {
+    "ModelSpec",
+    "ModelRole",
+    "ProviderApi",
+}
 
 HEADER = '''"""coco SDK — programmatic access to the coco multi-provider LLM CLI.
 
@@ -68,6 +95,14 @@ from coco_sdk.errors import (
 from coco_sdk.query import query
 from coco_sdk.structured import TypedClient
 from coco_sdk.tools import ToolDefinition, tool
+from coco_sdk.types import (
+    DEEPSEEK,
+    ModelAlias,
+    ModelRole,
+    ModelSpec,
+    ProviderApi,
+    thinking,
+)
 
 # Protocol types — auto-generated from coco-rs schemas.
 # Regenerate with: ./coco-sdk/scripts/generate_all.sh
@@ -90,9 +125,25 @@ def main(proto_path: Path) -> int:
         print(f"error: protocol.py parse failed: {e}", file=sys.stderr)
         return 1
 
-    class_names = sorted(
-        {node.name for node in tree.body if isinstance(node, ast.ClassDef)}
-    )
+    # Discover both classes (`class Foo: ...`) AND module-level type
+    # aliases (`Foo = Bar | Baz`). The codegen emits union aliases for
+    # schemars `pub enum X { Int(i64), String(String) }` — without
+    # picking up `Assign` nodes, those names would silently miss the
+    # __init__.py re-export and force consumers into deep imports.
+    discovered: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef):
+            discovered.add(node.name)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id[0].isupper():
+                    discovered.add(target.id)
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            if node.target.id[0].isupper():
+                discovered.add(node.target.id)
+    # Drop names re-exported by coco_sdk.types so its versions win in
+    # the package namespace.
+    class_names = sorted(n for n in discovered if n not in TYPES_PY_SHADOWS)
 
     init_path = proto_path.parent.parent / "__init__.py"
 

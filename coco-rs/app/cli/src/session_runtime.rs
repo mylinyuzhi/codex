@@ -38,6 +38,7 @@ use coco_context::FileReadState;
 use coco_hooks::HookRegistry;
 use coco_inference::ApiClient;
 use coco_messages::Message;
+use coco_query::CommandQueue;
 use coco_query::QueryEngine;
 use coco_query::QueryEngineConfig;
 use coco_session::SessionManager;
@@ -456,6 +457,22 @@ pub struct SessionRuntime {
     /// [`Self::reminder_mailbox_handle`]; the engine drains via
     /// [`coco_system_reminder::ReminderMailbox::drain`].
     reminder_mailbox: Arc<coco_system_reminder::ReminderMailbox>,
+    /// Session-scoped mid-turn command queue. The Rust analog of TS
+    /// `utils/messageQueueManager.ts` module-level singleton: producers
+    /// (the TUI-while-busy bridge in `tui_runner`, future task /
+    /// coordinator / hook forwarders) push `QueuedCommand`s here at any
+    /// time, and the per-turn `QueryEngine` consumes them via
+    /// [`Self::wire_engine`] which calls
+    /// [`QueryEngine::with_command_queue`]. Internally `Arc`-backed so
+    /// `Clone` is cheap — every engine instance shares the same backing
+    /// storage with the runtime and any other holder.
+    ///
+    /// Teammate messages and task notifications also flow through this
+    /// queue (with `QueueOrigin::Coordinator` /
+    /// `QueueOrigin::TaskNotification`) — no separate `Inbox` type, TS
+    /// parity with `getAgentPendingMessageAttachments` which surfaces
+    /// coordinator messages as `queued_command` attachments.
+    command_queue: CommandQueue,
 }
 
 impl SessionRuntime {
@@ -962,6 +979,7 @@ impl SessionRuntime {
             reminder_mailbox,
             transcript_store,
             transcript_dedup,
+            command_queue: CommandQueue::new(),
         }))
     }
 
@@ -1146,6 +1164,23 @@ impl SessionRuntime {
         self.hook_registry.clone()
     }
 
+    /// Session-scoped command queue handle. Producers outside the
+    /// per-turn engine — the TUI bridge in `tui_runner` (user typing
+    /// while busy), future task-completion / coordinator / hook
+    /// forwarders — call `enqueue` on this handle to inject mid-turn
+    /// steering messages. Returned by reference; callers `.clone()` if
+    /// they need an owned `Arc`-backed handle.
+    ///
+    /// Teammate messages and task notifications use the same queue
+    /// with `QueueOrigin::Coordinator` / `QueueOrigin::TaskNotification`
+    /// — TS parity with `getAgentPendingMessageAttachments`.
+    ///
+    /// TS parity: `utils/messageQueueManager.ts::enqueue` (exported as a
+    /// free function reading the module-level singleton).
+    pub fn command_queue(&self) -> &CommandQueue {
+        &self.command_queue
+    }
+
     /// Build a closure that materialises an
     /// [`coco_hooks::orchestration::OrchestrationContext`] tied to the
     /// current session's identity / cwd / disable flags.
@@ -1237,6 +1272,13 @@ impl SessionRuntime {
         }
         engine = engine.with_file_read_state(self.file_read_state.clone());
         engine = engine.with_app_state(app_state.clone());
+        // Session-scoped steering primitive. Without this, a fresh
+        // `CommandQueue::new()` is constructed in `QueryEngine::new` and
+        // dies with the per-turn engine, so any producer (TUI bridge,
+        // future task / coordinator forwarders) enqueueing on
+        // `runtime.command_queue()` would land on an instance the
+        // running engine cannot see.
+        engine = engine.with_command_queue(self.command_queue.clone());
         let sm_text_now = self.session_memory_service.current_text().await;
         engine = engine.with_session_memory_text(sm_text_now);
         engine = engine.with_session_memory_service(self.session_memory_service.clone());
@@ -1965,7 +2007,8 @@ impl SessionRuntime {
     ///   already fired this session doesn't re-fire after reload.
     /// - Per-agent `agent_scoped` overlay is **preserved** — those are
     ///   owned by the coordinator's spawn lifecycle, not by settings.
-    /// - Slash commands run only at turn boundaries (`QueryGuard::Idle`),
+    /// - Slash commands run only at turn boundaries (the dispatch loop
+    ///   in `tui_runner` `drain_active_turn`s before invoking them),
     ///   so PreToolUse/PostToolUse for an in-flight call cannot see
     ///   different hook sets.
     ///
@@ -2077,6 +2120,16 @@ impl SessionRuntime {
         // detector are the common prefix of TS `clearSessionCaches`.
         *self.app_state.write().await = ToolAppState::default();
         self.reset_cache_break_detectors().await;
+
+        // Drop any queued steering messages — `/clear` (and the lighter
+        // `/clear history`) semantically says "fresh start", and a
+        // queued prompt from the pre-clear session would otherwise
+        // surface as the first user input in the post-clear transcript.
+        // Runs before the `is_history_only` early return so both scopes
+        // wipe the queue. TS parity: `clearCommandQueue()` from
+        // `utils/messageQueueManager.ts` is invoked alongside the
+        // history reset in REPL.tsx's clear path.
+        self.command_queue.clear().await;
 
         if is_history_only {
             return Ok(());

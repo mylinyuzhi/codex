@@ -9,14 +9,25 @@
 //!   cargo run -p coco-types --features schema --example export_schema
 //!   cargo run -p coco-types --features schema --example export_schema -- /custom/path
 //!
+//! ## Bundle composition
+//!
+//! The bundled schema (`coco_app_server_protocol.schemas.json`) is built
+//! by registering a small set of **entry-point types** and letting
+//! `schemars` walk their `$ref` closure transitively. Concretely,
+//! `schema_for!(T)` returns a `RootSchema { schema, definitions }` where
+//! `definitions` already contains every type that `T` (recursively)
+//! references via `$ref`. We lift those flat into the bundle's outer
+//! `definitions` map. The result: any type reachable from any entry point
+//! appears in the bundle automatically — no per-type `bundle_entry` line
+//! to maintain, and no silent gaps for cross-language clients.
+//!
+//! Adding a new wire type? Make sure it is reachable from one of the
+//! entry points below. If it is a brand-new top-level concept (not
+//! referenced by any existing union/struct), add it to
+//! `ENTRY_POINTS` instead of sprinkling individual lines elsewhere.
+//!
 //! TS reference: cocode-rs `app-server-protocol/src/export.rs` (454 lines).
-//! The coco-rs version is simpler because our types are centralized in
-//! `coco-types` instead of a separate app-server-protocol crate.
-
-// The bulk of this example requires the `schema` feature; without it the
-// `schemars::JsonSchema` derives are not generated. Provide a `main`
-// under both configurations so `cargo test --all-targets` (which does not
-// enable the feature) still links successfully.
+//! coco-rs is shorter because the merger replaces the per-variant list.
 
 #[cfg(not(feature = "schema"))]
 fn main() {
@@ -28,6 +39,8 @@ fn main() {
 }
 
 #[cfg(feature = "schema")]
+use std::collections::BTreeMap;
+#[cfg(feature = "schema")]
 use std::fs;
 #[cfg(feature = "schema")]
 use std::path::Path;
@@ -36,8 +49,6 @@ use std::path::PathBuf;
 
 #[cfg(feature = "schema")]
 use schemars::JsonSchema;
-#[cfg(feature = "schema")]
-use schemars::schema::RootSchema;
 #[cfg(feature = "schema")]
 use schemars::schema_for;
 #[cfg(feature = "schema")]
@@ -58,9 +69,134 @@ fn write_schema<T: JsonSchema>(out_dir: &Path, name: &str) {
 }
 
 #[cfg(feature = "schema")]
-/// Build one entry in the bundled schema file.
-fn bundle_entry<T: JsonSchema>(name: &str) -> (String, RootSchema) {
-    (name.to_string(), schema_for!(T))
+/// Bundle accumulator with explicit-vs-transitive precedence.
+///
+/// Each entry point is registered via `add::<T>(name)` which:
+///   1. inserts T's top-level schema (the metadata-rich form
+///      `schema_for!(T).schema`, with its embedded `definitions`
+///      stripped) under `name` — marked **explicit**.
+///   2. lifts every entry of `schema_for!(T).definitions` flat into
+///      the bundle — marked **transitive**.
+///
+/// Two precedence rules:
+///   * **Explicit always wins**. When `ProviderApi` is registered
+///     explicitly *and* reached transitively via `ModelSpec.api`,
+///     the richer top-level schema (with `title`, `$schema` etc.)
+///     wins; the leaner transitive copy is silently dropped.
+///   * **First transitive wins**. When two unrelated entries both
+///     reach the same inner type, the schemas are equal in every
+///     case we have observed (schemars is deterministic), so we
+///     keep the first and only flag a real divergence as a conflict.
+struct BundleBuilder {
+    entries: BTreeMap<String, Value>,
+    /// Names registered via the explicit top-level path. These
+    /// outrank later transitive picks for the same name.
+    explicit: BTreeMap<String, ()>,
+    /// Conflicting names where two non-equal schemas landed under
+    /// the same name — almost always a real bug worth investigating.
+    conflicts: Vec<String>,
+}
+
+#[cfg(feature = "schema")]
+impl BundleBuilder {
+    fn new() -> Self {
+        Self {
+            entries: BTreeMap::new(),
+            explicit: BTreeMap::new(),
+            conflicts: Vec::new(),
+        }
+    }
+
+    /// Register an entry-point type and pull in its full transitive
+    /// `$ref` closure. See struct docs for precedence rules.
+    fn add<T: JsonSchema>(&mut self, name: &str) {
+        let root = schema_for!(T);
+
+        // 1) Top-level schema → bundle[name], marked **explicit**.
+        //    Strip the embedded `definitions` field — we lift its
+        //    entries flat below, so keeping a nested copy would just
+        //    duplicate data.
+        let mut top = serde_json::to_value(&root.schema).expect("serialize top schema");
+        if let Some(obj) = top.as_object_mut() {
+            obj.remove("definitions");
+        }
+        self.entries.insert(name.to_string(), top);
+        self.explicit.insert(name.to_string(), ());
+
+        // 2) Every transitively-reachable type → bundle[X], marked
+        //    **transitive** (loses to explicit, ties resolved
+        //    first-write-wins with conflict detection).
+        for (inner_name, inner_schema) in &root.definitions {
+            let inner = serde_json::to_value(inner_schema).expect("serialize inner schema");
+            self.insert_transitive(inner_name, inner);
+        }
+    }
+
+    fn insert_transitive(&mut self, name: &str, value: Value) {
+        // Explicit registrations are never overwritten by transitive
+        // picks — preserves the metadata-rich schema for entry points.
+        if self.explicit.contains_key(name) {
+            return;
+        }
+        if let Some(existing) = self.entries.get(name) {
+            if existing != &value {
+                self.conflicts.push(name.to_string());
+                return;
+            }
+        }
+        self.entries.insert(name.to_string(), value);
+    }
+
+    fn into_definitions(self) -> (serde_json::Map<String, Value>, Vec<String>) {
+        let mut map = serde_json::Map::new();
+        for (k, v) in self.entries {
+            map.insert(k, v);
+        }
+        (map, self.conflicts)
+    }
+}
+
+#[cfg(feature = "schema")]
+/// Walk every `$ref` in the bundle's definitions and return any that
+/// point at a name not present as a top-level definition. Each entry
+/// in the returned map is `(missing_target, [sources_that_referenced_it])`.
+fn find_dangling_refs(
+    definitions: &serde_json::Map<String, Value>,
+) -> BTreeMap<String, Vec<String>> {
+    let known: std::collections::BTreeSet<String> = definitions.keys().cloned().collect();
+    let mut dangling: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
+    fn walk(value: &Value, sink: &mut Vec<String>) {
+        match value {
+            Value::Object(map) => {
+                if let Some(Value::String(s)) = map.get("$ref") {
+                    if let Some(name) = s.strip_prefix("#/definitions/") {
+                        sink.push(name.to_string());
+                    }
+                }
+                for v in map.values() {
+                    walk(v, sink);
+                }
+            }
+            Value::Array(arr) => {
+                for v in arr {
+                    walk(v, sink);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    for (source, schema) in definitions {
+        let mut refs = Vec::new();
+        walk(schema, &mut refs);
+        for target in refs {
+            if !known.contains(&target) {
+                dangling.entry(target).or_default().push(source.clone());
+            }
+        }
+    }
+    dangling
 }
 
 #[cfg(feature = "schema")]
@@ -103,163 +239,127 @@ fn main() {
     write_schema::<coco_types::SessionStartParams>(&out_dir, "session_start_request");
     println!();
 
-    // --- Bundled schema: all types in one file, matching the cocode-sdk layout ---
-    // The Python SDK generator expects `coco_app_server_protocol.schemas.json`.
+    // --- Bundled schema: all types reachable from any entry point ---
+    //
+    // The bundle is the source of truth for cross-language clients
+    // (Python is the in-tree consumer; TS/Go/etc. only have this file).
+    // Entry points are the smallest set whose transitive `$ref` closure
+    // covers the full wire surface. Add a new entry **only** if the
+    // type is unreachable from every existing entry — otherwise it
+    // flows in for free via `BundleBuilder::add`.
     println!("Bundled schema:");
 
-    let type_schemas: Vec<(String, RootSchema)> = vec![
-        // 3-layer CoreEvent sub-enums (the envelope itself is in-process only).
-        bundle_entry::<coco_types::ServerNotification>("ServerNotification"),
-        bundle_entry::<coco_types::NotificationMethod>("NotificationMethod"),
-        bundle_entry::<coco_types::AgentStreamEvent>("AgentStreamEvent"),
-        bundle_entry::<coco_types::TuiOnlyEvent>("TuiOnlyEvent"),
-        // ThreadItem + ItemStatus
-        bundle_entry::<coco_types::ThreadItem>("ThreadItem"),
-        bundle_entry::<coco_types::ThreadItemDetails>("ThreadItemDetails"),
-        bundle_entry::<coco_types::ItemStatus>("ItemStatus"),
-        bundle_entry::<coco_types::FileChangeInfo>("FileChangeInfo"),
-        // Control protocol
-        bundle_entry::<coco_types::ClientRequest>("ClientRequest"),
-        bundle_entry::<coco_types::ClientRequestMethod>("ClientRequestMethod"),
-        bundle_entry::<coco_types::ServerRequest>("ServerRequest"),
-        bundle_entry::<coco_types::ServerRequestMethod>("ServerRequestMethod"),
-        bundle_entry::<coco_types::JsonRpcMessage>("JsonRpcMessage"),
-        bundle_entry::<coco_types::JsonRpcRequest>("JsonRpcRequest"),
-        bundle_entry::<coco_types::JsonRpcResponse>("JsonRpcResponse"),
-        bundle_entry::<coco_types::JsonRpcError>("JsonRpcError"),
-        bundle_entry::<coco_types::JsonRpcNotification>("JsonRpcNotification"),
-        bundle_entry::<coco_types::RequestId>("RequestId"),
-        bundle_entry::<coco_types::ApprovalDecision>("ApprovalDecision"),
-        // Session + turn params
-        bundle_entry::<coco_types::SessionStartedParams>("SessionStartedParams"),
-        bundle_entry::<coco_types::SessionResultParams>("SessionResultParams"),
-        bundle_entry::<coco_types::SessionEndedParams>("SessionEndedParams"),
-        bundle_entry::<coco_types::SessionState>("SessionState"),
-        bundle_entry::<coco_types::SessionStartParams>("SessionStartParams"),
-        bundle_entry::<coco_types::TurnStartedParams>("TurnStartedParams"),
-        bundle_entry::<coco_types::TurnCompletedParams>("TurnCompletedParams"),
-        bundle_entry::<coco_types::TurnFailedParams>("TurnFailedParams"),
-        bundle_entry::<coco_types::TurnInterruptedParams>("TurnInterruptedParams"),
-        bundle_entry::<coco_types::TurnStartParams>("TurnStartParams"),
-        // Streaming content
-        bundle_entry::<coco_types::ContentDeltaParams>("ContentDeltaParams"),
-        // Subagent
-        bundle_entry::<coco_types::SubagentSpawnedParams>("SubagentSpawnedParams"),
-        bundle_entry::<coco_types::SubagentCompletedParams>("SubagentCompletedParams"),
-        bundle_entry::<coco_types::SubagentBackgroundedParams>("SubagentBackgroundedParams"),
-        bundle_entry::<coco_types::SubagentProgressParams>("SubagentProgressParams"),
-        // MCP
-        bundle_entry::<coco_types::McpStartupStatusParams>("McpStartupStatusParams"),
-        bundle_entry::<coco_types::McpStartupCompleteParams>("McpStartupCompleteParams"),
-        bundle_entry::<coco_types::McpServerStatus>("McpServerStatus"),
-        bundle_entry::<coco_types::McpStatusResult>("McpStatusResult"),
-        bundle_entry::<coco_types::McpSetServersParams>("McpSetServersParams"),
-        bundle_entry::<coco_types::McpSetServersResult>("McpSetServersResult"),
-        bundle_entry::<coco_types::McpReconnectParams>("McpReconnectParams"),
-        bundle_entry::<coco_types::McpToggleParams>("McpToggleParams"),
-        bundle_entry::<coco_types::McpServerInit>("McpServerInit"),
-        // Context
-        bundle_entry::<coco_types::ContextCompactedParams>("ContextCompactedParams"),
-        bundle_entry::<coco_types::ContextUsageWarningParams>("ContextUsageWarningParams"),
-        bundle_entry::<coco_types::ContextClearedParams>("ContextClearedParams"),
-        bundle_entry::<coco_types::CompactionFailedParams>("CompactionFailedParams"),
-        bundle_entry::<coco_types::ContextUsageResult>("ContextUsageResult"),
-        bundle_entry::<coco_types::ContextUsageCategory>("ContextUsageCategory"),
-        bundle_entry::<coco_types::MessageBreakdown>("MessageBreakdown"),
-        // Task
-        bundle_entry::<coco_types::TaskStartedParams>("TaskStartedParams"),
-        bundle_entry::<coco_types::TaskCompletedParams>("TaskCompletedParams"),
-        bundle_entry::<coco_types::TaskProgressParams>("TaskProgressParams"),
-        bundle_entry::<coco_types::TaskCompletionStatus>("TaskCompletionStatus"),
-        bundle_entry::<coco_types::TaskUsage>("TaskUsage"),
-        // Model + permission + system
-        bundle_entry::<coco_types::ModelFallbackParams>("ModelFallbackParams"),
-        bundle_entry::<coco_types::PermissionModeChangedParams>("PermissionModeChangedParams"),
-        bundle_entry::<coco_types::PermissionMode>("PermissionMode"),
-        bundle_entry::<coco_types::PermissionDenialInfo>("PermissionDenialInfo"),
-        bundle_entry::<coco_types::SessionModelUsage>("SessionModelUsage"),
-        bundle_entry::<coco_types::FastModeState>("FastModeState"),
-        bundle_entry::<coco_types::ErrorParams>("ErrorParams"),
-        bundle_entry::<coco_types::RateLimitParams>("RateLimitParams"),
-        bundle_entry::<coco_types::RateLimitStatus>("RateLimitStatus"),
-        // IDE + plan + queue
-        bundle_entry::<coco_types::IdeSelectionChangedParams>("IdeSelectionChangedParams"),
-        bundle_entry::<coco_types::IdeDiagnosticsUpdatedParams>("IdeDiagnosticsUpdatedParams"),
-        bundle_entry::<coco_types::PlanModeChangedParams>("PlanModeChangedParams"),
-        // Hook lifecycle
-        bundle_entry::<coco_types::HookStartedParams>("HookStartedParams"),
-        bundle_entry::<coco_types::HookProgressParams>("HookProgressParams"),
-        bundle_entry::<coco_types::HookResponseParams>("HookResponseParams"),
-        bundle_entry::<coco_types::HookOutcomeStatus>("HookOutcomeStatus"),
-        // Worktree + summarize
-        bundle_entry::<coco_types::WorktreeEnteredParams>("WorktreeEnteredParams"),
-        bundle_entry::<coco_types::WorktreeExitedParams>("WorktreeExitedParams"),
-        bundle_entry::<coco_types::SummarizeCompletedParams>("SummarizeCompletedParams"),
-        // Rewind + cost + sandbox
-        bundle_entry::<coco_types::RewindCompletedParams>("RewindCompletedParams"),
-        bundle_entry::<coco_types::CostWarningParams>("CostWarningParams"),
-        bundle_entry::<coco_types::SandboxStateChangedParams>("SandboxStateChangedParams"),
-        // TS gap additions (Phase 0)
-        bundle_entry::<coco_types::LocalCommandOutputParams>("LocalCommandOutputParams"),
-        bundle_entry::<coco_types::FilesPersistedParams>("FilesPersistedParams"),
-        bundle_entry::<coco_types::PersistedFileInfo>("PersistedFileInfo"),
-        bundle_entry::<coco_types::PersistedFileError>("PersistedFileError"),
-        bundle_entry::<coco_types::ElicitationCompleteParams>("ElicitationCompleteParams"),
-        bundle_entry::<coco_types::ToolUseSummaryParams>("ToolUseSummaryParams"),
-        bundle_entry::<coco_types::ToolProgressParams>("ToolProgressParams"),
-        // Core value types
-        bundle_entry::<coco_types::TokenUsage>("TokenUsage"),
-        bundle_entry::<coco_types::ThinkingLevel>("ThinkingLevel"),
-        bundle_entry::<coco_types::AgentInfo>("AgentInfo"),
-        bundle_entry::<coco_types::PluginInit>("PluginInit"),
-        // Control protocol param structs (ClientRequest variants)
-        bundle_entry::<coco_types::InitializeParams>("InitializeParams"),
-        bundle_entry::<coco_types::HookCallbackMatcher>("HookCallbackMatcher"),
-        bundle_entry::<coco_types::SessionResumeParams>("SessionResumeParams"),
-        bundle_entry::<coco_types::SessionReadParams>("SessionReadParams"),
-        bundle_entry::<coco_types::SessionArchiveParams>("SessionArchiveParams"),
-        bundle_entry::<coco_types::ApprovalResolveParams>("ApprovalResolveParams"),
-        bundle_entry::<coco_types::UserInputResolveParams>("UserInputResolveParams"),
-        bundle_entry::<coco_types::SetModelParams>("SetModelParams"),
-        bundle_entry::<coco_types::SetPermissionModeParams>("SetPermissionModeParams"),
-        bundle_entry::<coco_types::SetThinkingParams>("SetThinkingParams"),
-        bundle_entry::<coco_types::StopTaskParams>("StopTaskParams"),
-        bundle_entry::<coco_types::RewindFilesParams>("RewindFilesParams"),
-        bundle_entry::<coco_types::UpdateEnvParams>("UpdateEnvParams"),
-        bundle_entry::<coco_types::CancelRequestParams>("CancelRequestParams"),
-        bundle_entry::<coco_types::ConfigWriteParams>("ConfigWriteParams"),
-        bundle_entry::<coco_types::ClientHookCallbackResponseParams>(
-            "ClientHookCallbackResponseParams",
-        ),
-        bundle_entry::<coco_types::McpRouteMessageResponseParams>("McpRouteMessageResponseParams"),
-        bundle_entry::<coco_types::ConfigApplyFlagsParams>("ConfigApplyFlagsParams"),
-        // ServerRequest param structs
-        bundle_entry::<coco_types::ServerAskForApprovalParams>("ServerAskForApprovalParams"),
-        bundle_entry::<coco_types::ServerRequestUserInputParams>("ServerRequestUserInputParams"),
-        bundle_entry::<coco_types::ServerMcpRouteMessageParams>("ServerMcpRouteMessageParams"),
-        bundle_entry::<coco_types::ServerHookCallbackParams>("ServerHookCallbackParams"),
-        bundle_entry::<coco_types::ServerCancelRequestParams>("ServerCancelRequestParams"),
-        bundle_entry::<coco_types::ConfigReadResult>("ConfigReadResult"),
-        bundle_entry::<coco_types::PluginReloadResult>("PluginReloadResult"),
-    ];
+    let mut bundle = BundleBuilder::new();
 
-    let mut definitions = serde_json::Map::new();
-    for (name, schema) in type_schemas {
-        let schema_json: Value = serde_json::to_value(schema).expect("serialize entry");
-        definitions.insert(name, schema_json);
+    // Wire envelope + 3-layer event taxonomy. `ServerNotification` /
+    // `ClientRequest` / `ServerRequest` carry the bulk of the param
+    // structs as transitives; `AgentStreamEvent` and `TuiOnlyEvent`
+    // mirror the same item/delta types from a different angle.
+    bundle.add::<coco_types::ServerNotification>("ServerNotification");
+    bundle.add::<coco_types::NotificationMethod>("NotificationMethod");
+    bundle.add::<coco_types::AgentStreamEvent>("AgentStreamEvent");
+    bundle.add::<coco_types::TuiOnlyEvent>("TuiOnlyEvent");
+    bundle.add::<coco_types::ClientRequest>("ClientRequest");
+    bundle.add::<coco_types::ClientRequestMethod>("ClientRequestMethod");
+    bundle.add::<coco_types::ServerRequest>("ServerRequest");
+    bundle.add::<coco_types::ServerRequestMethod>("ServerRequestMethod");
+    bundle.add::<coco_types::JsonRpcMessage>("JsonRpcMessage");
+
+    // JsonRpcMessage's four variants — schemars **inlines** the
+    // variant structs into the union's `oneOf` rather than using
+    // `$ref`, so they don't reach the bundle transitively. Register
+    // explicitly so consumers can refer to them by name (e.g. the
+    // Python SDK's `JsonRpcRequest(method=..., request_id=...)`
+    // helper, or TS clients pattern-matching on the standalone
+    // shapes).
+    bundle.add::<coco_types::JsonRpcRequest>("JsonRpcRequest");
+    bundle.add::<coco_types::JsonRpcResponse>("JsonRpcResponse");
+    bundle.add::<coco_types::JsonRpcError>("JsonRpcError");
+    bundle.add::<coco_types::JsonRpcNotification>("JsonRpcNotification");
+    bundle.add::<coco_types::RequestId>("RequestId");
+    bundle.add::<coco_types::ApprovalDecision>("ApprovalDecision");
+
+    // ThreadItem is a tagged union; its variant payload structs come
+    // through transitively. Registered explicitly because it's a
+    // top-level cross-language consumer (timeline rendering).
+    bundle.add::<coco_types::ThreadItem>("ThreadItem");
+
+    // Provider / model addressing. Not reachable through the wire
+    // unions (these live in config-layer init paths, not on the
+    // session/turn/event hot paths) but cross-language SDKs need them
+    // to express multi-provider model selection.
+    bundle.add::<coco_types::ProviderApi>("ProviderApi");
+    bundle.add::<coco_types::ModelRole>("ModelRole");
+    bundle.add::<coco_types::ModelSpec>("ModelSpec");
+    bundle.add::<coco_types::Capability>("Capability");
+    bundle.add::<coco_types::WireApi>("WireApi");
+    bundle.add::<coco_types::ApplyPatchToolType>("ApplyPatchToolType");
+
+    let (definitions, conflicts) = bundle.into_definitions();
+
+    if !conflicts.is_empty() {
+        eprintln!();
+        eprintln!(
+            "WARNING: {} schema name(s) had divergent shapes from different entry points:",
+            conflicts.len()
+        );
+        for name in conflicts.iter().take(10) {
+            eprintln!("  - {name}");
+        }
+        eprintln!(
+            "These are usually harmless (schemars sometimes emits subtly \
+             different metadata for the same type from different roots) but \
+             can mask real bugs — investigate if a known-canonical type appears."
+        );
     }
 
-    let bundle = json!({
+    // Hard check: every `$ref: "#/definitions/X"` in the bundle must
+    // resolve. If a type is referenced by a field but never registered
+    // as an entry point AND not picked up via transitives (e.g.
+    // schemars inlined the parent union's variants instead of $ref'ing
+    // them), cross-language clients break silently. This makes that
+    // failure mode loud and immediate.
+    let dangling = find_dangling_refs(&definitions);
+    if !dangling.is_empty() {
+        eprintln!();
+        eprintln!(
+            "ERROR: bundle has {} unresolved $ref(s) — cross-language clients will break:",
+            dangling.len()
+        );
+        for (target, sources) in dangling.iter().take(20) {
+            let preview: Vec<&String> = sources.iter().take(3).collect();
+            let extra = if sources.len() > 3 {
+                format!(" (+{} more)", sources.len() - 3)
+            } else {
+                String::new()
+            };
+            eprintln!("  - missing: {target}, referenced from: {preview:?}{extra}");
+        }
+        eprintln!();
+        eprintln!(
+            "Fix: register the missing type as an entry point in `main()`. \
+             Common cause: schemars inlines tagged-union variant structs into \
+             the parent's `oneOf` instead of emitting a `$ref`, so they aren't \
+             collected by the transitive walk."
+        );
+        std::process::exit(1);
+    }
+
+    let bundle_value = json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "coco-app-server-protocol",
         "description": "JSON Schema bundle for the coco-rs SDK protocol types. \
             Source: coco-rs/common/types. Generated by `cargo run -p coco-types \
-            --features schema --example export_schema`.",
+            --features schema --example export_schema`. Composition: a small \
+            set of entry-point types + every type they transitively reference \
+            via `$ref` (collected by `schemars::schema_for!` and flattened into \
+            `definitions`). To add a new type, ensure it is reachable from an \
+            existing entry; only add a new entry if it is a true root.",
         "definitions": definitions,
     });
 
     let bundle_path = out_dir.join("coco_app_server_protocol.schemas.json");
-    let bundle_json = serde_json::to_string_pretty(&bundle).expect("serialize bundle");
+    let bundle_json = serde_json::to_string_pretty(&bundle_value).expect("serialize bundle");
     fs::write(&bundle_path, bundle_json).expect("write bundle");
     println!("  ✓ {}", bundle_path.display());
 
