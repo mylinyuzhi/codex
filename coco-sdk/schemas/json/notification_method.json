@@ -25,6 +25,7 @@
     "context/compacted",
     "context/usageWarning",
     "context/compactionStarted",
+    "context/compactionPhase",
     "context/compactionFailed",
     "context/cleared",
     "task/started",

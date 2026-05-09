@@ -1,18 +1,22 @@
 """Typed structured output helper.
 
 Provides ``TypedClient`` — a generic wrapper that takes a Pydantic model,
-passes its JSON schema as ``output_format``, and deserializes the
-``structured_output`` from ``session/result`` back into the model::
+passes its JSON schema through the ``initialize.json_schema`` field,
+and deserializes the ``structured_output`` from ``session/result`` back
+into the model::
 
     from pydantic import BaseModel
     from coco_sdk import TypedClient
+    from coco_sdk.types import DEEPSEEK
 
     class CodeReview(BaseModel):
         summary: str
         issues: list[str]
         score: int
 
-    async with TypedClient(prompt="Review main.rs", output_type=CodeReview) as client:
+    async with TypedClient(prompt="Review main.rs",
+                           output_type=CodeReview,
+                           model=DEEPSEEK.flash_openai) as client:
         result = await client.get_typed_result()
         print(result.summary, result.score)
 """
@@ -40,23 +44,22 @@ class TypedClient(CocoClient, Generic[T]):
         **kwargs: Any,
     ):
         self._output_type = output_type
-        schema = output_type.model_json_schema()
-        super().__init__(prompt, output_format={"schema": schema}, **kwargs)
+        if "json_schema" in kwargs:
+            schema = kwargs.pop("json_schema")
+        else:
+            schema = output_type.model_json_schema()
+        super().__init__(prompt, json_schema=schema, **kwargs)
 
     async def get_typed_result(self) -> T:
         """Consume events and return the typed structured output.
 
-        Raises ValueError if no structured output is returned.
+        Raises ``ValueError`` if no structured output is returned.
         """
         result, _ = await self.get_typed_result_with_metadata()
         return result
 
     async def get_typed_result_with_metadata(self) -> tuple[T, SessionResultParams]:
-        """Consume events and return both typed output and session metadata.
-
-        Returns a tuple of (typed_output, session_result_params).
-        Raises ValueError if no structured output is returned.
-        """
+        """Return both typed output and the raw session-result metadata."""
         session_result: SessionResultParams | None = None
         async for event in self.events():
             sr = event.as_session_result()

@@ -11,6 +11,16 @@ unwrap_used = "allow"  # test-only crate, unwrap/expect is fine
 # No library — this crate exists solely to host integration tests under
 # `tests/`. Each `tests/<target>.rs` becomes its own test binary.
 
+# `sdk_server_stdio` runs a real `SdkServer` on stdio for the Python
+# coco-sdk e2e suite to attach to. `harness = false` keeps libtest from
+# wrapping stdout (`running 1 test`, etc.), which would corrupt the
+# NDJSON stream the SDK client parses. See the test file's module doc
+# for invocation.
+[[test]]
+name = "sdk_server_stdio"
+path = "tests/sdk_server_stdio.rs"
+harness = false
+
 [dev-dependencies]
 # SDK suite (sdk_deepseek): provider construction + vercel-ai calls.
 # vercel-ai-* types reach this crate exclusively through coco_inference's

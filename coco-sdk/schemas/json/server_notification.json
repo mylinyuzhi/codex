@@ -423,6 +423,25 @@
       }
     },
     {
+      "description": "Compaction phase progress (TS `onCompactProgress`). Drives the spinner text in the TUI / SDK runner so the user can see which sub-phase is active (PreCompact hooks → summarize → PostCompact hooks → done).",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "context/compactionPhase"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/CompactionPhaseParams"
+        }
+      }
+    },
+    {
       "description": "Compaction failed.",
       "type": "object",
       "required": [
@@ -1446,6 +1465,18 @@
         }
       }
     },
+    "CompactTrigger": {
+      "description": "How compaction was triggered.\n\nStays in `coco-types` (rather than `coco-messages`) because `event::CompactionPhaseParams` references it; the rest of the message family lives in `coco-messages`.\n\nMirrors the TS taxonomy: manual `/compact`, threshold-based auto, PTL-413 reactive recovery, gap-based time-based microcompact, session-memory short-circuit (no LLM), and staged context-collapse commit.",
+      "type": "string",
+      "enum": [
+        "manual",
+        "auto",
+        "reactive",
+        "time_based",
+        "session_memory",
+        "context_collapse"
+      ]
+    },
     "CompactionFailedParams": {
       "type": "object",
       "required": [
@@ -1459,6 +1490,45 @@
         },
         "error": {
           "type": "string"
+        }
+      }
+    },
+    "CompactionHookType": {
+      "type": "string",
+      "enum": [
+        "pre_compact",
+        "post_compact",
+        "session_start"
+      ]
+    },
+    "CompactionPhase": {
+      "description": "Sub-phase of a compaction in progress (TS `onCompactProgress`).\n\nMirrors the TS phase taxonomy at Tool.ts:150-156: - `HooksStart { hook_type }` for PreCompact / PostCompact / SessionStart - `Summarizing` for the LLM summarizer call - `Done` to clear the spinner",
+      "type": "string",
+      "enum": [
+        "hooks_start",
+        "summarizing",
+        "done"
+      ]
+    },
+    "CompactionPhaseParams": {
+      "type": "object",
+      "required": [
+        "phase"
+      ],
+      "properties": {
+        "hook_type": {
+          "description": "Set when `phase == HooksStart`. None when not applicable.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CompactionHookType"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "phase": {
+          "$ref": "#/definitions/CompactionPhase"
         }
       }
     },
@@ -1503,6 +1573,22 @@
         "summary_tokens"
       ],
       "properties": {
+        "post_tokens": {
+          "description": "Estimated tokens after compaction (resulting context size).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "pre_tokens": {
+          "description": "Estimated tokens before compaction (post-strategy LLM input view). `None` for paths that do not measure (e.g. micro/time-based may skip when the savings are 0).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
         "removed_messages": {
           "type": "integer",
           "format": "int32"
@@ -1510,6 +1596,15 @@
         "summary_tokens": {
           "type": "integer",
           "format": "int32"
+        },
+        "trigger": {
+          "description": "Which strategy produced this compaction.\n\nMirrors the TS `tengu_compact.trigger` field. Older transcripts without this field default to `Auto`. Defaulted via serde so off-the-wire payloads from older SDK clients keep parsing.",
+          "default": "auto",
+          "allOf": [
+            {
+              "$ref": "#/definitions/CompactTrigger"
+            }
+          ]
         }
       }
     },
@@ -1811,6 +1906,30 @@
         }
       }
     },
+    "InputTokenDetails": {
+      "description": "Input-side token breakdown — mirrors `vercel_ai::InputTokenDetails` (which itself flattens `vercel_ai_provider::InputTokens`).",
+      "type": "object",
+      "properties": {
+        "cache_read_tokens": {
+          "description": "Input tokens served from the prompt cache. Both OpenAI-compat (`prompt_tokens_details.cached_tokens`) and Anthropic (`cache_read_input_tokens`) expose this.",
+          "default": 0,
+          "type": "integer",
+          "format": "int64"
+        },
+        "cache_write_tokens": {
+          "description": "Input tokens written to the prompt cache. **Only** the Anthropic wire shape exposes this (`cache_creation_input_tokens`); OpenAI-compat responses (DeepSeek, xAI, Groq, …) have no equivalent field and the value stays 0 there. Matches upstream `@ai-sdk/openai-compatible`.",
+          "default": 0,
+          "type": "integer",
+          "format": "int64"
+        },
+        "no_cache_tokens": {
+          "description": "Input tokens that did NOT come from the prompt cache. `input_tokens = no_cache_tokens + cache_read_tokens` when the provider reports both.",
+          "default": 0,
+          "type": "integer",
+          "format": "int64"
+        }
+      }
+    },
     "ItemStatus": {
       "type": "string",
       "enum": [
@@ -1920,6 +2039,24 @@
         },
         "to_model": {
           "type": "string"
+        }
+      }
+    },
+    "OutputTokenDetails": {
+      "description": "Output-side token breakdown — mirrors `vercel_ai::OutputTokenDetails`.",
+      "type": "object",
+      "properties": {
+        "reasoning_tokens": {
+          "description": "Output tokens spent on reasoning / thinking blocks. Already counted inside `output_tokens` and billed at the output rate. Sourced from OpenAI-compat's `completion_tokens_details.reasoning_tokens` or Anthropic's thinking-block usage where exposed.",
+          "default": 0,
+          "type": "integer",
+          "format": "int64"
+        },
+        "text_tokens": {
+          "description": "Output tokens spent on plain text (non-reasoning). `output_tokens = text_tokens + reasoning_tokens` when the provider reports both.",
+          "default": 0,
+          "type": "integer",
+          "format": "int64"
         }
       }
     },
@@ -3145,28 +3282,51 @@
       }
     },
     "TokenUsage": {
-      "description": "Per-request token counts (returned by LLM API).",
+      "description": "Per-request token counts (returned by LLM API).\n\n**Shape mirrors `vercel_ai::LanguageModelUsage`** — the high-level SDK type at `vercel-ai/ai/src/types/usage.rs`. Field names and nesting are identical so a value can move across the seam without information loss. `i64` is used in place of vercel-ai's `Option<u64>` to match the rest of coco-rs's token-count idiom; \"not reported\" surfaces as `0`.\n\nBackward-compat: every nested field is `#[serde(default)]`, so old session JSON without the breakdown fields parses cleanly with breakdown values defaulting to 0.",
       "type": "object",
       "required": [
         "input_tokens",
         "output_tokens"
       ],
       "properties": {
-        "cache_creation_input_tokens": {
-          "default": 0,
-          "type": "integer",
-          "format": "int64"
-        },
-        "cache_read_input_tokens": {
-          "default": 0,
-          "type": "integer",
-          "format": "int64"
+        "input_token_details": {
+          "description": "Input-side breakdown.",
+          "default": {
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+            "no_cache_tokens": 0
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/InputTokenDetails"
+            }
+          ]
         },
         "input_tokens": {
+          "description": "Total input tokens consumed (= `no_cache + cache_read + cache_write` when all three are reported).",
           "type": "integer",
           "format": "int64"
         },
+        "output_token_details": {
+          "description": "Output-side breakdown.",
+          "default": {
+            "reasoning_tokens": 0,
+            "text_tokens": 0
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/OutputTokenDetails"
+            }
+          ]
+        },
         "output_tokens": {
+          "description": "Total output tokens consumed (= `text + reasoning` when both are reported).",
+          "type": "integer",
+          "format": "int64"
+        },
+        "total_tokens": {
+          "description": "`input_tokens + output_tokens`. Convenience aggregate matching vercel-ai's `LanguageModelUsage.total_tokens`. Default to 0 when not provided; `Self::total()` recomputes if needed.",
+          "default": 0,
           "type": "integer",
           "format": "int64"
         }

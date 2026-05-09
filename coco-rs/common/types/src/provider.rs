@@ -6,6 +6,7 @@ use std::str::FromStr;
 
 /// Which LLM provider implementation to use.
 /// Consumed by coco-config (ProviderInfo) and coco-inference (ProviderFactory).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderApi {
@@ -38,6 +39,7 @@ impl fmt::Display for ProviderApi {
 }
 
 /// Which purpose a model serves. Multiple roles can map to different models.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelRole {
@@ -106,6 +108,7 @@ impl FromStr for ModelRole {
 
 /// A resolved model identity: provider + model ID.
 /// Produced by coco-config, consumed by coco-inference.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelSpec {
     /// Sub-provider routing string (e.g., "bedrock", "vertex").
@@ -135,6 +138,7 @@ impl std::hash::Hash for ModelSpec {
 }
 
 /// Model capabilities (checked at request time).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Capability {
@@ -168,6 +172,7 @@ pub enum Capability {
 }
 
 /// How a model handles file editing / apply_patch tool.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ApplyPatchToolType {
@@ -181,6 +186,7 @@ pub enum ApplyPatchToolType {
 }
 
 /// Communication protocol (OpenAI has two APIs).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WireApi {

@@ -28,17 +28,38 @@ def main(python_dir: Path, proto_path: Path) -> int:
         print(f"error: protocol.py parse failed: {e}", file=sys.stderr)
         return 1
 
-    existing: set[str] = {
-        node.name for node in tree.body if isinstance(node, ast.ClassDef)
-    }
+    # "Existing" names include classes AND module-level assignments
+    # (type aliases like `McpServerConfig = StdioMcpServerConfig | ...`).
+    # Without `Assign`/`AnnAssign` detection, append_stubs would happily
+    # define a stub class with the same name *below* the alias,
+    # silently shadowing it for downstream importers.
+    existing: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef):
+            existing.add(node.name)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    existing.add(target.id)
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            existing.add(node.target.id)
 
     missing: set[str] = set()
     scan_dirs = [python_dir / "src" / "coco_sdk", python_dir / "tests"]
+    # `__init__.py` is auto-regenerated *after* this script by
+    # regen_init.py — its imports are downstream of protocol.py, not
+    # an authoritative source of user-side references. Including it
+    # here would create a feedback loop: the previous run's
+    # `__init__.py` lists every protocol class (including stubs from
+    # earlier runs), which would re-trigger the same stubs forever.
+    SKIP_FILES = {"__init__.py"}
     for root in scan_dirs:
         if not root.exists():
             continue
         for py in root.rglob("*.py"):
             if "generated" in py.parts or "__pycache__" in py.parts:
+                continue
+            if py.name in SKIP_FILES:
                 continue
             try:
                 t = ast.parse(py.read_text())

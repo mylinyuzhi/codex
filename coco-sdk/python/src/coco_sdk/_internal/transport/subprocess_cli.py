@@ -1,4 +1,4 @@
-"""Subprocess transport — spawns the coco binary with --sdk-mode."""
+"""Subprocess transport — spawns ``coco sdk`` and speaks NDJSON over stdio."""
 
 from __future__ import annotations
 
@@ -42,10 +42,14 @@ def _find_coco_binary() -> str:
 
 
 class SubprocessCLITransport(Transport):
-    """Transport that spawns coco as a subprocess with --sdk-mode.
+    """Transport that spawns ``coco sdk`` as a subprocess.
 
-    Communication is via NDJSON over stdin/stdout. Stderr is captured
-    and logged for debugging.
+    The Rust binary's ``sdk`` subcommand speaks JSON-RPC 2.0 over
+    NDJSON on stdin/stdout. Stderr is captured and logged.
+
+    ``cli_args`` are appended verbatim after ``sdk`` so callers can
+    pass model selection, system prompt, permission mode, etc. without
+    going through the wire protocol.
     """
 
     MAX_START_RETRIES = 3
@@ -56,12 +60,15 @@ class SubprocessCLITransport(Transport):
         binary_path: str | None = None,
         cwd: str | None = None,
         env: dict[str, str] | None = None,
+        cli_args: list[str] | None = None,
     ):
         self._binary_path = binary_path or os.environ.get("COCO_PATH") or _find_coco_binary()
         self._cwd = cwd
         self._env = env
+        self._cli_args = list(cli_args) if cli_args else []
         self._process: asyncio.subprocess.Process | None = None
         self._stderr_task: asyncio.Task[None] | None = None
+        self._next_request_id = 0
 
     async def start(self) -> None:
         last_error: Exception | None = None
@@ -82,7 +89,10 @@ class SubprocessCLITransport(Transport):
         ) from last_error
 
     async def _start_process(self) -> None:
-        cmd = [self._binary_path, "--sdk-mode"]
+        # `--model`, `--log-stderr`, etc. are top-level flags — clap
+        # parses them BEFORE the subcommand. Putting `cli_args` after
+        # `sdk` gives "unexpected argument" errors.
+        cmd = [self._binary_path, *self._cli_args, "sdk"]
 
         process_env = os.environ.copy()
         process_env["COCO_ENTRYPOINT"] = "sdk-py"
@@ -98,11 +108,9 @@ class SubprocessCLITransport(Transport):
             env=process_env,
         )
 
-        # Spawn background task to capture and log stderr
         self._stderr_task = asyncio.create_task(self._read_stderr())
 
     async def _read_stderr(self) -> None:
-        """Read stderr from the subprocess and log it."""
         if not self._process or not self._process.stderr:
             return
         while True:
@@ -114,11 +122,48 @@ class SubprocessCLITransport(Transport):
                 logger.debug("coco stderr: %s", text)
 
     async def send_line(self, line: str) -> None:
+        """Send a raw NDJSON line. Caller is responsible for wrapping.
+
+        Most callers should use :meth:`send_request` instead — it wraps
+        the typed request in the ``{type, request_id, method, params}``
+        envelope coco-rs's dispatcher expects.
+        """
         if not self._process or not self._process.stdin:
             raise TransportClosedError("Transport not started")
         data = (line.rstrip("\n") + "\n").encode()
         self._process.stdin.write(data)
         await self._process.stdin.drain()
+
+    def next_request_id(self) -> int:
+        """Allocate a fresh integer request id. Auto-increment, never zero."""
+        self._next_request_id += 1
+        return self._next_request_id
+
+    async def send_request(self, typed_request: Any) -> int:
+        """Wrap a generated ``*Request`` model into a JSON-RPC envelope and send.
+
+        Returns the assigned ``request_id`` so callers can match the
+        eventual response. Coco-rs dispatcher requires every client→
+        server message to carry ``{type: "request", request_id, method,
+        params}`` — sending raw ``{method, params}`` triggers
+        ``parse error: missing field `type``` and the subprocess
+        terminates.
+        """
+        request_id = self.next_request_id()
+        envelope = {
+            "type": "request",
+            "request_id": request_id,
+            "method": typed_request.method,
+        }
+        params = getattr(typed_request, "params", None)
+        if params is not None:
+            envelope["params"] = (
+                params.model_dump(exclude_none=True)
+                if hasattr(params, "model_dump")
+                else params
+            )
+        await self.send_line(json.dumps(envelope))
+        return request_id
 
     async def read_lines(self) -> AsyncIterator[dict[str, Any]]:
         if not self._process or not self._process.stdout:
@@ -143,7 +188,18 @@ class SubprocessCLITransport(Transport):
                 logger.warning("Malformed JSON from coco: %s (line: %s)", e, line_str[:200])
 
     async def read_events(self) -> AsyncIterator[ServerNotification]:
+        """Yield only ``type: "notification"`` messages from the wire.
+
+        Responses (``type: "response"``) and server-initiated requests
+        (``type: "request"``) are filtered out — they're consumed by
+        the request/reply machinery in ``CocoClient`` instead. For raw
+        access to every wire frame, use :meth:`read_lines`.
+        """
         async for data in self.read_lines():
+            msg_type = data.get("type")
+            if msg_type and msg_type != "notification":
+                # Response, server request, or error — not an event.
+                continue
             try:
                 yield ServerNotification.model_validate(data)
             except Exception as e:

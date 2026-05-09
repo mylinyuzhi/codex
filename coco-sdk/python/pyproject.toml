@@ -22,3 +22,13 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/coco_sdk"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+# Skip the intentionally-skipped pre-Phase-2 protocol tests (they
+# expect generator output that doesn't exist yet) — they print their
+# own skip reasons but pytest still collects them, which is fine.
+markers = [
+    "e2e: end-to-end tests that spawn the real `coco sdk` subprocess (skip without DEEPSEEK_API_KEY)",
+]

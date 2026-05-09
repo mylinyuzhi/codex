@@ -153,21 +153,32 @@ def make_optional(py_type: str) -> str:
 
 
 def generate_enum(name: str, schema: dict) -> str:
-    """Generate a str Enum class from either
-    - `{oneOf: [{type: string, enum: [v]}]}` schemars-tagged variants, or
-    - `{type: string, enum: [v, ...]}` flat string enums.
+    """Generate a str Enum class from either:
+
+    * ``{oneOf: [{type: string, enum: [v]}, ...]}`` — schemars's form for
+      enums where some variants carry doc comments. Each variant
+      sub-schema usually holds **one** value, but schemars *groups
+      consecutive no-doc variants into a single sub-schema with a
+      multi-value enum*. So a Rust enum with 8 plain variants and
+      1 documented variant produces
+      ``oneOf: [{enum: [<8 values>]}, {enum: [<doc'd value>]}]``.
+      We must iterate every value in every variant's enum list.
+    * ``{type: string, enum: [v, ...]}`` — flat string enum form
+      (no per-variant docs anywhere).
     """
     py_name = TYPE_RENAMES.get(name, name)
     lines = [f"class {py_name}(str, Enum):"]
+    values: list[str] = []
     if "oneOf" in schema:
         for variant in schema["oneOf"]:
-            value = variant["enum"][0]
-            ident = value.replace("/", "_").replace("-", "_")
-            lines.append(f"    {ident} = {value!r}")
+            for value in variant.get("enum", []):
+                values.append(value)
     else:
         for value in schema.get("enum", []):
-            ident = str(value).replace("/", "_").replace("-", "_")
-            lines.append(f"    {ident} = {value!r}")
+            values.append(value)
+    for value in values:
+        ident = str(value).replace("/", "_").replace("-", "_")
+        lines.append(f"    {ident} = {value!r}")
     return "\n".join(lines)
 
 
@@ -316,6 +327,34 @@ def is_enum_schema(schema: dict) -> bool:
     return schema.get("type") == "string" and "enum" in schema
 
 
+def is_union_alias_schema(schema: dict) -> bool:
+    """Check if a schema defines a top-level union type alias.
+
+    Schemars emits `pub enum RequestId { Int(i64), String(String) }` as
+    `{"anyOf": [{"type": "integer"}, {"type": "string"}]}` — no
+    discriminator, no per-variant data. Python expresses this as a
+    plain type alias: ``RequestId = int | str``.
+    """
+    if "anyOf" not in schema or "oneOf" in schema or schema.get("type"):
+        return False
+    return all(isinstance(v, dict) and "enum" not in v for v in schema["anyOf"])
+
+
+def generate_union_alias(name: str, schema: dict, defs: dict) -> str:
+    """Emit a Python type alias from an anyOf schema."""
+    parts: list[str] = []
+    for variant in schema["anyOf"]:
+        if variant == {"type": "null"}:
+            parts.append("None")
+        else:
+            parts.append(schema_to_python_type(variant, True, defs))
+    body = " | ".join(parts) if parts else "Any"
+    desc = schema.get("description", "").strip().splitlines()
+    if desc:
+        return f"# {desc[0][:120]}\n{name} = {body}"
+    return f"{name} = {body}"
+
+
 def collect_definitions(schema_dir: Path) -> dict[str, dict]:
     """Collect all type definitions from all schema files."""
     defs: dict[str, dict] = {}
@@ -339,8 +378,23 @@ def collect_definitions(schema_dir: Path) -> dict[str, dict]:
         for name, entry in bundle.get("definitions", {}).items():
             if name in defs:
                 continue
-            # Entry is a full root schema (has properties/oneOf/etc.)
-            if entry.get("type") == "object" or "oneOf" in entry:
+            # Bundle entries are full root schemas. We accept four
+            # shapes downstream codegen knows how to handle:
+            #   * `type: object` → Pydantic BaseModel
+            #   * `oneOf: [...]` → tagged union (variant struct or
+            #     descriptioned enum)
+            #   * `type: string` + `enum: [...]` → flat str Enum
+            #     (e.g. ProviderApi, WireApi — variants without
+            #     per-variant doc comments)
+            #   * `anyOf: [...]` (no `type`) → union type alias
+            #     (e.g. `RequestId = int | str` from
+            #     `pub enum RequestId { Int(i64), String(String) }`)
+            if (
+                entry.get("type") == "object"
+                or "oneOf" in entry
+                or is_enum_schema(entry)
+                or is_union_alias_schema(entry)
+            ):
                 defs[name] = entry
 
     # Extract inline item types from ThreadItem oneOf variants.
@@ -629,11 +683,14 @@ def main() -> None:
     # Classify types
     enum_names: set[str] = set()
     model_names: set[str] = set()
+    union_alias_names: set[str] = set()
     for name, defn in all_defs.items():
         if name in SKIP_TYPES or name in explicitly_handled:
             continue
         if is_enum_schema(defn):
             enum_names.add(name)
+        elif is_union_alias_schema(defn):
+            union_alias_names.add(name)
         elif defn.get("type") == "object":
             model_names.add(name)
 
@@ -682,6 +739,21 @@ def main() -> None:
         sections.append(generate_enum(name, all_defs[name]))
         sections.append("")
     sections.append("")
+
+    # ── Section: Union type aliases ──
+    # `pub enum X { Int(i64), String(String) }` — schemars emits
+    # `{anyOf: [{type:integer},{type:string}]}`; Python expresses
+    # this as a flat type alias (`X = int | str`). Must be emitted
+    # before any model that references it.
+    if union_alias_names:
+        sections.append("# " + "-" * 75)
+        sections.append("# Union type aliases")
+        sections.append("# " + "-" * 75)
+        sections.append("")
+        for name in sorted(union_alias_names):
+            sections.append(generate_union_alias(name, all_defs[name], all_defs))
+            sections.append("")
+        sections.append("")
 
     # ── Section: Item types ──
     item_types = [

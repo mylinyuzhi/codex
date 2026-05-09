@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "ClientRequest",
-  "description": "Bidirectional control protocol — client-initiated requests.\n\nEach variant carries a unique `method` string used on the wire. The method is the discriminator; params are the variant-specific payload.\n\nSee `event-system-design.md` §5.1 for the 22 base variants and §5.4 for the 7 gap additions. 29 total.",
+  "description": "Bidirectional control protocol — client-initiated requests.\n\nEach variant carries a unique `method` string used on the wire. The method is the discriminator; params are the variant-specific payload.\n\nSee `event-system-design.md` §5.1 for the 22 base variants and §5.4 for the 7 gap additions (`elicitation/resolve` is TS-aligned). 30 total.",
   "oneOf": [
     {
       "type": "object",

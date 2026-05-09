@@ -24,9 +24,82 @@ from pydantic import BaseModel, Field
 # Enums
 # ---------------------------------------------------------------------------
 
+class ApplyPatchToolType(str, Enum):
+    freeform = 'freeform'
+    function = 'function'
+    shell = 'shell'
+
 class ApprovalDecision(str, Enum):
     allow = 'allow'
     deny = 'deny'
+
+class Capability(str, Enum):
+    text_generation = 'text_generation'
+    streaming = 'streaming'
+    vision = 'vision'
+    audio = 'audio'
+    tool_calling = 'tool_calling'
+    embedding = 'embedding'
+    extended_thinking = 'extended_thinking'
+    structured_output = 'structured_output'
+    reasoning_summaries = 'reasoning_summaries'
+    parallel_tool_calls = 'parallel_tool_calls'
+    fast_mode = 'fast_mode'
+    prompt_cache = 'prompt_cache'
+    context_1m = 'context_1m'
+    interleaved_thinking = 'interleaved_thinking'
+    context_management = 'context_management'
+    token_efficient_tools = 'token_efficient_tools'
+
+class ClientRequestMethod(str, Enum):
+    initialize = 'initialize'
+    session_start = 'session/start'
+    session_resume = 'session/resume'
+    session_list = 'session/list'
+    session_read = 'session/read'
+    session_archive = 'session/archive'
+    turn_start = 'turn/start'
+    turn_interrupt = 'turn/interrupt'
+    approval_resolve = 'approval/resolve'
+    input_resolveUserInput = 'input/resolveUserInput'
+    elicitation_resolve = 'elicitation/resolve'
+    control_setModel = 'control/setModel'
+    control_setPermissionMode = 'control/setPermissionMode'
+    control_setThinking = 'control/setThinking'
+    control_stopTask = 'control/stopTask'
+    control_rewindFiles = 'control/rewindFiles'
+    control_updateEnv = 'control/updateEnv'
+    control_keepAlive = 'control/keepAlive'
+    control_cancelRequest = 'control/cancelRequest'
+    config_read = 'config/read'
+    config_value_write = 'config/value/write'
+    hook_callbackResponse = 'hook/callbackResponse'
+    mcp_routeMessageResponse = 'mcp/routeMessageResponse'
+    mcp_status = 'mcp/status'
+    context_usage = 'context/usage'
+    mcp_setServers = 'mcp/setServers'
+    mcp_reconnect = 'mcp/reconnect'
+    mcp_toggle = 'mcp/toggle'
+    plugin_reload = 'plugin/reload'
+    config_applyFlags = 'config/applyFlags'
+
+class CompactTrigger(str, Enum):
+    manual = 'manual'
+    auto = 'auto'
+    reactive = 'reactive'
+    time_based = 'time_based'
+    session_memory = 'session_memory'
+    context_collapse = 'context_collapse'
+
+class CompactionHookType(str, Enum):
+    pre_compact = 'pre_compact'
+    post_compact = 'post_compact'
+    session_start = 'session_start'
+
+class CompactionPhase(str, Enum):
+    hooks_start = 'hooks_start'
+    summarizing = 'summarizing'
+    done = 'done'
 
 class ExpandedView(str, Enum):
     none = 'none'
@@ -56,7 +129,98 @@ class ItemStatus(str, Enum):
 
 class McpConnectionStatus(str, Enum):
     connected = 'connected'
+    pending = 'pending'
+    failed = 'failed'
+    needs_auth = 'needs-auth'
+    disabled = 'disabled'
     disconnected = 'disconnected'
+
+class MemoryDialogScope(str, Enum):
+    managed = 'managed'
+    user = 'user'
+    project = 'project'
+    project_local = 'project_local'
+    subdir = 'subdir'
+
+class ModelRole(str, Enum):
+    main = 'main'
+    fast = 'fast'
+    compact = 'compact'
+    plan = 'plan'
+    explore = 'explore'
+    review = 'review'
+    hook_agent = 'hook_agent'
+    memory = 'memory'
+    subagent = 'subagent'
+
+class NotificationMethod(str, Enum):
+    session_started = 'session/started'
+    session_result = 'session/result'
+    session_ended = 'session/ended'
+    turn_started = 'turn/started'
+    turn_completed = 'turn/completed'
+    turn_failed = 'turn/failed'
+    turn_interrupted = 'turn/interrupted'
+    item_started = 'item/started'
+    item_updated = 'item/updated'
+    item_completed = 'item/completed'
+    agentMessage_delta = 'agentMessage/delta'
+    reasoning_delta = 'reasoning/delta'
+    subagent_spawned = 'subagent/spawned'
+    subagent_completed = 'subagent/completed'
+    subagent_backgrounded = 'subagent/backgrounded'
+    subagent_progress = 'subagent/progress'
+    mcp_startupStatus = 'mcp/startupStatus'
+    mcp_startupComplete = 'mcp/startupComplete'
+    context_compacted = 'context/compacted'
+    context_usageWarning = 'context/usageWarning'
+    context_compactionStarted = 'context/compactionStarted'
+    context_compactionPhase = 'context/compactionPhase'
+    context_compactionFailed = 'context/compactionFailed'
+    context_cleared = 'context/cleared'
+    task_started = 'task/started'
+    task_completed = 'task/completed'
+    task_progress = 'task/progress'
+    task_panel_changed = 'task_panel/changed'
+    plan_approval_requested = 'plan_approval/requested'
+    agents_killed = 'agents/killed'
+    model_fallbackStarted = 'model/fallbackStarted'
+    model_fallbackCompleted = 'model/fallbackCompleted'
+    model_fastModeChanged = 'model/fastModeChanged'
+    permission_modeChanged = 'permission/modeChanged'
+    prompt_suggestion = 'prompt/suggestion'
+    error = 'error'
+    rateLimit = 'rateLimit'
+    keepAlive = 'keepAlive'
+    ide_selectionChanged = 'ide/selectionChanged'
+    ide_diagnosticsUpdated = 'ide/diagnosticsUpdated'
+    plan_modeChanged = 'plan/modeChanged'
+    queue_stateChanged = 'queue/stateChanged'
+    queue_commandQueued = 'queue/commandQueued'
+    queue_commandDequeued = 'queue/commandDequeued'
+    rewind_completed = 'rewind/completed'
+    rewind_failed = 'rewind/failed'
+    cost_warning = 'cost/warning'
+    sandbox_stateChanged = 'sandbox/stateChanged'
+    sandbox_violationsDetected = 'sandbox/violationsDetected'
+    agents_registered = 'agents/registered'
+    hook_started = 'hook/started'
+    hook_progress = 'hook/progress'
+    hook_response = 'hook/response'
+    worktree_entered = 'worktree/entered'
+    worktree_exited = 'worktree/exited'
+    summarize_completed = 'summarize/completed'
+    summarize_failed = 'summarize/failed'
+    stream_stallDetected = 'stream/stallDetected'
+    stream_watchdogWarning = 'stream/watchdogWarning'
+    stream_requestEnd = 'stream/requestEnd'
+    session_stateChanged = 'session/stateChanged'
+    turn_maxReached = 'turn/maxReached'
+    localCommand_output = 'localCommand/output'
+    files_persisted = 'files/persisted'
+    elicitation_complete = 'elicitation/complete'
+    tool_useSummary = 'tool/useSummary'
+    tool_progress = 'tool/progress'
 
 class PermissionBehavior(str, Enum):
     allow = 'allow'
@@ -65,6 +229,10 @@ class PermissionBehavior(str, Enum):
 
 class PermissionMode(str, Enum):
     default = 'default'
+    plan = 'plan'
+    bypassPermissions = 'bypassPermissions'
+    dontAsk = 'dontAsk'
+    acceptEdits = 'acceptEdits'
     auto = 'auto'
     bubble = 'bubble'
 
@@ -85,6 +253,14 @@ class PermissionUpdateDestination(str, Enum):
     session = 'session'
     cli_arg = 'cli_arg'
 
+class ProviderApi(str, Enum):
+    anthropic = 'anthropic'
+    openai = 'openai'
+    gemini = 'gemini'
+    volcengine = 'volcengine'
+    zai = 'zai'
+    openai_compat = 'openai_compat'
+
 class RateLimitStatus(str, Enum):
     allowed = 'allowed'
     allowed_warning = 'allowed_warning'
@@ -97,6 +273,13 @@ class ReasoningEffort(str, Enum):
     medium = 'medium'
     high = 'high'
     x_high = 'x_high'
+
+class ServerRequestMethod(str, Enum):
+    approval_askForApproval = 'approval/askForApproval'
+    input_requestUserInput = 'input/requestUserInput'
+    mcp_routeMessage = 'mcp/routeMessage'
+    hook_callback = 'hook/callback'
+    control_cancelRequest = 'control/cancelRequest'
 
 class SessionState(str, Enum):
     idle = 'idle'
@@ -112,6 +295,18 @@ class TaskListStatus(str, Enum):
     pending = 'pending'
     in_progress = 'in_progress'
     completed = 'completed'
+
+class WireApi(str, Enum):
+    chat = 'chat'
+    responses = 'responses'
+
+
+# ---------------------------------------------------------------------------
+# Union type aliases
+# ---------------------------------------------------------------------------
+
+# Request identifier. Can be a string or integer per JSON-RPC 2.0. SDK clients typically use integers; coco-rs accepts bot
+RequestId = int | str
 
 
 # ---------------------------------------------------------------------------
@@ -188,6 +383,10 @@ class CompactionFailedParams(BaseModel):
     error: str
     attempts: int = 0
 
+class CompactionPhaseParams(BaseModel):
+    phase: CompactionPhase
+    hook_type: CompactionHookType | None = None
+
 class ContentDeltaParams(BaseModel):
     delta: str
     item_id: str | None = None
@@ -199,6 +398,9 @@ class ContextClearedParams(BaseModel):
 class ContextCompactedParams(BaseModel):
     removed_messages: int
     summary_tokens: int
+    post_tokens: int | None = None
+    pre_tokens: int | None = None
+    trigger: CompactTrigger = 'auto'
 
 class ContextUsageWarningParams(BaseModel):
     estimated_tokens: int
@@ -529,6 +731,7 @@ class NotificationMethod(str, Enum):
     CONTEXT_COMPACTED = 'context/compacted'
     CONTEXT_USAGE_WARNING = 'context/usageWarning'
     CONTEXT_COMPACTION_STARTED = 'context/compactionStarted'
+    CONTEXT_COMPACTION_PHASE = 'context/compactionPhase'
     CONTEXT_COMPACTION_FAILED = 'context/compactionFailed'
     CONTEXT_CLEARED = 'context/cleared'
     TASK_STARTED = 'task/started'
@@ -689,6 +892,11 @@ class ServerNotification(BaseModel):
     def as_context_compaction_started(self) -> ContextCompactionStartedParams | None:
         if self.method == 'context/compactionStarted':
             return ContextCompactionStartedParams.model_validate(self.params)
+        return None
+
+    def as_context_compaction_phase(self) -> CompactionPhaseParams | None:
+        if self.method == 'context/compactionPhase':
+            return CompactionPhaseParams.model_validate(self.params)
         return None
 
     def as_context_compaction_failed(self) -> CompactionFailedParams | None:
@@ -1470,29 +1678,6 @@ class AgentInfo(BaseModel):
     name: str
     description: str | None = None
 
-class ClientHookCallbackResponseParams(BaseModel):
-    callback_id: str
-    output: Any
-
-class ConfigReadResult(BaseModel):
-    config: Any
-    sources: dict[str, Any] = {}
-
-class ContextUsageCategory(BaseModel):
-    name: str
-    tokens: int
-
-class ContextUsageResult(BaseModel):
-    categories: list[ContextUsageCategory]
-    is_auto_compact_enabled: bool
-    max_tokens: int
-    model: str
-    percentage: float
-    raw_max_tokens: int
-    total_tokens: int
-    auto_compact_threshold: int | None = None
-    message_breakdown: MessageBreakdown | None = None
-
 class FileChangeInfo(BaseModel):
     kind: FileChangeKind
     path: str
@@ -1501,6 +1686,11 @@ class HookCallbackMatcher(BaseModel):
     hook_callback_ids: list[str]
     matcher: str | None = None
     timeout: int | None = None
+
+class InputTokenDetails(BaseModel):
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    no_cache_tokens: int = 0
 
 class JsonRpcError(BaseModel):
     code: int
@@ -1525,26 +1715,20 @@ class McpServerInit(BaseModel):
     name: str
     status: McpConnectionStatus
 
-class McpServerStatus(BaseModel):
-    name: str
-    status: McpConnectionStatus
-    error: str | None = None
-    tool_count: int = 0
+class MemoryDialogEntry(BaseModel):
+    label: str
+    path: str
+    scope: MemoryDialogScope
 
-class McpSetServersResult(BaseModel):
-    added: list[str]
-    errors: dict[str, str]
-    removed: list[str]
+class ModelSpec(BaseModel):
+    api: ProviderApi
+    display_name: str
+    model_id: str
+    provider: str
 
-class McpStatusResult(BaseModel):
-    mcpServers: list[McpServerStatus]
-
-class MessageBreakdown(BaseModel):
-    assistant_message_tokens: int
-    attachment_tokens: int
-    tool_call_tokens: int
-    tool_result_tokens: int
-    user_message_tokens: int
+class OutputTokenDetails(BaseModel):
+    reasoning_tokens: int = 0
+    text_tokens: int = 0
 
 class PermissionDenialInfo(BaseModel):
     tool_input: Any
@@ -1572,43 +1756,6 @@ class PluginInit(BaseModel):
     name: str
     path: str
     source: str | None = None
-
-class PluginReloadResult(BaseModel):
-    agents: list[str]
-    commands: list[str]
-    error_count: int
-    plugins: list[str]
-
-class ServerAskForApprovalParams(BaseModel):
-    input: Any
-    request_id: str
-    tool_name: str
-    tool_use_id: str
-    agent_id: str | None = None
-    blocked_path: str | None = None
-    decision_reason: str | None = None
-    description: str | None = None
-    display_name: str | None = None
-    permission_suggestions: list[Any] | None = None
-    title: str | None = None
-
-class ServerHookCallbackParams(BaseModel):
-    callback_id: str
-    input: Any
-    request_id: str
-    tool_use_id: str | None = None
-
-class ServerMcpRouteMessageParams(BaseModel):
-    message: Any
-    request_id: str
-    server_name: str
-
-class ServerRequestUserInputParams(BaseModel):
-    prompt: str
-    request_id: str
-    choices: list[str] | None = None
-    default: str | None = None
-    description: str | None = None
 
 class SessionModelUsage(BaseModel):
     cache_creation_input_tokens: int
@@ -1649,73 +1796,6 @@ class TodoRecord(BaseModel):
 class TokenUsage(BaseModel):
     input_tokens: int
     output_tokens: int
-    cache_creation_input_tokens: int = 0
-    cache_read_input_tokens: int = 0
-
-
-# ── Compatibility stubs ──
-#
-# Loose BaseModel subclasses for names referenced by client.py / tests
-# but not yet emitted by the coco-rs schema generator. These accept any
-# fields (`extra='allow'`) and are regenerated on every run of
-# ./coco-sdk/scripts/generate_python.sh.
-
-class AgentDefinitionConfig(BaseModel):
-    """Stub for AgentDefinitionConfig pending coco-rs schema emission."""
-    model_config = {"extra": "allow"}
-
-
-class AgentMessageDeltaParams(BaseModel):
-    """Stub for AgentMessageDeltaParams pending coco-rs schema emission."""
-    model_config = {"extra": "allow"}
-
-
-class CommandExecutionItem(BaseModel):
-    """Stub for CommandExecutionItem pending coco-rs schema emission."""
-    model_config = {"extra": "allow"}
-
-
-class HookBehavior(BaseModel):
-    """Stub for HookBehavior pending coco-rs schema emission."""
-    model_config = {"extra": "allow"}
-
-
-class HookCallbackConfig(BaseModel):
-    """Stub for HookCallbackConfig pending coco-rs schema emission."""
-    model_config = {"extra": "allow"}
-
-
-class HookCallbackOutput(BaseModel):
-    """Stub for HookCallbackOutput pending coco-rs schema emission."""
-    model_config = {"extra": "allow"}
-
-
-class HookExecutedParams(BaseModel):
-    """Stub for HookExecutedParams pending coco-rs schema emission."""
-    model_config = {"extra": "allow"}
-
-
-class McpServerConfig(BaseModel):
-    """Stub for McpServerConfig pending coco-rs schema emission."""
-    model_config = {"extra": "allow"}
-
-
-class PostToolUseHookInput(BaseModel):
-    """Stub for PostToolUseHookInput pending coco-rs schema emission."""
-    model_config = {"extra": "allow"}
-
-
-class PreToolUseHookInput(BaseModel):
-    """Stub for PreToolUseHookInput pending coco-rs schema emission."""
-    model_config = {"extra": "allow"}
-
-
-class SessionEndedReason(BaseModel):
-    """Stub for SessionEndedReason pending coco-rs schema emission."""
-    model_config = {"extra": "allow"}
-
-
-class Usage(BaseModel):
-    """Stub for Usage pending coco-rs schema emission."""
-    model_config = {"extra": "allow"}
-
+    input_token_details: InputTokenDetails = {}
+    output_token_details: OutputTokenDetails = {}
+    total_tokens: int = 0
