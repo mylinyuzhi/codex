@@ -9,6 +9,23 @@ use coco_types::IdeDiagnosticsUpdatedParams;
 use coco_types::IdeSelectionChangedParams;
 use coco_types::PermissionMode;
 
+/// One queued steering command as rendered by the TUI footer.
+///
+/// Mirrors a single entry in the engine's
+/// [`coco_query::CommandQueue`]; the `id` matches the
+/// `CommandQueued{id}` / `CommandDequeued{id}` notifications so the
+/// display can remove the right entry even when priority ordering or
+/// agent scoping causes the engine to drain something other than the
+/// queue front.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueuedCommandDisplay {
+    /// Stable identifier — `coco_query::QueuedCommand::id.to_string()`.
+    pub id: String,
+    /// Short preview of the queued prompt (caller-truncated; the
+    /// engine builds it via `QueuedCommand::preview`).
+    pub preview: String,
+}
+
 /// TUI-side label for the active compaction sub-phase. Built from
 /// `coco_types::CompactionPhaseParams` so the renderer can pick a
 /// localized spinner string without re-deriving it each frame.
@@ -99,8 +116,13 @@ pub struct SessionState {
     pub focused_subagent_index: Option<i32>,
     /// Current turn number (within multi-turn loop).
     pub current_turn_number: Option<i32>,
-    /// Queued commands for mid-turn injection.
-    pub queued_commands: VecDeque<String>,
+    /// Queued commands for mid-turn injection — projection of the
+    /// engine's `CommandQueue` populated via `CommandQueued` /
+    /// `CommandDequeued` notifications. Each entry pairs the engine
+    /// queue item's stable id with a short preview of the prompt so
+    /// `CommandDequeued{id}` can remove the matching entry even if
+    /// priority reordering caused the item not to be at the front.
+    pub queued_commands: VecDeque<QueuedCommandDisplay>,
     /// Available models for model picker.
     pub available_models: Vec<String>,
     /// Whether file checkpointing is enabled for rewind.

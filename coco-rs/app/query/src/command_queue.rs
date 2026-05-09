@@ -1,10 +1,19 @@
-//! Mid-turn command queue and query guard for steering.
+//! Mid-turn command queue for steering.
 //!
-//! TS: utils/messageQueueManager.ts (547 LOC) + utils/QueryGuard.ts (122 LOC)
+//! TS: utils/messageQueueManager.ts (547 LOC).
 //!
-//! CommandQueue enables mid-turn message injection: slash commands, teammate
-//! messages, and task notifications are queued and drained between tool calls.
-//! QueryGuard prevents race conditions between queue processing and query startup.
+//! Enables mid-turn message injection: human-typed prompts, teammate
+//! messages, task notifications, and channel pub-sub events are queued
+//! and drained at end-of-turn into the conversation history. The Rust
+//! port mirrors the TS module-level singleton pattern by hoisting the
+//! [`CommandQueue`] onto `SessionRuntime` and injecting it into every
+//! per-turn `QueryEngine` via `with_command_queue`.
+//!
+//! TS' `QueryGuard` 3-state FSM is intentionally not ported: in the
+//! Rust port the dispatch loop in `tui_runner` serialises turns via
+//! `drain_active_turn`, and the TUI gates `QueueInput` vs `SubmitInput`
+//! on the local `is_streaming()` flag — there's no concurrent
+//! queue-processor coroutine to guard against.
 
 use coco_system_reminder::QueueOrigin;
 use serde::Deserialize;
@@ -12,6 +21,7 @@ use serde::Serialize;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
+use uuid::Uuid;
 
 /// Priority for queued commands.
 /// Higher priority (lower numeric value) commands are dequeued first.
@@ -35,6 +45,12 @@ pub enum QueuePriority {
 /// [`coco_system_reminder::wrap_command_text`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueuedCommand {
+    /// Stable identifier minted at construction. Threads through
+    /// `CommandQueued`/`CommandDequeued` events so TUI / SDK clients
+    /// can pair the lifecycle observations of one queue entry. Mirrors
+    /// TS `QueuedCommand.uuid` (`utils/handlePromptSubmit.ts:343`).
+    #[serde(default = "Uuid::new_v4")]
+    pub id: Uuid,
     /// The prompt text or slash command.
     pub prompt: String,
     /// Priority level.
@@ -71,6 +87,7 @@ impl QueuedCommand {
     pub fn new(prompt: String, priority: QueuePriority) -> Self {
         let is_slash = prompt.starts_with('/');
         Self {
+            id: Uuid::new_v4(),
             prompt,
             priority,
             agent_id: None,
@@ -78,6 +95,17 @@ impl QueuedCommand {
             origin: None,
             images: Vec::new(),
         }
+    }
+
+    /// Short preview of the prompt for `CommandQueued.preview`. Caps at
+    /// 80 characters and trims to a char boundary so multibyte input
+    /// (CJK, emoji) doesn't slice in the middle of a code point.
+    pub fn preview(&self) -> String {
+        let mut out = String::with_capacity(80);
+        for c in self.prompt.chars().take(80) {
+            out.push(c);
+        }
+        out
     }
 
     pub fn with_agent(mut self, agent_id: String) -> Self {
@@ -162,10 +190,16 @@ impl CommandQueue {
             .collect()
     }
 
-    /// Remove specific commands from the queue.
-    pub async fn remove(&self, prompts_to_remove: &[String]) {
+    /// Remove specific commands from the queue by their stable
+    /// [`QueuedCommand::id`].
+    ///
+    /// `prompt`-based matching used to live here but couldn't tell two
+    /// queue entries with identical prompt text apart — the second
+    /// would be wrongly removed when the first was drained. The
+    /// [`Uuid`] minted at construction is the canonical identity.
+    pub async fn remove_by_ids(&self, ids_to_remove: &[Uuid]) {
         let mut queue = self.inner.lock().await;
-        queue.retain(|c| !prompts_to_remove.contains(&c.prompt));
+        queue.retain(|c| !ids_to_remove.contains(&c.id));
     }
 
     /// Check if the queue is empty.
@@ -270,179 +304,6 @@ impl CommandQueue {
         let mut queue = self.inner.lock().await;
         queue.clear();
         self.changed.notify_waiters();
-    }
-}
-
-/// State machine guarding query lifecycle to prevent race conditions.
-///
-/// TS: QueryGuard — three states with generation counter.
-/// Prevents re-entry during async gaps between queue processing and query startup.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum QueryGuardStatus {
-    /// No query active or reserved.
-    Idle,
-    /// A queue processor reserved the slot but hasn't started yet.
-    Dispatching,
-    /// A query is actively running.
-    Running,
-}
-
-#[derive(Debug)]
-pub struct QueryGuard {
-    status: Arc<Mutex<QueryGuardState>>,
-    changed: Arc<Notify>,
-}
-
-#[derive(Debug)]
-struct QueryGuardState {
-    status: QueryGuardStatus,
-    generation: i64,
-}
-
-impl Default for QueryGuard {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl QueryGuard {
-    pub fn new() -> Self {
-        Self {
-            status: Arc::new(Mutex::new(QueryGuardState {
-                status: QueryGuardStatus::Idle,
-                generation: 0,
-            })),
-            changed: Arc::new(Notify::new()),
-        }
-    }
-
-    /// Reserve the query slot for queue processing (idle -> dispatching).
-    /// Returns `false` if already active.
-    pub async fn reserve(&self) -> bool {
-        let mut state = self.status.lock().await;
-        if state.status != QueryGuardStatus::Idle {
-            return false;
-        }
-        state.status = QueryGuardStatus::Dispatching;
-        self.changed.notify_waiters();
-        true
-    }
-
-    /// Start the query. Returns a generation number for safe cleanup.
-    /// Transitions: idle -> running, dispatching -> running.
-    pub async fn try_start(&self) -> Option<i64> {
-        let mut state = self.status.lock().await;
-        match state.status {
-            QueryGuardStatus::Idle | QueryGuardStatus::Dispatching => {
-                state.generation += 1;
-                state.status = QueryGuardStatus::Running;
-                self.changed.notify_waiters();
-                Some(state.generation)
-            }
-            QueryGuardStatus::Running => None,
-        }
-    }
-
-    /// End the query if the generation matches (safe cleanup).
-    pub async fn end(&self, generation: i64) -> bool {
-        let mut state = self.status.lock().await;
-        if state.generation == generation {
-            state.status = QueryGuardStatus::Idle;
-            self.changed.notify_waiters();
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Force end regardless of generation (for cancellation).
-    pub async fn force_end(&self) {
-        let mut state = self.status.lock().await;
-        state.status = QueryGuardStatus::Idle;
-        self.changed.notify_waiters();
-    }
-
-    /// Cancel a reservation (dispatching -> idle).
-    pub async fn cancel_reservation(&self) {
-        let mut state = self.status.lock().await;
-        if state.status == QueryGuardStatus::Dispatching {
-            state.status = QueryGuardStatus::Idle;
-            self.changed.notify_waiters();
-        }
-    }
-
-    /// Whether a query is active (dispatching or running).
-    pub async fn is_active(&self) -> bool {
-        let state = self.status.lock().await;
-        state.status != QueryGuardStatus::Idle
-    }
-
-    /// Current status.
-    pub async fn status(&self) -> QueryGuardStatus {
-        self.status.lock().await.status
-    }
-}
-
-/// Inbox message from a teammate agent.
-///
-/// TS: InboxMessage in QueryEngine — teammate → main thread message passing.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InboxMessage {
-    /// Sender agent ID.
-    pub from_agent: String,
-    /// Message content.
-    pub content: String,
-    /// Whether this message has been consumed.
-    pub consumed: bool,
-    /// Timestamp (epoch ms).
-    pub timestamp: i64,
-}
-
-/// Thread-safe inbox for receiving teammate messages.
-#[derive(Debug, Clone)]
-pub struct Inbox {
-    messages: Arc<Mutex<Vec<InboxMessage>>>,
-}
-
-impl Default for Inbox {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Inbox {
-    pub fn new() -> Self {
-        Self {
-            messages: Arc::new(Mutex::new(Vec::new())),
-        }
-    }
-
-    /// Add a message to the inbox.
-    pub async fn push(&self, msg: InboxMessage) {
-        self.messages.lock().await.push(msg);
-    }
-
-    /// Drain unconsumed messages, marking them as consumed.
-    pub async fn drain_unconsumed(&self) -> Vec<InboxMessage> {
-        let mut msgs = self.messages.lock().await;
-        let mut drained = Vec::new();
-        for msg in msgs.iter_mut() {
-            if !msg.consumed {
-                msg.consumed = true;
-                drained.push(msg.clone());
-            }
-        }
-        drained
-    }
-
-    /// Count of unconsumed messages.
-    pub async fn unconsumed_count(&self) -> usize {
-        self.messages
-            .lock()
-            .await
-            .iter()
-            .filter(|m| !m.consumed)
-            .count()
     }
 }
 

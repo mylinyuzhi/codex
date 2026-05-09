@@ -8,8 +8,6 @@
 use crate::budget::BudgetDecision;
 use crate::budget::BudgetTracker;
 use crate::command_queue::CommandQueue;
-use crate::command_queue::Inbox;
-use crate::command_queue::QueuePriority;
 use crate::emit::emit_protocol;
 use crate::emit::emit_stream;
 use crate::session_state::SessionStateTracker;
@@ -34,7 +32,6 @@ use coco_types::ToolAppState;
 
 use crate::helpers::budget_pct_used;
 use crate::helpers::convert_to_assistant_content;
-use crate::helpers::drain_command_queue_into_history;
 use crate::helpers::extract_last_assistant_text;
 use crate::helpers::parse_stop_reason;
 use crate::helpers::should_continue_for_budget;
@@ -122,10 +119,10 @@ pub struct QueryEngine {
     /// LLM-driven handlers fall back to passthrough text — orchestration
     /// already handles that path with a `tracing::warn!`.
     pub(crate) hook_llm_handle: Option<Arc<dyn coco_hooks::HookLlmHandle>>,
-    /// Mid-turn command queue for steering.
+    /// Mid-turn command queue for steering. Carries both human-typed
+    /// prompts (via `QueueOrigin::Human`) and teammate / task-notification
+    /// messages (via `QueueOrigin::Coordinator` / `QueueOrigin::TaskNotification`).
     pub(crate) command_queue: CommandQueue,
-    /// Inbox for teammate messages.
-    pub(crate) inbox: Inbox,
     /// Session-level file read state for @mention dedup and changed-file detection.
     pub(crate) file_read_state: Option<Arc<RwLock<coco_context::FileReadState>>>,
     /// File history for checkpoint/rewind.
@@ -1720,19 +1717,21 @@ impl QueryEngine {
                 ));
             }
 
-            // Mid-turn `Now`-priority drain: urgent user input that arrived
-            // during streaming is flushed before we start executing tools, so
-            // it's visible on the next API call without waiting for the whole
-            // tool batch to complete. Non-Now commands defer to the end-of-turn
-            // drain below to preserve tool_use/tool_result pairing in history.
-            drain_command_queue_into_history(
-                &self.command_queue,
-                &mut *history,
-                &event_tx,
-                QueuePriority::Now,
-                None,
-            )
-            .await;
+            // Note: queued steering messages are drained at end-of-turn
+            // (`engine_finalize_turn::finalize_turn_post_tools` →
+            // `drain_command_queue_into_history` with priority=Later, which
+            // is the upper bound and includes Now / Next / Later items).
+            // An earlier mid-turn `Now`-only drain lived here, but it ran
+            // BEFORE the non-streaming `ToolCallRunner` produced
+            // tool_results — inserting a User message between the
+            // assistant's `tool_use` and its matching `tool_result` and
+            // breaking pairing on providers that enforce it (Anthropic
+            // 400). The end-of-turn drain happens after tools complete on
+            // both streaming + non-streaming paths and still surfaces
+            // queued items on the very next API call. TS parity:
+            // `query.ts:1547-1643` snapshots the queue post-tool, yields
+            // attachments, then dequeues — all after tool_results are in
+            // place.
 
             // Streaming-executed fast path: the StreamingHandle
             // already ran every tool and pushed their

@@ -24,7 +24,6 @@ use coco_tool_runtime::ToolRegistry;
 use coco_types::ToolAppState;
 
 use crate::command_queue::CommandQueue;
-use crate::command_queue::Inbox;
 use crate::config::QueryEngineConfig;
 use crate::config::SessionBootstrap;
 use crate::engine::QueryEngine;
@@ -54,7 +53,6 @@ impl QueryEngine {
             async_hook_registry: None,
             hook_llm_handle: None,
             command_queue: CommandQueue::new(),
-            inbox: Inbox::new(),
             file_read_state: None,
             file_history: None,
             config_home: None,
@@ -703,14 +701,33 @@ impl QueryEngine {
         self
     }
 
-    /// Access the command queue for mid-turn steering.
+    /// Access the command queue for mid-turn steering. Producers
+    /// (TUI bridge, future task / coordinator forwarders) call
+    /// `enqueue` on this handle to inject messages between LLM
+    /// iterations; the engine drains end-of-turn into the message
+    /// history.
     pub fn command_queue(&self) -> &CommandQueue {
         &self.command_queue
     }
 
-    /// Access the inbox for teammate messages.
-    pub fn inbox(&self) -> &Inbox {
-        &self.inbox
+    /// Inject a session-scoped [`CommandQueue`].
+    ///
+    /// `QueryEngine` is built fresh per turn (`SessionRuntime::build_engine`),
+    /// but the steering queue must survive across engines so messages typed
+    /// during turn N are still pending when turn N+1's engine starts. This
+    /// is the Rust analog of the TS module-level singleton in
+    /// `utils/messageQueueManager.ts`. The session runtime owns the queue
+    /// and hands it to every engine via this builder.
+    ///
+    /// Teammate messages also flow through this queue (with
+    /// [`coco_system_reminder::QueueOrigin::Coordinator`] /
+    /// [`coco_system_reminder::QueueOrigin::TaskNotification`]) — TS
+    /// parity with `getAgentPendingMessageAttachments`
+    /// (`attachments.ts:1085`) which converts coordinator messages to
+    /// `queued_command` attachments with `origin: 'coordinator'`.
+    pub fn with_command_queue(mut self, queue: CommandQueue) -> Self {
+        self.command_queue = queue;
+        self
     }
 }
 
