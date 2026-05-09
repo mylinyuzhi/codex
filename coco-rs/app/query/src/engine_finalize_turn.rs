@@ -267,10 +267,22 @@ impl QueryEngine {
         self.turn_counter
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-        // Drain command queue: all priorities land before the next API call.
-        // Slash commands excluded (processed post-turn). Agent-filtered.
-        // TS: `messageQueueManager.ts` flushes pending messages between tool
-        // execution and the next API call.
+        // Drain command queue: all priorities land before the next API
+        // call. Slash commands excluded (processed post-turn).
+        // Agent-filtered.
+        //
+        // The queue carries every steering producer through one pipe:
+        // human keyboard input (`QueueOrigin::Human`), coordinator
+        // teammate messages (`QueueOrigin::Coordinator`), background
+        // task completions (`QueueOrigin::TaskNotification`), and MCP
+        // channel messages (`QueueOrigin::Channel`). Each item drains
+        // into history as a `Message::Attachment` of kind
+        // `QueuedCommand` with origin-specific framing prepended via
+        // `wrap_command_text` — TS parity with
+        // `messageQueueManager.ts` (human prompts) +
+        // `getAgentPendingMessageAttachments`
+        // (`attachments.ts:1085-1100`, coordinator messages, all of
+        // which TS surfaces as `attachment.type === 'queued_command'`).
         drain_command_queue_into_history(
             &self.command_queue,
             history,
@@ -279,18 +291,6 @@ impl QueryEngine {
             None,
         )
         .await;
-
-        // Drain inbox messages from teammates. When a teammate sends a
-        // `<task-notification>` XML envelope (TS `coordinatorMode.ts:130-152`,
-        // emitted by the coordinator runner on worker terminate), surface
-        // the structured fields explicitly on the wrapper so the leader
-        // model can reason about task-id / status / summary / result /
-        // usage without re-parsing the inner XML.
-        let inbox_msgs = self.inbox.drain_unconsumed().await;
-        for msg in inbox_msgs {
-            let text = render_teammate_message_wrapper(&msg.from_agent, &msg.content);
-            history.push(coco_messages::create_user_message(&text));
-        }
 
         // Tool-result budget (Level 2) — TS `query.ts:379
         // applyToolResultBudget` runs BEFORE microcompact so the
@@ -1032,33 +1032,6 @@ fn build_transcript_entry(
         cost_usd,
         extra: serde_json::Map::new(),
     })
-}
-
-/// Wrap a teammate's inbox message in the `<teammate-message>` envelope
-/// the leader's model sees. When `content` is a `<task-notification>`
-/// XML envelope (TS `coordinatorMode.ts:130-152`) we surface the
-/// structured fields (task-id / status / summary) as wrapper attributes
-/// so the leader model can reason about them without re-parsing the
-/// inner XML — falling back to a plain wrapper when the parse fails or
-/// the message isn't a task notification.
-///
-/// Pure logic — extracted out of `finalize_turn_post_tools` so the
-/// receive-side wrapping is unit-testable without an engine fixture.
-pub(crate) fn render_teammate_message_wrapper(from: &str, content: &str) -> String {
-    if coco_subagent::looks_like_task_notification(content)
-        && let Some(parsed) = coco_subagent::parse_task_notification(content)
-    {
-        return format!(
-            "<teammate-message from=\"{from}\" task-id=\"{task_id}\" \
-             status=\"{status}\" summary=\"{summary}\">{content}</teammate-message>",
-            from = from,
-            task_id = parsed.task_id,
-            status = parsed.status.as_str(),
-            summary = parsed.summary,
-            content = content,
-        );
-    }
-    format!("<teammate-message from=\"{from}\">{content}</teammate-message>")
 }
 
 /// Project the recent tool_result tail of `history` into

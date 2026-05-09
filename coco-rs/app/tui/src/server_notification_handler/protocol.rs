@@ -453,6 +453,11 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
 
         // === Queue ===
         ServerNotification::QueueStateChanged { queued } => {
+            // Reconciliation safety net: if per-item `CommandDequeued`
+            // events were lost (channel saturation, fork dispatch
+            // missed an emit) the engine's authoritative count clamps
+            // the display so it never drifts to a stale, infinitely-
+            // growing list.
             state
                 .session
                 .queued_commands
@@ -460,13 +465,29 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
             true
         }
         ServerNotification::CommandQueued { id, preview } => {
-            let _ = id;
-            state.session.queued_commands.push_back(preview);
+            state
+                .session
+                .queued_commands
+                .push_back(crate::state::session::QueuedCommandDisplay { id, preview });
             true
         }
         ServerNotification::CommandDequeued { id } => {
-            let _ = id;
-            state.session.queued_commands.pop_front();
+            // Match by id so priority reordering between enqueue and
+            // drain doesn't cause us to remove the wrong preview. Falls
+            // back to pop_front if the id isn't tracked locally — that
+            // happens when a producer emits CommandQueued through a
+            // path the TUI didn't observe (e.g. SDK batch enqueues
+            // before the TUI subscribed).
+            if let Some(pos) = state
+                .session
+                .queued_commands
+                .iter()
+                .position(|q| q.id == id)
+            {
+                state.session.queued_commands.remove(pos);
+            } else if !state.session.queued_commands.is_empty() {
+                state.session.queued_commands.pop_front();
+            }
             true
         }
 

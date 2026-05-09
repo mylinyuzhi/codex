@@ -62,6 +62,21 @@ test *args:
 test-crate crate *args:
     cargo test -p {{crate}} "$@"
 
+# Run the coco-sdk Python suite (unit + e2e). E2E tests skip cleanly
+# when DEEPSEEK_API_KEY is unset, so this is a no-op cost without
+# credentials. The script lives next to the SDK so it can pick up the
+# right interpreter and pin pytest-asyncio config from pyproject.toml.
+sdk-py-test *args:
+    bash "{{justfile_directory()}}/scripts/run-sdk-py-tests.sh" "$@"
+
+# Verify the Rust↔Python codegen is in sync: schemas match coco-types,
+# protocol.py matches schemas, __init__.py matches protocol.py.
+# All three are diff-only (no in-place writes); fast (~1s warm cache).
+# Wire into pre-commit so silent drift fails the build, not the user.
+sdk-py-check:
+    bash "{{justfile_directory()}}/../coco-sdk/scripts/generate_schemas.sh" --check
+    bash "{{justfile_directory()}}/../coco-sdk/scripts/generate_python.sh" --check
+
 # ============================================================================
 # Pre-commit
 # ============================================================================
@@ -94,7 +109,13 @@ quick-check: fmt check-seam check-error-policy clippy-affected
 # superset of `cargo check`, and `test` compiles everything `clippy --tests`
 # already linted, so the manual chain just duplicates work. For iteration
 # without a test run, use `quick-check`.
-pre-commit: fmt check-seam check-error-policy clippy-affected test
+#
+# `sdk-py-check` (cheap, ~1s) runs the codegen in --check mode so any
+# drift between coco-types ↔ schemas ↔ Python fails the build. Then
+# `sdk-py-test` runs the actual Python suite (unit + e2e); e2e tests
+# self-skip without DEEPSEEK_API_KEY, so the recipe stays usable for
+# everyone.
+pre-commit: fmt check-seam check-error-policy clippy-affected test sdk-py-check sdk-py-test
 
 # ============================================================================
 # Running

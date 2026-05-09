@@ -1,19 +1,26 @@
-"""Example: Defining custom agents with AgentDefinitionConfig."""
+"""Example: registering custom agents at session-initialize time.
+
+The wire field ``InitializeParams.agents`` is opaque
+(``dict[str, dict[str, Any]]``) — coco-rs accepts whatever shape the
+loaded agent definition expects. The Python SDK passes the dict
+through untouched, so callers build the agent record themselves.
+"""
 
 import asyncio
 
-from coco_sdk import AgentDefinitionConfig, CocoClient, NotificationMethod
+from coco_sdk import CocoClient, NotificationMethod
 
 
 async def main():
-    # Define a custom "researcher" agent that only uses read-only tools
-    researcher = AgentDefinitionConfig(
-        description="Research agent for reading code and searching",
-        prompt="You are a code researcher. Only read and search, never modify.",
-        tools=["Read", "Glob", "Grep", "WebSearch"],
-        model="haiku",
-        max_turns=5,
-    )
+    researcher = {
+        "agent_type": "researcher",
+        "name": "Researcher",
+        "description": "Research agent for reading code and searching.",
+        "prompt": "You are a code researcher. Only read and search, never modify.",
+        "tools": ["Read", "Glob", "Grep", "WebSearch"],
+        "model_role": "explore",
+        "max_turns": 5,
+    }
 
     async with CocoClient(
         prompt="Use the researcher agent to find all TODO comments in the codebase",

@@ -19,19 +19,20 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
 use crate::i18n::t;
+use crate::state::session::QueuedCommandDisplay;
 use crate::theme::Theme;
 
 pub struct QueueStatusWidget<'a> {
-    queued: &'a VecDeque<String>,
+    queued: &'a VecDeque<QueuedCommandDisplay>,
     theme: &'a Theme,
 }
 
 impl<'a> QueueStatusWidget<'a> {
-    pub fn new(queued: &'a VecDeque<String>, theme: &'a Theme) -> Self {
+    pub fn new(queued: &'a VecDeque<QueuedCommandDisplay>, theme: &'a Theme) -> Self {
         Self { queued, theme }
     }
 
-    pub fn should_display(queued: &VecDeque<String>) -> bool {
+    pub fn should_display(queued: &VecDeque<QueuedCommandDisplay>) -> bool {
         !queued.is_empty()
     }
 }
@@ -47,7 +48,7 @@ impl Widget for QueueStatusWidget<'_> {
             Style::default().fg(self.theme.accent).bold(),
         )];
         if let Some(first) = self.queued.front() {
-            let preview: String = first.chars().take(48).collect();
+            let preview: String = first.preview.chars().take(48).collect();
             parts.push(Span::styled(
                 t!("queue_status.next_preview", preview = preview).to_string(),
                 Style::default().fg(self.theme.text_dim),
