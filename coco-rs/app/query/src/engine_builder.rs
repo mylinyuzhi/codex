@@ -69,6 +69,7 @@ impl QueryEngine {
             agent_catalog: None,
             last_cache_safe_params: Arc::new(tokio::sync::RwLock::new(None)),
             fork_dispatcher: None,
+            current_suggestion_abort: None,
             task_handle: None,
             tool_schema_validator: coco_tool_runtime::ToolSchemaValidator::new(),
             tool_result_replacement_state: Arc::new(tokio::sync::RwLock::new(
@@ -258,9 +259,15 @@ impl QueryEngine {
             .filter_map(|m| serde_json::to_value(m).ok())
             .collect();
         let rendered_system_prompt = self.config.system_prompt.clone().unwrap_or_default();
+        // Provider instance name is captured at the same point as `model_id`
+        // so post-turn forks can perform fast-mode-aware rate-limit selectivity
+        // (TS-parity gap closed by Phase 7). `ApiClient::provider()` returns
+        // the resolved provider name from `ProviderClientFingerprint`.
+        let provider = self.client.provider().to_string();
         self.save_cache_safe_params(coco_types::CacheSafeParams {
             rendered_system_prompt,
             model_id: self.config.model_id.clone(),
+            provider,
             fork_context_messages: fork_messages,
         })
         .await;
@@ -269,7 +276,18 @@ impl QueryEngine {
     /// Cache-break tracking attribution. Mirrors TS `getTrackingKey`:
     /// subagents land under `agent:custom` (with their `agent_id`),
     /// SDK calls under `sdk`, everything else under `repl_main_thread`.
-    pub(crate) fn query_source_label(&self) -> &'static str {
+    ///
+    /// When the engine config carries a `query_source_override`
+    /// (set by [`crate::forked_agent::ForkDispatcher`] from
+    /// [`crate::forked_agent::ForkedAgentOptions::query_source`]),
+    /// the override wins so log lines self-identify the fork variant
+    /// (e.g. `prompt_suggestion`, `extract_memories`,
+    /// `session_memory_auto`) instead of collapsing all forks to
+    /// `sdk`. TS parity: `runForkedAgent({querySource})`.
+    pub(crate) fn query_source_label(&self) -> &str {
+        if let Some(override_label) = self.config.query_source_override.as_deref() {
+            return override_label;
+        }
         if self.config.agent_id.is_some() {
             "agent:custom"
         } else if self.config.is_non_interactive {
@@ -504,6 +522,19 @@ impl QueryEngine {
     /// (`/btw`, `promptSuggestion`) to drive a fresh engine without
     /// mutating the parent. CLI / SDK runners install the same
     /// instance — usually backed by `SessionRuntime`.
+    /// Install the session-scoped prompt-suggestion abort slot. Called
+    /// from `wire_engine` so every per-turn engine sees the same
+    /// `Arc<Mutex<Option<CancellationToken>>>` shared across the
+    /// session — rapid `/clear` cycles cancel the prior in-flight
+    /// suggestion fork. TS: module-level `currentAbortController`.
+    pub fn with_current_suggestion_abort(
+        mut self,
+        slot: std::sync::Arc<tokio::sync::Mutex<Option<tokio_util::sync::CancellationToken>>>,
+    ) -> Self {
+        self.current_suggestion_abort = Some(slot);
+        self
+    }
+
     pub fn with_fork_dispatcher(
         mut self,
         dispatcher: crate::forked_agent::ForkDispatcherRef,

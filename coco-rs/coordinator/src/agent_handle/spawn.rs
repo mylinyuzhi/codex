@@ -831,6 +831,14 @@ impl SwarmAgentHandle {
             // The bg path below populates a per-task event channel so live
             // text deltas reach the task's output buffer.
             event_tx: None,
+            // Per-fork canUseTool callback inherits from the request. The
+            // AgentTool spawn path doesn't set one by default; memory /
+            // dream / session services thread their per-policy handle
+            // via `request.can_use_tool` after PR 4.
+            can_use_tool: request.can_use_tool.clone(),
+            require_can_use_tool: request.require_can_use_tool,
+            fork_label: request.fork_label,
+            max_output_tokens_override: None,
         };
 
         if request.run_in_background {
@@ -1195,12 +1203,21 @@ impl SwarmAgentHandle {
                         model: String::new(),
                         max_turns: Some(1),
                         // Empty allow-list → no tools fire during
-                        // summarization (TS denies via canUseTool callback;
-                        // empty allow-list achieves the same outcome).
+                        // summarization (defense-in-depth alongside
+                        // the typed canUseTool callback below).
                         allowed_tools: vec![String::new()],
                         is_teammate: false,
                         definition: definition_for_summary.clone(),
                         model_role: model_role_for_summary,
+                        // TS parity: `services/AgentSummary/agentSummary.ts:109`
+                        // `canUseTool: async () => deny-all`. Typed
+                        // handle documents intent + composes through
+                        // step 3.5 of execute_tool_call uniformly
+                        // with the other 8 fork variants.
+                        can_use_tool: Some(coco_tool_runtime::deny_all_handle(
+                            "agent_summary: tools disabled",
+                        )),
+                        fork_label: Some(coco_types::ForkLabel::AgentSummary),
                         ..Default::default()
                     };
                     let summary_text = match engine_for_summary

@@ -193,6 +193,36 @@ impl AgentQueryEngine for QueryEngineAdapter {
             // shared mailbox would let the child observe reminders
             // intended for the parent. Cheap: an empty `Mutex<State>`.
             reminder_mailbox: coco_system_reminder::ReminderMailbox::new(),
+            // Per-fork canUseTool plumbing — inherits from
+            // AgentQueryConfig so fork-spawned subagents (memory /
+            // dream / session services) honour their per-policy
+            // callbacks. Other (AgentTool) spawns leave it `None`.
+            can_use_tool: config.can_use_tool.clone(),
+            query_source_override: None,
+            fork_label: config.fork_label,
+            // PR #18143 cache-bust risk — only memory/compact callers
+            // intentionally set this; user-driven AgentTool spawns
+            // pass through unchanged.
+            max_output_tokens_override: config.max_output_tokens_override,
+            // Sub-context isolation for fork-flavored subagent spawns.
+            // When `fork_label` is set (memory services: extract /
+            // dream / session_memory; agent_summary timer), build a
+            // `ForkContextOverrides` so the per-call ToolUseContext
+            // builder applies auto agent_id, fresh DenialTrackingState,
+            // query_chain_id / query_depth bump, and write fence.
+            // User-invoked AgentTool spawns leave `fork_label = None`
+            // and skip isolation (they inherit the parent context).
+            // TS parity: `forkedAgent.ts::createSubagentContext` runs
+            // for every framework-spawned fork.
+            fork_isolation: config.fork_label.map(|label| {
+                let mut iso = crate::fork_context::ForkContextOverrides::for_label(label);
+                iso.can_use_tool = config.can_use_tool.clone();
+                iso.require_can_use_tool = config.require_can_use_tool;
+                if !config.allowed_write_roots.is_empty() {
+                    iso.allowed_write_roots = config.allowed_write_roots.clone();
+                }
+                std::sync::Arc::new(iso)
+            }),
         };
 
         // Role resolution: the adapter threads the subagent's role

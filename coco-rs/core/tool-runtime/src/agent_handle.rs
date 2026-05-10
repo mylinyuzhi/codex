@@ -270,6 +270,29 @@ pub struct AgentSpawnRequest {
     /// transcript writer.
     #[serde(default)]
     pub skip_transcript: bool,
+
+    /// Per-fork tool-execution gate. When `Some`, threaded onto the
+    /// child engine's `ToolUseContext.can_use_tool` so step 3.5 in
+    /// `execute_tool_call` enforces the policy uniformly. Skipped at
+    /// the JSON boundary — callbacks aren't portable across runners.
+    /// TS parity: `utils/forkedAgent.ts` `runForkedAgent({canUseTool})`.
+    #[serde(skip)]
+    pub can_use_tool: Option<crate::can_use_tool::CanUseToolHandleRef>,
+
+    /// When `true`, hook auto-approve cannot bypass the
+    /// [`Self::can_use_tool`] callback — speculation needs this so
+    /// overlay path-rewrites always run. TS: `requireCanUseTool` on
+    /// the subagent context.
+    #[serde(default)]
+    pub require_can_use_tool: bool,
+
+    /// Typed discriminator for telemetry / logs (`tengu_fork_agent_query`
+    /// `forkLabel`). When set, the engine's `query_source_label()`
+    /// returns this string so log readers can tell apart the 9 fork
+    /// variants without grepping callsites. TS:
+    /// `utils/forkedAgent.ts` `runForkedAgent({forkLabel})`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fork_label: Option<coco_types::ForkLabel>,
 }
 
 /// Response from spawning a subagent.

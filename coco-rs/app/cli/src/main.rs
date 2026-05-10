@@ -426,9 +426,19 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     // to the no-op dialog stub. TS parity: `elicitationHandler.ts:91-107`.
     let elicit_registry = session_runtime.hook_registry();
     let elicit_factory = session_runtime.orchestration_ctx_factory();
+    // Phase 7: pull the elicitation counter Arc so `wrap_send_elicitation_with_hooks`
+    // can hold an `ElicitationGuard` for each in-flight request. The
+    // counter is shared with `ToolAppState.elicitation_pending_count`
+    // — one Arc, two views.
+    let elicit_counter = session_runtime
+        .app_state
+        .read()
+        .await
+        .elicitation_pending_count
+        .clone();
     let mcp_handle: coco_tool_runtime::McpHandleRef = Arc::new(
         coco_cli::mcp_handle_adapter::McpManagerAdapter::new(mcp_manager.clone())
-            .with_elicitation_hooks(elicit_registry, elicit_factory),
+            .with_elicitation_hooks(elicit_registry, elicit_factory, Some(elicit_counter)),
     );
     install_session_late_binds(session_runtime.clone(), &cwd, Some(mcp_handle)).await?;
 

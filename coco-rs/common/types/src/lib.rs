@@ -16,6 +16,7 @@ mod command;
 mod event;
 mod extended;
 pub mod features;
+mod fork_label;
 mod hook;
 mod id;
 mod jsonrpc;
@@ -23,6 +24,7 @@ mod log;
 mod permission;
 mod plugin;
 mod provider;
+mod rate_limit;
 mod sandbox;
 mod server_request;
 pub mod side_query;
@@ -40,8 +42,13 @@ mod wire_tagged;
 // App-state (cross-turn shared state carried on ToolUseContext)
 pub use app_state::AppStatePatch;
 pub use app_state::AppStateReadHandle;
+pub use app_state::ElicitationGuard;
+pub use app_state::PendingPermissionGuard;
 pub use app_state::PromptSuggestion;
 pub use app_state::ToolAppState;
+
+// Per-provider rate-limit state (lives on `ToolAppState.rate_limits`).
+pub use rate_limit::RateLimitEntry;
 
 // Attachment taxonomy (full TS `Attachment.type` catalog + coverage)
 pub use attachment_kind::AttachmentEvent;
@@ -319,6 +326,10 @@ pub use features::Stage as FeatureStage;
 pub use features::all_features;
 pub use features::feature_for_key;
 pub use features::is_known_feature_key;
+
+// Fork-label discriminator (used by logs / telemetry / transcripts to
+// identify framework-spawned, cache-shared side-channel queries).
+pub use fork_label::ForkLabel;
 
 // Tool filter pipeline (Layers 2 + 4)
 pub use tool_filter::ToolFilter;

@@ -100,6 +100,8 @@ impl QueryEngine {
             turn_message_count = turn_messages.len(),
             streaming_tools = self.config.streaming_tool_execution,
             max_turns = self.config.max_turns,
+            query_source = %self.query_source_label(),
+            fork_label = ?self.config.fork_label,
             "session entering agent loop"
         );
 

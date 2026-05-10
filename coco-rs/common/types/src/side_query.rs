@@ -241,6 +241,18 @@ pub struct CacheSafeParams {
     /// are scoped per `(provider, model)` — a fork that targets a
     /// different model will simply miss the cache.
     pub model_id: String,
+    /// Provider instance name that served the parent turn. Captured
+    /// alongside `model_id` so post-turn forks can perform
+    /// **fast-mode-aware** rate-limit selectivity:
+    /// `prompt_suggestion::build_suggestion_context` reads
+    /// `app_state.rate_limits.get(&cache.provider)` to decide whether
+    /// to suppress, so a 429 on a *different* provider doesn't
+    /// silence suggestions when the fork's actual provider is healthy.
+    /// `#[serde(default)]` for backward compat with on-disk session
+    /// formats that pre-date Phase 7 — empty string means "unknown
+    /// provider" (selective check fails closed → no suppression).
+    #[serde(default)]
+    pub provider: String,
     /// Parent message history that should prefix the fork's prompt.
     /// Carried as serialized JSON so this DTO crosses layer
     /// boundaries without pulling `coco-messages` into `coco-types`.

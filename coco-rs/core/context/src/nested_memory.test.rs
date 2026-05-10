@@ -146,13 +146,19 @@ fn traverse_loads_agents_md_alongside_claude_md() {
     fs::write(sub.join("AGENTS.md"), "agents").unwrap();
     let trigger = sub.join("file.rs");
     fs::write(&trigger, "").unwrap();
+    // Production code canonicalizes paths in `directories_to_process`,
+    // which on macOS resolves `/var/folders/...` (TempDir's default
+    // root) to `/private/var/folders/...`. The test must canonicalize
+    // `sub` before path-equality comparison or the assertion never
+    // matches on macOS.
+    let sub_canonical = std::fs::canonicalize(&sub).unwrap();
 
     let mut loaded = HashSet::new();
     let entries = traverse_for_file(&trigger, &proj, &mut loaded);
 
     let names: Vec<&str> = entries
         .iter()
-        .filter(|e| e.path.parent() == Some(sub.as_path()))
+        .filter(|e| e.path.parent() == Some(sub_canonical.as_path()))
         .map(|e| e.path.file_name().unwrap().to_str().unwrap())
         .collect();
     assert!(
@@ -194,12 +200,15 @@ fn traverse_loads_local_files() {
     fs::write(sub.join("CLAUDE.local.md"), "local").unwrap();
     let trigger = sub.join("f.rs");
     fs::write(&trigger, "").unwrap();
+    // See `traverse_loads_agents_md_alongside_claude_md` for the
+    // macOS canonicalize-or-mismatch rationale.
+    let sub_canonical = std::fs::canonicalize(&sub).unwrap();
 
     let mut loaded = HashSet::new();
     let entries = traverse_for_file(&trigger, &proj, &mut loaded);
-    let local = entries
-        .iter()
-        .find(|e| e.source == MemoryFileSource::Local && e.path.parent() == Some(sub.as_path()));
+    let local = entries.iter().find(|e| {
+        e.source == MemoryFileSource::Local && e.path.parent() == Some(sub_canonical.as_path())
+    });
     assert!(
         local.is_some(),
         "expected Local entry for sub/CLAUDE.local.md"
@@ -313,12 +322,15 @@ fn loaded_entries_contain_file_contents() {
     fs::write(sub.join("CLAUDE.md"), "hello world").unwrap();
     let trigger = sub.join("f.rs");
     fs::write(&trigger, "").unwrap();
+    // See `traverse_loads_agents_md_alongside_claude_md` for the
+    // macOS canonicalize-or-mismatch rationale.
+    let sub_canonical = std::fs::canonicalize(&sub).unwrap();
 
     let mut loaded = HashSet::new();
     let entries = traverse_for_file(&trigger, &proj, &mut loaded);
     let entry = entries
         .iter()
-        .find(|e| e.path.parent() == Some(sub.as_path()))
+        .find(|e| e.path.parent() == Some(sub_canonical.as_path()))
         .expect("missing entry");
     assert_eq!(entry.content, "hello world");
 }

@@ -25,6 +25,8 @@ use coco_messages::MessageHistory;
 use coco_messages::UserContent;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 use crate::AgentStreamEvent;
 use crate::CoreEvent;
@@ -60,6 +62,50 @@ pub(crate) fn is_capacity_error_message(msg: &str) -> bool {
         || m.contains("status: 503")
         || m.contains("(529)")
         || m.contains("(503)")
+}
+
+/// Record a per-provider rate-limit observation onto
+/// `ToolAppState.rate_limits`. Called from the engine's capacity-error
+/// branch so subsequent post-turn forks (prompt-suggestion in particular)
+/// can suppress when their target provider is throttled.
+///
+/// Matches the read site at `engine_finalize_turn::build_suggestion_context`,
+/// which is keyed on `cache.provider` (set when the parent turn ran). The
+/// `provider` parameter here MUST match the `provider` recorded on the
+/// post-turn cache slot — both come from `ApiClient::provider()`, so this
+/// is true by construction. Asserted in `prompt_suggestion.test.rs`'s
+/// selectivity matrix.
+///
+/// Idempotent: a second 429 from the same provider replaces the entry
+/// (last-write-wins). Selectivity is the read-side filter.
+///
+/// `retry_after_ms` translates to wall-clock `reset_at_ms` immediately
+/// so the read site doesn't need monotonic clocks to evaluate freshness.
+pub(crate) async fn record_rate_limit_observation(
+    app_state: &Arc<RwLock<coco_types::ToolAppState>>,
+    provider: &str,
+    api: coco_types::ProviderApi,
+    retry_after_ms: Option<i64>,
+) {
+    if provider.is_empty() {
+        // Defensive: empty provider means we can't key the entry. Skip
+        // rather than write an entry no one will read selectively.
+        return;
+    }
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let entry = coco_types::RateLimitEntry {
+        api,
+        // 429 / Overloaded both surface as Rejected — callers wanting
+        // finer granularity can extend later (header-parsed warnings).
+        status: coco_types::RateLimitStatus::Rejected,
+        reset_at_ms: retry_after_ms.map(|ms| now_ms + ms),
+        // `retry_after_ms` is in ms; the wire field is seconds. Convert
+        // for telemetry parity with raw `Retry-After` header values.
+        retry_after_seconds: retry_after_ms.map(|ms| (ms / 1000).max(0)),
+        last_observed_ms: now_ms,
+    };
+    let mut snap = app_state.write().await;
+    snap.rate_limits.insert(provider.to_string(), entry);
 }
 
 /// Announce a model fallback / recovery transition as an inline

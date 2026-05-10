@@ -144,6 +144,11 @@ pub enum EnvKey {
     /// enable-default-true flag; coco-rs flips to disable-by-env to
     /// match the rest of the `COCO_*_DISABLE` family).
     CocoPromptSuggestionDisable,
+    /// `--bare` mode: skip ALL post-turn forks (promptSuggestion,
+    /// extractMemories, autoDream). Used by SDK / scripted `-p`
+    /// invocations that don't want background work after each turn.
+    /// TS: `query/stopHooks.ts:136` `isBareMode()` gate.
+    CocoBareMode,
     /// Disable AgentTool background-task registration. When set
     /// truthy, `run_in_background: true` and
     /// `AgentDefinition.background = true` are both ignored — every
@@ -262,6 +267,7 @@ impl EnvKey {
             Self::CocoCoordinatorMode => "COCO_COORDINATOR_MODE",
             Self::CocoForkSubagent => "COCO_FORK_SUBAGENT",
             Self::CocoPromptSuggestionDisable => "COCO_PROMPT_SUGGESTION_DISABLE",
+            Self::CocoBareMode => "COCO_BARE_MODE",
             Self::CocoBackgroundTasksDisable => "COCO_BACKGROUND_TASKS_DISABLE",
             Self::CocoAgentSummaryEnable => "COCO_AGENT_SUMMARY_ENABLE",
             Self::CocoAgentListInMessages => "COCO_AGENT_LIST_IN_MESSAGES",

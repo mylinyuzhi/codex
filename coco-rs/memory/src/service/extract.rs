@@ -398,6 +398,17 @@ impl ExtractService {
             // transcript — its tool-uses race the main thread's
             // writer and pollute the JSONL.
             skip_transcript: true,
+            // TS `extractMemories.ts:415` `canUseTool: createAutoMemCanUseTool(memoryDir)`.
+            // Allows Read/Glob/Grep, read-only Bash, Edit/Write
+            // within memory_dir; denies everything else. The
+            // canUseTool gate runs at tool-runtime step 3.5,
+            // composing with the `allowed_write_roots` fence above
+            // (callback = inner ring; field = outer ring).
+            can_use_tool: Some(crate::can_use_tool::create_auto_mem_handle(
+                self.memory_dir.clone(),
+            )),
+            require_can_use_tool: false,
+            fork_label: Some(coco_types::ForkLabel::ExtractMemories),
             ..Default::default()
         };
 

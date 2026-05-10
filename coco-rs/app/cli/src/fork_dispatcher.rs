@@ -33,7 +33,7 @@
 use std::sync::Arc;
 
 use coco_query::QueryEngineConfig;
-use coco_query::forked_agent::{ForkDispatcher, ForkedAgentOptions, ForkedDispatchResult};
+use coco_query::forked_agent::{ForkDispatcher, ForkedAgentOptions, ForkedAgentResult};
 use coco_types::CacheSafeParams;
 
 use crate::session_runtime::SessionRuntime;
@@ -58,7 +58,23 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
         options: &ForkedAgentOptions,
         prompt: &str,
         system_prompt_override: Option<String>,
-    ) -> Result<ForkedDispatchResult, coco_error::BoxedError> {
+    ) -> Result<ForkedAgentResult, coco_error::BoxedError> {
+        // PR #18143 cache-bust trail. Setting max_output_tokens on a
+        // cache-shared fork clamps `budget_tokens`, invalidating the
+        // parent's prompt cache (TS incident: 92.7% → 61% hit-rate).
+        // Only `Compact` legitimately sets this (distinct model).
+        // Surface a structured warn! on every other variant so a
+        // regression leaves a trail in the logs.
+        if let Some(cap) = options.max_output_tokens
+            && !matches!(options.fork_label, coco_types::ForkLabel::Compact)
+        {
+            tracing::warn!(
+                fork_label = %options.fork_label,
+                max_output_tokens = cap,
+                "max_output_tokens override set on cache-shared fork; cache key parity broken (PR #18143: 92.7% → 61% hit-rate incident)"
+            );
+        }
+
         // Derive the AgentQueryConfig shape from the cache slot. This
         // keeps the byte-faithful contract documented on `forked_agent`
         // (skip_cache_write, skip_transcript, max_turns: 1 by default).
@@ -111,6 +127,29 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
                 .effort
                 .as_deref()
                 .and_then(|s| s.parse::<coco_types::ThinkingLevel>().ok()),
+            // Per-fork plumbing — thread the canUseTool callback,
+            // fork_label, query_source override, and (cache-bust-risky)
+            // max_output_tokens override onto the child engine config
+            // so step 3.5 in execute_tool_call enforces uniformly and
+            // log lines self-identify which fork they belong to.
+            can_use_tool: options.can_use_tool.clone(),
+            query_source_override: Some(options.query_source.clone()),
+            fork_label: Some(options.fork_label),
+            max_output_tokens_override: options.max_output_tokens,
+            // Sub-context isolation primitives applied at the
+            // per-call ToolUseContext build site (tool_context.rs
+            // reads `fork_isolation` and applies auto agent_id,
+            // fresh denial tracking, query_chain_id / query_depth
+            // bump, allowed_write_roots fence, and require_can_use_tool).
+            // TS parity: `forkedAgent.ts::createSubagentContext`.
+            fork_isolation: Some(Arc::new({
+                let mut iso =
+                    coco_query::fork_context::ForkContextOverrides::for_label(options.fork_label);
+                iso.query_source = options.query_source.clone();
+                iso.can_use_tool = options.can_use_tool.clone();
+                iso.require_can_use_tool = options.require_can_use_tool;
+                iso
+            })),
             ..Default::default()
         };
 
@@ -120,11 +159,11 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
         // parent has, which keeps event emission / permission gating
         // consistent across the parent and child.
         //
-        // Cancellation: forks are short-lived; we hand them an
-        // independent token rather than threading the parent's, so a
-        // cancel of the parent loop doesn't tear down a fork mid-flight
-        // (and vice versa).
-        let cancel = tokio_util::sync::CancellationToken::new();
+        // Cancellation: forks are short-lived; honor the caller's
+        // override (speculation / compact share parent's abort token
+        // so user `Esc` aborts the fork) — fall back to a fresh
+        // independent token when the caller didn't supply one.
+        let cancel = options.overrides.abort.clone().unwrap_or_default();
         let engine = self
             .runtime
             .build_engine_from_config(engine_config, cancel, None)
@@ -160,10 +199,31 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
             })?
         };
 
-        Ok(ForkedDispatchResult {
-            text: result.response_text,
-            input_tokens: result.total_usage.input_tokens,
-            output_tokens: result.total_usage.output_tokens,
+        // Multi-message capture (TS parity:
+        // `utils/forkedAgent.ts::runForkedAgent` returns the engine's
+        // actual `Vec<Message>`). The fork's full assistant +
+        // user-tool-result sequence lands here so callers
+        // (`promptSuggestion::extract_suggestion_text`) can walk
+        // "tool→denied→text" turn-2 fallback paths correctly.
+        //
+        // `QueryResult.final_messages` carries every assistant +
+        // tool-result message produced during the fork's run; we
+        // strip the parent-history prefix that the engine prepended
+        // so the caller only sees the fork's own emissions (TS
+        // `runForkedAgent` likewise returns just the fork's added
+        // messages, not the parent's).
+        let parent_msg_count = agent_config.fork_context_messages.len();
+        let fork_messages: Vec<coco_messages::Message> = result
+            .final_messages
+            .iter()
+            .skip(parent_msg_count + 1) // +1 for the user prompt the fork prepended
+            .cloned()
+            .collect();
+
+        Ok(ForkedAgentResult {
+            messages: fork_messages,
+            total_usage: result.total_usage,
+            stop_reason: result.stop_reason,
         })
     }
 }

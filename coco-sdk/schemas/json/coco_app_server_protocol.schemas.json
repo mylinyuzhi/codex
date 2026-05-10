@@ -271,6 +271,14 @@
     "ApprovalResolveParams": {
       "description": "Matches TS `SDKControlPermissionRequestSchema` response shape flipped — here the SDK is *resolving* an approval request, so it's sent client→server.",
       "properties": {
+        "content_blocks": {
+          "description": "Optional content blocks (typically image attachments) the SDK client wants attached to the next user message. Mirrors TS `contentBlocks?: ContentBlockParam[]` on `PermissionAllowDecision` (`types/permissions.ts:183`) — paste-image-during-AskUserQuestion or attachments alongside `MCPTool` answers ride this slot. Carried verbatim as `serde_json::Value` because the underlying `ContentBlockParam` is Anthropic-shaped; consumers translate per provider.",
+          "items": true,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "decision": {
           "$ref": "#/definitions/ApprovalDecision"
         },
@@ -296,7 +304,7 @@
           "type": "string"
         },
         "updated_input": {
-          "description": "Optional modified tool input (for pre-approval mutation)."
+          "description": "Optional rewritten tool input the SDK client supplies at approval time. When `Some`, the engine substitutes this for the model-emitted input before invoking the tool. Used by `AskUserQuestion` to ship user-selected `answers` (and optional `annotations`) back into the tool's data envelope.\n\nProtocol mirror of `coco_tool_runtime::ToolPermissionResolution.updated_input` (the in-process equivalent for TUI mode). TS parity: `permissionDecision.updatedInput` at `services/tools/toolExecution.ts:1130-1131`. Consumed by `app/cli/src/sdk_server/approval_bridge.rs`."
         }
       },
       "required": [
@@ -431,6 +439,13 @@
           "description": "`context-management-2025-06-27` beta.",
           "enum": [
             "context_management"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Anthropic adaptive thinking — server picks effort dynamically. Gates the convert layer's emission of `thinking: {\"type\":\"adaptive\"}` for `ReasoningEffort::Auto`. Without this capability, the convert layer omits the field entirely so the server-side default applies (avoids 400 from non-adaptive models that reject the value).\n\nKnown supporting models (Anthropic family): Claude Sonnet 4.6, Claude Opus 4.6+, DeepSeek V4 (anthropic-compat).",
+          "enum": [
+            "adaptive_thinking"
           ],
           "type": "string"
         },
@@ -2742,16 +2757,33 @@
       "type": "string"
     },
     "ReasoningEffort": {
-      "description": "Reasoning effort level. Ordered from lowest to highest. Provider-agnostic scale — thinking_convert maps to per-provider values.",
-      "enum": [
-        "none",
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "x_high"
-      ],
-      "type": "string"
+      "description": "Reasoning effort. Ordered from \"off\" through numeric intensity. Provider-agnostic — `thinking_convert` maps to per-provider wire shapes.",
+      "oneOf": [
+        {
+          "enum": [
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "x_high"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Explicit \"thinking off\". Convert layer skips typed-effort emission; `level.options` may still carry an explicit-off wire toggle (e.g. DeepSeek's `{\"thinking\":{\"type\":\"disabled\"}}`).",
+          "enum": [
+            "disable"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "\"Let the provider decide\". Convert layer omits reasoning fields; the server-side default applies. This is the default state when no thinking level is configured.",
+          "enum": [
+            "auto"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "RequestId": {
       "anyOf": [
@@ -5335,7 +5367,7 @@
       "type": "object"
     },
     "ThinkingLevel": {
-      "description": "Unified thinking configuration for all providers.\n\nReplaces both TS EffortLevel and ThinkingConfig: TS EffortLevel ('low'|'medium'|'high'|'max') → ThinkingLevel::low()/medium()/high()/xhigh() TS ThinkingConfig { type: 'enabled', N }     → ThinkingLevel { effort: Medium, budget: Some(N) } TS ThinkingConfig { type: 'disabled' }       → ThinkingLevel::none()\n\nOnly 2 typed fields (effort + budget_tokens) are universal across providers. All provider-specific thinking params go through `options` (data-driven passthrough).",
+      "description": "Unified thinking configuration for all providers.\n\n`effort` carries provider-agnostic intent — `Disable`, `Auto`, or one of the numeric levels (`Minimal`..`XHigh`). Provider-specific wire toggles (e.g. DeepSeek's `{\"thinking\":{\"type\":\"enabled\"}}`) flow through `options` verbatim.\n\nSemantic states: * `Disable` — explicit \"thinking off\"; emit explicit-off signals where the provider supports them, otherwise omit reasoning fields. * `Auto`    — \"let the provider decide\"; omit reasoning fields so the server-side default applies. * `Minimal`..`XHigh` — explicit numeric efforts; emitted via the provider's typed reasoning channel.",
       "properties": {
         "budget_tokens": {
           "description": "Token budget — universal for budget-based providers.",
@@ -5351,7 +5383,7 @@
               "$ref": "#/definitions/ReasoningEffort"
             }
           ],
-          "description": "Reasoning effort level — universal across all providers."
+          "description": "Reasoning effort — universal across all providers."
         },
         "options": {
           "additionalProperties": true,
@@ -5805,11 +5837,9 @@
           "type": "object"
         },
         {
-          "description": "AskUserQuestion overlay needed.",
+          "description": "AskUserQuestion overlay needed. `input` carries the full tool input dict (the `questions[]` array, etc.) verbatim so the TUI renders the rich multi-question UI (multiSelect, preview, notes) matching TS `AskUserQuestionPermissionRequest.tsx`. The TUI echoes the answer payload back via `UserCommand::ApprovalResponse` with `updated_input = Some({...input, answers, annotations})`.",
           "properties": {
-            "message": {
-              "type": "string"
-            },
+            "input": true,
             "request_id": {
               "type": "string"
             },
@@ -5821,7 +5851,7 @@
             }
           },
           "required": [
-            "message",
+            "input",
             "request_id",
             "type"
           ],

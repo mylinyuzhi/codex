@@ -20,11 +20,13 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU32;
 
 use coco_hooks::HookRegistry;
 use coco_hooks::orchestration::ElicitationAction as HookElicitationAction;
 use coco_hooks::orchestration::ElicitationMode;
 use coco_hooks::orchestration::OrchestrationContext;
+use coco_types::ElicitationGuard;
 
 /// Build a `SendElicitation` closure that fires `Elicitation` and
 /// `ElicitationResult` hooks around the supplied `inner` fallback.
@@ -36,10 +38,18 @@ use coco_hooks::orchestration::OrchestrationContext;
 /// `ctx_factory` produces an `OrchestrationContext` per fire. Each call
 /// captures session_id / cwd at the time of firing rather than at
 /// closure-creation time so a `/clear` doesn't leave a stale snapshot.
+/// `elicitation_counter` (Phase 7 wire-up): clone of
+/// `ToolAppState.elicitation_pending_count`. `None` keeps the legacy
+/// untracked behaviour for tests / paths without app_state access.
+/// When `Some`, every wrapped invocation holds an [`ElicitationGuard`]
+/// for the request's full lifetime (pre-hook + dialog/error +
+/// post-hook), so the prompt-suggestion fork's
+/// `SuppressReason::ElicitationActive` fires correctly.
 pub fn wrap_send_elicitation_with_hooks(
     server_name: String,
     registry: Arc<HookRegistry>,
     ctx_factory: Arc<dyn Fn() -> OrchestrationContext + Send + Sync>,
+    elicitation_counter: Option<Arc<AtomicU32>>,
     inner: coco_mcp::SendElicitation,
 ) -> coco_mcp::SendElicitation {
     let inner = std::sync::Arc::new(tokio::sync::Mutex::new(inner));
@@ -60,7 +70,14 @@ pub fn wrap_send_elicitation_with_hooks(
             let registry = registry.clone();
             let ctx_factory = ctx_factory.clone();
             let inner = inner.clone();
+            let elicitation_counter = elicitation_counter.clone();
             Box::pin(async move {
+                // Phase 7: hold the guard for the entire elicitation
+                // lifetime — pre-hook, dialog (or error stub),
+                // post-hook. Drop fires when the async block returns,
+                // even on `?` early-exit paths, because the guard is
+                // moved into this block by value.
+                let _elicit_guard = elicitation_counter.map(ElicitationGuard::acquire);
                 let message = elicitation.message.clone();
                 let requested_schema = serde_json::to_value(&elicitation.requested_schema).ok();
 

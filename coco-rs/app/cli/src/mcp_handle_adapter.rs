@@ -37,6 +37,13 @@ pub struct McpManagerAdapter {
     /// inside detached closures.
     elicitation_ctx_factory:
         Option<Arc<dyn Fn() -> coco_hooks::orchestration::OrchestrationContext + Send + Sync>>,
+    /// Phase 7: clone of `ToolAppState.elicitation_pending_count`.
+    /// Threaded into `wrap_send_elicitation_with_hooks` so each
+    /// in-flight elicitation increments the counter for the
+    /// prompt-suggestion fork's `SuppressReason::ElicitationActive`
+    /// guard. `None` keeps the counter untracked (tests / paths
+    /// without app_state access).
+    elicitation_counter: Option<Arc<std::sync::atomic::AtomicU32>>,
 }
 
 impl McpManagerAdapter {
@@ -45,19 +52,26 @@ impl McpManagerAdapter {
             manager,
             hook_registry: None,
             elicitation_ctx_factory: None,
+            elicitation_counter: None,
         }
     }
 
     /// Install hook context so dynamic-MCP-server elicitations fire
     /// `Elicitation` / `ElicitationResult` hooks. Without this the
     /// adapter falls back to the legacy no-op send_elicitation closure.
+    ///
+    /// `elicitation_counter` (Phase 7) is the
+    /// `ToolAppState.elicitation_pending_count` Arc — pass `None` from
+    /// tests / paths that don't surface state to prompt-suggestion.
     pub fn with_elicitation_hooks(
         mut self,
         registry: Arc<coco_hooks::HookRegistry>,
         ctx_factory: Arc<dyn Fn() -> coco_hooks::orchestration::OrchestrationContext + Send + Sync>,
+        elicitation_counter: Option<Arc<std::sync::atomic::AtomicU32>>,
     ) -> Self {
         self.hook_registry = Some(registry);
         self.elicitation_ctx_factory = Some(ctx_factory);
+        self.elicitation_counter = elicitation_counter;
         self
     }
 }
@@ -239,6 +253,7 @@ impl McpHandle for McpManagerAdapter {
                     name.to_string(),
                     registry.clone(),
                     factory.clone(),
+                    self.elicitation_counter.clone(),
                     base_elicitation,
                 )
             }
