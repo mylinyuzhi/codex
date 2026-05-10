@@ -288,6 +288,10 @@ fn anthropic_caps_from(
             Capability::ContextManagement => out.context_management = true,
             Capability::TokenEfficientTools => out.token_efficient_tools = true,
             // Other capabilities are unrelated to Anthropic adapter policy.
+            // `AdaptiveThinking` is consumed by the convert layer (gates
+            // `thinking: {type:adaptive}` emission), not the adapter — the
+            // adapter has its own model-name-pattern `supports_adaptive_thinking`
+            // for the typed-reasoning fallback path.
             Capability::TextGeneration
             | Capability::Streaming
             | Capability::Vision
@@ -295,6 +299,7 @@ fn anthropic_caps_from(
             | Capability::ToolCalling
             | Capability::Embedding
             | Capability::ExtendedThinking
+            | Capability::AdaptiveThinking
             | Capability::StructuredOutput
             | Capability::ReasoningSummaries
             | Capability::ParallelToolCalls

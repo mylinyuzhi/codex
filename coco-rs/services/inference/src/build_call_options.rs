@@ -53,9 +53,13 @@ pub struct PerCallOverrides {
     pub max_output_tokens: Option<coco_config::PositiveTokens>,
     /// Per-turn thinking override.
     /// - `None` — fall through to `info.default_thinking()`.
-    /// - `Some(level)` with `effort == ReasoningEffort::None` —
-    ///   explicitly disable thinking for this turn.
-    /// - `Some(level)` with effort != None — use this level.
+    /// - `Some(level)` with `effort == ReasoningEffort::Disable` —
+    ///   explicitly disable thinking for this turn (must NOT silently
+    ///   fall through to the model default).
+    /// - `Some(level)` with `effort == ReasoningEffort::Auto` —
+    ///   explicitly defer to the provider's server-side default.
+    /// - `Some(level)` with `effort.is_explicit_level()` — use this
+    ///   numeric level (Minimal..XHigh) on the typed reasoning lane.
     pub thinking_level: Option<ThinkingLevel>,
     pub extra_body: BTreeMap<String, serde_json::Value>,
     /// Anthropic `context_management` payload (camelCase wire shape).
@@ -122,19 +126,24 @@ pub fn build_call_options_with_extra(
     // Lane A2: typed reasoning channel.
     //
     // Resolution semantics:
-    //   per_call.thinking_level == Some(t) where t.effort == None  → disable thinking (Some(t))
-    //   per_call.thinking_level == Some(t) where t.effort != None  → use t
-    //   per_call.thinking_level == None                            → info.default_thinking()
+    //   per_call.thinking_level == Some(t)                        → use t verbatim
+    //   per_call.thinking_level == None                           → info.default_thinking()
     //
-    // Critically, an explicit per-call effort = None must NOT silently
-    // fall through to the model default — that would let a turn
-    // disable thinking only for it to come back via the model.
+    // The typed `call.reasoning` slot is only set for explicit numeric
+    // efforts (Minimal..XHigh). `Disable` and `Auto` leave it `None`
+    // so the wire body omits any typed reasoning hint — `Disable` may
+    // still emit an explicit-off toggle via `level.options`, and `Auto`
+    // lets the server-side default apply.
+    //
+    // Critically, an explicit per-call `Disable` must NOT silently fall
+    // through to the model default — that would let a turn disable
+    // thinking only for it to come back via the model.
     let thinking: Option<&ThinkingLevel> = match per_call.thinking_level.as_ref() {
         Some(t) => Some(t),
         None => info.default_thinking(),
     };
     if let Some(t) = thinking
-        && t.effort != ReasoningEffort::None
+        && t.effort.is_explicit_level()
     {
         call.reasoning = Some(reasoning_effort_to_level(t.effort));
     }
@@ -153,10 +162,18 @@ pub fn build_call_options_with_extra(
     for (k, v) in &per_call.extra_body {
         merge_into_extra(&mut extra, k, v);
     }
-    if let Some(t) = thinking
-        && t.effort != ReasoningEffort::None
-    {
-        for (k, v) in thinking_convert::to_extra_body(t, api) {
+    if let Some(t) = thinking {
+        // Disabled levels (effort == None) still flow `level.options`
+        // through — DeepSeek V4 emits `{"thinking":{"type":"disabled"}}`
+        // when off. The Lane A2 typed-reasoning gate above (`call.reasoning`)
+        // remains gated on effort != None.
+        //
+        // `info.capabilities` gates Anthropic adaptive thinking — `Auto`
+        // emits `{type:adaptive}` only when `Capability::AdaptiveThinking`
+        // is declared. Empty / None capabilities → safe degradation
+        // (server default applies).
+        let caps = info.capabilities.as_deref().unwrap_or(&[]);
+        for (k, v) in thinking_convert::to_extra_body(t, api, caps) {
             merge_into_extra(&mut extra, &k, &v);
         }
     }
@@ -275,14 +292,23 @@ fn merge_into_extra(
 
 /// Map a coco-types `ReasoningEffort` to the vercel-ai
 /// `ReasoningLevel` that flows through `LanguageModelV4CallOptions.reasoning`.
+///
+/// Precondition: `effort.is_explicit_level()` — the only call site
+/// (Lane A2 in `build_call_options_with_extra`) gates on this. `Disable`
+/// and `Auto` mean "don't emit a typed reasoning hint" and must be
+/// handled by leaving `call.reasoning = None` at the call site, not by
+/// translating into a vercel-ai level here.
 fn reasoning_effort_to_level(effort: ReasoningEffort) -> ReasoningLevel {
     match effort {
-        ReasoningEffort::None => ReasoningLevel::None,
         ReasoningEffort::Minimal => ReasoningLevel::Minimal,
         ReasoningEffort::Low => ReasoningLevel::Low,
         ReasoningEffort::Medium => ReasoningLevel::Medium,
         ReasoningEffort::High => ReasoningLevel::High,
         ReasoningEffort::XHigh => ReasoningLevel::Xhigh,
+        ReasoningEffort::Disable | ReasoningEffort::Auto => unreachable!(
+            "reasoning_effort_to_level called with non-explicit effort {effort:?}; \
+             Lane A2 must gate on `effort.is_explicit_level()` before invoking this"
+        ),
     }
 }
 

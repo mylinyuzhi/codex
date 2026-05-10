@@ -348,11 +348,18 @@ fn json_response_format_without_schema_warns() {
 }
 
 // ---------------------------------------------------------------------------
-// Thinking budget warning uses Compatibility
+// Thinking enabled without budget — provider does NOT synthesize a default
 // ---------------------------------------------------------------------------
 
 #[test]
-fn thinking_budget_default_uses_compatibility_warning() {
+fn thinking_enabled_without_budget_emits_no_budget_tokens() {
+    // ModelInfo is the single source of truth for budget_tokens. When the
+    // upper layer supplies `{"type":"enabled"}` without a budget, the wire
+    // body must omit the `budget_tokens` key entirely, leave `max_tokens`
+    // at the model's `max_output_tokens`, and emit no compatibility
+    // warning. (DeepSeek's anthropic-compat endpoint is the motivating
+    // case — its `ModelInfo` declares no budget and its server doesn't
+    // require one.)
     let model = AnthropicMessagesLanguageModel::new("claude-sonnet-4-5", make_config());
 
     let mut anthropic_opts: HashMap<String, serde_json::Value> = HashMap::new();
@@ -368,21 +375,83 @@ fn thinking_budget_default_uses_compatibility_warning() {
     ])
     .with_provider_options(vercel_ai_provider::ProviderOptions(provider_opts));
 
-    let (_body, _headers, warnings) = model
+    let (body, _headers, warnings) = model
         .get_args(&options, false)
         .unwrap_or_else(|e| panic!("{e}"));
+
+    assert_eq!(
+        body["thinking"],
+        json!({"type": "enabled"}),
+        "thinking object must be exactly {{type: enabled}} — no synthesized budget_tokens",
+    );
     assert!(
-        warnings.iter().any(|w| matches!(
+        body["thinking"].get("budget_tokens").is_none(),
+        "budget_tokens key must NOT appear when ModelInfo did not supply one",
+    );
+    // `claude-sonnet-4-5` capabilities → max_output_tokens = 64_000.
+    assert_eq!(
+        body["max_tokens"],
+        json!(64_000),
+        "max_tokens must equal model's max_output_tokens — no synthetic bump",
+    );
+    assert!(
+        !warnings.iter().any(|w| matches!(
             w,
             Warning::Compatibility { feature, .. } if feature == "extended thinking"
         )),
-        "expected Compatibility warning for thinking budget, got: {warnings:?}",
+        "no Compatibility warning expected when budget is intentionally absent, got: {warnings:?}",
     );
-    // Should NOT have Warning::Other for this
-    assert!(!warnings.iter().any(|w| matches!(
-        w,
-        Warning::Other { message } if message.contains("thinking budget")
-    )),);
+}
+
+// ---------------------------------------------------------------------------
+// Thinking disabled — wire body actively carries the off toggle
+// ---------------------------------------------------------------------------
+
+#[test]
+fn thinking_disabled_writes_thinking_disabled_to_body() {
+    // `ThinkingConfig::Disabled` was previously parsed but silently
+    // dropped — `is_thinking` was false so no `body["thinking"]`
+    // write fired. The body builder now writes
+    // `body["thinking"] = {"type":"disabled"}` explicitly so the
+    // server doesn't fall back to its on-by-default behavior. Does
+    // not trigger temperature/topK/topP suppression (those only
+    // collide with Enabled or Adaptive).
+    let model = AnthropicMessagesLanguageModel::new("claude-sonnet-4-5", make_config());
+
+    let mut anthropic_opts: HashMap<String, serde_json::Value> = HashMap::new();
+    anthropic_opts.insert("thinking".into(), json!({"type": "disabled"}));
+    let mut provider_opts = HashMap::new();
+    provider_opts.insert("anthropic".into(), anthropic_opts);
+
+    let options = LanguageModelV4CallOptions::new(vec![
+        vercel_ai_provider::LanguageModelV4Message::user_text("Hello"),
+    ])
+    .with_provider_options(vercel_ai_provider::ProviderOptions(provider_opts));
+
+    let (body, _headers, warnings) = model
+        .get_args(&options, false)
+        .unwrap_or_else(|e| panic!("{e}"));
+
+    assert_eq!(
+        body["thinking"],
+        json!({"type": "disabled"}),
+        "body must carry the explicit-off toggle verbatim",
+    );
+    // `claude-sonnet-4-5` capabilities → max_output_tokens = 64_000.
+    assert_eq!(
+        body["max_tokens"],
+        json!(64_000),
+        "max_tokens must equal model's max_output_tokens — no thinking-budget bump",
+    );
+    // No suppression warnings — Disabled isn't "thinking" in the
+    // temperature-collision sense.
+    assert!(
+        !warnings.iter().any(|w| matches!(
+            w,
+            Warning::Unsupported { feature, .. } if feature == "temperature" || feature == "topK" || feature == "topP"
+        )),
+        "no temperature/topK/topP warnings expected for Disabled, got: {warnings:?}",
+    );
 }
 
 // ---------------------------------------------------------------------------

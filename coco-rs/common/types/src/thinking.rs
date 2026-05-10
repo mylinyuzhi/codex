@@ -5,17 +5,22 @@ use std::str::FromStr;
 
 /// Unified thinking configuration for all providers.
 ///
-/// Replaces both TS EffortLevel and ThinkingConfig:
-///   TS EffortLevel ('low'|'medium'|'high'|'max') → ThinkingLevel::low()/medium()/high()/xhigh()
-///   TS ThinkingConfig { type: 'enabled', N }     → ThinkingLevel { effort: Medium, budget: Some(N) }
-///   TS ThinkingConfig { type: 'disabled' }       → ThinkingLevel::none()
+/// `effort` carries provider-agnostic intent — `Disable`, `Auto`, or
+/// one of the numeric levels (`Minimal`..`XHigh`). Provider-specific
+/// wire toggles (e.g. DeepSeek's `{"thinking":{"type":"enabled"}}`)
+/// flow through `options` verbatim.
 ///
-/// Only 2 typed fields (effort + budget_tokens) are universal across providers.
-/// All provider-specific thinking params go through `options` (data-driven passthrough).
+/// Semantic states:
+///   * `Disable` — explicit "thinking off"; emit explicit-off signals
+///     where the provider supports them, otherwise omit reasoning fields.
+///   * `Auto`    — "let the provider decide"; omit reasoning fields
+///     so the server-side default applies.
+///   * `Minimal`..`XHigh` — explicit numeric efforts; emitted via the
+///     provider's typed reasoning channel.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ThinkingLevel {
-    /// Reasoning effort level — universal across all providers.
+    /// Reasoning effort — universal across all providers.
     pub effort: ReasoningEffort,
 
     /// Token budget — universal for budget-based providers.
@@ -28,9 +33,22 @@ pub struct ThinkingLevel {
 }
 
 impl ThinkingLevel {
-    pub fn none() -> Self {
+    /// Explicit "thinking off" — convert layer suppresses typed-effort
+    /// emission; `options` may carry an explicit-off wire toggle.
+    pub fn disable() -> Self {
         Self {
-            effort: ReasoningEffort::None,
+            effort: ReasoningEffort::Disable,
+            budget_tokens: None,
+            options: HashMap::new(),
+        }
+    }
+
+    /// "Let the provider decide" — convert layer omits all reasoning
+    /// fields so the server-side default applies (e.g. DeepSeek defaults
+    /// to enabled+high; OpenAI defaults to no reasoning).
+    pub fn auto() -> Self {
+        Self {
+            effort: ReasoningEffort::Auto,
             budget_tokens: None,
             options: HashMap::new(),
         }
@@ -39,33 +57,37 @@ impl ThinkingLevel {
     pub fn low() -> Self {
         Self {
             effort: ReasoningEffort::Low,
-            ..Self::none()
+            ..Self::auto()
         }
     }
 
     pub fn medium() -> Self {
         Self {
             effort: ReasoningEffort::Medium,
-            ..Self::none()
+            ..Self::auto()
         }
     }
 
     pub fn high() -> Self {
         Self {
             effort: ReasoningEffort::High,
-            ..Self::none()
+            ..Self::auto()
         }
     }
 
     pub fn xhigh() -> Self {
         Self {
             effort: ReasoningEffort::XHigh,
-            ..Self::none()
+            ..Self::auto()
         }
     }
 
+    /// Returns `true` for any state where thinking *might* happen on
+    /// the wire — i.e. anything other than `Disable`. `Auto` returns
+    /// `true` because the user has not opted out, even though the
+    /// provider may still resolve it to off-by-default.
     pub fn is_enabled(&self) -> bool {
-        self.effort != ReasoningEffort::None
+        self.effort != ReasoningEffort::Disable
     }
 
     pub fn with_budget(effort: ReasoningEffort, budget: i32) -> Self {
@@ -79,12 +101,12 @@ impl ThinkingLevel {
 
 impl Default for ThinkingLevel {
     fn default() -> Self {
-        Self::none()
+        Self::auto()
     }
 }
 
 /// Parses effort name only (no budget/options).
-/// "high" → ThinkingLevel::high(), "none" → ThinkingLevel::none()
+/// "high" → ThinkingLevel::high(), "auto" → ThinkingLevel::auto()
 impl FromStr for ThinkingLevel {
     type Err = String;
 
@@ -98,16 +120,23 @@ impl FromStr for ThinkingLevel {
     }
 }
 
-/// Reasoning effort level. Ordered from lowest to highest.
-/// Provider-agnostic scale — thinking_convert maps to per-provider values.
+/// Reasoning effort. Ordered from "off" through numeric intensity.
+/// Provider-agnostic — `thinking_convert` maps to per-provider wire shapes.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, Default,
 )]
 #[serde(rename_all = "snake_case")]
 pub enum ReasoningEffort {
+    /// Explicit "thinking off". Convert layer skips typed-effort
+    /// emission; `level.options` may still carry an explicit-off
+    /// wire toggle (e.g. DeepSeek's `{"thinking":{"type":"disabled"}}`).
+    Disable,
+    /// "Let the provider decide". Convert layer omits reasoning fields;
+    /// the server-side default applies. This is the default state when
+    /// no thinking level is configured.
     #[default]
-    None,
+    Auto,
     Minimal,
     Low,
     Medium,
@@ -115,12 +144,26 @@ pub enum ReasoningEffort {
     XHigh,
 }
 
+impl ReasoningEffort {
+    /// Returns `true` only for the explicit numeric efforts that the
+    /// convert layer emits via the provider's typed reasoning channel.
+    /// `Disable` and `Auto` both return `false` — neither maps to a
+    /// concrete level the provider should be told to use.
+    pub fn is_explicit_level(self) -> bool {
+        matches!(
+            self,
+            Self::Minimal | Self::Low | Self::Medium | Self::High | Self::XHigh
+        )
+    }
+}
+
 impl FromStr for ReasoningEffort {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "none" => Ok(Self::None),
+            "disable" | "disabled" | "off" => Ok(Self::Disable),
+            "auto" => Ok(Self::Auto),
             "minimal" => Ok(Self::Minimal),
             "low" => Ok(Self::Low),
             "medium" => Ok(Self::Medium),
@@ -134,7 +177,8 @@ impl FromStr for ReasoningEffort {
 impl std::fmt::Display for ReasoningEffort {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
-            Self::None => "none",
+            Self::Disable => "disable",
+            Self::Auto => "auto",
             Self::Minimal => "minimal",
             Self::Low => "low",
             Self::Medium => "medium",

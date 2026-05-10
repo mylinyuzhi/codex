@@ -131,9 +131,9 @@ fn no_extra_body_no_provider_options() {
 }
 
 #[test]
-fn explicit_per_call_none_thinking_disables_default() {
+fn explicit_per_call_disable_thinking_disables_default() {
     // Model has a default thinking level. Per-call sets thinking_level
-    // to Some(effort=None) — this MUST disable thinking, not fall
+    // to Some(effort=Disable) — this MUST disable thinking, not fall
     // through to the model default.
     let partial = PartialModelInfo {
         context_window: Some(PositiveTokens::new(200_000)),
@@ -145,7 +145,7 @@ fn explicit_per_call_none_thinking_disables_default() {
     let info = ModelInfo::from_partial("test", "test", partial).unwrap();
 
     let per_call = PerCallOverrides {
-        thinking_level: Some(ThinkingLevel::none()),
+        thinking_level: Some(ThinkingLevel::disable()),
         ..Default::default()
     };
 
@@ -160,11 +160,25 @@ fn explicit_per_call_none_thinking_disables_default() {
 
     assert!(
         call.reasoning.is_none(),
-        "explicit per-call None must disable reasoning"
+        "explicit per-call Disable must keep reasoning unset"
     );
-    assert!(
-        call.provider_options.is_none(),
-        "no thinking → no extra_body → no provider_options"
+    // The Anthropic typed arm now writes
+    // `provider_options["anthropic"]["thinking"] = {"type":"disabled"}`
+    // so the wire body actively carries the explicit-off toggle (the
+    // vercel-ai-anthropic body builder picks this up via the typed
+    // `ThinkingConfig::Disabled` parse and writes `body["thinking"]`).
+    let provider_options = call
+        .provider_options
+        .as_ref()
+        .expect("Disable on Anthropic must populate provider_options with the disabled toggle");
+    let anthropic_ns = provider_options
+        .0
+        .get("anthropic")
+        .expect("anthropic namespace must be present");
+    assert_eq!(
+        anthropic_ns.get("thinking"),
+        Some(&serde_json::json!({"type": "disabled"})),
+        "Disable on Anthropic must surface as thinking: disabled in provider_options",
     );
 }
 
@@ -446,4 +460,61 @@ fn cache_strategy_disabled_emits_no_session_context() {
         "no keys → no provider_options"
     );
     assert!(merged.is_empty());
+}
+
+#[test]
+fn deepseek_disabled_thinking_emits_disabled_toggle() {
+    // Per-call sets a Disable-effort thinking level that carries the
+    // DeepSeek-style disabled wire toggle in `level.options`. Effort=Disable
+    // keeps the typed reasoning lane unset (it's not an explicit level),
+    // and the `level.options` payload flows into `extra_body` and wraps
+    // into `provider_options`.
+    let partial = PartialModelInfo {
+        context_window: Some(PositiveTokens::new(1_000_000)),
+        max_output_tokens: Some(PositiveTokens::new(12_288)),
+        ..Default::default()
+    };
+    let info = ModelInfo::from_partial("deepseek-openai", "deepseek-v4-flash", partial).unwrap();
+
+    let mut disabled = ThinkingLevel::disable();
+    disabled
+        .options
+        .insert("thinking".into(), serde_json::json!({"type": "disabled"}));
+    let per_call = PerCallOverrides {
+        thinking_level: Some(disabled),
+        ..Default::default()
+    };
+
+    let (call, merged) = build_call_options_with_extra(
+        &info,
+        ProviderApi::OpenaiCompat,
+        "deepseek-openai",
+        &per_call,
+        Vec::new(),
+        None,
+    );
+
+    // Lane A2: typed reasoning stays unset for Disable effort.
+    assert!(
+        call.reasoning.is_none(),
+        "Disable effort must NOT set typed reasoning"
+    );
+
+    // Lane B: the wire toggle from `level.options` flows through.
+    assert_eq!(
+        merged.get("thinking"),
+        Some(&serde_json::json!({"type": "disabled"})),
+    );
+    assert!(
+        !merged.contains_key("reasoningEffort"),
+        "OpenaiCompat default arm must not emit reasoningEffort for Disable effort"
+    );
+
+    // The merged map ends up under provider_options[<instance>].
+    let po = call.provider_options.expect("provider_options set");
+    let inner = po.get("deepseek-openai").expect("namespace");
+    assert_eq!(
+        inner.get("thinking"),
+        Some(&serde_json::json!({"type": "disabled"})),
+    );
 }

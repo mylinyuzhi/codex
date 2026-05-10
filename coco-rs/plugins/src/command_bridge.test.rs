@@ -35,7 +35,7 @@ fn test_load_commands_from_md_files() {
     std::fs::create_dir(&commands_dir).unwrap();
     std::fs::write(
         commands_dir.join("deploy.md"),
-        "# deploy\n---\ndescription: Deploy the app\n---\nRun deployment steps.\n",
+        "---\ndescription: Deploy the app\n---\nRun deployment steps.\n",
     )
     .unwrap();
 
@@ -57,7 +57,7 @@ fn test_load_commands_from_skill_md_subdir() {
     std::fs::create_dir_all(&subdir).unwrap();
     std::fs::write(
         subdir.join("SKILL.md"),
-        "# lint\n---\ndescription: Lint code\n---\nRun linter.\n",
+        "---\ndescription: Lint code\n---\nRun linter.\n",
     )
     .unwrap();
 
@@ -107,7 +107,7 @@ fn test_load_v2_commands_from_manifest_string_path() {
     // Create command file at a custom path
     std::fs::write(
         dir.path().join("my-cmd.md"),
-        "# my-cmd\n---\ndescription: Custom command\n---\nDo custom things.\n",
+        "---\ndescription: Custom command\n---\nDo custom things.\n",
     )
     .unwrap();
 
@@ -205,7 +205,7 @@ fn test_load_v2_commands_from_manifest_object_source_path() {
 
     std::fs::write(
         dir.path().join("review.md"),
-        "# review\n---\ndescription: Review code\n---\nReview changes.\n",
+        "---\ndescription: Review code\n---\nReview changes.\n",
     )
     .unwrap();
 
@@ -268,7 +268,7 @@ fn test_command_metadata_overrides() {
 
     std::fs::write(
         dir.path().join("tool.md"),
-        "# tool\n---\ndescription: Original desc\nargument-hint: [arg]\nmodel: sonnet\n---\nTool prompt.\n",
+        "---\ndescription: Original desc\nargument-hint: [arg]\nmodel: sonnet\n---\nTool prompt.\n",
     )
     .unwrap();
 

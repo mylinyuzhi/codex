@@ -3,10 +3,22 @@ use pretty_assertions::assert_eq;
 use super::*;
 
 #[test]
-fn test_thinking_level_none() {
-    let level = ThinkingLevel::none();
-    assert_eq!(level.effort, ReasoningEffort::None);
+fn test_thinking_level_disable() {
+    let level = ThinkingLevel::disable();
+    assert_eq!(level.effort, ReasoningEffort::Disable);
     assert!(!level.is_enabled());
+}
+
+#[test]
+fn test_thinking_level_auto_is_default_and_enabled() {
+    let level = ThinkingLevel::auto();
+    assert_eq!(level.effort, ReasoningEffort::Auto);
+    assert!(
+        level.is_enabled(),
+        "Auto is opt-in: provider may still resolve to off, \
+         but the user has not explicitly disabled thinking"
+    );
+    assert_eq!(level, ThinkingLevel::default());
 }
 
 #[test]
@@ -26,10 +38,22 @@ fn test_thinking_level_with_budget() {
 
 #[test]
 fn test_reasoning_effort_ordering() {
-    assert!(ReasoningEffort::None < ReasoningEffort::Low);
+    assert!(ReasoningEffort::Disable < ReasoningEffort::Auto);
+    assert!(ReasoningEffort::Auto < ReasoningEffort::Low);
     assert!(ReasoningEffort::Low < ReasoningEffort::Medium);
     assert!(ReasoningEffort::Medium < ReasoningEffort::High);
     assert!(ReasoningEffort::High < ReasoningEffort::XHigh);
+}
+
+#[test]
+fn test_is_explicit_level_only_numeric_efforts() {
+    assert!(!ReasoningEffort::Disable.is_explicit_level());
+    assert!(!ReasoningEffort::Auto.is_explicit_level());
+    assert!(ReasoningEffort::Minimal.is_explicit_level());
+    assert!(ReasoningEffort::Low.is_explicit_level());
+    assert!(ReasoningEffort::Medium.is_explicit_level());
+    assert!(ReasoningEffort::High.is_explicit_level());
+    assert!(ReasoningEffort::XHigh.is_explicit_level());
 }
 
 #[test]
@@ -37,8 +61,13 @@ fn test_thinking_level_from_str() {
     let level: ThinkingLevel = "high".parse().unwrap();
     assert_eq!(level.effort, ReasoningEffort::High);
 
-    let level: ThinkingLevel = "none".parse().unwrap();
+    let level: ThinkingLevel = "disable".parse().unwrap();
+    assert_eq!(level.effort, ReasoningEffort::Disable);
     assert!(!level.is_enabled());
+
+    let level: ThinkingLevel = "auto".parse().unwrap();
+    assert_eq!(level.effort, ReasoningEffort::Auto);
+    assert!(level.is_enabled());
 }
 
 #[test]
@@ -55,6 +84,30 @@ fn test_reasoning_effort_from_str_aliases() {
         "x_high".parse::<ReasoningEffort>().unwrap(),
         ReasoningEffort::XHigh
     );
+    assert_eq!(
+        "off".parse::<ReasoningEffort>().unwrap(),
+        ReasoningEffort::Disable
+    );
+    assert_eq!(
+        "disabled".parse::<ReasoningEffort>().unwrap(),
+        ReasoningEffort::Disable
+    );
+}
+
+#[test]
+fn test_reasoning_effort_display_round_trip() {
+    for variant in [
+        ReasoningEffort::Disable,
+        ReasoningEffort::Auto,
+        ReasoningEffort::Minimal,
+        ReasoningEffort::Low,
+        ReasoningEffort::Medium,
+        ReasoningEffort::High,
+        ReasoningEffort::XHigh,
+    ] {
+        let s = variant.to_string();
+        assert_eq!(s.parse::<ReasoningEffort>().unwrap(), variant, "round-trip");
+    }
 }
 
 #[test]

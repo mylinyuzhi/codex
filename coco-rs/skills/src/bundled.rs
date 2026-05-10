@@ -37,6 +37,7 @@ fn bundled(
 ) -> SkillDefinition {
     SkillDefinition {
         name: name.to_string(),
+        display_name: None,
         description: description.to_string(),
         prompt: prompt.to_string(),
         source: SkillSource::Bundled,
@@ -57,6 +58,8 @@ fn bundled(
         disable_model_invocation: false,
         shell: None,
         content_length: prompt.len() as i64,
+        has_user_specified_description: true,
+        progress_message: Some("running".to_string()),
         is_hidden: false,
         gated_by: None,
         files: HashMap::new(),

@@ -151,6 +151,31 @@ fn test_empty_body() {
 }
 
 #[test]
+fn test_empty_frontmatter_block() {
+    // `---\n---\n` with no keys: regression for the case where the
+    // closing fence sits flush against the opener and the simple
+    // `find("\n---")` lookup missed it.
+    let input = "---\n---\n\nbody text";
+    let fm = parse(input);
+    assert!(fm.data.is_empty());
+    assert_eq!(fm.content.trim(), "body text");
+}
+
+#[test]
+fn test_yaml_special_chars_auto_quoted() {
+    // Values containing YAML-special chars like `*`, `{`, `}` parse as
+    // strings via the TS-style `quoteProblematicValues` retry path
+    // rather than blowing up the whole frontmatter.
+    let input = "---\npaths: *.{ts,tsx}, src/**/*.{js,jsx}\nname: glob-skill\n---\nbody";
+    let fm = parse(input);
+    assert_eq!(fm.data.get("name").unwrap().as_str(), Some("glob-skill"));
+    assert_eq!(
+        fm.data.get("paths").unwrap().as_str(),
+        Some("*.{ts,tsx}, src/**/*.{js,jsx}")
+    );
+}
+
+#[test]
 fn test_skill_frontmatter() {
     let input = r#"---
 description: Review changed code

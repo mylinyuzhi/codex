@@ -225,11 +225,59 @@ fn seed_builtin_models() -> BTreeMap<String, PartialModelInfo> {
 
     let mut m = BTreeMap::new();
 
+    // Budgets aligned with `vercel-ai-provider-utils::map_reasoning_to_provider_budget`
+    // defaults applied to Claude's 64k max_output_tokens (Low 10% / Medium 30% /
+    // High 60%). Declaring them at this layer (rather than relying on a provider
+    // fallback) keeps `vercel-ai-anthropic` faithful to ModelInfo: when budget
+    // is absent the wire body omits the key entirely.
     let claude_thinking_levels = vec![
-        ThinkingLevel::low(),
-        ThinkingLevel::medium(),
-        ThinkingLevel::high(),
+        ThinkingLevel::with_budget(ReasoningEffort::Low, 6_400),
+        ThinkingLevel::with_budget(ReasoningEffort::Medium, 19_200),
+        ThinkingLevel::with_budget(ReasoningEffort::High, 38_400),
         ThinkingLevel::with_budget(ReasoningEffort::XHigh, 128_000),
+    ];
+
+    // DeepSeek V4 thinking surface: 4 states (disable / auto / high / max).
+    //
+    //   * `Disable` — explicit off; emits `{"thinking":{"type":"disabled"}}`
+    //     via `options`. Convert layer skips typed-arm emission.
+    //   * `Auto`    — let DeepSeek decide. Emits NOTHING — no `thinking`,
+    //     no `reasoning_effort`. Per DeepSeek docs the server defaults to
+    //     enabled+high (or max for complex Agent requests).
+    //   * `Medium`  — UX "high". Emits `{"thinking":{"type":"enabled"}}`
+    //     via `options`; the OpenaiCompat arm adds `reasoning_effort: "medium"`.
+    //   * `XHigh`   — UX "max". Emits `{"thinking":{"type":"enabled"}}`
+    //     via `options`; the OpenaiCompat arm adds `reasoning_effort: "xhigh"`.
+    let deepseek_v4_thinking_levels = vec![
+        ThinkingLevel {
+            effort: ReasoningEffort::Disable,
+            budget_tokens: None,
+            options: std::collections::HashMap::from([(
+                "thinking".to_string(),
+                serde_json::json!({"type": "disabled"}),
+            )]),
+        },
+        ThinkingLevel {
+            effort: ReasoningEffort::Auto,
+            budget_tokens: None,
+            options: std::collections::HashMap::new(),
+        },
+        ThinkingLevel {
+            effort: ReasoningEffort::Medium,
+            budget_tokens: None,
+            options: std::collections::HashMap::from([(
+                "thinking".to_string(),
+                serde_json::json!({"type": "enabled"}),
+            )]),
+        },
+        ThinkingLevel {
+            effort: ReasoningEffort::XHigh,
+            budget_tokens: None,
+            options: std::collections::HashMap::from([(
+                "thinking".to_string(),
+                serde_json::json!({"type": "enabled"}),
+            )]),
+        },
     ];
 
     m.insert(
@@ -244,6 +292,7 @@ fn seed_builtin_models() -> BTreeMap<String, PartialModelInfo> {
                 Capability::ToolCalling,
                 Capability::Vision,
                 Capability::ExtendedThinking,
+                Capability::AdaptiveThinking,
                 Capability::FastMode,
                 Capability::PromptCache,
                 Capability::Context1m,
@@ -268,6 +317,7 @@ fn seed_builtin_models() -> BTreeMap<String, PartialModelInfo> {
                 Capability::ToolCalling,
                 Capability::Vision,
                 Capability::ExtendedThinking,
+                Capability::AdaptiveThinking,
                 Capability::FastMode,
                 Capability::PromptCache,
                 Capability::InterleavedThinking,
@@ -431,7 +481,11 @@ fn seed_builtin_models() -> BTreeMap<String, PartialModelInfo> {
                 Capability::TextGeneration,
                 Capability::Streaming,
                 Capability::ToolCalling,
+                Capability::ExtendedThinking,
+                Capability::AdaptiveThinking,
             ]),
+            supported_thinking_levels: Some(deepseek_v4_thinking_levels.clone()),
+            default_thinking_level: Some(ReasoningEffort::Auto),
             ..Default::default()
         },
     );
@@ -447,7 +501,11 @@ fn seed_builtin_models() -> BTreeMap<String, PartialModelInfo> {
                 Capability::TextGeneration,
                 Capability::Streaming,
                 Capability::ToolCalling,
+                Capability::ExtendedThinking,
+                Capability::AdaptiveThinking,
             ]),
+            supported_thinking_levels: Some(deepseek_v4_thinking_levels),
+            default_thinking_level: Some(ReasoningEffort::Auto),
             ..Default::default()
         },
     );

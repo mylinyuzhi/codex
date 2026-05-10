@@ -135,7 +135,18 @@ fn test_snapshot_with_help_overlay() {
     state.ui.set_overlay(Overlay::Help);
 
     let output = render_to_string(&state, 80, 24);
-    insta::assert_snapshot!("help_overlay", output);
+    // Modifier label depends on host OS (`opt` on macOS, `alt`
+    // elsewhere) — see `coco_keybindings::display::DisplayPlatform`.
+    // Per-platform snapshot suffix keeps both labels honest instead
+    // of normalizing one away.
+    let suffix = if cfg!(target_os = "macos") {
+        "macos"
+    } else {
+        "linux"
+    };
+    insta::with_settings!({ snapshot_suffix => suffix }, {
+        insta::assert_snapshot!("help_overlay", output);
+    });
 }
 
 #[test]

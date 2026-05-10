@@ -1,0 +1,29 @@
+---
+source: app/tui/src/widgets/mod.test.rs
+assertion_line: 148
+expression: output
+---
+ | opus-4                                                                       
+            ┌ Help ────────────────────────────────────────────────┐            
+            │tab            Toggle plan mode                       │            
+            │shift+tab      Cycle permission mode                  │            
+            │ctrl+t         Toggle tasks / teammates panel         │            
+            │ctrl+m         Cycle model                            │            
+            │ctrl+c         Interrupt                              │            
+            │ctrl+l         Clear screen                           │            
+            │ctrl+k         Kill to end of line                    │            
+            │ctrl+y         Yank killed text                       │            
+            │ctrl+x ctrl+e  External editor                        │            
+            │ctrl+p         Command palette                        │            
+            │ctrl+s         Stash / restore input draft            │            
+            │ctrl+x ctrl+k  Kill all agents                        │            
+            │opt+o          Toggle fast mode                       │            
+            │ctrl+shift+f   Global search                          │            
+            │ctrl+o         Toggle transcript view                 │            
+            │ctrl+shift+o   Toggle teammate message preview        │            
+            │ctrl+shift+p   Quick open file                        │            
+            │ctrl+w         Context window                         │            
+ Input ─────│f6             Focus next panel                       │────────────
+> Type a mes│ctrl+d         Quit                                   │            
+            └──────────────────────────────────────────────────────┘            
+ opus-4 | Default | 0 msgs
