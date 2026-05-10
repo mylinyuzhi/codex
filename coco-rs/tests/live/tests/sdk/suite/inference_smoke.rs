@@ -36,7 +36,9 @@ pub async fn run(provider: &str, model_id: &str) -> Result<()> {
 
     let params = QueryParams {
         prompt,
-        max_tokens: Some(64),
+        // 1024 leaves headroom for reasoning models — see the same
+        // rationale on `basic::params_for`.
+        max_tokens: Some(1024),
         thinking_level: None,
         fast_mode: false,
         tools: None,

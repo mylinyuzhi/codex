@@ -17,7 +17,9 @@ pub async fn run(target: &LiveTarget) -> Result<()> {
             LanguageModelMessage::system("You are a helpful assistant. Be concise."),
             LanguageModelMessage::user_text("Say 'hello world' exactly."),
         ],
-        max_tokens: Some(64),
+        // 1024 leaves headroom for reasoning models — see the same
+        // rationale on `basic::params_for`.
+        max_tokens: Some(1024),
         thinking_level: None,
         fast_mode: false,
         tools: None,

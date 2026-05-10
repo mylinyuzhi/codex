@@ -34,7 +34,22 @@ use tokio_util::sync::CancellationToken;
 
 use crate::common::usage_report;
 
-const MODEL: &str = "deepseek-v4-flash";
+/// Resolved model under test, sourced from `.env`. Reads
+/// `COCO_LIVE_TEST_DEEPSEEK_OPENAI_MODEL` (preferred) or
+/// `_DEEPSEEK_ANTHROPIC_MODEL` so all CLI invocations and assertions
+/// share one identifier; falls back to `deepseek-v4-flash` so existing
+/// CI without env config still runs the suite. Box-leak'd once via
+/// `OnceLock` so callers can keep treating it as `&'static str`.
+fn model_id() -> &'static str {
+    use std::sync::OnceLock;
+    static M: OnceLock<&'static str> = OnceLock::new();
+    M.get_or_init(|| {
+        let s = std::env::var("COCO_LIVE_TEST_DEEPSEEK_OPENAI_MODEL")
+            .or_else(|_| std::env::var("COCO_LIVE_TEST_DEEPSEEK_ANTHROPIC_MODEL"))
+            .unwrap_or_else(|_| "deepseek-v4-flash".to_string());
+        Box::leak(s.into_boxed_str())
+    })
+}
 
 fn parse_cli(argv: &[&str]) -> Cli {
     use clap::Parser;
@@ -78,10 +93,10 @@ fn record_outcome(scenario: &str, outcome: &RunChatOutcome) {
 
 #[tokio::test]
 async fn test_coco_cli_basic_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
+    let _t = require_live!("deepseek-openai", model_id(), "text");
     let cli = cli_for(
         "deepseek-openai",
-        MODEL,
+        model_id(),
         "Reply with the single word: ok",
         None,
         &[],
@@ -103,10 +118,10 @@ async fn test_coco_cli_basic_deepseek_openai() -> Result<()> {
 
 #[tokio::test]
 async fn test_coco_cli_basic_deepseek_anthropic() -> Result<()> {
-    let _t = require_live!("deepseek-anthropic", MODEL, "text");
+    let _t = require_live!("deepseek-anthropic", model_id(), "text");
     let cli = cli_for(
         "deepseek-anthropic",
-        MODEL,
+        model_id(),
         "Reply with the single word: ok",
         None,
         &[],
@@ -123,12 +138,12 @@ async fn test_coco_cli_basic_deepseek_anthropic() -> Result<()> {
 
 #[tokio::test]
 async fn test_coco_cli_cross_protocol_deepseek() -> Result<()> {
-    let _o = require_live!("deepseek-openai", MODEL, "cross_protocol");
-    let _a = require_live!("deepseek-anthropic", MODEL, "cross_protocol");
+    let _o = require_live!("deepseek-openai", model_id(), "cross_protocol");
+    let _a = require_live!("deepseek-anthropic", model_id(), "cross_protocol");
     let prompt = "What is the capital of France? Respond with just the city name.";
 
     for provider in ["deepseek-openai", "deepseek-anthropic"] {
-        let cli = cli_for(provider, MODEL, prompt, None, &[]);
+        let cli = cli_for(provider, model_id(), prompt, None, &[]);
         let outcome = run_chat(&cli, cli.prompt.as_deref()).await?;
         record_outcome("coco_cli.cross_protocol", &outcome);
         assert!(
@@ -144,10 +159,10 @@ async fn test_coco_cli_cross_protocol_deepseek() -> Result<()> {
 
 #[tokio::test]
 async fn test_coco_cli_max_turns_one_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
+    let _t = require_live!("deepseek-openai", model_id(), "text");
     let cli = cli_for(
         "deepseek-openai",
-        MODEL,
+        model_id(),
         "Say 'hello' in exactly one word.",
         None,
         &["--max-turns", "1"],
@@ -170,17 +185,17 @@ async fn test_coco_cli_max_turns_one_deepseek_openai() -> Result<()> {
 
 // ─── --settings file plumbing ────────────────────────────────────────
 
-/// Write a tempdir `settings.json` that pins `model: deepseek-openai/<MODEL>`,
+/// Write a tempdir `settings.json` that pins `model: deepseek-openai/<model_id()>`,
 /// then run `coco -p "..." --settings <tempdir>/settings.json` *without*
 /// `--model` and verify the settings-driven model takes effect.
 #[tokio::test]
 async fn test_coco_cli_settings_file_drives_model_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
+    let _t = require_live!("deepseek-openai", model_id(), "text");
 
     let tmp = common::tmpdir::make("coco-tests-cli-")?;
     let settings_path = tmp.path().join("settings.json");
     let body = serde_json::json!({
-        "model": format!("deepseek-openai/{MODEL}"),
+        "model": format!("deepseek-openai/{}", model_id()),
     });
     std::fs::write(
         &settings_path,
@@ -200,7 +215,7 @@ async fn test_coco_cli_settings_file_drives_model_deepseek_openai() -> Result<()
 
     let outcome = run_chat(&cli, cli.prompt.as_deref()).await?;
     record_outcome("coco_cli.settings_file", &outcome);
-    assert_eq!(outcome.model_id, MODEL);
+    assert_eq!(outcome.model_id, model_id());
     assert_eq!(outcome.provider_api, Some(ProviderApi::OpenaiCompat));
     assert!(!outcome.response_text.trim().is_empty());
     let _ = tmp; // keep alive until end
@@ -211,10 +226,10 @@ async fn test_coco_cli_settings_file_drives_model_deepseek_openai() -> Result<()
 
 #[tokio::test]
 async fn test_coco_cli_permission_mode_accept_edits_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
+    let _t = require_live!("deepseek-openai", model_id(), "text");
     let cli = cli_for(
         "deepseek-openai",
-        MODEL,
+        model_id(),
         "Reply with the single word: ok",
         None,
         &["--permission-mode", "acceptEdits"],
@@ -233,20 +248,23 @@ async fn test_coco_cli_permission_mode_accept_edits_deepseek_openai() -> Result<
 
 // ─── Fallback chain plumbing (no real fallback fired, but the path runs) ─
 
-/// `--fallback-model deepseek-anthropic/<MODEL>` should parse and the
+/// `--fallback-model deepseek-anthropic/<model_id()>` should parse and the
 /// fallback chain should be installed on the engine. We don't trigger a
 /// real fallback (DeepSeek doesn't 529-throttle for our tiny prompts),
 /// but the test confirms the parse + plumbing path doesn't crash.
 #[tokio::test]
 async fn test_coco_cli_fallback_chain_parses_deepseek() -> Result<()> {
-    let _o = require_live!("deepseek-openai", MODEL, "text");
-    let _a = require_live!("deepseek-anthropic", MODEL, "text");
+    let _o = require_live!("deepseek-openai", model_id(), "text");
+    let _a = require_live!("deepseek-anthropic", model_id(), "text");
     let cli = cli_for(
         "deepseek-openai",
-        MODEL,
+        model_id(),
         "Reply with the single word: ok",
         None,
-        &["--fallback-model", &format!("deepseek-anthropic/{MODEL}")],
+        &[
+            "--fallback-model",
+            &format!("deepseek-anthropic/{}", model_id()),
+        ],
     );
     let outcome = run_chat(&cli, cli.prompt.as_deref()).await?;
     record_outcome("coco_cli.fallback_chain", &outcome);
@@ -259,7 +277,7 @@ async fn test_coco_cli_fallback_chain_parses_deepseek() -> Result<()> {
 
 #[tokio::test]
 async fn test_coco_cli_max_tokens_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
+    let _t = require_live!("deepseek-openai", model_id(), "text");
     // `--max-tokens 256` — large enough for a one-line answer but small
     // enough that the cap is exercised. Asserts the flag plumbed
     // through `cli.max_tokens` → `QueryEngineConfig.max_tokens` without
@@ -268,7 +286,7 @@ async fn test_coco_cli_max_tokens_deepseek_openai() -> Result<()> {
     // some providers count thinking against the cap differently.
     let cli = cli_for(
         "deepseek-openai",
-        MODEL,
+        model_id(),
         "Reply with the single word: ok",
         None,
         &["--max-tokens", "256"],
@@ -291,7 +309,7 @@ async fn test_coco_cli_max_tokens_deepseek_openai() -> Result<()> {
 /// answers the prompt.
 #[tokio::test]
 async fn test_coco_cli_claude_md_discovery_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
+    let _t = require_live!("deepseek-openai", model_id(), "text");
 
     let tmp = common::tmpdir::make("coco-tests-cli-")?;
     let claude_md = tmp.path().join("CLAUDE.md");
@@ -302,7 +320,7 @@ async fn test_coco_cli_claude_md_discovery_deepseek_openai() -> Result<()> {
 
     let cli = cli_for(
         "deepseek-openai",
-        MODEL,
+        model_id(),
         "What is the magic word from the project notes? Respond with just the word.",
         None,
         &[],
@@ -340,7 +358,7 @@ async fn test_coco_cli_claude_md_discovery_deepseek_openai() -> Result<()> {
 /// the file exists on disk.
 #[tokio::test]
 async fn test_coco_cli_multi_turn_agent_loop_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "tools");
+    let _t = require_live!("deepseek-openai", model_id(), "tools");
     let tmp = common::tmpdir::make("coco-tests-cli-")?;
     let workdir = tmp.path().to_path_buf();
     let workdir_str = workdir.to_string_lossy().into_owned();
@@ -353,7 +371,7 @@ async fn test_coco_cli_multi_turn_agent_loop_deepseek_openai() -> Result<()> {
     );
     let cli = cli_for(
         "deepseek-openai",
-        MODEL,
+        model_id(),
         &prompt,
         None,
         &["--dangerously-skip-permissions", "--max-turns", "10"],
@@ -401,11 +419,11 @@ async fn test_coco_cli_multi_turn_agent_loop_deepseek_openai() -> Result<()> {
 /// shape (the same data shape `--resume <session>` would load from disk).
 #[tokio::test]
 async fn test_coco_cli_session_continue_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
+    let _t = require_live!("deepseek-openai", model_id(), "text");
 
     let cli1 = cli_for(
         "deepseek-openai",
-        MODEL,
+        model_id(),
         "Remember: my favorite color is teal. Reply with the single word `noted`.",
         None,
         &[],
@@ -420,7 +438,7 @@ async fn test_coco_cli_session_continue_deepseek_openai() -> Result<()> {
 
     let cli2 = cli_for(
         "deepseek-openai",
-        MODEL,
+        model_id(),
         "What is my favorite color? Respond with just the color.",
         None,
         &[],
@@ -447,10 +465,10 @@ async fn test_coco_cli_session_continue_deepseek_openai() -> Result<()> {
 
 #[tokio::test]
 async fn test_coco_cli_system_prompt_override_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
+    let _t = require_live!("deepseek-openai", model_id(), "text");
     let cli = cli_for(
         "deepseek-openai",
-        MODEL,
+        model_id(),
         "Who are you? Answer in exactly one word.",
         None,
         &[
@@ -472,10 +490,10 @@ async fn test_coco_cli_system_prompt_override_deepseek_openai() -> Result<()> {
 
 #[tokio::test]
 async fn test_coco_cli_append_system_prompt_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
+    let _t = require_live!("deepseek-openai", model_id(), "text");
     let cli = cli_for(
         "deepseek-openai",
-        MODEL,
+        model_id(),
         "What is the magic word in this session? Reply with exactly that word and nothing else.",
         None,
         &[
@@ -497,7 +515,7 @@ async fn test_coco_cli_append_system_prompt_deepseek_openai() -> Result<()> {
 
 #[tokio::test]
 async fn test_coco_cli_append_system_prompt_file_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
+    let _t = require_live!("deepseek-openai", model_id(), "text");
     let tmp = common::tmpdir::make("coco-tests-cli-")?;
     let path = tmp.path().join("extra.txt");
     std::fs::write(
@@ -507,7 +525,7 @@ async fn test_coco_cli_append_system_prompt_file_deepseek_openai() -> Result<()>
 
     let cli = cli_for(
         "deepseek-openai",
-        MODEL,
+        model_id(),
         "What is the magic word in this session? Reply with exactly that word and nothing else.",
         None,
         &[
@@ -546,7 +564,7 @@ async fn test_coco_cli_invalid_model_format_errors() -> Result<()> {
 async fn test_coco_cli_missing_append_system_prompt_file_errors() -> Result<()> {
     let cli = cli_for(
         "deepseek-openai",
-        MODEL,
+        model_id(),
         "noop",
         None,
         &[
@@ -571,13 +589,13 @@ async fn test_coco_cli_missing_append_system_prompt_file_errors() -> Result<()> 
 
 #[tokio::test]
 async fn test_coco_cli_cancellation_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
+    let _t = require_live!("deepseek-openai", model_id(), "text");
     let cancel = CancellationToken::new();
     cancel.cancel(); // pre-cancelled — engine should observe immediately
 
     let cli = cli_for(
         "deepseek-openai",
-        MODEL,
+        model_id(),
         "Reply with the single word: ok",
         None,
         &[],
@@ -605,10 +623,10 @@ async fn test_coco_cli_cancellation_deepseek_openai() -> Result<()> {
 
 #[tokio::test]
 async fn test_coco_cli_basic_emits_one_api_call_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
+    let _t = require_live!("deepseek-openai", model_id(), "text");
     let cli = cli_for(
         "deepseek-openai",
-        MODEL,
+        model_id(),
         "Reply with the single word: ok",
         None,
         &[],
@@ -627,14 +645,17 @@ async fn test_coco_cli_basic_emits_one_api_call_deepseek_openai() -> Result<()> 
 
 #[tokio::test]
 async fn test_coco_cli_fallback_chain_installs_count() -> Result<()> {
-    let _o = require_live!("deepseek-openai", MODEL, "text");
-    let _a = require_live!("deepseek-anthropic", MODEL, "text");
+    let _o = require_live!("deepseek-openai", model_id(), "text");
+    let _a = require_live!("deepseek-anthropic", model_id(), "text");
     let cli = cli_for(
         "deepseek-openai",
-        MODEL,
+        model_id(),
         "Reply with the single word: ok",
         None,
-        &["--fallback-model", &format!("deepseek-anthropic/{MODEL}")],
+        &[
+            "--fallback-model",
+            &format!("deepseek-anthropic/{}", model_id()),
+        ],
     );
     let outcome = run_chat(&cli, cli.prompt.as_deref()).await?;
     record_outcome("coco_cli.fallback_chain_install_count", &outcome);
@@ -654,7 +675,7 @@ async fn test_coco_cli_fallback_chain_installs_count() -> Result<()> {
 /// says openai → openai wins.
 #[tokio::test]
 async fn test_coco_cli_cli_model_flag_overrides_settings_file() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
+    let _t = require_live!("deepseek-openai", model_id(), "text");
     let tmp = common::tmpdir::make("coco-tests-cli-")?;
     let settings_path = tmp.path().join("settings.json");
     let body = serde_json::json!({
@@ -663,7 +684,7 @@ async fn test_coco_cli_cli_model_flag_overrides_settings_file() -> Result<()> {
     std::fs::write(&settings_path, serde_json::to_vec_pretty(&body)?)?;
     let cli = cli_for(
         "deepseek-openai",
-        MODEL,
+        model_id(),
         "Reply with the single word: ok",
         Some(&settings_path.to_string_lossy()),
         &[],
@@ -682,7 +703,7 @@ async fn test_coco_cli_cli_model_flag_overrides_settings_file() -> Result<()> {
 /// `--cwd` flag wins over `RunChatOptions::cwd`.
 #[tokio::test]
 async fn test_coco_cli_cwd_flag_wins_over_options() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
+    let _t = require_live!("deepseek-openai", model_id(), "text");
     let flag_dir = common::tmpdir::make("coco-tests-cli-flag-")?;
     let opts_dir = common::tmpdir::make("coco-tests-cli-opts-")?;
     let argv: Vec<String> = vec![
@@ -690,7 +711,7 @@ async fn test_coco_cli_cwd_flag_wins_over_options() -> Result<()> {
         "-p".into(),
         "Reply with the single word: ok".into(),
         "--model".into(),
-        format!("deepseek-openai/{MODEL}"),
+        format!("deepseek-openai/{}", model_id()),
         "--cwd".into(),
         flag_dir.path().to_string_lossy().into_owned(),
     ];
@@ -720,10 +741,10 @@ async fn test_coco_cli_cwd_flag_wins_over_options() -> Result<()> {
 /// config and surface in `RunChatOutcome`.
 #[tokio::test]
 async fn test_coco_cli_tool_filter_plumbing() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
+    let _t = require_live!("deepseek-openai", model_id(), "text");
     let cli = cli_for(
         "deepseek-openai",
-        MODEL,
+        model_id(),
         "Reply with the single word: ok",
         None,
         &[
@@ -749,12 +770,12 @@ async fn test_coco_cli_tool_filter_plumbing() -> Result<()> {
 /// `--add-dir` flag entries surface as absolute paths.
 #[tokio::test]
 async fn test_coco_cli_add_dir_resolves_to_absolute() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
+    let _t = require_live!("deepseek-openai", model_id(), "text");
     let extra = common::tmpdir::make("coco-tests-cli-extra-")?;
     let extra_str = extra.path().to_string_lossy().into_owned();
     let cli = cli_for(
         "deepseek-openai",
-        MODEL,
+        model_id(),
         "Reply with the single word: ok",
         None,
         &["--add-dir", &extra_str],
@@ -773,16 +794,16 @@ async fn test_coco_cli_add_dir_resolves_to_absolute() -> Result<()> {
 /// Multiple `--fallback-model` flags install in flag order.
 #[tokio::test]
 async fn test_coco_cli_two_fallback_models_install_in_order() -> Result<()> {
-    let _o = require_live!("deepseek-openai", MODEL, "text");
-    let _a = require_live!("deepseek-anthropic", MODEL, "text");
+    let _o = require_live!("deepseek-openai", model_id(), "text");
+    let _a = require_live!("deepseek-anthropic", model_id(), "text");
     let cli = cli_for(
         "deepseek-openai",
-        MODEL,
+        model_id(),
         "Reply with the single word: ok",
         None,
         &[
             "--fallback-model",
-            &format!("deepseek-anthropic/{MODEL}"),
+            &format!("deepseek-anthropic/{}", model_id()),
             "--fallback-model",
             "deepseek-anthropic/deepseek-v4-pro",
         ],
@@ -804,7 +825,7 @@ async fn test_coco_cli_invalid_settings_json_errors() -> Result<()> {
     std::fs::write(&path, "{ not valid json }")?;
     let cli = cli_for(
         "deepseek-openai",
-        MODEL,
+        model_id(),
         "noop",
         Some(&path.to_string_lossy()),
         &[],
@@ -823,10 +844,13 @@ async fn test_coco_cli_invalid_settings_json_errors() -> Result<()> {
 async fn test_coco_cli_duplicate_fallback_chain_errors() -> Result<()> {
     let cli = cli_for(
         "deepseek-openai",
-        MODEL,
+        model_id(),
         "noop",
         None,
-        &["--fallback-model", &format!("deepseek-openai/{MODEL}")],
+        &[
+            "--fallback-model",
+            &format!("deepseek-openai/{}", model_id()),
+        ],
     );
     let result = run_chat(&cli, cli.prompt.as_deref()).await;
     assert!(
@@ -840,7 +864,7 @@ async fn test_coco_cli_duplicate_fallback_chain_errors() -> Result<()> {
 /// `--dangerously-skip-permissions` downgrades and emits notification.
 #[tokio::test]
 async fn test_coco_cli_killswitch_downgrades_bypass() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
+    let _t = require_live!("deepseek-openai", model_id(), "text");
     let tmp = common::tmpdir::make("coco-tests-cli-killswitch-")?;
     let settings_path = tmp.path().join("settings.json");
     let body = serde_json::json!({
@@ -853,7 +877,7 @@ async fn test_coco_cli_killswitch_downgrades_bypass() -> Result<()> {
     std::fs::write(&settings_path, serde_json::to_vec_pretty(&body)?)?;
     let cli = cli_for(
         "deepseek-openai",
-        MODEL,
+        model_id(),
         "Reply with the single word: ok",
         Some(&settings_path.to_string_lossy()),
         &["--dangerously-skip-permissions"],
@@ -889,10 +913,10 @@ async fn test_coco_cli_killswitch_downgrades_bypass() -> Result<()> {
 /// erroring (better) OR starts crashing (worse), this test breaks.
 #[tokio::test]
 async fn test_coco_cli_invalid_permission_mode_silently_falls_back() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
+    let _t = require_live!("deepseek-openai", model_id(), "text");
     let cli = cli_for(
         "deepseek-openai",
-        MODEL,
+        model_id(),
         "Reply with the single word: ok",
         None,
         &["--permission-mode", "garbage_not_a_mode"],
@@ -919,7 +943,7 @@ async fn test_coco_cli_invalid_permission_mode_silently_falls_back() -> Result<(
 async fn test_coco_cli_max_turns_zero_errors() -> Result<()> {
     let cli = cli_for(
         "deepseek-openai",
-        MODEL,
+        model_id(),
         "noop",
         None,
         &["--max-turns", "0"],
@@ -943,7 +967,13 @@ async fn test_coco_cli_max_turns_zero_errors() -> Result<()> {
 /// test pins the new behavior.
 #[tokio::test]
 async fn test_coco_cli_max_tokens_negative_errors() -> Result<()> {
-    let cli = cli_for("deepseek-openai", MODEL, "noop", None, &["--max-tokens=-1"]);
+    let cli = cli_for(
+        "deepseek-openai",
+        model_id(),
+        "noop",
+        None,
+        &["--max-tokens=-1"],
+    );
     let result = run_chat(&cli, cli.prompt.as_deref()).await;
     let err = result.expect_err("--max-tokens=-1 should error");
     assert!(
@@ -959,7 +989,7 @@ async fn test_coco_cli_max_tokens_negative_errors() -> Result<()> {
 async fn test_coco_cli_max_tokens_zero_errors() -> Result<()> {
     let cli = cli_for(
         "deepseek-openai",
-        MODEL,
+        model_id(),
         "noop",
         None,
         &["--max-tokens", "0"],
@@ -1006,7 +1036,7 @@ async fn test_coco_cli_cwd_nonexistent_path_behavior() -> Result<()> {
         "-p",
         "noop",
         "--model",
-        &format!("deepseek-openai/{MODEL}"),
+        &format!("deepseek-openai/{}", model_id()),
         "--cwd",
         "/this/path/should/not/exist/anywhere/in/2026",
     ]);
@@ -1027,14 +1057,14 @@ async fn test_coco_cli_cwd_nonexistent_path_behavior() -> Result<()> {
 /// Currently `resolve_additional_dirs` does this; pin it.
 #[tokio::test]
 async fn test_coco_cli_add_dir_relative_resolves_against_cwd() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
+    let _t = require_live!("deepseek-openai", model_id(), "text");
     let workdir = common::tmpdir::make("coco-tests-cli-relative-")?;
     let argv: Vec<String> = vec![
         "coco".into(),
         "-p".into(),
         "Reply with the single word: ok".into(),
         "--model".into(),
-        format!("deepseek-openai/{MODEL}"),
+        format!("deepseek-openai/{}", model_id()),
         "--cwd".into(),
         workdir.path().to_string_lossy().into_owned(),
         "--add-dir".into(),
@@ -1061,10 +1091,10 @@ async fn test_coco_cli_add_dir_relative_resolves_against_cwd() -> Result<()> {
 /// `resolve_initial_permission_mode`'s walk semantics.
 #[tokio::test]
 async fn test_coco_cli_conflicting_permission_flags_resolution() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
+    let _t = require_live!("deepseek-openai", model_id(), "text");
     let cli = cli_for(
         "deepseek-openai",
-        MODEL,
+        model_id(),
         "Reply with the single word: ok",
         None,
         &[
@@ -1097,7 +1127,7 @@ async fn test_coco_cli_conflicting_permission_flags_resolution() -> Result<()> {
 /// CLI flag should win (it appears earlier in the walk).
 #[tokio::test]
 async fn test_coco_cli_perm_mode_flag_wins_over_settings_default() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
+    let _t = require_live!("deepseek-openai", model_id(), "text");
     let tmp = common::tmpdir::make("coco-tests-cli-perm-mode-")?;
     let settings_path = tmp.path().join("settings.json");
     let body = serde_json::json!({
@@ -1108,7 +1138,7 @@ async fn test_coco_cli_perm_mode_flag_wins_over_settings_default() -> Result<()>
     std::fs::write(&settings_path, serde_json::to_vec_pretty(&body)?)?;
     let cli = cli_for(
         "deepseek-openai",
-        MODEL,
+        model_id(),
         "Reply with the single word: ok",
         Some(&settings_path.to_string_lossy()),
         &["--permission-mode", "acceptEdits"],
@@ -1130,18 +1160,18 @@ async fn test_coco_cli_perm_mode_flag_wins_over_settings_default() -> Result<()>
 /// and presumably permissive deserialize. Document.
 #[tokio::test]
 async fn test_coco_cli_settings_unknown_keys_ignored() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
+    let _t = require_live!("deepseek-openai", model_id(), "text");
     let tmp = common::tmpdir::make("coco-tests-cli-unknown-keys-")?;
     let settings_path = tmp.path().join("settings.json");
     let body = serde_json::json!({
-        "model": format!("deepseek-openai/{MODEL}"),
+        "model": format!("deepseek-openai/{}", model_id()),
         "fooBar": "wat",            // unknown
         "nested": { "weird": 42 },  // unknown
     });
     std::fs::write(&settings_path, serde_json::to_vec_pretty(&body)?)?;
     let cli = cli_for(
         "deepseek-openai",
-        MODEL,
+        model_id(),
         "Reply with the single word: ok",
         Some(&settings_path.to_string_lossy()),
         &[],
@@ -1164,10 +1194,10 @@ async fn test_coco_cli_settings_unknown_keys_ignored() -> Result<()> {
 /// 3. usage_report aggregates correctly across threads
 #[tokio::test]
 async fn test_coco_cli_concurrent_runs_no_corruption() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
+    let _t = require_live!("deepseek-openai", model_id(), "text");
     async fn run_one(suffix: String) -> Result<(String, RunChatOutcome)> {
         let prompt = format!("Reply with exactly: {suffix}");
-        let cli = cli_for("deepseek-openai", MODEL, &prompt, None, &[]);
+        let cli = cli_for("deepseek-openai", model_id(), &prompt, None, &[]);
         let outcome = run_chat(&cli, cli.prompt.as_deref()).await?;
         Ok((suffix, outcome))
     }

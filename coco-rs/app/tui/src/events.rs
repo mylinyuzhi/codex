@@ -185,9 +185,12 @@ pub enum TuiCommand {
     ShowDoctor,
     /// Show the tabbed settings panel.
     ShowSettings,
-    /// Switch to the next Settings tab (Tab in settings overlay).
+    /// Tab: cycle Settings tab forward (Settings overlay) OR cycle
+    /// question/footer focus (Question overlay). Handler in update.rs
+    /// dispatches per-overlay. TS Question parity:
+    /// `handleTabNext` in `AskUserQuestionPermissionRequest.tsx`.
     SettingsNextTab,
-    /// Switch to the previous Settings tab (Shift+Tab in settings overlay).
+    /// Shift+Tab variant of [`SettingsNextTab`].
     SettingsPrevTab,
 
     // ── Overlay navigation ──

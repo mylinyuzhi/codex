@@ -31,7 +31,7 @@ async fn approve_flow_sends_approved_decision() {
     }
 
     // Simulate user approval.
-    let resolved = resolve_pending(&pending, "r1", true, None, Vec::new()).await;
+    let resolved = resolve_pending(&pending, "r1", true, None, Vec::new(), None, None).await;
     assert!(resolved);
 
     let resolution = request_handle.await.unwrap().unwrap();
@@ -47,8 +47,16 @@ async fn reject_flow_propagates_feedback() {
     let handle = tokio::spawn(async move { bridge.request_permission(dummy_request("r2")).await });
     let _ = rx.recv().await;
 
-    let resolved =
-        resolve_pending(&pending, "r2", false, Some("not safe".into()), Vec::new()).await;
+    let resolved = resolve_pending(
+        &pending,
+        "r2",
+        false,
+        Some("not safe".into()),
+        Vec::new(),
+        None,
+        None,
+    )
+    .await;
     assert!(resolved);
 
     let resolution = handle.await.unwrap().unwrap();
@@ -59,7 +67,7 @@ async fn reject_flow_propagates_feedback() {
 #[tokio::test]
 async fn unknown_request_id_returns_false() {
     let pending = new_pending_map();
-    let resolved = resolve_pending(&pending, "ghost", true, None, Vec::new()).await;
+    let resolved = resolve_pending(&pending, "ghost", true, None, Vec::new(), None, None).await;
     assert!(!resolved);
 }
 

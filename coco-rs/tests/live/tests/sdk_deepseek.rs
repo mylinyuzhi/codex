@@ -38,49 +38,49 @@ mod suite;
 
 use anyhow::Result;
 
-const MODEL: &str = "deepseek-v4-flash";
-
 // ─── deepseek-openai (OpenAI-compatible protocol) ─────────────────────
+// Set `COCO_LIVE_TEST_DEEPSEEK_OPENAI_MODEL` (e.g. `deepseek-v4-flash`)
+// in `.env` — the macro skips with a one-line message when unset.
 
 #[tokio::test]
 async fn test_basic_deepseek_openai() -> Result<()> {
-    let target = require_live!("deepseek-openai", MODEL, "text");
+    let target = require_live!("deepseek-openai", "text");
     suite::basic::run(&target).await
 }
 
 #[tokio::test]
 async fn test_token_usage_deepseek_openai() -> Result<()> {
-    let target = require_live!("deepseek-openai", MODEL, "text");
+    let target = require_live!("deepseek-openai", "text");
     suite::basic::run_token_usage(&target).await
 }
 
 #[tokio::test]
 async fn test_multi_turn_deepseek_openai() -> Result<()> {
-    let target = require_live!("deepseek-openai", MODEL, "text");
+    let target = require_live!("deepseek-openai", "text");
     suite::basic::run_multi_turn(&target).await
 }
 
 #[tokio::test]
 async fn test_long_multi_turn_deepseek_openai() -> Result<()> {
-    let target = require_live!("deepseek-openai", MODEL, "text");
+    let target = require_live!("deepseek-openai", "text");
     suite::basic::run_long_multi_turn(&target).await
 }
 
 #[tokio::test]
 async fn test_streaming_deepseek_openai() -> Result<()> {
-    let target = require_live!("deepseek-openai", MODEL, "streaming");
+    let target = require_live!("deepseek-openai", "streaming");
     suite::streaming::run(&target).await
 }
 
 #[tokio::test]
 async fn test_streaming_tools_deepseek_openai() -> Result<()> {
-    let target = require_live!("deepseek-openai", MODEL, "tools");
+    let target = require_live!("deepseek-openai", "tools");
     suite::streaming::run_with_tools(&target).await
 }
 
 #[tokio::test]
 async fn test_tools_deepseek_openai() -> Result<()> {
-    let target = require_live!("deepseek-openai", MODEL, "tools");
+    let target = require_live!("deepseek-openai", "tools");
     suite::tools::run(&target).await
 }
 
@@ -90,66 +90,66 @@ async fn test_tools_deepseek_openai() -> Result<()> {
 
 #[tokio::test]
 async fn test_inference_smoke_deepseek_openai() -> Result<()> {
-    let _target = require_live!("deepseek-openai", MODEL, "text");
-    suite::inference_smoke::run("deepseek-openai", MODEL).await
+    let target = require_live!("deepseek-openai", "text");
+    suite::inference_smoke::run(target.provider, &target.model).await
 }
 
 // ─── deepseek-anthropic (Anthropic protocol) ──────────────────────────
 
 #[tokio::test]
 async fn test_basic_deepseek_anthropic() -> Result<()> {
-    let target = require_live!("deepseek-anthropic", MODEL, "text");
+    let target = require_live!("deepseek-anthropic", "text");
     suite::basic::run(&target).await
 }
 
 #[tokio::test]
 async fn test_token_usage_deepseek_anthropic() -> Result<()> {
-    let target = require_live!("deepseek-anthropic", MODEL, "text");
+    let target = require_live!("deepseek-anthropic", "text");
     suite::basic::run_token_usage(&target).await
 }
 
 #[tokio::test]
 async fn test_multi_turn_deepseek_anthropic() -> Result<()> {
-    let target = require_live!("deepseek-anthropic", MODEL, "text");
+    let target = require_live!("deepseek-anthropic", "text");
     suite::basic::run_multi_turn(&target).await
 }
 
 #[tokio::test]
 async fn test_long_multi_turn_deepseek_anthropic() -> Result<()> {
-    let target = require_live!("deepseek-anthropic", MODEL, "text");
+    let target = require_live!("deepseek-anthropic", "text");
     suite::basic::run_long_multi_turn(&target).await
 }
 
 #[tokio::test]
 async fn test_streaming_deepseek_anthropic() -> Result<()> {
-    let target = require_live!("deepseek-anthropic", MODEL, "streaming");
+    let target = require_live!("deepseek-anthropic", "streaming");
     suite::streaming::run(&target).await
 }
 
 #[tokio::test]
 async fn test_streaming_tools_deepseek_anthropic() -> Result<()> {
-    let target = require_live!("deepseek-anthropic", MODEL, "tools");
+    let target = require_live!("deepseek-anthropic", "tools");
     suite::streaming::run_with_tools(&target).await
 }
 
 #[tokio::test]
 async fn test_tools_deepseek_anthropic() -> Result<()> {
-    let target = require_live!("deepseek-anthropic", MODEL, "tools");
+    let target = require_live!("deepseek-anthropic", "tools");
     suite::tools::run(&target).await
 }
 
 #[tokio::test]
 async fn test_inference_smoke_deepseek_anthropic() -> Result<()> {
-    let _target = require_live!("deepseek-anthropic", MODEL, "text");
-    suite::inference_smoke::run("deepseek-anthropic", MODEL).await
+    let target = require_live!("deepseek-anthropic", "text");
+    suite::inference_smoke::run(target.provider, &target.model).await
 }
 
 // ─── Cross-protocol parity ────────────────────────────────────────────
 
 #[tokio::test]
 async fn test_cross_protocol_deepseek() -> Result<()> {
-    let openai = require_live!("deepseek-openai", MODEL, "cross_protocol");
-    let anthropic = require_live!("deepseek-anthropic", MODEL, "cross_protocol");
+    let openai = require_live!("deepseek-openai", "cross_protocol");
+    let anthropic = require_live!("deepseek-anthropic", "cross_protocol");
     suite::cross_protocol::run(&openai, &anthropic).await
 }
 
@@ -160,8 +160,8 @@ async fn test_cross_protocol_deepseek() -> Result<()> {
 /// shape parity at the wire level.
 #[tokio::test]
 async fn test_cross_protocol_session_switch_deepseek() -> Result<()> {
-    let openai = require_live!("deepseek-openai", MODEL, "cross_protocol");
-    let anthropic = require_live!("deepseek-anthropic", MODEL, "cross_protocol");
+    let openai = require_live!("deepseek-openai", "cross_protocol");
+    let anthropic = require_live!("deepseek-anthropic", "cross_protocol");
     suite::cross_protocol::run_session_switch(&openai, &anthropic).await
 }
 

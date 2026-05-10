@@ -13,7 +13,11 @@ const SYSTEM: &str = "You are a helpful assistant. Be concise.";
 fn params_for(prompt: Vec<LanguageModelMessage>, source: &str) -> QueryParams {
     QueryParams {
         prompt,
-        max_tokens: Some(128),
+        // 1024 leaves headroom for reasoning models (gpt-5 etc.) that
+        // burn the budget on hidden reasoning before emitting output.
+        // Non-reasoning models still answer briefly — max_tokens is a
+        // cap, not a target.
+        max_tokens: Some(1024),
         thinking_level: None,
         fast_mode: false,
         tools: None,

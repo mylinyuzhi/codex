@@ -427,14 +427,25 @@ pub async fn handle_command(
             true
         }
         TuiCommand::SettingsNextTab => {
-            if let Some(crate::state::Overlay::Settings(ref mut s)) = state.ui.overlay {
-                s.next_tab();
+            // Tab cycles between contexts depending on the active overlay.
+            // Settings overlay → next tab. Question overlay → cycle focus
+            // (questions → footer items). Other overlays ignore Tab.
+            match state.ui.overlay {
+                Some(crate::state::Overlay::Settings(ref mut s)) => s.next_tab(),
+                Some(crate::state::Overlay::Question(_)) => {
+                    overlay::question_cycle_focus(state, 1);
+                }
+                _ => {}
             }
             true
         }
         TuiCommand::SettingsPrevTab => {
-            if let Some(crate::state::Overlay::Settings(ref mut s)) = state.ui.overlay {
-                s.prev_tab();
+            match state.ui.overlay {
+                Some(crate::state::Overlay::Settings(ref mut s)) => s.prev_tab(),
+                Some(crate::state::Overlay::Question(_)) => {
+                    overlay::question_cycle_focus(state, -1);
+                }
+                _ => {}
             }
             true
         }

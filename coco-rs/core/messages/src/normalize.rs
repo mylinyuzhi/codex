@@ -224,6 +224,16 @@ pub fn normalize_messages_for_api(messages: &[Message]) -> Vec<LlmMessage> {
     // LlmMessage level since by this point the Message envelope is gone.
     sanitize_error_tool_result_in_llm_messages(&mut result);
 
+    // Step 15b: forward-direction `ensureToolResultPairing` (TS
+    // `messages.ts:5301-5326`). Synthesize an `is_error: true` placeholder
+    // tool_result for every assistant tool_use that lacks a matching
+    // tool_result. Without this, a single race / panic / discard miss
+    // produces the provider error `unexpected tool_use_id` and the next
+    // turn fails. Coco-rs's existing cancel/discard paths
+    // (`permission_controller.rs:237-258`, `executor.rs:286-306`) cover
+    // the common cases; this is the fail-safe last line.
+    synthesize_missing_tool_results(&mut result);
+
     // Step 16: Ensure starts with user
     if let Some(first) = result.first()
         && !matches!(first, LlmMessage::User { .. })
@@ -233,6 +243,107 @@ pub fn normalize_messages_for_api(messages: &[Message]) -> Vec<LlmMessage> {
     }
 
     result
+}
+
+/// Placeholder text shipped in the synthetic tool_result body. Literal
+/// match to TS `claude-code/src/utils/messages.ts:246-247` — exact wire
+/// format so transcripts produced by either runtime are interchangeable
+/// and so HFI / strict-pairing detectors that key off this exact string
+/// keep working.
+const SYNTHETIC_TOOL_RESULT_PLACEHOLDER: &str = "[Tool result missing due to internal error]";
+
+/// TS-parity forward synthesis of missing tool_results
+/// (`utils/messages.ts::ensureToolResultPairing`, lines 5301-5326).
+///
+/// Walks `messages` and, for each `Assistant` whose `ToolCall` parts have
+/// no matching `ToolResult` anywhere in the transcript, inserts an
+/// `is_error: true` placeholder tool_result. If a `Tool` message already
+/// follows the orphan-bearing `Assistant`, the synthetic parts are
+/// appended to its existing content (no extra message) so the wire-level
+/// role-merge stays clean. Otherwise a fresh `Tool` message is inserted
+/// immediately after the `Assistant`.
+///
+/// **Index advance asymmetry** — when we *append* to an existing Tool at
+/// `i+1`, the next loop iteration's natural `i += 1` lands on that Tool
+/// (correct: it's not an Assistant, so the loop walks past). When we
+/// *insert* a new Tool at `i+1`, we add an extra `i += 1` to skip the
+/// newly-inserted Tool before the natural increment fires.
+///
+/// **Idempotency** — `resolved` is collected from existing Tool messages
+/// up front; once a synthetic carries the orphan id, a subsequent call
+/// re-collects `resolved` (now including the synthetic id) and finds no
+/// orphans. Verified by `normalize_synthesis_is_idempotent`.
+///
+/// `pub(crate)` so the test module can call it twice in a row to verify
+/// the idempotency invariant directly.
+pub(crate) fn synthesize_missing_tool_results(messages: &mut Vec<LlmMessage>) {
+    use coco_inference::ToolContentPart;
+    use coco_inference::ToolResultContent;
+    use coco_inference::ToolResultPart;
+
+    let resolved: std::collections::HashSet<String> = messages
+        .iter()
+        .filter_map(|m| match m {
+            LlmMessage::Tool { content, .. } => Some(
+                content
+                    .iter()
+                    .filter_map(|p| match p {
+                        ToolContentPart::ToolResult(r) => Some(r.tool_call_id.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+
+    let mut i = 0;
+    while i < messages.len() {
+        if let LlmMessage::Assistant { content, .. } = &messages[i] {
+            let orphans: Vec<(String, String)> = content
+                .iter()
+                .filter_map(|c| match c {
+                    crate::AssistantContent::ToolCall(tc)
+                        if !resolved.contains(&tc.tool_call_id) =>
+                    {
+                        Some((tc.tool_call_id.clone(), tc.tool_name.clone()))
+                    }
+                    _ => None,
+                })
+                .collect();
+
+            if !orphans.is_empty() {
+                let mut synthetic_parts: Vec<ToolContentPart> = orphans
+                    .into_iter()
+                    .map(|(id, name)| {
+                        ToolContentPart::ToolResult(ToolResultPart {
+                            tool_call_id: id,
+                            tool_name: name,
+                            output: ToolResultContent::text(SYNTHETIC_TOOL_RESULT_PLACEHOLDER),
+                            is_error: true,
+                            provider_metadata: None,
+                        })
+                    })
+                    .collect();
+
+                if let Some(LlmMessage::Tool {
+                    content: existing, ..
+                }) = messages.get_mut(i + 1)
+                {
+                    existing.append(&mut synthetic_parts);
+                } else {
+                    let synthetic = LlmMessage::Tool {
+                        content: synthetic_parts,
+                        provider_options: None,
+                    };
+                    messages.insert(i + 1, synthetic);
+                    i += 1;
+                }
+            }
+        }
+        i += 1;
+    }
 }
 
 /// LlmMessage-level variant of `sanitize_error_tool_result_content` that

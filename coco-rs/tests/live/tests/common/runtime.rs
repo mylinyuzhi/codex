@@ -4,6 +4,7 @@
 //! `client.query` / `client.query_stream` directly; provider-direct
 //! `vercel-ai` SDK access is forbidden by the seam guard.
 
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -20,6 +21,48 @@ use coco_inference::model_factory::build_api_client;
 use coco_types::ModelSpec;
 
 use crate::common::env::ensure_env_loaded;
+
+/// Env-var prefix for per-provider builtin overrides driven from `.env`.
+/// Form: `COCO_LIVE_TEST_<NAME>_<FIELD>` where `<NAME>` upper-cases the
+/// builtin provider name with `-` → `_` (e.g. `OPENAI`, `DEEPSEEK_OPENAI`).
+const PROVIDER_OVERRIDE_PREFIX: &str = "COCO_LIVE_TEST_";
+
+/// Builtin provider names eligible for `.env`-driven overrides. Mirrors
+/// the registry in `coco_config::builtin_providers()`. Keep this list
+/// short — overrides only exist to point a builtin at an alternate
+/// gateway (TikTok GPT proxy, custom Anthropic mirror, …) without
+/// touching `~/.coco/providers.json`.
+const OVERRIDABLE_PROVIDERS: &[&str] = &[
+    "openai",
+    "anthropic",
+    "google",
+    "volcengine",
+    "zai",
+    "deepseek-openai",
+    "deepseek-anthropic",
+];
+
+/// Override fields recognised on each provider. Maps the env-var token
+/// (right-hand side of `COCO_LIVE_TEST_<NAME>_<TOKEN>`) to the matching
+/// `PartialProviderConfig` field name in the synthesized JSON overlay.
+///
+/// Surface area is intentionally narrow:
+/// - `API_KEY`   → `api_key`   (test-isolated credential; native
+///                              `OPENAI_API_KEY` etc. still wins per
+///                              `ProviderConfig::resolve_api_key`)
+/// - `BASE_URL`  → `base_url`  (alternate gateway / mirror)
+/// - `WIRE_API`  → `wire_api`  (`responses` / `chat`; rare)
+///
+/// Note: per-test `MODEL` is *not* an overlay field — it's a per-call
+/// argument to `build_api_client`, not part of provider config. The
+/// test framework reads `COCO_LIVE_TEST_<NAME>_MODEL` directly via
+/// `crate::common::env::provider_model` and threads it through
+/// `LiveTarget`.
+const OVERRIDE_FIELDS: &[(&str, &str)] = &[
+    ("API_KEY", "api_key"),
+    ("BASE_URL", "base_url"),
+    ("WIRE_API", "wire_api"),
+];
 
 /// Cached runtime — building it touches the filesystem (tempdir creation
 /// and provider resolution), so we share one across all tests in a
@@ -46,6 +89,9 @@ pub fn shared_runtime() -> &'static Arc<RuntimeConfig> {
     let entry = RUNTIME.get_or_init(|| {
         ensure_env_loaded();
         let home = tempfile::tempdir().expect("create test tempdir");
+        let catalogs = CatalogPaths::empty_in(home.path());
+        materialize_provider_overlay(&catalogs.providers)
+            .expect("write provider overlay JSON from .env overrides");
         // Multi-LLM SDK: Main has no implicit default. The shared
         // runtime is only used as a builtin-provider catalog (see
         // `provider_config` / `spec_for`); Main resolution is not
@@ -60,7 +106,7 @@ pub fn shared_runtime() -> &'static Arc<RuntimeConfig> {
             ..Default::default()
         };
         let runtime = RuntimeConfigBuilder::from_process(home.path())
-            .with_catalog_paths(CatalogPaths::empty_in(home.path()))
+            .with_catalog_paths(catalogs)
             .with_overrides(overrides)
             .build()
             .expect("build empty-overlay runtime");
@@ -70,6 +116,53 @@ pub fn shared_runtime() -> &'static Arc<RuntimeConfig> {
         }
     });
     &entry.runtime
+}
+
+/// Synthesize a `providers.json` overlay from `COCO_LIVE_TEST_<NAME>_<FIELD>`
+/// env vars and write it to `path`. Skips when no overrides are set so
+/// the empty-catalog default behavior is preserved.
+///
+/// The overlay shape is identical to user-authored `~/.coco/providers.json`
+/// — we feed it through the same `apply_partial_layer` path the production
+/// resolver uses, so anything legal there works here.
+fn materialize_provider_overlay(path: &Path) -> Result<()> {
+    let mut overlay = serde_json::Map::new();
+    for &provider in OVERRIDABLE_PROVIDERS {
+        let prefix = format!(
+            "{PROVIDER_OVERRIDE_PREFIX}{}_",
+            provider.to_uppercase().replace('-', "_")
+        );
+        let mut fields = serde_json::Map::new();
+        for &(env_token, json_field) in OVERRIDE_FIELDS {
+            let key = format!("{prefix}{env_token}");
+            if let Ok(value) = std::env::var(&key)
+                && !value.trim().is_empty()
+            {
+                fields.insert(
+                    json_field.to_string(),
+                    serde_json::Value::String(value.trim().to_string()),
+                );
+            }
+        }
+        if !fields.is_empty() {
+            overlay.insert(provider.to_string(), serde_json::Value::Object(fields));
+        }
+    }
+    if overlay.is_empty() {
+        return Ok(());
+    }
+
+    let json = serde_json::to_string_pretty(&serde_json::Value::Object(overlay))
+        .context("serialize provider overlay")?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).with_context(|| format!("mkdir {}", parent.display()))?;
+    }
+    std::fs::write(path, json).with_context(|| format!("write {}", path.display()))?;
+    eprintln!(
+        "[coco-tests-live] wrote provider overlay from .env to {}",
+        path.display()
+    );
+    Ok(())
 }
 
 /// Borrow a builtin provider config from the shared runtime. Borrow is
@@ -140,6 +233,15 @@ impl LiveTarget {
                 })
                 .with_context(|| format!("build_client({provider}, {model})")),
         )
+    }
+
+    /// Same as `try_resolve` but reads the model from
+    /// `COCO_LIVE_TEST_<PROVIDER>_MODEL`. Returns `None` when either the
+    /// model env var or the provider's API key is unset (so the test
+    /// skips with a single-line message).
+    pub fn try_resolve_env_model(provider: &'static str) -> Option<Result<Self>> {
+        let model = crate::common::env::provider_model(provider)?;
+        Self::try_resolve(provider, &model)
     }
 }
 

@@ -140,16 +140,31 @@ impl ToolPermissionBridge for TuiPermissionBridge {
                 .await;
         }
 
-        // Step 2: emit ApprovalRequired onto the TUI event channel.
-        // The TUI handler at `tui_only.rs:20` consumes it and sets
-        // `Overlay::Permission` with the request fields.
-        let event = CoreEvent::Tui(TuiOnlyEvent::ApprovalRequired {
-            request_id: request.id.clone(),
-            tool_name: request.tool_name.clone(),
-            description: request.description.clone(),
-            input_preview: serde_json::to_string(&request.input)
-                .unwrap_or_else(|_| "<unrenderable input>".to_string()),
-        });
+        // Step 2: emit the right overlay event onto the TUI channel.
+        //
+        // AskUserQuestion gets a dedicated rich overlay (Question UI:
+        // multi-question, multiSelect, preview, notes) — TS parity with
+        // `AskUserQuestionPermissionRequest.tsx`. All other tools get
+        // the generic Allow / Deny `Permission` overlay.
+        //
+        // Both paths land back here via the same `pending` oneshot
+        // and `UserCommand::ApprovalResponse` channel — the only
+        // difference is how the TUI collects the user's input
+        // before resolving.
+        let event = if request.tool_name == coco_types::ToolName::AskUserQuestion.as_str() {
+            CoreEvent::Tui(TuiOnlyEvent::QuestionAsked {
+                request_id: request.id.clone(),
+                input: request.input.clone(),
+            })
+        } else {
+            CoreEvent::Tui(TuiOnlyEvent::ApprovalRequired {
+                request_id: request.id.clone(),
+                tool_name: request.tool_name.clone(),
+                description: request.description.clone(),
+                input_preview: serde_json::to_string(&request.input)
+                    .unwrap_or_else(|_| "<unrenderable input>".to_string()),
+            })
+        };
         if let Err(e) = self.notification_tx.send(event).await {
             // Channel closed → the TUI is shutting down. Pull the
             // pending entry back so we don't leak the oneshot, and
@@ -184,12 +199,29 @@ impl ToolPermissionBridge for TuiPermissionBridge {
 /// performed by the consumer (`tui_runner::ApprovalResponse` arm)
 /// before this fn is called — by the time the resolution lands on
 /// the bridge the rules are already effective.
+///
+/// `updated_input` carries a user-supplied rewrite of the tool input
+/// (e.g. `AskUserQuestion` answers). When `Some`, downstream
+/// (`PermissionController::resolve` → `tool_call_preparer`) substitutes
+/// it for the original input before invoking the tool. TS parity:
+/// `permissionDecision.updatedInput` at
+/// `services/tools/toolExecution.ts:1130-1131`.
+///
+/// `content_blocks` carries optional image attachments (etc.) the user
+/// pasted alongside the answer. Mirrors TS
+/// `PermissionAllowDecision.contentBlocks` at
+/// `types/permissions.ts:183`. Today the TUI doesn't have a paste-into-
+/// question gesture so callers pass `None`; the bridge plumbing is in
+/// place so SDK clients (which already ship the field via
+/// `ApprovalResolveParams.content_blocks`) flow through unchanged.
 pub async fn resolve_pending(
     pending: &PendingApprovals,
     request_id: &str,
     approved: bool,
     feedback: Option<String>,
     permission_updates: Vec<coco_types::PermissionUpdate>,
+    updated_input: Option<serde_json::Value>,
+    content_blocks: Option<Vec<serde_json::Value>>,
 ) -> bool {
     let sender = {
         let mut map = pending.write().await;
@@ -207,6 +239,8 @@ pub async fn resolve_pending(
         },
         feedback,
         applied_updates: permission_updates,
+        updated_input,
+        content_blocks,
     };
     tx.send(resolution).is_ok()
 }
