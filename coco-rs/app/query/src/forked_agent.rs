@@ -127,12 +127,12 @@ pub struct ForkedAgentOptions {
     /// readers which fork variant fired without grepping callsites.
     pub fork_label: ForkLabel,
     /// Per-fork tool-execution gate. `Some` installs the callback at
-    /// `ToolUseContext.can_use_tool` so step 3.5 of `execute_tool_call`
-    /// runs it BEFORE the tool's built-in `check_permissions`. The
-    /// six policies (deny-all / auto-mem / session-mem / speculation
-    /// 3-boundary) live in their respective subsystems; this module
-    /// just threads the handle through. TS:
-    /// `runForkedAgent({canUseTool})`.
+    /// `ToolUseContext.can_use_tool` so the app/query preparer runs it
+    /// before the static permission evaluator consults the tool's
+    /// built-in `check_permissions`. The six policies (deny-all /
+    /// auto-mem / session-mem / speculation 3-boundary) live in their
+    /// respective subsystems; this module just threads the handle
+    /// through. TS: `runForkedAgent({canUseTool})`.
     pub can_use_tool: Option<CanUseToolHandleRef>,
     /// When `true`, hook auto-approve cannot bypass [`Self::can_use_tool`].
     /// Speculation needs this so overlay path-rewrites always run
@@ -200,10 +200,15 @@ pub fn build_query_config(
     cache: &CacheSafeParams,
     options: &ForkedAgentOptions,
 ) -> AgentQueryConfig {
+    let mut prompt_cache = cache.prompt_cache.clone();
+    if let Some(cfg) = prompt_cache.as_mut() {
+        cfg.skip_cache_write = options.skip_cache_write;
+    }
     AgentQueryConfig {
         system_prompt: cache.rendered_system_prompt.clone(),
         model: cache.model_id.clone(),
         max_turns: options.max_turns,
+        prompt_cache,
         // Inherit the parent's history verbatim so the API request's
         // prefix bytes match — this is what enables cache sharing.
         fork_context_messages: cache.fork_context_messages.clone(),
@@ -264,10 +269,9 @@ pub trait ForkDispatcher: Send + Sync {
     /// `cache` is the parent's [`CacheSafeParams`] (typically read
     /// from `QueryEngine::last_cache_safe_params`). `prompt` is the
     /// new user message to append after the cached parent history.
-    /// `system_prompt_override` lets callers (notably
-    /// `promptSuggestion`) substitute a different system prompt
-    /// while keeping the rest of the cache parity intact — when
-    /// `None`, `cache.rendered_system_prompt` is used.
+    /// `system_prompt_override` lets non-cache-sharing callers
+    /// substitute a different system prompt; cache-sharing callers
+    /// should pass `None` so `cache.rendered_system_prompt` is used.
     async fn dispatch(
         &self,
         cache: &CacheSafeParams,

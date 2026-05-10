@@ -221,12 +221,18 @@ pub struct SuggestionContext {
     pub awaiting_plan_approval: bool,
 }
 
-/// Result of the underlying fork's text extraction. Returned by
-/// [`extract_suggestion_text`] — the caller passes this into the
-/// last 4 steps of [`try_generate_suggestion`].
+/// Result of the underlying fork's text generation. The caller
+/// passes this into the last 4 steps of [`try_generate_suggestion`].
 pub struct GenerationResult {
     pub text: String,
     pub prompt_id: String,
+    pub request_id: Option<String>,
+}
+
+/// Text + request id extracted from the fork's emitted messages.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtractedSuggestion {
+    pub text: String,
     pub request_id: Option<String>,
 }
 
@@ -360,17 +366,28 @@ pub fn try_generate_suggestion(
 
 // ── Multi-message text walk ────────────────────────────────────
 
-/// Walk the fork's emitted messages in reverse order and return
-/// the first non-empty text block in any assistant message.
+/// Walk the fork's emitted messages in TS order and return the
+/// first non-empty text block in any assistant message.
 ///
 /// TS: `services/PromptSuggestion/promptSuggestion.ts:332-349` —
 /// "model may loop (try tool → denied → text in next message)";
 /// this walk catches the text in turn 2 even when turn 1 was a
 /// (denied) tool call.
 pub fn extract_suggestion_text(messages: &[Message]) -> String {
-    messages
+    extract_suggestion_generation(messages).text
+}
+
+/// Extract the suggestion text plus the first assistant request id.
+///
+/// TS captures the first assistant `requestId` for RL dataset joins,
+/// then walks messages forward for the first non-empty text block.
+pub fn extract_suggestion_generation(messages: &[Message]) -> ExtractedSuggestion {
+    let request_id = messages.iter().find_map(|m| match m {
+        coco_messages::Message::Assistant(a) => a.request_id.clone(),
+        _ => None,
+    });
+    let text = messages
         .iter()
-        .rev()
         .filter_map(|m| match m {
             coco_messages::Message::Assistant(a) => match &a.message {
                 coco_inference::LanguageModelMessage::Assistant { content, .. } => Some(content),
@@ -378,7 +395,7 @@ pub fn extract_suggestion_text(messages: &[Message]) -> String {
             },
             _ => None,
         })
-        .flat_map(|content| content.iter().rev())
+        .flat_map(|content| content.iter())
         .find_map(|part| match part {
             coco_inference::AssistantContentPart::Text(t) => {
                 let trimmed = t.text.trim();
@@ -390,7 +407,8 @@ pub fn extract_suggestion_text(messages: &[Message]) -> String {
             }
             _ => None,
         })
-        .unwrap_or_default()
+        .unwrap_or_default();
+    ExtractedSuggestion { text, request_id }
 }
 
 // ── 12-rule filter (verbatim regex) ────────────────────────────

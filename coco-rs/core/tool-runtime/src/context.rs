@@ -342,14 +342,15 @@ pub struct ToolUseContext {
     pub permission_bridge: Option<ToolPermissionBridgeRef>,
 
     // ── Per-Fork Tool Gate ──
-    /// Optional per-fork canUseTool callback. When `Some`, runs at
-    /// [`crate::execution::execute_tool_call`] step 3.5 BEFORE
-    /// `tool.check_permissions`. `Deny` short-circuits with the message
-    /// surfaced as the synthesized `tool_result`. `Allow{updated_input}`
-    /// rewrites the input passed to permissions + execute (speculation
-    /// overlay path-rewrite hook). `Ask` falls through to the tool's
-    /// built-in opinion. `None` preserves pre-step-3.5 behavior — the
-    /// callback is skipped entirely.
+    /// Optional per-fork canUseTool callback. When `Some`, app/query's
+    /// tool-call preparer runs it before the static permission
+    /// evaluator consults `tool.check_permissions`. `Deny`
+    /// short-circuits with the message surfaced as the synthesized
+    /// `tool_result`. `Allow{updated_input}` rewrites the input passed
+    /// to permissions + execute (speculation overlay path-rewrite
+    /// hook). `Ask` falls through to the tool's built-in opinion.
+    /// `None` preserves pre-canUseTool behavior — the callback is
+    /// skipped entirely.
     ///
     /// `require_can_use_tool` (above) controls whether `Pre`-tool-use
     /// hook auto-approve can bypass this callback. When `true`,

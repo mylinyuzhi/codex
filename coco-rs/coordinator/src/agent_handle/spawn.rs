@@ -777,6 +777,7 @@ impl SwarmAgentHandle {
                 .and_then(|c| c.max_turns)
                 .or(request.max_turns),
             context_window: None,
+            prompt_cache: None,
             max_output_tokens: None,
             // Coordinator-mode tool pool: when the leader is in coordinator
             // mode, AgentTool spawns are workers and must see only the

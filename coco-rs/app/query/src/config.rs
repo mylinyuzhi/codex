@@ -15,6 +15,7 @@ use coco_messages::Message;
 use coco_types::Features;
 use coco_types::PermissionMode;
 use coco_types::PermissionRulesBySource;
+use coco_types::PromptCacheConfig;
 use coco_types::ThinkingLevel;
 use coco_types::TokenUsage;
 use coco_types::ToolFilter;
@@ -58,6 +59,11 @@ pub struct QueryEngineConfig {
     pub max_turns: i32,
     /// Maximum output tokens per request.
     pub max_tokens: Option<i64>,
+    /// Per-call prompt-cache directive. Main sessions set this when the
+    /// active provider/model supports prompt caching; forked sessions
+    /// inherit it from the parent cache slot and may set
+    /// `skip_cache_write`.
+    pub prompt_cache: Option<PromptCacheConfig>,
     /// System prompt to prepend.
     pub system_prompt: Option<String>,
     /// Append to system prompt (after CLAUDE.md).
@@ -239,11 +245,10 @@ pub struct QueryEngineConfig {
     pub reminder_mailbox: Arc<coco_system_reminder::ReminderMailbox>,
 
     /// Per-fork tool-execution gate. When `Some`, the engine threads
-    /// the handle onto every `ToolUseContext` it builds, so step 3.5
-    /// of `execute_tool_call` runs the callback BEFORE the tool's
-    /// built-in `check_permissions`. `None` preserves
-    /// pre-canUseTool-wiring behavior. TS:
-    /// `utils/forkedAgent.ts::runForkedAgent({canUseTool})`.
+    /// the handle onto every `ToolUseContext` it builds, so the
+    /// tool-call preparer runs the callback before the static
+    /// permission evaluator. `None` preserves pre-canUseTool-wiring
+    /// behavior. TS: `utils/forkedAgent.ts::runForkedAgent({canUseTool})`.
     pub can_use_tool: Option<coco_tool_runtime::CanUseToolHandleRef>,
 
     /// Override label returned by [`crate::engine_builder::query_source_label`].
@@ -294,6 +299,7 @@ impl Default for QueryEngineConfig {
         Self {
             max_turns: 30,
             max_tokens: None,
+            prompt_cache: None,
             system_prompt: None,
             append_system_prompt: None,
             model_id: String::new(),

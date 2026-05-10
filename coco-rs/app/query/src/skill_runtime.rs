@@ -179,6 +179,7 @@ impl SkillHandle for QuerySkillRuntime {
                     model: skill.model.clone().unwrap_or_default(),
                     max_turns: None,
                     context_window: None,
+                    prompt_cache: None,
                     max_output_tokens: None,
                     allowed_tools: skill.allowed_tools.clone().unwrap_or_default(),
                     disallowed_tools: Vec::new(),

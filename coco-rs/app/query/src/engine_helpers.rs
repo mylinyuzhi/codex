@@ -108,6 +108,20 @@ pub(crate) async fn record_rate_limit_observation(
     snap.rate_limits.insert(provider.to_string(), entry);
 }
 
+/// Clear a provider's rejected rate-limit observation after a successful
+/// request. Entries with no reset header otherwise suppress post-turn
+/// promptSuggestion indefinitely.
+pub(crate) async fn clear_rate_limit_observation(
+    app_state: &Arc<RwLock<coco_types::ToolAppState>>,
+    provider: &str,
+) {
+    if provider.is_empty() {
+        return;
+    }
+    let mut snap = app_state.write().await;
+    snap.rate_limits.remove(provider);
+}
+
 /// Announce a model fallback / recovery transition as an inline
 /// stream notice. TS parity: `query.ts:946` writes a system-tagged
 /// line into the transcript so SDK consumers + the TUI see it

@@ -319,8 +319,8 @@ impl ToolContextFactory {
             // Per-fork canUseTool callback. Threaded from
             // QueryEngineConfig (set by ForkedAgentOptions →
             // fork_dispatcher) onto every ToolUseContext built for
-            // this engine, so step 3.5 in execute_tool_call gates
-            // every tool call uniformly.
+            // this engine, so the preparer gates every tool call
+            // before static permission evaluation.
             can_use_tool: self.config.can_use_tool.clone(),
             progress_tx: overrides.progress_tx,
             task_handle: self.task_handle.clone(),

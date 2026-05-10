@@ -1,7 +1,11 @@
 use std::sync::Arc;
 
 use coco_messages::Message;
+use coco_types::CacheSafeParams;
+use coco_types::CacheTtl;
 use coco_types::ForkLabel;
+use coco_types::PromptCacheConfig;
+use coco_types::PromptCacheMode;
 use coco_types::TokenUsage;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -60,6 +64,37 @@ fn test_for_label_carries_can_use_tool() {
     let mut opts = ForkedAgentOptions::for_label(ForkLabel::PromptSuggestion);
     opts.can_use_tool = Some(deny_all_handle("test"));
     assert!(opts.can_use_tool.is_some());
+}
+
+#[test]
+fn test_build_query_config_inherits_prompt_cache_and_sets_skip_cache_write() {
+    let cache = CacheSafeParams {
+        rendered_system_prompt: "system".into(),
+        model_id: "claude-opus-4-7".into(),
+        provider: "anthropic".into(),
+        prompt_cache: Some(PromptCacheConfig {
+            mode: PromptCacheMode::Auto,
+            ttl: CacheTtl::OneHour,
+            scope: None,
+            requested_betas: Default::default(),
+            skip_cache_write: false,
+        }),
+        fork_context_messages: vec![json!({"type": "user"})],
+    };
+    let options = ForkedAgentOptions::for_label(ForkLabel::PromptSuggestion);
+
+    let config = build_query_config(&cache, &options);
+
+    let prompt_cache = config
+        .prompt_cache
+        .expect("parent prompt-cache directive should be inherited");
+    assert_eq!(prompt_cache.mode, PromptCacheMode::Auto);
+    assert_eq!(prompt_cache.ttl, CacheTtl::OneHour);
+    assert!(
+        prompt_cache.skip_cache_write,
+        "fire-and-forget fork must flip skip_cache_write without losing cache-key fields"
+    );
+    assert_eq!(config.fork_context_messages, cache.fork_context_messages);
 }
 
 #[tokio::test]

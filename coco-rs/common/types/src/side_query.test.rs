@@ -8,6 +8,7 @@ fn test_cache_safe_params_serde_roundtrip() {
         rendered_system_prompt: "You are a helpful agent.".into(),
         model_id: "claude-opus-4-7".into(),
         provider: "anthropic".into(),
+        prompt_cache: None,
         fork_context_messages: vec![
             serde_json::json!({"role": "user", "content": "hi"}),
             serde_json::json!({"role": "assistant", "content": "hello"}),
@@ -38,6 +39,7 @@ fn test_cache_safe_params_eq_distinguishes_model() {
         rendered_system_prompt: "sys".into(),
         model_id: "claude-opus-4-7".into(),
         provider: "anthropic".into(),
+        prompt_cache: None,
         fork_context_messages: Vec::new(),
     };
     let b = CacheSafeParams {
@@ -53,6 +55,7 @@ fn test_cache_safe_params_eq_distinguishes_provider() {
         rendered_system_prompt: "sys".into(),
         model_id: "claude-opus-4-7".into(),
         provider: "anthropic".into(),
+        prompt_cache: None,
         fork_context_messages: Vec::new(),
     };
     let b = CacheSafeParams {

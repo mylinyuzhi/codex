@@ -35,6 +35,11 @@ pub struct AgentQueryConfig {
     /// Context window size (tokens). Defaults to model's max.
     #[serde(default)]
     pub context_window: Option<i64>,
+    /// Prompt-cache directive inherited from a parent fork context.
+    /// Fork callers preserve the parent's cache-key fields and only set
+    /// `skip_cache_write` for fire-and-forget runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_cache: Option<coco_types::PromptCacheConfig>,
     /// Maximum output tokens per turn. Defaults to model's max.
     #[serde(default)]
     pub max_output_tokens: Option<i64>,
@@ -208,10 +213,10 @@ pub struct AgentQueryConfig {
     pub event_tx: Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
 
     /// Per-fork tool-execution gate. Threaded onto the child engine's
-    /// `ToolUseContext.can_use_tool` so step 3.5 of `execute_tool_call`
-    /// enforces the policy. `None` preserves existing behavior — no
-    /// callback runs. TS parity: `utils/forkedAgent.ts`
-    /// `runForkedAgent({canUseTool})`.
+    /// `ToolUseContext.can_use_tool` so app/query enforces the policy
+    /// before the static permission evaluator. `None` preserves
+    /// existing behavior — no callback runs. TS parity:
+    /// `utils/forkedAgent.ts` `runForkedAgent({canUseTool})`.
     #[serde(skip)]
     pub can_use_tool: Option<crate::can_use_tool::CanUseToolHandleRef>,
 

@@ -4,7 +4,7 @@
 //! `services/tools/toolExecution.ts:706-748` (the callback dispatch +
 //! `requireCanUseTool` interaction with hook auto-approve).
 //!
-//! ## Why a callback at the executor layer
+//! ## Why a callback at the per-call gate
 //!
 //! Forks need to gate tool execution dynamically based on per-call
 //! state (file path, mode, overlay membership) — a static
@@ -12,8 +12,10 @@
 //! `file_path` to overlay_path" semantics or auto-mem's "Edit only
 //! when path is under `memory_dir`".
 //!
-//! The handle is invoked at [`crate::execution::execute_tool_call`]
-//! step 3.5, BEFORE `tool.check_permissions`. Decision variants:
+//! The handle is invoked by the app/query tool-call preparer before
+//! the static permission evaluator consults `tool.check_permissions`.
+//! The legacy [`crate::execution::execute_tool_call`] helper also
+//! honors the same step for direct callers. Decision variants:
 //!
 //! - [`CanUseToolDecision::Deny`] short-circuits with the message
 //!   surfaced as the `tool_result` content (TS parity).

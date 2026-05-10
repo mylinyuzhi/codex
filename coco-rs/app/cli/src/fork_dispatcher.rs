@@ -19,9 +19,8 @@
 //! (system prompt bytes, model id, fork-context messages). When
 //! callers pass `system_prompt_override`, the override replaces
 //! `cache.rendered_system_prompt` *before* the parent history is
-//! prepended — the parent cache is intentionally invalidated for
-//! the override case (e.g. promptSuggestion's bespoke system
-//! prompt) but the rest of the request shape stays put.
+//! prepended. Cache-sharing callers such as promptSuggestion must pass
+//! their prompt as the fork user message and leave this override unset.
 //!
 //! ## What this is NOT
 //!
@@ -104,6 +103,7 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
             max_output_tokens: agent_config.max_output_tokens.unwrap_or(16_384),
             max_turns: agent_config.max_turns.unwrap_or(1),
             max_tokens: None,
+            prompt_cache: agent_config.prompt_cache.clone(),
             system_prompt: Some(agent_config.system_prompt.clone()),
             streaming_tool_execution: false,
             session_id: agent_config.session_id.clone().unwrap_or_default(),

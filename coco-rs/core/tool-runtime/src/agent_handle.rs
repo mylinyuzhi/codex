@@ -272,9 +272,10 @@ pub struct AgentSpawnRequest {
     pub skip_transcript: bool,
 
     /// Per-fork tool-execution gate. When `Some`, threaded onto the
-    /// child engine's `ToolUseContext.can_use_tool` so step 3.5 in
-    /// `execute_tool_call` enforces the policy uniformly. Skipped at
-    /// the JSON boundary — callbacks aren't portable across runners.
+    /// child engine's `ToolUseContext.can_use_tool` so app/query
+    /// enforces the policy before static permission evaluation.
+    /// Skipped at the JSON boundary — callbacks aren't portable across
+    /// runners.
     /// TS parity: `utils/forkedAgent.ts` `runForkedAgent({canUseTool})`.
     #[serde(skip)]
     pub can_use_tool: Option<crate::can_use_tool::CanUseToolHandleRef>,

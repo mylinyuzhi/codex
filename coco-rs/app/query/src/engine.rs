@@ -802,7 +802,7 @@ impl QueryEngine {
                 // strategy resolved at session bootstrap; defaults if not
                 // wired yet (Phase 2 of prompt-cache rollout).
                 agentic: true,
-                cache: None,
+                cache: self.config.prompt_cache.clone(),
             };
 
             // ── Phase 9: Streaming tool scheduling ──
@@ -931,6 +931,13 @@ impl QueryEngine {
                     // Success resets the capacity-error streak —
                     // isolated 529s must not accumulate across turns.
                     consecutive_capacity_errors = 0;
+                    if let Some(app_state) = self.app_state.as_ref() {
+                        crate::engine_helpers::clear_rate_limit_observation(
+                            app_state,
+                            active_client.provider(),
+                        )
+                        .await;
+                    }
                     tracing::debug!(
                         turn,
                         turn_id = %turn_id,
@@ -1723,6 +1730,8 @@ impl QueryEngine {
                 // never runs on this path, so save the cache-safe
                 // params here for post-turn fork features.
                 self.save_post_turn_cache_params(history).await;
+                self.maybe_spawn_prompt_suggestion_after_stop(&event_tx)
+                    .await;
                 // SDK protocol contract: every turn that emitted a
                 // `TurnStarted` must close with a terminal turn event.
                 // The tool-execution branches reach `TurnCompleted` via

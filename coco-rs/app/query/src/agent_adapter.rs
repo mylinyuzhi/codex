@@ -85,6 +85,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
         let engine_config = QueryEngineConfig {
             max_turns: config.max_turns.unwrap_or(30),
             max_tokens: None,
+            prompt_cache: config.prompt_cache.clone(),
             system_prompt: Some(config.system_prompt),
             append_system_prompt: None,
             model_id: config.model,

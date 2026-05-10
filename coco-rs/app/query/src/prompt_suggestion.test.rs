@@ -1,5 +1,12 @@
 use super::*;
+use coco_messages::AssistantMessage;
+use coco_messages::LlmMessage;
+use coco_messages::Message;
+use coco_messages::StopReason;
+use coco_messages::TextContent;
+use coco_types::TokenUsage;
 use coco_types::ToolAppState;
+use uuid::Uuid;
 
 fn default_state() -> ToolAppState {
     ToolAppState::default()
@@ -96,6 +103,61 @@ fn good_generation() -> Option<GenerationResult> {
         prompt_id: "user_intent".into(),
         request_id: Some("req-1".into()),
     })
+}
+
+fn assistant_msg(text: &str, request_id: Option<&str>) -> Message {
+    Message::Assistant(AssistantMessage {
+        message: LlmMessage::Assistant {
+            content: vec![coco_messages::AssistantContent::Text(TextContent {
+                text: text.into(),
+                provider_metadata: None,
+            })],
+            provider_options: None,
+        },
+        uuid: Uuid::new_v4(),
+        model: "test".into(),
+        stop_reason: Some(StopReason::EndTurn),
+        usage: Some(TokenUsage::default()),
+        cost_usd: None,
+        request_id: request_id.map(str::to_string),
+        api_error: None,
+    })
+}
+
+#[test]
+fn test_extract_suggestion_generation_uses_first_assistant_text_and_request_id() {
+    let messages = vec![
+        assistant_msg("  first useful prompt  ", Some("req-first")),
+        assistant_msg("second prompt", Some("req-second")),
+    ];
+
+    let generation = extract_suggestion_generation(&messages);
+
+    assert_eq!(
+        generation,
+        ExtractedSuggestion {
+            text: "first useful prompt".into(),
+            request_id: Some("req-first".into()),
+        }
+    );
+}
+
+#[test]
+fn test_extract_suggestion_generation_skips_empty_text_but_keeps_first_request_id() {
+    let messages = vec![
+        assistant_msg("   ", Some("req-first")),
+        assistant_msg("run cargo check", Some("req-second")),
+    ];
+
+    let generation = extract_suggestion_generation(&messages);
+
+    assert_eq!(
+        generation,
+        ExtractedSuggestion {
+            text: "run cargo check".into(),
+            request_id: Some("req-first".into()),
+        }
+    );
 }
 
 #[test]

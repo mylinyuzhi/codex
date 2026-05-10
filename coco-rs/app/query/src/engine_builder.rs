@@ -268,6 +268,7 @@ impl QueryEngine {
             rendered_system_prompt,
             model_id: self.config.model_id.clone(),
             provider,
+            prompt_cache: self.config.prompt_cache.clone(),
             fork_context_messages: fork_messages,
         })
         .await;

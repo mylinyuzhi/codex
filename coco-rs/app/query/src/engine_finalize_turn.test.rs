@@ -17,22 +17,129 @@
 // asserts the field flips on/off.
 
 use super::build_suggestion_context;
+use crate::CoreEvent;
+use crate::ServerNotification;
+use crate::config::QueryEngineConfig;
+use crate::engine::QueryEngine;
+use crate::forked_agent::ForkDispatcher;
+use crate::forked_agent::ForkedAgentOptions;
+use crate::forked_agent::ForkedAgentResult;
 use coco_types::CacheSafeParams;
 use coco_types::PendingPermissionGuard;
 use coco_types::ProviderApi;
 use coco_types::RateLimitEntry;
 use coco_types::RateLimitStatus;
+use coco_types::TokenUsage;
 use coco_types::ToolAppState;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 use tokio::sync::RwLock;
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 fn empty_cache(provider: &str) -> CacheSafeParams {
     CacheSafeParams {
         rendered_system_prompt: String::new(),
         model_id: "claude-opus-4-7".into(),
         provider: provider.into(),
+        prompt_cache: None,
         fork_context_messages: Vec::new(),
+    }
+}
+
+fn assistant_msg(text: &str, request_id: Option<&str>) -> coco_messages::Message {
+    coco_messages::Message::Assistant(coco_messages::AssistantMessage {
+        message: coco_messages::LlmMessage::Assistant {
+            content: vec![coco_messages::AssistantContent::Text(
+                coco_messages::TextContent {
+                    text: text.into(),
+                    provider_metadata: None,
+                },
+            )],
+            provider_options: None,
+        },
+        uuid: uuid::Uuid::new_v4(),
+        model: "test-model".into(),
+        stop_reason: Some(coco_messages::StopReason::EndTurn),
+        usage: Some(TokenUsage::default()),
+        cost_usd: None,
+        request_id: request_id.map(str::to_string),
+        api_error: None,
+    })
+}
+
+struct DummyModel;
+
+#[async_trait::async_trait]
+impl coco_inference::LanguageModel for DummyModel {
+    fn provider(&self) -> &str {
+        "mock"
+    }
+
+    fn model_id(&self) -> &str {
+        "mock-model"
+    }
+
+    async fn do_generate(
+        &self,
+        _options: coco_inference::LanguageModelCallOptions,
+    ) -> Result<coco_inference::LanguageModelGenerateResult, coco_inference::AISdkError> {
+        Ok(coco_inference::LanguageModelGenerateResult {
+            content: vec![coco_inference::AssistantContentPart::Text(
+                coco_inference::TextPart {
+                    text: "unused".into(),
+                    provider_metadata: None,
+                },
+            )],
+            usage: coco_inference::Usage::new(0, 0),
+            finish_reason: coco_inference::FinishReason::new(
+                coco_inference::UnifiedFinishReason::Stop,
+            ),
+            warnings: Vec::new(),
+            provider_metadata: None,
+            request: None,
+            response: None,
+        })
+    }
+
+    async fn do_stream(
+        &self,
+        options: coco_inference::LanguageModelCallOptions,
+    ) -> Result<coco_inference::LanguageModelStreamResult, coco_inference::AISdkError> {
+        let result = self.do_generate(options).await?;
+        Ok(coco_inference::synthetic_stream_from_content(
+            result.content,
+            result.usage,
+            result.finish_reason,
+        ))
+    }
+}
+
+#[derive(Default)]
+struct CapturingSuggestionDispatcher {
+    prompt: std::sync::Mutex<Option<String>>,
+    system_override: std::sync::Mutex<Option<Option<String>>>,
+}
+
+#[async_trait::async_trait]
+impl ForkDispatcher for CapturingSuggestionDispatcher {
+    async fn dispatch(
+        &self,
+        _cache: &CacheSafeParams,
+        _options: &ForkedAgentOptions,
+        prompt: &str,
+        system_prompt_override: Option<String>,
+    ) -> Result<ForkedAgentResult, coco_error::BoxedError> {
+        *self.prompt.lock().expect("prompt lock is not poisoned") = Some(prompt.to_string());
+        *self
+            .system_override
+            .lock()
+            .expect("system override lock is not poisoned") = Some(system_prompt_override);
+        Ok(ForkedAgentResult {
+            messages: vec![assistant_msg("run cargo check", Some("req-suggest"))],
+            ..Default::default()
+        })
     }
 }
 
@@ -172,6 +279,82 @@ async fn build_suggestion_context_rate_limit_empty_provider_fails_open() {
 }
 
 #[tokio::test]
+async fn maybe_spawn_prompt_suggestion_records_and_emits_protocol_event() {
+    let model = Arc::new(DummyModel);
+    let client = Arc::new(coco_inference::ApiClient::with_default_fingerprint(
+        model,
+        coco_inference::RetryConfig::default(),
+    ));
+    let tools = Arc::new(coco_tool_runtime::ToolRegistry::new());
+    let dispatcher = Arc::new(CapturingSuggestionDispatcher::default());
+    let app_state = Arc::new(RwLock::new(ToolAppState::default()));
+    let engine = QueryEngine::new(
+        QueryEngineConfig::default(),
+        client,
+        tools,
+        CancellationToken::new(),
+        None,
+    )
+    .with_app_state(app_state.clone())
+    .with_fork_dispatcher(dispatcher.clone());
+
+    let mut cache = empty_cache("anthropic");
+    cache.fork_context_messages = vec![
+        serde_json::to_value(assistant_msg("first turn", Some("req-parent-1")))
+            .expect("assistant message serializes"),
+        serde_json::to_value(assistant_msg("second turn", Some("req-parent-2")))
+            .expect("assistant message serializes"),
+    ];
+    engine.save_cache_safe_params(cache).await;
+
+    let (tx, mut rx) = mpsc::channel(4);
+    engine
+        .maybe_spawn_prompt_suggestion_after_stop(&Some(tx))
+        .await;
+
+    let event = tokio::time::timeout(Duration::from_secs(1), rx.recv())
+        .await
+        .expect("prompt suggestion event should arrive")
+        .expect("event channel should stay open until event");
+    match event {
+        CoreEvent::Protocol(ServerNotification::PromptSuggestion { suggestions }) => {
+            assert_eq!(suggestions, vec!["run cargo check".to_string()]);
+        }
+        other => panic!("expected PromptSuggestion protocol event, got {other:?}"),
+    }
+
+    let state = app_state.read().await;
+    let suggestion = state
+        .prompt_suggestion
+        .as_ref()
+        .expect("suggestion should be recorded in app state");
+    assert_eq!(suggestion.text, "run cargo check");
+    assert_eq!(
+        suggestion.generation_request_id.as_deref(),
+        Some("req-suggest")
+    );
+    drop(state);
+
+    let prompt = dispatcher
+        .prompt
+        .lock()
+        .expect("prompt lock is not poisoned")
+        .clone()
+        .expect("dispatcher should receive prompt");
+    assert_eq!(prompt, crate::prompt_suggestion::SUGGESTION_PROMPT);
+    let override_seen = dispatcher
+        .system_override
+        .lock()
+        .expect("system override lock is not poisoned")
+        .clone()
+        .expect("dispatcher should record override argument");
+    assert!(
+        override_seen.is_none(),
+        "promptSuggestion must use the TS fork shape: user prompt only, no system override"
+    );
+}
+
+#[tokio::test]
 async fn prune_stale_rate_limits_removes_expired_entries() {
     use super::prune_stale_rate_limits;
 
@@ -276,6 +459,26 @@ async fn record_rate_limit_observation_skips_empty_provider() {
     record_rate_limit_observation(&app_state, "", ProviderApi::Anthropic, Some(1_000)).await;
 
     assert!(app_state.read().await.rate_limits.is_empty());
+}
+
+#[tokio::test]
+async fn clear_rate_limit_observation_removes_no_reset_rejection() {
+    use crate::engine_helpers::clear_rate_limit_observation;
+    use crate::engine_helpers::record_rate_limit_observation;
+
+    let app_state = Arc::new(RwLock::new(ToolAppState::default()));
+
+    record_rate_limit_observation(&app_state, "anthropic", ProviderApi::Anthropic, None).await;
+    assert!(
+        app_state.read().await.rate_limits.contains_key("anthropic"),
+        "no-reset rejection should be recorded"
+    );
+
+    clear_rate_limit_observation(&app_state, "anthropic").await;
+    assert!(
+        !app_state.read().await.rate_limits.contains_key("anthropic"),
+        "successful provider call should clear stale rejection"
+    );
 }
 
 #[tokio::test]

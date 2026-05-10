@@ -76,8 +76,9 @@ pub struct ForkContextOverrides {
     /// as `readFileState`.
     pub clone_content_replacement_state: bool,
     /// Per-fork canUseTool callback. Forwarded onto every
-    /// `ToolUseContext.can_use_tool` so step 3.5 of
-    /// `execute_tool_call` enforces the per-policy gate.
+    /// `ToolUseContext.can_use_tool` so the tool-call preparer
+    /// enforces the per-policy gate before static permission
+    /// evaluation.
     pub can_use_tool: Option<CanUseToolHandleRef>,
     /// When `true`, hook auto-approve cannot bypass the
     /// `can_use_tool` callback. Speculation needs this so overlay

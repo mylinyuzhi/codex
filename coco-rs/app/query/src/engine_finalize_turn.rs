@@ -631,31 +631,6 @@ impl QueryEngine {
         // updates the slot.
         self.save_post_turn_cache_params(history).await;
 
-        // P5 / A3: kick off the post-turn promptSuggestion fork when
-        // the gate allows. The helper checks env, plan-mode,
-        // non-interactive, and pending-plan-approval; all four must
-        // be open for a suggestion to fire. The actual fork runs in
-        // a detached task so the turn can finalise immediately —
-        // the suggestion lands on `ToolAppState.prompt_suggestion`
-        // when the model responds (the TUI consumer reads from there).
-        // TS parity: `query/stopHooks.ts:139` `executePromptSuggestion`.
-        // The full 9-step guard pipeline runs inside
-        // `spawn_prompt_suggestion_task::pre_fork_guards` — bare mode
-        // is one of the 9 suppress reasons there, but we also gate
-        // here so we don't pay for the SuggestionContext build when
-        // bare mode is on. (Cheap, but the intent is clearer.) TS
-        // parity: `stopHooks.ts:136-140` skips the entire stop-hooks
-        // block under `isBareMode()`.
-        if !bare_mode_active && let Some(app_state) = self.app_state.as_ref() {
-            // Phase 7c: prune stale `rate_limits` entries whose
-            // `reset_at_ms` has passed before the suggestion guards
-            // read. Defensive — the read side also re-checks the
-            // reset timestamp, but pruning here keeps the map
-            // bounded by the number of currently-throttled providers.
-            prune_stale_rate_limits(app_state).await;
-            self.spawn_prompt_suggestion_task(app_state.clone()).await;
-        }
-
         // Per-turn JSONL transcript append. Walks `history` and writes
         // any user/assistant/system/attachment message whose uuid isn't
         // already in the cross-engine dedup set. Skips silently when
@@ -748,12 +723,31 @@ impl QueryEngine {
     /// - dispatch error (transport crash etc.)
     /// - empty / placeholder-only response from the model
     ///
+    /// TS parity: `query.ts` calls `handleStopHooks()` only when the
+    /// assistant did not request follow-up tool execution; `stopHooks.ts`
+    /// then starts `executePromptSuggestion()` under the non-bare gate.
+    pub(crate) async fn maybe_spawn_prompt_suggestion_after_stop(
+        &self,
+        event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
+    ) {
+        if coco_config::env::is_env_truthy(coco_config::EnvKey::CocoBareMode) {
+            return;
+        }
+        let Some(app_state) = self.app_state.as_ref() else {
+            return;
+        };
+        prune_stale_rate_limits(app_state).await;
+        self.spawn_prompt_suggestion_task(app_state.clone(), event_tx.clone())
+            .await;
+    }
+
     /// TS parity: `services/PromptSuggestion/promptSuggestion.ts`
-    /// calls `runForkedAgent` with the bespoke suggestion system
-    /// prompt and `effort: undefined` (cache parity preserved).
+    /// calls `runForkedAgent` with the bespoke suggestion prompt as a
+    /// user message and `effort: undefined` (cache parity preserved).
     async fn spawn_prompt_suggestion_task(
         &self,
         app_state: std::sync::Arc<tokio::sync::RwLock<coco_types::ToolAppState>>,
+        event_tx: Option<tokio::sync::mpsc::Sender<CoreEvent>>,
     ) {
         let cache = match self.last_cache_safe_params().await {
             Some(c) => c,
@@ -799,9 +793,9 @@ impl QueryEngine {
             }
         }
 
-        // Detach: the suggestion is fire-and-forget. The parent turn
-        // has already emitted `TurnCompleted`; we don't want a slow
-        // suggestion fork blocking the next user prompt.
+        // Detach: the suggestion is fire-and-forget. The parent turn is
+        // finalizing; we don't want a slow suggestion fork blocking the
+        // next user prompt.
         let abort_for_task = abort_token.clone();
         tokio::spawn(async move {
             // Bail if a newer spawn already cancelled this fork before
@@ -819,47 +813,53 @@ impl QueryEngine {
                 "prompt suggestion: tools disabled",
             ));
             options.overrides.abort = Some(abort_for_task.clone());
-            let system = crate::prompt_suggestion::build_suggestion_system_prompt().to_string();
-            // The fork sees a special-purpose system prompt + the
-            // parent's history; the user message is intentionally
-            // empty (TS does the same — the model is told via the
-            // system prompt to produce a suggestion based on what
-            // came before). Some providers reject a literally empty
-            // user message, so we send a single space.
-            let result = dispatcher
-                .dispatch(&cache, &options, " ", Some(system))
-                .await;
+            let prompt = crate::prompt_suggestion::build_suggestion_system_prompt().to_string();
+            // The fork sees the parent's system prompt/cache-key
+            // params unchanged; the suggestion instruction is appended
+            // as the fork's user message, matching TS runForkedAgent.
+            let result = dispatcher.dispatch(&cache, &options, &prompt, None).await;
             match result {
                 Ok(r) => {
                     // Multi-message text walk (TS:332-349 — "model
                     // may loop (try tool → denied → text in next
                     // message)"). Walks every assistant message and
-                    // finds the last non-empty text block.
-                    let text = crate::prompt_suggestion::extract_suggestion_text(&r.messages);
+                    // finds the first non-empty text block.
+                    let generation =
+                        crate::prompt_suggestion::extract_suggestion_generation(&r.messages);
                     // Post-fork validation (steps 7-9): aborted /
                     // empty / NONE / 12-rule filter. TS:
                     // promptSuggestion.ts:171-181.
                     let aborted_after = abort_for_task.is_cancelled();
-                    if let Some(outcome) =
-                        crate::prompt_suggestion::post_fork_validation(&text, aborted_after)
-                    {
+                    if let Some(outcome) = crate::prompt_suggestion::post_fork_validation(
+                        &generation.text,
+                        aborted_after,
+                    ) {
                         tracing::debug!(
                             outcome = ?outcome,
-                            text_len = text.len(),
+                            text_len = generation.text.len(),
                             "promptSuggestion dropped by post-fork validation"
                         );
                         return;
                     }
                     let prompt_id = uuid::Uuid::new_v4().to_string();
                     let now = chrono::Utc::now().to_rfc3339();
+                    let suggestion = generation.text.trim().to_string();
                     let mut state = app_state.write().await;
                     crate::prompt_suggestion::record_suggestion(
                         &mut state,
-                        text.trim().to_string(),
+                        suggestion.clone(),
                         prompt_id,
                         now,
-                        None,
+                        generation.request_id,
                     );
+                    drop(state);
+                    let _delivered = emit_protocol(
+                        &event_tx,
+                        ServerNotification::PromptSuggestion {
+                            suggestions: vec![suggestion],
+                        },
+                    )
+                    .await;
                 }
                 Err(e) => {
                     tracing::debug!(error = %e, "promptSuggestion fork dispatch failed");
