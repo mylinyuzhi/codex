@@ -431,6 +431,49 @@ fn builtin_claude_haiku_does_not_declare_isp_or_context1m() {
 }
 
 #[test]
+fn builtin_claude_models_declare_explicit_thinking_budgets() {
+    // After dropping the wire-builder `budget_tokens = 1024` fallback in
+    // `vercel-ai-anthropic`, ModelInfo is the single source of truth for
+    // budget. Anthropic first-party rejects `thinking.type=enabled`
+    // without `budget_tokens`, so every Claude builtin level must declare
+    // an explicit budget here. Values are aligned with
+    // `vercel-ai-provider-utils::map_reasoning_to_provider_budget`
+    // defaults at 64k max_output (Low 10% / Medium 30% / High 60%; XHigh
+    // pinned to the model's 128k headroom).
+    use coco_types::ReasoningEffort;
+    let builtin = builtin_models_partial();
+    let expected_budgets = [
+        (ReasoningEffort::Low, 6_400_i32),
+        (ReasoningEffort::Medium, 19_200),
+        (ReasoningEffort::High, 38_400),
+        (ReasoningEffort::XHigh, 128_000),
+    ];
+    for model_id in ["claude-sonnet-4-6", "claude-opus-4-7"] {
+        let info = builtin.get(model_id).expect(model_id);
+        let levels = info
+            .supported_thinking_levels
+            .as_ref()
+            .unwrap_or_else(|| panic!("{model_id} must seed thinking levels"));
+        assert_eq!(
+            levels.len(),
+            expected_budgets.len(),
+            "{model_id} thinking-level count drifted from expected matrix",
+        );
+        for (level, (expected_effort, expected_budget)) in levels.iter().zip(expected_budgets) {
+            assert_eq!(
+                level.effort, expected_effort,
+                "{model_id} effort order drifted",
+            );
+            assert_eq!(
+                level.budget_tokens,
+                Some(expected_budget),
+                "{model_id} {expected_effort:?} must declare explicit budget",
+            );
+        }
+    }
+}
+
+#[test]
 fn builtin_deepseek_v4_declares_four_thinking_levels() {
     use coco_types::ReasoningEffort;
     let builtin = builtin_models_partial();
@@ -459,7 +502,7 @@ fn builtin_deepseek_v4_declares_four_thinking_levels() {
         assert_eq!(levels.len(), 4, "{model_id} must expose 4 thinking levels");
         assert_eq!(levels[0].effort, ReasoningEffort::Disable);
         assert_eq!(levels[1].effort, ReasoningEffort::Auto);
-        assert_eq!(levels[2].effort, ReasoningEffort::High);
+        assert_eq!(levels[2].effort, ReasoningEffort::Medium);
         assert_eq!(levels[3].effort, ReasoningEffort::XHigh);
 
         // Disable carries the explicit-off wire toggle.
@@ -473,11 +516,11 @@ fn builtin_deepseek_v4_declares_four_thinking_levels() {
             levels[1].options.is_empty(),
             "{model_id} Auto level must have empty options (provider decides)"
         );
-        // High and XHigh carry the enabled toggle.
+        // Medium (UX "high") and XHigh (UX "max") carry the enabled toggle.
         assert_eq!(
             levels[2].options.get("thinking"),
             Some(&serde_json::json!({"type": "enabled"})),
-            "{model_id} High level must declare enabled toggle"
+            "{model_id} Medium level must declare enabled toggle"
         );
         assert_eq!(
             levels[3].options.get("thinking"),

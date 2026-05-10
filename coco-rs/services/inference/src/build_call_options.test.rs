@@ -463,10 +463,9 @@ fn deepseek_disabled_thinking_emits_disabled_toggle() {
     let info = ModelInfo::from_partial("deepseek-openai", "deepseek-v4-flash", partial).unwrap();
 
     let mut disabled = ThinkingLevel::disable();
-    disabled.options.insert(
-        "thinking".into(),
-        serde_json::json!({"type": "disabled"}),
-    );
+    disabled
+        .options
+        .insert("thinking".into(), serde_json::json!({"type": "disabled"}));
     let per_call = PerCallOverrides {
         thinking_level: Some(disabled),
         ..Default::default()

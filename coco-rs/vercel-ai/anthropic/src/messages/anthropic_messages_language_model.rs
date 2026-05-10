@@ -502,7 +502,7 @@ impl AnthropicMessagesLanguageModel {
             Some(ThinkingConfig::Enabled { .. }) | Some(ThinkingConfig::Adaptive)
         );
 
-        let mut thinking_budget: Option<u64> = match thinking_type {
+        let thinking_budget: Option<u64> = match thinking_type {
             Some(ThinkingConfig::Enabled { budget_tokens }) => *budget_tokens,
             _ => None,
         };
@@ -554,18 +554,19 @@ impl AnthropicMessagesLanguageModel {
         if is_thinking {
             match thinking_type {
                 Some(ThinkingConfig::Enabled { budget_tokens }) => {
-                    let budget = budget_tokens.unwrap_or_else(|| {
-                        warnings.push(Warning::Compatibility {
-                            feature: "extended thinking".into(),
-                            details: Some("thinking budget is required when thinking is enabled. using default budget of 1024 tokens.".into()),
-                        });
-                        thinking_budget = Some(1024);
-                        1024
-                    });
-                    body["thinking"] = json!({
-                        "type": "enabled",
-                        "budget_tokens": budget,
-                    });
+                    // ModelInfo is the single source of truth for budget_tokens.
+                    // When omitted, emit `{"type":"enabled"}` with no
+                    // budget_tokens key — the provider does not synthesize
+                    // a default. Endpoints that require it (Anthropic
+                    // first-party) must declare a budget per ThinkingLevel
+                    // in the registry.
+                    let mut thinking_obj = serde_json::Map::new();
+                    thinking_obj.insert("type".into(), Value::String("enabled".into()));
+                    if let Some(budget) = budget_tokens {
+                        thinking_obj
+                            .insert("budget_tokens".into(), Value::Number((*budget).into()));
+                    }
+                    body["thinking"] = Value::Object(thinking_obj);
                 }
                 Some(ThinkingConfig::Adaptive) => {
                     body["thinking"] = json!({"type": "adaptive"});
@@ -594,8 +595,12 @@ impl AnthropicMessagesLanguageModel {
                 });
             }
 
-            // Adjust max_tokens to account for thinking budget
-            body["max_tokens"] = json!(max_tokens + thinking_budget.unwrap_or(0));
+            // Adjust max_tokens to account for thinking budget — only when
+            // ModelInfo declared one. With None, leave max_tokens at the
+            // model's max_output_tokens.
+            if let Some(budget) = thinking_budget {
+                body["max_tokens"] = json!(max_tokens + budget);
+            }
         } else {
             // Only check temperature/topP mutual exclusivity when thinking is not enabled
             if options.top_p.is_some() && temperature.is_some() {

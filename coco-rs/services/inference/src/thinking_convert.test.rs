@@ -126,10 +126,9 @@ fn disable_effort_passes_options_through() {
     // pass options through even when effort is Disable so the wire
     // toggle reaches the body.
     let mut level = ThinkingLevel::disable();
-    level.options.insert(
-        "thinking".into(),
-        serde_json::json!({"type": "disabled"}),
-    );
+    level
+        .options
+        .insert("thinking".into(), serde_json::json!({"type": "disabled"}));
     let out = to_extra_body(&level, ProviderApi::OpenaiCompat);
     assert_eq!(
         out.get("thinking"),
@@ -154,10 +153,9 @@ fn deepseek_medium_emits_thinking_enabled_and_reasoning_effort() {
         budget_tokens: None,
         options: std::collections::HashMap::new(),
     };
-    level.options.insert(
-        "thinking".into(),
-        serde_json::json!({"type": "enabled"}),
-    );
+    level
+        .options
+        .insert("thinking".into(), serde_json::json!({"type": "enabled"}));
     let out = to_extra_body(&level, ProviderApi::OpenaiCompat);
     assert_eq!(
         out.get("thinking"),
@@ -177,10 +175,9 @@ fn deepseek_xhigh_emits_thinking_enabled_and_xhigh_reasoning_effort() {
         budget_tokens: None,
         options: std::collections::HashMap::new(),
     };
-    level.options.insert(
-        "thinking".into(),
-        serde_json::json!({"type": "enabled"}),
-    );
+    level
+        .options
+        .insert("thinking".into(), serde_json::json!({"type": "enabled"}));
     let out = to_extra_body(&level, ProviderApi::OpenaiCompat);
     assert_eq!(
         out.get("thinking"),

@@ -35,7 +35,8 @@ use vercel_ai_provider::LanguageModelV4Message;
 
 /// Builds a `ModelInfo` for `deepseek-v4-flash` mirroring what the
 /// builtin registry resolves: 1M context, 12k output, ExtendedThinking,
-/// and the 4-level thinking surface (Disable / Auto / High / XHigh).
+/// and the 4-level thinking surface (Disable / Auto / Medium / XHigh —
+/// `Medium` is the UX label "high", `XHigh` is the UX label "max").
 fn deepseek_v4_flash_info(provider_name: &str) -> ModelInfo {
     let levels = vec![
         ThinkingLevel {
@@ -52,7 +53,7 @@ fn deepseek_v4_flash_info(provider_name: &str) -> ModelInfo {
             options: HashMap::new(),
         },
         ThinkingLevel {
-            effort: ReasoningEffort::High,
+            effort: ReasoningEffort::Medium,
             budget_tokens: None,
             options: HashMap::from([(
                 "thinking".to_string(),
@@ -87,10 +88,11 @@ fn deepseek_v4_flash_info(provider_name: &str) -> ModelInfo {
     ModelInfo::from_partial(provider_name, "deepseek-v4-flash", partial).unwrap()
 }
 
-/// Per-call thinking override mirroring the registry's High entry.
-fn high_thinking_with_enabled_toggle() -> ThinkingLevel {
+/// Per-call thinking override mirroring the registry's Medium (UX
+/// label "high") entry.
+fn medium_thinking_with_enabled_toggle() -> ThinkingLevel {
     ThinkingLevel {
-        effort: ReasoningEffort::High,
+        effort: ReasoningEffort::Medium,
         budget_tokens: None,
         options: HashMap::from([(
             "thinking".to_string(),
@@ -144,16 +146,17 @@ fn make_anthropic_config() -> Arc<AnthropicConfig> {
     })
 }
 
-/// Test A — OpenAI-compat path with explicit High level. Same
-/// `deepseek-v4-flash` ModelInfo driven through the `deepseek-openai`
-/// provider with thinking_level = High. Final wire body must include
-/// the `thinking` enabled toggle and `reasoning_effort: "high"` —
-/// matching the curl in the design spec.
+/// Test A — OpenAI-compat path with explicit Medium level (UX "high").
+/// Same `deepseek-v4-flash` ModelInfo driven through the
+/// `deepseek-openai` provider with thinking_level = Medium. Final wire
+/// body must include the `thinking` enabled toggle and
+/// `reasoning_effort: "medium"` (the OpenaiCompat arm derives this from
+/// `ReasoningEffort::Display`).
 #[test]
-fn deepseek_v4_flash_openai_compat_high_emits_thinking_and_reasoning_effort() {
+fn deepseek_v4_flash_openai_compat_medium_emits_thinking_and_reasoning_effort() {
     let info = deepseek_v4_flash_info("deepseek-openai");
     let per_call = PerCallOverrides {
-        thinking_level: Some(high_thinking_with_enabled_toggle()),
+        thinking_level: Some(medium_thinking_with_enabled_toggle()),
         ..Default::default()
     };
 
@@ -173,9 +176,9 @@ fn deepseek_v4_flash_openai_compat_high_emits_thinking_and_reasoning_effort() {
         .get_args(&call)
         .unwrap_or_else(|e| panic!("get_args: {e}"));
 
-    // Per the curl in the design spec:
+    // Wire body shape:
     //   {"model":"deepseek-v4-flash","messages":[…],
-    //    "thinking":{"type":"enabled"},"reasoning_effort":"high"}
+    //    "thinking":{"type":"enabled"},"reasoning_effort":"medium"}
     assert_eq!(body["model"], serde_json::json!("deepseek-v4-flash"));
     assert!(body["messages"].is_array(), "messages must be present");
     assert_eq!(
@@ -185,8 +188,8 @@ fn deepseek_v4_flash_openai_compat_high_emits_thinking_and_reasoning_effort() {
     );
     assert_eq!(
         body["reasoning_effort"],
-        serde_json::json!("high"),
-        "reasoning_effort must derive from ReasoningEffort::High via Display"
+        serde_json::json!("medium"),
+        "reasoning_effort must derive from ReasoningEffort::Medium via Display"
     );
 }
 
@@ -236,10 +239,9 @@ fn deepseek_v4_flash_openai_compat_disable_emits_disabled_toggle_only() {
     let info = deepseek_v4_flash_info("deepseek-openai");
 
     let mut disable = ThinkingLevel::disable();
-    disable.options.insert(
-        "thinking".into(),
-        serde_json::json!({"type": "disabled"}),
-    );
+    disable
+        .options
+        .insert("thinking".into(), serde_json::json!({"type": "disabled"}));
     let per_call = PerCallOverrides {
         thinking_level: Some(disable),
         ..Default::default()
@@ -272,18 +274,18 @@ fn deepseek_v4_flash_openai_compat_disable_emits_disabled_toggle_only() {
     );
 }
 
-/// Test B — Anthropic path with explicit High level. Same
-/// `deepseek-v4-flash` ModelInfo driven through the `deepseek-anthropic`
-/// provider. Anthropic's wire shape uses `thinking: {type: enabled,
-/// budget_tokens: N?}`; the convert layer's typed Anthropic arm
-/// overwrites the user-supplied `level.options.thinking` (since arm
-/// emission happens AFTER options passthrough). Final wire body
-/// retains an `enabled` thinking object.
+/// Test B — Anthropic path with explicit Medium level (UX "high").
+/// Same `deepseek-v4-flash` ModelInfo driven through the
+/// `deepseek-anthropic` provider. Asserts the no-fallback contract:
+/// ModelInfo declares no `budget_tokens` for DeepSeek levels, so the
+/// wire body must emit `{"type":"enabled"}` *only* and `max_tokens`
+/// must equal the builtin's `max_output_tokens` — no synthetic 1024
+/// budget, no `max_tokens` bump.
 #[test]
-fn deepseek_v4_flash_anthropic_high_emits_thinking_enabled() {
+fn deepseek_v4_flash_anthropic_medium_emits_thinking_enabled() {
     let info = deepseek_v4_flash_info("deepseek-anthropic");
     let per_call = PerCallOverrides {
-        thinking_level: Some(high_thinking_with_enabled_toggle()),
+        thinking_level: Some(medium_thinking_with_enabled_toggle()),
         ..Default::default()
     };
 
@@ -297,8 +299,7 @@ fn deepseek_v4_flash_anthropic_high_emits_thinking_enabled() {
     );
     call.prompt = vec![LanguageModelV4Message::user_text("Hello!")];
 
-    let model =
-        AnthropicMessagesLanguageModel::new("deepseek-v4-flash", make_anthropic_config());
+    let model = AnthropicMessagesLanguageModel::new("deepseek-v4-flash", make_anthropic_config());
     let (body, _headers, _warnings) = model
         .get_args(&call, false)
         .unwrap_or_else(|e| panic!("get_args: {e}"));
@@ -306,13 +307,24 @@ fn deepseek_v4_flash_anthropic_high_emits_thinking_enabled() {
     assert_eq!(body["model"], serde_json::json!("deepseek-v4-flash"));
     assert!(body["messages"].is_array(), "messages must be present");
     assert_eq!(
-        body["thinking"]["type"],
-        serde_json::json!("enabled"),
-        "thinking must be enabled on the Anthropic wire"
+        body["thinking"],
+        serde_json::json!({"type": "enabled"}),
+        "thinking object must be exactly {{type: enabled}} — no synthesized budget_tokens"
+    );
+    assert!(
+        body["thinking"].get("budget_tokens").is_none(),
+        "DeepSeek anthropic-compat must NOT carry budget_tokens — ModelInfo declared None"
+    );
+    // builtin max_output_tokens = 12_288 (deepseek_v4_flash_info above).
+    // Anthropic provider must NOT bump it when budget is absent.
+    assert_eq!(
+        body["max_tokens"],
+        serde_json::json!(12_288),
+        "max_tokens must equal builtin max_output_tokens — no synthetic bump"
     );
     // No `reasoning_effort` on Anthropic wire — that key is
     // OpenaiCompat-specific. The Anthropic arm emits effort via
-    // `thinking.budgetTokens` only.
+    // `thinking.budgetTokens` only (which we deliberately omit here).
     assert!(
         body.get("reasoning_effort").is_none(),
         "Anthropic wire must NOT carry reasoning_effort"
