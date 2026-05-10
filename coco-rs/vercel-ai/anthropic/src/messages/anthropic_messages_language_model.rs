@@ -59,7 +59,10 @@ use super::map_anthropic_stop_reason::map_anthropic_stop_reason;
 use super::prepare_tools::prepare_anthropic_tools;
 
 /// Type alias for the result of `get_args()`: (body, headers, warnings).
-type GetArgsResult = (Value, HashMap<String, String>, Vec<Warning>);
+/// Public so cross-crate tests can introspect the wire body via
+/// [`AnthropicMessagesLanguageModel::get_args`]. Tuple is
+/// `(body, headers, warnings)`.
+pub type GetArgsResult = (Value, HashMap<String, String>, Vec<Warning>);
 
 /// Model capabilities for a given model family.
 struct ModelCapabilities {
@@ -274,8 +277,10 @@ impl AnthropicMessagesLanguageModel {
         }
     }
 
-    /// Build request body, headers, and collect warnings.
-    fn get_args(
+    /// Build request body, headers, and collect warnings. Public so
+    /// cross-crate tests can introspect the wire shape without
+    /// dispatching HTTP.
+    pub fn get_args(
         &self,
         options: &LanguageModelV4CallOptions,
         stream: bool,

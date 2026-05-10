@@ -63,8 +63,9 @@ impl OpenAICompatibleChatLanguageModel {
         }
     }
 
-    /// Build request body and collect warnings.
-    fn get_args(
+    /// Build request body and collect warnings. Public so cross-crate
+    /// tests can introspect the wire shape without dispatching HTTP.
+    pub fn get_args(
         &self,
         options: &LanguageModelV4CallOptions,
     ) -> Result<(Value, Vec<Warning>), AISdkError> {

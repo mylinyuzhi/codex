@@ -18,19 +18,34 @@
 //! determines wire body, not the user-facing instance label.
 
 use coco_types::ProviderApi;
-use coco_types::ReasoningEffort;
 use coco_types::ThinkingLevel;
 use std::collections::BTreeMap;
 
 /// Convert a `ThinkingLevel` into provider-neutral flat camelCase
 /// keys. Routing key is the wire-protocol family.
+///
+/// `level.options` is passed through unconditionally (including when
+/// `effort == Disable` or `Auto`) so models can declare provider-specific
+/// wire shapes for either off-state — e.g. DeepSeek V4 emits
+/// `{"thinking":{"type":"disabled"}}` when off. The typed-arm emission
+/// is gated on `effort.is_explicit_level()`; `Disable` and `Auto` skip
+/// the arm entirely so the server-side default applies.
 pub fn to_extra_body(
     level: &ThinkingLevel,
     api: ProviderApi,
 ) -> BTreeMap<String, serde_json::Value> {
     let mut out = BTreeMap::new();
 
-    if level.effort == ReasoningEffort::None {
+    // Pass `level.options` through unconditionally so models can declare
+    // a wire toggle for the disabled state. Typed-arm emission below
+    // overwrites overlapping keys when effort is an explicit numeric
+    // level — current order matches existing Claude builtin behavior.
+    for (key, value) in &level.options {
+        out.insert(key.clone(), value.clone());
+    }
+
+    if !level.effort.is_explicit_level() {
+        // Disable / Auto — let the server-side default apply.
         return out;
     }
 
@@ -76,13 +91,6 @@ pub fn to_extra_body(
                 serde_json::Value::String(level.effort.to_string()),
             );
         }
-    }
-
-    // Pass-through `level.options` — provider-specific extensions land
-    // verbatim. Caller is responsible for camelCase keys (the typed
-    // fields above are camelCase by construction).
-    for (key, value) in &level.options {
-        out.insert(key.clone(), value.clone());
     }
 
     out

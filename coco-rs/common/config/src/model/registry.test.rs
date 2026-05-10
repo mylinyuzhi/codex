@@ -431,6 +431,63 @@ fn builtin_claude_haiku_does_not_declare_isp_or_context1m() {
 }
 
 #[test]
+fn builtin_deepseek_v4_declares_four_thinking_levels() {
+    use coco_types::ReasoningEffort;
+    let builtin = builtin_models_partial();
+    for model_id in ["deepseek-v4-flash", "deepseek-v4-pro"] {
+        let info = builtin.get(model_id).expect(model_id);
+
+        // Capability gate.
+        let caps = info.capabilities.as_ref().expect("capabilities");
+        assert!(
+            caps.contains(&coco_types::Capability::ExtendedThinking),
+            "{model_id} must declare ExtendedThinking"
+        );
+
+        // Default = Auto (matches DeepSeek docs: server defaults to enabled+high).
+        assert_eq!(
+            info.default_thinking_level,
+            Some(ReasoningEffort::Auto),
+            "{model_id} default thinking level must be Auto"
+        );
+
+        // Surface: 4 levels [Disable, Auto, High, XHigh] in that order.
+        let levels = info
+            .supported_thinking_levels
+            .as_ref()
+            .expect("thinking levels");
+        assert_eq!(levels.len(), 4, "{model_id} must expose 4 thinking levels");
+        assert_eq!(levels[0].effort, ReasoningEffort::Disable);
+        assert_eq!(levels[1].effort, ReasoningEffort::Auto);
+        assert_eq!(levels[2].effort, ReasoningEffort::High);
+        assert_eq!(levels[3].effort, ReasoningEffort::XHigh);
+
+        // Disable carries the explicit-off wire toggle.
+        assert_eq!(
+            levels[0].options.get("thinking"),
+            Some(&serde_json::json!({"type": "disabled"})),
+            "{model_id} Disable level must declare disabled toggle"
+        );
+        // Auto declares NO options — provider decides everything.
+        assert!(
+            levels[1].options.is_empty(),
+            "{model_id} Auto level must have empty options (provider decides)"
+        );
+        // High and XHigh carry the enabled toggle.
+        assert_eq!(
+            levels[2].options.get("thinking"),
+            Some(&serde_json::json!({"type": "enabled"})),
+            "{model_id} High level must declare enabled toggle"
+        );
+        assert_eq!(
+            levels[3].options.get("thinking"),
+            Some(&serde_json::json!({"type": "enabled"})),
+            "{model_id} XHigh level must declare enabled toggle"
+        );
+    }
+}
+
+#[test]
 fn non_anthropic_builtin_models_do_not_declare_prompt_cache() {
     // Capability::PromptCache is Anthropic wire-shape specific; no GPT/Gemini
     // builtin should declare it (multi-provider isolation invariant).

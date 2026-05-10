@@ -90,10 +90,20 @@ fn volcengine_uses_reasoning_effort_camelcase() {
 }
 
 #[test]
-fn none_effort_returns_empty_map() {
-    let level = ThinkingLevel::none();
+fn disable_returns_empty_map_when_no_options() {
+    let level = ThinkingLevel::disable();
     let out = to_extra_body(&level, ProviderApi::Anthropic);
     assert!(out.is_empty());
+}
+
+#[test]
+fn auto_returns_empty_map_when_no_options() {
+    let level = ThinkingLevel::auto();
+    let out = to_extra_body(&level, ProviderApi::OpenaiCompat);
+    assert!(
+        out.is_empty(),
+        "Auto with empty options means: provider decides; no fields emitted"
+    );
 }
 
 #[test]
@@ -106,5 +116,79 @@ fn level_options_are_passed_through() {
     assert_eq!(
         out.get("interleaved").and_then(serde_json::Value::as_bool),
         Some(true)
+    );
+}
+
+#[test]
+fn disable_effort_passes_options_through() {
+    // DeepSeek V4 declares `{"thinking":{"type":"disabled"}}` in
+    // `level.options` for its `Disable` level. The convert layer must
+    // pass options through even when effort is Disable so the wire
+    // toggle reaches the body.
+    let mut level = ThinkingLevel::disable();
+    level.options.insert(
+        "thinking".into(),
+        serde_json::json!({"type": "disabled"}),
+    );
+    let out = to_extra_body(&level, ProviderApi::OpenaiCompat);
+    assert_eq!(
+        out.get("thinking"),
+        Some(&serde_json::json!({"type": "disabled"})),
+    );
+    // No `reasoningEffort` for Disable — typed-arm emission is gated on
+    // `is_explicit_level()`, which Disable / Auto fail.
+    assert!(
+        !out.contains_key("reasoningEffort"),
+        "Disable level must not emit reasoningEffort"
+    );
+}
+
+#[test]
+fn deepseek_medium_emits_thinking_enabled_and_reasoning_effort() {
+    // Mirrors the registry surface: Medium effort + options carrying
+    // the wire-enabled toggle. Output must contain BOTH the
+    // `thinking` toggle (from level.options) AND the `reasoningEffort`
+    // (from the OpenaiCompat default arm via `Display`).
+    let mut level = ThinkingLevel {
+        effort: ReasoningEffort::Medium,
+        budget_tokens: None,
+        options: std::collections::HashMap::new(),
+    };
+    level.options.insert(
+        "thinking".into(),
+        serde_json::json!({"type": "enabled"}),
+    );
+    let out = to_extra_body(&level, ProviderApi::OpenaiCompat);
+    assert_eq!(
+        out.get("thinking"),
+        Some(&serde_json::json!({"type": "enabled"})),
+    );
+    assert_eq!(
+        out.get("reasoningEffort")
+            .and_then(serde_json::Value::as_str),
+        Some("medium"),
+    );
+}
+
+#[test]
+fn deepseek_xhigh_emits_thinking_enabled_and_xhigh_reasoning_effort() {
+    let mut level = ThinkingLevel {
+        effort: ReasoningEffort::XHigh,
+        budget_tokens: None,
+        options: std::collections::HashMap::new(),
+    };
+    level.options.insert(
+        "thinking".into(),
+        serde_json::json!({"type": "enabled"}),
+    );
+    let out = to_extra_body(&level, ProviderApi::OpenaiCompat);
+    assert_eq!(
+        out.get("thinking"),
+        Some(&serde_json::json!({"type": "enabled"})),
+    );
+    assert_eq!(
+        out.get("reasoningEffort")
+            .and_then(serde_json::Value::as_str),
+        Some("xhigh"),
     );
 }
