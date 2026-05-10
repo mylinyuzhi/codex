@@ -167,7 +167,13 @@ pub fn build_call_options_with_extra(
         // through — DeepSeek V4 emits `{"thinking":{"type":"disabled"}}`
         // when off. The Lane A2 typed-reasoning gate above (`call.reasoning`)
         // remains gated on effort != None.
-        for (k, v) in thinking_convert::to_extra_body(t, api) {
+        //
+        // `info.capabilities` gates Anthropic adaptive thinking — `Auto`
+        // emits `{type:adaptive}` only when `Capability::AdaptiveThinking`
+        // is declared. Empty / None capabilities → safe degradation
+        // (server default applies).
+        let caps = info.capabilities.as_deref().unwrap_or(&[]);
+        for (k, v) in thinking_convert::to_extra_body(t, api, caps) {
             merge_into_extra(&mut extra, &k, &v);
         }
     }

@@ -1,13 +1,23 @@
 use super::*;
+use coco_types::Capability;
 use coco_types::ProviderApi;
 use coco_types::ReasoningEffort;
 use coco_types::ThinkingLevel;
 use pretty_assertions::assert_eq;
 
+/// Capability slice for tests modelling an adaptive-capable Anthropic
+/// model (Claude Sonnet 4.6 / Opus 4.6 / DeepSeek-anthropic-compat).
+const ADAPTIVE: &[Capability] = &[Capability::AdaptiveThinking];
+
+/// Empty capability slice — models with no AdaptiveThinking declared
+/// (Claude Sonnet 4.5, custom-registered third-party Anthropic-compat
+/// without registry override, etc.). Auto on these MUST emit nothing.
+const NO_CAPS: &[Capability] = &[];
+
 #[test]
 fn anthropic_thinking_uses_camelcase_budget_tokens() {
     let level = ThinkingLevel::with_budget(ReasoningEffort::High, 32_000);
-    let out = to_extra_body(&level, ProviderApi::Anthropic);
+    let out = to_extra_body(&level, ProviderApi::Anthropic, ADAPTIVE);
     let thinking = out.get("thinking").unwrap();
     assert_eq!(
         thinking.get("type").and_then(serde_json::Value::as_str),
@@ -40,7 +50,7 @@ fn renamed_anthropic_instance_still_emits_anthropic_shape() {
     // ProviderApi::Anthropic) MUST still get the typed Anthropic wire
     // body, not the OpenAI-compat fallback.
     let level = ThinkingLevel::with_budget(ReasoningEffort::High, 12_000);
-    let out = to_extra_body(&level, ProviderApi::Anthropic);
+    let out = to_extra_body(&level, ProviderApi::Anthropic, ADAPTIVE);
     assert!(out.contains_key("thinking"));
     assert!(!out.contains_key("reasoningEffort"));
 }
@@ -48,7 +58,7 @@ fn renamed_anthropic_instance_still_emits_anthropic_shape() {
 #[test]
 fn openai_responses_uses_reasoning_summary_camelcase() {
     let level = ThinkingLevel::high();
-    let out = to_extra_body(&level, ProviderApi::Openai);
+    let out = to_extra_body(&level, ProviderApi::Openai, NO_CAPS);
     assert_eq!(
         out.get("reasoningSummary")
             .and_then(serde_json::Value::as_str),
@@ -59,7 +69,7 @@ fn openai_responses_uses_reasoning_summary_camelcase() {
 #[test]
 fn google_thinking_config_uses_camelcase_keys() {
     let level = ThinkingLevel::with_budget(ReasoningEffort::Medium, 8_000);
-    let out = to_extra_body(&level, ProviderApi::Gemini);
+    let out = to_extra_body(&level, ProviderApi::Gemini, NO_CAPS);
     let config = out.get("thinkingConfig").unwrap();
     assert_eq!(
         config
@@ -78,7 +88,7 @@ fn google_thinking_config_uses_camelcase_keys() {
 #[test]
 fn openai_compat_emits_reasoning_effort_camelcase() {
     let level = ThinkingLevel::high();
-    let out = to_extra_body(&level, ProviderApi::OpenaiCompat);
+    let out = to_extra_body(&level, ProviderApi::OpenaiCompat, NO_CAPS);
     assert_eq!(
         out.get("reasoningEffort")
             .and_then(serde_json::Value::as_str),
@@ -89,7 +99,7 @@ fn openai_compat_emits_reasoning_effort_camelcase() {
 #[test]
 fn volcengine_uses_reasoning_effort_camelcase() {
     let level = ThinkingLevel::high();
-    let out = to_extra_body(&level, ProviderApi::Volcengine);
+    let out = to_extra_body(&level, ProviderApi::Volcengine, NO_CAPS);
     assert_eq!(
         out.get("reasoningEffort")
             .and_then(serde_json::Value::as_str),
@@ -101,9 +111,10 @@ fn volcengine_uses_reasoning_effort_camelcase() {
 fn anthropic_arm_disable_emits_disabled_thinking_typed() {
     // Disable on the Anthropic arm now writes the explicit-off
     // toggle on the wire (vercel-ai-anthropic body builder picks it
-    // up via the typed `ThinkingConfig::Disabled` parse).
+    // up via the typed `ThinkingConfig::Disabled` parse). Capability
+    // slice is irrelevant for Disable — the gate only affects Auto.
     let level = ThinkingLevel::disable();
-    let out = to_extra_body(&level, ProviderApi::Anthropic);
+    let out = to_extra_body(&level, ProviderApi::Anthropic, NO_CAPS);
     assert_eq!(
         out.get("thinking"),
         Some(&serde_json::json!({"type": "disabled"})),
@@ -118,13 +129,13 @@ fn anthropic_arm_disable_emits_disabled_thinking_typed() {
 #[test]
 fn anthropic_arm_auto_emits_adaptive_thinking_only() {
     // Auto on Anthropic emits the adaptive variant — server picks
-    // effort dynamically.
+    // effort dynamically. Requires `Capability::AdaptiveThinking`.
     let level = ThinkingLevel::auto();
-    let out = to_extra_body(&level, ProviderApi::Anthropic);
+    let out = to_extra_body(&level, ProviderApi::Anthropic, ADAPTIVE);
     assert_eq!(
         out.get("thinking"),
         Some(&serde_json::json!({"type": "adaptive"})),
-        "Auto on Anthropic must emit {{type: adaptive}}",
+        "Auto on adaptive-capable Anthropic must emit {{type: adaptive}}",
     );
     assert!(
         !out.contains_key("output_config"),
@@ -139,7 +150,7 @@ fn anthropic_arm_minimal_maps_to_low_effort() {
     // emits the standard enabled thinking object.
     let mut level = ThinkingLevel::auto();
     level.effort = ReasoningEffort::Minimal;
-    let out = to_extra_body(&level, ProviderApi::Anthropic);
+    let out = to_extra_body(&level, ProviderApi::Anthropic, NO_CAPS);
     assert_eq!(
         out.get("thinking")
             .and_then(|v| v.get("type"))
@@ -159,7 +170,7 @@ fn anthropic_arm_minimal_maps_to_low_effort() {
 fn anthropic_arm_xhigh_maps_to_max_effort() {
     let mut level = ThinkingLevel::auto();
     level.effort = ReasoningEffort::XHigh;
-    let out = to_extra_body(&level, ProviderApi::Anthropic);
+    let out = to_extra_body(&level, ProviderApi::Anthropic, NO_CAPS);
     assert_eq!(
         out.get("output_config")
             .and_then(|v| v.get("effort"))
@@ -177,7 +188,7 @@ fn anthropic_arm_medium_emits_thinking_and_output_config_medium() {
     // "medium").
     let mut level = ThinkingLevel::auto();
     level.effort = ReasoningEffort::Medium;
-    let out = to_extra_body(&level, ProviderApi::Anthropic);
+    let out = to_extra_body(&level, ProviderApi::Anthropic, NO_CAPS);
     assert_eq!(
         out.get("thinking")
             .and_then(|v| v.get("type"))
@@ -195,7 +206,7 @@ fn anthropic_arm_medium_emits_thinking_and_output_config_medium() {
 #[test]
 fn auto_returns_empty_map_when_no_options() {
     let level = ThinkingLevel::auto();
-    let out = to_extra_body(&level, ProviderApi::OpenaiCompat);
+    let out = to_extra_body(&level, ProviderApi::OpenaiCompat, NO_CAPS);
     assert!(
         out.is_empty(),
         "Auto with empty options on OpenaiCompat means: provider decides; no fields emitted",
@@ -207,7 +218,7 @@ fn disable_returns_empty_map_on_openai_compat() {
     // OpenaiCompat path keeps the is_explicit_level gate — Disable
     // emits nothing typed (only level.options pass-through).
     let level = ThinkingLevel::disable();
-    let out = to_extra_body(&level, ProviderApi::OpenaiCompat);
+    let out = to_extra_body(&level, ProviderApi::OpenaiCompat, NO_CAPS);
     assert!(out.is_empty());
 }
 
@@ -217,7 +228,7 @@ fn level_options_are_passed_through() {
     level
         .options
         .insert("interleaved".into(), serde_json::Value::Bool(true));
-    let out = to_extra_body(&level, ProviderApi::Anthropic);
+    let out = to_extra_body(&level, ProviderApi::Anthropic, ADAPTIVE);
     assert_eq!(
         out.get("interleaved").and_then(serde_json::Value::as_bool),
         Some(true)
@@ -234,7 +245,7 @@ fn disable_effort_passes_options_through() {
     level
         .options
         .insert("thinking".into(), serde_json::json!({"type": "disabled"}));
-    let out = to_extra_body(&level, ProviderApi::OpenaiCompat);
+    let out = to_extra_body(&level, ProviderApi::OpenaiCompat, NO_CAPS);
     assert_eq!(
         out.get("thinking"),
         Some(&serde_json::json!({"type": "disabled"})),
@@ -261,7 +272,7 @@ fn deepseek_medium_emits_thinking_enabled_and_reasoning_effort() {
     level
         .options
         .insert("thinking".into(), serde_json::json!({"type": "enabled"}));
-    let out = to_extra_body(&level, ProviderApi::OpenaiCompat);
+    let out = to_extra_body(&level, ProviderApi::OpenaiCompat, NO_CAPS);
     assert_eq!(
         out.get("thinking"),
         Some(&serde_json::json!({"type": "enabled"})),
@@ -283,7 +294,7 @@ fn deepseek_xhigh_emits_thinking_enabled_and_xhigh_reasoning_effort() {
     level
         .options
         .insert("thinking".into(), serde_json::json!({"type": "enabled"}));
-    let out = to_extra_body(&level, ProviderApi::OpenaiCompat);
+    let out = to_extra_body(&level, ProviderApi::OpenaiCompat, NO_CAPS);
     assert_eq!(
         out.get("thinking"),
         Some(&serde_json::json!({"type": "enabled"})),
@@ -318,6 +329,7 @@ fn matrix_anthropic_disable_emits_disabled_thinking_no_output_config() {
     let out = to_extra_body(
         &level_with_effort(ReasoningEffort::Disable),
         ProviderApi::Anthropic,
+        NO_CAPS,
     );
     assert_eq!(
         out.get("thinking"),
@@ -330,10 +342,12 @@ fn matrix_anthropic_disable_emits_disabled_thinking_no_output_config() {
 }
 
 #[test]
-fn matrix_anthropic_auto_emits_adaptive_thinking_no_output_config() {
+fn matrix_anthropic_auto_with_adaptive_capability_emits_adaptive() {
+    // Adaptive-capable Anthropic model + Auto → emit `{type:adaptive}`.
     let out = to_extra_body(
         &level_with_effort(ReasoningEffort::Auto),
         ProviderApi::Anthropic,
+        ADAPTIVE,
     );
     assert_eq!(
         out.get("thinking"),
@@ -343,10 +357,40 @@ fn matrix_anthropic_auto_emits_adaptive_thinking_no_output_config() {
 }
 
 #[test]
+fn matrix_anthropic_auto_without_adaptive_capability_emits_nothing() {
+    // Non-adaptive Anthropic model + Auto → emit NOTHING. Server-side
+    // default applies. Protects callers from `--thinking auto` against
+    // models that would reject the value (e.g. Claude Sonnet 4.5).
+    let out = to_extra_body(
+        &level_with_effort(ReasoningEffort::Auto),
+        ProviderApi::Anthropic,
+        // Has ExtendedThinking but NOT AdaptiveThinking.
+        &[Capability::ExtendedThinking],
+    );
+    assert!(
+        out.is_empty(),
+        "Auto on non-adaptive Anthropic must emit nothing — got {out:?}"
+    );
+}
+
+#[test]
+fn matrix_anthropic_auto_with_empty_capabilities_emits_nothing() {
+    // Defensive: ModelInfo.capabilities = None falls back to
+    // `&[]` at the call site; verify Auto still degrades gracefully.
+    let out = to_extra_body(
+        &level_with_effort(ReasoningEffort::Auto),
+        ProviderApi::Anthropic,
+        NO_CAPS,
+    );
+    assert!(out.is_empty());
+}
+
+#[test]
 fn matrix_anthropic_minimal_emits_enabled_thinking_and_low_effort() {
     let out = to_extra_body(
         &level_with_effort(ReasoningEffort::Minimal),
         ProviderApi::Anthropic,
+        NO_CAPS,
     );
     assert_eq!(
         out.get("thinking"),
@@ -363,6 +407,7 @@ fn matrix_anthropic_low_emits_enabled_thinking_and_low_effort() {
     let out = to_extra_body(
         &level_with_effort(ReasoningEffort::Low),
         ProviderApi::Anthropic,
+        NO_CAPS,
     );
     assert_eq!(
         out.get("thinking"),
@@ -379,6 +424,7 @@ fn matrix_anthropic_medium_emits_enabled_thinking_and_medium_effort() {
     let out = to_extra_body(
         &level_with_effort(ReasoningEffort::Medium),
         ProviderApi::Anthropic,
+        NO_CAPS,
     );
     assert_eq!(
         out.get("thinking"),
@@ -395,6 +441,7 @@ fn matrix_anthropic_high_emits_enabled_thinking_and_high_effort() {
     let out = to_extra_body(
         &level_with_effort(ReasoningEffort::High),
         ProviderApi::Anthropic,
+        NO_CAPS,
     );
     assert_eq!(
         out.get("thinking"),
@@ -411,6 +458,7 @@ fn matrix_anthropic_xhigh_emits_enabled_thinking_and_max_effort() {
     let out = to_extra_body(
         &level_with_effort(ReasoningEffort::XHigh),
         ProviderApi::Anthropic,
+        NO_CAPS,
     );
     assert_eq!(
         out.get("thinking"),
@@ -423,10 +471,32 @@ fn matrix_anthropic_xhigh_emits_enabled_thinking_and_max_effort() {
 }
 
 #[test]
+fn matrix_anthropic_explicit_levels_ignore_adaptive_capability() {
+    // Capability gate is Auto-only; explicit levels emit the same
+    // shape regardless of AdaptiveThinking presence. Locks the
+    // intended scope of the gate.
+    for effort in [
+        ReasoningEffort::Minimal,
+        ReasoningEffort::Low,
+        ReasoningEffort::Medium,
+        ReasoningEffort::High,
+        ReasoningEffort::XHigh,
+    ] {
+        let with = to_extra_body(&level_with_effort(effort), ProviderApi::Anthropic, ADAPTIVE);
+        let without = to_extra_body(&level_with_effort(effort), ProviderApi::Anthropic, NO_CAPS);
+        assert_eq!(
+            with, without,
+            "{effort:?} wire shape must not depend on AdaptiveThinking",
+        );
+    }
+}
+
+#[test]
 fn matrix_openai_disable_emits_nothing() {
     let out = to_extra_body(
         &level_with_effort(ReasoningEffort::Disable),
         ProviderApi::Openai,
+        NO_CAPS,
     );
     assert!(
         out.is_empty(),
@@ -439,6 +509,7 @@ fn matrix_openai_auto_emits_nothing() {
     let out = to_extra_body(
         &level_with_effort(ReasoningEffort::Auto),
         ProviderApi::Openai,
+        NO_CAPS,
     );
     assert!(out.is_empty());
 }
@@ -452,7 +523,7 @@ fn matrix_openai_explicit_levels_emit_reasoning_summary() {
         ReasoningEffort::High,
         ReasoningEffort::XHigh,
     ] {
-        let out = to_extra_body(&level_with_effort(effort), ProviderApi::Openai);
+        let out = to_extra_body(&level_with_effort(effort), ProviderApi::Openai, NO_CAPS);
         assert_eq!(
             out.get("reasoningSummary")
                 .and_then(serde_json::Value::as_str),
@@ -469,6 +540,7 @@ fn matrix_gemini_disable_emits_nothing() {
     let out = to_extra_body(
         &level_with_effort(ReasoningEffort::Disable),
         ProviderApi::Gemini,
+        NO_CAPS,
     );
     assert!(out.is_empty());
 }
@@ -478,6 +550,7 @@ fn matrix_gemini_auto_emits_nothing() {
     let out = to_extra_body(
         &level_with_effort(ReasoningEffort::Auto),
         ProviderApi::Gemini,
+        NO_CAPS,
     );
     assert!(out.is_empty());
 }
@@ -491,7 +564,7 @@ fn matrix_gemini_explicit_levels_emit_thinking_config() {
         ReasoningEffort::High,
         ReasoningEffort::XHigh,
     ] {
-        let out = to_extra_body(&level_with_effort(effort), ProviderApi::Gemini);
+        let out = to_extra_body(&level_with_effort(effort), ProviderApi::Gemini, NO_CAPS);
         assert_eq!(
             out.get("thinkingConfig")
                 .and_then(|v| v.get("includeThoughts"))
@@ -509,17 +582,28 @@ fn matrix_openai_compat_disable_emits_nothing() {
     let out = to_extra_body(
         &level_with_effort(ReasoningEffort::Disable),
         ProviderApi::OpenaiCompat,
+        NO_CAPS,
     );
     assert!(out.is_empty());
 }
 
 #[test]
 fn matrix_openai_compat_auto_emits_nothing() {
-    let out = to_extra_body(
+    // OpenaiCompat (DeepSeek-openai path) ignores AdaptiveThinking
+    // capability — the gate is Anthropic-arm-only. Verify the same
+    // empty-emit behavior whether or not the capability is declared.
+    let with = to_extra_body(
         &level_with_effort(ReasoningEffort::Auto),
         ProviderApi::OpenaiCompat,
+        ADAPTIVE,
     );
-    assert!(out.is_empty());
+    let without = to_extra_body(
+        &level_with_effort(ReasoningEffort::Auto),
+        ProviderApi::OpenaiCompat,
+        NO_CAPS,
+    );
+    assert!(with.is_empty());
+    assert!(without.is_empty());
 }
 
 #[test]
@@ -532,7 +616,11 @@ fn matrix_openai_compat_explicit_levels_emit_reasoning_effort() {
         (ReasoningEffort::XHigh, "xhigh"),
     ];
     for (effort, wire) in cases {
-        let out = to_extra_body(&level_with_effort(effort), ProviderApi::OpenaiCompat);
+        let out = to_extra_body(
+            &level_with_effort(effort),
+            ProviderApi::OpenaiCompat,
+            NO_CAPS,
+        );
         assert_eq!(
             out.get("reasoningEffort")
                 .and_then(serde_json::Value::as_str),
@@ -555,7 +643,7 @@ fn matrix_volcengine_explicit_levels_emit_reasoning_effort() {
         ReasoningEffort::High,
         ReasoningEffort::XHigh,
     ] {
-        let out = to_extra_body(&level_with_effort(effort), ProviderApi::Volcengine);
+        let out = to_extra_body(&level_with_effort(effort), ProviderApi::Volcengine, NO_CAPS);
         assert!(
             out.contains_key("reasoningEffort"),
             "Volcengine {effort:?} must emit reasoningEffort",
@@ -565,6 +653,7 @@ fn matrix_volcengine_explicit_levels_emit_reasoning_effort() {
         to_extra_body(
             &level_with_effort(ReasoningEffort::Disable),
             ProviderApi::Volcengine,
+            NO_CAPS,
         )
         .is_empty()
     );
@@ -572,6 +661,7 @@ fn matrix_volcengine_explicit_levels_emit_reasoning_effort() {
         to_extra_body(
             &level_with_effort(ReasoningEffort::Auto),
             ProviderApi::Volcengine,
+            NO_CAPS,
         )
         .is_empty()
     );
@@ -588,7 +678,7 @@ fn matrix_zai_explicit_levels_emit_reasoning_effort() {
         ReasoningEffort::High,
         ReasoningEffort::XHigh,
     ] {
-        let out = to_extra_body(&level_with_effort(effort), ProviderApi::Zai);
+        let out = to_extra_body(&level_with_effort(effort), ProviderApi::Zai, NO_CAPS);
         assert!(
             out.contains_key("reasoningEffort"),
             "Zai {effort:?} must emit reasoningEffort",
@@ -598,10 +688,18 @@ fn matrix_zai_explicit_levels_emit_reasoning_effort() {
         to_extra_body(
             &level_with_effort(ReasoningEffort::Disable),
             ProviderApi::Zai,
+            NO_CAPS,
         )
         .is_empty()
     );
-    assert!(to_extra_body(&level_with_effort(ReasoningEffort::Auto), ProviderApi::Zai,).is_empty());
+    assert!(
+        to_extra_body(
+            &level_with_effort(ReasoningEffort::Auto),
+            ProviderApi::Zai,
+            NO_CAPS,
+        )
+        .is_empty()
+    );
 }
 
 #[test]
@@ -613,7 +711,7 @@ fn matrix_anthropic_disable_with_options_pass_through_overwritten_by_typed_arm()
     level
         .options
         .insert("thinking".into(), serde_json::json!({"type": "enabled"}));
-    let out = to_extra_body(&level, ProviderApi::Anthropic);
+    let out = to_extra_body(&level, ProviderApi::Anthropic, ADAPTIVE);
     assert_eq!(
         out.get("thinking"),
         Some(&serde_json::json!({"type": "disabled"})),
@@ -632,7 +730,7 @@ fn matrix_anthropic_explicit_level_with_budget_emits_camel_case_budget_tokens() 
         (ReasoningEffort::XHigh, "max"),
     ] {
         let level = ThinkingLevel::with_budget(effort, 12_345);
-        let out = to_extra_body(&level, ProviderApi::Anthropic);
+        let out = to_extra_body(&level, ProviderApi::Anthropic, NO_CAPS);
         let thinking = out.get("thinking").unwrap();
         assert_eq!(
             thinking.get("type").and_then(serde_json::Value::as_str),

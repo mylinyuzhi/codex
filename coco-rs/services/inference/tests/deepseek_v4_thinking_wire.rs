@@ -79,6 +79,11 @@ fn deepseek_v4_flash_info(provider_name: &str) -> ModelInfo {
             Capability::Streaming,
             Capability::ToolCalling,
             Capability::ExtendedThinking,
+            // DeepSeek V4 anthropic-compat supports adaptive thinking.
+            // Required so Test B3 (Auto → {type:adaptive}) can produce
+            // the wire signal — the convert layer gates this on the
+            // capability presence.
+            Capability::AdaptiveThinking,
         ]),
         supported_thinking_levels: Some(levels),
         default_thinking_level: Some(ReasoningEffort::Auto),

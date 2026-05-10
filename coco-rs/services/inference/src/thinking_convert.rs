@@ -17,6 +17,7 @@
 //! `thinking { type, budgetTokens }` shape — the family is what
 //! determines wire body, not the user-facing instance label.
 
+use coco_types::Capability;
 use coco_types::ProviderApi;
 use coco_types::ReasoningEffort;
 use coco_types::ThinkingLevel;
@@ -33,7 +34,11 @@ use std::collections::BTreeMap;
 /// `ReasoningEffort` via an exhaustive inner match — there is no
 /// fallthrough that could emit `{"type":"enabled"}` for `Disable`/`Auto`:
 ///   - `Disable` → `{"thinking":{"type":"disabled"}}`
-///   - `Auto`    → `{"thinking":{"type":"adaptive"}}`
+///   - `Auto`    → `{"thinking":{"type":"adaptive"}}` **only when
+///     `capabilities` contains [`Capability::AdaptiveThinking`]**.
+///     Without the capability, the field is omitted so the server-side
+///     default applies — protects non-adaptive Claude models (e.g.
+///     Sonnet 4.5) from receiving a value they would reject with 400.
 ///   - `Minimal` → mapped to `Low`
 ///   - `Low/Medium/High/XHigh` → both
 ///     `{"thinking":{"type":"enabled","budgetTokens"?}}` and
@@ -47,9 +52,11 @@ use std::collections::BTreeMap;
 /// Other arms (Openai/Gemini/OpenaiCompat/Volcengine/Zai) gate on
 /// `is_explicit_level()` — `Disable`/`Auto` emit nothing typed for them
 /// (server default applies; `level.options` pass-through is preserved).
+/// `capabilities` is consulted only by the Anthropic arm today.
 pub fn to_extra_body(
     level: &ThinkingLevel,
     api: ProviderApi,
+    capabilities: &[Capability],
 ) -> BTreeMap<String, serde_json::Value> {
     let mut out = BTreeMap::new();
 
@@ -74,7 +81,17 @@ pub fn to_extra_body(
                     out.insert("thinking".into(), serde_json::json!({"type": "disabled"}));
                 }
                 ReasoningEffort::Auto => {
-                    out.insert("thinking".into(), serde_json::json!({"type": "adaptive"}));
+                    // Adaptive thinking is gated on a model capability:
+                    // emit `{type:adaptive}` only when the registry
+                    // declares the model supports it. Otherwise, fall
+                    // through silently — the wire body carries no
+                    // `thinking` field and the server-side default
+                    // applies. Prevents 400 errors when callers run
+                    // `--thinking auto` against a non-adaptive Claude
+                    // model.
+                    if capabilities.contains(&Capability::AdaptiveThinking) {
+                        out.insert("thinking".into(), serde_json::json!({"type": "adaptive"}));
+                    }
                 }
                 ReasoningEffort::Minimal
                 | ReasoningEffort::Low
