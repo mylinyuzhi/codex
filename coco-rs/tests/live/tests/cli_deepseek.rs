@@ -9,9 +9,10 @@
 //!
 //! # Skip behavior
 //!
-//! Auto-skips when `DEEPSEEK_API_KEY` is unset or the provider /
-//! capability is excluded by `COCO_LIVE_TEST_*` gates. Returns `Ok(())`
-//! on skip so unconfigured CI stays green.
+//! Auto-skips when `COCO_LIVE_TEST_DEEPSEEK_OPENAI_MODEL` (or
+//! `_DEEPSEEK_ANTHROPIC_MODEL`) is unset, the API key is missing, or the
+//! provider / capability is excluded by `COCO_LIVE_TEST_*` gates.
+//! Returns `Ok(())` on skip so unconfigured CI stays green.
 //!
 //! # Capabilities
 //!
@@ -33,133 +34,131 @@ mod common;
 
 use anyhow::Result;
 
-const MODEL: &str = "deepseek-v4-flash";
-
 // ─── deepseek-openai ─────────────────────────────────────────────────
 
 #[tokio::test]
 async fn test_cli_one_shot_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
-    cli::suite::one_shot::run("deepseek-openai", MODEL).await
+    let target = require_live!("deepseek-openai", "text");
+    cli::suite::one_shot::run(target.provider, &target.model).await
 }
 
 #[tokio::test]
 async fn test_cli_tool_chain_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "tools");
-    cli::suite::tool_chain::run("deepseek-openai", MODEL).await
+    let target = require_live!("deepseek-openai", "tools");
+    cli::suite::tool_chain::run(target.provider, &target.model).await
 }
 
 #[tokio::test]
 async fn test_cli_compact_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "compact");
-    cli::suite::compact::run("deepseek-openai", MODEL).await
+    let target = require_live!("deepseek-openai", "compact");
+    cli::suite::compact::run(target.provider, &target.model).await
 }
 
 // ─── deepseek-anthropic ──────────────────────────────────────────────
 
 #[tokio::test]
 async fn test_cli_one_shot_deepseek_anthropic() -> Result<()> {
-    let _t = require_live!("deepseek-anthropic", MODEL, "text");
-    cli::suite::one_shot::run("deepseek-anthropic", MODEL).await
+    let target = require_live!("deepseek-anthropic", "text");
+    cli::suite::one_shot::run(target.provider, &target.model).await
 }
 
 #[tokio::test]
 async fn test_cli_tool_chain_deepseek_anthropic() -> Result<()> {
-    let _t = require_live!("deepseek-anthropic", MODEL, "tools");
-    cli::suite::tool_chain::run("deepseek-anthropic", MODEL).await
+    let target = require_live!("deepseek-anthropic", "tools");
+    cli::suite::tool_chain::run(target.provider, &target.model).await
 }
 
 #[tokio::test]
 async fn test_cli_compact_deepseek_anthropic() -> Result<()> {
-    let _t = require_live!("deepseek-anthropic", MODEL, "compact");
-    cli::suite::compact::run("deepseek-anthropic", MODEL).await
+    let target = require_live!("deepseek-anthropic", "compact");
+    cli::suite::compact::run(target.provider, &target.model).await
 }
 
 // ─── Cross-protocol ──────────────────────────────────────────────────
 
 #[tokio::test]
 async fn test_cli_cross_protocol_deepseek() -> Result<()> {
-    let _open = require_live!("deepseek-openai", MODEL, "cross_protocol");
-    let _anth = require_live!("deepseek-anthropic", MODEL, "cross_protocol");
-    cli::suite::cross_protocol::run(MODEL).await
+    let openai = require_live!("deepseek-openai", "cross_protocol");
+    let _anth = require_live!("deepseek-anthropic", "cross_protocol");
+    cli::suite::cross_protocol::run(&openai.model).await
 }
 
 // ─── Reminder coverage (bare-engine layer) ───────────────────────────
 
 #[tokio::test]
 async fn test_cli_reminder_plan_mode_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
-    cli::suite::reminders::plan_mode::run("deepseek-openai", MODEL).await
+    let target = require_live!("deepseek-openai", "text");
+    cli::suite::reminders::plan_mode::run(target.provider, &target.model).await
 }
 
 #[tokio::test]
 async fn test_cli_reminder_auto_mode_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
-    cli::suite::reminders::auto_mode::run("deepseek-openai", MODEL).await
+    let target = require_live!("deepseek-openai", "text");
+    cli::suite::reminders::auto_mode::run(target.provider, &target.model).await
 }
 
 #[tokio::test]
 async fn test_cli_reminder_critical_instruction_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
-    cli::suite::reminders::critical_instruction::run("deepseek-openai", MODEL).await
+    let target = require_live!("deepseek-openai", "text");
+    cli::suite::reminders::critical_instruction::run(target.provider, &target.model).await
 }
 
 #[tokio::test]
 async fn test_cli_reminder_token_usage_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
-    cli::suite::reminders::token_usage::run("deepseek-openai", MODEL).await
+    let target = require_live!("deepseek-openai", "text");
+    cli::suite::reminders::token_usage::run(target.provider, &target.model).await
 }
 
 #[tokio::test]
 async fn test_cli_reminder_budget_usd_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
-    cli::suite::reminders::budget_usd::run("deepseek-openai", MODEL).await
+    let target = require_live!("deepseek-openai", "text");
+    cli::suite::reminders::budget_usd::run(target.provider, &target.model).await
 }
 
 #[tokio::test]
 async fn test_cli_reminder_ultrathink_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
-    cli::suite::reminders::ultrathink_effort::run("deepseek-openai", MODEL).await
+    let target = require_live!("deepseek-openai", "text");
+    cli::suite::reminders::ultrathink_effort::run(target.provider, &target.model).await
 }
 
 #[tokio::test]
 async fn test_cli_reminder_output_style_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
-    cli::suite::reminders::output_style::run("deepseek-openai", MODEL).await
+    let target = require_live!("deepseek-openai", "text");
+    cli::suite::reminders::output_style::run(target.provider, &target.model).await
 }
 
 #[tokio::test]
 async fn test_cli_reminder_skill_listing_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
-    cli::suite::reminders::skill_listing::run("deepseek-openai", MODEL).await
+    let target = require_live!("deepseek-openai", "text");
+    cli::suite::reminders::skill_listing::run(target.provider, &target.model).await
 }
 
 // ─── Round B: failure-mode coverage ──────────────────────────────────
 
 #[tokio::test]
 async fn test_cli_max_turns_one_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "tools");
-    cli::suite::max_turns_one::run("deepseek-openai", MODEL).await
+    let target = require_live!("deepseek-openai", "tools");
+    cli::suite::max_turns_one::run(target.provider, &target.model).await
 }
 
 #[tokio::test]
 async fn test_cli_tool_error_recovery_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "tools");
-    cli::suite::tool_error_recovery::run("deepseek-openai", MODEL).await
+    let target = require_live!("deepseek-openai", "tools");
+    cli::suite::tool_error_recovery::run(target.provider, &target.model).await
 }
 
 // ─── Round D: Tier-1/2 architectural seam coverage ───────────────────
 
 #[tokio::test]
 async fn test_cli_usage_consistency_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
-    cli::suite::usage_consistency::run("deepseek-openai", MODEL).await
+    let target = require_live!("deepseek-openai", "text");
+    cli::suite::usage_consistency::run(target.provider, &target.model).await
 }
 
 #[tokio::test]
 async fn test_cli_bash_oversize_truncation_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "tools");
-    cli::suite::bash_oversize_truncation::run("deepseek-openai", MODEL).await
+    let target = require_live!("deepseek-openai", "tools");
+    cli::suite::bash_oversize_truncation::run(target.provider, &target.model).await
 }
 
 // CLAUDE.md auto-discovery is exercised by the higher-level
@@ -186,14 +185,14 @@ async fn test_cli_bash_oversize_truncation_deepseek_openai() -> Result<()> {
 
 #[tokio::test]
 async fn test_cli_hook_posttooluse_injects_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "tools");
-    cli::suite::hook_posttooluse_injects::run("deepseek-openai", MODEL).await
+    let target = require_live!("deepseek-openai", "tools");
+    cli::suite::hook_posttooluse_injects::run(target.provider, &target.model).await
 }
 
 #[tokio::test]
 async fn test_cli_mid_turn_injection_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "tools");
-    cli::suite::mid_turn_injection::run("deepseek-openai", MODEL).await
+    let target = require_live!("deepseek-openai", "tools");
+    cli::suite::mid_turn_injection::run(target.provider, &target.model).await
 }
 
 // ─── Round E: invariant pinning ──────────────────────────────────────
@@ -208,28 +207,28 @@ async fn test_cli_mid_turn_injection_deepseek_openai() -> Result<()> {
 
 #[tokio::test]
 async fn test_cli_tool_use_completed_carries_name_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "tools");
-    cli::suite::tool_use_completed_carries_name::run("deepseek-openai", MODEL).await
+    let target = require_live!("deepseek-openai", "tools");
+    cli::suite::tool_use_completed_carries_name::run(target.provider, &target.model).await
 }
 
 // ─── Round C: streaming + concurrency + prompt-override ──────────────
 
 #[tokio::test]
 async fn test_cli_streaming_deltas_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
-    cli::suite::streaming_deltas::run("deepseek-openai", MODEL).await
+    let target = require_live!("deepseek-openai", "text");
+    cli::suite::streaming_deltas::run(target.provider, &target.model).await
 }
 
 #[tokio::test]
 async fn test_cli_parallel_reads_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "tools");
-    cli::suite::parallel_reads::run("deepseek-openai", MODEL).await
+    let target = require_live!("deepseek-openai", "tools");
+    cli::suite::parallel_reads::run(target.provider, &target.model).await
 }
 
 #[tokio::test]
 async fn test_cli_system_prompt_override_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
-    cli::suite::system_prompt_override::run("deepseek-openai", MODEL).await
+    let target = require_live!("deepseek-openai", "text");
+    cli::suite::system_prompt_override::run(target.provider, &target.model).await
 }
 
 // ─── Token-usage report (alphabetically last) ────────────────────────

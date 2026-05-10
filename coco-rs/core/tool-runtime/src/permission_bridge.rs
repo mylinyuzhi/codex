@@ -66,6 +66,29 @@ pub struct ToolPermissionResolution {
     /// "Always Allow".
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub applied_updates: Vec<coco_types::PermissionUpdate>,
+    /// Optional rewritten tool input the user supplied at approval
+    /// time. When `Some`, downstream
+    /// (`PermissionOutcome::Allow.updated_input` →
+    /// `tool_call_preparer::resolve_effective_input_from_permission`)
+    /// substitutes this for the original input before invoking the
+    /// tool. Used by `AskUserQuestion` to splice user-selected
+    /// `answers` (and optional `annotations`) into the tool's data
+    /// envelope so `render_for_model` can produce the answered prose.
+    /// TS parity: `permissionDecision.updatedInput` at
+    /// `services/tools/toolExecution.ts:1130-1131`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_input: Option<serde_json::Value>,
+    /// Optional content blocks (image attachments etc.) the user
+    /// supplied alongside the approval. Mirrors TS `PermissionAllowDecision.contentBlocks`
+    /// (`types/permissions.ts:183`) — typically populated when the user
+    /// pasted an image while answering `AskUserQuestion`. Consumers
+    /// (e.g. the engine's tool-execution path) attach these to the
+    /// next user message in the conversation. Carried as
+    /// `Vec<serde_json::Value>` because the wire shape is Anthropic
+    /// `ContentBlockParam`; the cross-provider translation happens at
+    /// the consumer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_blocks: Option<Vec<serde_json::Value>>,
 }
 
 /// Trait for forwarding permission requests from agents to the leader.
@@ -102,6 +125,8 @@ impl ToolPermissionBridge for NoOpPermissionBridge {
             decision: ToolPermissionDecision::Rejected,
             feedback: Some("Permission forwarding not available".into()),
             applied_updates: Vec::new(),
+            updated_input: None,
+            content_blocks: None,
         })
     }
 }

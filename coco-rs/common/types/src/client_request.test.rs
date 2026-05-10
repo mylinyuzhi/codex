@@ -70,6 +70,7 @@ fn approval_resolve_serializes_decision() {
         permission_update: None,
         feedback: None,
         updated_input: None,
+        content_blocks: None,
     });
     let j = serde_json::to_value(&req).unwrap();
     assert_eq!(j["method"], "approval/resolve");

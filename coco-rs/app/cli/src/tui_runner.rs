@@ -822,8 +822,9 @@ async fn run_agent_driver(
                 approved,
                 always_allow,
                 feedback,
-                updated_input: _, // TS edits the tool input pre-approval; that path lands later
+                updated_input,
                 permission_updates,
+                content_blocks,
             } => {
                 // Apply any rule additions the user authorized
                 // ("Always Allow" or future destination-picker
@@ -969,6 +970,8 @@ async fn run_agent_driver(
                     approved,
                     feedback,
                     permission_updates,
+                    updated_input,
+                    content_blocks,
                 )
                 .await;
                 if !resolved {

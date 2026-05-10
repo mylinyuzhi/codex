@@ -96,3 +96,55 @@ pub fn provider_allowed(provider_name: &str) -> bool {
         None => true,
     }
 }
+
+/// Convert builtin provider name to the env-var token used in
+/// `COCO_LIVE_TEST_<TOKEN>_<FIELD>` (uppercase, `-` → `_`).
+fn provider_env_token(provider_name: &str) -> String {
+    provider_name.to_uppercase().replace('-', "_")
+}
+
+/// Per-provider model under test. Reads `COCO_LIVE_TEST_<PROVIDER>_MODEL`.
+/// `None` when unset or empty — the calling test should skip with a
+/// one-line message rather than fall back to a hardcoded default, so
+/// model identity stays visible in `.env` (no surprise routing).
+pub fn provider_model(provider_name: &str) -> Option<String> {
+    ensure_env_loaded();
+    let key = format!("COCO_LIVE_TEST_{}_MODEL", provider_env_token(provider_name));
+    std::env::var(&key)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+/// `true` when `capability` is enabled for `provider_name`. Resolution
+/// order, mirroring `vercel-ai/ai/tests/common/config.rs`:
+///
+/// 1. `COCO_LIVE_TEST_<PROVIDER>_CAPABILITIES` (per-provider, comma list
+///    or `none`)
+/// 2. `COCO_LIVE_TEST_CAPABILITIES` (global)
+/// 3. All capabilities enabled
+pub fn capability_enabled_for(provider_name: &str, capability: &str) -> bool {
+    ensure_env_loaded();
+    let key = format!(
+        "COCO_LIVE_TEST_{}_CAPABILITIES",
+        provider_env_token(provider_name)
+    );
+    if let Ok(value) = std::env::var(&key) {
+        let trimmed = value.trim();
+        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("none") {
+            return false;
+        }
+        let set: HashSet<String> = value
+            .split(',')
+            .map(|s| s.trim().to_lowercase())
+            .filter(|s| !s.is_empty())
+            .collect();
+        return set.contains(capability);
+    }
+    capability_enabled(capability)
+}
+
+/// Env-var name suggested in skip messages so users know what to set.
+pub fn provider_model_var(provider_name: &str) -> String {
+    format!("COCO_LIVE_TEST_{}_MODEL", provider_env_token(provider_name))
+}

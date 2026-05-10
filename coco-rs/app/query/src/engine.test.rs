@@ -2654,6 +2654,8 @@ impl ToolPermissionBridge for RecordingBridge {
             decision: self.decision,
             feedback: Some("recorded".into()),
             applied_updates: Vec::new(),
+            updated_input: None,
+            content_blocks: None,
         })
     }
 }
@@ -3003,6 +3005,8 @@ impl ToolPermissionBridge for BlockingBridge {
             decision: ToolPermissionDecision::Approved,
             feedback: None,
             applied_updates: Vec::new(),
+            updated_input: None,
+            content_blocks: None,
         })
     }
 }

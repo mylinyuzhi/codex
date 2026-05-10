@@ -350,13 +350,203 @@ pub struct SessionOption {
 }
 
 /// Question overlay (AskUserQuestion tool).
+///
+/// Mirrors the TS `AskUserQuestionPermissionRequest.tsx` data model:
+/// up to 4 questions per call, each with 2-4 options, optional preview
+/// content per option, and optional per-option notes captured by the
+/// user. Supports both single-select (radio) and multi-select (checkbox)
+/// modes per question, plus the two TS footer affordances:
+/// "Chat about this" (always shown) and "Skip interview and plan
+/// immediately" (plan-mode only).
+///
+/// Submit semantics:
+/// - Enter on [`QuestionFocus::Question`] when on the LAST question →
+///   ship `UserCommand::ApprovalResponse { approved: true, updated_input:
+///   Some({...original_input, answers, annotations}) }`. TS:
+///   `submitAnswers` (`AskUserQuestionPermissionRequest.tsx:407`).
+/// - Enter on `QuestionFocus::Question` (not last) → advance focus to
+///   next question. TS: `nextQuestion` / `Submit` button on intermediate
+///   questions.
+/// - Enter on [`QuestionFocus::ChatAboutThis`] → ship
+///   `ApprovalResponse { approved: false, feedback: Some(<synthesized>) }`
+///   with the TS-mirrored clarification prose. TS:
+///   `handleRespondToClaude`.
+/// - Enter on [`QuestionFocus::SkipInterview`] → same with skip-interview
+///   prose. TS: `handleFinishPlanInterview`. Only reachable when
+///   `is_in_plan_mode`.
 #[derive(Debug, Clone)]
 pub struct QuestionOverlay {
     pub request_id: String,
-    pub question: String,
-    pub options: Vec<String>,
-    pub selected: i32,
+    /// Original tool input dict, stored verbatim so the answer payload
+    /// can re-emit fields the model supplied that the TUI doesn't render
+    /// (e.g. `metadata.source`). Stored AND re-emitted because the
+    /// splice protocol in `update/overlay.rs` rebuilds the input as
+    /// `{...original_input, answers, annotations}` — dropping the
+    /// `original_input` spread would silently strip those fields.
+    pub original_input: serde_json::Value,
+    pub questions: Vec<QuestionItem>,
+    /// Currently focused element (question index OR a footer item).
+    /// Tab cycles forward, Shift+Tab cycles backward.
+    pub focus: QuestionFocus,
+    /// Plan-mode gate for the Skip-interview footer item. Set from
+    /// `state.session.permission_mode == PermissionMode::Plan` when the
+    /// overlay is constructed.
+    pub is_in_plan_mode: bool,
 }
+
+/// What the user is currently focused on in the question overlay.
+///
+/// TS reference: `AskUserQuestionPermissionRequest.tsx` tracks
+/// `currentQuestionIndex` + `isFooterFocused` + `footerIndex`. Coco
+/// collapses these into a single enum so the focus state machine is
+/// linearizable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuestionFocus {
+    /// On the Nth question (0-indexed). `selected` within that question
+    /// drives radio/checkbox selection.
+    Question(i32),
+    /// Footer "Chat about this" item — always available.
+    ChatAboutThis,
+    /// Footer "Skip interview and plan immediately" item — only
+    /// reachable when `QuestionOverlay.is_in_plan_mode`.
+    SkipInterview,
+}
+
+/// One question in the AskUserQuestion overlay.
+#[derive(Debug, Clone)]
+pub struct QuestionItem {
+    /// Short label rendered as a chip — e.g. "Auth method".
+    pub header: String,
+    /// Full question text — typically ends with "?".
+    pub question: String,
+    pub options: Vec<QuestionOption>,
+    /// `true` allows checkbox-style multi-selection, `false` is radio.
+    pub multi_select: bool,
+    /// Currently focused option index (drives navigation + radio selection).
+    pub selected: i32,
+    /// Indices toggled on for multi-select. Empty in single-select mode
+    /// (the Enter handler then falls back to `selected`).
+    pub checked: Vec<i32>,
+    /// Free-form text typed by the user. Used both as "notes" annotation
+    /// (TS `questionStates[q].textInputValue`) AND as the answer body
+    /// when the focused option is the injected "Other" option. The
+    /// answer-build logic in `update/overlay.rs` differentiates by
+    /// inspecting the focused option's label.
+    pub notes: String,
+    /// `true` while typed characters route to `notes` instead of moving
+    /// focus between options. Set automatically when focus moves to the
+    /// "Other" option (`__other__` label) — TS:
+    /// `QuestionView.tsx:85-87` `isOtherFocused`.
+    pub editing_notes: bool,
+}
+
+/// One choice within a [`QuestionItem`].
+#[derive(Debug, Clone)]
+pub struct QuestionOption {
+    /// 1-5 word label shown in the option list. The injected
+    /// "Other" option uses the sentinel label [`OTHER_OPTION_LABEL`]
+    /// (TS `__other__`) — the answer-build logic detects this and
+    /// substitutes the user's typed `notes` for the label.
+    pub label: String,
+    /// Longer explanation rendered under the label.
+    pub description: String,
+    /// Optional preview content (Markdown / monospace) shown side-by-side
+    /// when this option is focused. `None` for plain options.
+    pub preview: Option<String>,
+}
+
+/// Sentinel label injected as the last option of every question so the
+/// user can type a free-form answer instead of picking. Mirrors TS
+/// `QuestionView.tsx:85` `value === "__other__"`.
+pub const OTHER_OPTION_LABEL: &str = "__other__";
+
+/// Visible label used by the renderer when displaying the "Other"
+/// sentinel — TS shows "Other" in the dropdown.
+pub const OTHER_OPTION_DISPLAY: &str = "Other";
+
+impl QuestionOverlay {
+    /// Build the "Chat about this" rejection-feedback prose.
+    ///
+    /// Byte-for-byte mirror of TS `handleRespondToClaude` at
+    /// `claude-code/src/components/permissions/AskUserQuestionPermissionRequest/AskUserQuestionPermissionRequest.tsx:300-316`.
+    /// The leading-whitespace lines are intentional — TS uses an
+    /// indented template literal and ships the literal indentation.
+    pub fn chat_about_this_feedback(&self) -> String {
+        let questions_with_answers = self.format_questions_with_answers(/*concise=*/ false);
+        format!(
+            "The user wants to clarify these questions.\n    \
+             This means they may have additional information, context or questions for you.\n    \
+             Take their response into account and then reformulate the questions if appropriate.\n    \
+             Start by asking them what they would like to clarify.\n\n    \
+             Questions asked:\n{questions_with_answers}"
+        )
+    }
+
+    /// Build the "Skip interview and plan immediately" rejection-feedback
+    /// prose. Byte-for-byte mirror of TS `handleFinishPlanInterview`
+    /// (`AskUserQuestionPermissionRequest.tsx:340-356`). Caller is
+    /// responsible for gating on `is_in_plan_mode` — this fn is pure.
+    pub fn skip_interview_feedback(&self) -> String {
+        let questions_with_answers = self.format_questions_with_answers(/*concise=*/ false);
+        format!(
+            "The user has indicated they have provided enough answers for the plan interview.\n\
+             Stop asking clarifying questions and proceed to finish the plan with the information you have.\n\n\
+             Questions asked and answers provided:\n{questions_with_answers}"
+        )
+    }
+
+    /// Helper used by both feedback builders. TS source has identical
+    /// loop bodies in both handlers — extracted here to keep the prose
+    /// constants the only place that diverges.
+    fn format_questions_with_answers(&self, _concise: bool) -> String {
+        self.questions
+            .iter()
+            .map(|q| {
+                let answer = self.peek_answer_for(q);
+                if answer.is_empty() {
+                    format!("- \"{}\"\n  (No answer provided)", q.question)
+                } else {
+                    format!("- \"{}\"\n  Answer: {}", q.question, answer)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Peek the would-be answer for `q` without committing. Used by the
+    /// feedback synthesizers — they show what the user partially answered
+    /// before deciding to bail out via Chat-about-this / Skip-interview.
+    /// Single-select picks the focused option label (or the typed `notes`
+    /// when "Other" is focused); multi-select joins all checked labels.
+    fn peek_answer_for(&self, q: &QuestionItem) -> String {
+        let label_for = |idx: i32| -> Option<&str> {
+            let opt = q.options.get(idx as usize)?;
+            if opt.label == OTHER_OPTION_LABEL {
+                let trimmed = q.notes.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed)
+                }
+            } else {
+                Some(opt.label.as_str())
+            }
+        };
+        if q.multi_select && !q.checked.is_empty() {
+            q.checked
+                .iter()
+                .filter_map(|i| label_for(*i))
+                .collect::<Vec<_>>()
+                .join(", ")
+        } else {
+            label_for(q.selected).unwrap_or("").to_string()
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "overlay.test.rs"]
+mod overlay_tests;
 
 /// MCP elicitation form overlay.
 #[derive(Debug, Clone)]
@@ -695,7 +885,3 @@ impl TranscriptOverlay {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "overlay.test.rs"]
-mod tests;

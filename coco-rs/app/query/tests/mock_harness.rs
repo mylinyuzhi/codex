@@ -280,6 +280,8 @@ impl ToolPermissionBridge for AllowAllPermissionBridge {
             decision: ToolPermissionDecision::Approved,
             feedback: None,
             applied_updates: Vec::new(),
+            updated_input: None,
+            content_blocks: None,
         })
     }
 }

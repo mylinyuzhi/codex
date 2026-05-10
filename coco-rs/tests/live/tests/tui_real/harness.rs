@@ -20,6 +20,7 @@
 //!    `coco_tui::render::render` into a `TestBackend` buffer for
 //!    substring assertions.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -94,6 +95,15 @@ pub struct HarnessConfig {
     /// flip flags (e.g. `--system-prompt`) without growing the builder
     /// surface for every flag the harness might need.
     pub extra_argv: Vec<String>,
+    /// Optional auto-responses for `AskUserQuestion` tool calls. Map of
+    /// question text → answer string. When the engine emits an
+    /// `ApprovalRequired` for `AskUserQuestion`, the harness builds an
+    /// `answers` payload from this map (defaulting to the first option
+    /// for any question not in the map) and ships it via the existing
+    /// `UserCommand::ApprovalResponse { updated_input: Some(...) }`
+    /// channel — same flow the production TUI uses, no custom wiring.
+    /// Empty map = auto-pick first option for every question.
+    pub auto_answer_questions: Option<HashMap<String, String>>,
 }
 
 impl Default for HarnessConfig {
@@ -109,6 +119,7 @@ impl Default for HarnessConfig {
             settings_path: None,
             workdir: None,
             extra_argv: Vec::new(),
+            auto_answer_questions: None,
         }
     }
 }
@@ -182,6 +193,20 @@ impl RealTuiHarnessBuilder {
         self
     }
 
+    /// Enable auto-handling of `AskUserQuestion` approvals. The harness
+    /// will intercept `ApprovalRequired { tool_name == "AskUserQuestion" }`
+    /// events during `pump_until_*` loops, build a TS-shaped `answers`
+    /// payload (looking up explicit answers in `answers` by question
+    /// text, defaulting to the question's first option when no answer
+    /// is supplied), and send `UserCommand::ApprovalResponse` with
+    /// `updated_input: Some({ ...input, answers })` — the same channel
+    /// the production TUI overlay uses. Pass an empty map to enable
+    /// the "always pick first option" default.
+    pub fn with_auto_answer_questions(mut self, answers: HashMap<String, String>) -> Self {
+        self.cfg.auto_answer_questions = Some(answers);
+        self
+    }
+
     pub async fn build(self) -> Result<RealTuiHarness> {
         RealTuiHarness::build(self.cfg).await
     }
@@ -208,6 +233,12 @@ pub struct RealTuiHarness {
     event_tx: mpsc::Sender<CoreEvent>,
     driver_task: Option<JoinHandle<()>>,
     cancel: CancellationToken,
+    /// When `Some`, the harness auto-resolves `AskUserQuestion` approvals
+    /// inside `pump_until_*` loops by replaying the model's question
+    /// list and picking answers from this map (default: first option).
+    /// `None` = leave AskUserQuestion approvals to the test (legacy
+    /// behavior). Populated by `with_auto_answer_questions`.
+    auto_answer_questions: Option<HashMap<String, String>>,
 }
 
 impl RealTuiHarness {
@@ -378,6 +409,7 @@ impl RealTuiHarness {
             event_tx,
             driver_task: Some(driver_task),
             cancel,
+            auto_answer_questions: cfg.auto_answer_questions,
         })
     }
 
@@ -390,6 +422,52 @@ impl RealTuiHarness {
         let _ = handle_command(&mut self.state, TuiCommand::SubmitInput, &self.command_tx).await;
     }
 
+    /// Inspect an event for AskUserQuestion lifecycle and auto-handle
+    /// it when [`Self::auto_answer_questions`] is configured. Returns
+    /// `true` when the event was consumed (caller should `continue`
+    /// the pump loop without surfacing the event). Side effects:
+    /// - On `Tui::QuestionAsked { input }`, build a TS-shaped `answers`
+    ///   map (lookup question text in the configured map; default to
+    ///   first option) and resolve the bridge via
+    ///   `UserCommand::ApprovalResponse { updated_input: Some({...input,
+    ///   answers}) }` — the same channel the production Question
+    ///   overlay uses.
+    ///
+    /// `Stream::ToolUseQueued` is no longer needed as a buffering
+    /// signal: the production bridge now embeds the full input in
+    /// `QuestionAsked.input`, so we can build the payload directly.
+    ///
+    /// Always returns `false` when `auto_answer_questions` is `None`,
+    /// so this helper is a no-op for tests that don't opt in.
+    async fn maybe_auto_handle_question(&mut self, event: &CoreEvent) -> bool {
+        if self.auto_answer_questions.is_none() {
+            return false;
+        }
+        match event {
+            CoreEvent::Tui(TuiOnlyEvent::QuestionAsked { request_id, input }) => {
+                let answers_overrides = self
+                    .auto_answer_questions
+                    .as_ref()
+                    .cloned()
+                    .unwrap_or_default();
+                let updated_input = build_question_answers_payload(Some(input), &answers_overrides);
+                let request_id = request_id.clone();
+                let _ = resolve_pending(
+                    &self.pending_approvals,
+                    &request_id,
+                    true,
+                    None,
+                    Vec::new(),
+                    Some(updated_input),
+                    None,
+                )
+                .await;
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Drain every queued event into `AppState`, returning when the
     /// engine emits `SessionResult` (turn-loop done) or `timeout`
     /// elapses. Returns `true` ⇒ clean run (`is_error=false`),
@@ -400,28 +478,33 @@ impl RealTuiHarness {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 return Err(anyhow!(
-                    "RealTuiHarness: timed out after {:?} waiting for SessionResult \
-                     ({} events drained, last={:?})",
+                    "RealTuiHarness: timed out after {:?} waiting for SessionResult\n  \
+                     {}",
                     timeout,
-                    self.events.len(),
-                    self.events.last().map(event_summary)
+                    diagnose_event_stall(&self.events),
                 ));
             }
             let next = match tokio::time::timeout(remaining, self.event_rx.recv()).await {
                 Ok(Some(evt)) => evt,
                 Ok(None) => {
                     return Err(anyhow!(
-                        "RealTuiHarness: event channel closed before SessionResult"
+                        "RealTuiHarness: event channel closed before SessionResult\n  \
+                         {}",
+                        diagnose_event_stall(&self.events),
                     ));
                 }
                 Err(_) => continue,
             };
             handle_core_event(&mut self.state, next.clone());
+            let auto_handled = self.maybe_auto_handle_question(&next).await;
             let is_terminal = matches!(
                 &next,
                 CoreEvent::Protocol(ServerNotification::SessionResult(_))
             );
             self.events.push(next);
+            if auto_handled {
+                continue;
+            }
             if is_terminal {
                 let is_err = self
                     .events
@@ -467,6 +550,11 @@ impl RealTuiHarness {
                 Err(_) => continue,
             };
             handle_core_event(&mut self.state, next.clone());
+            // Auto-handle AskUserQuestion approvals when the harness
+            // is configured for it — the test would otherwise see the
+            // AskUserQuestion ApprovalRequired and treat it as the
+            // approval it was waiting for, which it isn't.
+            let auto_handled = self.maybe_auto_handle_question(&next).await;
             if matches!(
                 &next,
                 CoreEvent::Protocol(ServerNotification::SessionResult(_))
@@ -478,7 +566,9 @@ impl RealTuiHarness {
                      bypass is OFF and the hook/tool combo triggers an Ask decision."
                 ));
             }
-            let approval = if let CoreEvent::Tui(TuiOnlyEvent::ApprovalRequired {
+            let approval = if auto_handled {
+                None
+            } else if let CoreEvent::Tui(TuiOnlyEvent::ApprovalRequired {
                 request_id,
                 tool_name,
                 input_preview,
@@ -503,7 +593,16 @@ impl RealTuiHarness {
     /// Resolve a pending approval as approved (mirrors
     /// `UserCommand::ApprovalResponse` in prod).
     pub async fn approve(&self, request_id: &str) -> bool {
-        resolve_pending(&self.pending_approvals, request_id, true, None, Vec::new()).await
+        resolve_pending(
+            &self.pending_approvals,
+            request_id,
+            true,
+            None,
+            Vec::new(),
+            None,
+            None,
+        )
+        .await
     }
 
     /// Resolve a pending approval as rejected, with optional feedback
@@ -515,6 +614,8 @@ impl RealTuiHarness {
             false,
             feedback,
             Vec::new(),
+            None,
+            None,
         )
         .await
     }
@@ -749,6 +850,7 @@ async fn run_real_agent_driver(
                 request_id,
                 approved,
                 feedback,
+                updated_input,
                 ..
             } => {
                 let _ = resolve_pending(
@@ -757,6 +859,8 @@ async fn run_real_agent_driver(
                     approved,
                     feedback,
                     Vec::new(),
+                    updated_input,
+                    None,
                 )
                 .await;
             }
@@ -827,6 +931,54 @@ pub struct ApprovalRequest {
     pub input_preview: String,
 }
 
+/// Build the `updated_input` payload spliced into an `AskUserQuestion`
+/// approval. Mirrors the TS `AskUserQuestionPermissionRequest.tsx`
+/// flow: clone the original input, add an `answers: { question_text →
+/// answer_string }` map, leave everything else untouched.
+///
+/// `original_input` is the structured tool input captured from
+/// `Stream::ToolUseQueued`; `overrides` is the explicit map the test
+/// passed via `with_auto_answer_questions`. For each question the
+/// model asked, the override wins; otherwise we fall back to the
+/// question's first option (TS-aligned default).
+///
+/// Returns a `serde_json::Value` ready to ship as
+/// `UserCommand::ApprovalResponse.updated_input`. Returns the bare
+/// `{"answers": {}}` payload if `original_input` is missing — keeps
+/// the harness usable even if the lifecycle ordering surprises us.
+fn build_question_answers_payload(
+    original_input: Option<&serde_json::Value>,
+    overrides: &HashMap<String, String>,
+) -> serde_json::Value {
+    let mut answers = serde_json::Map::new();
+    if let Some(input) = original_input
+        && let Some(questions) = input.get("questions").and_then(|v| v.as_array())
+    {
+        for q in questions {
+            let Some(question_text) = q.get("question").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let answer = overrides.get(question_text).cloned().or_else(|| {
+                q.get("options")
+                    .and_then(|v| v.as_array())
+                    .and_then(|opts| opts.first())
+                    .and_then(|opt| opt.get("label"))
+                    .and_then(|v| v.as_str())
+                    .map(String::from)
+            });
+            if let Some(answer) = answer {
+                answers.insert(question_text.to_string(), serde_json::Value::String(answer));
+            }
+        }
+    }
+    let mut updated = match original_input.cloned() {
+        Some(serde_json::Value::Object(map)) => map,
+        _ => serde_json::Map::new(),
+    };
+    updated.insert("answers".into(), serde_json::Value::Object(answers));
+    serde_json::Value::Object(updated)
+}
+
 fn event_summary(evt: &CoreEvent) -> String {
     match evt {
         CoreEvent::Protocol(n) => format!("Protocol::{:?}", n.method()),
@@ -847,4 +999,43 @@ fn event_summary(evt: &CoreEvent) -> String {
         },
         CoreEvent::Tui(_) => "Tui".into(),
     }
+}
+
+/// Build a multi-line diagnostic for stuck `pump_until_*` loops.
+///
+/// Includes (a) total event count, (b) a histogram of event variants
+/// sorted by frequency, and (c) the last 20 events in chronological
+/// order. The histogram surfaces "model kept emitting deltas but never
+/// finished a turn" patterns; the tail captures whether tool-call
+/// completion + post-approval Resume events arrived.
+fn diagnose_event_stall(events: &[CoreEvent]) -> String {
+    use std::collections::BTreeMap;
+
+    let mut histogram: BTreeMap<String, usize> = BTreeMap::new();
+    for e in events {
+        *histogram.entry(event_summary(e)).or_insert(0) += 1;
+    }
+    let mut sorted: Vec<(&String, &usize)> = histogram.iter().collect();
+    sorted.sort_by(|a, b| b.1.cmp(a.1));
+    let hist_lines: Vec<String> = sorted
+        .iter()
+        .map(|(k, v)| format!("    {v:>4} × {k}"))
+        .collect();
+
+    let tail_n = 20.min(events.len());
+    let tail_start = events.len() - tail_n;
+    let tail_lines: Vec<String> = events[tail_start..]
+        .iter()
+        .enumerate()
+        .map(|(i, e)| format!("    [{:>4}] {}", tail_start + i, event_summary(e)))
+        .collect();
+
+    format!(
+        "diagnostics:\n  events_drained = {}\n  histogram (variant × count, descending):\n{}\n  \
+         tail (last {} events):\n{}",
+        events.len(),
+        hist_lines.join("\n"),
+        tail_n,
+        tail_lines.join("\n"),
+    )
 }

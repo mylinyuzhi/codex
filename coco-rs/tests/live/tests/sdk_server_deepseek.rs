@@ -29,14 +29,12 @@ use crate::sdk_server::harness::send_initialize;
 use crate::sdk_server::harness::send_session_start;
 use crate::sdk_server::harness::send_turn;
 
-const MODEL: &str = "deepseek-v4-flash";
-
 // ─── initialize ──────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn test_sdk_initialize_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
-    let server = build_live_server("deepseek-openai", MODEL).await?;
+    let target = require_live!("deepseek-openai", "text");
+    let server = build_live_server("deepseek-openai", &target.model).await?;
     let (resp, _notifs) = send_initialize(&server).await?;
 
     // Response should at least be an object; SDK protocol returns the
@@ -62,8 +60,8 @@ async fn test_sdk_initialize_deepseek_openai() -> Result<()> {
 
 #[tokio::test]
 async fn test_sdk_initialize_deepseek_anthropic() -> Result<()> {
-    let _t = require_live!("deepseek-anthropic", MODEL, "text");
-    let server = build_live_server("deepseek-anthropic", MODEL).await?;
+    let target = require_live!("deepseek-anthropic", "text");
+    let server = build_live_server("deepseek-anthropic", &target.model).await?;
     let (resp, _notifs) = send_initialize(&server).await?;
     assert!(resp.is_object(), "initialize response must be an object");
     server.shutdown().await;
@@ -78,8 +76,8 @@ async fn test_sdk_initialize_deepseek_anthropic() -> Result<()> {
 /// - a terminal `turn/completed` notification
 #[tokio::test]
 async fn test_sdk_turn_basic_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
-    let server = build_live_server("deepseek-openai", MODEL).await?;
+    let target = require_live!("deepseek-openai", "text");
+    let server = build_live_server("deepseek-openai", &target.model).await?;
     let (_init, _) = send_initialize(&server).await?;
     let _ = send_session_start(&server).await?;
     let (_resp, notifs) = send_turn(&server, 2, "Reply with the single word: ok").await?;
@@ -114,8 +112,8 @@ async fn test_sdk_turn_basic_deepseek_openai() -> Result<()> {
 
 #[tokio::test]
 async fn test_sdk_turn_basic_deepseek_anthropic() -> Result<()> {
-    let _t = require_live!("deepseek-anthropic", MODEL, "text");
-    let server = build_live_server("deepseek-anthropic", MODEL).await?;
+    let target = require_live!("deepseek-anthropic", "text");
+    let server = build_live_server("deepseek-anthropic", &target.model).await?;
     let (_init, _) = send_initialize(&server).await?;
     let _ = send_session_start(&server).await?;
     let (_resp, notifs) = send_turn(&server, 2, "Reply with the single word: ok").await?;
@@ -138,8 +136,8 @@ async fn test_sdk_turn_basic_deepseek_anthropic() -> Result<()> {
 /// payloads and assert it echoes the fact.
 #[tokio::test]
 async fn test_sdk_two_turns_share_session_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
-    let server = build_live_server("deepseek-openai", MODEL).await?;
+    let target = require_live!("deepseek-openai", "text");
+    let server = build_live_server("deepseek-openai", &target.model).await?;
     let (_init, _) = send_initialize(&server).await?;
     let _ = send_session_start(&server).await?;
 
@@ -181,8 +179,8 @@ async fn test_sdk_two_turns_share_session_deepseek_openai() -> Result<()> {
 /// `handle_turn_interrupt` → `runner.run_turn` → engine loop.
 #[tokio::test]
 async fn test_sdk_turn_mid_flight_interrupt_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
-    let server = build_live_server("deepseek-openai", MODEL).await?;
+    let target = require_live!("deepseek-openai", "text");
+    let server = build_live_server("deepseek-openai", &target.model).await?;
     let (_init, _) = send_initialize(&server).await?;
     let _ = send_session_start(&server).await?;
 
@@ -282,8 +280,8 @@ async fn test_sdk_turn_mid_flight_interrupt_deepseek_openai() -> Result<()> {
 /// `Write` tool item.
 #[tokio::test]
 async fn test_sdk_turn_tool_call_round_trip_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
-    let server = build_live_server("deepseek-openai", MODEL).await?;
+    let target = require_live!("deepseek-openai", "text");
+    let server = build_live_server("deepseek-openai", &target.model).await?;
     let (_init, _) = send_initialize(&server).await?;
     let _ = send_session_start(&server).await?;
 
@@ -347,8 +345,8 @@ async fn test_sdk_turn_tool_call_round_trip_deepseek_openai() -> Result<()> {
 /// our harness has it `false`, so the request should be rejected.
 #[tokio::test]
 async fn test_sdk_set_permission_mode_bypass_blocked() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
-    let server = build_live_server("deepseek-openai", MODEL).await?;
+    let target = require_live!("deepseek-openai", "text");
+    let server = build_live_server("deepseek-openai", &target.model).await?;
     let (_init, _) = send_initialize(&server).await?;
     let _ = send_session_start(&server).await?;
 
@@ -397,8 +395,8 @@ async fn test_sdk_set_permission_mode_bypass_blocked() -> Result<()> {
 /// that mode.
 #[tokio::test]
 async fn test_sdk_set_permission_mode_accept_edits() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
-    let server = build_live_server("deepseek-openai", MODEL).await?;
+    let target = require_live!("deepseek-openai", "text");
+    let server = build_live_server("deepseek-openai", &target.model).await?;
     let (_init, _) = send_initialize(&server).await?;
     let _ = send_session_start(&server).await?;
 
@@ -428,8 +426,8 @@ async fn test_sdk_set_permission_mode_accept_edits() -> Result<()> {
 /// to accept further requests after.
 #[tokio::test]
 async fn test_sdk_interrupt_idle_safe() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
-    let server = build_live_server("deepseek-openai", MODEL).await?;
+    let target = require_live!("deepseek-openai", "text");
+    let server = build_live_server("deepseek-openai", &target.model).await?;
     let (_init, _) = send_initialize(&server).await?;
 
     server
@@ -465,8 +463,8 @@ async fn test_sdk_interrupt_idle_safe() -> Result<()> {
 /// beyond the harness build.
 #[tokio::test]
 async fn test_sdk_unknown_method_returns_error() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
-    let server = build_live_server("deepseek-openai", MODEL).await?;
+    let target = require_live!("deepseek-openai", "text");
+    let server = build_live_server("deepseek-openai", &target.model).await?;
     server
         .client
         .send(req(99, "totally/madeup/method", serde_json::json!({})))
@@ -490,64 +488,67 @@ async fn test_sdk_unknown_method_returns_error() -> Result<()> {
 
 #[tokio::test]
 async fn test_sdk_reminder_hook_additional_context_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "tools");
-    sdk_server::suite::reminders::hook_additional_context::run("deepseek-openai", MODEL).await
+    let target = require_live!("deepseek-openai", "tools");
+    sdk_server::suite::reminders::hook_additional_context::run("deepseek-openai", &target.model)
+        .await
 }
 
 #[tokio::test]
 async fn test_sdk_reminder_hook_stopped_continuation_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "tools");
-    sdk_server::suite::reminders::hook_stopped_continuation::run("deepseek-openai", MODEL).await
+    let target = require_live!("deepseek-openai", "tools");
+    sdk_server::suite::reminders::hook_stopped_continuation::run("deepseek-openai", &target.model)
+        .await
 }
 
 #[tokio::test]
 async fn test_sdk_reminder_plan_mode_transitions_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
-    sdk_server::suite::reminders::plan_mode_transitions::run("deepseek-openai", MODEL).await
+    let target = require_live!("deepseek-openai", "text");
+    sdk_server::suite::reminders::plan_mode_transitions::run("deepseek-openai", &target.model).await
 }
 
 #[tokio::test]
 async fn test_sdk_reminder_hook_session_start_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
-    sdk_server::suite::reminders::hook_session_start::run("deepseek-openai", MODEL).await
+    let target = require_live!("deepseek-openai", "text");
+    sdk_server::suite::reminders::hook_session_start::run("deepseek-openai", &target.model).await
 }
 
 #[tokio::test]
 async fn test_sdk_reminder_hook_user_prompt_submit_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
-    sdk_server::suite::reminders::hook_user_prompt_submit::run("deepseek-openai", MODEL).await
+    let target = require_live!("deepseek-openai", "text");
+    sdk_server::suite::reminders::hook_user_prompt_submit::run("deepseek-openai", &target.model)
+        .await
 }
 
 #[tokio::test]
 async fn test_sdk_reminder_skill_listing_runtime_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
-    sdk_server::suite::reminders::skill_listing_runtime::run("deepseek-openai", MODEL).await
+    let target = require_live!("deepseek-openai", "text");
+    sdk_server::suite::reminders::skill_listing_runtime::run("deepseek-openai", &target.model).await
 }
 
 // ─── Round A: engine hot-path coverage ───────────────────────────────
 
 #[tokio::test]
 async fn test_sdk_session_resume_roundtrip_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
-    sdk_server::suite::session_resume_roundtrip::run("deepseek-openai", MODEL).await
+    let target = require_live!("deepseek-openai", "text");
+    sdk_server::suite::session_resume_roundtrip::run("deepseek-openai", &target.model).await
 }
 
 #[tokio::test]
 async fn test_sdk_set_model_mid_session_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
-    sdk_server::suite::set_model_mid_session::run("deepseek-openai", MODEL).await
+    let target = require_live!("deepseek-openai", "text");
+    sdk_server::suite::set_model_mid_session::run("deepseek-openai", &target.model).await
 }
 
 #[tokio::test]
 async fn test_sdk_session_archive_emits_aggregate_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "text");
-    sdk_server::suite::session_archive_emits_aggregate::run("deepseek-openai", MODEL).await
+    let target = require_live!("deepseek-openai", "text");
+    sdk_server::suite::session_archive_emits_aggregate::run("deepseek-openai", &target.model).await
 }
 
 #[tokio::test]
 async fn test_sdk_cancel_during_tool_deepseek_openai() -> Result<()> {
-    let _t = require_live!("deepseek-openai", MODEL, "tools");
-    sdk_server::suite::cancel_during_tool::run("deepseek-openai", MODEL).await
+    let target = require_live!("deepseek-openai", "tools");
+    sdk_server::suite::cancel_during_tool::run("deepseek-openai", &target.model).await
 }
 
 // ─── Token-usage report (alphabetically last) ────────────────────────

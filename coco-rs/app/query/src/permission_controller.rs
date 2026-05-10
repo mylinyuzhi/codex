@@ -208,8 +208,16 @@ impl<'a> PermissionController<'a> {
                     self.state_tracker
                         .transition_to(SessionState::Running, self.event_tx)
                         .await;
+                    // Forward `updated_input` from the bridge so
+                    // `tool_call_preparer::resolve_effective_input_from_permission`
+                    // can substitute it for the original tool input. Used
+                    // by `AskUserQuestion` to splice user-selected
+                    // `answers` into the tool's data envelope. TS parity:
+                    // `permissionDecision.updatedInput` →
+                    // `processedInput = permissionDecision.updatedInput`
+                    // at `services/tools/toolExecution.ts:1130-1131`.
                     PermissionOutcome::Allow {
-                        updated_input: None,
+                        updated_input: resolution.updated_input,
                     }
                 }
                 coco_tool_runtime::ToolPermissionDecision::Rejected => {
