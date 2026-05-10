@@ -10,7 +10,13 @@ fn build_test_runtime() -> coco_config::RuntimeConfig {
     let tmp = tempfile::TempDir::new().expect("tempdir");
     let catalogs = coco_config::CatalogPaths::empty_in(tmp.path());
     let settings = coco_config::SettingsWithSource {
-        merged: coco_config::Settings::default(),
+        merged: coco_config::Settings {
+            // Multi-LLM SDK: Main has no implicit default. The
+            // SwarmAgentHandle tests don't care which model — pick a
+            // builtin so config build succeeds.
+            model: Some("anthropic/claude-opus-4-7".into()),
+            ..Default::default()
+        },
         per_source: std::collections::HashMap::new(),
     };
     coco_config::build_runtime_config_with(

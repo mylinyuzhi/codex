@@ -44,8 +44,6 @@ pub struct PartialProviderConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_model: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout_secs: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wire_api: Option<WireApi>,
@@ -79,7 +77,6 @@ impl fmt::Debug for PartialProviderConfig {
             .field("env_key", &self.env_key)
             .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
             .field("base_url", &self.base_url)
-            .field("default_model", &self.default_model)
             .field("timeout_secs", &self.timeout_secs)
             .field("wire_api", &self.wire_api)
             .field("client_options", &self.client_options)
@@ -109,8 +106,6 @@ pub struct ProviderConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_key: Option<RedactedSecret>,
     pub base_url: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_model: Option<String>,
     pub timeout_secs: i64,
     pub wire_api: WireApi,
     pub client_options: ProviderClientOptions,
@@ -132,7 +127,6 @@ impl Default for ProviderConfig {
             env_key: String::new(),
             api_key: None,
             base_url: String::new(),
-            default_model: None,
             timeout_secs: DEFAULT_TIMEOUT_SECS,
             wire_api: WireApi::Chat,
             client_options: ProviderClientOptions::default(),
@@ -150,7 +144,6 @@ impl fmt::Debug for ProviderConfig {
             .field("env_key", &self.env_key)
             .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
             .field("base_url", &self.base_url)
-            .field("default_model", &self.default_model)
             .field("timeout_secs", &self.timeout_secs)
             .field("wire_api", &self.wire_api)
             .field("client_options", &self.client_options)
@@ -226,7 +219,6 @@ impl ProviderConfig {
             env_key,
             api_key: partial.api_key.clone(),
             base_url,
-            default_model: partial.default_model.clone(),
             timeout_secs: partial.timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS),
             wire_api: partial.wire_api.unwrap_or(WireApi::Chat),
             client_options,
@@ -257,9 +249,6 @@ impl ProviderConfig {
         }
         if let Some(base_url) = &overlay.base_url {
             self.base_url.clone_from(base_url);
-        }
-        if let Some(default_model) = &overlay.default_model {
-            self.default_model = Some(default_model.clone());
         }
         if let Some(timeout) = overlay.timeout_secs {
             if timeout < 0 {

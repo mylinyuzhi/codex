@@ -28,6 +28,11 @@ fn build_runtime_with(extra_provider: Option<(String, PartialProviderConfig)>) -
         providers.insert(name, partial);
     }
     let settings = Settings {
+        // Multi-LLM SDK: Main has no implicit default. These tests
+        // exercise model_factory for arbitrary (provider, model) pairs
+        // — Main itself is irrelevant, just needs to satisfy the
+        // mandatory-field check.
+        model: Some("anthropic/claude-opus-4-7".into()),
         providers,
         ..Default::default()
     };

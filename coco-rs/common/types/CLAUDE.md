@@ -17,7 +17,7 @@ Hook / Task / Command: `HookEventType` (32 variants, `#[non_exhaustive]`), `Hook
 
 Provider / Model: `ProviderApi`, `ModelRole`, `ModelSpec`, `Capability`, `CapabilitySet`, `ApplyPatchToolType`, `WireApi`.
 
-Thinking / Token / ID / Sandbox: `ThinkingLevel { effort, budget_tokens, options }`, `ReasoningEffort` (6 levels), `TokenUsage`, `ModelUsage`, `SessionId`, `AgentId`, `TaskId`, `SandboxMode`.
+Thinking / Token / ID / Sandbox: `ThinkingLevel { effort, budget_tokens, options }`, `ReasoningEffort` (7 variants: `Disable`, `Auto`, `Minimal`, `Low`, `Medium`, `High`, `XHigh` — `Disable` is explicit-off, `Auto` defers to provider default, the rest are explicit numeric levels gated by `is_explicit_level()`), `TokenUsage`, `ModelUsage`, `SessionId`, `AgentId`, `TaskId`, `SandboxMode`.
 
 Event envelope (owned here — see `event-system-design.md`): `CoreEvent` (3-layer), `ServerNotification` (66 variants) + `NotificationMethod` (typed wire-method enum), `AgentStreamEvent`, `TuiOnlyEvent`, `ThreadItem`, plus 50+ event param structs.
 

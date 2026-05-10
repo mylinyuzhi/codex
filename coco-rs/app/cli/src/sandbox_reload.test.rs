@@ -27,7 +27,12 @@ fn settings_with(merged: Settings) -> SettingsWithSource {
     }
 }
 
-fn build_test_runtime(merged: Settings) -> (TempDir, RuntimeConfig) {
+fn build_test_runtime(mut merged: Settings) -> (TempDir, RuntimeConfig) {
+    // Multi-LLM SDK has no implicit Main fallback — sandbox tests
+    // don't care about the model, but the build now requires one.
+    if merged.model.is_none() && merged.models.main.is_none() {
+        merged.model = Some("anthropic/claude-opus-4-7".into());
+    }
     let tmp = TempDir::new().expect("tempdir");
     let catalogs = CatalogPaths::empty_in(tmp.path());
     let runtime = build_runtime_config_with(

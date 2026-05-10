@@ -30,7 +30,7 @@ fn test_load_plugin_skills_from_manifest_paths() {
     // Create a skill .md file
     std::fs::write(
         dir.path().join("my-tool.md"),
-        "# my-tool\n---\ndescription: A tool\n---\nDo things.\n",
+        "---\ndescription: A tool\n---\nDo things.\n",
     )
     .unwrap();
 
@@ -79,7 +79,7 @@ fn test_load_plugin_skills_skill_md_dir_format() {
     std::fs::create_dir_all(&skill_subdir).unwrap();
     std::fs::write(
         skill_subdir.join("SKILL.md"),
-        "# heading\n---\ndescription: Skill from dir\n---\nContent.\n",
+        "---\ndescription: Skill from dir\n---\nContent.\n",
     )
     .unwrap();
 

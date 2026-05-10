@@ -154,6 +154,20 @@ pub fn parse(input: &str) -> Frontmatter {
     let after_first = &trimmed[3..];
     let after_first = after_first.strip_prefix('\n').unwrap_or(after_first);
 
+    // Empty frontmatter (`---\n---\n…`): the closer sits at index 0 with no
+    // leading newline. The general `find("\n---")` lookup misses that, so
+    // handle the zero-length block explicitly.
+    if let Some(rest) = after_first.strip_prefix("---") {
+        let body = rest
+            .strip_prefix('\n')
+            .or_else(|| rest.strip_prefix("\r\n"))
+            .unwrap_or(rest);
+        return Frontmatter {
+            data: HashMap::new(),
+            content: body.to_string(),
+        };
+    }
+
     if let Some(end_pos) = after_first.find("\n---") {
         let yaml_block = &after_first[..end_pos];
         let content_start = end_pos + 4; // skip \n---
@@ -176,9 +190,15 @@ pub fn parse(input: &str) -> Frontmatter {
     }
 }
 
-/// Parse a YAML block via `serde_yml`. Falls through to an empty map
-/// when YAML parsing fails (matching TS lenient behaviour: malformed
-/// frontmatter doesn't poison the body).
+/// Parse a YAML block via `serde_yml`. On parse failure, retries once
+/// after auto-quoting values that contain YAML special characters
+/// (e.g. globs like `*.{ts,tsx}`, where `*` is a YAML alias indicator
+/// and `{}` opens a flow mapping). Mirrors TS `quoteProblematicValues`
+/// in `claude-code-kim/src/utils/frontmatterParser.ts:85-121` so disk
+/// skills authored against the TS schema load identically.
+///
+/// Falls through to an empty map when even the retry fails (matching TS
+/// lenient behaviour: malformed frontmatter doesn't poison the body).
 fn parse_yaml_block(yaml: &str) -> HashMap<String, FrontmatterValue> {
     let trimmed = yaml.trim();
     if trimmed.is_empty() {
@@ -186,7 +206,10 @@ fn parse_yaml_block(yaml: &str) -> HashMap<String, FrontmatterValue> {
     }
     let value: serde_yml::Value = match serde_yml::from_str(yaml) {
         Ok(v) => v,
-        Err(_) => return HashMap::new(),
+        Err(_) => match serde_yml::from_str(&quote_problematic_values(yaml)) {
+            Ok(v) => v,
+            Err(_) => return HashMap::new(),
+        },
     };
     let mapping = match value {
         serde_yml::Value::Mapping(m) => m,
@@ -204,6 +227,86 @@ fn parse_yaml_block(yaml: &str) -> HashMap<String, FrontmatterValue> {
             Some((key, yaml_to_frontmatter_value(v)))
         })
         .collect()
+}
+
+/// Pre-process YAML text by wrapping values that contain YAML special
+/// characters in double quotes. Mirrors TS `quoteProblematicValues` —
+/// keeps glob patterns like `*.{ts,tsx}` from being interpreted as
+/// anchors or flow-mappings.
+///
+/// Only top-level `key: value` lines are rewritten; indented lines,
+/// list items, and block-scalar headers pass through untouched so YAML
+/// list / nested-mapping syntax keeps working.
+fn quote_problematic_values(yaml: &str) -> String {
+    let mut out = String::with_capacity(yaml.len() + 16);
+    for (i, line) in yaml.lines().enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        match maybe_quote_line(line) {
+            Some(rewritten) => out.push_str(&rewritten),
+            None => out.push_str(line),
+        }
+    }
+    if yaml.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+fn maybe_quote_line(line: &str) -> Option<String> {
+    // Skip indented lines (sequence items, nested mappings).
+    if line.starts_with(' ') || line.starts_with('\t') {
+        return None;
+    }
+
+    let colon = line.find(':')?;
+    let key = &line[..colon];
+    if key.is_empty() || !key.chars().all(is_simple_key_char) {
+        return None;
+    }
+
+    let after_colon = &line[colon + 1..];
+    // Need at least one separator space — `key:value` without space is not
+    // a YAML mapping line we want to touch.
+    let value = after_colon.strip_prefix(' ')?.trim_end();
+    if value.is_empty() {
+        return None;
+    }
+
+    // Already quoted — leave alone.
+    if (value.starts_with('"') && value.ends_with('"'))
+        || (value.starts_with('\'') && value.ends_with('\''))
+    {
+        return None;
+    }
+
+    if !needs_quoting(value) {
+        return None;
+    }
+
+    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+    Some(format!("{key}: \"{escaped}\""))
+}
+
+fn is_simple_key_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '-' || c == '_'
+}
+
+/// Returns true when the value contains characters that have special YAML
+/// meaning at the start of a scalar or anywhere in a flow context. Mirrors
+/// the TS `YAML_SPECIAL_CHARS` regex: `[{}[\]*&#!|>%@`]|: ` (`': '` flags
+/// nested mappings; bare `:` is fine for times like `12:34`).
+fn needs_quoting(value: &str) -> bool {
+    if value.contains(": ") {
+        return true;
+    }
+    value.chars().any(|c| {
+        matches!(
+            c,
+            '{' | '}' | '[' | ']' | '*' | '&' | '#' | '!' | '|' | '>' | '%' | '@' | '`'
+        )
+    })
 }
 
 fn yaml_to_frontmatter_value(value: serde_yml::Value) -> FrontmatterValue {

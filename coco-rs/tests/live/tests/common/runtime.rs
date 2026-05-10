@@ -46,8 +46,22 @@ pub fn shared_runtime() -> &'static Arc<RuntimeConfig> {
     let entry = RUNTIME.get_or_init(|| {
         ensure_env_loaded();
         let home = tempfile::tempdir().expect("create test tempdir");
+        // Multi-LLM SDK: Main has no implicit default. The shared
+        // runtime is only used as a builtin-provider catalog (see
+        // `provider_config` / `spec_for`); Main resolution is not
+        // exercised, but `build()` still requires a value. Pin a
+        // builtin so this passes even when the host has no
+        // `~/.coco/settings.json`.
+        let overrides = coco_config::RuntimeOverrides {
+            model_override: Some(coco_config::ModelSelection {
+                provider: "anthropic".into(),
+                model_id: "claude-opus-4-7".into(),
+            }),
+            ..Default::default()
+        };
         let runtime = RuntimeConfigBuilder::from_process(home.path())
             .with_catalog_paths(CatalogPaths::empty_in(home.path()))
+            .with_overrides(overrides)
             .build()
             .expect("build empty-overlay runtime");
         TestRuntime {

@@ -6,6 +6,7 @@ use coco_system_reminder::SkillsSource;
 fn skill(name: &str, desc: &str) -> SkillDefinition {
     SkillDefinition {
         name: name.to_string(),
+        display_name: None,
         description: desc.to_string(),
         prompt: String::new(),
         source: SkillSource::Bundled,
@@ -26,6 +27,8 @@ fn skill(name: &str, desc: &str) -> SkillDefinition {
         disable_model_invocation: false,
         shell: None,
         content_length: 0,
+        has_user_specified_description: true,
+        progress_message: Some("running".to_string()),
         is_hidden: false,
         gated_by: None,
         files: std::collections::HashMap::new(),

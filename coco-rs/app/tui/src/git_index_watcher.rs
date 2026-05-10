@@ -14,6 +14,7 @@ use coco_file_search::FileIndex;
 use coco_file_search::SharedFileIndex;
 use coco_file_watch::FileWatcherBuilder;
 use coco_file_watch::RecursiveMode;
+use coco_git::find_canonical_git_root;
 use tracing::debug;
 
 /// Throttle window — coalesce bursts when git rewrites `index` (commit,
@@ -25,11 +26,18 @@ const THROTTLE: Duration = Duration::from_millis(500);
 /// whenever `.git/index` (or the broader `.git/` dir, when `index` is
 /// rewritten via rename) changes.
 ///
-/// No-op if `cwd` has no `.git/` directory.
+/// No-op when `cwd` is outside any git work tree. Uses
+/// `find_canonical_git_root` so subdirectories, linked worktrees, and
+/// submodules all locate the canonical `.git/` (the on-disk directory
+/// shared across worktrees), not just `cwd/.git`.
 pub fn spawn(cwd: PathBuf, index: SharedFileIndex) {
-    let git_dir = cwd.join(".git");
+    let Some(git_root) = find_canonical_git_root(&cwd) else {
+        debug!("git_index_watcher: {cwd:?} is outside a git work tree, skipping");
+        return;
+    };
+    let git_dir = git_root.join(".git");
     if !git_dir.is_dir() {
-        debug!("git_index_watcher: no .git/ at {cwd:?}, skipping");
+        debug!("git_index_watcher: no .git/ at canonical root {git_root:?}, skipping");
         return;
     }
 

@@ -25,7 +25,6 @@ pub fn builtin_provider_partials() -> Vec<(&'static str, PartialProviderConfig)>
                 // version segments. So `https://api.anthropic.com` would
                 // produce `/messages` (404) instead of `/v1/messages`.
                 base_url: Some("https://api.anthropic.com/v1".into()),
-                default_model: Some("claude-sonnet-4-6".into()),
                 ..Default::default()
             },
         ),
@@ -35,7 +34,6 @@ pub fn builtin_provider_partials() -> Vec<(&'static str, PartialProviderConfig)>
                 api: Some(ProviderApi::Openai),
                 env_key: Some("OPENAI_API_KEY".into()),
                 base_url: Some("https://api.openai.com/v1".into()),
-                default_model: Some("gpt-5".into()),
                 // OpenAI direct defaults to the Responses API (the
                 // SDK's `language_model()` default). Users with
                 // legacy Chat Completions deployments override via
@@ -53,7 +51,6 @@ pub fn builtin_provider_partials() -> Vec<(&'static str, PartialProviderConfig)>
                 // SDK appends `/models/<id>:generateContent` to `base_url`
                 // without auto-detecting missing version segments.
                 base_url: Some("https://generativelanguage.googleapis.com/v1beta".into()),
-                default_model: Some("gemini-2.5-pro".into()),
                 ..Default::default()
             },
         ),
@@ -82,7 +79,6 @@ pub fn builtin_provider_partials() -> Vec<(&'static str, PartialProviderConfig)>
                 env_key: Some(EnvKey::DeepseekApiKey.to_string()),
                 // OpenAI-compatible endpoint — SDK appends `/chat/completions`.
                 base_url: Some("https://api.deepseek.com/v1".into()),
-                default_model: Some("deepseek-v4-pro".into()),
                 models: Some(deepseek_v4_models()),
                 ..Default::default()
             },
@@ -95,7 +91,6 @@ pub fn builtin_provider_partials() -> Vec<(&'static str, PartialProviderConfig)>
                 // Anthropic-compatible endpoint — must end with `/v1`; SDK
                 // appends `/messages` (same rule as `api.anthropic.com/v1`).
                 base_url: Some("https://api.deepseek.com/anthropic/v1".into()),
-                default_model: Some("deepseek-v4-pro".into()),
                 models: Some(deepseek_v4_models()),
                 ..Default::default()
             },

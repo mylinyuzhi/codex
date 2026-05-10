@@ -166,6 +166,16 @@ pub enum Capability {
     InterleavedThinking,
     /// `context-management-2025-06-27` beta.
     ContextManagement,
+    /// Anthropic adaptive thinking — server picks effort dynamically.
+    /// Gates the convert layer's emission of
+    /// `thinking: {"type":"adaptive"}` for `ReasoningEffort::Auto`.
+    /// Without this capability, the convert layer omits the field
+    /// entirely so the server-side default applies (avoids 400 from
+    /// non-adaptive models that reject the value).
+    ///
+    /// Known supporting models (Anthropic family): Claude Sonnet 4.6,
+    /// Claude Opus 4.6+, DeepSeek V4 (anthropic-compat).
+    AdaptiveThinking,
     /// `token-efficient-tools-2026-03-28` beta. Mutually
     /// exclusive with structured outputs.
     TokenEfficientTools,
