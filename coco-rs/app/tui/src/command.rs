@@ -82,6 +82,11 @@ pub enum UserCommand {
         /// Permission rules to persist from this decision.
         /// TS: `permissionUpdates` (suggestions the user accepted)
         permission_updates: Vec<PermissionUpdate>,
+        /// Optional content blocks (image attachments etc.) the user
+        /// pasted alongside the answer. TS: `contentBlocks` — 4th arg
+        /// of `onAllow` / 2nd arg of `onReject`. Today no TUI gesture
+        /// emits this; SDK clients ship via `ApprovalResolveParams.content_blocks`.
+        content_blocks: Option<Vec<serde_json::Value>>,
     },
     /// Execute a skill by name.
     ExecuteSkill { name: String, args: Option<String> },

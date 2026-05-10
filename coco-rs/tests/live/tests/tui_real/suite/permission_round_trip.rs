@@ -18,6 +18,7 @@
 //! The bypass-permissions flag MUST be off — otherwise the engine
 //! short-circuits and never consults the bridge.
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -55,12 +56,20 @@ pub async fn run(provider: &str, model: &str) -> Result<()> {
         .with_bypass_permissions(false) // bypass off → bridge consulted
         .with_settings_path(settings_path)
         .with_workdir(workdir)
+        // If the model decides to call AskUserQuestion mid-flow (e.g. to
+        // clarify after the Bash approval), the harness auto-resolves
+        // the second permission request via the same `UserCommand::
+        // ApprovalResponse` channel the production TUI overlay uses,
+        // splicing first-option answers into `updated_input`. Without
+        // this the engine would block in `permission_controller`'s
+        // bridge wait until the test-level 60s deadline tripped.
+        .with_auto_answer_questions(HashMap::new())
         .build()
         .await?;
 
     let prompt = format!(
-        "Use the Bash tool to run `echo approved > {marker_str}`. After the \
-         user approves, reply with the single word `done`."
+        "Use the Bash tool to run `echo approved > {marker_str}`. \
+         After the tool completes, reply with the single word `done`."
     );
     harness.submit(&prompt).await;
 

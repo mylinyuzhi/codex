@@ -101,6 +101,7 @@ pub(super) async fn approve(state: &mut AppState, command_tx: &mpsc::Sender<User
                     feedback: None,
                     updated_input: None,
                     permission_updates: vec![],
+                    content_blocks: None,
                 })
                 .await;
             state.ui.dismiss_overlay();
@@ -114,6 +115,7 @@ pub(super) async fn approve(state: &mut AppState, command_tx: &mpsc::Sender<User
                     feedback: None,
                     updated_input: None,
                     permission_updates: vec![],
+                    content_blocks: None,
                 })
                 .await;
             state.ui.dismiss_overlay();
@@ -127,6 +129,7 @@ pub(super) async fn approve(state: &mut AppState, command_tx: &mpsc::Sender<User
                     feedback: None,
                     updated_input: None,
                     permission_updates: vec![],
+                    content_blocks: None,
                 })
                 .await;
             state.ui.dismiss_overlay();
@@ -195,6 +198,7 @@ pub(super) async fn deny(state: &mut AppState, command_tx: &mpsc::Sender<UserCom
                     feedback: None,
                     updated_input: None,
                     permission_updates: vec![],
+                    content_blocks: None,
                 })
                 .await;
             state.ui.dismiss_overlay();
@@ -208,6 +212,7 @@ pub(super) async fn deny(state: &mut AppState, command_tx: &mpsc::Sender<UserCom
                     feedback: None,
                     updated_input: None,
                     permission_updates: vec![],
+                    content_blocks: None,
                 })
                 .await;
             state.ui.dismiss_overlay();
@@ -221,6 +226,7 @@ pub(super) async fn deny(state: &mut AppState, command_tx: &mpsc::Sender<UserCom
                     feedback: None,
                     updated_input: None,
                     permission_updates: vec![],
+                    content_blocks: None,
                 })
                 .await;
             state.ui.dismiss_overlay();
@@ -294,6 +300,7 @@ pub(super) async fn approve_all(state: &mut AppState, command_tx: &mpsc::Sender<
                 feedback: None,
                 updated_input: None,
                 permission_updates: vec![update],
+                content_blocks: None,
             })
             .await;
         state.ui.dismiss_overlay();
@@ -318,6 +325,7 @@ pub(super) async fn classifier_auto_approve(
                 feedback: None,
                 updated_input: None,
                 permission_updates: vec![],
+                content_blocks: None,
             })
             .await;
         state.ui.dismiss_overlay();
@@ -326,6 +334,20 @@ pub(super) async fn classifier_auto_approve(
 
 /// Push `c` into the current filterable overlay's filter string.
 pub(super) fn filter(state: &mut AppState, c: char) {
+    // Question overlay specializes the keystroke routing: Space toggles
+    // multi-select; printable chars edit the "Other" notes textarea
+    // when that option is focused. Both consume the keystroke before
+    // any filter logic. TS: `QuestionView.tsx` `onKeyDown` priority.
+    if matches!(state.ui.overlay, Some(Overlay::Question(_))) {
+        if c == ' ' {
+            question_toggle_checked(state);
+            return;
+        }
+        if question_notes_input(state, c) {
+            return;
+        }
+        return; // Question overlay has no filter — silently swallow.
+    }
     match &mut state.ui.overlay {
         Some(Overlay::ModelPicker(m)) => {
             m.filter.push(c);
@@ -353,6 +375,12 @@ pub(super) fn filter(state: &mut AppState, c: char) {
 
 /// Pop the last char from the current filterable overlay's filter string.
 pub(super) fn filter_backspace(state: &mut AppState) {
+    // Question overlay: when "Other" is focused, Backspace edits the
+    // notes textarea. Otherwise no-op (Question has no filter).
+    if matches!(state.ui.overlay, Some(Overlay::Question(_))) {
+        question_notes_backspace(state);
+        return;
+    }
     match &mut state.ui.overlay {
         Some(Overlay::ModelPicker(m)) => {
             m.filter.pop();
@@ -414,8 +442,25 @@ pub(super) fn nav(state: &mut AppState, delta: i32) {
             e.selected = (e.selected + delta).clamp(0, (count - 1).max(0));
         }
         Some(Overlay::Question(q)) => {
-            let count = q.options.len() as i32;
-            q.selected = (q.selected + delta).clamp(0, (count - 1).max(0));
+            // Up/Down moves the focused option within the *focused* question.
+            // No-op when focus is on a footer item (Chat-about-this /
+            // Skip-interview) — Tab/Shift+Tab cycle the focus between
+            // questions and footer items, handled by `OverlayTabsNext`.
+            if let crate::state::QuestionFocus::Question(idx) = q.focus
+                && let Some(qi) = q.questions.get_mut(idx as usize)
+            {
+                let count = qi.options.len() as i32;
+                let next = (qi.selected + delta).clamp(0, (count - 1).max(0));
+                qi.selected = next;
+                // TS `QuestionView.tsx:85-87`: focusing the `__other__`
+                // option flips into text-input mode. Drop out when
+                // moving away.
+                qi.editing_notes = qi
+                    .options
+                    .get(next as usize)
+                    .map(|o| o.label == crate::state::OTHER_OPTION_LABEL)
+                    .unwrap_or(false);
+            }
         }
         Some(Overlay::Feedback(f)) => {
             let count = f.options.len() as i32;
@@ -583,17 +628,77 @@ pub(super) async fn confirm(state: &mut AppState, command_tx: &mpsc::Sender<User
             }
         }
         Some(Overlay::Question(q)) => {
-            if let Some(option) = q.options.get(q.selected as usize) {
-                let _ = command_tx
-                    .send(UserCommand::ApprovalResponse {
-                        request_id: q.request_id.clone(),
-                        approved: true,
-                        always_allow: false,
-                        feedback: Some(option.clone()),
-                        updated_input: None,
-                        permission_updates: vec![],
-                    })
-                    .await;
+            use crate::state::QuestionFocus;
+            match q.focus {
+                QuestionFocus::Question(idx) => {
+                    // Intermediate question → advance to the next.
+                    // Last question → submit all answers via the
+                    // updated_input splice. TS `nextQuestion` /
+                    // `submitAnswers` at
+                    // `AskUserQuestionPermissionRequest.tsx:407,565`.
+                    let last_idx = (q.questions.len() as i32).saturating_sub(1);
+                    if idx < last_idx {
+                        // Re-set into the overlay (we own `q` here after
+                        // the take()).
+                        let mut q = q;
+                        q.focus = QuestionFocus::Question(idx + 1);
+                        state.ui.overlay = Some(Overlay::Question(q));
+                        return;
+                    }
+                    let updated_input = build_answer_payload(&q);
+                    let _ = command_tx
+                        .send(UserCommand::ApprovalResponse {
+                            request_id: q.request_id.clone(),
+                            approved: true,
+                            always_allow: false,
+                            feedback: None,
+                            updated_input: Some(updated_input),
+                            permission_updates: vec![],
+                            content_blocks: None,
+                        })
+                        .await;
+                }
+                QuestionFocus::ChatAboutThis => {
+                    // TS `handleRespondToClaude`: rejection with the
+                    // synthesized clarification prose. The model
+                    // receives this as the rejection feedback and
+                    // re-asks / clarifies.
+                    let feedback = q.chat_about_this_feedback();
+                    let _ = command_tx
+                        .send(UserCommand::ApprovalResponse {
+                            request_id: q.request_id.clone(),
+                            approved: false,
+                            always_allow: false,
+                            feedback: Some(feedback),
+                            updated_input: None,
+                            permission_updates: vec![],
+                            content_blocks: None,
+                        })
+                        .await;
+                }
+                QuestionFocus::SkipInterview => {
+                    // Plan-mode-only. The renderer hides this footer
+                    // item when `!is_in_plan_mode`, but Tab navigation
+                    // also skips it — the focus enum should never carry
+                    // SkipInterview when plan-mode is off. Defensive
+                    // gate here in case future changes reach this arm
+                    // outside plan mode.
+                    if !q.is_in_plan_mode {
+                        return;
+                    }
+                    let feedback = q.skip_interview_feedback();
+                    let _ = command_tx
+                        .send(UserCommand::ApprovalResponse {
+                            request_id: q.request_id.clone(),
+                            approved: false,
+                            always_allow: false,
+                            feedback: Some(feedback),
+                            updated_input: None,
+                            permission_updates: vec![],
+                            content_blocks: None,
+                        })
+                        .await;
+                }
             }
         }
         Some(Overlay::Settings(s)) => {
@@ -701,6 +806,178 @@ pub(super) async fn request_diff_stats_if_rewind(
             })
             .await;
     }
+}
+
+/// Cycle the focus within the Question overlay (Tab / Shift+Tab).
+///
+/// Order (TS `AskUserQuestionPermissionRequest.tsx`): Q0 → Q1 → … →
+/// QN-1 → ChatAboutThis → SkipInterview (only when in plan mode) →
+/// Q0 (wrap). `delta` is +1 for Tab, -1 for Shift+Tab. No-op when no
+/// Question overlay is active.
+pub(super) fn question_cycle_focus(state: &mut AppState, delta: i32) {
+    use crate::state::QuestionFocus;
+    let Some(Overlay::Question(ref mut q)) = state.ui.overlay else {
+        return;
+    };
+    let q_count = q.questions.len() as i32;
+    if q_count == 0 {
+        return;
+    }
+    // Linearize the focus order so we can walk it as a Vec<QuestionFocus>.
+    let mut order: Vec<QuestionFocus> = (0..q_count).map(QuestionFocus::Question).collect();
+    order.push(QuestionFocus::ChatAboutThis);
+    if q.is_in_plan_mode {
+        order.push(QuestionFocus::SkipInterview);
+    }
+    let idx = order.iter().position(|f| *f == q.focus).unwrap_or(0) as i32;
+    let len = order.len() as i32;
+    let next = (idx + delta).rem_euclid(len) as usize;
+    q.focus = order[next];
+    // Keep `editing_notes` in sync with the new focus.
+    if let QuestionFocus::Question(qi_idx) = q.focus
+        && let Some(qi) = q.questions.get_mut(qi_idx as usize)
+    {
+        qi.editing_notes = qi
+            .options
+            .get(qi.selected as usize)
+            .map(|o| o.label == crate::state::OTHER_OPTION_LABEL)
+            .unwrap_or(false);
+    }
+}
+
+/// Toggle the focused option's checked state in a multi-select question
+/// (Space). Single-select and footer focus are no-ops. TS `MultiSelect`
+/// onSpace handler in
+/// `claude-code/src/components/permissions/AskUserQuestionPermissionRequest/QuestionView.tsx`.
+pub(super) fn question_toggle_checked(state: &mut AppState) {
+    use crate::state::QuestionFocus;
+    let Some(Overlay::Question(ref mut q)) = state.ui.overlay else {
+        return;
+    };
+    let QuestionFocus::Question(qi_idx) = q.focus else {
+        return;
+    };
+    let Some(qi) = q.questions.get_mut(qi_idx as usize) else {
+        return;
+    };
+    if !qi.multi_select {
+        return;
+    }
+    let target = qi.selected;
+    if let Some(pos) = qi.checked.iter().position(|i| *i == target) {
+        qi.checked.swap_remove(pos);
+    } else {
+        qi.checked.push(target);
+    }
+}
+
+/// Append a typed character into the focused question's `notes` buffer
+/// when the Other option is focused (TS: text-input mode while
+/// `__other__` selected). Returns `true` if the char was consumed.
+/// Caller should fall back to the normal filter-input path when this
+/// returns `false`.
+pub(super) fn question_notes_input(state: &mut AppState, c: char) -> bool {
+    use crate::state::QuestionFocus;
+    let Some(Overlay::Question(ref mut q)) = state.ui.overlay else {
+        return false;
+    };
+    let QuestionFocus::Question(qi_idx) = q.focus else {
+        return false;
+    };
+    let Some(qi) = q.questions.get_mut(qi_idx as usize) else {
+        return false;
+    };
+    if !qi.editing_notes {
+        return false;
+    }
+    qi.notes.push(c);
+    true
+}
+
+/// Backspace in the focused question's notes textarea. Returns `true`
+/// if the keystroke was consumed.
+pub(super) fn question_notes_backspace(state: &mut AppState) -> bool {
+    use crate::state::QuestionFocus;
+    let Some(Overlay::Question(ref mut q)) = state.ui.overlay else {
+        return false;
+    };
+    let QuestionFocus::Question(qi_idx) = q.focus else {
+        return false;
+    };
+    let Some(qi) = q.questions.get_mut(qi_idx as usize) else {
+        return false;
+    };
+    if !qi.editing_notes {
+        return false;
+    }
+    qi.notes.pop();
+    true
+}
+
+/// Build the `{...original_input, answers, annotations}` payload shipped
+/// via `UserCommand::ApprovalResponse.updated_input`. Mirrors TS
+/// `submitAnswers` at `AskUserQuestionPermissionRequest.tsx:407`.
+fn build_answer_payload(q: &crate::state::QuestionOverlay) -> serde_json::Value {
+    let mut answers = serde_json::Map::new();
+    let mut annotations = serde_json::Map::new();
+
+    for qi in &q.questions {
+        // Pick checked indices (multi-select) or the focused one
+        // (single-select). Multi-select with no toggles falls back to
+        // the focused option so we never ship an empty answer for a
+        // question that was actually shown.
+        let chosen_indices: Vec<i32> = if qi.multi_select && !qi.checked.is_empty() {
+            qi.checked.clone()
+        } else {
+            vec![qi.selected]
+        };
+        let labels: Vec<String> = chosen_indices
+            .iter()
+            .filter_map(|i| qi.options.get(*i as usize))
+            .map(|o| {
+                if o.label == crate::state::OTHER_OPTION_LABEL {
+                    qi.notes.trim().to_string()
+                } else {
+                    o.label.clone()
+                }
+            })
+            .filter(|s| !s.is_empty())
+            .collect();
+        let answer = labels.join(", ");
+        answers.insert(qi.question.clone(), serde_json::Value::String(answer));
+
+        // Annotation entry — preview from the focused option (TS
+        // `selectedOption?.preview`) and notes from the typed buffer
+        // (only when the focused option is NOT the Other sentinel,
+        // since for Other the notes ARE the answer).
+        let focused_opt = qi.options.get(qi.selected as usize);
+        let is_other_focused = focused_opt
+            .map(|o| o.label == crate::state::OTHER_OPTION_LABEL)
+            .unwrap_or(false);
+        let preview = focused_opt.and_then(|o| o.preview.as_ref());
+        let notes_for_annotation = if is_other_focused {
+            None
+        } else {
+            Some(qi.notes.trim()).filter(|s| !s.is_empty())
+        };
+        if preview.is_some() || notes_for_annotation.is_some() {
+            let mut entry = serde_json::Map::new();
+            if let Some(p) = preview {
+                entry.insert("preview".into(), serde_json::Value::String(p.clone()));
+            }
+            if let Some(n) = notes_for_annotation {
+                entry.insert("notes".into(), serde_json::Value::String(n.into()));
+            }
+            annotations.insert(qi.question.clone(), serde_json::Value::Object(entry));
+        }
+    }
+
+    let mut payload = q.original_input.as_object().cloned().unwrap_or_default();
+    payload.insert("answers".into(), serde_json::Value::Object(answers));
+    if !annotations.is_empty() {
+        payload.insert("annotations".into(), serde_json::Value::Object(annotations));
+    }
+    serde_json::Value::Object(payload)
 }
 
 /// Rewind Esc: go back a phase before dismissing. Returns `true` if overlay

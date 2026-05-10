@@ -223,9 +223,28 @@ pub struct ApprovalResolveParams {
     /// Optional feedback to inject back to the model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub feedback: Option<String>,
-    /// Optional modified tool input (for pre-approval mutation).
+    /// Optional rewritten tool input the SDK client supplies at
+    /// approval time. When `Some`, the engine substitutes this for the
+    /// model-emitted input before invoking the tool. Used by
+    /// `AskUserQuestion` to ship user-selected `answers` (and optional
+    /// `annotations`) back into the tool's data envelope.
+    ///
+    /// Protocol mirror of `coco_tool_runtime::ToolPermissionResolution.updated_input`
+    /// (the in-process equivalent for TUI mode). TS parity:
+    /// `permissionDecision.updatedInput` at `services/tools/toolExecution.ts:1130-1131`.
+    /// Consumed by `app/cli/src/sdk_server/approval_bridge.rs`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated_input: Option<serde_json::Value>,
+    /// Optional content blocks (typically image attachments) the SDK
+    /// client wants attached to the next user message. Mirrors TS
+    /// `contentBlocks?: ContentBlockParam[]` on `PermissionAllowDecision`
+    /// (`types/permissions.ts:183`) — paste-image-during-AskUserQuestion
+    /// or attachments alongside `MCPTool` answers ride this slot.
+    /// Carried verbatim as `serde_json::Value` because the underlying
+    /// `ContentBlockParam` is Anthropic-shaped; consumers translate
+    /// per provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_blocks: Option<Vec<serde_json::Value>>,
 }
 
 /// TS uses `allow` / `deny` / `ask` for the canUseTool response flow.

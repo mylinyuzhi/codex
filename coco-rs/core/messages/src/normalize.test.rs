@@ -591,3 +591,240 @@ fn sanitize_strips_non_text_from_is_error_tool_result() {
     };
     assert_eq!(text, "stderr line 1\n\nstderr line 2");
 }
+
+/// TS-parity forward synthesis (`utils/messages.ts:5301-5326`):
+/// when an assistant tool_use has no matching tool_result anywhere
+/// in the transcript, normalize_messages_for_api must inject an
+/// `is_error: true` placeholder so the next provider call doesn't
+/// hit `unexpected tool_use_id`.
+#[test]
+fn normalize_synthesizes_missing_tool_result() {
+    use coco_inference::ToolCallPart;
+    use coco_inference::ToolContentPart;
+    use coco_inference::ToolResultContent;
+    use coco_types::ToolId;
+    use coco_types::ToolName;
+
+    // Assistant emits tc1 + tc2; only tc1 has a result.
+    let assistant = Message::Assistant(AssistantMessage {
+        message: LlmMessage::Assistant {
+            content: vec![
+                AssistantContent::Text(coco_inference::TextPart {
+                    text: "calling".into(),
+                    provider_metadata: None,
+                }),
+                AssistantContent::ToolCall(ToolCallPart::new(
+                    "tc1",
+                    "Bash",
+                    serde_json::json!({"command": "echo a"}),
+                )),
+                AssistantContent::ToolCall(ToolCallPart::new(
+                    "tc2",
+                    "Bash",
+                    serde_json::json!({"command": "echo b"}),
+                )),
+            ],
+            provider_options: None,
+        },
+        uuid: Uuid::new_v4(),
+        model: "test".into(),
+        stop_reason: Some(StopReason::EndTurn),
+        usage: None,
+        cost_usd: None,
+        request_id: None,
+        api_error: None,
+    });
+    let tool_result_tc1 = Message::ToolResult(ToolResultMessage {
+        uuid: Uuid::new_v4(),
+        message: LlmMessage::Tool {
+            content: vec![ToolContentPart::ToolResult(
+                coco_inference::ToolResultPart {
+                    tool_call_id: "tc1".into(),
+                    tool_name: "Bash".into(),
+                    output: ToolResultContent::text("a"),
+                    is_error: false,
+                    provider_metadata: None,
+                },
+            )],
+            provider_options: None,
+        },
+        tool_use_id: "tc1".into(),
+        tool_id: ToolId::Builtin(ToolName::Bash),
+        is_error: false,
+    });
+
+    let result = normalize_messages_for_api(&[user_msg("go"), assistant, tool_result_tc1]);
+
+    // Find the Tool message — it must now carry BOTH tc1 (real) and
+    // tc2 (synthesized is_error). Order: real first (it predates the
+    // synthesizer), synthetic appended.
+    let tool_idx = result
+        .iter()
+        .position(|m| matches!(m, LlmMessage::Tool { .. }))
+        .expect("Tool message must exist");
+    let LlmMessage::Tool { content, .. } = &result[tool_idx] else {
+        unreachable!()
+    };
+    let ids: Vec<(String, bool)> = content
+        .iter()
+        .filter_map(|p| match p {
+            ToolContentPart::ToolResult(r) => Some((r.tool_call_id.clone(), r.is_error)),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        ids.iter().any(|(id, e)| id == "tc1" && !*e),
+        "tc1 real result must survive: got {ids:?}"
+    );
+    assert!(
+        ids.iter().any(|(id, e)| id == "tc2" && *e),
+        "tc2 synthetic is_error result must be injected: got {ids:?}"
+    );
+}
+
+/// Synthesis must be idempotent — running it twice on the same Vec
+/// must not produce duplicate tool_results. Calls the private
+/// `synthesize_missing_tool_results` directly (twice) so this test
+/// genuinely exercises the second-pass path, not just observes a
+/// single normalize-call output.
+#[test]
+fn normalize_synthesis_is_idempotent() {
+    use coco_inference::ToolCallPart;
+    use coco_inference::ToolContentPart;
+
+    // Build a Vec<LlmMessage> with one assistant tool_use and no
+    // matching tool_result.
+    let mut msgs = vec![
+        LlmMessage::user_text("go"),
+        LlmMessage::Assistant {
+            content: vec![AssistantContent::ToolCall(ToolCallPart::new(
+                "orphan",
+                "Bash",
+                serde_json::json!({}),
+            ))],
+            provider_options: None,
+        },
+    ];
+
+    super::synthesize_missing_tool_results(&mut msgs);
+    let count_after_first = count_tool_results_for(&msgs, "orphan");
+    assert_eq!(count_after_first, 1, "first pass must inject the synthetic");
+
+    // Second call on the SAME mutated Vec — the synthetic from pass 1
+    // is now in `resolved`, so pass 2 must be a no-op.
+    super::synthesize_missing_tool_results(&mut msgs);
+    let count_after_second = count_tool_results_for(&msgs, "orphan");
+    assert_eq!(
+        count_after_second, 1,
+        "second pass must NOT duplicate the synthetic; got {count_after_second} parts"
+    );
+
+    fn count_tool_results_for(msgs: &[LlmMessage], id: &str) -> usize {
+        msgs.iter()
+            .map(|m| match m {
+                LlmMessage::Tool { content, .. } => content
+                    .iter()
+                    .filter(|p| matches!(p, ToolContentPart::ToolResult(r) if r.tool_call_id == id))
+                    .count(),
+                _ => 0,
+            })
+            .sum()
+    }
+}
+
+/// Two assistants with orphans, separated by a Tool message that
+/// resolves a different tool_use. Each assistant's orphan must be
+/// synthesized independently — verifies the audit's edge case A2.
+#[test]
+fn normalize_synthesizes_for_multiple_assistants() {
+    use coco_inference::ToolCallPart;
+    use coco_inference::ToolContentPart;
+    use coco_types::ToolId;
+    use coco_types::ToolName;
+
+    let asst_a = Message::Assistant(AssistantMessage {
+        message: LlmMessage::Assistant {
+            content: vec![AssistantContent::ToolCall(ToolCallPart::new(
+                "tcA",
+                "Bash",
+                serde_json::json!({}),
+            ))],
+            provider_options: None,
+        },
+        uuid: Uuid::new_v4(),
+        model: "test".into(),
+        stop_reason: Some(StopReason::EndTurn),
+        usage: None,
+        cost_usd: None,
+        request_id: None,
+        api_error: None,
+    });
+    // Tool that resolves an unrelated id (decoy — must NOT be treated
+    // as covering tcA or tcB).
+    let unrelated = Message::ToolResult(ToolResultMessage {
+        uuid: Uuid::new_v4(),
+        message: LlmMessage::Tool {
+            content: vec![ToolContentPart::ToolResult(
+                coco_inference::ToolResultPart {
+                    tool_call_id: "unrelated".into(),
+                    tool_name: "Bash".into(),
+                    output: coco_inference::ToolResultContent::text("ok"),
+                    is_error: false,
+                    provider_metadata: None,
+                },
+            )],
+            provider_options: None,
+        },
+        tool_use_id: "unrelated".into(),
+        tool_id: ToolId::Builtin(ToolName::Bash),
+        is_error: false,
+    });
+    let asst_b = Message::Assistant(AssistantMessage {
+        message: LlmMessage::Assistant {
+            content: vec![AssistantContent::ToolCall(ToolCallPart::new(
+                "tcB",
+                "Bash",
+                serde_json::json!({}),
+            ))],
+            provider_options: None,
+        },
+        uuid: Uuid::new_v4(),
+        model: "test".into(),
+        stop_reason: Some(StopReason::EndTurn),
+        usage: None,
+        cost_usd: None,
+        request_id: None,
+        api_error: None,
+    });
+
+    let result = normalize_messages_for_api(&[user_msg("go"), asst_a, unrelated, asst_b]);
+
+    let collect_ids = |id: &str| {
+        result
+            .iter()
+            .flat_map(|m| match m {
+                LlmMessage::Tool { content, .. } => content
+                    .iter()
+                    .filter_map(|p| match p {
+                        ToolContentPart::ToolResult(r) if r.tool_call_id == id => Some(r.is_error),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>(),
+                _ => Vec::new(),
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let tca = collect_ids("tcA");
+    let tcb = collect_ids("tcB");
+    assert_eq!(
+        tca,
+        vec![true],
+        "tcA must have exactly one synthetic is_error result"
+    );
+    assert_eq!(
+        tcb,
+        vec![true],
+        "tcB must have exactly one synthetic is_error result"
+    );
+}

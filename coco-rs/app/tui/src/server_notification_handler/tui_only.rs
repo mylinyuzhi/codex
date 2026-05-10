@@ -57,16 +57,21 @@ pub(super) fn handle(state: &mut AppState, event: TuiOnlyEvent) -> bool {
         } => on_rewind_completed(state, target_message_id, files_changed),
 
         // === Question / elicitation / sandbox overlays ===
-        TuiOnlyEvent::QuestionAsked {
-            request_id,
-            message,
-        } => {
+        TuiOnlyEvent::QuestionAsked { request_id, input } => {
+            let questions = parse_question_items(&input);
+            // Plan-mode gate for the Skip-interview footer item — TS:
+            // `isInPlanMode` from `getPermissionMode()` at
+            // `AskUserQuestionPermissionRequest.tsx`. Captured at overlay
+            // construction so a mid-overlay mode flip doesn't change the
+            // available footer items mid-flight.
+            let is_in_plan_mode = state.session.permission_mode == coco_types::PermissionMode::Plan;
             state.ui.set_overlay(crate::state::Overlay::Question(
                 crate::state::QuestionOverlay {
                     request_id,
-                    question: message,
-                    options: Vec::new(),
-                    selected: 0,
+                    original_input: input,
+                    questions,
+                    focus: crate::state::QuestionFocus::Question(0),
+                    is_in_plan_mode,
                 },
             ));
             true
@@ -428,6 +433,74 @@ fn on_rewind_completed(
     };
     state.ui.add_toast(Toast::success(msg));
     true
+}
+
+/// Parse the AskUserQuestion tool input dict into rich
+/// `QuestionItem`s the overlay can render.
+///
+/// Tolerant parser — missing/optional fields use defaults so a
+/// model that emits a partial schema still produces a usable overlay
+/// rather than a blank screen.
+///
+/// TS: `AskUserQuestionPermissionRequest.tsx` reads the same shape.
+fn parse_question_items(input: &serde_json::Value) -> Vec<crate::state::QuestionItem> {
+    let Some(arr) = input.get("questions").and_then(serde_json::Value::as_array) else {
+        return Vec::new();
+    };
+    arr.iter()
+        .map(|q| {
+            let header = str_field(q, "header").to_string();
+            let question = str_field(q, "question").to_string();
+            let multi_select = q
+                .get("multiSelect")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            let options: Vec<crate::state::QuestionOption> = q
+                .get("options")
+                .and_then(serde_json::Value::as_array)
+                .map(|opts| {
+                    opts.iter()
+                        .map(|o| crate::state::QuestionOption {
+                            label: str_field(o, "label").to_string(),
+                            description: str_field(o, "description").to_string(),
+                            preview: o
+                                .get("preview")
+                                .and_then(serde_json::Value::as_str)
+                                .map(String::from),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            // Inject the "Other" sentinel as the last option of every
+            // question (single-select only — TS does the same; the
+            // multiSelect widget hides Other). When the user focuses
+            // it, typed chars route to `notes` and the answer-build
+            // logic substitutes the typed text for the option label.
+            // TS: `QuestionView.tsx:85` `__other__` sentinel.
+            let mut options = options;
+            if !multi_select {
+                options.push(crate::state::QuestionOption {
+                    label: crate::state::OTHER_OPTION_LABEL.into(),
+                    description: "Type your own answer.".into(),
+                    preview: None,
+                });
+            }
+            crate::state::QuestionItem {
+                header,
+                question,
+                options,
+                multi_select,
+                selected: 0,
+                checked: Vec::new(),
+                notes: String::new(),
+                editing_notes: false,
+            }
+        })
+        .collect()
+}
+
+fn str_field<'a>(v: &'a serde_json::Value, key: &str) -> &'a str {
+    v.get(key).and_then(serde_json::Value::as_str).unwrap_or("")
 }
 
 /// Extract elicitation fields from a JSON Schema object.

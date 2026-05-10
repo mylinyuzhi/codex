@@ -133,6 +133,47 @@ impl Tool for AskUserQuestionTool {
                 }
             }),
         );
+        // `answers` and `annotations` are optional fields the TUI/CLI
+        // layer splices into the tool input via
+        // `PermissionOutcome::Allow.updated_input` BEFORE `tool_call_preparer`
+        // re-validates the rewritten input. Declaring them here keeps
+        // schema validation green; the model itself is not expected to
+        // populate these — the prompt teaches it to emit `questions`
+        // only. TS parity: `mapToolResultToToolResultBlockParam` reads
+        // `answers` and `annotations` from the result envelope.
+        p.insert(
+            "answers".into(),
+            serde_json::json!({
+                "type": "object",
+                "description": "(Internal) User-supplied answers, spliced by the host before invocation. Map of question text → selected option label.",
+                "additionalProperties": { "type": "string" }
+            }),
+        );
+        p.insert(
+            "annotations".into(),
+            serde_json::json!({
+                "type": "object",
+                "description": "(Internal) Per-question annotations (preview / notes), spliced by the host before invocation.",
+                "additionalProperties": { "type": "object" }
+            }),
+        );
+        // TS `commonFields.metadata` (AskUserQuestionTool.tsx:58-60).
+        // Optional analytics-tracking blob the model may emit alongside
+        // the question (e.g. `{source: "remember"}` for the /remember
+        // command). Echoed straight through to logs; never user-visible.
+        p.insert(
+            "metadata".into(),
+            serde_json::json!({
+                "type": "object",
+                "description": "Optional metadata for tracking and analytics purposes. Not displayed to user.",
+                "properties": {
+                    "source": {
+                        "type": "string",
+                        "description": "Optional identifier for the source of this question (e.g., \"remember\" for /remember command). Used for analytics tracking."
+                    }
+                }
+            }),
+        );
         ToolInputSchema { properties: p }
     }
 
@@ -203,10 +244,22 @@ impl Tool for AskUserQuestionTool {
             .cloned()
             .unwrap_or(Value::Array(vec![]));
 
-        // Return the questions as the result. The TUI/CLI layer intercepts
-        // this tool's output, presents the UI, and fills in answers.
+        // Propagate `answers` and `annotations` through to the result
+        // when the host (TUI/CLI/test harness) has already spliced
+        // them into the tool input via `PermissionOutcome::Allow.updated_input`.
+        // `render_for_model` reads them off `data` and produces the
+        // user-answered prose; without this propagation the splice
+        // would be invisible to the renderer.
+        let mut data = serde_json::Map::new();
+        data.insert("questions".into(), questions);
+        if let Some(answers) = input.get("answers").cloned() {
+            data.insert("answers".into(), answers);
+        }
+        if let Some(annotations) = input.get("annotations").cloned() {
+            data.insert("annotations".into(), annotations);
+        }
         Ok(ToolResult {
-            data: serde_json::json!({"questions": questions}),
+            data: Value::Object(data),
             new_messages: vec![],
             app_state_patch: None,
         })

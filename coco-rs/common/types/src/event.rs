@@ -1249,8 +1249,16 @@ pub enum TuiOnlyEvent {
         description: String,
         input_preview: String,
     },
-    /// AskUserQuestion overlay needed.
-    QuestionAsked { request_id: String, message: String },
+    /// AskUserQuestion overlay needed. `input` carries the full tool
+    /// input dict (the `questions[]` array, etc.) verbatim so the TUI
+    /// renders the rich multi-question UI (multiSelect, preview, notes)
+    /// matching TS `AskUserQuestionPermissionRequest.tsx`. The TUI
+    /// echoes the answer payload back via `UserCommand::ApprovalResponse`
+    /// with `updated_input = Some({...input, answers, annotations})`.
+    QuestionAsked {
+        request_id: String,
+        input: serde_json::Value,
+    },
     /// MCP elicitation overlay needed.
     ElicitationRequested {
         request_id: String,

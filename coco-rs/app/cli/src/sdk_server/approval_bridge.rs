@@ -137,6 +137,17 @@ impl ToolPermissionBridge for SdkPermissionBridge {
                     // applies + persists the same shape, so wiring it
                     // here is a one-line addition.
                     applied_updates: Vec::new(),
+                    // TS parity: `permissionDecision.updatedInput` at
+                    // `services/tools/toolExecution.ts:1130-1131`. The
+                    // protocol carries it on `ApprovalResolveParams`
+                    // (`client_request.rs:226-228`); SDK clients ship
+                    // `AskUserQuestion` answers (and any other pre-tool
+                    // input rewrite) here.
+                    updated_input: parsed.updated_input,
+                    // TS parity: `PermissionAllowDecision.contentBlocks`
+                    // (`types/permissions.ts:183`) — image attachments
+                    // pasted alongside the answer ride this slot.
+                    content_blocks: parsed.content_blocks,
                 })
             }
             JsonRpcMessage::Error(e) => {
@@ -152,6 +163,8 @@ impl ToolPermissionBridge for SdkPermissionBridge {
                     decision: ToolPermissionDecision::Rejected,
                     feedback: Some(format!("approval error: {}", e.message)),
                     applied_updates: Vec::new(),
+                    updated_input: None,
+                    content_blocks: None,
                 })
             }
             other => Err(format!(
