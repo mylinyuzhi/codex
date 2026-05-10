@@ -85,7 +85,8 @@ fn deepseek_v4_flash_info(provider_name: &str) -> ModelInfo {
         ..Default::default()
     };
 
-    ModelInfo::from_partial(provider_name, "deepseek-v4-flash", partial).unwrap()
+    ModelInfo::from_partial(provider_name, "deepseek-v4-flash", partial)
+        .unwrap_or_else(|e| panic!("ModelInfo::from_partial: {e}"))
 }
 
 /// Per-call thinking override mirroring the registry's Medium (UX
@@ -176,6 +177,11 @@ fn deepseek_v4_flash_openai_compat_medium_emits_thinking_and_reasoning_effort() 
         .get_args(&call)
         .unwrap_or_else(|e| panic!("get_args: {e}"));
 
+    eprintln!(
+        "\n===== TEST A · openai-compat · Medium =====\n{}\n",
+        serde_json::to_string_pretty(&body).unwrap()
+    );
+
     // Wire body shape:
     //   {"model":"deepseek-v4-flash","messages":[…],
     //    "thinking":{"type":"enabled"},"reasoning_effort":"medium"}
@@ -221,6 +227,11 @@ fn deepseek_v4_flash_openai_compat_auto_emits_no_thinking_fields() {
         .get_args(&call)
         .unwrap_or_else(|e| panic!("get_args: {e}"));
 
+    eprintln!(
+        "\n===== TEST A2 · openai-compat · Auto =====\n{}\n",
+        serde_json::to_string_pretty(&body).unwrap()
+    );
+
     assert_eq!(body["model"], serde_json::json!("deepseek-v4-flash"));
     assert!(
         body.get("thinking").is_none(),
@@ -263,6 +274,11 @@ fn deepseek_v4_flash_openai_compat_disable_emits_disabled_toggle_only() {
         .get_args(&call)
         .unwrap_or_else(|e| panic!("get_args: {e}"));
 
+    eprintln!(
+        "\n===== TEST A3 · openai-compat · Disable =====\n{}\n",
+        serde_json::to_string_pretty(&body).unwrap()
+    );
+
     assert_eq!(
         body["thinking"],
         serde_json::json!({"type": "disabled"}),
@@ -300,9 +316,15 @@ fn deepseek_v4_flash_anthropic_medium_emits_thinking_enabled() {
     call.prompt = vec![LanguageModelV4Message::user_text("Hello!")];
 
     let model = AnthropicMessagesLanguageModel::new("deepseek-v4-flash", make_anthropic_config());
-    let (body, _headers, _warnings) = model
+    let (body, headers, _warnings) = model
         .get_args(&call, false)
         .unwrap_or_else(|e| panic!("get_args: {e}"));
+
+    eprintln!(
+        "\n===== TEST B · anthropic · Medium =====\nheaders: {:#?}\nbody:\n{}\n",
+        headers,
+        serde_json::to_string_pretty(&body).unwrap()
+    );
 
     assert_eq!(body["model"], serde_json::json!("deepseek-v4-flash"));
     assert!(body["messages"].is_array(), "messages must be present");
@@ -315,6 +337,14 @@ fn deepseek_v4_flash_anthropic_medium_emits_thinking_enabled() {
         body["thinking"].get("budget_tokens").is_none(),
         "DeepSeek anthropic-compat must NOT carry budget_tokens — ModelInfo declared None"
     );
+    // New API surface: output_config.effort derived from level.effort
+    // (Medium → "medium"). Goes via raw shallow-merge so no
+    // `effort-2025-11-24` beta header is added.
+    assert_eq!(
+        body["output_config"],
+        serde_json::json!({"effort": "medium"}),
+        "Medium effort must surface as output_config.effort = \"medium\""
+    );
     // builtin max_output_tokens = 12_288 (deepseek_v4_flash_info above).
     // Anthropic provider must NOT bump it when budget is absent.
     assert_eq!(
@@ -323,10 +353,144 @@ fn deepseek_v4_flash_anthropic_medium_emits_thinking_enabled() {
         "max_tokens must equal builtin max_output_tokens — no synthetic bump"
     );
     // No `reasoning_effort` on Anthropic wire — that key is
-    // OpenaiCompat-specific. The Anthropic arm emits effort via
-    // `thinking.budgetTokens` only (which we deliberately omit here).
+    // OpenaiCompat-specific.
     assert!(
         body.get("reasoning_effort").is_none(),
         "Anthropic wire must NOT carry reasoning_effort"
     );
+}
+
+/// Test B2 — Anthropic + XHigh (UX "max"). Wire body has
+/// `output_config.effort == "max"` and the standard enabled thinking
+/// object.
+#[test]
+fn deepseek_v4_flash_anthropic_xhigh_emits_output_config_max() {
+    let info = deepseek_v4_flash_info("deepseek-anthropic");
+    let per_call = PerCallOverrides {
+        thinking_level: Some(ThinkingLevel {
+            effort: ReasoningEffort::XHigh,
+            budget_tokens: None,
+            options: HashMap::from([(
+                "thinking".to_string(),
+                serde_json::json!({"type": "enabled"}),
+            )]),
+        }),
+        ..Default::default()
+    };
+
+    let (mut call, _merged) = build_call_options_with_extra(
+        &info,
+        ProviderApi::Anthropic,
+        "deepseek-anthropic",
+        &per_call,
+        Vec::new(),
+        None,
+    );
+    call.prompt = vec![LanguageModelV4Message::user_text("Hello!")];
+
+    let model = AnthropicMessagesLanguageModel::new("deepseek-v4-flash", make_anthropic_config());
+    let (body, _headers, _warnings) = model
+        .get_args(&call, false)
+        .unwrap_or_else(|e| panic!("get_args: {e}"));
+
+    eprintln!(
+        "\n===== TEST B2 · anthropic · XHigh =====\n{}\n",
+        serde_json::to_string_pretty(&body).unwrap()
+    );
+
+    assert_eq!(body["thinking"], serde_json::json!({"type": "enabled"}),);
+    assert_eq!(
+        body["output_config"],
+        serde_json::json!({"effort": "max"}),
+        "XHigh effort must surface as output_config.effort = \"max\""
+    );
+    assert_eq!(body["max_tokens"], serde_json::json!(12_288));
+}
+
+/// Test B3 — Anthropic + Auto. Wire body has
+/// `thinking: {"type": "adaptive"}` and NO `output_config`. Server
+/// picks effort dynamically.
+#[test]
+fn deepseek_v4_flash_anthropic_auto_emits_adaptive_thinking() {
+    let info = deepseek_v4_flash_info("deepseek-anthropic");
+    let per_call = PerCallOverrides {
+        thinking_level: Some(ThinkingLevel::auto()),
+        ..Default::default()
+    };
+
+    let (mut call, _merged) = build_call_options_with_extra(
+        &info,
+        ProviderApi::Anthropic,
+        "deepseek-anthropic",
+        &per_call,
+        Vec::new(),
+        None,
+    );
+    call.prompt = vec![LanguageModelV4Message::user_text("Hello!")];
+
+    let model = AnthropicMessagesLanguageModel::new("deepseek-v4-flash", make_anthropic_config());
+    let (body, _headers, _warnings) = model
+        .get_args(&call, false)
+        .unwrap_or_else(|e| panic!("get_args: {e}"));
+
+    eprintln!(
+        "\n===== TEST B3 · anthropic · Auto =====\n{}\n",
+        serde_json::to_string_pretty(&body).unwrap()
+    );
+
+    assert_eq!(
+        body["thinking"],
+        serde_json::json!({"type": "adaptive"}),
+        "Auto on Anthropic must surface as thinking: adaptive"
+    );
+    assert!(
+        body.get("output_config").is_none(),
+        "Auto must NOT emit output_config — server picks effort"
+    );
+    assert_eq!(body["max_tokens"], serde_json::json!(12_288));
+}
+
+/// Test B4 — Anthropic + Disable. Wire body actively carries the
+/// disabled toggle so the server doesn't fall back to thinking-on
+/// default. Validates both the convert-layer typed write AND the
+/// vercel-ai-anthropic body builder (which previously parsed
+/// `ThinkingConfig::Disabled` but never wrote it to the body).
+#[test]
+fn deepseek_v4_flash_anthropic_disable_emits_disabled_thinking() {
+    let info = deepseek_v4_flash_info("deepseek-anthropic");
+    let per_call = PerCallOverrides {
+        thinking_level: Some(ThinkingLevel::disable()),
+        ..Default::default()
+    };
+
+    let (mut call, _merged) = build_call_options_with_extra(
+        &info,
+        ProviderApi::Anthropic,
+        "deepseek-anthropic",
+        &per_call,
+        Vec::new(),
+        None,
+    );
+    call.prompt = vec![LanguageModelV4Message::user_text("Hello!")];
+
+    let model = AnthropicMessagesLanguageModel::new("deepseek-v4-flash", make_anthropic_config());
+    let (body, _headers, _warnings) = model
+        .get_args(&call, false)
+        .unwrap_or_else(|e| panic!("get_args: {e}"));
+
+    eprintln!(
+        "\n===== TEST B4 · anthropic · Disable =====\n{}\n",
+        serde_json::to_string_pretty(&body).unwrap()
+    );
+
+    assert_eq!(
+        body["thinking"],
+        serde_json::json!({"type": "disabled"}),
+        "Disable on Anthropic must surface as thinking: disabled"
+    );
+    assert!(
+        body.get("output_config").is_none(),
+        "Disable must NOT emit output_config"
+    );
+    assert_eq!(body["max_tokens"], serde_json::json!(12_288));
 }

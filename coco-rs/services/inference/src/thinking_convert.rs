@@ -18,18 +18,35 @@
 //! determines wire body, not the user-facing instance label.
 
 use coco_types::ProviderApi;
+use coco_types::ReasoningEffort;
 use coco_types::ThinkingLevel;
 use std::collections::BTreeMap;
 
 /// Convert a `ThinkingLevel` into provider-neutral flat camelCase
 /// keys. Routing key is the wire-protocol family.
 ///
-/// `level.options` is passed through unconditionally (including when
-/// `effort == Disable` or `Auto`) so models can declare provider-specific
-/// wire shapes for either off-state — e.g. DeepSeek V4 emits
-/// `{"thinking":{"type":"disabled"}}` when off. The typed-arm emission
-/// is gated on `effort.is_explicit_level()`; `Disable` and `Auto` skip
-/// the arm entirely so the server-side default applies.
+/// `level.options` is passed through unconditionally so models can
+/// declare provider-specific wire shapes (e.g. DeepSeek's
+/// `{"thinking":{"type":"disabled"}}` toggle).
+///
+/// The `ProviderApi::Anthropic` arm has full coverage of
+/// `ReasoningEffort` via an exhaustive inner match — there is no
+/// fallthrough that could emit `{"type":"enabled"}` for `Disable`/`Auto`:
+///   - `Disable` → `{"thinking":{"type":"disabled"}}`
+///   - `Auto`    → `{"thinking":{"type":"adaptive"}}`
+///   - `Minimal` → mapped to `Low`
+///   - `Low/Medium/High/XHigh` → both
+///     `{"thinking":{"type":"enabled","budgetTokens"?}}` and
+///     `{"output_config":{"effort":<wire>}}`
+///
+/// The `output_config` write goes through raw shallow-merge — it does
+/// NOT set `AnthropicProviderOptions.effort`, so the Anthropic-specific
+/// `effort-2025-11-24` beta header is not added. Callers wanting that
+/// beta opt in by setting `provider_options["anthropic"]["effort"]`.
+///
+/// Other arms (Openai/Gemini/OpenaiCompat/Volcengine/Zai) gate on
+/// `is_explicit_level()` — `Disable`/`Auto` emit nothing typed for them
+/// (server default applies; `level.options` pass-through is preserved).
 pub fn to_extra_body(
     level: &ThinkingLevel,
     api: ProviderApi,
@@ -38,58 +55,100 @@ pub fn to_extra_body(
 
     // Pass `level.options` through unconditionally so models can declare
     // a wire toggle for the disabled state. Typed-arm emission below
-    // overwrites overlapping keys when effort is an explicit numeric
-    // level — current order matches existing Claude builtin behavior.
+    // overwrites overlapping keys when the arm produces a definitive
+    // shape — current order matches existing Claude builtin behavior.
     for (key, value) in &level.options {
         out.insert(key.clone(), value.clone());
     }
 
-    if !level.effort.is_explicit_level() {
-        // Disable / Auto — let the server-side default apply.
-        return out;
-    }
-
     match api {
         ProviderApi::Anthropic => {
-            // { "thinking": { "type": "enabled", "budgetTokens": <n> } }
-            let mut thinking = serde_json::Map::new();
-            thinking.insert("type".into(), serde_json::Value::String("enabled".into()));
-            if let Some(budget) = level.budget_tokens {
-                thinking.insert(
-                    "budgetTokens".into(),
-                    serde_json::Value::Number(budget.into()),
-                );
+            // Exhaustive on ReasoningEffort: the wire `thinking.type`
+            // (and presence of `output_config`) is computed from
+            // `level.effort` directly. Adding a new effort variant
+            // forces this match to be updated — there is no path
+            // that can silently emit `{"type":"enabled"}` for
+            // Disable/Auto.
+            match level.effort {
+                ReasoningEffort::Disable => {
+                    out.insert("thinking".into(), serde_json::json!({"type": "disabled"}));
+                }
+                ReasoningEffort::Auto => {
+                    out.insert("thinking".into(), serde_json::json!({"type": "adaptive"}));
+                }
+                ReasoningEffort::Minimal
+                | ReasoningEffort::Low
+                | ReasoningEffort::Medium
+                | ReasoningEffort::High
+                | ReasoningEffort::XHigh => {
+                    // Legacy thinking object — kept for back-compat
+                    // with pre-output_config Anthropic API; budgetTokens
+                    // honored only when ModelInfo declares one.
+                    let mut thinking = serde_json::Map::new();
+                    thinking.insert("type".into(), serde_json::Value::String("enabled".into()));
+                    if let Some(budget) = level.budget_tokens {
+                        thinking.insert(
+                            "budgetTokens".into(),
+                            serde_json::Value::Number(budget.into()),
+                        );
+                    }
+                    out.insert("thinking".into(), serde_json::Value::Object(thinking));
+
+                    // output_config.effort (new Anthropic API surface).
+                    // Goes via raw shallow-merge to avoid the
+                    // `effort-2025-11-24` beta header — DeepSeek
+                    // anthropic-compat doesn't accept it. Minimal has
+                    // no Anthropic equivalent, so it collapses to Low.
+                    let wire_effort = match level.effort {
+                        ReasoningEffort::Minimal | ReasoningEffort::Low => "low",
+                        ReasoningEffort::Medium => "medium",
+                        ReasoningEffort::High => "high",
+                        ReasoningEffort::XHigh => "max",
+                        ReasoningEffort::Disable | ReasoningEffort::Auto => unreachable!(),
+                    };
+                    out.insert(
+                        "output_config".into(),
+                        serde_json::json!({"effort": wire_effort}),
+                    );
+                }
             }
-            out.insert("thinking".into(), serde_json::Value::Object(thinking));
         }
         ProviderApi::Openai => {
             // OpenAI Responses: { "reasoningSummary": "auto" }. Effort
             // is sent via the `reasoning` typed field on
             // `LanguageModelV4CallOptions`, not via extra_body.
-            out.insert(
-                "reasoningSummary".into(),
-                serde_json::Value::String("auto".into()),
-            );
+            // Disable/Auto: server default applies.
+            if level.effort.is_explicit_level() {
+                out.insert(
+                    "reasoningSummary".into(),
+                    serde_json::Value::String("auto".into()),
+                );
+            }
         }
         ProviderApi::Gemini => {
             // { "thinkingConfig": { "includeThoughts": true, "thinkingBudget": <n> } }
-            let mut config = serde_json::Map::new();
-            config.insert("includeThoughts".into(), serde_json::Value::Bool(true));
-            if let Some(budget) = level.budget_tokens {
-                config.insert(
-                    "thinkingBudget".into(),
-                    serde_json::Value::Number(budget.into()),
-                );
+            if level.effort.is_explicit_level() {
+                let mut config = serde_json::Map::new();
+                config.insert("includeThoughts".into(), serde_json::Value::Bool(true));
+                if let Some(budget) = level.budget_tokens {
+                    config.insert(
+                        "thinkingBudget".into(),
+                        serde_json::Value::Number(budget.into()),
+                    );
+                }
+                out.insert("thinkingConfig".into(), serde_json::Value::Object(config));
             }
-            out.insert("thinkingConfig".into(), serde_json::Value::Object(config));
         }
         ProviderApi::Volcengine | ProviderApi::Zai | ProviderApi::OpenaiCompat => {
             // xAI / DeepSeek / Volcengine / Z.AI / generic compat:
-            // { "reasoningEffort": "high" }
-            out.insert(
-                "reasoningEffort".into(),
-                serde_json::Value::String(level.effort.to_string()),
-            );
+            // { "reasoningEffort": "<level>" }. Disable/Auto: only
+            // level.options pass-through (e.g. DeepSeek's wire toggle).
+            if level.effort.is_explicit_level() {
+                out.insert(
+                    "reasoningEffort".into(),
+                    serde_json::Value::String(level.effort.to_string()),
+                );
+            }
         }
     }
 

@@ -162,9 +162,23 @@ fn explicit_per_call_disable_thinking_disables_default() {
         call.reasoning.is_none(),
         "explicit per-call Disable must keep reasoning unset"
     );
-    assert!(
-        call.provider_options.is_none(),
-        "Disable with empty options → no extra_body → no provider_options"
+    // The Anthropic typed arm now writes
+    // `provider_options["anthropic"]["thinking"] = {"type":"disabled"}`
+    // so the wire body actively carries the explicit-off toggle (the
+    // vercel-ai-anthropic body builder picks this up via the typed
+    // `ThinkingConfig::Disabled` parse and writes `body["thinking"]`).
+    let provider_options = call
+        .provider_options
+        .as_ref()
+        .expect("Disable on Anthropic must populate provider_options with the disabled toggle");
+    let anthropic_ns = provider_options
+        .0
+        .get("anthropic")
+        .expect("anthropic namespace must be present");
+    assert_eq!(
+        anthropic_ns.get("thinking"),
+        Some(&serde_json::json!({"type": "disabled"})),
+        "Disable on Anthropic must surface as thinking: disabled in provider_options",
     );
 }
 

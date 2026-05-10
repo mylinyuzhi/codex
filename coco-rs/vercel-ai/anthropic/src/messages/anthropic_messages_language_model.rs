@@ -615,6 +615,16 @@ impl AnthropicMessagesLanguageModel {
             }
         }
 
+        // Explicit-off: emit `{"type":"disabled"}` on the wire so the
+        // server doesn't apply its on-by-default behavior. Sits outside
+        // the `is_thinking` block (Disabled isn't "thinking" in the
+        // temperature-suppression sense — temperature/topK/topP stay
+        // valid). Mirrors `ThinkingConfig::Disabled` (which has
+        // `#[serde(rename = "disabled")]` for round-trip parity).
+        if matches!(thinking_type, Some(ThinkingConfig::Disabled)) {
+            body["thinking"] = json!({"type": "disabled"});
+        }
+
         // Clamp max_tokens for known models to enable model switching without breaking
         if capabilities.is_known_model {
             let final_max_tokens = body["max_tokens"].as_u64().unwrap_or(0);
