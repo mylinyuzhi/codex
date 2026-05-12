@@ -78,6 +78,28 @@ pub enum Feature {
     /// this gate.
     /// TS: `isTodoV2Enabled()` in `utils/tasks.ts:133-139`.
     TaskV2,
+    /// Lazy tool-schema loading via `ToolSearch`. When **on** (default),
+    /// tools whose `Tool::should_defer() == true` are sent to the model
+    /// name-only on turn 1 and discovered via the `ToolSearch` tool —
+    /// either through the client-side `discovered_tool_names` patch
+    /// (default path, every Provider) or Anthropic's server-side
+    /// `tool_reference` expansion (when the model declares
+    /// `Capability::ServerSideToolReference`). Saves a large chunk of
+    /// the tools-array token budget on sessions with many MCP tools.
+    ///
+    /// When **off** (the TS `'standard'` mode equivalent), the
+    /// `ToolSearch` tool is hidden from the model AND the deferral
+    /// filter is short-circuited: every enabled tool gets its full
+    /// schema in every request. Choose this when token budget is
+    /// not a concern and you'd rather avoid the round-trip cost of
+    /// `ToolSearch`.
+    ///
+    /// TS: `getToolSearchMode()` in `utils/toolSearch.ts:172-198`.
+    /// coco-rs exposes only the binary `tst` / `standard` modes —
+    /// `tst-auto` (threshold-gated by deferred-tool token count) is
+    /// intentionally not ported; it depends on per-Provider token
+    /// counting that pollutes the inference seam.
+    ToolSearch,
 
     // Behavior / safety gate (Stable, default=false for risk-conservative).
     /// Run shell commands inside a sandbox.
@@ -290,6 +312,12 @@ const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::TaskV2,
         key: "task_v2",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::ToolSearch,
+        key: "tool_search",
         stage: Stage::Stable,
         default_enabled: true,
     },

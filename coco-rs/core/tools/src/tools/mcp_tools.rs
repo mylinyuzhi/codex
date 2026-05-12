@@ -116,6 +116,12 @@ impl Tool for ListMcpResourcesTool {
     fn is_concurrency_safe(&self, _: &Value) -> bool {
         true
     }
+    fn should_defer(&self) -> bool {
+        true
+    }
+    fn search_hint(&self) -> Option<&str> {
+        Some("list resources available on connected MCP servers")
+    }
 
     /// TS `ListMcpResourcesTool.ts:108-122`: empty branch emits a
     /// specific message; non-empty branch emits `jsonStringify(content)`.
@@ -214,6 +220,12 @@ impl Tool for ReadMcpResourceTool {
     /// different resources can run in parallel.
     fn is_concurrency_safe(&self, _: &Value) -> bool {
         true
+    }
+    fn should_defer(&self) -> bool {
+        true
+    }
+    fn search_hint(&self) -> Option<&str> {
+        Some("read a specific resource from an MCP server by URI")
     }
 
     /// TS `ReadMcpResourceTool.ts:151-157` emits `jsonStringify(content)`
@@ -352,6 +364,26 @@ impl Tool for McpTool {
 
     fn mcp_info(&self) -> Option<&McpToolInfo> {
         Some(&self.info)
+    }
+
+    /// TS `Tool.ts:441 isMcp: true` defers every MCP tool by default.
+    /// The model must call `ToolSearch` to bring an MCP tool's full
+    /// schema into the request — unless the server advertised
+    /// `_meta["anthropic/alwaysLoad"] == true`, which routes through
+    /// [`Self::always_load`] and short-circuits the deferred-pool
+    /// filter in `ToolRegistry::loaded_tools`.
+    fn should_defer(&self) -> bool {
+        true
+    }
+
+    /// TS `prompt.ts:64-66 isDeferredTool`: `if (tool.alwaysLoad ===
+    /// true) return false`. Read from
+    /// `McpToolAnnotations.always_load`, sourced from the server's
+    /// `_meta["anthropic/alwaysLoad"]` flag on the tool. When true,
+    /// `ToolRegistry::loaded_tools` ignores the `should_defer()`
+    /// signal and surfaces the tool's full schema on turn 1.
+    fn always_load(&self) -> bool {
+        self.annotations.always_load
     }
 
     fn is_concurrency_safe(&self, _: &Value) -> bool {

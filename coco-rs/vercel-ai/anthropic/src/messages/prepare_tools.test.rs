@@ -275,6 +275,70 @@ fn allowed_callers_adds_advanced_tool_use_beta() {
     );
 }
 
+/// `deferLoading: true` in the tool's provider_options must surface on
+/// the wire as `defer_loading: true`. This is the multi-provider TS
+/// parity path: `engine_prompt::build_tool_definitions` writes the
+/// `deferLoading` flag for deferred-but-not-discovered tools when the
+/// model supports `ServerSideToolReference`, and the Anthropic adapter
+/// translates it to the server's wire shape verbatim.
+#[test]
+fn defer_loading_provider_option_surfaces_on_wire() {
+    let mut anthropic = HashMap::new();
+    anthropic.insert("deferLoading".to_string(), serde_json::json!(true));
+    let mut po_map = HashMap::new();
+    po_map.insert("anthropic".to_string(), anthropic);
+
+    let tool = LanguageModelV4Tool::Function(LanguageModelV4FunctionTool {
+        name: "WebFetch".into(),
+        description: Some("Fetch a URL".into()),
+        input_schema: serde_json::json!({"type": "object", "properties": {}}),
+        input_examples: None,
+        strict: None,
+        provider_options: Some(vercel_ai_provider::ProviderOptions(po_map)),
+    });
+    let result = prepare_anthropic_tools(
+        &Some(vec![tool]),
+        &None,
+        None,
+        false,
+        /*context_management_eligible*/ true,
+        None,
+    );
+    let tools = result.tools.unwrap_or_else(|| panic!("should have tools"));
+    assert_eq!(tools[0]["name"], "WebFetch");
+    assert_eq!(
+        tools[0]["defer_loading"],
+        serde_json::json!(true),
+        "deferLoading must round-trip onto the wire: {:?}",
+        tools[0]
+    );
+}
+
+#[test]
+fn defer_loading_absent_when_provider_option_false_or_missing() {
+    // Sanity: a tool without the deferLoading flag must NOT have
+    // `defer_loading` in the wire body. Default Anthropic semantics:
+    // tools without the field are eagerly exposed to the model.
+    let tool = LanguageModelV4Tool::Function(LanguageModelV4FunctionTool {
+        name: "Bash".into(),
+        description: Some("Run a shell command".into()),
+        input_schema: serde_json::json!({"type": "object", "properties": {}}),
+        input_examples: None,
+        strict: None,
+        provider_options: None,
+    });
+    let result = prepare_anthropic_tools(
+        &Some(vec![tool]),
+        &None,
+        None,
+        false,
+        /*context_management_eligible*/ true,
+        None,
+    );
+    let tools = result.tools.unwrap();
+    assert!(tools[0].get("defer_loading").is_none());
+}
+
 #[test]
 fn tool_search_does_not_add_advanced_tool_use_beta() {
     let regex_tool = LanguageModelV4Tool::Provider(LanguageModelV4ProviderTool {

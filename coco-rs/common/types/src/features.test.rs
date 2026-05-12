@@ -21,6 +21,22 @@ fn defaults_for_token_economy_gates() {
     assert!(f.enabled(Feature::WebFetch));
     assert!(f.enabled(Feature::Mcp));
     assert!(f.enabled(Feature::TaskV2));
+    // ToolSearch defaults ON (TS parity: ENABLE_TOOL_SEARCH unset →
+    // `tst` mode). Sessions with few deferrable tools can opt out
+    // via settings.json `features.tool_search = false`.
+    assert!(f.enabled(Feature::ToolSearch));
+}
+
+#[test]
+fn tool_search_key_maps_via_apply_map() {
+    let mut f = Features::with_defaults();
+    let mut m = BTreeMap::new();
+    m.insert("tool_search".to_string(), false);
+    f.apply_map(&m);
+    assert!(
+        !f.enabled(Feature::ToolSearch),
+        "explicit `tool_search: false` must turn the gate off"
+    );
 }
 
 #[test]

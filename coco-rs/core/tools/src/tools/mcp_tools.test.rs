@@ -1,5 +1,6 @@
 use super::*;
 use coco_tool_runtime::McpToolAnnotations;
+use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolResultContentPart;
 use serde_json::json;
 
@@ -11,6 +12,66 @@ fn make_mcp_tool() -> McpTool {
         json!({"properties": {}}),
         McpToolAnnotations::default(),
     )
+}
+
+// ---------------------------------------------------------------------------
+// alwaysLoad — TS `prompt.ts:64 isDeferredTool` opt-out
+// ---------------------------------------------------------------------------
+
+#[test]
+fn always_load_defaults_to_false_so_mcp_tools_are_deferred() {
+    let tool = make_mcp_tool();
+    assert!(tool.should_defer(), "MCP tools defer by default");
+    assert!(
+        !tool.always_load(),
+        "Default annotations do not opt out of deferral"
+    );
+}
+
+#[test]
+fn always_load_propagates_from_meta_opt_out() {
+    // TS parity: `_meta["anthropic/alwaysLoad"] == true` on the
+    // server-side tool schema → `tool.alwaysLoad === true` →
+    // `isDeferredTool()` returns `false` first thing.
+    let schema = json!({
+        "_meta": {"anthropic/alwaysLoad": true},
+        "properties": {}
+    });
+    let annotations = McpToolAnnotations::from_input_schema_meta(&schema);
+    assert!(annotations.always_load);
+
+    let tool = McpTool::new(
+        "test-server".into(),
+        "always-on".into(),
+        "always-loaded tool".into(),
+        schema,
+        annotations,
+    );
+    assert!(tool.always_load(), "always_load flows through annotations");
+    // `should_defer()` stays `true` — the registry filter is what
+    // decides whether to surface the schema: `should_defer() &&
+    // !always_load()`.
+    assert!(tool.should_defer());
+}
+
+#[test]
+fn always_load_meta_extractor_ignores_non_bool_values() {
+    // Defensive: arbitrary `_meta["anthropic/alwaysLoad"]` payloads
+    // from misbehaving servers (string "true", number 1) must NOT
+    // accidentally opt the tool out.
+    let schemas = [
+        json!({"_meta": {"anthropic/alwaysLoad": "true"}}),
+        json!({"_meta": {"anthropic/alwaysLoad": 1}}),
+        json!({"_meta": {}}),
+        json!({}),
+    ];
+    for schema in schemas {
+        let a = McpToolAnnotations::from_input_schema_meta(&schema);
+        assert!(
+            !a.always_load,
+            "non-bool _meta should not opt out: {schema}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

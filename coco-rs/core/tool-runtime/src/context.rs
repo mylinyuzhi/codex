@@ -141,6 +141,56 @@ pub struct ToolUseContext {
     /// the top-level session.
     pub tool_filter: ToolFilter,
 
+    /// Wire-names of deferred tools the model has discovered via
+    /// `ToolSearch`. Snapshot of [`coco_types::ToolAppState::discovered_tool_names`]
+    /// for the current turn — `Arc<HashSet>` so the filter pipeline
+    /// can consult it without locking. A deferred tool whose name is
+    /// in this set is treated as if `should_defer() == false` by
+    /// [`crate::ToolRegistry::loaded_tools`], so its full schema is
+    /// sent on the next request.
+    ///
+    /// Empty default = pre-discovery state; deferred tools stay hidden
+    /// until the model finds them via `ToolSearch`. TS parity:
+    /// `extractDiscoveredToolNames(messages)` in `utils/toolSearch.ts:545`.
+    pub discovered_tool_names: Arc<HashSet<String>>,
+
+    /// Whether the current model supports Anthropic's server-side
+    /// `tool_reference` expansion (`tool-search-tool-2025-10-19`).
+    /// Populated by `ToolContextFactory::build` from
+    /// `ApiClient::model_info().has_capability(ServerSideToolReference)`.
+    ///
+    /// When `true`, `ToolSearchTool::execute` emits matches as
+    /// `tool_reference` content blocks (via
+    /// `ToolResultContentPart::Custom`) so the Anthropic server
+    /// expands their schemas inline — keeping the client-side `tools`
+    /// array constant across turns (cache-friendly). The
+    /// `discovered_tool_names` patch is **skipped** on this path
+    /// because the discovery state lives in message history, not in
+    /// `ToolAppState`.
+    ///
+    /// When `false`, the runtime falls back to the
+    /// [`Self::model_supports_client_side_tool_search`] path (if also
+    /// declared) — text envelope + `AppStatePatch` adding matches to
+    /// `discovered_tool_names` so the next turn's `tools` array
+    /// surfaces the schemas client-side (one cache break per
+    /// discovery).
+    pub model_supports_tool_reference: bool,
+
+    /// Whether the current model has been validated against coco-rs's
+    /// client-side `ToolSearch` promotion path. Mirrors
+    /// [`coco_types::Capability::ClientSideToolSearch`] from the
+    /// resolved `ModelInfo`.
+    ///
+    /// Combined with [`Self::model_supports_tool_reference`] +
+    /// [`coco_types::Feature::ToolSearch`] to form the runtime
+    /// activation predicate (see [`Self::tool_search_active`]).
+    ///
+    /// Default `false` for unknown / user-declared models so the
+    /// runtime falls back to the safe "eager-load every tool"
+    /// behavior — the user can opt a custom model in by adding the
+    /// capability via `~/.coco/models.json`.
+    pub model_supports_client_side_tool_search: bool,
+
     // ── Core State ──
     /// Cancellation token for aborting tool execution.
     pub cancel: CancellationToken,
@@ -504,6 +554,9 @@ impl ToolUseContext {
             features: self.features.clone(),
             tool_overrides: self.tool_overrides.clone(),
             tool_filter: self.tool_filter.clone(),
+            discovered_tool_names: self.discovered_tool_names.clone(),
+            model_supports_tool_reference: self.model_supports_tool_reference,
+            model_supports_client_side_tool_search: self.model_supports_client_side_tool_search,
             cancel: self.cancel.clone(),
             messages: self.messages.clone(),
             permission_context: self.permission_context.clone(),
@@ -581,6 +634,55 @@ impl ToolUseContext {
         ctx
     }
 
+    /// Builder: install the `ToolSearch`-discovered tool-name snapshot
+    /// onto an existing context. Callers thread this from
+    /// `ToolAppState::discovered_tool_names` so the registry filter
+    /// pipeline can upgrade discovered deferred tools into the loaded
+    /// pool.
+    pub fn with_discovered_tool_names(mut self, names: Arc<HashSet<String>>) -> Self {
+        self.discovered_tool_names = names;
+        self
+    }
+
+    /// Builder: install the current model's `ToolSearch`-related
+    /// capability flags on a stub context. Used by `engine_prompt`
+    /// and `engine_turn_reminders` so the registry filter and the
+    /// `deferred_tools_delta` partitioner see the same activation
+    /// predicate the runtime would see.
+    pub fn with_model_capabilities(
+        mut self,
+        supports_tool_reference: bool,
+        supports_client_side_tool_search: bool,
+    ) -> Self {
+        self.model_supports_tool_reference = supports_tool_reference;
+        self.model_supports_client_side_tool_search = supports_client_side_tool_search;
+        self
+    }
+
+    /// Effective `ToolSearch` activation for the current turn.
+    ///
+    /// Three-way predicate combining:
+    /// 1. User-facing [`coco_types::Feature::ToolSearch`] gate.
+    /// 2. Model capability — at least one of
+    ///    [`Self::model_supports_tool_reference`] (server-side, cache-friendly)
+    ///    or [`Self::model_supports_client_side_tool_search`]
+    ///    (universal, costs cache breaks on Anthropic) must be declared.
+    ///
+    /// When `false`:
+    ///   - [`crate::ToolRegistry::loaded_tools`] short-circuits the
+    ///     deferral filter — every enabled tool's schema lands on
+    ///     turn 1 (TS `'standard'` mode equivalent).
+    ///   - [`crate::ToolRegistry::deferred_tools`] returns empty.
+    ///   - `ToolSearchTool::is_enabled` returns `false`; the tool
+    ///     is hidden from the model.
+    ///
+    /// This is the canonical site for the predicate so registry /
+    /// tool / engine_prompt agree byte-for-byte.
+    pub fn tool_search_active(&self) -> bool {
+        self.features.enabled(coco_types::Feature::ToolSearch)
+            && (self.model_supports_tool_reference || self.model_supports_client_side_tool_search)
+    }
+
     /// Create a minimal context for testing.
     #[cfg(any(test, feature = "testing"))]
     pub fn test_default() -> Self {
@@ -609,6 +711,9 @@ impl ToolUseContext {
             features: Arc::new(Features::with_defaults()),
             tool_overrides: Arc::new(ToolOverrides::none()),
             tool_filter: ToolFilter::unrestricted(),
+            discovered_tool_names: Arc::new(HashSet::new()),
+            model_supports_tool_reference: false,
+            model_supports_client_side_tool_search: false,
             cancel: CancellationToken::new(),
             messages: Arc::new(RwLock::new(Vec::new())),
             permission_context: ToolPermissionContext {

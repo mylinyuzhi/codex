@@ -821,12 +821,27 @@ impl QueryEngine {
             // below handles execution post-Finish.
             let streaming_enabled = self.config.streaming_tool_execution;
             let streaming_ctx: Option<Arc<ToolUseContext>> = if streaming_enabled {
+                let current_supports_tool_reference = model_runtime
+                    .current_client()
+                    .model_info()
+                    .is_some_and(|info| {
+                        info.has_capability(coco_types::Capability::ServerSideToolReference)
+                    });
+                let current_supports_client_side_tool_search = model_runtime
+                    .current_client()
+                    .model_info()
+                    .is_some_and(|info| {
+                        info.has_capability(coco_types::Capability::ClientSideToolSearch)
+                    });
                 let base = self
                     .tool_context_factory(hook_tx_opt.as_ref())
                     .build(crate::tool_context::ToolContextOverrides {
                         user_message_id: Some(user_msg_uuid.clone()),
                         progress_tx: Some(progress_tx_session.clone()),
                         current_model_id: Some(model_runtime.current_model_id().to_string()),
+                        current_model_supports_tool_reference: current_supports_tool_reference,
+                        current_model_supports_client_side_tool_search:
+                            current_supports_client_side_tool_search,
                     })
                     .await;
                 Some(Arc::new(base))
@@ -1823,12 +1838,27 @@ impl QueryEngine {
             // `ToolUseContext` when hooks are configured so tool callbacks
             // that need PreToolUse/PostToolUse use the same pipeline as the
             // runner.
+            let ctx_supports_tool_reference = model_runtime
+                .current_client()
+                .model_info()
+                .is_some_and(|info| {
+                    info.has_capability(coco_types::Capability::ServerSideToolReference)
+                });
+            let ctx_supports_client_side_tool_search = model_runtime
+                .current_client()
+                .model_info()
+                .is_some_and(|info| {
+                    info.has_capability(coco_types::Capability::ClientSideToolSearch)
+                });
             let ctx = self
                 .tool_context_factory(hook_tx_opt.as_ref())
                 .build(crate::tool_context::ToolContextOverrides {
                     user_message_id: Some(user_msg_uuid.clone()),
                     progress_tx: Some(progress_tx_session.clone()),
                     current_model_id: Some(model_runtime.current_model_id().to_string()),
+                    current_model_supports_tool_reference: ctx_supports_tool_reference,
+                    current_model_supports_client_side_tool_search:
+                        ctx_supports_client_side_tool_search,
                 })
                 .await;
 

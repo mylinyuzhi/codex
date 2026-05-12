@@ -72,6 +72,71 @@ async fn test_factory_honors_current_model_id_override() {
 }
 
 #[tokio::test]
+async fn test_factory_threads_tool_reference_capability() {
+    // The engine derives `current_model_supports_tool_reference` from
+    // the active client's `ModelInfo` and passes it through overrides.
+    // The factory must surface it on the built `ToolUseContext` so
+    // `ToolSearchTool::execute` can branch into the cache-friendly
+    // path on capable models.
+    let config = test_config();
+    let ctx_capable = factory(config.clone())
+        .build(ToolContextOverrides {
+            current_model_supports_tool_reference: true,
+            ..Default::default()
+        })
+        .await;
+    assert!(ctx_capable.model_supports_tool_reference);
+
+    let ctx_incapable = factory(config)
+        .build(ToolContextOverrides {
+            current_model_supports_tool_reference: false,
+            ..Default::default()
+        })
+        .await;
+    assert!(!ctx_incapable.model_supports_tool_reference);
+}
+
+#[tokio::test]
+async fn test_factory_threads_client_side_tool_search_capability() {
+    // Same plumbing as `tool_reference` — the client-side capability
+    // is the universal cousin (no Anthropic beta dependency). When
+    // both capabilities are absent, `ctx.tool_search_active()` is
+    // false and `ToolSearch` hides from the model.
+    let config = test_config();
+
+    let ctx_neither = factory(config.clone()).build(Default::default()).await;
+    assert!(!ctx_neither.model_supports_client_side_tool_search);
+    assert!(
+        !ctx_neither.tool_search_active(),
+        "no capability → tool_search inactive even if feature on"
+    );
+
+    let ctx_client_only = factory(config.clone())
+        .build(ToolContextOverrides {
+            current_model_supports_client_side_tool_search: true,
+            ..Default::default()
+        })
+        .await;
+    assert!(ctx_client_only.model_supports_client_side_tool_search);
+    assert!(!ctx_client_only.model_supports_tool_reference);
+    assert!(
+        ctx_client_only.tool_search_active(),
+        "client-side cap alone is sufficient when feature on"
+    );
+
+    let ctx_server_only = factory(config)
+        .build(ToolContextOverrides {
+            current_model_supports_tool_reference: true,
+            ..Default::default()
+        })
+        .await;
+    assert!(
+        ctx_server_only.tool_search_active(),
+        "server-side cap alone is sufficient when feature on"
+    );
+}
+
+#[tokio::test]
 async fn test_factory_honors_is_non_interactive() {
     let mut config = test_config();
     config.is_non_interactive = true;

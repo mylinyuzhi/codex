@@ -110,19 +110,62 @@ impl QueryEngine {
         // (counts human turns, not LLM iterations). Tool-result
         // rounds within one human turn share the same counter value
         // so reminders don't spam mid-turn.
-        let reminder_tools: Vec<String> = {
+        // Take the app_state snapshot *before* building the stub so
+        // the reminder context observes the same discovered-tool set
+        // that `engine_prompt::build_tool_definitions` will use this
+        // turn — keeps the `deferred_tools_delta` reminder aligned
+        // with what the LLM actually receives as tools.
+        let pre_snapshot_discovered: std::sync::Arc<std::collections::HashSet<String>> = match self
+            .app_state
+            .as_ref()
+        {
+            Some(state) => std::sync::Arc::new(state.read().await.discovered_tool_names.clone()),
+            None => std::sync::Arc::new(std::collections::HashSet::new()),
+        };
+        // Match `engine_prompt::build_tool_definitions` capability
+        // resolution exactly so the registry partitions seen here
+        // line up byte-for-byte with the LLM-visible tools set. When
+        // either capability is absent, `tool_search_active()` returns
+        // false in the registry and `deferred_tools` is empty — the
+        // `deferred_tools_delta` reminder collapses to "nothing
+        // searchable", which is the correct truth.
+        let supports_tool_reference = self.client.model_info().is_some_and(|info| {
+            info.has_capability(coco_types::Capability::ServerSideToolReference)
+        });
+        let supports_client_side_tool_search = self
+            .client
+            .model_info()
+            .is_some_and(|info| info.has_capability(coco_types::Capability::ClientSideToolSearch));
+        // Both partitions share the same filter context so they
+        // cover disjoint halves of the registry — `loaded` includes
+        // discovered tools, `deferred` excludes them.
+        let (reminder_loaded_tools, reminder_deferred_tools): (Vec<String>, Vec<String>) = {
             let stub_ctx = coco_tool_runtime::ToolUseContext::stub_for_filtering(
                 self.config.features.clone(),
                 self.config.tool_overrides.clone(),
                 self.config.tool_filter.clone(),
                 self.config.permission_mode,
-            );
-            self.tools
+            )
+            .with_discovered_tool_names(pre_snapshot_discovered)
+            .with_model_capabilities(supports_tool_reference, supports_client_side_tool_search);
+            let loaded: Vec<String> = self
+                .tools
                 .loaded_tools(&stub_ctx)
                 .iter()
                 .map(|t| t.name().to_string())
-                .collect()
+                .collect();
+            let deferred: Vec<String> = self
+                .tools
+                .deferred_tools(&stub_ctx)
+                .iter()
+                .map(|t| t.name().to_string())
+                .collect();
+            (loaded, deferred)
         };
+        // `reminder_tools` retains its TS name as the model-visible
+        // (loaded) tool list — used by `TurnReminderInput::tools` and
+        // unchanged consumers below.
+        let reminder_tools = reminder_loaded_tools.clone();
         let pm_settings = &self.config.plan_mode_settings;
         let workflow_rm = match pm_settings.workflow {
             coco_config::PlanModeWorkflow::FivePhase => coco_context::PlanWorkflow::FivePhase,
@@ -220,14 +263,21 @@ impl QueryEngine {
         // can control it per session without re-reading settings from
         // disk.
         let reminder_auto_compact_enabled = self.config.is_auto_compact_active();
-        // TS `getDeferredToolsDelta` — diff current tools against the
-        // last announced set stored on app_state. Non-empty added or
-        // removed triggers the `deferred_tools_delta` reminder.
-        let reminder_deferred_tools_delta =
-            compute_tools_delta(&reminder_tools, &app_state_snapshot.last_announced_tools);
-        // Clone the tool list for post-emit bookkeeping (the main
-        // `reminder_tools` is moved into `TurnReminderInput::tools`).
-        let reminder_tools_clone = reminder_tools.clone();
+        // TS `getDeferredToolsDelta` — diff the current **deferred**
+        // tool set against the last announced set on app_state. The
+        // loaded set is supplied so a tool that moves deferred →
+        // loaded (model discovered via `ToolSearch`) stays silently
+        // in the announced pool. Non-empty added or removed triggers
+        // the `deferred_tools_delta` reminder.
+        let reminder_deferred_tools_delta = compute_tools_delta(
+            &reminder_deferred_tools,
+            &reminder_loaded_tools,
+            &app_state_snapshot.last_announced_tools,
+        );
+        // Clone the deferred list for post-emit bookkeeping — TS
+        // `getDeferredToolsDelta` replaces `announced` with the
+        // current deferred set after emission.
+        let reminder_deferred_tools_clone = reminder_deferred_tools.clone();
         // TS `getAgentListingDeltaAttachment` — diff the current
         // agent-type set (from `SessionBootstrap`) against the
         // last-announced set on app_state.
@@ -621,11 +671,12 @@ impl QueryEngine {
                     }
                 }
                 // TS `getDeferredToolsDelta` replaces the announced
-                // set with the current tool list after successful
-                // emission. Subsequent turns then diff against the
-                // fresh baseline.
+                // set with the current **deferred** tool list after
+                // successful emission. Subsequent turns then diff
+                // against the fresh baseline.
                 if fired_types.contains(&ReminderAttachmentType::DeferredToolsDelta) {
-                    guard.last_announced_tools = reminder_tools_clone.iter().cloned().collect();
+                    guard.last_announced_tools =
+                        reminder_deferred_tools_clone.iter().cloned().collect();
                 }
                 // Same pattern for the agent-listing delta.
                 if fired_types.contains(&ReminderAttachmentType::AgentListingDelta) {

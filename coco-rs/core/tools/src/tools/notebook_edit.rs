@@ -77,6 +77,12 @@ impl Tool for NotebookEditTool {
         );
         ToolInputSchema { properties: p }
     }
+    fn should_defer(&self) -> bool {
+        true
+    }
+    fn search_hint(&self) -> Option<&str> {
+        Some("edit a Jupyter notebook ipynb cell")
+    }
 
     /// Render the edit envelope as the prebuilt `message` field so the
     /// model gets the human-readable summary directly. notebook_path /

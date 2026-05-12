@@ -96,14 +96,71 @@ impl QueryEngine {
         &self,
         app_state: &ToolAppState,
     ) -> Vec<LanguageModelTool> {
+        // Carry the `ToolSearch` discovery set into the filter pipeline
+        // so deferred tools the model has unlocked get their schema in
+        // this turn's request.
+        let discovered = std::sync::Arc::new(app_state.discovered_tool_names.clone());
+
+        // Resolve both `ToolSearch`-related capabilities from the
+        // active client's `ModelInfo`. Three-state outcome:
+        //   - server (Anthropic Sonnet 4.5+/Opus 4+ via beta
+        //     `tool-search-tool-2025-10-19`): tools array carries every
+        //     enabled tool with `deferLoading: true` on deferred ones.
+        //     Server expands `tool_reference` content blocks into
+        //     `<functions>` markup inline — `tools` shape is constant
+        //     across turns, prompt-cache prefix stays warm.
+        //   - client-side only (capable models without server beta —
+        //     GPT-5, Gemini, DeepSeek, Haiku, …): tools array contains
+        //     only the loaded set; deferred tools enter on the next
+        //     turn after `ToolSearch` writes
+        //     `discovered_tool_names`. One cache break per discovery.
+        //   - neither (unknown / custom model that didn't declare
+        //     either capability): the registry filter auto-disables
+        //     deferral via `tool_search_active`, so every enabled
+        //     tool's full schema lands on turn 1 (safe default).
+        let supports_tool_reference = self.client.model_info().is_some_and(|info| {
+            info.has_capability(coco_types::Capability::ServerSideToolReference)
+        });
+        let supports_client_side_tool_search = self
+            .client
+            .model_info()
+            .is_some_and(|info| info.has_capability(coco_types::Capability::ClientSideToolSearch));
+
         let stub_ctx = coco_tool_runtime::ToolUseContext::stub_for_filtering(
             self.config.features.clone(),
             self.config.tool_overrides.clone(),
             self.config.tool_filter.clone(),
             self.config.permission_mode,
-        );
-        let loaded = self.tools.loaded_tools(&stub_ctx);
-        let tool_names: Vec<String> = loaded.iter().map(|t| t.name().to_string()).collect();
+        )
+        .with_discovered_tool_names(discovered.clone())
+        .with_model_capabilities(supports_tool_reference, supports_client_side_tool_search);
+
+        // The tool list sent to the model. When the server-side path
+        // is live (capability declared AND `Feature::ToolSearch` on),
+        // `enabled` includes deferred tools too; `deferred_marker`
+        // captures which names need the `deferLoading` provider-option
+        // patch below. Otherwise (client-side path OR feature off OR
+        // capability missing), `loaded_tools` handles the partition
+        // — its short-circuit on `tool_search_active` covers the
+        // capability-missing case automatically.
+        let use_server_side_path = supports_tool_reference && stub_ctx.tool_search_active();
+        let (model_tools, deferred_marker): (Vec<_>, std::collections::HashSet<String>) =
+            if use_server_side_path {
+                let enabled = self.tools.enabled(&stub_ctx);
+                let deferred: std::collections::HashSet<String> = self
+                    .tools
+                    .deferred_tools(&stub_ctx)
+                    .iter()
+                    .map(|t| t.name().to_string())
+                    .collect();
+                (enabled, deferred)
+            } else {
+                (
+                    self.tools.loaded_tools(&stub_ctx),
+                    std::collections::HashSet::new(),
+                )
+            };
+        let tool_names: Vec<String> = model_tools.iter().map(|t| t.name().to_string()).collect();
 
         let agent_names: Vec<String> = self
             .session_bootstrap
@@ -206,8 +263,8 @@ impl QueryEngine {
             ant_build,
         };
 
-        let mut out = Vec::with_capacity(loaded.len());
-        for tool in loaded {
+        let mut out = Vec::with_capacity(model_tools.len());
+        for tool in model_tools {
             // `Tool::input_json_schema` returns a fully-formed JSON Schema
             // when the tool ships one. Otherwise we synthesize one from
             // `Tool::input_schema`'s loose `properties` map and wrap it
@@ -222,13 +279,29 @@ impl QueryEngine {
                 serde_json::json!({ "type": "object", "properties": props })
             });
             let description = tool.prompt(&prompt_options).await;
+            // Attach `deferLoading: true` to tools the model has not
+            // yet discovered via `ToolSearch`. Anthropic adapter reads
+            // this in `prepare_tools::prepare_anthropic_tools` and
+            // emits `defer_loading: true` on the wire so the server
+            // hides the schema from the model. Other providers ignore
+            // unknown provider_options blocks — no-op for them.
+            let tool_name = tool.name();
+            let provider_options = if deferred_marker.contains(tool_name) {
+                let mut anthropic = std::collections::HashMap::new();
+                anthropic.insert("deferLoading".to_string(), serde_json::Value::Bool(true));
+                let mut po_map = std::collections::HashMap::new();
+                po_map.insert("anthropic".to_string(), anthropic);
+                Some(coco_inference::ProviderOptions(po_map))
+            } else {
+                None
+            };
             out.push(LanguageModelTool::Function(LanguageModelFunctionTool {
-                name: tool.name().to_string(),
+                name: tool_name.to_string(),
                 description: Some(description),
                 input_schema: json_schema,
                 input_examples: None,
                 strict: None,
-                provider_options: None,
+                provider_options,
             }));
         }
         out

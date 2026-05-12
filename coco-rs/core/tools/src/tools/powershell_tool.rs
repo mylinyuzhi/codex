@@ -118,6 +118,13 @@ impl Tool for PowerShellTool {
         !self.is_read_only(input)
     }
 
+    fn should_defer(&self) -> bool {
+        true
+    }
+    fn search_hint(&self) -> Option<&str> {
+        Some("run pwsh PowerShell commands on Windows")
+    }
+
     fn get_activity_description(&self, input: &Value) -> Option<String> {
         let command = input.get("command").and_then(|v| v.as_str())?;
         let truncated: String = command.chars().take(57).collect();

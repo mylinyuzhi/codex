@@ -170,4 +170,5 @@ pub use traits::render_text_or_json;
 // `coco-messages` (or, transitively, on `vercel-ai-provider`)
 // directly. See `docs/coco-rs/tool-result-rendering.md`.
 pub use coco_messages::ToolResultContentPart;
+pub use coco_messages::tool_reference_content_part;
 pub use validation::ValidationResult;

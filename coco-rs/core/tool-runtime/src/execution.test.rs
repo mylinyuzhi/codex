@@ -35,14 +35,6 @@ fn test_extract_file_extension() {
     );
 }
 
-#[test]
-fn test_is_deferred_tool() {
-    assert!(is_deferred_tool("CronCreate"));
-    assert!(is_deferred_tool("NotebookEdit"));
-    assert!(!is_deferred_tool("Read"));
-    assert!(!is_deferred_tool("Bash"));
-}
-
 // ── R7-T19: defense-in-depth strip tests ──
 //
 // `strip_internal_bash_fields` removes underscore-prefixed fields from

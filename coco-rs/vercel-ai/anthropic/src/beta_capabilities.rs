@@ -33,6 +33,7 @@ pub fn map_capability(cap: AdapterBetaCapability) -> Option<&'static str> {
         AdapterBetaCapability::PromptCachingScope => "prompt-caching-scope-2026-01-05",
         AdapterBetaCapability::RedactThinking => "redact-thinking-2026-02-12",
         AdapterBetaCapability::Advisor => "advisor-2025-12-04",
+        AdapterBetaCapability::ToolSearch => "tool-search-tool-2025-10-19",
     })
 }
 

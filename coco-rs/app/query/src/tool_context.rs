@@ -124,6 +124,24 @@ pub(crate) struct ToolContextOverrides {
     /// reflects post-fallback state; absent falls back to
     /// `config.model_id` (tests, pre-fallback paths).
     pub(crate) current_model_id: Option<String>,
+    /// `true` when the post-fallback active model declares
+    /// [`coco_types::Capability::ServerSideToolReference`]. Engine
+    /// resolves this from `ApiClient::model_info()` so a model swap
+    /// (primary → fallback) changes the ToolSearch envelope shape
+    /// without a context-factory rebuild. Default `false` keeps the
+    /// non-Anthropic / non-capable path (client-side promotion).
+    pub(crate) current_model_supports_tool_reference: bool,
+    /// `true` when the active model declares
+    /// [`coco_types::Capability::ClientSideToolSearch`] — the
+    /// universal `discovered_tool_names` promotion path. Default
+    /// `false` for unknown/custom models so they degrade to
+    /// eager-loading (no `ToolSearch` round-trip).
+    ///
+    /// Combined with [`Self::current_model_supports_tool_reference`]
+    /// inside the factory to populate the ctx capability flags;
+    /// `ToolUseContext::tool_search_active()` then drives the
+    /// runtime three-state activation.
+    pub(crate) current_model_supports_client_side_tool_search: bool,
 }
 
 impl ToolContextFactory {
@@ -133,17 +151,24 @@ impl ToolContextFactory {
     /// the prior batch's `ExitPlanModeTool` / `EnterPlanModeTool` patches
     /// become visible here without a config reload.
     pub(crate) async fn build(&self, overrides: ToolContextOverrides) -> ToolUseContext {
-        let (live_mode, live_pre_plan, live_stripped) = match self.app_state.as_ref() {
-            Some(state) => {
-                let guard = state.read().await;
-                (
-                    guard.permission_mode.unwrap_or(self.config.permission_mode),
-                    guard.pre_plan_mode,
-                    guard.stripped_dangerous_rules.clone(),
-                )
-            }
-            None => (self.config.permission_mode, None, None),
-        };
+        let (live_mode, live_pre_plan, live_stripped, live_discovered_tool_names) =
+            match self.app_state.as_ref() {
+                Some(state) => {
+                    let guard = state.read().await;
+                    (
+                        guard.permission_mode.unwrap_or(self.config.permission_mode),
+                        guard.pre_plan_mode,
+                        guard.stripped_dangerous_rules.clone(),
+                        std::sync::Arc::new(guard.discovered_tool_names.clone()),
+                    )
+                }
+                None => (
+                    self.config.permission_mode,
+                    None,
+                    None,
+                    std::sync::Arc::new(std::collections::HashSet::new()),
+                ),
+            };
 
         let plans_dir = self.config_home.as_ref().map(|ch| {
             coco_context::resolve_plans_directory(
@@ -194,6 +219,10 @@ impl ToolContextFactory {
             features: self.config.features.clone(),
             tool_overrides: self.config.tool_overrides.clone(),
             tool_filter: self.config.tool_filter.clone(),
+            discovered_tool_names: live_discovered_tool_names,
+            model_supports_tool_reference: overrides.current_model_supports_tool_reference,
+            model_supports_client_side_tool_search: overrides
+                .current_model_supports_client_side_tool_search,
             is_teammate: self.config.is_teammate,
             plan_mode_required: self.config.plan_mode_required,
             // Pre-resolve swarm identity once, so tools read from ctx

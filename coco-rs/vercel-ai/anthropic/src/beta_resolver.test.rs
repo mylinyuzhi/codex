@@ -40,6 +40,7 @@ fn all_caps_on() -> AnthropicModelCapabilities {
         interleaved_thinking: true,
         context_management: true,
         token_efficient_tools: true,
+        tool_reference: true,
     }
 }
 
@@ -99,6 +100,38 @@ fn context_1m_emitted_on_capable_model() {
     let config = make_config(caps, true, false, false, false);
     let resolved = resolve(&config, false, &[]);
     assert!(resolved.headers.contains("context-1m-2025-08-07"));
+}
+
+#[test]
+fn tool_search_beta_emitted_on_capable_model() {
+    // `tool-search-tool-2025-10-19` is a capability-only gate — no
+    // topology / experimental / agentic-query filter (TS parity).
+    let caps = AnthropicModelCapabilities {
+        tool_reference: true,
+        ..Default::default()
+    };
+    let config = make_config(caps, false, false, false, false);
+    let resolved = resolve(&config, false, &[]);
+    assert!(
+        resolved.headers.contains("tool-search-tool-2025-10-19"),
+        "expected tool-search beta when tool_reference cap is on: {:?}",
+        resolved.headers
+    );
+}
+
+#[test]
+fn tool_search_beta_suppressed_when_capability_off() {
+    // Sanity: incapable model (e.g. Haiku, older Claude 3) must not
+    // emit the beta header — server would 400 on unrecognized header.
+    let config = make_config(
+        AnthropicModelCapabilities::default(),
+        true,
+        false,
+        false,
+        false,
+    );
+    let resolved = resolve(&config, true, &[]);
+    assert!(!resolved.headers.contains("tool-search-tool-2025-10-19"));
 }
 
 #[test]
