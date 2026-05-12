@@ -179,17 +179,28 @@ fn extract_llm_message_text(msg: &LlmMessage) -> Option<String> {
             }
         }
         LlmMessage::Assistant { content, .. } => {
-            let texts: Vec<&str> = content
-                .iter()
-                .filter_map(|p| match p {
-                    AssistantContent::Text(t) => Some(t.text.as_str()),
-                    _ => None,
-                })
-                .collect();
-            if texts.is_empty() {
+            // Walk content in emission order; emit text chunks and
+            // `[tool: <name>]` placeholder lines for tool calls so the
+            // compaction LLM sees where tools were invoked relative to
+            // surrounding text. Otherwise interleaved
+            // `[Text(A), ToolCall, Text(B)]` collapses to `"A\nB"` and
+            // tool actions get silently misattributed in the summary.
+            let mut chunks: Vec<String> = Vec::new();
+            for p in content {
+                match p {
+                    AssistantContent::Text(t) if !t.text.is_empty() => {
+                        chunks.push(t.text.clone());
+                    }
+                    AssistantContent::ToolCall(tc) => {
+                        chunks.push(format!("[tool: {}]", tc.tool_name));
+                    }
+                    _ => {}
+                }
+            }
+            if chunks.is_empty() {
                 None
             } else {
-                Some(texts.join("\n"))
+                Some(chunks.join("\n"))
             }
         }
         LlmMessage::Tool { content, .. } => {

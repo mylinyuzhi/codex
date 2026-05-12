@@ -78,13 +78,28 @@ pub async fn run(target: &LiveTarget) -> Result<()> {
 /// Streaming + tool-calling. Asserts a `ToolCallStart` event for `get_weather`.
 pub async fn run_with_tools(target: &LiveTarget) -> Result<()> {
     let params = QueryParams {
+        // Two stressors compounded the flakiness on Gemini-3 thinking
+        // models:
+        //   1. Tight `max_tokens` (256) — `thoughtsTokenCount` burned
+        //      the entire budget before any output, finishing with
+        //      `MAX_TOKENS` and empty content.
+        //   2. Soft prompt — the model occasionally chose to STOP with
+        //      an empty text part (no `functionCall`) even on a fresh
+        //      budget, treating "Use the get_weather tool" as a hint
+        //      rather than a mandate.
+        // 4096-token budget eliminates (1); the imperative system
+        // prompt + "Do not answer in text" forcing addresses (2).
         prompt: vec![
-            LanguageModelMessage::system("You are a helpful assistant. Use the provided tools."),
+            LanguageModelMessage::system(
+                "You are a helpful assistant. For weather questions you MUST call \
+                 the get_weather tool — do not answer with prose, do not refuse, \
+                 do not return an empty message.",
+            ),
             LanguageModelMessage::user_text(
-                "What's the weather in Tokyo? Use the get_weather tool.",
+                "What's the weather in Tokyo? Call get_weather with city='Tokyo'.",
             ),
         ],
-        max_tokens: Some(256),
+        max_tokens: Some(4096),
         thinking_level: None,
         fast_mode: false,
         tools: Some(vec![weather_tool_def()]),

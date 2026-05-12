@@ -46,20 +46,38 @@ impl MessageHistory {
 
     /// Return the text from the last Assistant message, if any.
     ///
-    /// Concatenates all `Text` content parts in the last assistant message.
+    /// Walks the message content in emission order and emits text parts
+    /// separated by `\n`, with `[tool: <name>]` placeholder lines for
+    /// non-text parts. Preserves the tool-call boundary so consumers
+    /// (Stop hook input, memory extraction, etc.) see the structural
+    /// transitions instead of a silently-concatenated blob.
+    ///
+    /// Before the multi-part streaming reconstruction landed, this
+    /// method always saw `Vec<Text(combined)>` and the empty-string
+    /// join was correct. With per-part `provider_metadata` now
+    /// preserved, multiple `Text` parts can appear interleaved with
+    /// `ToolCall`s — the placeholder keeps downstream semantics intact.
     pub fn last_assistant_text(&self) -> Option<String> {
         self.messages.iter().rev().find_map(|msg| match msg {
             Message::Assistant(a) => match &a.message {
                 LlmMessage::Assistant { content, .. } => {
-                    let text: String = content
-                        .iter()
-                        .filter_map(|c| match c {
-                            AssistantContent::Text(t) => Some(t.text.as_str()),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>()
-                        .join("");
-                    if text.is_empty() { None } else { Some(text) }
+                    let mut chunks: Vec<String> = Vec::new();
+                    for c in content {
+                        match c {
+                            AssistantContent::Text(t) if !t.text.is_empty() => {
+                                chunks.push(t.text.clone());
+                            }
+                            AssistantContent::ToolCall(tc) => {
+                                chunks.push(format!("[tool: {}]", tc.tool_name));
+                            }
+                            _ => {}
+                        }
+                    }
+                    if chunks.is_empty() {
+                        None
+                    } else {
+                        Some(chunks.join("\n"))
+                    }
                 }
                 _ => None,
             },
