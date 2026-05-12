@@ -14,6 +14,7 @@ use crate::i18n::t;
 use crate::render_overlays;
 use crate::state::AppState;
 use crate::state::FocusTarget;
+use crate::state::PromptMode;
 use crate::state::Toast;
 use crate::state::ToastSeverity;
 use crate::theme::Theme;
@@ -169,6 +170,33 @@ fn render_header_bar(frame: &mut Frame, area: Rect, state: &AppState, theme: &Th
         parts.push(Span::styled(
             format!(" {short}"),
             Style::default().fg(theme.primary),
+        ));
+    }
+
+    // Worktree indicator. Set by `WorktreeEntered`; cleared on
+    // `WorktreeExited`. Shown as `🌿 name` after the cwd so users
+    // running parallel agent sessions in different worktrees can tell
+    // their windows apart without checking the title bar.
+    if let Some(ref wt) = state.session.worktree_path {
+        let short = wt.rsplit('/').next().unwrap_or(wt);
+        parts.push(Span::styled(" | ", Style::default().fg(theme.border)));
+        parts.push(Span::styled(
+            format!("🌿 {short}"),
+            Style::default().fg(theme.success),
+        ));
+    }
+
+    // Git branch. Populated at session startup from
+    // `coco_git::operations::get_current_branch`. The leading ``
+    // glyph (Powerline branch) mirrors what shell prompts like
+    // starship / oh-my-zsh use, so users recognise it without a label.
+    // Detached HEAD is `None` and renders nothing — the absence is
+    // itself a signal to investigate.
+    if let Some(ref branch) = state.session.git_branch {
+        parts.push(Span::styled(" | ", Style::default().fg(theme.border)));
+        parts.push(Span::styled(
+            format!(" {branch}"),
+            Style::default().fg(theme.text_dim),
         ));
     }
 
@@ -345,11 +373,34 @@ fn render_chat_and_input(frame: &mut Frame, area: Rect, state: &AppState, theme:
         .focused_subagent_index
         .and_then(|i| state.session.subagents.get(i as usize));
     let header_height: u16 = if focused_subagent.is_some() { 1 } else { 0 };
+    let queue_rows: u16 =
+        if crate::widgets::QueueStatusWidget::should_display(&state.session.queued_commands) {
+            1
+        } else {
+            0
+        };
+    let stash_rows: u16 =
+        if crate::widgets::StashNotice::should_display(state.ui.stashed_input.as_ref()) {
+            1
+        } else {
+            0
+        };
 
-    let [header, chat, input] = area.layout(&Layout::vertical([
-        Constraint::Length(header_height), // teammate header (0 when unfocused)
-        Constraint::Min(1),                // chat
-        Constraint::Length(input_height),  // input
+    // Vertical stack:
+    //   teammate header (0 when no focused subagent)
+    //   chat                    (fills remaining)
+    //   queued-commands strip   (0 unless queue non-empty)
+    //   input                   (3 rows)
+    //   stash notice            (0 when no stash)
+    // Queue sits *above* input so the user sees what's already queued
+    // while typing the next entry — matches TS PromptInputQueuedCommands
+    // which renders above the prompt.
+    let [header, chat, queue, input, stash] = area.layout(&Layout::vertical([
+        Constraint::Length(header_height),
+        Constraint::Min(1),
+        Constraint::Length(queue_rows),
+        Constraint::Length(input_height),
+        Constraint::Length(stash_rows),
     ]));
 
     if let Some(agent) = focused_subagent {
@@ -360,7 +411,18 @@ fn render_chat_and_input(frame: &mut Frame, area: Rect, state: &AppState, theme:
     }
 
     render_conversation(frame, state, chat, theme);
+    if queue_rows > 0 {
+        frame.render_widget(
+            crate::widgets::QueueStatusWidget::new(&state.session.queued_commands, theme),
+            queue,
+        );
+    }
     render_input(frame, state, input, theme);
+    if stash_rows > 0
+        && let Some(s) = state.ui.stashed_input.as_ref()
+    {
+        frame.render_widget(crate::widgets::StashNotice::new(s, theme), stash);
+    }
 
     // Autocomplete popup sits above the input area. The widget computes its
     // own Y offset upward from the supplied rect, so passing the input area
@@ -394,48 +456,105 @@ fn render_conversation(frame: &mut Frame, state: &AppState, area: Rect, theme: &
 fn render_input(frame: &mut Frame, state: &AppState, area: Rect, theme: &Theme) {
     let is_focused = state.ui.focus == FocusTarget::Input;
     let is_streaming = state.is_streaming();
+    // Streaming suppresses prompt-mode rendering — bash/memory submissions
+    // can't run mid-turn, so the input is always a queue entry while a turn
+    // is in flight. TS parity: `PromptInputModeIndicator` checks
+    // `isLoading` (== streaming) before applying the bash colour.
+    let prompt_mode = if is_streaming {
+        PromptMode::Normal
+    } else {
+        state.ui.input.prompt_mode()
+    };
     let border_color = if is_focused {
         theme.border_focused
     } else {
         theme.border
     };
 
-    // Mode indicator: > normal, ! plan, ~ streaming
-    // Use ASCII chars to ensure consistent 2-column width across all terminals.
-    let indicator = if is_streaming {
-        Span::styled("~ ", Style::default().fg(theme.warning))
-    } else if state.is_plan_mode() {
-        Span::styled("! ", Style::default().fg(theme.plan_mode).bold())
-    } else {
-        Span::styled("> ", Style::default().fg(theme.primary))
+    // The indicator owns the leading prefix character when a prompt mode
+    // is active — `! ` for bash, `# ` for memory — and the body renders
+    // the stripped text. This matches TS where the `!` is part of the
+    // `PromptInputModeIndicator` component rather than the input value.
+    // Position 0 of `InputState.text` is the prefix; visual cursor is
+    // offset by one in those modes so typing at "the start" really means
+    // immediately after the indicator.
+    let indicator = match (is_streaming, prompt_mode) {
+        (true, _) => Span::styled("~ ", Style::default().fg(theme.warning)),
+        (false, PromptMode::Bash) => Span::styled("! ", Style::default().fg(theme.accent)).bold(),
+        (false, PromptMode::Memory) => {
+            Span::styled("# ", Style::default().fg(theme.success)).bold()
+        }
+        // `❯` matches TS `figures.pointer` on macOS/Linux. Width is one
+        // column in standard fonts; the trailing space keeps the gutter
+        // at the same 2-col budget as the other indicators.
+        (false, PromptMode::Normal) => Span::styled("❯ ", Style::default().fg(theme.primary)),
     };
 
-    // P5 / A4: when the input is empty AND a post-turn prompt
-    // suggestion is available, render the suggestion as the dim
-    // placeholder. Prefer the freshest suggestion (last entry) so
-    // sequential turns each get their own. The user accepts it by
-    // pressing Tab/Right at the empty input — bound in
-    // `keybinding_bridge.rs` (TODO: A4 follow-up).
+    // P5 / A4: when the input is empty AND a post-turn prompt suggestion
+    // is available, render the suggestion as the dim placeholder. Prefer
+    // the freshest suggestion (last entry) so sequential turns each get
+    // their own. The user accepts it by pressing Tab/Right at the empty
+    // input — bound in `keybinding_bridge.rs`.
     let suggestion = state.session.prompt_suggestions.last();
-    let display_text = if state.ui.input.is_empty() {
-        match suggestion {
-            Some(s) => s.clone(),
-            None => t!("input.placeholder").to_string(),
+    let is_empty = state.ui.input.is_empty();
+
+    // Match the submit-time prefix-stripping rule (`PromptMode::strip_prefix`):
+    // drop the leading mode character plus one optional space so the body
+    // shown here equals exactly what the engine will receive. Without this
+    // alignment a typed `! ls` would render with double-spacing (`! ` from
+    // the indicator plus a kept leading space in the body).
+    let prefix_consumed: usize = if is_empty || prompt_mode == PromptMode::Normal {
+        0
+    } else {
+        let body = &state.ui.input.text[1..];
+        1 + if body.starts_with(' ') { 1 } else { 0 }
+    };
+    // Placeholder priority (TS `usePromptInputPlaceholder`):
+    //   1. queued-command hint — only when the queue is non-empty so
+    //      the user notices there's something to recall with ↑.
+    //   2. prompt suggestion from the last post-turn fork.
+    //   3. static default placeholder.
+    let has_editable_queue = !state.session.queued_commands.is_empty();
+    let display_text = if is_empty {
+        if has_editable_queue {
+            t!("input.placeholder_queued").to_string()
+        } else if let Some(s) = suggestion {
+            s.clone()
+        } else {
+            t!("input.placeholder").to_string()
         }
     } else {
-        state.ui.input.text.clone()
+        state.ui.input.text[prefix_consumed..].to_string()
     };
 
-    let text_style = if state.ui.input.is_empty() {
+    let text_style = if is_empty {
         Style::default().fg(theme.text_dim)
     } else {
         Style::default().fg(theme.text)
     };
 
-    let title = if state.is_plan_mode() {
-        format!(" {} ", t!("input.title_plan_mode"))
-    } else if is_streaming {
+    // Layered title:
+    //   streaming         →  "Queue Input" (wins outright — modes can't fire mid-turn)
+    //   plan + prompt     →  "Plan • Bash Mode" / "Plan • Memory Mode"
+    //   prompt mode only  →  "Bash Mode" / "Memory Mode"
+    //   plan only         →  "Plan Mode"
+    //   default           →  "Input"
+    // Plan mode is a session-wide permission flag, so when it's active
+    // we surface it alongside the prompt mode rather than letting the
+    // prompt mode mask it — otherwise the user would lose track of
+    // being in plan after one bash sortie.
+    let title = if is_streaming {
         format!(" {} ", t!("input.title_queue"))
+    } else if prompt_mode != PromptMode::Normal && state.is_plan_mode() {
+        format!(
+            " {} • {} ",
+            t!("input.title_plan_mode"),
+            t!(prompt_mode.title_i18n_key())
+        )
+    } else if prompt_mode != PromptMode::Normal {
+        format!(" {} ", t!(prompt_mode.title_i18n_key()))
+    } else if state.is_plan_mode() {
+        format!(" {} ", t!("input.title_plan_mode"))
     } else {
         format!(" {} ", t!("input.title"))
     };
@@ -450,12 +569,16 @@ fn render_input(frame: &mut Frame, state: &AppState, area: Rect, theme: &Theme) 
 
     frame.render_widget(input, area);
 
-    // Show cursor position (offset by 2 for mode indicator)
-    if is_focused && !state.ui.input.is_empty() {
-        let indicator_width = 2_u16; // "❯ " is 2 chars wide
+    // Cursor position: indicator owns 2 columns. The visual cursor sits
+    // `prefix_consumed` chars left of the raw cursor (the indicator owns
+    // those chars) and clamps to 0 when the raw cursor lands inside the
+    // consumed prefix (so backspace at that point deletes the `!` / `#`).
+    if is_focused && !is_empty {
+        let indicator_width = 2_u16;
+        let raw_cursor = (state.ui.input.cursor - prefix_consumed as i32).max(0);
         let max_cursor = area.width.saturating_sub(indicator_width + 1) as i32;
-        let cursor_x = area.x + indicator_width + state.ui.input.cursor.min(max_cursor) as u16;
-        let cursor_y = area.y + 1; // below border
+        let cursor_x = area.x + indicator_width + raw_cursor.min(max_cursor) as u16;
+        let cursor_y = area.y + 1;
         frame.set_cursor_position((cursor_x, cursor_y));
     }
 }

@@ -300,6 +300,14 @@ pub struct Cli {
     #[arg(long)]
     pub log_stderr: bool,
 
+    /// Show source `file:line` + thread name on each log event.
+    /// Tri-state: `--log-location` (or `=true`) forces on,
+    /// `--log-location=false` forces off, omission falls back to the
+    /// auto-rule — enabled when the resolved filter is the bare level
+    /// `debug` or `trace`. Higher priority than `COCO_LOG_LOCATION`.
+    #[arg(long, value_name = "BOOL", num_args = 0..=1, default_missing_value = "true")]
+    pub log_location: Option<bool>,
+
     /// Timezone for log timestamps: `local | utc`. Defaults to `local`.
     /// Higher priority than `COCO_LOG_TIMEZONE`.
     #[arg(long, value_name = "TZ")]

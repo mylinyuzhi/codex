@@ -123,6 +123,17 @@ pub struct SubscriberOpts {
     /// Force a stderr layer in addition to the file sink. Has no
     /// effect for [`Mode::Headless`] (which always writes to stderr).
     pub also_stderr: bool,
+    /// Show source `file:line` on each log event. Adds ~30–80 bytes
+    /// per line — keep off by default. The CLI layer auto-enables
+    /// this when the resolved filter is the bare level `debug` /
+    /// `trace`; advanced `EnvFilter` directives don't trigger the
+    /// auto-rule (the user is in control).
+    pub location: bool,
+    /// Show thread name on each log event. Mostly cosmetic for the
+    /// async hot path (worker threads cycle), but useful for panics
+    /// and blocking-pool work. Wired to the same auto-rule as
+    /// [`Self::location`].
+    pub thread_names: bool,
     /// Directory used for the rotating-default log file.
     pub default_log_dir: PathBuf,
     /// Prefix used for the rotating-default log file. Daily rotation
@@ -175,15 +186,19 @@ pub fn init_subscriber(mut opts: SubscriberOpts) -> Result<Option<SubscriberHand
     })?;
 
     let format = opts.format.unwrap_or_else(|| default_format(opts.mode));
+    let layout = LayoutOpts {
+        location: opts.location,
+        thread_names: opts.thread_names,
+    };
 
-    let (file_layer, file_guard, log_path) = build_file_sink(&opts, format)?;
+    let (file_layer, file_guard, log_path) = build_file_sink(&opts, format, layout)?;
 
     let want_stderr = match opts.mode {
         Mode::Headless => true,
         Mode::Tui | Mode::Sdk => opts.also_stderr,
         Mode::Skip => unreachable!("Skip handled above"),
     };
-    let stderr_layer = want_stderr.then(|| build_stderr_layer(format, &opts.timezone));
+    let stderr_layer = want_stderr.then(|| build_stderr_layer(format, &opts.timezone, layout));
 
     // Per-layer filter (one EnvFilter per fmt layer) instead of a
     // global subscriber filter. This lets each `Box<dyn Layer<Registry>>`
@@ -242,9 +257,18 @@ pub fn resolve_log_path(opts: &SubscriberOpts) -> PathBuf {
 /// without lifting up to `Layered<…>`.
 type BoxedLayer = Box<dyn Layer<Registry> + Send + Sync + 'static>;
 
+/// Per-layer layout toggles. Both sinks share the same values so the
+/// file and stderr outputs stay in lockstep.
+#[derive(Debug, Clone, Copy)]
+struct LayoutOpts {
+    location: bool,
+    thread_names: bool,
+}
+
 fn build_file_sink(
     opts: &SubscriberOpts,
     format: Format,
+    layout: LayoutOpts,
 ) -> Result<(BoxedLayer, Option<WorkerGuard>, Option<PathBuf>)> {
     let log_path = resolve_log_path(opts);
     let dir = log_path
@@ -263,15 +287,16 @@ fn build_file_sink(
     let appender = rolling::daily(&dir, &prefix);
     let (writer, guard) = tracing_appender::non_blocking(appender);
 
-    let layer = boxed_fmt_layer(format, writer, /*ansi*/ false, &opts.timezone);
+    let layer = boxed_fmt_layer(format, writer, /*ansi*/ false, &opts.timezone, layout);
     Ok((layer, Some(guard), Some(log_path)))
 }
 
 fn build_stderr_layer(
     format: Format,
     timezone: &TimezoneConfig,
+    layout: LayoutOpts,
 ) -> Box<dyn Layer<Registry> + Send + Sync + 'static> {
-    boxed_fmt_layer(format, io::stderr, /*ansi*/ true, timezone)
+    boxed_fmt_layer(format, io::stderr, /*ansi*/ true, timezone, layout)
 }
 
 fn boxed_fmt_layer<W>(
@@ -279,6 +304,7 @@ fn boxed_fmt_layer<W>(
     writer: W,
     ansi: bool,
     timezone: &TimezoneConfig,
+    layout: LayoutOpts,
 ) -> Box<dyn Layer<Registry> + Send + Sync + 'static>
 where
     W: for<'a> fmt::MakeWriter<'a> + Send + Sync + 'static,
@@ -287,6 +313,9 @@ where
         .with_writer(writer)
         .with_ansi(ansi)
         .with_target(true)
+        .with_file(layout.location)
+        .with_line_number(layout.location)
+        .with_thread_names(layout.thread_names)
         .with_timer(ConfigurableTimer::new(timezone.clone()));
     // `.boxed()` (from `Layer`) erases the per-format concrete type so
     // all three arms unify on `Box<dyn Layer<Registry>>`.
@@ -309,7 +338,11 @@ pub fn init_for_tests() {
     TEST_SUBSCRIBER_INIT.get_or_init(|| {
         let env_filter =
             EnvFilter::try_new("coco=debug,debug").unwrap_or_else(|_| EnvFilter::new("debug"));
-        let layer = build_stderr_layer(Format::Pretty, &TimezoneConfig::default())
+        let layout = LayoutOpts {
+            location: false,
+            thread_names: false,
+        };
+        let layer = build_stderr_layer(Format::Pretty, &TimezoneConfig::default(), layout)
             .with_filter(env_filter)
             .boxed();
         let _ = Registry::default().with(layer).try_init();

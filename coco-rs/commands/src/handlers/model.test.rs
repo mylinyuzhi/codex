@@ -1,82 +1,85 @@
 use super::*;
+use crate::CommandHandler;
 
 #[test]
 fn test_resolve_model_alias() {
     let m = resolve_model("sonnet").unwrap();
-    assert_eq!(m.alias, "sonnet");
-    assert_eq!(m.full_id, "claude-sonnet-4-20250514");
+    assert_eq!(m.provider, "anthropic");
+    assert_eq!(m.model_id, "claude-sonnet-4-6");
 }
 
 #[test]
 fn test_resolve_model_alias_case_insensitive() {
     let m = resolve_model("OPUS").unwrap();
-    assert_eq!(m.alias, "opus");
+    assert_eq!(m.model_id, "claude-opus-4-7");
 }
 
 #[test]
 fn test_resolve_model_full_id() {
-    let m = resolve_model("claude-haiku-3-20250307").unwrap();
-    assert_eq!(m.alias, "haiku");
+    let m = resolve_model("claude-haiku-4-5").unwrap();
+    assert_eq!(m.provider, "anthropic");
+    assert_eq!(m.model_id, "claude-haiku-4-5");
 }
 
 #[test]
 fn test_resolve_model_prefix() {
     let m = resolve_model("claude-sonnet").unwrap();
-    assert_eq!(m.alias, "sonnet");
+    assert_eq!(m.provider, "anthropic");
+    // Prefix matches the first registry key alphabetically — for the
+    // current builtin set that's `claude-sonnet-4-6`. The test stays
+    // robust if more sonnet variants land because the assertion is on
+    // prefix membership rather than exact id.
+    assert!(m.model_id.starts_with("claude-sonnet"));
+}
+
+#[test]
+fn test_resolve_model_provider_inference() {
+    assert_eq!(resolve_model("gpt5").unwrap().provider, "openai");
+    assert_eq!(resolve_model("gemini").unwrap().provider, "google");
+    assert_eq!(resolve_model("deepseek").unwrap().provider, "deepseek");
 }
 
 #[test]
 fn test_resolve_model_unknown() {
-    assert!(resolve_model("gpt-4").is_none());
     assert!(resolve_model("llama").is_none());
+    assert!(resolve_model("totally-not-a-model").is_none());
 }
 
 #[test]
-fn test_levenshtein_identical() {
-    assert_eq!(levenshtein("sonnet", "sonnet"), 0);
+fn test_format_context_units() {
+    assert_eq!(format_context(1_000_000), "1M");
+    assert_eq!(format_context(200_000), "200K");
+    assert_eq!(format_context(272_000), "272K");
+    assert_eq!(format_context(900), "900");
 }
 
 #[test]
-fn test_levenshtein_one_edit() {
-    assert_eq!(levenshtein("sonnet", "sonnt"), 1);
-    assert_eq!(levenshtein("sonnet", "sonnett"), 1);
-}
-
-#[test]
-fn test_levenshtein_different() {
-    assert!(levenshtein("sonnet", "haiku") > 3);
-}
-
-#[test]
-fn test_list_models_output() {
-    let output = list_models();
-    assert!(output.contains("sonnet"));
-    assert!(output.contains("opus"));
-    assert!(output.contains("haiku"));
-    assert!(output.contains("Available Models"));
-    assert!(output.contains("$/M in"));
-}
-
-#[tokio::test]
-async fn test_handler_no_args() {
-    let output = handler(String::new()).await.unwrap();
-    assert!(output.contains("Available Models"));
-    assert!(output.contains("sonnet"));
+fn test_builtin_summary_sorted_by_provider() {
+    let entries = builtin_summary();
+    // Verify provider clusters: anthropic first, then deepseek, google, openai.
+    let providers: Vec<&str> = entries.iter().map(|e| e.provider).collect();
+    let mut last: Option<&str> = None;
+    for p in &providers {
+        if let Some(prev) = last {
+            assert!(prev <= *p, "providers out of order: {prev} > {p}");
+        }
+        last = Some(*p);
+    }
 }
 
 /// Run `f` with `COCO_CONFIG_DIR` pointed at a fresh tempdir so the
-/// settings-write side effect of `/model` doesn't touch the developer's
-/// real `~/.coco/settings.json`.
+/// settings-write side effect of `/model <name>` doesn't touch the
+/// developer's real `~/.coco/settings.json`.
 async fn with_tmp_config_dir<F, Fut, T>(f: F) -> T
 where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = T>,
 {
     let tmp = tempfile::tempdir().unwrap();
-    // SAFETY: tests run with --test-threads=1 by default in nextest;
-    // the env var is restored on scope exit. This mirrors the pattern
-    // used in `commands/handlers/keybindings.test.rs`.
     let prev = std::env::var_os("COCO_CONFIG_DIR");
+    // SAFETY: tests run with --test-threads=1 by default in nextest;
+    // env vars are restored on scope exit. Mirror of the pattern in
+    // `commands/handlers/keybindings.test.rs`.
     unsafe {
         std::env::set_var("COCO_CONFIG_DIR", tmp.path());
     }
@@ -91,27 +94,39 @@ where
 }
 
 #[tokio::test]
-async fn test_handler_valid_model() {
-    let output = with_tmp_config_dir(|| handler("opus".to_string()))
-        .await
-        .unwrap();
-    assert!(output.contains("set to"));
-    assert!(output.contains("claude-opus-4-20250514"));
-    assert!(output.contains("Pricing"));
-    assert!(output.contains("Saved to"));
+async fn test_handler_no_args_opens_picker() {
+    let handler = ModelHandler;
+    let result = handler.execute_command("").await.unwrap();
+    assert!(matches!(
+        result,
+        CommandResult::OpenDialog(DialogSpec::ModelPicker)
+    ));
+}
+
+#[tokio::test]
+async fn test_handler_valid_model_persists() {
+    let output = with_tmp_config_dir(|| async {
+        let handler = ModelHandler;
+        handler.execute_command("opus").await.unwrap()
+    })
+    .await;
+    let text = match output {
+        CommandResult::Text(t) => t,
+        other => panic!("expected Text result, got {other:?}"),
+    };
+    assert!(text.contains("Set Main"), "missing 'Set Main' in {text}");
+    assert!(text.contains("anthropic/claude-opus-4-7"));
+    assert!(text.contains("persisted to"));
 }
 
 #[tokio::test]
 async fn test_handler_unknown_model() {
-    let output = handler("gpt-4".to_string()).await.unwrap();
-    assert!(output.contains("Unknown model"));
-}
-
-#[tokio::test]
-async fn test_handler_custom_provider_model() {
-    let output = with_tmp_config_dir(|| handler("openai/gpt-4-turbo".to_string()))
-        .await
-        .unwrap();
-    assert!(output.contains("custom model"));
-    assert!(output.contains("Saved to"));
+    let handler = ModelHandler;
+    let result = handler.execute_command("llama").await.unwrap();
+    let text = match result {
+        CommandResult::Text(t) => t,
+        other => panic!("expected Text result, got {other:?}"),
+    };
+    assert!(text.contains("Unknown model"));
+    assert!(text.contains("anthropic/claude-"));
 }

@@ -120,6 +120,7 @@ async fn test_inline_skill_expands_prompt_into_new_messages() {
         SkillInvocationResult::Inline {
             summary,
             new_messages,
+            permission_updates: _,
         } => {
             assert!(summary.contains("greet"));
             assert_eq!(new_messages.len(), 1);
@@ -239,4 +240,141 @@ async fn test_name_normalization_strips_leading_slash() {
         .invoke_skill("/greet", "", SubagentInheritance::default())
         .await;
     assert!(ok.is_ok(), "leading slash should normalize away");
+}
+
+#[tokio::test]
+async fn test_inline_skill_without_allowed_tools_has_no_updates() {
+    // Baseline: an inline skill with no `allowed-tools` frontmatter
+    // produces an empty `permission_updates` vec. Nothing flows into
+    // the executor's permission-rule handle on that path.
+    let skill = sample_skill("plain", "Hi!", SkillContext::Inline, false, false);
+    let rt = runtime_with(vec![skill]);
+    let result = rt
+        .invoke_skill("plain", "", SubagentInheritance::default())
+        .await
+        .expect("ok");
+    match result {
+        SkillInvocationResult::Inline {
+            permission_updates, ..
+        } => {
+            assert!(
+                permission_updates.is_empty(),
+                "no `allowed-tools` ⇒ no updates, got: {permission_updates:?}"
+            );
+        }
+        other => panic!("expected Inline, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_inline_skill_with_allowed_tools_emits_command_rules() {
+    // TS parity: a skill frontmatter `allowed-tools: Read, Edit(*.md)`
+    // becomes a single `PermissionUpdate::AddRules { destination:
+    // Command }` carrying two `PermissionRule { source: Command,
+    // behavior: Allow, ... }` entries. The destination is `Command`
+    // (NOT `Session`) so the rules live in the same slot TS uses
+    // (`alwaysAllowRules.command`) — observable for audit + cleanly
+    // separated from user-clicked Always-Allow rules.
+    let mut skill = sample_skill("editor", "Edit stuff", SkillContext::Inline, false, false);
+    skill.allowed_tools = Some(vec!["Read".to_string(), "Edit(*.md)".to_string()]);
+    let rt = runtime_with(vec![skill]);
+    let result = rt
+        .invoke_skill("editor", "", SubagentInheritance::default())
+        .await
+        .expect("ok");
+    let permission_updates = match result {
+        SkillInvocationResult::Inline {
+            permission_updates, ..
+        } => permission_updates,
+        other => panic!("expected Inline, got {other:?}"),
+    };
+    assert_eq!(
+        permission_updates.len(),
+        1,
+        "one AddRules update per skill invocation"
+    );
+    match &permission_updates[0] {
+        coco_types::PermissionUpdate::AddRules { rules, destination } => {
+            assert_eq!(
+                *destination,
+                coco_types::PermissionUpdateDestination::Command,
+                "TS parity: destination is Command, not Session"
+            );
+            assert_eq!(rules.len(), 2);
+            assert_eq!(rules[0].source, coco_types::PermissionRuleSource::Command);
+            assert_eq!(rules[0].behavior, coco_types::PermissionBehavior::Allow);
+            assert_eq!(rules[0].value.tool_pattern, "Read");
+            assert!(rules[0].value.rule_content.is_none());
+            // `Edit(*.md)` parses to `tool_pattern: Edit` + content `*.md`.
+            assert_eq!(rules[1].value.tool_pattern, "Edit");
+            assert_eq!(rules[1].value.rule_content.as_deref(), Some("*.md"));
+        }
+        other => panic!("expected AddRules, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_fork_skill_with_allowed_tools_does_not_narrow_registry() {
+    // TS-mirror behavior: fork-mode skills push `allowed-tools` into
+    // `extra_allow_rules` (auto-allow), NOT `allowed_tools` (registry
+    // filter). The forked subagent therefore sees the full inherited
+    // tool registry; the listed entries are simply auto-allowed.
+    //
+    // We assert this on the config the runtime hands to the engine
+    // by recording the value through a capturing `AgentQueryEngine`.
+    use std::sync::Mutex;
+
+    struct CapturingEngine {
+        captured: Arc<Mutex<Option<AgentQueryConfig>>>,
+    }
+
+    #[async_trait]
+    impl AgentQueryEngine for CapturingEngine {
+        async fn execute_query(
+            &self,
+            _prompt: &str,
+            config: AgentQueryConfig,
+        ) -> Result<AgentQueryResult, coco_error::BoxedError> {
+            *self.captured.lock().unwrap() = Some(config);
+            Ok(AgentQueryResult {
+                response_text: Some("ok".into()),
+                messages: Vec::new(),
+                turns: 1,
+                input_tokens: 0,
+                output_tokens: 0,
+                tool_use_count: 0,
+                cancelled: false,
+            })
+        }
+    }
+
+    let mut skill = sample_skill("scan", "Scan!", SkillContext::Fork, false, false);
+    skill.allowed_tools = Some(vec!["Read".to_string(), "Grep".to_string()]);
+    let captured = Arc::new(Mutex::new(None));
+    let engine = Arc::new(CapturingEngine {
+        captured: captured.clone(),
+    });
+    let rt = runtime_with(vec![skill]).with_agent_engine(engine);
+    rt.invoke_skill("scan", "", SubagentInheritance::default())
+        .await
+        .expect("ok");
+
+    let config = captured.lock().unwrap().take().expect("captured config");
+    // Registry filter MUST be empty — TS doesn't narrow tools[] for skills.
+    assert!(
+        config.allowed_tools.is_empty(),
+        "fork-skill must NOT set registry filter; got: {:?}",
+        config.allowed_tools
+    );
+    // Auto-allow set MUST contain the two Command-source rules.
+    assert_eq!(config.extra_allow_rules.len(), 2);
+    assert!(
+        config
+            .extra_allow_rules
+            .iter()
+            .all(|r| r.source == coco_types::PermissionRuleSource::Command
+                && r.behavior == coco_types::PermissionBehavior::Allow),
+        "extra_allow_rules must all be Command + Allow; got: {:?}",
+        config.extra_allow_rules
+    );
 }

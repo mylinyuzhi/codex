@@ -442,15 +442,8 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
             AlwaysSafe,
             Some("[command]"),
         ),
-        (
-            names::MODEL,
-            "Switch the current model",
-            &[],
-            handlers::model::handler,
-            true,
-            LocalOnly,
-            Some("[model]"),
-        ),
+        // /model registered via `register_ts_parity_handlers` (custom
+        // CommandHandler returning `OpenDialog(ModelPicker)` on no args).
         (
             names::PERMISSIONS,
             "Manage allow & deny tool permission rules",
@@ -1512,6 +1505,28 @@ pub fn register_ts_parity_handlers(
                 handler: names::REWIND.to_string(),
             }),
             handler: Some(Arc::new(handlers::rewind::RewindHandler)),
+            is_enabled: None,
+        });
+    }
+
+    // /model — TS: commands/model/model.tsx (local-jsx ModelPicker).
+    // No-args opens the picker overlay; with-args validates against
+    // the builtin registry and persists `model_roles.main`.
+    {
+        let mut base = crate::builtin_base_ext(
+            names::MODEL,
+            "Switch the current model (opens picker with no arg)",
+            &[],
+            CommandSafety::LocalOnly,
+            Some("[model]"),
+        );
+        base.loaded_from = Some(CommandSource::Builtin);
+        registry.register(RegisteredCommand {
+            base,
+            command_type: CommandType::LocalOverlay(LocalCommandData {
+                handler: names::MODEL.to_string(),
+            }),
+            handler: Some(Arc::new(handlers::model::ModelHandler)),
             is_enabled: None,
         });
     }

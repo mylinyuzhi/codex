@@ -44,7 +44,11 @@ pub enum CompactionPhaseLabel {
 /// Current Unix epoch in milliseconds (best-effort — clamps to 0
 /// if the system clock is before the epoch, which only happens in
 /// pathological setups).
-fn now_ms() -> i64 {
+///
+/// `pub(crate)` so call sites outside this module (the protocol
+/// handler that times subagent starts) reuse the same clamp instead
+/// of open-coding `SystemTime::now()`.
+pub(crate) fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
@@ -149,6 +153,18 @@ pub struct SessionState {
     pub session_state: coco_types::SessionState,
     /// Active worktree path (set by WorktreeEntered, cleared by WorktreeExited).
     pub worktree_path: Option<String>,
+    /// Current git branch name shown in the header. Populated at
+    /// startup from `coco_git::operations::get_current_branch`; live
+    /// updates would flow through `git_index_watcher.rs` once the
+    /// watcher gains a branch-refresh emit. `None` when the cwd is
+    /// outside a git work tree or HEAD is detached.
+    pub git_branch: Option<String>,
+    /// Active thinking effort for the current session. Mirrors the
+    /// engine's resolved level (set on session start), cycled by
+    /// `TuiCommand::CycleThinkingLevel` (Ctrl+T). `Auto` keeps the
+    /// model's per-call default — distinct from `Disable` which
+    /// explicitly turns thinking off on supported providers.
+    pub thinking_effort: coco_types::ReasoningEffort,
     /// Model fallback banner message (set by ModelFallbackStarted, cleared on Completed).
     pub model_fallback_banner: Option<String>,
     /// Rate limit status (set by RateLimit notification).
@@ -327,6 +343,8 @@ impl Default for SessionState {
             saved_sessions: Vec::new(),
             session_state: coco_types::SessionState::Idle,
             worktree_path: None,
+            git_branch: None,
+            thinking_effort: coco_types::ReasoningEffort::Auto,
             model_fallback_banner: None,
             rate_limit_info: None,
             context_usage_percent: None,
@@ -583,6 +601,63 @@ impl ChatMessage {
         }
     }
 
+    /// Create a bash-input user message (rendered as `> $ <command>`).
+    /// TS parity: `UserBashInputMessage`.
+    pub fn user_bash_input(id: impl Into<String>, command: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            role: ChatRole::User,
+            content: MessageContent::BashInput {
+                command: command.into(),
+            },
+            is_meta: false,
+            created_at_ms: now_ms(),
+            is_compact_summary: false,
+            is_visible_in_transcript_only: false,
+            permission_mode: None,
+        }
+    }
+
+    /// Create a bash-output user message (rendered as indented body).
+    /// Same id as the matching `BashInput` so rewind groups them.
+    /// TS parity: `UserBashOutputMessage`.
+    pub fn user_bash_output(
+        id: impl Into<String>,
+        output: impl Into<String>,
+        exit_code: i32,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            role: ChatRole::User,
+            content: MessageContent::BashOutput {
+                output: output.into(),
+                exit_code,
+            },
+            is_meta: false,
+            created_at_ms: now_ms(),
+            is_compact_summary: false,
+            is_visible_in_transcript_only: false,
+            permission_mode: None,
+        }
+    }
+
+    /// Create a memory-input user message.
+    /// TS parity: `UserMemoryInputMessage`.
+    pub fn user_memory_input(id: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            role: ChatRole::User,
+            content: MessageContent::MemoryInput {
+                content: content.into(),
+            },
+            is_meta: false,
+            created_at_ms: now_ms(),
+            is_compact_summary: false,
+            is_visible_in_transcript_only: false,
+            permission_mode: None,
+        }
+    }
+
     /// Create a simple assistant text message.
     pub fn assistant_text(id: impl Into<String>, text: impl Into<String>) -> Self {
         Self {
@@ -764,6 +839,13 @@ pub enum ToolStatus {
 }
 
 /// Subagent instance tracking.
+///
+/// `started_at_ms` and `token_usage` are optional so the TUI can render
+/// elapsed-time / token-cost telemetry alongside the spinner line —
+/// TS parity with `CoordinatorAgentStatus.tsx`. The protocol handler
+/// populates them on `SubagentStarted` / `SubagentTokens` notifications
+/// when available, and the renderer hides each field when unset rather
+/// than synthesising fake zeros.
 #[derive(Debug, Clone)]
 pub struct SubagentInstance {
     pub agent_id: String,
@@ -771,6 +853,13 @@ pub struct SubagentInstance {
     pub description: String,
     pub status: SubagentStatus,
     pub color: Option<String>,
+    /// Unix-epoch ms when the subagent started. `None` while the
+    /// protocol handler hasn't populated it yet. The renderer shows
+    /// `elapsed = now - started_at` only when this is set.
+    pub started_at_ms: Option<i64>,
+    /// Cumulative token usage for this teammate. The renderer shows
+    /// `↑input ↓output` arrows so the user sees direction at a glance.
+    pub token_usage: Option<TokenUsage>,
 }
 
 /// Subagent lifecycle status.

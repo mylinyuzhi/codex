@@ -389,6 +389,7 @@ async fn execute_background(
         }),
         new_messages: vec![],
         app_state_patch: None,
+        permission_updates: Vec::new(),
     })
 }
 
@@ -462,6 +463,7 @@ async fn execute_foreground(
                 }),
                 new_messages: vec![],
                 app_state_patch: None,
+                permission_updates: Vec::new(),
             })
         }
         Ok(Err(e)) => Err(ToolError::ExecutionFailed {

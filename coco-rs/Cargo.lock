@@ -953,6 +953,7 @@ dependencies = [
  "coco-sandbox",
  "coco-session",
  "coco-session-memory",
+ "coco-shell",
  "coco-skills",
  "coco-state",
  "coco-subagent",

@@ -9,8 +9,14 @@
 //!   `--log-level` > `COCO_LOG` > `RUST_LOG` > `coco_otel::subscriber::DEFAULT_FILTER`.
 //!
 //! `COCO_LOG_FORMAT`, `COCO_LOG_FILE`, `COCO_LOG_STDERR`,
-//! `COCO_LOG_TIMEZONE` mirror their `--log-*` flag counterparts at
-//! lower priority.
+//! `COCO_LOG_LOCATION`, `COCO_LOG_TIMEZONE` mirror their `--log-*` flag
+//! counterparts at lower priority.
+//!
+//! Auto-verbose: when the same three sources resolve to a *bare* level
+//! of `debug` or `trace`, location + thread-name layout default to on.
+//! Custom `EnvFilter` directives (`coco=debug,info`, …) leave layout
+//! at off — advanced users are expected to opt in via `--log-location`
+//! or `COCO_LOG_LOCATION` if they want it.
 
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -35,9 +41,10 @@ use crate::Commands;
 pub fn install(cli: &Cli) -> Result<Option<SubscriberHandle>> {
     let opts = subscriber_opts_from_cli(cli);
     let mode = opts.mode;
+    let location = opts.location;
     let handle = init_subscriber(opts).map_err(|e| anyhow::anyhow!("{e}"))?;
     if let Some(h) = &handle {
-        emit_ready_anchor(mode, h);
+        emit_ready_anchor(mode, h, location);
     }
     Ok(handle)
 }
@@ -45,12 +52,16 @@ pub fn install(cli: &Cli) -> Result<Option<SubscriberHandle>> {
 /// Build [`SubscriberOpts`] from CLI flags + `COCO_LOG*` env vars.
 /// Pure assembly — does not register the global subscriber.
 pub fn subscriber_opts_from_cli(cli: &Cli) -> SubscriberOpts {
+    let auto_verbose = auto_verbose_from_sources(cli);
+    let location = resolve_location(cli, auto_verbose);
     SubscriberOpts {
         mode: detect_mode(cli),
         level: resolve_level(cli),
         format: resolve_format(cli),
         file: resolve_file(cli),
         also_stderr: cli.log_stderr || env::is_env_truthy(EnvKey::CocoLogStderr),
+        location,
+        thread_names: location,
         default_log_dir: global_config::config_home().join("logs"),
         default_file_prefix: "coco".to_string(),
         timezone: resolve_timezone(cli),
@@ -108,6 +119,39 @@ fn resolve_file(cli: &Cli) -> Option<PathBuf> {
         .or_else(|| env::env_opt(EnvKey::CocoLogFile).map(PathBuf::from))
 }
 
+/// Tri-state resolution for the verbose-layout switch (location +
+/// thread name). Explicit flag wins, then env, then auto-rule.
+fn resolve_location(cli: &Cli, auto_verbose: bool) -> bool {
+    if let Some(v) = cli.log_location {
+        return v;
+    }
+    if let Some(v) = env::env_truthy_opt(EnvKey::CocoLogLocation) {
+        return v;
+    }
+    auto_verbose
+}
+
+/// Whether the resolved filter source is a *bare* `debug` / `trace`
+/// level. Checks the same three sources as [`resolve_level`] in the
+/// same priority order; full `EnvFilter` directives short-circuit to
+/// `false` (advanced user → no implicit layout change).
+fn auto_verbose_from_sources(cli: &Cli) -> bool {
+    if let Some(raw) = cli.log_level.as_deref() {
+        return is_bare_verbose_level(raw);
+    }
+    if let Some(directive) = env::env_opt(EnvKey::CocoLog) {
+        return is_bare_verbose_level(&directive);
+    }
+    if let Some(directive) = std::env::var("RUST_LOG").ok().filter(|s| !s.is_empty()) {
+        return is_bare_verbose_level(&directive);
+    }
+    false
+}
+
+fn is_bare_verbose_level(raw: &str) -> bool {
+    matches!(raw.trim().to_ascii_lowercase().as_str(), "debug" | "trace")
+}
+
 /// Resolve the timezone for log timestamps. `--log-timezone` wins
 /// over `COCO_LOG_TIMEZONE`; both accept `local | utc`
 /// (case-insensitive). Unknown values fall through to
@@ -148,7 +192,7 @@ fn expand_bare_level(raw: &str) -> String {
     }
 }
 
-fn emit_ready_anchor(mode: Mode, handle: &SubscriberHandle) {
+fn emit_ready_anchor(mode: Mode, handle: &SubscriberHandle, location: bool) {
     match handle.log_path.as_ref() {
         Some(path) => tracing::info!(
             target: "coco_cli::startup",
@@ -157,6 +201,7 @@ fn emit_ready_anchor(mode: Mode, handle: &SubscriberHandle) {
             log_filter = %handle.effective_filter,
             log_format = handle.effective_format.as_str(),
             log_file = %path.display(),
+            log_location = location,
             "subscriber ready"
         ),
         None => tracing::info!(
@@ -165,6 +210,7 @@ fn emit_ready_anchor(mode: Mode, handle: &SubscriberHandle) {
             mode = mode.as_str(),
             log_filter = %handle.effective_filter,
             log_format = handle.effective_format.as_str(),
+            log_location = location,
             "subscriber ready (file sink disabled)"
         ),
     }

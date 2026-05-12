@@ -153,6 +153,12 @@ pub struct StreamingToolExecutor {
     /// `orchestration.ts:queuedContextModifiers` applied after the
     /// concurrent batch finishes.
     app_state: Option<Arc<RwLock<coco_types::ToolAppState>>>,
+    /// Optional permission-rule mutation handle. Applied at the same
+    /// point as `app_state_patch` so rules emitted by a tool
+    /// (typically `SkillTool` forwarding skill frontmatter
+    /// `allowed-tools`) are visible to the next tool / turn. `None`
+    /// resolves to a silent drop (test / standalone-executor paths).
+    permission_rule_handle: Option<crate::PermissionRuleHandleRef>,
     /// Optional protocol-event sink used to broadcast
     /// `TaskPanelChanged` after every applied `app_state_patch`. Keeps
     /// the TUI in sync with V2 plan-item and V1 todo snapshots.
@@ -173,6 +179,7 @@ impl StreamingToolExecutor {
             update_tx,
             update_rx,
             app_state: None,
+            permission_rule_handle: None,
             event_tx: None,
         }
     }
@@ -183,6 +190,17 @@ impl StreamingToolExecutor {
     /// are silently dropped (the executor has nowhere to apply them).
     pub fn with_app_state(mut self, arc: Arc<RwLock<coco_types::ToolAppState>>) -> Self {
         self.app_state = Some(arc);
+        self
+    }
+
+    /// Attach a permission-rule mutation handle. Tools that return
+    /// `ToolResult::permission_updates` (today: `SkillTool` forwarding
+    /// a skill's `allowed-tools` frontmatter) push deltas through this
+    /// handle, mirroring TS `SkillTool.ts`'s `contextModifier` on
+    /// `alwaysAllowRules`. Without this, updates are silently dropped
+    /// with a `tracing::debug!` (standalone executor / test paths).
+    pub fn with_permission_rule_handle(mut self, handle: crate::PermissionRuleHandleRef) -> Self {
+        self.permission_rule_handle = Some(handle);
         self
     }
 
@@ -205,6 +223,7 @@ impl StreamingToolExecutor {
             update_tx,
             update_rx,
             app_state: None,
+            permission_rule_handle: None,
             event_tx: None,
         }
     }
@@ -447,7 +466,17 @@ impl StreamingToolExecutor {
                             .await;
                     }
                 }
-                // No patch or no shared state wired: nothing to emit.
+                // Apply permission-rule deltas through the installed
+                // handle (typically the CLI's `SessionRuntime` adapter
+                // that folds rules into `QueryEngineConfig`). Skipped
+                // silently when no handle is wired — `tracing::debug!`
+                // logs a non-empty drop so a regression leaves a trail.
+                if !tr.permission_updates.is_empty()
+                    && let Some(handle) = self.permission_rule_handle.as_ref()
+                {
+                    let updates = std::mem::take(&mut tr.permission_updates);
+                    handle.apply_updates(updates).await;
+                }
                 Ok(tr)
             }
             Err(e) => Err(e),
@@ -845,12 +874,13 @@ impl StreamingToolExecutor {
         // legacy `execute_concurrent` post-batch apply but keys on
         // `model_index` rather than tool_use_id.
         queued_effects.sort_by_key(|(idx, _)| *idx);
+        let (patches, update_lists): (Vec<_>, Vec<_>) = queued_effects
+            .into_iter()
+            .map(|(_, e)| (e.app_state_patch, e.permission_updates))
+            .unzip();
         let combined = ToolSideEffects {
-            app_state_patch: coalesce_patches(
-                queued_effects
-                    .into_iter()
-                    .filter_map(|(_, e)| e.app_state_patch),
-            ),
+            app_state_patch: coalesce_patches(patches.into_iter().flatten()),
+            permission_updates: update_lists.into_iter().flatten().collect(),
         };
         self.apply_side_effects(combined).await;
     }
@@ -861,7 +891,22 @@ impl StreamingToolExecutor {
     /// patch `FnOnce` runs exactly once, event is best-effort
     /// delivery (dropped if no sink is configured).
     pub(crate) async fn apply_side_effects(&self, effects: ToolSideEffects) {
-        let Some(patch) = effects.app_state_patch else {
+        let ToolSideEffects {
+            app_state_patch,
+            permission_updates,
+        } = effects;
+
+        // Permission-rule updates apply via the dedicated handle and
+        // are independent of the app_state patch. Run them first so a
+        // missing `app_state` (i.e. early-return below) doesn't drop
+        // the permission delta.
+        if !permission_updates.is_empty()
+            && let Some(handle) = self.permission_rule_handle.as_ref()
+        {
+            handle.apply_updates(permission_updates).await;
+        }
+
+        let Some(patch) = app_state_patch else {
             return;
         };
         let Some(state) = self.app_state.as_ref() else {

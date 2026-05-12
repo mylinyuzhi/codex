@@ -63,6 +63,7 @@ fn test_stamp_splits_app_state_patch_into_side_effects() {
             app_state_patch: Some(Box::new(|state| {
                 state.plan_mode_attachment_count = 42;
             })),
+            permission_updates: Vec::new(),
         },
     };
     let (stamped, effects) = unstamped.stamp_and_extract_effects(/*seq*/ 0);
@@ -207,6 +208,7 @@ fn test_runnable_plan_carries_prepared_call() {
                 data: json!({}),
                 new_messages: vec![],
                 app_state_patch: None,
+                permission_updates: Vec::new(),
             })
         }
     }

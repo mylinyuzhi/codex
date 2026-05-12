@@ -92,6 +92,7 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
                 data,
                 new_messages,
                 app_state_patch,
+                permission_updates,
             } = tool_result;
             let mut output_data = data;
 
@@ -241,7 +242,10 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
                 error_kind: None,
                 permission_denial: None,
                 prevent_continuation: prevent_reason,
-                effects: ToolSideEffects { app_state_patch },
+                effects: ToolSideEffects {
+                    app_state_patch,
+                    permission_updates,
+                },
             }
         }
         Err(error) => {

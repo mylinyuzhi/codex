@@ -51,6 +51,26 @@ NDJSON RPC channel — logs would corrupt either.
 to `coco=debug,debug` so coco crates stay verbose without flooding
 third-party output. Full `EnvFilter` directives pass through verbatim.
 
+### Layout toggles: `--log-location` (`COCO_LOG_LOCATION`)
+
+`SubscriberOpts.location` + `.thread_names` add `file:line` and the
+thread name to each event. Off by default (~30–80 bytes per line).
+Tri-state resolution in `app/cli/src/tracing_init.rs`:
+
+```
+explicit --log-location > COCO_LOG_LOCATION > auto-rule
+```
+
+Auto-rule: when the same source that supplied the filter is the
+*bare* level `debug` or `trace`, the toggle defaults to on.
+Advanced `EnvFilter` directives (`coco=debug,info`) leave layout
+off — the user is in control. Thread name follows `location`
+byte-for-byte; there's intentionally no separate flag.
+
+Errors won't carry the **caller** site though — `file!()/line!()`
+points at the `tracing::*` macro call, not the error origin. For
+that, see `#[stack_trace_debug]` in `common/stack-trace-macro`.
+
 ## Logging conventions (workspace-wide)
 
 These apply to every crate that emits `tracing::*` events.

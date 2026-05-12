@@ -36,6 +36,32 @@ pub enum ClearScope {
 /// Commands sent from TUI to the core agent loop.
 #[derive(Debug, Clone)]
 pub enum UserCommand {
+    /// Submit a bash-mode entry (input started with `!`). The TUI has
+    /// already stripped the leading `!` and pushed a
+    /// `ChatMessage::BashInput` locally; the engine bridge in
+    /// `tui_runner` runs the command via `coco_shell::ShellExecutor`
+    /// and emits a `ChatMessage::BashOutput` back through the
+    /// `ServerNotification::Message` channel. TS parity:
+    /// `LocalShellTask.tsx` — bypasses the model loop entirely.
+    SubmitBash {
+        /// User-message UUID minted at submit time so the BashInput
+        /// and BashOutput messages can share a parent id for rewind.
+        user_message_id: String,
+        /// Shell command (already prefix-stripped).
+        command: String,
+    },
+    /// Submit a memory-mode entry (input started with `#`). The TUI
+    /// has stripped the prefix and shown a `ChatMessage::MemoryInput`
+    /// locally; the engine bridge appends to the project memory file
+    /// (`CLAUDE.md` discovered via `coco_memory`). TS parity:
+    /// `UserMemoryInputMessage` + `MemoryFileSelector`. For now the
+    /// implementation writes to the project `CLAUDE.md` only — the
+    /// per-scope picker overlay is a follow-up.
+    SubmitMemory {
+        user_message_id: String,
+        /// Memory content (already prefix-stripped).
+        content: String,
+    },
     /// Submit user input text with resolved paste data.
     SubmitInput {
         /// User-message UUID minted at submit time. The TUI pushes a
@@ -63,8 +89,25 @@ pub enum UserCommand {
     SetPermissionMode { mode: PermissionMode },
     /// Set thinking level.
     SetThinkingLevel { level: String },
-    /// Set model.
+    /// Set the main model (legacy single-role command).
+    ///
+    /// Prefer [`SetModelRole`] for new code — it carries the role, the
+    /// provider, and the chosen effort so multi-role configurations
+    /// can be persisted. Retained for older callers that only need to
+    /// flip the Main model and don't care about provider or effort.
     SetModel { model: String },
+    /// Set the model bound to `role` plus its thinking effort. Emitted
+    /// by the role-pill model picker on Enter; the engine persists the
+    /// selection to `~/.coco.json::model_roles.<role>.primary` and
+    /// applies it live. Non-Main roles take effect on the next turn
+    /// that drives that role.
+    SetModelRole {
+        role: coco_types::ModelRole,
+        provider: String,
+        model_id: String,
+        /// Chosen effort. `None` when the model has no thinking capability.
+        effort: Option<coco_types::ReasoningEffort>,
+    },
     /// Respond to a permission prompt.
     ///
     /// TS: `onAllow(updatedInput, permissionUpdates, feedback, contentBlocks)`

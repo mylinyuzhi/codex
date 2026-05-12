@@ -25,6 +25,7 @@ coco-inference.workspace = true
 coco-compact.workspace = true
 coco-session-memory.workspace = true
 coco-memory.workspace = true
+coco-shell.workspace = true
 coco-tool-runtime.workspace = true
 coco-tools.workspace = true
 coco-query.workspace = true

@@ -51,6 +51,8 @@ class Capability(str, Enum):
     context_management = 'context_management'
     adaptive_thinking = 'adaptive_thinking'
     token_efficient_tools = 'token_efficient_tools'
+    server_side_tool_reference = 'server_side_tool_reference'
+    client_side_tool_search = 'client_side_tool_search'
 
 class ClientRequestMethod(str, Enum):
     initialize = 'initialize'
@@ -253,6 +255,7 @@ class PermissionUpdateDestination(str, Enum):
     local_settings = 'local_settings'
     session = 'session'
     cli_arg = 'cli_arg'
+    command = 'command'
 
 class ProviderApi(str, Enum):
     anthropic = 'anthropic'

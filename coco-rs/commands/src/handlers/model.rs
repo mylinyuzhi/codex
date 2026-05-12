@@ -1,211 +1,198 @@
-//! `/model` — switch the active model with validation.
+//! `/model` — open the provider-grouped model picker (no args) or
+//! validate + persist a model id (with args).
 //!
-//! Lists available models with capabilities and pricing, validates
-//! the requested model against the known registry, and performs the switch.
+//! TS source: `commands/model/model.tsx:1-200`. TS opens `ModelPicker`
+//! when called without args and writes through `setGlobalConfig`
+//! when called with one. coco-rs mirrors the same two-mode shape but
+//! also extends it: the picker carries a role pill so any of the
+//! nine [`coco_types::ModelRole`] slots can be edited from the same
+//! surface.
+//!
+//! The args branch validates against the builtin
+//! [`coco_config::builtin_models_partial`] registry rather than a
+//! stale local list of ids — coco-rs supports Anthropic, OpenAI,
+//! Google, and DeepSeek out of the box, so a hardcoded list went
+//! out of date fast.
 
-use std::pin::Pin;
+use async_trait::async_trait;
 
-/// Known model entry with metadata for display.
-struct KnownModel {
-    /// Short alias (e.g., "sonnet").
-    alias: &'static str,
-    /// Full model ID.
-    full_id: &'static str,
-    /// Description for the listing.
-    description: &'static str,
-    /// Input price per million tokens (USD).
-    input_price: f64,
-    /// Output price per million tokens (USD).
-    output_price: f64,
-    /// Context window size.
-    context_window: i64,
+use crate::CommandHandler;
+use crate::CommandResult;
+use crate::DialogSpec;
+
+pub struct ModelHandler;
+
+#[async_trait]
+impl CommandHandler for ModelHandler {
+    /// No args → open the picker overlay. Args → resolve `args` against
+    /// the builtin registry, persist to
+    /// `~/.coco/settings.json::model_roles.main`, and report inline.
+    async fn execute_command(&self, args: &str) -> crate::Result<CommandResult> {
+        let requested = args.trim();
+        if requested.is_empty() {
+            return Ok(CommandResult::OpenDialog(DialogSpec::ModelPicker));
+        }
+        Ok(CommandResult::Text(handle_with_args(requested)))
+    }
+
+    fn handler_name(&self) -> &str {
+        "model"
+    }
 }
 
-const KNOWN_MODELS: &[KnownModel] = &[
-    KnownModel {
-        alias: "sonnet",
-        full_id: "claude-sonnet-4-20250514",
-        description: "Balanced speed and intelligence (default)",
-        input_price: 3.0,
-        output_price: 15.0,
-        context_window: 200_000,
-    },
-    KnownModel {
-        alias: "opus",
-        full_id: "claude-opus-4-20250514",
-        description: "Most capable, best for complex tasks",
-        input_price: 15.0,
-        output_price: 75.0,
-        context_window: 200_000,
-    },
-    KnownModel {
-        alias: "haiku",
-        full_id: "claude-haiku-3-20250307",
-        description: "Fastest and most affordable",
-        input_price: 0.25,
-        output_price: 1.25,
-        context_window: 200_000,
-    },
-];
-
-/// Async handler for `/model [name]`.
-///
-/// With no arguments, lists available models.
-/// With a model name or alias, validates and switches.
-pub fn handler(
-    args: String,
-) -> Pin<Box<dyn std::future::Future<Output = crate::Result<String>> + Send>> {
-    Box::pin(async move {
-        let requested = args.trim().to_string();
-
-        if requested.is_empty() {
-            return Ok(list_models());
-        }
-
-        // Try to resolve the model
-        match resolve_model(&requested) {
-            Some(model) => {
-                let mut out = format!("Model set to: {}\n\n", model.full_id);
-                out.push_str(&format!("  {}\n", model.description));
-                out.push_str(&format!(
-                    "  Pricing: ${:.2}/M input, ${:.2}/M output\n",
-                    model.input_price, model.output_price,
-                ));
-                out.push_str(&format!(
-                    "  Context: {}K tokens\n",
-                    model.context_window / 1000,
-                ));
-                // Persist to user settings so the next session picks it
-                // up. Matches TS `commands/model/model.tsx` which writes
-                // through `setGlobalConfig({ primaryModel })`.
-                match coco_config::global_config::write_user_setting(
-                    "model",
-                    serde_json::Value::String(model.full_id.to_string()),
-                ) {
-                    Ok(path) => {
-                        out.push_str(&format!(
-                            "\nSaved to {} (effective on next session).",
-                            path.display()
-                        ));
-                    }
-                    Err(e) => {
-                        out.push_str(&format!("\nWarning: failed to persist selection: {e}"));
-                    }
+/// Resolve `requested` against the builtin registry, persist to
+/// `model_roles.main`, and return a user-facing summary line. Pure
+/// (no overlay side effects) so the typed-arg path stays inline.
+fn handle_with_args(requested: &str) -> String {
+    match resolve_model(requested) {
+        Some(resolved) => {
+            let payload = serde_json::json!({
+                "primary": {
+                    "provider": resolved.provider,
+                    "model_id": resolved.model_id,
                 }
-                Ok(out)
-            }
-            None => {
-                // Check if it looks like a provider:model pattern
-                if requested.contains('/') || requested.contains(':') {
-                    let mut out = format!(
-                        "Setting custom model: {requested}\n\n\
-                         Note: this model is not in the built-in registry.\n\
-                         Ensure your provider supports this model ID.\n"
-                    );
-                    match coco_config::global_config::write_user_setting(
-                        "model",
-                        serde_json::Value::String(requested.clone()),
-                    ) {
-                        Ok(path) => {
-                            out.push_str(&format!(
-                                "\nSaved to {} (effective on next session).",
-                                path.display()
-                            ));
-                        }
-                        Err(e) => {
-                            out.push_str(&format!("\nWarning: failed to persist selection: {e}"));
-                        }
-                    }
-                    Ok(out)
-                } else {
-                    let mut out = format!("Unknown model: {requested}\n\n");
-                    out.push_str("Did you mean one of these?\n\n");
-                    // Suggest closest matches
-                    for m in KNOWN_MODELS {
-                        let alias_dist = levenshtein(&requested.to_ascii_lowercase(), m.alias);
-                        if alias_dist <= 3 {
-                            out.push_str(&format!("  {} ({})\n", m.alias, m.full_id,));
-                        }
-                    }
-                    out.push_str("\nUse /model to see all available models.");
-                    Ok(out)
-                }
+            });
+            match coco_config::global_config::write_user_setting("model_roles.main", payload) {
+                Ok(path) => format!(
+                    "Set Main → {}/{} (persisted to {})\n  {}",
+                    resolved.provider,
+                    resolved.model_id,
+                    path.display(),
+                    resolved.summary
+                ),
+                Err(err) => format!(
+                    "Set Main → {}/{} (failed to persist: {err})",
+                    resolved.provider, resolved.model_id
+                ),
             }
         }
+        None => {
+            let mut out = format!("Unknown model: {requested}\n\n");
+            out.push_str("Use /model with no arguments to open the picker, or pick one of:\n");
+            for entry in builtin_summary() {
+                out.push_str(&format!(
+                    "  {:<24}  {}\n",
+                    format!("{}/{}", entry.provider, entry.model_id),
+                    entry.summary
+                ));
+            }
+            out
+        }
+    }
+}
+
+struct ResolvedBuiltin {
+    provider: &'static str,
+    model_id: String,
+    summary: String,
+}
+
+/// Resolve `input` against the builtin registry. Matches in this
+/// order: alias (sonnet/opus/haiku/gpt5/gemini/deepseek), exact
+/// model_id, case-insensitive model_id, prefix.
+fn resolve_model(input: &str) -> Option<ResolvedBuiltin> {
+    let lower = input.to_ascii_lowercase();
+    let alias_match: Option<&str> = match lower.as_str() {
+        "sonnet" => Some("claude-sonnet-4-6"),
+        "opus" => Some("claude-opus-4-7"),
+        "haiku" => Some("claude-haiku-4-5"),
+        "gpt5" | "gpt-5" => Some("gpt-5-4"),
+        "gemini" => Some("gemini-2.5-pro"),
+        "deepseek" => Some("deepseek-v4-pro"),
+        _ => None,
+    };
+    let target_id: Option<String> = alias_match.map(str::to_string).or_else(|| {
+        let registry = coco_config::builtin_models_partial();
+        if registry.contains_key(&lower) {
+            Some(lower.clone())
+        } else {
+            registry
+                .keys()
+                .find(|k| k.eq_ignore_ascii_case(&lower) || k.starts_with(&lower))
+                .cloned()
+        }
+    });
+    let id = target_id?;
+    let (provider, provider_display) = infer_provider(&id);
+    let registry = coco_config::builtin_models_partial();
+    let entry = registry.get(&id)?;
+    let display_name = entry.display_name.clone().unwrap_or_else(|| id.clone());
+    let ctx = entry
+        .context_window
+        .map(|t| format_context(t.get() as i64))
+        .unwrap_or_else(|| "?".to_string());
+    let thinking = if entry.supported_thinking_levels.is_some() {
+        " · thinking"
+    } else {
+        ""
+    };
+    Some(ResolvedBuiltin {
+        provider,
+        model_id: id,
+        summary: format!("{provider_display} · {display_name} · {ctx}{thinking}"),
     })
 }
 
-/// Build the model listing string.
-fn list_models() -> String {
-    let mut out = String::from("## Available Models\n\n");
-    out.push_str("| Alias   | Model ID                       | $/M in | $/M out | Ctx    |\n");
-    out.push_str("|---------|--------------------------------|--------|---------|--------|\n");
-
-    for m in KNOWN_MODELS {
-        out.push_str(&format!(
-            "| {:<7} | {:<30} | {:>6.2} | {:>7.2} | {:>4}K |\n",
-            m.alias,
-            m.full_id,
-            m.input_price,
-            m.output_price,
-            m.context_window / 1000,
-        ));
-    }
-
-    out.push_str("\nUse /model <alias> or /model <full-id> to switch.\n");
-    out.push_str("Custom model IDs (e.g., provider/model) are also accepted.");
-    out
-}
-
-/// Resolve a model name or alias to a known model.
-fn resolve_model(input: &str) -> Option<&'static KnownModel> {
-    let lower = input.to_ascii_lowercase();
-
-    // Exact alias match
-    if let Some(m) = KNOWN_MODELS.iter().find(|m| m.alias == lower) {
-        return Some(m);
-    }
-
-    // Full ID match (case-insensitive)
-    if let Some(m) = KNOWN_MODELS
+fn builtin_summary() -> Vec<ResolvedBuiltin> {
+    let registry = coco_config::builtin_models_partial();
+    let mut entries: Vec<ResolvedBuiltin> = registry
         .iter()
-        .find(|m| m.full_id.eq_ignore_ascii_case(&lower))
-    {
-        return Some(m);
-    }
-
-    // Prefix match on full ID
-    if let Some(m) = KNOWN_MODELS.iter().find(|m| m.full_id.starts_with(&lower)) {
-        return Some(m);
-    }
-
-    None
+        .map(|(id, partial)| {
+            let (provider, provider_display) = infer_provider(id);
+            let display_name = partial.display_name.clone().unwrap_or_else(|| id.clone());
+            let ctx = partial
+                .context_window
+                .map(|t| format_context(t.get() as i64))
+                .unwrap_or_else(|| "?".to_string());
+            let thinking = if partial.supported_thinking_levels.is_some() {
+                " · thinking"
+            } else {
+                ""
+            };
+            ResolvedBuiltin {
+                provider,
+                model_id: id.clone(),
+                summary: format!("{provider_display} · {display_name} · {ctx}{thinking}"),
+            }
+        })
+        .collect();
+    entries.sort_by(|a, b| {
+        a.provider
+            .cmp(b.provider)
+            .then_with(|| a.model_id.cmp(&b.model_id))
+    });
+    entries
 }
 
-/// Simple Levenshtein distance for typo detection.
-fn levenshtein(a: &str, b: &str) -> usize {
-    let a_bytes = a.as_bytes();
-    let b_bytes = b.as_bytes();
-    let a_len = a_bytes.len();
-    let b_len = b_bytes.len();
-
-    let mut prev: Vec<usize> = (0..=b_len).collect();
-    let mut curr = vec![0; b_len + 1];
-
-    for i in 1..=a_len {
-        curr[0] = i;
-        for j in 1..=b_len {
-            let cost = if a_bytes[i - 1] == b_bytes[j - 1] {
-                0
-            } else {
-                1
-            };
-            curr[j] = (prev[j] + 1).min(curr[j - 1] + 1).min(prev[j - 1] + cost);
-        }
-        std::mem::swap(&mut prev, &mut curr);
+/// Mirror of `coco_tui::update::show::infer_provider`. Both must stay
+/// in sync if a new provider lands.
+fn infer_provider(model_id: &str) -> (&'static str, &'static str) {
+    if model_id.starts_with("claude-") {
+        ("anthropic", "Anthropic")
+    } else if model_id.starts_with("gpt-") || model_id.starts_with('o') {
+        ("openai", "OpenAI")
+    } else if model_id.starts_with("gemini-") {
+        ("google", "Google")
+    } else if model_id.starts_with("deepseek-") {
+        ("deepseek", "DeepSeek")
+    } else {
+        ("other", "Other")
     }
+}
 
-    prev[b_len]
+fn format_context(tokens: i64) -> String {
+    if tokens >= 1_000_000 {
+        let m = tokens as f64 / 1_000_000.0;
+        if (m - m.round()).abs() < 0.05 {
+            format!("{}M", m.round() as i64)
+        } else {
+            format!("{m:.1}M")
+        }
+    } else if tokens >= 1_000 {
+        format!("{}K", tokens / 1_000)
+    } else {
+        format!("{tokens}")
+    }
 }
 
 #[cfg(test)]

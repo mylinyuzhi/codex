@@ -8,6 +8,7 @@ use crate::command::UserCommand;
 use crate::i18n::t;
 use crate::state::AppState;
 use crate::state::Overlay;
+use crate::state::PromptMode;
 use crate::state::ui::Toast;
 use crate::update_rewind;
 
@@ -223,6 +224,66 @@ fn do_clear_conversation(state: &mut AppState, clear_plan_state: bool) {
     }
 }
 
+/// Handle a submission whose leading character is a prompt-mode prefix
+/// (`!` bash or `#` memory). Pushes the appropriate local
+/// `ChatMessage` so the user sees the input echoed immediately, then
+/// dispatches a typed `UserCommand` for the engine bridge to execute.
+///
+/// The bridge in `tui_runner` is responsible for emitting the matching
+/// follow-up message (`BashOutput` / a memory-write confirmation). The
+/// TUI never touches the filesystem or shell directly — keeps the
+/// permission model and side-effect surface in one place.
+async fn submit_prefixed(
+    state: &mut AppState,
+    command_tx: &mpsc::Sender<UserCommand>,
+    mode: PromptMode,
+    text: &str,
+) -> bool {
+    let payload = mode.strip_prefix(text).to_string();
+    if payload.is_empty() {
+        // Empty body after stripping the prefix (e.g. user typed just
+        // `!` and hit Enter). Don't echo or dispatch — drop silently.
+        return true;
+    }
+
+    // Record the *full* prefixed text in history so up-arrow recall
+    // returns the user to the same mode without forcing them to retype
+    // the prefix character. TS parity: `prependModeCharacterToInput`.
+    state.ui.input.add_to_history(text.to_string());
+
+    let user_message_id = uuid::Uuid::new_v4().to_string();
+    let message = match mode {
+        PromptMode::Bash => {
+            crate::state::session::ChatMessage::user_bash_input(user_message_id.clone(), &payload)
+        }
+        PromptMode::Memory => {
+            crate::state::session::ChatMessage::user_memory_input(user_message_id.clone(), &payload)
+        }
+        PromptMode::Normal => unreachable!("submit_prefixed only handles non-Normal modes"),
+    };
+    state.session.add_message(message);
+
+    let command = match mode {
+        PromptMode::Bash => UserCommand::SubmitBash {
+            user_message_id,
+            command: payload,
+        },
+        PromptMode::Memory => UserCommand::SubmitMemory {
+            user_message_id,
+            content: payload,
+        },
+        PromptMode::Normal => unreachable!("submit_prefixed only handles non-Normal modes"),
+    };
+    let _ = command_tx.send(command).await;
+
+    state.ui.paste_manager.clear();
+    state.ui.scroll_offset = 0;
+    state.ui.user_scrolled = false;
+    state.session.last_query_completion_at = None;
+    state.session.idle_prompt_fired = false;
+    true
+}
+
 /// Submit current input (or intercept local-only slash commands via
 /// [`try_local_command`]). Returns `true` so the caller can propagate the
 /// "state changed" signal.
@@ -230,6 +291,15 @@ pub(super) async fn submit(state: &mut AppState, command_tx: &mpsc::Sender<UserC
     let text = state.ui.input.take_input();
     if text.is_empty() {
         return true;
+    }
+
+    // Prompt-mode routing happens BEFORE slash/local-command checks
+    // because `!` and `#` are prefix-only — they can never collide with
+    // `/foo` (different leading byte) so this ordering is safe and
+    // matches TS's `getModeFromInput → if bash …` dispatch order.
+    let mode = PromptMode::from_text(&text);
+    if mode != PromptMode::Normal {
+        return submit_prefixed(state, command_tx, mode, &text).await;
     }
 
     let trimmed = text.trim();

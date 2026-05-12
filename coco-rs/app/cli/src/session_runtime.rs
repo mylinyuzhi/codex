@@ -1290,6 +1290,15 @@ impl SessionRuntime {
         }
         engine = engine.with_file_read_state(self.file_read_state.clone());
         engine = engine.with_app_state(app_state.clone());
+        // Skill-emitted `permission_updates` now flow through the
+        // engine's own per-engine `EngineLiveRulesHandle`
+        // (auto-installed by `QueryEngine::new`) which writes into
+        // `QueryEngine.live_command_rules` — a fresh Arc per engine
+        // = per user message. No session-level handle install: that
+        // would leak rules across user messages. TS parity: `query()`
+        // closure-captures `appState.alwaysAllowRules.command` and
+        // drops it on return. See `engine_live_rules` for the
+        // lifecycle invariant.
         // Session-scoped steering primitive. Without this, a fresh
         // `CommandQueue::new()` is constructed in `QueryEngine::new` and
         // dies with the per-turn engine, so any producer (TUI bridge,

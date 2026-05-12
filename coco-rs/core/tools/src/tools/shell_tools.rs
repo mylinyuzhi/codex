@@ -87,6 +87,7 @@ impl Tool for SleepTool {
             }),
             new_messages: vec![],
             app_state_patch: None,
+            permission_updates: Vec::new(),
         })
     }
 }
@@ -199,6 +200,7 @@ impl Tool for SyntheticOutputTool {
             data: serde_json::json!(output),
             new_messages: vec![],
             app_state_patch: None,
+            permission_updates: Vec::new(),
         })
     }
 }

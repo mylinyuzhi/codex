@@ -47,9 +47,19 @@ pub(super) fn permission_content(p: &PermissionOverlay, theme: &Theme) -> (Strin
             } else {
                 t!("dialog.perm_overwrite")
             };
-            format!("{action}: {path}\n\n{content_preview}")
+            // Three-line header matches TS `FileWritePermissionRequest`'s
+            // labeled "File: / Action: / Preview:" layout — the previous
+            // one-line concat lost the action label as a colon-prefix.
+            let file_line = t!("dialog.perm_file", path = path.as_str());
+            let action_label = t!("dialog.perm_action_label");
+            format!("{action_label}: {action}\n{file_line}\n\n{content_preview}")
         }
-        PermissionDetail::Filesystem { operation, path } => format!("{operation}: {path}"),
+        PermissionDetail::Filesystem { operation, path } => t!(
+            "dialog.perm_filesystem",
+            operation = operation.as_str(),
+            path = path.as_str()
+        )
+        .to_string(),
         PermissionDetail::WebFetch { url, method } => t!(
             "dialog.perm_web",
             method = method.as_str(),

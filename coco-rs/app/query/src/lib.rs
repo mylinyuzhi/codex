@@ -24,6 +24,7 @@ mod engine_builder;
 mod engine_compaction;
 mod engine_finalize_turn;
 mod engine_helpers;
+pub mod engine_live_rules;
 mod engine_prompt;
 mod engine_session;
 mod engine_turn_reminders;
@@ -63,6 +64,7 @@ pub use config::QueryEngineConfig;
 pub use config::QueryResult;
 pub use config::SessionBootstrap;
 pub use engine::QueryEngine;
+pub use engine_live_rules::EngineLiveRulesHandle;
 
 // Re-export CoreEvent from coco-types for consumers of run_with_events().
 // The old QueryEvent enum has been deleted per event-system-design.md Phase 0:

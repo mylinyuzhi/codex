@@ -44,6 +44,7 @@ impl crate::traits::Tool for SafeTool {
             data: input,
             new_messages: vec![],
             app_state_patch: None,
+            permission_updates: Vec::new(),
         })
     }
 }
@@ -81,6 +82,7 @@ impl crate::traits::Tool for UnsafeTool {
             data: input,
             new_messages: vec![],
             app_state_patch: None,
+            permission_updates: Vec::new(),
         })
     }
 }
@@ -207,6 +209,7 @@ impl crate::traits::Tool for SlowSafeTool {
             data: json!({"tool": self.name}),
             new_messages: vec![],
             app_state_patch: None,
+            permission_updates: Vec::new(),
         })
     }
 }
@@ -249,6 +252,7 @@ impl crate::traits::Tool for PatchSafeTool {
             app_state_patch: Some(Box::new(move |state| {
                 state.plan_mode_attachment_count = state.plan_mode_attachment_count * 10 + digit;
             })),
+            permission_updates: Vec::new(),
         })
     }
 }
@@ -618,6 +622,7 @@ where
     UnstampedToolCallOutcome {
         effects: ToolSideEffects {
             app_state_patch: Some(Box::new(patch)),
+            permission_updates: Vec::new(),
         },
         ..empty_unstamped(tool_use_id, model_index)
     }

@@ -41,6 +41,35 @@ impl Widget for StatusBar<'_> {
             parts.push(Span::raw(" ⚡").fg(self.theme.warning));
         }
 
+        // Thinking effort. `Auto` is the resting state — we suppress
+        // the badge so the bar stays quiet when the user hasn't taken
+        // explicit control. Any other state earns a brain glyph plus
+        // the effort name so Ctrl+T's effect is visible.
+        if !matches!(
+            self.state.session.thinking_effort,
+            coco_types::ReasoningEffort::Auto
+        ) {
+            parts.push(
+                Span::raw(format!(" 🧠 {}", self.state.session.thinking_effort)).fg(
+                    if matches!(
+                        self.state.session.thinking_effort,
+                        coco_types::ReasoningEffort::Disable
+                    ) {
+                        self.theme.text_dim
+                    } else {
+                        self.theme.accent
+                    },
+                ),
+            );
+        }
+
+        // Sandbox shield (TS `SandboxPromptFooterHint`). Surfaces when the
+        // engine has wrapped tool execution in a platform sandbox
+        // (bwrap/Seatbelt) so the user knows shell writes are confined.
+        if self.state.session.sandbox_active {
+            parts.push(Span::raw(" 🛡").fg(self.theme.success));
+        }
+
         // Permission mode
         parts.push(Span::raw(" | ").fg(self.theme.border));
         parts.push(

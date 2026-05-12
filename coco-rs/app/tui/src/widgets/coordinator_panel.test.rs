@@ -22,6 +22,8 @@ fn test_coordinator_task_from_subagent_running() {
         description: "Find auth code".into(),
         status: SubagentStatus::Running,
         color: Some("blue".into()),
+        started_at_ms: None,
+        token_usage: None,
     };
     let task = CoordinatorTask::from_subagent(&instance);
     assert_eq!(task.task_id, "agent-7af2");
@@ -41,6 +43,8 @@ fn test_coordinator_task_from_subagent_completed_not_running() {
         description: "Plan refactor".into(),
         status: SubagentStatus::Completed,
         color: None,
+        started_at_ms: None,
+        token_usage: None,
     };
     assert!(
         !CoordinatorTask::from_subagent(&instance).is_running,
@@ -58,6 +62,8 @@ fn test_coordinator_task_from_subagent_failed_or_backgrounded_not_running() {
             description: "doing stuff".into(),
             status,
             color: None,
+            started_at_ms: None,
+            token_usage: None,
         };
         assert!(
             !CoordinatorTask::from_subagent(&instance).is_running,

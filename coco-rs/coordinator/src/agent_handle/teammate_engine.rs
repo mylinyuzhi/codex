@@ -45,6 +45,7 @@ impl AgentExecutionEngine for TeammateExecutionAdapter {
             max_turns: config.max_turns,
             allowed_tools: config.allowed_tools,
             disallowed_tools: config.disallowed_tools,
+            extra_allow_rules: Vec::new(),
             tool_overrides: config.tool_overrides,
             features: config.features,
             parent_tool_filter: config.parent_tool_filter,

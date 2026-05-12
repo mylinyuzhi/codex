@@ -100,6 +100,7 @@ impl Tool for TeamCreateTool {
             data: serde_json::json!(result),
             new_messages: vec![],
             app_state_patch: None,
+            permission_updates: Vec::new(),
         })
     }
 }
@@ -168,6 +169,7 @@ impl Tool for TeamDeleteTool {
             data: serde_json::json!({ "success": true, "message": result }),
             new_messages: vec![],
             app_state_patch: None,
+            permission_updates: Vec::new(),
         })
     }
 }

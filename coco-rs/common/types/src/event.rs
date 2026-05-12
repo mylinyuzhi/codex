@@ -1396,6 +1396,52 @@ pub enum TuiOnlyEvent {
     /// emits "Cancelled memory editing". TS parity:
     /// `commands/memory/memory.tsx`.
     OpenMemoryDialog { entries: Vec<MemoryDialogEntry> },
+    /// Result of a prompt-mode `!`-prefixed bash submission. The TUI
+    /// folds this into a `MessageContent::BashOutput` chat message
+    /// keyed by the same `user_message_id` as the matching
+    /// `BashInput`. Emitted by the CLI bridge after running the
+    /// command via `coco_shell::ShellExecutor`. TS parity:
+    /// `LocalShellTask` completion.
+    BashCommandCompleted {
+        /// Shared id of the bash input/output pair so rewind groups them.
+        user_message_id: String,
+        /// Merged stdout + stderr, already truncated to a reasonable
+        /// display size by the bridge.
+        output: String,
+        /// Process exit code; non-zero shades the output red.
+        exit_code: i32,
+    },
+    /// Confirmation that a prompt-mode `#`-prefixed memory entry was
+    /// appended to a CLAUDE.md file. The TUI surfaces a toast and the
+    /// `MemoryInput` chat message that was already pushed locally.
+    MemorySaved {
+        /// Path of the file that was appended to (project / user scope).
+        path: String,
+    },
+    /// Confirmation that a `(role, provider, model_id, effort)` selection
+    /// from the model picker was persisted to
+    /// `~/.coco/settings.json::model_roles.<role>`. The TUI raises a
+    /// success toast. The role / provider / model_id fields are pre-formatted
+    /// strings (role uses `ModelRole::as_str()`, effort uses the wire
+    /// form via `ReasoningEffort::Display`) so the consumer doesn't
+    /// need to depend on `coco-config`.
+    ModelRoleApplied {
+        role: String,
+        provider: String,
+        model_id: String,
+        /// Wire-form effort label (e.g. `"medium"` / `"xhigh"`); `None`
+        /// when the model has no thinking capability or the picker
+        /// produced no override.
+        effort: Option<String>,
+    },
+    /// Persistence of a model-role selection failed. The TUI raises an
+    /// error toast carrying the wrapped reason.
+    ModelRolePersistFailed { role: String, error: String },
+    /// Tell the TUI to open the provider-grouped model picker. Emitted
+    /// when the slash dispatcher resolves `/model` with no args (typed
+    /// `/model` from input bar). The TUI consumes the current
+    /// `state.session.model` to mark the "current" entry.
+    OpenModelPicker,
 }
 
 /// One row in the `/memory` file-picker overlay. Built by the slash

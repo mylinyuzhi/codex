@@ -354,6 +354,7 @@ impl Tool for TaskCreateTool {
             data: project_create(&task),
             new_messages: vec![],
             app_state_patch: Some(patch),
+            permission_updates: Vec::new(),
         })
     }
 }
@@ -440,6 +441,7 @@ impl Tool for TaskGetTool {
             data: project_get(task.as_ref()),
             new_messages: vec![],
             app_state_patch: None,
+            permission_updates: Vec::new(),
         })
     }
 }
@@ -589,6 +591,7 @@ impl Tool for TaskListTool {
             data: serde_json::json!({ "tasks": tasks }),
             new_messages: vec![],
             app_state_patch: None,
+            permission_updates: Vec::new(),
         })
     }
 }
@@ -751,6 +754,7 @@ impl Tool for TaskUpdateTool {
                     data: project_update_error(&task_id, "Task not found"),
                     new_messages: vec![],
                     app_state_patch: None,
+                    permission_updates: Vec::new(),
                 });
             }
             Err(e) => {
@@ -790,6 +794,7 @@ impl Tool for TaskUpdateTool {
                 data,
                 new_messages: vec![],
                 app_state_patch: Some(patch),
+                permission_updates: Vec::new(),
             });
         }
 
@@ -1017,6 +1022,7 @@ impl Tool for TaskUpdateTool {
             ),
             new_messages: vec![],
             app_state_patch: Some(patch),
+            permission_updates: Vec::new(),
         })
     }
 }
@@ -1135,6 +1141,7 @@ impl Tool for TaskStopTool {
                 }),
                 new_messages: vec![],
                 app_state_patch: None,
+                permission_updates: Vec::new(),
             }),
             Err(e) => Err(ToolError::ExecutionFailed {
                 message: format!("No running task found with ID: {task_id} ({e})"),
@@ -1325,6 +1332,7 @@ impl Tool for TaskOutputTool {
                 ),
                 new_messages: vec![],
                 app_state_patch: None,
+                permission_updates: Vec::new(),
             });
         }
 
@@ -1340,6 +1348,7 @@ impl Tool for TaskOutputTool {
             }),
             new_messages: vec![],
             app_state_patch: None,
+            permission_updates: Vec::new(),
         })
     }
 }
@@ -1533,6 +1542,7 @@ impl Tool for TodoWriteTool {
             }),
             new_messages: vec![],
             app_state_patch: Some(patch),
+            permission_updates: Vec::new(),
         })
     }
 }

@@ -6,7 +6,6 @@
 //! context fork vs inline execution, and skill validation.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 
 // ── Skill execution mode ──
 
@@ -310,33 +309,6 @@ pub fn skill_matches_rule(skill_name: &str, rule: &str) -> bool {
         return skill_name.starts_with(prefix);
     }
     false
-}
-
-/// Filter allowed tools for a skill invocation.
-///
-/// Starts with the skill's allowed_tools list, removes disallowed_tools,
-/// then intersects with the globally available tools.
-pub fn compute_effective_tools(skill: &ResolvedSkill, available_tools: &[String]) -> Vec<String> {
-    let available_set: HashSet<&str> = available_tools.iter().map(String::as_str).collect();
-
-    if skill.allowed_tools.is_empty() {
-        // No restriction — use all available tools minus disallowed
-        let disallowed: HashSet<&str> = skill.disallowed_tools.iter().map(String::as_str).collect();
-        available_tools
-            .iter()
-            .filter(|t| !disallowed.contains(t.as_str()))
-            .cloned()
-            .collect()
-    } else {
-        // Intersect allowed with available, then remove disallowed
-        let disallowed: HashSet<&str> = skill.disallowed_tools.iter().map(String::as_str).collect();
-        skill
-            .allowed_tools
-            .iter()
-            .filter(|t| available_set.contains(t.as_str()) && !disallowed.contains(t.as_str()))
-            .cloned()
-            .collect()
-    }
 }
 
 /// Determine the execution mode for a skill based on its configuration

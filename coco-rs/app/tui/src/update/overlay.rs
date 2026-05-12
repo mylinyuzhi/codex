@@ -14,7 +14,7 @@ use crate::state::CommandOption;
 use crate::state::CommandPaletteOverlay;
 use crate::state::ExportFormat;
 use crate::state::MemoryDialogEntry;
-use crate::state::ModelOption;
+use crate::state::ModelEntry;
 use crate::state::ModelPickerOverlay;
 use crate::state::Overlay;
 use crate::state::SessionBrowserOverlay;
@@ -172,12 +172,45 @@ pub(super) async fn approve(state: &mut AppState, command_tx: &mpsc::Sender<User
                 .await;
             state.ui.dismiss_overlay();
         }
-        Some(
-            Overlay::Trust(_)
-            | Overlay::AutoModeOptIn(_)
-            | Overlay::BypassPermissions(_)
-            | Overlay::WorktreeExit(_),
-        ) => {
+        Some(Overlay::BypassPermissions(_)) => {
+            // Defense in depth: even after the user clicks Approve we
+            // re-check the capability gate before flipping. The cycle
+            // path already filters Bypass when the gate is off, but a
+            // stale overlay (e.g. opened earlier in the session, gate
+            // toggled since) shouldn't be able to escalate. Drops
+            // through to a no-op + neutral toast so the user knows the
+            // click was acknowledged without surprise.
+            if !state.session.bypass_permissions_available {
+                state.ui.add_toast(crate::state::ui::Toast::warning(
+                    t!("toast.bypass_unavailable").to_string(),
+                ));
+                state.ui.dismiss_overlay();
+                return;
+            }
+            state.session.permission_mode = PermissionMode::BypassPermissions;
+            let _ = command_tx
+                .send(UserCommand::SetPermissionMode {
+                    mode: PermissionMode::BypassPermissions,
+                })
+                .await;
+            state.ui.add_toast(crate::state::ui::Toast::warning(
+                t!("toast.bypass_enabled").to_string(),
+            ));
+            state.ui.dismiss_overlay();
+        }
+        Some(Overlay::AutoModeOptIn(_)) => {
+            state.session.permission_mode = PermissionMode::Auto;
+            let _ = command_tx
+                .send(UserCommand::SetPermissionMode {
+                    mode: PermissionMode::Auto,
+                })
+                .await;
+            state.ui.add_toast(crate::state::ui::Toast::info(
+                t!("toast.auto_mode_enabled").to_string(),
+            ));
+            state.ui.dismiss_overlay();
+        }
+        Some(Overlay::Trust(_) | Overlay::WorktreeExit(_)) => {
             state.ui.dismiss_overlay();
         }
         _ => {
@@ -255,6 +288,17 @@ pub(super) async fn deny(state: &mut AppState, command_tx: &mpsc::Sender<UserCom
             state
                 .session
                 .add_message(crate::state::session::ChatMessage::system_text(id, body));
+            state.ui.dismiss_overlay();
+        }
+        Some(Overlay::BypassPermissions(_)) | Some(Overlay::AutoModeOptIn(_)) => {
+            // Declining bypass / auto opt-in keeps the current mode.
+            // A toast confirms the cancel so the user doesn't doubt
+            // whether the Shift+Tab landed silently.
+            let current = crate::update::permission_mode_label(state.session.permission_mode);
+            state.ui.add_toast(crate::state::ui::Toast::info(
+                crate::i18n::t!("toast.permission_mode_unchanged", mode = current.as_str())
+                    .to_string(),
+            ));
             state.ui.dismiss_overlay();
         }
         _ => {
@@ -420,6 +464,12 @@ pub(super) fn nav(state: &mut AppState, delta: i32) {
         Some(Overlay::ModelPicker(m)) => {
             let count = filtered_models(m).len() as i32;
             m.selected = (m.selected + delta).clamp(0, (count - 1).max(0));
+            // Re-derive effort from the newly-focused model's default
+            // so the footer reflects "the model's preferred level"
+            // unless the user has explicitly cycled past it.
+            m.effort = filtered_models(m)
+                .get(m.selected as usize)
+                .and_then(|e| e.default_effort);
         }
         Some(Overlay::CommandPalette(cp)) => {
             let count = filtered_commands(cp).len() as i32;
@@ -528,13 +578,21 @@ pub(super) async fn confirm(state: &mut AppState, command_tx: &mpsc::Sender<User
     let overlay = state.ui.overlay.take();
     match overlay {
         Some(Overlay::ModelPicker(m)) => {
-            if let Some(model) = filtered_models(&m).get(m.selected as usize) {
+            if let Some(entry) = filtered_models(&m).get(m.selected as usize).copied() {
                 let _ = command_tx
-                    .send(UserCommand::SetModel {
-                        model: model.id.clone(),
+                    .send(UserCommand::SetModelRole {
+                        role: m.role,
+                        provider: entry.provider.clone(),
+                        model_id: entry.model_id.clone(),
+                        effort: m.effort,
                     })
                     .await;
-                state.session.model = model.id.clone();
+                // Optimistic local update for Main — non-Main roles
+                // have no live mirror in `SessionState`, so the engine
+                // is the source of truth there.
+                if matches!(m.role, coco_types::ModelRole::Main) {
+                    state.session.model = entry.model_id.clone();
+                }
             }
         }
         Some(Overlay::CommandPalette(cp)) => {
@@ -993,12 +1051,51 @@ pub(super) fn rewind_cancel(state: &mut AppState) -> bool {
 
 // ── filter helpers ──
 
-fn filtered_models(m: &ModelPickerOverlay) -> Vec<&ModelOption> {
-    let filter_lower = m.filter.to_lowercase();
-    m.models
+/// Cycle the effort axis of the model picker by `delta`, clamped to
+/// the focused entry's `supported_efforts`. No-op when the overlay
+/// isn't a `ModelPicker` or when the focused model has no thinking
+/// capability — the renderer hides the footer in that case so this
+/// branch never triggers from the UI anyway.
+pub(super) fn cycle_model_effort(state: &mut AppState, delta: i32) {
+    let Some(Overlay::ModelPicker(m)) = &mut state.ui.overlay else {
+        return;
+    };
+    let filtered: Vec<&ModelEntry> = m
+        .entries
         .iter()
-        .filter(|model| {
-            filter_lower.is_empty() || model.label.to_lowercase().contains(&filter_lower)
+        .filter(|e| {
+            m.filter.is_empty()
+                || e.display_name
+                    .to_lowercase()
+                    .contains(&m.filter.to_lowercase())
+                || e.provider_display
+                    .to_lowercase()
+                    .contains(&m.filter.to_lowercase())
+        })
+        .collect();
+    let Some(entry) = filtered.get(m.selected as usize) else {
+        return;
+    };
+    if entry.supported_efforts.is_empty() {
+        return;
+    }
+    let current_idx = m
+        .effort
+        .and_then(|e| entry.supported_efforts.iter().position(|&se| se == e))
+        .unwrap_or(0) as i32;
+    let n = entry.supported_efforts.len() as i32;
+    let next_idx = (current_idx + delta).rem_euclid(n) as usize;
+    m.effort = Some(entry.supported_efforts[next_idx]);
+}
+
+fn filtered_models(m: &ModelPickerOverlay) -> Vec<&ModelEntry> {
+    let filter_lower = m.filter.to_lowercase();
+    m.entries
+        .iter()
+        .filter(|e| {
+            filter_lower.is_empty()
+                || e.display_name.to_lowercase().contains(&filter_lower)
+                || e.provider_display.to_lowercase().contains(&filter_lower)
         })
         .collect()
 }
@@ -1084,3 +1181,7 @@ fn open_memory_entry_async(state: &mut AppState, entry: &MemoryDialogEntry) {
         )),
     }
 }
+
+#[cfg(test)]
+#[path = "overlay.test.rs"]
+mod tests;

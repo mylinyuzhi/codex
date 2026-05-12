@@ -1,16 +1,16 @@
 //! Stream processing for vercel-ai streaming responses.
 //!
-//! Provides [`StreamProcessor`] for consuming and accumulating streaming
-//! responses from language models. This is the mid-level API between raw
-//! `LanguageModelV4StreamPart` events and the high-level `stream_text()`.
+//! Provides [`StreamProcessor`], a thin adapter that wraps a
+//! `Stream<LanguageModelV4StreamPart>` with idle-timeout enforcement and
+//! health metrics (ttft, stall_count, total_stall_ms).
 //!
-//! # API Levels
+//! # Non-goals
 //!
-//! ```text
-//! Level 1: Raw Stream (do_stream() → Stream<StreamPart>)   — too low for most uses
-//! Level 2: StreamProcessor (accumulate → snapshot + events) — this module
-//! Level 3: stream_text() (multi-step + tool exec)           — too high for agent loops
-//! ```
+//! This module deliberately does not accumulate stream content into a
+//! per-stream snapshot. Different consumers want different accumulators
+//! (e.g. coco-inference needs per-part `provider_metadata` fidelity for
+//! round-tripping Gemini `thoughtSignature` / Anthropic `signature` /
+//! OpenAI `encrypted_content`), so the policy lives with the consumer.
 //!
 //! # Example
 //!
@@ -18,26 +18,17 @@
 //! use vercel_ai::stream::StreamProcessor;
 //!
 //! let result = model.do_stream(options).await?;
-//! let mut processor = StreamProcessor::new(result);
+//! let mut processor = StreamProcessor::from_stream(result.stream);
 //!
-//! while let Some(Ok((part, snapshot))) = processor.next().await {
-//!     println!("Text so far: {}", snapshot.text);
-//!     if snapshot.is_complete {
-//!         println!("Done! Usage: {:?}", snapshot.usage);
-//!     }
+//! while let Some(part) = processor.next().await {
+//!     // process `part?` however the consumer wants
 //! }
+//! let metrics = processor.metrics();
 //! ```
 
 mod metrics;
 mod processor;
-mod processor_state;
-mod snapshot;
 
 pub use metrics::StreamMetrics;
 pub use processor::StreamProcessor;
 pub use processor::StreamProcessorConfig;
-pub use snapshot::FileSnapshot;
-pub use snapshot::ReasoningSnapshot;
-pub use snapshot::SourceSnapshot;
-pub use snapshot::StreamSnapshot;
-pub use snapshot::ToolCallSnapshot;

@@ -306,6 +306,16 @@ impl PermissionUpdate {
 }
 
 /// Destination for persisting permission updates.
+///
+/// Persistable destinations (`User`/`Project`/`LocalSettings`) write to
+/// disk; in-memory destinations (`Session`/`CliArg`/`Command`) live only
+/// for the running session. TS parity: same split as
+/// `persistPermissionUpdates` in `PermissionUpdate.ts`.
+///
+/// `Command` is reserved for rules contributed by an invoked command or
+/// skill's frontmatter (`allowed-tools:`). TS parity:
+/// `alwaysAllowRules.command` populated by `SkillTool` /
+/// `createGetAppStateWithAllowedTools`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -315,6 +325,9 @@ pub enum PermissionUpdateDestination {
     LocalSettings,
     Session,
     CliArg,
+    /// Rules contributed by a command/skill frontmatter `allowed-tools`.
+    /// In-memory only; cleared on session end.
+    Command,
 }
 
 /// Rules grouped by source (for ToolPermissionContext).

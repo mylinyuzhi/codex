@@ -562,14 +562,9 @@ pub use vercel_ai_provider::NoSuchModelError;
 pub use vercel_ai_provider::UnsupportedFunctionalityError;
 
 // Re-exports from stream module
-pub use stream::FileSnapshot;
-pub use stream::ReasoningSnapshot;
-pub use stream::SourceSnapshot;
 pub use stream::StreamMetrics;
 pub use stream::StreamProcessor;
 pub use stream::StreamProcessorConfig;
-pub use stream::StreamSnapshot;
-pub use stream::ToolCallSnapshot;
 
 /// Test utilities for mock models and providers.
 #[cfg(test)]

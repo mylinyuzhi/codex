@@ -26,7 +26,7 @@ pub(super) fn try_render<'a>(
             // TS: user-message component uses a terminal-adaptive fill so
             // prompts visually separate from assistant prose. None = inherit.
             for line in text.lines() {
-                let mut span = Span::raw(format!("> {line}")).fg(w.theme.user_message);
+                let mut span = Span::raw(format!("❯ {line}")).fg(w.theme.user_message);
                 if let Some(bg) = w.theme.user_message_bg {
                     span = span.bg(bg);
                 }
@@ -36,15 +36,18 @@ pub(super) fn try_render<'a>(
         }
         MessageContent::Image { path } => {
             lines.push(Line::from(vec![
-                Span::raw("> ").fg(w.theme.user_message),
+                Span::raw("❯ ").fg(w.theme.user_message),
                 Span::raw("📎 ").fg(w.theme.accent),
                 Span::raw(path.as_str()).fg(w.theme.primary).underlined(),
             ]));
             Some(())
         }
         MessageContent::BashInput { command } => {
+            // TS `UserBashInputMessage` renders the leading `!` in
+            // `bashBorder` style. We re-use the input-area mode glyph so
+            // the chat echo visually matches the prompt the user typed.
             lines.push(Line::from(vec![
-                Span::raw("> $ ").fg(w.theme.user_message),
+                Span::raw("! ").fg(w.theme.accent).bold(),
                 Span::raw(command.as_str()).fg(w.theme.accent),
             ]));
             Some(())
@@ -86,7 +89,7 @@ pub(super) fn try_render<'a>(
         }
         MessageContent::MemoryInput { content } => {
             lines.push(Line::from(vec![
-                Span::raw("> ").fg(w.theme.user_message),
+                Span::raw("❯ ").fg(w.theme.user_message),
                 Span::raw("💾 ").fg(w.theme.accent),
                 Span::raw(content.as_str()).fg(w.theme.text_dim),
             ]));
@@ -135,7 +138,7 @@ pub(super) fn try_render<'a>(
             preview,
         } => {
             lines.push(Line::from(vec![
-                Span::raw("> ").fg(w.theme.user_message),
+                Span::raw("❯ ").fg(w.theme.user_message),
                 Span::raw(format!("📎 [{attachment_type}] ")).fg(w.theme.accent),
                 Span::raw(preview.as_str()).fg(w.theme.text_dim),
             ]));

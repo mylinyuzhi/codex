@@ -10,6 +10,7 @@ use tokio::sync::mpsc;
 use crate::command::UserCommand;
 use crate::constants;
 use crate::events::TuiCommand;
+use crate::i18n::t;
 use crate::state::AppState;
 use crate::state::FocusTarget;
 use crate::update_rewind;
@@ -18,7 +19,11 @@ mod clipboard;
 mod edit;
 mod expanded_view;
 mod overlay;
-mod show;
+// `pub(crate)` so the slash-command dispatcher (in
+// `server_notification_handler::tui_only`) can call into `cycle_model`
+// when `TuiOnlyEvent::OpenModelPicker` arrives. The other `show::*`
+// constructors remain crate-internal helpers.
+pub(crate) mod show;
 mod stash;
 mod transcript;
 
@@ -44,26 +49,89 @@ pub async fn handle_command(
         // ── Mode toggles ──
         TuiCommand::TogglePlanMode => {
             state.toggle_plan_mode();
+            let mode = state.session.permission_mode;
             let _ = command_tx
-                .send(UserCommand::SetPermissionMode {
-                    mode: state.session.permission_mode,
-                })
+                .send(UserCommand::SetPermissionMode { mode })
                 .await;
+            // Transient toast so the toggle is acknowledged even when
+            // the user's eyes are on the input bar rather than the
+            // mode banner. Plan-on uses plan_mode color (info-equivalent
+            // in the Toast palette); plan-off uses info as well so the
+            // off-state doesn't read as a failure.
+            let key = if mode == coco_types::PermissionMode::Plan {
+                "toast.plan_mode_on"
+            } else {
+                "toast.plan_mode_off"
+            };
+            state
+                .ui
+                .add_toast(crate::state::ui::Toast::info(t!(key).to_string()));
             true
         }
         TuiCommand::CyclePermissionMode => {
-            state.cycle_permission_mode();
-            let _ = command_tx
-                .send(UserCommand::SetPermissionMode {
-                    mode: state.session.permission_mode,
-                })
-                .await;
+            // Compute the next mode without committing — the cycle helper
+            // applies eagerly, so we'd lose the chance to intercept
+            // high-stakes targets (BypassPermissions / Auto) and force
+            // a confirmation dialog. Mirrors TS: Shift+Tab landing on
+            // bypass surfaces `BypassPermissionsModeDialog` before the
+            // mode actually flips.
+            let next = state.session.permission_mode.next_in_cycle(
+                state.session.bypass_permissions_available,
+                state.session.auto_mode_available,
+            );
+            match next {
+                coco_types::PermissionMode::BypassPermissions => {
+                    let current_label = format!("{:?}", state.session.permission_mode);
+                    state
+                        .ui
+                        .set_overlay(crate::state::Overlay::BypassPermissions(
+                            crate::state::BypassPermissionsOverlay {
+                                current_mode: current_label,
+                            },
+                        ));
+                }
+                coco_types::PermissionMode::Auto => {
+                    state.ui.set_overlay(crate::state::Overlay::AutoModeOptIn(
+                        crate::state::AutoModeOptInOverlay {
+                            description: t!("dialog.auto_mode_description").to_string(),
+                        },
+                    ));
+                }
+                _ => {
+                    state.session.permission_mode = next;
+                    let _ = command_tx
+                        .send(UserCommand::SetPermissionMode { mode: next })
+                        .await;
+                    state.ui.add_toast(crate::state::ui::Toast::info(
+                        t!(
+                            "toast.permission_mode_set",
+                            mode = permission_mode_label(next).as_str()
+                        )
+                        .to_string(),
+                    ));
+                }
+            }
             true
         }
         TuiCommand::CycleThinkingLevel => {
+            // Cycle Auto → Disable → Low → Medium → High → XHigh → Auto.
+            // `Minimal` is intentionally skipped — it's only used by a
+            // narrow set of OpenAI models and the shortcut is meant
+            // for broad-stroke level toggling. The picker overlay
+            // exposes the full ladder (including Minimal) per-model.
+            use coco_types::ReasoningEffort::*;
+            let next = match state.session.thinking_effort {
+                Auto => Disable,
+                Disable => Low,
+                Low => Medium,
+                Medium => High,
+                High => XHigh,
+                XHigh | Minimal => Auto,
+            };
+            state.session.thinking_effort = next;
             let _ = command_tx
                 .send(UserCommand::SetThinkingLevel {
-                    level: "medium".to_string(),
+                    level: next.to_string(),
                 })
                 .await;
             true
@@ -429,11 +497,15 @@ pub async fn handle_command(
         TuiCommand::SettingsNextTab => {
             // Tab cycles between contexts depending on the active overlay.
             // Settings overlay → next tab. Question overlay → cycle focus
-            // (questions → footer items). Other overlays ignore Tab.
+            // (questions → footer items). ModelPicker → cycle the
+            // role pill. Other overlays ignore Tab.
             match state.ui.overlay {
                 Some(crate::state::Overlay::Settings(ref mut s)) => s.next_tab(),
                 Some(crate::state::Overlay::Question(_)) => {
                     overlay::question_cycle_focus(state, 1);
+                }
+                Some(crate::state::Overlay::ModelPicker(_)) => {
+                    show::cycle_model_role(state, 1);
                 }
                 _ => {}
             }
@@ -445,8 +517,19 @@ pub async fn handle_command(
                 Some(crate::state::Overlay::Question(_)) => {
                     overlay::question_cycle_focus(state, -1);
                 }
+                Some(crate::state::Overlay::ModelPicker(_)) => {
+                    show::cycle_model_role(state, -1);
+                }
                 _ => {}
             }
+            true
+        }
+        TuiCommand::ModelPickerCycleEffort(delta) => {
+            overlay::cycle_model_effort(state, delta);
+            true
+        }
+        TuiCommand::ModelPickerCycleRole(delta) => {
+            show::cycle_model_role(state, delta);
             true
         }
         TuiCommand::ExecuteSkill(name) => {
@@ -545,4 +628,22 @@ pub async fn handle_command(
     }
 
     changed
+}
+
+/// Localised label for a permission mode, used in toasts/banners so the
+/// user sees the same wording the help overlay and status row use.
+/// `pub(crate)` so the overlay deny handler can reuse it without
+/// duplicating the match — keeps mode wording consistent across the
+/// TogglePlanMode / Cycle / overlay-decline surfaces.
+pub(crate) fn permission_mode_label(mode: coco_types::PermissionMode) -> String {
+    let key = match mode {
+        coco_types::PermissionMode::Default => "permission_mode.default",
+        coco_types::PermissionMode::Plan => "permission_mode.plan",
+        coco_types::PermissionMode::AcceptEdits => "permission_mode.accept_edits",
+        coco_types::PermissionMode::BypassPermissions => "permission_mode.bypass",
+        coco_types::PermissionMode::Auto => "permission_mode.auto",
+        coco_types::PermissionMode::DontAsk => "permission_mode.dont_ask",
+        coco_types::PermissionMode::Bubble => "permission_mode.bubble",
+    };
+    t!(key).to_string()
 }

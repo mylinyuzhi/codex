@@ -86,6 +86,12 @@ pub const TOOL_DESCRIPTION_MAX_CHARS: i32 = 40;
 /// Multiplier to estimate token count from word count.
 pub const THINKING_TOKEN_MULTIPLIER: f64 = 1.3;
 
+/// Maximum body lines shown for an expanded thinking block before the
+/// `…` overflow marker. TS keeps the full block in a markdown render
+/// (no clamp); coco-rs clamps so a chatty model doesn't push other
+/// chat rows off-screen. Bump this up if users want more context.
+pub const THINKING_PREVIEW_LINES: usize = 5;
+
 // ========== Virtual Scroll ==========
 
 /// Number of messages to render beyond the visible viewport (buffer).

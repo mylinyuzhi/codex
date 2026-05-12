@@ -267,6 +267,7 @@ impl Tool for GlobTool {
             data: serde_json::json!(output),
             new_messages: vec![],
             app_state_patch: None,
+            permission_updates: Vec::new(),
         })
     }
 }

@@ -33,13 +33,13 @@ fn pending_permission_guard_increments_and_drops() {
     // decrements. This is the contract the prompt-suggestion fork
     // relies on — counter > 0 ↔ at least one overlay is open.
     let s = ToolAppState::default();
-    let counter = s.pending_permission_count.clone();
+    let counter = &s.pending_permission_count;
     assert_eq!(counter.load(Ordering::Relaxed), 0);
 
-    let g1 = PendingPermissionGuard::acquire(counter.clone());
+    let g1 = PendingPermissionGuard::acquire(std::sync::Arc::clone(counter));
     assert_eq!(counter.load(Ordering::Relaxed), 1);
 
-    let g2 = PendingPermissionGuard::acquire(counter.clone());
+    let g2 = PendingPermissionGuard::acquire(std::sync::Arc::clone(counter));
     assert_eq!(counter.load(Ordering::Relaxed), 2);
 
     drop(g1);
@@ -55,10 +55,10 @@ fn elicitation_guard_increments_and_drops() {
     // elicitation counter. Verify it works independently — both
     // counters live on the same struct but don't cross-talk.
     let s = ToolAppState::default();
-    let perm_counter = s.pending_permission_count.clone();
-    let elicit_counter = s.elicitation_pending_count.clone();
+    let perm_counter = &s.pending_permission_count;
+    let elicit_counter = &s.elicitation_pending_count;
 
-    let _g = ElicitationGuard::acquire(elicit_counter.clone());
+    let _g = ElicitationGuard::acquire(std::sync::Arc::clone(elicit_counter));
     assert_eq!(elicit_counter.load(Ordering::Relaxed), 1);
     // Permission counter must NOT move — counters are independent.
     assert_eq!(perm_counter.load(Ordering::Relaxed), 0);
@@ -70,10 +70,11 @@ fn pending_permission_guard_drop_in_panic_unwind() {
     // panic-unwind. This is the property that lets us use the
     // guard from arbitrary tasks without runtime concerns.
     let s = ToolAppState::default();
-    let counter = s.pending_permission_count.clone();
+    let counter = &s.pending_permission_count;
 
-    let _ = std::panic::catch_unwind(|| {
-        let _guard = PendingPermissionGuard::acquire(counter.clone());
+    let counter_for_closure = std::sync::Arc::clone(counter);
+    let _ = std::panic::catch_unwind(move || {
+        let _guard = PendingPermissionGuard::acquire(counter_for_closure);
         panic!("simulate task panic with guard held");
     });
 
