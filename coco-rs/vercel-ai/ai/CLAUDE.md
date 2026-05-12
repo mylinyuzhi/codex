@@ -24,7 +24,7 @@ Middleware: `wrap_language_model`, `wrap_embedding_model`, `wrap_image_model`, `
 
 Registry / provider: `ProviderRegistry`, `ProviderRegistryOptions`, `create_provider_registry`, `custom_provider`, `CustomProviderOptions`, `set_default_provider` / `get_default_provider` / `clear_default_provider` / `has_default_provider`.
 
-Stream processing: `StreamProcessor`, `StreamProcessorConfig`, `StreamSnapshot`, `FileSnapshot`, `ReasoningSnapshot`, `SourceSnapshot`, `ToolCallSnapshot`, `TextStreamPart`.
+Stream processing: `StreamProcessor`, `StreamProcessorConfig`, `StreamMetrics`, `TextStreamPart`. `StreamProcessor` is a thin adapter — idle-timeout + ttft/stall metrics around a `Stream<LanguageModelV4StreamPart>`. **It does no content accumulation**: per-stream snapshots embed consumer policy (which parts matter, which metadata to preserve), so each consumer owns its own accumulator (e.g. `coco_inference::AssistantTurnSnapshot`).
 
 Tool results / errors: `ToolCall`, `ToolResult`, `ToolOutput`, `ToolError`, `ToolCallOutcome`, `DynamicToolCall` / `DynamicToolResult`, `StaticToolCall` / `StaticToolResult`, `TypedToolCall` / `TypedToolResult`, `ToolCallRepairFunction`, `SmoothStream`.
 

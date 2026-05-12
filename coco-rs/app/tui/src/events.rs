@@ -210,6 +210,17 @@ pub enum TuiCommand {
     OverlayJumpEnd,
     /// Confirm selection in overlay.
     OverlayConfirm,
+    /// Cycle thinking effort in the ModelPicker overlay by `delta`.
+    /// Bound to Left/Right via `modelPicker:decreaseEffort` /
+    /// `modelPicker:increaseEffort`. Distinct from `OverlayPrev/Next`
+    /// (Up/Down) because the picker has two orthogonal cursors —
+    /// model row and effort level — TS solves this with the same
+    /// `←/→` axis (`useEffortNavigation`).
+    ModelPickerCycleEffort(i32),
+    /// Cycle the configured role in the ModelPicker overlay by `delta`.
+    /// Tab → +1, Shift+Tab → -1. coco-rs-only extension to the TS
+    /// picker (TS only ever drives the `main` model).
+    ModelPickerCycleRole(i32),
 
     // ── Task management ──
     /// Background all foreground tasks.

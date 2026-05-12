@@ -330,6 +330,8 @@ fn test_snapshot_subagent_panel_populated() {
             description: "Search for auth handlers".into(),
             status: SubagentStatus::Running,
             color: Some("blue".into()),
+            started_at_ms: None,
+            token_usage: None,
         },
         SubagentInstance {
             agent_id: "agent-c1d3".into(),
@@ -337,6 +339,8 @@ fn test_snapshot_subagent_panel_populated() {
             description: "Design refactor plan".into(),
             status: SubagentStatus::Completed,
             color: None,
+            started_at_ms: None,
+            token_usage: None,
         },
         SubagentInstance {
             agent_id: "agent-9e5f".into(),
@@ -344,6 +348,8 @@ fn test_snapshot_subagent_panel_populated() {
             description: "Run tests + verify".into(),
             status: SubagentStatus::Failed,
             color: Some("red".into()),
+            started_at_ms: None,
+            token_usage: None,
         },
     ];
     state.session.focused_subagent_index = Some(0);

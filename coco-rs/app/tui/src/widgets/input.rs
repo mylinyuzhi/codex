@@ -17,6 +17,7 @@ use ratatui::widgets::Wrap;
 
 use crate::i18n::t;
 use crate::state::ui::InputState;
+use crate::state::ui::PromptMode;
 use crate::theme::Theme;
 
 /// Token type for syntax highlighting.
@@ -55,6 +56,8 @@ impl<'a> InputWidget<'a> {
         self
     }
 
+    /// Set whether the session's permission mode is `Plan`. Drives the
+    /// "Plan Mode" title fallback when no prompt prefix is active.
     pub fn plan_mode(mut self, plan_mode: bool) -> Self {
         self.plan_mode = plan_mode;
         self
@@ -171,14 +174,19 @@ impl Widget for InputWidget<'_> {
             self.theme.border
         };
 
-        let title_text = if self.plan_mode {
-            t!("input.title_plan_mode")
-        } else if self.is_streaming {
-            t!("input.title_queue")
+        // Layered title: streaming wins, then prompt-mode prefix, then
+        // plan permission mode, else default. Mirrors `render::render_input`.
+        let prompt_mode = self.input.prompt_mode();
+        let title_key = if self.is_streaming {
+            "input.title_queue"
+        } else if prompt_mode != PromptMode::Normal {
+            prompt_mode.title_i18n_key()
+        } else if self.plan_mode {
+            "input.title_plan_mode"
         } else {
-            t!("input.title")
+            "input.title"
         };
-        let title = format!(" {title_text} ");
+        let title = format!(" {} ", t!(title_key));
 
         let block = Block::default()
             .borders(Borders::TOP)

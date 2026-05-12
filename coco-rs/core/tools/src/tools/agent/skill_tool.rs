@@ -141,32 +141,43 @@ impl Tool for SkillTool {
         // runtime to splice at the seam where Value→Message conversion
         // lives — this tool's `new_messages: Vec<Message>` slot stays
         // empty.
-        let data = match result {
+        // Pull `permission_updates` off the inline variant so the
+        // skill's `allowed-tools` frontmatter folds into the running
+        // session config via the executor's `PermissionRuleHandle`.
+        // Fork variant has no return-channel updates — those were
+        // applied at dispatch time via `AgentQueryConfig.extra_allow_rules`.
+        let (data, permission_updates) = match result {
             coco_tool_runtime::SkillInvocationResult::Inline {
                 summary,
                 new_messages,
-            } => serde_json::json!({
-                "status": "inline",
-                "success": true,
-                "commandName": skill_name,
-                "summary": summary,
-                "new_messages": new_messages,
-            }),
-            coco_tool_runtime::SkillInvocationResult::Forked { agent_id, output } => {
+                permission_updates,
+            } => (
+                serde_json::json!({
+                    "status": "inline",
+                    "success": true,
+                    "commandName": skill_name,
+                    "summary": summary,
+                    "new_messages": new_messages,
+                }),
+                permission_updates,
+            ),
+            coco_tool_runtime::SkillInvocationResult::Forked { agent_id, output } => (
                 serde_json::json!({
                     "status": "forked",
                     "success": true,
                     "commandName": skill_name,
                     "agentId": agent_id,
                     "result": output,
-                })
-            }
+                }),
+                Vec::new(),
+            ),
         };
 
         Ok(ToolResult {
             data,
             new_messages: vec![],
             app_state_patch: None,
+            permission_updates,
         })
     }
 }

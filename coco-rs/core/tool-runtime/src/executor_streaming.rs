@@ -231,12 +231,13 @@ where
             on_outcome(outcome);
         }
         safe_effects.sort_by_key(|(idx, _)| *idx);
+        let (patches, update_lists): (Vec<_>, Vec<_>) = safe_effects
+            .into_iter()
+            .map(|(_, e)| (e.app_state_patch, e.permission_updates))
+            .unzip();
         let combined_safe = ToolSideEffects {
-            app_state_patch: crate::executor::coalesce_patches(
-                safe_effects
-                    .into_iter()
-                    .filter_map(|(_, e)| e.app_state_patch),
-            ),
+            app_state_patch: crate::executor::coalesce_patches(patches.into_iter().flatten()),
+            permission_updates: update_lists.into_iter().flatten().collect(),
         };
         self.executor.apply_side_effects(combined_safe).await;
 

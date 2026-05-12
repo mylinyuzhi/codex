@@ -44,13 +44,33 @@ pub struct AgentQueryConfig {
     #[serde(default)]
     pub max_output_tokens: Option<i64>,
     /// Tools available to the agent (names). Empty = inherit parent's
-    /// filter; non-empty = subagent restricted to this set.
+    /// filter; non-empty = subagent restricted to this set. This is a
+    /// **registry filter** — tools outside the set are hidden from the
+    /// model. Used by `AgentTool` / coordinator / teammate spawners
+    /// where the parent intends to narrow the visible toolset.
+    ///
+    /// Fork-mode skills DO NOT populate this. They go through
+    /// [`AgentQueryConfig::extra_allow_rules`] instead, mirroring TS
+    /// `createGetAppStateWithAllowedTools` (which adds to
+    /// `alwaysAllowRules.command` without narrowing tools[]).
     #[serde(default)]
     pub allowed_tools: Vec<String>,
     /// Tools explicitly denied to the agent regardless of allow-list.
     /// Sourced from `AgentDefinition.disallowed_tools`.
     #[serde(default)]
     pub disallowed_tools: Vec<String>,
+    /// Auto-allow rules (typically Command-source from a skill's
+    /// `allowed-tools` frontmatter) folded into the subagent's
+    /// `ToolPermissionContext.allow_rules` at fork-engine
+    /// construction. Skipped at the JSON boundary because the rule
+    /// values carry runtime-only metadata (`PermissionRule` is
+    /// `Clone`, but cross-process serialization would round-trip the
+    /// rule strings via a different path).
+    ///
+    /// TS parity: `createGetAppStateWithAllowedTools` wrapping
+    /// `getAppState` for forked-skill contexts (`forkedAgent.ts:147-171`).
+    #[serde(skip)]
+    pub extra_allow_rules: Vec<coco_types::PermissionRule>,
     /// Layer 2 tool overrides inherited from the parent. The subagent
     /// **never** widens this set — `ToolOverrides::none()` would
     /// expose tools the active model doesn't actually accept. Skipped

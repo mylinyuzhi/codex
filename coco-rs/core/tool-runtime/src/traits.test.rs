@@ -48,6 +48,7 @@ impl Tool for EchoTool {
             data: input,
             new_messages: vec![],
             app_state_patch: None,
+            permission_updates: Vec::new(),
         })
     }
 }

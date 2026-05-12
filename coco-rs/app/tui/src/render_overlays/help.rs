@@ -169,6 +169,28 @@ fn entries() -> &'static [HelpEntry] {
                 fallback: "PageUp/Down",
                 description_key: "help.desc.scroll",
             },
+            // Prompt-mode prefixes — typed inline, not bound to a key.
+            // Listed last so the keybinding rows above stay together.
+            HelpEntry {
+                action: None,
+                fallback: "!cmd",
+                description_key: "help.desc.bash_mode",
+            },
+            HelpEntry {
+                action: None,
+                fallback: "#note",
+                description_key: "help.desc.memory_mode",
+            },
+            HelpEntry {
+                action: None,
+                fallback: "/cmd",
+                description_key: "help.desc.slash_commands",
+            },
+            HelpEntry {
+                action: None,
+                fallback: "@path",
+                description_key: "help.desc.file_mention",
+            },
         ]
     })
 }

@@ -135,6 +135,7 @@ impl Tool for EnterWorktreeTool {
             }),
             new_messages: vec![],
             app_state_patch: None,
+            permission_updates: Vec::new(),
         })
     }
 }
@@ -331,6 +332,7 @@ impl Tool for ExitWorktreeTool {
             }),
             new_messages: vec![],
             app_state_patch: None,
+            permission_updates: Vec::new(),
         })
     }
 }

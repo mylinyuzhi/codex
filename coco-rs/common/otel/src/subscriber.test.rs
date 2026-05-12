@@ -19,6 +19,8 @@ fn opts(mode: Mode) -> SubscriberOpts {
         format: None,
         file: None,
         also_stderr: false,
+        location: false,
+        thread_names: false,
         default_log_dir: PathBuf::from("/tmp/coco-test/logs"),
         default_file_prefix: "coco".to_string(),
         timezone: TimezoneConfig::default(),
@@ -111,6 +113,27 @@ fn skip_mode_ignores_timezone() {
     // not change behavior.
     let mut o = opts(Mode::Skip);
     o.timezone = TimezoneConfig::Utc;
+    let result = init_subscriber(o).expect("Skip should not error");
+    assert!(result.is_none());
+}
+
+#[test]
+fn opts_layout_toggles_default_off() {
+    // Verbose layout (file:line + thread name) must stay off unless
+    // the CLI layer opts in — the doc rationale is the per-event byte
+    // cost.
+    let o = opts(Mode::Tui);
+    assert!(!o.location);
+    assert!(!o.thread_names);
+}
+
+#[test]
+fn skip_mode_ignores_layout_toggles() {
+    // Skip path returns early — non-default layout flags must not
+    // alter the contract that no subscriber is installed.
+    let mut o = opts(Mode::Skip);
+    o.location = true;
+    o.thread_names = true;
     let result = init_subscriber(o).expect("Skip should not error");
     assert!(result.is_none());
 }

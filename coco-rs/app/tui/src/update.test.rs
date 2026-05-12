@@ -387,3 +387,156 @@ async fn plan_exit_tab_excludes_bypass_when_gate_off() {
     };
     assert_eq!(p.next_mode, PlanExitTarget::RestorePrePlan);
 }
+
+#[tokio::test]
+async fn cycle_into_bypass_shows_confirmation_overlay() {
+    use coco_types::PermissionMode;
+
+    let mut state = AppState::new();
+    state.session.bypass_permissions_available = true;
+    state.session.permission_mode = PermissionMode::Plan; // next = Bypass
+    let (tx, mut rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::CyclePermissionMode, &tx).await;
+
+    // Mode must NOT change until the user confirms.
+    assert_eq!(state.session.permission_mode, PermissionMode::Plan);
+    assert!(
+        matches!(state.ui.overlay, Some(Overlay::BypassPermissions(_))),
+        "BypassPermissionsOverlay should be shown"
+    );
+    assert!(rx.try_recv().is_err(), "should not flip mode until approve");
+}
+
+#[tokio::test]
+async fn approve_bypass_overlay_flips_mode_and_toasts() {
+    use crate::state::BypassPermissionsOverlay;
+    use coco_types::PermissionMode;
+
+    let mut state = AppState::new();
+    state.session.bypass_permissions_available = true;
+    state
+        .ui
+        .set_overlay(Overlay::BypassPermissions(BypassPermissionsOverlay {
+            current_mode: "Plan".into(),
+        }));
+    let (tx, mut rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::Approve, &tx).await;
+
+    assert_eq!(
+        state.session.permission_mode,
+        PermissionMode::BypassPermissions
+    );
+    assert!(state.ui.overlay.is_none());
+    let toasted = state
+        .ui
+        .toasts
+        .iter()
+        .any(|t| matches!(t.severity, ToastSeverity::Warning));
+    assert!(toasted, "approve should raise a warning toast");
+    let cmd = rx.try_recv().expect("SetPermissionMode must be sent");
+    assert!(
+        matches!(
+            cmd,
+            UserCommand::SetPermissionMode {
+                mode: PermissionMode::BypassPermissions
+            }
+        ),
+        "got: {cmd:?}"
+    );
+}
+
+#[tokio::test]
+async fn deny_bypass_overlay_keeps_mode() {
+    use crate::state::BypassPermissionsOverlay;
+    use coco_types::PermissionMode;
+
+    let mut state = AppState::new();
+    state.session.bypass_permissions_available = true;
+    state.session.permission_mode = PermissionMode::Plan;
+    state
+        .ui
+        .set_overlay(Overlay::BypassPermissions(BypassPermissionsOverlay {
+            current_mode: "Plan".into(),
+        }));
+    let (tx, mut rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::Deny, &tx).await;
+
+    assert_eq!(state.session.permission_mode, PermissionMode::Plan);
+    assert!(state.ui.overlay.is_none());
+    assert!(
+        rx.try_recv().is_err(),
+        "deny must not emit SetPermissionMode"
+    );
+}
+
+#[tokio::test]
+async fn cycle_into_auto_shows_opt_in() {
+    use coco_types::PermissionMode;
+
+    // Only auto available — cycle Plan → Auto since bypass is gated off.
+    let mut state = AppState::new();
+    state.session.auto_mode_available = true;
+    state.session.bypass_permissions_available = false;
+    state.session.permission_mode = PermissionMode::Plan;
+    let (tx, mut rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::CyclePermissionMode, &tx).await;
+
+    assert_eq!(state.session.permission_mode, PermissionMode::Plan);
+    assert!(
+        matches!(state.ui.overlay, Some(Overlay::AutoModeOptIn(_))),
+        "AutoModeOptIn overlay should be shown"
+    );
+    assert!(rx.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn cycle_into_safe_mode_applies_immediately() {
+    use coco_types::PermissionMode;
+
+    let mut state = AppState::new();
+    state.session.permission_mode = PermissionMode::Default;
+    let (tx, mut rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::CyclePermissionMode, &tx).await;
+
+    // Default → AcceptEdits with no confirmation overlay.
+    assert_eq!(state.session.permission_mode, PermissionMode::AcceptEdits);
+    assert!(state.ui.overlay.is_none());
+    let toasted = state
+        .ui
+        .toasts
+        .iter()
+        .any(|t| matches!(t.severity, ToastSeverity::Info));
+    assert!(toasted, "safe mode change should raise an info toast");
+    let cmd = rx.try_recv().expect("SetPermissionMode must be sent");
+    assert!(matches!(
+        cmd,
+        UserCommand::SetPermissionMode {
+            mode: PermissionMode::AcceptEdits
+        }
+    ));
+}
+
+#[tokio::test]
+async fn toggle_plan_mode_raises_toast() {
+    use coco_types::PermissionMode;
+
+    let mut state = AppState::new();
+    let (tx, _rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::TogglePlanMode, &tx).await;
+    assert_eq!(state.session.permission_mode, PermissionMode::Plan);
+    let on_toast = state
+        .ui
+        .toasts
+        .iter()
+        .any(|t| t.message.to_lowercase().contains("plan mode on"));
+    assert!(on_toast, "plan-on toast should mention plan mode on");
+
+    handle_command(&mut state, TuiCommand::TogglePlanMode, &tx).await;
+    assert_eq!(state.session.permission_mode, PermissionMode::Default);
+}

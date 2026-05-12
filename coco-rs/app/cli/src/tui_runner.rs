@@ -540,6 +540,72 @@ async fn run_agent_driver(
                 });
             }
 
+            UserCommand::SubmitBash {
+                user_message_id,
+                command,
+            } => {
+                let event_tx_t = event_tx.clone();
+                // Run from the process's current dir — shell prompt
+                // commands inherit the same cwd the agent is using.
+                // `runtime_config.paths.project_dir` is the explicit
+                // project root when configured, but is optional, so
+                // we fall back to `current_dir()` (always defined).
+                let cwd = runtime
+                    .runtime_config
+                    .paths
+                    .project_dir
+                    .clone()
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+                tokio::spawn(async move {
+                    run_prompt_mode_bash(&cwd, user_message_id, command, event_tx_t).await;
+                });
+            }
+
+            UserCommand::SubmitMemory {
+                user_message_id: _,
+                content,
+            } => {
+                let event_tx_t = event_tx.clone();
+                let cwd = runtime
+                    .runtime_config
+                    .paths
+                    .project_dir
+                    .clone()
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+                tokio::spawn(async move {
+                    run_prompt_mode_memory(&cwd, content, event_tx_t).await;
+                });
+            }
+
+            UserCommand::SetModel { model } => {
+                // Legacy command — flip the Main role only. Persist
+                // through the same path as `SetModelRole { role: Main }`
+                // so two callers don't drift on disk shape.
+                let event_tx_t = event_tx.clone();
+                tokio::spawn(async move {
+                    persist_model_role(
+                        coco_types::ModelRole::Main,
+                        infer_provider_for_persist(&model),
+                        model,
+                        None,
+                        event_tx_t,
+                    )
+                    .await;
+                });
+            }
+
+            UserCommand::SetModelRole {
+                role,
+                provider,
+                model_id,
+                effort,
+            } => {
+                let event_tx_t = event_tx.clone();
+                tokio::spawn(async move {
+                    persist_model_role(role, provider, model_id, effort, event_tx_t).await;
+                });
+            }
+
             UserCommand::ExecuteSkill { name, args } => {
                 // Command-palette dispatch (`update/overlay.rs::Submit`).
                 // Same registry lookup as the typed path, but with no
@@ -930,6 +996,9 @@ async fn run_agent_driver(
                                         "local settings"
                                     }
                                     coco_types::PermissionUpdateDestination::CliArg => "CLI flag",
+                                    coco_types::PermissionUpdateDestination::Command => {
+                                        "command scope"
+                                    }
                                 };
                                 let behavior = match rule.behavior {
                                     coco_types::PermissionBehavior::Allow => "allow",
@@ -1487,6 +1556,11 @@ async fn dispatch_slash_command(
                         }))
                         .await;
                 }
+                DialogSpec::ModelPicker => {
+                    let _ = event_tx
+                        .send(CoreEvent::Tui(TuiOnlyEvent::OpenModelPicker))
+                        .await;
+                }
                 DialogSpec::PluginPicker
                 | DialogSpec::McpbConfig { .. }
                 | DialogSpec::Confirm { .. } => {
@@ -1494,9 +1568,9 @@ async fn dispatch_slash_command(
                         DialogSpec::PluginPicker => "plugin picker",
                         DialogSpec::McpbConfig { .. } => "MCPB config form",
                         DialogSpec::Confirm { .. } => "confirm dialog",
-                        DialogSpec::MessageSelector | DialogSpec::MemoryFileSelector { .. } => {
-                            unreachable!()
-                        }
+                        DialogSpec::MessageSelector
+                        | DialogSpec::MemoryFileSelector { .. }
+                        | DialogSpec::ModelPicker => unreachable!(),
                     }
                     .to_string();
                     emit_slash_status(
@@ -2669,6 +2743,239 @@ fn image_data_to_queued(images: &[coco_tui::paste::ImageData]) -> Vec<QueuedImag
             data_base64: base64::engine::general_purpose::STANDARD.encode(&img.bytes),
         })
         .collect()
+}
+
+/// Run a prompt-mode bash submission (`!ls -la`). Mirrors TS's
+/// `LocalShellTask` semantics: the model loop is bypassed entirely;
+/// the command runs once in the session cwd via [`coco_shell::ShellExecutor`]
+/// and the merged stdout+stderr is folded back into the transcript as a
+/// `MessageContent::BashOutput`.
+///
+/// Output is capped at 200 lines / ~8 KB so a `find /` doesn't fill the
+/// chat scrollback. The TUI's renderer already truncates display to 20
+/// lines (`render_user.rs::BashOutput`) but we keep the wire payload
+/// modest to avoid bloating the JSONL transcript.
+async fn run_prompt_mode_bash(
+    cwd: &std::path::Path,
+    user_message_id: String,
+    command: String,
+    event_tx: mpsc::Sender<CoreEvent>,
+) {
+    const MAX_OUTPUT_BYTES: usize = 8 * 1024;
+    const MAX_OUTPUT_LINES: usize = 200;
+
+    let mut executor = coco_shell::ShellExecutor::new(cwd);
+    let exec_opts = coco_shell::ExecOptions::default();
+    let (output, exit_code) = match executor.execute(&command, &exec_opts).await {
+        Ok(result) => {
+            let mut merged = String::new();
+            if !result.stdout.is_empty() {
+                merged.push_str(&result.stdout);
+            }
+            if !result.stderr.is_empty() {
+                if !merged.is_empty() && !merged.ends_with('\n') {
+                    merged.push('\n');
+                }
+                merged.push_str(&result.stderr);
+            }
+            (
+                truncate_output(merged, MAX_OUTPUT_BYTES, MAX_OUTPUT_LINES),
+                result.exit_code,
+            )
+        }
+        Err(err) => (format!("error: {err}"), -1),
+    };
+
+    let _ = event_tx
+        .send(CoreEvent::Tui(TuiOnlyEvent::BashCommandCompleted {
+            user_message_id,
+            output,
+            exit_code,
+        }))
+        .await;
+}
+
+/// Append a `#`-prefixed memory entry to the project `CLAUDE.md`. If no
+/// `CLAUDE.md` exists at the cwd root we create one. The full memory
+/// scope picker (project / user / managed / external-includes) ships as
+/// a follow-up — for now we mirror TS's default behaviour of writing to
+/// the closest project memory file.
+async fn run_prompt_mode_memory(
+    cwd: &std::path::Path,
+    content: String,
+    event_tx: mpsc::Sender<CoreEvent>,
+) {
+    let path = cwd.join("CLAUDE.md");
+    let path_display = path.display().to_string();
+    let result = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)?;
+        // Each `#` entry becomes a bulleted line under no specific
+        // heading. TS uses the file picker so the user chooses scope +
+        // section; this MVP just appends. If the file is empty seed a
+        // newline so the bullet starts on its own line.
+        let metadata = file.metadata()?;
+        if metadata.len() > 0 {
+            writeln!(file)?;
+        }
+        writeln!(file, "- {content}")?;
+        Ok(())
+    })
+    .await;
+
+    match result {
+        Ok(Ok(())) => {
+            let _ = event_tx
+                .send(CoreEvent::Tui(TuiOnlyEvent::MemorySaved {
+                    path: path_display,
+                }))
+                .await;
+        }
+        Ok(Err(err)) => {
+            warn!(error = %err, "memory append failed");
+            let _ = event_tx
+                .send(CoreEvent::Protocol(ServerNotification::Error(
+                    coco_types::ErrorParams {
+                        message: format!("memory append failed: {err}"),
+                        category: None,
+                        retryable: false,
+                    },
+                )))
+                .await;
+        }
+        Err(err) => {
+            warn!(error = %err, "memory append task panicked");
+        }
+    }
+}
+
+/// Cap `text` at the smaller of `max_bytes` or `max_lines`, appending a
+/// short notice when truncation occurs. Splits on char boundaries so
+/// UTF-8 stays intact even when the byte limit lands mid-codepoint.
+fn truncate_output(text: String, max_bytes: usize, max_lines: usize) -> String {
+    let line_count = text.lines().count();
+    let byte_over = text.len() > max_bytes;
+    if !byte_over && line_count <= max_lines {
+        return text;
+    }
+    let mut truncated: String = text.lines().take(max_lines).collect::<Vec<_>>().join("\n");
+    if truncated.len() > max_bytes {
+        let cut = truncated
+            .char_indices()
+            .take_while(|(i, _)| *i <= max_bytes)
+            .last()
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        truncated.truncate(cut);
+    }
+    truncated.push_str("\n… (truncated)");
+    truncated
+}
+
+/// Persist a `(role, provider, model_id, effort)` selection to
+/// `~/.coco/settings.json::model_roles.<role>`. Emits a TUI event
+/// for the success/failure toast.
+///
+/// The on-disk shape matches the nested form accepted by
+/// `RoleSlots<ModelSelection>::deserialize`
+/// (`common/config/src/model/role_slots.rs`): `primary` carries the
+/// selection, optional `thinking_level` carries the chosen effort
+/// when one is set. Effort lives at the role level because the
+/// runtime resolver applies it per role (rather than per model).
+///
+/// Live re-binding is out of scope for this turn — the engine picks
+/// up the new selection on the next session, or sooner when the
+/// `SettingsWatcher` debounce fires and reloads.
+async fn persist_model_role(
+    role: coco_types::ModelRole,
+    provider: String,
+    model_id: String,
+    effort: Option<coco_types::ReasoningEffort>,
+    event_tx: tokio::sync::mpsc::Sender<CoreEvent>,
+) {
+    let role_key = role.as_str().to_string();
+    let mut payload = serde_json::json!({
+        "primary": {
+            "provider": provider,
+            "model_id": model_id,
+        }
+    });
+    if let Some(effort) = effort
+        && let Some(obj) = payload.as_object_mut()
+    {
+        obj.insert(
+            "thinking_level".to_string(),
+            serde_json::json!({ "effort": effort.to_string() }),
+        );
+    }
+
+    let role_key_for_write = role_key.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        coco_config::global_config::write_user_setting(
+            &format!("model_roles.{role_key_for_write}"),
+            payload,
+        )
+    })
+    .await;
+
+    match result {
+        Ok(Ok(path)) => {
+            tracing::info!(
+                role = %role_key,
+                %provider,
+                %model_id,
+                settings_path = %path.display(),
+                "persisted model-role selection"
+            );
+            let _ = event_tx
+                .send(CoreEvent::Tui(TuiOnlyEvent::ModelRoleApplied {
+                    role: role_key,
+                    provider,
+                    model_id,
+                    effort: effort.map(|e| e.to_string()),
+                }))
+                .await;
+        }
+        Ok(Err(err)) => {
+            tracing::warn!(role = %role_key, %provider, %model_id, error = %err, "failed to persist model-role selection");
+            let _ = event_tx
+                .send(CoreEvent::Tui(TuiOnlyEvent::ModelRolePersistFailed {
+                    role: role_key,
+                    error: err.to_string(),
+                }))
+                .await;
+        }
+        Err(join_err) => {
+            tracing::warn!(role = %role_key, error = %join_err, "model-role persist task panicked");
+            let _ = event_tx
+                .send(CoreEvent::Tui(TuiOnlyEvent::ModelRolePersistFailed {
+                    role: role_key,
+                    error: format!("task join error: {join_err}"),
+                }))
+                .await;
+        }
+    }
+}
+
+/// Best-effort provider inference for the legacy `SetModel` path that
+/// only carries a model_id. Mirrors the TUI's `infer_provider` so
+/// persistence is consistent regardless of which command emitted it.
+fn infer_provider_for_persist(model_id: &str) -> String {
+    if model_id.starts_with("claude-") {
+        "anthropic"
+    } else if model_id.starts_with("gpt-") || model_id.starts_with('o') {
+        "openai"
+    } else if model_id.starts_with("gemini-") {
+        "google"
+    } else if model_id.starts_with("deepseek-") {
+        "deepseek"
+    } else {
+        "other"
+    }
+    .to_string()
 }
 
 #[cfg(test)]

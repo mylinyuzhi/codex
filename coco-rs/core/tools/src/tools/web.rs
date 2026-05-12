@@ -728,6 +728,7 @@ Usage notes:
                             }),
                             new_messages: vec![],
                             app_state_patch: None,
+                            permission_updates: Vec::new(),
                         });
                     }
                     Err(e) => {
@@ -821,6 +822,7 @@ Usage notes:
                     }),
                     new_messages: vec![],
                     app_state_patch: None,
+                    permission_updates: Vec::new(),
                 });
             }
         };
@@ -835,6 +837,7 @@ Usage notes:
             }),
             new_messages: vec![],
             app_state_patch: None,
+            permission_updates: Vec::new(),
         })
     }
 }
@@ -1530,6 +1533,7 @@ IMPORTANT - Use the correct year in search queries:
             }),
             new_messages: vec![],
             app_state_patch: None,
+            permission_updates: Vec::new(),
         })
     }
 }

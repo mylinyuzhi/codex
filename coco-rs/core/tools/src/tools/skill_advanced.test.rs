@@ -240,45 +240,6 @@ fn test_skill_matches_rule_wildcard() {
     assert!(!skill_matches_rule("commit", "review:*"));
 }
 
-// ── Tool computation tests ──
-
-#[test]
-fn test_compute_effective_tools_unrestricted() {
-    let skill = ResolvedSkill {
-        name: "test".into(),
-        prompt: "do stuff".into(),
-        source: SkillSource::Bundled,
-        execution_mode: SkillExecutionMode::Inline,
-        model_override: None,
-        allowed_tools: vec![],
-        disallowed_tools: vec!["Bash".into()],
-        allow_model_invocation: true,
-        effort: None,
-    };
-    let available = vec!["Read".into(), "Write".into(), "Bash".into()];
-    let effective = compute_effective_tools(&skill, &available);
-    assert_eq!(effective, vec!["Read", "Write"]);
-}
-
-#[test]
-fn test_compute_effective_tools_restricted() {
-    let skill = ResolvedSkill {
-        name: "test".into(),
-        prompt: "do stuff".into(),
-        source: SkillSource::Bundled,
-        execution_mode: SkillExecutionMode::Inline,
-        model_override: None,
-        allowed_tools: vec!["Read".into(), "Grep".into(), "Missing".into()],
-        disallowed_tools: vec![],
-        allow_model_invocation: true,
-        effort: None,
-    };
-    let available = vec!["Read".into(), "Write".into(), "Grep".into()];
-    let effective = compute_effective_tools(&skill, &available);
-    // "Missing" is not in available, so excluded
-    assert_eq!(effective, vec!["Read", "Grep"]);
-}
-
 // ── Execution mode tests ──
 
 #[test]

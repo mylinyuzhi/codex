@@ -265,6 +265,68 @@ pub(super) fn handle(state: &mut AppState, event: TuiOnlyEvent) -> bool {
             }
             true
         }
+        TuiOnlyEvent::BashCommandCompleted {
+            user_message_id: _,
+            output,
+            exit_code,
+        } => {
+            // Fresh id for the output row — the rewind picker keys on
+            // message id, so reusing the input's id would surface two
+            // rows targeting the same checkpoint. The two messages are
+            // adjacent in history so visual pairing is preserved without
+            // sharing the id. (`user_message_id` stays in the event for
+            // future correlation needs, e.g. linking output-to-input in
+            // SDK transcripts.)
+            state
+                .session
+                .add_message(crate::state::session::ChatMessage::user_bash_output(
+                    uuid::Uuid::new_v4().to_string(),
+                    output,
+                    exit_code,
+                ));
+            true
+        }
+        TuiOnlyEvent::MemorySaved { path } => {
+            state.ui.add_toast(Toast::success(
+                t!("toast.memory_saved", path = path.as_str()).to_string(),
+            ));
+            true
+        }
+        TuiOnlyEvent::ModelRoleApplied {
+            role,
+            provider,
+            model_id,
+            effort,
+        } => {
+            let effort_suffix = effort
+                .as_deref()
+                .map(|e| format!(" · {e}"))
+                .unwrap_or_default();
+            state.ui.add_toast(Toast::success(
+                t!(
+                    "toast.model_set",
+                    role = role.as_str(),
+                    provider = provider.as_str(),
+                    model = model_id.as_str(),
+                    effort = effort_suffix.as_str()
+                )
+                .to_string(),
+            ));
+            // Optimistic Main mirror was already applied locally by the
+            // overlay confirm path for the Main role; non-Main roles
+            // don't have a session-state mirror so we just log.
+            true
+        }
+        TuiOnlyEvent::ModelRolePersistFailed { role: _, error } => {
+            state.ui.add_toast(Toast::error(
+                t!("toast.model_save_failed", error = error.as_str()).to_string(),
+            ));
+            true
+        }
+        TuiOnlyEvent::OpenModelPicker => {
+            crate::update::show::cycle_model(state);
+            true
+        }
         TuiOnlyEvent::SlashCommandStatus { name, kind } => {
             use coco_types::SlashCommandStatusKind;
             let text = match kind {

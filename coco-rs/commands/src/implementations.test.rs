@@ -33,12 +33,14 @@ fn test_extended_builtins_no_overlap_with_base() {
     // Some commands exist in both (the extended set overrides/replaces them)
     // That's by design: extended handlers have real logic replacing stubs.
     // Verify the extended set has the key commands.
+    // `/model` is registered via `register_ts_parity_handlers`, not here —
+    // moved out so the handler can return `OpenDialog(ModelPicker)` on
+    // no-args. Don't add it back to this list.
     let key_commands = [
         "compact",
         "context",
         "cost",
         "diff",
-        "model",
         "permissions",
         "session",
         "resume",
@@ -310,16 +312,22 @@ fn test_color_handler_invalid_color() {
 // /fast removed per parity scope; coverage dropped accordingly.
 
 #[tokio::test]
-async fn test_model_handler_empty() {
-    let output = handlers::model::handler(String::new()).await.unwrap();
-    assert!(output.contains("Available Models"));
-    assert!(output.contains("sonnet"));
-    assert!(output.contains("opus"));
-    assert!(output.contains("haiku"));
+async fn test_model_handler_empty_opens_picker() {
+    use crate::CommandHandler;
+    use crate::CommandResult;
+    use crate::DialogSpec;
+    let handler = crate::handlers::model::ModelHandler;
+    let result = handler.execute_command("").await.unwrap();
+    assert!(matches!(
+        result,
+        CommandResult::OpenDialog(DialogSpec::ModelPicker)
+    ));
 }
 
 #[tokio::test]
 async fn test_model_handler_known() {
+    use crate::CommandHandler;
+    use crate::CommandResult;
     // Sandbox the settings write so this test doesn't pollute the
     // developer's real `~/.coco/settings.json`.
     let tmp = tempfile::tempdir().unwrap();
@@ -327,23 +335,34 @@ async fn test_model_handler_known() {
     unsafe {
         std::env::set_var("COCO_CONFIG_DIR", tmp.path());
     }
-    let output = handlers::model::handler("sonnet".to_string())
-        .await
-        .unwrap();
+    let handler = crate::handlers::model::ModelHandler;
+    let result = handler.execute_command("sonnet").await.unwrap();
     unsafe {
         match prev {
             Some(v) => std::env::set_var("COCO_CONFIG_DIR", v),
             None => std::env::remove_var("COCO_CONFIG_DIR"),
         }
     }
-    assert!(output.contains("set to"));
-    assert!(output.contains("Saved to"));
+    let text = match result {
+        CommandResult::Text(t) => t,
+        other => panic!("expected Text, got {other:?}"),
+    };
+    assert!(text.contains("Set Main"), "missing 'Set Main' in {text}");
+    assert!(text.contains("anthropic/claude-sonnet-4-6"));
+    assert!(text.contains("persisted to"));
 }
 
 #[tokio::test]
 async fn test_model_handler_unknown() {
-    let output = handlers::model::handler("gpt-4".to_string()).await.unwrap();
-    assert!(output.contains("Unknown model"));
+    use crate::CommandHandler;
+    use crate::CommandResult;
+    let handler = crate::handlers::model::ModelHandler;
+    let result = handler.execute_command("gpt-4").await.unwrap();
+    let text = match result {
+        CommandResult::Text(t) => t,
+        other => panic!("expected Text, got {other:?}"),
+    };
+    assert!(text.contains("Unknown model"));
 }
 
 #[tokio::test]

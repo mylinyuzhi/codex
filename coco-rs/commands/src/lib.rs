@@ -122,6 +122,12 @@ pub enum DialogSpec {
     },
     /// Generic confirm dialog.
     Confirm { title: String, message: String },
+    /// `/model` — provider-grouped model picker with role pill and
+    /// inline thinking-effort selector. TS parity:
+    /// `components/ModelPicker.tsx`; coco-rs extends the TS shape with
+    /// a role pill so multi-provider users can address any
+    /// [`coco_types::ModelRole`] from the same surface.
+    ModelPicker,
 }
 
 /// One row in the memory-file selector.

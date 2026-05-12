@@ -301,20 +301,58 @@ pub struct CostWarningOverlay {
     pub threshold_cents: i64,
 }
 
-/// Model picker overlay (filterable list).
+/// Model picker overlay — provider-grouped list of `(provider, model_id)`
+/// candidates plus an inline thinking-effort selector. Tab cycles the
+/// target role (Main / Fast / Compact / …); the confirm path persists
+/// to that role's slot in `~/.coco.json::model_roles`.
+///
+/// TS parity reference: `components/ModelPicker.tsx`. coco-rs extends
+/// the TS shape with a role pill so multi-provider users can configure
+/// every `ModelRole` from the same surface — TS only ever drives the
+/// `main` model.
 #[derive(Debug, Clone)]
 pub struct ModelPickerOverlay {
-    pub models: Vec<ModelOption>,
+    /// Which role we're configuring. Defaults to `Main` when launched
+    /// by `Ctrl+M` / `/model`; Tab cycles forward, Shift+Tab back.
+    pub role: coco_types::ModelRole,
+    /// Available model entries, pre-sorted by `(provider, display_name)`
+    /// so the rendered list is stable and provider headers fall
+    /// naturally between consecutive same-provider rows.
+    pub entries: Vec<ModelEntry>,
+    /// Substring filter, lowercased — matches `display_name` and
+    /// `provider_display`.
     pub filter: String,
+    /// Index into the *filtered* entries list (0-based, headers skipped
+    /// because they aren't selectable rows).
     pub selected: i32,
+    /// Currently-chosen effort for the focused model. Re-derived from
+    /// `default_effort` on every selection change (see `update::overlay`).
+    /// `None` when the focused model declares no thinking levels.
+    pub effort: Option<coco_types::ReasoningEffort>,
 }
 
-/// A selectable model option.
+/// One row in the picker — pre-resolved against the registry so the
+/// renderer never has to reach back into config.
 #[derive(Debug, Clone)]
-pub struct ModelOption {
-    pub id: String,
-    pub label: String,
-    pub description: Option<String>,
+pub struct ModelEntry {
+    /// Canonical provider id (e.g. `"anthropic"`). Used as the persistence key.
+    pub provider: String,
+    /// Display label rendered in the section header (e.g. `"Anthropic"`).
+    pub provider_display: String,
+    pub model_id: String,
+    /// Pretty name; falls back to `model_id` when registry lacks one.
+    pub display_name: String,
+    /// Context window in tokens — rendered as `"1M"` / `"200K"`.
+    pub context_window: Option<i64>,
+    /// Efforts the model supports; drives the inline footer cycle.
+    /// Empty when the model has no thinking capability — the effort
+    /// footer is then hidden.
+    pub supported_efforts: Vec<coco_types::ReasoningEffort>,
+    /// Model's preferred effort when none chosen explicitly.
+    pub default_effort: Option<coco_types::ReasoningEffort>,
+    /// `true` when this entry is the role's currently-applied selection.
+    /// Rendered with a `[current]` badge.
+    pub is_current_for_role: bool,
 }
 
 /// Command palette overlay (filterable list of /commands).

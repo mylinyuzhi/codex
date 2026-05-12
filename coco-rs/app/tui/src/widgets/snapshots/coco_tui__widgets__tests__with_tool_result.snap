@@ -3,11 +3,11 @@ source: app/tui/src/widgets/mod.test.rs
 expression: output
 ---
  | opus-4                                                                       
-> List files                                                                    
+❯ List files                                                                    
                                                                                 
-  ✓ Bash: ls -la                                                                
+  ● Bash(ls -la)                                                                
                                                                                 
-  ✓ Bash:                                                                       
+  ● Bash                                                                        
     file1.rs                                                                    
     file2.rs                                                                    
     Cargo.toml                                                                  
@@ -23,6 +23,6 @@ expression: output
                                                                                 
                                                                                 
  Input ─────────────────────────────────────────────────────────────────────────
-> Type a message...                                                             
+❯ Type a message...                                                             
                                                                                 
  opus-4 | Default | 3 msgs

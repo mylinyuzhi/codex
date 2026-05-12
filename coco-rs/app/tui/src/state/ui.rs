@@ -302,6 +302,75 @@ impl HistoryEntry {
     }
 }
 
+/// Input prefix mode — derived from the leading character of [`InputState::text`].
+///
+/// TS parity:
+/// * `Bash` mirrors TS `PromptInputMode = 'bash'` (typed `!` prefix in
+///   `components/PromptInput/inputModes.ts`). Submit bypasses the model
+///   loop and runs the shell directly, like TS's `LocalShellTask`.
+/// * `Memory` is a coco-rs-only ergonomic addition — TS triggers memory
+///   capture via the `/memory` slash command and a file picker, not a
+///   prompt prefix. We expose `#` as a shorthand for "append to project
+///   `CLAUDE.md`" so quick captures don't require opening the picker.
+///   Document this divergence in user-facing help.
+///
+/// The mode is computed on the fly so backspacing past the prefix
+/// character returns to `Normal` automatically — no separate state to
+/// keep in sync.
+///
+/// Plan mode is *not* a prompt mode; it's a permission mode set via
+/// `Shift+Tab` cycle and shown in the input title, not via prefix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PromptMode {
+    /// Standard chat input.
+    #[default]
+    Normal,
+    /// Leading `!` — submit runs as a shell command. TS: `LocalShellTask`.
+    Bash,
+    /// Leading `#` — submit appends to a `CLAUDE.md` memory file. TS:
+    /// `UserMemoryInputMessage` + `MemoryFileSelector`.
+    Memory,
+}
+
+impl PromptMode {
+    /// Compute the mode from the leading character of `text`.
+    ///
+    /// Returns `Normal` for empty input and for anything that doesn't
+    /// match a known prefix. Whitespace before the prefix disqualifies
+    /// the mode (matches TS: `getModeFromInput` checks `startsWith`).
+    pub fn from_text(text: &str) -> Self {
+        match text.as_bytes().first() {
+            Some(b'!') => Self::Bash,
+            Some(b'#') => Self::Memory,
+            _ => Self::Normal,
+        }
+    }
+
+    /// Strip the mode prefix from `text` (including one optional space
+    /// after it). Returns `text` unchanged for `Normal`.
+    ///
+    /// Used at submit time so `!ls -la` becomes the command `ls -la`
+    /// and `# fix bug` becomes the memory body `fix bug`.
+    pub fn strip_prefix(self, text: &str) -> &str {
+        match self {
+            Self::Normal => text,
+            Self::Bash | Self::Memory => {
+                let stripped = &text[1..];
+                stripped.strip_prefix(' ').unwrap_or(stripped)
+            }
+        }
+    }
+
+    /// i18n key for the input title shown when this mode is active.
+    pub fn title_i18n_key(self) -> &'static str {
+        match self {
+            Self::Normal => "input.title",
+            Self::Bash => "input.title_bash_mode",
+            Self::Memory => "input.title_memory_mode",
+        }
+    }
+}
+
 /// Multi-line input state.
 #[derive(Debug)]
 pub struct InputState {
@@ -388,6 +457,11 @@ impl InputState {
     /// Whether the input is empty.
     pub fn is_empty(&self) -> bool {
         self.text.is_empty()
+    }
+
+    /// Current prompt-prefix mode (derived from leading character).
+    pub fn prompt_mode(&self) -> PromptMode {
+        PromptMode::from_text(&self.text)
     }
 
     /// Record a submitted text into history using frecency scoring.
@@ -597,3 +671,7 @@ impl Toast {
         (1.0 - elapsed / total).max(0.0)
     }
 }
+
+#[cfg(test)]
+#[path = "ui.test.rs"]
+mod tests;

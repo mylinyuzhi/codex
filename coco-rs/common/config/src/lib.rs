@@ -62,6 +62,8 @@ pub use model::ResolvedModel;
 pub use model::RoleSlots;
 pub use model::aliases::ModelAlias;
 pub use model::build_model_registry;
+pub use model::builtin_models_partial;
+pub use model::builtin_models_resolved;
 pub use overrides::RuntimeOverrides;
 pub use positive::PositiveCount;
 pub use positive::PositiveTokens;

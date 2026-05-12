@@ -23,6 +23,6 @@ expression: output
                                                                                 
                                                                                 
  Input ─────────────────────────────────────────────────────────────────────────
-> Run the failing tests                                                         
+❯ Run the failing tests                                                         
                                                                                 
  opus-4 | Default | 0 msgs

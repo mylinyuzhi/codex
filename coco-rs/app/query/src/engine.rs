@@ -190,6 +190,36 @@ pub struct QueryEngine {
     /// surfaces that as a clean model-visible error rather than
     /// panicking.
     pub(crate) skill_handle: Option<coco_tool_runtime::SkillHandleRef>,
+    /// Skill-emitted Command-source permission rules scoped to **this
+    /// engine instance**. Since `QueryEngine` is rebuilt fresh per user
+    /// message (`SessionRuntime::build_engine` is called from every
+    /// TUI / SDK / headless / fork driver), engine-scoped = user-msg-scoped.
+    /// This mirrors TS `query()`'s `getAppState` closure-captured
+    /// `appState.alwaysAllowRules.command`:
+    ///
+    /// - **Within one user message** — every turn's
+    ///   `ToolContextFactory::build` reads this Arc and merges its
+    ///   contents into `ToolPermissionContext.allow_rules` under
+    ///   [`coco_types::PermissionRuleSource::Command`], so a skill
+    ///   invoked on turn N's auto-allow rules are honored on turn N+1.
+    /// - **Across user messages** — the engine drops, the Arc count
+    ///   goes to zero, the next user message's engine starts with a
+    ///   fresh empty store.
+    /// - **Subagent forks** — each forked engine builds its own
+    ///   Arc; rules emitted inside a subagent skill cannot leak to
+    ///   the parent.
+    ///
+    /// Shared by `Arc` with [`Self::permission_rule_handle`] (which
+    /// writes into it) and with the per-batch `ToolContextFactory`
+    /// (which reads it for the merge). See `engine_live_rules` module.
+    pub(crate) live_command_rules: Arc<RwLock<Vec<coco_types::PermissionRule>>>,
+    /// Handle the executor installs on every batch so tool-emitted
+    /// `permission_updates` flow into [`Self::live_command_rules`].
+    /// Defaults to an [`crate::engine_live_rules::EngineLiveRulesHandle`]
+    /// constructed from the same Arc; tests/standalone may override via
+    /// [`Self::with_permission_rule_handle`] to install a `NoOp` for
+    /// isolation.
+    pub(crate) permission_rule_handle: coco_tool_runtime::PermissionRuleHandleRef,
     /// Snapshot of the agent-definition catalog (T7). Surfaced on
     /// every `ToolUseContext` so AgentTool can resolve
     /// `subagent_type → AgentDefinition` and thread the definition
@@ -850,10 +880,14 @@ impl QueryEngine {
             };
             let mut streaming_handle = streaming_ctx.as_ref().map(|ctx_arc| {
                 let executor_base = coco_tool_runtime::StreamingToolExecutor::new();
-                let executor = Arc::new(match self.app_state.as_ref() {
+                let executor_with_state = match self.app_state.as_ref() {
                     Some(state) => executor_base.with_app_state(state.clone()),
                     None => executor_base,
-                });
+                };
+                let executor = Arc::new(
+                    executor_with_state
+                        .with_permission_rule_handle(self.permission_rule_handle.clone()),
+                );
                 let ctx_for_closure = ctx_arc.clone();
                 let hooks_for_closure = self.hooks.clone();
                 let orchestration_for_closure = self.orchestration_ctx();
@@ -1829,6 +1863,7 @@ impl QueryEngine {
                 client: &self.client,
                 auto_mode_rules: &self.auto_mode_rules,
                 app_state: self.app_state.as_ref(),
+                permission_rule_handle: &self.permission_rule_handle,
             }
             .run()
             .await;
@@ -2005,3 +2040,7 @@ fn make_query_result(
 #[cfg(test)]
 #[path = "engine.test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "engine_live_rules_scoping.test.rs"]
+mod engine_live_rules_scoping_tests;

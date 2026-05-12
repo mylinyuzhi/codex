@@ -44,6 +44,8 @@ use coco_tool_runtime::ToolRegistry;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::AgentId;
 use coco_types::AppStateReadHandle;
+use coco_types::PermissionRule;
+use coco_types::PermissionRuleSource;
 use coco_types::ToolAppState;
 use coco_types::ToolPermissionContext;
 use tokio::sync::RwLock;
@@ -102,6 +104,16 @@ pub(crate) struct ToolContextFactory {
     /// and refreshed on `/agents reload`. `None` is the legacy/test
     /// path — AgentTool degrades to subagent_type→role mapping alone.
     pub(crate) agent_catalog: Option<Arc<coco_subagent::AgentCatalogSnapshot>>,
+    /// Per-engine skill-emitted Command-source rule store, shared by
+    /// `Arc` with `QueryEngine.live_command_rules` and the
+    /// `EngineLiveRulesHandle` installed on the executor.
+    ///
+    /// At each batch's `build()`, the factory `read()`s this Arc and
+    /// merges its contents into the returned context's
+    /// `permission_context.allow_rules[Command]` so the evaluator sees
+    /// rules emitted by prior turns of the same user message. The Arc
+    /// drops with the engine — see [`crate::engine_live_rules`].
+    pub(crate) live_command_rules: Arc<RwLock<Vec<PermissionRule>>>,
 }
 
 /// Per-call overrides applied on top of [`ToolContextFactory`] inputs.
@@ -193,6 +205,50 @@ impl ToolContextFactory {
         let main_loop_model = overrides
             .current_model_id
             .unwrap_or_else(|| self.config.model_id.clone());
+
+        // Merge the per-engine live Command-source rules into the
+        // batch-time `allow_rules` snapshot. TS parity:
+        // `getAppState().alwaysAllowRules.command` is read at every
+        // permission check; we snapshot once per batch (factory.build
+        // is called per batch). Cross-batch propagation works because
+        // each turn's build() re-reads the live Arc. The empty-fast-path
+        // avoids a clone when no skill has emitted rules yet.
+        let allow_rules = {
+            let live = self.live_command_rules.read().await;
+            if live.is_empty() {
+                // Hot path: factory builds every batch; emitting one
+                // log per build at debug would dominate the file
+                // sink. Stay silent here — info logs in
+                // `engine_live_rules` already mark the meaningful
+                // state transition (rules being added).
+                self.config.allow_rules.clone()
+            } else {
+                let live_count = live.len();
+                let base_command_count = self
+                    .config
+                    .allow_rules
+                    .get(&PermissionRuleSource::Command)
+                    .map(Vec::len)
+                    .unwrap_or(0);
+                let mut merged = self.config.allow_rules.clone();
+                merged
+                    .entry(PermissionRuleSource::Command)
+                    .or_default()
+                    .extend(live.iter().cloned());
+                let merged_command_count = merged
+                    .get(&PermissionRuleSource::Command)
+                    .map(Vec::len)
+                    .unwrap_or(0);
+                tracing::debug!(
+                    session_id = %self.config.session_id,
+                    live_count,
+                    base_command_count,
+                    merged_command_count,
+                    "tool_context: merged live Command rules into allow_rules"
+                );
+                merged
+            }
+        };
         ToolUseContext {
             tools: self.tools.clone(),
             main_loop_model,
@@ -251,11 +307,13 @@ impl ToolContextFactory {
                 // map when the user widens the allowlist mid-session.
                 additional_dirs: self.config.session_additional_dirs.clone(),
                 // Permission rules from settings.json (user /
-                // project / policy). TS parity: loaded via
-                // `loadPermissionRules` at session bootstrap and
-                // passed verbatim to every tool invocation's
-                // `toolPermissionContext`. Plan Tier 3 polish.
-                allow_rules: self.config.allow_rules.clone(),
+                // project / policy) merged with the per-engine live
+                // Command-source rules emitted by skills earlier this
+                // user message. TS parity: `loadPermissionRules` for
+                // the base + `alwaysAllowRules.command` for the live
+                // delta — both read through the same evaluator slot.
+                // Plan Tier 3 polish.
+                allow_rules,
                 deny_rules: self.config.deny_rules.clone(),
                 ask_rules: self.config.ask_rules.clone(),
                 bypass_available: self.config.bypass_permissions_available,

@@ -80,6 +80,7 @@ pub(crate) struct ToolCallRunner<'a> {
     pub client: &'a Arc<ApiClient>,
     pub auto_mode_rules: &'a AutoModeRules,
     pub app_state: Option<&'a Arc<RwLock<ToolAppState>>>,
+    pub permission_rule_handle: &'a coco_tool_runtime::PermissionRuleHandleRef,
 }
 
 impl<'a> ToolCallRunner<'a> {
@@ -179,7 +180,7 @@ impl<'a> ToolCallRunner<'a> {
         //    `Fn + Sync` (called concurrently via
         //    `FuturesUnordered`), so it only captures immutable
         //    data.
-        let executor = create_executor(self.app_state);
+        let executor = create_executor(self.app_state, self.permission_rule_handle);
         let shared_ctx = self.ctx;
         let hooks = self.hooks;
         let orchestration_ctx = self.orchestration_ctx.clone();
@@ -362,9 +363,13 @@ impl Control {
     }
 }
 
-fn create_executor(app_state: Option<&Arc<RwLock<ToolAppState>>>) -> StreamingToolExecutor {
-    match app_state {
+fn create_executor(
+    app_state: Option<&Arc<RwLock<ToolAppState>>>,
+    permission_rule_handle: &coco_tool_runtime::PermissionRuleHandleRef,
+) -> StreamingToolExecutor {
+    let base = match app_state {
         Some(arc) => StreamingToolExecutor::new().with_app_state(arc.clone()),
         None => StreamingToolExecutor::new(),
-    }
+    };
+    base.with_permission_rule_handle(permission_rule_handle.clone())
 }

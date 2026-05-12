@@ -42,6 +42,16 @@ impl QueryEngine {
         hooks: Option<Arc<HookRegistry>>,
     ) -> Self {
         let (attachment_tx, attachment_rx) = tokio::sync::mpsc::unbounded_channel();
+        // Per-engine (= per-user-msg) skill-rule store + matching handle.
+        // Shared via Arc with the factory's batch-time merge and with
+        // the handle the executor uses to fold tool-emitted updates.
+        // See `engine_live_rules` for lifetime + subagent-isolation
+        // rationale.
+        let live_command_rules: Arc<RwLock<Vec<coco_types::PermissionRule>>> =
+            Arc::new(RwLock::new(Vec::new()));
+        let permission_rule_handle: coco_tool_runtime::PermissionRuleHandleRef = Arc::new(
+            crate::engine_live_rules::EngineLiveRulesHandle::new(live_command_rules.clone()),
+        );
         Self {
             config,
             client,
@@ -66,6 +76,8 @@ impl QueryEngine {
             mcp_handle: None,
             agent_handle: None,
             skill_handle: None,
+            live_command_rules,
+            permission_rule_handle,
             agent_catalog: None,
             last_cache_safe_params: Arc::new(tokio::sync::RwLock::new(None)),
             fork_dispatcher: None,
@@ -759,6 +771,30 @@ impl QueryEngine {
     /// `queued_command` attachments with `origin: 'coordinator'`.
     pub fn with_command_queue(mut self, queue: CommandQueue) -> Self {
         self.command_queue = queue;
+        self
+    }
+
+    /// Override the engine's default
+    /// [`PermissionRuleHandle`](coco_tool_runtime::PermissionRuleHandle).
+    ///
+    /// By default `QueryEngine::new` installs an
+    /// [`crate::engine_live_rules::EngineLiveRulesHandle`] that folds
+    /// `Command`-destination `permission_updates` into the engine's own
+    /// `live_command_rules` Arc — the per-user-msg-scoped store mirrors
+    /// TS `query()`'s closure-captured `appState.alwaysAllowRules.command`.
+    /// Production paths inherit this default; tests/standalone callers
+    /// can swap in [`coco_tool_runtime::NoOpPermissionRuleHandle`] when
+    /// they want updates dropped instead.
+    ///
+    /// **Note:** overriding does NOT change [`QueryEngine.live_command_rules`].
+    /// The factory still reads the original Arc for the batch-time
+    /// merge — only the WRITE path is redirected. Use this to isolate
+    /// writes in tests, not to reroute reads.
+    pub fn with_permission_rule_handle(
+        mut self,
+        handle: coco_tool_runtime::PermissionRuleHandleRef,
+    ) -> Self {
+        self.permission_rule_handle = handle;
         self
     }
 }

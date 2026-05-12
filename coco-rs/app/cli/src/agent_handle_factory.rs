@@ -172,15 +172,20 @@ pub async fn build_agent_team_wiring(
                 // installs all the same observers / mailbox / hooks
                 // the top-level engine gets so subagent execution
                 // stays observable.
-                let mut engine = runtime
+                let engine = runtime
                     .build_engine_from_config(
                         engine_config,
                         tokio_util::sync::CancellationToken::new(),
                         None,
                     )
                     .await;
-                engine = engine.with_client(client);
-                engine
+                // Per-engine `live_command_rules` is fresh for every
+                // forked subagent (constructed inside
+                // `QueryEngine::new`), so the subagent's skill rules
+                // cannot leak to the parent — different Arcs. No
+                // NoOp override needed: TS parity stays without an
+                // explicit isolation seam.
+                engine.with_client(client)
             })
         })
     };

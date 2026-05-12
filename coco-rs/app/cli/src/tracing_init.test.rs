@@ -3,7 +3,9 @@ use pretty_assertions::assert_eq;
 
 use super::detect_mode;
 use super::expand_bare_level;
+use super::is_bare_verbose_level;
 use super::parse_timezone;
+use super::resolve_location;
 use super::subscriber_opts_from_cli;
 use crate::Cli;
 use coco_otel::subscriber::Mode;
@@ -136,4 +138,76 @@ fn subscriber_opts_unknown_log_timezone_falls_back_to_default() {
         opts.timezone,
         TimezoneConfig::Local | TimezoneConfig::Utc
     ));
+}
+
+#[test]
+fn is_bare_verbose_level_recognises_debug_and_trace() {
+    assert!(is_bare_verbose_level("debug"));
+    assert!(is_bare_verbose_level("trace"));
+    assert!(is_bare_verbose_level("DEBUG"));
+    assert!(is_bare_verbose_level("  Trace  "));
+}
+
+#[test]
+fn is_bare_verbose_level_rejects_quieter_levels() {
+    for lvl in ["off", "error", "warn", "info"] {
+        assert!(!is_bare_verbose_level(lvl), "{lvl} must not trigger");
+    }
+}
+
+#[test]
+fn is_bare_verbose_level_rejects_full_envfilter_directives() {
+    // Advanced users with custom directives stay in control of layout.
+    // `expand_bare_level` would also reject these, keeping the two
+    // helpers in lockstep on what counts as "bare".
+    for raw in [
+        "coco=debug,info",
+        "coco_inference::stream=trace,info",
+        "coco=trace,reqwest=warn",
+    ] {
+        assert!(!is_bare_verbose_level(raw), "{raw} must not trigger");
+    }
+}
+
+#[test]
+fn resolve_location_explicit_flag_wins_over_auto() {
+    // `--log-location=false` must defeat the debug auto-rule.
+    let mut cli = parse(&["--prompt", "hi"]);
+    cli.log_location = Some(false);
+    assert!(!resolve_location(&cli, /*auto_verbose*/ true));
+
+    cli.log_location = Some(true);
+    assert!(resolve_location(&cli, /*auto_verbose*/ false));
+}
+
+#[test]
+fn resolve_location_falls_back_to_auto_when_no_explicit() {
+    // We can't reliably scrub `COCO_LOG_LOCATION` from the test env
+    // here without serializing on a global mutex, so this test only
+    // asserts the auto-fallback shape when neither flag nor env is
+    // set. Setting the flag explicitly bypasses env entirely (covered
+    // above), so the env path stays exercised by integration runs.
+    let cli = parse(&["--prompt", "hi"]);
+    if cli.log_location.is_none() && std::env::var("COCO_LOG_LOCATION").is_err() {
+        assert!(resolve_location(&cli, /*auto_verbose*/ true));
+        assert!(!resolve_location(&cli, /*auto_verbose*/ false));
+    }
+}
+
+#[test]
+fn subscriber_opts_log_location_flag_forces_on() {
+    let cli = parse(&["--prompt", "hi", "--log-location"]);
+    let opts = subscriber_opts_from_cli(&cli);
+    assert!(opts.location);
+    // thread_names is wired to follow `location` byte-for-byte so the
+    // file and stderr sinks stay in lockstep.
+    assert!(opts.thread_names);
+}
+
+#[test]
+fn subscriber_opts_log_location_flag_can_force_off() {
+    let cli = parse(&["--prompt", "hi", "--log-location=false"]);
+    let opts = subscriber_opts_from_cli(&cli);
+    assert!(!opts.location);
+    assert!(!opts.thread_names);
 }

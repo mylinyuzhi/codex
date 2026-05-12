@@ -22,6 +22,36 @@ just quick-check  # Iteration: fmt + seam guard + check-error-policy + increment
 just pre-commit   # REQUIRED before commit: quick-check + nextest test run
 ```
 
+### Pre-commit is expensive — run it ONCE per commit, at the very end
+
+`pre-commit` compiles every test binary in the workspace and runs the full
+nextest suite. It is *orders of magnitude* slower than `quick-check`. Treat
+it as the **final gate**, not an iteration tool.
+
+**The rule:** every iteration uses `quick-check`; `pre-commit` fires exactly
+once, immediately before `git commit`.
+
+```
+edit → just quick-check → repeat until green
+                                ↓
+                       just pre-commit (final gate, ONCE)
+                                ↓
+                            git commit
+```
+
+**Why never run `pre-commit` mid-iteration:** `cargo clippy` / `cargo check`
+write `.rmeta` (metadata, no codegen). `cargo test --no-run` writes test-cfg
+ELF binaries with dev-deps linked. **These two artifact caches do not share.**
+If `pre-commit` is going to fail on a clippy warning, you only find out *after*
+nextest has already spent its compile budget on output that gets thrown away.
+`quick-check` catches the same warnings without entering the test-compile path.
+
+**Linker speedup (already configured):** `coco-rs/.cargo/config.toml` sets
+`mold` as the Linux linker (`-C link-arg=-fuse-ld=mold`). Install once with
+`apt install mold`; the config picks it up automatically. Linking is a large
+fraction of test-binary build time, so this materially shortens both warm
+incremental rebuilds and cold `pre-commit` runs.
+
 Scoped helpers (use only when you genuinely need a single piece):
 
 ```bash

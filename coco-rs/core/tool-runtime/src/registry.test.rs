@@ -57,6 +57,7 @@ impl Tool for StubTool {
             data: input,
             new_messages: vec![],
             app_state_patch: None,
+            permission_updates: Vec::new(),
         })
     }
 }
@@ -225,6 +226,7 @@ impl Tool for GatedTool {
             data: input,
             new_messages: vec![],
             app_state_patch: None,
+            permission_updates: Vec::new(),
         })
     }
 }

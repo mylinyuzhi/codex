@@ -43,6 +43,11 @@ pub enum EnvKey {
     /// Log format: `pretty | compact | json`. Defaults to `pretty` for
     /// TTY output and `json` for file output.
     CocoLogFormat,
+    /// Tri-state override for "verbose layout" (file:line + thread
+    /// name) on each log event. Truthy → force on, falsy → force off,
+    /// unset → follow the auto rule (enabled when the resolved filter
+    /// is the bare level `debug` or `trace`).
+    CocoLogLocation,
     /// When truthy, force a stderr fmt layer in addition to the file
     /// sink. SDK / TUI normally write to file only — this opts in to
     /// also seeing logs on stderr (must not be set in SDK mode unless
@@ -221,6 +226,7 @@ impl EnvKey {
             Self::CocoLog => "COCO_LOG",
             Self::CocoLogFile => "COCO_LOG_FILE",
             Self::CocoLogFormat => "COCO_LOG_FORMAT",
+            Self::CocoLogLocation => "COCO_LOG_LOCATION",
             Self::CocoLogStderr => "COCO_LOG_STDERR",
             Self::CocoLogTimezone => "COCO_LOG_TIMEZONE",
             Self::CocoMaxContextTokens => "COCO_MAX_CONTEXT_TOKENS",
@@ -333,6 +339,14 @@ pub fn is_env_truthy<K: AsRef<OsStr>>(key: K) -> bool {
 /// TS: isEnvDefinedFalsy() — normalizes "0", "false", "no", "off".
 pub fn is_env_falsy<K: AsRef<OsStr>>(key: K) -> bool {
     var(key).ok().is_some_and(|v| is_falsy_value(&v))
+}
+
+/// Tri-state truthy lookup. `Some(true)`/`Some(false)` for recognised
+/// truthy/falsy values, `None` when the var is unset or unrecognised —
+/// lets callers fall through to a default without conflating "unset"
+/// with "explicitly false".
+pub fn env_truthy_opt<K: AsRef<OsStr>>(key: K) -> Option<bool> {
+    var(key).ok().and_then(|v| parse_truthy(&v))
 }
 
 /// Get an environment variable as an optional string.

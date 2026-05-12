@@ -214,6 +214,7 @@ pub fn build_query_config(
         fork_context_messages: cache.fork_context_messages.clone(),
         allowed_tools: Vec::new(),
         disallowed_tools: Vec::new(),
+        extra_allow_rules: Vec::new(),
         effort: options.effort.clone(),
         // Per-fork policy: thread can_use_tool / fork_label /
         // max_output_tokens onto the child engine config so the

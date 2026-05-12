@@ -37,10 +37,6 @@ impl StreamMetricsTracker {
         }
     }
 
-    pub fn set_stall_threshold(&mut self, threshold: Duration) {
-        self.stall_threshold = threshold;
-    }
-
     pub fn record_item(&mut self, part: Option<&LanguageModelV4StreamPart>) {
         let now = Instant::now();
         if let Some(last) = self.last_item_time {
