@@ -18,13 +18,20 @@ use crate::common::weather_tool_def;
 /// Asserts the model emits a `get_weather` tool call when prompted.
 pub async fn run(target: &LiveTarget) -> Result<()> {
     let params = QueryParams {
+        // Same shape + rationale as `streaming::run_with_tools`:
+        // 4096-token budget + imperative system prompt to keep
+        // Gemini-3 reliably emitting the tool call.
         prompt: vec![
-            LanguageModelMessage::system("You are a helpful assistant. Use the provided tools."),
+            LanguageModelMessage::system(
+                "You are a helpful assistant. For weather questions you MUST call \
+                 the get_weather tool — do not answer with prose, do not refuse, \
+                 do not return an empty message.",
+            ),
             LanguageModelMessage::user_text(
-                "What's the weather in Tokyo? Use the get_weather tool.",
+                "What's the weather in Tokyo? Call get_weather with city='Tokyo'.",
             ),
         ],
-        max_tokens: Some(256),
+        max_tokens: Some(4096),
         thinking_level: None,
         fast_mode: false,
         tools: Some(vec![weather_tool_def()]),

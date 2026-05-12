@@ -499,16 +499,24 @@ async fn try_classify_in_auto_mode(
             };
             match client.query(&params).await {
                 Ok(result) => {
-                    let text = result
-                        .content
-                        .iter()
-                        .filter_map(|p| match p {
-                            coco_inference::AssistantContentPart::Text(t) => Some(t.text.as_str()),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>()
-                        .join("");
-                    Ok(text)
+                    // auto-mode classifier input — preserve tool-call
+                    // boundary markers so permission decisions see the
+                    // structural transitions (otherwise multi-text +
+                    // tool calls collapse to a single blob and the
+                    // classifier can misclassify).
+                    let mut chunks: Vec<String> = Vec::new();
+                    for p in &result.content {
+                        match p {
+                            coco_inference::AssistantContentPart::Text(t) if !t.text.is_empty() => {
+                                chunks.push(t.text.clone());
+                            }
+                            coco_inference::AssistantContentPart::ToolCall(tc) => {
+                                chunks.push(format!("[tool: {}]", tc.tool_name));
+                            }
+                            _ => {}
+                        }
+                    }
+                    Ok(chunks.join("\n"))
                 }
                 Err(e) => Err(e.to_string()),
             }

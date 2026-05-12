@@ -1,7 +1,14 @@
 //! Streaming query support — processes LanguageModelV4StreamPart into StreamEvent.
+//!
+//! End-of-turn assistant reconstruction reads `StreamEvent::Finish.snapshot`,
+//! an `Arc<AssistantTurnSnapshot>` that captures per-part `provider_metadata`
+//! (Gemini `thoughtSignature`, Anthropic `signature`, OpenAI `encrypted_content`)
+//! verbatim. See `docs/coco-rs/streaming-metadata-roundtrip-plan.md`.
 
 use coco_types::TokenUsage;
+use std::collections::HashMap;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::debug;
@@ -11,14 +18,441 @@ use vercel_ai::StreamProcessor;
 use vercel_ai_provider::AISdkError;
 use vercel_ai_provider::AssistantContentPart;
 use vercel_ai_provider::FinishReason;
+use vercel_ai_provider::LanguageModelV4FileData;
 use vercel_ai_provider::LanguageModelV4StreamPart;
 use vercel_ai_provider::LanguageModelV4StreamResult;
+use vercel_ai_provider::ProviderMetadata;
 use vercel_ai_provider::Usage;
 
 pub use vercel_ai::StreamMetrics;
 pub use vercel_ai::StreamProcessorConfig;
 
 const DEFAULT_PROCESS_STREAM_STALL_THRESHOLD: Duration = Duration::from_secs(30);
+
+// ─── AssistantTurnSnapshot — per-turn full-fidelity assistant content ────
+//
+// Owned by coco-inference (not vercel-ai/ai). Accumulated inside
+// `process_stream_with_config` as parts arrive, then shipped as
+// `Arc<AssistantTurnSnapshot>` on `StreamEvent::Finish.snapshot`. The
+// agent loop in `coco-query::engine` walks `parts` in order to rebuild
+// `Vec<AssistantContentPart>` with every part's `provider_metadata`
+// preserved verbatim.
+//
+// Why this lives here and not in `vercel-ai/ai/src/stream/snapshot.rs`:
+// - vercel-ai/ai's `StreamSnapshot` is a public SDK surface that mirrors
+//   `@ai-sdk/ai` v4 spec. Extending it for coco-rs-specific needs would
+//   diverge from spec and force backwards-compat shims for external SDK
+//   consumers.
+// - The seam contract (`services/inference/CLAUDE.md`) says coco-inference
+//   owns coco-rs-specific extensions; vercel-ai/ai stays vendor-neutral.
+//
+// See `docs/coco-rs/streaming-metadata-roundtrip-plan.md` §"Why Path B
+// over Path A" for the full rationale.
+
+/// One emitted segment in an assistant turn, paired with the
+/// provider metadata that was attached to it on the wire.
+#[derive(Debug, Clone)]
+pub struct TextSegment {
+    pub id: String,
+    pub text: String,
+    pub provider_metadata: Option<ProviderMetadata>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReasoningSegment {
+    pub id: String,
+    pub text: String,
+    pub provider_metadata: Option<ProviderMetadata>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ToolCallSegment {
+    pub id: String,
+    pub tool_name: String,
+    /// Stringified JSON accumulated from `ToolInputDelta` events.
+    /// When `ToolCall(tc)` close arrives, this is overwritten with
+    /// `tc.input` (canonical close).
+    pub input_json: String,
+    pub provider_executed: Option<bool>,
+    pub dynamic: Option<bool>,
+    /// `true` once `ToolInputEnd` has arrived.
+    pub is_input_complete: bool,
+    /// `true` once `ToolCall(tc)` close has arrived. Some providers
+    /// (and the synthetic stream helper) omit this — reconstruction
+    /// filters on `is_input_complete || is_complete`.
+    pub is_complete: bool,
+    pub provider_metadata: Option<ProviderMetadata>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FileSegment {
+    pub id: String,
+    /// Always wrapped as `Data { data }` since `LanguageModelV4StreamPart::File`
+    /// carries `data: String` without a URL/base64 discriminator.
+    pub data: LanguageModelV4FileData,
+    pub media_type: String,
+    pub provider_metadata: Option<ProviderMetadata>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReasoningFileSegment {
+    pub id: String,
+    pub data: LanguageModelV4FileData,
+    pub media_type: String,
+    pub provider_metadata: Option<ProviderMetadata>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SourceSegment {
+    pub id: String,
+    pub url: Option<String>,
+    pub title: Option<String>,
+    pub source_type: String,
+    pub provider_metadata: Option<ProviderMetadata>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CustomSegment {
+    pub id: String,
+    pub data: serde_json::Value,
+    pub provider_metadata: Option<ProviderMetadata>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ToolApprovalRequestSegment {
+    pub approval_id: String,
+    pub tool_call_id: String,
+    pub provider_metadata: Option<ProviderMetadata>,
+}
+
+/// One assistant-turn part, preserving emission order across kinds.
+#[derive(Debug, Clone)]
+pub enum TurnPart {
+    Text(TextSegment),
+    Reasoning(ReasoningSegment),
+    ToolCall(ToolCallSegment),
+    File(FileSegment),
+    ReasoningFile(ReasoningFileSegment),
+    Source(SourceSegment),
+    Custom(CustomSegment),
+    ToolApprovalRequest(ToolApprovalRequestSegment),
+}
+
+/// Full reconstruction of one assistant turn. Shipped on
+/// `StreamEvent::Finish.snapshot` as `Arc<AssistantTurnSnapshot>`.
+#[derive(Debug, Clone, Default)]
+pub struct AssistantTurnSnapshot {
+    pub parts: Vec<TurnPart>,
+}
+
+/// Internal accumulator. Mutated as `LanguageModelV4StreamPart` events
+/// arrive; produces the final `AssistantTurnSnapshot` on `Finish`.
+#[derive(Default)]
+struct AssistantTurnSnapshotState {
+    snapshot: AssistantTurnSnapshot,
+    /// Index in `snapshot.parts` for the active text/reasoning/tool segment
+    /// keyed by stream id. `ToolApprovalRequest` etc. don't need active
+    /// tracking — they're pushed atomically.
+    active_text: HashMap<String, usize>,
+    active_reasoning: HashMap<String, usize>,
+    active_tool: HashMap<String, usize>,
+}
+
+impl AssistantTurnSnapshotState {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    /// Merge `incoming` into `existing` using first-wins semantics
+    /// (Gemini repeats identical blob on every delta; A4 from review).
+    fn merge_metadata_first_wins(
+        existing: &mut Option<ProviderMetadata>,
+        incoming: Option<&ProviderMetadata>,
+    ) {
+        if existing.is_none()
+            && let Some(m) = incoming
+        {
+            *existing = Some(m.clone());
+        }
+    }
+
+    /// Pattern-match on every relevant `LanguageModelV4StreamPart` variant
+    /// and update the snapshot. Pure function over state + part — no I/O.
+    fn update(&mut self, part: &LanguageModelV4StreamPart) {
+        match part {
+            // ─── Text ────────────────────────────────────────────────
+            LanguageModelV4StreamPart::TextStart {
+                id,
+                provider_metadata,
+            } => {
+                // Idempotency: duplicate *Start is a provider bug; skip.
+                if self.active_text.contains_key(id) {
+                    trace!(id = %id, "duplicate TextStart ignored");
+                    return;
+                }
+                let idx = self.snapshot.parts.len();
+                self.snapshot.parts.push(TurnPart::Text(TextSegment {
+                    id: id.clone(),
+                    text: String::new(),
+                    provider_metadata: provider_metadata.clone(),
+                }));
+                self.active_text.insert(id.clone(), idx);
+            }
+            LanguageModelV4StreamPart::TextDelta {
+                id,
+                delta,
+                provider_metadata,
+            } => {
+                if let Some(&idx) = self.active_text.get(id)
+                    && let Some(TurnPart::Text(seg)) = self.snapshot.parts.get_mut(idx)
+                {
+                    seg.text.push_str(delta);
+                    Self::merge_metadata_first_wins(
+                        &mut seg.provider_metadata,
+                        provider_metadata.as_ref(),
+                    );
+                }
+            }
+            LanguageModelV4StreamPart::TextEnd {
+                id,
+                provider_metadata,
+            } => {
+                if let Some(idx) = self.active_text.remove(id)
+                    && let Some(TurnPart::Text(seg)) = self.snapshot.parts.get_mut(idx)
+                {
+                    Self::merge_metadata_first_wins(
+                        &mut seg.provider_metadata,
+                        provider_metadata.as_ref(),
+                    );
+                }
+            }
+
+            // ─── Reasoning ───────────────────────────────────────────
+            LanguageModelV4StreamPart::ReasoningStart {
+                id,
+                provider_metadata,
+            } => {
+                if self.active_reasoning.contains_key(id) {
+                    trace!(id = %id, "duplicate ReasoningStart ignored");
+                    return;
+                }
+                let idx = self.snapshot.parts.len();
+                self.snapshot
+                    .parts
+                    .push(TurnPart::Reasoning(ReasoningSegment {
+                        id: id.clone(),
+                        text: String::new(),
+                        provider_metadata: provider_metadata.clone(),
+                    }));
+                self.active_reasoning.insert(id.clone(), idx);
+            }
+            LanguageModelV4StreamPart::ReasoningDelta {
+                id,
+                delta,
+                provider_metadata,
+            } => {
+                if let Some(&idx) = self.active_reasoning.get(id)
+                    && let Some(TurnPart::Reasoning(seg)) = self.snapshot.parts.get_mut(idx)
+                {
+                    seg.text.push_str(delta);
+                    Self::merge_metadata_first_wins(
+                        &mut seg.provider_metadata,
+                        provider_metadata.as_ref(),
+                    );
+                }
+            }
+            LanguageModelV4StreamPart::ReasoningEnd {
+                id,
+                provider_metadata,
+            } => {
+                if let Some(idx) = self.active_reasoning.remove(id)
+                    && let Some(TurnPart::Reasoning(seg)) = self.snapshot.parts.get_mut(idx)
+                {
+                    // Anthropic ships its `signature` on `ReasoningEnd`,
+                    // not `ReasoningStart`. Always prefer end-time
+                    // metadata when present (it's the canonical close).
+                    if let Some(m) = provider_metadata.as_ref() {
+                        seg.provider_metadata = Some(m.clone());
+                    }
+                }
+            }
+
+            // ─── Tool input ──────────────────────────────────────────
+            LanguageModelV4StreamPart::ToolInputStart {
+                id,
+                tool_name,
+                provider_executed,
+                dynamic,
+                provider_metadata,
+                ..
+            } => {
+                if self.active_tool.contains_key(id) {
+                    trace!(id = %id, "duplicate ToolInputStart ignored");
+                    return;
+                }
+                let idx = self.snapshot.parts.len();
+                self.snapshot
+                    .parts
+                    .push(TurnPart::ToolCall(ToolCallSegment {
+                        id: id.clone(),
+                        tool_name: tool_name.clone(),
+                        input_json: String::new(),
+                        provider_executed: *provider_executed,
+                        dynamic: *dynamic,
+                        is_input_complete: false,
+                        is_complete: false,
+                        provider_metadata: provider_metadata.clone(),
+                    }));
+                self.active_tool.insert(id.clone(), idx);
+            }
+            LanguageModelV4StreamPart::ToolInputDelta {
+                id,
+                delta,
+                provider_metadata,
+            } => {
+                if let Some(&idx) = self.active_tool.get(id)
+                    && let Some(TurnPart::ToolCall(seg)) = self.snapshot.parts.get_mut(idx)
+                {
+                    seg.input_json.push_str(delta);
+                    Self::merge_metadata_first_wins(
+                        &mut seg.provider_metadata,
+                        provider_metadata.as_ref(),
+                    );
+                }
+            }
+            LanguageModelV4StreamPart::ToolInputEnd {
+                id,
+                provider_metadata,
+            } => {
+                if let Some(&idx) = self.active_tool.get(id)
+                    && let Some(TurnPart::ToolCall(seg)) = self.snapshot.parts.get_mut(idx)
+                {
+                    seg.is_input_complete = true;
+                    Self::merge_metadata_first_wins(
+                        &mut seg.provider_metadata,
+                        provider_metadata.as_ref(),
+                    );
+                }
+                // Do NOT remove from active_tool yet — `ToolCall(tc)`
+                // close may still come and needs to find the segment.
+            }
+            LanguageModelV4StreamPart::ToolCall(tc) => {
+                // `LanguageModelV4ToolCall.input` is `String` (stringified
+                // JSON), per `vercel-ai/provider/src/language_model/v4/tool_call.rs:20`.
+                let input_str = tc.input.clone();
+                if let Some(&idx) = self.active_tool.get(&tc.tool_call_id)
+                    && let Some(TurnPart::ToolCall(seg)) = self.snapshot.parts.get_mut(idx)
+                {
+                    seg.is_complete = true;
+                    // Canonical input from close. Overwrite when non-empty
+                    // (deltas may have accumulated junk that the close
+                    // fixes). Empty close input keeps accumulated deltas.
+                    if !input_str.is_empty() {
+                        seg.input_json = input_str;
+                    }
+                    // A4: None close MUST NOT overwrite earlier Some.
+                    if tc.provider_metadata.is_some() {
+                        seg.provider_metadata = tc.provider_metadata.clone();
+                    }
+                    if tc.provider_executed.is_some() {
+                        seg.provider_executed = tc.provider_executed;
+                    }
+                    if tc.dynamic.is_some() {
+                        seg.dynamic = tc.dynamic;
+                    }
+                    self.active_tool.remove(&tc.tool_call_id);
+                } else {
+                    // ToolCall arrived without prior ToolInputStart —
+                    // push directly. Some providers (mocks too) take
+                    // this shortcut.
+                    self.snapshot
+                        .parts
+                        .push(TurnPart::ToolCall(ToolCallSegment {
+                            id: tc.tool_call_id.clone(),
+                            tool_name: tc.tool_name.clone(),
+                            input_json: input_str,
+                            provider_executed: tc.provider_executed,
+                            dynamic: tc.dynamic,
+                            is_input_complete: true,
+                            is_complete: true,
+                            provider_metadata: tc.provider_metadata.clone(),
+                        }));
+                }
+            }
+
+            // ─── File ────────────────────────────────────────────────
+            LanguageModelV4StreamPart::File(file) => {
+                // Stream `File.data: String` is undifferentiated (could
+                // be base64 or URL by convention but no discriminator on
+                // the wire). We always wrap as `Data { Base64 }` —
+                // matches the dominant case (most providers emit
+                // base64 for generated images); URL-bearing flows would
+                // need a separate wire shape anyway.
+                self.snapshot.parts.push(TurnPart::File(FileSegment {
+                    id: vercel_ai_provider_utils::generate_id("file"),
+                    data: LanguageModelV4FileData::Data {
+                        data: vercel_ai_provider::FileRawData::Base64(file.data.clone()),
+                    },
+                    media_type: file.media_type.clone(),
+                    provider_metadata: file.provider_metadata.clone(),
+                }));
+            }
+            LanguageModelV4StreamPart::ReasoningFile(rfile) => {
+                self.snapshot
+                    .parts
+                    .push(TurnPart::ReasoningFile(ReasoningFileSegment {
+                        id: vercel_ai_provider_utils::generate_id("rfile"),
+                        data: LanguageModelV4FileData::Data {
+                            data: vercel_ai_provider::FileRawData::Base64(rfile.data.clone()),
+                        },
+                        media_type: rfile.media_type.clone(),
+                        provider_metadata: rfile.provider_metadata.clone(),
+                    }));
+            }
+
+            // ─── Source ──────────────────────────────────────────────
+            LanguageModelV4StreamPart::Source(src) => {
+                self.snapshot.parts.push(TurnPart::Source(SourceSegment {
+                    id: src.id.clone(),
+                    url: src.url.clone(),
+                    title: src.title.clone(),
+                    source_type: format!("{:?}", src.source_type),
+                    provider_metadata: src.provider_metadata.clone(),
+                }));
+            }
+
+            // ─── Custom ──────────────────────────────────────────────
+            LanguageModelV4StreamPart::Custom {
+                kind,
+                provider_metadata,
+            } => {
+                self.snapshot.parts.push(TurnPart::Custom(CustomSegment {
+                    id: kind.clone(),
+                    data: serde_json::Value::Null,
+                    provider_metadata: provider_metadata.clone(),
+                }));
+            }
+
+            // ─── Tool approval request ───────────────────────────────
+            LanguageModelV4StreamPart::ToolApprovalRequest(req) => {
+                self.snapshot.parts.push(TurnPart::ToolApprovalRequest(
+                    ToolApprovalRequestSegment {
+                        approval_id: req.approval_id.clone(),
+                        tool_call_id: req.tool_call_id.clone(),
+                        provider_metadata: req.provider_metadata.clone(),
+                    },
+                ));
+            }
+
+            // ─── Non-content / lifecycle / unhandled ─────────────────
+            //
+            // StreamStart / Finish / Error / ResponseMetadata / Raw /
+            // ToolResult / ToolInputAvailable / ToolApprovalResponse —
+            // none belong in the assistant content vector. Drop.
+            _ => {}
+        }
+    }
+}
 
 /// Events emitted during streaming inference.
 #[derive(Debug, Clone)]
@@ -44,11 +478,19 @@ pub enum StreamEvent {
     ToolCallDelta { id: String, delta: String },
     /// Tool call input complete.
     ToolCallEnd { id: String },
-    /// Stream finished — final usage.
+    /// Stream finished — final usage and full turn snapshot.
+    ///
+    /// `snapshot` carries every emitted part with its `provider_metadata`
+    /// intact, in emission order. Consumers rebuilding `Vec<AssistantContentPart>`
+    /// for history MUST read from `snapshot.parts` to preserve per-part
+    /// signatures (Gemini `thoughtSignature`, Anthropic `signature`,
+    /// OpenAI `encrypted_content`). Constructed once per turn; cheap to
+    /// share via Arc.
     Finish {
         usage: TokenUsage,
         stop_reason: String,
         metrics: StreamMetrics,
+        snapshot: Arc<AssistantTurnSnapshot>,
     },
     /// Error during streaming.
     Error {
@@ -89,12 +531,24 @@ pub async fn process_stream_with_config(
     let mut processor = StreamProcessor::from_stream_with_config(stream, config);
     let mut reported_stall_count = 0;
     let mut emitted_events: i64 = 0;
+    // Per-turn assistant content accumulator. Walked at `Finish` to
+    // produce the `Arc<AssistantTurnSnapshot>` on `StreamEvent::Finish`.
+    let mut turn_state = AssistantTurnSnapshotState::new();
 
     while let Some(result) = processor.next().await {
         let (event, metrics) = match result {
             Ok((part, _)) => {
                 let metrics = processor.metrics();
-                (stream_event_from_part(part, metrics), metrics)
+                // Update our own coco-inference-owned accumulator BEFORE
+                // converting to `StreamEvent`. The vercel-ai `StreamProcessor`
+                // already updated its private `StreamSnapshot` inside
+                // `processor.next()`; we ignore that one and own our
+                // metadata-faithful copy here.
+                turn_state.update(&part);
+                (
+                    stream_event_from_part(part, metrics, &mut turn_state),
+                    metrics,
+                )
             }
             Err(e) => {
                 let metrics = processor.metrics();
@@ -181,6 +635,7 @@ pub async fn process_stream_with_config(
 fn stream_event_from_part(
     part: LanguageModelV4StreamPart,
     metrics: StreamMetrics,
+    turn_state: &mut AssistantTurnSnapshotState,
 ) -> Option<StreamEvent> {
     match part {
         LanguageModelV4StreamPart::TextDelta { delta, .. } => {
@@ -203,11 +658,16 @@ fn stream_event_from_part(
             usage,
             finish_reason,
             ..
-        } => Some(StreamEvent::Finish {
-            usage: token_usage_from_provider_usage(&usage),
-            stop_reason: finish_reason.unified.to_string(),
-            metrics,
-        }),
+        } => {
+            // Take ownership of the accumulated snapshot — this turn is done.
+            let snapshot = Arc::new(std::mem::take(&mut turn_state.snapshot));
+            Some(StreamEvent::Finish {
+                usage: token_usage_from_provider_usage(&usage),
+                stop_reason: finish_reason.unified.to_string(),
+                metrics,
+                snapshot,
+            })
+        }
         LanguageModelV4StreamPart::Error { error } => Some(StreamEvent::Error {
             message: error.message,
             metrics,
@@ -248,15 +708,24 @@ fn u64_to_i64(value: u64) -> i64 {
 ///
 /// Intended for **tests**: mocks that only implement `do_generate` can delegate
 /// their `do_stream` to this helper so the streaming agent loop sees the same
-/// logical response. Each content block is emitted as a single-chunk
-/// start/delta/end trio, followed by a `Finish` event carrying `usage` and
-/// `finish_reason`. Non-stream variants (`File`, `Source`, etc.) are ignored.
+/// logical response. Each content block is emitted as a `start → delta → end`
+/// trio (with the canonical `ToolCall(tc)` close after `ToolInputEnd` for
+/// tool calls), followed by a `Finish` event carrying `usage` and
+/// `finish_reason`.
+///
+/// **`provider_metadata` is propagated verbatim** from each source
+/// `AssistantContentPart` to every emitted stream part. This is critical
+/// for round-trip tests: a mock that emits a `Reasoning` with
+/// `provider_metadata = Some({"anthropic":{"signature":"S1"}})` must
+/// produce a stream where the corresponding `ReasoningEnd` carries the
+/// same signature. Without this, mock-based tests give false confidence.
 pub fn synthetic_stream_from_content(
     content: Vec<AssistantContentPart>,
     usage: Usage,
     finish_reason: FinishReason,
 ) -> LanguageModelV4StreamResult {
     use LanguageModelV4StreamPart as Part;
+    use vercel_ai_provider::LanguageModelV4ToolCall;
 
     let mut parts: Vec<Result<Part, AISdkError>> = Vec::new();
     let mut seg = 0usize;
@@ -267,16 +736,16 @@ pub fn synthetic_stream_from_content(
                 seg += 1;
                 parts.push(Ok(Part::ReasoningStart {
                     id: id.clone(),
-                    provider_metadata: None,
+                    provider_metadata: r.provider_metadata.clone(),
                 }));
                 parts.push(Ok(Part::ReasoningDelta {
                     id: id.clone(),
                     delta: r.text,
-                    provider_metadata: None,
+                    provider_metadata: r.provider_metadata.clone(),
                 }));
                 parts.push(Ok(Part::ReasoningEnd {
                     id,
-                    provider_metadata: None,
+                    provider_metadata: r.provider_metadata,
                 }));
             }
             AssistantContentPart::Text(t) => {
@@ -284,39 +753,122 @@ pub fn synthetic_stream_from_content(
                 seg += 1;
                 parts.push(Ok(Part::TextStart {
                     id: id.clone(),
-                    provider_metadata: None,
+                    provider_metadata: t.provider_metadata.clone(),
                 }));
                 parts.push(Ok(Part::TextDelta {
                     id: id.clone(),
                     delta: t.text,
-                    provider_metadata: None,
+                    provider_metadata: t.provider_metadata.clone(),
                 }));
                 parts.push(Ok(Part::TextEnd {
                     id,
-                    provider_metadata: None,
+                    provider_metadata: t.provider_metadata,
                 }));
             }
             AssistantContentPart::ToolCall(tc) => {
+                let call_id = tc.tool_call_id.clone();
+                let tool_name = tc.tool_name.clone();
+                let provider_executed = tc.provider_executed;
+                let provider_metadata = tc.provider_metadata.clone();
+                // `ToolCallPart.input` is `JSONValue`; the wire shape
+                // expects stringified JSON, mirroring the canonical
+                // `LanguageModelV4ToolCall.input: String` field.
+                let input_str = serde_json::to_string(&tc.input).unwrap_or_else(|_| "{}".into());
                 parts.push(Ok(Part::ToolInputStart {
-                    id: tc.tool_call_id.clone(),
-                    tool_name: tc.tool_name.clone(),
-                    provider_executed: tc.provider_executed,
+                    id: call_id.clone(),
+                    tool_name: tool_name.clone(),
+                    provider_executed,
                     dynamic: None,
                     title: None,
-                    provider_metadata: None,
+                    provider_metadata: provider_metadata.clone(),
                 }));
-                let json = serde_json::to_string(&tc.input).unwrap_or_else(|_| "{}".into());
                 parts.push(Ok(Part::ToolInputDelta {
-                    id: tc.tool_call_id.clone(),
-                    delta: json,
-                    provider_metadata: None,
+                    id: call_id.clone(),
+                    delta: input_str.clone(),
+                    provider_metadata: provider_metadata.clone(),
                 }));
                 parts.push(Ok(Part::ToolInputEnd {
-                    id: tc.tool_call_id,
-                    provider_metadata: None,
+                    id: call_id.clone(),
+                    provider_metadata: provider_metadata.clone(),
                 }));
+                // Canonical `ToolCall(tc)` close — this is what real
+                // providers (Anthropic, OpenAI Responses, Google) emit
+                // after `ToolInputEnd`. Required so the accumulator
+                // can mark `is_complete=true` and downstream consumers
+                // that filter on `is_complete` see the tool call.
+                let mut close = LanguageModelV4ToolCall::new(call_id, tool_name, input_str);
+                close.provider_executed = provider_executed;
+                close.provider_metadata = provider_metadata;
+                parts.push(Ok(Part::ToolCall(close)));
             }
-            _ => {}
+            AssistantContentPart::File(fp) => {
+                // Convert `FilePart.data` (SharedV4FileData / FileRawData)
+                // to the wire `String` form for synthesis. URL-only
+                // file references don't roundtrip through the stream's
+                // undifferentiated `data: String`.
+                let data = match &fp.data {
+                    vercel_ai_provider::SharedV4FileData::Data { data } => match data {
+                        vercel_ai_provider::FileRawData::Base64(s) => s.clone(),
+                        vercel_ai_provider::FileRawData::Bytes(_) => data.to_base64(),
+                    },
+                    vercel_ai_provider::SharedV4FileData::Url { .. }
+                    | vercel_ai_provider::SharedV4FileData::Reference { .. }
+                    | vercel_ai_provider::SharedV4FileData::Text { .. } => {
+                        trace!(
+                            "Non-data File variant skipped in synthetic stream (Data-only path)"
+                        );
+                        continue;
+                    }
+                };
+                parts.push(Ok(Part::File(
+                    vercel_ai_provider::language_model::v4::stream::File {
+                        data,
+                        media_type: fp.media_type.clone(),
+                        provider_metadata: fp.provider_metadata,
+                    },
+                )));
+            }
+            AssistantContentPart::ReasoningFile(rfp) => {
+                let data = match &rfp.data {
+                    LanguageModelV4FileData::Data { data } => match data {
+                        vercel_ai_provider::FileRawData::Base64(s) => s.clone(),
+                        vercel_ai_provider::FileRawData::Bytes(_) => data.to_base64(),
+                    },
+                    LanguageModelV4FileData::Url { .. } => {
+                        trace!("ReasoningFile URL skipped in synthetic stream (Data-only path)");
+                        continue;
+                    }
+                };
+                parts.push(Ok(Part::ReasoningFile(
+                    vercel_ai_provider::language_model::v4::stream::ReasoningFile {
+                        data,
+                        media_type: rfp.media_type.clone(),
+                        provider_metadata: rfp.provider_metadata,
+                    },
+                )));
+            }
+            AssistantContentPart::Source(src) => {
+                parts.push(Ok(Part::Source(src)));
+            }
+            AssistantContentPart::ToolApprovalRequest(req) => {
+                // `ToolApprovalRequestPart` (assistant content) and
+                // `LanguageModelV4ToolApprovalRequest` (stream part) are
+                // distinct types — bridge by copying the two required
+                // ids + metadata.
+                let mut srq = vercel_ai_provider::language_model::v4::tool_approval_request::LanguageModelV4ToolApprovalRequest::new(
+                    req.approval_id,
+                    req.tool_call_id,
+                );
+                if let Some(m) = req.provider_metadata {
+                    srq = srq.with_metadata(m);
+                }
+                parts.push(Ok(Part::ToolApprovalRequest(srq)));
+            }
+            // ToolResult / Custom are provider-specific and don't have
+            // a clean synthetic representation — skip with a trace.
+            _ => {
+                trace!("AssistantContentPart variant skipped in synthetic stream");
+            }
         }
     }
     parts.push(Ok(Part::Finish {

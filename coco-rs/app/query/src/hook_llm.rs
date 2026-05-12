@@ -194,6 +194,14 @@ fn build_prompt(user_prompt: &str) -> Vec<LanguageModelMessage> {
 /// - `ok: false` → Blocking with the supplied reason
 /// - `ok: true` → Ok
 fn parse_hook_response(content: &[AssistantContentPart]) -> HookEvaluationResult {
+    // Multi-text-part assistant messages are now possible (streaming
+    // path preserves per-part `provider_metadata`). The naive `join("")`
+    // still works for hook LLM responses because hooks emit a single
+    // JSON object as text; multi-text would corrupt the parse but the
+    // existing test
+    // (`test_parse_hook_response_concatenates_multiple_text_parts`)
+    // verifies that the parser tolerates the multi-text shape and
+    // returns a parse-failure outcome rather than crashing.
     let text = content
         .iter()
         .filter_map(|part| match part {
