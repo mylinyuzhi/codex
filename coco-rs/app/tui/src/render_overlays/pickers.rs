@@ -1,6 +1,8 @@
 //! Filterable-list picker overlay renderers (model, command, session, quick
 //! open, export, MCP select).
 
+use coco_types::ModelRole;
+use coco_types::ReasoningEffort;
 use ratatui::prelude::Color;
 
 use crate::i18n::t;
@@ -9,49 +11,205 @@ use crate::state::ExportOverlay;
 use crate::state::McpServerSelectOverlay;
 use crate::state::MemoryDialogOverlay;
 use crate::state::MemoryDialogScope;
+use crate::state::ModelEntry;
 use crate::state::ModelPickerOverlay;
 use crate::state::QuickOpenOverlay;
 use crate::state::SessionBrowserOverlay;
 use crate::theme::Theme;
+
+/// Canonical role order — must mirror `update::show::next_role` so the
+/// pill order matches Tab/Shift+Tab cycling.
+const ROLE_ORDER: [ModelRole; 9] = [
+    ModelRole::Main,
+    ModelRole::Fast,
+    ModelRole::Compact,
+    ModelRole::Plan,
+    ModelRole::Explore,
+    ModelRole::Review,
+    ModelRole::HookAgent,
+    ModelRole::Memory,
+    ModelRole::Subagent,
+];
 
 pub(super) fn model_picker_content(
     m: &ModelPickerOverlay,
     theme: &Theme,
 ) -> (String, String, Color) {
     let filter_lower = m.filter.to_lowercase();
-    let items: Vec<String> = m
-        .models
+    let filtered: Vec<&ModelEntry> = m
+        .entries
         .iter()
-        .filter(|model| {
-            filter_lower.is_empty() || model.label.to_lowercase().contains(&filter_lower)
-        })
-        .enumerate()
-        .map(|(i, model)| {
-            let marker = if i as i32 == m.selected { "▸ " } else { "  " };
-            let desc = model
-                .description
-                .as_deref()
-                .map(|d| format!(" — {d}"))
-                .unwrap_or_default();
-            format!("{marker}{}{desc}", model.label)
+        .filter(|e| {
+            filter_lower.is_empty()
+                || e.display_name.to_lowercase().contains(&filter_lower)
+                || e.provider_display.to_lowercase().contains(&filter_lower)
         })
         .collect();
 
+    let role_line = render_role_pill(m.role);
     let filter_line = if m.filter.is_empty() {
-        t!("dialog.type_filter").to_string()
+        t!("dialog.model_picker_type_filter").to_string()
     } else {
         t!("dialog.filter_prefix", text = m.filter.as_str()).to_string()
     };
 
-    (
-        t!("dialog.title_model").to_string(),
-        format!(
-            "{filter_line}\n\n{}\n\n{}",
-            items.join("\n"),
-            t!("dialog.hints_nav_select_cancel")
-        ),
-        theme.primary,
+    let model_lines = render_grouped_models(&filtered, m.selected);
+    let footer = render_effort_footer(m, &filtered);
+    let hints = t!("dialog.model_picker_hints").to_string();
+
+    let body = if footer.is_empty() {
+        format!("{role_line}\n\n{filter_line}\n\n{model_lines}\n\n{hints}")
+    } else {
+        format!("{role_line}\n\n{filter_line}\n\n{model_lines}\n\n{footer}\n\n{hints}")
+    };
+
+    let role_label = role_display(m.role);
+    let title = t!("dialog.model_picker_title", role = role_label.as_str()).to_string();
+    (title, body, theme.primary)
+}
+
+/// Render the role pill row, e.g. `Role:  ▸Main◂  Fast  Compact  ...`.
+/// Markers around the active role draw attention without needing colour
+/// (the underlying paragraph is single-colour). TS uses tab-bar styling
+/// for an equivalent pill in `components/ModelPicker.tsx`.
+fn render_role_pill(active: ModelRole) -> String {
+    let parts: Vec<String> = ROLE_ORDER
+        .iter()
+        .map(|r| {
+            if *r == active {
+                format!("▸{}◂", role_display(*r))
+            } else {
+                format!(" {} ", role_display(*r))
+            }
+        })
+        .collect();
+    format!(
+        "{}  {}",
+        t!("dialog.model_picker_role_label"),
+        parts.join("  ")
     )
+}
+
+/// Render the model list with provider headers between sections. The
+/// list is already sorted by `(provider_display, display_name)` so a
+/// section break is just "previous row's provider != current's".
+fn render_grouped_models(entries: &[&ModelEntry], selected: i32) -> String {
+    if entries.is_empty() {
+        return t!("dialog.model_picker_empty").to_string();
+    }
+    let mut out: Vec<String> = Vec::with_capacity(entries.len() + 8);
+    let mut last_provider: Option<&str> = None;
+    for (i, entry) in entries.iter().enumerate() {
+        if last_provider != Some(entry.provider_display.as_str()) {
+            if !out.is_empty() {
+                out.push(String::new()); // blank line between groups
+            }
+            out.push(entry.provider_display.clone());
+            last_provider = Some(entry.provider_display.as_str());
+        }
+        let marker = if i as i32 == selected {
+            "  ❯ "
+        } else {
+            "    "
+        };
+        let context = entry
+            .context_window
+            .map(|w| format!(" · {}", format_context_window(w)))
+            .unwrap_or_default();
+        let thinking = if entry.supported_efforts.is_empty() {
+            String::new()
+        } else {
+            format!(" · {}", t!("dialog.model_picker_thinking_tag"))
+        };
+        let current = if entry.is_current_for_role {
+            format!("  [{}]", t!("dialog.model_picker_current"))
+        } else {
+            String::new()
+        };
+        out.push(format!(
+            "{marker}{}{context}{thinking}{current}",
+            entry.display_name
+        ));
+    }
+    out.join("\n")
+}
+
+/// Format a token count as `1M` / `200K` / `1024`.
+fn format_context_window(tokens: i64) -> String {
+    if tokens >= 1_000_000 {
+        let m = tokens as f64 / 1_000_000.0;
+        if (m - m.round()).abs() < 0.05 {
+            format!("{}M", m.round() as i64)
+        } else {
+            format!("{m:.1}M")
+        }
+    } else if tokens >= 1_000 {
+        format!("{}K", tokens / 1_000)
+    } else {
+        format!("{tokens}")
+    }
+}
+
+/// Render the thinking-effort footer for the focused model. Returns
+/// an empty string when the focused model has no supported levels so
+/// the caller can omit the section entirely.
+fn render_effort_footer(m: &ModelPickerOverlay, filtered: &[&ModelEntry]) -> String {
+    let Some(entry) = filtered.get(m.selected as usize) else {
+        return String::new();
+    };
+    if entry.supported_efforts.is_empty() {
+        return String::new();
+    }
+    let active = m.effort.or(entry.default_effort);
+    let chips: Vec<String> = entry
+        .supported_efforts
+        .iter()
+        .map(|e| {
+            let label = effort_display(*e);
+            if Some(*e) == active {
+                format!("▸{label}◂")
+            } else {
+                format!(" {label} ")
+            }
+        })
+        .collect();
+    format!(
+        "{}  {}",
+        t!("dialog.model_picker_thinking_label"),
+        chips.join("  ")
+    )
+}
+
+/// User-facing role display name. Lookups go through i18n so the
+/// translation table owns the wording — ASCII fallbacks aren't
+/// hardcoded here.
+fn role_display(role: ModelRole) -> String {
+    let key = match role {
+        ModelRole::Main => "role.main",
+        ModelRole::Fast => "role.fast",
+        ModelRole::Compact => "role.compact",
+        ModelRole::Plan => "role.plan",
+        ModelRole::Explore => "role.explore",
+        ModelRole::Review => "role.review",
+        ModelRole::HookAgent => "role.hook_agent",
+        ModelRole::Memory => "role.memory",
+        ModelRole::Subagent => "role.subagent",
+    };
+    t!(key).to_string()
+}
+
+/// User-facing effort label. `Auto` shows as "auto" so users don't
+/// confuse it with "default" — `Disable` shows as "off".
+fn effort_display(effort: ReasoningEffort) -> &'static str {
+    match effort {
+        ReasoningEffort::Disable => "off",
+        ReasoningEffort::Auto => "auto",
+        ReasoningEffort::Minimal => "minimal",
+        ReasoningEffort::Low => "low",
+        ReasoningEffort::Medium => "medium",
+        ReasoningEffort::High => "high",
+        ReasoningEffort::XHigh => "xhigh",
+    }
 }
 
 pub(super) fn command_palette_content(

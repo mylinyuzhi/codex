@@ -1350,6 +1350,7 @@ impl coco_tool_runtime::Tool for HookOrderingTool {
             data: serde_json::json!({"value": "ordering"}),
             new_messages: vec![coco_messages::create_user_message("tool new message")],
             app_state_patch: None,
+            permission_updates: Vec::new(),
         })
     }
 }
@@ -1399,6 +1400,7 @@ impl coco_tool_runtime::Tool for HookOrderingMcpTool {
             data: serde_json::json!({"value": "ordering-mcp"}),
             new_messages: vec![coco_messages::create_user_message("tool new message")],
             app_state_patch: None,
+            permission_updates: Vec::new(),
         })
     }
 }

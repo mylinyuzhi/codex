@@ -66,6 +66,7 @@ impl crate::traits::Tool for ConfigurableTool {
             data: json!({}),
             new_messages: Vec::new(),
             app_state_patch: None,
+            permission_updates: Vec::new(),
         })
     }
 }

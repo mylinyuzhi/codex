@@ -1069,14 +1069,25 @@
       ]
     },
     "PermissionUpdateDestination": {
-      "description": "Destination for persisting permission updates.",
-      "type": "string",
-      "enum": [
-        "user_settings",
-        "project_settings",
-        "local_settings",
-        "session",
-        "cli_arg"
+      "description": "Destination for persisting permission updates.\n\nPersistable destinations (`User`/`Project`/`LocalSettings`) write to disk; in-memory destinations (`Session`/`CliArg`/`Command`) live only for the running session. TS parity: same split as `persistPermissionUpdates` in `PermissionUpdate.ts`.\n\n`Command` is reserved for rules contributed by an invoked command or skill's frontmatter (`allowed-tools:`). TS parity: `alwaysAllowRules.command` populated by `SkillTool` / `createGetAppStateWithAllowedTools`.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "user_settings",
+            "project_settings",
+            "local_settings",
+            "session",
+            "cli_arg"
+          ]
+        },
+        {
+          "description": "Rules contributed by a command/skill frontmatter `allowed-tools`. In-memory only; cleared on session end.",
+          "type": "string",
+          "enum": [
+            "command"
+          ]
+        }
       ]
     },
     "ReasoningEffort": {

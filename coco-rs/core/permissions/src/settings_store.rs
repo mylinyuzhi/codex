@@ -137,7 +137,9 @@ impl SettingsPermissionStore {
             PermissionUpdateDestination::LocalSettings => {
                 Some(global_config::local_settings_path(&self.cwd))
             }
-            PermissionUpdateDestination::Session | PermissionUpdateDestination::CliArg => None,
+            PermissionUpdateDestination::Session
+            | PermissionUpdateDestination::CliArg
+            | PermissionUpdateDestination::Command => None,
         }
     }
 

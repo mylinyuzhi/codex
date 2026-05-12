@@ -32,7 +32,22 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
         // === Session lifecycle ===
         ServerNotification::SessionStarted(p) => {
             state.session.session_id = Some(p.session_id);
+            // Initialise thinking_effort from the model's registered
+            // default so the status bar reflects the starting state
+            // before any Ctrl+T cycle. Falls back to Auto when the
+            // model has no opinion (the resting state).
+            state.session.thinking_effort = coco_config::builtin_models_partial()
+                .get(&p.model)
+                .and_then(|info| info.default_thinking_level)
+                .unwrap_or(coco_types::ReasoningEffort::Auto);
             state.session.model = p.model;
+            // Resolve the current git branch before storing cwd so a
+            // failure (cwd outside a repo, detached HEAD) leaves
+            // `git_branch = None` rather than a stale value. Stdout
+            // shells out to `git rev-parse`; this fires once per session
+            // start so the cost is negligible.
+            let cwd_path = std::path::PathBuf::from(&p.cwd);
+            state.session.git_branch = coco_git::get_current_branch(&cwd_path).ok().flatten();
             state.session.working_dir = Some(p.cwd);
             // A new session invalidates any cached agent markdown — otherwise
             // /copy could surface text from a previous conversation.
@@ -114,6 +129,8 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
                 description: p.description,
                 status: SubagentStatus::Running,
                 color: p.color,
+                started_at_ms: Some(crate::state::session::now_ms()),
+                token_usage: None,
             });
             true
         }

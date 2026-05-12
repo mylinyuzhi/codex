@@ -648,6 +648,7 @@ impl Tool for BashTool {
                         }),
                         new_messages: vec![],
                         app_state_patch: None,
+                        permission_updates: Vec::new(),
                     });
                 }
                 Err(ToolError::ExecutionFailed {
@@ -699,6 +700,7 @@ async fn execute_background(
         }),
         new_messages: vec![],
         app_state_patch: None,
+        permission_updates: Vec::new(),
     })
 }
 
@@ -924,6 +926,7 @@ async fn execute_foreground(
         data: result_obj,
         new_messages: vec![],
         app_state_patch: None,
+        permission_updates: Vec::new(),
     })
 }
 
@@ -1118,6 +1121,7 @@ async fn apply_sed_edit(
             }),
             new_messages: vec![],
             app_state_patch: None,
+            permission_updates: Vec::new(),
         });
     }
 
@@ -1136,6 +1140,7 @@ async fn apply_sed_edit(
                 }),
                 new_messages: vec![],
                 app_state_patch: None,
+                permission_updates: Vec::new(),
             });
         }
     };
@@ -1171,6 +1176,7 @@ async fn apply_sed_edit(
         }),
         new_messages: vec![],
         app_state_patch: None,
+        permission_updates: Vec::new(),
     })
 }
 

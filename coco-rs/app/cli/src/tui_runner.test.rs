@@ -358,3 +358,46 @@ fn plan_query_after_flip_open_substring_still_queries() {
         Some("open the door")
     );
 }
+
+mod truncate_output_tests {
+    use super::super::truncate_output;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn short_text_passes_through() {
+        assert_eq!(truncate_output("hello".into(), 100, 10), "hello");
+    }
+
+    #[test]
+    fn caps_at_line_count_with_marker() {
+        let text = (0..15)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let out = truncate_output(text, 10_000, 5);
+        let lines = out.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 6);
+        assert_eq!(lines[0], "line 0");
+        assert_eq!(lines[4], "line 4");
+        assert_eq!(lines[5], "… (truncated)");
+    }
+
+    #[test]
+    fn caps_at_byte_budget() {
+        let long = "x".repeat(500);
+        let out = truncate_output(long, 50, 1000);
+        assert!(out.starts_with(&"x".repeat(50)));
+        assert!(out.ends_with("(truncated)"));
+    }
+
+    #[test]
+    fn preserves_utf8_boundaries_when_cut() {
+        // Each 🚀 is 4 bytes; 60 chars × 4 = 240 bytes. The byte cut
+        // must land on a 4-byte boundary so the string stays valid
+        // UTF-8 (`.chars().count()` panics on a malformed slice).
+        let rocket_run: String = "🚀".repeat(60);
+        let out = truncate_output(rocket_run, 100, 1000);
+        let _ = out.chars().count();
+        assert!(out.ends_with("(truncated)"));
+    }
+}

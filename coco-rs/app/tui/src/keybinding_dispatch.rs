@@ -196,8 +196,12 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
         DiffViewDetails => TuiCommand::OverlayConfirm,
 
         // ── ModelPicker ─────────────────────────────────────────────
-        ModelPickerDecreaseEffort => TuiCommand::OverlayPrev,
-        ModelPickerIncreaseEffort => TuiCommand::OverlayNext,
+        // Left/Right cycle the *effort axis* — separate from Up/Down
+        // (`SelectPrevious` / `SelectNext`) which move between models.
+        // Previously both pairs routed to OverlayPrev/OverlayNext, so
+        // ←/→ silently scrolled the list (latent TS-parity gap).
+        ModelPickerDecreaseEffort => TuiCommand::ModelPickerCycleEffort(-1),
+        ModelPickerIncreaseEffort => TuiCommand::ModelPickerCycleEffort(1),
 
         // ── Select ──────────────────────────────────────────────────
         SelectNext => TuiCommand::OverlayNext,

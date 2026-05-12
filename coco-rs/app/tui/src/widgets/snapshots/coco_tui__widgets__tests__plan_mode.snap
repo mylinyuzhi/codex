@@ -4,7 +4,7 @@ expression: output
 ---
  | opus-4 | PLAN | turn 3                                                       
  ⚠ Permission: plan — read-only exploration. Writes require /plan exit.         
-> Plan the implementation                                                       
+❯ Plan the implementation                                                       
                                                                                 
                                                                                 
                                                                                 
@@ -23,6 +23,6 @@ expression: output
                                                                                 
                                                                                 
  Plan Mode ─────────────────────────────────────────────────────────────────────
-! Type a message...                                                             
+❯ Type a message...                                                             
                                                                                 
  opus-4 | Plan | 1 msgs

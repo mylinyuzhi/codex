@@ -197,6 +197,31 @@ fn test_supports_persistence() {
     ));
     assert!(!supports_persistence(PermissionUpdateDestination::Session));
     assert!(!supports_persistence(PermissionUpdateDestination::CliArg));
+    // Skill-driven rules are in-memory; they belong to the `Command`
+    // bucket which never persists. TS parity: `alwaysAllowRules.command`
+    // is session-lifetime only.
+    assert!(!supports_persistence(PermissionUpdateDestination::Command));
+}
+
+#[test]
+fn test_command_destination_routes_to_command_source() {
+    // Adding a rule with `destination: Command` must land it under
+    // `PermissionRuleSource::Command` in the allow map. This is the
+    // central guarantee skill auto-allow relies on — without it,
+    // skills' `allowed-tools` would silently disappear or pollute the
+    // wrong bucket.
+    let ctx = empty_context();
+    let update = PermissionUpdate::AddRules {
+        rules: vec![make_allow_rule("Read", None)],
+        destination: PermissionUpdateDestination::Command,
+    };
+    let updated = apply_permission_update(ctx, &update);
+    let command_rules = updated
+        .allow_rules
+        .get(&PermissionRuleSource::Command)
+        .expect("Command source must be populated");
+    assert_eq!(command_rules.len(), 1);
+    assert_eq!(command_rules[0].value.tool_pattern, "Read");
 }
 
 #[test]

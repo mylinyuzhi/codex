@@ -23,6 +23,13 @@ fn test_config() -> QueryEngineConfig {
 }
 
 fn factory(config: QueryEngineConfig) -> ToolContextFactory {
+    factory_with_live_rules(config, Arc::new(RwLock::new(Vec::new())))
+}
+
+fn factory_with_live_rules(
+    config: QueryEngineConfig,
+    live_command_rules: Arc<RwLock<Vec<coco_types::PermissionRule>>>,
+) -> ToolContextFactory {
     ToolContextFactory {
         config,
         tools: Arc::new(ToolRegistry::new()),
@@ -41,6 +48,7 @@ fn factory(config: QueryEngineConfig) -> ToolContextFactory {
         skill_handle: None,
         tool_schema_validator: None,
         agent_catalog: None,
+        live_command_rules,
     }
 }
 
@@ -405,4 +413,163 @@ async fn test_factory_defaults_skill_handle_to_noop_unavailable() {
         err,
         coco_tool_runtime::SkillInvocationError::Unavailable { .. }
     ));
+}
+
+// ── Live Command-source rule merge tests ──
+//
+// Verifies the `engine.live_command_rules` Arc threaded into the
+// factory is read at every `build()` and folded into
+// `permission_context.allow_rules[Command]`. TS parity:
+// `getAppState().alwaysAllowRules.command` is read each permission
+// check; per-engine = per-user-msg scoping comes from the engine's
+// fresh-per-turn lifecycle (see `engine_live_rules` module docs).
+
+fn skill_cmd_rule(tool_pattern: &str) -> coco_types::PermissionRule {
+    coco_types::PermissionRule {
+        source: coco_types::PermissionRuleSource::Command,
+        behavior: coco_types::PermissionBehavior::Allow,
+        value: coco_types::PermissionRuleValue {
+            tool_pattern: tool_pattern.into(),
+            rule_content: None,
+        },
+    }
+}
+
+#[tokio::test]
+async fn test_factory_returns_base_allow_rules_when_live_rules_empty() {
+    // Zero-clone fast path: when the live store is empty, the
+    // factory must hand back the config's base allow_rules verbatim
+    // (no Command entry inserted). This is the common case — the
+    // overwhelming majority of turns have no skill-emitted rules.
+    let config = test_config();
+    let base_clone = config.allow_rules.clone();
+    let ctx = factory(config).build(Default::default()).await;
+    // PermissionRule doesn't impl PartialEq; compare via JSON roundtrip.
+    assert_eq!(
+        serde_json::to_string(&ctx.permission_context.allow_rules).unwrap(),
+        serde_json::to_string(&base_clone).unwrap(),
+        "fast path must hand back base allow_rules verbatim"
+    );
+    // No Command source ever materialised because we never inserted one.
+    assert!(
+        !ctx.permission_context
+            .allow_rules
+            .contains_key(&coco_types::PermissionRuleSource::Command)
+    );
+}
+
+#[tokio::test]
+async fn test_factory_merges_live_rules_into_command_source() {
+    // Skill emitted a rule earlier this user message — factory.build
+    // for the next batch must surface it under the Command source so
+    // the evaluator sees it.
+    let config = test_config();
+    let store: Arc<RwLock<Vec<coco_types::PermissionRule>>> =
+        Arc::new(RwLock::new(vec![skill_cmd_rule("Read")]));
+    let ctx = factory_with_live_rules(config, store.clone())
+        .build(Default::default())
+        .await;
+    let cmd_rules = ctx
+        .permission_context
+        .allow_rules
+        .get(&coco_types::PermissionRuleSource::Command)
+        .expect("Command source should be populated from live rules");
+    assert_eq!(cmd_rules.len(), 1);
+    assert_eq!(cmd_rules[0].value.tool_pattern, "Read");
+}
+
+#[tokio::test]
+async fn test_factory_cross_batch_propagation_within_same_arc() {
+    // Same Arc shared with the (hypothetical) engine + handle:
+    // batch 1's `build()` sees `[Read]`, then a "tool emission"
+    // appends `[Edit]`, batch 2's `build()` sees both. This is the
+    // cross-turn-within-user-msg path that TS gets via the
+    // closure-captured appState.
+    let config = test_config();
+    let store: Arc<RwLock<Vec<coco_types::PermissionRule>>> =
+        Arc::new(RwLock::new(vec![skill_cmd_rule("Read")]));
+    let factory = factory_with_live_rules(config, store.clone());
+
+    let ctx1 = factory.build(Default::default()).await;
+    let cmd1 = ctx1
+        .permission_context
+        .allow_rules
+        .get(&coco_types::PermissionRuleSource::Command)
+        .expect("batch 1 should see Read");
+    assert_eq!(cmd1.len(), 1);
+
+    // Simulate a tool emission between batches.
+    store.write().await.push(skill_cmd_rule("Edit"));
+
+    let ctx2 = factory.build(Default::default()).await;
+    let cmd2 = ctx2
+        .permission_context
+        .allow_rules
+        .get(&coco_types::PermissionRuleSource::Command)
+        .expect("batch 2 should see both rules");
+    let patterns: Vec<&str> = cmd2.iter().map(|r| r.value.tool_pattern.as_str()).collect();
+    assert_eq!(patterns, vec!["Read", "Edit"]);
+}
+
+#[tokio::test]
+async fn test_factory_isolates_per_arc_engines() {
+    // Two factories with two independent Arc-stores ≡ two engines
+    // (= two user messages, or main + subagent). A write into one
+    // must NOT be visible through the other.
+    let config_a = test_config();
+    let config_b = test_config();
+    let store_a: Arc<RwLock<Vec<coco_types::PermissionRule>>> = Arc::new(RwLock::new(Vec::new()));
+    let store_b: Arc<RwLock<Vec<coco_types::PermissionRule>>> = Arc::new(RwLock::new(Vec::new()));
+
+    store_a.write().await.push(skill_cmd_rule("Read"));
+
+    let ctx_a = factory_with_live_rules(config_a, store_a)
+        .build(Default::default())
+        .await;
+    let ctx_b = factory_with_live_rules(config_b, store_b)
+        .build(Default::default())
+        .await;
+
+    assert!(
+        ctx_a
+            .permission_context
+            .allow_rules
+            .contains_key(&coco_types::PermissionRuleSource::Command)
+    );
+    assert!(
+        !ctx_b
+            .permission_context
+            .allow_rules
+            .contains_key(&coco_types::PermissionRuleSource::Command)
+    );
+}
+
+#[tokio::test]
+async fn test_factory_preserves_base_command_rules_when_merging() {
+    // If the user has set Command-source rules at the config layer
+    // (e.g. via CLI `--allow Command:Read`, though uncommon), the
+    // factory must append live rules to those rather than replace
+    // the base.
+    let mut config = test_config();
+    config
+        .allow_rules
+        .entry(coco_types::PermissionRuleSource::Command)
+        .or_default()
+        .push(skill_cmd_rule("Glob"));
+
+    let store: Arc<RwLock<Vec<coco_types::PermissionRule>>> =
+        Arc::new(RwLock::new(vec![skill_cmd_rule("Read")]));
+    let ctx = factory_with_live_rules(config, store)
+        .build(Default::default())
+        .await;
+    let cmd_rules = ctx
+        .permission_context
+        .allow_rules
+        .get(&coco_types::PermissionRuleSource::Command)
+        .expect("Command source should retain base + live entries");
+    let patterns: Vec<&str> = cmd_rules
+        .iter()
+        .map(|r| r.value.tool_pattern.as_str())
+        .collect();
+    assert_eq!(patterns, vec!["Glob", "Read"]);
 }

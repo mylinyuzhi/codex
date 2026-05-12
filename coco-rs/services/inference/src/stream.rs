@@ -31,23 +31,16 @@ const DEFAULT_PROCESS_STREAM_STALL_THRESHOLD: Duration = Duration::from_secs(30)
 
 // ─── AssistantTurnSnapshot — per-turn full-fidelity assistant content ────
 //
-// Owned by coco-inference (not vercel-ai/ai). Accumulated inside
-// `process_stream_with_config` as parts arrive, then shipped as
-// `Arc<AssistantTurnSnapshot>` on `StreamEvent::Finish.snapshot`. The
-// agent loop in `coco-query::engine` walks `parts` in order to rebuild
-// `Vec<AssistantContentPart>` with every part's `provider_metadata`
-// preserved verbatim.
+// Owned by coco-inference. Accumulated inside `process_stream_with_config`
+// as parts arrive, then shipped as `Arc<AssistantTurnSnapshot>` on
+// `StreamEvent::Finish.snapshot`. The agent loop in `coco-query::engine`
+// walks `parts` in order to rebuild `Vec<AssistantContentPart>` with every
+// part's `provider_metadata` preserved verbatim.
 //
-// Why this lives here and not in `vercel-ai/ai/src/stream/snapshot.rs`:
-// - vercel-ai/ai's `StreamSnapshot` is a public SDK surface that mirrors
-//   `@ai-sdk/ai` v4 spec. Extending it for coco-rs-specific needs would
-//   diverge from spec and force backwards-compat shims for external SDK
-//   consumers.
-// - The seam contract (`services/inference/CLAUDE.md`) says coco-inference
-//   owns coco-rs-specific extensions; vercel-ai/ai stays vendor-neutral.
-//
-// See `docs/coco-rs/streaming-metadata-roundtrip-plan.md` §"Why Path B
-// over Path A" for the full rationale.
+// Accumulation lives here, not in vercel-ai/ai, because it embeds policy
+// (which parts matter, which metadata to preserve). vercel-ai/ai's job
+// ends at `Stream<LanguageModelV4StreamPart>` + idle-timeout + metrics —
+// content accumulation is consumer policy, not vendor protocol.
 
 /// One emitted segment in an assistant turn, paired with the
 /// provider metadata that was attached to it on the wire.
@@ -537,13 +530,13 @@ pub async fn process_stream_with_config(
 
     while let Some(result) = processor.next().await {
         let (event, metrics) = match result {
-            Ok((part, _)) => {
+            Ok(part) => {
                 let metrics = processor.metrics();
-                // Update our own coco-inference-owned accumulator BEFORE
-                // converting to `StreamEvent`. The vercel-ai `StreamProcessor`
-                // already updated its private `StreamSnapshot` inside
-                // `processor.next()`; we ignore that one and own our
-                // metadata-faithful copy here.
+                // Update the per-turn assistant accumulator BEFORE converting
+                // to a `StreamEvent`. `StreamProcessor` is a thin metrics +
+                // idle-timeout adapter and does no accumulation of its own;
+                // content state is owned here so per-part `provider_metadata`
+                // round-trips intact.
                 turn_state.update(&part);
                 (
                     stream_event_from_part(part, metrics, &mut turn_state),

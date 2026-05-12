@@ -26,6 +26,7 @@
 use coco_messages::Message;
 use coco_types::AppStatePatch;
 use coco_types::PermissionDenialInfo;
+use coco_types::PermissionUpdate;
 use coco_types::ToolId;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -163,6 +164,12 @@ pub struct ToolSideEffects {
     /// batches queue by `model_index` and apply post-batch under one
     /// write lock (TS `toolOrchestration.ts:54-62` parity).
     pub app_state_patch: Option<AppStatePatch>,
+    /// Declarative permission-rule deltas to fold into the running
+    /// session config. Applied via the executor's
+    /// `PermissionRuleHandle` at the same point as `app_state_patch`.
+    /// TS parity: `contextModifier` wrapping `alwaysAllowRules` on
+    /// `getAppState`.
+    pub permission_updates: Vec<PermissionUpdate>,
     // Future effects (pending cache invalidations, telemetry
     // side-channels, etc.) live here — they do NOT leak into the
     // history-facing outcome.
@@ -174,6 +181,7 @@ impl ToolSideEffects {
     pub fn none() -> Self {
         Self {
             app_state_patch: None,
+            permission_updates: Vec::new(),
         }
     }
 }

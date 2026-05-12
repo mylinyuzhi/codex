@@ -45,6 +45,11 @@ use coco_tool_runtime::SkillHandle;
 use coco_tool_runtime::SkillInvocationError;
 use coco_tool_runtime::SkillInvocationResult;
 use coco_tool_runtime::SubagentInheritance;
+use coco_types::PermissionBehavior;
+use coco_types::PermissionRule;
+use coco_types::PermissionRuleSource;
+use coco_types::PermissionUpdate;
+use coco_types::PermissionUpdateDestination;
 use tokio::sync::RwLock;
 
 /// Real skill-runtime implementation.
@@ -128,6 +133,22 @@ impl SkillHandle for QuerySkillRuntime {
         let expanded_prompt =
             coco_tools::tools::skill_advanced::expand_skill_prompt_simple(&skill.prompt, args);
 
+        // Skill frontmatter `allowed-tools` becomes Command-source
+        // auto-allow rules. Inline path threads these through
+        // `SkillInvocationResult::Inline.permission_updates` →
+        // `ToolResult.permission_updates` → executor's
+        // `PermissionRuleHandle` → session config. Fork path inlines
+        // them on `AgentQueryConfig.extra_allow_rules` so the
+        // subagent's first turn already sees them. TS parity:
+        // `SkillTool.ts` `contextModifier` for inline,
+        // `createGetAppStateWithAllowedTools` for fork — both write
+        // into `alwaysAllowRules.command`.
+        let allow_rules = skill
+            .allowed_tools
+            .as_deref()
+            .map(build_command_allow_rules)
+            .unwrap_or_default();
+
         match skill.context {
             SkillContext::Inline => {
                 // Inline: surface the expanded prompt as a new user
@@ -138,6 +159,7 @@ impl SkillHandle for QuerySkillRuntime {
                 tracing::info!(
                     skill_name = %skill.name,
                     prompt_chars = expanded_prompt.len(),
+                    allow_rules = allow_rules.len(),
                     "skill inline expanded"
                 );
                 let summary = format!(
@@ -148,9 +170,18 @@ impl SkillHandle for QuerySkillRuntime {
                 let new_messages = vec![
                     serde_json::to_value(&expanded_message).unwrap_or(serde_json::Value::Null),
                 ];
+                let permission_updates = if allow_rules.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![PermissionUpdate::AddRules {
+                        rules: allow_rules,
+                        destination: PermissionUpdateDestination::Command,
+                    }]
+                };
                 Ok(SkillInvocationResult::Inline {
                     summary,
                     new_messages,
+                    permission_updates,
                 })
             }
             SkillContext::Fork => {
@@ -181,8 +212,14 @@ impl SkillHandle for QuerySkillRuntime {
                     context_window: None,
                     prompt_cache: None,
                     max_output_tokens: None,
-                    allowed_tools: skill.allowed_tools.clone().unwrap_or_default(),
+                    // Fork skills mirror TS behavior: NO registry
+                    // narrowing. The subagent sees the full
+                    // inherited toolset; `extra_allow_rules` below
+                    // auto-allow the listed tools, others go through
+                    // the normal permission pipeline.
+                    allowed_tools: Vec::new(),
                     disallowed_tools: Vec::new(),
+                    extra_allow_rules: allow_rules,
                     tool_overrides: inherit.tool_overrides.clone(),
                     features: inherit.features.clone(),
                     parent_tool_filter: inherit.parent_tool_filter.clone(),
@@ -236,6 +273,7 @@ impl SkillHandle for QuerySkillRuntime {
                 tracing::info!(
                     skill_name = %skill.name,
                     agent_id = %agent_id,
+                    extra_allow_rules = config.extra_allow_rules.len(),
                     "skill fork dispatch"
                 );
                 let query_result = engine
@@ -264,6 +302,22 @@ impl SkillHandle for QuerySkillRuntime {
             }
         }
     }
+}
+
+/// Convert a skill's `allowed-tools` list (tool patterns) into
+/// Command-source allow rules. Each entry becomes one
+/// `PermissionRule` with `source: Command, behavior: Allow` so
+/// downstream evaluation matches both inline and fork paths via the
+/// same `Command` slot — TS parity: `alwaysAllowRules.command`.
+fn build_command_allow_rules(allowed_tools: &[String]) -> Vec<PermissionRule> {
+    allowed_tools
+        .iter()
+        .map(|raw| PermissionRule {
+            source: PermissionRuleSource::Command,
+            behavior: PermissionBehavior::Allow,
+            value: coco_permissions::parse_rule_string(raw),
+        })
+        .collect()
 }
 
 #[cfg(test)]

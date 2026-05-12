@@ -16,35 +16,44 @@ pub(super) fn try_render<'a>(
 ) -> Option<()> {
     match content {
         MessageContent::ToolSuccess { tool_name, output } => {
+            // Mirror the invocation row: the result block reuses the
+            // `●` glyph so the eye groups call+result. Status is
+            // colour-encoded (green ⇒ completed). Body is indented
+            // four spaces past the gutter so column alignment matches
+            // the tool-use header.
             lines.push(Line::from(vec![
-                Span::raw("  ✓ ").fg(w.theme.tool_completed),
-                Span::raw(format!("{tool_name}: ")).fg(w.theme.text_dim),
+                Span::raw("  ● ").fg(w.theme.tool_completed),
+                Span::raw(tool_name.clone()).fg(w.theme.text).bold(),
             ]));
+            let total = output.lines().count();
             for line in output.lines().take(15) {
                 lines.push(Line::from(
                     Span::raw(format!("    {line}")).fg(w.theme.text),
                 ));
             }
-            if output.lines().count() > 15 {
+            if total > 15 {
                 lines.push(Line::from(
-                    Span::raw(format!(
-                        "    ... ({} more lines)",
-                        output.lines().count() - 15
-                    ))
-                    .fg(w.theme.text_dim),
+                    Span::raw(format!("    … ({} more lines)", total - 15))
+                        .fg(w.theme.text_dim)
+                        .italic(),
                 ));
             }
             Some(())
         }
         MessageContent::ToolError { tool_name, error } => {
             lines.push(Line::from(vec![
-                Span::raw("  ✗ ").fg(w.theme.tool_error),
-                Span::raw(format!("{tool_name}: ")).fg(w.theme.text_dim),
+                Span::raw("  ● ").fg(w.theme.tool_error),
+                Span::raw(tool_name.clone()).fg(w.theme.text).bold(),
+                Span::raw(": ").fg(w.theme.text_dim),
                 Span::raw(error.as_str()).fg(w.theme.error),
             ]));
             Some(())
         }
         MessageContent::ToolRejected { tool_name, reason } => {
+            // ⊘ (circled division slash) reads as "blocked" without
+            // implying error or success — TS uses similar gating
+            // glyphs. Warning colour keeps the row visible but not
+            // alarming.
             lines.push(Line::from(vec![
                 Span::raw("  ⊘ ").fg(w.theme.warning),
                 Span::raw(t!("chat.tool_rejected", tool_name = tool_name).to_string())

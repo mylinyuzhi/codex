@@ -25,6 +25,7 @@ fn destination_to_source(dest: PermissionUpdateDestination) -> PermissionRuleSou
         PermissionUpdateDestination::LocalSettings => PermissionRuleSource::LocalSettings,
         PermissionUpdateDestination::Session => PermissionRuleSource::Session,
         PermissionUpdateDestination::CliArg => PermissionRuleSource::CliArg,
+        PermissionUpdateDestination::Command => PermissionRuleSource::Command,
     }
 }
 

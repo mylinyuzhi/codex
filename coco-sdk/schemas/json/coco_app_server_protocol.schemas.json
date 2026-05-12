@@ -455,6 +455,20 @@
             "token_efficient_tools"
           ],
           "type": "string"
+        },
+        {
+          "description": "Server-side `tool_reference` expansion (Anthropic beta `tool-search-tool-2025-10-19`). When set, the provider's API server expands `{type:\"tool_reference\",tool_name:X}` content blocks into inline `<functions>...</functions>` markup before the prompt reaches the model. Lets the client keep the `tools` array constant across turns (delayed tools carry `defer_loading: true`) and emit references inside `tool_result.content` instead of growing the tools list — preserving prompt cache prefix across `ToolSearch` discoveries.\n\nProvider-specific (Anthropic-only). The multi-provider default path is client-side promotion through `ToolAppState::discovered_tool_names`, which costs a cache break on the tools array but works on every provider.\n\nKnown supporting models: Claude Sonnet 4.5+, Opus 4+, GPT-5 (anthropic-compat). NOT supported on Haiku 4.5 / 3.5 / older 3-series.",
+          "enum": [
+            "server_side_tool_reference"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Provider/model is known to work correctly with coco-rs's client-side `ToolSearch` promotion path (`discovered_tool_names` `AppStatePatch` + tools-array growth on the next turn).\n\n**Per-model opt-in**, default **off** for unknown models. Rationale: a model that doesn't tolerate the growing tools array (legacy proxies, local quantized models with strict schema cache, …) shouldn't be silently subjected to ToolSearch — eager-loading every tool's full schema on turn 1 is the safe degradation. Set this capability in the registry (`builtin_models_partial`) once a model has been validated.\n\nThe runtime activation predicate is: ```text tool_search_active = Feature::ToolSearch && (ServerSideToolReference || ClientSideToolSearch) ``` When **both** capabilities are absent, the model lands in the \"eager-load every tool, hide ToolSearch\" state regardless of the user's `Feature::ToolSearch` setting.\n\nNo TS analogue — TS only ships the server-side path and blacklists incompatible models via `DEFAULT_UNSUPPORTED_MODEL_PATTERNS`. coco-rs needs a positive capability for the client-side path because it works on every Provider, so \"default-on\" would mis-fire on local / custom model deployments that nobody has vetted.",
+          "enum": [
+            "client_side_tool_search"
+          ],
+          "type": "string"
         }
       ],
       "title": "Capability"
@@ -2565,15 +2579,26 @@
       ]
     },
     "PermissionUpdateDestination": {
-      "description": "Destination for persisting permission updates.",
-      "enum": [
-        "user_settings",
-        "project_settings",
-        "local_settings",
-        "session",
-        "cli_arg"
-      ],
-      "type": "string"
+      "description": "Destination for persisting permission updates.\n\nPersistable destinations (`User`/`Project`/`LocalSettings`) write to disk; in-memory destinations (`Session`/`CliArg`/`Command`) live only for the running session. TS parity: same split as `persistPermissionUpdates` in `PermissionUpdate.ts`.\n\n`Command` is reserved for rules contributed by an invoked command or skill's frontmatter (`allowed-tools:`). TS parity: `alwaysAllowRules.command` populated by `SkillTool` / `createGetAppStateWithAllowedTools`.",
+      "oneOf": [
+        {
+          "enum": [
+            "user_settings",
+            "project_settings",
+            "local_settings",
+            "session",
+            "cli_arg"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Rules contributed by a command/skill frontmatter `allowed-tools`. In-memory only; cleared on session end.",
+          "enum": [
+            "command"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "PersistedFileError": {
       "properties": {
@@ -6356,6 +6381,129 @@
           },
           "required": [
             "entries",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Result of a prompt-mode `!`-prefixed bash submission. The TUI folds this into a `MessageContent::BashOutput` chat message keyed by the same `user_message_id` as the matching `BashInput`. Emitted by the CLI bridge after running the command via `coco_shell::ShellExecutor`. TS parity: `LocalShellTask` completion.",
+          "properties": {
+            "exit_code": {
+              "description": "Process exit code; non-zero shades the output red.",
+              "format": "int32",
+              "type": "integer"
+            },
+            "output": {
+              "description": "Merged stdout + stderr, already truncated to a reasonable display size by the bridge.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "bash_command_completed"
+              ],
+              "type": "string"
+            },
+            "user_message_id": {
+              "description": "Shared id of the bash input/output pair so rewind groups them.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "exit_code",
+            "output",
+            "type",
+            "user_message_id"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Confirmation that a prompt-mode `#`-prefixed memory entry was appended to a CLAUDE.md file. The TUI surfaces a toast and the `MemoryInput` chat message that was already pushed locally.",
+          "properties": {
+            "path": {
+              "description": "Path of the file that was appended to (project / user scope).",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "memory_saved"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Confirmation that a `(role, provider, model_id, effort)` selection from the model picker was persisted to `~/.coco/settings.json::model_roles.<role>`. The TUI raises a success toast. The role / provider / model_id fields are pre-formatted strings (role uses `ModelRole::as_str()`, effort uses the wire form via `ReasoningEffort::Display`) so the consumer doesn't need to depend on `coco-config`.",
+          "properties": {
+            "effort": {
+              "description": "Wire-form effort label (e.g. `\"medium\"` / `\"xhigh\"`); `None` when the model has no thinking capability or the picker produced no override.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "model_id": {
+              "type": "string"
+            },
+            "provider": {
+              "type": "string"
+            },
+            "role": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "model_role_applied"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "model_id",
+            "provider",
+            "role",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Persistence of a model-role selection failed. The TUI raises an error toast carrying the wrapped reason.",
+          "properties": {
+            "error": {
+              "type": "string"
+            },
+            "role": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "model_role_persist_failed"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "error",
+            "role",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Tell the TUI to open the provider-grouped model picker. Emitted when the slash dispatcher resolves `/model` with no args (typed `/model` from input bar). The TUI consumes the current `state.session.model` to mark the \"current\" entry.",
+          "properties": {
+            "type": {
+              "enum": [
+                "open_model_picker"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
             "type"
           ],
           "type": "object"

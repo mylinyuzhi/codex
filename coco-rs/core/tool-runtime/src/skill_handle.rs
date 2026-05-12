@@ -29,6 +29,7 @@ use serde::Serialize;
 use std::sync::Arc;
 
 use coco_types::Features;
+use coco_types::PermissionUpdate;
 use coco_types::ToolFilter;
 use coco_types::ToolOverrides;
 
@@ -54,6 +55,16 @@ pub struct SubagentInheritance {
 /// to history (tagged with the parent tool_use_id). Forked skills
 /// return the child agent's final text + metadata — the runtime
 /// routes this through the same tool_result pipeline as `AgentTool`.
+///
+/// **Permission rules**: Inline variant carries `permission_updates`
+/// the runner forwards on the `SkillTool`'s `ToolResult` so the
+/// session's `QueryEngineConfig` picks up the skill's `allowed-tools`
+/// frontmatter as `PermissionRuleSource::Command` auto-allow rules. The
+/// Forked variant has no permission channel — fork-mode skills inject
+/// their rules at dispatch time via `AgentQueryConfig.extra_allow_rules`
+/// (Layer 4 inheritance), so by the time the subagent finishes there's
+/// nothing to thread back. TS parity: `SkillTool.ts:775` `contextModifier`
+/// for inline; `createGetAppStateWithAllowedTools` wrapping for fork.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SkillInvocationResult {
     /// Expand the skill's prompt inline as new user messages.
@@ -67,6 +78,13 @@ pub enum SkillInvocationResult {
         /// outputs group with the SkillTool call that produced
         /// them.
         new_messages: Vec<serde_json::Value>,
+        /// Permission-rule deltas the runner should forward on the
+        /// `SkillTool`'s `ToolResult.permission_updates`. Built from
+        /// the skill's `allowed-tools` frontmatter as
+        /// `PermissionUpdate::AddRules { destination: Command }`. Empty
+        /// when the skill has no `allowed-tools` declaration.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        permission_updates: Vec<PermissionUpdate>,
     },
     /// Fork a subagent to run the skill and aggregate its output.
     Forked {

@@ -69,11 +69,13 @@ impl Tool for McpAuthTool {
                 data: serde_json::json!(msg),
                 new_messages: vec![],
                 app_state_patch: None,
+                permission_updates: Vec::new(),
             }),
             Err(e) => Ok(ToolResult {
                 data: serde_json::json!(format!("Authentication failed for {server_name}: {e}")),
                 new_messages: vec![],
                 app_state_patch: None,
+                permission_updates: Vec::new(),
             }),
         }
     }
@@ -150,6 +152,7 @@ impl Tool for ListMcpResourcesTool {
                         ),
                         new_messages: vec![],
                         app_state_patch: None,
+                        permission_updates: Vec::new(),
                     });
                 }
                 let items: Vec<Value> = resources
@@ -167,12 +170,14 @@ impl Tool for ListMcpResourcesTool {
                     data: serde_json::json!(items),
                     new_messages: vec![],
                     app_state_patch: None,
+                    permission_updates: Vec::new(),
                 })
             }
             Err(e) => Ok(ToolResult {
                 data: serde_json::json!(format!("Failed to list resources: {e}")),
                 new_messages: vec![],
                 app_state_patch: None,
+                permission_updates: Vec::new(),
             }),
         }
     }
@@ -283,6 +288,7 @@ impl Tool for ReadMcpResourceTool {
                     data,
                     new_messages: vec![],
                     app_state_patch: None,
+                    permission_updates: Vec::new(),
                 })
             }
             Err(e) => Ok(ToolResult {
@@ -291,6 +297,7 @@ impl Tool for ReadMcpResourceTool {
                 )),
                 new_messages: vec![],
                 app_state_patch: None,
+                permission_updates: Vec::new(),
             }),
         }
     }
@@ -494,6 +501,7 @@ impl Tool for McpTool {
                     data,
                     new_messages: vec![],
                     app_state_patch: None,
+                    permission_updates: Vec::new(),
                 })
             }
             Err(e) => Err(ToolError::ExecutionFailed {

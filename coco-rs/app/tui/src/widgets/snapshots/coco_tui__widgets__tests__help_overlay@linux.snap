@@ -23,6 +23,6 @@ expression: output
             │ctrl+shift+p   Quick open file                        │            
             │ctrl+w         Context window                         │            
  Input ─────│f6             Focus next panel                       │────────────
-> Type a mes│ctrl+d         Quit                                   │            
+❯ Type a mes│ctrl+d         Quit                                   │            
             └──────────────────────────────────────────────────────┘            
  opus-4 | Default | 0 msgs

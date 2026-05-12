@@ -798,6 +798,10 @@ impl SwarmAgentHandle {
                 Vec::new()
             },
             disallowed_tools: request.disallowed_tools.clone(),
+            // Coordinator / AgentTool spawns don't carry skill-style
+            // auto-allow rules — those flow only through
+            // `SkillRuntime` Fork path. Leave empty.
+            extra_allow_rules: Vec::new(),
             tool_overrides: request.tool_overrides.clone(),
             features: request.features.clone(),
             parent_tool_filter: request.parent_tool_filter.clone(),

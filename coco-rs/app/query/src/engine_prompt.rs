@@ -378,6 +378,12 @@ impl QueryEngine {
             // AgentTool reads `subagent_type → AgentDefinition` from
             // here at the spawn boundary.
             agent_catalog: self.agent_catalog.clone(),
+            // Per-engine live Command-source rule store. Same Arc as
+            // `QueryEngine.live_command_rules` and the
+            // `EngineLiveRulesHandle` installed on the executor —
+            // factory.build merges it into `allow_rules[Command]` per
+            // batch. See `engine_live_rules` for the lifecycle.
+            live_command_rules: self.live_command_rules.clone(),
         }
     }
 

@@ -13,6 +13,8 @@ fn running_subagent() -> SubagentInstance {
         description: "scan".into(),
         status: SubagentStatus::Running,
         color: None,
+        started_at_ms: None,
+        token_usage: None,
     }
 }
 

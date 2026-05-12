@@ -116,7 +116,14 @@ impl AgentQueryEngine for QueryEngineAdapter {
                 .and_then(|s| s.parse::<ThinkingLevel>().ok()),
             session_id: config.session_id.unwrap_or_default(),
             project_dir: None,
-            allow_rules: Default::default(),
+            // Subagent rule maps start empty, then we fold in any
+            // `extra_allow_rules` the caller (today: fork-mode
+            // `SkillTool` forwarding skill frontmatter `allowed-tools`)
+            // wants pre-populated under `PermissionRuleSource::Command`.
+            // TS parity: `createGetAppStateWithAllowedTools`
+            // (`forkedAgent.ts:147-171`) wraps `getAppState` to inject
+            // the same rules into the subagent's evaluation context.
+            allow_rules: build_initial_allow_rules(&config.extra_allow_rules),
             deny_rules: Default::default(),
             ask_rules: Default::default(),
             session_additional_dirs: Default::default(),
@@ -372,6 +379,49 @@ pub fn micro_compact_serialized_messages(
         .iter()
         .map(|m| serde_json::to_value(m).unwrap_or_default())
         .collect()
+}
+
+/// Build the initial `allow_rules` map for a fork-spawned subagent.
+///
+/// Groups `extra_allow_rules` by `(source, behavior)` — today every
+/// rule lands under `PermissionRuleSource::Command` because fork-mode
+/// skills are the only producer. The grouping iterates anyway so a
+/// future producer that emits mixed sources continues to slot
+/// correctly without a downstream change.
+fn build_initial_allow_rules(
+    extra: &[coco_types::PermissionRule],
+) -> coco_types::PermissionRulesBySource {
+    let mut map: coco_types::PermissionRulesBySource = Default::default();
+    let mut skipped = 0usize;
+    for rule in extra {
+        if rule.behavior != coco_types::PermissionBehavior::Allow {
+            // Deny / Ask rules don't belong in `allow_rules`. Drop with a
+            // warning so a misbehaving caller doesn't silently widen the
+            // wrong bucket.
+            skipped += 1;
+            tracing::warn!(
+                behavior = ?rule.behavior,
+                "build_initial_allow_rules: skipping non-Allow rule in extra_allow_rules"
+            );
+            continue;
+        }
+        map.entry(rule.source).or_default().push(rule.clone());
+    }
+    if !extra.is_empty() {
+        // Useful at subagent spawn time: confirms the parent's
+        // `extra_allow_rules` (today: fork-mode skill `allowed-tools`)
+        // landed in the subagent's BASE `allow_rules` bucket, not the
+        // per-engine live overlay. The live overlay starts empty;
+        // subagent skills can still emit into it during execution.
+        tracing::info!(
+            extra = extra.len(),
+            kept = extra.len() - skipped,
+            skipped,
+            sources = ?map.keys().collect::<Vec<_>>(),
+            "agent_adapter: built initial allow_rules for forked subagent"
+        );
+    }
+    map
 }
 
 #[cfg(test)]

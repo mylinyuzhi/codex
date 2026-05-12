@@ -205,6 +205,7 @@ impl Tool for SendMessageTool {
                 }),
                 new_messages: vec![],
                 app_state_patch: None,
+                permission_updates: Vec::new(),
             });
         }
 
@@ -221,6 +222,7 @@ impl Tool for SendMessageTool {
             data: serde_json::json!(result),
             new_messages: vec![],
             app_state_patch: None,
+            permission_updates: Vec::new(),
         })
     }
 }
