@@ -254,6 +254,15 @@ impl DreamService {
             // background subagent's tool-uses out of the user's main
             // JSONL transcript.
             skip_transcript: true,
+            // TS `autoDream.ts:224` `canUseTool: createAutoMemCanUseTool(memoryRoot)`.
+            // AutoDream uses the same auto-mem policy as extract,
+            // but pinned to `memory_dir` (which acts as the
+            // memoryRoot for the consolidation pass).
+            can_use_tool: Some(crate::can_use_tool::create_auto_mem_handle(
+                self.memory_dir.clone(),
+            )),
+            require_can_use_tool: false,
+            fork_label: Some(coco_types::ForkLabel::AutoDream),
             ..Default::default()
         };
 

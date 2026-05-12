@@ -49,6 +49,7 @@ class Capability(str, Enum):
     context_1m = 'context_1m'
     interleaved_thinking = 'interleaved_thinking'
     context_management = 'context_management'
+    adaptive_thinking = 'adaptive_thinking'
     token_efficient_tools = 'token_efficient_tools'
 
 class ClientRequestMethod(str, Enum):
@@ -267,12 +268,13 @@ class RateLimitStatus(str, Enum):
     rejected = 'rejected'
 
 class ReasoningEffort(str, Enum):
-    none = 'none'
     minimal = 'minimal'
     low = 'low'
     medium = 'medium'
     high = 'high'
     x_high = 'x_high'
+    disable = 'disable'
+    auto = 'auto'
 
 class ServerRequestMethod(str, Enum):
     approval_askForApproval = 'approval/askForApproval'
@@ -1256,6 +1258,7 @@ PermissionUpdate = Any
 class ApprovalResolveParams(BaseModel):
     decision: ApprovalDecision
     request_id: str
+    content_blocks: list[Any] | None = None
     feedback: str | None = None
     permission_update: PermissionUpdate | None = None
     updated_input: Any = None

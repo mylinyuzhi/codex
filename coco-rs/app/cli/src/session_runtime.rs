@@ -394,6 +394,14 @@ pub struct SessionRuntime {
     /// `promptSuggestion` skips). Real impl lives in
     /// `app/cli/src/fork_dispatcher.rs`.
     fork_dispatcher: Arc<RwLock<Option<coco_query::forked_agent::ForkDispatcherRef>>>,
+    /// Session-scoped abort token for the in-flight prompt-suggestion
+    /// fork. TS parity: `services/PromptSuggestion/promptSuggestion.ts`
+    /// module-level `currentAbortController` singleton. When a new
+    /// suggestion fork starts, we cancel the previous one so users
+    /// rapidly cycling `/clear` don't accumulate fork tasks burning
+    /// tokens. `None` ⇒ no fork in flight.
+    pub current_suggestion_abort:
+        Arc<tokio::sync::Mutex<Option<tokio_util::sync::CancellationToken>>>,
     /// Background task runtime (TaskHandle implementation) — owns
     /// the `TaskManager` + per-task control state. Shared with
     /// `SwarmAgentHandle` so AgentTool's bg path registers spawns
@@ -829,6 +837,15 @@ impl SessionRuntime {
             max_tokens: cli
                 .max_tokens
                 .or_else(|| runtime_config.loop_config.max_tokens.map(i64::from)),
+            prompt_cache: client
+                .supports_prompt_cache()
+                .then(|| coco_types::PromptCacheConfig {
+                    mode: coco_types::PromptCacheMode::Auto,
+                    ttl: coco_types::CacheTtl::OneHour,
+                    scope: None,
+                    requested_betas: Default::default(),
+                    skip_cache_write: false,
+                }),
             system_prompt: Some(system_prompt_with_memory),
             streaming_tool_execution: runtime_config.loop_config.enable_streaming_tools,
             session_id: session_id.clone(),
@@ -970,6 +987,7 @@ impl SessionRuntime {
             // QueryEngineAdapter factory can close over Arc<Self>.
             agent_handle: Arc::new(RwLock::new(None)),
             fork_dispatcher: Arc::new(RwLock::new(None)),
+            current_suggestion_abort: Arc::new(tokio::sync::Mutex::new(None)),
             task_runtime: Arc::new(RwLock::new(None)),
             agent_transcript_store: Arc::new(RwLock::new(None)),
             mcp_handle: Arc::new(RwLock::new(None)),
@@ -1392,6 +1410,11 @@ impl SessionRuntime {
         if let Some(dispatcher) = self.fork_dispatcher.read().await.clone() {
             engine = engine.with_fork_dispatcher(dispatcher);
         }
+        // Session-scoped prompt-suggestion abort slot (TS module-level
+        // `currentAbortController`). Sharing the same `Arc` across
+        // every per-turn engine lets a new spawn cancel the in-flight
+        // previous one.
+        engine = engine.with_current_suggestion_abort(self.current_suggestion_abort.clone());
         // Production task runtime — same `Arc` is shared with
         // `SwarmAgentHandle` so AgentTool background spawns and the
         // engine's `Task*` tools see one source of truth.

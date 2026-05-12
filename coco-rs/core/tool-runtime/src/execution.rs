@@ -158,7 +158,99 @@ pub async fn execute_tool_call(
     //
     // Underscore-prefixed convention: any input field on Bash whose
     // key starts with `_` is treated as internal and stripped here.
-    let input = strip_internal_bash_fields(tool_name, input);
+    let mut input = strip_internal_bash_fields(tool_name, input);
+
+    // Step 3.5: Per-fork canUseTool callback gate.
+    //
+    // TS: services/tools/toolExecution.ts:706-748 — the callback runs
+    // BEFORE `tool.check_permissions` so forks (promptSuggestion,
+    // speculation, side_question, compact, extract / dream / session
+    // memory, agent_summary, auto_dream) can deny / rewrite per-call
+    // input without modifying the static rule pipeline.
+    //
+    // Decisions:
+    // - Deny → short-circuit, surface the message as the synthesized
+    //   tool_result content; the model sees a denial and can adapt.
+    // - Allow{updated_input: Some(v)} → rewrite input, skip the
+    //   tool's built-in check_permissions (callback is authoritative).
+    //   Speculation overlay path-rewrite uses this.
+    // - Allow{updated_input: None} → proceed unchanged but still
+    //   skip the built-in check (callback's opinion is final).
+    // - Ask → fall through to the tool's built-in check_permissions
+    //   (callback abstains; e.g. session-mem only cares about Edit
+    //   on memory_path, returns Ask for everything else).
+    //
+    // `NoOpCanUseToolHandle` returns Ask for every call, so non-fork
+    // code paths see no behavior change when ctx.can_use_tool is
+    // installed during tests.
+    let mut skip_builtin_perms = false;
+    if let Some(handle) = ctx.can_use_tool.clone() {
+        let cb_ctx = crate::can_use_tool::CanUseToolCallContext {
+            tool_use_id: tool_use_id.to_string(),
+            abort: ctx.cancel.clone(),
+            require_can_use_tool: ctx.require_can_use_tool,
+            messages: ctx.messages.clone(),
+        };
+        match handle.check(tool_name, &input, &cb_ctx).await {
+            crate::can_use_tool::CanUseToolDecision::Deny {
+                message,
+                decision_reason,
+            } => {
+                tracing::info!(
+                    tool_use_id = %tool_use_id,
+                    tool_name = %tool_name,
+                    permission_decision = "fork_deny",
+                    decision_reason = ?decision_reason,
+                    "fork canUseTool denied call"
+                );
+                return ToolExecutionResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    tool_id,
+                    tool_name: tool_name.to_string(),
+                    result: Err(ToolError::PermissionDenied { message }),
+                    duration_ms: start.elapsed().as_millis() as i64,
+                    permission_denied: true,
+                    error_class: Some("permission_denied".to_string()),
+                };
+            }
+            crate::can_use_tool::CanUseToolDecision::Allow {
+                updated_input: Some(rewritten),
+                decision_reason,
+            } => {
+                tracing::debug!(
+                    tool_use_id = %tool_use_id,
+                    tool_name = %tool_name,
+                    permission_decision = "fork_allow_rewrite",
+                    decision_reason = ?decision_reason,
+                    "fork canUseTool allowed with input rewrite"
+                );
+                input = rewritten;
+                skip_builtin_perms = true;
+            }
+            crate::can_use_tool::CanUseToolDecision::Allow {
+                updated_input: None,
+                decision_reason,
+            } => {
+                tracing::debug!(
+                    tool_use_id = %tool_use_id,
+                    tool_name = %tool_name,
+                    permission_decision = "fork_allow",
+                    decision_reason = ?decision_reason,
+                    "fork canUseTool allowed call"
+                );
+                skip_builtin_perms = true;
+            }
+            crate::can_use_tool::CanUseToolDecision::Ask { decision_reason } => {
+                tracing::debug!(
+                    tool_use_id = %tool_use_id,
+                    tool_name = %tool_name,
+                    permission_decision = "fork_ask_passthrough",
+                    decision_reason = ?decision_reason,
+                    "fork canUseTool abstained; falling through to built-in check"
+                );
+            }
+        }
+    }
 
     // Step 4: Check permissions (tool-level opinion only).
     //
@@ -170,41 +262,48 @@ pub async fn execute_tool_call(
     // entrypoint) that have already cleared the rule pipeline; it
     // honors the tool's own `Deny` / `Ask` opinions but treats
     // `Passthrough` and `Allow` as proceed-to-execute.
-    let decision = tool.check_permissions(&input, ctx).await;
-    match decision {
-        coco_types::ToolCheckResult::Deny { message } => {
-            tracing::info!(
-                tool_use_id = %tool_use_id,
-                tool_name = %tool_name,
-                permission_decision = "deny",
-                "tool denied by permission check"
-            );
-            return ToolExecutionResult {
-                tool_use_id: tool_use_id.to_string(),
-                tool_id,
-                tool_name: tool_name.to_string(),
-                result: Err(ToolError::PermissionDenied { message }),
-                duration_ms: start.elapsed().as_millis() as i64,
-                permission_denied: true,
-                error_class: Some("permission_denied".to_string()),
-            };
-        }
-        coco_types::ToolCheckResult::Ask { .. } => {
-            // In auto mode, treat as allow (TUI handles interactive prompts)
-            tracing::debug!(
-                tool_use_id = %tool_use_id,
-                tool_name = %tool_name,
-                permission_decision = "ask",
-                "tool requires permission ask (auto-mode allow)"
-            );
-        }
-        coco_types::ToolCheckResult::Allow { .. } | coco_types::ToolCheckResult::Passthrough => {
-            tracing::debug!(
-                tool_use_id = %tool_use_id,
-                tool_name = %tool_name,
-                permission_decision = "allow_or_passthrough",
-                "tool allowed (or no opinion) by check"
-            );
+    //
+    // Skipped when step 3.5's canUseTool callback explicitly returned
+    // `Allow` — the callback's opinion is authoritative for the Allow
+    // path (TS parity: toolExecution.ts:737-748).
+    if !skip_builtin_perms {
+        let decision = tool.check_permissions(&input, ctx).await;
+        match decision {
+            coco_types::ToolCheckResult::Deny { message } => {
+                tracing::info!(
+                    tool_use_id = %tool_use_id,
+                    tool_name = %tool_name,
+                    permission_decision = "deny",
+                    "tool denied by permission check"
+                );
+                return ToolExecutionResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    tool_id,
+                    tool_name: tool_name.to_string(),
+                    result: Err(ToolError::PermissionDenied { message }),
+                    duration_ms: start.elapsed().as_millis() as i64,
+                    permission_denied: true,
+                    error_class: Some("permission_denied".to_string()),
+                };
+            }
+            coco_types::ToolCheckResult::Ask { .. } => {
+                // In auto mode, treat as allow (TUI handles interactive prompts)
+                tracing::debug!(
+                    tool_use_id = %tool_use_id,
+                    tool_name = %tool_name,
+                    permission_decision = "ask",
+                    "tool requires permission ask (auto-mode allow)"
+                );
+            }
+            coco_types::ToolCheckResult::Allow { .. }
+            | coco_types::ToolCheckResult::Passthrough => {
+                tracing::debug!(
+                    tool_use_id = %tool_use_id,
+                    tool_name = %tool_name,
+                    permission_decision = "allow_or_passthrough",
+                    "tool allowed (or no opinion) by check"
+                );
+            }
         }
     }
 

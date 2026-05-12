@@ -341,6 +341,25 @@ pub struct ToolUseContext {
     /// TS: createInProcessCanUseTool() in inProcessRunner.ts
     pub permission_bridge: Option<ToolPermissionBridgeRef>,
 
+    // ── Per-Fork Tool Gate ──
+    /// Optional per-fork canUseTool callback. When `Some`, app/query's
+    /// tool-call preparer runs it before the static permission
+    /// evaluator consults `tool.check_permissions`. `Deny`
+    /// short-circuits with the message surfaced as the synthesized
+    /// `tool_result`. `Allow{updated_input}` rewrites the input passed
+    /// to permissions + execute (speculation overlay path-rewrite
+    /// hook). `Ask` falls through to the tool's built-in opinion.
+    /// `None` preserves pre-canUseTool behavior — the callback is
+    /// skipped entirely.
+    ///
+    /// `require_can_use_tool` (above) controls whether `Pre`-tool-use
+    /// hook auto-approve can bypass this callback. When `true`,
+    /// callback wins regardless of hook config.
+    ///
+    /// TS: `Tool.ts::CanUseToolFn`, dispatched at
+    /// `services/tools/toolExecution.ts:706-748`.
+    pub can_use_tool: Option<crate::can_use_tool::CanUseToolHandleRef>,
+
     // ── Progress Reporting ──
     /// Channel for tool progress updates. Tools send ToolProgress here;
     /// StreamingToolExecutor yields them immediately to the TUI.
@@ -525,6 +544,7 @@ impl ToolUseContext {
             cwd_override: self.cwd_override.clone(),
             allowed_write_roots: self.allowed_write_roots.clone(),
             permission_bridge: self.permission_bridge.clone(),
+            can_use_tool: self.can_use_tool.clone(),
             progress_tx: self.progress_tx.clone(),
             task_handle: self.task_handle.clone(),
             task_list: self.task_list.clone(),
@@ -636,6 +656,7 @@ impl ToolUseContext {
             cwd_override: None,
             allowed_write_roots: Vec::new(),
             permission_bridge: None,
+            can_use_tool: None,
             progress_tx: None,
             task_handle: None,
             task_list: Arc::new(crate::task_list_handle::InMemoryTaskListHandle::new()),

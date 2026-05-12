@@ -179,6 +179,7 @@ impl SkillHandle for QuerySkillRuntime {
                     model: skill.model.clone().unwrap_or_default(),
                     max_turns: None,
                     context_window: None,
+                    prompt_cache: None,
                     max_output_tokens: None,
                     allowed_tools: skill.allowed_tools.clone().unwrap_or_default(),
                     disallowed_tools: Vec::new(),
@@ -222,6 +223,14 @@ impl SkillHandle for QuerySkillRuntime {
                     permission_bridge: None,
                     // Skills don't stream into a task buffer.
                     event_tx: None,
+                    // Skills don't install a per-fork canUseTool
+                    // callback — they inherit the parent's permission
+                    // pipeline (allow/deny rules + tool's own
+                    // `check_permissions`).
+                    can_use_tool: None,
+                    require_can_use_tool: false,
+                    fork_label: None,
+                    max_output_tokens_override: None,
                 };
 
                 tracing::info!(

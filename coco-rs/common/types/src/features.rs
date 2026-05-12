@@ -126,6 +126,23 @@ pub enum Feature {
     /// Prompt-cache break detection wiring during compaction.
     /// TS: `feature('PROMPT_CACHE_BREAK_DETECTION')` in `commands/compact/compact.ts:67`.
     PromptCacheBreakDetection,
+    /// Speculative pre-execution of accepted prompt suggestions.
+    ///
+    /// COW overlay filesystem at `<tmp>/speculation/<pid>/<id>/`,
+    /// 3-boundary canUseTool (Edit/Write rewrites to overlay; Bash
+    /// via shell-parser read-only check; deny default), MAX_TURNS=20
+    /// / MAX_MESSAGES=100, accept/abort lifecycle.
+    ///
+    /// TS: `services/PromptSuggestion/speculation.ts` (gated upstream
+    /// by `USER_TYPE='ant'`; coco-rs uses this Feature instead so
+    /// non-Anthropic users can opt in via settings.json).
+    ///
+    /// **Default false** — experimental; high implementation
+    /// complexity (overlay COW, 3-boundary classification,
+    /// pipelined-suggestion forks). The Phase-1 `Allow{updated_input}`
+    /// path-rewrite mechanism is in place to support this when
+    /// the full overlay subsystem ships.
+    Speculation,
 }
 
 impl Feature {
@@ -377,6 +394,16 @@ const FEATURES: &[FeatureSpec] = &[
         id: Feature::PromptCacheBreakDetection,
         key: "prompt_cache_break_detection",
         stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Speculation,
+        key: "speculation",
+        stage: Stage::Experimental {
+            name: "Speculation",
+            menu_description: "Pre-execute accepted prompt suggestions in an overlay sandbox; instant inject on accept",
+            announcement: "Speculation enabled — accepted prompt suggestions will run in an overlay before injection.",
+        },
         default_enabled: false,
     },
 ];

@@ -614,6 +614,14 @@ impl Tool for AgentTool {
             // transcript. Memory-side forks set this true via their
             // own service.
             skip_transcript: false,
+            // User-driven AgentTool spawns inherit the parent
+            // permission pipeline (allow / deny rules + tool's own
+            // check_permissions). Memory-side forks override this
+            // via dedicated entry points to install per-policy
+            // canUseTool callbacks.
+            can_use_tool: None,
+            require_can_use_tool: false,
+            fork_label: None,
         };
 
         let request_description = request.description.clone();

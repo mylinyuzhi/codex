@@ -74,6 +74,28 @@ src/
 - `SessionMemoryService` writes the 9-section template if missing, then asks the agent to Edit-only — never overwrites the file wholesale.
 - `MemoryEvent::ExtractionCompleted::files_written` sums real `Write + Edit + NotebookEdit` invocations from `AgentSpawnResponse::tool_use_counts` — no fabricated counts.
 
+## Per-Fork canUseTool Policies (PR 4)
+
+[`can_use_tool`](src/can_use_tool.rs) provides two policy callbacks
+threaded onto every memory-fork's `AgentSpawnRequest.can_use_tool`
+field. The handle runs at `coco_tool_runtime::execution::execute_tool_call`
+step 3.5 BEFORE the tool's built-in `check_permissions`, so the
+fork can deny / rewrite per-call without modifying the static
+permission rule pipeline.
+
+| Helper | Used by | Policy |
+|---|---|---|
+| `create_auto_mem_handle(memory_dir)` | `ExtractService`, `DreamService` | Allow `Read`/`Glob`/`Grep` unrestricted; Allow `Bash` IFF [`coco_shell_parser::safety::is_known_safe_command`] returns true AND command has no shell metachars (`>`, `\|`, `;`, `&`, …); Allow `Edit`/`Write` IFF `input.file_path` lexically resolves under `memory_dir`; Deny everything else |
+| `create_session_mem_handle(memory_path)` | `SessionMemoryService` | Allow `Read`; Allow `Edit` IFF `input.file_path == memory_path` (exact match); Deny everything else |
+
+The fence is **defense-in-depth**: callback (inner ring) + the
+existing `AgentSpawnRequest.constraints.allowed_write_roots` field
+(outer ring) both apply. Either alone would protect; both together
+guard against future field-renaming drift.
+
+TS source: `services/extractMemories/extractMemories.ts::createAutoMemCanUseTool`
++ `services/SessionMemory/sessionMemory.ts::createSessionMemCanUseTool`.
+
 ## What this crate does NOT own
 
 - The system-prompt assembly seam (`coco-context::build_system_prompt`) — memory only renders its block via `prompt::build_system_prompt_section` and hands it through.
@@ -85,6 +107,7 @@ src/
 ## Cargo deps
 
 `coco-config`, `coco-types`, `coco-tool-runtime`, `coco-frontmatter`, `coco-git`, `coco-otel`,
+`coco-shell-parser` (for the auto-mem `Bash` read-only check), `async-trait`,
 `tokio`, `serde`, `serde_json`, `thiserror`, `tracing`, `filetime`, `libc` (cfg(unix)).
 
 `coco-messages` / `coco-inference` are intentionally not deps — services use the `AgentHandle`

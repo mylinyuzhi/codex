@@ -10,6 +10,8 @@ use coco_inference::ToolCallPart;
 use coco_messages::Message;
 use coco_messages::MessageHistory;
 use coco_permissions::AutoModeRules;
+use coco_tool_runtime::CanUseToolDecision;
+use coco_tool_runtime::DecisionReason;
 use coco_tool_runtime::PendingToolCall;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolPermissionBridgeRef;
@@ -249,6 +251,26 @@ async fn resolve_permission_decision(
     auto_mode_rules: &AutoModeRules,
 ) -> PermissionDecision {
     let (hook_permission_behavior, hook_permission_reason) = hook_permission;
+    let mut hook_permission_behavior = hook_permission_behavior;
+
+    if let Some(gate) =
+        resolve_can_use_tool_decision(tool_call, effective_input, ctx, hook_permission_behavior)
+            .await
+    {
+        match gate {
+            CanUseToolResolution::Decision(decision) => return decision,
+            CanUseToolResolution::Ask => {
+                if matches!(
+                    hook_permission_behavior,
+                    Some(coco_types::PermissionBehavior::Allow)
+                ) && ctx.require_can_use_tool
+                {
+                    hook_permission_behavior = None;
+                }
+            }
+        }
+    }
+
     let mut decision = match hook_permission_behavior {
         Some(coco_types::PermissionBehavior::Allow) => PermissionDecision::Allow {
             updated_input: None,
@@ -295,6 +317,94 @@ async fn resolve_permission_decision(
     }
 
     decision
+}
+
+enum CanUseToolResolution {
+    Decision(PermissionDecision),
+    Ask,
+}
+
+async fn resolve_can_use_tool_decision(
+    tool_call: &ToolCallPart,
+    effective_input: &Value,
+    ctx: &ToolUseContext,
+    hook_permission_behavior: Option<coco_types::PermissionBehavior>,
+) -> Option<CanUseToolResolution> {
+    let should_run = match hook_permission_behavior {
+        Some(coco_types::PermissionBehavior::Deny) => false,
+        Some(coco_types::PermissionBehavior::Allow) => ctx.require_can_use_tool,
+        Some(coco_types::PermissionBehavior::Ask) | None => true,
+    };
+    if !should_run {
+        return None;
+    }
+
+    let handle = ctx.can_use_tool.clone()?;
+    let cb_ctx = coco_tool_runtime::CanUseToolCallContext {
+        tool_use_id: tool_call.tool_call_id.clone(),
+        abort: ctx.cancel.clone(),
+        require_can_use_tool: ctx.require_can_use_tool,
+        messages: ctx.messages.clone(),
+    };
+    match handle
+        .check(&tool_call.tool_name, effective_input, &cb_ctx)
+        .await
+    {
+        CanUseToolDecision::Deny {
+            message,
+            decision_reason,
+        } => {
+            tracing::info!(
+                tool_use_id = %tool_call.tool_call_id,
+                tool_name = %tool_call.tool_name,
+                decision_reason = ?decision_reason,
+                "fork canUseTool denied call"
+            );
+            Some(CanUseToolResolution::Decision(PermissionDecision::Deny {
+                message,
+                reason: coco_types::PermissionDecisionReason::AsyncAgent {
+                    reason: can_use_tool_reason_label(&decision_reason),
+                },
+            }))
+        }
+        CanUseToolDecision::Allow {
+            updated_input,
+            decision_reason,
+        } => {
+            tracing::debug!(
+                tool_use_id = %tool_call.tool_call_id,
+                tool_name = %tool_call.tool_name,
+                decision_reason = ?decision_reason,
+                updated = updated_input.is_some(),
+                "fork canUseTool allowed call"
+            );
+            Some(CanUseToolResolution::Decision(PermissionDecision::Allow {
+                updated_input,
+                feedback: Some(can_use_tool_reason_label(&decision_reason)),
+            }))
+        }
+        CanUseToolDecision::Ask { decision_reason } => {
+            tracing::debug!(
+                tool_use_id = %tool_call.tool_call_id,
+                tool_name = %tool_call.tool_name,
+                decision_reason = ?decision_reason,
+                "fork canUseTool abstained; falling through"
+            );
+            Some(CanUseToolResolution::Ask)
+        }
+    }
+}
+
+fn can_use_tool_reason_label(reason: &DecisionReason) -> String {
+    match reason {
+        DecisionReason::Other { reason } => reason.clone(),
+        DecisionReason::RuleAllow { rule_kind } => format!("rule_allow:{rule_kind}"),
+        DecisionReason::RuleDeny { rule_kind } => format!("rule_deny:{rule_kind}"),
+        DecisionReason::ModeAllow => "mode_allow".into(),
+        DecisionReason::UserAccept => "user_accept".into(),
+        DecisionReason::UserReject => "user_reject".into(),
+        DecisionReason::Speculation { boundary } => format!("speculation:{boundary:?}"),
+    }
 }
 
 /// Run the central rule evaluator against a tool call.
@@ -549,3 +659,7 @@ async fn validate_effective_input_or_complete_error(
     .await;
     None
 }
+
+#[cfg(test)]
+#[path = "tool_call_preparer.test.rs"]
+mod tests;

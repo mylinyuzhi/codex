@@ -217,6 +217,14 @@ pub struct QueryEngine {
     /// `None` ⇒ post-turn forks degrade to no-op (a placeholder is
     /// surfaced where appropriate; the parent loop continues).
     pub(crate) fork_dispatcher: Option<crate::forked_agent::ForkDispatcherRef>,
+    /// Session-scoped abort slot for the in-flight prompt-suggestion
+    /// fork. TS parity: `services/PromptSuggestion/promptSuggestion.ts`
+    /// module-level `currentAbortController`. When the engine spawns
+    /// a new suggestion fork, it cancels the previous in-flight one
+    /// so rapid `/clear` cycles don't accumulate fork tasks burning
+    /// tokens. `None` ⇒ no abort slot wired (test contexts).
+    pub(crate) current_suggestion_abort:
+        Option<std::sync::Arc<tokio::sync::Mutex<Option<tokio_util::sync::CancellationToken>>>>,
     /// Background task runtime — the [`TaskHandle`] consumed by
     /// `TaskGet` / `TaskOutput` / `TaskStop` / `TaskList` and by the
     /// AgentTool background dispatch (P2'+ TaskManager wiring).
@@ -794,7 +802,7 @@ impl QueryEngine {
                 // strategy resolved at session bootstrap; defaults if not
                 // wired yet (Phase 2 of prompt-cache rollout).
                 agentic: true,
-                cache: None,
+                cache: self.config.prompt_cache.clone(),
             };
 
             // ── Phase 9: Streaming tool scheduling ──
@@ -923,6 +931,13 @@ impl QueryEngine {
                     // Success resets the capacity-error streak —
                     // isolated 529s must not accumulate across turns.
                     consecutive_capacity_errors = 0;
+                    if let Some(app_state) = self.app_state.as_ref() {
+                        crate::engine_helpers::clear_rate_limit_observation(
+                            app_state,
+                            active_client.provider(),
+                        )
+                        .await;
+                    }
                     tracing::debug!(
                         turn,
                         turn_id = %turn_id,
@@ -990,6 +1005,34 @@ impl QueryEngine {
                             | coco_inference::InferenceError::RateLimited { .. }
                     ) || is_capacity_error_message(&err_msg);
                     if is_capacity {
+                        // Phase 7c: record per-provider rate-limit
+                        // observation onto `ToolAppState.rate_limits`
+                        // BEFORE the retry/fallback decision flow so
+                        // post-turn forks (prompt-suggestion) see the
+                        // throttle even on the first 429. Selectivity
+                        // is the read-side filter — every entry in
+                        // the map is keyed by the provider that
+                        // observed the error.
+                        if let Some(app_state) = self.app_state.as_ref() {
+                            let retry_after_ms = match &e {
+                                coco_inference::InferenceError::RateLimited {
+                                    retry_after_ms,
+                                    ..
+                                }
+                                | coco_inference::InferenceError::Overloaded {
+                                    retry_after_ms,
+                                    ..
+                                } => *retry_after_ms,
+                                _ => None,
+                            };
+                            crate::engine_helpers::record_rate_limit_observation(
+                                app_state,
+                                active_client.provider(),
+                                active_client.fingerprint().api,
+                                retry_after_ms,
+                            )
+                            .await;
+                        }
                         consecutive_capacity_errors += 1;
                         if consecutive_capacity_errors < MAX_CONSECUTIVE_CAPACITY_ERRORS {
                             // Below threshold: log and retry the
@@ -1687,6 +1730,8 @@ impl QueryEngine {
                 // never runs on this path, so save the cache-safe
                 // params here for post-turn fork features.
                 self.save_post_turn_cache_params(history).await;
+                self.maybe_spawn_prompt_suggestion_after_stop(&event_tx)
+                    .await;
                 // SDK protocol contract: every turn that emitted a
                 // `TurnStarted` must close with a terminal turn event.
                 // The tool-execution branches reach `TurnCompleted` via

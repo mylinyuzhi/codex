@@ -15,6 +15,7 @@ use coco_messages::Message;
 use coco_types::Features;
 use coco_types::PermissionMode;
 use coco_types::PermissionRulesBySource;
+use coco_types::PromptCacheConfig;
 use coco_types::ThinkingLevel;
 use coco_types::TokenUsage;
 use coco_types::ToolFilter;
@@ -58,6 +59,11 @@ pub struct QueryEngineConfig {
     pub max_turns: i32,
     /// Maximum output tokens per request.
     pub max_tokens: Option<i64>,
+    /// Per-call prompt-cache directive. Main sessions set this when the
+    /// active provider/model supports prompt caching; forked sessions
+    /// inherit it from the parent cache slot and may set
+    /// `skip_cache_write`.
+    pub prompt_cache: Option<PromptCacheConfig>,
     /// System prompt to prepend.
     pub system_prompt: Option<String>,
     /// Append to system prompt (after CLAUDE.md).
@@ -237,6 +243,55 @@ pub struct QueryEngineConfig {
     /// `teammate_shutdown_batch` bodies. The trait split prevents
     /// producers from accidentally consuming the queue.
     pub reminder_mailbox: Arc<coco_system_reminder::ReminderMailbox>,
+
+    /// Per-fork tool-execution gate. When `Some`, the engine threads
+    /// the handle onto every `ToolUseContext` it builds, so the
+    /// tool-call preparer runs the callback before the static
+    /// permission evaluator. `None` preserves pre-canUseTool-wiring
+    /// behavior. TS: `utils/forkedAgent.ts::runForkedAgent({canUseTool})`.
+    pub can_use_tool: Option<coco_tool_runtime::CanUseToolHandleRef>,
+
+    /// Override label returned by [`crate::engine_builder::query_source_label`].
+    /// When `Some`, the engine reports this string instead of the
+    /// agent_id / non-interactive / repl_main_thread default. Forks
+    /// pass their `ForkedAgentOptions.query_source` through here so
+    /// telemetry can split traffic per-fork. TS:
+    /// `runForkedAgent({querySource})`.
+    pub query_source_override: Option<String>,
+
+    /// Typed fork discriminator. Threaded into
+    /// [`crate::engine_session::run_internal_with_messages`]'s session-loop
+    /// `info!` macro so log lines self-identify which fork they belong
+    /// to. TS: `runForkedAgent({forkLabel})`.
+    pub fork_label: Option<coco_types::ForkLabel>,
+
+    /// Hard cap on output tokens, overriding the model's default.
+    /// **WARNING**: setting this clamps `budget_tokens`, breaking
+    /// prompt cache parity with the parent. PR #18143 incident:
+    /// setting `effort: 'low'` on prompt-suggestion forks dropped
+    /// cache hit rate from 92.7% → 61% (45× spike in cache writes).
+    /// Only set this when cache parity is **not** a goal (e.g.
+    /// compact summaries that intentionally use a different model
+    /// and budget). The inference layer logs `tracing::warn!` when
+    /// this field is `Some` so the regression leaves a trail.
+    pub max_output_tokens_override: Option<i64>,
+
+    /// Sub-context isolation overrides. `Some` ⇒ the engine is
+    /// fork-spawned and the per-call `ToolUseContext` builder
+    /// applies the [`ForkContextOverrides`] field-by-field
+    /// (auto agent_id, query_chain_id / query_depth bump,
+    /// allowed_write_roots fence, isolated callback handles).
+    /// `None` ⇒ standard parent-shared semantics (default).
+    /// TS parity: `forkedAgent.ts::createSubagentContext`.
+    ///
+    /// The `clone_file_read_state` flag inside is honored by the
+    /// dispatcher at engine-build time (cloning is too expensive
+    /// to repeat per-call); other flags apply at per-call
+    /// `ToolUseContext` construction.
+    ///
+    /// Stored as `Arc` so threading it onto every per-call
+    /// `ToolUseContext` is a cheap pointer-copy.
+    pub fork_isolation: Option<std::sync::Arc<crate::fork_context::ForkContextOverrides>>,
 }
 
 impl Default for QueryEngineConfig {
@@ -244,6 +299,7 @@ impl Default for QueryEngineConfig {
         Self {
             max_turns: 30,
             max_tokens: None,
+            prompt_cache: None,
             system_prompt: None,
             append_system_prompt: None,
             model_id: String::new(),
@@ -289,6 +345,11 @@ impl Default for QueryEngineConfig {
             allowed_write_roots: Vec::new(),
             include_hook_events: false,
             reminder_mailbox: coco_system_reminder::ReminderMailbox::new(),
+            can_use_tool: None,
+            query_source_override: None,
+            fork_label: None,
+            max_output_tokens_override: None,
+            fork_isolation: None,
         }
     }
 }

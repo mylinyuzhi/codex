@@ -47,11 +47,11 @@ const OVERRIDABLE_PROVIDERS: &[&str] = &[
 /// `PartialProviderConfig` field name in the synthesized JSON overlay.
 ///
 /// Surface area is intentionally narrow:
-/// - `API_KEY`   → `api_key`   (test-isolated credential; native
-///                              `OPENAI_API_KEY` etc. still wins per
-///                              `ProviderConfig::resolve_api_key`)
-/// - `BASE_URL`  → `base_url`  (alternate gateway / mirror)
-/// - `WIRE_API`  → `wire_api`  (`responses` / `chat`; rare)
+/// - `API_KEY` → `api_key` (test-isolated credential; native
+///   `OPENAI_API_KEY` etc. still wins per
+///   `ProviderConfig::resolve_api_key`)
+/// - `BASE_URL` → `base_url` (alternate gateway / mirror)
+/// - `WIRE_API` → `wire_api` (`responses` / `chat`; rare)
 ///
 /// Note: per-test `MODEL` is *not* an overlay field — it's a per-call
 /// argument to `build_api_client`, not part of provider config. The
