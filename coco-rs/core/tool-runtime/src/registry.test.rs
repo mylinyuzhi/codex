@@ -19,6 +19,8 @@ use std::sync::Arc;
 struct StubTool {
     name: String,
     mcp: Option<McpToolInfo>,
+    should_defer: bool,
+    always_load: bool,
 }
 
 #[async_trait::async_trait]
@@ -40,6 +42,12 @@ impl Tool for StubTool {
     fn mcp_info(&self) -> Option<&McpToolInfo> {
         self.mcp.as_ref()
     }
+    fn should_defer(&self) -> bool {
+        self.should_defer
+    }
+    fn always_load(&self) -> bool {
+        self.always_load
+    }
     async fn execute(
         &self,
         input: Value,
@@ -57,6 +65,8 @@ fn stub(name: &str) -> Arc<StubTool> {
     Arc::new(StubTool {
         name: name.into(),
         mcp: None,
+        should_defer: false,
+        always_load: false,
     })
 }
 
@@ -67,6 +77,22 @@ fn mcp_stub(name: &str, server: &str, mcp_name: &str) -> Arc<StubTool> {
             server_name: server.into(),
             tool_name: mcp_name.into(),
         }),
+        should_defer: false,
+        always_load: false,
+    })
+}
+
+/// Build a deferred-by-default MCP-shaped stub for `loaded_tools`
+/// partition tests.
+fn deferred_mcp_stub(name: &str, server: &str, always_load: bool) -> Arc<StubTool> {
+    Arc::new(StubTool {
+        name: name.into(),
+        mcp: Some(McpToolInfo {
+            server_name: server.into(),
+            tool_name: name.into(),
+        }),
+        should_defer: true,
+        always_load,
     })
 }
 
@@ -375,6 +401,148 @@ fn pipeline_design_doc_gpt5_plan_mode_trace() {
         visible, expected,
         "design doc §8 trace: only Read + web_search + web_fetch should remain"
     );
+}
+
+/// When `Feature::ToolSearch` is **off**, the deferral filter
+/// is bypassed entirely (TS `'standard'` mode): every deferred
+/// tool gets full schema on turn 1 and the deferred pool is empty.
+/// Mirrors the user-facing `settings.json` toggle
+/// `features.tool_search = false` that lets sessions with few
+/// deferrable tools skip the lazy-loading round-trip.
+#[test]
+fn tool_search_disabled_loads_every_deferred_tool_eagerly() {
+    let reg = ToolRegistry::new();
+    reg.register(deferred_mcp_stub(
+        "mcp__notes__list",
+        "notes",
+        /*always_load=*/ false,
+    ));
+    reg.register(stub("Read")); // eager built-in
+
+    let mut features = coco_types::Features::with_defaults();
+    features.disable(coco_types::Feature::ToolSearch);
+    let ctx = crate::context::ToolUseContext::stub_for_filtering(
+        Arc::new(features),
+        Arc::new(coco_types::ToolOverrides::none()),
+        coco_types::ToolFilter::unrestricted(),
+        coco_types::PermissionMode::Default,
+    );
+
+    let loaded = names(&reg.loaded_tools(&ctx));
+    let deferred = names(&reg.deferred_tools(&ctx));
+
+    assert!(
+        loaded.contains("mcp__notes__list"),
+        "feature off → deferred tool must surface eagerly"
+    );
+    assert!(loaded.contains("Read"));
+    assert!(
+        deferred.is_empty(),
+        "feature off → deferred pool must be empty: {deferred:?}"
+    );
+}
+
+/// Sanity: with the feature on AND the model declaring a
+/// capability, the deferred filter still hides the would-be-deferred
+/// tool. Catches regressions where the disabled-branch logic leaks
+/// into the enabled path.
+#[test]
+fn tool_search_enabled_keeps_deferred_pool() {
+    let reg = ToolRegistry::new();
+    reg.register(deferred_mcp_stub(
+        "mcp__notes__list",
+        "notes",
+        /*always_load=*/ false,
+    ));
+
+    let ctx = crate::context::ToolUseContext::stub_for_filtering(
+        Arc::new(coco_types::Features::with_defaults()),
+        Arc::new(coco_types::ToolOverrides::none()),
+        coco_types::ToolFilter::unrestricted(),
+        coco_types::PermissionMode::Default,
+    )
+    // Declare client-side capability so `tool_search_active()` is
+    // true — feature alone isn't enough now that we three-state.
+    .with_model_capabilities(false, true);
+
+    let loaded = names(&reg.loaded_tools(&ctx));
+    let deferred = names(&reg.deferred_tools(&ctx));
+    assert!(!loaded.contains("mcp__notes__list"));
+    assert!(deferred.contains("mcp__notes__list"));
+}
+
+/// Three-state coverage: feature ON but model lacks both
+/// capabilities → deferral filter short-circuits like
+/// `Feature::ToolSearch = false`. Surface every tool eagerly.
+#[test]
+fn tool_search_inactive_when_model_lacks_capability() {
+    let reg = ToolRegistry::new();
+    reg.register(deferred_mcp_stub(
+        "mcp__notes__list",
+        "notes",
+        /*always_load=*/ false,
+    ));
+
+    let ctx = crate::context::ToolUseContext::stub_for_filtering(
+        Arc::new(coco_types::Features::with_defaults()),
+        Arc::new(coco_types::ToolOverrides::none()),
+        coco_types::ToolFilter::unrestricted(),
+        coco_types::PermissionMode::Default,
+    );
+    // No `with_model_capabilities` call → both flags default false.
+
+    let loaded = names(&reg.loaded_tools(&ctx));
+    let deferred = names(&reg.deferred_tools(&ctx));
+    assert!(
+        loaded.contains("mcp__notes__list"),
+        "no capability → deferred tool must surface eagerly"
+    );
+    assert!(
+        deferred.is_empty(),
+        "no capability → deferred pool must be empty: {deferred:?}"
+    );
+}
+
+/// `always_load` (TS `_meta["anthropic/alwaysLoad"]` opt-out) must
+/// surface the tool in `loaded_tools` on turn 1 even when
+/// `should_defer() == true`. Symmetric: `deferred_tools` must omit it.
+#[test]
+fn loaded_tools_includes_always_load_mcp_tool_on_turn_one() {
+    let reg = ToolRegistry::new();
+    reg.register(deferred_mcp_stub(
+        "mcp__notes__pin",
+        "notes",
+        /*always_load=*/ true,
+    ));
+    reg.register(deferred_mcp_stub(
+        "mcp__notes__list",
+        "notes",
+        /*always_load=*/ false,
+    ));
+    reg.register(stub("Read")); // eager built-in — always loaded
+
+    let ctx = crate::context::ToolUseContext::stub_for_filtering(
+        Arc::new(coco_types::Features::with_defaults()),
+        Arc::new(coco_types::ToolOverrides::none()),
+        coco_types::ToolFilter::unrestricted(),
+        coco_types::PermissionMode::Default,
+    )
+    // Declare a capability so `tool_search_active()` is true and the
+    // deferral filter actually runs (the always-load short-circuit
+    // is what the test is asserting).
+    .with_model_capabilities(false, true);
+
+    let loaded = names(&reg.loaded_tools(&ctx));
+    let deferred = names(&reg.deferred_tools(&ctx));
+
+    // alwaysLoad MCP tool short-circuits the deferral filter.
+    assert!(loaded.contains("mcp__notes__pin"));
+    assert!(!deferred.contains("mcp__notes__pin"));
+    // Regular MCP tool stays deferred until ToolSearch discovers it.
+    assert!(!loaded.contains("mcp__notes__list"));
+    assert!(deferred.contains("mcp__notes__list"));
+    // Sanity: eager built-in is always loaded.
+    assert!(loaded.contains("Read"));
 }
 
 /// Deregister-by-server must find tools by their MCP info, regardless

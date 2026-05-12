@@ -167,6 +167,11 @@ pub enum AdapterBetaCapability {
     PromptCachingScope,
     RedactThinking,
     Advisor,
+    /// Server-side `tool_reference` expansion + `defer_loading` on
+    /// tool definitions (`tool-search-tool-2025-10-19`). Emitted when
+    /// `AnthropicModelCapabilities.tool_reference` is true and the
+    /// request actually carries deferred tools.
+    ToolSearch,
 }
 
 /// Per-call cache strategy directive. Mirror of `coco_types::PromptCacheConfig`

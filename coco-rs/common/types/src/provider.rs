@@ -179,6 +179,54 @@ pub enum Capability {
     /// `token-efficient-tools-2026-03-28` beta. Mutually
     /// exclusive with structured outputs.
     TokenEfficientTools,
+    /// Server-side `tool_reference` expansion (Anthropic beta
+    /// `tool-search-tool-2025-10-19`). When set, the provider's API
+    /// server expands `{type:"tool_reference",tool_name:X}` content
+    /// blocks into inline `<functions>...</functions>` markup before
+    /// the prompt reaches the model. Lets the client keep the `tools`
+    /// array constant across turns (delayed tools carry
+    /// `defer_loading: true`) and emit references inside
+    /// `tool_result.content` instead of growing the tools list —
+    /// preserving prompt cache prefix across `ToolSearch` discoveries.
+    ///
+    /// Provider-specific (Anthropic-only). The multi-provider default
+    /// path is client-side promotion through
+    /// `ToolAppState::discovered_tool_names`, which costs a cache
+    /// break on the tools array but works on every provider.
+    ///
+    /// Known supporting models: Claude Sonnet 4.5+, Opus 4+, GPT-5
+    /// (anthropic-compat). NOT supported on Haiku 4.5 / 3.5 /
+    /// older 3-series.
+    ServerSideToolReference,
+    /// Provider/model is known to work correctly with coco-rs's
+    /// client-side `ToolSearch` promotion path (`discovered_tool_names`
+    /// `AppStatePatch` + tools-array growth on the next turn).
+    ///
+    /// **Per-model opt-in**, default **off** for unknown models.
+    /// Rationale: a model that doesn't tolerate the growing tools
+    /// array (legacy proxies, local quantized models with strict
+    /// schema cache, …) shouldn't be silently subjected to ToolSearch
+    /// — eager-loading every tool's full schema on turn 1 is the
+    /// safe degradation. Set this capability in the registry
+    /// (`builtin_models_partial`) once a model has been validated.
+    ///
+    /// The runtime activation predicate is:
+    /// ```text
+    /// tool_search_active =
+    ///     Feature::ToolSearch
+    ///     && (ServerSideToolReference || ClientSideToolSearch)
+    /// ```
+    /// When **both** capabilities are absent, the model lands in the
+    /// "eager-load every tool, hide ToolSearch" state regardless of
+    /// the user's `Feature::ToolSearch` setting.
+    ///
+    /// No TS analogue — TS only ships the server-side path and
+    /// blacklists incompatible models via
+    /// `DEFAULT_UNSUPPORTED_MODEL_PATTERNS`. coco-rs needs a positive
+    /// capability for the client-side path because it works on every
+    /// Provider, so "default-on" would mis-fire on local / custom
+    /// model deployments that nobody has vetted.
+    ClientSideToolSearch,
 }
 
 /// How a model handles file editing / apply_patch tool.

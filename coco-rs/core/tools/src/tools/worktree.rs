@@ -52,6 +52,12 @@ impl Tool for EnterWorktreeTool {
         );
         ToolInputSchema { properties: p }
     }
+    fn should_defer(&self) -> bool {
+        true
+    }
+    fn search_hint(&self) -> Option<&str> {
+        Some("create and enter a git worktree on a branch")
+    }
 
     /// Emit the prebuilt `message` field as plain text — the model
     /// doesn't need the path/branch fields separately, they're already
@@ -195,6 +201,12 @@ impl Tool for ExitWorktreeTool {
             }),
         );
         ToolInputSchema { properties: p }
+    }
+    fn should_defer(&self) -> bool {
+        true
+    }
+    fn search_hint(&self) -> Option<&str> {
+        Some("remove a git worktree and restore previous cwd")
     }
 
     /// Emit the prebuilt `message` field; restoration metadata is for

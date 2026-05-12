@@ -58,6 +58,12 @@ impl Tool for TeamCreateTool {
         );
         ToolInputSchema { properties: p }
     }
+    fn should_defer(&self) -> bool {
+        true
+    }
+    fn search_hint(&self) -> Option<&str> {
+        Some("create a new swarm team with a lead agent")
+    }
 
     /// `data` is the bare confirmation string from `agent.create_team`.
     fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
@@ -122,6 +128,12 @@ impl Tool for TeamDeleteTool {
         ToolInputSchema {
             properties: HashMap::new(),
         }
+    }
+    fn should_defer(&self) -> bool {
+        true
+    }
+    fn search_hint(&self) -> Option<&str> {
+        Some("delete the current swarm team and clean up")
     }
 
     /// Render the prebuilt `message` field — `success` flag is for

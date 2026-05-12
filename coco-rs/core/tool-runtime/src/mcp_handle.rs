@@ -51,6 +51,40 @@ pub struct McpToolAnnotations {
     pub destructive_hint: bool,
     /// Tool accesses external resources (network, APIs). Default: false.
     pub open_world_hint: bool,
+    /// Server-side opt-out from `ToolSearch` deferral. When the MCP
+    /// server advertises `_meta["anthropic/alwaysLoad"] == true` on a
+    /// tool, this flag short-circuits the deferred-pool filter in
+    /// [`crate::ToolRegistry::loaded_tools`], so the tool's full
+    /// schema appears in turn-1 tool definitions.
+    ///
+    /// TS parity: `prompt.ts:isDeferredTool` checks
+    /// `tool.alwaysLoad === true` first (line 64) before any other
+    /// rule. Default: false (every MCP tool is deferred unless the
+    /// server opts out).
+    pub always_load: bool,
+}
+
+impl McpToolAnnotations {
+    /// Read the MCP server-declared `_meta` block off the tool's input
+    /// schema and lift the `anthropic/alwaysLoad` flag onto the typed
+    /// annotation struct. Other annotation fields stay at
+    /// [`Default::default()`] — they are wired by the discovery layer
+    /// from the rmcp `annotations` object, not from `_meta`.
+    ///
+    /// TS source: `prompt.ts:62-108 isDeferredTool` consumes the
+    /// `tool.alwaysLoad` boolean that the MCP discovery code lifts
+    /// from `_meta["anthropic/alwaysLoad"]`.
+    pub fn from_input_schema_meta(input_schema: &Value) -> Self {
+        let always_load = input_schema
+            .get("_meta")
+            .and_then(|m| m.get("anthropic/alwaysLoad"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        Self {
+            always_load,
+            ..Self::default()
+        }
+    }
 }
 
 /// Schema info for an MCP server tool.

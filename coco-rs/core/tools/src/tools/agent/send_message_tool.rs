@@ -69,6 +69,12 @@ impl Tool for SendMessageTool {
         );
         ToolInputSchema { properties: p }
     }
+    fn should_defer(&self) -> bool {
+        true
+    }
+    fn search_hint(&self) -> Option<&str> {
+        Some("send a message to a teammate agent or broadcast")
+    }
 
     /// Render either the prebuilt `message` field (auto-resumed path)
     /// or the bare confirmation string returned by `agent.send_message`.

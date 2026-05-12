@@ -39,6 +39,12 @@ impl Tool for SleepTool {
     fn is_concurrency_safe(&self, _: &Value) -> bool {
         true
     }
+    fn should_defer(&self) -> bool {
+        true
+    }
+    fn search_hint(&self) -> Option<&str> {
+        Some("pause execution for a configurable number of seconds")
+    }
 
     fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
         let text = data
@@ -168,6 +174,12 @@ impl Tool for SyntheticOutputTool {
     }
     fn is_concurrency_safe(&self, _: &Value) -> bool {
         true
+    }
+    fn should_defer(&self) -> bool {
+        true
+    }
+    fn search_hint(&self) -> Option<&str> {
+        Some("emit synthetic output for SDK integration scenarios")
     }
 
     /// `data` is the verbatim output string. Unwrap to avoid JSON

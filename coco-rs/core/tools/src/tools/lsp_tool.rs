@@ -65,6 +65,12 @@ impl Tool for LspTool {
     fn is_concurrency_safe(&self, _: &Value) -> bool {
         true
     }
+    fn should_defer(&self) -> bool {
+        true
+    }
+    fn search_hint(&self) -> Option<&str> {
+        Some("LSP code intelligence definitions references diagnostics symbols hover")
+    }
 
     async fn execute(
         &self,

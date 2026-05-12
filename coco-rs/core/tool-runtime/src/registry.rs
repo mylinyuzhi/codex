@@ -177,23 +177,51 @@ impl ToolRegistry {
     }
 
     /// Get non-deferred enabled tools (loaded immediately).
+    ///
+    /// A deferred tool whose wire-name appears in
+    /// `ctx.discovered_tool_names` is treated as if it were not
+    /// deferred — that is the TS-parity mechanism through which the
+    /// model "loads" a tool via `ToolSearch`. `always_load()` still
+    /// short-circuits the deferral check independent of discovery.
+    ///
+    /// When [`coco_types::Feature::ToolSearch`] is **off**, the
+    /// deferral check is bypassed entirely (TS `'standard'` mode):
+    /// every enabled tool's full schema lands in turn-1 requests.
+    /// Keeps the per-Provider serialization path identical, just
+    /// without the lazy-loading optimization.
     pub fn loaded_tools(&self, ctx: &ToolUseContext) -> Vec<Arc<dyn Tool>> {
         let inner = self
             .inner
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let tool_search_active = ctx.tool_search_active();
         inner
             .tools
             .values()
             .filter(|t| {
-                passes_filter_pipeline(t.as_ref(), ctx) && (!t.should_defer() || t.always_load())
+                passes_filter_pipeline(t.as_ref(), ctx)
+                    && (!tool_search_active
+                        || !t.should_defer()
+                        || t.always_load()
+                        || ctx.discovered_tool_names.contains(t.name()))
             })
             .cloned()
             .collect()
     }
 
     /// Get deferred tools (discovered via ToolSearch).
+    ///
+    /// Symmetric to [`Self::loaded_tools`]: deferred tools that have
+    /// been discovered are *excluded* — they have moved into the
+    /// loaded set for this turn.
+    ///
+    /// Returns empty when [`coco_types::Feature::ToolSearch`] is
+    /// off — there is no deferred pool to surface, every tool is
+    /// already loaded via [`Self::loaded_tools`].
     pub fn deferred_tools(&self, ctx: &ToolUseContext) -> Vec<Arc<dyn Tool>> {
+        if !ctx.tool_search_active() {
+            return Vec::new();
+        }
         let inner = self
             .inner
             .read()
@@ -202,7 +230,10 @@ impl ToolRegistry {
             .tools
             .values()
             .filter(|t| {
-                passes_filter_pipeline(t.as_ref(), ctx) && t.should_defer() && !t.always_load()
+                passes_filter_pipeline(t.as_ref(), ctx)
+                    && t.should_defer()
+                    && !t.always_load()
+                    && !ctx.discovered_tool_names.contains(t.name())
             })
             .cloned()
             .collect()

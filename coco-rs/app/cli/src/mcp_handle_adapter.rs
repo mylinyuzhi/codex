@@ -189,12 +189,15 @@ impl McpHandle for McpManagerAdapter {
             .all_tools()
             .await
             .into_iter()
-            .map(|(server, def)| McpToolSchema {
-                server_name: server,
-                tool_name: def.name,
-                description: def.description,
-                input_schema: def.input_schema,
-                annotations: McpToolAnnotations::default(),
+            .map(|(server, def)| {
+                let annotations = McpToolAnnotations::from_input_schema_meta(&def.input_schema);
+                McpToolSchema {
+                    server_name: server,
+                    tool_name: def.name,
+                    description: def.description,
+                    input_schema: def.input_schema,
+                    annotations,
+                }
             })
             .collect()
     }
