@@ -103,3 +103,69 @@ against a mock model: a producer task enqueues during turn 1, the test asserts
 the wrapped attachment lands in history, the second turn's prompt contains the
 steering marker, lifecycle events fire (`CommandQueued` → `CommandDequeued`),
 and the final response references the marker (proving the model acted on it).
+
+## Forks vs Subagents vs Main Loop
+
+Three distinct spawn paths share the same `query()` engine. They differ
+in **who invokes**, **what state isolates**, and **how the result
+surfaces**:
+
+- **Main loop** — user-facing session. Owns `MessageHistory`, the
+  cache slot, `ToolAppState`, `CommandQueue`. Persistent across turns.
+- **Fork** (`forked_agent.rs`, dispatched by
+  `app/cli::fork_dispatcher`) — fire-and-forget side query that
+  **shares the parent's prompt cache** via `CacheSafeParams`. 9
+  variants enumerated by `coco_types::ForkLabel`:
+  `prompt_suggestion`, `side_question`, `compact`, `extract_memories`,
+  `session_memory_{auto,manual}`, `agent_summary`, `auto_dream`,
+  `speculation`. Lifecycle: dispatch → run → return result → die.
+  Never mutates parent transcript. Uses `ForkContextOverrides`
+  (in `fork_context.rs`) for per-call isolation: auto agent_id,
+  fresh `DenialTrackingState`, fresh `query_chain_id` + `query_depth`
+  bump (capped at 16), `allowed_write_roots` fence, `require_can_use_tool`
+  toggle. TS: `utils/forkedAgent.ts::createSubagentContext`.
+- **Subagent** (`AgentTool` model-spawned via
+  `coco_tool_runtime::AgentHandle`) — full multi-turn child engine,
+  may run for hours, lives in `task_runtime`. Different cache
+  contract: child has its own cache key. Inherits permission rules
+  but builds fresh `MessageHistory`.
+
+Forks are **structurally subagents** (same `createSubagentContext`-equivalent
+isolation primitive) but framework-spawned (post-turn / timer / slash)
+rather than model-spawned. Per-fork tool gating goes through the
+`CanUseToolHandle` callback at `core/tool-runtime/src/execution.rs`
+step 3.5.
+
+### `ForkedAgentOptions::for_label` cache-parity defaults
+
+The conservative shape preserves the parent's prompt cache:
+`max_turns=Some(1)`, `skip_transcript=true`, `skip_cache_write=true`,
+`effort=None`, `max_output_tokens=None`. **Do not set
+`max_output_tokens`** on cache-shared forks — PR #18143 incident:
+`effort: 'low'` dropped cache hit rate from 92.7% → 61% (45× spike
+in cache writes) by changing `budget_tokens`. The inference layer
+logs `tracing::warn!` when this field is `Some` so any regression
+leaves a trail.
+
+### promptSuggestion 9-step guard + 12-rule filter
+
+Post-turn promptSuggestion runs through `prompt_suggestion::try_generate_suggestion`
+which mirrors TS `services/PromptSuggestion/promptSuggestion.ts:125-456`
+byte-for-byte:
+
+1. abort check (singleton in caller's hands)
+2. `assistant_turn_count < 2` ⇒ `TooFewTurns`
+3. last response was API error ⇒ `ApiError`
+4. `parent_uncached_tokens > MAX_PARENT_UNCACHED_TOKENS (10_000)` ⇒ `CacheCold`
+5. `get_suggestion_suppress_reason` (7 reason variants)
+6. `generate_suggestion` (forks via `runForkedAgent` equivalent)
+7. abort recheck
+8. empty / `NONE` ⇒ `Empty`
+9. `should_filter_suggestion` — 12 rules: `Done`, `MetaText`,
+   `MetaWrapped`, `ErrorMessage`, `PrefixedLabel`, `TooFewWords`
+   (with 17-word `ALLOWED_SINGLE_WORDS` bypass), `TooManyWords`,
+   `TooLong`, `MultipleSentences`, `HasFormatting`, `Evaluative`,
+   `ClaudeVoice`. Each rule has byte-faithful regex.
+
+The verbatim `SUGGESTION_PROMPT` (30 lines) lives at
+`prompt_suggestion_prompt.txt` and is `include_str!`'d.

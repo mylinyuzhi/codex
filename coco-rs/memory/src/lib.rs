@@ -18,6 +18,7 @@
 
 pub mod agent_memory;
 pub mod agent_memory_snapshot;
+pub mod can_use_tool;
 pub mod compact_truncate;
 pub mod config;
 pub mod lock;

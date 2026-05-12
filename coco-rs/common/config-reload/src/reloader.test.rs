@@ -4,15 +4,30 @@ use coco_config::EnvSnapshot;
 use std::time::Duration;
 use tempfile::TempDir;
 
-/// Spawn a reloader with TempDir-isolated catalog paths and an
-/// explicitly-empty `EnvSnapshot` for determinism (independent of
-/// `EnvSnapshot::default` impl).
+/// Spawn a reloader with TempDir-isolated catalog paths and a
+/// minimally-populated `EnvSnapshot` carrying just enough state to
+/// satisfy the runtime builder (a Main model selection — the
+/// builder errors out without one). All other env keys stay
+/// unset so the test is independent of host environment.
 async fn spawn_isolated(home: &std::path::Path) -> RuntimeReloader {
     let opts = ReloadOptions::new(home)
         .with_catalog_paths(CatalogPaths::rooted(home))
-        .with_env_factory(empty_env)
+        .with_env_factory(test_env_with_main_model)
         .with_debounce(Duration::from_millis(50));
     RuntimeReloader::spawn(opts).expect("spawn reloader")
+}
+
+/// Empty-except-Main-model env. The runtime builder requires a
+/// Main model selection (TS parity: multi-provider SDK refuses
+/// silent defaults — see `runtime.rs:412-428` `no Main model
+/// configured` error). `anthropic/claude-sonnet-4-6` is a
+/// builtin-roster slug so it resolves without needing a custom
+/// `models.json`.
+fn test_env_with_main_model() -> EnvSnapshot {
+    EnvSnapshot::from_pairs(std::iter::once((
+        coco_config::EnvKey::CocoModel,
+        "anthropic/claude-sonnet-4-6",
+    )))
 }
 
 fn empty_env() -> EnvSnapshot {

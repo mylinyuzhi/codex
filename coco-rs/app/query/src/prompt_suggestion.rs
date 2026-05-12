@@ -1,108 +1,577 @@
-//! Post-turn promptSuggestion service.
+//! Post-turn promptSuggestion service — full TS-parity port.
 //!
-//! TS: `services/PromptSuggestion/promptSuggestion.ts:139` —
-//! `executePromptSuggestion()` runs from `query/stopHooks.ts:139` after
-//! every successful turn. It forks the parent session (cache-shared
-//! via [`coco_types::CacheSafeParams`]), asks the model for a 3-12
-//! word suggestion of "what should I ask next", and writes the result
-//! to `ToolAppState.prompt_suggestion` so the TUI can render it
-//! behind the user's cursor.
+//! TS source: `services/PromptSuggestion/promptSuggestion.ts`. All
+//! 9 guard steps, 12 filter rules, and the verbatim system prompt
+//! are byte-faithful with TS:125-456.
 //!
-//! ## Scope of this module
+//! ## Pipeline
 //!
-//! Pure logic only. Three pieces:
+//! After each successful turn, `engine_finalize_turn` builds a
+//! [`SuggestionContext`] from the parent app_state +
+//! `last_cache_safe_params` and calls [`try_generate_suggestion`].
+//! The function runs the 9-step guard sequence (TS:125-182), and
+//! when accepted, the model's reply goes through the 12-rule filter
+//! ([`should_filter_suggestion`], TS:354-456). Surviving suggestions
+//! land on `ToolAppState.prompt_suggestion` via [`record_suggestion`].
 //!
-//! 1. [`should_suggest`] — the gate: `Feature::AgentTeams` is unrelated;
-//!    suggestions gate on the user's `COCO_PROMPT_SUGGESTION_DISABLE` env,
-//!    non-plan-mode, no pending permissions, and interactive session.
-//!    TS: `stopHooks.ts:136-140`.
-//! 2. [`build_suggestion_system_prompt`] — the system-prompt template
-//!    handed to the forked model. Byte-faithful to TS
-//!    `services/PromptSuggestion/promptSuggestion.ts:55-87`.
-//! 3. [`record_suggestion`] — write the model's reply onto
-//!    `ToolAppState.prompt_suggestion`. Pure mutation; the LLM call
-//!    site is responsible for filtering empty / overlong responses.
+//! ## Cache parity
 //!
-//! The actual LLM-fork orchestration lives at the engine call site
-//! (and depends on the SwarmAgentHandle / QueryEngineAdapter wiring
-//! P1 ships). This module is the contract those callers consume.
+//! The fork dispatcher passes the parent's `CacheSafeParams` so the
+//! API request prefix matches byte-for-byte. The 9-step guard's
+//! `cache_cold` check ([`MAX_PARENT_UNCACHED_TOKENS`]) suppresses
+//! when the parent's last assistant turn would force more than 10k
+//! uncached tokens — without this guard, every prompt-suggestion
+//! fork would burn 10k+ tokens just warming up the cache. TS:239-256.
+//!
+//! ## Filter rationale
+//!
+//! 12 filters keep the model's output usable as a TUI placeholder:
+//! evaluative ("looks good") and Claude-voice ("Let me…") replies
+//! aren't things a user would type. Single-sentence + 2-12 word
+//! constraints match the TUI input area. TS:354-456 for verbatim regex.
 
+use std::collections::HashSet;
+
+use coco_messages::Message;
 use coco_types::{PromptSuggestion, ToolAppState};
+use once_cell::sync::Lazy;
+use regex::Regex;
 
-/// Whether the engine should attempt a post-turn promptSuggestion
-/// fork. Gates on:
-///
-/// - **Env kill switch** (`COCO_PROMPT_SUGGESTION_DISABLE`): when truthy,
-///   skip. TS parity: `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false`,
-///   inverted to match the coco-rs `COCO_*_DISABLE` family.
-/// - **Plan mode**: suggestions during planning are noise — the user
-///   is reviewing a plan, not deciding what to ask next.
-/// - **Pending permissions**: the user is mid-decision; a suggestion
-///   underneath the prompt would race with the permission UI.
-/// - **Non-interactive session**: SDK / print mode have no input
-///   placeholder to render the suggestion into.
-///
-/// Caller must pass the env-truthy check function (so this stays a
-/// pure unit-testable helper). Production callers pass
-/// `coco_config::env::is_env_truthy(EnvKey::CocoPromptSuggestionDisable)`.
-pub fn should_suggest(state: &ToolAppState, is_non_interactive: bool, env_disable: bool) -> bool {
-    if env_disable {
-        return false;
-    }
-    if is_non_interactive {
-        return false;
-    }
-    if matches!(
-        state.permission_mode,
-        Some(coco_types::PermissionMode::Plan)
-    ) {
-        return false;
-    }
-    if state.awaiting_plan_approval {
-        return false;
-    }
-    true
-}
+// ── Constants (verbatim TS) ────────────────────────────────────
 
-/// System-prompt template handed to the forked model. The model is
-/// asked to produce a single short suggestion (3-12 words) that
-/// matches the user's style.
+/// Suppression threshold for cache-cold parent turns.
 ///
-/// Byte-faithful with TS `promptSuggestion.ts:55-87` (`SUGGESTION_SYSTEM_PROMPT`).
+/// TS: `services/PromptSuggestion/promptSuggestion.ts:239`
+/// `MAX_PARENT_UNCACHED_TOKENS = 10_000`. When the parent's last
+/// assistant message would force more than 10k uncached tokens
+/// (input + cache_creation + output), suppress the fork — the
+/// re-warm cost dwarfs any suggestion benefit.
+pub const MAX_PARENT_UNCACHED_TOKENS: i64 = 10_000;
+
+/// Words that bypass the [`SuggestionFilter::TooFewWords`] rule.
+///
+/// TS: `services/PromptSuggestion/promptSuggestion.ts:403-424`. Single-
+/// word user inputs like "yes" / "commit" / "deploy" are valid
+/// commands the user would actually type, so we allow them through
+/// the < 2 word filter.
+pub const ALLOWED_SINGLE_WORDS: &[&str] = &[
+    // Affirmatives
+    "yes", "yeah", "yep", "yea", "yup", "sure", "ok", "okay", // Actions
+    "push", "commit", "deploy", "stop", "continue", "check", "exit", "quit", // Negation
+    "no",
+];
+
+/// Verbatim system prompt handed to the suggestion fork.
+///
+/// TS: `services/PromptSuggestion/promptSuggestion.ts:258-287`.
+/// Loaded from a sibling `.txt` so byte-faithfulness is doctest-able
+/// (length + first line).
+pub const SUGGESTION_PROMPT: &str = include_str!("prompt_suggestion_prompt.txt");
+
+/// Legacy alias — `engine_finalize_turn` referenced this name from
+/// the pre-port days. New callers should use [`SUGGESTION_PROMPT`]
+/// directly.
 pub fn build_suggestion_system_prompt() -> &'static str {
-    "You are a prompt-suggestion assistant. Based on the conversation \
-     so far, suggest a single short follow-up question or instruction \
-     the user might reasonably want to send next. \
-     \n\n\
-     Constraints:\n\
-     - 3 to 12 words.\n\
-     - Match the user's tone and casing (casual or formal as the user is).\n\
-     - No quoted suffixes, no leading bullet, no explanation.\n\
-     - Be concrete: refer to a specific file, symbol, error, or task \
-       from the conversation when one is obvious.\n\
-     - If the user is mid-flow and there is no clear next step, output \
-       the literal token NONE — the caller will skip rendering."
+    SUGGESTION_PROMPT
 }
 
-/// Strip the suggestion text and return `None` when it is empty,
-/// equals `NONE`, or exceeds 24 words (the model occasionally
-/// runs over the 12-word cap).
-pub fn validate_suggestion(text: &str) -> Option<String> {
+// ── Outcome types ──────────────────────────────────────────────
+
+/// Outcome of [`try_generate_suggestion`].
+///
+/// Maps to the 5 TS code paths the caller acts on:
+/// `Accepted` records a suggestion; `Suppressed` / `Filtered` /
+/// `Empty` / `Aborted` skip rendering.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SuggestionOutcome {
+    /// Suggestion passed all guards + filters. Caller renders it
+    /// behind the user's TUI cursor.
+    Accepted {
+        text: String,
+        prompt_id: String,
+        request_id: Option<String>,
+    },
+    /// One of the 9 guards short-circuited.
+    Suppressed { reason: SuppressReason },
+    /// All 9 guards passed and generation produced text, but the
+    /// 12-rule filter rejected it.
+    Filtered { rule: SuggestionFilter },
+    /// Generation succeeded but produced empty / `NONE` text.
+    Empty,
+    /// `currentAbortController` was cancelled mid-flight.
+    Aborted,
+    /// Underlying fork dispatcher errored (network, cancellation,
+    /// engine-level error). Not the model's fault — caller logs
+    /// and skips rendering.
+    Error { kind: String },
+}
+
+/// Why the 9-step guard suppressed a suggestion.
+///
+/// TS variants: `services/PromptSuggestion/promptSuggestion.ts:107-145`
+/// `getSuggestionSuppressReason` + the 4 inline checks at
+/// `tryGenerateSuggestion:142-163`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SuppressReason {
+    /// Fewer than 2 assistant turns — no suggestion context yet.
+    /// TS:142.
+    TooFewTurns,
+    /// Last assistant turn was an API error — model probably
+    /// won't produce useful text. TS:148.
+    ApiError,
+    /// Parent's last turn would force > [`MAX_PARENT_UNCACHED_TOKENS`]
+    /// of cache warm-up. TS:152, `getParentCacheSuppressReason`.
+    CacheCold,
+    /// Disabled via settings / env / GrowthBook.
+    /// TS: `getSuggestionSuppressReason::disabled`.
+    Disabled,
+    /// Permission prompt is on screen — overlay race.
+    PendingPermission,
+    /// Elicitation queue is non-empty.
+    ElicitationActive,
+    /// Permission mode is `Plan` — user is reviewing a plan.
+    PlanMode,
+    /// Rate-limited (provider-side capacity).
+    RateLimit,
+    /// `--bare` mode skips all post-turn forks.
+    BareMode,
+    /// Non-interactive session (SDK / print mode) has no input area
+    /// to render the suggestion into.
+    NonInteractive,
+    /// Swarm teammate session — only the leader should show
+    /// suggestions, not workers / teammates. TS:
+    /// `promptSuggestion.ts:78-85`.
+    SwarmTeammate,
+    /// Awaiting plan approval — the user is reviewing a plan, not
+    /// composing the next prompt.
+    AwaitingPlanApproval,
+}
+
+/// 12 output-filter rules from `shouldFilterSuggestion`.
+///
+/// TS: `services/PromptSuggestion/promptSuggestion.ts:354-456`. Each
+/// rule has byte-faithful regex / predicate logic in
+/// [`should_filter_suggestion`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SuggestionFilter {
+    /// Single word "done" — user wouldn't type this as a follow-up.
+    Done,
+    /// "nothing found", "no suggestion", "silence is …", bare
+    /// "silence" — meta-text spelling out the silence instruction.
+    MetaText,
+    /// Wrapped meta `(silence — ...)` / `[no suggestion]`.
+    MetaWrapped,
+    /// Starts with "api error:" / "prompt is too long" / "request
+    /// timed out" / "invalid api key" / "image was too large".
+    ErrorMessage,
+    /// `^\w+:\s` — model emitted a label prefix like "Suggestion: ".
+    PrefixedLabel,
+    /// Fewer than 2 words and not in [`ALLOWED_SINGLE_WORDS`] /
+    /// not a `/`-prefixed slash.
+    TooFewWords,
+    /// More than 12 words.
+    TooManyWords,
+    /// >= 100 characters.
+    TooLong,
+    /// `[.!?]\s+[A-Z]` — multiple sentences detected.
+    MultipleSentences,
+    /// Contains `\n` / `*` / `**` — model returned formatting.
+    HasFormatting,
+    /// Evaluative phrases ("looks good", "thanks", "perfect").
+    Evaluative,
+    /// Claude-voice openers ("Let me", "I'll", "Here's").
+    ClaudeVoice,
+}
+
+// ── Guard input / output context ───────────────────────────────
+
+/// Inputs to [`try_generate_suggestion`] — gates that need to be
+/// evaluated *before* paying for the fork.
+///
+/// TS: `tryGenerateSuggestion`'s closure-captured state in
+/// `services/PromptSuggestion/promptSuggestion.ts:125-182` +
+/// `getSuggestionSuppressReason:107-119`.
+pub struct SuggestionContext {
+    /// Number of assistant turns in the parent history. Forks
+    /// wait until 2+ turns exist so suggestion has context.
+    pub assistant_turn_count: u32,
+    /// Whether the parent's last assistant turn was an API error.
+    pub last_response_was_api_error: bool,
+    /// Parent's last turn `input + cache_creation + output` tokens.
+    pub parent_uncached_tokens: i64,
+    /// Promptsuggestion master switch (settings / env).
+    pub disabled: bool,
+    /// User has a permission overlay on screen.
+    pub pending_permission: bool,
+    /// Elicitation queue has pending items.
+    pub elicitation_active: bool,
+    /// Permission mode is `Plan`.
+    pub plan_mode: bool,
+    /// Provider-side rate limit triggered.
+    pub rate_limit: bool,
+    /// `--bare` mode (post-turn forks skipped).
+    pub bare_mode: bool,
+    /// Non-interactive session.
+    pub non_interactive: bool,
+    /// Swarm teammate session. TS: `isTeammate()` (only leader
+    /// shows suggestions).
+    pub is_teammate: bool,
+    /// Plan mode + the user has already exited plan mode but the
+    /// plan hasn't been approved/rejected yet.
+    pub awaiting_plan_approval: bool,
+}
+
+/// Result of the underlying fork's text generation. The caller
+/// passes this into the last 4 steps of [`try_generate_suggestion`].
+pub struct GenerationResult {
+    pub text: String,
+    pub prompt_id: String,
+    pub request_id: Option<String>,
+}
+
+/// Text + request id extracted from the fork's emitted messages.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtractedSuggestion {
+    pub text: String,
+    pub request_id: Option<String>,
+}
+
+// ── 9-step guard sequence ──────────────────────────────────────
+
+/// Returns `Some(reason)` when one of the 6 [`SuppressReason`]
+/// variants from `getSuggestionSuppressReason` applies; `None` to
+/// proceed.
+///
+/// TS: `services/PromptSuggestion/promptSuggestion.ts:107-119`.
+pub fn get_suggestion_suppress_reason(ctx: &SuggestionContext) -> Option<SuppressReason> {
+    if ctx.disabled {
+        return Some(SuppressReason::Disabled);
+    }
+    if ctx.non_interactive {
+        return Some(SuppressReason::NonInteractive);
+    }
+    if ctx.is_teammate {
+        return Some(SuppressReason::SwarmTeammate);
+    }
+    if ctx.bare_mode {
+        return Some(SuppressReason::BareMode);
+    }
+    if ctx.pending_permission {
+        return Some(SuppressReason::PendingPermission);
+    }
+    if ctx.awaiting_plan_approval {
+        return Some(SuppressReason::AwaitingPlanApproval);
+    }
+    if ctx.elicitation_active {
+        return Some(SuppressReason::ElicitationActive);
+    }
+    if ctx.plan_mode {
+        return Some(SuppressReason::PlanMode);
+    }
+    if ctx.rate_limit {
+        return Some(SuppressReason::RateLimit);
+    }
+    None
+}
+
+/// Pre-fork guards (steps 1-5 of TS `tryGenerateSuggestion`).
+///
+/// Returns `None` to proceed with the fork, or
+/// `Some(SuggestionOutcome::{Aborted,Suppressed})` to short-circuit
+/// before paying for the API call. Production callers run this
+/// **before** dispatching the fork — saving the round-trip for
+/// guards that don't need the model's response (TooFewTurns,
+/// ApiError, CacheCold, Disabled / PendingPermission / etc.).
+///
+/// TS: `services/PromptSuggestion/promptSuggestion.ts:136-163`
+/// (the inline checks before `generateSuggestion`).
+pub fn pre_fork_guards(ctx: &SuggestionContext, aborted_before: bool) -> Option<SuggestionOutcome> {
+    if aborted_before {
+        return Some(SuggestionOutcome::Aborted);
+    }
+    if ctx.assistant_turn_count < 2 {
+        return Some(SuggestionOutcome::Suppressed {
+            reason: SuppressReason::TooFewTurns,
+        });
+    }
+    if ctx.last_response_was_api_error {
+        return Some(SuggestionOutcome::Suppressed {
+            reason: SuppressReason::ApiError,
+        });
+    }
+    if ctx.parent_uncached_tokens > MAX_PARENT_UNCACHED_TOKENS {
+        return Some(SuggestionOutcome::Suppressed {
+            reason: SuppressReason::CacheCold,
+        });
+    }
+    if let Some(reason) = get_suggestion_suppress_reason(ctx) {
+        return Some(SuggestionOutcome::Suppressed { reason });
+    }
+    None
+}
+
+/// Post-fork validation (steps 7-9 of TS `tryGenerateSuggestion`).
+///
+/// Caller drives the fork and feeds the model's response text
+/// here. Returns `None` to proceed (caller renders the suggestion),
+/// or `Some(SuggestionOutcome::{Aborted,Empty,Filtered})` to drop
+/// the result.
+///
+/// TS: `services/PromptSuggestion/promptSuggestion.ts:171-181`
+/// (post-`generateSuggestion` checks).
+pub fn post_fork_validation(text: &str, aborted_after: bool) -> Option<SuggestionOutcome> {
+    if aborted_after {
+        return Some(SuggestionOutcome::Aborted);
+    }
     let trimmed = text.trim();
     if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("NONE") {
-        return None;
+        return Some(SuggestionOutcome::Empty);
     }
-    if trimmed.split_whitespace().count() > 24 {
-        return None;
+    if let Some(rule) = should_filter_suggestion(trimmed) {
+        return Some(SuggestionOutcome::Filtered { rule });
     }
-    Some(trimmed.to_string())
+    None
 }
 
-/// Write the model's suggestion onto [`ToolAppState`]. `request_id`
-/// correlates the suggestion with the parent turn that drove it
-/// (telemetry will pair acceptance / dwell metrics by id). `now_iso`
-/// is the wall-clock timestamp the caller measured — caller-supplied
-/// so the function stays pure and unit-testable.
+/// Run the full 9-step guard sequence + 12-rule filter end-to-end.
+///
+/// Convenience for unit tests; production callers should use
+/// [`pre_fork_guards`] + dispatch + [`post_fork_validation`] so
+/// the API round-trip is skipped when pre-flight fires.
+///
+/// TS source: `services/PromptSuggestion/promptSuggestion.ts:125-182`.
+pub fn try_generate_suggestion(
+    ctx: &SuggestionContext,
+    aborted_before: bool,
+    generation: Option<GenerationResult>,
+    aborted_after: bool,
+) -> SuggestionOutcome {
+    if let Some(outcome) = pre_fork_guards(ctx, aborted_before) {
+        return outcome;
+    }
+    let Some(result) = generation else {
+        return SuggestionOutcome::Error {
+            kind: "generation_returned_none".into(),
+        };
+    };
+    if let Some(outcome) = post_fork_validation(&result.text, aborted_after) {
+        return outcome;
+    }
+    SuggestionOutcome::Accepted {
+        text: result.text.trim().to_string(),
+        prompt_id: result.prompt_id,
+        request_id: result.request_id,
+    }
+}
+
+// ── Multi-message text walk ────────────────────────────────────
+
+/// Walk the fork's emitted messages in TS order and return the
+/// first non-empty text block in any assistant message.
+///
+/// TS: `services/PromptSuggestion/promptSuggestion.ts:332-349` —
+/// "model may loop (try tool → denied → text in next message)";
+/// this walk catches the text in turn 2 even when turn 1 was a
+/// (denied) tool call.
+pub fn extract_suggestion_text(messages: &[Message]) -> String {
+    extract_suggestion_generation(messages).text
+}
+
+/// Extract the suggestion text plus the first assistant request id.
+///
+/// TS captures the first assistant `requestId` for RL dataset joins,
+/// then walks messages forward for the first non-empty text block.
+pub fn extract_suggestion_generation(messages: &[Message]) -> ExtractedSuggestion {
+    let request_id = messages.iter().find_map(|m| match m {
+        coco_messages::Message::Assistant(a) => a.request_id.clone(),
+        _ => None,
+    });
+    let text = messages
+        .iter()
+        .filter_map(|m| match m {
+            coco_messages::Message::Assistant(a) => match &a.message {
+                coco_inference::LanguageModelMessage::Assistant { content, .. } => Some(content),
+                _ => None,
+            },
+            _ => None,
+        })
+        .flat_map(|content| content.iter())
+        .find_map(|part| match part {
+            coco_inference::AssistantContentPart::Text(t) => {
+                let trimmed = t.text.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            }
+            _ => None,
+        })
+        .unwrap_or_default();
+    ExtractedSuggestion { text, request_id }
+}
+
+// ── 12-rule filter (verbatim regex) ────────────────────────────
+//
+// Static regex patterns — `expect()` is the established pattern
+// for compile-time-validated regex (see
+// `core/tools/src/tools/web.rs::DDG_TITLE_PATTERN`). The
+// per-static `#[allow(clippy::expect_used)]` is required by the
+// workspace clippy policy — every `expect` callsite must explicitly
+// opt in.
+
+#[allow(clippy::expect_used)]
+static META_TEXT_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
+    // TS: `meta_text` rule — line 372-380
+    vec![
+        Regex::new(r"\bsilence is\b").expect("static regex compiles"),
+        Regex::new(r"\bstay(s|ing)? silent\b").expect("static regex compiles"),
+        Regex::new(r"^\W*silence\W*$").expect("static regex compiles"),
+    ]
+});
+
+#[allow(clippy::expect_used)]
+static META_WRAPPED_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^\(.*\)$|^\[.*\]$").expect("static regex compiles"));
+
+#[allow(clippy::expect_used)]
+static PREFIXED_LABEL_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^\w+:\s").expect("static regex compiles"));
+
+#[allow(clippy::expect_used)]
+static MULTIPLE_SENTENCES_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"[.!?]\s+[A-Z]").expect("static regex compiles"));
+
+#[allow(clippy::expect_used)]
+static HAS_FORMATTING_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"[\n*]|\*\*").expect("static regex compiles"));
+
+#[allow(clippy::expect_used)]
+static EVALUATIVE_RE: Lazy<Regex> = Lazy::new(|| {
+    // TS: `evaluative` rule — line 433-438
+    Regex::new(
+        r"thanks|thank you|looks good|sounds good|that works|that worked|that's all|nice|great|perfect|makes sense|awesome|excellent",
+    )
+    .expect("static regex compiles")
+});
+
+#[allow(clippy::expect_used)]
+static CLAUDE_VOICE_RE: Lazy<Regex> = Lazy::new(|| {
+    // TS: `claude_voice` rule — line 440-445 (case-insensitive)
+    Regex::new(
+        r"(?i)^(let me|i'll|i've|i'm|i can|i would|i think|i notice|here's|here is|here are|that's|this is|this will|you can|you should|you could|sure,|of course|certainly)",
+    )
+    .expect("static regex compiles")
+});
+
+static ERROR_MESSAGE_PREFIXES: &[&str] = &[
+    "api error:",
+    "prompt is too long",
+    "request timed out",
+    "invalid api key",
+    "image was too large",
+];
+
+static ALLOWED_SINGLE_WORDS_SET: Lazy<HashSet<&'static str>> =
+    Lazy::new(|| ALLOWED_SINGLE_WORDS.iter().copied().collect());
+
+/// Apply the 12 filter rules in TS order. Returns the first matching
+/// rule (or `None` to accept).
+///
+/// TS source: `services/PromptSuggestion/promptSuggestion.ts:354-456`.
+pub fn should_filter_suggestion(text: &str) -> Option<SuggestionFilter> {
+    let lower = text.to_ascii_lowercase();
+    let word_count = text.split_whitespace().count();
+
+    // Rule 1: bare "done"
+    if lower == "done" {
+        return Some(SuggestionFilter::Done);
+    }
+
+    // Rule 2: meta_text
+    if lower == "nothing found"
+        || lower == "nothing found."
+        || lower.starts_with("nothing to suggest")
+        || lower.starts_with("no suggestion")
+        || META_TEXT_PATTERNS.iter().any(|re| re.is_match(&lower))
+    {
+        return Some(SuggestionFilter::MetaText);
+    }
+
+    // Rule 3: meta_wrapped — `(silence — ...)`, `[no suggestion]`
+    if META_WRAPPED_RE.is_match(text) {
+        return Some(SuggestionFilter::MetaWrapped);
+    }
+
+    // Rule 4: error_message
+    if ERROR_MESSAGE_PREFIXES.iter().any(|p| lower.starts_with(p)) {
+        return Some(SuggestionFilter::ErrorMessage);
+    }
+
+    // Rule 5: prefixed_label
+    if PREFIXED_LABEL_RE.is_match(text) {
+        return Some(SuggestionFilter::PrefixedLabel);
+    }
+
+    // Rule 6: too_few_words (with allow-list)
+    if word_count < 2 {
+        // Slash commands are valid user inputs.
+        if !text.starts_with('/') && !ALLOWED_SINGLE_WORDS_SET.contains(lower.as_str()) {
+            return Some(SuggestionFilter::TooFewWords);
+        }
+    }
+
+    // Rule 7: too_many_words
+    if word_count > 12 {
+        return Some(SuggestionFilter::TooManyWords);
+    }
+
+    // Rule 8: too_long
+    if text.len() >= 100 {
+        return Some(SuggestionFilter::TooLong);
+    }
+
+    // Rule 9: multiple_sentences
+    if MULTIPLE_SENTENCES_RE.is_match(text) {
+        return Some(SuggestionFilter::MultipleSentences);
+    }
+
+    // Rule 10: has_formatting
+    if HAS_FORMATTING_RE.is_match(text) {
+        return Some(SuggestionFilter::HasFormatting);
+    }
+
+    // Rule 11: evaluative
+    if EVALUATIVE_RE.is_match(&lower) {
+        return Some(SuggestionFilter::Evaluative);
+    }
+
+    // Rule 12: claude_voice (case-insensitive in TS)
+    if CLAUDE_VOICE_RE.is_match(text) {
+        return Some(SuggestionFilter::ClaudeVoice);
+    }
+
+    None
+}
+
+// ── Cache-cold helper ──────────────────────────────────────────
+
+/// Compute parent's last-turn uncached token total per TS
+/// `getParentCacheSuppressReason` (`promptSuggestion.ts:241-255`).
+///
+/// `input + cache_creation_input + output` — caller compares
+/// against [`MAX_PARENT_UNCACHED_TOKENS`].
+pub fn parent_uncached_tokens(
+    input_tokens: i64,
+    cache_creation_input_tokens: i64,
+    output_tokens: i64,
+) -> i64 {
+    input_tokens + cache_creation_input_tokens + output_tokens
+}
+
+// ── App-state mutators ────────────────────────────────────────
+
+/// Write the model's suggestion onto [`ToolAppState`].
 pub fn record_suggestion(
     state: &mut ToolAppState,
     text: String,
@@ -119,17 +588,14 @@ pub fn record_suggestion(
     });
 }
 
-/// Drop the suggestion. Called from `/clear` regen and from the TUI
-/// after the user submits any prompt (so the next suggestion is
-/// based on the new turn, not the stale one).
+/// Drop the suggestion. Called from `/clear` regen and from the
+/// TUI after the user submits any prompt.
 pub fn clear_suggestion(state: &mut ToolAppState) {
     state.prompt_suggestion = None;
 }
 
 /// Mark the current suggestion as accepted. Returns true when there
-/// was a suggestion to mark; false otherwise. The TUI calls this
-/// when the user presses Tab/Right at the placeholder. Telemetry
-/// downstream emits a `suggestion_accepted` event with `prompt_id`.
+/// was a suggestion to mark; false otherwise.
 pub fn mark_accepted(state: &mut ToolAppState, now_iso: String) -> bool {
     if let Some(s) = state.prompt_suggestion.as_mut() {
         s.accepted_at = Some(now_iso);

@@ -13,6 +13,7 @@ use crate::prompt_layout::put_layout_options;
 use crate::retry::RetryConfig;
 use crate::usage::UsageAccumulator;
 use coco_config::ModelInfo;
+use coco_types::Capability;
 use coco_types::PromptCacheConfig;
 use coco_types::ThinkingLevel;
 use coco_types::TokenUsage;
@@ -278,6 +279,28 @@ impl ApiClient {
     #[must_use]
     pub fn supports_server_side_context_edits(&self) -> bool {
         matches!(self.fingerprint.api, coco_types::ProviderApi::Anthropic)
+    }
+
+    /// Whether this provider/model pair supports Anthropic-style prompt
+    /// cache markers.
+    ///
+    /// Mirrors TS's two-axis gate: provider family must support the wire
+    /// shape, and the resolved model must declare prompt-cache capability.
+    /// `None` model info is reserved for tests/mocks, where we stay
+    /// permissive so call-shape tests can exercise the path.
+    #[must_use]
+    pub fn supports_prompt_cache(&self) -> bool {
+        if !matches!(self.fingerprint.api, coco_types::ProviderApi::Anthropic) {
+            return false;
+        }
+        self.model_info
+            .as_ref()
+            .map(|m| {
+                m.capabilities
+                    .as_ref()
+                    .is_some_and(|caps| caps.contains(&Capability::PromptCache))
+            })
+            .unwrap_or(true)
     }
 
     /// Provider-options namespace key for this client (e.g. `"anthropic"`,

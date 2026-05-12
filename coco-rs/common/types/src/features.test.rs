@@ -45,6 +45,34 @@ fn defaults_for_experimental_gates() {
 }
 
 #[test]
+fn speculation_is_experimental_default_off() {
+    let f = Features::with_defaults();
+    assert!(
+        !f.enabled(Feature::Speculation),
+        "Speculation must default off (experimental)"
+    );
+    let info = all_features()
+        .find(|s| s.id == Feature::Speculation)
+        .unwrap();
+    assert_eq!(info.key, "speculation");
+    assert!(matches!(info.stage, Stage::Experimental { .. }));
+    assert_eq!(
+        info.stage.experimental_menu_name(),
+        Some("Speculation"),
+        "menu name registered"
+    );
+}
+
+#[test]
+fn feature_keys_unique() {
+    let mut keys: Vec<&'static str> = all_features().map(|s| s.key).collect();
+    keys.sort_unstable();
+    let len_before = keys.len();
+    keys.dedup();
+    assert_eq!(keys.len(), len_before, "feature wire keys must be unique");
+}
+
+#[test]
 fn empty_starts_with_no_features() {
     let f = Features::empty();
     for spec in all_features() {

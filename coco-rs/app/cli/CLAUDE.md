@@ -51,3 +51,30 @@ Config: `--settings`, `--setting-sources`, `--system-prompt`, `--append-system-p
 Model: `--model`, `--fallback-model`, `--betas`, `--agent`, `--thinking`, `--thinking-budget`, `--max-thinking-tokens`, `--effort`
 Worktree/bg: `--worktree`, `--bg`
 SDK: `--replay-user-messages`, `--include-hook-events`, `--include-partial-messages`
+
+## Stop Hooks Dispatch Order
+
+Post-turn hooks fire from `coco_query::engine_finalize_turn` in
+TS-parity order (`query/stopHooks.ts:133-157`):
+
+1. **bareMode gate** — `--bare` mode skips all post-turn forks (no
+   prompt suggestion, no memory extraction, no auto-dream). Used
+   by SDK / scripted `-p` invocations that don't want background
+   work after each turn.
+2. **promptSuggestion** — fires unconditionally (subject to its
+   own 9-step guard sequence in
+   `coco_query::prompt_suggestion::try_generate_suggestion`).
+3. **extractMemories** — fires when `MemoryConfig.extraction_enabled`
+   AND `agent_id.is_none()` (subagents don't extract).
+4. **autoDream** — fires when `MemoryConfig.dream_enabled` AND
+   `agent_id.is_none()`. The 3-gate scheduler (`memory/src/service/dream.rs`)
+   then internally checks 24h elapsed + 5 distinct sessions + PID
+   lock before paying for the consolidation.
+
+Each fork dispatches via `coco_query::forked_agent::ForkDispatcher`
+(installed by `fork_dispatcher::install` at session bootstrap).
+The dispatcher threads the parent's `CacheSafeParams` so the
+child's API request prefix matches byte-for-byte — TS parity
+`runForkedAgent`. Per-fork `canUseTool` policies live in
+`coco-memory::can_use_tool` (auto-mem + session-mem); promptSuggestion
++ side_question + agent_summary use `deny_all_handle`.

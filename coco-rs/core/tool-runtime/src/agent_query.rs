@@ -35,6 +35,11 @@ pub struct AgentQueryConfig {
     /// Context window size (tokens). Defaults to model's max.
     #[serde(default)]
     pub context_window: Option<i64>,
+    /// Prompt-cache directive inherited from a parent fork context.
+    /// Fork callers preserve the parent's cache-key fields and only set
+    /// `skip_cache_write` for fire-and-forget runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_cache: Option<coco_types::PromptCacheConfig>,
     /// Maximum output tokens per turn. Defaults to model's max.
     #[serde(default)]
     pub max_output_tokens: Option<i64>,
@@ -206,6 +211,35 @@ pub struct AgentQueryConfig {
     /// — `mpsc::Sender` doesn't serialise.
     #[serde(skip)]
     pub event_tx: Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+
+    /// Per-fork tool-execution gate. Threaded onto the child engine's
+    /// `ToolUseContext.can_use_tool` so app/query enforces the policy
+    /// before the static permission evaluator. `None` preserves
+    /// existing behavior — no callback runs. TS parity:
+    /// `utils/forkedAgent.ts` `runForkedAgent({canUseTool})`.
+    #[serde(skip)]
+    pub can_use_tool: Option<crate::can_use_tool::CanUseToolHandleRef>,
+
+    /// When `true`, hook auto-approve cannot bypass the `can_use_tool`
+    /// callback. TS: `requireCanUseTool`.
+    #[serde(default)]
+    pub require_can_use_tool: bool,
+
+    /// Typed fork discriminator for telemetry / log structured fields.
+    /// When set, the engine's `query_source_label()` returns this
+    /// string so log readers tell apart the 9 fork variants. TS:
+    /// `runForkedAgent({forkLabel})`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fork_label: Option<coco_types::ForkLabel>,
+
+    /// Hard cap on output tokens. **WARNING**: setting this clamps
+    /// `budget_tokens`, invalidates parent prompt cache. PR #18143
+    /// incident — setting `effort: 'low'` on prompt-suggestion forks
+    /// dropped cache hit rate from 92.7% → 61% (45× spike in cache
+    /// writes). Only set when cache parity is not a goal (e.g.
+    /// compact summaries that intentionally use a different model).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens_override: Option<i64>,
 }
 
 /// Result of a multi-turn agent query.

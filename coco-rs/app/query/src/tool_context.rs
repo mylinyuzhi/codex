@@ -236,7 +236,23 @@ impl ToolContextFactory {
             },
             tool_use_id: None,
             user_message_id: overrides.user_message_id,
-            agent_id: self.config.agent_id.as_ref().map(AgentId::new),
+            // Fork isolation: when fork_isolation is set and the
+            // config didn't pre-supply an agent_id, auto-gen one
+            // (TS parity: `forkedAgent.ts::createSubagentContext`
+            // always allocates a fresh agentId per fork).
+            agent_id: self
+                .config
+                .agent_id
+                .clone()
+                .or_else(|| {
+                    self.config.fork_isolation.as_ref().map(|iso| {
+                        iso.agent_id
+                            .clone()
+                            .unwrap_or_else(|| crate::fork_context::auto_agent_id(iso.fork_label))
+                    })
+                })
+                .as_ref()
+                .map(AgentId::new),
             agent_type: None,
             // T7: agent catalog snapshot. Filled when the session
             // bootstrap calls `ToolContextFactory::with_agent_catalog`;
@@ -251,7 +267,15 @@ impl ToolContextFactory {
             discovered_skill_names: Default::default(),
             tool_decisions: Default::default(),
             user_modified: false,
-            require_can_use_tool: false,
+            // Fork isolation honors `require_can_use_tool` flag —
+            // speculation needs this so overlay path-rewrites always
+            // run regardless of hook auto-approve config.
+            require_can_use_tool: self
+                .config
+                .fork_isolation
+                .as_ref()
+                .map(|iso| iso.require_can_use_tool)
+                .unwrap_or(false),
             preserve_tool_use_results: false,
             rendered_system_prompt: None,
             critical_system_reminder: None,
@@ -282,9 +306,22 @@ impl ToolContextFactory {
             cwd_override: self.config.cwd_override.clone(),
             // Memdir-only write fence for sandboxed subagents (memory
             // extraction / auto-dream). Empty when the parent session
-            // didn't install one.
-            allowed_write_roots: self.config.allowed_write_roots.clone(),
+            // didn't install one. Fork isolation can override this
+            // per-fork (e.g. memory services pin to memory_dir).
+            allowed_write_roots: self
+                .config
+                .fork_isolation
+                .as_ref()
+                .filter(|iso| !iso.allowed_write_roots.is_empty())
+                .map(|iso| iso.allowed_write_roots.clone())
+                .unwrap_or_else(|| self.config.allowed_write_roots.clone()),
             permission_bridge: self.permission_bridge.clone(),
+            // Per-fork canUseTool callback. Threaded from
+            // QueryEngineConfig (set by ForkedAgentOptions →
+            // fork_dispatcher) onto every ToolUseContext built for
+            // this engine, so the preparer gates every tool call
+            // before static permission evaluation.
+            can_use_tool: self.config.can_use_tool.clone(),
             progress_tx: overrides.progress_tx,
             task_handle: self.task_handle.clone(),
             task_list: self
@@ -305,9 +342,32 @@ impl ToolContextFactory {
                 .app_state
                 .as_ref()
                 .map(|arc| AppStateReadHandle::new(arc.clone())),
-            local_denial_tracking: None,
-            query_chain_id: None,
-            query_depth: 0,
+            // Fork isolation: fresh DenialTrackingState per fork so
+            // a fork's denials don't leak into the parent's
+            // consecutive-denial counter (TS parity:
+            // `createSubagentContext` always creates a fresh
+            // `denialTrackingState`).
+            local_denial_tracking: self.config.fork_isolation.as_ref().map(|_| {
+                Arc::new(RwLock::new(
+                    coco_tool_runtime::context::DenialTrackingState::new(),
+                ))
+            }),
+            // Query-tracking chain id: forks start a fresh UUID so
+            // telemetry can group fork traffic separately from main
+            // loop. TS: `queryTracking.chainId = randomUUID()`.
+            query_chain_id: self
+                .config
+                .fork_isolation
+                .as_ref()
+                .map(|_| uuid::Uuid::new_v4().to_string()),
+            // Query-tracking depth: parent depth + 1 (capped at 16).
+            // TS: `queryTracking.depth = parent.depth + 1`.
+            query_depth: self
+                .config
+                .fork_isolation
+                .as_ref()
+                .map(|iso| iso.child_query_depth())
+                .unwrap_or(0),
         }
     }
 }

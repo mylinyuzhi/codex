@@ -196,11 +196,12 @@ impl SessionMemoryService {
             had_tool_calls_in_last_turn,
             "session-memory extract dispatch"
         );
-        self.run(
+        self.run_with_label(
             current_tokens,
             tool_calls_since_last_extraction,
             last_message_id,
             had_tool_calls_in_last_turn,
+            coco_types::ForkLabel::SessionMemoryAuto,
         )
         .await
     }
@@ -228,11 +229,12 @@ impl SessionMemoryService {
         // manual cadence is measurable independently.
         self.telemetry
             .emit(MemoryEvent::SessionMemoryManualExtraction);
-        self.run(
+        self.run_with_label(
             current_tokens,
             0,
             last_message_id,
             had_tool_calls_in_last_turn,
+            coco_types::ForkLabel::SessionMemoryManual,
         )
         .await
     }
@@ -359,12 +361,13 @@ impl SessionMemoryService {
         *state = SessionState::default();
     }
 
-    async fn run(
+    async fn run_with_label(
         &self,
         current_tokens: i64,
         tool_calls_since_last_extraction: i32,
         last_message_id: Option<String>,
         had_tool_calls_in_last_turn: bool,
+        fork_label: coco_types::ForkLabel,
     ) -> SessionMemoryOutcome {
         let start = Instant::now();
         {
@@ -455,6 +458,20 @@ impl SessionMemoryService {
             // SM file's read/edit machinery. Matches our consistent
             // policy across all three memory subagents.
             skip_transcript: true,
+            // TS `sessionMemory.ts:318` `canUseTool: createSessionMemCanUseTool(memoryPath)`.
+            // Session-mem policy is tighter than auto-mem: Edit
+            // ONLY on the canonical SM file path, Read otherwise.
+            // This guarantees the session-memory update can't
+            // sprawl into other files even if the model tries.
+            can_use_tool: Some(crate::can_use_tool::create_session_mem_handle(
+                self.file_path.clone(),
+            )),
+            require_can_use_tool: false,
+            // TS parity: auto cadence vs `/summary` manual trigger
+            // emit distinct labels so analytics can split them.
+            // `force()` passes `SessionMemoryManual`; auto path via
+            // `maybe_extract` passes `SessionMemoryAuto`.
+            fork_label: Some(fork_label),
             ..Default::default()
         };
 

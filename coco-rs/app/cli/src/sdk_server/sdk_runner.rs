@@ -134,6 +134,15 @@ impl TurnRunner for QueryEngineRunner {
                     runtime_config.loop_config.max_turns.unwrap_or(max_turns)
                 },
                 max_tokens: runtime_config.loop_config.max_tokens.map(i64::from),
+                prompt_cache: runtime.client.supports_prompt_cache().then(|| {
+                    coco_types::PromptCacheConfig {
+                        mode: coco_types::PromptCacheMode::Auto,
+                        ttl: coco_types::CacheTtl::OneHour,
+                        scope: None,
+                        requested_betas: Default::default(),
+                        skip_cache_write: false,
+                    }
+                }),
                 system_prompt,
                 streaming_tool_execution: runtime_config.loop_config.enable_streaming_tools,
                 session_id: handoff.session_id.clone(),
@@ -278,13 +287,42 @@ impl TurnRunner for QueryEngineRunner {
                             req.display_text
                         ),
                         Some(dispatcher) => {
-                            let options = coco_query::forked_agent::one_shot_options("/btw");
+                            let mut options =
+                                coco_query::forked_agent::ForkedAgentOptions::for_label(
+                                    coco_types::ForkLabel::SideQuestion,
+                                );
+                            options.can_use_tool = Some(coco_query::forked_agent::deny_all_handle(
+                                "side question: tools disabled",
+                            ));
                             match dispatcher
                                 .dispatch(&cache, &options, &req.question, None)
                                 .await
                             {
                                 Ok(result) => {
-                                    format!("{}\n\n{}", req.display_text, result.text)
+                                    // P1 single-message walk; PR 4a will
+                                    // promote this to the full
+                                    // multi-message text walk pattern.
+                                    let text = result
+                                        .messages
+                                        .iter()
+                                        .rev()
+                                        .find_map(|m| match m {
+                                            coco_messages::Message::Assistant(a) => match &a.message {
+                                                coco_inference::LanguageModelMessage::Assistant {
+                                                    content,
+                                                    ..
+                                                } => content.iter().rev().find_map(|p| match p {
+                                                    coco_inference::AssistantContentPart::Text(t) => {
+                                                        Some(t.text.clone())
+                                                    }
+                                                    _ => None,
+                                                }),
+                                                _ => None,
+                                            },
+                                            _ => None,
+                                        })
+                                        .unwrap_or_default();
+                                    format!("{}\n\n{}", req.display_text, text)
                                 }
                                 Err(e) => {
                                     format!("{}\n(side-question failed: {e})", req.display_text)

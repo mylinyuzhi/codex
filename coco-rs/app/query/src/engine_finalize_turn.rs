@@ -437,6 +437,13 @@ impl QueryEngine {
             }
         }
 
+        // Stop-hooks gate (TS `query/stopHooks.ts:136-157`): bare
+        // mode skips the entire post-turn fan-out (promptSuggestion +
+        // extractMemories + sessionMemory + autoDream). Used by
+        // `--bare` SDK / scripted `-p` invocations that don't want
+        // background work after each turn.
+        let bare_mode_active = coco_config::env::is_env_truthy(coco_config::EnvKey::CocoBareMode);
+
         // Auto-memory turn-end fan-out (TS feature `AutoMemory`): fire
         // the 9-section session memory, the forked extraction service,
         // and the auto-dream gate-check concurrently. All three gate
@@ -446,7 +453,8 @@ impl QueryEngine {
         // its time+scan gates pass. TS parity: `handleStopHooks`
         // dispatches `executeExtractMemories` + `executeAutoDream` on
         // every turn-end alongside session-memory updates.
-        if let Some(runtime) = self.memory_runtime.clone()
+        if !bare_mode_active
+            && let Some(runtime) = self.memory_runtime.clone()
             && self.config.agent_id.is_none()
         {
             let last_cursor = runtime.extract.last_cursor().await;
@@ -623,30 +631,6 @@ impl QueryEngine {
         // updates the slot.
         self.save_post_turn_cache_params(history).await;
 
-        // P5 / A3: kick off the post-turn promptSuggestion fork when
-        // the gate allows. The helper checks env, plan-mode,
-        // non-interactive, and pending-plan-approval; all four must
-        // be open for a suggestion to fire. The actual fork runs in
-        // a detached task so the turn can finalise immediately —
-        // the suggestion lands on `ToolAppState.prompt_suggestion`
-        // when the model responds (the TUI consumer reads from there).
-        // TS parity: `query/stopHooks.ts:139` `executePromptSuggestion`.
-        if let Some(app_state) = self.app_state.as_ref() {
-            let env_disable =
-                coco_config::env::is_env_truthy(coco_config::EnvKey::CocoPromptSuggestionDisable);
-            let is_non_interactive = self.config.is_non_interactive;
-            let snapshot = app_state.read().await;
-            let should = crate::prompt_suggestion::should_suggest(
-                &snapshot,
-                is_non_interactive,
-                env_disable,
-            );
-            drop(snapshot);
-            if should {
-                self.spawn_prompt_suggestion_task(app_state.clone()).await;
-            }
-        }
-
         // Per-turn JSONL transcript append. Walks `history` and writes
         // any user/assistant/system/attachment message whose uuid isn't
         // already in the cross-engine dedup set. Skips silently when
@@ -739,12 +723,31 @@ impl QueryEngine {
     /// - dispatch error (transport crash etc.)
     /// - empty / placeholder-only response from the model
     ///
+    /// TS parity: `query.ts` calls `handleStopHooks()` only when the
+    /// assistant did not request follow-up tool execution; `stopHooks.ts`
+    /// then starts `executePromptSuggestion()` under the non-bare gate.
+    pub(crate) async fn maybe_spawn_prompt_suggestion_after_stop(
+        &self,
+        event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
+    ) {
+        if coco_config::env::is_env_truthy(coco_config::EnvKey::CocoBareMode) {
+            return;
+        }
+        let Some(app_state) = self.app_state.as_ref() else {
+            return;
+        };
+        prune_stale_rate_limits(app_state).await;
+        self.spawn_prompt_suggestion_task(app_state.clone(), event_tx.clone())
+            .await;
+    }
+
     /// TS parity: `services/PromptSuggestion/promptSuggestion.ts`
-    /// calls `runForkedAgent` with the bespoke suggestion system
-    /// prompt and `effort: undefined` (cache parity preserved).
+    /// calls `runForkedAgent` with the bespoke suggestion prompt as a
+    /// user message and `effort: undefined` (cache parity preserved).
     async fn spawn_prompt_suggestion_task(
         &self,
         app_state: std::sync::Arc<tokio::sync::RwLock<coco_types::ToolAppState>>,
+        event_tx: Option<tokio::sync::mpsc::Sender<CoreEvent>>,
     ) {
         let cache = match self.last_cache_safe_params().await {
             Some(c) => c,
@@ -754,46 +757,211 @@ impl QueryEngine {
             Some(d) => d,
             None => return,
         };
-        // Detach: the suggestion is fire-and-forget. The parent turn
-        // has already emitted `TurnCompleted`; we don't want a slow
-        // suggestion fork blocking the next user prompt.
+
+        // Build the 9-step `SuggestionContext` from the parent's
+        // cache + app_state snapshot BEFORE spawning. The pre-fork
+        // guards (TooFewTurns / ApiError / CacheCold / suppress
+        // reasons) save the API round-trip when they fire — TS
+        // parity: `services/PromptSuggestion/promptSuggestion.ts:136-163`
+        // runs these checks before `generateSuggestion`.
+        let ctx = build_suggestion_context(
+            &cache,
+            &app_state,
+            self.config.is_non_interactive,
+            self.config.is_teammate,
+        )
+        .await;
+        if let Some(outcome) = crate::prompt_suggestion::pre_fork_guards(&ctx, false) {
+            tracing::debug!(
+                outcome = ?outcome,
+                "promptSuggestion suppressed by pre-fork guard"
+            );
+            return;
+        }
+
+        // TS `currentAbortController` singleton: cancel any prior
+        // in-flight suggestion fork before starting a new one. This
+        // means rapid `/clear` cycles don't accumulate fork tasks
+        // burning tokens. Allocate a fresh token, store it under the
+        // session-scoped slot, hand a clone to the spawn so the next
+        // spawn can cancel cleanly.
+        let abort_token = tokio_util::sync::CancellationToken::new();
+        if let Some(slot) = self.current_suggestion_abort.as_ref() {
+            let mut guard = slot.lock().await;
+            if let Some(prev) = guard.replace(abort_token.clone()) {
+                prev.cancel();
+            }
+        }
+
+        // Detach: the suggestion is fire-and-forget. The parent turn is
+        // finalizing; we don't want a slow suggestion fork blocking the
+        // next user prompt.
+        let abort_for_task = abort_token.clone();
         tokio::spawn(async move {
-            let options = crate::forked_agent::one_shot_options("promptSuggestion");
-            let system = crate::prompt_suggestion::build_suggestion_system_prompt().to_string();
-            // The fork sees a special-purpose system prompt + the
-            // parent's history; the user message is intentionally
-            // empty (TS does the same — the model is told via the
-            // system prompt to produce a suggestion based on what
-            // came before). Some providers reject a literally empty
-            // user message, so we send a single space.
-            let result = dispatcher
-                .dispatch(&cache, &options, " ", Some(system))
-                .await;
+            // Bail if a newer spawn already cancelled this fork before
+            // we got scheduled.
+            if abort_for_task.is_cancelled() {
+                return;
+            }
+            // Install deny-all canUseTool so the fork can't actually
+            // invoke tools (TS: `runForkedAgent({canUseTool: deny-all})`
+            // at promptSuggestion.ts:302-306).
+            let mut options = crate::forked_agent::ForkedAgentOptions::for_label(
+                coco_types::ForkLabel::PromptSuggestion,
+            );
+            options.can_use_tool = Some(crate::forked_agent::deny_all_handle(
+                "prompt suggestion: tools disabled",
+            ));
+            options.overrides.abort = Some(abort_for_task.clone());
+            let prompt = crate::prompt_suggestion::build_suggestion_system_prompt().to_string();
+            // The fork sees the parent's system prompt/cache-key
+            // params unchanged; the suggestion instruction is appended
+            // as the fork's user message, matching TS runForkedAgent.
+            let result = dispatcher.dispatch(&cache, &options, &prompt, None).await;
             match result {
                 Ok(r) => {
-                    let text = r.text.trim();
-                    // Filter empty / NONE / overly-long responses
-                    // (matches TS's filter logic which guards against
-                    // model NACKs and rejects out-of-band noise).
-                    if text.is_empty() || text.eq_ignore_ascii_case("NONE") || text.len() > 200 {
+                    // Multi-message text walk (TS:332-349 — "model
+                    // may loop (try tool → denied → text in next
+                    // message)"). Walks every assistant message and
+                    // finds the first non-empty text block.
+                    let generation =
+                        crate::prompt_suggestion::extract_suggestion_generation(&r.messages);
+                    // Post-fork validation (steps 7-9): aborted /
+                    // empty / NONE / 12-rule filter. TS:
+                    // promptSuggestion.ts:171-181.
+                    let aborted_after = abort_for_task.is_cancelled();
+                    if let Some(outcome) = crate::prompt_suggestion::post_fork_validation(
+                        &generation.text,
+                        aborted_after,
+                    ) {
+                        tracing::debug!(
+                            outcome = ?outcome,
+                            text_len = generation.text.len(),
+                            "promptSuggestion dropped by post-fork validation"
+                        );
                         return;
                     }
                     let prompt_id = uuid::Uuid::new_v4().to_string();
                     let now = chrono::Utc::now().to_rfc3339();
+                    let suggestion = generation.text.trim().to_string();
                     let mut state = app_state.write().await;
                     crate::prompt_suggestion::record_suggestion(
                         &mut state,
-                        text.to_string(),
+                        suggestion.clone(),
                         prompt_id,
                         now,
-                        None,
+                        generation.request_id,
                     );
+                    drop(state);
+                    let _delivered = emit_protocol(
+                        &event_tx,
+                        ServerNotification::PromptSuggestion {
+                            suggestions: vec![suggestion],
+                        },
+                    )
+                    .await;
                 }
                 Err(e) => {
                     tracing::debug!(error = %e, "promptSuggestion fork dispatch failed");
                 }
             }
         });
+    }
+}
+
+/// Build a [`crate::prompt_suggestion::SuggestionContext`] from the
+/// parent engine's cache slot + app_state snapshot. Used by the
+/// pre-fork guards to short-circuit before the API round-trip.
+///
+/// `assistant_turn_count` and `last_response_was_api_error` come from
+/// deserializing the cache slot's `fork_context_messages`;
+/// `parent_uncached_tokens` is the last assistant's
+/// `input + cache_creation_input + output` tokens (TS
+/// `getParentCacheSuppressReason`). Other fields come from
+/// `ToolAppState`.
+async fn build_suggestion_context(
+    cache: &coco_types::CacheSafeParams,
+    app_state: &std::sync::Arc<tokio::sync::RwLock<coco_types::ToolAppState>>,
+    is_non_interactive: bool,
+    is_teammate: bool,
+) -> crate::prompt_suggestion::SuggestionContext {
+    let mut assistant_turn_count: u32 = 0;
+    let mut last_assistant_msg: Option<coco_messages::Message> = None;
+    for v in &cache.fork_context_messages {
+        if let Ok(m) = serde_json::from_value::<coco_messages::Message>(v.clone())
+            && matches!(m, coco_messages::Message::Assistant(_))
+        {
+            assistant_turn_count = assistant_turn_count.saturating_add(1);
+            last_assistant_msg = Some(m);
+        }
+    }
+
+    let (last_response_was_api_error, parent_uncached_tokens) = match &last_assistant_msg {
+        Some(coco_messages::Message::Assistant(a)) => {
+            let api_error = a.api_error.is_some();
+            let usage = a.usage.unwrap_or_default();
+            let tokens = crate::prompt_suggestion::parent_uncached_tokens(
+                usage.input_tokens,
+                usage.cache_creation_input_tokens(),
+                usage.output_tokens,
+            );
+            (api_error, tokens)
+        }
+        _ => (false, 0),
+    };
+
+    let snap = app_state.read().await;
+    let plan_mode = matches!(snap.permission_mode, Some(coco_types::PermissionMode::Plan));
+    let awaiting_plan_approval = snap.awaiting_plan_approval;
+    // Phase 7 wire-up: read live counters from `ToolAppState`. Both
+    // counters are `Arc<AtomicU32>`, mutated lock-free by RAII guards
+    // held by the TUI permission bridge (`pending_permission_count`)
+    // and the MCP elicitation service (`elicitation_pending_count`).
+    let pending_permission = snap
+        .pending_permission_count
+        .load(std::sync::atomic::Ordering::Relaxed)
+        > 0;
+    let elicitation_active = snap
+        .elicitation_pending_count
+        .load(std::sync::atomic::Ordering::Relaxed)
+        > 0;
+    // Phase 7c: selective rate-limit suppression — `rate_limits` is
+    // keyed by provider instance name; we look up the cache's
+    // recorded provider so fast-mode swaps are honoured (the parent
+    // turn captured the literally-active provider).
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let rate_limit = if cache.provider.is_empty() {
+        // Pre-Phase-7 transcripts may carry empty `provider` (serde
+        // default). Without a key we can't match selectively; fail
+        // open (no suppression) to avoid silencing all suggestions.
+        false
+    } else {
+        snap.rate_limits
+            .get(&cache.provider)
+            .map(|e| {
+                matches!(e.status, coco_types::RateLimitStatus::Rejected)
+                    && e.reset_at_ms.is_none_or(|r| now_ms < r)
+            })
+            .unwrap_or(false)
+    };
+    let env_disable =
+        coco_config::env::is_env_truthy(coco_config::EnvKey::CocoPromptSuggestionDisable);
+    let bare_mode = coco_config::env::is_env_truthy(coco_config::EnvKey::CocoBareMode);
+    drop(snap);
+
+    crate::prompt_suggestion::SuggestionContext {
+        assistant_turn_count,
+        last_response_was_api_error,
+        parent_uncached_tokens,
+        disabled: env_disable,
+        pending_permission,
+        is_teammate,
+        awaiting_plan_approval,
+        elicitation_active,
+        plan_mode,
+        rate_limit,
+        bare_mode,
+        non_interactive: is_non_interactive,
     }
 }
 
@@ -1104,6 +1272,24 @@ async fn apply_tool_result_budget_to_history(
                 coco_inference::LanguageModelMessage::user_text(trb::TOOL_RESULT_CLEARED_MESSAGE);
         }
     }
+}
+
+/// Phase 7c: prune `rate_limits` entries whose `reset_at_ms` has
+/// passed. Called from `finalize_turn_post_tools` immediately before
+/// `spawn_prompt_suggestion_task` reads the map. Bounded keyspace
+/// (≤ #configured providers) means pruning is O(few entries) per
+/// finalize and there's no hot-path concern.
+///
+/// Entries with `reset_at_ms = None` (no reset header surfaced) are
+/// retained — they get overwritten on the next successful or failing
+/// call from the same provider. Bounded by the keyspace anyway.
+async fn prune_stale_rate_limits(
+    app_state: &std::sync::Arc<tokio::sync::RwLock<coco_types::ToolAppState>>,
+) {
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let mut snap = app_state.write().await;
+    snap.rate_limits
+        .retain(|_, e| e.reset_at_ms.is_none_or(|r| r > now_ms));
 }
 
 #[cfg(test)]

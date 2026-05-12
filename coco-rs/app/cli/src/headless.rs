@@ -631,6 +631,15 @@ pub async fn run_chat_with_options(
         max_tokens: cli
             .max_tokens
             .or_else(|| runtime_config.loop_config.max_tokens.map(i64::from)),
+        prompt_cache: client
+            .supports_prompt_cache()
+            .then(|| coco_types::PromptCacheConfig {
+                mode: coco_types::PromptCacheMode::Auto,
+                ttl: coco_types::CacheTtl::OneHour,
+                scope: None,
+                requested_betas: Default::default(),
+                skip_cache_write: false,
+            }),
         system_prompt: Some(system_prompt),
         streaming_tool_execution: runtime_config.loop_config.enable_streaming_tools,
         project_dir: Some(

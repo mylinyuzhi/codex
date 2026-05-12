@@ -35,17 +35,15 @@
       }
     },
     {
-      "description": "AskUserQuestion overlay needed.",
+      "description": "AskUserQuestion overlay needed. `input` carries the full tool input dict (the `questions[]` array, etc.) verbatim so the TUI renders the rich multi-question UI (multiSelect, preview, notes) matching TS `AskUserQuestionPermissionRequest.tsx`. The TUI echoes the answer payload back via `UserCommand::ApprovalResponse` with `updated_input = Some({...input, answers, annotations})`.",
       "type": "object",
       "required": [
-        "message",
+        "input",
         "request_id",
         "type"
       ],
       "properties": {
-        "message": {
-          "type": "string"
-        },
+        "input": true,
         "request_id": {
           "type": "string"
         },

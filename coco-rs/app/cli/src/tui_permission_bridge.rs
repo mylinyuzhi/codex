@@ -51,15 +51,30 @@ use coco_query::CoreEvent;
 use coco_tool_runtime::{
     ToolPermissionBridge, ToolPermissionDecision, ToolPermissionRequest, ToolPermissionResolution,
 };
+use coco_types::PendingPermissionGuard;
 use coco_types::TuiOnlyEvent;
 use tokio::sync::{RwLock, mpsc, oneshot};
 use tracing::warn;
 
 use crate::session_runtime::SessionRuntime;
 
+/// One pending approval: the oneshot sender for the resolution + the
+/// RAII guard that keeps `ToolAppState.pending_permission_count`
+/// incremented while this entry is live. When the entry is removed
+/// (via `resolve_pending` or the bridge's drop-cleanup path), the
+/// guard drops, decrementing the counter exactly once. Lock-free.
+pub struct PendingApprovalEntry {
+    pub sender: oneshot::Sender<ToolPermissionResolution>,
+    /// `None` for entries created before the runtime weak-ref is
+    /// installed (tests / very-early-bootstrap). Production runtimes
+    /// always have `Some` because `set_notification_runtime` lands
+    /// before any tool can fire `request_permission`.
+    pub _guard: Option<PendingPermissionGuard>,
+}
+
 /// Shared sender side of pending approvals — keyed by `request_id` so
 /// `resolve_pending` can route the matching response back.
-pub type PendingApprovals = Arc<RwLock<HashMap<String, oneshot::Sender<ToolPermissionResolution>>>>;
+pub type PendingApprovals = Arc<RwLock<HashMap<String, PendingApprovalEntry>>>;
 
 /// Build a fresh empty pending map. Hand the same `Arc` to
 /// [`TuiPermissionBridge::new`] AND the tui_runner's
@@ -100,6 +115,25 @@ impl TuiPermissionBridge {
     pub async fn set_notification_runtime(&self, weak: Weak<SessionRuntime>) {
         *self.notification_runtime.write().await = Some(weak);
     }
+
+    /// Resolve the `Arc<AtomicU32>` counter on
+    /// `ToolAppState.pending_permission_count` via the late-bound
+    /// runtime Weak. Returns `None` when the runtime hasn't been
+    /// bound yet (test fixtures / startup race) — caller treats that
+    /// as "no counter, skip the increment" so prompt-suggestion
+    /// suppression degrades gracefully instead of panicking.
+    async fn pending_permission_counter(
+        &self,
+    ) -> Option<std::sync::Arc<std::sync::atomic::AtomicU32>> {
+        let runtime = self
+            .notification_runtime
+            .read()
+            .await
+            .as_ref()
+            .and_then(Weak::upgrade)?;
+        let snap = runtime.app_state.read().await;
+        Some(snap.pending_permission_count.clone())
+    }
 }
 
 #[async_trait]
@@ -112,10 +146,27 @@ impl ToolPermissionBridge for TuiPermissionBridge {
         // emitting the event. Reverse order risks a fast-path race
         // where the user clicks Approve before the entry exists and
         // the resolver finds nothing to send to.
+        //
+        // Acquire a `PendingPermissionGuard` here so the entry's
+        // lifetime is the canonical signal for "is the user staring
+        // at a permission overlay?". The guard drops when the entry
+        // is removed from the map (resolve_pending path) OR when the
+        // bridge's cleanup branches below remove it on channel close.
+        // Counter Arc is fetched via the late-bound Weak<SessionRuntime>
+        // — `None` only in test / very-early-bootstrap paths where
+        // the runtime hasn't been bound yet.
+        let pending_perm_counter = self.pending_permission_counter().await;
+        let guard = pending_perm_counter.map(PendingPermissionGuard::acquire);
         let (tx, rx) = oneshot::channel();
         {
             let mut pending = self.pending.write().await;
-            pending.insert(request.id.clone(), tx);
+            pending.insert(
+                request.id.clone(),
+                PendingApprovalEntry {
+                    sender: tx,
+                    _guard: guard,
+                },
+            );
         }
 
         // TS `useNotifyAfterTimeout('Claude Code is waiting for your input',
@@ -223,11 +274,13 @@ pub async fn resolve_pending(
     updated_input: Option<serde_json::Value>,
     content_blocks: Option<Vec<serde_json::Value>>,
 ) -> bool {
-    let sender = {
+    // Removing the entry drops its `_guard` field, decrementing the
+    // pending_permission_count exactly once via `Drop`. Lock-free.
+    let entry = {
         let mut map = pending.write().await;
         map.remove(request_id)
     };
-    let Some(tx) = sender else {
+    let Some(entry) = entry else {
         warn!(%request_id, "ApprovalResponse for unknown request_id (stale or already resolved)");
         return false;
     };
@@ -242,7 +295,7 @@ pub async fn resolve_pending(
         updated_input,
         content_blocks,
     };
-    tx.send(resolution).is_ok()
+    entry.sender.send(resolution).is_ok()
 }
 
 #[cfg(test)]

@@ -27,6 +27,7 @@ mod engine_helpers;
 mod engine_prompt;
 mod engine_session;
 mod engine_turn_reminders;
+pub mod fork_context;
 pub mod forked_agent;
 mod helpers;
 mod hook_adapter;

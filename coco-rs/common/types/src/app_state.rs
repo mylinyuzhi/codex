@@ -18,8 +18,12 @@
 use crate::AgentColorName;
 use crate::PermissionMode;
 use crate::PermissionRulesBySource;
+use crate::RateLimitEntry;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::Ordering;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
@@ -249,6 +253,99 @@ pub struct ToolAppState {
     ///
     /// TS parity: `appState.standaloneAgentContext.color` (`commands/color/color.ts:54-89`).
     pub agent_color: Option<AgentColorName>,
+
+    // ── Stub-field wire-up (Phase 7) ───────────────────────────────
+    /// Open permission overlays / coordinator-mailbox requests awaiting
+    /// user response. Mutated lock-free by [`PendingPermissionGuard`]
+    /// (`acquire`/`Drop` flips this counter via atomic ops). Read by
+    /// `prompt_suggestion::build_suggestion_context` to gate
+    /// `SuppressReason::PendingPermission`.
+    ///
+    /// `Arc<AtomicU32>` so the guard's `Drop` is fully synchronous —
+    /// no `tokio::spawn`, no Tokio-runtime dependency, no deadlock
+    /// against this struct's own `Arc<RwLock>` wrapper. Cloning the
+    /// Arc is the canonical way to share the counter across the TUI
+    /// overlay and coordinator mailbox without holding a write-lock.
+    ///
+    /// **Clone semantic.** `ToolAppState::clone` shares the same atomic
+    /// (Arc semantic). Acceptable because clones are typically used for
+    /// snapshotting where stale counter values are fine; callers that
+    /// want a *fresh* counter construct via `Default`.
+    pub pending_permission_count: Arc<AtomicU32>,
+
+    /// In-flight MCP elicitation requests (form / URL). Same pattern
+    /// as `pending_permission_count` — incremented when an
+    /// `ElicitationRequest` is emitted, decremented on response /
+    /// timeout / abort via [`ElicitationGuard`]. Read to gate
+    /// `SuppressReason::ElicitationActive`.
+    pub elicitation_pending_count: Arc<AtomicU32>,
+
+    /// Per-provider rate-limit state, keyed by provider instance name
+    /// (matches `services/inference::ProviderClientFingerprint::provider`,
+    /// NOT the `ProviderApi` discriminator — two `OpenaiCompat`
+    /// instances "groq" / "together" coexist independently).
+    /// Mutated by the engine post-call (direct write under the
+    /// app_state lock, same convention as `observers::ToolAppStateObserver`).
+    /// Stale entries (`now > reset_at_ms`) are pruned at finalize_turn.
+    /// Read by `prompt_suggestion::build_suggestion_context` to gate
+    /// `SuppressReason::RateLimit` against `cache.provider`.
+    pub rate_limits: BTreeMap<String, RateLimitEntry>,
+}
+
+// ────────────────────────────────────────────────────────────────
+// RAII counter guards (Phase 7 stub-field wire-up)
+// ────────────────────────────────────────────────────────────────
+
+/// Increment-on-acquire / decrement-on-Drop guard around an
+/// `Arc<AtomicU32>` counter. Used to track open permission overlays
+/// and pending coordinator-mailbox requests so the prompt-suggestion
+/// fork can suppress when one of those flows is awaiting user input.
+///
+/// **Lock-free.** `Drop` performs a single relaxed atomic decrement —
+/// no `tokio::spawn`, no Tokio-runtime dependency, no deadlock risk.
+/// Safe to drop from a panicked task or non-Tokio thread.
+///
+/// **Why `Ordering::Relaxed`.** The counter is self-contained: readers
+/// only need eventual visibility for the boolean "is anything pending?"
+/// check, not happens-before with other state.
+#[derive(Debug)]
+pub struct PendingPermissionGuard {
+    counter: Arc<AtomicU32>,
+}
+
+impl PendingPermissionGuard {
+    pub fn acquire(counter: Arc<AtomicU32>) -> Self {
+        counter.fetch_add(1, Ordering::Relaxed);
+        Self { counter }
+    }
+}
+
+impl Drop for PendingPermissionGuard {
+    fn drop(&mut self) {
+        self.counter.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// Same shape as [`PendingPermissionGuard`], pinned to MCP elicitation
+/// requests. Held inside the pending-elicitations entry so timeout /
+/// abort / response all decrement the counter exactly once via
+/// `Drop`.
+#[derive(Debug)]
+pub struct ElicitationGuard {
+    counter: Arc<AtomicU32>,
+}
+
+impl ElicitationGuard {
+    pub fn acquire(counter: Arc<AtomicU32>) -> Self {
+        counter.fetch_add(1, Ordering::Relaxed);
+        Self { counter }
+    }
+}
+
+impl Drop for ElicitationGuard {
+    fn drop(&mut self) {
+        self.counter.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 /// A user-prompt suggestion produced by the post-turn forked

@@ -30,6 +30,7 @@ Tool trait, streaming executor, tool registry, callback handles. Defines the int
   - `ScheduleStore`/`ScheduleStoreRef` — cron store
   - `SideQuery`/`SideQueryHandle` + `SideQueryRequest`/`SideQueryResponse` + `side_query_to_text_callback`
   - `ToolPermissionBridge`/`ToolPermissionBridgeRef` + `ToolPermissionRequest`/`ToolPermissionDecision`/`ToolPermissionResolution`
+  - `CanUseToolHandle`/`CanUseToolHandleRef` + `CanUseToolDecision` (`Allow{updated_input}` / `Deny{message}` / `Ask`) + `DecisionReason` + `CanUseToolCallContext` + `NoOpCanUseToolHandle` + `deny_all_handle(reason)` — per-fork tool-execution gate dispatched at `execution::execute_tool_call` step 3.5 BEFORE the tool's built-in `check_permissions`. TS: `Tool.ts::CanUseToolFn`. The `Allow{updated_input}` variant is the path-rewrite hook speculation overlay needs.
   - `PlanApprovalMessage`/`PlanApprovalRequest`/`PlanApprovalResponse`
 - **Stall detection**: `STALL_CHECK_INTERVAL_MS`, `STALL_TAIL_BYTES`, `STALL_THRESHOLD_MS`, `format_stall_notification`, `format_task_notification`, `matches_interactive_prompt`
 
