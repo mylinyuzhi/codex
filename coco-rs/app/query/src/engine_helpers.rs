@@ -274,30 +274,51 @@ pub(crate) fn extract_streaming_result_text(ordered: &[Message]) -> String {
     String::new()
 }
 
-/// Compute the TS-parity `deferred_tools_delta` between the current tool
-/// set and the last-announced set stored on `ToolAppState`.
+/// Compute the TS-parity `deferred_tools_delta`.
 ///
-/// Returns `None` when the sets are equal (nothing to announce); returns
-/// `Some(info)` with `added_lines` / `removed_names` when they differ.
+/// **Three inputs**, mirroring TS `getDeferredToolsDelta`
+/// (`utils/toolSearch.ts:646-706`):
 ///
-/// TS `getDeferredToolsDelta` at `attachments.ts:1472` reconstructs the
-/// announced set by scanning history for prior delta attachments;
-/// coco-rs persists the set directly on app_state, so this diff is
-/// O(|current ∪ announced|).
+///   - `current_deferred` — names the model can find via `ToolSearch`
+///     this turn but cannot yet invoke directly.
+///   - `current_loaded` — names the model already has full schema for
+///     (eager tools + discovered deferred tools).
+///   - `last_announced` — names announced in the most recent
+///     `deferred_tools_delta` reminder, persisted on `ToolAppState`.
+///
+/// Diff rules:
+///
+///   - `added = current_deferred - last_announced` — newly searchable
+///     names the model has not been told about yet (MCP server just
+///     connected, or first turn after session start).
+///   - `removed = last_announced - (current_deferred ∪ current_loaded)`
+///     — names the model knew about that have left the registry
+///     entirely (MCP server disconnect). A name that moves from
+///     deferred → loaded (model discovered it via `ToolSearch`) is
+///     **silently** kept in the announced pool — its schema now
+///     appears directly in the request's tool list, no further
+///     reminder is required.
+///
+/// Returns `None` when both diffs are empty.
 pub(crate) fn compute_tools_delta(
-    current_tools: &[String],
+    current_deferred: &[String],
+    current_loaded: &[String],
     last_announced: &HashSet<String>,
 ) -> Option<coco_system_reminder::DeferredToolsDeltaInfo> {
-    let current_set: HashSet<&String> = current_tools.iter().collect();
+    let registry_pool: HashSet<&str> = current_deferred
+        .iter()
+        .map(String::as_str)
+        .chain(current_loaded.iter().map(String::as_str))
+        .collect();
 
-    let mut added_lines: Vec<String> = current_tools
+    let mut added_lines: Vec<String> = current_deferred
         .iter()
         .filter(|t| !last_announced.contains(t.as_str()))
         .map(|t| format!("- {t}"))
         .collect();
     let mut removed_names: Vec<String> = last_announced
         .iter()
-        .filter(|t| !current_set.contains(*t))
+        .filter(|t| !registry_pool.contains(t.as_str()))
         .cloned()
         .collect();
 

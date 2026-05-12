@@ -144,6 +144,12 @@ impl Tool for CronCreateTool {
         );
         ToolInputSchema { properties: p }
     }
+    fn should_defer(&self) -> bool {
+        true
+    }
+    fn search_hint(&self) -> Option<&str> {
+        Some("schedule a recurring cron job to run later")
+    }
 
     /// Render the create envelope as a single-line confirmation. TS
     /// parity: `CronCreateTool.ts:143-154 mapToolResultToToolResultBlockParam`.
@@ -299,6 +305,12 @@ impl Tool for CronDeleteTool {
         );
         ToolInputSchema { properties: p }
     }
+    fn should_defer(&self) -> bool {
+        true
+    }
+    fn search_hint(&self) -> Option<&str> {
+        Some("delete a scheduled cron job by id")
+    }
 
     /// TS `CronDeleteTool.ts:86-92 mapToolResultToToolResultBlockParam`.
     fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
@@ -364,6 +376,12 @@ impl Tool for CronListTool {
     /// stay non-safe because they mutate the store.
     fn is_concurrency_safe(&self, _: &Value) -> bool {
         true
+    }
+    fn should_defer(&self) -> bool {
+        true
+    }
+    fn search_hint(&self) -> Option<&str> {
+        Some("list active cron jobs and schedules")
     }
 
     /// Render `{jobs: [...]}` as a human-readable summary list.

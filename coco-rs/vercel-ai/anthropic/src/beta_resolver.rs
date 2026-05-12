@@ -107,6 +107,16 @@ pub fn resolve(
     {
         headers.insert(h.into());
     }
+    // Server-side `tool_reference` expansion. The header is a
+    // capability flag, not a per-request opt-in — TS emits it on every
+    // request for capable models regardless of whether the tools array
+    // carries `defer_loading: true` entries this turn. No topology gate
+    // (works on first-party + future Bedrock/Vertex once they ship it).
+    if caps.tool_reference
+        && let Some(h) = map_capability(AdapterBetaCapability::ToolSearch)
+    {
+        headers.insert(h.into());
+    }
     // Prompt-caching-scope: first-party-only AND experimental-gate-on
     // (TS `betas.ts:215-232`).
     if matches!(config.provider_topology, ProviderTopology::FirstParty)

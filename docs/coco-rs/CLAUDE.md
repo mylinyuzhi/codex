@@ -44,6 +44,7 @@ Each piece of information has exactly one owner. No duplication across docs.
 | Prompt cache break detection, CacheScope, CacheBreakDetector | `crate-coco-inference.md` | |
 | AgentTool architecture: spawn, fork, worktree, tool filtering, agent-as-task | `crate-coco-tools.md` | |
 | **Tool Result Budget** (Level 1 per-tool persist + Level 2 per-message budget) | `tool-result-budget-plan.md` | crate-coco-tool-runtime / crate-coco-tools / crate-coco-query / crate-coco-compact reference, not redefine |
+| **ToolSearch** deferred-tool lazy loading: query DSL, scoring, multi-provider promotion via `discovered_tool_names` | `tool-search-design.md` | crate-coco-tools / crate-coco-tool-runtime reference, not redefine |
 | Skills loading, SkillDefinition, SkillManager, bundled registry | `crate-coco-skills.md` | |
 | Hooks: HooksSettings, HookMatcher, HookCommand, HookExecutor, AsyncHookRegistry | `crate-coco-hooks.md` | |
 | Background task execution: TaskState, isBackgrounded, task output, notification, PlanFileManager | `crate-coco-tasks.md` | |

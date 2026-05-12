@@ -147,4 +147,12 @@ fn capability_prompt_cache_wire_format_is_snake_case() {
         serde_json::to_string(&Capability::TokenEfficientTools).unwrap(),
         "\"token_efficient_tools\""
     );
+    assert_eq!(
+        serde_json::to_string(&Capability::ServerSideToolReference).unwrap(),
+        "\"server_side_tool_reference\""
+    );
+    assert_eq!(
+        serde_json::to_string(&Capability::ClientSideToolSearch).unwrap(),
+        "\"client_side_tool_search\""
+    );
 }

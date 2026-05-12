@@ -200,6 +200,39 @@ pub struct ToolAppState {
     /// O(history-length) per turn.
     pub last_announced_tools: std::collections::HashSet<String>,
 
+    /// Wire-names of deferred tools the model has discovered via
+    /// `ToolSearch` and that should now be exposed to the LLM with
+    /// full schema (no longer deferred).
+    ///
+    /// TS parity: `extractDiscoveredToolNames(messages)` in
+    /// `utils/toolSearch.ts:545` — TS walks message history each turn
+    /// collecting `tool_name` from `tool_reference` blocks inside
+    /// `tool_result.content`. coco-rs is provider-agnostic and cannot
+    /// rely on Anthropic's server-side `tool_reference` expansion, so
+    /// it persists the discovered set directly here. Tools that
+    /// resolve via `ToolSearch` write through an `AppStatePatch`;
+    /// `ToolRegistry::loaded_tools` consults this set to upgrade a
+    /// `should_defer() == true` tool into the "loaded" pool for the
+    /// next turn's tool-definitions build.
+    ///
+    /// **Invariant — additive only**: discovered names are NEVER
+    /// removed from this set during a session. Once unlocked, a tool
+    /// stays callable for the rest of the session and re-appears in
+    /// every subsequent turn's `tools` array (TS parity — the
+    /// `tool_reference` block stays in history forever). Survives
+    /// compaction automatically because the set lives on `ToolAppState`,
+    /// not in messages — no `preCompactDiscoveredTools` carry-forward
+    /// is required (TS pattern in `utils/toolSearch.ts:553-559`).
+    /// `/clear` resets `ToolAppState` and therefore the set.
+    ///
+    /// **Cache cost**: on Anthropic + a model **without**
+    /// `Capability::ServerSideToolReference`, each discovery grows
+    /// the `tools` wire array by one entry and breaks the
+    /// prompt-cache prefix once. After the model has discovered
+    /// every tool it needs (typically a handful of early turns) the
+    /// array is stable and the prefix stays warm.
+    pub discovered_tool_names: std::collections::HashSet<String>,
+
     /// Agent types announced via the most recent `agent_listing_delta`
     /// reminder. TS parity: reconstructed from prior delta attachments.
     pub last_announced_agents: std::collections::HashSet<String>,

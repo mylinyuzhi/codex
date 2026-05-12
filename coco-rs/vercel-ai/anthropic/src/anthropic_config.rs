@@ -37,6 +37,15 @@ pub struct AnthropicModelCapabilities {
     pub interleaved_thinking: bool,
     pub context_management: bool,
     pub token_efficient_tools: bool,
+    /// Server expands `tool_reference` content blocks into
+    /// `<functions>...</functions>` markup before the prompt reaches
+    /// the model. When true, the adapter emits `defer_loading: true`
+    /// on tools the caller marks for deferral and adds the
+    /// `tool-search-tool-2025-10-19` beta header. Lets the caller keep
+    /// the `tools` array constant across turns (cache-friendly).
+    ///
+    /// Maps from `coco_types::Capability::ServerSideToolReference`.
+    pub tool_reference: bool,
 }
 
 /// Endpoint family — currently single-variant by design (Bedrock /

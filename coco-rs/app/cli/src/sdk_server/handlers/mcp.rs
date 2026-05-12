@@ -90,8 +90,10 @@ async fn collect_server_schemas(
             server_name: server_name.to_string(),
             tool_name: t.name.clone(),
             description: t.description.clone(),
+            annotations: coco_tool_runtime::McpToolAnnotations::from_input_schema_meta(
+                &t.input_schema,
+            ),
             input_schema: t.input_schema.clone(),
-            annotations: coco_tool_runtime::McpToolAnnotations::default(),
         })
         .collect()
 }

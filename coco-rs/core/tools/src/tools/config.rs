@@ -69,6 +69,12 @@ impl Tool for ConfigTool {
     fn is_concurrency_safe(&self, _: &Value) -> bool {
         true
     }
+    fn should_defer(&self) -> bool {
+        true
+    }
+    fn search_hint(&self) -> Option<&str> {
+        Some("get set list or reset config settings")
+    }
 
     /// Render the prebuilt `message` field, optionally followed by the
     /// list of available keys (for the `list` action). Skips JSON

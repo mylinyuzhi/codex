@@ -264,6 +264,12 @@ impl Tool for TaskCreateTool {
     fn is_concurrency_safe(&self, _: &Value) -> bool {
         true
     }
+    fn should_defer(&self) -> bool {
+        true
+    }
+    fn search_hint(&self) -> Option<&str> {
+        Some("create a persistent task in the plan-item store")
+    }
 
     /// Render the create envelope as `Task #{id} created successfully: {subject}`.
     /// TS parity: `TaskCreateTool.ts:130-135::mapToolResultToToolResultBlockParam`.
@@ -384,6 +390,12 @@ impl Tool for TaskGetTool {
     fn is_concurrency_safe(&self, _: &Value) -> bool {
         true
     }
+    fn should_defer(&self) -> bool {
+        true
+    }
+    fn search_hint(&self) -> Option<&str> {
+        Some("fetch a single task record by id")
+    }
 
     /// Render the task envelope as a multi-line text block, or
     /// "Task not found" when `task` is null. TS parity:
@@ -494,6 +506,12 @@ impl Tool for TaskListTool {
     }
     fn is_concurrency_safe(&self, _: &Value) -> bool {
         true
+    }
+    fn should_defer(&self) -> bool {
+        true
+    }
+    fn search_hint(&self) -> Option<&str> {
+        Some("list persistent tasks filtered by status or owner")
     }
 
     /// Render `{tasks: [...]}` as `#{id} [{status}] {subject}{owner}{blocked}`
@@ -650,6 +668,12 @@ impl Tool for TaskUpdateTool {
 
     fn is_concurrency_safe(&self, _: &Value) -> bool {
         true
+    }
+    fn should_defer(&self) -> bool {
+        true
+    }
+    fn search_hint(&self) -> Option<&str> {
+        Some("update task status fields owner or notes")
     }
 
     /// Render the update envelope. TS parity:
@@ -1059,6 +1083,12 @@ impl Tool for TaskStopTool {
     fn is_concurrency_safe(&self, _: &Value) -> bool {
         true
     }
+    fn should_defer(&self) -> bool {
+        true
+    }
+    fn search_hint(&self) -> Option<&str> {
+        Some("stop a running background task or shell")
+    }
 
     // TS `TaskStopTool.ts:98-103` emits `jsonStringify(output)` —
     // i.e. the entire `{message, task_id, task_type}` envelope as
@@ -1401,6 +1431,12 @@ impl Tool for TodoWriteTool {
             }),
         );
         ToolInputSchema { properties: p }
+    }
+    fn should_defer(&self) -> bool {
+        true
+    }
+    fn search_hint(&self) -> Option<&str> {
+        Some("write the per-agent todo checklist for tracking work")
     }
 
     /// TS parity: `TodoWriteTool.ts::mapToolResultToToolResultBlockParam`.

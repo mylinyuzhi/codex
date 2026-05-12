@@ -587,6 +587,12 @@ Usage notes:
     fn is_concurrency_safe(&self, _: &Value) -> bool {
         true
     }
+    fn should_defer(&self) -> bool {
+        true
+    }
+    fn search_hint(&self) -> Option<&str> {
+        Some("fetch a URL and summarize the page contents")
+    }
 
     fn get_activity_description(&self, input: &Value) -> Option<String> {
         let url = input.get("url").and_then(|v| v.as_str())?;
@@ -1374,6 +1380,12 @@ IMPORTANT - Use the correct year in search queries:
     }
     fn is_concurrency_safe(&self, _: &Value) -> bool {
         true
+    }
+    fn should_defer(&self) -> bool {
+        true
+    }
+    fn search_hint(&self) -> Option<&str> {
+        Some("search the web for current information and sources")
     }
 
     fn validate_input(

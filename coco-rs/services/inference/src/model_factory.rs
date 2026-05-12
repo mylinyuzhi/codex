@@ -287,6 +287,7 @@ fn anthropic_caps_from(
             Capability::InterleavedThinking => out.interleaved_thinking = true,
             Capability::ContextManagement => out.context_management = true,
             Capability::TokenEfficientTools => out.token_efficient_tools = true,
+            Capability::ServerSideToolReference => out.tool_reference = true,
             // Other capabilities are unrelated to Anthropic adapter policy.
             // `AdaptiveThinking` is consumed by the convert layer (gates
             // `thinking: {type:adaptive}` emission), not the adapter — the
@@ -303,7 +304,11 @@ fn anthropic_caps_from(
             | Capability::StructuredOutput
             | Capability::ReasoningSummaries
             | Capability::ParallelToolCalls
-            | Capability::FastMode => {}
+            | Capability::FastMode
+            // `ClientSideToolSearch` is a coco-rs-side decision flag
+            // (whether the engine should run client-side promotion
+            // for this model) — Anthropic adapter never reads it.
+            | Capability::ClientSideToolSearch => {}
         }
     }
     out

@@ -268,6 +268,20 @@ impl ApiClient {
         self.model.model_id()
     }
 
+    /// Resolved [`ModelInfo`] for the underlying client. `None` for
+    /// test/mock clients built through the lightweight constructors
+    /// that bypass the registry resolution path.
+    ///
+    /// Callers that need capability gates (e.g. `engine_prompt`
+    /// branching on [`coco_types::Capability::ServerSideToolReference`])
+    /// look up through this accessor rather than reaching into the
+    /// configuration tree, so post-fallback model swaps surface
+    /// immediately on the next turn.
+    #[must_use]
+    pub fn model_info(&self) -> Option<&ModelInfo> {
+        self.model_info.as_ref()
+    }
+
     /// Whether this provider applies `context_management` server-side
     /// (preserves prompt cache while clearing old tool results /
     /// thinking blocks). Today only Anthropic — other providers ignore

@@ -422,23 +422,6 @@ pub fn extract_file_extension(tool_name: &str, input: &Value) -> Option<String> 
         .map(str::to_lowercase)
 }
 
-/// Check if a tool name refers to a deferred tool (discovered via ToolSearch).
-pub fn is_deferred_tool(tool_name: &str) -> bool {
-    const DEFERRED_TOOLS: &[&str] = &[
-        ToolName::CronCreate.as_str(),
-        ToolName::CronDelete.as_str(),
-        ToolName::CronList.as_str(),
-        ToolName::RemoteTrigger.as_str(),
-        ToolName::Sleep.as_str(),
-        ToolName::NotebookEdit.as_str(),
-        ToolName::EnterWorktree.as_str(),
-        ToolName::ExitWorktree.as_str(),
-        ToolName::PowerShell.as_str(),
-        ToolName::SyntheticOutput.as_str(),
-    ];
-    DEFERRED_TOOLS.contains(&tool_name)
-}
-
 #[cfg(test)]
 #[path = "execution.test.rs"]
 mod tests;

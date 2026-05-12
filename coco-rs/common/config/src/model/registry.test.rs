@@ -431,6 +431,44 @@ fn builtin_claude_haiku_does_not_declare_isp_or_context1m() {
 }
 
 #[test]
+fn builtin_claude_sonnet_opus_declare_server_side_tool_reference() {
+    // `tool-search-tool-2025-10-19` beta is shipped on Claude
+    // Sonnet 4.5+/Opus 4+; Haiku ships without it (TS
+    // `DEFAULT_UNSUPPORTED_MODEL_PATTERNS=['haiku']`).
+    let builtin = builtin_models_partial();
+
+    let sonnet_caps = builtin["claude-sonnet-4-6"].capabilities.as_ref().unwrap();
+    assert!(sonnet_caps.contains(&coco_types::Capability::ServerSideToolReference));
+
+    let opus_caps = builtin["claude-opus-4-7"].capabilities.as_ref().unwrap();
+    assert!(opus_caps.contains(&coco_types::Capability::ServerSideToolReference));
+
+    let haiku_caps = builtin["claude-haiku-4-5"].capabilities.as_ref().unwrap();
+    assert!(!haiku_caps.contains(&coco_types::Capability::ServerSideToolReference));
+}
+
+#[test]
+fn every_builtin_model_declares_client_side_tool_search() {
+    // The client-side `discovered_tool_names` promotion path is the
+    // universal fallback — every built-in model is validated against
+    // it (TS has no analogue: TS only supports the server-side path
+    // and blacklists incompatible models). Custom models added via
+    // `~/.coco/models.json` without this capability degrade to
+    // eager-load (safe default; ToolSearch hidden).
+    let builtin = builtin_models_partial();
+    for (model_id, info) in builtin.iter() {
+        let caps = info
+            .capabilities
+            .as_ref()
+            .unwrap_or_else(|| panic!("{model_id} must seed capabilities"));
+        assert!(
+            caps.contains(&coco_types::Capability::ClientSideToolSearch),
+            "{model_id} must declare ClientSideToolSearch (validated client-side path)"
+        );
+    }
+}
+
+#[test]
 fn builtin_claude_models_declare_explicit_thinking_budgets() {
     // After dropping the wire-builder `budget_tokens = 1024` fallback in
     // `vercel-ai-anthropic`, ModelInfo is the single source of truth for
