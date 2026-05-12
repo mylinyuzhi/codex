@@ -1114,23 +1114,34 @@ impl QueryEngine {
             // calls first appeared (by `ToolInputStart`) so the downstream
             // exec path keeps the same ordering contract as the blocking path.
             //
+            // `response_text` and `reasoning_text` are presentation-only
+            // accumulators driven from `StreamEvent::{TextDelta, ReasoningDelta}`:
+            //
+            // - `response_text` feeds the Stop hook's `last_assistant_message`
+            //   input (engine.rs:1691), a log field (`:1739`), and
+            //   `QueryResult.response_text` (`:1765`).
+            // - `reasoning_text` feeds a log field (`:1347`).
+            //
+            // The history-bearing assistant content is reconstructed from
+            // `event.snapshot` at `StreamEvent::Finish` — this is the path
+            // that preserves per-part `provider_metadata` (Gemini
+            // `thoughtSignature`, Anthropic `signature`, OpenAI
+            // `encrypted_content`). See `docs/coco-rs/streaming-metadata-roundtrip-plan.md`.
             let mut response_text = String::new();
             let mut reasoning_text = String::new();
-            // Latest `provider_metadata` payload from a `ReasoningEnd`
-            // event in the stream. For Anthropic-shaped APIs this
-            // carries `anthropic.signature`, which the next request
-            // must echo back inside the thinking block — otherwise
-            // DeepSeek's `/anthropic/v1` (and similar strict
-            // implementations) reject the request with `content[].thinking
-            // must be passed back`. `None` for providers that don't
-            // ship the metadata.
-            let mut reasoning_provider_metadata: Option<coco_inference::ProviderMetadata> = None;
             let mut tool_order: Vec<String> = Vec::new();
             let mut tool_buffers: std::collections::HashMap<String, StreamingToolCallBuffer> =
                 std::collections::HashMap::new();
             let mut stream_usage: Option<TokenUsage> = None;
             let mut stream_stop_reason: Option<String> = None;
             let mut stream_error: Option<String> = None;
+            // Captured at `StreamEvent::Finish`; consumed to rebuild
+            // `Vec<AssistantContentPart>` for history. `None` until Finish
+            // arrives; cancellation/error paths skip reconstruction
+            // entirely so the `None` case is unreachable on the
+            // reconstruction path.
+            let mut turn_snapshot: Option<std::sync::Arc<coco_inference::AssistantTurnSnapshot>> =
+                None;
 
             loop {
                 let event = tokio::select! {
@@ -1179,18 +1190,12 @@ impl QueryEngine {
                         )
                         .await;
                     }
-                    StreamEvent::ReasoningEnd { provider_metadata } => {
-                        // Last writer wins. Multiple thinking blocks in
-                        // one turn currently get merged into a single
-                        // `ReasoningPart` (engine collapses streamed
-                        // reasoning into one accumulator above), so
-                        // attaching the most recent signature is the
-                        // best we can do without a wider stream redesign.
-                        // For single-block turns (the common case) this
-                        // is exact.
-                        if provider_metadata.is_some() {
-                            reasoning_provider_metadata = provider_metadata;
-                        }
+                    StreamEvent::ReasoningEnd { .. } => {
+                        // No-op: the snapshot accumulator at the
+                        // coco-inference layer captures the signature
+                        // per-segment and surfaces it on
+                        // `StreamEvent::Finish.snapshot` for full
+                        // multi-reasoning fidelity (see plan v6).
                     }
                     StreamEvent::ToolCallStart { id, tool_name } => {
                         if !tool_buffers.contains_key(&id) {
@@ -1333,8 +1338,12 @@ impl QueryEngine {
                         }
                     }
                     StreamEvent::Finish {
-                        usage, stop_reason, ..
+                        usage,
+                        stop_reason,
+                        snapshot,
+                        ..
                     } => {
+                        turn_snapshot = Some(snapshot);
                         tracing::debug!(
                             turn,
                             turn_id = %turn_id,
@@ -1471,82 +1480,20 @@ impl QueryEngine {
             let model_id = model_runtime.current_model_id().to_string();
             cost_tracker.record(&model_id, usage, /*cost_usd*/ 0.0, api_elapsed_ms);
 
-            // Re-materialize `tool_calls` from buffers in arrival order.
-            // Malformed JSON or incomplete buffers are skipped with a warning —
-            // matches the blocking path's behavior of silently ignoring
-            // AssistantContentPart variants it doesn't recognize.
-            let mut tool_calls: Vec<ToolCallPart> = Vec::new();
-            for call_id in &tool_order {
-                let Some(buf) = tool_buffers.get(call_id) else {
-                    continue;
-                };
-                if !buf.complete {
-                    warn!(tool_call_id = %call_id, "tool call buffer did not complete");
-                    continue;
-                }
-                // Strict parse → repair fallback (same path as the
-                // streaming branch). Repaired calls are logged so we
-                // can observe real-world hit rates per provider.
-                let input: serde_json::Value =
-                    match coco_tool_runtime::parse_tool_input(&buf.input_json) {
-                        Ok((v, outcome)) => {
-                            if let coco_tool_runtime::ParseOutcome::Repaired { repaired_with } =
-                                outcome
-                            {
-                                tracing::info!(
-                                    tool_call_id = %call_id,
-                                    tool_name = %buf.tool_name,
-                                    repaired_with = ?repaired_with,
-                                    "tool input JSON repaired before execution",
-                                );
-                            }
-                            v
-                        }
-                        Err(e) => {
-                            warn!(
-                                tool_call_id = %call_id,
-                                tool_name = %buf.tool_name,
-                                error = %e,
-                                raw_input = %buf.input_json,
-                                "tool input JSON parse failed"
-                            );
-                            continue;
-                        }
-                    };
-                tool_calls.push(ToolCallPart {
-                    tool_call_id: call_id.clone(),
-                    tool_name: buf.tool_name.clone(),
-                    input,
-                    provider_executed: None,
-                    provider_metadata: None,
-                });
-            }
-
-            // Reconstruct the assistant `content` vector: reasoning → text →
-            // tool calls. Matches the typical ordering from the blocking
-            // `do_generate` path; individual providers may interleave
-            // differently, but the stream doesn't preserve relative ordering
-            // between text and reasoning chunks anyway.
-            let mut content_parts: Vec<AssistantContentPart> = Vec::new();
-            if !reasoning_text.is_empty() {
-                content_parts.push(AssistantContentPart::Reasoning(ReasoningPart {
-                    text: reasoning_text,
-                    // Round-trip the provider metadata captured from
-                    // `StreamEvent::ReasoningEnd`. For Anthropic-shaped
-                    // APIs this carries `anthropic.signature`, which
-                    // must echo back on the next request.
-                    provider_metadata: reasoning_provider_metadata.take(),
-                }));
-            }
-            if !response_text.is_empty() {
-                content_parts.push(AssistantContentPart::Text(TextPart {
-                    text: response_text.clone(),
-                    provider_metadata: None,
-                }));
-            }
-            for tc in &tool_calls {
-                content_parts.push(AssistantContentPart::ToolCall(tc.clone()));
-            }
+            // Reconstruct assistant content from the per-turn snapshot
+            // accumulated inside `coco-inference::process_stream_with_config`.
+            // Each `TurnPart` carries its own `provider_metadata`, so
+            // Gemini `thoughtSignature` / Anthropic `signature` /
+            // OpenAI `encrypted_content` survive intact and round-trip
+            // back to the model on the next turn.
+            //
+            // Cancellation / mid-stream error paths skip this block via
+            // `continue;` upstream (engine.rs:~1379), so `turn_snapshot`
+            // is always `Some` here. Defensive fallback to empty
+            // snapshot keeps the unwrap from panicking if that
+            // invariant ever weakens.
+            let snapshot = turn_snapshot.take().unwrap_or_default();
+            let (content_parts, tool_calls) = assistant_content_from_snapshot(&snapshot);
 
             let parsed_stop_reason = stream_stop_reason.as_deref().and_then(parse_stop_reason);
             let assistant_msg = Message::Assistant(coco_messages::AssistantMessage {
@@ -1924,6 +1871,102 @@ impl QueryEngine {
 // - `crate::engine_finalize_turn` — tail-of-turn compact ladder + reactive recovery;
 // - `crate::engine_prompt` — `build_prompt` / tool-defs / context factory / date-change;
 // - `crate::engine_turn_reminders` — per-turn reminder pipeline.
+
+/// Rebuild the assistant `Vec<AssistantContentPart>` plus the
+/// `Vec<ToolCallPart>` view of completed tool calls from a per-turn
+/// snapshot produced by `coco-inference::process_stream_with_config`.
+///
+/// Walks `snapshot.parts` in emission order so the resulting vector
+/// preserves the original text↔reasoning↔tool sequence (matters for
+/// Gemini-3, which interleaves freely). Each part carries its own
+/// `provider_metadata` — signatures and equivalents round-trip verbatim.
+///
+/// Tool-call filter: include when `is_input_complete || is_complete`.
+/// Some providers (and the synthetic mock helper) only emit
+/// `ToolInputStart`/`Delta`/`End` without the canonical `ToolCall(tc)`
+/// close, so requiring `is_complete` would silently drop valid tool
+/// calls. Malformed JSON is skipped with a `tracing::warn!`,
+/// matching the previous behavior on the buffer-driven reconstruction
+/// path.
+fn assistant_content_from_snapshot(
+    snapshot: &coco_inference::AssistantTurnSnapshot,
+) -> (Vec<AssistantContentPart>, Vec<ToolCallPart>) {
+    let mut content_parts: Vec<AssistantContentPart> = Vec::with_capacity(snapshot.parts.len());
+    let mut tool_calls: Vec<ToolCallPart> = Vec::new();
+
+    for part in &snapshot.parts {
+        match part {
+            coco_inference::TurnPart::Text(t) => {
+                if t.text.is_empty() {
+                    continue;
+                }
+                content_parts.push(AssistantContentPart::Text(TextPart {
+                    text: t.text.clone(),
+                    provider_metadata: t.provider_metadata.clone(),
+                }));
+            }
+            coco_inference::TurnPart::Reasoning(r) => {
+                if r.text.is_empty() {
+                    continue;
+                }
+                content_parts.push(AssistantContentPart::Reasoning(ReasoningPart {
+                    text: r.text.clone(),
+                    provider_metadata: r.provider_metadata.clone(),
+                }));
+            }
+            coco_inference::TurnPart::ToolCall(tc) => {
+                if !(tc.is_input_complete || tc.is_complete) {
+                    warn!(tool_call_id = %tc.id, "tool call did not complete");
+                    continue;
+                }
+                let input: serde_json::Value =
+                    match coco_tool_runtime::parse_tool_input(&tc.input_json) {
+                        Ok((v, outcome)) => {
+                            if let coco_tool_runtime::ParseOutcome::Repaired { repaired_with } =
+                                outcome
+                            {
+                                tracing::info!(
+                                    tool_call_id = %tc.id,
+                                    tool_name = %tc.tool_name,
+                                    repaired_with = ?repaired_with,
+                                    "tool input JSON repaired before execution",
+                                );
+                            }
+                            v
+                        }
+                        Err(e) => {
+                            warn!(
+                                tool_call_id = %tc.id,
+                                tool_name = %tc.tool_name,
+                                error = %e,
+                                raw_input = %tc.input_json,
+                                "tool input JSON parse failed"
+                            );
+                            continue;
+                        }
+                    };
+                let tcp = ToolCallPart {
+                    tool_call_id: tc.id.clone(),
+                    tool_name: tc.tool_name.clone(),
+                    input,
+                    provider_executed: tc.provider_executed,
+                    provider_metadata: tc.provider_metadata.clone(),
+                };
+                content_parts.push(AssistantContentPart::ToolCall(tcp.clone()));
+                tool_calls.push(tcp);
+            }
+            // File / ReasoningFile / Source / Custom / ToolApprovalRequest
+            // are not yet round-tripped through assistant history. Adding
+            // them here is a follow-up; for now they're emission-only via
+            // the live UI stream events. Drop with a trace.
+            other => {
+                tracing::trace!(?other, "snapshot variant not yet reconstructed");
+            }
+        }
+    }
+
+    (content_parts, tool_calls)
+}
 
 /// Pure constructor for [`QueryResult`], factored out of `run_session_loop`.
 /// All inputs flow through parameters — there is no captured state — so the

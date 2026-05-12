@@ -652,16 +652,23 @@ impl QueryEngine {
                 };
                 match client.query(&params).await {
                     Ok(result) => {
-                        let text = result
-                            .content
-                            .iter()
-                            .filter_map(|c| match c {
-                                AssistantContent::Text(t) => Some(t.text.as_str()),
-                                _ => None,
-                            })
-                            .collect::<Vec<_>>()
-                            .join("");
-                        Ok(text)
+                        // Compaction summary input — preserve tool-call
+                        // structure with `[tool: <name>]` placeholder
+                        // lines so multi-text + tool-call interleaving
+                        // doesn't lose attribution context.
+                        let mut chunks: Vec<String> = Vec::new();
+                        for c in &result.content {
+                            match c {
+                                AssistantContent::Text(t) if !t.text.is_empty() => {
+                                    chunks.push(t.text.clone());
+                                }
+                                AssistantContent::ToolCall(tc) => {
+                                    chunks.push(format!("[tool: {}]", tc.tool_name));
+                                }
+                                _ => {}
+                            }
+                        }
+                        Ok(chunks.join("\n"))
                     }
                     Err(e) => Err(e.to_string()),
                 }
