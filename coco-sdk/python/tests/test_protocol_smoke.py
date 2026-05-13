@@ -131,11 +131,11 @@ def test_provider_api_enum_has_all_six_variants() -> None:
     assert actual == expected
 
 
-def test_model_role_enum_has_all_nine_variants() -> None:
+def test_model_role_enum_has_all_eight_variants() -> None:
     from coco_sdk import ModelRole
 
     expected = {
-        "main", "fast", "compact", "plan", "explore",
+        "main", "fast", "plan", "explore",
         "review", "hook_agent", "memory", "subagent",
     }
     assert {m.value for m in ModelRole} == expected

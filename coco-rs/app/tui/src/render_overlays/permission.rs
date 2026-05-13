@@ -157,7 +157,28 @@ pub(super) fn permission_content(p: &PermissionOverlay, theme: &Theme) -> (Strin
         String::new()
     };
 
-    let actions = if p.show_always_allow {
+    // Choices mode: TS-parity render of the per-option grid. The
+    // standard yes/no/always footer is replaced by a vertical list with
+    // a `▸` cursor on `selected_choice`. Up/Down moves the cursor;
+    // Approve (Enter) commits the picked value. The "Always Allow"
+    // affordance is intentionally suppressed in this mode (the
+    // construction site flips `show_always_allow = false` when choices
+    // is `Some`) — choices are one-shot policy picks, not durable rules.
+    //
+    // TS parity: `ExitPlanModePermissionRequest.tsx:691-704`.
+    let actions = if let Some(choices) = &p.choices {
+        let selected = p.selected_choice.min(choices.len().saturating_sub(1));
+        let mut lines = String::new();
+        for (idx, choice) in choices.iter().enumerate() {
+            let marker = if idx == selected { "▸ " } else { "  " };
+            lines.push_str(&format!("{marker}{}\n", choice.label));
+            if let Some(desc) = &choice.description {
+                lines.push_str(&format!("    {desc}\n"));
+            }
+        }
+        lines.push_str(t!("dialog.hints_nav_select").as_ref());
+        lines
+    } else if p.show_always_allow {
         t!("dialog.actions_approve_deny_always").to_string()
     } else {
         t!("dialog.actions_approve_deny").to_string()

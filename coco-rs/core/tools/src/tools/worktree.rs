@@ -227,7 +227,7 @@ impl Tool for ExitWorktreeTool {
     async fn execute(
         &self,
         input: Value,
-        _ctx: &ToolUseContext,
+        ctx: &ToolUseContext,
     ) -> Result<ToolResult<Value>, ToolError> {
         let path = input
             .get("path")
@@ -288,6 +288,18 @@ impl Tool for ExitWorktreeTool {
                 source: None,
             });
         }
+
+        // Proactive LSP cleanup: shutdown the worktree-rooted servers
+        // BEFORE process-cwd restoration. The `git worktree remove`
+        // succeeded above, but stale `(server_id, worktree_root)` cache
+        // entries would otherwise linger until session end. The lazy
+        // path in `LspServerManager::get_client` (server.rs:206-229)
+        // catches this when the next request happens to touch a file
+        // under the removed root, but that next request may never come
+        // in the session. Best-effort — adapter swallows errors.
+        let abs_worktree =
+            std::fs::canonicalize(&worktree_path).unwrap_or_else(|_| worktree_path.clone());
+        ctx.lsp.shutdown_for_root(&abs_worktree).await;
 
         // Layer 1: restore process CWD. Critical: without this, if the
         // process cwd was inside the just-removed worktree, every

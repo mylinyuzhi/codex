@@ -19,6 +19,7 @@ pub mod help;
 pub mod hooks;
 pub mod init_prompt;
 pub mod keybindings;
+pub mod lsp;
 pub mod mcp;
 pub mod memory;
 pub mod memory_dialog;

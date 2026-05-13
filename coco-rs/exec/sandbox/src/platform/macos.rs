@@ -40,13 +40,14 @@ impl SandboxPlatform for MacOsSandbox {
         config: &SandboxConfig,
         command: &str,
         session_tag: &str,
+        extra_writable_binds: &[std::path::PathBuf],
         cmd: &mut tokio::process::Command,
     ) -> Result<()> {
         if config.enforcement == EnforcementLevel::Disabled {
             return Ok(());
         }
 
-        let profile = generate_seatbelt_profile(config, command, session_tag);
+        let profile = generate_seatbelt_profile(config, command, session_tag, extra_writable_binds);
 
         info!(
             enforcement = ?config.enforcement,
@@ -93,7 +94,12 @@ fn escape_sbpl_path(path: &str) -> String {
 /// Each invocation produces a unique profile with a `CMD64_` command tag
 /// embedded in the `(deny default (with message ...))` rule, enabling
 /// macOS violation log correlation back to the specific command.
-fn generate_seatbelt_profile(config: &SandboxConfig, command: &str, session_tag: &str) -> String {
+fn generate_seatbelt_profile(
+    config: &SandboxConfig,
+    command: &str,
+    session_tag: &str,
+    extra_writable_binds: &[std::path::PathBuf],
+) -> String {
     use std::fmt::Write;
 
     let mut profile = String::with_capacity(8192);
@@ -251,6 +257,13 @@ fn generate_seatbelt_profile(config: &SandboxConfig, command: &str, session_tag:
     profile.push_str("(allow file-write* (subpath \"/private/tmp\"))\n");
     for tmpdir in tmpdir_variants() {
         let escaped = escape_sbpl_path(&tmpdir);
+        let _ = writeln!(profile, "(allow file-write* (subpath \"{escaped}\"))");
+    }
+    // Per-command writable binds — shell-executor's allocated tmpdir
+    // for cwd-file tracking and `TMPDIR` injection. Seatbelt treats
+    // these as additional writable subpaths; bwrap on Linux binds them.
+    for path in extra_writable_binds {
+        let escaped = escape_sbpl_path(&path.display().to_string());
         let _ = writeln!(profile, "(allow file-write* (subpath \"{escaped}\"))");
     }
     profile.push('\n');

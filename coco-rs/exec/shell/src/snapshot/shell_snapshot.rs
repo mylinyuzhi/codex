@@ -30,7 +30,10 @@ const DEFAULT_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_SNAPSHOT_RETENTION: Duration = Duration::from_secs(60 * 60 * 24 * 7);
 
 /// Default directory name for shell snapshots.
-const DEFAULT_SNAPSHOT_DIR: &str = "shell_snapshots";
+///
+/// Matches the TS layout `shell-snapshots/` (hyphenated) so a coco install
+/// can co-exist with a claude-code install under the same `$CONFIG_HOME`.
+const DEFAULT_SNAPSHOT_DIR: &str = "shell-snapshots";
 
 /// Configuration for shell snapshotting.
 #[derive(Debug, Clone)]
@@ -117,15 +120,26 @@ impl ShellSnapshot {
     ///
     /// Returns `None` if creation fails (unsupported shell, timeout, validation
     /// failure, etc.). Commands will fall back to login shell mode.
+    ///
+    /// Naming mirrors TS `ShellSnapshot.ts:438-444`:
+    /// `snapshot-<shell>-<ts>-<rand6>.sh` — unique across sessions and shells
+    /// so re-shell within a session doesn't clobber the previous file.
     pub async fn try_new(config: &SnapshotConfig, session_id: &str, shell: &Shell) -> Option<Self> {
         let extension = match shell.shell_type() {
             ShellType::PowerShell => "ps1",
             _ => "sh",
         };
 
-        let path = config
-            .snapshot_dir
-            .join(format!("{session_id}.{extension}"));
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let rand_id: u32 = rand::random();
+        let _ = session_id; // accepted for diagnostics + future correlation
+        let path = config.snapshot_dir.join(format!(
+            "snapshot-{}-{timestamp}-{rand_id:06x}.{extension}",
+            shell.name()
+        ));
 
         let snapshot = match write_shell_snapshot(shell, &path, config.timeout).await {
             Ok(path) => {

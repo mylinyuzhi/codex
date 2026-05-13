@@ -50,6 +50,7 @@ async fn request_permission_approved_round_trip() {
                 tool_name: "Bash".into(),
                 description: "Execute ls".into(),
                 input: serde_json::json!({ "command": "ls" }),
+                choices: None,
             })
             .await
     });
@@ -102,6 +103,7 @@ async fn request_permission_denied_round_trip() {
                 tool_name: "Bash".into(),
                 description: "rm -rf /".into(),
                 input: serde_json::json!({ "command": "rm -rf /" }),
+                choices: None,
             })
             .await
     });
@@ -145,6 +147,7 @@ async fn request_permission_client_error_is_treated_as_denial() {
                 tool_name: "Bash".into(),
                 description: "test".into(),
                 input: serde_json::json!({}),
+                choices: None,
             })
             .await
     });
@@ -188,6 +191,7 @@ async fn request_permission_errors_if_transport_not_initialized() {
             tool_name: "Bash".into(),
             description: "x".into(),
             input: serde_json::json!({}),
+            choices: None,
         })
         .await;
     let err = result.expect_err("should error when transport missing");

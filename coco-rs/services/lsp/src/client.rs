@@ -574,7 +574,12 @@ impl LspClient {
         let uri = Url::from_file_path(&path)
             .map_err(|_| LspErr::Internal(format!("invalid file path: {}", path.display())))?;
 
-        // Detect language ID from extension (use &'static str to avoid allocation)
+        // Detect language ID from extension (use &'static str to avoid allocation).
+        // Covers every extension declared by `BUILTIN_SERVERS` in `config.rs`
+        // — typescript-language-server in particular needs the correct
+        // languageId (NOT "plaintext") or it silently ignores didOpen.
+        // TS parity: `LSPServerManager.openFile` reads
+        // `server.config.extensionToLanguage[ext]`.
         let language_id: &'static str = path
             .extension()
             .and_then(|ext| ext.to_str())
@@ -582,6 +587,10 @@ impl LspClient {
                 "rs" => "rust",
                 "go" => "go",
                 "py" | "pyi" => "python",
+                "ts" => "typescript",
+                "tsx" => "typescriptreact",
+                "js" | "mjs" | "cjs" => "javascript",
+                "jsx" => "javascriptreact",
                 _ => "plaintext",
             })
             .unwrap_or("plaintext");
@@ -863,6 +872,26 @@ impl LspClient {
             self.server_id
         );
         Ok(())
+    }
+
+    /// Dispatch a raw JSON-RPC request through this client's connection.
+    ///
+    /// Intended for the `coco-tool-runtime::LspHandle` adapter, which
+    /// already builds the protocol-level params (TS parity:
+    /// `LSPTool.ts:getMethodAndParams`). Higher-level typed wrappers
+    /// (`definition`, `references`, …) remain the right entry point for
+    /// in-crate callers — this method skips capability checks and
+    /// symbol-position resolution.
+    ///
+    /// Caller is responsible for ensuring the file is open
+    /// (`sync_file()` / `update_file()`) before issuing a
+    /// `textDocument/*` request.
+    pub async fn send_raw_request(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        self.connection.request(method, params).await
     }
 
     /// Force re-sync a file (close and reopen)

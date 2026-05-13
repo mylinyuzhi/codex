@@ -52,6 +52,12 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
             // A new session invalidates any cached agent markdown — otherwise
             // /copy could surface text from a previous conversation.
             state.session.last_agent_markdown = None;
+            // LSP active flag drives the status-bar badge. Stays sticky
+            // for the lifetime of the session — a per-server refresh
+            // would need a separate `LspPrewarmComplete` event (variant
+            // is defined, emission TBD when settings reload triggers
+            // re-prewarm).
+            state.session.lsp_active = p.lsp_active;
             true
         }
         ServerNotification::SessionResult(p) => {
@@ -219,6 +225,16 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
                     t!("toast.mcp_failed_to_start", count = p.failed.len()).to_string(),
                 ));
             }
+            true
+        }
+
+        // === LSP ===
+        ServerNotification::LspPrewarmComplete(p) => {
+            // Mid-session prewarm completed (e.g. settings reload).
+            // Flip the badge based on whether the new prewarm spawned
+            // anything. SessionStarted carries the bootstrap value;
+            // this overlay handles subsequent state changes.
+            state.session.lsp_active = !p.started.is_empty();
             true
         }
 

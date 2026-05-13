@@ -82,6 +82,37 @@ pub struct EngineResources {
 /// The `RuntimeConfig` itself is caller-built — TUI typically
 /// snapshots it from a hot-reload publisher, SDK / headless build it
 /// once via [`crate::headless::build_runtime_config_for_cli`].
+/// Build a real LSP handle when `Feature::Lsp` is enabled and the
+/// session has a workspace root + coco-home to load
+/// `lsp_servers.json` from. Returns `None` otherwise — callers thread
+/// the `None` into [`install_session_late_binds`] so the runtime's LSP
+/// slot stays empty and `LspTool` is hidden from the model.
+///
+/// The constructed `LspServerManager` is wrapped in
+/// [`crate::lsp_handle_adapter::LspManagerAdapter`] so file mutation
+/// tools (Write / Edit / NotebookEdit) can dispatch `didSave` +
+/// `clearDeliveredDiagnosticsForFile` through `ctx.lsp.notify_save`.
+///
+/// The adapter is **prewarmed** before returning (TS parity:
+/// `manager.initialize()` at session bootstrap so `LSPTool.isEnabled`
+/// reads accurate running-state by turn 1). Prewarm is best-effort —
+/// servers that fail to spawn just flip the adapter's `is_connected`
+/// gate to `false`, hiding the tool cleanly instead of throwing on the
+/// first call.
+pub async fn build_lsp_handle_if_enabled(
+    runtime_config: &RuntimeConfig,
+    coco_home: &Path,
+    cwd: &Path,
+) -> Option<coco_tool_runtime::LspHandleRef> {
+    if !runtime_config.features.enabled(coco_types::Feature::Lsp) {
+        return None;
+    }
+    let manager = coco_lsp::create_manager(Some(coco_home), Some(cwd.to_path_buf()));
+    let adapter = crate::lsp_handle_adapter::LspManagerAdapter::new(manager);
+    adapter.prewarm(cwd).await;
+    Some(Arc::new(adapter))
+}
+
 pub fn build_engine_resources(
     cli: &Cli,
     runtime_config: &RuntimeConfig,
@@ -208,10 +239,18 @@ fn build_session_command_registry(
 /// `mcp_handle` is optional because TUI does not yet bootstrap an
 /// `McpConnectionManager`. SDK passes `Some(handle)` and gets the
 /// original install ordering preserved (mcp before agent-team).
+///
+/// `lsp_handle` is optional and **independently gated** by
+/// [`coco_types::Feature::Lsp`] at the caller (CLI / SDK / TUI). When
+/// `None`, the runtime's LSP slot stays unset and
+/// `LspTool::is_enabled()` reports `false` (via `NoOpLspHandle`), so
+/// the tool is hidden from the model's tool list — TS parity
+/// (`LSPTool.isEnabled() = isLspConnected()`).
 pub async fn install_session_late_binds(
     runtime: Arc<SessionRuntime>,
     cwd: &Path,
     mcp_handle: Option<coco_tool_runtime::McpHandleRef>,
+    lsp_handle: Option<coco_tool_runtime::LspHandleRef>,
 ) -> Result<()> {
     // Background task runtime — owns the `TaskManager` and per-task
     // disk output; shared with `SwarmAgentHandle` so AgentTool
@@ -251,6 +290,14 @@ pub async fn install_session_late_binds(
     // the very first engine build, matching the original SDK ordering.
     if let Some(handle) = mcp_handle {
         runtime.attach_mcp_handle(handle).await;
+    }
+
+    // LSP handle install: same pattern as MCP. When the caller did the
+    // `Feature::Lsp` gate + manager construction (CLI / SDK), the
+    // handle threads in here so per-turn engines pick it up via
+    // `wire_engine`. TUI passes `None` (no LSP boot yet).
+    if let Some(handle) = lsp_handle {
+        runtime.attach_lsp_handle(handle).await;
     }
 
     // Agent-team wiring (`SwarmAgentHandle` + `QueryEngineAdapter`

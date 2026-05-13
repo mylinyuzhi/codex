@@ -20,7 +20,6 @@ use coco_types::ToolInputSchema;
 use coco_types::ToolName;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 fn default_timeout_ms(config: &coco_config::ToolConfig) -> u64 {
     config.bash.default_timeout_ms.max(1) as u64
@@ -716,18 +715,20 @@ async fn execute_foreground(
     sandbox_state: Option<std::sync::Arc<SandboxState>>,
     sandbox_bypass: SandboxBypass,
 ) -> Result<ToolResult<Value>, ToolError> {
-    // Resolve the working directory. Worktree-isolated subagents set
-    // `ctx.cwd_override` so their bash commands must run inside the
-    // isolated checkout, not the host process's cwd. TS uses `getCwd()`
-    // which the runtime swaps out for isolated sessions
-    // (`BashTool.tsx:643-649`). Falling back to the process cwd (and
-    // finally `/tmp`) matches TS's fallback chain when no override is set.
-    let cwd = ctx
-        .cwd_override
-        .clone()
-        .or_else(|| std::env::current_dir().ok())
-        .unwrap_or_else(|| PathBuf::from("/tmp"));
-    let mut executor = coco_shell::ShellExecutor::new_with_config(&cwd, &ctx.shell_config);
+    // 4-tier cwd resolution. Spawn at the live session cwd; the
+    // out-of-project guard runs AFTER exec (TS parity:
+    // `BashTool.tsx:702-707` resets only after the command completes,
+    // so the offending command runs in /tmp / the drifted dir and the
+    // annotation lands on its stderr).
+    let cwd = crate::tools::shell_cwd::resolve_spawn_cwd(ctx).await;
+
+    // Prefer the session-scoped provider (snapshot + session-env + `/env`
+    // + shell-prefix all live there). Fall back to per-call construction
+    // for legacy / test paths that haven't wired the provider yet.
+    let mut executor = match ctx.shell_provider.clone() {
+        Some(provider) => coco_shell::ShellExecutor::with_provider(&cwd, provider),
+        None => coco_shell::ShellExecutor::new_with_config(&cwd, &ctx.shell_config),
+    };
 
     // R6-T17 + R6-T18: thread the ctx cancel token and the sandbox state
     // through to the shell executor. When `sandbox_state` is `Some` and
@@ -790,6 +791,13 @@ async fn execute_foreground(
         message: format!("shell execution failed: {e}"),
         source: None,
     })?;
+
+    // setCwd(new_cwd) → resetCwdIfOutsideProject. If reset fires, the
+    // annotation lands on THIS command's stderr — matching TS
+    // (`BashTool.tsx:702-707`). No-op for worktree subagents.
+    let reset_message =
+        crate::tools::shell_cwd::finalize_cwd_post_exec(ctx, cmd_result.new_cwd.clone()).await;
+    crate::tools::shell_cwd::annotate_stderr_with_reset(&mut cmd_result.stderr, reset_message);
 
     // Annotate stderr with any sandbox violations recorded during this
     // command. Mirrors TS `annotateStderrWithSandboxFailures` —

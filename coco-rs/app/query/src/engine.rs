@@ -98,6 +98,22 @@ pub struct QueryEngine {
     /// [`Self::with_fallback_client`] (one tier) or
     /// [`Self::with_fallback_clients`] (chain).
     pub(crate) fallback_clients: Vec<Arc<ApiClient>>,
+    /// Pre-resolved `ApiClient` for `ModelRole::Plan`, used to swap
+    /// the active client when `permission_mode == Plan`. `None` means
+    /// "no swap installed" — the engine stays on Main for every turn,
+    /// matching the pre-feature behaviour.
+    ///
+    /// TS parity behaviour: `getRuntimeMainLoopModel`
+    /// (utils/model/model.ts:145). TS encodes the swap via
+    /// `opusplan`/`haiku` aliases on the user's main model setting;
+    /// coco-rs encodes it as the generic `ModelRole::Plan` config slot,
+    /// so the swap works for any provider.
+    ///
+    /// Set via [`Self::with_plan_role_client`] from
+    /// `SessionRuntime::wire_engine` after pre-resolving
+    /// `client_for_role(ModelRole::Plan)`. Forks / subagents leave this
+    /// `None` so their main loop stays on the parent-inherited client.
+    pub(crate) plan_role_client: Option<Arc<ApiClient>>,
     /// Optional half-open recovery policy. Empty = sticky
     /// fallback (post-switch the session stays on the fallback
     /// for the remainder). When set, the engine periodically
@@ -160,6 +176,14 @@ pub struct QueryEngine {
     /// applies"). Wired by `session_runtime` via
     /// [`Self::with_mcp_handle`].
     pub(crate) mcp_handle: Option<coco_tool_runtime::McpHandleRef>,
+    /// LSP handle for code-intelligence operations exposed to tools
+    /// (`LSPTool`). `None` ⇒ `ToolContextFactory` substitutes
+    /// `NoOpLspHandle`, which reports `is_connected() = false` so
+    /// `LspTool::is_enabled` filters the tool out of the model's tool
+    /// list (TS parity:
+    /// `LSPTool.isEnabled() = isLspConnected()`). Wired by
+    /// `session_runtime` via [`Self::with_lsp_handle`].
+    pub(crate) lsp_handle: Option<coco_tool_runtime::LspHandleRef>,
     /// Agent-runtime handle for `AgentTool` (subagent spawn / team
     /// management / background signalling). `None` resolves to
     /// `NoOpAgentHandle` in [`ToolContextFactory::build`]; the CLI /
@@ -698,6 +722,31 @@ impl QueryEngine {
 
             turn += 1;
             let turn_id = format!("turn-{turn}");
+
+            // Consume the one-shot `pending_clear_message_history` flag
+            // set by `ExitPlanModeTool` when the user picked "clear
+            // context" in the multi-choice exit dialog. We drain it
+            // here at turn entry (after `turn += 1` so the log line
+            // below reports the cleared state) so the cleared history
+            // is what every downstream subsystem (reminders, prompt
+            // build, API call) observes.
+            //
+            // TS parity: `ExitPlanModePermissionRequest.tsx:383`
+            // sets `initialMessage.clearContext = true`, and the REPL
+            // wipes context before starting the new session. Rust
+            // mirrors the intent — at the next turn the model sees a
+            // fresh transcript.
+            if let Some(state_handle) = self.app_state.as_ref() {
+                let drained = {
+                    let mut w = state_handle.write().await;
+                    std::mem::take(&mut w.pending_clear_message_history)
+                };
+                if drained {
+                    history.clear();
+                    info!(turn, "plan-mode exit cleared conversation history");
+                }
+            }
+
             // The `turn` canonical anchor cannot be a single async span guard
             // here: this loop body has many `.await` points, and
             // `EnteredSpan` is sync-only. Per-step turn correlation is
@@ -962,7 +1011,32 @@ impl QueryEngine {
             // Route through ModelRuntime so post-fallback / probe
             // calls reach the active provider. When no fallback is
             // configured this is identical to `self.client.query_stream`.
-            let active_client = model_runtime.current_client();
+            //
+            // Plan-mode swap (TS parity `getRuntimeMainLoopModel`,
+            // utils/model/model.ts:145): when `permission_mode == Plan`
+            // and the user pre-configured a Plan-role client, route
+            // this turn through it instead of the Main client. The
+            // context-size guard mirrors TS's `exceeds200kTokens` bypass
+            // — when the most recent assistant message's total context
+            // would overflow the Plan model's window, stay on Main to
+            // avoid truncation. The threshold is configurable via
+            // `PlanModeSettings.plan_model_fallback_threshold_tokens`.
+            let plan_swap_candidate = if self.config.permission_mode
+                == coco_types::PermissionMode::Plan
+                && !crate::engine_helpers::most_recent_assistant_exceeds(
+                    &history.messages,
+                    self.config
+                        .plan_mode_settings
+                        .plan_model_fallback_threshold_tokens,
+                ) {
+                self.plan_role_client.as_ref()
+            } else {
+                None
+            };
+            let active_client = match plan_swap_candidate {
+                Some(plan_client) => plan_client.clone(),
+                None => model_runtime.current_client(),
+            };
             tracing::debug!(
                 turn,
                 turn_id = %turn_id,

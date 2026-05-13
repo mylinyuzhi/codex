@@ -15,6 +15,7 @@ coco-inference.workspace = true
 coco-tool-runtime.workspace = true
 coco-tools.workspace = true
 coco-sandbox.workspace = true
+coco-shell.workspace = true
 coco-messages.workspace = true
 coco-context.workspace = true
 coco-compact.workspace = true

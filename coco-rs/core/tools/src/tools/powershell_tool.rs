@@ -344,7 +344,7 @@ impl Tool for PowerShellTool {
                 .unwrap_or(false),
         );
 
-        execute_foreground(command, &input, sandbox_state, sandbox_bypass).await
+        execute_foreground(command, &input, ctx, sandbox_state, sandbox_bypass).await
     }
 }
 
@@ -394,9 +394,19 @@ async fn execute_background(
 }
 
 /// Foreground execution with UTF-16 output decode and optional sandbox wrap.
+///
+/// Goes through [`coco_shell::ShellExecutor`] + [`coco_shell::PowerShellProvider`]
+/// so cancel-token, timeout, sandbox-wrap, and CWD tracking all behave
+/// the same way they do for `BashTool`. The provider's `build_exec_command`
+/// emits `-EncodedCommand <base64-utf16le>` when sandboxed (to dodge the
+/// sandbox-runtime's shellquote layer corrupting `!`/`$`/`?`); we get
+/// `stdout_bytes` / `stderr_bytes` back so [`decode_ps_output`] can
+/// recover the original UTF-16 BOM-prefixed text without going through
+/// the lossy String conversion the executor applies for display.
 async fn execute_foreground(
     command: &str,
     input: &Value,
+    ctx: &ToolUseContext,
     sandbox_state: Option<Arc<SandboxState>>,
     sandbox_bypass: SandboxBypass,
 ) -> Result<ToolResult<Value>, ToolError> {
@@ -406,10 +416,25 @@ async fn execute_foreground(
         .unwrap_or(DEFAULT_TIMEOUT_MS)
         .min(MAX_TIMEOUT_MS);
 
-    let mut cmd = tokio::process::Command::new("pwsh");
-    cmd.args(["-NoProfile", "-NonInteractive", "-Command", command])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
+    // 4-tier cwd resolution. Spawn at live session cwd; reset guard
+    // runs AFTER exec to match TS `PowerShellTool.tsx:520-525` —
+    // annotation lands on the offending command's stderr.
+    let cwd = crate::tools::shell_cwd::resolve_spawn_cwd(ctx).await;
+
+    // Build a per-call pwsh provider. PowerShell isn't currently
+    // session-scoped (no snapshot/session-env story for pwsh) — a fresh
+    // provider per call is cheap and isolates `/env` state correctly.
+    // Note this is independent of cwd persistence, which uses the same
+    // session-cwd plumbing as bash above.
+    let pwsh_shell = coco_shell::get_shell(coco_shell::ShellType::PowerShell, None).ok_or(
+        ToolError::ExecutionFailed {
+            message: "pwsh not found on PATH. Install PowerShell to use this tool.".into(),
+            source: None,
+        },
+    )?;
+    let provider: Arc<dyn coco_shell::ShellProvider> =
+        Arc::new(coco_shell::PowerShellProvider::from_shell(pwsh_shell));
+    let mut executor = coco_shell::ShellExecutor::with_provider(&cwd, provider);
 
     let violations_baseline = if let Some(state) = &sandbox_state {
         Some(state.violations_total_snapshot().await)
@@ -417,63 +442,73 @@ async fn execute_foreground(
         None
     };
 
-    if let Some(state) = &sandbox_state {
-        state
-            .try_wrap_command(command, sandbox_bypass, &mut cmd)
-            .map_err(|e| ToolError::PermissionDenied {
-                message: format!("PowerShell sandbox wrap failed: {e}"),
+    let opts = coco_shell::ExecOptions {
+        timeout_ms: Some(timeout_ms as i64),
+        cancel: Some(ctx.cancel.clone()),
+        sandbox: sandbox_state.clone(),
+        sandbox_bypass,
+        ..Default::default()
+    };
+
+    let cmd_result =
+        executor
+            .execute(command, &opts)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed {
+                message: format!("PowerShell execution failed: {e}"),
+                source: None,
             })?;
-    }
 
-    let child = cmd.spawn().map_err(|e| ToolError::ExecutionFailed {
-        message: format!("Failed to start pwsh: {e}. Ensure PowerShell (pwsh) is installed."),
-        source: None,
-    })?;
-
-    let result = tokio::time::timeout(
-        std::time::Duration::from_millis(timeout_ms),
-        child.wait_with_output(),
-    )
-    .await;
-
-    match result {
-        Ok(Ok(output)) => {
-            // TS Windows pwsh emits UTF-16 LE/BE with BOM. `decode_ps_output`
-            // transparently handles both encodings and falls back to
-            // UTF-8 for everything else.
-            let stdout = decode_ps_output(&output.stdout);
-            let mut stderr = decode_ps_output(&output.stderr);
-            if let (Some(state), Some(prev)) = (&sandbox_state, violations_baseline)
-                && let Some(annotation) = state.format_violations_since(prev).await
-            {
-                if stderr.is_empty() {
-                    stderr = annotation;
-                } else {
-                    stderr.push('\n');
-                    stderr.push_str(&annotation);
-                }
-            }
-            let exit_code = output.status.code().unwrap_or(-1);
-            Ok(ToolResult {
-                data: serde_json::json!({
-                    "stdout": stdout,
-                    "stderr": stderr,
-                    "exitCode": exit_code,
-                    "interrupted": false,
-                }),
-                new_messages: vec![],
-                app_state_patch: None,
-                permission_updates: Vec::new(),
-            })
-        }
-        Ok(Err(e)) => Err(ToolError::ExecutionFailed {
-            message: format!("PowerShell execution failed: {e}"),
-            source: None,
-        }),
-        Err(_) => Err(ToolError::Timeout {
+    if cmd_result.timed_out {
+        return Err(ToolError::Timeout {
             timeout_ms: timeout_ms as i64,
-        }),
+        });
     }
+
+    // setCwd(new_cwd) → resetCwdIfOutsideProject (TS parity with
+    // `PowerShellTool.tsx:520-525`). `Set-Location C:\foo` in turn N
+    // persists into turn N+1; if it drifted outside the allowed set,
+    // session_cwd snaps back to original and we annotate stderr.
+    let reset_message =
+        crate::tools::shell_cwd::finalize_cwd_post_exec(ctx, cmd_result.new_cwd.clone()).await;
+
+    // Decode UTF-16 BOM-prefixed output. Falls through to UTF-8 lossy
+    // when the byte buffer is plain UTF-8.
+    let stdout = cmd_result
+        .stdout_bytes
+        .as_deref()
+        .map(decode_ps_output)
+        .unwrap_or_else(|| cmd_result.stdout.clone());
+    let mut stderr = cmd_result
+        .stderr_bytes
+        .as_deref()
+        .map(decode_ps_output)
+        .unwrap_or_else(|| cmd_result.stderr.clone());
+
+    crate::tools::shell_cwd::annotate_stderr_with_reset(&mut stderr, reset_message);
+
+    if let (Some(state), Some(prev)) = (&sandbox_state, violations_baseline)
+        && let Some(annotation) = state.format_violations_since(prev).await
+    {
+        if stderr.is_empty() {
+            stderr = annotation;
+        } else {
+            stderr.push('\n');
+            stderr.push_str(&annotation);
+        }
+    }
+
+    Ok(ToolResult {
+        data: serde_json::json!({
+            "stdout": stdout,
+            "stderr": stderr,
+            "exitCode": cmd_result.exit_code,
+            "interrupted": cmd_result.interrupted,
+        }),
+        new_messages: vec![],
+        app_state_patch: None,
+        permission_updates: Vec::new(),
+    })
 }
 
 #[cfg(test)]

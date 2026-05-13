@@ -8,8 +8,15 @@ use walkdir::WalkDir;
 
 use crate::config::IgnoreConfig;
 
-/// Ignore file names (ripgrep native support)
-pub const IGNORE_FILES: &[&str] = &[".ignore"];
+/// Ignore file names (ripgrep native support + agent-specific overrides).
+///
+/// `.agentignore` uses the same gitignore syntax as `.ignore`, but is the
+/// agreed name for **AI-agent-only** exclusions — checked-in files the
+/// user wants hidden from Claude / coco-rs (secrets, fixtures, generated
+/// artifacts) without affecting the rest of git tooling. Treated
+/// identically to `.ignore` at the matcher level; the filename split
+/// just makes intent explicit.
+pub const IGNORE_FILES: &[&str] = &[".ignore", ".agentignore"];
 use crate::patterns::BINARY_FILE_PATTERNS;
 use crate::patterns::COMMON_DIRECTORY_EXCLUDES;
 use crate::patterns::COMMON_IGNORE_PATTERNS;

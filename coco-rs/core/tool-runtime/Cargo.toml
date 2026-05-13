@@ -17,6 +17,7 @@ coco-messages.workspace = true
 coco-config.workspace = true
 coco-context.workspace = true
 coco-sandbox.workspace = true
+coco-shell.workspace = true
 # Pure-logic foundation; carries the AgentDefinition catalog snapshot that
 # `ToolUseContext` exposes to AgentTool. One-way dep — `coco-subagent`
 # does NOT depend on `coco-tool-runtime` (see core/subagent/Cargo.toml).

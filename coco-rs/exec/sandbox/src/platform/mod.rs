@@ -31,11 +31,19 @@ pub trait SandboxPlatform: Send + Sync {
     /// `command` is the original shell command string (used on macOS for
     /// violation correlation via `CMD64_` tags). `session_tag` is the
     /// session-unique tag for log filtering (format: `_<hex>_SBX`).
+    ///
+    /// `extra_writable_binds` — per-command host paths that should be
+    /// bind-mounted writable inside the sandbox. The shell executor
+    /// passes a freshly-allocated tmpdir (`/tmp/coco-sbx-<rand>`) here
+    /// so the inner command can write the cwd-tracking file there and
+    /// the parent process can read it after exec. TS source:
+    /// `bashProvider.ts:235-247` (sandboxTmpDir).
     fn wrap_command(
         &self,
         config: &SandboxConfig,
         command: &str,
         session_tag: &str,
+        extra_writable_binds: &[std::path::PathBuf],
         cmd: &mut tokio::process::Command,
     ) -> Result<()>;
 }
@@ -79,6 +87,7 @@ impl SandboxPlatform for NoopSandbox {
         _config: &SandboxConfig,
         _command: &str,
         _session_tag: &str,
+        _extra_writable_binds: &[std::path::PathBuf],
         _cmd: &mut tokio::process::Command,
     ) -> Result<()> {
         Ok(())

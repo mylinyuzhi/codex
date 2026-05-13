@@ -19,6 +19,14 @@ use crate::matcher::PatternMatcher;
 /// Ignore file names to scan when building matchers.
 const GITIGNORE_FILENAME: &str = ".gitignore";
 const IGNORE_FILENAME: &str = ".ignore";
+/// AI-agent-only ignore file. Same syntax as `.gitignore`, intentionally
+/// not in `.gitignore` because the user wants the file checked into
+/// version control but **hidden from agent tooling** (secrets, fixtures,
+/// generated artifacts that confuse the model). Gated by the same
+/// `IgnoreConfig::respect_ignore` flag as `.ignore` — both are
+/// "additional gitignore files" from the perspective of the matcher
+/// chain.
+const AGENTIGNORE_FILENAME: &str = ".agentignore";
 
 /// Maximum depth when scanning for ignore files.
 const MAX_SCAN_DEPTH: usize = 20;
@@ -240,6 +248,15 @@ fn add_ignore_files_for_dir(
         let ignore_path = dir.join(IGNORE_FILENAME);
         if ignore_path.is_file() {
             builder.add(&ignore_path);
+            has_rules = true;
+        }
+        // `.agentignore` is the AI-only sibling of `.ignore`. Same
+        // gate, same syntax — added to the SAME builder so negation /
+        // ordering interacts naturally with `.ignore` rules within
+        // this directory level.
+        let agentignore_path = dir.join(AGENTIGNORE_FILENAME);
+        if agentignore_path.is_file() {
+            builder.add(&agentignore_path);
             has_rules = true;
         }
     }

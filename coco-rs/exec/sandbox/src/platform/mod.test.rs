@@ -24,7 +24,7 @@ fn test_create_platform_wrap_disabled_mode() {
     // Wrapping with disabled enforcement should be a no-op
     assert!(
         sandbox
-            .wrap_command(&config, "echo hello", "_test_SBX", &mut cmd)
+            .wrap_command(&config, "echo hello", "_test_SBX", &[], &mut cmd)
             .is_ok()
     );
 }

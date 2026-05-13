@@ -49,6 +49,7 @@ impl SandboxPlatform for LinuxSandbox {
         config: &SandboxConfig,
         _command: &str,
         _session_tag: &str,
+        extra_writable_binds: &[PathBuf],
         cmd: &mut tokio::process::Command,
     ) -> Result<()> {
         if config.enforcement == EnforcementLevel::Disabled {
@@ -59,7 +60,15 @@ impl SandboxPlatform for LinuxSandbox {
             message: "bubblewrap (bwrap) not found",
         })?;
 
-        let bwrap_args = build_bwrap_args(config);
+        let mut bwrap_args = build_bwrap_args(config);
+        // Per-command writable binds — shell-executor passes the
+        // freshly-allocated tmpdir so the inner command can persist
+        // its cwd-tracking file there and the parent can read it.
+        // TS parity: `bashProvider.ts:235-247` sandboxTmpDir.
+        for path in extra_writable_binds {
+            let path_str = path.display().to_string();
+            bwrap_args.extend(["--bind".to_string(), path_str.clone(), path_str]);
+        }
         let seccomp_mode =
             seccomp::determine_seccomp_mode(config.allow_network, config.proxy_active);
 

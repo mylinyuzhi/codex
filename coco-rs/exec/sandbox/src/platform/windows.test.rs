@@ -17,7 +17,7 @@ fn test_wrap_command_disabled_enforcement() {
     let mut cmd = tokio::process::Command::new("echo");
     cmd.arg("hello");
 
-    let result = sandbox.wrap_command(&config, "echo hello", "_test_SBX", &mut cmd);
+    let result = sandbox.wrap_command(&config, "echo hello", "_test_SBX", &[], &mut cmd);
     assert!(result.is_ok());
 
     // Command should not be modified when enforcement is disabled
@@ -35,7 +35,7 @@ fn test_wrap_command_with_enforcement() {
     let mut cmd = tokio::process::Command::new("bash");
     cmd.arg("-c").arg("ls -la");
 
-    let result = sandbox.wrap_command(&config, "ls -la", "_test_SBX", &mut cmd);
+    let result = sandbox.wrap_command(&config, "ls -la", "_test_SBX", &[], &mut cmd);
     assert!(result.is_ok());
 
     // Command should be replaced with coco helper

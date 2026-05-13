@@ -18,6 +18,7 @@ use std::path::PathBuf;
 
 use crate::agent_handle::AgentHandleRef;
 use crate::hook_handle::HookHandleRef;
+use crate::lsp_handle::LspHandleRef;
 use crate::mcp_handle::McpHandleRef;
 use crate::permission_bridge::ToolPermissionBridgeRef;
 use crate::registry::ToolRegistry;
@@ -122,12 +123,42 @@ pub struct ToolUseContext {
     /// (`ShellExecutor::new_with_config`) for shell-override + snapshot
     /// gating.
     pub shell_config: coco_config::ShellConfig,
+    /// Session-scoped shell command assembler. Constructed once at
+    /// session bootstrap and threaded through every tool invocation so
+    /// that snapshot capture, session-env hook output, `/env` vars,
+    /// and `COCO_SHELL_PREFIX` survive across calls.
+    ///
+    /// `None` for tests / SDK paths that haven't wired the provider —
+    /// `BashTool` falls back to constructing a fresh per-call executor
+    /// (no snapshot benefit but still functional).
+    pub shell_provider: Option<std::sync::Arc<dyn coco_shell::ShellProvider>>,
+    /// Frozen anchor — captured at session start. BashTool's
+    /// `reset_cwd_if_outside_project` uses it to snap back when the
+    /// live cwd drifts out of the allowed working set. `None` for
+    /// tests / agent-worktree paths.
+    pub original_cwd: Option<std::path::PathBuf>,
+    /// Mutable session CWD shared across all BashTool invocations.
+    /// `cd /tmp` in turn N updates this; turn N+1 reads it as the
+    /// spawn cwd. `None` ⇒ BashTool uses `std::env::current_dir()`
+    /// (per-call, no persistence — legacy / test path).
+    pub session_cwd: Option<std::sync::Arc<tokio::sync::RwLock<std::path::PathBuf>>>,
     /// Resolved web-fetch runtime configuration. Consumed by the
     /// `WebFetchTool` for timeout / max-content-length / user-agent.
     pub web_fetch_config: coco_config::WebFetchConfig,
     /// Resolved web-search runtime configuration. Consumed by the
     /// `WebSearchTool` for max-results.
     pub web_search_config: coco_config::WebSearchConfig,
+    /// Resolved plan-mode runtime settings. Consumed by
+    /// `ExitPlanModeTool` to decide whether to surface the multi-choice
+    /// clear-context dialog, and by the engine main loop to read the
+    /// `plan_model_fallback_threshold_tokens` value when computing the
+    /// plan-mode model swap.
+    pub plan_mode_settings: coco_config::PlanModeSettings,
+    /// Resolved LSP tool-layer runtime configuration. Consumed by the
+    /// `LspTool` for the per-query file-size gate. Server roster lives
+    /// in `coco-lsp::LspServersConfig` (separate config file) — this
+    /// struct only carries cross-server tool-side knobs.
+    pub lsp_config: coco_config::LspConfig,
     /// Centralized feature gates. See
     /// `docs/coco-rs/feature-gates-and-tool-filtering.md`.
     pub features: Arc<Features>,
@@ -333,6 +364,14 @@ pub struct ToolUseContext {
     // ── MCP ──
     /// Handle for MCP operations (list/read resources, call tools, auth).
     pub mcp: McpHandleRef,
+
+    // ── LSP ──
+    /// Handle for LSP code-intelligence operations. `NoOpLspHandle` in
+    /// sessions without a configured language server — its
+    /// `is_connected()` returns `false`, which combined with
+    /// `LspTool::is_enabled` hides the tool from the model's tool list
+    /// entirely (TS parity: `LSPTool.isEnabled() = isLspConnected()`).
+    pub lsp: LspHandleRef,
 
     // ── Scheduling ──
     /// Handle for cron/trigger operations.
@@ -549,8 +588,13 @@ impl ToolUseContext {
             reminder_mailbox: self.reminder_mailbox.clone(),
             memory_config: self.memory_config.clone(),
             shell_config: self.shell_config.clone(),
+            shell_provider: self.shell_provider.clone(),
+            original_cwd: self.original_cwd.clone(),
+            session_cwd: self.session_cwd.clone(),
             web_fetch_config: self.web_fetch_config.clone(),
             web_search_config: self.web_search_config.clone(),
+            plan_mode_settings: self.plan_mode_settings.clone(),
+            lsp_config: self.lsp_config.clone(),
             features: self.features.clone(),
             tool_overrides: self.tool_overrides.clone(),
             tool_filter: self.tool_filter.clone(),
@@ -589,6 +633,7 @@ impl ToolUseContext {
             in_progress_tool_use_ids: self.in_progress_tool_use_ids.clone(),
             side_query: self.side_query.clone(),
             mcp: self.mcp.clone(),
+            lsp: self.lsp.clone(),
             schedules: self.schedules.clone(),
             agent: self.agent.clone(),
             skill: self.skill.clone(),
@@ -706,8 +751,13 @@ impl ToolUseContext {
             reminder_mailbox: coco_system_reminder::noop_reminder_mailbox(),
             memory_config: coco_config::MemoryConfig::default(),
             shell_config: coco_config::ShellConfig::default(),
+            shell_provider: None,
+            original_cwd: None,
+            session_cwd: None,
             web_fetch_config: coco_config::WebFetchConfig::default(),
             web_search_config: coco_config::WebSearchConfig::default(),
+            plan_mode_settings: coco_config::PlanModeSettings::default(),
+            lsp_config: coco_config::LspConfig::default(),
             features: Arc::new(Features::with_defaults()),
             tool_overrides: Arc::new(ToolOverrides::none()),
             tool_filter: ToolFilter::unrestricted(),
@@ -753,6 +803,7 @@ impl ToolUseContext {
             in_progress_tool_use_ids: Arc::new(RwLock::new(HashSet::new())),
             side_query: Arc::new(crate::side_query::NoOpSideQuery),
             mcp: Arc::new(crate::mcp_handle::NoOpMcpHandle),
+            lsp: Arc::new(crate::lsp_handle::NoOpLspHandle),
             schedules: Arc::new(crate::schedule_store::NoOpScheduleStore),
             agent: Arc::new(crate::agent_handle::NoOpAgentHandle),
             skill: Arc::new(crate::skill_handle::NoOpSkillHandle),

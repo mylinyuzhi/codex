@@ -1,102 +1,40 @@
-//! Full LSP tool implementation ported from TS LSPTool/.
+//! Shared LSP DTOs + AI-friendly formatters used by `LspTool`.
 //!
-//! TS: tools/LSPTool/LSPTool.ts, formatters.ts, schemas.ts
-//!
-//! Provides code intelligence via Language Server Protocol:
-//! go-to-definition, find-references, hover, document symbols,
-//! workspace symbols, go-to-implementation, call hierarchy,
-//! and diagnostics listing.
+//! TS: `tools/LSPTool/formatters.ts`. The action enum lives in
+//! [`crate::input_types::LspAction`] (9-variant TS-mirror) and dispatch
+//! lives in [`crate::tools::lsp_tool`]. This file is a leaf module —
+//! pure data + pure formatters, no I/O, no async, no `ctx`.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
-
-// ── LSP operation enum ──
-
-/// All supported LSP operations (matches TS discriminated union).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum LspOperation {
-    GoToDefinition,
-    FindReferences,
-    Hover,
-    DocumentSymbol,
-    WorkspaceSymbol,
-    GoToImplementation,
-    PrepareCallHierarchy,
-    IncomingCalls,
-    OutgoingCalls,
-    Diagnostics,
-}
-
-impl LspOperation {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::GoToDefinition => "goToDefinition",
-            Self::FindReferences => "findReferences",
-            Self::Hover => "hover",
-            Self::DocumentSymbol => "documentSymbol",
-            Self::WorkspaceSymbol => "workspaceSymbol",
-            Self::GoToImplementation => "goToImplementation",
-            Self::PrepareCallHierarchy => "prepareCallHierarchy",
-            Self::IncomingCalls => "incomingCalls",
-            Self::OutgoingCalls => "outgoingCalls",
-            Self::Diagnostics => "diagnostics",
-        }
-    }
-
-    /// Map operation to LSP method string.
-    pub fn lsp_method(&self) -> &'static str {
-        match self {
-            Self::GoToDefinition => "textDocument/definition",
-            Self::FindReferences => "textDocument/references",
-            Self::Hover => "textDocument/hover",
-            Self::DocumentSymbol => "textDocument/documentSymbol",
-            Self::WorkspaceSymbol => "workspace/symbol",
-            Self::GoToImplementation => "textDocument/implementation",
-            Self::PrepareCallHierarchy => "textDocument/prepareCallHierarchy",
-            Self::IncomingCalls => "textDocument/prepareCallHierarchy",
-            Self::OutgoingCalls => "textDocument/prepareCallHierarchy",
-            Self::Diagnostics => "textDocument/diagnostic",
-        }
-    }
-
-    /// Whether this operation requires a file position (line + character).
-    pub fn requires_position(&self) -> bool {
-        match self {
-            Self::DocumentSymbol | Self::WorkspaceSymbol | Self::Diagnostics => false,
-            _ => true,
-        }
-    }
-}
 
 // ── LSP data structures ──
 
 /// A location returned by the LSP server (file URI + range).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LspLocation {
     pub uri: String,
     pub range: LspRange,
 }
 
 /// Start/end position pair.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LspRange {
     pub start: LspPosition,
     pub end: LspPosition,
 }
 
 /// Zero-based line and character offset.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LspPosition {
     pub line: i32,
     pub character: i32,
 }
 
 /// Symbol kind (LSP spec values 1-26).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SymbolKind(pub i32);
 
 impl SymbolKind {
@@ -177,7 +115,11 @@ impl HoverContents {
         match self {
             Self::String(s) => s.clone(),
             Self::Markup { value, .. } => value.clone(),
-            Self::Array(items) => items.iter().map(Self::to_text).collect::<Vec<_>>().join("\n\n"),
+            Self::Array(items) => items
+                .iter()
+                .map(Self::to_text)
+                .collect::<Vec<_>>()
+                .join("\n\n"),
         }
     }
 }
@@ -209,34 +151,6 @@ pub struct OutgoingCall {
     pub from_ranges: Vec<LspRange>,
 }
 
-/// LSP diagnostic severity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DiagnosticSeverity(pub i32);
-
-impl DiagnosticSeverity {
-    pub fn label(&self) -> &'static str {
-        match self.0 {
-            1 => "Error",
-            2 => "Warning",
-            3 => "Information",
-            4 => "Hint",
-            _ => "Unknown",
-        }
-    }
-}
-
-/// A single diagnostic (error/warning).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LspDiagnostic {
-    pub range: LspRange,
-    pub severity: Option<DiagnosticSeverity>,
-    pub message: String,
-    #[serde(default)]
-    pub source: Option<String>,
-    #[serde(default)]
-    pub code: Option<Value>,
-}
-
 /// Structured output from an LSP operation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LspOutput {
@@ -248,9 +162,6 @@ pub struct LspOutput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_count: Option<i32>,
 }
-
-/// Maximum LSP file size for analysis (10 MB).
-const MAX_LSP_FILE_SIZE_BYTES: u64 = 10_000_000;
 
 // ── URI utilities ──
 
@@ -264,7 +175,7 @@ pub fn uri_to_file_path(uri: &str) -> String {
     }
 
     urlencoding::decode(&path)
-        .map(|s| s.into_owned())
+        .map(std::borrow::Cow::into_owned)
         .unwrap_or(path)
 }
 
@@ -276,12 +187,12 @@ pub fn format_uri(uri: &str, cwd: Option<&str>) -> String {
 
     let file_path = uri_to_file_path(uri);
 
-    if let Some(cwd) = cwd {
-        if let Ok(rel) = pathdiff::diff_paths(&file_path, cwd) {
-            let rel_str = rel.to_string_lossy().replace('\\', "/");
-            if rel_str.len() < file_path.len() && !rel_str.starts_with("../../") {
-                return rel_str;
-            }
+    if let Some(cwd) = cwd
+        && let Some(rel) = pathdiff::diff_paths(&file_path, cwd)
+    {
+        let rel_str = rel.to_string_lossy().replace('\\', "/");
+        if rel_str.len() < file_path.len() && !rel_str.starts_with("../../") {
+            return rel_str;
         }
     }
 
@@ -309,7 +220,10 @@ pub fn format_definition_result(locations: &[LspLocation], cwd: Option<&str>) ->
     if valid.len() == 1 {
         return format!("Defined in {}", format_location(valid[0], cwd));
     }
-    let list: Vec<String> = valid.iter().map(|l| format!("  {}", format_location(l, cwd))).collect();
+    let list: Vec<String> = valid
+        .iter()
+        .map(|l| format!("  {}", format_location(l, cwd)))
+        .collect();
     format!("Found {} definitions:\n{}", valid.len(), list.join("\n"))
 }
 
@@ -387,18 +301,12 @@ fn format_symbol_tree(sym: &DocumentSymbol, indent: i32, lines: &mut Vec<String>
     }
 }
 
-/// Count total symbols including nested children.
-pub fn count_symbols(symbols: &[DocumentSymbol]) -> i32 {
-    let mut count = symbols.len() as i32;
-    for sym in symbols {
-        count += count_symbols(&sym.children);
-    }
-    count
-}
-
 /// Format workspace symbols (flat list grouped by file).
 pub fn format_workspace_symbols(symbols: &[SymbolInformation], cwd: Option<&str>) -> String {
-    let valid: Vec<_> = symbols.iter().filter(|s| !s.location.uri.is_empty()).collect();
+    let valid: Vec<_> = symbols
+        .iter()
+        .filter(|s| !s.location.uri.is_empty())
+        .collect();
     if valid.is_empty() {
         return "No symbols found in workspace.".to_string();
     }
@@ -418,7 +326,11 @@ pub fn format_workspace_symbols(symbols: &[SymbolInformation], cwd: Option<&str>
     let mut lines = vec![format!(
         "Found {} {} in workspace:",
         valid.len(),
-        if valid.len() == 1 { "symbol" } else { "symbols" }
+        if valid.len() == 1 {
+            "symbol"
+        } else {
+            "symbols"
+        }
     )];
     for (path, syms) in &by_file {
         lines.push(format!("\n{path}:"));
@@ -543,36 +455,6 @@ pub fn format_outgoing_calls(calls: &[OutgoingCall], cwd: Option<&str>) -> Strin
     lines.join("\n")
 }
 
-/// Format diagnostics for a file.
-pub fn format_diagnostics(diagnostics: &[LspDiagnostic], file_path: &str) -> String {
-    if diagnostics.is_empty() {
-        return format!("No diagnostics for {file_path}");
-    }
-    let mut lines = vec![format!(
-        "Found {} {} in {file_path}:",
-        diagnostics.len(),
-        if diagnostics.len() == 1 { "diagnostic" } else { "diagnostics" }
-    )];
-    for diag in diagnostics {
-        let line = diag.range.start.line + 1;
-        let ch = diag.range.start.character + 1;
-        let severity = diag.severity.map(|s| s.label()).unwrap_or("Unknown");
-        let mut entry = format!("  {severity} at {line}:{ch}: {}", diag.message);
-        if let Some(source) = &diag.source {
-            entry.push_str(&format!(" ({source})"));
-        }
-        if let Some(code) = &diag.code {
-            match code {
-                Value::String(s) => entry.push_str(&format!(" [{s}]")),
-                Value::Number(n) => entry.push_str(&format!(" [{n}]")),
-                _ => {}
-            }
-        }
-        lines.push(entry);
-    }
-    lines.join("\n")
-}
-
 // ── Helpers ──
 
 /// Group locations by file URI, preserving insertion order.
@@ -600,69 +482,56 @@ pub fn count_unique_files(locations: &[LspLocation]) -> i32 {
     uris.len() as i32
 }
 
-/// Validate that a file exists, is a regular file, and is within size limits.
-pub fn validate_lsp_file(path: &Path) -> Result<(), String> {
+/// Validate that a file exists, is a regular file, and is within size
+/// limits. `max_bytes` is the configurable upper bound from
+/// `LspConfig::max_file_size_bytes`; `0` disables the size gate (the
+/// `coco_config::LspConfig::resolve` finalizer floors negative values
+/// to `0`, so this is the right sentinel to read here).
+///
+/// **SECURITY** (TS parity, `LSPTool.ts:170-173`): UNC paths (`\\…` or
+/// `//…`) are rejected without `path.exists()` — on Windows the stat
+/// call would attempt to resolve the share and leak NTLM credentials.
+/// Linux/macOS treat `//path` as `/path` so the practical attack
+/// surface there is nil, but we mirror the guard for cross-platform
+/// safety.
+pub fn validate_lsp_file(path: &Path, max_bytes: u64) -> Result<(), String> {
+    let display = path.to_string_lossy();
+    if display.starts_with("\\\\") || display.starts_with("//") {
+        return Err(format!(
+            "UNC paths are not allowed for LSP queries: {}",
+            path.display()
+        ));
+    }
     if !path.exists() {
         return Err(format!("File does not exist: {}", path.display()));
     }
     if !path.is_file() {
         return Err(format!("Path is not a file: {}", path.display()));
     }
-    if let Ok(meta) = path.metadata() {
-        if meta.len() > MAX_LSP_FILE_SIZE_BYTES {
-            let mb = meta.len() / 1_000_000;
-            return Err(format!(
-                "File too large for LSP analysis ({mb}MB exceeds 10MB limit)"
-            ));
-        }
+    if max_bytes > 0
+        && let Ok(meta) = path.metadata()
+        && meta.len() > max_bytes
+    {
+        let mb_actual = meta.len() / 1_000_000;
+        let mb_limit = max_bytes / 1_000_000;
+        return Err(format!(
+            "File too large for LSP analysis ({mb_actual}MB exceeds {mb_limit}MB limit)"
+        ));
     }
     Ok(())
 }
 
-/// Build LSP request params from operation, file URI, and position.
-pub fn build_lsp_params(
-    operation: LspOperation,
-    file_uri: &str,
-    line: Option<i32>,
-    character: Option<i32>,
-) -> Value {
-    // Convert from 1-based (user-facing) to 0-based (LSP protocol)
-    let position = serde_json::json!({
-        "line": line.unwrap_or(1) - 1,
-        "character": character.unwrap_or(1) - 1,
-    });
-
-    match operation {
-        LspOperation::DocumentSymbol => serde_json::json!({
-            "textDocument": { "uri": file_uri }
-        }),
-        LspOperation::WorkspaceSymbol => serde_json::json!({
-            "query": ""
-        }),
-        LspOperation::Diagnostics => serde_json::json!({
-            "textDocument": { "uri": file_uri }
-        }),
-        LspOperation::FindReferences => serde_json::json!({
-            "textDocument": { "uri": file_uri },
-            "position": position,
-            "context": { "includeDeclaration": true }
-        }),
-        _ => serde_json::json!({
-            "textDocument": { "uri": file_uri },
-            "position": position,
-        }),
-    }
-}
-
-/// Convert a file path to a file:// URI.
-pub fn path_to_file_uri(path: &str) -> String {
-    let normalized = path.replace('\\', "/");
-    if normalized.starts_with('/') {
-        format!("file://{normalized}")
-    } else {
-        // Windows drive path
-        format!("file:///{normalized}")
-    }
+/// Convert an absolute file path to a `file://` URI with RFC 3986
+/// percent-encoding. Paths with spaces (`/foo bar/baz.rs`) and
+/// non-ASCII characters must be encoded — LSP servers key opened
+/// documents by URI, and the URI we put in `textDocument.uri` has
+/// to match the one `LspClient::sync_file` sent via `didOpen` (which
+/// goes through `lsp_types::Url::from_file_path`).
+///
+/// Returns `None` when `path` is not absolute — `Url::from_file_path`
+/// requires an absolute path on every platform.
+pub fn path_to_file_uri(path: &Path) -> Option<String> {
+    url::Url::from_file_path(path).ok().map(|u| u.to_string())
 }
 
 #[cfg(test)]

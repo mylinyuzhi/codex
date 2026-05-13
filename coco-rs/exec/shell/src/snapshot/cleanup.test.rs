@@ -3,70 +3,61 @@ use std::time::Duration;
 use tempfile::tempdir;
 
 #[tokio::test]
-async fn test_cleanup_removes_non_active_with_zero_retention() {
+async fn test_cleanup_removes_files_older_than_retention() {
     let dir = tempdir().expect("create temp dir");
     let snapshot_dir = dir.path();
 
-    let old_snapshot = snapshot_dir.join("old-session.sh");
-    let active_snapshot = snapshot_dir.join("active-session.sh");
+    let old1 = snapshot_dir.join("snapshot-bash-100-aaa.sh");
+    let old2 = snapshot_dir.join("snapshot-zsh-200-bbb.sh");
+    fs::write(&old1, "# old").await.unwrap();
+    fs::write(&old2, "# old").await.unwrap();
 
-    fs::write(&old_snapshot, "# old").await.expect("write old");
-    fs::write(&active_snapshot, "# active")
-        .await
-        .expect("write active");
-
-    // With zero retention, any non-active snapshot is immediately stale
-    let removed = cleanup_stale_snapshots(snapshot_dir, "active-session", Duration::ZERO)
+    // Zero retention → every file is stale.
+    let removed = cleanup_stale_snapshots(snapshot_dir, "active", Duration::ZERO)
         .await
         .expect("cleanup");
-
-    assert_eq!(removed, 1);
-    assert!(!old_snapshot.exists());
-    assert!(active_snapshot.exists());
+    assert_eq!(removed, 2);
+    assert!(!old1.exists());
+    assert!(!old2.exists());
 }
 
 #[tokio::test]
-async fn test_cleanup_skips_active_session() {
+async fn test_cleanup_preserves_fresh_files() {
     let dir = tempdir().expect("create temp dir");
     let snapshot_dir = dir.path();
 
-    let active_snapshot = snapshot_dir.join("my-session.sh");
-    fs::write(&active_snapshot, "# active")
-        .await
-        .expect("write");
+    let recent = snapshot_dir.join("snapshot-bash-123-abc.sh");
+    fs::write(&recent, "# fresh").await.unwrap();
 
-    let removed = cleanup_stale_snapshots(snapshot_dir, "my-session", Duration::from_secs(0))
+    // Long retention → file is not yet stale.
+    let removed = cleanup_stale_snapshots(snapshot_dir, "active", Duration::from_secs(3600))
         .await
         .expect("cleanup");
-
     assert_eq!(removed, 0);
-    assert!(active_snapshot.exists());
-}
-
-#[tokio::test]
-async fn test_cleanup_removes_invalid_filenames() {
-    let dir = tempdir().expect("create temp dir");
-    let snapshot_dir = dir.path();
-
-    let invalid = snapshot_dir.join("no-extension");
-    fs::write(&invalid, "# invalid").await.expect("write");
-
-    let removed = cleanup_stale_snapshots(snapshot_dir, "other-session", Duration::from_secs(0))
-        .await
-        .expect("cleanup");
-
-    assert_eq!(removed, 1);
-    assert!(!invalid.exists());
+    assert!(recent.exists());
 }
 
 #[tokio::test]
 async fn test_cleanup_handles_missing_dir() {
     let dir = tempdir().expect("create temp dir");
     let nonexistent = dir.path().join("nonexistent");
-
-    let removed = cleanup_stale_snapshots(&nonexistent, "session", Duration::from_secs(0))
+    let removed = cleanup_stale_snapshots(&nonexistent, "x", Duration::from_secs(0))
         .await
         .expect("cleanup");
-
     assert_eq!(removed, 0);
+}
+
+#[tokio::test]
+async fn test_cleanup_skips_non_files() {
+    let dir = tempdir().expect("create temp dir");
+    let snapshot_dir = dir.path();
+    // A subdir must NOT be deleted.
+    let subdir = snapshot_dir.join("inner");
+    tokio::fs::create_dir_all(&subdir).await.unwrap();
+
+    let removed = cleanup_stale_snapshots(snapshot_dir, "x", Duration::ZERO)
+        .await
+        .expect("cleanup");
+    assert_eq!(removed, 0);
+    assert!(subdir.exists());
 }

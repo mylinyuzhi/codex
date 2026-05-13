@@ -93,13 +93,31 @@ fn accept_suggestion(state: &mut AppState) {
 pub(super) async fn approve(state: &mut AppState, command_tx: &mpsc::Sender<UserCommand>) {
     match &state.ui.overlay {
         Some(Overlay::Permission(p)) => {
+            // Multi-choice mode: 'y' commits the currently-focused
+            // choice (Enter takes the same path via confirm()). The
+            // chosen `value` is spliced into `updated_input` so the
+            // tool's execute() can branch on it. A choice whose value
+            // is "no" denies; everything else approves. Classic yes/no
+            // mode (`choices.is_none()`) keeps the unconditional
+            // `approved: true` path.
+            let (approved, updated_input) = if p.choices.is_some() {
+                let chosen_is_no = p
+                    .choices
+                    .as_ref()
+                    .and_then(|cs| cs.get(p.selected_choice))
+                    .map(|c| c.value.as_str())
+                    == Some("no");
+                (!chosen_is_no, build_choice_payload(p))
+            } else {
+                (true, None)
+            };
             let _ = command_tx
                 .send(UserCommand::ApprovalResponse {
                     request_id: p.request_id.clone(),
-                    approved: true,
+                    approved,
                     always_allow: false,
                     feedback: None,
-                    updated_input: None,
+                    updated_input,
                     permission_updates: vec![],
                     content_blocks: None,
                 })
@@ -530,6 +548,20 @@ pub(super) fn nav(state: &mut AppState, delta: i32) {
             let new_idx = ((current_idx + delta).rem_euclid(len)) as usize;
             p.next_mode = order[new_idx];
         }
+        Some(Overlay::Permission(p)) => {
+            // Multi-choice mode (ExitPlanMode keep/clear/cancel etc.):
+            // Up/Down moves the selected choice with saturation. In
+            // classic yes/no mode this arm is a no-op — Approve / Deny
+            // map to dedicated keystrokes ('y' / 'n'), not the cursor.
+            if let Some(choices) = &p.choices
+                && !choices.is_empty()
+            {
+                let count = choices.len() as i32;
+                let current = p.selected_choice as i32;
+                let next = (current + delta).clamp(0, count - 1);
+                p.selected_choice = next as usize;
+            }
+        }
         Some(Overlay::Rewind(r)) => {
             update_rewind::handle_rewind_nav(r, delta);
         }
@@ -812,6 +844,36 @@ pub(super) async fn confirm(state: &mut AppState, command_tx: &mpsc::Sender<User
             state.ui.dismiss_overlay();
             return;
         }
+        // Permission overlay in choice mode: Enter commits the
+        // currently-focused option (TS parity:
+        // `ExitPlanModePermissionRequest.tsx:691-704`). The chosen
+        // `value` is spliced into `updated_input` so the tool's
+        // `execute()` can branch on it (e.g. ExitPlanMode reads
+        // `user_choice == "yes-clear-context"` to flag history-clear).
+        // Classic yes/no mode (no choices) falls into the dismiss
+        // catch-all below — Enter is a no-op there, matching TS's
+        // y/n-only confirmation prompt.
+        Some(Overlay::Permission(ref p)) if p.choices.is_some() => {
+            let chosen_is_no = p
+                .choices
+                .as_ref()
+                .and_then(|cs| cs.get(p.selected_choice))
+                .map(|c| c.value.as_str())
+                == Some("no");
+            let updated_input = build_choice_payload(p);
+            let _ = command_tx
+                .send(UserCommand::ApprovalResponse {
+                    request_id: p.request_id.clone(),
+                    approved: !chosen_is_no,
+                    always_allow: false,
+                    feedback: None,
+                    updated_input,
+                    permission_updates: vec![],
+                    content_blocks: None,
+                })
+                .await;
+            // Fall through to the queue-pop at end of fn.
+        }
         // All remaining overlays: confirm = dismiss
         Some(
             Overlay::Permission(_)
@@ -970,6 +1032,30 @@ pub(super) fn question_notes_backspace(state: &mut AppState) -> bool {
     }
     qi.notes.pop();
     true
+}
+
+/// Build the `{...original_input, user_choice}` payload shipped via
+/// `UserCommand::ApprovalResponse.updated_input` when the user commits
+/// a multi-choice permission selection. Carries every field the tool
+/// originally supplied so its `execute()` can read both the new
+/// `user_choice` field and the original args. Returns `None` when the
+/// overlay has no choices or the cursor is out of range — caller falls
+/// back to `updated_input: None`.
+///
+/// TS parity: `ExitPlanModePermissionRequest.tsx:691-704` — the
+/// option's `value` is merged into the original tool input on commit.
+fn build_choice_payload(p: &crate::state::PermissionOverlay) -> Option<serde_json::Value> {
+    let choice = p.choices.as_ref()?.get(p.selected_choice)?;
+    let mut payload = p
+        .original_input
+        .as_ref()
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default();
+    payload.insert(
+        "user_choice".into(),
+        serde_json::Value::String(choice.value.clone()),
+    );
+    Some(serde_json::Value::Object(payload))
 }
 
 /// Build the `{...original_input, answers, annotations}` payload shipped

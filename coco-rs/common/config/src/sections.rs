@@ -328,12 +328,19 @@ impl LoopConfig {
 pub struct PartialShellSettings {
     pub default_shell: Option<String>,
     pub disable_snapshot: Option<bool>,
+    pub maintain_project_working_dir: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShellConfig {
     pub default_shell: Option<String>,
     pub disable_snapshot: bool,
+    /// When true, snap the bash cwd back to the session's original cwd
+    /// after every command — even if the cwd is inside the allowed
+    /// working set. TS parity:
+    /// `utils/envUtils.ts::shouldMaintainProjectWorkingDir` driven by
+    /// `CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR`.
+    pub maintain_project_working_dir: bool,
 }
 
 impl ShellConfig {
@@ -341,12 +348,19 @@ impl ShellConfig {
         let mut config = Self {
             default_shell: settings.shell.default_shell.clone(),
             disable_snapshot: settings.shell.disable_snapshot.unwrap_or(false),
+            maintain_project_working_dir: settings
+                .shell
+                .maintain_project_working_dir
+                .unwrap_or(false),
         };
         if let Some(shell) = env.get_string(EnvKey::CocoShell) {
             config.default_shell = Some(shell);
         }
         if env.is_truthy(EnvKey::CocoDisableShellSnapshot) {
             config.disable_snapshot = true;
+        }
+        if env.is_truthy(EnvKey::CocoBashMaintainProjectWorkingDir) {
+            config.maintain_project_working_dir = true;
         }
         config
     }
@@ -688,6 +702,52 @@ impl WebSearchConfig {
 // `enable_token_usage_attachment`) weren't wired into
 // `coco_context::attachment`. Re-add when the attachment pipeline
 // grows explicit on/off gates.
+
+/// 10 MB cap on the file the agent can dispatch LSP queries against.
+/// TS source: `tools/LSPTool/LSPTool.ts` — same number, same purpose
+/// (rust-analyzer chokes on huge generated bundles; pyright reads the
+/// whole file into memory).
+const DEFAULT_LSP_MAX_FILE_SIZE_BYTES: i64 = 10_000_000;
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PartialLspSettings {
+    pub max_file_size_bytes: Option<i64>,
+}
+
+/// Resolved LSP tool-layer knobs. Today only the per-query file-size
+/// gate; future fields (per-server timeout overrides, prewarm policy,
+/// notification debounce) land here so the wire shape stays stable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LspConfig {
+    /// Maximum on-disk size of a file the `LspTool` will dispatch
+    /// a query against. Files larger than this are rejected at the
+    /// tool layer (`validate_lsp_file`) before reaching the LSP
+    /// server. `0` disables the gate.
+    pub max_file_size_bytes: i64,
+}
+
+impl Default for LspConfig {
+    fn default() -> Self {
+        Self {
+            max_file_size_bytes: DEFAULT_LSP_MAX_FILE_SIZE_BYTES,
+        }
+    }
+}
+
+impl LspConfig {
+    pub fn resolve(settings: &Settings, env: &EnvSnapshot) -> Self {
+        let mut config = Self::default();
+        if let Some(v) = settings.lsp.max_file_size_bytes {
+            config.max_file_size_bytes = v;
+        }
+        if let Some(v) = env.get_i64(EnvKey::CocoLspMaxFileSizeBytes) {
+            config.max_file_size_bytes = v;
+        }
+        config.max_file_size_bytes = config.max_file_size_bytes.max(0);
+        config
+    }
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]

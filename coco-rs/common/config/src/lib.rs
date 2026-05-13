@@ -98,6 +98,7 @@ pub use sections::ApiConfig;
 pub use sections::ApiRetryConfig;
 pub use sections::BashConfig;
 pub use sections::LoopConfig;
+pub use sections::LspConfig;
 pub use sections::McpRuntimeConfig;
 pub use sections::MemoryConfig;
 pub use sections::PathConfig;

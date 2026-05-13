@@ -19,6 +19,7 @@ use crate::provider::PartialProviderConfig;
 use crate::sandbox_settings::SandboxSettings;
 use crate::sections::PartialApiSettings;
 use crate::sections::PartialLoopSettings;
+use crate::sections::PartialLspSettings;
 use crate::sections::PartialMcpRuntimeSettings;
 use crate::sections::PartialMemorySettings;
 use crate::sections::PartialPathSettings;
@@ -86,6 +87,13 @@ pub struct Settings {
     pub web_fetch: PartialWebFetchSettings,
     #[serde(default)]
     pub web_search: PartialWebSearchSettings,
+    /// LSP tool-layer knobs. Resolved into `RuntimeConfig.lsp`
+    /// (`LspConfig`); the file-size gate ships today, future fields
+    /// (per-server overrides, prewarm policy) land in the same slot.
+    /// Server roster lives in `~/.coco/lsp_servers.json` per the
+    /// established `coco-lsp` design — not here.
+    #[serde(default)]
+    pub lsp: PartialLspSettings,
     #[serde(default)]
     pub paths: PartialPathSettings,
 
@@ -271,7 +279,17 @@ pub struct WorktreeConfig {
 ///
 /// All fields have sensible defaults so users who don't touch their
 /// settings.json get the canonical 5-phase workflow + standard Phase 4.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+///
+/// `Default` is implemented manually (not derived) because the field-level
+/// `#[serde(default = "...")]` annotations do NOT participate in
+/// `#[derive(Default)]`. A `derive(Default)` instance would silently zero
+/// `explore_agent_count` / `plan_agent_count` /
+/// `plan_model_fallback_threshold_tokens` — which is wrong for the
+/// "user has no `plan_mode` block in settings.json" path (outer
+/// `#[serde(default)]` on the parent struct uses `Default`, not the
+/// field-level fns). Manual `Default` mirrors the field-level fns so
+/// every construction path produces the same sensible values.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PlanModeSettings {
     /// Which workflow the Full plan-mode reminder should emit.
@@ -301,6 +319,29 @@ pub struct PlanModeSettings {
     /// settings.json backwards compatibility.
     #[serde(default)]
     pub verify_execution: bool,
+    /// In plan mode, if the latest assistant message's context exceeds
+    /// this token count, the engine falls back from the configured
+    /// `models.plan` client to the `models.main` client to avoid
+    /// truncation.
+    ///
+    /// TS parity: `getRuntimeMainLoopModel`'s `exceeds200kTokens` branch
+    /// (utils/model/model.ts:152-159). TS hardcodes 200_000 as the
+    /// threshold; coco-rs exposes it so multi-LLM users can tune for
+    /// their plan-role model's actual context window.
+    ///
+    /// Default 200_000. Set to `i64::MAX` to disable fallback; set to 0
+    /// to always fall back (effectively disabling plan-mode model swap).
+    #[serde(default = "default_plan_model_fallback_threshold")]
+    pub plan_model_fallback_threshold_tokens: i64,
+    /// Whether the `ExitPlanMode` permission dialog offers a "clear
+    /// context" option in addition to the default yes/no choice.
+    ///
+    /// TS parity: `settings.showClearContextOnPlanAccept`
+    /// (utils/settings/types.ts:735-740), default false. When true the
+    /// TUI surfaces keep/clear/cancel choices; selecting clear schedules
+    /// `MessageHistory::clear()` at the next turn boundary.
+    #[serde(default)]
+    pub show_clear_context_on_exit: bool,
 }
 
 fn default_explore_agent_count() -> i32 {
@@ -308,6 +349,23 @@ fn default_explore_agent_count() -> i32 {
 }
 fn default_plan_agent_count() -> i32 {
     1
+}
+fn default_plan_model_fallback_threshold() -> i64 {
+    200_000
+}
+
+impl Default for PlanModeSettings {
+    fn default() -> Self {
+        Self {
+            workflow: PlanModeWorkflow::default(),
+            phase4_variant: PlanPhase4Variant::default(),
+            explore_agent_count: default_explore_agent_count(),
+            plan_agent_count: default_plan_agent_count(),
+            verify_execution: false,
+            plan_model_fallback_threshold_tokens: default_plan_model_fallback_threshold(),
+            show_clear_context_on_exit: false,
+        }
+    }
 }
 
 /// The plan-mode Full reminder workflow variant.

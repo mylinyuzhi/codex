@@ -152,8 +152,20 @@ impl AgentQueryEngine for QueryEngineAdapter {
             sandbox_state: None,
             memory_config: coco_config::MemoryConfig::default(),
             shell_config: coco_config::ShellConfig::default(),
+            // Subagent flows don't carry the parent's shell provider
+            // (snapshot/session-env/`/env`/shell-prefix). Worktree-isolated
+            // subagents set `cwd_override` so the bash tool's spawn already
+            // points at the right directory; running without snapshot is
+            // an acceptable tradeoff for an isolated transient session.
+            shell_provider: None,
+            // No session-level CWD persistence for subagents — their cwd
+            // is fenced via `cwd_override` and they don't share state
+            // with the parent session.
+            original_cwd: None,
+            session_cwd: None,
             web_fetch_config: coco_config::WebFetchConfig::default(),
             web_search_config: coco_config::WebSearchConfig::default(),
+            lsp_config: coco_config::LspConfig::default(),
             // Layer 1 — inherit parent's resolved features. Defaulting
             // to `with_defaults()` would silently re-enable gates the
             // user disabled at the top level (Sandbox, WebSearch, ...).

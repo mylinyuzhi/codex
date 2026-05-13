@@ -116,6 +116,15 @@ impl Widget for StatusBar<'_> {
             );
         }
 
+        // LSP indicator. Sticky-on for the session when the
+        // `LspManagerAdapter` reported `is_connected = true` at startup
+        // (Feature::Lsp on + prewarm spawned ≥ 1 server). Mirrors the
+        // MCP badge pattern.
+        if self.state.session.lsp_active {
+            parts.push(Span::raw(" | ").fg(self.theme.border));
+            parts.push(Span::raw("LSP").fg(self.theme.accent));
+        }
+
         // Cost
         if self.state.session.estimated_cost_cents > 0 {
             parts.push(Span::raw(" | ").fg(self.theme.border));

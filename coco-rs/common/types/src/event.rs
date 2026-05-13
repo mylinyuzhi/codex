@@ -327,6 +327,15 @@ Each variant's wire method is generated together with the matching \
     /// All MCP servers finished startup.
     "mcp/startupComplete" => McpStartupComplete(McpStartupCompleteParams),
 
+    // === LSP (1) ===
+
+    /// LSP server pool finished prewarm. Fired once per session
+    /// bootstrap (after `LspManagerAdapter::prewarm` completes), so the
+    /// TUI status bar can show a `LSP` badge with the running-server
+    /// count. Not emitted when `Feature::Lsp` is off — `started` /
+    /// `failed` are empty in that case.
+    "lsp/prewarmComplete" => LspPrewarmComplete(LspPrewarmCompleteParams),
+
     // === Context (6) ===
 
     /// Context compacted.
@@ -563,6 +572,12 @@ pub struct SessionStartedParams {
     pub output_style: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fast_mode_state: Option<FastModeState>,
+    /// `true` when at least one LSP server is healthy at session
+    /// startup (`Feature::Lsp` on + adapter `is_connected() = true`).
+    /// Used by the TUI status bar to render an "LSP" badge. Default
+    /// `false` keeps legacy SDK clients backward-compatible.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub lsp_active: bool,
 }
 
 /// MCP server init entry (inline struct in TS).
@@ -830,6 +845,16 @@ pub struct McpStartupCompleteParams {
     pub servers: Vec<String>,
     #[serde(default)]
     pub failed: Vec<String>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LspPrewarmCompleteParams {
+    /// IDs of language servers that successfully spawned (e.g.
+    /// `["rust-analyzer", "gopls"]`).
+    pub started: Vec<String>,
+    /// Workspace root the prewarm anchored at.
+    pub root: String,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1243,11 +1268,28 @@ pub enum SessionState {
 pub enum TuiOnlyEvent {
     // === Permission / Question overlays (4) ===
     /// Permission approval overlay needed.
+    ///
+    /// When `choices` is `Some`, the TUI should render a multi-choice
+    /// list (e.g. ExitPlanMode's keep/clear/cancel) instead of the
+    /// default yes/no buttons. Picked `value` is echoed back via
+    /// `UserCommand::ApprovalResponse.updated_input` as a
+    /// `{ ..original_input, user_choice: "<value>" }` JSON object so
+    /// the tool's `execute()` can branch on the choice. TS parity:
+    /// `ExitPlanModePermissionRequest.tsx:691-704` option grid.
+    ///
+    /// `original_input` carries the raw tool input so the TUI can
+    /// splice the picked `user_choice` into it verbatim before sending
+    /// the approval response — mirrors `QuestionAsked.input`. `None`
+    /// keeps the wire compact when no choices are present.
     ApprovalRequired {
         request_id: String,
         tool_name: String,
         description: String,
         input_preview: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        choices: Option<Vec<crate::PermissionAskChoice>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        original_input: Option<serde_json::Value>,
     },
     /// AskUserQuestion overlay needed. `input` carries the full tool
     /// input dict (the `questions[]` array, etc.) verbatim so the TUI

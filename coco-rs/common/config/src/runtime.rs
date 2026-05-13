@@ -27,6 +27,7 @@ use crate::provider::builtin::builtin_providers;
 use crate::sandbox_settings::SandboxSettings;
 use crate::sections::ApiConfig;
 use crate::sections::LoopConfig;
+use crate::sections::LspConfig;
 use crate::sections::McpRuntimeConfig;
 use crate::sections::MemoryConfig;
 use crate::sections::PathConfig;
@@ -64,6 +65,10 @@ pub struct RuntimeConfig {
     pub mcp: McpRuntimeConfig,
     pub web_fetch: WebFetchConfig,
     pub web_search: WebSearchConfig,
+    /// LSP tool-layer knobs. Server roster (`lsp_servers.json`) lives
+    /// in `coco-lsp`; this struct only carries cross-server tool-side
+    /// limits (file-size gate, future timeout / prewarm policy).
+    pub lsp: LspConfig,
     pub paths: PathConfig,
     /// Resolved compaction parameters (auto threshold, micro keep-recent,
     /// api-native gate, session-memory budgets, experimental flags). Single
@@ -253,6 +258,7 @@ pub fn build_runtime_config_with(
         mcp: McpRuntimeConfig::resolve(merged, &env),
         web_fetch: WebFetchConfig::resolve(merged),
         web_search: WebSearchConfig::resolve(merged),
+        lsp: LspConfig::resolve(merged, &env),
         paths: PathConfig::resolve(merged),
         compact: CompactConfig::resolve(merged, &env),
         prompt_cache: PromptCacheRuntimeConfig::resolve(merged, &env),
@@ -456,12 +462,6 @@ fn resolve_model_roles(
     )?;
     set_role_from_json(
         &mut roles,
-        ModelRole::Compact,
-        settings.merged.models.compact.as_ref(),
-        providers,
-    )?;
-    set_role_from_json(
-        &mut roles,
         ModelRole::Plan,
         settings.merged.models.plan.as_ref(),
         providers,
@@ -510,7 +510,6 @@ fn resolve_model_roles(
     if let Some(main_slots) = roles.roles.get(&ModelRole::Main).cloned() {
         for fallback_role in [
             ModelRole::Fast,
-            ModelRole::Compact,
             ModelRole::Plan,
             ModelRole::Explore,
             ModelRole::Review,

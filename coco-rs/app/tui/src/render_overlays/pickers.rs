@@ -19,10 +19,9 @@ use crate::theme::Theme;
 
 /// Canonical role order — must mirror `update::show::next_role` so the
 /// pill order matches Tab/Shift+Tab cycling.
-const ROLE_ORDER: [ModelRole; 9] = [
+const ROLE_ORDER: [ModelRole; 8] = [
     ModelRole::Main,
     ModelRole::Fast,
-    ModelRole::Compact,
     ModelRole::Plan,
     ModelRole::Explore,
     ModelRole::Review,
@@ -68,7 +67,7 @@ pub(super) fn model_picker_content(
     (title, body, theme.primary)
 }
 
-/// Render the role pill row, e.g. `Role:  ▸Main◂  Fast  Compact  ...`.
+/// Render the role pill row, e.g. `Role:  ▸Main◂  Fast  Plan  ...`.
 /// Markers around the active role draw attention without needing colour
 /// (the underlying paragraph is single-colour). TS uses tab-bar styling
 /// for an equivalent pill in `components/ModelPicker.tsx`.
@@ -187,7 +186,6 @@ fn role_display(role: ModelRole) -> String {
     let key = match role {
         ModelRole::Main => "role.main",
         ModelRole::Fast => "role.fast",
-        ModelRole::Compact => "role.compact",
         ModelRole::Plan => "role.plan",
         ModelRole::Explore => "role.explore",
         ModelRole::Review => "role.review",

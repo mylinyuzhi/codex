@@ -33,6 +33,7 @@ coco-system-reminder.workspace = true
 coco-messages.workspace = true
 coco-context.workspace = true
 coco-mcp.workspace = true
+coco-lsp.workspace = true
 coco-permissions.workspace = true
 coco-plugins.workspace = true
 coco-skills.workspace = true
