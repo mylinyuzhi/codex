@@ -301,37 +301,6 @@ pub(super) fn handle(state: &mut AppState, event: TuiOnlyEvent) -> bool {
             ));
             true
         }
-        TuiOnlyEvent::ModelRoleApplied {
-            role,
-            provider,
-            model_id,
-            effort,
-        } => {
-            let effort_suffix = effort
-                .as_deref()
-                .map(|e| format!(" · {e}"))
-                .unwrap_or_default();
-            state.ui.add_toast(Toast::success(
-                t!(
-                    "toast.model_set",
-                    role = role.as_str(),
-                    provider = provider.as_str(),
-                    model = model_id.as_str(),
-                    effort = effort_suffix.as_str()
-                )
-                .to_string(),
-            ));
-            // Optimistic Main mirror was already applied locally by the
-            // overlay confirm path for the Main role; non-Main roles
-            // don't have a session-state mirror so we just log.
-            true
-        }
-        TuiOnlyEvent::ModelRolePersistFailed { role: _, error } => {
-            state.ui.add_toast(Toast::error(
-                t!("toast.model_save_failed", error = error.as_str()).to_string(),
-            ));
-            true
-        }
         TuiOnlyEvent::OpenModelPicker => {
             crate::update::show::cycle_model(state);
             true

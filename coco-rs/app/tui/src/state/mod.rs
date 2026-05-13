@@ -65,6 +65,8 @@ pub use session::ChatMessage;
 pub use session::ChatRole;
 pub use session::McpServerStatus;
 pub use session::MessageContent;
+pub use session::ModelBinding;
+pub use session::ModelCatalogEntry;
 pub use session::PlanAction;
 pub use session::QueuedCommandDisplay;
 pub use session::SavedSession;

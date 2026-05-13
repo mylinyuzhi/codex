@@ -157,14 +157,20 @@ pub async fn build_agent_team_wiring(
                 // post-warm so this is effectively instant after the
                 // first call per role; the cold path pays one
                 // `build_api_client` cost per session per role.
+                // Main reads through `main_client()` so any in-session
+                // hot-swap (TUI picker selecting a new Main model)
+                // is observed by subagents on the next spawn.
                 let client = match role {
                     Some(r) if r != coco_types::ModelRole::Main => {
-                        runtime.client_for_role(r).await.unwrap_or_else(|e| {
-                            warn!(?r, error = %e, "client_for_role failed; falling back to Main");
-                            runtime.client.clone()
-                        })
+                        match runtime.client_for_role(r).await {
+                            Ok(c) => c,
+                            Err(e) => {
+                                warn!(?r, error = %e, "client_for_role failed; falling back to Main");
+                                runtime.main_client().await
+                            }
+                        }
                     }
-                    _ => runtime.client.clone(),
+                    _ => runtime.main_client().await,
                 };
                 // Build a fresh engine via the runtime's standard
                 // path, then swap in the role-resolved client.

@@ -343,6 +343,32 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     // engine and TUI share one truth. Static for session lifetime.
     app.state_mut().session.bypass_permissions_available = bypass_permissions_available;
     app.state_mut().session.permission_mode = permission_mode;
+    // Seed the model + provider for the status bar. Production TUI
+    // doesn't currently install a `SessionBootstrap`, so the engine's
+    // `emit_session_started` is a no-op and the model field would
+    // otherwise stay empty until a fallback fires. Provider is the
+    // authoritative id from the resolved Main role; the picker keeps
+    // a prefix-match fallback for unregistered builtins.
+    app.state_mut().session.model = model_id.clone();
+    app.state_mut().session.provider = runtime
+        .runtime_config
+        .model_roles
+        .get(coco_types::ModelRole::Main)
+        .map(|spec| spec.provider.clone())
+        .unwrap_or_default();
+
+    // Seed `model_catalog` and `model_by_role` from the resolved
+    // `ModelRegistry`. The TUI picker and Ctrl+T cycle both consult
+    // these — using the registry view (rather than the L0-only
+    // `builtin_models_partial`) means L1 `~/.coco/models.json` entries
+    // and L2 `providers.<n>.models.<id>` overrides are visible.
+    {
+        let mut catalog = build_model_catalog(&runtime.runtime_config);
+        let by_role = build_model_by_role(&runtime.runtime_config);
+        let state = app.state_mut();
+        state.session.model_catalog = std::mem::take(&mut catalog);
+        state.session.model_by_role = by_role;
+    }
 
     // Surface the startup downgrade notification (if any) as a toast
     // so interactive users see it. Headless paths eprintln it; the
@@ -583,32 +609,29 @@ async fn run_agent_driver(
                 });
             }
 
-            UserCommand::SetModel { model } => {
-                // Legacy command — flip the Main role only. Persist
-                // through the same path as `SetModelRole { role: Main }`
-                // so two callers don't drift on disk shape.
-                let event_tx_t = event_tx.clone();
-                tokio::spawn(async move {
-                    persist_model_role(
-                        coco_types::ModelRole::Main,
-                        infer_provider_for_persist(&model),
-                        model,
-                        None,
-                        event_tx_t,
-                    )
-                    .await;
-                });
-            }
-
             UserCommand::SetModelRole {
                 role,
                 provider,
                 model_id,
                 effort,
             } => {
+                let runtime_t = runtime.clone();
                 let event_tx_t = event_tx.clone();
                 tokio::spawn(async move {
-                    persist_model_role(role, provider, model_id, effort, event_tx_t).await;
+                    apply_role_in_memory(runtime_t, role, provider, model_id, effort, event_tx_t)
+                        .await;
+                });
+            }
+
+            UserCommand::SetThinkingLevel { level } => {
+                // coco-rs Ctrl+T cycle path. Updates the Main role's
+                // effort in-memory and emits `ModelRoleChanged` so the
+                // TUI mirror stays consistent across status bar +
+                // picker. No file write — see `apply_role_in_memory`.
+                let runtime_t = runtime.clone();
+                let event_tx_t = event_tx.clone();
+                tokio::spawn(async move {
+                    apply_main_effort_in_memory(runtime_t, level, event_tx_t).await;
                 });
             }
 
@@ -693,6 +716,11 @@ async fn run_agent_driver(
                 // and rewrites runtime.history; an in-flight turn that
                 // mutates either would race.
                 drain_active_turn(&active_turn).await;
+                // Snapshot the current Main client. Rewind's summarize
+                // path makes a single LLM call to partial-compact the
+                // truncated history — runs through the live Main, so
+                // a hot-swapped picker selection takes effect here too.
+                let rewind_client = runtime.main_client().await;
                 handle_rewind(
                     &restore_type,
                     &message_id,
@@ -702,7 +730,7 @@ async fn run_agent_driver(
                     &session_id,
                     &event_tx,
                     &runtime.history,
-                    &runtime.client,
+                    &rewind_client,
                 )
                 .await;
             }
@@ -2881,107 +2909,284 @@ fn truncate_output(text: String, max_bytes: usize, max_lines: usize) -> String {
     truncated
 }
 
-/// Persist a `(role, provider, model_id, effort)` selection to
-/// `~/.coco/settings.json::model_roles.<role>`. Emits a TUI event
-/// for the success/failure toast.
+/// Build the TUI's session-frozen model catalog from the resolved
+/// `ModelRegistry`. Merges L2 `(provider, model_id)` entries with L0
+/// builtins (lazy-synthesised via `infer_provider` when not paired with
+/// any registered provider) and L1 `~/.coco/models.json` entries.
 ///
-/// The on-disk shape matches the nested form accepted by
-/// `RoleSlots<ModelSelection>::deserialize`
-/// (`common/config/src/model/role_slots.rs`): `primary` carries the
-/// selection, optional `thinking_level` carries the chosen effort
-/// when one is set. Effort lives at the role level because the
-/// runtime resolver applies it per role (rather than per model).
+/// Provider display labels reuse the same mapping as
+/// `update/show.rs::infer_provider`'s display side, so picker headers
+/// stay consistent regardless of which path produced the entry.
+fn build_model_catalog(
+    runtime_config: &coco_config::RuntimeConfig,
+) -> Vec<coco_tui::state::ModelCatalogEntry> {
+    use coco_tui::state::ModelCatalogEntry;
+    let mut entries: Vec<ModelCatalogEntry> = Vec::new();
+    let mut seen: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
+
+    // L2: pre-resolved (provider, model_id) entries.
+    for ((provider, model_id), resolved) in &runtime_config.model_registry.resolved {
+        let info = &resolved.info;
+        let supported_efforts: Vec<coco_types::ReasoningEffort> = info
+            .supported_thinking_levels
+            .as_ref()
+            .map(|levels| levels.iter().map(|l| l.effort).collect())
+            .unwrap_or_default();
+        entries.push(ModelCatalogEntry {
+            provider: provider.clone(),
+            provider_display: provider_display_label(provider),
+            model_id: model_id.clone(),
+            display_name: info
+                .display_name
+                .clone()
+                .unwrap_or_else(|| model_id.clone()),
+            context_window: Some(info.context_window.get() as i64),
+            supported_efforts,
+            default_effort: info.default_thinking_level,
+        });
+        seen.insert((provider.clone(), model_id.clone()));
+    }
+
+    // L0 fallback: builtin partial entries not paired with any
+    // provider. Provider is inferred from the model_id prefix because
+    // the builtin map is keyed only by model_id.
+    for (model_id, partial) in coco_config::builtin_models_partial() {
+        let (provider, provider_display) = infer_provider_for_catalog(model_id);
+        if seen.contains(&(provider.to_string(), model_id.clone())) {
+            continue;
+        }
+        let supported_efforts: Vec<coco_types::ReasoningEffort> = partial
+            .supported_thinking_levels
+            .as_ref()
+            .map(|levels| levels.iter().map(|l| l.effort).collect())
+            .unwrap_or_default();
+        entries.push(ModelCatalogEntry {
+            provider: provider.to_string(),
+            provider_display: provider_display.to_string(),
+            model_id: model_id.clone(),
+            display_name: partial
+                .display_name
+                .clone()
+                .unwrap_or_else(|| model_id.clone()),
+            context_window: partial.context_window.map(|t| t.get() as i64),
+            supported_efforts,
+            default_effort: partial.default_thinking_level,
+        });
+    }
+
+    // Stable sort: provider_display → display_name. Matches the
+    // picker's section-by-provider rendering.
+    entries.sort_by(|a, b| {
+        a.provider_display
+            .cmp(&b.provider_display)
+            .then_with(|| a.display_name.cmp(&b.display_name))
+    });
+    entries
+}
+
+/// Build the initial `model_by_role` map from
+/// `RuntimeConfig.model_roles`. Each role gets a `ModelBinding` with
+/// `effort: None` (the engine's resolver picks the model's default
+/// thinking level when no explicit effort is set).
+fn build_model_by_role(
+    runtime_config: &coco_config::RuntimeConfig,
+) -> std::collections::HashMap<coco_types::ModelRole, coco_tui::state::ModelBinding> {
+    use coco_tui::state::ModelBinding;
+    use coco_types::ModelRole;
+    const ROLES: [ModelRole; 8] = [
+        ModelRole::Main,
+        ModelRole::Fast,
+        ModelRole::Plan,
+        ModelRole::Explore,
+        ModelRole::Review,
+        ModelRole::HookAgent,
+        ModelRole::Memory,
+        ModelRole::Subagent,
+    ];
+    let mut out = std::collections::HashMap::new();
+    for role in ROLES {
+        if let Some(spec) = runtime_config.model_roles.get(role) {
+            out.insert(
+                role,
+                ModelBinding {
+                    model_id: spec.model_id.clone(),
+                    provider: spec.provider.clone(),
+                    effort: None,
+                },
+            );
+        }
+    }
+    out
+}
+
+/// Provider-prefix → display label. Used by both the L0-fallback
+/// catalog seeder and any place that wants a human label for a
+/// provider id. The L2 resolved path can use this too — providers
+/// don't carry a display label upstream.
+fn provider_display_label(provider: &str) -> String {
+    match provider {
+        "anthropic" => "Anthropic",
+        "openai" => "OpenAI",
+        "google" => "Google",
+        "deepseek" => "DeepSeek",
+        "bytedance" => "ByteDance",
+        other => return other.to_string(),
+    }
+    .to_string()
+}
+
+/// Infer `(provider, provider_display)` from a model_id prefix. Used
+/// as the L0 fallback when no L2 entry pairs the builtin model with a
+/// registered provider. Mirrors `update/show.rs::infer_provider`
+/// (which retains the same logic for the picker's
+/// `is_current_for_role` matching path).
+fn infer_provider_for_catalog(model_id: &str) -> (&'static str, &'static str) {
+    if model_id.starts_with("claude-") {
+        ("anthropic", "Anthropic")
+    } else if model_id.starts_with("gpt-") || model_id.starts_with('o') {
+        ("openai", "OpenAI")
+    } else if model_id.starts_with("gemini-") {
+        ("google", "Google")
+    } else if model_id.starts_with("deepseek-") {
+        ("deepseek", "DeepSeek")
+    } else {
+        ("other", "Other")
+    }
+}
+
+/// Apply a `(role, provider, model_id, effort)` selection to the live
+/// [`SessionRuntime`] in-memory and emit
+/// [`ServerNotification::ModelRoleChanged`] so the TUI refreshes its
+/// `model_by_role` mirror (and, when `role == Main`, the status-bar
+/// fields).
 ///
-/// Live re-binding is out of scope for this turn — the engine picks
-/// up the new selection on the next session, or sooner when the
-/// `SettingsWatcher` debounce fires and reloads.
-async fn persist_model_role(
+/// **No file write.** Users who want the binding to survive across
+/// sessions edit `~/.coco.json::model_roles.<role>.primary` themselves.
+/// The picker is for fast experimentation, not persistence.
+///
+/// Non-Main roles take effect on the next turn that drives that role.
+/// Main effort takes effect immediately; Main model_id changes only
+/// take effect on next session restart — see
+/// [`SessionRuntime::client_for_role`] doc-comment.
+async fn apply_role_in_memory(
+    runtime: Arc<crate::session_runtime::SessionRuntime>,
     role: coco_types::ModelRole,
     provider: String,
     model_id: String,
     effort: Option<coco_types::ReasoningEffort>,
     event_tx: tokio::sync::mpsc::Sender<CoreEvent>,
 ) {
-    let role_key = role.as_str().to_string();
-    let mut payload = serde_json::json!({
-        "primary": {
-            "provider": provider,
-            "model_id": model_id,
-        }
-    });
-    if let Some(effort) = effort
-        && let Some(obj) = payload.as_object_mut()
+    // Best-effort display name lookup from the resolved registry.
+    // Falls back to the model_id itself so the TUI always has *some*
+    // label.
+    let display_name = runtime
+        .runtime_config
+        .model_registry
+        .resolve(&provider, &model_id)
+        .map(|resolved| {
+            resolved
+                .info
+                .display_name
+                .clone()
+                .unwrap_or_else(|| model_id.clone())
+        })
+        .unwrap_or_else(|| model_id.clone());
+    let api = runtime
+        .runtime_config
+        .providers
+        .get(&provider)
+        .map(|p| p.api)
+        .unwrap_or(coco_types::ProviderApi::Anthropic);
+    let spec = coco_types::ModelSpec {
+        provider: provider.clone(),
+        api,
+        model_id: model_id.clone(),
+        display_name,
+    };
+    // Main: this rebuilds + hot-swaps the live `ApiClient`. The
+    // build can fail (e.g. provider unregistered, model_factory
+    // error) — surface that as an `Error` notification so the TUI
+    // raises a toast / dialog and the user's status bar reverts
+    // along with `ModelRoleChanged` not firing. Non-Main: build is
+    // lazy (`client_for_role`), so install always succeeds.
+    if let Err(err) = runtime
+        .apply_role_override(role, crate::session_runtime::RoleOverride { spec, effort })
+        .await
     {
-        obj.insert(
-            "thinking_level".to_string(),
-            serde_json::json!({ "effort": effort.to_string() }),
+        tracing::warn!(
+            role = %role.as_str(),
+            %provider,
+            %model_id,
+            error = %err,
+            "apply_role_override failed; reverting picker mirror"
         );
+        let _ = event_tx
+            .send(CoreEvent::Protocol(ServerNotification::Error(
+                coco_types::ErrorParams {
+                    message: format!(
+                        "failed to apply {role_label} → {provider}/{model_id}: {err}",
+                        role_label = role.as_str(),
+                    ),
+                    category: Some("model_role_apply_failed".to_string()),
+                    retryable: true,
+                },
+            )))
+            .await;
+        return;
     }
-
-    let role_key_for_write = role_key.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        coco_config::global_config::write_user_setting(
-            &format!("model_roles.{role_key_for_write}"),
-            payload,
-        )
-    })
-    .await;
-
-    match result {
-        Ok(Ok(path)) => {
-            tracing::info!(
-                role = %role_key,
-                %provider,
-                %model_id,
-                settings_path = %path.display(),
-                "persisted model-role selection"
-            );
-            let _ = event_tx
-                .send(CoreEvent::Tui(TuiOnlyEvent::ModelRoleApplied {
-                    role: role_key,
-                    provider,
-                    model_id,
-                    effort: effort.map(|e| e.to_string()),
-                }))
-                .await;
-        }
-        Ok(Err(err)) => {
-            tracing::warn!(role = %role_key, %provider, %model_id, error = %err, "failed to persist model-role selection");
-            let _ = event_tx
-                .send(CoreEvent::Tui(TuiOnlyEvent::ModelRolePersistFailed {
-                    role: role_key,
-                    error: err.to_string(),
-                }))
-                .await;
-        }
-        Err(join_err) => {
-            tracing::warn!(role = %role_key, error = %join_err, "model-role persist task panicked");
-            let _ = event_tx
-                .send(CoreEvent::Tui(TuiOnlyEvent::ModelRolePersistFailed {
-                    role: role_key,
-                    error: format!("task join error: {join_err}"),
-                }))
-                .await;
-        }
-    }
+    tracing::info!(
+        role = %role.as_str(),
+        %provider,
+        %model_id,
+        effort = ?effort,
+        "applied in-memory model-role override (not persisted)"
+    );
+    let _ = event_tx
+        .send(CoreEvent::Protocol(ServerNotification::ModelRoleChanged(
+            coco_types::ModelRoleChangedParams {
+                role,
+                model_id,
+                provider,
+                effort,
+            },
+        )))
+        .await;
 }
 
-/// Best-effort provider inference for the legacy `SetModel` path that
-/// only carries a model_id. Mirrors the TUI's `infer_provider` so
-/// persistence is consistent regardless of which command emitted it.
-fn infer_provider_for_persist(model_id: &str) -> String {
-    if model_id.starts_with("claude-") {
-        "anthropic"
-    } else if model_id.starts_with("gpt-") || model_id.starts_with('o') {
-        "openai"
-    } else if model_id.starts_with("gemini-") {
-        "google"
-    } else if model_id.starts_with("deepseek-") {
-        "deepseek"
-    } else {
-        "other"
-    }
-    .to_string()
+/// Apply a thinking-level change to the Main role in-memory (Ctrl+T
+/// cycle). Reuses [`apply_role_in_memory`]'s end (event emission) so
+/// the TUI mirror updates through the same `ModelRoleChanged` path.
+async fn apply_main_effort_in_memory(
+    runtime: Arc<crate::session_runtime::SessionRuntime>,
+    level: String,
+    event_tx: tokio::sync::mpsc::Sender<CoreEvent>,
+) {
+    let effort = match level.parse::<coco_types::ReasoningEffort>() {
+        Ok(e) => Some(e),
+        Err(err) => {
+            tracing::warn!(level = %level, error = %err, "SetThinkingLevel: bad effort string, ignoring");
+            return;
+        }
+    };
+    runtime
+        .apply_role_effort(coco_types::ModelRole::Main, effort)
+        .await;
+    // Re-emit ModelRoleChanged so the TUI's `model_by_role` and
+    // status-bar mirrors stay coherent. Pull spec back from the
+    // runtime so the event carries the live (model, provider) pair.
+    let Some(resolved) = runtime.resolve_role(coco_types::ModelRole::Main).await else {
+        return;
+    };
+    let _ = event_tx
+        .send(CoreEvent::Protocol(ServerNotification::ModelRoleChanged(
+            coco_types::ModelRoleChangedParams {
+                role: coco_types::ModelRole::Main,
+                model_id: resolved.spec.model_id,
+                provider: resolved.spec.provider,
+                effort,
+            },
+        )))
+        .await;
 }
 
 #[cfg(test)]

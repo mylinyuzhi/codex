@@ -48,6 +48,13 @@ pub enum KeybindingAction {
     ChatModelPicker,
     ChatFastMode,
     ChatThinkingToggle,
+    /// coco-rs extension (no TS counterpart): cycle the Main role's
+    /// thinking effort forward through the current model's
+    /// `supported_thinking_levels`, wrapping at the end. Bound to
+    /// `ctrl+t` in Chat context (shadowing the global `app:toggleTodos`
+    /// while the user is at the input); `app:toggleTodos` remains
+    /// reachable from non-Chat contexts.
+    ChatCycleThinking,
     ChatSubmit,
     ChatNewline,
     ChatUndo,
@@ -211,6 +218,7 @@ impl KeybindingAction {
             Self::ChatModelPicker => Cow::Borrowed("chat:modelPicker"),
             Self::ChatFastMode => Cow::Borrowed("chat:fastMode"),
             Self::ChatThinkingToggle => Cow::Borrowed("chat:thinkingToggle"),
+            Self::ChatCycleThinking => Cow::Borrowed("chat:cycleThinking"),
             Self::ChatSubmit => Cow::Borrowed("chat:submit"),
             Self::ChatNewline => Cow::Borrowed("chat:newline"),
             Self::ChatUndo => Cow::Borrowed("chat:undo"),
@@ -414,6 +422,7 @@ impl FromStr for KeybindingAction {
             "chat:modelPicker" => Self::ChatModelPicker,
             "chat:fastMode" => Self::ChatFastMode,
             "chat:thinkingToggle" => Self::ChatThinkingToggle,
+            "chat:cycleThinking" => Self::ChatCycleThinking,
             "chat:submit" => Self::ChatSubmit,
             "chat:newline" => Self::ChatNewline,
             "chat:undo" => Self::ChatUndo,

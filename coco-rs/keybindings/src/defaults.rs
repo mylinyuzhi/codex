@@ -94,6 +94,15 @@ pub fn default_blocks() -> Vec<KeybindingBlock> {
                 ("meta+p", KeybindingAction::ChatModelPicker),
                 ("meta+o", KeybindingAction::ChatFastMode),
                 ("meta+t", KeybindingAction::ChatThinkingToggle),
+                // coco-rs extension (no TS counterpart): Ctrl+T in the
+                // Chat context cycles the Main role's thinking effort
+                // forward through the active model's
+                // `supported_thinking_levels`. Shadows the Global
+                // `ctrl+t → app:toggleTodos` while the user is at the
+                // input; the global binding stays reachable from other
+                // contexts (Picker, Settings, Scrollable) where the
+                // task panel toggle still makes sense.
+                ("ctrl+t", KeybindingAction::ChatCycleThinking),
                 ("enter", KeybindingAction::ChatSubmit),
                 ("up", KeybindingAction::HistoryPrevious),
                 ("down", KeybindingAction::HistoryNext),
