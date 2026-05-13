@@ -2,12 +2,57 @@
 //!
 //! Updated by server notification handlers when the agent loop emits events.
 
+use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::time::Instant;
 
 use coco_types::IdeDiagnosticsUpdatedParams;
 use coco_types::IdeSelectionChangedParams;
+use coco_types::ModelRole;
 use coco_types::PermissionMode;
+use coco_types::ReasoningEffort;
+
+/// One (provider, model) entry in the TUI's session-frozen model
+/// directory. Seeded from `RuntimeConfig.model_registry` (L0 builtin +
+/// L1 `~/.coco/models.json` + L2 per-provider overrides) at session
+/// start; the picker and `Ctrl+T` thinking cycle both consult this
+/// snapshot.
+///
+/// The data is intentionally frozen for the session lifetime — model
+/// metadata is a runtime-config concern, not a per-turn one. If the
+/// user edits `~/.coco/models.json` mid-session they need to restart
+/// to see the new entries (matches the rest of the runtime_config
+/// snapshot policy).
+#[derive(Debug, Clone)]
+pub struct ModelCatalogEntry {
+    /// Canonical provider id (e.g. `"anthropic"`, `"openai"`).
+    pub provider: String,
+    /// Human-facing provider label used in picker section headers.
+    pub provider_display: String,
+    /// Model id, e.g. `"claude-sonnet-4-6"`.
+    pub model_id: String,
+    /// Display name; falls back to `model_id` if unset upstream.
+    pub display_name: String,
+    /// Total context-window size (input + output) when known.
+    pub context_window: Option<i64>,
+    /// Efforts the model declares it supports, in declaration order.
+    /// `Ctrl+T` cycles through this slice; the picker effort footer
+    /// renders the same set.
+    pub supported_efforts: Vec<ReasoningEffort>,
+    /// Effort the model declares as its default when none is set.
+    pub default_effort: Option<ReasoningEffort>,
+}
+
+/// Live binding of one [`ModelRole`] inside the TUI state. Mirrors
+/// `SessionRuntime.role_overrides` but in display-friendly form so the
+/// picker can mark "current" entries without an async hop.
+#[derive(Debug, Clone)]
+pub struct ModelBinding {
+    pub model_id: String,
+    pub provider: String,
+    /// `None` ⇒ engine uses the model's `default_thinking_level`.
+    pub effort: Option<ReasoningEffort>,
+}
 
 /// One queued steering command as rendered by the TUI footer.
 ///
@@ -60,8 +105,25 @@ pub(crate) fn now_ms() -> i64 {
 pub struct SessionState {
     /// Conversation messages.
     pub messages: Vec<ChatMessage>,
-    /// Active model name.
+    /// Active model id (e.g. `claude-sonnet-4-6`, `gpt-5`, `gemini-2.5-pro`).
     pub model: String,
+    /// Active provider id for [`Self::model`] (e.g. `anthropic`, `openai`,
+    /// `google`). Sourced from `RuntimeConfig.model_roles[Main].provider` at
+    /// session bootstrap; the picker keeps a prefix-match fallback for
+    /// builtin entries that aren't paired with a registered role.
+    pub provider: String,
+    /// Session-frozen view of every `(provider, model_id)` pair known
+    /// to the runtime. Seeded once at startup; consumed by
+    /// `update::CycleThinkingLevel` (read `supported_efforts` for the
+    /// active Main model) and `update::show::build_model_entries`
+    /// (picker rendering, including L1 user-catalog + L2 per-provider
+    /// overrides that `builtin_models_partial()` alone wouldn't surface).
+    pub model_catalog: Vec<ModelCatalogEntry>,
+    /// Live per-role bindings. Empty entries inherit
+    /// `RuntimeConfig.model_roles[role]`; populated entries reflect
+    /// in-memory picker selections. Drives the picker's
+    /// `is_current_for_role` flag and (for `Main`) the Ctrl+T cycle.
+    pub model_by_role: HashMap<ModelRole, ModelBinding>,
     /// Current permission mode. Plan-mode status is derived from this
     /// (`permission_mode == Plan`) — no separate bool.
     pub permission_mode: PermissionMode,
@@ -315,6 +377,9 @@ impl Default for SessionState {
         Self {
             messages: Vec::new(),
             model: String::new(),
+            provider: String::new(),
+            model_catalog: Vec::new(),
+            model_by_role: HashMap::new(),
             permission_mode: PermissionMode::Default,
             bypass_permissions_available: false,
             auto_mode_available: false,

@@ -53,27 +53,52 @@ pub(crate) fn cycle_model(state: &mut AppState) {
         }));
 }
 
-/// Build the picker entries for `role`. Pulls metadata from
-/// `coco_config::builtin_models_partial()` and synthesises the
-/// provider id from the model-id prefix.
+/// Build the picker entries for `role` from the session-frozen
+/// `model_catalog`. The catalog covers all three resolution layers
+/// (L0 builtin + L1 `~/.coco/models.json` + L2 per-provider
+/// overrides), seeded by `tui_runner` at session start.
 ///
-/// Restricting to builtins is intentional for now: surfacing
-/// user-registered models requires plumbing `ModelRegistry` through
-/// the TUI session state, which is a separate change. Builtins cover
-/// every provider coco-rs ships with.
+/// **Fallback when catalog is empty**: synthesize entries from
+/// `coco_config::builtin_models_partial()` directly. This keeps tests
+/// (`AppState::new()` without a seed step) and pre-bootstrap mock
+/// paths working — production goes through the seed and never hits
+/// this branch.
 pub(super) fn build_model_entries(state: &AppState, role: ModelRole) -> Vec<ModelEntry> {
-    // Optional allow-list from settings.available_models. When set,
-    // limit the picker to those ids so users locked to a subset
-    // (corporate policy, billing constraints) don't see ineligible
-    // models.
     let allowlist: Option<&[String]> = if state.session.available_models.is_empty() {
         None
     } else {
         Some(state.session.available_models.as_slice())
     };
-
     let current_for_role = current_model_for_role(state, role);
 
+    if !state.session.model_catalog.is_empty() {
+        return state
+            .session
+            .model_catalog
+            .iter()
+            .filter(|entry| {
+                allowlist
+                    .map(|a| a.iter().any(|s| s == &entry.model_id))
+                    .unwrap_or(true)
+            })
+            .map(|entry| ModelEntry {
+                provider: entry.provider.clone(),
+                provider_display: entry.provider_display.clone(),
+                model_id: entry.model_id.clone(),
+                display_name: entry.display_name.clone(),
+                context_window: entry.context_window,
+                supported_efforts: entry.supported_efforts.clone(),
+                default_effort: entry.default_effort,
+                is_current_for_role: current_for_role
+                    .as_ref()
+                    .map(|(p, m)| p == &entry.provider && m == &entry.model_id)
+                    .unwrap_or(false),
+            })
+            .collect();
+    }
+
+    // Fallback: builtin-only synthesis. Provider inferred from
+    // model_id prefix because the builtin map is keyed only by id.
     let mut entries: Vec<ModelEntry> = coco_config::builtin_models_partial()
         .iter()
         .filter(|(model_id, _)| {
@@ -100,16 +125,12 @@ pub(super) fn build_model_entries(state: &AppState, role: ModelRole) -> Vec<Mode
                 supported_efforts,
                 default_effort: partial.default_thinking_level,
                 is_current_for_role: current_for_role
-                    .as_deref()
-                    .map(|m| m == model_id)
+                    .as_ref()
+                    .map(|(_, m)| m == model_id)
                     .unwrap_or(false),
             }
         })
         .collect();
-
-    // Sort by (provider_display, display_name) so providers cluster
-    // and within a provider models are alphabetic — stable for both
-    // rendering (headers fall between sections) and snapshot tests.
     entries.sort_by(|a, b| {
         a.provider_display
             .cmp(&b.provider_display)
@@ -118,17 +139,10 @@ pub(super) fn build_model_entries(state: &AppState, role: ModelRole) -> Vec<Mode
     entries
 }
 
-/// Lookup the model id currently bound to `role`. For now only `Main`
-/// has a live mirror (`state.session.model`); other roles fall through
-/// to the Main id so the picker still surfaces a sensible "current"
-/// marker. Wire per-role state when the engine exposes it.
-fn current_model_for_role(state: &AppState, _role: ModelRole) -> Option<String> {
-    Some(state.session.model.clone())
-}
-
-/// Map a builtin `model_id` to its canonical provider. Builtin
-/// registry doesn't carry a provider field (entries are keyed only
-/// by id), so this lookup is the seam between display and persistence.
+/// Map a builtin `model_id` to its canonical provider. Used only by
+/// the fallback branch in [`build_model_entries`] when
+/// `state.session.model_catalog` is empty (tests / pre-bootstrap).
+/// Production reads provider directly off the catalog entries.
 fn infer_provider(model_id: &str) -> (&'static str, &'static str) {
     if model_id.starts_with("claude-") {
         ("anthropic", "Anthropic")
@@ -141,6 +155,21 @@ fn infer_provider(model_id: &str) -> (&'static str, &'static str) {
     } else {
         ("other", "Other")
     }
+}
+
+/// Lookup the `(provider, model_id)` pair currently bound to `role`.
+/// Reads `state.session.model_by_role` (the live mirror populated by
+/// `ModelRoleChanged` and seeded at session start); falls back to the
+/// Main pair when a role has no binding (matches the engine's own
+/// `ModelRoles` fallback chain).
+fn current_model_for_role(state: &AppState, role: ModelRole) -> Option<(String, String)> {
+    if let Some(b) = state.session.model_by_role.get(&role) {
+        return Some((b.provider.clone(), b.model_id.clone()));
+    }
+    if state.session.provider.is_empty() || state.session.model.is_empty() {
+        return None;
+    }
+    Some((state.session.provider.clone(), state.session.model.clone()))
 }
 
 /// Cycle the picker's target role by `delta`, rebuilding entries for

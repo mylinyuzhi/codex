@@ -200,8 +200,6 @@ fn tui_kind(evt: &TuiOnlyEvent) -> &'static str {
         TuiOnlyEvent::OpenMemoryDialog { .. } => "open_memory_dialog",
         TuiOnlyEvent::BashCommandCompleted { .. } => "bash_command_completed",
         TuiOnlyEvent::MemorySaved { .. } => "memory_saved",
-        TuiOnlyEvent::ModelRoleApplied { .. } => "model_role_applied",
-        TuiOnlyEvent::ModelRolePersistFailed { .. } => "model_role_persist_failed",
         TuiOnlyEvent::OpenModelPicker => "open_model_picker",
     }
 }

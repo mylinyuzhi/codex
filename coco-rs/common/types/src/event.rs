@@ -375,7 +375,7 @@ Each variant's wire method is generated together with the matching \
     /// Agents killed.
     "agents/killed" => AgentsKilled(AgentsKilledParams),
 
-    // === Model (3) ===
+    // === Model (4) ===
 
     /// Model fallback started.
     "model/fallbackStarted" => ModelFallbackStarted(ModelFallbackParams),
@@ -383,6 +383,11 @@ Each variant's wire method is generated together with the matching \
     "model/fallbackCompleted" => ModelFallbackCompleted,
     /// Fast mode state changed.
     "model/fastModeChanged" => FastModeChanged { active: bool },
+    /// A role's binding (model + provider + effort) changed in-memory
+    /// via the picker or `Ctrl+T`. Carries the resolved fields the TUI
+    /// needs to refresh its `model_by_role` cache and, for `Main`,
+    /// status-bar fields (`model`, `provider`, `thinking_effort`).
+    "model/roleChanged" => ModelRoleChanged(ModelRoleChangedParams),
 
     // === Permission (1) ===
 
@@ -1055,6 +1060,27 @@ pub struct ModelFallbackParams {
     pub reason: String,
 }
 
+/// Payload for [`crate::ServerNotification::ModelRoleChanged`]. Carries
+/// the resolved binding (model + provider + thinking effort) that the
+/// TUI applies to `state.session.model_by_role[role]` and, when
+/// `role == Main`, also to `state.session.{model, provider,
+/// thinking_effort}` for the status bar.
+///
+/// Emitted by `tui_runner` after applying an in-memory override via
+/// `SessionRuntime::apply_role_override` / `apply_role_effort`. No
+/// persistence to settings.json — that's the user's job.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelRoleChangedParams {
+    pub role: crate::ModelRole,
+    pub model_id: String,
+    pub provider: String,
+    /// `None` ⇒ engine falls back to the model's
+    /// `default_thinking_level`. `Some(_)` ⇒ explicit user choice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<crate::ReasoningEffort>,
+}
+
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionModeChangedParams {
@@ -1460,25 +1486,6 @@ pub enum TuiOnlyEvent {
         /// Path of the file that was appended to (project / user scope).
         path: String,
     },
-    /// Confirmation that a `(role, provider, model_id, effort)` selection
-    /// from the model picker was persisted to
-    /// `~/.coco/settings.json::model_roles.<role>`. The TUI raises a
-    /// success toast. The role / provider / model_id fields are pre-formatted
-    /// strings (role uses `ModelRole::as_str()`, effort uses the wire
-    /// form via `ReasoningEffort::Display`) so the consumer doesn't
-    /// need to depend on `coco-config`.
-    ModelRoleApplied {
-        role: String,
-        provider: String,
-        model_id: String,
-        /// Wire-form effort label (e.g. `"medium"` / `"xhigh"`); `None`
-        /// when the model has no thinking capability or the picker
-        /// produced no override.
-        effort: Option<String>,
-    },
-    /// Persistence of a model-role selection failed. The TUI raises an
-    /// error toast carrying the wrapped reason.
-    ModelRolePersistFailed { role: String, error: String },
     /// Tell the TUI to open the provider-grouped model picker. Emitted
     /// when the slash dispatcher resolves `/model` with no args (typed
     /// `/model` from input bar). The TUI consumes the current

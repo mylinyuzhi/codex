@@ -238,8 +238,11 @@ fn map_global_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
         KeyCode::Char('c') if ctrl => Some(TuiCommand::Interrupt),
         KeyCode::Char('q') if ctrl => Some(TuiCommand::Quit),
         KeyCode::Char('l') if ctrl => Some(TuiCommand::ClearScreen),
-        KeyCode::Char('t') if ctrl && shift => Some(TuiCommand::ToggleThinking),
-        KeyCode::Char('t') if ctrl => Some(TuiCommand::CycleThinkingLevel),
+        // Ctrl+T / Ctrl+Shift+T are owned by the keybindings resolver
+        // (Chat: `chat:cycleThinking` → `CycleThinkingLevel`; Global:
+        // `app:toggleTodos` → `ToggleExpandedTasksView`). No legacy
+        // fallback needed; users who unbind both can rebind via
+        // `~/.coco/keybindings.json`.
         KeyCode::Char('e') if ctrl && shift => Some(TuiCommand::ToggleToolCollapse),
         KeyCode::Char('e') if ctrl => Some(TuiCommand::OpenExternalEditor),
         KeyCode::Char('r') if ctrl && shift => Some(TuiCommand::ToggleSystemReminders),

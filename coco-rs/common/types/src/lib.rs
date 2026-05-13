@@ -123,6 +123,7 @@ pub use event::McpStartupStatusParams;
 pub use event::MemoryDialogEntry;
 pub use event::MemoryDialogScope;
 pub use event::ModelFallbackParams;
+pub use event::ModelRoleChangedParams;
 pub use event::NotificationMethod;
 pub use event::PermissionDenialInfo;
 pub use event::PermissionModeChangedParams;
