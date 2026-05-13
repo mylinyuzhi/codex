@@ -37,7 +37,53 @@ Also: `tools/shared/`, `tools/utils.ts`, and supporting utils (`utils/worktree.t
 
 - MCPTool is the only dynamic tool — schema comes from the connected server at runtime. Re-connection is idempotent: the registry deregisters prior tools for that server first.
 - All file-mutation tools (Edit/Write/NotebookEdit/Bash) invoke the team-mem secret guard + file-history tracking helpers before touching disk.
-- One file per tool. Utility tools live in their own modules: `ask_user_question.rs`, `tool_search.rs`, `config.rs`, `brief.rs`, `lsp_tool.rs`, `notebook_edit.rs`. (`lsp_tool.rs` is suffixed because `lsp.rs` is reserved for shared LSP types/formatters scaffolding.)
+- One file per tool. Utility tools live in their own modules: `ask_user_question.rs`, `tool_search.rs`, `config.rs`, `brief.rs`, `lsp_tool.rs`, `notebook_edit.rs`. (`lsp_tool.rs` is suffixed because `lsp.rs` holds the shared DTOs + formatters that the tool consumes.)
+
+### LSP tool — TS-mirror dispatch
+
+`LspAction` (9 variants: `goToDefinition` / `findReferences` / `hover` /
+`documentSymbol` / `workspaceSymbol` / `goToImplementation` /
+`prepareCallHierarchy` / `incomingCalls` / `outgoingCalls`) mirrors TS
+`tools/LSPTool/schemas.ts` exactly. Wire format is **camelCase** so the
+model's tool calls validate identically across runtimes. Diagnostics are
+**not** an `LspAction` — they flow through the passive `system_reminder`
+pipeline (`coco-lsp::DiagnosticsStore` → `app/query::reminder_adapters`)
+exactly like TS `passiveFeedback.ts`.
+
+`LspTool::is_enabled` is double-gated: `Feature::Lsp` enabled **and**
+`ctx.lsp.is_connected()` (adapter reports running state after
+bootstrap prewarm). Without either gate the tool is filtered out of
+the model's tool list.
+
+Dispatch flow:
+1. `LspTool::execute` parses input + resolves relative paths against
+   `ctx.cwd_override` (worktree-aware) → fall back to process cwd.
+2. `validate_lsp_file` rejects UNC paths (`\\…` / `//…`) for Windows
+   NTLM safety (TS parity) and files larger than 10MB.
+3. `build_params(action, uri, line, character)` produces 0-based LSP
+   `Position` from 1-based input.
+4. `ctx.lsp.send_request(path, method, params)` → adapter
+   (`coco_cli::lsp_handle_adapter::LspManagerAdapter`) routes via
+   `LspServerManager::get_client(path)` which walks up to find
+   `.git` / `Cargo.toml` — auto-routing per worktree.
+5. For `incomingCalls` / `outgoingCalls`, dispatch runs the TS
+   two-step pattern: `prepareCallHierarchy` → pick first item →
+   `callHierarchy/{incomingCalls,outgoingCalls}`.
+6. Location-returning ops (`goToDefinition` / `findReferences` /
+   `goToImplementation` / `workspaceSymbol`) are filtered through
+   `coco_file_ignore::PathChecker` — TS uses `git check-ignore`
+   subprocess; coco-rs uses the in-process unified path (see
+   user memory `feedback_unified_ignore_service`).
+7. Typed formatters in `tools::lsp::format_*` produce the
+   markdown-ish `LspOutput` returned to the model.
+
+`Write` / `Edit` / `NotebookEdit` / `ApplyPatch` all call
+`ctx.lsp.notify_save(path)` after a successful write — TS parity
+(`FileWriteTool.ts` etc.). The adapter forwards to `client.notify_save`
+(sends `textDocument/didSave` only if the file is already in the
+server's `opened` tracker) AND clears the file's entries from
+`DiagnosticsStore.delivered_for_file` so re-published diagnostics for
+the edited file are not suppressed by cross-turn dedup.
 
 ## Per-tool Result Persistence Thresholds
 

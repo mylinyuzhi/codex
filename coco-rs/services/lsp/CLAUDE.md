@@ -59,8 +59,31 @@ Config files: `~/.coco/lsp_servers.json` (user) → `.coco/lsp_servers.json` (pr
 
 `ServerLifecycle` tracks crashes with max restarts + exponential backoff. Health check tries `workspace/symbol`, falls back to `hover` on any open file.
 
+## Tool Layer Integration
+
+The agent-facing `LspTool` lives in `coco-tools` and dispatches via the
+`coco_tool_runtime::LspHandle` trait. The concrete adapter
+(`coco_cli::lsp_handle_adapter::LspManagerAdapter`) wraps an
+`Arc<LspServerManager>` + the manager's `DiagnosticsStore`. TS parity
+table:
+
+| TS | Rust seam |
+|----|-----------|
+| `tools/LSPTool/LSPTool.ts` | `coco-tools::tools::lsp_tool::LspTool` |
+| `tools/LSPTool/formatters.ts` | `coco-tools::tools::lsp::format_*` |
+| `services/lsp/manager.ts::isLspConnected()` | `LspHandle::is_connected()` (sync; backed by `LspServerManager::has_configured_servers` + adapter `has_active` AtomicBool) |
+| `services/lsp/manager.ts::initialize()` | `LspManagerAdapter::prewarm(project_root)` — parallel `join_all` over deduped `(server_id)` set |
+| `FileWriteTool.ts::lspManager.saveFile()` + `clearDeliveredDiagnosticsForFile()` | `LspHandle::notify_save(path)` (adapter calls both) |
+| `LSPServerManager.openFile/changeFile/saveFile/closeFile` | `LspClient::sync_file/update_file/notify_save/...` (via raw JSON-RPC) |
+
+`LspHandle::send_request(file, method, params)` is the universal dispatch
+path — it auto-routes via `find_project_root(file)` so files in a git
+worktree (`.git` is a file, not a dir; both pass `Path::exists()`) are
+served by an LSP rooted at the worktree.
+
 ## Notes
 
 - **Does NOT follow the `*_ext.rs` extension pattern** — direct file modifications preferred.
 - Symbol cache invalidation is version-tracked per file.
 - Re-exports `lsp_types::{CallHierarchyIncomingCall, CallHierarchyItem, CallHierarchyOutgoingCall, Location, SymbolInformation}`.
+- `LspClient::send_raw_request(method, params)` is the protocol-level passthrough used by the tool-layer adapter; in-crate callers should prefer the typed wrappers (`definition`/`references`/`hover`/…).

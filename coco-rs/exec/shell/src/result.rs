@@ -29,6 +29,13 @@ pub struct CommandResult {
     #[serde(skip)]
     pub stdout_bytes: Option<Vec<u8>>,
     pub stderr: String,
+    /// Raw pre-UTF-8-lossy stderr bytes, populated by the executor.
+    /// Symmetric with `stdout_bytes` — PowerShell on Windows can emit
+    /// UTF-16 LE/BE with a BOM on stderr too, so consumers that need
+    /// to decode the original encoding (e.g. PowerShellTool) read
+    /// these bytes instead of the lossy `stderr` String.
+    #[serde(skip)]
+    pub stderr_bytes: Option<Vec<u8>>,
     /// New CWD if command changed directory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub new_cwd: Option<PathBuf>,

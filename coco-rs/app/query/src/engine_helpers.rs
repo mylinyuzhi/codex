@@ -335,6 +335,36 @@ pub(crate) fn compute_tools_delta(
     })
 }
 
+/// Whether the most recent assistant message's total context exceeds
+/// `threshold` tokens.
+///
+/// TS parity: `utils/tokens.ts:159 doesMostRecentAssistantMessageExceed200k`.
+/// TS hardcodes a 200_000 threshold to bypass the `opusplan → Opus` swap
+/// in plan mode when Opus's smaller context window would truncate.
+/// coco-rs accepts the threshold as a parameter so users can tune it
+/// for their configured plan-role model (set via
+/// `PlanModeSettings.plan_model_fallback_threshold_tokens`).
+///
+/// The "total context" is the sum of `input_tokens` (all input tokens,
+/// not just non-cached), `cache_read`, `cache_creation`, and
+/// `output_tokens` — matching TS's `inputTokens + cacheRead +
+/// cacheCreation + outputTokens` shape. Returns `false` when the
+/// history has no assistant message yet (cold start).
+pub(crate) fn most_recent_assistant_exceeds(messages: &[Message], threshold: i64) -> bool {
+    for msg in messages.iter().rev() {
+        if let Message::Assistant(a) = msg
+            && let Some(usage) = &a.usage
+        {
+            let total = usage.input_tokens
+                + usage.cache_read_input_tokens()
+                + usage.cache_creation_input_tokens()
+                + usage.output_tokens;
+            return total > threshold;
+        }
+    }
+    false
+}
+
 /// Extract the raw user-input text from the most-recent non-meta user
 /// message in history. Mirrors TS `getAttachments(input, ...)` where
 /// `input` is the user's prompt string (not a structured message).
@@ -557,3 +587,7 @@ pub(crate) async fn drain_one_progress(
     )
     .await;
 }
+
+#[cfg(test)]
+#[path = "engine_helpers.test.rs"]
+mod tests;

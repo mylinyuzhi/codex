@@ -162,11 +162,86 @@ async fn exit_plan_mode_non_teammate_asks_for_confirmation() {
     let ctx = ctx_with_mode(PermissionMode::Plan);
     let decision = ExitPlanModeTool.check_permissions(&json!({}), &ctx).await;
     match decision {
-        coco_types::ToolCheckResult::Ask { message } => {
+        coco_types::ToolCheckResult::Ask { message, choices } => {
             assert!(message.contains("Exit plan mode"));
+            // Default `show_clear_context_on_exit = false` → no choices.
+            assert!(choices.is_none(), "no choices when setting is off");
         }
         other => panic!("expected Ask, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn exit_plan_mode_offers_clear_context_choice_when_setting_enabled() {
+    // TS parity: `ExitPlanModePermissionRequest.tsx:137` gates the
+    // multi-choice dialog on `settings.showClearContextOnPlanAccept`.
+    let mut ctx = ctx_with_mode(PermissionMode::Plan);
+    ctx.plan_mode_settings.show_clear_context_on_exit = true;
+
+    let decision = ExitPlanModeTool.check_permissions(&json!({}), &ctx).await;
+    match decision {
+        coco_types::ToolCheckResult::Ask { choices, .. } => {
+            let choices = choices.expect("expected choices when setting is on");
+            let values: Vec<&str> = choices.iter().map(|c| c.value.as_str()).collect();
+            assert_eq!(
+                values,
+                vec!["yes-keep-context", "yes-clear-context", "no"],
+                "choices must surface the keep/clear/cancel triad"
+            );
+        }
+        other => panic!("expected Ask, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn exit_plan_mode_clear_context_choice_sets_pending_flag() {
+    use tempfile::tempdir;
+    let tmp = tempdir().unwrap();
+    let session_id = "exit-clear-ctx";
+    let plans_dir = coco_context::resolve_plans_directory(tmp.path(), None, None);
+    coco_context::write_plan(session_id, &plans_dir, "# plan", None).unwrap();
+
+    let app_state = plan_mode_app_state(Some(PermissionMode::Default), None);
+    let mut ctx = ctx_with_mode(PermissionMode::Plan);
+    ctx.config_home = Some(tmp.path().to_path_buf());
+    ctx.session_id_for_history = Some(session_id.into());
+    ctx.app_state = Some(app_state.clone().into());
+
+    // Simulate the TUI rewriting input with the picked choice value.
+    let input = json!({"user_choice": "yes-clear-context"});
+    let _ = execute_and_apply_patch(&ExitPlanModeTool, input, &ctx, &app_state)
+        .await
+        .unwrap();
+    let guard = app_state.read().await;
+    assert!(
+        guard.pending_clear_message_history,
+        "yes-clear-context must schedule MessageHistory::clear()"
+    );
+}
+
+#[tokio::test]
+async fn exit_plan_mode_keep_context_choice_does_not_set_pending_flag() {
+    use tempfile::tempdir;
+    let tmp = tempdir().unwrap();
+    let session_id = "exit-keep-ctx";
+    let plans_dir = coco_context::resolve_plans_directory(tmp.path(), None, None);
+    coco_context::write_plan(session_id, &plans_dir, "# plan", None).unwrap();
+
+    let app_state = plan_mode_app_state(Some(PermissionMode::Default), None);
+    let mut ctx = ctx_with_mode(PermissionMode::Plan);
+    ctx.config_home = Some(tmp.path().to_path_buf());
+    ctx.session_id_for_history = Some(session_id.into());
+    ctx.app_state = Some(app_state.clone().into());
+
+    let input = json!({"user_choice": "yes-keep-context"});
+    let _ = execute_and_apply_patch(&ExitPlanModeTool, input, &ctx, &app_state)
+        .await
+        .unwrap();
+    let guard = app_state.read().await;
+    assert!(
+        !guard.pending_clear_message_history,
+        "yes-keep-context must NOT schedule a clear"
+    );
 }
 
 /// Seed app_state for an ExitPlanMode test. TS parity: appState is

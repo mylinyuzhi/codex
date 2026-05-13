@@ -105,6 +105,9 @@ fn test_snapshot_with_permission_overlay() {
         show_always_allow: true,
         classifier_checking: false,
         classifier_auto_approved: None,
+        choices: None,
+        selected_choice: 0,
+        original_input: None,
     }));
 
     let output = render_to_string(&state, 80, 24);

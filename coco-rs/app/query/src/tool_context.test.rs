@@ -46,6 +46,8 @@ fn factory_with_live_rules(
         hook_handle: None,
         agent_handle: None,
         skill_handle: None,
+        lsp_handle: None,
+        mcp_handle: None,
         tool_schema_validator: None,
         agent_catalog: None,
         live_command_rules,

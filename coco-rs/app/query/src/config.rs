@@ -205,10 +205,31 @@ pub struct QueryEngineConfig {
     pub memory_config: MemoryConfig,
     /// Resolved shell runtime configuration (bash-tool path).
     pub shell_config: ShellConfig,
+    /// Session-scoped shell command assembler. Constructed once at
+    /// session bootstrap (with the live snapshot watch + session-env
+    /// reader + `/env` store) and threaded onto every
+    /// [`coco_tool_runtime::ToolUseContext`]. `None` for tests / SDK
+    /// paths that haven't yet wired the provider — Bash falls back to
+    /// per-call executor construction without snapshot caching.
+    pub shell_provider: Option<Arc<dyn coco_shell::ShellProvider>>,
+    /// Frozen anchor — captured at session start. BashTool's
+    /// `reset_cwd_if_outside_project` uses it to snap back when the
+    /// live cwd drifts out of the allowed working set. TS:
+    /// `bootstrap/state.ts::originalCwd`.
+    pub original_cwd: Option<std::path::PathBuf>,
+    /// Mutable session CWD shared across all BashTool invocations.
+    /// `cd /tmp` in turn N updates this; turn N+1 reads it as the
+    /// spawn cwd. TS parity: `bootstrap/state.ts::STATE.cwd` driven
+    /// by `utils/Shell.ts::setCwd`. `None` for tests / SDK paths;
+    /// BashTool falls back to `std::env::current_dir()`.
+    pub session_cwd: Option<Arc<tokio::sync::RwLock<std::path::PathBuf>>>,
     /// Resolved web-fetch runtime configuration (WebFetchTool).
     pub web_fetch_config: WebFetchConfig,
     /// Resolved web-search runtime configuration (WebSearchTool).
     pub web_search_config: WebSearchConfig,
+    /// Resolved LSP tool-layer runtime configuration (LspTool).
+    /// Carries the per-query file-size gate; future fields land here.
+    pub lsp_config: coco_config::LspConfig,
     /// Centralized feature gates (Layer 1 of the tool filter pipeline).
     /// See `docs/coco-rs/feature-gates-and-tool-filtering.md`.
     pub features: Arc<Features>,
@@ -337,8 +358,12 @@ impl Default for QueryEngineConfig {
             sandbox_state: None,
             memory_config: MemoryConfig::default(),
             shell_config: ShellConfig::default(),
+            shell_provider: None,
+            original_cwd: None,
+            session_cwd: None,
             web_fetch_config: WebFetchConfig::default(),
             web_search_config: WebSearchConfig::default(),
+            lsp_config: coco_config::LspConfig::default(),
             features: Arc::new(Features::with_defaults()),
             tool_overrides: Arc::new(ToolOverrides::none()),
             tool_filter: ToolFilter::unrestricted(),

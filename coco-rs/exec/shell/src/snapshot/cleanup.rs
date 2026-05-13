@@ -1,7 +1,19 @@
-//! Stale snapshot cleanup utilities.
+//! Stale shell-snapshot cleanup.
 //!
-//! Removes orphaned or expired shell snapshot files while protecting
-//! the currently active session's snapshot.
+//! TS source: `utils/cleanupRegistry.ts` — claude-code registers a cleanup
+//! callback per snapshot, fired at graceful shutdown. Our equivalent has
+//! two parts:
+//!
+//! - **`Drop` on [`ShellSnapshot`](super::ShellSnapshot)** — best-effort
+//!   unlink for the current session's own file when the handle drops.
+//!
+//! - **`cleanup_stale_snapshots`** (this fn) — called at session start to
+//!   sweep any file older than `retention` that was left behind by a
+//!   previous run that crashed before `Drop` could fire.
+//!
+//! With the TS-aligned naming `snapshot-<shell>-<ts>-<rand>.<ext>`, every
+//! filename is unique across sessions, so we no longer need to special-case
+//! "the active session's file" — mtime alone tells us what's stale.
 
 use std::io::ErrorKind;
 use std::path::Path;
@@ -11,18 +23,19 @@ use std::time::SystemTime;
 use anyhow::Result;
 use tokio::fs;
 
-/// Removes stale shell snapshot files from the snapshot directory.
+/// Remove shell-snapshot files older than `retention`.
 ///
-/// A snapshot is considered stale if:
-/// 1. It lacks a valid filename format (no extension separator)
-/// 2. It belongs to a different session and is older than the retention period
-///
-/// Returns the number of snapshots removed.
+/// `active_session_id` is accepted for API back-compat (older callers
+/// expected per-session protection); it's currently unused because the
+/// new naming scheme makes mtime alone sufficient. Returns the number
+/// of files removed.
 pub async fn cleanup_stale_snapshots(
     snapshot_dir: &Path,
     active_session_id: &str,
     retention: Duration,
 ) -> Result<i32> {
+    let _ = active_session_id;
+
     let mut entries = match fs::read_dir(snapshot_dir).await {
         Ok(entries) => entries,
         Err(err) if err.kind() == ErrorKind::NotFound => return Ok(0),
@@ -36,28 +49,9 @@ pub async fn cleanup_stale_snapshots(
         if !entry.file_type().await?.is_file() {
             continue;
         }
-
         let path = entry.path();
-        let file_name = entry.file_name();
-        let file_name = file_name.to_string_lossy();
-
-        // Extract session ID from filename (format: {session_id}.{extension})
-        let session_id = match file_name.rsplit_once('.') {
-            Some((stem, _ext)) => stem,
-            None => {
-                // Invalid filename format — remove it
-                remove_snapshot_file(&path).await;
-                removed_count += 1;
-                continue;
-            }
-        };
-
-        if session_id == active_session_id {
-            continue;
-        }
-
         let modified = match fs::metadata(&path).await.and_then(|m| m.modified()) {
-            Ok(modified) => modified,
+            Ok(m) => m,
             Err(err) => {
                 tracing::warn!(
                     "Failed to check snapshot age for {}: {err:?}",
@@ -66,7 +60,6 @@ pub async fn cleanup_stale_snapshots(
                 continue;
             }
         };
-
         if let Ok(age) = now.duration_since(modified)
             && age >= retention
         {
@@ -78,14 +71,11 @@ pub async fn cleanup_stale_snapshots(
     Ok(removed_count)
 }
 
-/// Removes a snapshot file, logging any unexpected errors.
 async fn remove_snapshot_file(path: &Path) {
-    if let Err(err) = fs::remove_file(path).await {
-        if err.kind() != ErrorKind::NotFound {
-            tracing::warn!("Failed to delete shell snapshot at {:?}: {err:?}", path);
-        }
-    } else {
-        tracing::debug!("Removed stale snapshot: {}", path.display());
+    match fs::remove_file(path).await {
+        Ok(()) => tracing::debug!("Removed stale snapshot: {}", path.display()),
+        Err(err) if err.kind() == ErrorKind::NotFound => {}
+        Err(err) => tracing::warn!("Failed to delete shell snapshot at {:?}: {err:?}", path),
     }
 }
 

@@ -42,12 +42,16 @@ grep-regex.workspace = true
 grep-searcher.workspace = true
 pdf-extract.workspace = true
 regex.workspace = true
+unicode-normalization.workspace = true
 walkdir.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 tokio = { workspace = true, features = ["process", "time", "fs"] }
 tokio-util.workspace = true
 tracing.workspace = true
 reqwest = { workspace = true, features = ["rustls-tls", "stream"] }
+url.workspace = true
+urlencoding.workspace = true
+pathdiff = "0.2"
 
 [dev-dependencies]
 anyhow.workspace = true

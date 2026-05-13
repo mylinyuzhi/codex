@@ -1,21 +1,47 @@
+//! Shell command executor.
+//!
+//! Spawns a child shell with the command built by a
+//! [`crate::provider::ShellProvider`], waits with timeout + cancel-token,
+//! optionally wraps with platform sandbox enforcement, and reads back the
+//! CWD via the provider-written file.
+//!
+//! This layer is intentionally thin — every shell-flavor concern (snapshot,
+//! session-env, extglob, eval-quoting, pwd-tracking, encoding) lives in
+//! the provider. Adding a new shell means adding a `ShellProvider` impl,
+//! not editing this file.
+//!
+//! TS source: `utils/Shell.ts` (spawn + wait + post-cwd handling).
+
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 use coco_config::ShellConfig;
 
+use crate::provider::BashProvider;
+use crate::provider::BuildExecOpts;
+use crate::provider::BuiltCommand;
+use crate::provider::ShellProvider;
 use crate::result::CommandResult;
 use crate::result::ExecOptions;
 use crate::safety::SafetyResult;
-use crate::shell_types::Shell;
-use crate::shell_types::ShellType;
 use crate::shell_types::default_user_shell;
 use crate::shell_types::shell_from_config;
 use crate::snapshot::ShellSnapshot;
 use crate::snapshot::SnapshotConfig;
 
-/// CWD tracking marker — appended to commands to detect directory changes.
-const CWD_MARKER_PREFIX: &str = "___COCO_CWD___";
+/// Process-wide monotonic ID for per-command CWD-tracking filenames.
+///
+/// Avoids collisions when many `ShellExecutor`s share the same tmpdir
+/// (e.g. concurrent agent teams). u64 is more than enough — even at 1M
+/// commands/second it wraps in 500K years.
+static COMMAND_ID: AtomicU64 = AtomicU64::new(1);
+
+fn next_command_id() -> u64 {
+    COMMAND_ID.fetch_add(1, Ordering::Relaxed)
+}
 
 /// Shell executor with CWD tracking, timeout, and environment snapshot support.
 pub struct ShellExecutor {
@@ -26,37 +52,35 @@ pub struct ShellExecutor {
     /// the post-command scrub mitigates planted bare-repo attacks
     /// (anthropics/claude-code#29316) for the original session root.
     original_cwd: PathBuf,
-    /// Shell configuration with type, path, and optional snapshot.
-    shell: Shell,
-    /// Resolved user settings — controls snapshot disable, shell-prefix, etc.
-    ///
-    /// `None` keeps legacy behavior for callers constructed via `new()`
-    /// before the config pipeline existed (tests + pre-runtime paths).
-    shell_config: Option<ShellConfig>,
+    /// Shell-specific command assembler. `Arc`-shared across all
+    /// `ShellExecutor` instances in a session so they all see the same
+    /// snapshot / session-env / shell-prefix state.
+    provider: Arc<dyn ShellProvider>,
 }
 
 impl ShellExecutor {
-    /// Construct an executor that auto-detects the shell from `$SHELL`
-    /// + platform defaults. No user settings applied.
+    /// Auto-detect the shell from `$SHELL` + platform defaults. No
+    /// session-scoped state (snapshot, session-env, shell-prefix).
     pub fn new(cwd: &Path) -> Self {
-        Self {
-            cwd: cwd.to_path_buf(),
-            original_cwd: cwd.to_path_buf(),
-            shell: default_user_shell(),
-            shell_config: None,
-        }
+        let provider = Arc::new(BashProvider::from_shell(default_user_shell()));
+        Self::with_provider(cwd, provider)
     }
 
-    /// Construct an executor that honors a resolved [`ShellConfig`]:
-    ///   - `default_shell` acts as the bash/zsh override
-    ///   - `disable_snapshot` gates [`start_snapshotting`]
-    ///   - `shell_prefix` is reserved for future consumption (logged today)
+    /// Honour `ShellConfig.default_shell` for the override but skip
+    /// snapshot wiring (legacy callers + tests).
     pub fn new_with_config(cwd: &Path, shell_config: &ShellConfig) -> Self {
+        let provider = Arc::new(BashProvider::from_shell(shell_from_config(shell_config)));
+        Self::with_provider(cwd, provider)
+    }
+
+    /// Construct with a pre-built provider — the entry point for
+    /// session-bootstrap code that wires in the snapshot watch, session-env
+    /// reader, and `/env` store.
+    pub fn with_provider(cwd: &Path, provider: Arc<dyn ShellProvider>) -> Self {
         Self {
             cwd: cwd.to_path_buf(),
             original_cwd: cwd.to_path_buf(),
-            shell: shell_from_config(shell_config),
-            shell_config: Some(shell_config.clone()),
+            provider,
         }
     }
 
@@ -68,50 +92,27 @@ impl ShellExecutor {
         self.cwd = cwd;
     }
 
-    /// Returns the underlying Shell.
-    pub fn shell(&self) -> &Shell {
-        &self.shell
+    /// Borrow the underlying provider (e.g. for `start_snapshotting` on
+    /// the embedded [`Shell`] — only relevant for `BashProvider`).
+    pub fn provider(&self) -> &Arc<dyn ShellProvider> {
+        &self.provider
     }
 
-    /// Returns the current snapshot if available.
-    pub fn shell_snapshot(&self) -> Option<Arc<ShellSnapshot>> {
-        self.shell.shell_snapshot()
-    }
-
-    /// Starts async shell snapshotting in a background task.
-    ///
-    /// The snapshot captures the user's shell environment (functions, aliases,
-    /// options, exports) and sources it before each command, avoiding login
-    /// shell overhead while preserving the user's interactive environment.
+    /// Convenience for callers that haven't yet been refactored onto the
+    /// provider path: kick off snapshot capture in a background task and
+    /// install the receiver onto a freshly-built provider.
     ///
     /// When `shell_config.disable_snapshot` is true (via settings.json or
-    /// `COCO_DISABLE_SHELL_SNAPSHOT` folded into the config at resolve time),
-    /// this is a no-op.
+    /// `COCO_DISABLE_SHELL_SNAPSHOT`), this is a no-op.
     pub fn start_snapshotting(&mut self, coco_home: PathBuf, session_id: &str) {
-        if self
-            .shell_config
-            .as_ref()
-            .is_some_and(|c| c.disable_snapshot)
-        {
-            return;
-        }
+        // Build a fresh Shell so we own a `&mut` for the watch sender.
+        let mut shell = default_user_shell();
         let config = SnapshotConfig::new(&coco_home);
-        ShellSnapshot::start_snapshotting(config, session_id, &mut self.shell);
+        ShellSnapshot::start_snapshotting(config, session_id, &mut shell);
+        self.provider = Arc::new(BashProvider::from_shell(shell));
     }
 
     /// Execute a shell command with timeout and CWD tracking.
-    ///
-    /// When a shell snapshot is available, it is sourced before the command
-    /// to restore the user's interactive environment without login shell overhead.
-    /// When no snapshot, falls back to login shell (`-l`) so the user still
-    /// gets their default environment.
-    ///
-    /// R6-T17: if `options.cancel` is set, a `tokio::select!` races the
-    /// child wait against the cancel token; when the token fires, the
-    /// child future is dropped which kills the process via
-    /// `kill_on_drop(true)`, and the return `CommandResult.interrupted`
-    /// flag is set to `true` so the caller can distinguish a cancel
-    /// from a normal completion or a timeout.
     pub async fn execute(
         &mut self,
         command: &str,
@@ -124,36 +125,43 @@ impl ShellExecutor {
             .to_path_buf();
         let original_cwd = self.original_cwd.clone();
 
-        let (shell_command, use_login_shell) = self.build_exec_command(command);
-        let tracked_command = if options.prevent_cwd_changes {
-            shell_command
+        // Allocate the per-command sandbox tmpdir up-front (when
+        // sandbox is active for this command). Holding the TempDir
+        // here means it auto-cleans when this function returns. The
+        // path is passed to the provider (for cwd-file + TMPDIR) AND
+        // to the platform wrap (for bwrap `--bind` / Seatbelt
+        // file-write subpath).
+        let sandbox_tmp_dir: Option<tempfile::TempDir> = if should_use_sandbox(options, command) {
+            coco_sandbox::SandboxState::allocate_command_tmp_dir()
         } else {
-            format!("{shell_command}; echo \"{CWD_MARKER_PREFIX}$(pwd -P)\"")
+            None
         };
+        let sandbox_tmp_path = sandbox_tmp_dir.as_ref().map(|d| d.path().to_path_buf());
 
-        let shell_flag = if use_login_shell { "-lc" } else { "-c" };
+        let built = self
+            .build_command(command, options, sandbox_tmp_path.clone())
+            .await;
+        let merged_env = self
+            .merge_env(command, options, sandbox_tmp_path.clone())
+            .await;
+        let spawn_args = self.provider.spawn_args(&built.command_string);
 
-        let mut cmd = tokio::process::Command::new(self.shell.shell_path());
-        cmd.arg(shell_flag).arg(&tracked_command);
+        let mut cmd = tokio::process::Command::new(self.provider.shell_path());
+        cmd.args(&spawn_args);
         cmd.current_dir(&effective_cwd);
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
 
-        for (key, value) in &options.extra_env {
+        for (key, value) in merged_env {
             cmd.env(key, value);
         }
 
-        apply_sandbox_wrap(&mut cmd, command, options)?;
+        apply_sandbox_wrap(&mut cmd, command, options, sandbox_tmp_path.as_deref())?;
 
         let child = cmd.kill_on_drop(true).spawn()?;
-
         let timeout_ms = options.timeout_ms.unwrap_or(120_000);
         let timeout_duration = std::time::Duration::from_millis(timeout_ms as u64);
 
-        // Build the wait future and race it against the cancel token
-        // (if present) plus the timeout. `wait_with_output()` consumes
-        // the child, so we spawn the future only once and drop it on
-        // cancel to trigger `kill_on_drop`.
         let wait_future = child.wait_with_output();
         tokio::pin!(wait_future);
 
@@ -161,16 +169,14 @@ impl ShellExecutor {
             tokio::select! {
                 biased;
                 () = cancel.cancelled() => {
-                    // Dropping `wait_future` on the next line kills the
-                    // child via `kill_on_drop(true)`. We return a
-                    // CommandResult with `interrupted = true` so the
-                    // caller can surface that distinctly from a timeout.
                     scrub_bare_repo_after_command(options, &effective_cwd, &original_cwd);
+                    cleanup_cwd_file(&built.cwd_file_path);
                     return Ok(CommandResult {
                         exit_code: -1,
                         stdout: String::new(),
                         stdout_bytes: None,
                         stderr: "Command interrupted".to_string(),
+                        stderr_bytes: None,
                         new_cwd: None,
                         timed_out: false,
                         interrupted: true,
@@ -181,15 +187,18 @@ impl ShellExecutor {
                         Ok(Ok(output)) => output,
                         Ok(Err(e)) => {
                             scrub_bare_repo_after_command(options, &effective_cwd, &original_cwd);
+                            cleanup_cwd_file(&built.cwd_file_path);
                             return Err(e.into());
                         }
                         Err(_) => {
                             scrub_bare_repo_after_command(options, &effective_cwd, &original_cwd);
+                            cleanup_cwd_file(&built.cwd_file_path);
                             return Ok(CommandResult {
                                 exit_code: -1,
                                 stdout: String::new(),
                                 stdout_bytes: None,
                                 stderr: format!("Command timed out after {timeout_ms}ms"),
+                                stderr_bytes: None,
                                 new_cwd: None,
                                 timed_out: true,
                                 interrupted: false,
@@ -203,15 +212,18 @@ impl ShellExecutor {
                 Ok(Ok(output)) => output,
                 Ok(Err(e)) => {
                     scrub_bare_repo_after_command(options, &effective_cwd, &original_cwd);
+                    cleanup_cwd_file(&built.cwd_file_path);
                     return Err(e.into());
                 }
                 Err(_) => {
                     scrub_bare_repo_after_command(options, &effective_cwd, &original_cwd);
+                    cleanup_cwd_file(&built.cwd_file_path);
                     return Ok(CommandResult {
                         exit_code: -1,
                         stdout: String::new(),
                         stdout_bytes: None,
                         stderr: format!("Command timed out after {timeout_ms}ms"),
+                        stderr_bytes: None,
                         new_cwd: None,
                         timed_out: true,
                         interrupted: false,
@@ -220,18 +232,17 @@ impl ShellExecutor {
             }
         };
 
-        // Preserve the raw stdout bytes BEFORE the lossy UTF-8 conversion
-        // so binary-aware consumers (e.g. BashTool's image-detection
-        // path) can inspect the original magic-byte signature.
         let stdout_raw = output.stdout;
-        let mut stdout = String::from_utf8_lossy(&stdout_raw).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let stderr_raw = output.stderr;
+        let stdout = String::from_utf8_lossy(&stdout_raw).to_string();
+        let stderr = String::from_utf8_lossy(&stderr_raw).to_string();
 
-        let new_cwd = if !options.prevent_cwd_changes {
-            extract_cwd_from_output(&mut stdout)
-        } else {
+        let new_cwd = if options.prevent_cwd_changes {
             None
+        } else {
+            read_cwd_file(&built.cwd_file_path)
         };
+        cleanup_cwd_file(&built.cwd_file_path);
 
         if let Some(ref new) = new_cwd {
             self.cwd = new.clone();
@@ -244,6 +255,7 @@ impl ShellExecutor {
             stdout,
             stdout_bytes: Some(stdout_raw),
             stderr,
+            stderr_bytes: Some(stderr_raw),
             new_cwd,
             timed_out: false,
             interrupted: false,
@@ -266,9 +278,6 @@ impl ShellExecutor {
     }
 
     /// Execute a command with streaming progress via a callback.
-    ///
-    /// Reader tasks share an atomic byte counter with the progress loop so
-    /// the callback receives real-time output volume approximately every second.
     pub async fn execute_with_progress<F>(
         &mut self,
         command: &str,
@@ -288,26 +297,33 @@ impl ShellExecutor {
             .unwrap_or(&self.cwd)
             .to_path_buf();
         let original_cwd = self.original_cwd.clone();
-        let (shell_command, use_login_shell) = self.build_exec_command(command);
-        let tracked_command = if options.prevent_cwd_changes {
-            shell_command
+
+        let sandbox_tmp_dir: Option<tempfile::TempDir> = if should_use_sandbox(options, command) {
+            coco_sandbox::SandboxState::allocate_command_tmp_dir()
         } else {
-            format!("{shell_command}; echo \"{CWD_MARKER_PREFIX}$(pwd -P)\"")
+            None
         };
+        let sandbox_tmp_path = sandbox_tmp_dir.as_ref().map(|d| d.path().to_path_buf());
 
-        let shell_flag = if use_login_shell { "-lc" } else { "-c" };
+        let built = self
+            .build_command(command, options, sandbox_tmp_path.clone())
+            .await;
+        let merged_env = self
+            .merge_env(command, options, sandbox_tmp_path.clone())
+            .await;
+        let spawn_args = self.provider.spawn_args(&built.command_string);
 
-        let mut cmd = tokio::process::Command::new(self.shell.shell_path());
-        cmd.arg(shell_flag).arg(&tracked_command);
+        let mut cmd = tokio::process::Command::new(self.provider.shell_path());
+        cmd.args(&spawn_args);
         cmd.current_dir(&effective_cwd);
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
 
-        for (key, value) in &options.extra_env {
+        for (key, value) in merged_env {
             cmd.env(key, value);
         }
 
-        apply_sandbox_wrap(&mut cmd, command, options)?;
+        apply_sandbox_wrap(&mut cmd, command, options, sandbox_tmp_path.as_deref())?;
 
         let mut child = cmd.kill_on_drop(true).spawn()?;
 
@@ -321,12 +337,6 @@ impl ShellExecutor {
         let timeout_duration = std::time::Duration::from_millis(timeout_ms as u64);
         let start = std::time::Instant::now();
 
-        // R7-T18: stdout reader collects raw `Vec<u8>` instead of
-        // immediately UTF-8-lossy-converting each 8KB chunk. Collecting
-        // bytes lets BashTool's image detector inspect the original
-        // magic-byte signature for `cat image.png` style commands.
-        // Lossy conversion still happens at the end for the `stdout`
-        // String field.
         let stdout_counter = stdout_bytes.clone();
         let stdout_handle = tokio::spawn(async move {
             let mut collected: Vec<u8> = Vec::new();
@@ -346,8 +356,6 @@ impl ShellExecutor {
             collected
         });
 
-        // stderr stays String-based — image detection only inspects
-        // stdout, so we don't need to keep stderr's raw bytes.
         let stderr_counter = stderr_bytes.clone();
         let stderr_handle = tokio::spawn(async move {
             let mut collected = String::new();
@@ -369,11 +377,6 @@ impl ShellExecutor {
         });
 
         let progress_interval = std::time::Duration::from_secs(1);
-        // R6-T17: honour the cancel token inside the streaming loop so
-        // the caller can interrupt mid-stream. The `biased` selector
-        // checks cancel first, then child completion, then the progress
-        // tick — so a pending cancel always wins over a late progress
-        // update.
         let cancel = options.cancel.clone();
         let wait_result = loop {
             tokio::select! {
@@ -386,11 +389,11 @@ impl ShellExecutor {
                     }
                 } => {
                     let _ = child.kill().await;
-                    // Drain whatever output was produced before cancel.
                     let stdout_partial_bytes = stdout_handle.await.unwrap_or_default();
                     let stdout_partial = String::from_utf8_lossy(&stdout_partial_bytes).to_string();
                     let stderr_partial = stderr_handle.await.unwrap_or_default();
                     scrub_bare_repo_after_command(options, &effective_cwd, &original_cwd);
+                    cleanup_cwd_file(&built.cwd_file_path);
                     return Ok(CommandResult {
                         exit_code: -1,
                         stdout: stdout_partial,
@@ -400,6 +403,10 @@ impl ShellExecutor {
                         } else {
                             format!("{stderr_partial}\nCommand interrupted")
                         },
+                        // Streaming path collects stderr as String only —
+                        // PowerShell (the only stderr-bytes consumer)
+                        // uses the non-streaming path.
+                        stderr_bytes: None,
                         new_cwd: None,
                         timed_out: false,
                         interrupted: true,
@@ -413,11 +420,13 @@ impl ShellExecutor {
                     if elapsed > timeout_duration {
                         let _ = child.kill().await;
                         scrub_bare_repo_after_command(options, &effective_cwd, &original_cwd);
+                        cleanup_cwd_file(&built.cwd_file_path);
                         return Ok(CommandResult {
                             exit_code: -1,
                             stdout: String::new(),
                             stdout_bytes: None,
                             stderr: format!("Command timed out after {timeout_ms}ms"),
+                            stderr_bytes: None,
                             new_cwd: None,
                             timed_out: true,
                             interrupted: false,
@@ -435,14 +444,15 @@ impl ShellExecutor {
 
         let status = wait_result?;
         let stdout_raw = stdout_handle.await.unwrap_or_default();
-        let mut stdout = String::from_utf8_lossy(&stdout_raw).to_string();
+        let stdout = String::from_utf8_lossy(&stdout_raw).to_string();
         let stderr = stderr_handle.await.unwrap_or_default();
 
-        let new_cwd = if !options.prevent_cwd_changes {
-            extract_cwd_from_output(&mut stdout)
-        } else {
+        let new_cwd = if options.prevent_cwd_changes {
             None
+        } else {
+            read_cwd_file(&built.cwd_file_path)
         };
+        cleanup_cwd_file(&built.cwd_file_path);
 
         if let Some(ref new) = new_cwd {
             self.cwd = new.clone();
@@ -457,49 +467,74 @@ impl ShellExecutor {
             stdout,
             stdout_bytes: Some(stdout_raw),
             stderr,
+            stderr_bytes: None,
             new_cwd,
             timed_out: false,
             interrupted: false,
         })
     }
 
-    /// Create a forked executor for subagent with isolated CWD.
-    pub fn fork_for_subagent(&self) -> Self {
-        Self {
-            cwd: self.cwd.clone(),
-            original_cwd: self.original_cwd.clone(),
-            shell: self.shell.clone(),
-            shell_config: self.shell_config.clone(),
-        }
+    async fn build_command(
+        &self,
+        command: &str,
+        _options: &ExecOptions,
+        sandbox_tmp_dir: Option<PathBuf>,
+    ) -> BuiltCommand {
+        let use_sandbox = sandbox_tmp_dir.is_some();
+        let opts = BuildExecOpts {
+            id: next_command_id(),
+            sandbox_tmp_dir,
+            use_sandbox,
+        };
+        self.provider.build_exec_command(command, &opts).await
     }
 
-    /// Builds the full command string with snapshot sourcing, extglob disable,
-    /// and eval wrapping.
-    ///
-    /// Returns `(command_string, use_login_shell)`.
-    ///
-    /// TS alignment (`bashProvider.ts:buildExecCommand`):
-    /// - If snapshot exists and file accessible: source snapshot, disable extglob,
-    ///   eval-wrap the command. Use `-c` (no login shell needed).
-    /// - If snapshot missing/inaccessible: use `-c -l` (login shell provides
-    ///   user environment as fallback).
-    fn build_exec_command(&self, command: &str) -> (String, bool) {
-        if let Some(snapshot) = self.shell.shell_snapshot()
-            && snapshot.path().exists()
-        {
-            let snapshot_path = snapshot.path().display();
-            let extglob_cmd = disable_extglob_command(self.shell.shell_type());
-            // TS: commandParts.join(' && ') — source, extglob, eval
-            let cmd = format!(
-                ". '{snapshot_path}' 2>/dev/null || true && \
-                 {extglob_cmd} && \
-                 eval {command}"
-            );
-            return (cmd, /*use_login_shell*/ false);
+    async fn merge_env(
+        &self,
+        command: &str,
+        options: &ExecOptions,
+        sandbox_tmp_dir: Option<PathBuf>,
+    ) -> std::collections::HashMap<String, String> {
+        let use_sandbox = sandbox_tmp_dir.is_some();
+        let opts = BuildExecOpts {
+            id: 0, // env_overrides doesn't depend on id
+            sandbox_tmp_dir,
+            use_sandbox,
+        };
+        let mut env = options.extra_env.clone();
+        // Provider overrides applied AFTER caller's extra_env so sandbox
+        // isolation (TMPDIR / TMPPREFIX) wins over `/env TMPDIR=…`.
+        for (k, v) in self.provider.env_overrides(command, &opts).await {
+            env.insert(k, v);
         }
+        env
+    }
+}
 
-        // No snapshot: fall back to login shell for user environment
-        (command.to_string(), /*use_login_shell*/ true)
+fn should_use_sandbox(options: &ExecOptions, command: &str) -> bool {
+    let Some(state) = &options.sandbox else {
+        return false;
+    };
+    state
+        .command_snapshot(command, options.sandbox_bypass)
+        .should_wrap
+}
+
+fn read_cwd_file(path: &Path) -> Option<PathBuf> {
+    let contents = std::fs::read_to_string(path).ok()?;
+    let trimmed = contents.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let buf = PathBuf::from(trimmed);
+    if buf.is_absolute() { Some(buf) } else { None }
+}
+
+fn cleanup_cwd_file(path: &Path) {
+    if let Err(err) = std::fs::remove_file(path)
+        && err.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::debug!("Failed to remove cwd file {}: {err:?}", path.display());
     }
 }
 
@@ -509,19 +544,24 @@ impl ShellExecutor {
 /// the command is excluded from sandboxing per
 /// [`coco_sandbox::SandboxState::command_snapshot`].
 ///
-/// Errors from the platform wrap (e.g., bwrap binary missing at exec time)
-/// are surfaced as `anyhow::Error` so the caller can fail-closed and refuse
-/// to run the command unsandboxed.
+/// When `sandbox_tmp_dir` is `Some`, that path is passed to the platform
+/// wrap so it can be bind-mounted (bwrap) or carve-outed (Seatbelt) as
+/// writable inside the sandbox — letting the inner shell's
+/// `pwd -P >| <tmpdir>/cwd-N` actually write where the parent can read.
 fn apply_sandbox_wrap(
     cmd: &mut tokio::process::Command,
     command: &str,
     options: &ExecOptions,
+    sandbox_tmp_dir: Option<&std::path::Path>,
 ) -> anyhow::Result<()> {
     let Some(state) = &options.sandbox else {
         return Ok(());
     };
+    let binds: Vec<PathBuf> = sandbox_tmp_dir
+        .map(|p| vec![p.to_path_buf()])
+        .unwrap_or_default();
     state
-        .try_wrap_command(command, options.sandbox_bypass, cmd)
+        .try_wrap_command_with_binds(command, options.sandbox_bypass, &binds, cmd)
         .map_err(|e| anyhow::anyhow!("sandbox wrap failed: {e}"))?;
     Ok(())
 }
@@ -529,11 +569,7 @@ fn apply_sandbox_wrap(
 /// Best-effort post-command scrub of planted bare-repo files in `cwd` /
 /// `original_cwd`. Mirrors TS `cleanupAfterCommand()` calling
 /// `scrubBareGitRepoFiles()` (sandbox-adapter.ts:963-966), mitigation for
-/// anthropics/claude-code#29316: an attacker plants `HEAD`/`objects`/…
-/// and a `core.fsmonitor` config so any subsequent unsandboxed `git`
-/// invocation runs arbitrary code. The pre-command deny-write list keeps
-/// existing files intact; this post-command pass deletes any files
-/// created during execution.
+/// anthropics/claude-code#29316.
 fn scrub_bare_repo_after_command(options: &ExecOptions, cwd: &Path, original_cwd: &Path) {
     if options.sandbox.is_none() {
         return;
@@ -544,19 +580,6 @@ fn scrub_bare_repo_after_command(options: &ExecOptions, cwd: &Path, original_cwd
     }
 }
 
-/// Returns the shell command to disable extended globbing.
-///
-/// TS: `bashProvider.ts:getDisableExtglobCommand()` — security measure to
-/// prevent malicious filename expansion after sourcing user config.
-fn disable_extglob_command(shell_type: &ShellType) -> &'static str {
-    match shell_type {
-        ShellType::Bash => "shopt -u extglob 2>/dev/null || true",
-        ShellType::Zsh => "setopt NO_EXTENDED_GLOB 2>/dev/null || true",
-        // For unknown or sh, try both.
-        _ => "{ shopt -u extglob || setopt NO_EXTENDED_GLOB; } >/dev/null 2>&1 || true",
-    }
-}
-
 /// Progress update during streaming shell execution.
 #[derive(Debug, Clone)]
 pub struct ShellProgress {
@@ -564,20 +587,6 @@ pub struct ShellProgress {
     pub elapsed_seconds: f64,
     /// Total bytes of combined stdout+stderr output so far.
     pub total_bytes: i64,
-}
-
-/// Extract CWD from output by finding the marker line and removing it.
-fn extract_cwd_from_output(stdout: &mut String) -> Option<PathBuf> {
-    if let Some(marker_pos) = stdout.rfind(CWD_MARKER_PREFIX) {
-        let cwd_line = stdout[marker_pos + CWD_MARKER_PREFIX.len()..].trim();
-        let cwd = PathBuf::from(cwd_line);
-
-        *stdout = stdout[..marker_pos].trim_end().to_string();
-
-        if cwd.is_absolute() { Some(cwd) } else { None }
-    } else {
-        None
-    }
 }
 
 #[cfg(test)]

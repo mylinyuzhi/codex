@@ -578,7 +578,6 @@ fn test_unconfigured_roles_default_to_main() {
 
     for role in [
         ModelRole::Fast,
-        ModelRole::Compact,
         ModelRole::Plan,
         ModelRole::Explore,
         ModelRole::Review,

@@ -119,15 +119,22 @@ impl Tool for ApplyPatchTool {
         })?;
 
         // Pre-flight: parse the patch to extract affected paths so we
-        // can record file-history snapshots BEFORE the mutation.
-        // Errors here are not fatal — `apply_patch` below will produce
-        // its own (more descriptive) parse error in that case. Mirrors
-        // the per-tool track_file_edit ordering used by Edit/Write.
-        if let Ok(parsed) = coco_apply_patch::parse_patch(patch) {
-            for hunk in &parsed.hunks {
-                let path = hunk.resolve_path(&cwd);
-                crate::track_file_edit(ctx, path.as_path()).await;
-            }
+        // can record file-history snapshots BEFORE the mutation and
+        // notify the LSP AFTER. Errors here are not fatal —
+        // `apply_patch` below will produce its own (more descriptive)
+        // parse error in that case. Mirrors the per-tool track_file_edit
+        // ordering used by Edit/Write.
+        let affected_paths: Vec<std::path::PathBuf> = coco_apply_patch::parse_patch(patch)
+            .map(|parsed| {
+                parsed
+                    .hunks
+                    .iter()
+                    .map(|hunk| hunk.resolve_path(&cwd).as_path().to_path_buf())
+                    .collect()
+            })
+            .unwrap_or_default();
+        for path in &affected_paths {
+            crate::track_file_edit(ctx, path.as_path()).await;
         }
 
         let mut stdout: Vec<u8> = Vec::new();
@@ -147,6 +154,12 @@ impl Tool for ApplyPatchTool {
                 ),
                 source: None,
             })?;
+
+        // TS parity with Write/Edit — notify LSP of `didSave` per file
+        // touched so diagnostics refresh. Best-effort, errors swallowed.
+        for path in &affected_paths {
+            ctx.lsp.notify_save(path.as_path()).await;
+        }
 
         let out = String::from_utf8_lossy(&stdout).to_string();
         let err = String::from_utf8_lossy(&stderr).to_string();

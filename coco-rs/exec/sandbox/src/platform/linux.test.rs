@@ -447,7 +447,7 @@ fn test_wrap_command_disabled_is_noop() {
     let mut cmd = tokio::process::Command::new("echo");
     cmd.arg("hello");
 
-    let result = sandbox.wrap_command(&config, "test command", "_test_SBX", &mut cmd);
+    let result = sandbox.wrap_command(&config, "test command", "_test_SBX", &[], &mut cmd);
     assert!(result.is_ok());
     let inner = cmd.as_std();
     assert_eq!(inner.get_program(), "echo");
@@ -472,7 +472,7 @@ fn test_wrap_command_readonly_rewrites() {
     let mut cmd = tokio::process::Command::new("/bin/bash");
     cmd.arg("-c").arg("echo hello");
 
-    let result = sandbox.wrap_command(&config, "test command", "_test_SBX", &mut cmd);
+    let result = sandbox.wrap_command(&config, "test command", "_test_SBX", &[], &mut cmd);
     assert!(result.is_ok());
 
     let inner = cmd.as_std();
@@ -515,7 +515,7 @@ fn test_wrap_command_with_seccomp_inserts_apply_seccomp_inner() {
     let mut cmd = tokio::process::Command::new("/bin/echo");
     cmd.arg("hello");
 
-    let result = sandbox.wrap_command(&config, "test command", "_test_SBX", &mut cmd);
+    let result = sandbox.wrap_command(&config, "test command", "_test_SBX", &[], &mut cmd);
     assert!(result.is_ok());
 
     let inner = cmd.as_std();
@@ -565,7 +565,7 @@ fn test_wrap_command_full_network_skips_seccomp() {
     let mut cmd = tokio::process::Command::new("/bin/echo");
     cmd.arg("hello");
 
-    let result = sandbox.wrap_command(&config, "test command", "_test_SBX", &mut cmd);
+    let result = sandbox.wrap_command(&config, "test command", "_test_SBX", &[], &mut cmd);
     assert!(result.is_ok());
 
     let inner = cmd.as_std();

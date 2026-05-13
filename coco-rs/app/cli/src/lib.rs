@@ -10,6 +10,7 @@ pub mod elicitation_hooks;
 pub mod file_changed_watcher;
 pub mod fork_dispatcher;
 pub mod headless;
+pub mod lsp_handle_adapter;
 pub mod mcp_handle_adapter;
 pub mod output;
 pub mod paths;

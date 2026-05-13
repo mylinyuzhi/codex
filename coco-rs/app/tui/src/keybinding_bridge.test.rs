@@ -58,6 +58,9 @@ fn test_permission_overlay_context() {
             show_always_allow: true,
             classifier_checking: false,
             classifier_auto_approved: None,
+            choices: None,
+            selected_choice: 0,
+            original_input: None,
         },
     ));
     assert_eq!(active_context(&state), KeybindingContext::Confirmation);
@@ -137,6 +140,9 @@ fn test_overlay_y_approves() {
             show_always_allow: true,
             classifier_checking: false,
             classifier_auto_approved: None,
+            choices: None,
+            selected_choice: 0,
+            original_input: None,
         },
     ));
     let cmd = map_key(&state, press(KeyCode::Char('y')));
@@ -158,6 +164,9 @@ fn test_overlay_n_denies() {
             show_always_allow: true,
             classifier_checking: false,
             classifier_auto_approved: None,
+            choices: None,
+            selected_choice: 0,
+            original_input: None,
         },
     ));
     let cmd = map_key(&state, press(KeyCode::Char('n')));

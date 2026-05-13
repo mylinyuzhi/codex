@@ -114,6 +114,7 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
             shell_config: runtime_config.shell.clone(),
             web_fetch_config: runtime_config.web_fetch.clone(),
             web_search_config: runtime_config.web_search.clone(),
+            lsp_config: runtime_config.lsp.clone(),
             compact: runtime_config.compact.clone(),
             features: Arc::new(runtime_config.features.clone()),
             tool_overrides: runtime_config.tool_overrides.clone(),

@@ -22,6 +22,7 @@
     "subagent/progress",
     "mcp/startupStatus",
     "mcp/startupComplete",
+    "lsp/prewarmComplete",
     "context/compacted",
     "context/usageWarning",
     "context/compactionStarted",

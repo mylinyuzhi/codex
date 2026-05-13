@@ -800,6 +800,10 @@ pub fn register_builtins(registry: &mut CommandRegistry) {
         // /pr removed: TS uses /commit-push-pr instead.
         ("review", "Review code changes or a PR", &[], review_handler),
         // ── Tools & Plugins ──
+        // /lsp is registered as an async handler in
+        // `register_extended_builtins` (handlers::lsp::handler). The
+        // re-registration there replaces this slot, so the simple-array
+        // entry is omitted to keep one source of truth.
         ("mcp", "Manage MCP server connections", &[], mcp_handler),
         (
             "plugin",

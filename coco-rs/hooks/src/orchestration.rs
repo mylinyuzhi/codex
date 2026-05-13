@@ -489,7 +489,12 @@ pub fn build_hook_env_with_plugin(
     }
 
     // CLAUDE_ENV_FILE — for SessionStart, Setup, CwdChanged, FileChanged.
-    // Each hook gets a unique file via hook_index to avoid overwrites.
+    // Hooks write shell snippets to this path; the next bash command
+    // sources them via `coco_shell::SessionEnvReader`. Location matches
+    // TS `sessionEnvironment.ts:18-23`:
+    //   <coco_home>/session-env/<session_id>/{event}-hook-{idx}.sh
+    // where `event` is lowercase ("setup", "sessionstart", …) so the
+    // reader's regex picks them up.
     if let Some(idx) = hook_index
         && matches!(
             hook_event,
@@ -498,11 +503,17 @@ pub fn build_hook_env_with_plugin(
                 | HookEventType::CwdChanged
                 | HookEventType::FileChanged
         )
-        && let Ok(tmp) = std::env::var("TMPDIR")
-            .or_else(|_| std::env::var("TMP"))
-            .or_else(|_| Ok::<String, std::env::VarError>("/tmp".to_string()))
     {
-        let env_file = format!("{tmp}/claude-hook-env-{session_id}-{hook_event_str}-{idx}.sh");
+        let event_lower = hook_event_str.to_ascii_lowercase();
+        let coco_home = coco_config::global_config::config_home();
+        let dir = coco_home.join("session-env").join(session_id);
+        // Best-effort dir creation — failures fall through and let the
+        // hook's `> $CLAUDE_ENV_FILE` redirect surface the error.
+        let _ = std::fs::create_dir_all(&dir);
+        let env_file = dir
+            .join(format!("{event_lower}-hook-{idx}.sh"))
+            .to_string_lossy()
+            .into_owned();
         env.insert("CLAUDE_ENV_FILE".to_string(), env_file);
     }
 

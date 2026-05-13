@@ -369,6 +369,18 @@ impl QueryEngine {
             // `SkillHandle` same pattern — real handle when
             // installed, `NoOpSkillHandle` otherwise.
             skill_handle: self.skill_handle.clone(),
+            // `LspHandle` same pattern — real handle when installed via
+            // `with_lsp_handle` at session bootstrap; otherwise
+            // `NoOpLspHandle` so `is_connected() = false` and `LspTool`
+            // is filtered out of the model's tool list.
+            lsp_handle: self.lsp_handle.clone(),
+            // `McpHandle` is installed via `with_mcp_handle` from
+            // `SessionRuntime.wire_engine` (which reads the late-bound
+            // slot populated by `install_session_late_binds`).
+            // Without this, MCP tools (`McpAuthTool`, list/read
+            // resources, dynamic `McpTool`) fall back to
+            // `NoOpMcpHandle` and surface "not configured" errors.
+            mcp_handle: self.mcp_handle.clone(),
             // Session-scoped schema validator. Clone is cheap —
             // inner state is `Arc<RwLock<HashMap>>` shared across
             // per-turn ctx rebuilds so the compile cache persists.

@@ -149,6 +149,8 @@ fn test_permission_request_shows_overlay() {
             tool_name: "Bash".into(),
             description: "Execute command".into(),
             input_preview: "rm -rf /tmp/test".into(),
+            choices: None,
+            original_input: None,
         }),
     );
     assert!(state.has_overlay());

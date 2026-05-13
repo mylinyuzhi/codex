@@ -942,6 +942,7 @@ dependencies = [
  "coco-hooks",
  "coco-inference",
  "coco-keybindings",
+ "coco-lsp",
  "coco-mcp",
  "coco-memory",
  "coco-messages",
@@ -986,6 +987,7 @@ dependencies = [
  "chrono",
  "coco-config",
  "coco-error",
+ "coco-lsp",
  "coco-plugins",
  "coco-skills",
  "coco-subagent",
@@ -1292,6 +1294,7 @@ dependencies = [
  "coco-utils-common",
  "crossterm",
  "dirs 5.0.1",
+ "futures",
  "lsp-types",
  "notify 8.2.0",
  "pretty_assertions",
@@ -1501,6 +1504,7 @@ dependencies = [
  "coco-sandbox",
  "coco-session",
  "coco-session-memory",
+ "coco-shell",
  "coco-skills",
  "coco-subagent",
  "coco-system-reminder",
@@ -1696,11 +1700,15 @@ name = "coco-shell"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-trait",
+ "base64 0.22.1",
  "coco-config",
  "coco-sandbox",
  "coco-types",
  "dirs 6.0.0",
  "pretty_assertions",
+ "rand 0.9.4",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",
@@ -1943,6 +1951,7 @@ dependencies = [
  "coco-error",
  "coco-messages",
  "coco-sandbox",
+ "coco-shell",
  "coco-subagent",
  "coco-system-reminder",
  "coco-types",
@@ -1992,6 +2001,7 @@ dependencies = [
  "html2text",
  "ignore",
  "image",
+ "pathdiff",
  "pdf-extract",
  "pretty_assertions",
  "rand 0.9.4",
@@ -2003,6 +2013,9 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "unicode-normalization",
+ "url",
+ "urlencoding",
  "uuid",
  "walkdir",
 ]
@@ -5382,6 +5395,12 @@ checksum = "07ba0ad7e047712414213ff67533e6dd477af0a4e1d14fb52343e53d30ea9397"
 dependencies = [
  "once_cell",
 ]
+
+[[package]]
+name = "pathdiff"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df94ce210e5bc13cb6651479fa48d14f601d9858cfe0467f43ae157023b938d3"
 
 [[package]]
 name = "pdf-extract"

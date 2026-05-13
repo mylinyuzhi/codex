@@ -158,6 +158,23 @@ pub struct PermissionOverlay {
     /// Set when classifier auto-approved; shows checkmark before dismissal.
     /// TS: `classifierAutoApproved` + `classifierMatchedRule` in ToolUseConfirm.
     pub classifier_auto_approved: Option<String>,
+    /// Optional multi-choice payload. `None` means render the classic
+    /// yes/no/always dialog. `Some` switches the renderer into a
+    /// choice-list mode (mirrors `QuestionOverlay`): Up/Down moves
+    /// `selected_choice`, Enter (approve) echoes the picked value back
+    /// to the tool via `UserCommand::ApprovalResponse.updated_input`.
+    ///
+    /// TS parity: `ExitPlanModePermissionRequest.tsx:691-704` option
+    /// grid, gated on `settings.showClearContextOnPlanAccept`.
+    pub choices: Option<Vec<coco_types::PermissionAskChoice>>,
+    /// Cursor position within `choices`. Meaningless when
+    /// `choices.is_none()`.
+    pub selected_choice: usize,
+    /// Raw tool input captured at dialog-open time. Used by the
+    /// approve path to splice `user_choice` in without losing other
+    /// fields the model originally supplied. Carried only when
+    /// `choices.is_some()`.
+    pub original_input: Option<serde_json::Value>,
 }
 
 /// Risk level for permission explainer badge.
@@ -303,7 +320,7 @@ pub struct CostWarningOverlay {
 
 /// Model picker overlay — provider-grouped list of `(provider, model_id)`
 /// candidates plus an inline thinking-effort selector. Tab cycles the
-/// target role (Main / Fast / Compact / …); the confirm path persists
+/// target role (Main / Fast / Plan / …); the confirm path persists
 /// to that role's slot in `~/.coco.json::model_roles`.
 ///
 /// TS parity reference: `components/ModelPicker.tsx`. coco-rs extends

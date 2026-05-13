@@ -301,7 +301,24 @@ pub struct SessionRuntime {
     /// `CancellationToken::new()`.
     cancel: CancellationToken,
 
+    /// Original CWD captured at session start. Frozen for the lifetime
+    /// of this [`SessionRuntime`] — never moves even if the user
+    /// `cd`'s away inside a Bash command. Used as the anchor for
+    /// `reset_cwd_if_outside_project` (when bash drifts out of the
+    /// allowed working directory set, we snap it back here) and for
+    /// "Shell cwd was reset to …" stderr annotations. TS:
+    /// `bootstrap/state.ts::originalCwd`.
+    pub original_cwd: PathBuf,
+
     // ── mutable per-session state (changes on /clear or mid-session) ──
+    /// Currently active CWD. Updated **across BashTool calls** so the
+    /// model's `cd /tmp` in one turn survives into the next turn.
+    /// TS parity: `bootstrap/state.ts::STATE.cwd` updated via
+    /// `utils/Shell.ts::setCwd` after every `pwd -P >| <file>` read.
+    /// Threaded into every `ToolUseContext` via the engine config so
+    /// BashTool can read it as the spawn cwd and write back from
+    /// `CommandResult.new_cwd`.
+    pub current_cwd: Arc<RwLock<PathBuf>>,
     /// Session id; mutated by [`Self::clear_conversation`] (regen).
     session_id: Arc<RwLock<String>>,
     /// Engine config; mutated by [`Self::clear_conversation`] (session_id)
@@ -367,14 +384,15 @@ pub struct SessionRuntime {
     /// session's jsonl on the next snapshot. `None` when
     /// file_checkpointing is disabled.
     file_history_sink_session_id: Option<Arc<std::sync::RwLock<String>>>,
-    /// Lazy cache of `ApiClient` per `ModelRole`. `Main` is always
-    /// pre-populated (== `self.client`). Other roles are built on
-    /// first request via `client_for_role`. Required so
-    /// per-role-configured users (e.g. `models.subagent =
-    /// openai/gpt-5` while `models.main = anthropic/...`) actually
-    /// route subagents through their configured provider instead of
-    /// silently reusing Main's client.
-    role_clients: tokio::sync::RwLock<std::collections::HashMap<ModelRole, Arc<ApiClient>>>,
+    /// Shared per-role `ApiClient` cache. The same `Arc` is handed to
+    /// every subsystem that needs role-aware dispatch (hook LLM, fork
+    /// dispatcher, side query, …) so a given role resolves to one
+    /// `ApiClient` instance with a single `CacheBreakDetector` regardless
+    /// of caller. Required so per-role-configured users (e.g.
+    /// `models.subagent = openai/gpt-5` while `models.main =
+    /// anthropic/...`) actually route subagents through their
+    /// configured provider instead of silently reusing Main's client.
+    role_client_cache: Arc<coco_inference::RoleClientCache>,
     /// Agent-spawn handle used by `AgentTool` / coordinator-mode
     /// workers. `Some(SwarmAgentHandle)` when `Feature::AgentTeams`
     /// is enabled at session bootstrap; `None` falls back to
@@ -435,6 +453,12 @@ pub struct SessionRuntime {
     /// MCP filter degrades to fail-closed (hides MCP-required
     /// agents).
     mcp_handle: Arc<RwLock<Option<coco_tool_runtime::McpHandleRef>>>,
+    /// Late-bind slot for the LSP handle. CLI / SDK installs a
+    /// `LspManagerAdapter` here when `Feature::Lsp` is on and at
+    /// least one language server is configured; `wire_engine` reads
+    /// the slot at engine-build time and installs it via
+    /// `with_lsp_handle`.
+    lsp_handle: Arc<RwLock<Option<coco_tool_runtime::LspHandleRef>>>,
     /// Where the agent loader looks for markdown agents. Cached so
     /// `/agents reload` and the file-watcher reload paths can rebuild
     /// the snapshot without re-resolving the paths from scratch.
@@ -822,6 +846,65 @@ impl SessionRuntime {
         let (allow_rules, deny_rules, ask_rules) =
             crate::permission_rule_loader::typed_permission_rules(&runtime_config.settings);
 
+        // ── Session-scoped CWD state ──
+        //
+        // Frozen anchor + live tracker, mirroring TS's
+        // `STATE.originalCwd` + `STATE.cwd`. The live tracker is
+        // threaded through every `ToolUseContext` so BashTool can
+        // read it as the spawn cwd and write back `new_cwd` after
+        // each command — `cd /tmp` in turn N survives into turn N+1.
+        let session_original_cwd = cwd.clone();
+        let session_current_cwd = Arc::new(RwLock::new(cwd.clone()));
+
+        // ── Session-scoped shell provider ──
+        //
+        // Build once at session start so `BashProvider` keeps the same
+        // snapshot watch + session-env reader + `/env` store across all
+        // BashTool invocations. TS parity: `bashProvider.ts:58-69` —
+        // snapshot promise resolves once for the lifetime of the
+        // shell provider singleton.
+        let shell_provider: Option<Arc<dyn coco_shell::ShellProvider>> = {
+            let mut shell = coco_shell::shell_from_config(&runtime_config.shell);
+            let snap_cfg = coco_shell::SnapshotConfig::new(&config_home);
+            if !runtime_config.shell.disable_snapshot {
+                coco_shell::ShellSnapshot::start_snapshotting(
+                    snap_cfg.clone(),
+                    &session_id,
+                    &mut shell,
+                );
+                // Sweep prior-run residue in the background — mtime-only,
+                // no await needed on the hot path.
+                let dir = snap_cfg.snapshot_dir.clone();
+                let sid = session_id.clone();
+                let retention = snap_cfg.retention;
+                tokio::spawn(async move {
+                    match coco_shell::cleanup_stale_snapshots(&dir, &sid, retention).await {
+                        Ok(n) if n > 0 => {
+                            info!("reaped {n} stale shell snapshots from {}", dir.display());
+                        }
+                        Ok(_) => {}
+                        Err(e) => warn!("shell snapshot cleanup failed: {e}"),
+                    }
+                });
+            }
+            let session_env_reader = Some(Arc::new(coco_shell::SessionEnvReader::new(
+                &config_home,
+                &session_id,
+            )));
+            // `COCO_SHELL_PREFIX` is consumed here (BashProvider wraps the
+            // assembled command). The same env var is also consumed by
+            // `coco-hooks` for hook-command execution — they share the
+            // value but apply it independently.
+            let shell_prefix = std::env::var("COCO_SHELL_PREFIX").ok();
+            let session_env_vars = coco_shell::SessionEnvVars::new();
+            Some(Arc::new(coco_shell::BashProvider::new(
+                shell,
+                session_env_reader,
+                session_env_vars,
+                shell_prefix,
+            )) as Arc<dyn coco_shell::ShellProvider>)
+        };
+
         // Build the engine config — owns most settings drawn from
         // RuntimeConfig + CLI overrides.
         let engine_config = QueryEngineConfig {
@@ -861,8 +944,12 @@ impl SessionRuntime {
             sandbox_state: sandbox_state.clone(),
             memory_config: runtime_config.memory.clone(),
             shell_config: runtime_config.shell.clone(),
+            shell_provider,
+            original_cwd: Some(session_original_cwd.clone()),
+            session_cwd: Some(session_current_cwd.clone()),
             web_fetch_config: runtime_config.web_fetch.clone(),
             web_search_config: runtime_config.web_search.clone(),
+            lsp_config: runtime_config.lsp.clone(),
             compact: runtime_config.compact.clone(),
             features: Arc::new(runtime_config.features.clone()),
             tool_overrides: runtime_config.tool_overrides.clone(),
@@ -873,14 +960,26 @@ impl SessionRuntime {
 
         let auto_title_enabled = runtime_config.settings.merged.session.auto_title;
 
-        let client_for_main_init = client.clone();
-        // Build the LLM-driven hook handler once. Same `ApiClient` the
-        // main loop uses — Prompt hooks fire as side-channel queries
-        // (TS `execPromptHook` / `execAgentHook` uses
-        // `queryModelWithoutStreaming` / `query()` against the same
-        // session model).
-        let hook_llm_handle: Arc<dyn coco_hooks::HookLlmHandle> =
-            Arc::new(coco_query::hook_llm::QueryHookLlm::new(client.clone()));
+        // Shared per-role `ApiClient` cache. Both
+        // `SessionRuntime::client_for_role` and `QueryHookLlm` consume
+        // this `Arc` — one cache means a given role's
+        // `CacheBreakDetector` state stays continuous regardless of
+        // which subsystem dispatched the call.
+        let role_client_cache = Arc::new(coco_inference::RoleClientCache::new(
+            runtime_config.clone(),
+            client.clone(),
+        ));
+
+        // LLM-driven hook handler. `for_session` pre-resolves
+        // `ModelRole::HookAgent` against the shared cache (spec-equality
+        // shortcut reuses the Main `Arc` when the role is unconfigured),
+        // so users who set `models.hook_agent` in settings.json get that
+        // model for hook evaluations. Per-hook `model` overrides parse
+        // as `ModelRole` and route through the same cache. TS parity:
+        // `execPromptHook` / `execAgentHook` with `hook.model` override.
+        let hook_llm_handle: Arc<dyn coco_hooks::HookLlmHandle> = Arc::new(
+            coco_query::hook_llm::QueryHookLlm::for_session(role_client_cache.clone()).await,
+        );
         // Main-session transcript store. Constructed once so the
         // file-history sink, the per-turn message append in
         // `engine_finalize_turn`, and the agent-transcript persistence
@@ -944,6 +1043,8 @@ impl SessionRuntime {
         let agent_catalog = Arc::new(RwLock::new(initial_agent_snapshot));
 
         Ok(Arc::new(Self {
+            original_cwd: session_original_cwd,
+            current_cwd: session_current_cwd,
             client,
             fallback_clients,
             recovery_policy,
@@ -974,14 +1075,7 @@ impl SessionRuntime {
             file_changed_watcher: tokio::sync::RwLock::new(None),
             history: Arc::new(Mutex::new(Vec::new())),
             file_history_sink_session_id,
-            role_clients: tokio::sync::RwLock::new({
-                // Pre-populate Main so callers that go through
-                // `client_for_role(ModelRole::Main)` still get the
-                // canonical client without rebuilding.
-                let mut m = std::collections::HashMap::new();
-                m.insert(ModelRole::Main, client_for_main_init);
-                m
-            }),
+            role_client_cache,
             // Late-bound — `attach_agent_handle()` installs after the
             // Arc<SessionRuntime> is constructed so the
             // QueryEngineAdapter factory can close over Arc<Self>.
@@ -991,6 +1085,7 @@ impl SessionRuntime {
             task_runtime: Arc::new(RwLock::new(None)),
             agent_transcript_store: Arc::new(RwLock::new(None)),
             mcp_handle: Arc::new(RwLock::new(None)),
+            lsp_handle: Arc::new(RwLock::new(None)),
             agent_search_paths,
             builtin_agent_catalog,
             agent_catalog,
@@ -1082,6 +1177,21 @@ impl SessionRuntime {
         self.mcp_handle.read().await.clone()
     }
 
+    /// Install or replace the late-bound LSP handle. Same semantics as
+    /// [`Self::attach_mcp_handle`] — slot is read at every
+    /// `wire_engine` call so per-turn engines pick up swaps.
+    pub async fn attach_lsp_handle(&self, handle: coco_tool_runtime::LspHandleRef) {
+        let mut slot = self.lsp_handle.write().await;
+        *slot = Some(handle);
+    }
+
+    /// Snapshot the installed LSP handle. `None` ⇒ no handle wired —
+    /// `wire_engine` falls back to `NoOpLspHandle` and `LspTool` hides
+    /// from the model.
+    pub async fn current_lsp_handle(&self) -> Option<coco_tool_runtime::LspHandleRef> {
+        self.lsp_handle.read().await.clone()
+    }
+
     /// Snapshot the current session id (cheap clone of the inner String).
     pub async fn current_session_id(&self) -> String {
         self.session_id.read().await.clone()
@@ -1105,52 +1215,55 @@ impl SessionRuntime {
         self.memory_runtime.as_ref()
     }
 
-    /// Resolve an `ApiClient` for the given `ModelRole`. Lazily builds
-    /// and caches via [`coco_inference::model_factory::build_api_client`] on
-    /// first access; subsequent calls return the cached `Arc`.
-    /// Returns `Err` when the runtime config has no spec for `role`
-    /// AND `role != Main` — the runtime always owns a Main client.
+    /// Resolve an `ApiClient` for the given `ModelRole`, going through
+    /// the shared [`coco_inference::RoleClientCache`]. The cache caches
+    /// lazily-built clients (one per role) so plan-mode swaps, subagent
+    /// spawns, and hook evaluations all share the same `ApiClient` for
+    /// a given role.
     ///
     /// Why this exists: the previous design assumed every model call
     /// went through `runtime.client` (= Main). Multi-provider configs
     /// like `models.subagent = openai/gpt-5` would silently reuse
     /// Main's client, defeating the user's per-role routing.
     pub async fn client_for_role(&self, role: ModelRole) -> anyhow::Result<Arc<ApiClient>> {
-        // Fast path: cached.
-        {
-            let g = self.role_clients.read().await;
-            if let Some(c) = g.get(&role) {
-                return Ok(c.clone());
-            }
+        self.role_client_cache
+            .resolve(role)
+            .await
+            .map_err(anyhow::Error::from)
+    }
+
+    /// Select the `ApiClient` to use for the *current turn* when
+    /// `permission_mode == Plan`. Returns `None` when no swap is needed
+    /// — callers stay on the engine's default Main client.
+    ///
+    /// TS parity behaviour: `getRuntimeMainLoopModel`
+    /// (utils/model/model.ts:145-167). TS encodes the plan-mode swap
+    /// via the `opusplan`/`haiku` aliases on the user's main model;
+    /// coco-rs is multi-LLM and instead extends the `ModelRole::Plan`
+    /// slot (previously subagent-only) to also drive the main-session
+    /// model choice when in plan mode. Users opt in by setting
+    /// `models.plan = <provider>/<model_id>` in their settings.json;
+    /// without a Plan slot, the fallback chain (`runtime.rs:507`)
+    /// returns the Main client and this returns `Some(main)` — same
+    /// observable behaviour as the pre-change path.
+    ///
+    /// `exceeds_threshold` is the live "most recent assistant message
+    /// context > N" flag computed at the engine turn entry. TS bypasses
+    /// the swap when this is true to avoid truncation; the Rust
+    /// counterpart honours the same intent — returning `None` here is
+    /// equivalent to TS returning `mainLoopModel` unchanged.
+    pub async fn resolve_plan_mode_client(
+        &self,
+        permission_mode: PermissionMode,
+        exceeds_threshold: bool,
+    ) -> Option<Arc<ApiClient>> {
+        if permission_mode != PermissionMode::Plan {
+            return None;
         }
-        // Main always pre-populated; reaching here for Main means the
-        // cache map was tampered with — refresh.
-        if role == ModelRole::Main {
-            let mut g = self.role_clients.write().await;
-            g.insert(ModelRole::Main, self.client.clone());
-            return Ok(self.client.clone());
+        if exceeds_threshold {
+            return None;
         }
-        // Resolve role spec from runtime config; fall back to Main
-        // when unconfigured (matches `RuntimeConfig::resolve_model_roles`
-        // semantics — unconfigured roles inherit Main's spec).
-        let spec = self
-            .runtime_config
-            .model_roles
-            .get(role)
-            .cloned()
-            .ok_or_else(|| {
-                anyhow::anyhow!("model role {role:?} unresolved (no Main fallback either)")
-            })?;
-        let retry: coco_inference::RetryConfig = self.runtime_config.api.retry.clone().into();
-        let built =
-            coco_inference::model_factory::build_api_client(&self.runtime_config, &spec, retry)?;
-        let mut g = self.role_clients.write().await;
-        // Lost-update protection: another waiter may have built first.
-        if let Some(existing) = g.get(&role) {
-            return Ok(existing.clone());
-        }
-        g.insert(role, built.clone());
-        Ok(built)
+        self.client_for_role(ModelRole::Plan).await.ok()
     }
 
     /// Snapshot the current `QueryEngineConfig` (clones the inner struct).
@@ -1288,6 +1401,27 @@ impl SessionRuntime {
         if let Some(policy) = self.recovery_policy {
             engine = engine.with_recovery_policy(policy);
         }
+        // Pre-resolve the `ModelRole::Plan` client so the engine can
+        // swap it in for `permission_mode == Plan` turns. We use the
+        // same `client_for_role` cache as subagent routing — when
+        // `models.plan` is unconfigured the fallback chain at
+        // `runtime.rs:507` returns the Main spec, so the call returns
+        // an `ApiClient` equivalent to Main and the swap becomes a
+        // no-op (same observable behaviour as not installing this).
+        //
+        // Build failures are non-fatal — log and skip; the session
+        // still works, plan mode just doesn't get a swap.
+        let plan_client = match self.client_for_role(ModelRole::Plan).await {
+            Ok(c) => Some(c),
+            Err(e) => {
+                tracing::debug!(
+                    error = %e,
+                    "client_for_role(Plan) failed during wire_engine; plan-mode swap disabled this session"
+                );
+                None
+            }
+        };
+        engine = engine.with_plan_role_client(plan_client);
         engine = engine.with_file_read_state(self.file_read_state.clone());
         engine = engine.with_app_state(app_state.clone());
         // Skill-emitted `permission_updates` now flow through the
@@ -1377,6 +1511,12 @@ impl SessionRuntime {
         // hot-reloads land on the next engine.
         if let Some(mcp) = self.mcp_handle.read().await.clone() {
             engine = engine.with_mcp_handle(mcp);
+        }
+        // Same snapshot pattern as MCP — every per-turn engine reads
+        // the late-bound LSP slot once at wire time. Hot-reloads of
+        // the LSP config land on the next engine build.
+        if let Some(lsp) = self.lsp_handle.read().await.clone() {
+            engine = engine.with_lsp_handle(lsp);
         }
         // Install the agent catalog snapshot so `AgentTool::prompt`
         // renders the dynamic per-turn agent listing (TS parity:

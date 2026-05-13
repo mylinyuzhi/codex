@@ -214,6 +214,12 @@ impl ToolPermissionBridge for TuiPermissionBridge {
                 description: request.description.clone(),
                 input_preview: serde_json::to_string(&request.input)
                     .unwrap_or_else(|_| "<unrenderable input>".to_string()),
+                choices: request.choices.clone(),
+                // Carry the raw input only when there's a choice payload
+                // so the TUI can splice `user_choice` into a clone of it.
+                // For the legacy yes/no dialog the input_preview string
+                // is enough.
+                original_input: request.choices.as_ref().map(|_| request.input.clone()),
             })
         };
         if let Err(e) = self.notification_tx.send(event).await {

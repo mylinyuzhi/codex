@@ -5,7 +5,7 @@
 //! the trait lives in `coco-hooks` and is implemented here so the
 //! L4 → L2 dependency arrow is reversed.
 //!
-//! # Status (v1)
+//! # Status
 //!
 //! - **Prompt path**: full implementation. Builds a single-turn
 //!   `QueryParams`, calls `ApiClient::query`, parses the assistant
@@ -14,7 +14,7 @@
 //!   `UserPromptSubmit` hooks don't fire from within a hook
 //!   evaluation. Mirrors TS `execPromptHook.ts:21-211`.
 //!
-//! - **Agent path**: pragmatic v1 — logs a warning and returns
+//! - **Agent path**: pragmatic stub — logs a warning and returns
 //!   `Cancelled`. TS `execAgentHook.ts:264` uses the same outcome
 //!   when the agent stops without calling `StructuredOutputTool`,
 //!   so this is silent (no UI error) and matches TS's worst-case
@@ -26,16 +26,38 @@
 //!     * Auto-grant of `Read(/<transcript_path>)` for the run
 //!
 //!   This is tracked as a P3 follow-up in `crate-coco-hooks.md`.
+//!   The model-routing wiring (`pick_client`) IS in place so when
+//!   the stub is replaced the per-hook `model` override already
+//!   flows correctly.
 //!
 //! # Model selection
 //!
 //! TS uses `getSmallFastModel()` (Haiku) by default; the per-hook
-//! `hook.model` field can override. Coco-rs has a `ModelRole::HookAgent`
-//! variant for the same purpose. v1 uses the main session's
-//! `ApiClient` directly — the `model` parameter passed to the trait
-//! is logged for telemetry but not yet routed. Per-role ApiClient
-//! construction is a P2 follow-up.
+//! `hook.model` field can override with either a literal model id
+//! or an alias. Coco-rs routes through `ModelRole::HookAgent`
+//! instead — bare model strings are deliberately rejected per the
+//! project rule "never bare model string; route via `ModelRole`"
+//! (see root `CLAUDE.md`).
+//!
+//! - **Default client** — [`QueryHookLlm::for_session`] pre-resolves
+//!   `ModelRole::HookAgent` from the shared
+//!   [`coco_inference::RoleClientCache`] at session bootstrap. Users
+//!   who set `models.hook_agent` in settings.json get that model for
+//!   every hook evaluation. Unconfigured roles inherit Main's spec
+//!   via the cache's spec-equality shortcut (no redundant client
+//!   built, detector baseline preserved).
+//!
+//! - **Per-call override** — the `model` parameter on
+//!   [`HookLlmHandle::evaluate_prompt`] / `evaluate_agent` is parsed
+//!   as a [`ModelRole`] (`"main"` / `"fast"` / `"explore"` / `"review"` /
+//!   `"hook_agent"` / `"memory"` / `"subagent"` / `"plan"`, case-
+//!   insensitive). Recognised roles route through the shared cache.
+//!   Unrecognised strings fall through to the default client with a
+//!   warn log so user misconfigurations are visible — and tell the
+//!   user to either set `models.hook_agent` and omit `model`, or
+//!   use a role name.
 
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -46,7 +68,9 @@ use coco_inference::ApiClient;
 use coco_inference::AssistantContentPart;
 use coco_inference::LanguageModelMessage;
 use coco_inference::QueryParams;
+use coco_inference::RoleClientCache;
 use coco_inference::UserContentPart;
+use coco_types::ModelRole;
 use serde::Deserialize;
 
 /// System prompt prepended to every Prompt hook evaluation.
@@ -70,32 +94,97 @@ struct HookResponse {
 }
 
 /// `coco-query`'s `HookLlmHandle` implementation. Single struct for
-/// both Prompt and Agent paths — they share `client` and the
+/// both Prompt and Agent paths — they share `default_client` and the
 /// `Cancelled`/`NonBlockingError` mapping logic.
 ///
+/// `role_cache` is the per-call role-override gateway and the source
+/// of `default_client` — sharing one `Arc<RoleClientCache>` across
+/// `SessionRuntime` and the hook handle means a given role's
+/// `CacheBreakDetector` state stays continuous regardless of caller.
+///
 /// Manual `Debug` because `ApiClient` itself doesn't derive `Debug`
-/// (provider state is non-trivial); we surface only the model id which
-/// is what diagnostics actually want.
+/// (provider state is non-trivial); we surface only the default
+/// client's model id which is what diagnostics actually want.
 pub struct QueryHookLlm {
-    client: Arc<ApiClient>,
+    default_client: Arc<ApiClient>,
+    role_cache: Arc<RoleClientCache>,
 }
 
 impl std::fmt::Debug for QueryHookLlm {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("QueryHookLlm")
-            .field("model_id", &self.client.model_id())
-            .field("provider", &self.client.provider())
+            .field("default_model_id", &self.default_client.model_id())
+            .field("default_provider", &self.default_client.provider())
             .finish()
     }
 }
 
 impl QueryHookLlm {
-    pub fn new(client: Arc<ApiClient>) -> Self {
-        Self { client }
+    /// Build a session-wired hook handler. Pre-resolves
+    /// `ModelRole::HookAgent` against the shared cache as the default
+    /// client and stores the `Arc<RoleClientCache>` so per-call `model`
+    /// overrides reach the user-configured role clients.
+    ///
+    /// When `HookAgent` is unconfigured the fallback chain in
+    /// `runtime.rs:resolve_model_roles` populates it with Main's spec;
+    /// the cache's spec-equality shortcut reuses the Main `Arc` so the
+    /// common case stays zero-extra-allocation.
+    pub async fn for_session(role_cache: Arc<RoleClientCache>) -> Self {
+        let default_client = match role_cache.resolve(ModelRole::HookAgent).await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "HookAgent role unresolved at hook-handle bootstrap; falling back to Main client"
+                );
+                role_cache.main_client()
+            }
+        };
+        Self {
+            default_client,
+            role_cache,
+        }
     }
 
-    pub fn into_handle(self) -> Arc<dyn HookLlmHandle> {
-        Arc::new(self) as Arc<dyn HookLlmHandle>
+    /// Pick the `ApiClient` for a single hook invocation.
+    ///
+    /// Precedence (mirrors TS `hook.model` semantics, adapted to
+    /// coco-rs's `ModelRole` indirection):
+    /// 1. `model = Some(m)` and `m` parses as a `ModelRole` → resolve
+    ///    that role via the shared cache (`Err` falls back to
+    ///    `default_client` with a warn).
+    /// 2. `model = Some(m)` and `m` is not a recognised role → warn
+    ///    and use `default_client`. The warn message tells the user
+    ///    that `hook.model` accepts role names, not bare model ids.
+    /// 3. `model = None` → `default_client` (= HookAgent role).
+    async fn pick_client(&self, model: Option<&str>) -> Arc<ApiClient> {
+        let Some(m) = model else {
+            return self.default_client.clone();
+        };
+        let role = match ModelRole::from_str(m) {
+            Ok(r) => r,
+            Err(_) => {
+                tracing::warn!(
+                    requested_model = m,
+                    "hook `model` is not a recognised ModelRole (expected one of \
+                     main/fast/plan/explore/review/hook_agent/memory/subagent); \
+                     set `models.hook_agent` in settings.json and omit `model`, \
+                     or pass a role name. Falling back to HookAgent default."
+                );
+                return self.default_client.clone();
+            }
+        };
+        match self.role_cache.resolve(role).await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(
+                    requested_role = %role,
+                    error = %e,
+                    "hook `model` role resolution failed; using HookAgent default"
+                );
+                self.default_client.clone()
+            }
+        }
     }
 }
 
@@ -107,15 +196,7 @@ impl HookLlmHandle for QueryHookLlm {
         model: Option<&str>,
         timeout: Duration,
     ) -> HookEvaluationResult {
-        if let Some(m) = model {
-            // v1: log the override but route through the main ApiClient.
-            // Per-role ApiClient construction is a P2 follow-up.
-            tracing::debug!(
-                requested_model = m,
-                bound_model = self.client.model_id(),
-                "Prompt hook model override not yet wired; using main client model"
-            );
-        }
+        let client = self.pick_client(model).await;
 
         let prompt = build_prompt(prompt);
         let params = QueryParams {
@@ -132,7 +213,7 @@ impl HookLlmHandle for QueryHookLlm {
             agentic: false,
         };
 
-        let result = tokio::time::timeout(timeout, self.client.query(&params)).await;
+        let result = tokio::time::timeout(timeout, client.query(&params)).await;
 
         match result {
             // TS treats timeout as `cancelled` — silent, no UI error.
@@ -147,10 +228,18 @@ impl HookLlmHandle for QueryHookLlm {
     async fn evaluate_agent(
         &self,
         _prompt: &str,
-        _model: Option<&str>,
+        model: Option<&str>,
         _timeout: Duration,
     ) -> HookEvaluationResult {
-        // v1 stub: full multi-turn agent evaluation requires a forked
+        // Resolve the client even though we don't yet use it — this
+        // keeps the per-hook `model` routing parity wired so the model
+        // role is observable in telemetry, and when the full agent
+        // impl lands (StructuredOutputTool + forked engine + max_turns
+        // enforcement) it inherits the resolved client without any
+        // re-wiring. `_client` is intentionally unused for now.
+        let _client = self.pick_client(model).await;
+
+        // Stub: full multi-turn agent evaluation requires a forked
         // `QueryEngine`, `StructuredOutputTool`, transcript-read
         // permission grant, and "must call structured output" stop-hook
         // enforcement. Until that lands, return `Cancelled` — TS's

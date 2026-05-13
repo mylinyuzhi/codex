@@ -347,6 +347,12 @@ impl Tool for NotebookEditTool {
                 source: None,
             })?;
 
+        // TS parity with FileWriteTool/FileEditTool — notify the LSP
+        // server of the save so diagnostics refresh. Best-effort.
+        ctx.lsp
+            .notify_save(std::path::Path::new(notebook_path))
+            .await;
+
         // Build the TS-shaped response. For insert: include `new_cell_id`
         // (or null when nbformat < 4.5). For replace/delete: include
         // `cell_id` from the resolved cell. Always include `cell_index`

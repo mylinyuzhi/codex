@@ -56,6 +56,7 @@ impl QueryEngine {
             config,
             client,
             fallback_clients: Vec::new(),
+            plan_role_client: None,
             recovery_policy: None,
             tools,
             cancel,
@@ -74,6 +75,7 @@ impl QueryEngine {
             app_state: None,
             mailbox: None,
             mcp_handle: None,
+            lsp_handle: None,
             agent_handle: None,
             skill_handle: None,
             live_command_rules,
@@ -519,6 +521,15 @@ impl QueryEngine {
         self
     }
 
+    /// Install the LSP handle so `LspTool::is_enabled` reports
+    /// connected state correctly **and** `LspTool::execute` can dispatch
+    /// JSON-RPC requests through the server manager. `None` (the
+    /// default) makes the tool hide itself from the model's tool list.
+    pub fn with_lsp_handle(mut self, handle: coco_tool_runtime::LspHandleRef) -> Self {
+        self.lsp_handle = Some(handle);
+        self
+    }
+
     /// Install the real [`AgentHandle`](coco_tool_runtime::AgentHandle) so
     /// `AgentTool` invocations route to the swarm / subagent
     /// runtime. Without this the factory defaults to
@@ -612,6 +623,23 @@ impl QueryEngine {
     /// call keeps the default sticky-fallback behavior.
     pub fn with_recovery_policy(mut self, policy: coco_config::FallbackRecoveryPolicy) -> Self {
         self.recovery_policy = Some(policy);
+        self
+    }
+
+    /// Install the pre-resolved `ApiClient` for `ModelRole::Plan` so
+    /// the main loop can swap to it when `permission_mode == Plan`.
+    ///
+    /// Wired by `SessionRuntime::wire_engine` from
+    /// `client_for_role(ModelRole::Plan)`. Pass `None` (the default)
+    /// to keep the main loop on the Main client across all permission
+    /// modes — preserves pre-feature behaviour.
+    ///
+    /// TS parity behaviour: `getRuntimeMainLoopModel`
+    /// (utils/model/model.ts:145-167) — but encoded as a generic role
+    /// slot rather than alias-conditional logic, since coco-rs is
+    /// multi-LLM.
+    pub fn with_plan_role_client(mut self, client: Option<Arc<ApiClient>>) -> Self {
+        self.plan_role_client = client;
         self
     }
 

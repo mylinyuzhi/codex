@@ -207,7 +207,7 @@ fn test_wrap_command_removes_dyld_env_vars() {
     let mut cmd = tokio::process::Command::new("/bin/echo");
     cmd.arg("test");
 
-    let result = sandbox.wrap_command(&config, "test command", "_test_SBX", &mut cmd);
+    let result = sandbox.wrap_command(&config, "test command", "_test_SBX", &[], &mut cmd);
     assert!(result.is_ok());
 
     let inner = cmd.as_std();
@@ -242,7 +242,7 @@ fn test_wrap_command_disabled_does_not_remove_env_vars() {
     let mut cmd = tokio::process::Command::new("/bin/echo");
     cmd.arg("test");
 
-    let result = sandbox.wrap_command(&config, "test command", "_test_SBX", &mut cmd);
+    let result = sandbox.wrap_command(&config, "test command", "_test_SBX", &[], &mut cmd);
     assert!(result.is_ok());
 
     let inner = cmd.as_std();
@@ -261,7 +261,7 @@ fn test_wrap_command_disabled_is_noop() {
     let mut cmd = tokio::process::Command::new("echo");
     cmd.arg("hello");
 
-    let result = sandbox.wrap_command(&config, "test command", "_test_SBX", &mut cmd);
+    let result = sandbox.wrap_command(&config, "test command", "_test_SBX", &[], &mut cmd);
     assert!(result.is_ok());
     let inner = cmd.as_std();
     assert_eq!(inner.get_program(), "echo");
@@ -280,7 +280,7 @@ fn test_wrap_command_rewrites_to_sandbox_exec() {
     let mut cmd = tokio::process::Command::new("/bin/bash");
     cmd.arg("-c").arg("echo hello");
 
-    let result = sandbox.wrap_command(&config, "test command", "_test_SBX", &mut cmd);
+    let result = sandbox.wrap_command(&config, "test command", "_test_SBX", &[], &mut cmd);
     assert!(result.is_ok());
 
     let inner = cmd.as_std();

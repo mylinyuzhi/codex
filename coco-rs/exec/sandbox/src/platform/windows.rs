@@ -65,6 +65,7 @@ impl SandboxPlatform for WindowsSandbox {
         config: &SandboxConfig,
         _command: &str,
         _session_tag: &str,
+        _extra_writable_binds: &[std::path::PathBuf],
         cmd: &mut tokio::process::Command,
     ) -> Result<()> {
         if config.enforcement == EnforcementLevel::Disabled {

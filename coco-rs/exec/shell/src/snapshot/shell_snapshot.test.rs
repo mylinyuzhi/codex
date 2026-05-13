@@ -28,7 +28,7 @@ fn test_snapshot_config_default() {
         config
             .snapshot_dir
             .to_string_lossy()
-            .contains("shell_snapshots")
+            .contains("shell-snapshots")
     );
     assert_eq!(config.timeout, Duration::from_secs(10));
     assert_eq!(config.retention, Duration::from_secs(60 * 60 * 24 * 7));
@@ -38,7 +38,7 @@ fn test_snapshot_config_default() {
 fn test_snapshot_config_new() {
     let home = PathBuf::from("/home/test/.coco");
     let config = SnapshotConfig::new(&home);
-    assert_eq!(config.snapshot_dir, home.join("shell_snapshots"));
+    assert_eq!(config.snapshot_dir, home.join("shell-snapshots"));
 }
 
 #[cfg(unix)]

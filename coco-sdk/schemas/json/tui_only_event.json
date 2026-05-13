@@ -4,7 +4,7 @@
   "description": "TUI-exclusive events.\n\nThese events are dropped by SDK and App-Server consumers. They drive overlays, toasts, and UI-only state transitions that are not part of the protocol contract.\n\nPer `event-system-design.md` Section 1.7, the design listed this type as owned by `coco-tui`. Since `CoreEvent::Tui(TuiOnlyEvent)` is part of the envelope enum defined in `coco-types`, the type itself must live in `coco-types` to avoid a cyclic dependency. The semantic contract (TUI-only, never sent to SDK) is preserved via consumer dispatch rules in `StreamAccumulator` and `handle_core_event()`.\n\n21 variants (20 from design §4.1 + 1 coco-rs extension).",
   "oneOf": [
     {
-      "description": "Permission approval overlay needed.",
+      "description": "Permission approval overlay needed.\n\nWhen `choices` is `Some`, the TUI should render a multi-choice list (e.g. ExitPlanMode's keep/clear/cancel) instead of the default yes/no buttons. Picked `value` is echoed back via `UserCommand::ApprovalResponse.updated_input` as a `{ ..original_input, user_choice: \"<value>\" }` JSON object so the tool's `execute()` can branch on the choice. TS parity: `ExitPlanModePermissionRequest.tsx:691-704` option grid.\n\n`original_input` carries the raw tool input so the TUI can splice the picked `user_choice` into it verbatim before sending the approval response — mirrors `QuestionAsked.input`. `None` keeps the wire compact when no choices are present.",
       "type": "object",
       "required": [
         "description",
@@ -14,12 +14,22 @@
         "type"
       ],
       "properties": {
+        "choices": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/PermissionAskChoice"
+          }
+        },
         "description": {
           "type": "string"
         },
         "input_preview": {
           "type": "string"
         },
+        "original_input": true,
         "request_id": {
           "type": "string"
         },
@@ -749,6 +759,31 @@
           ]
         }
       ]
+    },
+    "PermissionAskChoice": {
+      "description": "One option in a multi-choice permission dialog.\n\nUsed by `ToolCheckResult::Ask.choices` and surfaced on the wire via `PermissionDecision::Ask.choices`. The TUI renders one row per choice; the picked `value` is echoed back so the tool's `execute()` can branch on the user's selection.",
+      "type": "object",
+      "required": [
+        "label",
+        "value"
+      ],
+      "properties": {
+        "description": {
+          "description": "Optional one-line explanation rendered under the label.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "label": {
+          "description": "Short row label shown to the user.",
+          "type": "string"
+        },
+        "value": {
+          "description": "Stable identifier echoed back in the approval response. Use kebab-case (`\"yes-keep-context\"`, `\"yes-clear-context\"`, `\"no\"`).",
+          "type": "string"
+        }
+      }
     },
     "SlashCommandStatusKind": {
       "description": "Categorization of a `SlashCommandStatus` payload. Each variant maps to a `slash.status.*` key in the TUI locale catalog.\n\nWire format intentionally tagged so SDK clients can render their own localized strings instead of consuming the TUI's English fallback.",

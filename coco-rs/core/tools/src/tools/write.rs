@@ -280,6 +280,12 @@ impl Tool for WriteTool {
         // `.claude/skills/` ancestor, the manager picks up the new
         // skill on the next batch boundary.
         crate::track_skill_discovery(ctx, path).await;
+        // TS `FileWriteTool.ts` calls `clearDeliveredDiagnosticsForFile`
+        // + `lspManager.saveFile(path)` after every successful write so
+        // the language server re-indexes and emits fresh diagnostics.
+        // `notify_save` is best-effort — no LSP server / no language
+        // binding / RPC failure all become silent no-ops.
+        ctx.lsp.notify_save(path).await;
 
         // TS `FileWriteTool.ts:418-433` — return structured `{type, filePath}`
         // so render_for_model can branch on the operation type. The

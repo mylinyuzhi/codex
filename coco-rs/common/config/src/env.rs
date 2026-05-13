@@ -24,6 +24,11 @@ pub enum EnvKey {
     CocoAgentId,
     CocoAgentName,
     CocoBashAutoBackgroundOnTimeout,
+    /// Truthy ⇒ snap the bash cwd back to `originalCwd` after every
+    /// command, regardless of whether the cwd is inside the allowed
+    /// working set. TS parity: `CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR`
+    /// in `utils/envUtils.ts::shouldMaintainProjectWorkingDir`.
+    CocoBashMaintainProjectWorkingDir,
     CocoBubblewrap,
     CocoConfigDir,
     CocoDisableFastMode,
@@ -56,6 +61,10 @@ pub enum EnvKey {
     /// Timezone for log timestamps: `local | utc`. Lower priority than
     /// `--log-timezone`. Defaults to `local`.
     CocoLogTimezone,
+    /// `LspConfig::max_file_size_bytes` override. Wins over settings.
+    /// Files exceeding this size are rejected at the tool layer before
+    /// reaching the LSP server (rust-analyzer / pyright OOM-guard).
+    CocoLspMaxFileSizeBytes,
     CocoMaxContextTokens,
     CocoMaxToolUseConcurrency,
     CocoMemoryPathOverride,
@@ -215,6 +224,7 @@ impl EnvKey {
             Self::CocoAgentId => "COCO_AGENT_ID",
             Self::CocoAgentName => "COCO_AGENT_NAME",
             Self::CocoBashAutoBackgroundOnTimeout => "COCO_BASH_AUTO_BACKGROUND_ON_TIMEOUT",
+            Self::CocoBashMaintainProjectWorkingDir => "COCO_BASH_MAINTAIN_PROJECT_WORKING_DIR",
             Self::CocoBubblewrap => "COCO_BUBBLEWRAP",
             Self::CocoConfigDir => "COCO_CONFIG_DIR",
             Self::CocoDisableFastMode => "COCO_DISABLE_FAST_MODE",
@@ -229,6 +239,7 @@ impl EnvKey {
             Self::CocoLogLocation => "COCO_LOG_LOCATION",
             Self::CocoLogStderr => "COCO_LOG_STDERR",
             Self::CocoLogTimezone => "COCO_LOG_TIMEZONE",
+            Self::CocoLspMaxFileSizeBytes => "COCO_LSP_MAX_FILE_SIZE_BYTES",
             Self::CocoMaxContextTokens => "COCO_MAX_CONTEXT_TOKENS",
             Self::CocoMaxToolUseConcurrency => "COCO_MAX_TOOL_USE_CONCURRENCY",
             Self::CocoMemoryPathOverride => "COCO_MEMORY_PATH_OVERRIDE",

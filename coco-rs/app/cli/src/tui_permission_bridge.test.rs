@@ -9,6 +9,7 @@ fn dummy_request(id: &str) -> ToolPermissionRequest {
         tool_name: "Bash".into(),
         description: "ls".into(),
         input: serde_json::json!({"command": "ls"}),
+        choices: None,
     }
 }
 
