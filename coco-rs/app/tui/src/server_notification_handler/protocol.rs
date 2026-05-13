@@ -401,6 +401,42 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
             state.session.model_fallback_banner = None;
             true
         }
+        ServerNotification::ModelRoleChanged(p) => {
+            // Fold the binding into `model_by_role` (one entry per role
+            // independent of provider/model_id so the picker's "current"
+            // marker always points to the right row).
+            state.session.model_by_role.insert(
+                p.role,
+                crate::state::ModelBinding {
+                    model_id: p.model_id.clone(),
+                    provider: p.provider.clone(),
+                    effort: p.effort,
+                },
+            );
+            // Mirror Main role into the legacy `model`/`provider`/
+            // `thinking_effort` fields the status bar reads directly.
+            // Non-Main roles only affect the picker view.
+            if p.role == coco_types::ModelRole::Main {
+                state.session.model = p.model_id.clone();
+                state.session.provider = p.provider.clone();
+                state.session.thinking_effort =
+                    p.effort.unwrap_or(coco_types::ReasoningEffort::Auto);
+            }
+            // Success toast — terse, since the picker confirm already
+            // closed and the new binding shows in the status bar.
+            let effort_suffix = p.effort.map(|e| format!(" · {e}")).unwrap_or_default();
+            state.ui.add_toast(Toast::success(
+                t!(
+                    "toast.model_set",
+                    role = p.role.as_str(),
+                    provider = p.provider.as_str(),
+                    model = p.model_id.as_str(),
+                    effort = effort_suffix.as_str()
+                )
+                .to_string(),
+            ));
+            true
+        }
         ServerNotification::FastModeChanged { active } => {
             let msg = if active {
                 t!("toast.fast_mode_on")

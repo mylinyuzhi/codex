@@ -766,8 +766,8 @@ pub enum ThemeName { Default, Dark, Light, Dracula, Nord }
 | `Shift+Enter` / `Ctrl+J` | Chat | Insert newline |
 | `Tab` | Chat | Toggle plan mode |
 | `Shift+Tab` | Chat | Cycle permission mode |
-| `Ctrl+T` | Chat | Cycle thinking level |
-| `Shift+Ctrl+T` | Chat | Toggle thinking display |
+| `Ctrl+T` | Chat | Cycle Main role's thinking effort through model's `supported_thinking_levels` (coco-rs extension; `ChatCycleThinking`) |
+| `Cmd+T` / `Meta+T` / `Alt+T` | Chat | Toggle thinking-content visibility in transcript (`ChatThinkingToggle → ToggleThinking`) |
 | `Ctrl+M` | Chat | Cycle model (show picker) |
 | `Ctrl+B` | Chat | Background all tasks |
 | `Ctrl+F` | Chat | Kill all agents |

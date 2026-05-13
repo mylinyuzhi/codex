@@ -29,6 +29,15 @@ impl Widget for StatusBar<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let mut parts = Vec::new();
 
+        // Provider tag (e.g. `[anthropic]`). Suppressed when the
+        // provider is unknown so mock/test sessions and pre-bootstrap
+        // states render unchanged — see `SessionState::provider`.
+        if !self.state.session.provider.is_empty() {
+            parts.push(
+                Span::raw(format!(" [{}]", self.state.session.provider)).fg(self.theme.text_dim),
+            );
+        }
+
         // Model
         parts.push(
             Span::raw(format!(" {}", self.state.session.model))

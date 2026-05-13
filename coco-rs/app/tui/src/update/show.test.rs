@@ -10,6 +10,7 @@ use coco_types::ModelRole;
 fn cycle_model_seeds_builtin_registry() {
     let mut state = AppState::new();
     state.session.model = "claude-sonnet-4-6".to_string();
+    state.session.provider = "anthropic".to_string();
     cycle_model(&mut state);
     let m = match &state.ui.overlay {
         Some(Overlay::ModelPicker(m)) => m.clone(),

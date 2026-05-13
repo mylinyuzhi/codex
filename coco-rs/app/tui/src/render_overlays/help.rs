@@ -57,10 +57,15 @@ fn entries() -> &'static [HelpEntry] {
                 fallback: "shift+tab",
                 description_key: "help.desc.cycle_permission_mode",
             },
+            // coco-rs extension: in Chat context Ctrl+T cycles the
+            // Main role's thinking effort. `app:toggleTodos` stays
+            // reachable from non-Chat contexts (Picker, Settings, …)
+            // but the help overlay is Chat-context only so we surface
+            // the thinking cycle here.
             HelpEntry {
-                action: Some(AppToggleTodos),
+                action: Some(ChatCycleThinking),
                 fallback: "ctrl+t",
-                description_key: "help.desc.toggle_expanded_view",
+                description_key: "help.desc.cycle_thinking_level",
             },
             // TUI-only: cycle model is bound to Ctrl+M in the legacy
             // cascade; TS schema doesn't have an equivalent action.

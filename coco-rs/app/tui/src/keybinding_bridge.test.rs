@@ -174,15 +174,14 @@ fn test_overlay_n_denies() {
 }
 
 #[test]
-fn test_ctrl_t_toggles_expanded_tasks_view() {
-    // TS `app:toggleTodos` (Ctrl+T) cycles the right-rail expanded
-    // view — coco-rs implements the same. The legacy
-    // `CycleThinkingLevel` mapping was a coco-rs invention from before
-    // the TS-aligned dispatch landed; now this binding fires the
-    // resolver path (`AppToggleTodos → ToggleExpandedTasksView`).
+fn test_ctrl_t_cycles_thinking_level_in_chat_context() {
+    // coco-rs extension: in Chat context Ctrl+T cycles the Main role's
+    // thinking effort through the active model's `supported_thinking_levels`
+    // (`ChatCycleThinking → CycleThinkingLevel`). The Global
+    // `app:toggleTodos` binding stays reachable from non-Chat contexts.
     let state = AppState::new();
     let cmd = map_key(&state, ctrl(KeyCode::Char('t')));
-    assert!(matches!(cmd, Some(TuiCommand::ToggleExpandedTasksView)));
+    assert!(matches!(cmd, Some(TuiCommand::CycleThinkingLevel)));
 }
 
 #[test]

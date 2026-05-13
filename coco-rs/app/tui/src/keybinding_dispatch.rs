@@ -85,6 +85,10 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
         ChatModelPicker => TuiCommand::CycleModel,
         ChatFastMode => TuiCommand::ToggleFastMode,
         ChatThinkingToggle => TuiCommand::ToggleThinking,
+        // coco-rs extension: cycle Main role thinking effort through
+        // the active model's `supported_thinking_levels`. See
+        // `update.rs::CycleThinkingLevel`.
+        ChatCycleThinking => TuiCommand::CycleThinkingLevel,
         ChatSubmit => {
             // Streaming → queue; otherwise submit (mirrors
             // keybinding_bridge.rs:259).

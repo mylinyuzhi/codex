@@ -114,20 +114,40 @@ pub async fn handle_command(
             true
         }
         TuiCommand::CycleThinkingLevel => {
-            // Cycle Auto → Disable → Low → Medium → High → XHigh → Auto.
-            // `Minimal` is intentionally skipped — it's only used by a
-            // narrow set of OpenAI models and the shortcut is meant
-            // for broad-stroke level toggling. The picker overlay
-            // exposes the full ladder (including Minimal) per-model.
-            use coco_types::ReasoningEffort::*;
-            let next = match state.session.thinking_effort {
-                Auto => Disable,
-                Disable => Low,
-                Low => Medium,
-                Medium => High,
-                High => XHigh,
-                XHigh | Minimal => Auto,
-            };
+            // Find the catalog entry for the current Main role's
+            // (provider, model_id) pair and cycle through ITS declared
+            // `supported_efforts`. This honors per-model declarations
+            // (DeepSeek's 4-state ladder is different from Anthropic's
+            // 4-budget ladder is different from OpenAI's 5-level
+            // ladder) — Ctrl+T is no longer a hardcoded ordering.
+            let supported: Vec<coco_types::ReasoningEffort> = state
+                .session
+                .model_catalog
+                .iter()
+                .find(|e| e.provider == state.session.provider && e.model_id == state.session.model)
+                .map(|e| e.supported_efforts.clone())
+                .unwrap_or_default();
+
+            // No declared support → silent no-op. Common when the
+            // active model is registered without a
+            // `supported_thinking_levels` entry (e.g. a user-added
+            // model in `~/.coco/models.json` without metadata) or when
+            // `state.session.{provider, model}` haven't been seeded
+            // yet (pre-bootstrap mock paths).
+            if supported.is_empty() {
+                return true;
+            }
+
+            // Current effort not in supported list → restart at index 0.
+            // Self-correcting: a stale `thinking_effort` (e.g. from a
+            // prior model that supported XHigh) snaps back to a legal
+            // value on the next Ctrl+T press instead of going nowhere.
+            let current_idx = supported
+                .iter()
+                .position(|e| *e == state.session.thinking_effort)
+                .unwrap_or(0);
+            let next = supported[(current_idx + 1) % supported.len()];
+
             state.session.thinking_effort = next;
             let _ = command_tx
                 .send(UserCommand::SetThinkingLevel {

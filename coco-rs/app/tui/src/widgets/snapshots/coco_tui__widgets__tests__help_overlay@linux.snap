@@ -6,7 +6,7 @@ expression: output
             ┌ Help ────────────────────────────────────────────────┐            
             │tab            Toggle plan mode                       │            
             │shift+tab      Cycle permission mode                  │            
-            │ctrl+t         Toggle tasks / teammates panel         │            
+            │ctrl+t         Cycle thinking level                   │            
             │ctrl+m         Cycle model                            │            
             │ctrl+c         Interrupt                              │            
             │ctrl+l         Clear screen                           │            

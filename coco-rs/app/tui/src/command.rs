@@ -87,20 +87,20 @@ pub enum UserCommand {
     /// Set permission mode. Replaces the legacy `SetPlanMode { bool }`
     /// — plan-mode activation is just `SetPermissionMode { mode: Plan }`.
     SetPermissionMode { mode: PermissionMode },
-    /// Set thinking level.
-    SetThinkingLevel { level: String },
-    /// Set the main model (legacy single-role command).
+    /// Set the Main role's thinking effort.
     ///
-    /// Prefer [`SetModelRole`] for new code — it carries the role, the
-    /// provider, and the chosen effort so multi-role configurations
-    /// can be persisted. Retained for older callers that only need to
-    /// flip the Main model and don't care about provider or effort.
-    SetModel { model: String },
+    /// Emitted by [`crate::events::TuiCommand::CycleThinkingLevel`]
+    /// (Ctrl+T). `level` is the wire-form string from
+    /// `ReasoningEffort::to_string` (e.g. `"high"`, `"xhigh"`). The
+    /// engine resolves it in-memory via `SessionRuntime::apply_role_effort`
+    /// — no file write.
+    SetThinkingLevel { level: String },
     /// Set the model bound to `role` plus its thinking effort. Emitted
-    /// by the role-pill model picker on Enter; the engine persists the
-    /// selection to `~/.coco.json::model_roles.<role>.primary` and
-    /// applies it live. Non-Main roles take effect on the next turn
-    /// that drives that role.
+    /// by the role-pill model picker on Enter; the engine applies the
+    /// selection in-memory via `SessionRuntime::apply_role_override`
+    /// — no file write. Non-Main roles take effect on the next turn
+    /// that drives that role; Main effort takes effect immediately,
+    /// Main model_id changes require a session restart (v1 limitation).
     SetModelRole {
         role: coco_types::ModelRole,
         provider: String,
