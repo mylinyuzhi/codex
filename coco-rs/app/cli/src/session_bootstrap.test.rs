@@ -90,7 +90,7 @@ async fn install_session_late_binds_populates_every_slot_without_mcp() {
     let runtime = build_runtime(&home).await;
     let cwd = home.path().to_path_buf();
 
-    install_session_late_binds(runtime.clone(), &cwd, None)
+    install_session_late_binds(runtime.clone(), &cwd, None, None)
         .await
         .expect("install_session_late_binds");
 
@@ -110,6 +110,10 @@ async fn install_session_late_binds_populates_every_slot_without_mcp() {
         runtime.current_mcp_handle().await.is_none(),
         "mcp_handle slot must stay None when caller passes None"
     );
+    assert!(
+        runtime.current_lsp_handle().await.is_none(),
+        "lsp_handle slot must stay None when caller passes None"
+    );
 }
 
 #[tokio::test]
@@ -120,12 +124,30 @@ async fn install_session_late_binds_attaches_mcp_when_some() {
 
     let mcp_handle: coco_tool_runtime::McpHandleRef = Arc::new(coco_tool_runtime::NoOpMcpHandle);
 
-    install_session_late_binds(runtime.clone(), &cwd, Some(mcp_handle))
+    install_session_late_binds(runtime.clone(), &cwd, Some(mcp_handle), None)
         .await
         .expect("install_session_late_binds");
 
     assert!(
         runtime.current_mcp_handle().await.is_some(),
         "mcp_handle slot must be Some when caller passes Some"
+    );
+}
+
+#[tokio::test]
+async fn install_session_late_binds_attaches_lsp_when_some() {
+    let home = TempDir::new().expect("home tempdir");
+    let runtime = build_runtime(&home).await;
+    let cwd = home.path().to_path_buf();
+
+    let lsp_handle: coco_tool_runtime::LspHandleRef = Arc::new(coco_tool_runtime::NoOpLspHandle);
+
+    install_session_late_binds(runtime.clone(), &cwd, None, Some(lsp_handle))
+        .await
+        .expect("install_session_late_binds");
+
+    assert!(
+        runtime.current_lsp_handle().await.is_some(),
+        "lsp_handle slot must be Some when caller passes Some"
     );
 }

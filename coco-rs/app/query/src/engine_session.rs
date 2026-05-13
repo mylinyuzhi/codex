@@ -288,6 +288,13 @@ impl QueryEngine {
         } else {
             bootstrap.tools.clone()
         };
+        // Snapshot LSP connectivity for the status bar. Sync read — the
+        // adapter's `is_connected()` is backed by an AtomicBool refined
+        // by bootstrap prewarm, so this reflects accurate running-state
+        // at session-start time. Subsequent runtime changes (server
+        // crash, reload) would need a separate notification to update.
+        let lsp_active = self.lsp_handle.as_ref().is_some_and(|h| h.is_connected());
+
         let _delivered = emit_protocol(
             event_tx,
             ServerNotification::SessionStarted(coco_types::SessionStartedParams {
@@ -307,6 +314,7 @@ impl QueryEngine {
                 version: bootstrap.version.clone(),
                 output_style: bootstrap.output_style.clone(),
                 fast_mode_state: bootstrap.fast_mode_state,
+                lsp_active,
             }),
         )
         .await;

@@ -48,7 +48,6 @@ fn test_model_role_as_str_matches_serde() {
     for role in [
         ModelRole::Main,
         ModelRole::Fast,
-        ModelRole::Compact,
         ModelRole::Plan,
         ModelRole::Explore,
         ModelRole::Review,

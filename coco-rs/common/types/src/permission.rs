@@ -233,9 +233,37 @@ pub enum ToolCheckResult {
         feedback: Option<String>,
     },
     /// Tool requires user confirmation for this input.
-    Ask { message: String },
+    ///
+    /// `choices` is `None` for the traditional yes/no dialog. When
+    /// `Some`, the TUI renders a multi-choice list instead and the
+    /// selected `value` is echoed back to the tool via
+    /// `ToolUseContext::user_choice` so `execute()` can branch on it.
+    /// TS parity: `ExitPlanModePermissionRequest.tsx:691-704` option grid.
+    Ask {
+        message: String,
+        choices: Option<Vec<PermissionAskChoice>>,
+    },
     /// Tool denies this input.
     Deny { message: String },
+}
+
+/// One option in a multi-choice permission dialog.
+///
+/// Used by `ToolCheckResult::Ask.choices` and surfaced on the wire via
+/// `PermissionDecision::Ask.choices`. The TUI renders one row per
+/// choice; the picked `value` is echoed back so the tool's `execute()`
+/// can branch on the user's selection.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PermissionAskChoice {
+    /// Stable identifier echoed back in the approval response. Use
+    /// kebab-case (`"yes-keep-context"`, `"yes-clear-context"`, `"no"`).
+    pub value: String,
+    /// Short row label shown to the user.
+    pub label: String,
+    /// Optional one-line explanation rendered under the label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 /// The result of a permission check.
@@ -253,6 +281,12 @@ pub enum PermissionDecision {
         message: String,
         #[serde(default)]
         suggestions: Vec<PermissionUpdate>,
+        /// Optional multi-choice payload. When `Some`, the TUI renders
+        /// a choice list instead of yes/no; the picked `value` is sent
+        /// back to the tool. TS parity:
+        /// `ExitPlanModePermissionRequest.tsx:691-704` option grid.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        choices: Option<Vec<PermissionAskChoice>>,
     },
     Deny {
         message: String,

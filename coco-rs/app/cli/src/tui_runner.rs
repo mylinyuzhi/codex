@@ -245,7 +245,13 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     // Without this TUI used to silently miss background AgentTool,
     // resume, and `/btw`. MCP handle is `None` until TUI grows its
     // own `McpConnectionManager` bootstrap.
-    install_session_late_binds(runtime.clone(), &cwd, None).await?;
+    let lsp_handle = coco_cli::session_bootstrap::build_lsp_handle_if_enabled(
+        &runtime.runtime_config,
+        &coco_config::global_config::config_home(),
+        &cwd,
+    )
+    .await;
+    install_session_late_binds(runtime.clone(), &cwd, None, lsp_handle).await?;
 
     // Install the SessionRuntime weak-ref on the permission bridge so
     // `Notification` hooks (TS `permission_prompt`) fire when the

@@ -93,8 +93,9 @@ impl<'a> PermissionController<'a> {
                 .await;
                 PermissionOutcome::Denied
             }
-            PermissionDecision::Ask { .. } => {
-                self.resolve_ask(tool_call, tool_input, tool_id).await
+            PermissionDecision::Ask { choices, .. } => {
+                self.resolve_ask(tool_call, tool_input, tool_id, choices)
+                    .await
             }
         }
     }
@@ -104,6 +105,7 @@ impl<'a> PermissionController<'a> {
         tool_call: &ToolCallPart,
         tool_input: &serde_json::Value,
         tool_id: &ToolId,
+        choices: Option<Vec<coco_types::PermissionAskChoice>>,
     ) -> PermissionOutcome {
         // TS reference: notifySessionStateChanged('requires_action') on
         // can_use_tool entry, then transition back to running when the
@@ -192,6 +194,7 @@ impl<'a> PermissionController<'a> {
             tool_name: tool_call.tool_name.clone(),
             description: format!("Approval required for {}", tool_call.tool_name),
             input: tool_input.clone(),
+            choices,
         };
 
         let bridge_result = tokio::select! {

@@ -440,7 +440,13 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
         coco_cli::mcp_handle_adapter::McpManagerAdapter::new(mcp_manager.clone())
             .with_elicitation_hooks(elicit_registry, elicit_factory, Some(elicit_counter)),
     );
-    install_session_late_binds(session_runtime.clone(), &cwd, Some(mcp_handle)).await?;
+    let lsp_handle = coco_cli::session_bootstrap::build_lsp_handle_if_enabled(
+        &session_runtime.runtime_config,
+        &global_config::config_home(),
+        &cwd,
+    )
+    .await;
+    install_session_late_binds(session_runtime.clone(), &cwd, Some(mcp_handle), lsp_handle).await?;
 
     // TS parity (`main.tsx:2437/2577/2607`): SessionStart hooks fire
     // once at session bootstrap; output queues onto the shared

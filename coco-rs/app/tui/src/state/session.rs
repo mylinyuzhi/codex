@@ -116,6 +116,10 @@ pub struct SessionState {
     pub compact_warning_suppressed: bool,
     /// Connected MCP servers.
     pub mcp_servers: Vec<McpServerStatus>,
+    /// `true` when at least one LSP server is healthy. Populated from
+    /// `ServerNotification::SessionStarted.lsp_active`; drives the
+    /// "LSP" badge on the status bar.
+    pub lsp_active: bool,
     /// Focused subagent index for side panel.
     pub focused_subagent_index: Option<i32>,
     /// Current turn number (within multi-turn loop).
@@ -331,6 +335,7 @@ impl Default for SessionState {
             compaction_phase: None,
             compact_warning_suppressed: false,
             mcp_servers: Vec::new(),
+            lsp_active: false,
             focused_subagent_index: None,
             current_turn_number: None,
             queued_commands: VecDeque::new(),

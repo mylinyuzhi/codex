@@ -492,8 +492,40 @@ impl Tool for ExitPlanModeTool {
             };
         }
         // Non-teammates: require user confirmation.
+        //
+        // When `plan_mode.show_clear_context_on_exit` is true, surface
+        // the multi-choice dialog. TS parity:
+        // `ExitPlanModePermissionRequest.tsx:137, 691-704` — gated on
+        // `settings.showClearContextOnPlanAccept` (default false).
+        //
+        // The TUI echoes the picked `value` back via
+        // `updated_input.user_choice`, which `execute()` reads to
+        // decide whether to flag `pending_clear_message_history` on the
+        // app-state patch.
+        let choices = if ctx.plan_mode_settings.show_clear_context_on_exit {
+            Some(vec![
+                coco_types::PermissionAskChoice {
+                    value: "yes-keep-context".into(),
+                    label: "Yes, keep context".into(),
+                    description: Some("Exit plan mode and retain the conversation history.".into()),
+                },
+                coco_types::PermissionAskChoice {
+                    value: "yes-clear-context".into(),
+                    label: "Yes, clear context".into(),
+                    description: Some("Exit plan mode and start a fresh conversation.".into()),
+                },
+                coco_types::PermissionAskChoice {
+                    value: "no".into(),
+                    label: "No, stay in plan mode".into(),
+                    description: None,
+                },
+            ])
+        } else {
+            None
+        };
         coco_types::ToolCheckResult::Ask {
             message: "Exit plan mode?".into(),
+            choices,
         }
     }
 
@@ -723,6 +755,15 @@ impl Tool for ExitPlanModeTool {
             None
         };
 
+        // TS parity: `ExitPlanModePermissionRequest.tsx:332-394`. When
+        // the multi-choice dialog is enabled, the TUI echoes the picked
+        // option as `input.user_choice`. `yes-clear-context` schedules
+        // a `MessageHistory::clear()` at the next turn boundary.
+        let clear_history_requested = input
+            .get("user_choice")
+            .and_then(|v| v.as_str())
+            .is_some_and(|v| v == "yes-clear-context");
+
         // Queue the full ExitPlanMode transition. TS parity:
         // `ExitPlanModeV2Tool.ts:357-403` is one big `setAppState`;
         // our closure is the Rust equivalent of that updater.
@@ -748,6 +789,9 @@ impl Tool for ExitPlanModeTool {
                 state.stripped_dangerous_rules = snapshotted_stripped_rules;
             } else if !restoring_to_auto && state.stripped_dangerous_rules.is_some() {
                 state.stripped_dangerous_rules = None;
+            }
+            if clear_history_requested {
+                state.pending_clear_message_history = true;
             }
         });
 

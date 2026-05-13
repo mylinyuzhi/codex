@@ -280,6 +280,7 @@ async fn resolve_permission_decision(
             message: hook_permission_reason
                 .unwrap_or_else(|| "PreToolUse hook requested approval".into()),
             suggestions: Vec::new(),
+            choices: None,
         },
         Some(coco_types::PermissionBehavior::Deny) => PermissionDecision::Deny {
             message: hook_permission_reason

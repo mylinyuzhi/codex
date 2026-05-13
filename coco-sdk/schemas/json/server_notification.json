@@ -370,6 +370,25 @@
       }
     },
     {
+      "description": "LSP server pool finished prewarm. Fired once per session bootstrap (after `LspManagerAdapter::prewarm` completes), so the TUI status bar can show a `LSP` badge with the running-server count. Not emitted when `Feature::Lsp` is off — `started` / `failed` are empty in that case.",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "lsp/prewarmComplete"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/LspPrewarmCompleteParams"
+        }
+      }
+    },
+    {
       "description": "Context compacted.",
       "type": "object",
       "required": [
@@ -1949,6 +1968,26 @@
         "content": true
       }
     },
+    "LspPrewarmCompleteParams": {
+      "type": "object",
+      "required": [
+        "root",
+        "started"
+      ],
+      "properties": {
+        "root": {
+          "description": "Workspace root the prewarm anchored at.",
+          "type": "string"
+        },
+        "started": {
+          "description": "IDs of language servers that successfully spawned (e.g. `[\"rust-analyzer\", \"gopls\"]`).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
     "McpConnectionStatus": {
       "description": "MCP server connection state on the wire.\n\nMatches the TS `McpServerStatusSchema` enum at `coreSchemas.ts:167-173`: `'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled'`. `Disconnected` is a coco-rs extension used when the connection manager has no record of a named server.",
       "oneOf": [
@@ -2523,6 +2562,10 @@
               "type": "null"
             }
           ]
+        },
+        "lsp_active": {
+          "description": "`true` when at least one LSP server is healthy at session startup (`Feature::Lsp` on + adapter `is_connected() = true`). Used by the TUI status bar to render an \"LSP\" badge. Default `false` keeps legacy SDK clients backward-compatible.",
+          "type": "boolean"
         },
         "mcp_servers": {
           "description": "MCP server status at initialization.",

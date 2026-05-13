@@ -116,10 +116,11 @@ impl PermissionEvaluator {
                         feedback,
                     };
                 }
-                ToolCheckResult::Ask { message } => {
+                ToolCheckResult::Ask { message, choices } => {
                     return PermissionDecision::Ask {
                         message,
                         suggestions: vec![],
+                        choices,
                     };
                 }
                 ToolCheckResult::Passthrough => {
@@ -173,6 +174,7 @@ impl PermissionEvaluator {
                             return PermissionDecision::Ask {
                                 message: format!("ask rule matched: {tool_str}({content})"),
                                 suggestions: vec![],
+                                choices: None,
                             };
                         }
                     }
@@ -182,6 +184,7 @@ impl PermissionEvaluator {
             return PermissionDecision::Ask {
                 message: format!("tool-wide ask rule for {tool_str}"),
                 suggestions: vec![],
+                choices: None,
             };
         }
 
@@ -198,6 +201,7 @@ impl PermissionEvaluator {
                 return PermissionDecision::Ask {
                     message,
                     suggestions: vec![],
+                    choices: None,
                 };
             }
         }
@@ -226,6 +230,7 @@ impl PermissionEvaluator {
                         return PermissionDecision::Ask {
                             message: format!("MCP server {server} requires approval"),
                             suggestions: vec![],
+                            choices: None,
                         };
                     }
                 }
@@ -365,6 +370,7 @@ fn mode_fallthrough(
                 PermissionDecision::Ask {
                     message: format!("plan mode: approve {tool_str}?"),
                     suggestions: vec![],
+                    choices: None,
                 }
             }
         }
@@ -381,6 +387,7 @@ fn mode_fallthrough(
                 PermissionDecision::Ask {
                     message: format!("approve {tool_str}?"),
                     suggestions: vec![],
+                    choices: None,
                 }
             }
         }
@@ -388,6 +395,7 @@ fn mode_fallthrough(
         _ => PermissionDecision::Ask {
             message: format!("approve {tool_str}?"),
             suggestions: vec![],
+            choices: None,
         },
     }
 }

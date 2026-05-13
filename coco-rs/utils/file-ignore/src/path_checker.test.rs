@@ -14,11 +14,49 @@ fn setup_ignore(dir: &Path, content: &str) {
     fs::write(dir.join(".ignore"), content).expect("write .ignore");
 }
 
+fn setup_agentignore(dir: &Path, content: &str) {
+    fs::write(dir.join(".agentignore"), content).expect("write .agentignore");
+}
+
 fn touch(path: &Path) {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).expect("create parent dirs");
     }
     fs::write(path, "").expect("touch file");
+}
+
+#[test]
+fn test_agentignore_hides_checked_in_secrets() {
+    // `.agentignore` is for AI-only exclusions — files that are
+    // intentionally checked in (so NOT in .gitignore) but the user
+    // wants hidden from agent tooling.
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    setup_agentignore(root, "secrets.toml\nfixtures/\n");
+    touch(&root.join("secrets.toml"));
+    touch(&root.join("fixtures").join("data.json"));
+    touch(&root.join("main.rs"));
+
+    let checker = PathChecker::new(root, &default_config());
+
+    assert!(checker.is_ignored(&root.join("secrets.toml")));
+    assert!(checker.is_ignored(&root.join("fixtures").join("data.json")));
+    assert!(!checker.is_ignored(&root.join("main.rs")));
+}
+
+#[test]
+fn test_agentignore_respects_disable_flag() {
+    // When `respect_ignore` is false, `.agentignore` is also ignored
+    // — they share the same gate (same conceptual category of
+    // "additional ignore files").
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    setup_agentignore(root, "secret.txt\n");
+    touch(&root.join("secret.txt"));
+
+    let config = IgnoreConfig::default().with_ignore(false);
+    let checker = PathChecker::new(root, &config);
+    assert!(!checker.is_ignored(&root.join("secret.txt")));
 }
 
 #[test]

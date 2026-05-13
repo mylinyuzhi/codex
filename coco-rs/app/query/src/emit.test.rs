@@ -87,6 +87,8 @@ async fn emit_tui_routes_to_tui_layer() {
         tool_name: "Bash".into(),
         description: "rm -rf".into(),
         input_preview: "...".into(),
+        choices: None,
+        original_input: None,
     };
     assert!(emit_tui(&Some(tx), evt).await);
 

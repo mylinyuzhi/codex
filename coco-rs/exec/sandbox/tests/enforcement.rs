@@ -79,7 +79,7 @@ mod linux {
             .stderr(std::process::Stdio::piped());
 
         platform
-            .wrap_command(config, command, "_test_SBX", &mut cmd)
+            .wrap_command(config, command, "_test_SBX", &[], &mut cmd)
             .map_err(|e| anyhow::anyhow!("wrap failed: {e}"))?;
 
         let output = tokio::time::timeout(PROBE_TIMEOUT, cmd.output())
@@ -169,7 +169,7 @@ mod linux {
             .stderr(std::process::Stdio::piped());
 
         platform
-            .wrap_command(&config, "echo", "_test_SBX", &mut cmd)
+            .wrap_command(&config, "echo", "_test_SBX", &[], &mut cmd)
             .map_err(|e| anyhow::anyhow!("{e}"))?;
 
         let output = tokio::time::timeout(PROBE_TIMEOUT, cmd.output())

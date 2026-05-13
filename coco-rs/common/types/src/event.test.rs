@@ -484,6 +484,7 @@ fn session_started_has_all_init_fields() {
         version: "0.0.1".into(),
         output_style: None,
         fast_mode_state: None,
+        lsp_active: false,
     };
     let j = serde_json::to_value(&p).unwrap();
     assert_eq!(j["cwd"], "/tmp");

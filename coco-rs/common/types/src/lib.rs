@@ -286,6 +286,7 @@ pub use permission::AdditionalWorkingDir;
 pub use permission::ClassifierBehavior;
 pub use permission::ClassifierUsage;
 pub use permission::PendingClassifierCheck;
+pub use permission::PermissionAskChoice;
 pub use permission::PermissionBehavior;
 pub use permission::PermissionDecision;
 pub use permission::PermissionDecisionReason;

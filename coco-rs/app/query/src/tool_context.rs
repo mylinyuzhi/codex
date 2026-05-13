@@ -35,7 +35,9 @@ use coco_config::env;
 use coco_context::FileHistoryState;
 use coco_tool_runtime::AgentHandleRef;
 use coco_tool_runtime::HookHandleRef;
+use coco_tool_runtime::LspHandleRef;
 use coco_tool_runtime::MailboxHandleRef;
+use coco_tool_runtime::McpHandleRef;
 use coco_tool_runtime::SkillHandleRef;
 use coco_tool_runtime::TaskListHandleRef;
 use coco_tool_runtime::TodoListHandleRef;
@@ -90,6 +92,21 @@ pub(crate) struct ToolContextFactory {
     /// of silent skipping. Swap in a real handle once `SkillRuntime`
     /// implementations land (Phase 7-β).
     pub(crate) skill_handle: Option<SkillHandleRef>,
+    /// Optional LSP-runtime handle. `None` resolves to
+    /// `NoOpLspHandle`, whose `is_connected() = false` hides
+    /// [`LspTool`](coco_tools::LspTool) from the model's tool list.
+    /// CLI / SDK / TUI runners install a real handle (the
+    /// `LspManagerAdapter`) at session bootstrap when
+    /// `Feature::Lsp` is enabled.
+    pub(crate) lsp_handle: Option<LspHandleRef>,
+    /// Optional MCP-runtime handle. `None` resolves to
+    /// `NoOpMcpHandle`. Without a real handle installed,
+    /// `McpAuthTool` / `ListMcpResourcesTool` / `ReadMcpResourceTool`
+    /// / dynamic `McpTool` wrappers degrade to "no MCP available"
+    /// errors. CLI / SDK runners install
+    /// `mcp_handle_adapter::McpManagerAdapter`; TUI currently passes
+    /// `None` (no MCP bootstrap yet in TUI runner).
+    pub(crate) mcp_handle: Option<McpHandleRef>,
     /// Session-scoped JSON Schema validator for tool inputs.
     /// Plan Phase 4a / I3: caches compiled `jsonschema::Validator`
     /// per `ToolId`; the preparer runs it on model input AND on
@@ -270,8 +287,13 @@ impl ToolContextFactory {
             reminder_mailbox: self.config.reminder_mailbox.clone().handle(),
             memory_config: self.config.memory_config.clone(),
             shell_config: self.config.shell_config.clone(),
+            shell_provider: self.config.shell_provider.clone(),
+            original_cwd: self.config.original_cwd.clone(),
+            session_cwd: self.config.session_cwd.clone(),
             web_fetch_config: self.config.web_fetch_config.clone(),
             web_search_config: self.config.web_search_config.clone(),
+            plan_mode_settings: self.config.plan_mode_settings.clone(),
+            lsp_config: self.config.lsp_config.clone(),
             features: self.config.features.clone(),
             tool_overrides: self.config.tool_overrides.clone(),
             tool_filter: self.config.tool_filter.clone(),
@@ -368,7 +390,14 @@ impl ToolContextFactory {
             critical_system_reminder: None,
             in_progress_tool_use_ids: Arc::new(RwLock::new(Default::default())),
             side_query: Arc::new(coco_tool_runtime::NoOpSideQuery),
-            mcp: Arc::new(coco_tool_runtime::NoOpMcpHandle),
+            mcp: self
+                .mcp_handle
+                .clone()
+                .unwrap_or_else(|| Arc::new(coco_tool_runtime::NoOpMcpHandle)),
+            lsp: self
+                .lsp_handle
+                .clone()
+                .unwrap_or_else(|| Arc::new(coco_tool_runtime::NoOpLspHandle)),
             schedules: Arc::new(coco_tool_runtime::NoOpScheduleStore),
             agent: self
                 .agent_handle

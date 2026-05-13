@@ -148,12 +148,11 @@ class MemoryDialogScope(str, Enum):
 class ModelRole(str, Enum):
     main = 'main'
     fast = 'fast'
-    compact = 'compact'
-    plan = 'plan'
     explore = 'explore'
     review = 'review'
     hook_agent = 'hook_agent'
     memory = 'memory'
+    plan = 'plan'
     subagent = 'subagent'
 
 class NotificationMethod(str, Enum):
@@ -175,6 +174,7 @@ class NotificationMethod(str, Enum):
     subagent_progress = 'subagent/progress'
     mcp_startupStatus = 'mcp/startupStatus'
     mcp_startupComplete = 'mcp/startupComplete'
+    lsp_prewarmComplete = 'lsp/prewarmComplete'
     context_compacted = 'context/compacted'
     context_usageWarning = 'context/usageWarning'
     context_compactionStarted = 'context/compactionStarted'
@@ -468,6 +468,10 @@ class IdeSelectionChangedParams(BaseModel):
 class LocalCommandOutputParams(BaseModel):
     content: Any
 
+class LspPrewarmCompleteParams(BaseModel):
+    root: str
+    started: list[str]
+
 class McpStartupCompleteParams(BaseModel):
     servers: list[str]
     failed: list[str] = []
@@ -545,6 +549,7 @@ class SessionStartedParams(BaseModel):
     api_key_source: str | None = None
     betas: list[str] | None = None
     fast_mode_state: FastModeState | None = None
+    lsp_active: bool = False
     mcp_servers: list[McpServerInit] = []
     output_style: str | None = None
     plugins: list[PluginInit] = []
@@ -733,6 +738,7 @@ class NotificationMethod(str, Enum):
     SUBAGENT_PROGRESS = 'subagent/progress'
     MCP_STARTUP_STATUS = 'mcp/startupStatus'
     MCP_STARTUP_COMPLETE = 'mcp/startupComplete'
+    LSP_PREWARM_COMPLETE = 'lsp/prewarmComplete'
     CONTEXT_COMPACTED = 'context/compacted'
     CONTEXT_USAGE_WARNING = 'context/usageWarning'
     CONTEXT_COMPACTION_STARTED = 'context/compactionStarted'
@@ -882,6 +888,11 @@ class ServerNotification(BaseModel):
     def as_mcp_startup_complete(self) -> McpStartupCompleteParams | None:
         if self.method == 'mcp/startupComplete':
             return McpStartupCompleteParams.model_validate(self.params)
+        return None
+
+    def as_lsp_prewarm_complete(self) -> LspPrewarmCompleteParams | None:
+        if self.method == 'lsp/prewarmComplete':
+            return LspPrewarmCompleteParams.model_validate(self.params)
         return None
 
     def as_context_compacted(self) -> ContextCompactedParams | None:
@@ -1735,6 +1746,11 @@ class ModelSpec(BaseModel):
 class OutputTokenDetails(BaseModel):
     reasoning_tokens: int = 0
     text_tokens: int = 0
+
+class PermissionAskChoice(BaseModel):
+    label: str
+    value: str
+    description: str | None = None
 
 class PermissionDenialInfo(BaseModel):
     tool_input: Any

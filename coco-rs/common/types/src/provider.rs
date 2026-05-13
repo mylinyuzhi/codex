@@ -45,7 +45,24 @@ impl fmt::Display for ProviderApi {
 pub enum ModelRole {
     Main,
     Fast,
-    Compact,
+    /// Plan-mode model. Used in two distinct contexts:
+    ///
+    /// 1. **Subagent role** — when the built-in Plan subagent spawns
+    ///    (`SubagentType::Plan → ModelRole::Plan` in
+    ///    `core/subagent/src/subagent_role.rs:34`), the spawn factory
+    ///    resolves the client via `client_for_role(Plan)`.
+    /// 2. **Main-session plan-mode swap** — when the leader enters
+    ///    `PermissionMode::Plan`, the engine swaps the active client
+    ///    to `client_for_role(Plan)` for the duration of plan mode.
+    ///    TS parity behavioral analogue: `getRuntimeMainLoopModel`'s
+    ///    `opusplan` → Opus alias swap (`utils/model/model.ts:145-167`).
+    ///    coco-rs encodes this as a generic role slot so it works for
+    ///    any provider, not just Anthropic.
+    ///
+    /// Unconfigured `models.plan` falls back to Main's spec via the
+    /// chain in `runtime.rs:507`, and `client_for_role` short-circuits
+    /// to the cached Main `Arc` — both call sites degrade cleanly to
+    /// "no swap" without spurious cache breaks.
     Plan,
     Explore,
     Review,
@@ -66,7 +83,6 @@ impl ModelRole {
         match self {
             Self::Main => "main",
             Self::Fast => "fast",
-            Self::Compact => "compact",
             Self::Plan => "plan",
             Self::Explore => "explore",
             Self::Review => "review",
@@ -94,7 +110,6 @@ impl FromStr for ModelRole {
         match normalized.as_str() {
             "main" => Ok(Self::Main),
             "fast" => Ok(Self::Fast),
-            "compact" => Ok(Self::Compact),
             "plan" => Ok(Self::Plan),
             "explore" => Ok(Self::Explore),
             "review" => Ok(Self::Review),

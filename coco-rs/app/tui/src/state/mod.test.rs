@@ -329,6 +329,9 @@ fn test_permission_overlay() {
         show_always_allow: true,
         classifier_checking: false,
         classifier_auto_approved: None,
+        choices: None,
+        selected_choice: 0,
+        original_input: None,
     }));
 
     assert!(state.has_overlay());

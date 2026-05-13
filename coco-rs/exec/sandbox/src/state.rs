@@ -594,6 +594,31 @@ impl SandboxState {
         ))
     }
 
+    /// Allocate a per-command sandbox tmpdir on the host.
+    ///
+    /// The directory is `mkdir`'d under the parent process's `$TMPDIR`
+    /// (or `/tmp` fallback) with a unique `coco-sbx-XXXXXX` suffix.
+    /// The returned [`tempfile::TempDir`] owns the cleanup — drop it
+    /// after `child.wait_with_output()` returns to remove the dir.
+    ///
+    /// The path is then handed to:
+    /// - [`SandboxPlatform::wrap_command`] via `extra_writable_binds`
+    ///   so the inner process can write inside the sandbox.
+    /// - The shell provider as `BuildExecOpts.sandbox_tmp_dir` so the
+    ///   inner shell writes its cwd-tracking file there and the
+    ///   provider can inject `TMPDIR` / `COCO_TMPDIR` / `TMPPREFIX`.
+    ///
+    /// Returns `None` if `tempfile::tempdir()` fails (extremely
+    /// unlikely — would require `/tmp` itself being un-writable).
+    /// TS source: `bashProvider.ts:235-247` (sandboxTmpDir).
+    pub fn allocate_command_tmp_dir() -> Option<tempfile::TempDir> {
+        tempfile::Builder::new()
+            .prefix("coco-sbx-")
+            .tempdir()
+            .map_err(|e| tracing::warn!("Failed to allocate sandbox tmpdir: {e}"))
+            .ok()
+    }
+
     /// Apply platform sandbox enforcement to a `tokio::process::Command`.
     ///
     /// One-shot helper that combines `command_snapshot` + platform-wrap so
@@ -611,6 +636,20 @@ impl SandboxState {
         bypass: SandboxBypass,
         cmd: &mut tokio::process::Command,
     ) -> crate::error::Result<bool> {
+        self.try_wrap_command_with_binds(command, bypass, &[], cmd)
+    }
+
+    /// Same as [`Self::try_wrap_command`] but additionally bind-mounts
+    /// per-command writable paths (the sandbox tmpdir) into the
+    /// sandbox. Called by `coco_shell::ShellExecutor` so the
+    /// freshly-allocated `TempDir` is visible inside bwrap / Seatbelt.
+    pub fn try_wrap_command_with_binds(
+        &self,
+        command: &str,
+        bypass: SandboxBypass,
+        extra_writable_binds: &[std::path::PathBuf],
+        cmd: &mut tokio::process::Command,
+    ) -> crate::error::Result<bool> {
         let snap = self.command_snapshot(command, bypass);
         let Some(config) = snap.config else {
             return Ok(false);
@@ -618,8 +657,13 @@ impl SandboxState {
         if !snap.should_wrap {
             return Ok(false);
         }
-        self.platform
-            .wrap_command(&config, command, &self.session_tag, cmd)?;
+        self.platform.wrap_command(
+            &config,
+            command,
+            &self.session_tag,
+            extra_writable_binds,
+            cmd,
+        )?;
         for (k, v) in &snap.proxy_env {
             cmd.env(k, v);
         }

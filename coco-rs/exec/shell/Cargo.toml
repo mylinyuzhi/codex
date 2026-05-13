@@ -15,7 +15,12 @@ coco-types.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 anyhow.workspace = true
+async-trait.workspace = true
+base64.workspace = true
 dirs.workspace = true
+rand.workspace = true
+regex.workspace = true
+tempfile.workspace = true
 tokio = { workspace = true, features = ["process", "io-util", "time", "sync", "fs"] }
 tokio-util.workspace = true
 tracing.workspace = true

@@ -360,6 +360,9 @@ impl Tool for EditTool {
         // `.claude/skills/` ancestor, the manager picks up the change
         // on the next batch boundary.
         crate::track_skill_discovery(ctx, path).await;
+        // TS `FileEditTool.ts` notifies the LSP server of the save so
+        // diagnostics refresh after every edit. Best-effort.
+        ctx.lsp.notify_save(path).await;
 
         // TS `FileEditTool.ts:567-568` returns `{filePath, replaceAll, userModified}`
         // and render_for_model branches on those flags. coco-rs doesn't

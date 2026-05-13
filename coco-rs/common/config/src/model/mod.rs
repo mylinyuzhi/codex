@@ -295,7 +295,6 @@ impl ModelSelection {
 pub struct ModelSelectionSettings {
     pub main: Option<RoleSlots<ModelSelection>>,
     pub fast: Option<RoleSlots<ModelSelection>>,
-    pub compact: Option<RoleSlots<ModelSelection>>,
     pub plan: Option<RoleSlots<ModelSelection>>,
     pub explore: Option<RoleSlots<ModelSelection>>,
     pub review: Option<RoleSlots<ModelSelection>>,

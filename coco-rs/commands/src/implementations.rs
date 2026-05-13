@@ -60,6 +60,7 @@ pub mod names {
     pub const INIT: &str = "init";
 
     // Tools & Plugins
+    pub const LSP: &str = "lsp";
     pub const MCP: &str = "mcp";
     pub const PLUGIN: &str = "plugin";
     pub const AGENTS: &str = "agents";
@@ -506,6 +507,15 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
             true,
             LocalOnly,
             None,
+        ),
+        (
+            names::LSP,
+            "Manage LSP servers (status, install, enable/disable, add/remove)",
+            &[],
+            handlers::lsp::handler,
+            true,
+            LocalOnly,
+            Some("[list|install|enable|disable|add|remove] [server]"),
         ),
         (
             names::MCP,

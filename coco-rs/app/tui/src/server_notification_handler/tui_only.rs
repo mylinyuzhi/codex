@@ -22,6 +22,8 @@ pub(super) fn handle(state: &mut AppState, event: TuiOnlyEvent) -> bool {
             tool_name,
             description,
             input_preview,
+            choices,
+            original_input,
         } => {
             state.ui.set_overlay(crate::state::Overlay::Permission(
                 crate::state::PermissionOverlay {
@@ -30,9 +32,16 @@ pub(super) fn handle(state: &mut AppState, event: TuiOnlyEvent) -> bool {
                     description,
                     detail: crate::state::PermissionDetail::Generic { input_preview },
                     risk_level: None,
-                    show_always_allow: true,
+                    // When the dialog is in choice mode, suppress the
+                    // "Always Allow" affordance — the user is picking
+                    // a one-shot action (e.g. keep/clear context), not
+                    // declaring a durable rule.
+                    show_always_allow: choices.is_none(),
                     classifier_checking: false,
                     classifier_auto_approved: None,
+                    choices,
+                    selected_choice: 0,
+                    original_input,
                 },
             ));
             true

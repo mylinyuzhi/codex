@@ -39,6 +39,16 @@ pub struct ToolPermissionRequest {
     pub description: String,
     /// Tool input as JSON.
     pub input: serde_json::Value,
+    /// Optional multi-choice payload propagated from
+    /// `PermissionDecision::Ask.choices`. When `Some`, the TUI / SDK
+    /// client should render a choice list rather than yes/no; the picked
+    /// `value` is echoed back via `ToolPermissionResolution.updated_input`
+    /// as `{ ..originalInput, user_choice: "<value>" }` so the tool's
+    /// `execute()` can branch on the selection.
+    ///
+    /// TS parity: `ExitPlanModePermissionRequest.tsx:691-704` option grid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub choices: Option<Vec<coco_types::PermissionAskChoice>>,
 }
 
 /// Leader's decision on a permission request.

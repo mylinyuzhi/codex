@@ -138,6 +138,17 @@ pub struct ToolAppState {
     /// for the current pending approval.
     pub awaiting_plan_approval_request_id: Option<String>,
 
+    /// One-shot: set by `ExitPlanModeTool` when the user picked
+    /// "clear context" in the multi-choice exit dialog (gated by
+    /// `PlanModeSettings.show_clear_context_on_exit`). The engine
+    /// consumes this at the next turn boundary by calling
+    /// `MessageHistory::clear()` and resetting the flag.
+    ///
+    /// TS parity: `ExitPlanModePermissionRequest.tsx:383`
+    /// `initialMessage.clearContext = true` triggers REPL context
+    /// clear when starting a new session.
+    pub pending_clear_message_history: bool,
+
     // ── Task / Todo snapshots ────────────────────────────────────────
     //
     // Task tools emit `app_state_patch` closures that refresh these

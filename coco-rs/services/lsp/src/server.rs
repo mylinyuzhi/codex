@@ -904,50 +904,18 @@ impl LspServerManager {
     /// let warmed = manager.prewarm(&[".rs", ".go"], project_root).await;
     /// ```
     pub async fn prewarm(&self, extensions: &[&str], project_root: &Path) -> Vec<String> {
-        let mut warmed = Vec::new();
-
+        // Dedup extensions → unique server_info. Multiple extensions can
+        // route to the same server (typescript-language-server covers
+        // `.ts` / `.tsx` / `.js` / `.jsx` / `.mjs` / `.cjs`), so without
+        // dedup parallel spawn would race to insert duplicate
+        // `(server_id, root)` entries before the cache check sees them.
+        let mut unique_servers: Vec<ServerInfo> = Vec::new();
+        let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
         for ext in extensions {
-            // Check if we have a server for this extension
             match self.find_server_for_extension(ext).await {
-                Ok(server_info) => {
-                    let key = (server_info.id.clone(), project_root.to_path_buf());
-
-                    // Check if already cached
-                    {
-                        let clients = self.clients.lock().await;
-                        if clients.contains_key(&key) {
-                            debug!(
-                                "Server {} already running for extension {}",
-                                server_info.id, ext
-                            );
-                            warmed.push(server_info.id);
-                            continue;
-                        }
-                    }
-
-                    // Try to spawn the server
-                    info!(
-                        "Pre-warming LSP server {} for extension {}",
-                        server_info.id, ext
-                    );
-
-                    match self
-                        .spawn_server_with_lifecycle(&key, &server_info, project_root)
-                        .await
-                    {
-                        Ok(_client) => {
-                            info!(
-                                "Successfully pre-warmed LSP server {} for extension {}",
-                                server_info.id, ext
-                            );
-                            warmed.push(server_info.id);
-                        }
-                        Err(e) => {
-                            warn!(
-                                "Failed to pre-warm LSP server {} for extension {}: {}",
-                                server_info.id, ext, e
-                            );
-                        }
+                Ok(info) => {
+                    if seen_ids.insert(info.id.clone()) {
+                        unique_servers.push(info);
                     }
                 }
                 Err(e) => {
@@ -955,6 +923,50 @@ impl LspServerManager {
                 }
             }
         }
+
+        if unique_servers.is_empty() {
+            return Vec::new();
+        }
+
+        // Parallel spawn — `initialize` round-trip dominates per-server
+        // latency (rust-analyzer can take ~1s of indexing prep), so
+        // doing them concurrently cuts bootstrap from O(N×t) to O(t).
+        // TS parity: `LSPServerManager.initialize` uses `Promise.all`.
+        let project_root = project_root.to_path_buf();
+        let futures = unique_servers.into_iter().map(|server_info| {
+            let project_root = project_root.clone();
+            async move {
+                let key = (server_info.id.clone(), project_root.clone());
+
+                // Check cache first — if another caller (or a previous
+                // prewarm) already created this client, reuse it.
+                {
+                    let clients = self.clients.lock().await;
+                    if clients.contains_key(&key) {
+                        debug!("Server {} already running", server_info.id);
+                        return Some(server_info.id);
+                    }
+                }
+
+                info!("Pre-warming LSP server {}", server_info.id);
+                match self
+                    .spawn_server_with_lifecycle(&key, &server_info, &project_root)
+                    .await
+                {
+                    Ok(_client) => {
+                        info!("Successfully pre-warmed LSP server {}", server_info.id);
+                        Some(server_info.id)
+                    }
+                    Err(e) => {
+                        warn!("Failed to pre-warm LSP server {}: {}", server_info.id, e);
+                        None
+                    }
+                }
+            }
+        });
+
+        let results = futures::future::join_all(futures).await;
+        let warmed: Vec<String> = results.into_iter().flatten().collect();
 
         if !warmed.is_empty() {
             info!("Pre-warmed {} LSP server(s): {:?}", warmed.len(), warmed);

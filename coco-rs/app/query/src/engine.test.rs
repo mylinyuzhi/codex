@@ -2368,6 +2368,7 @@ impl coco_tool_runtime::Tool for AskingTool {
     ) -> coco_types::ToolCheckResult {
         coco_types::ToolCheckResult::Ask {
             message: "please approve".into(),
+            choices: None,
         }
     }
     async fn execute(
@@ -2614,6 +2615,7 @@ impl Tool for AskingMockTool {
     ) -> coco_types::ToolCheckResult {
         coco_types::ToolCheckResult::Ask {
             message: "Mock needs permission".into(),
+            choices: None,
         }
     }
     async fn execute(

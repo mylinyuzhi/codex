@@ -301,6 +301,14 @@ impl DiagnosticsStore {
             return Vec::new();
         }
 
+        // TS parity: `LSPDiagnosticRegistry.checkForLSPDiagnostics` sorts
+        // each file's diagnostics by severity BEFORE truncating to
+        // `MAX_DIAGNOSTICS_PER_FILE`, so errors are preserved when warnings
+        // / hints would otherwise crowd them out of the cap. Stable sort
+        // keeps within-severity order deterministic. Highest priority
+        // (Error=4) first.
+        candidates.sort_by(|a, b| b.severity.priority().cmp(&a.severity.priority()));
+
         // Dedup: skip diagnostics already delivered in previous turns
         let mut delivered = self.delivered.write().await;
         let mut per_file_counts: HashMap<&PathBuf, usize> = HashMap::new();

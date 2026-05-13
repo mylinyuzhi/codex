@@ -174,10 +174,9 @@ pub(super) fn cycle_model_role(state: &mut AppState, delta: i32) {
 /// Canonical role order for the picker pill. Wraps with `rem_euclid`
 /// so Tab from `Subagent` returns to `Main`.
 fn next_role(current: ModelRole, delta: i32) -> ModelRole {
-    const ORDER: [ModelRole; 9] = [
+    const ORDER: [ModelRole; 8] = [
         ModelRole::Main,
         ModelRole::Fast,
-        ModelRole::Compact,
         ModelRole::Plan,
         ModelRole::Explore,
         ModelRole::Review,
