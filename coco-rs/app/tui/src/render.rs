@@ -642,6 +642,26 @@ fn is_coordinator_mode_active() -> bool {
 
 /// Render the status bar.
 fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
+    // Exit-confirmation hint takes the whole bar when armed so it's
+    // visible in the same bottom-footer position as TS
+    // `PromptInputFooterLeftSide.tsx:147-150`.
+    if let Some(key) = state.ui.pending_exit_hint() {
+        let text = t!("status.exit_prompt", key = key.label()).to_string();
+        tracing::info!(
+            key = key.label(),
+            prompt = %text,
+            width = area.width,
+            "status bar rendering exit prompt"
+        );
+        let line = Line::from(Span::styled(
+            text,
+            Style::default().fg(theme.warning).bold(),
+        ));
+        let bar = Paragraph::new(line).style(Style::default().bg(theme.border));
+        frame.render_widget(bar, area);
+        return;
+    }
+
     let mut parts = Vec::new();
 
     // Model

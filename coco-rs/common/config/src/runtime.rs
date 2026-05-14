@@ -8,6 +8,7 @@ use coco_types::ModelRole;
 use coco_types::ModelSpec;
 use coco_types::ToolOverrides;
 
+use crate::builtin::builtin_providers;
 use crate::compact_settings::CompactConfig;
 use crate::env::EnvOnlyConfig;
 use crate::env::EnvSnapshot;
@@ -23,7 +24,6 @@ use crate::prompt_cache_settings::AccountConfig;
 use crate::prompt_cache_settings::PromptCacheRuntimeConfig;
 use crate::provider::PartialProviderConfig;
 use crate::provider::ProviderConfig;
-use crate::provider::builtin::builtin_providers;
 use crate::sandbox_settings::SandboxSettings;
 use crate::sections::ApiConfig;
 use crate::sections::LoopConfig;

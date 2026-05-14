@@ -302,37 +302,11 @@ fn test_strip_prompt_xml_tags_drops_known_blocks() {
     assert_eq!(strip_prompt_xml_tags(preserved), preserved);
 }
 
-#[test]
-fn test_auto_restore_after_interrupt_only_synthetic_following() {
-    let mut state = AppState::new();
-    state.session.add_message(ChatMessage::user_text(
-        "u-1".to_string(),
-        "real prompt".to_string(),
-    ));
-    // Following messages are synthetic — no meaningful assistant text.
-    state
-        .session
-        .add_message(ChatMessage::assistant_text("a-1".to_string(), ""));
-    let result = auto_restore_after_interrupt(&state.session.messages);
-    let (msg_id, restore) = result.expect("auto-restore must trigger");
-    assert_eq!(msg_id, "u-1");
-    assert_eq!(restore, RestoreType::ConversationOnly);
-}
-
-#[test]
-fn test_auto_restore_after_interrupt_skips_when_meaningful() {
-    let mut state = AppState::new();
-    state.session.add_message(ChatMessage::user_text(
-        "u-1".to_string(),
-        "real prompt".to_string(),
-    ));
-    state.session.add_message(ChatMessage::assistant_text(
-        "a-1".to_string(),
-        "actual reply text",
-    ));
-    // Meaningful assistant content after — auto-restore must NOT trigger.
-    assert!(auto_restore_after_interrupt(&state.session.messages).is_none());
-}
+// Coverage for the lossless-tail logic moved into the
+// `on_turn_interrupted` matrix in `protocol.test.rs` — auto-restore is
+// no longer a standalone helper. `find_last_user_message_index` +
+// `messages_after_are_only_synthetic` are still covered by tests
+// above + by the protocol-layer matrix.
 
 // ── #3 preselectedMessage flow ───────────────────────────────────
 

@@ -248,8 +248,20 @@ pub enum TuiCommand {
     CopyLastMessage,
 
     // ── Application ──
-    /// Quit the application.
+    /// Quit the application **immediately**. Issued by `/quit` /
+    /// `/exit` slash commands and by `exit::ExitEffect::Quit`
+    /// (delivered after a double-press has confirmed the user's intent).
+    /// Plain Ctrl+C / Ctrl+D do NOT emit `Quit` directly — they go
+    /// through [`RequestExit`] or [`Interrupt`] so the double-press
+    /// state machine in `update::exit` gets a chance to run.
     Quit,
+    /// User pressed an exit key (Ctrl+D in defaults). The handler in
+    /// `update::exit::on_request_exit` runs the double-press tracker
+    /// and either arms the "Press X again to exit" hint or fires
+    /// [`Quit`]. Distinct from [`Interrupt`] (Ctrl+C) because Ctrl+D
+    /// has no "cancel running task" semantics — its first press only
+    /// arms the prompt.
+    RequestExit,
 
     // ── Stash ──
     /// Push to / pop from the input-draft stash slot. TS

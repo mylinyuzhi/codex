@@ -88,7 +88,7 @@ struct ResolvedBuiltin {
 }
 
 /// Resolve `input` against the builtin registry. Matches in this
-/// order: alias (sonnet/opus/haiku/gpt5/gemini/deepseek), exact
+/// order: alias (sonnet/opus/haiku/gpt5/gemini-pro/deepseek-pro), exact
 /// model_id, case-insensitive model_id, prefix.
 fn resolve_model(input: &str) -> Option<ResolvedBuiltin> {
     let lower = input.to_ascii_lowercase();
@@ -97,8 +97,8 @@ fn resolve_model(input: &str) -> Option<ResolvedBuiltin> {
         "opus" => Some("claude-opus-4-7"),
         "haiku" => Some("claude-haiku-4-5"),
         "gpt5" | "gpt-5" => Some("gpt-5-4"),
-        "gemini" => Some("gemini-2.5-pro"),
-        "deepseek" => Some("deepseek-v4-pro"),
+        "gemini-pro" => Some("gemini-3.1-pro-preview"),
+        "deepseek-pro" => Some("deepseek-v4-pro"),
         _ => None,
     };
     let target_id: Option<String> = alias_match.map(str::to_string).or_else(|| {

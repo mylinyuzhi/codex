@@ -445,10 +445,20 @@ impl AnthropicMessagesLanguageModel {
                 Some(&mut cache_validator),
             )
         } else {
+            // `disable_parallel_tool_use` resolution: typed
+            // provider_options wins; otherwise invert the generic
+            // `options.parallel_tool_calls` toggle (Anthropic uses
+            // inverted polarity — `parallel_tool_calls = true` means
+            // `disable = false`). Either way, `prepare_anthropic_tools`
+            // nests the resolved value into `tool_choice` per the
+            // Messages API contract — it is NOT a root-level field.
+            let disable_parallel = anthropic_options
+                .disable_parallel_tool_use
+                .or_else(|| options.parallel_tool_calls.map(|enabled| !enabled));
             prepare_anthropic_tools(
                 &options.tools,
                 &options.tool_choice,
-                anthropic_options.disable_parallel_tool_use,
+                disable_parallel,
                 supports_strict_tools,
                 context_management_eligible,
                 Some(&mut cache_validator),

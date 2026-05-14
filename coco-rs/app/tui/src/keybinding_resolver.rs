@@ -225,6 +225,7 @@ pub fn context_stack(ctx: TuiContext) -> Vec<KbContext> {
             KbContext::Select,
             KbContext::Global,
         ],
+        ModelPicker => vec![KbContext::ModelPicker, KbContext::Select, KbContext::Global],
         Scrollable => vec![KbContext::Help, KbContext::Transcript, KbContext::Global],
         Autocomplete => vec![KbContext::Autocomplete, KbContext::Chat, KbContext::Global],
         Settings => vec![KbContext::Settings, KbContext::Select, KbContext::Global],

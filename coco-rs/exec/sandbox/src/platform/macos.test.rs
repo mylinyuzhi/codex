@@ -64,7 +64,7 @@ fn test_generate_seatbelt_profile_includes_base_policy() {
         ..Default::default()
     };
 
-    let profile = generate_seatbelt_profile(&config, "echo hello", "_test_SBX");
+    let profile = generate_seatbelt_profile(&config, "echo hello", "_test_SBX", &[]);
     // Version header and deny-default with command tag
     assert!(profile.contains("(version 1)"));
     assert!(profile.contains("(deny default (with message \"CMD64_"));
@@ -98,7 +98,7 @@ fn test_generate_seatbelt_profile_readonly_no_writable_roots() {
         ..Default::default()
     };
 
-    let profile = generate_seatbelt_profile(&config, "test cmd", "_test_SBX");
+    let profile = generate_seatbelt_profile(&config, "test cmd", "_test_SBX", &[]);
     assert!(profile.contains("(allow file-read* (subpath \"/usr\"))"));
     assert!(!profile.contains("Writable roots"));
     // Network restricted to loopback
@@ -117,7 +117,7 @@ fn test_generate_seatbelt_profile_with_writable_roots() {
         ..Default::default()
     };
 
-    let profile = generate_seatbelt_profile(&config, "test cmd", "_test_SBX");
+    let profile = generate_seatbelt_profile(&config, "test cmd", "_test_SBX", &[]);
     assert!(profile.contains("(allow file-write* (subpath \"/home/user/project\"))"));
     // Protected subpaths denied for writes
     assert!(profile.contains("(deny file-write* (subpath \"/home/user/project/.git\"))"));
@@ -138,7 +138,7 @@ fn test_generate_seatbelt_profile_strict_no_network() {
         ..Default::default()
     };
 
-    let profile = generate_seatbelt_profile(&config, "test cmd", "_test_SBX");
+    let profile = generate_seatbelt_profile(&config, "test cmd", "_test_SBX", &[]);
     assert!(profile.contains("(allow file-write* (subpath \"/tmp/sandbox\"))"));
     // No network policy appended
     assert!(!profile.contains("com.apple.trustd.agent"));
@@ -153,7 +153,7 @@ fn test_generate_seatbelt_profile_weaker_network_isolation() {
         ..Default::default()
     };
 
-    let profile = generate_seatbelt_profile(&config, "test cmd", "_test_SBX");
+    let profile = generate_seatbelt_profile(&config, "test cmd", "_test_SBX", &[]);
     // Should include trustd.agent for Go TLS cert verification
     assert!(profile.contains("com.apple.trustd.agent"));
 }
@@ -167,7 +167,7 @@ fn test_generate_seatbelt_profile_no_trustd_by_default() {
         ..Default::default()
     };
 
-    let profile = generate_seatbelt_profile(&config, "test cmd", "_test_SBX");
+    let profile = generate_seatbelt_profile(&config, "test cmd", "_test_SBX", &[]);
     // Should NOT include trustd.agent by default
     assert!(!profile.contains("com.apple.trustd.agent"));
 }
@@ -183,7 +183,7 @@ fn test_generate_seatbelt_profile_escapes_writable_root_paths() {
         ..Default::default()
     };
 
-    let profile = generate_seatbelt_profile(&config, "test cmd", "_test_SBX");
+    let profile = generate_seatbelt_profile(&config, "test cmd", "_test_SBX", &[]);
     // Quotes should be escaped
     assert!(profile.contains(r#"\"with quotes\""#));
     // Should not contain unescaped quotes that break SBPL
@@ -306,7 +306,7 @@ fn test_generate_seatbelt_profile_pty_disabled() {
         ..Default::default()
     };
 
-    let profile = generate_seatbelt_profile(&config, "echo hello", "_test_SBX");
+    let profile = generate_seatbelt_profile(&config, "echo hello", "_test_SBX", &[]);
     assert!(
         profile.contains("(deny pseudo-tty)"),
         "PTY should be denied when allow_pty=false"
@@ -332,7 +332,7 @@ fn test_generate_seatbelt_profile_includes_special_write_paths() {
         ..Default::default()
     };
 
-    let profile = generate_seatbelt_profile(&config, "test cmd", "_test_SBX");
+    let profile = generate_seatbelt_profile(&config, "test cmd", "_test_SBX", &[]);
     // Device file writes (from Claude Code kx6)
     assert!(profile.contains("(allow file-write* (literal \"/dev/stdout\"))"));
     assert!(profile.contains("(allow file-write* (literal \"/dev/stderr\"))"));
@@ -353,7 +353,7 @@ fn test_generate_seatbelt_profile_long_command_tag_truncated() {
         ..Default::default()
     };
 
-    let profile = generate_seatbelt_profile(&config, &long_command, "_test_SBX");
+    let profile = generate_seatbelt_profile(&config, &long_command, "_test_SBX", &[]);
     // Tag should be present but truncated (100 chars → ~136 base64 chars)
     assert!(profile.contains("CMD64_"));
     // 500 chars of 'x' base64-encoded would be ~668 chars; 100 chars → ~136 chars
@@ -383,7 +383,7 @@ fn test_generate_seatbelt_profile_denied_read_paths() {
         ..Default::default()
     };
 
-    let profile = generate_seatbelt_profile(&config, "ls", "_test_SBX");
+    let profile = generate_seatbelt_profile(&config, "ls", "_test_SBX", &[]);
     assert!(
         profile.contains("(deny file-read* (subpath \"/etc/shadow\"))"),
         "Profile should deny reading /etc/shadow"
@@ -405,7 +405,7 @@ fn test_generate_seatbelt_profile_no_denied_read_when_empty() {
         ..Default::default()
     };
 
-    let profile = generate_seatbelt_profile(&config, "ls", "_test_SBX");
+    let profile = generate_seatbelt_profile(&config, "ls", "_test_SBX", &[]);
     assert!(
         !profile.contains("Explicitly denied read paths"),
         "Profile should NOT have denied read section when no paths configured"
@@ -423,7 +423,7 @@ fn test_generate_seatbelt_profile_denied_paths_also_deny_read() {
         ..Default::default()
     };
 
-    let profile = generate_seatbelt_profile(&config, "ls", "_test_SBX");
+    let profile = generate_seatbelt_profile(&config, "ls", "_test_SBX", &[]);
     assert!(
         profile.contains("(deny file-read* (subpath \"/sensitive/data\"))"),
         "denied_paths should also generate file-read* deny rules"
@@ -445,7 +445,7 @@ fn test_generate_seatbelt_profile_allow_read_emits_after_deny() {
         ..Default::default()
     };
 
-    let profile = generate_seatbelt_profile(&config, "ls", "_test_SBX");
+    let profile = generate_seatbelt_profile(&config, "ls", "_test_SBX", &[]);
     let deny_idx = profile
         .find("(deny file-read* (subpath \"/etc/shadow\"))")
         .expect("deny rule should be present");
@@ -475,7 +475,7 @@ fn test_generate_seatbelt_profile_no_allow_read_section_when_empty() {
         ..Default::default()
     };
 
-    let profile = generate_seatbelt_profile(&config, "ls", "_test_SBX");
+    let profile = generate_seatbelt_profile(&config, "ls", "_test_SBX", &[]);
     assert!(
         !profile.contains("allow_read carve-outs"),
         "Profile should NOT have allow_read section when no carve-outs configured"

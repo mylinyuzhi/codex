@@ -58,6 +58,8 @@ pub struct Theme {
     pub border_focused: Color,
     pub scrollbar: Color,
     pub plan_mode: Color,
+    pub selection_bg: Color,
+    pub selection_fg: Color,
 
     // ── Diff ──
     pub diff_added: Color,
@@ -91,6 +93,7 @@ impl Theme {
         }
     }
 
+    #[allow(clippy::disallowed_methods)]
     fn default_theme() -> Self {
         Self {
             primary: Color::Cyan,
@@ -118,6 +121,8 @@ impl Theme {
             border_focused: Color::Cyan,
             scrollbar: Color::DarkGray,
             plan_mode: Color::Cyan,
+            selection_bg: Color::Rgb(18, 55, 62),
+            selection_fg: Color::Cyan,
 
             diff_added: Color::Green,
             diff_removed: Color::Red,
@@ -137,6 +142,7 @@ impl Theme {
         }
     }
 
+    #[allow(clippy::disallowed_methods)]
     fn dark_theme() -> Self {
         Self {
             primary: Color::LightCyan,
@@ -164,6 +170,8 @@ impl Theme {
             border_focused: Color::LightCyan,
             scrollbar: Color::DarkGray,
             plan_mode: Color::LightCyan,
+            selection_bg: Color::Rgb(18, 55, 62),
+            selection_fg: Color::LightCyan,
 
             diff_added: Color::LightGreen,
             diff_removed: Color::LightRed,
@@ -183,6 +191,7 @@ impl Theme {
         }
     }
 
+    #[allow(clippy::disallowed_methods)]
     fn light_theme() -> Self {
         Self {
             primary: Color::Cyan,
@@ -210,6 +219,8 @@ impl Theme {
             border_focused: Color::Cyan,
             scrollbar: Color::DarkGray,
             plan_mode: Color::Cyan,
+            selection_bg: Color::Rgb(220, 244, 246),
+            selection_fg: Color::Cyan,
 
             diff_added: Color::Green,
             diff_removed: Color::Red,
@@ -260,6 +271,8 @@ impl Theme {
             border_focused: Color::Rgb(139, 233, 253),
             scrollbar: Color::DarkGray,
             plan_mode: Color::Rgb(139, 233, 253),
+            selection_bg: Color::Rgb(68, 71, 90),
+            selection_fg: Color::Rgb(139, 233, 253),
 
             diff_added: Color::Rgb(80, 250, 123),
             diff_removed: Color::Rgb(255, 85, 85),
@@ -310,6 +323,8 @@ impl Theme {
             border_focused: Color::Rgb(136, 192, 208),
             scrollbar: Color::DarkGray,
             plan_mode: Color::Rgb(136, 192, 208),
+            selection_bg: Color::Rgb(59, 66, 82),
+            selection_fg: Color::Rgb(136, 192, 208),
 
             diff_added: Color::Rgb(163, 190, 140),
             diff_removed: Color::Rgb(191, 97, 106),

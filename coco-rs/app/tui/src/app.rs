@@ -329,11 +329,9 @@ impl App {
     async fn handle_event(&mut self, event: TuiEvent) -> bool {
         match event {
             TuiEvent::Key(key) => {
-                // Track Esc timing for double-Esc rewind detection.
-                // TS: useDoublePress() in PromptInput.tsx
-                if key.code == crossterm::event::KeyCode::Esc {
-                    self.state.ui.last_esc_time = Some(std::time::Instant::now());
-                }
+                // (The old "write last_esc_time before dispatch" path
+                // was removed — see `update::exit` + `state.ui.*_tracker`
+                // for the new double-press machine.)
                 // TS App.tsx:452 — every Ink input event bumps the
                 // last-interaction timestamp so the idle-prompt timer
                 // restarts from "now" rather than firing while the
@@ -347,6 +345,7 @@ impl App {
                 }
             }
             TuiEvent::Tick => {
+                let now = std::time::Instant::now();
                 let had_toasts = self.state.ui.has_toasts();
                 self.state.ui.expire_toasts();
                 self.maybe_fire_idle_prompt().await;
@@ -354,8 +353,23 @@ impl App {
                 // chord auto-cancels after the 1 s window without
                 // requiring another keypress (mirrors TS
                 // CHORD_TIMEOUT_MS in `KeybindingProviderSetup.tsx:30`).
-                let chord_cancelled = self.state.ui.kb_handle.tick(std::time::Instant::now());
-                (had_toasts && !self.state.ui.has_toasts()) || chord_cancelled
+                let chord_cancelled = self.state.ui.kb_handle.tick(now);
+                // Expire any armed double-press hint (Ctrl+C / Ctrl+D
+                // exit prompt, double-Esc rewind) so the footer text
+                // disappears after `DOUBLE_PRESS_TIMEOUT` even if the
+                // user never presses another key. TS:
+                // `useDoublePress.ts:48-57` setTimeout.
+                let pending_exit_before = self.state.ui.pending_exit_hint();
+                let double_press_expired = self.state.ui.tick_double_press(now);
+                if double_press_expired
+                    && let Some(key) = pending_exit_before
+                    && self.state.ui.pending_exit_hint().is_none()
+                {
+                    tracing::info!(key = key.label(), "exit prompt expired before second press");
+                }
+                (had_toasts && !self.state.ui.has_toasts())
+                    || chord_cancelled
+                    || double_press_expired
             }
             TuiEvent::SpinnerTick => {
                 if let Some(ref mut streaming) = self.state.ui.streaming {

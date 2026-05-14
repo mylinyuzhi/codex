@@ -439,3 +439,71 @@ async fn stream_errors_when_pending_tool_call_never_receives_function_name() {
             .all(|part| !matches!(part, LanguageModelV4StreamPart::ToolCall(_)))
     );
 }
+
+// ─── parallel_tool_calls translation ─────────────────────────────
+
+fn simple_user_options() -> LanguageModelV4CallOptions {
+    LanguageModelV4CallOptions {
+        prompt: vec![vercel_ai_provider::LanguageModelV4Message::User {
+            content: vec![vercel_ai_provider::UserContentPart::Text(
+                vercel_ai_provider::TextPart {
+                    text: "Hello".into(),
+                    provider_metadata: None,
+                },
+            )],
+            provider_options: None,
+        }],
+        ..Default::default()
+    }
+}
+
+#[test]
+fn parallel_tool_calls_generic_flag_emits_snake_case_wire() {
+    let model = OpenAICompatibleChatLanguageModel::new("grok-2", make_config());
+    let options = LanguageModelV4CallOptions {
+        parallel_tool_calls: Some(true),
+        ..simple_user_options()
+    };
+    let (body, _) = model.get_args(&options).expect("get_args");
+    assert_eq!(
+        body["parallel_tool_calls"], true,
+        "OpenAI-compatible providers expect OpenAI-standard snake_case wire key"
+    );
+}
+
+#[test]
+fn parallel_tool_calls_unset_omits_key() {
+    let model = OpenAICompatibleChatLanguageModel::new("grok-2", make_config());
+    let options = simple_user_options();
+    let (body, _) = model.get_args(&options).expect("get_args");
+    assert!(
+        body.get("parallel_tool_calls").is_none(),
+        "Unset toggle must NOT emit the key — provider default applies"
+    );
+}
+
+#[test]
+fn parallel_tool_calls_passthrough_provider_options_wins_over_generic() {
+    // User-explicit override via `provider_options[<ns>].parallel_tool_calls`
+    // (passthrough — snake_case) must win over the generic flag.
+    // Passthrough runs AFTER the generic emission, so its value overwrites
+    // anything the generic flag wrote earlier.
+    let model = OpenAICompatibleChatLanguageModel::new("grok-2", make_config());
+    // `provider_options_name()` strips the suffix after `.`, so
+    // `xai.chat` resolves to namespace key `xai` for option lookup.
+    let mut po = vercel_ai_provider::ProviderOptions::default();
+    let mut inner = std::collections::HashMap::new();
+    inner.insert("parallel_tool_calls".into(), serde_json::Value::Bool(false));
+    po.set("xai", inner);
+
+    let options = LanguageModelV4CallOptions {
+        provider_options: Some(po),
+        parallel_tool_calls: Some(true),
+        ..simple_user_options()
+    };
+    let (body, _) = model.get_args(&options).expect("get_args");
+    assert_eq!(
+        body["parallel_tool_calls"], false,
+        "User passthrough override must beat the capability-driven generic flag"
+    );
+}

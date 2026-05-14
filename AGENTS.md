@@ -8,17 +8,59 @@ Multi-provider LLM SDK and CLI. All development in `coco-rs/`.
 
 ## Commands
 
-Run from `coco-rs/` directory:
+Run from `coco-rs/` directory.
+
+**Default to the composite recipes — don't chain `check` + `clippy` + `test`
+manually.** Clippy is a superset of `cargo check` (it runs the same
+type-check pass plus lints), and `test` (nextest) compiles every
+`--tests` target clippy already linted, so the manual chain duplicates
+work. Pick one of:
 
 ```bash
 just fmt          # After Rust changes (auto-approve)
-just pre-commit   # REQUIRED before commit (fmt + check + clippy + test via nextest)
-just test         # If changed vercel-ai or core crates
-just test-crate <name>   # Scope to a single crate
-just check        # Type-check all crates
-just clippy       # Run clippy on all crates
-just fix -p <name>       # Auto-fix clippy warnings for a single crate
-just help         # All commands
+just quick-check  # Iteration: fmt + seam guard + check-error-policy + incremental clippy. NO tests.
+just pre-commit   # REQUIRED before commit: quick-check + nextest test run
+```
+
+### Pre-commit is expensive — run it ONCE per commit, at the very end
+
+`pre-commit` compiles every test binary in the workspace and runs the full
+nextest suite. It is *orders of magnitude* slower than `quick-check`. Treat
+it as the **final gate**, not an iteration tool.
+
+**The rule:** every iteration uses `quick-check`; `pre-commit` fires exactly
+once, immediately before `git commit`.
+
+```
+edit → just quick-check → repeat until green
+                                ↓
+                       just pre-commit (final gate, ONCE)
+                                ↓
+                            git commit
+```
+
+**Why never run `pre-commit` mid-iteration:** `cargo clippy` / `cargo check`
+write `.rmeta` (metadata, no codegen). `cargo test --no-run` writes test-cfg
+ELF binaries with dev-deps linked. **These two artifact caches do not share.**
+If `pre-commit` is going to fail on a clippy warning, you only find out *after*
+nextest has already spent its compile budget on output that gets thrown away.
+`quick-check` catches the same warnings without entering the test-compile path.
+
+**Linker speedup (already configured):** `coco-rs/.cargo/config.toml` sets
+`mold` as the Linux linker (`-C link-arg=-fuse-ld=mold`). Install once with
+`apt install mold`; the config picks it up automatically. Linking is a large
+fraction of test-binary build time, so this materially shortens both warm
+incremental rebuilds and cold `pre-commit` runs.
+
+Scoped helpers (use only when you genuinely need a single piece):
+
+```bash
+just test               # Full nextest run; needed when you changed shared crates
+just test-crate <name>  # Scope tests to one crate
+just fix -p <name>      # Auto-fix clippy warnings for one crate
+just clippy             # Force full-workspace clippy (rare; clippy-affected is the default)
+just check              # Bare cargo check (rarely useful — clippy already does this)
+just help               # All commands
 ```
 
 **Path conventions** (avoids the `coco-rs/coco-rs/...` mistake):
@@ -76,6 +118,17 @@ Add for `None` / booleans / numeric literals. Skip for string/char literals unle
 - Concise; describe purpose, not implementation
 - Field docs: 1-2 lines, no example configs
 - Code comments: only when intent is non-obvious
+
+### Commit Messages (Conventional Commits)
+
+- Subject: `<type>(<scope>): <summary>` — imperative mood, ≤72 chars, no period.
+  Types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`, `perf`, `ci`, `build`, `style`, `revert`.
+- Body (optional): wrap at 72 cols, blank line after subject. One short bullet per
+  logical change — explain *why*, not *what* the diff already shows. Skip
+  per-file recaps, test counts, and rote "verified" lines unless load-bearing.
+- Footers: `BREAKING CHANGE:` and `Co-Authored-By:` only.
+- Squash commits: keep subject ≤72 chars; body = 4–8 bullets max grouped by
+  theme. Don't paste full per-commit bodies — synthesize.
 
 ## Architecture
 
@@ -207,6 +260,7 @@ One-line purposes. For key types and details, open each crate's own `CLAUDE.md`.
 | `memory` | Persistent cross-session: CLAUDE.md mgmt, auto-extraction, session memory, KAIROS auto-dream, team sync |
 | `plugins` | Plugin system via `PLUGIN.toml` (contributions, marketplace, hot-reload) |
 | `keybindings` | Shortcuts with context-based resolution and chord support |
+| `output-styles` | Built-in catalog (`Explanatory` / `Learning`) + project / user / managed dir loader + plugin loader (`force-for-plugin`) + system-prompt section + `OutputStyleManager` |
 
 ### App
 
@@ -279,15 +333,20 @@ Reusable primitives. **Check here first** before implementing any basic utility.
 
 ## Error Handling
 
-| Layer | Error Type |
-|-------|------------|
-| common/, core/, services/ | `coco-error` + snafu + snafu-virtstack (StatusCode `XX_YYY`, retryable flag) |
-| root modules | snafu + `coco-error` |
-| utils/ | `anyhow::Result` |
-| vercel-ai/ | `thiserror` (standalone, no coco deps) |
-| app/, exec/, standalone | `anyhow::Result` (retrieval uses `RetrievalErr`; apply-patch uses `thiserror`) |
+Three tiers, each with one allowed error library. Pick by layer, not taste.
 
-StatusCode categories: General (00-05), Config (10), Provider (11), Resource (12). See [common/error/README.md](coco-rs/common/error/README.md).
+| Tier | Where | Library | Notes |
+|------|-------|---------|-------|
+| **3 (main trunk)** | `common/`, `core/`, `services/`, root modules (`commands`, `skills`, `hooks`, `tasks`, `memory`, `plugins`, `keybindings`), `app/query` | **snafu + `coco-error`** | Required when the error crosses ≥2 layers, drives retry / classification, or surfaces to users. Implement `ErrorExt` and pick a `StatusCode`. |
+| **2 (boundary)** | `vercel-ai/*`, `utils/*` (libraries), `retrieval`, `bridge` | **thiserror** | Leaf libraries. No `coco-error` dep — main-trunk callers convert at the boundary via `boxed(err, StatusCode::X)`. |
+| **1 (terminal)** | `app/cli` `main`, `app/tui`, `exec/shell`, `exec/exec-server`, tests, `[dev-dependencies]` | **anyhow** | Entry points and tests where errors are printed and discarded. Never appears in a public lib API. |
+
+**Hard rules:**
+- **No `pub fn ... -> anyhow::Result<_>` in `utils/*` or `vercel-ai/*`** — these are libraries; their public API must be a typed `Result<T, CrateError>`. Enforced by `just check-error-policy`.
+- `[dev-dependencies]` is exempt — anyhow in tests is fine.
+- A crate that depends on a third-party API returning `anyhow::Result` (e.g. `utils/pty` → `portable-pty`) may keep `anyhow` in `[dependencies]` for internal use, but its **own** public API must still return its own `thiserror` enum.
+
+**StatusCode categories:** General (00-05), Config (10), Provider (11), Resource (12), SystemReminder (13). See [common/error/README.md](coco-rs/common/error/README.md).
 
 ## Testing
 
@@ -337,6 +396,26 @@ Tests go in `implementation.test.rs` alongside the source. Integration tests in 
 - Prefer `tokio::sync` primitives in async contexts
 - `Send + Sync` bounds on traits used with `Arc<dyn Trait>`
 
+## Tracing & Logging
+
+The global `tracing` subscriber is installed once from the binary
+(`app/cli/src/main.rs::main`) via `coco_otel::subscriber::init_subscriber`.
+**Without that install every `tracing::*` call is a no-op** — library /
+test code MUST NOT install one. Tests that need to assert on logs use
+`coco_otel::subscriber::init_for_tests` (`OnceLock`-guarded).
+
+Filter resolution: `--log-level` > `COCO_LOG` > `RUST_LOG` >
+`subscriber::DEFAULT_FILTER` (`coco=debug,info`). File sink is rotating
+daily under `<config_home>/logs/coco.log` in TUI / SDK / Headless modes.
+Stdout is reserved (TUI ratatui screen, SDK NDJSON RPC) — logs land on
+stderr only when explicitly opted in via `--log-stderr` (Headless does
+this by default).
+
+Levels, span-anchor list (the seven canonical anchors), `#[instrument]`
+policy, standard field names, and the secret-redaction rule for HTTP
+bodies — see `common/otel/CLAUDE.md` "Logging conventions". Adopt those
+field names verbatim across crates so ops can pivot.
+
 ## Dependencies
 
 | Purpose | Crate |
@@ -362,6 +441,7 @@ Prefer well-maintained crates; check security advisories; use workspace deps.
 | No inline tests | Use `#[path = "<name>.test.rs"]` always |
 | No `unsafe` | All safe Rust. Wrap unsafe deps in own crate. Truly unavoidable? Discuss first |
 | No single-use helpers | Inline at the call site |
+| Env vars use `COCO_*` | All coco-owned environment variables MUST use the `COCO_` prefix (third-party / SDK-vendor names like `ANTHROPIC_API_KEY` are exempt). When porting from TS, rename `CLAUDE_*` / `CLAUDE_CODE_*` / unprefixed names (e.g. `DISABLE_COMPACT`, `USE_API_CLEAR_TOOL_RESULTS`) to a namespaced `COCO_<DOMAIN>_<NAME>` form (e.g. `COCO_COMPACT_DISABLE`, `COCO_COMPACT_API_CLEAR_TOOL_RESULTS`). Add the variant to `coco_config::EnvKey`; never call `std::env::var` ad-hoc inside crates. |
 
 ### Type Safety
 
@@ -387,6 +467,13 @@ Raw strings only for unconstrained input (user text, opaque external IDs, third-
 
 - **Plan Mode — skip Ultraplan only.** Port core lifecycle, Pewter-ledger (Phase-4 variants `null`/`trim`/`cut`/`cap`), Interview phase — gate on `settings.json` (`plan_mode.phase4_variant`, `plan_mode.workflow`), not GrowthBook or `USER_TYPE=ant`. Skip every `feature('ULTRAPLAN')` path (needs CCR backend coco-rs doesn't ship).
 
+### Config & Feature Gates
+
+- **Consume `RuntimeConfig`, never raw `Settings`/env.** All layering (settings.json → `EnvOnlyConfig` → `RuntimeOverrides`) is folded once in `coco_config::build_runtime_config`. Leaf crates read the resolved sub-config (`tool`, `shell`, `sandbox`, `memory`, `mcp`, `compact`, `web_*`, `paths`, …) and `features` / `tool_overrides` off `RuntimeConfig` — they never re-merge `Partial*` overlays or call `std::env::var`.
+- **Feature is a coarse capability gate, not a sub-toggle.** `coco_types::Feature` is closed (`WebSearch`, `WebFetch`, `Sandbox`, `AutoMemory`, `Retrieval`, `AgentTeams`, `Worktree`, `Lsp`). Sub-toggles (`MemoryConfig.extraction_enabled`, `SandboxConfig.mode`, `RetrievalConfig.reranker.enabled`, …) stay inside their `*Config`. Enterprise policy and "configured = enabled" subsystems (hooks, plugins, skills, telemetry) are **not** Features.
+- **Three resolution layers, single merge site.** `Features::with_defaults()` → `apply_map(settings.features)` → `apply_map(env COCO_FEATURE_*)` → `RuntimeOverrides.feature_overrides`. Never bypass: no ad-hoc `COCO_DISABLE_*` env, no `Features::default()` (the type intentionally has no `Default` impl — pick `with_defaults()` or `empty()`).
+- **Gate at the right layer.** Tool-level gate → implement `Tool::is_enabled(ctx) { ctx.features.enabled(Feature::X) }` (Layer 1 of the 5-layer filter pipeline). Subsystem-level gate (`AutoMemory`, `Retrieval`, `Sandbox`) → check at the subsystem entry point, not in tool registry. Subagents inherit parent `Arc<Features>` and **must never widen**.
+
 ### Event System
 
 - **Single `CoreEvent` enum, three dispatch layers:** `Protocol` (SDK NDJSON), `Stream` (agent content), `Tui` (terminal). Emit once; consumers pick a layer. `QueryEngine::emit_*` is the reference emitter.
@@ -402,7 +489,7 @@ Every crate in `coco-rs/` has its own `CLAUDE.md` (path = `coco-rs/<layer>/<crat
 - **Services**: inference, compact, mcp, lsp
 - **Core**: tool-runtime, tools, permissions, messages, context, system-reminder, subagent
 - **Exec**: shell, sandbox, process-hardening, exec-server, apply-patch
-- **Root**: commands, skills, hooks, tasks, memory, plugins, keybindings
+- **Root**: commands, skills, hooks, tasks, memory, plugins, keybindings, output-styles
 - **App**: cli, tui, query, state, session
 - **Standalone**: bridge, retrieval
 - **Utils**: each of the 26 utils/ crates has one

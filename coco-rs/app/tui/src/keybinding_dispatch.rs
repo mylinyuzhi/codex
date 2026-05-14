@@ -32,8 +32,12 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
     use KeybindingAction::*;
     Some(match action {
         // ── App-level (Global) ──────────────────────────────────────
+        // Ctrl+C and Ctrl+D both go through `update::exit`'s
+        // double-press machine — they do NOT immediately quit. See
+        // `defaults.rs:68-71` for the TS-mirrored comment and
+        // `reserved.rs` for the user-rebind block.
         AppInterrupt => TuiCommand::Interrupt,
-        AppExit => TuiCommand::Quit,
+        AppExit => TuiCommand::RequestExit,
         AppRedraw => TuiCommand::ClearScreen,
         // TS `app:toggleTodos` (Ctrl+T) — cycle the right-rail
         // expanded view between None / Tasks / (Teammates if running).
@@ -62,23 +66,20 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
 
         // ── Chat input ──────────────────────────────────────────────
         ChatCancel => {
-            // Double-Esc → ShowRewind when input empty + messages
-            // exist; mirrors PromptInput.tsx useDoublePress() and the
-            // existing keybinding_bridge logic.
-            let now = std::time::Instant::now();
-            let is_double = state
-                .ui
-                .last_esc_time
-                .is_some_and(|t| now.duration_since(t) < crate::constants::DOUBLE_ESC_THRESHOLD);
-            if is_double
-                && state.ui.input.is_empty()
-                && !state.session.messages.is_empty()
-                && state.ui.overlay.is_none()
-            {
-                TuiCommand::ShowRewind
-            } else {
-                TuiCommand::Cancel
-            }
+            // Esc → Cancel always; the *second* Esc within
+            // `DOUBLE_PRESS_TIMEOUT` (and only with no overlay + empty
+            // input + history) opens the rewind picker. The poll is
+            // here because dispatch reads + mutates the tracker
+            // atomically — putting the arm in `app.rs` ahead of
+            // dispatch would create the same "set then compare to
+            // self" bug the old `last_esc_time` path had.
+            //
+            // The tracker is mutated through &AppState — see
+            // `keybinding_resolver` for why `kb_handle` is `Arc<RwLock>`.
+            // We don't have interior mutability for the tracker, so
+            // double-press for Esc lives in `update::handle_command`'s
+            // `TuiCommand::Cancel` arm via `state.ui.esc_tracker.poll`.
+            TuiCommand::Cancel
         }
         ChatKillAgents => TuiCommand::KillAllAgents,
         ChatCycleMode => TuiCommand::CyclePermissionMode,

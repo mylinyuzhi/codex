@@ -78,6 +78,7 @@ pub use session::ToolExecution;
 pub use session::ToolStatus;
 pub use session::ToolUseStatus;
 pub use ui::ActiveSuggestions;
+pub use ui::ExitKey;
 pub use ui::FocusTarget;
 pub use ui::HistoryEntry;
 pub use ui::InputState;
@@ -143,6 +144,22 @@ impl AppState {
     /// Whether a spinner should be shown.
     pub fn should_show_spinner(&self) -> bool {
         self.is_streaming() || self.session.is_busy()
+    }
+
+    /// Whether Ctrl+C has work to interrupt (streaming, busy session,
+    /// queued commands). Used by the exit double-press to distinguish
+    /// "cancel a task" from "arm the exit prompt" — mirrors the boolean
+    /// `onInterrupt?.()` return in TS `useExitOnCtrlCD.ts:73-76`.
+    pub fn has_interruptible_work(&self) -> bool {
+        self.is_streaming() || self.session.is_busy() || !self.session.queued_commands.is_empty()
+    }
+
+    /// Whether Esc-driven rewind is currently appropriate: the input
+    /// must be empty, the session must have user-visible history, and
+    /// no overlay can be occluding the cursor. Mirrors TS
+    /// `PromptInput.tsx:1955` (`doublePressEscFromEmpty`).
+    pub fn rewind_available_from_input(&self) -> bool {
+        self.ui.input.is_empty() && !self.session.messages.is_empty() && self.ui.overlay.is_none()
     }
 
     /// Cycle permission mode (Shift+Tab).

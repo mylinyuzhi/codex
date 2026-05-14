@@ -4,6 +4,7 @@
 //! `ConfigError` (Tier 3 main-trunk policy).
 
 pub mod analytics;
+pub mod builtin;
 pub mod compact_settings;
 pub mod constants;
 pub mod effort;
@@ -31,6 +32,11 @@ pub use analytics::AnalyticsSink;
 pub use analytics::EventProperties;
 pub use analytics::MetadataValue;
 pub use analytics::SessionAnalytics;
+pub use builtin::DEFAULT_BASE_INSTRUCTIONS;
+pub use builtin::builtin_models_partial;
+pub use builtin::builtin_models_resolved;
+pub use builtin::builtin_provider_partials;
+pub use builtin::builtin_providers;
 pub use compact_settings::ApiNativeConfig as CompactApiNativeConfig;
 pub use compact_settings::AutoCompactConfig;
 pub use compact_settings::CompactConfig;
@@ -60,10 +66,7 @@ pub use model::ModelSelectionSettings;
 pub use model::PartialModelInfo;
 pub use model::ResolvedModel;
 pub use model::RoleSlots;
-pub use model::aliases::ModelAlias;
 pub use model::build_model_registry;
-pub use model::builtin_models_partial;
-pub use model::builtin_models_resolved;
 pub use overrides::RuntimeOverrides;
 pub use positive::PositiveCount;
 pub use positive::PositiveTokens;
@@ -107,6 +110,7 @@ pub use sections::ToolConfig;
 pub use sections::WebFetchConfig;
 pub use sections::WebSearchConfig;
 pub use sections::WebSearchProvider;
+pub use settings::PartialLogSettings;
 pub use settings::PlanModeSettings;
 pub use settings::PlanModeWorkflow;
 pub use settings::PlanPhase4Variant;

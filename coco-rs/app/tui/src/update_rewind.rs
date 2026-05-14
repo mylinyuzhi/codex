@@ -154,8 +154,7 @@ fn is_selectable_user_message(msg: &crate::state::ChatMessage) -> bool {
 /// When `preselect_message_id` matches a real (non-synthetic) row, the
 /// overlay opens directly in the `RestoreOptions` phase with that row
 /// selected. TS: `preselectedMessage` (`MessageSelector.tsx:42-44`,
-/// 72-83). Used by the message-actions `edit` flow and by
-/// `auto_restore_after_interrupt`'s non-lossless path.
+/// 72-83). Used by the message-actions `edit` flow.
 ///
 /// `preselect_message_id = None` → identical to `build_rewind_overlay`.
 pub fn build_rewind_overlay_for(
@@ -546,22 +545,6 @@ pub fn messages_after_are_only_synthetic(
 /// Find the last selectable user message index for auto-restore.
 pub fn find_last_user_message_index(messages: &[crate::state::ChatMessage]) -> Option<usize> {
     messages.iter().rposition(is_selectable_user_message)
-}
-
-/// Build the auto-restore command for an interrupt that left only
-/// synthetic content behind. TS: `screens/REPL.tsx:3010-3022`. Returns
-/// `Some((message_id, restore_type))` if the conditions match; `None`
-/// otherwise. Caller is responsible for confirming preconditions
-/// (interrupt reason = user-cancel, no overlay, empty input).
-pub fn auto_restore_after_interrupt(
-    messages: &[crate::state::ChatMessage],
-) -> Option<(String, RestoreType)> {
-    let idx = find_last_user_message_index(messages)?;
-    if !messages_after_are_only_synthetic(messages, idx) {
-        return None;
-    }
-    let message_id = messages.get(idx)?.id.clone();
-    Some((message_id, RestoreType::ConversationOnly))
 }
 
 #[cfg(test)]

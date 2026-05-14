@@ -1,4 +1,3 @@
-pub mod builtin;
 pub mod client_options;
 pub mod model_override;
 

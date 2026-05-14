@@ -571,6 +571,7 @@ const KNOWN_SETTINGS_FIELDS: &[&str] = &[
     "fast_mode",
     "providers",
     "env",
+    "log",
     "api",
     "loop",
     "tool",

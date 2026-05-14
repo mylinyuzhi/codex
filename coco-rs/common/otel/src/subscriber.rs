@@ -27,15 +27,19 @@
 
 use std::error::Error;
 use std::io;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use coco_utils_common::ConfigurableTimer;
+use tracing::Level;
+use tracing::Metadata;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::Layer;
+use tracing_subscriber::filter::Targets;
 use tracing_subscriber::fmt;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::Registry;
@@ -123,11 +127,9 @@ pub struct SubscriberOpts {
     /// Force a stderr layer in addition to the file sink. Has no
     /// effect for [`Mode::Headless`] (which always writes to stderr).
     pub also_stderr: bool,
-    /// Show source `file:line` on each log event. Adds ~30–80 bytes
-    /// per line — keep off by default. The CLI layer auto-enables
-    /// this when the resolved filter is the bare level `debug` /
-    /// `trace`; advanced `EnvFilter` directives don't trigger the
-    /// auto-rule (the user is in control).
+    /// Show source `filename:line` on each log event. Adds ~30–80 bytes
+    /// per line. The CLI layer auto-enables this when the resolved
+    /// filter enables DEBUG or TRACE events for coco targets.
     pub location: bool,
     /// Show thread name on each log event. Mostly cosmetic for the
     /// async hot path (worker threads cycle), but useful for panics
@@ -162,6 +164,24 @@ pub struct SubscriberHandle {
 /// at `debug` for every `coco_*` crate (this is a dev-phase build),
 /// `info` for everything else (third-party / tokio / hyper).
 pub const DEFAULT_FILTER: &str = "coco=debug,info";
+
+/// Returns true when a static tracing filter enables DEBUG-level events
+/// for at least one `coco*` target.
+///
+/// This intentionally parses through `tracing-subscriber`'s `Targets`
+/// filter so target-prefix and specificity behavior matches the fmt
+/// layers. Dynamic span/field directives are ignored by this helper.
+pub fn filter_enables_coco_debug(filter_directive: &str) -> bool {
+    let Ok(targets) = filter_directive.parse::<Targets>() else {
+        return false;
+    };
+    if targets.would_enable("coco", &Level::DEBUG) {
+        return true;
+    }
+    targets.iter().any(|(target, _)| {
+        target.starts_with("coco") && targets.would_enable(target, &Level::DEBUG)
+    })
+}
 
 /// Build and register the global tracing subscriber. Safe to call
 /// exactly once per process. Subsequent calls return an error from
@@ -309,6 +329,7 @@ fn boxed_fmt_layer<W>(
 where
     W: for<'a> fmt::MakeWriter<'a> + Send + Sync + 'static,
 {
+    let writer = SourceFileBasenameWriter::new(writer, layout.location);
     let base = fmt::layer()
         .with_writer(writer)
         .with_ansi(ansi)
@@ -324,6 +345,113 @@ where
         Format::Compact => base.compact().boxed(),
         Format::Json => base.json().boxed(),
     }
+}
+
+struct SourceFileBasenameWriter<W> {
+    inner: W,
+    enabled: bool,
+}
+
+impl<W> SourceFileBasenameWriter<W> {
+    fn new(inner: W, enabled: bool) -> Self {
+        Self { inner, enabled }
+    }
+}
+
+impl<'a, W> fmt::MakeWriter<'a> for SourceFileBasenameWriter<W>
+where
+    W: fmt::MakeWriter<'a>,
+{
+    type Writer = SourceFileBasenameEventWriter<W::Writer>;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        SourceFileBasenameEventWriter::new(self.inner.make_writer(), None)
+    }
+
+    fn make_writer_for(&'a self, meta: &Metadata<'_>) -> Self::Writer {
+        let source_file = self
+            .enabled
+            .then(|| meta.file())
+            .flatten()
+            .and_then(SourceFileLocation::new);
+        SourceFileBasenameEventWriter::new(self.inner.make_writer_for(meta), source_file)
+    }
+}
+
+struct SourceFileLocation {
+    path: String,
+    basename: String,
+}
+
+impl SourceFileLocation {
+    fn new(source_file: &str) -> Option<Self> {
+        let basename = source_file_basename(source_file);
+        (basename != source_file).then(|| Self {
+            path: source_file.to_string(),
+            basename: basename.to_string(),
+        })
+    }
+}
+
+struct SourceFileBasenameEventWriter<W> {
+    inner: W,
+    source_file: Option<SourceFileLocation>,
+}
+
+impl<W> SourceFileBasenameEventWriter<W> {
+    fn new(inner: W, source_file: Option<SourceFileLocation>) -> Self {
+        Self { inner, source_file }
+    }
+}
+
+impl<W> Write for SourceFileBasenameEventWriter<W>
+where
+    W: Write,
+{
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let Some(source_file) = &self.source_file else {
+            return self.inner.write(buf);
+        };
+
+        let rewritten = replace_source_file(
+            buf,
+            source_file.path.as_bytes(),
+            source_file.basename.as_bytes(),
+        );
+        self.inner.write_all(&rewritten)?;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+fn source_file_basename(source_file: &str) -> &str {
+    source_file
+        .rsplit(['/', '\\'])
+        .next()
+        .filter(|basename| !basename.is_empty())
+        .unwrap_or(source_file)
+}
+
+fn replace_source_file(buf: &[u8], source_file: &[u8], basename: &[u8]) -> Vec<u8> {
+    if source_file.is_empty() {
+        return buf.to_vec();
+    }
+
+    let mut rewritten = Vec::with_capacity(buf.len());
+    let mut remaining = buf;
+    while let Some(index) = remaining
+        .windows(source_file.len())
+        .position(|window| window == source_file)
+    {
+        rewritten.extend_from_slice(&remaining[..index]);
+        rewritten.extend_from_slice(basename);
+        remaining = &remaining[index + source_file.len()..];
+    }
+    rewritten.extend_from_slice(remaining);
+    rewritten
 }
 
 static TEST_SUBSCRIBER_INIT: OnceLock<()> = OnceLock::new();

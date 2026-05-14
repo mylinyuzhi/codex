@@ -10,7 +10,7 @@ TS-mirror for `outputStyles/`, `constants/outputStyles.ts`, and
   (built-ins: `default` / `Explanatory` / `Learning`),
   `getAllOutputStyles`, `getOutputStyleConfig`, `hasCustomOutputStyle`.
 - `outputStyles/loadOutputStylesDir.ts` — project + user
-  `.claude/output-styles/*.md` markdown discovery, frontmatter parsing
+  `.coco/output-styles/*.md` markdown discovery, frontmatter parsing
   (`name`, `description`, `keep-coding-instructions`).
 - `utils/plugins/loadPluginOutputStyles.ts` — plugin output-styles
   loader; namespace prefix `pluginName:baseName`; parses
@@ -70,10 +70,10 @@ src/
   loader doesn't read that field; we explicitly clear it after
   parsing. Plugin authors who need that escape hatch should ship a
   dir-style instead.
-- **Force-for-plugin tie-break is alphabetical.** Multiple plugins all
-  setting `force-for-plugin: true` is a misconfiguration; we log the
-  full list and pick the alphabetically-first deterministically so
-  bootstraps are reproducible across machines.
+- **Force-for-plugin tie-break follows catalog order.** Multiple plugins
+  all setting `force-for-plugin: true` is a misconfiguration; we log the
+  full list and pick the first loaded style, matching TS object-value
+  order.
 
 ## What this crate does NOT own
 

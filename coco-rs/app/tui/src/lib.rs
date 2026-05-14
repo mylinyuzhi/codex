@@ -19,6 +19,7 @@ pub mod clipboard;
 pub mod clipboard_copy;
 pub mod command;
 pub mod constants;
+pub mod double_press;
 pub mod editor;
 pub mod events;
 pub mod git_index_watcher;

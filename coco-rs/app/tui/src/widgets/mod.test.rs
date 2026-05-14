@@ -191,6 +191,27 @@ fn test_snapshot_with_pending_chord() {
 }
 
 #[test]
+fn test_exit_prompt_replaces_status_bar() {
+    let mut state = AppState::new();
+    state.ui.ctrl_c_tracker.poll((), std::time::Instant::now());
+
+    let output = render_to_string(&state, 80, 24);
+    let status_line = output
+        .lines()
+        .nth(23)
+        .expect("24-line render should include a status row");
+
+    assert!(
+        status_line.contains("Press Ctrl-C again to exit"),
+        "exit prompt should render in the bottom status bar:\n{output}",
+    );
+    assert!(
+        !status_line.contains("Default") && !status_line.contains("msgs"),
+        "exit prompt should replace model/mode/message-count status content:\n{output}",
+    );
+}
+
+#[test]
 fn test_snapshot_with_rate_limit_banner() {
     let mut state = AppState::new();
     state.session.model = "opus-4".to_string();

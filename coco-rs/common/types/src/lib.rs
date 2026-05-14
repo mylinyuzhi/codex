@@ -93,6 +93,7 @@ pub use agent_ipc::TeammateProtocolMessage;
 pub use event::AgentInfo;
 pub use event::AgentStreamEvent;
 pub use event::AgentsKilledParams;
+pub use event::CancelReason;
 pub use event::CompactionFailedParams;
 pub use event::CompactionHookType;
 pub use event::CompactionPhase;

@@ -147,7 +147,7 @@ metadata=$(cargo metadata --no-deps --format-version 1 2>/dev/null) || {
   run_full
 }
 
-mapfile -t PKG_MAP < <(
+PKG_MAP=$(
   echo "$metadata" \
     | jq -r '.packages[] | "\(.manifest_path | sub("/Cargo.toml$"; ""))\t\(.name)"' \
     | awk -F'\t' '{print length($1)"\t"$0}' \
@@ -159,46 +159,73 @@ file_to_pkg() {
   local file="$1"
   local abs="$PROJECT_DIR/$file"
   local entry prefix name
-  for entry in "${PKG_MAP[@]}"; do
-    prefix="${entry%%	*}"
-    name="${entry#*	}"
+  while IFS= read -r entry; do
+    [ -z "$entry" ] && continue
+    prefix="${entry%%$'\t'*}"
+    name="${entry#*$'\t'}"
     case "$abs" in
       "$prefix"/*|"$prefix") echo "$name"; return ;;
     esac
-  done
+  done <<< "$PKG_MAP"
+}
+
+set_add() {
+  local set="$1"
+  local value="$2"
+  local item
+  [ -z "$value" ] && { printf '%s' "$set"; return; }
+  while IFS= read -r item; do
+    [ "$item" = "$value" ] && { printf '%s' "$set"; return; }
+  done <<< "$set"
+  if [ -n "$set" ]; then
+    printf '%s\n%s' "$set" "$value"
+  else
+    printf '%s' "$value"
+  fi
+}
+
+set_count() {
+  local set="$1"
+  if [ -z "$set" ]; then
+    echo 0
+  else
+    printf '%s\n' "$set" | awk 'NF { n++ } END { print n + 0 }'
+  fi
 }
 
 # Step 5: changed crates
-declare -A changed_pkgs=()
+changed_pkgs=""
 while IFS= read -r file; do
   [ -z "$file" ] && continue
   pkg=$(file_to_pkg "$file")
-  [ -n "$pkg" ] && changed_pkgs["$pkg"]=1
+  changed_pkgs=$(set_add "$changed_pkgs" "$pkg")
 done <<< "$changed_rs"
 
-if [ ${#changed_pkgs[@]} -eq 0 ]; then
+changed_count=$(set_count "$changed_pkgs")
+if [ "$changed_count" -eq 0 ]; then
   echo "clippy.sh: no .rs changes mapped to a workspace crate — skipping" >&2
   exit 0
 fi
 
 # Step 6: reverse-dep closure (full edges; includes dev-deps to catch
 # test-only consumers like coco-test-harness).
-declare -A affected=()
-for pkg in "${!changed_pkgs[@]}"; do
-  affected["$pkg"]=1
+affected=""
+while IFS= read -r pkg; do
+  [ -z "$pkg" ] && continue
+  affected=$(set_add "$affected" "$pkg")
   while IFS= read -r dep; do
-    [ -n "$dep" ] && affected["$dep"]=1
+    affected=$(set_add "$affected" "$dep")
   done < <(cargo tree -i "$pkg" --prefix none --all-features 2>/dev/null \
              | awk 'NF{print $1}' | sort -u)
-done
+done <<< "$changed_pkgs"
 
 # Step 7: threshold check
 total=$(echo "$metadata" | jq '.packages | length')
 threshold_pct="${COCO_CLIPPY_FALLBACK_PCT:-70}"
 threshold=$((total * threshold_pct / 100))
-affected_count=${#affected[@]}
+affected_count=$(set_count "$affected")
 
-echo "clippy.sh: changed=${#changed_pkgs[@]} → affected=$affected_count / $total (threshold=$threshold @ ${threshold_pct}%)" >&2
+echo "clippy.sh: changed=$changed_count → affected=$affected_count / $total (threshold=$threshold @ ${threshold_pct}%)" >&2
 
 if [ "$affected_count" -ge "$threshold" ]; then
   echo "clippy.sh: affected ≥ ${threshold_pct}% → falling back to full workspace clippy" >&2
@@ -207,11 +234,12 @@ fi
 
 # Step 8: scoped clippy — single invocation with -p flags
 pkg_args=()
-for pkg in "${!affected[@]}"; do
+while IFS= read -r pkg; do
+  [ -z "$pkg" ] && continue
   pkg_args+=("-p" "$pkg")
-done
+done <<< "$affected"
 
-echo "clippy.sh: scoped to: ${!affected[*]}" >&2
+echo "clippy.sh: scoped to: $(printf '%s\n' "$affected" | tr '\n' ' ')" >&2
 run_clippy "${pkg_args[@]}" --all-features --tests ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
 echo "clippy.sh: passed (incremental, $affected_count/$total pkgs)" >&2
 exit 0

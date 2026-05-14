@@ -1,13 +1,17 @@
 use clap::Parser;
 use pretty_assertions::assert_eq;
 
+use super::LogEnv;
 use super::detect_mode;
 use super::expand_bare_level;
-use super::is_bare_verbose_level;
 use super::parse_timezone;
 use super::resolve_location;
 use super::subscriber_opts_from_cli;
+use super::subscriber_opts_from_cli_with_sources;
 use crate::Cli;
+use coco_config::PartialLogSettings;
+use coco_config::Settings;
+use coco_otel::subscriber::Format;
 use coco_otel::subscriber::Mode;
 use coco_otel::subscriber::TimezoneConfig;
 
@@ -15,6 +19,13 @@ fn parse(args: &[&str]) -> Cli {
     let mut full = vec!["coco"];
     full.extend_from_slice(args);
     Cli::parse_from(full)
+}
+
+fn settings_with_log(log: PartialLogSettings) -> Settings {
+    Settings {
+        log,
+        ..Settings::default()
+    }
 }
 
 #[test]
@@ -88,8 +99,9 @@ fn subscriber_opts_carries_log_stderr_flag() {
 #[test]
 fn subscriber_opts_log_level_flag_expands() {
     let cli = parse(&["--prompt", "hi", "--log-level", "trace"]);
-    let opts = subscriber_opts_from_cli(&cli);
+    let opts = subscriber_opts_from_cli_with_sources(&cli, None, &LogEnv::default());
     assert_eq!(opts.level.as_deref(), Some("coco=trace,trace"));
+    assert!(opts.location);
 }
 
 #[test]
@@ -141,32 +153,65 @@ fn subscriber_opts_unknown_log_timezone_falls_back_to_default() {
 }
 
 #[test]
-fn is_bare_verbose_level_recognises_debug_and_trace() {
-    assert!(is_bare_verbose_level("debug"));
-    assert!(is_bare_verbose_level("trace"));
-    assert!(is_bare_verbose_level("DEBUG"));
-    assert!(is_bare_verbose_level("  Trace  "));
+fn subscriber_opts_default_filter_auto_enables_location() {
+    let cli = parse(&["--prompt", "hi"]);
+    let opts = subscriber_opts_from_cli_with_sources(&cli, None, &LogEnv::default());
+    assert_eq!(opts.level, None);
+    assert!(opts.location);
+    assert!(opts.thread_names);
 }
 
 #[test]
-fn is_bare_verbose_level_rejects_quieter_levels() {
-    for lvl in ["off", "error", "warn", "info"] {
-        assert!(!is_bare_verbose_level(lvl), "{lvl} must not trigger");
-    }
+fn subscriber_opts_settings_filter_debug_auto_enables_location() {
+    let cli = parse(&["--prompt", "hi"]);
+    let settings = settings_with_log(PartialLogSettings {
+        level: Some("coco=debug,info".into()),
+        ..PartialLogSettings::default()
+    });
+    let opts = subscriber_opts_from_cli_with_sources(&cli, Some(&settings), &LogEnv::default());
+    assert_eq!(opts.level.as_deref(), Some("coco=debug,info"));
+    assert!(opts.location);
 }
 
 #[test]
-fn is_bare_verbose_level_rejects_full_envfilter_directives() {
-    // Advanced users with custom directives stay in control of layout.
-    // `expand_bare_level` would also reject these, keeping the two
-    // helpers in lockstep on what counts as "bare".
-    for raw in [
-        "coco=debug,info",
-        "coco_inference::stream=trace,info",
-        "coco=trace,reqwest=warn",
-    ] {
-        assert!(!is_bare_verbose_level(raw), "{raw} must not trigger");
-    }
+fn subscriber_opts_settings_bare_level_expands() {
+    let cli = parse(&["--prompt", "hi"]);
+    let settings = settings_with_log(PartialLogSettings {
+        level: Some("info".into()),
+        ..PartialLogSettings::default()
+    });
+    let opts = subscriber_opts_from_cli_with_sources(&cli, Some(&settings), &LogEnv::default());
+    assert_eq!(opts.level.as_deref(), Some("coco=info,info"));
+    assert!(!opts.location);
+}
+
+#[test]
+fn subscriber_opts_env_overrides_settings_log_block() {
+    let cli = parse(&["--prompt", "hi"]);
+    let settings = settings_with_log(PartialLogSettings {
+        level: Some("trace".into()),
+        format: Some("json".into()),
+        file: Some("/settings.log".into()),
+        stderr: Some(true),
+        location: Some(true),
+        timezone: Some("local".into()),
+    });
+    let log_env = LogEnv {
+        level: Some("coco=info,info".into()),
+        format: Some("compact".into()),
+        file: Some("/env.log".into()),
+        stderr: Some(false),
+        location: Some(false),
+        timezone: Some("utc".into()),
+        ..LogEnv::default()
+    };
+    let opts = subscriber_opts_from_cli_with_sources(&cli, Some(&settings), &log_env);
+    assert_eq!(opts.level.as_deref(), Some("coco=info,info"));
+    assert_eq!(opts.format, Some(Format::Compact));
+    assert_eq!(opts.file, Some(std::path::PathBuf::from("/env.log")));
+    assert!(!opts.also_stderr);
+    assert!(!opts.location);
+    assert_eq!(opts.timezone, TimezoneConfig::Utc);
 }
 
 #[test]
@@ -174,24 +219,39 @@ fn resolve_location_explicit_flag_wins_over_auto() {
     // `--log-location=false` must defeat the debug auto-rule.
     let mut cli = parse(&["--prompt", "hi"]);
     cli.log_location = Some(false);
-    assert!(!resolve_location(&cli, /*auto_verbose*/ true));
+    assert!(!resolve_location(
+        &cli,
+        None,
+        &LogEnv::default(),
+        /*auto_verbose*/ true
+    ));
 
     cli.log_location = Some(true);
-    assert!(resolve_location(&cli, /*auto_verbose*/ false));
+    assert!(resolve_location(
+        &cli,
+        None,
+        &LogEnv::default(),
+        /*auto_verbose*/ false
+    ));
 }
 
 #[test]
 fn resolve_location_falls_back_to_auto_when_no_explicit() {
-    // We can't reliably scrub `COCO_LOG_LOCATION` from the test env
-    // here without serializing on a global mutex, so this test only
-    // asserts the auto-fallback shape when neither flag nor env is
-    // set. Setting the flag explicitly bypasses env entirely (covered
-    // above), so the env path stays exercised by integration runs.
+    // Pass an empty LogEnv so the test is not coupled to the process
+    // environment inherited by the test runner.
     let cli = parse(&["--prompt", "hi"]);
-    if cli.log_location.is_none() && std::env::var("COCO_LOG_LOCATION").is_err() {
-        assert!(resolve_location(&cli, /*auto_verbose*/ true));
-        assert!(!resolve_location(&cli, /*auto_verbose*/ false));
-    }
+    assert!(resolve_location(
+        &cli,
+        None,
+        &LogEnv::default(),
+        /*auto_verbose*/ true
+    ));
+    assert!(!resolve_location(
+        &cli,
+        None,
+        &LogEnv::default(),
+        /*auto_verbose*/ false
+    ));
 }
 
 #[test]

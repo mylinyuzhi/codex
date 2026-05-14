@@ -42,8 +42,13 @@ use tokio_util::sync::CancellationToken;
 
 use crate::Cli;
 
-pub const DEFAULT_SYSTEM_PROMPT_IDENTITY: &str =
-    "You are coco, an AI coding assistant. Be concise and helpful.";
+/// Fallback base instructions used when a resolved `ModelInfo`
+/// declares no `base_instructions` (e.g. Claude built-ins and any
+/// user-added non-builtin model in `~/.coco/providers.json` /
+/// `models.json` that doesn't set `base_instructions[_file]`). Routed
+/// through `coco_config::DEFAULT_BASE_INSTRUCTIONS` so the on-disk
+/// `instructions/default_prompt.md` is the single source of truth.
+pub const DEFAULT_SYSTEM_PROMPT_IDENTITY: &str = coco_config::DEFAULT_BASE_INSTRUCTIONS;
 
 // ─── Mock model (no-credentials fallback) ────────────────────────────
 
@@ -228,7 +233,7 @@ pub fn create_api_client(
 
 /// Build a [`coco_output_styles::OutputStyleManager`] from settings,
 /// the standard on-disk dirs ([`crate::paths::user_output_style_dir`],
-/// [`crate::paths::project_output_style_dir`],
+/// [`crate::paths::project_output_style_dirs`],
 /// [`crate::paths::managed_output_style_dir`]), and the supplied
 /// plugin sources.
 ///
@@ -243,7 +248,7 @@ pub fn build_output_style_manager(
     coco_output_styles::OutputStyleManager::builder()
         .settings_name(runtime_config.settings.merged.output_style.clone())
         .user_dir(Some(crate::paths::user_output_style_dir()))
-        .project_dirs(vec![crate::paths::project_output_style_dir(cwd)])
+        .project_dirs(crate::paths::project_output_style_dirs(cwd))
         .managed_dir(Some(crate::paths::managed_output_style_dir()))
         .plugins(plugin_sources.to_vec())
         .build()
@@ -253,16 +258,16 @@ pub fn build_output_style_manager(
 
 /// Convert a resolved [`OutputStyleConfig`] into the borrowed view the
 /// `coco-context` prompt builder accepts. Built-in styles set
-/// `keep_coding_instructions: Some(true)`; for unset (custom dir
-/// styles that omitted the key), default to `true` so the standard
-/// coding instructions stay on top — TS does the same.
+/// `keep_coding_instructions: Some(true)`; unset custom/plugin styles
+/// default to `false`, matching TS's strict
+/// `keepCodingInstructions === true` gate.
 fn output_style_section(
     style: &coco_output_styles::OutputStyleConfig,
 ) -> coco_context::prompt::OutputStyleSection<'_> {
     coco_context::prompt::OutputStyleSection {
         name: &style.name,
         prompt: &style.prompt,
-        keep_coding_instructions: style.keep_coding_instructions.unwrap_or(true),
+        keep_coding_instructions: style.keep_coding_instructions.unwrap_or(false),
     }
 }
 

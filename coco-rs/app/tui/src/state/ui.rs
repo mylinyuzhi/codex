@@ -10,10 +10,36 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::constants;
+use crate::double_press::DoublePressTracker;
 use crate::keybinding_resolver::KeybindingHandle;
 use crate::state::overlay::Overlay;
 use crate::theme::Theme;
 use crate::widgets::suggestion_popup::SuggestionItem;
+
+/// Exit keys subject to double-press confirmation. Mirrors TS
+/// `ExitState::keyName` (`hooks/useExitOnCtrlCD.ts`).
+///
+/// The variant labels (`"Ctrl-C"` / `"Ctrl-D"`) match the TS string
+/// values verbatim so footer copy and i18n substitution line up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExitKey {
+    /// Ctrl+C — interrupt the running task on the first press and exit
+    /// on a second press within the window.
+    CtrlC,
+    /// Ctrl+D — arm-only on the first press, exit on the second.
+    CtrlD,
+}
+
+impl ExitKey {
+    /// Human-readable label used in the "Press X again to exit" hint.
+    /// Matches the TS string values in `useExitOnCtrlCD.ts:8`.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::CtrlC => "Ctrl-C",
+            Self::CtrlD => "Ctrl-D",
+        }
+    }
+}
 
 /// UI-only local state.
 #[derive(Debug)]
@@ -48,8 +74,18 @@ pub struct UiState {
     pub help_scroll: i32,
     /// Kill ring for Ctrl+K / Ctrl+Y.
     pub kill_ring: String,
-    /// Timestamp of last Esc press (for double-Esc rewind detection).
-    pub last_esc_time: Option<Instant>,
+    /// Double-press tracker for Ctrl+C → exit. Independent from
+    /// [`ctrl_d_tracker`] so a "Ctrl+C, Ctrl+D, Ctrl+C" sequence within
+    /// the window still completes the Ctrl+C double-press — mirrors
+    /// TS `useExitOnCtrlCD.ts` (two parallel `useDoublePress` hooks).
+    pub ctrl_c_tracker: DoublePressTracker<()>,
+    /// Double-press tracker for Ctrl+D → exit. See [`ctrl_c_tracker`].
+    pub ctrl_d_tracker: DoublePressTracker<()>,
+    /// Double-press tracker for Esc → Rewind overlay. The Esc keystroke
+    /// itself fires `TuiCommand::Cancel` on every press; this tracker
+    /// only controls whether the second Esc opens the rewind picker.
+    /// TS: `useDoublePress` inside `PromptInput.tsx`.
+    pub esc_tracker: DoublePressTracker<()>,
     /// Whether the terminal window currently has focus. Used to gate
     /// turn-complete notifications so they only fire when the user has
     /// switched away — matches TS `ink::focus` semantics.
@@ -125,7 +161,9 @@ impl UiState {
             collapsed_tools: HashSet::new(),
             help_scroll: 0,
             kill_ring: String::new(),
-            last_esc_time: None,
+            ctrl_c_tracker: DoublePressTracker::new(constants::DOUBLE_PRESS_TIMEOUT),
+            ctrl_d_tracker: DoublePressTracker::new(constants::DOUBLE_PRESS_TIMEOUT),
+            esc_tracker: DoublePressTracker::new(constants::DOUBLE_PRESS_TIMEOUT),
             terminal_focused: true,
             clipboard_lease: None,
             active_suggestions: None,
@@ -202,6 +240,37 @@ impl UiState {
     /// Remove expired toasts.
     pub fn expire_toasts(&mut self) {
         self.toasts.retain(|t| !t.is_expired());
+    }
+
+    /// Which exit key is currently armed for double-press confirmation.
+    /// When both trackers are armed (uncommon but possible if the user
+    /// alternates Ctrl+C/Ctrl+D), the most recently armed key wins so
+    /// the hint reflects the latest keystroke. Mirrors TS
+    /// `ExitState { pending, keyName }` — only one prompt visible.
+    pub fn pending_exit_hint(&self) -> Option<ExitKey> {
+        match (
+            self.ctrl_c_tracker.pending_until(),
+            self.ctrl_d_tracker.pending_until(),
+        ) {
+            (Some(cu), Some(du)) => Some(if du > cu {
+                ExitKey::CtrlD
+            } else {
+                ExitKey::CtrlC
+            }),
+            (Some(_), None) => Some(ExitKey::CtrlC),
+            (None, Some(_)) => Some(ExitKey::CtrlD),
+            (None, None) => None,
+        }
+    }
+
+    /// Advance both exit trackers and the Esc tracker. Returns `true`
+    /// if any tracker just expired (the caller should request a redraw
+    /// so the "press again" hint disappears).
+    pub fn tick_double_press(&mut self, now: Instant) -> bool {
+        let a = self.ctrl_c_tracker.tick(now);
+        let b = self.ctrl_d_tracker.tick(now);
+        let c = self.esc_tracker.tick(now);
+        a || b || c
     }
 }
 

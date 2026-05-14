@@ -8,9 +8,12 @@ use super::Mode;
 use super::SubscriberOpts;
 use super::TimezoneConfig;
 use super::default_format;
+use super::filter_enables_coco_debug;
 use super::init_for_tests;
 use super::init_subscriber;
+use super::replace_source_file;
 use super::resolve_log_path;
+use super::source_file_basename;
 
 fn opts(mode: Mode) -> SubscriberOpts {
     SubscriberOpts {
@@ -61,6 +64,31 @@ fn default_filter_is_dev_friendly() {
     // Guard the documented dev-phase default. If we change this,
     // update the conventions doc in the same commit.
     assert_eq!(DEFAULT_FILTER, "coco=debug,info");
+}
+
+#[test]
+fn filter_enables_coco_debug_for_default_filter() {
+    assert!(filter_enables_coco_debug(DEFAULT_FILTER));
+}
+
+#[test]
+fn filter_enables_coco_debug_for_coco_trace_directive() {
+    assert!(filter_enables_coco_debug("coco=trace,info"));
+}
+
+#[test]
+fn filter_enables_coco_debug_for_specific_coco_crate() {
+    assert!(filter_enables_coco_debug("coco=info,coco_shell=debug,info"));
+}
+
+#[test]
+fn filter_enables_coco_debug_rejects_info_only_coco() {
+    assert!(!filter_enables_coco_debug("coco=info,debug"));
+}
+
+#[test]
+fn filter_enables_coco_debug_rejects_non_coco_debug() {
+    assert!(!filter_enables_coco_debug("reqwest=debug,info"));
 }
 
 #[test]
@@ -136,4 +164,28 @@ fn skip_mode_ignores_layout_toggles() {
     o.thread_names = true;
     let result = init_subscriber(o).expect("Skip should not error");
     assert!(result.is_none());
+}
+
+#[test]
+fn source_file_basename_strips_path_prefix() {
+    assert_eq!(
+        source_file_basename("common/config/src/runtime.rs"),
+        "runtime.rs"
+    );
+    assert_eq!(
+        source_file_basename(r"common\config\src\runtime.rs"),
+        "runtime.rs"
+    );
+    assert_eq!(source_file_basename("runtime.rs"), "runtime.rs");
+}
+
+#[test]
+fn replace_source_file_uses_basename_in_log_output() {
+    let raw = b"coco_config::runtime: common/config/src/runtime.rs:521: model role";
+    let rewritten = replace_source_file(raw, b"common/config/src/runtime.rs", b"runtime.rs");
+
+    assert_eq!(
+        String::from_utf8(rewritten).expect("valid utf-8"),
+        "coco_config::runtime: runtime.rs:521: model role"
+    );
 }
