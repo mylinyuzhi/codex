@@ -17,7 +17,9 @@ storybook-static/
 
 # ignore README for publishing
 codex-cli/README.md
-.codex
+.codex/*
+!.codex/skills/
+!.codex/skills/**
 # ignore Nix derivation results
 result
 
