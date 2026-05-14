@@ -33,6 +33,10 @@ class ApprovalDecision(str, Enum):
     allow = 'allow'
     deny = 'deny'
 
+class CancelReason(str, Enum):
+    user_cancel = 'user_cancel'
+    system_preempt = 'system_preempt'
+
 class Capability(str, Enum):
     text_generation = 'text_generation'
     streaming = 'streaming'
@@ -150,8 +154,8 @@ class ModelRole(str, Enum):
     fast = 'fast'
     explore = 'explore'
     review = 'review'
-    hook_agent = 'hook_agent'
     memory = 'memory'
+    hook_agent = 'hook_agent'
     plan = 'plan'
     subagent = 'subagent'
 
@@ -190,6 +194,7 @@ class NotificationMethod(str, Enum):
     model_fallbackStarted = 'model/fallbackStarted'
     model_fallbackCompleted = 'model/fallbackCompleted'
     model_fastModeChanged = 'model/fastModeChanged'
+    model_roleChanged = 'model/roleChanged'
     permission_modeChanged = 'permission/modeChanged'
     prompt_suggestion = 'prompt/suggestion'
     error = 'error'
@@ -485,6 +490,12 @@ class ModelFallbackParams(BaseModel):
     reason: str
     to_model: str
 
+class ModelRoleChangedParams(BaseModel):
+    model_id: str
+    provider: str
+    role: ModelRole
+    effort: ReasoningEffort | None = None
+
 class PermissionModeChangedParams(BaseModel):
     mode: PermissionMode
     bypass_available: bool = False
@@ -633,6 +644,7 @@ class TurnFailedParams(BaseModel):
     error: str
 
 class TurnInterruptedNotifParams(BaseModel):
+    reason: CancelReason | None = None
     turn_id: str | None = None
 
 class TurnStartedParams(BaseModel):
@@ -754,6 +766,7 @@ class NotificationMethod(str, Enum):
     MODEL_FALLBACK_STARTED = 'model/fallbackStarted'
     MODEL_FALLBACK_COMPLETED = 'model/fallbackCompleted'
     MODEL_FAST_MODE_CHANGED = 'model/fastModeChanged'
+    MODEL_ROLE_CHANGED = 'model/roleChanged'
     PERMISSION_MODE_CHANGED = 'permission/modeChanged'
     PROMPT_SUGGESTION = 'prompt/suggestion'
     ERROR = 'error'
@@ -968,6 +981,11 @@ class ServerNotification(BaseModel):
     def as_model_fast_mode_changed(self) -> ModelFastModeChangedParams | None:
         if self.method == 'model/fastModeChanged':
             return ModelFastModeChangedParams.model_validate(self.params)
+        return None
+
+    def as_model_role_changed(self) -> ModelRoleChangedParams | None:
+        if self.method == 'model/roleChanged':
+            return ModelRoleChangedParams.model_validate(self.params)
         return None
 
     def as_permission_mode_changed(self) -> PermissionModeChangedParams | None:

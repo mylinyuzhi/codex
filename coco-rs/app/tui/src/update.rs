@@ -508,6 +508,10 @@ pub async fn handle_command(
             show::settings(state);
             true
         }
+        TuiCommand::ToggleSyntaxHighlighting => {
+            overlay::toggle_syntax_highlighting(state);
+            true
+        }
         TuiCommand::SettingsNextTab => {
             // Tab cycles between contexts depending on the active overlay.
             // Settings overlay → next tab. Question overlay → cycle focus
@@ -560,6 +564,9 @@ pub async fn handle_command(
             // the agent driver's own ChatMessage emission.
             let user_message_id = uuid::Uuid::new_v4().to_string();
             let content = format!("/{name}");
+            if edit::try_local_command(state, &content) {
+                return true;
+            }
             let _ = command_tx
                 .send(UserCommand::SubmitInput {
                     user_message_id,

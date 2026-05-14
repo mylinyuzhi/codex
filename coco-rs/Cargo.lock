@@ -1032,6 +1032,7 @@ dependencies = [
  "coco-types",
  "coco-utils-common",
  "dirs 6.0.0",
+ "jsonc-parser",
  "pretty_assertions",
  "serde",
  "serde_json",
@@ -2047,6 +2048,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tracing",
+ "unicode-width 0.2.2",
  "uuid",
 ]
 
@@ -4167,6 +4169,15 @@ dependencies = [
  "futures-util",
  "once_cell",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "jsonc-parser"
+version = "0.24.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ebcfcb2f2b016f7372835b99cd3be24cc13ce9823107beb0f98b09c6092ba9f"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]

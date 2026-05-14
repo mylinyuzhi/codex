@@ -12,6 +12,8 @@ use crate::state::AppState;
 use crate::state::ModelEntry;
 use crate::state::ModelPickerOverlay;
 use crate::state::Overlay;
+use crate::state::ProviderUnavailableReason;
+use crate::state::ui::ToastSeverity;
 use coco_types::ModelRole;
 use coco_types::ReasoningEffort;
 use tokio::sync::mpsc;
@@ -42,6 +44,7 @@ fn entry(
         supported_efforts: efforts.to_vec(),
         default_effort: default,
         is_current_for_role: false,
+        unavailable_reasons: Vec::new(),
     }
 }
 
@@ -111,6 +114,26 @@ fn cycle_effort_noops_outside_picker() {
     // No overlay → cycle_effort should silently no-op (no panic).
     cycle_model_effort(&mut s, 1);
     assert!(s.ui.overlay.is_none());
+}
+
+#[tokio::test]
+async fn confirm_model_picker_blocks_unavailable_provider() {
+    let mut unavailable = entry("m", &[], None);
+    unavailable
+        .unavailable_reasons
+        .push(ProviderUnavailableReason::MissingApiKey {
+            env_key: "TEST_API_KEY".to_string(),
+        });
+    let mut s = picker(vec![unavailable], 0, None);
+    let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
+
+    confirm(&mut s, &tx).await;
+
+    assert!(rx.try_recv().is_err(), "no model-change command sent");
+    assert!(matches!(s.ui.overlay, Some(Overlay::ModelPicker(_))));
+    assert_eq!(s.ui.toasts.len(), 1);
+    assert_eq!(s.ui.toasts[0].severity, ToastSeverity::Warning);
+    assert!(s.ui.toasts[0].message.contains("TEST_API_KEY"));
 }
 
 // ── Permission overlay: multi-choice commit path ──
@@ -343,6 +366,7 @@ fn filtered_models_matches_provider_display() {
             supported_efforts: vec![],
             default_effort: None,
             is_current_for_role: false,
+            unavailable_reasons: Vec::new(),
         },
         ModelEntry {
             provider: "openai".into(),
@@ -353,6 +377,7 @@ fn filtered_models_matches_provider_display() {
             supported_efforts: vec![],
             default_effort: None,
             is_current_for_role: false,
+            unavailable_reasons: Vec::new(),
         },
     ];
     let m = ModelPickerOverlay {

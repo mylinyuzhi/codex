@@ -4,9 +4,10 @@
 //! `UiState::set_overlay`. Extracted from `update.rs` to keep the top-level
 //! dispatch under 500 LoC.
 
-use tokio::sync::mpsc;
+use std::collections::HashSet;
 
 use coco_types::ModelRole;
+use tokio::sync::mpsc;
 
 use crate::command::UserCommand;
 use crate::i18n::t;
@@ -19,6 +20,7 @@ use crate::state::GlobalSearchOverlay;
 use crate::state::ModelEntry;
 use crate::state::ModelPickerOverlay;
 use crate::state::Overlay;
+use crate::state::ProviderUnavailableReason;
 use crate::state::QuickOpenOverlay;
 use crate::state::SessionBrowserOverlay;
 use crate::state::SessionOption;
@@ -72,7 +74,7 @@ pub(super) fn build_model_entries(state: &AppState, role: ModelRole) -> Vec<Mode
     let current_for_role = current_model_for_role(state, role);
 
     if !state.session.model_catalog.is_empty() {
-        return state
+        let entries = state
             .session
             .model_catalog
             .iter()
@@ -93,8 +95,10 @@ pub(super) fn build_model_entries(state: &AppState, role: ModelRole) -> Vec<Mode
                     .as_ref()
                     .map(|(p, m)| p == &entry.provider && m == &entry.model_id)
                     .unwrap_or(false),
+                unavailable_reasons: Vec::new(),
             })
             .collect();
+        return apply_provider_statuses(state, entries);
     }
 
     // Fallback: builtin-only synthesis. Provider inferred from
@@ -128,15 +132,54 @@ pub(super) fn build_model_entries(state: &AppState, role: ModelRole) -> Vec<Mode
                     .as_ref()
                     .map(|(_, m)| m == model_id)
                     .unwrap_or(false),
+                unavailable_reasons: Vec::new(),
             }
         })
         .collect();
+    sort_model_entries(&mut entries);
+    apply_provider_statuses(state, entries)
+}
+
+fn apply_provider_statuses(state: &AppState, mut entries: Vec<ModelEntry>) -> Vec<ModelEntry> {
+    for entry in &mut entries {
+        if let Some(status) = state.session.provider_statuses.get(&entry.provider) {
+            entry.unavailable_reasons = status.unavailable_reasons.clone();
+        }
+    }
+
+    let providers_with_entries: HashSet<String> =
+        entries.iter().map(|entry| entry.provider.clone()).collect();
+    for (provider, status) in &state.session.provider_statuses {
+        if providers_with_entries.contains(provider) {
+            continue;
+        }
+        let mut reasons = status.unavailable_reasons.clone();
+        if !reasons.contains(&ProviderUnavailableReason::NoModels) {
+            reasons.push(ProviderUnavailableReason::NoModels);
+        }
+        entries.push(ModelEntry {
+            provider: provider.clone(),
+            provider_display: status.provider_display.clone(),
+            model_id: String::new(),
+            display_name: status.provider_display.clone(),
+            context_window: None,
+            supported_efforts: Vec::new(),
+            default_effort: None,
+            is_current_for_role: false,
+            unavailable_reasons: reasons,
+        });
+    }
+
+    sort_model_entries(&mut entries);
+    entries
+}
+
+fn sort_model_entries(entries: &mut [ModelEntry]) {
     entries.sort_by(|a, b| {
         a.provider_display
             .cmp(&b.provider_display)
             .then_with(|| a.display_name.cmp(&b.display_name))
     });
-    entries
 }
 
 /// Map a builtin `model_id` to its canonical provider. Used only by
@@ -386,7 +429,10 @@ pub(super) fn doctor(state: &mut AppState) {
 /// Open the tabbed settings overlay (theme, output style, permissions, about).
 pub(super) fn settings(state: &mut AppState) {
     state.ui.set_overlay(Overlay::Settings(
-        crate::widgets::settings_panel::SettingsPanelState::new(),
+        crate::widgets::settings_panel::SettingsPanelState::new(
+            &state.ui.theme_state,
+            state.ui.display_settings,
+        ),
     ));
 }
 

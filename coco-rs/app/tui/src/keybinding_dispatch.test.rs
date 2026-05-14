@@ -95,7 +95,6 @@ fn feature_gated_actions_silently_no_op() {
         KeybindingAction::AppToggleBrief,
         KeybindingAction::AppToggleTerminal,
         KeybindingAction::PermissionToggleDebug,
-        KeybindingAction::ThemeToggleSyntaxHighlighting,
         KeybindingAction::AttachmentsRemove,
         KeybindingAction::PluginToggle,
         KeybindingAction::PluginInstall,
@@ -112,4 +111,11 @@ fn feature_gated_actions_silently_no_op() {
             "{action:?} should return None — TS feature-gated action with no coco-rs surface",
         );
     }
+}
+
+#[test]
+fn theme_toggle_syntax_highlighting_maps_to_toggle_command() {
+    let state = fresh_state();
+    let cmd = dispatch_action(&KeybindingAction::ThemeToggleSyntaxHighlighting, &state).unwrap();
+    assert!(matches!(cmd, TuiCommand::ToggleSyntaxHighlighting));
 }

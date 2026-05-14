@@ -30,6 +30,8 @@ use crate::sections::PartialWebSearchSettings;
 
 pub use source::SettingSource;
 
+pub const SYNTAX_HIGHLIGHTING_DISABLED_KEY: &str = "syntax_highlighting_disabled";
+
 /// The merged settings snapshot. Immutable after loading.
 /// TS: SettingsJson type in types.ts (Zod schema)
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -457,7 +459,7 @@ fn default_true() -> bool {
 
 /// Load settings from a JSON string.
 pub fn parse_settings(json: &str) -> crate::Result<Settings> {
-    let settings: Settings = serde_json::from_str(json)?;
+    let settings: Settings = crate::jsonc::from_str(json)?;
     Ok(settings)
 }
 
@@ -556,9 +558,13 @@ fn load_and_merge(
     use crate::ResultExt;
     let contents = std::fs::read_to_string(path)
         .with_ctx_lazy(|| format!("failed to read settings file: {}", path.display()))?;
-    let value: serde_json::Value = serde_json::from_str(&contents)
-        .with_ctx_lazy(|| format!("failed to parse JSON in settings file: {}", path.display()))?;
+    let value = crate::jsonc::parse_value(&contents)
+        .with_ctx_lazy(|| format!("failed to parse JSONC in settings file: {}", path.display()))?;
     per_source.insert(source, value.clone());
     merge::deep_merge(merged, &value);
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "mod.test.rs"]
+mod tests;

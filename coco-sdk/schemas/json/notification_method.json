@@ -38,6 +38,7 @@
     "model/fallbackStarted",
     "model/fallbackCompleted",
     "model/fastModeChanged",
+    "model/roleChanged",
     "permission/modeChanged",
     "prompt/suggestion",
     "error",

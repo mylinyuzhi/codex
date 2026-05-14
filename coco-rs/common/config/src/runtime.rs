@@ -364,9 +364,9 @@ where
             });
         }
     };
-    serde_json::from_str(&contents).map_err(|source| ConfigError::CatalogParse {
+    crate::jsonc::from_str(&contents).map_err(|source| ConfigError::CatalogParse {
         path: path.to_path_buf(),
-        source,
+        message: source.to_string(),
     })
 }
 

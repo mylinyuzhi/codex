@@ -216,8 +216,26 @@ fn test_version_handler() {
 
 #[test]
 fn test_theme_handler() {
-    assert!(theme_handler("").contains("Available themes"));
-    assert!(theme_handler("dark").contains("dark"));
+    assert!(theme_handler("").contains("~/.coco/theme.json"));
+    assert!(theme_handler("dark").contains("Theme `dark`"));
+}
+
+#[test]
+fn test_config_read_handler_accepts_jsonc_settings() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("settings.json");
+    std::fs::write(
+        &path,
+        r#"{
+  // user comment
+  "language": "zh-CN",
+}
+"#,
+    )
+    .unwrap();
+
+    let output = config_read_handler_at_path(&path, "language");
+    assert_eq!(output, r#"Current value of `language`: "zh-CN""#);
 }
 
 /// `/output-style` is the deprecated stub from TS

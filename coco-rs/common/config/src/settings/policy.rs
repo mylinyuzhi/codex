@@ -18,7 +18,7 @@ pub fn load_policy_settings() -> Option<Settings> {
     let managed_path = global_config::managed_settings_path();
     if managed_path.exists()
         && let Ok(content) = std::fs::read_to_string(&managed_path)
-        && let Ok(settings) = serde_json::from_str::<Settings>(&content)
+        && let Ok(settings) = crate::jsonc::from_str::<Settings>(&content)
     {
         return Some(settings);
     }
@@ -37,7 +37,7 @@ pub fn load_policy_settings() -> Option<Settings> {
         let mut merged = serde_json::Value::Object(serde_json::Map::new());
         for entry in fragments {
             if let Ok(content) = std::fs::read_to_string(entry.path())
-                && let Ok(value) = serde_json::from_str::<serde_json::Value>(&content)
+                && let Ok(value) = crate::jsonc::parse_value(&content)
             {
                 crate::settings::merge::deep_merge(&mut merged, &value);
             }

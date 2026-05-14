@@ -38,7 +38,12 @@ pub(super) fn try_render<'a>(
 ) -> Option<()> {
     match content {
         MessageContent::AssistantText(text) => {
-            let md_lines = crate::widgets::markdown::markdown_to_lines(text, w.theme, w.width);
+            let md_lines = crate::widgets::markdown::markdown_to_lines_with_syntax(
+                text,
+                w.theme,
+                w.width,
+                w.syntax_highlighting,
+            );
             lines.extend(md_lines);
             Some(())
         }
@@ -175,7 +180,12 @@ pub(super) fn try_render<'a>(
                     .fg(w.theme.text_dim)
                     .bold(),
             ]));
-            let md_lines = crate::widgets::markdown::markdown_to_lines(content, w.theme, w.width);
+            let md_lines = crate::widgets::markdown::markdown_to_lines_with_syntax(
+                content,
+                w.theme,
+                w.width,
+                w.syntax_highlighting,
+            );
             lines.extend(md_lines);
             Some(())
         }

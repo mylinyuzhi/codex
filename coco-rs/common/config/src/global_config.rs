@@ -98,18 +98,32 @@ pub fn load_global_config() -> crate::Result<GlobalConfig> {
         return Ok(GlobalConfig::default());
     }
     let contents = std::fs::read_to_string(&path)?;
-    let config: GlobalConfig = serde_json::from_str(&contents)?;
+    let config: GlobalConfig = crate::jsonc::from_str(&contents)?;
     Ok(config)
 }
 
 /// Write global config to disk.
 pub fn write_global_config(config: &GlobalConfig) -> crate::Result<()> {
     let path = global_config_path();
+    write_global_config_at_path(&path, config)
+}
+
+fn write_global_config_at_path(path: &Path, config: &GlobalConfig) -> crate::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let contents = serde_json::to_string_pretty(config)?;
-    std::fs::write(&path, contents)?;
+    let contents = if path.exists() {
+        std::fs::read_to_string(path)?
+    } else {
+        String::new()
+    };
+    let updated = if contents.trim().is_empty() {
+        serde_json::to_string_pretty(config)?
+    } else {
+        let value = serde_json::to_value(config)?;
+        crate::jsonc::update_value_preserving_format(&contents, value)?
+    };
+    std::fs::write(path, updated)?;
     Ok(())
 }
 
@@ -148,7 +162,8 @@ pub fn local_settings_path(cwd: &Path) -> PathBuf {
 ///
 /// `key` may be dotted (`sandbox.mode`) — intermediate objects are
 /// created if absent. Existing siblings are preserved. Returns the
-/// path that was written so callers can show it to the user.
+/// path that was written so callers can show it to the user. Invalid
+/// existing JSON is returned as an error and left untouched.
 ///
 /// **Reload semantics**: writes to disk; the live runtime keeps the
 /// pre-existing in-memory `Settings` until the user starts a new
@@ -157,52 +172,34 @@ pub fn local_settings_path(cwd: &Path) -> PathBuf {
 /// next session, not the current one.
 pub fn write_user_setting(key: &str, value: serde_json::Value) -> crate::Result<PathBuf> {
     let path = user_settings_path();
+    write_user_setting_to_path(&path, key, value)
+}
+
+fn write_user_setting_to_path(
+    path: &Path,
+    key: &str,
+    value: serde_json::Value,
+) -> crate::Result<PathBuf> {
+    write_user_setting_at_path(path, key, value)?;
+    Ok(path.to_path_buf())
+}
+
+fn write_user_setting_at_path(
+    path: &Path,
+    key: &str,
+    value: serde_json::Value,
+) -> crate::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let mut root: serde_json::Value = if path.exists() {
-        let s = std::fs::read_to_string(&path)?;
-        if s.trim().is_empty() {
-            serde_json::json!({})
-        } else {
-            serde_json::from_str(&s).unwrap_or_else(|_| serde_json::json!({}))
-        }
+    let contents = if path.exists() {
+        std::fs::read_to_string(path)?
     } else {
-        serde_json::json!({})
+        String::new()
     };
-    set_dotted(&mut root, key, value);
-    let contents = serde_json::to_string_pretty(&root)?;
-    std::fs::write(&path, contents)?;
-    Ok(path)
-}
-
-/// Walk `obj` along `key`'s dot-separated path, creating intermediate
-/// objects, and write `value` at the leaf. Replaces non-object
-/// intermediates rather than failing — slash-command settings writes
-/// are user-driven and the user just typed the key explicitly.
-fn set_dotted(obj: &mut serde_json::Value, key: &str, value: serde_json::Value) {
-    let mut parts = key.split('.').peekable();
-    let mut cur = obj;
-    while let Some(part) = parts.next() {
-        if parts.peek().is_none() {
-            if let Some(map) = cur.as_object_mut() {
-                map.insert(part.to_string(), value);
-            }
-            return;
-        }
-        if !cur.is_object() {
-            *cur = serde_json::json!({});
-        }
-        // Branch on as_object_mut rather than expect: structurally
-        // unreachable (we just ensured cur is an Object), but clippy
-        // forbids `.expect()` on Option in this crate.
-        let Some(map) = cur.as_object_mut() else {
-            return;
-        };
-        cur = map
-            .entry(part.to_string())
-            .or_insert_with(|| serde_json::json!({}));
-    }
+    let updated = crate::jsonc::set_dotted_value_preserving_format(&contents, key, value)?;
+    std::fs::write(path, updated)?;
+    Ok(())
 }
 
 /// Best-effort mark the project at `cwd` as having completed onboarding
@@ -251,3 +248,7 @@ pub fn managed_settings_path() -> PathBuf {
         PathBuf::from(r"C:\Program Files\CoCo\managed-settings.json")
     }
 }
+
+#[cfg(test)]
+#[path = "global_config.test.rs"]
+mod tests;

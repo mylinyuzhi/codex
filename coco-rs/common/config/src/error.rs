@@ -84,12 +84,11 @@ pub enum ConfigError {
         source: std::io::Error,
     },
 
-    #[error("failed to parse {path}: {source}")]
-    CatalogParse {
-        path: PathBuf,
-        #[source]
-        source: serde_json::Error,
-    },
+    #[error("failed to parse {path}: {message}")]
+    CatalogParse { path: PathBuf, message: String },
+
+    #[error("jsonc error: {message}")]
+    Jsonc { message: String },
 
     #[error("unknown provider `{name}` referenced by role binding")]
     UnknownProvider { name: String },
@@ -176,6 +175,7 @@ impl ErrorExt for ConfigError {
             Self::InvalidTimeoutSecs { .. } => StatusCode::InvalidArguments,
             Self::Io { .. } => StatusCode::IoError,
             Self::Json { .. } => StatusCode::InvalidJson,
+            Self::Jsonc { .. } => StatusCode::InvalidJson,
             Self::Generic { .. } => StatusCode::Internal,
         }
     }
