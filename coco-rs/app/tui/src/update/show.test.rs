@@ -1,6 +1,8 @@
 use super::*;
 use crate::state::AppState;
 use crate::state::Overlay;
+use crate::state::ProviderStatus;
+use crate::state::ProviderUnavailableReason;
 use coco_types::ModelRole;
 
 /// `cycle_model` opens the picker for the Main role, seeded with at
@@ -24,6 +26,57 @@ fn cycle_model_seeds_builtin_registry() {
     // The current Main model is marked.
     let current = m.entries.iter().find(|e| e.is_current_for_role).unwrap();
     assert_eq!(current.model_id, "claude-sonnet-4-6");
+}
+
+#[test]
+fn cycle_model_marks_provider_config_unavailable() {
+    let mut state = AppState::new();
+    state.session.provider_statuses.insert(
+        "openai".to_string(),
+        ProviderStatus {
+            provider_display: "OpenAI".to_string(),
+            unavailable_reasons: vec![ProviderUnavailableReason::MissingApiKey {
+                env_key: "OPENAI_API_KEY".to_string(),
+            }],
+        },
+    );
+
+    cycle_model(&mut state);
+    let m = match &state.ui.overlay {
+        Some(Overlay::ModelPicker(m)) => m,
+        other => panic!("expected ModelPicker, got {other:?}"),
+    };
+    let openai = m.entries.iter().find(|e| e.provider == "openai").unwrap();
+    assert_eq!(
+        openai.unavailable_reasons,
+        vec![ProviderUnavailableReason::MissingApiKey {
+            env_key: "OPENAI_API_KEY".to_string()
+        }]
+    );
+}
+
+#[test]
+fn cycle_model_adds_unavailable_provider_without_models() {
+    let mut state = AppState::new();
+    state.session.provider_statuses.insert(
+        "custom".to_string(),
+        ProviderStatus {
+            provider_display: "Custom".to_string(),
+            unavailable_reasons: Vec::new(),
+        },
+    );
+
+    cycle_model(&mut state);
+    let m = match &state.ui.overlay {
+        Some(Overlay::ModelPicker(m)) => m,
+        other => panic!("expected ModelPicker, got {other:?}"),
+    };
+    let custom = m.entries.iter().find(|e| e.provider == "custom").unwrap();
+    assert!(custom.model_id.is_empty());
+    assert_eq!(
+        custom.unavailable_reasons,
+        vec![ProviderUnavailableReason::NoModels]
+    );
 }
 
 /// Role cycle wraps via Tab/Shift+Tab over the canonical 9-role order

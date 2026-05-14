@@ -10,10 +10,22 @@ use ratatui::text::Span;
 
 use crate::constants::TABLE_MAX_COL_WIDTH;
 use crate::constants::TABLE_MIN_COL_WIDTH;
+use crate::display_settings::SyntaxHighlighting;
 use crate::theme::Theme;
 
 /// Convert markdown text to styled lines for terminal rendering.
 pub fn markdown_to_lines(text: &str, theme: &Theme, width: u16) -> Vec<Line<'static>> {
+    markdown_to_lines_with_syntax(text, theme, width, SyntaxHighlighting::Enabled)
+}
+
+/// Convert markdown text to styled lines with explicit syntax-highlighting
+/// behavior for fenced code blocks.
+pub fn markdown_to_lines_with_syntax(
+    text: &str,
+    theme: &Theme,
+    width: u16,
+    syntax_highlighting: SyntaxHighlighting,
+) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut in_code_block = false;
     let mut code_lang = String::new();
@@ -49,7 +61,11 @@ pub fn markdown_to_lines(text: &str, theme: &Theme, width: u16) -> Vec<Line<'sta
         }
 
         if in_code_block {
-            let spans = highlight_code_line(raw_line, &code_lang, theme);
+            let spans = if syntax_highlighting.is_enabled() {
+                highlight_code_line(raw_line, &code_lang, theme)
+            } else {
+                vec![Span::raw(raw_line.to_string()).fg(theme.text_dim)]
+            };
             let mut full = vec![Span::raw("  \u{2502} ").fg(theme.border)];
             full.extend(spans);
             lines.push(Line::from(full));

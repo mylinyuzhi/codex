@@ -221,6 +221,7 @@ humantime-serde = "1"
 ignore = "0.4.23"
 image = { version = "^0.25.9", default-features = false }
 mime_guess = "2.0.5"
+jsonc-parser = { version = "0.24", features = ["serde", "cst"] }
 keyring = "3"
 lazy_static = "1"
 libc = "0.2"

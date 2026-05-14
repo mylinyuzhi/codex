@@ -12,6 +12,7 @@ pub mod env;
 pub mod error;
 pub mod fast_mode;
 pub mod global_config;
+pub(crate) mod jsonc;
 pub mod model;
 pub mod overrides;
 pub mod positive;
@@ -127,3 +128,7 @@ pub use system_reminder::AttachmentSettings as SystemReminderAttachmentSettings;
 pub use system_reminder::DEFAULT_TIMEOUT_MS as SYSTEM_REMINDER_DEFAULT_TIMEOUT_MS;
 pub use system_reminder::SystemReminderConfig;
 pub use tool_overrides::resolve_tool_overrides;
+
+pub fn parse_jsonc_value(contents: &str) -> Result<serde_json::Value> {
+    jsonc::parse_value(contents)
+}

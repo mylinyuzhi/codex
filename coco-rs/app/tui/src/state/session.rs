@@ -12,6 +12,34 @@ use coco_types::ModelRole;
 use coco_types::PermissionMode;
 use coco_types::ReasoningEffort;
 
+/// Provider configuration issue that makes all models under that
+/// provider unavailable in the picker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProviderUnavailableReason {
+    /// `base_url` is empty after config resolution.
+    MissingBaseUrl,
+    /// No API key was resolved from the configured env var or fallback
+    /// `providers.<name>.api_key` value.
+    MissingApiKey { env_key: String },
+    /// The provider has no model rows visible to the picker.
+    NoModels,
+}
+
+/// Session-frozen provider availability status used by `/model`.
+#[derive(Debug, Clone, Default)]
+pub struct ProviderStatus {
+    /// Human-facing provider label used in picker section headers.
+    pub provider_display: String,
+    /// Empty means provider config is usable.
+    pub unavailable_reasons: Vec<ProviderUnavailableReason>,
+}
+
+impl ProviderStatus {
+    pub fn is_available(&self) -> bool {
+        self.unavailable_reasons.is_empty()
+    }
+}
+
 /// One (provider, model) entry in the TUI's session-frozen model
 /// directory. Seeded from `RuntimeConfig.model_registry` (L0 builtin +
 /// L1 `~/.coco/models.json` + L2 per-provider overrides) at session
@@ -119,6 +147,10 @@ pub struct SessionState {
     /// (picker rendering, including L1 user-catalog + L2 per-provider
     /// overrides that `builtin_models_partial()` alone wouldn't surface).
     pub model_catalog: Vec<ModelCatalogEntry>,
+    /// Session-frozen provider config validation results. The picker
+    /// uses this to mark unavailable provider/model rows before the
+    /// user hits Enter.
+    pub provider_statuses: HashMap<String, ProviderStatus>,
     /// Live per-role bindings. Empty entries inherit
     /// `RuntimeConfig.model_roles[role]`; populated entries reflect
     /// in-memory picker selections. Drives the picker's
@@ -379,6 +411,7 @@ impl Default for SessionState {
             model: String::new(),
             provider: String::new(),
             model_catalog: Vec::new(),
+            provider_statuses: HashMap::new(),
             model_by_role: HashMap::new(),
             permission_mode: PermissionMode::Default,
             bypass_permissions_available: false,

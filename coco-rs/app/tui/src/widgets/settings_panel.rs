@@ -14,9 +14,13 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
 
+use crate::display_settings::DisplaySettings;
+use crate::display_settings::SyntaxHighlighting;
 use crate::i18n::t;
 use crate::theme::Theme;
-use crate::theme::ThemeName;
+use crate::theme::ThemeChoice;
+use crate::theme::ThemeRuntimeState;
+use crate::theme::ThemeSetting;
 
 /// Settings panel tab.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,7 +36,9 @@ pub enum SettingsTab {
 pub struct SettingsPanelState {
     pub active_tab: SettingsTab,
     pub selected: i32,
-    pub themes: Vec<ThemeName>,
+    pub themes: Vec<ThemeChoice>,
+    pub active_theme: ThemeSetting,
+    pub display_settings: DisplaySettings,
     pub output_styles: Vec<String>,
     pub permission_rules: Vec<PermissionRuleDisplay>,
 }
@@ -46,20 +52,44 @@ pub struct PermissionRuleDisplay {
 }
 
 impl SettingsPanelState {
-    pub fn new() -> Self {
+    pub fn new(theme_state: &ThemeRuntimeState, display_settings: DisplaySettings) -> Self {
         Self {
             active_tab: SettingsTab::Theme,
-            selected: 0,
-            themes: vec![
-                ThemeName::Default,
-                ThemeName::Dark,
-                ThemeName::Light,
-                ThemeName::Dracula,
-                ThemeName::Nord,
-            ],
+            selected: selected_theme_index(&theme_state.choices, &theme_state.setting),
+            themes: theme_state.choices.clone(),
+            active_theme: theme_state.setting.clone(),
+            display_settings,
             output_styles: Vec::new(),
             permission_rules: Vec::new(),
         }
+    }
+
+    pub fn set_themes(&mut self, themes: Vec<ThemeChoice>, active_theme: ThemeSetting) {
+        self.selected = selected_theme_index(&themes, &active_theme);
+        self.themes = themes;
+        self.active_theme = active_theme;
+    }
+
+    pub fn set_display_settings(&mut self, display_settings: DisplaySettings) {
+        self.display_settings = display_settings;
+    }
+
+    pub fn selected_theme_choice(&self) -> Option<&ThemeChoice> {
+        usize::try_from(self.selected)
+            .ok()
+            .and_then(|selected| self.themes.get(selected))
+    }
+
+    pub fn is_syntax_highlighting_selected(&self) -> bool {
+        self.selected == self.syntax_highlighting_index()
+    }
+
+    pub fn theme_item_count(&self) -> usize {
+        self.themes.len() + 1
+    }
+
+    fn syntax_highlighting_index(&self) -> i32 {
+        self.themes.len() as i32
     }
 
     pub fn next_tab(&mut self) {
@@ -85,7 +115,33 @@ impl SettingsPanelState {
 
 impl Default for SettingsPanelState {
     fn default() -> Self {
-        Self::new()
+        Self::new(&ThemeRuntimeState::default(), DisplaySettings::default())
+    }
+}
+
+fn selected_theme_index(themes: &[ThemeChoice], active_theme: &ThemeSetting) -> i32 {
+    themes
+        .iter()
+        .position(|choice| &choice.setting == active_theme)
+        .unwrap_or(0) as i32
+}
+
+pub(crate) fn syntax_highlighting_status(syntax_highlighting: SyntaxHighlighting) -> String {
+    match syntax_highlighting {
+        SyntaxHighlighting::Enabled => t!("settings.enabled").to_string(),
+        SyntaxHighlighting::Disabled => t!("settings.disabled").to_string(),
+    }
+}
+
+pub(crate) fn syntax_highlighting_status_for_display(settings: DisplaySettings) -> String {
+    let status = syntax_highlighting_status(settings.syntax_highlighting);
+    if let Some(source) = settings.syntax_highlighting_editability.overriding_source() {
+        format!(
+            "{status} ({})",
+            t!("settings.overridden_by", source = source.as_str())
+        )
+    } else {
+        status
     }
 }
 
@@ -148,18 +204,51 @@ impl Widget for SettingsPanelWidget<'_> {
         // Tab content
         match self.state.active_tab {
             SettingsTab::Theme => {
-                for (i, theme_name) in self.state.themes.iter().enumerate() {
+                for (i, choice) in self.state.themes.iter().enumerate() {
                     let marker = if i as i32 == self.state.selected {
                         "▸ "
                     } else {
                         "  "
                     };
-                    let name = format!("{theme_name:?}");
+                    let active = if choice.setting == self.state.active_theme {
+                        "✓ "
+                    } else {
+                        "  "
+                    };
                     lines.push(Line::from(vec![
                         Span::raw(marker),
-                        Span::raw(name).fg(self.theme.text),
+                        Span::raw(active).fg(self.theme.success),
+                        Span::raw(choice.label.as_str()).fg(self.theme.text),
                     ]));
                 }
+                lines.push(Line::default());
+                let marker = if self.state.is_syntax_highlighting_selected() {
+                    "▸ "
+                } else {
+                    "  "
+                };
+                let active = if self.state.display_settings.syntax_highlighting.is_enabled() {
+                    "✓ "
+                } else {
+                    "  "
+                };
+                let status = syntax_highlighting_status_for_display(self.state.display_settings);
+                let text_color = if self
+                    .state
+                    .display_settings
+                    .syntax_highlighting_editability
+                    .is_editable()
+                {
+                    self.theme.text
+                } else {
+                    self.theme.text_dim
+                };
+                lines.push(Line::from(vec![
+                    Span::raw(marker),
+                    Span::raw(active).fg(self.theme.success),
+                    Span::raw(format!("{}: {status}", t!("settings.syntax_highlighting")))
+                        .fg(text_color),
+                ]));
             }
             SettingsTab::OutputStyle => {
                 if self.state.output_styles.is_empty() {

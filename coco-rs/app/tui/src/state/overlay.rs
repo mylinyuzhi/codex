@@ -4,6 +4,8 @@
 //! guidance. See `crate-coco-tui.md` §Overlay System for the taxonomy and
 //! `state/ui.rs::UiState::set_overlay` for displacement semantics.
 
+use super::session::ProviderUnavailableReason;
+
 /// Modal overlay variants.
 #[derive(Debug, Clone)]
 pub enum Overlay {
@@ -370,6 +372,8 @@ pub struct ModelEntry {
     /// `true` when this entry is the role's currently-applied selection.
     /// Rendered with a `[current]` badge.
     pub is_current_for_role: bool,
+    /// Provider config issues that prevent this row from being selected.
+    pub unavailable_reasons: Vec<ProviderUnavailableReason>,
 }
 
 /// Command palette overlay (filterable list of /commands).

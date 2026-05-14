@@ -185,27 +185,6 @@ fn test_handle_rewind_cancel_goes_back_from_options() {
 }
 
 #[test]
-fn test_visible_range_small_list() {
-    let state = make_state_with_messages(3);
-    let overlay = build_rewind_overlay(&state);
-    let (start, end) = visible_range(&overlay);
-    assert_eq!(start, 0);
-    // 3 real messages + 1 synthetic = 4 entries, fits inside MAX_VISIBLE.
-    assert_eq!(end, 4);
-}
-
-#[test]
-fn test_visible_range_large_list() {
-    let state = make_state_with_messages(20);
-    let mut overlay = build_rewind_overlay(&state);
-    overlay.selected = 10;
-    let (start, end) = visible_range(&overlay);
-    assert_eq!(end - start, 7);
-    assert!(start <= 10);
-    assert!(end > 10);
-}
-
-#[test]
 fn test_summarize_feedback_empty_submit_cancels_to_options() {
     // TS `MessageSelector.tsx` summarize input declares
     // `allowEmptySubmitToCancel: true`. Empty submit must NOT dispatch
@@ -263,25 +242,6 @@ fn test_summarize_feedback_with_text_dispatches_rewind() {
     // pending_summarize stays set so Confirming phase can show
     // "Summarizing…" while the engine processes the request.
     assert!(overlay.pending_summarize.is_some());
-}
-
-#[test]
-fn test_picker_is_empty_with_only_synthetic_row() {
-    // TS `hasMessagesToSelect = messageOptions.length > 1` (line 71).
-    // No real user messages → picker considered empty even though the
-    // synthetic row is present.
-    let state = AppState::new();
-    let overlay = build_rewind_overlay(&state);
-    assert_eq!(overlay.messages.len(), 1);
-    assert!(overlay.messages[0].is_current_prompt);
-    assert!(picker_is_empty(&overlay));
-}
-
-#[test]
-fn test_picker_is_empty_false_with_real_messages() {
-    let state = make_state_with_messages(1);
-    let overlay = build_rewind_overlay(&state);
-    assert!(!picker_is_empty(&overlay));
 }
 
 #[test]

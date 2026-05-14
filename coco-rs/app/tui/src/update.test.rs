@@ -10,6 +10,9 @@ use super::edit::try_local_command;
 use super::handle_command;
 use crate::command::ShutdownReason;
 use crate::command::UserCommand;
+use crate::display_settings::DisplaySettingEditability;
+use crate::display_settings::DisplaySettings;
+use crate::display_settings::SyntaxHighlighting;
 use crate::events::TuiCommand;
 use crate::state::AppState;
 use crate::state::Overlay;
@@ -139,6 +142,31 @@ async fn queue_input_of_plain_text_still_queues() {
         }
         other => panic!("expected QueueCommand on the wire, got {other:?}"),
     }
+}
+
+#[test]
+fn toggle_syntax_highlighting_does_not_mutate_when_higher_priority_setting_wins() {
+    let mut state = AppState::new();
+    state.ui.display_settings = DisplaySettings {
+        syntax_highlighting: SyntaxHighlighting::Enabled,
+        syntax_highlighting_editability: DisplaySettingEditability::OverriddenBy(
+            coco_config::SettingSource::Project,
+        ),
+    };
+
+    super::overlay::toggle_syntax_highlighting(&mut state);
+
+    assert_eq!(
+        state.ui.display_settings.syntax_highlighting,
+        SyntaxHighlighting::Enabled
+    );
+    assert_eq!(state.ui.toasts.len(), 1);
+    assert_eq!(state.ui.toasts[0].severity, ToastSeverity::Warning);
+    assert!(
+        state.ui.toasts[0].message.contains("project"),
+        "unexpected toast: {}",
+        state.ui.toasts[0].message
+    );
 }
 
 #[tokio::test]

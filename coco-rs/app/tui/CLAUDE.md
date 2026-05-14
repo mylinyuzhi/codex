@@ -38,7 +38,8 @@ Model (AppState) ← Update (handle_event) ← Events (TuiEvent) ← View (rende
 | `server_notification_handler::handle_core_event` | Fold `CoreEvent` into `AppState` |
 | `render` | Pure `(&AppState, &mut Frame) → ()` — ratatui view |
 | `StreamAccumulator` (re-export) | Stream deltas → `ServerNotification` for semantic display |
-| `Theme`, `ThemeName` | 5 named themes; crossterm color fallback |
+| `Theme`, `ThemeName` | 9 built-in themes plus custom `~/.coco/theme.json` palettes; hot-reloaded |
+| `DisplaySettings` | TUI display prefs from `settings.json` such as syntax-highlighting enablement |
 | `PasteManager`, `ImageData`, `ResolvedInput` | Paste buffering + image attachment |
 | `Animation` | Spinner/streaming pacing |
 

@@ -665,6 +665,7 @@ Added in Round 2 review:
 | `multi-provider-plan.md` | Multi-LLM architecture: flow, beta headers, provider branching |
 | `tool-result-budget-plan.md` | Two-level Tool Result Budget plan: Level 1 per-tool persistence (`<persisted-output>` + 2KB preview + session-scoped storage) and Level 2 per-message aggregate budget (`ContentReplacementState` + `enforceToolResultBudget`). Owners: `coco-tool-runtime` + `coco-query` + `coco-session` (re-routed from `coco-context`). |
 | `parity-skills-commands-plugins.md` | Deep-review parity plan for `coco-skills` / `coco-commands` / `coco-plugins`: every P1/P2/P3 gap mirrors TS define/behavior/UI with file:line citations. Round 11 (May 2026). Cross-references `crate-coco-{skills,commands,plugins}.md` and `audit-gaps.md`. |
+| `tui-overall-design.md` | TUI overall design: conversation workspace, theme/style contract, typed picker architecture, `/memory` picker convergence, model/provider picker constraints, and phased implementation plan. |
 | `config-file-map.md` | Every file coco-rs reads/writes, which crate owns it |
 | `audit-gaps.md` | Gap analysis with fix status and priority |
 | `crate-coco-types.md` | Foundation types (Message, Permission, Tool, Task, Provider) |

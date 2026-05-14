@@ -14,8 +14,8 @@ use crate::state::ui::Toast;
 use crate::update_rewind;
 
 /// Try to handle `trimmed` as a TUI-only slash command that must never reach
-/// the agent (`/copy`, `/rewind`, `/checkpoint`). Returns `true` when the
-/// input has been consumed locally; callers should skip their normal
+/// the agent (`/copy`, `/rewind`, `/checkpoint`, `/theme`). Returns `true`
+/// when the input has been consumed locally; callers should skip their normal
 /// submit/queue path in that case.
 ///
 /// Shared between [`submit`] (normal Enter) and the `QueueInput` handler
@@ -25,6 +25,10 @@ use crate::update_rewind;
 pub(super) fn try_local_command(state: &mut AppState, trimmed: &str) -> bool {
     if trimmed == "/copy" {
         super::clipboard::copy_last_message(state);
+        return true;
+    }
+    if trimmed == "/theme" || trimmed.starts_with("/theme ") {
+        handle_theme_command(state, trimmed);
         return true;
     }
     if trimmed == "/rewind"
@@ -54,6 +58,41 @@ pub(super) fn try_local_command(state: &mut AppState, trimmed: &str) -> bool {
     // `submit()` which routes via the async `try_local_clear` path
     // (needs the command channel).
     false
+}
+
+fn handle_theme_command(state: &mut AppState, trimmed: &str) {
+    let name = trimmed.strip_prefix("/theme").map(str::trim).unwrap_or("");
+    if name.is_empty() {
+        let settings = crate::widgets::settings_panel::SettingsPanelState::new(
+            &state.ui.theme_state,
+            state.ui.display_settings,
+        );
+        state.ui.set_overlay(Overlay::Settings(settings));
+        return;
+    }
+
+    let setting = if name.eq_ignore_ascii_case("auto") {
+        crate::theme::ThemeSetting::Auto
+    } else {
+        crate::theme::ThemeSetting::Named(name.to_string())
+    };
+
+    match state.ui.apply_theme_setting(setting) {
+        Ok(()) => {
+            let saved_setting = state.ui.theme_state.setting.clone();
+            match crate::theme::save_theme_setting(&saved_setting) {
+                Ok(path) => state
+                    .ui
+                    .add_toast(Toast::success(format!("Theme saved to {}", path.display()))),
+                Err(err) => state
+                    .ui
+                    .add_toast(Toast::error(format!("Failed to save theme: {err}"))),
+            }
+        }
+        Err(err) => state
+            .ui
+            .add_toast(Toast::error(format!("Failed to apply theme: {err}"))),
+    }
 }
 
 /// Try to handle `trimmed` as `/exit` or `/quit`. Sends

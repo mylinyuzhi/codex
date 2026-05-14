@@ -164,9 +164,7 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
         TaskBackground => TuiCommand::BackgroundAllTasks,
 
         // ── ThemePicker ─────────────────────────────────────────────
-        // TS toggle for the syntax-highlighting setting inside the
-        // theme picker overlay; coco-rs doesn't expose the option.
-        ThemeToggleSyntaxHighlighting => return None,
+        ThemeToggleSyntaxHighlighting => TuiCommand::ToggleSyntaxHighlighting,
 
         // ── Attachments ─────────────────────────────────────────────
         AttachmentsNext => TuiCommand::OverlayNext,

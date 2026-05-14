@@ -589,7 +589,7 @@ const KNOWN_SETTINGS_FIELDS: &[&str] = &[
     "enable_all_project_mcp_servers",
     "output_style",
     "language",
-    "syntax_highlighting_disabled",
+    crate::settings::SYNTAX_HIGHLIGHTING_DISABLED_KEY,
     "enabled_plugins",
     "worktree",
     "plans_directory",

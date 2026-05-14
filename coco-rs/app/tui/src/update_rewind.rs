@@ -284,15 +284,6 @@ fn build_rewind_overlay_internal(state: &AppState) -> RewindOverlay {
     }
 }
 
-/// True when the only entries are the synthetic current-prompt row
-/// (and any other non-real rows). Used by the renderer to switch to
-/// the "Nothing to rewind to yet." inline empty state. TS:
-/// `hasMessagesToSelect = messageOptions.length > 1`
-/// (`MessageSelector.tsx:71`).
-pub fn picker_is_empty(overlay: &RewindOverlay) -> bool {
-    !overlay.messages.iter().any(|m| !m.is_current_prompt)
-}
-
 /// Navigate up/down in the rewind overlay.
 ///
 /// In MessageSelect phase, navigates the message list.
@@ -494,21 +485,6 @@ pub fn handle_rewind_cancel(overlay: &mut RewindOverlay) -> bool {
         }
         RewindPhase::Confirming => true,
     }
-}
-
-/// Compute visible message window (centered on selected).
-///
-/// TS: MAX_VISIBLE_MESSAGES = 7, firstVisibleIndex calculation.
-pub fn visible_range(overlay: &RewindOverlay) -> (usize, usize) {
-    let max_visible = crate::constants::REWIND_MAX_VISIBLE as usize;
-    let count = overlay.messages.len();
-    if count <= max_visible {
-        return (0, count);
-    }
-    let center = overlay.selected as usize;
-    let half = max_visible / 2;
-    let start = center.saturating_sub(half).min(count - max_visible);
-    (start, start + max_visible)
 }
 
 /// Check if all messages after `from_index` are synthetic/non-meaningful.

@@ -9,6 +9,8 @@ pub mod rewind;
 pub mod session;
 pub mod ui;
 
+pub use crate::display_settings::DisplaySettings;
+pub use crate::display_settings::SyntaxHighlighting;
 pub use overlay::AutoModeOptInOverlay;
 pub use overlay::BridgeOverlay;
 pub use overlay::BypassPermissionsOverlay;
@@ -68,6 +70,8 @@ pub use session::MessageContent;
 pub use session::ModelBinding;
 pub use session::ModelCatalogEntry;
 pub use session::PlanAction;
+pub use session::ProviderStatus;
+pub use session::ProviderUnavailableReason;
 pub use session::QueuedCommandDisplay;
 pub use session::SavedSession;
 pub use session::SessionState;
