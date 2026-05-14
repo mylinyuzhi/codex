@@ -803,11 +803,31 @@ pub(super) async fn confirm(state: &mut AppState, command_tx: &mpsc::Sender<User
         Some(Overlay::Settings(s)) => {
             // Only the Theme tab applies changes on Enter. Other tabs are
             // read-only (About) or populated asynchronously (OutputStyle,
-            // Permissions). On Theme tab, swap the live theme immediately.
-            if let crate::widgets::settings_panel::SettingsTab::Theme = s.active_tab
-                && let Some(theme_name) = s.themes.get(s.selected as usize)
-            {
-                state.ui.theme = crate::theme::Theme::from_name(*theme_name);
+            // Permissions). On Theme tab, theme rows persist to
+            // ~/.coco/theme.json and the syntax row persists to settings.json.
+            let mut s = s;
+            if let crate::widgets::settings_panel::SettingsTab::Theme = s.active_tab {
+                if let Some(choice) = s.selected_theme_choice().cloned() {
+                    match state.ui.apply_theme_setting(choice.setting.clone()) {
+                        Ok(()) => {
+                            s.active_theme = choice.setting.clone();
+                            match crate::theme::save_theme_setting(&choice.setting) {
+                                Ok(path) => state.ui.add_toast(crate::state::ui::Toast::success(
+                                    format!("Theme saved to {}", path.display()),
+                                )),
+                                Err(err) => state.ui.add_toast(crate::state::ui::Toast::error(
+                                    format!("Failed to save theme: {err}"),
+                                )),
+                            }
+                        }
+                        Err(err) => state.ui.add_toast(crate::state::ui::Toast::error(format!(
+                            "Failed to apply theme: {err}"
+                        ))),
+                    }
+                } else if s.is_syntax_highlighting_selected() {
+                    toggle_syntax_highlighting(state);
+                    s.set_display_settings(state.ui.display_settings);
+                }
             }
             // Keep settings open after selection — user may want to try
             // themes successively.
@@ -1243,11 +1263,63 @@ fn filtered_sessions(s: &SessionBrowserOverlay) -> Vec<&SessionOption> {
         .collect()
 }
 
+pub(super) fn toggle_syntax_highlighting(state: &mut AppState) {
+    if let Some(source) = state
+        .ui
+        .display_settings
+        .syntax_highlighting_editability
+        .overriding_source()
+    {
+        state.ui.add_toast(Toast::warning(
+            t!(
+                "toast.syntax_highlighting_overridden",
+                source = source.as_str()
+            )
+            .to_string(),
+        ));
+        return;
+    }
+
+    let next = state
+        .ui
+        .display_settings
+        .with_syntax_highlighting(state.ui.display_settings.syntax_highlighting.toggle());
+
+    let disabled = next.syntax_highlighting.is_disabled();
+    match coco_config::global_config::write_user_setting(
+        coco_config::settings::SYNTAX_HIGHLIGHTING_DISABLED_KEY,
+        serde_json::json!(disabled),
+    ) {
+        Ok(path) => {
+            state.ui.apply_display_settings(next);
+            let status = crate::widgets::settings_panel::syntax_highlighting_status(
+                next.syntax_highlighting,
+            );
+            let path_text = path.display().to_string();
+            state.ui.add_toast(Toast::success(
+                t!(
+                    "toast.syntax_highlighting_saved",
+                    status = status.as_str(),
+                    path = path_text.as_str()
+                )
+                .to_string(),
+            ));
+        }
+        Err(err) => state.ui.add_toast(Toast::error(
+            t!(
+                "toast.syntax_highlighting_save_failed",
+                error = err.to_string().as_str()
+            )
+            .to_string(),
+        )),
+    }
+}
+
 /// Number of selectable items on the Settings active tab.
 fn settings_item_count(s: &crate::widgets::settings_panel::SettingsPanelState) -> usize {
     use crate::widgets::settings_panel::SettingsTab;
     match s.active_tab {
-        SettingsTab::Theme => s.themes.len(),
+        SettingsTab::Theme => s.theme_item_count(),
         SettingsTab::OutputStyle => s.output_styles.len(),
         SettingsTab::Permissions => s.permission_rules.len(),
         SettingsTab::About => 0,

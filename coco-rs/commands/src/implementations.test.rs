@@ -216,8 +216,8 @@ fn test_version_handler() {
 
 #[test]
 fn test_theme_handler() {
-    assert!(theme_handler("").contains("Available themes"));
-    assert!(theme_handler("dark").contains("dark"));
+    assert!(theme_handler("").contains("~/.coco/theme.json"));
+    assert!(theme_handler("dark").contains("Theme `dark`"));
 }
 
 #[test]

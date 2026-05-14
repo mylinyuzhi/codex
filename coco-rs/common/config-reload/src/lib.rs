@@ -7,6 +7,7 @@
 mod reloader;
 
 pub use reloader::ConfigChange;
+pub use reloader::ConfigReloadError;
 pub use reloader::ReloadOptions;
 pub use reloader::RuntimeReloader;
 pub use reloader::TrackedKind;

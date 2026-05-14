@@ -38,6 +38,7 @@ Every file coco-rs reads from or writes to, which crate owns it.
 | `~/.coco.json` | JSON | `coco-config` | RW | GlobalConfig: user ID, theme, project configs, costs |
 | `~/.coco/settings.json` | JSON | `coco-config` | RW | User global settings |
 | `~/.coco/keybindings.json` | JSON | `keybindings/` | RW | Keyboard shortcuts |
+| `~/.coco/theme.json` | JSON | `coco-tui` | RW | TUI active theme and custom color palettes |
 | `~/.coco/CLAUDE.md` | Markdown | `coco-context` | R | User global instructions |
 | `~/.coco/rules/*.md` | Markdown+YAML | `coco-context` | R | User global rules |
 | `~/.coco/skills/*.md` | Markdown+YAML | `coco-skills` | R | User personal skills |

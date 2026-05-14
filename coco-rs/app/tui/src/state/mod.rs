@@ -9,6 +9,8 @@ pub mod rewind;
 pub mod session;
 pub mod ui;
 
+pub use crate::display_settings::DisplaySettings;
+pub use crate::display_settings::SyntaxHighlighting;
 pub use overlay::AutoModeOptInOverlay;
 pub use overlay::BridgeOverlay;
 pub use overlay::BypassPermissionsOverlay;

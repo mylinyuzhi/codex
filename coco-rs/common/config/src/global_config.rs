@@ -162,7 +162,8 @@ pub fn local_settings_path(cwd: &Path) -> PathBuf {
 ///
 /// `key` may be dotted (`sandbox.mode`) — intermediate objects are
 /// created if absent. Existing siblings are preserved. Returns the
-/// path that was written so callers can show it to the user.
+/// path that was written so callers can show it to the user. Invalid
+/// existing JSON is returned as an error and left untouched.
 ///
 /// **Reload semantics**: writes to disk; the live runtime keeps the
 /// pre-existing in-memory `Settings` until the user starts a new
@@ -171,8 +172,16 @@ pub fn local_settings_path(cwd: &Path) -> PathBuf {
 /// next session, not the current one.
 pub fn write_user_setting(key: &str, value: serde_json::Value) -> crate::Result<PathBuf> {
     let path = user_settings_path();
-    write_user_setting_at_path(&path, key, value)?;
-    Ok(path)
+    write_user_setting_to_path(&path, key, value)
+}
+
+fn write_user_setting_to_path(
+    path: &Path,
+    key: &str,
+    value: serde_json::Value,
+) -> crate::Result<PathBuf> {
+    write_user_setting_at_path(path, key, value)?;
+    Ok(path.to_path_buf())
 }
 
 fn write_user_setting_at_path(

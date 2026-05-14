@@ -34,6 +34,7 @@ pub(super) fn transcript_overlay_content(
         .show_thinking(true)
         .show_system_reminders(overlay.show_all)
         .tool_executions(&state.session.tool_executions)
+        .syntax_highlighting(state.ui.display_settings.syntax_highlighting)
         .kb_handle(&state.ui.kb_handle);
     if !state.ui.collapsed_tools.is_empty() {
         chat = chat.collapsed_tools(&state.ui.collapsed_tools);

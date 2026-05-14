@@ -135,6 +135,7 @@ async fn config_file_appearance_triggers_rebuild() {
 async fn malformed_catalog_keeps_prior_snapshot() {
     let tmp = TempDir::new().unwrap();
     let reloader = spawn_isolated(tmp.path()).await;
+    let mut error_rx = reloader.subscribe_errors();
     let initial = reloader.current();
     let initial_keys: std::collections::BTreeSet<String> =
         initial.providers.keys().cloned().collect();
@@ -144,8 +145,29 @@ async fn malformed_catalog_keeps_prior_snapshot() {
     let providers_path = tmp.path().join("providers.json");
     std::fs::write(&providers_path, "not valid json {{{").unwrap();
 
-    // Allow the watcher to react.
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    let reload_error = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            match error_rx.recv().await {
+                Ok(err) if err.path == providers_path => break err,
+                Ok(_) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    panic!("reload error channel closed")
+                }
+            }
+        }
+    })
+    .await
+    .expect("reload error within timeout");
+    assert_eq!(
+        reload_error.kind,
+        TrackedKind::Settings(coco_config::WatchedKind::ProvidersCatalog)
+    );
+    assert!(
+        reload_error.message.contains("failed to parse"),
+        "unexpected reload error: {}",
+        reload_error.message
+    );
 
     let after = reloader.current();
     let after_keys: std::collections::BTreeSet<String> = after.providers.keys().cloned().collect();

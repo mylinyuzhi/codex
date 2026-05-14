@@ -20,6 +20,7 @@ use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
 
 use crate::constants;
+use crate::display_settings::SyntaxHighlighting;
 use crate::i18n::t;
 use crate::state::session::ChatMessage;
 use crate::state::session::MessageContent;
@@ -39,6 +40,7 @@ pub struct ChatWidget<'a> {
     tool_executions: &'a [ToolExecution],
     collapsed_tools: Option<&'a HashSet<String>>,
     theme: &'a Theme,
+    syntax_highlighting: SyntaxHighlighting,
     width: u16,
     /// Keybinding handle for rendering live shortcuts (e.g. the
     /// `…(<chord> to see full summary)` hint). `None` falls back to
@@ -59,6 +61,7 @@ impl<'a> ChatWidget<'a> {
             tool_executions: &[],
             collapsed_tools: None,
             theme,
+            syntax_highlighting: SyntaxHighlighting::Enabled,
             width: 80,
             kb_handle: None,
         }
@@ -99,6 +102,10 @@ impl<'a> ChatWidget<'a> {
     }
     pub fn width(mut self, w: u16) -> Self {
         self.width = w;
+        self
+    }
+    pub fn syntax_highlighting(mut self, syntax_highlighting: SyntaxHighlighting) -> Self {
+        self.syntax_highlighting = syntax_highlighting;
         self
     }
 
@@ -257,8 +264,12 @@ impl<'a> ChatWidget<'a> {
     fn render_streaming(&self, streaming: &StreamingState, lines: &mut Vec<Line<'a>>) {
         let content = streaming.visible_content();
         if !content.is_empty() {
-            let md_lines =
-                crate::widgets::markdown::markdown_to_lines(content, self.theme, self.width);
+            let md_lines = crate::widgets::markdown::markdown_to_lines_with_syntax(
+                content,
+                self.theme,
+                self.width,
+                self.syntax_highlighting,
+            );
             lines.extend(md_lines);
             lines.push(Line::from(Span::raw("▌").fg(self.theme.accent)));
         }

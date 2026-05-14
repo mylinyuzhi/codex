@@ -1,4 +1,5 @@
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use tempfile::TempDir;
 
 use super::*;
@@ -99,6 +100,59 @@ fn test_write_user_setting_parse_error_preserves_existing_file() {
     assert!(err.to_string().contains("jsonc error"));
     let updated = std::fs::read_to_string(&path).expect("read settings");
     assert_eq!(updated, original);
+}
+
+#[test]
+fn test_write_user_setting_to_path_rejects_invalid_json_without_overwriting_file() {
+    let tmp = TempDir::new().expect("tempdir");
+    let path = tmp.path().join("settings.json");
+    let original = "{ invalid json";
+    std::fs::write(&path, original).expect("write settings");
+
+    let err =
+        write_user_setting_to_path(&path, "theme", json!("dark")).expect_err("invalid settings");
+
+    assert!(
+        err.to_string().contains("jsonc error"),
+        "unexpected error: {err}"
+    );
+    let updated = std::fs::read_to_string(&path).expect("read settings");
+    assert_eq!(updated, original);
+}
+
+#[test]
+fn test_write_user_setting_to_path_preserves_siblings_for_dotted_keys() {
+    let tmp = TempDir::new().expect("tempdir");
+    let path = tmp.path().join("settings.json");
+    std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&json!({
+            "theme": "dark",
+            "sandbox": {
+                "mode": "workspace-write",
+                "network": "enabled"
+            }
+        }))
+        .expect("serialize settings"),
+    )
+    .expect("write settings");
+
+    let written =
+        write_user_setting_to_path(&path, "sandbox.mode", json!("read-only")).expect("write");
+
+    assert_eq!(written, path);
+    let updated = std::fs::read_to_string(&path).expect("read settings");
+    let value: serde_json::Value = serde_json::from_str(&updated).expect("parse settings");
+    assert_eq!(
+        value,
+        json!({
+            "theme": "dark",
+            "sandbox": {
+                "mode": "read-only",
+                "network": "enabled"
+            }
+        })
+    );
 }
 
 #[test]
