@@ -30,6 +30,7 @@ pub mod keybinding_dispatch;
 pub mod keybinding_resolver;
 pub mod keybinding_setup;
 pub mod paste;
+mod presentation;
 pub mod render;
 mod render_overlays;
 pub mod server_notification_handler;

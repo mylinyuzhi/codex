@@ -24,6 +24,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 
 use crate::i18n::t;
+use crate::presentation::layout;
 use crate::state::AppState;
 use crate::state::Overlay;
 use crate::theme::Theme;
@@ -43,12 +44,13 @@ pub(crate) fn render_overlay(
 
     let (title, body, border_color) = overlay_content(overlay, state, theme);
 
-    // ratatui 0.30: use `Rect::centered` instead of computing x/y manually.
-    // 70% of the available width (clamped 40..=100) and exactly enough
-    // vertical room for the content (+4 for border + blank rows).
-    let width = (area.width * 70 / 100).clamp(40, 100);
-    let height = (body.lines().count() as u16 + 4).min(area.height.saturating_sub(2));
-    let overlay_area = area.centered(Constraint::Length(width), Constraint::Length(height));
+    let width = ((area.width as u32 * 70 / 100) as u16).clamp(40, 100);
+    let height = body
+        .lines()
+        .count()
+        .saturating_add(4)
+        .min(u16::MAX as usize) as u16;
+    let overlay_area = layout::centered_fixed_area(area, width, height);
 
     frame.render_widget(Clear, overlay_area);
 
