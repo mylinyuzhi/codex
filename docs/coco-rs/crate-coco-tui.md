@@ -12,6 +12,9 @@ cocode-rs provides the complete TUI infrastructure: TEA pattern, event loop, wid
 keybindings, streaming, overlays, themes, i18n. TS defines the component taxonomy (389 files)
 and UI behaviors that need Rust widget implementations.
 
+For the target cross-cutting UI consolidation plan, see
+`tui-overall-design.md`.
+
 | Layer | Source | Status |
 |-------|--------|--------|
 | TEA event loop (`tokio::select!` multiplexing) | cocode-rs `app.rs` | **KEEP** |
@@ -21,7 +24,7 @@ and UI behaviors that need Rust widget implementations.
 | Keybinding bridge (context-aware resolution) | cocode-rs `keybinding_bridge.rs` | **KEEP** |
 | Streaming display (pacing, accumulation) | cocode-rs `streaming/` | **KEEP** |
 | Overlay system (modal queue with priority) | cocode-rs `state/ui.rs` | **KEEP** (extend types) |
-| Theme system (5 named themes) | cocode-rs `theme.rs` | **KEEP** |
+| Theme system (9 built-in themes + custom JSON) | cocode-rs `theme.rs` | **KEEP** |
 | i18n (rust-i18n, en + zh-CN) | cocode-rs `i18n/` | **KEEP** |
 | TS component taxonomy (41 message renderers) | TS `components/messages/` | **Port** (widget impls) |
 | TS dialog types (44 dialog variants) | TS `components/permissions/` etc. | **Port** (overlay variants) |
@@ -1034,7 +1037,7 @@ app/tui/src/
     clipboard.rs              # Paste + copy-last integration
   command.rs                  # UserCommand enum (TUI → Core)
   terminal.rs                 # Terminal setup/teardown, panic hook
-  theme.rs                    # 5 named themes, color palette
+  theme.rs                    # 9 built-in themes, custom JSON, hot reload
   animation.rs                # Spinner frames, time-based
   constants.rs                # Layout breakpoints, timing constants
   keybinding_bridge.rs        # KeyEvent → TuiCommand via KeybindingsManager
@@ -1128,6 +1131,6 @@ app/tui/src/
 | Overlay queue with priority | Agent-driven overlays queue; user-triggered displace. Prevents dialog storms |
 | 4 parallel autocomplete systems | Each has independent debounce, cancel, and mpsc channel. No interference |
 | Streaming pacing separate from chat | StreamingState tracks display cursor; committed to ChatMessage on turn end |
-| Theme as struct, not trait | 5 named themes are compile-time; no need for dynamic dispatch |
+| Theme as struct, not trait | Builtin themes are compile-time; custom JSON is resolved into the same struct, so no dynamic dispatch is needed |
 | i18n via `t!()` macro | All user-facing strings in YAML. Compile-time key validation |
 | No Ink framework port | ratatui + crossterm replaces React-based Ink entirely. Zero overlap needed |
