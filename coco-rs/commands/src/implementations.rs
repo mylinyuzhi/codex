@@ -951,20 +951,23 @@ fn config_extended_handler(args: &str) -> String {
             Err(e) => format!("Failed to write `{key}`: {e}"),
         }
     } else {
-        // Read-only view of one key.
-        let raw = match std::fs::read_to_string(&path) {
-            Ok(s) if !s.trim().is_empty() => s,
-            _ => return format!("Current value of `{subcommand}`: (settings.json not present)"),
-        };
-        let json: serde_json::Value = match serde_json::from_str(&raw) {
-            Ok(v) => v,
-            Err(e) => return format!("Failed to parse settings.json: {e}"),
-        };
-        let value = lookup_dotted(&json, subcommand);
-        match value {
-            Some(v) => format!("Current value of `{subcommand}`: {v}"),
-            None => format!("Current value of `{subcommand}`: (not set)"),
-        }
+        config_read_handler_at_path(&path, subcommand)
+    }
+}
+
+fn config_read_handler_at_path(path: &std::path::Path, key: &str) -> String {
+    let raw = match std::fs::read_to_string(path) {
+        Ok(s) if !s.trim().is_empty() => s,
+        _ => return format!("Current value of `{key}`: (settings.json not present)"),
+    };
+    let json: serde_json::Value = match coco_config::parse_jsonc_value(&raw) {
+        Ok(v) => v,
+        Err(e) => return format!("Failed to parse settings.json: {e}"),
+    };
+    let value = lookup_dotted(&json, key);
+    match value {
+        Some(v) => format!("Current value of `{key}`: {v}"),
+        None => format!("Current value of `{key}`: (not set)"),
     }
 }
 

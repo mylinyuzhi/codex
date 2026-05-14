@@ -473,6 +473,40 @@ fn test_role_validation_rejects_unknown_model_id() {
 }
 
 #[test]
+fn test_runtime_loads_jsonc_provider_catalog() {
+    use std::fs;
+
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join("providers.json"),
+        r#"{
+            // Provider catalog files accept JSONC syntax.
+            local: {
+                api: "openai_compat",
+                "env_key": "LOCAL_KEY",
+                "base_url": "https://local.invalid/v1",
+            },
+        }"#,
+    )
+    .unwrap();
+
+    let runtime = build_runtime_config_with(
+        settings_with(Settings {
+            model: Some("anthropic/claude-opus-4-7".into()),
+            ..Default::default()
+        }),
+        EnvSnapshot::default(),
+        RuntimeOverrides::default(),
+        CatalogPaths::rooted(tmp.path()),
+    )
+    .expect("runtime config");
+
+    let provider = runtime.providers.get("local").expect("local provider");
+    assert_eq!(provider.env_key, "LOCAL_KEY");
+    assert_eq!(provider.base_url, "https://local.invalid/v1");
+}
+
+#[test]
 fn test_role_validation_rejects_incomplete_user_catalog_entry() {
     // A `models.json` entry that sets only `max_output_tokens` (no
     // `context_window`) is incomplete. The validation pass surfaces

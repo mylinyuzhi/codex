@@ -101,11 +101,12 @@ async fn config_file_appearance_triggers_rebuild() {
     // surfaces the publish via the changed/borrow_and_update flow.
     let providers_path = tmp.path().join("providers.json");
     let json = r#"{
+        // Hot reload reuses coco-config's JSONC parser.
         "internal-router": {
             "api": "openai_compat",
             "env_key": "INTERNAL_KEY",
-            "base_url": "https://internal/v1"
-        }
+            "base_url": "https://internal/v1",
+        },
     }"#;
     std::fs::write(&providers_path, json).unwrap();
 

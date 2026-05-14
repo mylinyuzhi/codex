@@ -220,6 +220,24 @@ fn test_theme_handler() {
     assert!(theme_handler("dark").contains("dark"));
 }
 
+#[test]
+fn test_config_read_handler_accepts_jsonc_settings() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("settings.json");
+    std::fs::write(
+        &path,
+        r#"{
+  // user comment
+  "language": "zh-CN",
+}
+"#,
+    )
+    .unwrap();
+
+    let output = config_read_handler_at_path(&path, "language");
+    assert_eq!(output, r#"Current value of `language`: "zh-CN""#);
+}
+
 /// `/output-style` is the deprecated stub from TS
 /// `commands/output-style/output-style.tsx`. The handler must:
 ///   1. Return the verbatim TS deprecation message regardless of args.
