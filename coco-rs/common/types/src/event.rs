@@ -780,11 +780,40 @@ pub struct TurnFailedParams {
     pub error: String,
 }
 
+/// Why a turn was interrupted. Lets the TUI distinguish "user pressed
+/// Ctrl+C — restore the input if conditions match" from "system cancelled
+/// the in-flight turn to make room for `/clear` / `/compact` / `/rewind`
+/// / shutdown / next submit — leave the conversation alone".
+///
+/// Mirrors TS `abortController.signal.reason` discrimination at
+/// `REPL.tsx:3001`. New variants default to non-user-initiated semantics
+/// at the consumer (no auto-restore), so adding e.g. `BudgetExhausted`
+/// or `Timeout` later is additive without breaking the TUI handler.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CancelReason {
+    /// User-initiated cancel (Ctrl+C in the TUI, `control/interrupt`
+    /// in the SDK). The only reason that may trigger auto-restore.
+    UserCancel,
+    /// System pre-empted the in-flight turn so another session-level
+    /// operation can run (Clear / Compact / Rewind / Shutdown / new
+    /// SubmitInput). Auto-restore is suppressed — the user did not
+    /// request a rewind.
+    SystemPreempt,
+}
+
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TurnInterruptedParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_id: Option<String>,
+    /// Why the turn was interrupted. `None` only on legacy transcripts
+    /// that pre-date this field; new senders always populate it. The
+    /// TUI handler treats `None` as `SystemPreempt` (conservative — no
+    /// auto-restore on unknown reason).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<CancelReason>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

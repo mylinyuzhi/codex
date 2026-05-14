@@ -4,6 +4,7 @@
 
 use tokio::sync::mpsc;
 
+use crate::command::ShutdownReason;
 use crate::command::UserCommand;
 use crate::i18n::t;
 use crate::state::AppState;
@@ -63,7 +64,15 @@ pub(super) async fn try_local_exit(trimmed: &str, command_tx: &mpsc::Sender<User
     if trimmed != "/exit" && trimmed != "/quit" {
         return false;
     }
-    let _ = command_tx.send(UserCommand::Shutdown).await;
+    tracing::info!(
+        exit_case = %ShutdownReason::SlashCommand,
+        "slash exit requested"
+    );
+    let _ = command_tx
+        .send(UserCommand::Shutdown {
+            reason: ShutdownReason::SlashCommand,
+        })
+        .await;
     true
 }
 

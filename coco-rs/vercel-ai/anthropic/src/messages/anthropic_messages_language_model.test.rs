@@ -766,3 +766,106 @@ fn prompt_cache_beta_header_join_is_deterministic_sorted() {
     sorted.sort_unstable();
     assert_eq!(parts, sorted, "betas must be sorted before join");
 }
+
+// ─── parallel_tool_calls translation ─────────────────────────────
+//
+// Anthropic uses inverted polarity AND nests the flag inside
+// `tool_choice`, NOT at the request body root. The provider crate
+// reads the generic `options.parallel_tool_calls` toggle, inverts it,
+// and threads it through `prepare_anthropic_tools` which folds it
+// into `tool_choice`. `prepare_anthropic_tools` only writes the key
+// when `disable == true` (matches the server-side default of "parallel
+// enabled"), so `parallel_tool_calls = Some(true)` is wire-silent.
+
+fn echo_tool() -> vercel_ai_provider::LanguageModelV4Tool {
+    vercel_ai_provider::LanguageModelV4Tool::Function(
+        vercel_ai_provider::language_model::v4::LanguageModelV4FunctionTool {
+            name: "echo".into(),
+            description: Some("Echo input back".into()),
+            input_schema: serde_json::json!({"type": "object", "properties": {}}),
+            input_examples: None,
+            strict: None,
+            provider_options: None,
+        },
+    )
+}
+
+#[test]
+fn parallel_tool_calls_false_writes_disable_into_tool_choice() {
+    let model = AnthropicMessagesLanguageModel::new("claude-sonnet-4-5", make_config());
+    let mut options = LanguageModelV4CallOptions::new(vec![
+        vercel_ai_provider::LanguageModelV4Message::user_text("hi"),
+    ]);
+    options.tools = Some(vec![echo_tool()]);
+    options.tool_choice = Some(vercel_ai_provider::LanguageModelV4ToolChoice::Auto);
+    options.parallel_tool_calls = Some(false);
+
+    let (body, _, _) = model
+        .get_args(&options, false)
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        body["tool_choice"]["type"], "auto",
+        "tool_choice must remain `auto`"
+    );
+    assert_eq!(
+        body["tool_choice"]["disable_parallel_tool_use"], true,
+        "Generic `parallel_tool_calls = false` must invert into nested \
+         `tool_choice.disable_parallel_tool_use = true` per Anthropic API contract"
+    );
+    assert!(
+        body.get("disable_parallel_tool_use").is_none(),
+        "Anthropic API rejects root-level `disable_parallel_tool_use`; \
+         must be nested in tool_choice"
+    );
+}
+
+#[test]
+fn parallel_tool_calls_true_omits_disable_key() {
+    // disable=false matches Anthropic server default → prepare_tools
+    // intentionally skips emitting the key (wire-silent).
+    let model = AnthropicMessagesLanguageModel::new("claude-sonnet-4-5", make_config());
+    let mut options = LanguageModelV4CallOptions::new(vec![
+        vercel_ai_provider::LanguageModelV4Message::user_text("hi"),
+    ]);
+    options.tools = Some(vec![echo_tool()]);
+    options.tool_choice = Some(vercel_ai_provider::LanguageModelV4ToolChoice::Auto);
+    options.parallel_tool_calls = Some(true);
+
+    let (body, _, _) = model
+        .get_args(&options, false)
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert!(
+        body["tool_choice"]
+            .get("disable_parallel_tool_use")
+            .is_none(),
+        "disable=false matches Anthropic default; the key must NOT appear on the wire"
+    );
+}
+
+#[test]
+fn parallel_tool_calls_typed_provider_option_wins_over_generic() {
+    let model = AnthropicMessagesLanguageModel::new("claude-sonnet-4-5", make_config());
+    let mut po = vercel_ai_provider::ProviderOptions::default();
+    let mut inner = HashMap::new();
+    inner.insert(
+        "disableParallelToolUse".to_string(),
+        serde_json::Value::Bool(true),
+    );
+    po.set("anthropic", inner);
+
+    let mut options = LanguageModelV4CallOptions::new(vec![
+        vercel_ai_provider::LanguageModelV4Message::user_text("hi"),
+    ]);
+    options.tools = Some(vec![echo_tool()]);
+    options.tool_choice = Some(vercel_ai_provider::LanguageModelV4ToolChoice::Auto);
+    options.provider_options = Some(po);
+    options.parallel_tool_calls = Some(true); // would map to disable=false
+
+    let (body, _, _) = model
+        .get_args(&options, false)
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        body["tool_choice"]["disable_parallel_tool_use"], true,
+        "Typed provider_options.disableParallelToolUse must win over the generic toggle"
+    );
+}

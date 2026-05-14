@@ -28,34 +28,34 @@ pub fn user_output_style_dir() -> PathBuf {
     global_config::config_home().join("output-styles")
 }
 
-/// `<cwd>/.claude/output-styles` — single project output style dir.
-///
-/// TS additionally walks every ancestor up to the git root (see
-/// `getProjectDirsUpToHome` in TS `markdownConfigLoader.ts`); coco-rs
-/// follows the simpler cwd-direct convention used by skills and agents
-/// (`get_skill_paths` / `standard_agent_search_paths`). Sessions are
-/// explicitly bound to a single cwd, so deeply-nested traversal isn't
-/// load-bearing in coco-rs and would surprise users who expect
-/// `<cwd>/.claude/...` to be the only project-style root.
+/// `<cwd>/.coco/output-styles` — direct project output style dir.
 pub fn project_output_style_dir(cwd: &Path) -> PathBuf {
-    cwd.join(".claude").join("output-styles")
+    cwd.join(".coco").join("output-styles")
+}
+
+/// Project output-style dirs from most-specific to least-specific,
+/// matching TS `getProjectDirsUpToHome('output-styles', cwd)`.
+///
+/// The walk starts at `cwd`, checks each `.coco/output-styles`
+/// directory, and stops after the git root when inside a repository; if
+/// not in git, it stops at the user's home directory or filesystem root.
+/// Linked worktrees fall back to the canonical repository copy when the
+/// worktree root does not have `.coco/output-styles` checked out.
+pub fn project_output_style_dirs(cwd: &Path) -> Vec<PathBuf> {
+    project_coco_subdirs_up_to_home("output-styles", cwd)
 }
 
 /// Cross-platform managed/policy directory for output styles. Mirrors
 /// [`coco_skills::get_managed_skills_path`] but for `output-styles`.
 ///
-/// TS reads from `getManagedFilePath()/.claude/output-styles`;
-/// coco-rs hardcodes the canonical platform paths so admins can drop
-/// markdown in there without setting an env var.
+/// TS reads from `getManagedFilePath()/.claude/output-styles`; coco-rs
+/// uses the platform CoCo managed-settings root with `output-styles/`
+/// beside `managed-settings.json`.
 pub fn managed_output_style_dir() -> PathBuf {
-    #[cfg(target_os = "macos")]
-    {
-        PathBuf::from("/Library/Application Support/ClaudeCode/.claude/output-styles")
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        PathBuf::from("/etc/claude-code/.claude/output-styles")
-    }
+    global_config::managed_settings_path()
+        .parent()
+        .map(|dir| dir.join("output-styles"))
+        .unwrap_or_else(|| PathBuf::from("/etc/coco/output-styles"))
 }
 
 /// Directory list for output styles in TS-parity priority order
@@ -66,11 +66,11 @@ pub fn managed_output_style_dir() -> PathBuf {
 /// [`coco_output_styles::OutputStyleManager::builder`] which accepts
 /// each source separately so priority is enforced explicitly.
 pub fn output_style_dirs(cwd: &Path) -> Vec<PathBuf> {
-    vec![
-        user_output_style_dir(),
-        project_output_style_dir(cwd),
-        managed_output_style_dir(),
-    ]
+    let mut dirs = Vec::new();
+    dirs.push(user_output_style_dir());
+    dirs.extend(project_output_style_dirs(cwd));
+    dirs.push(managed_output_style_dir());
+    dirs
 }
 
 /// Standard CLI agent search paths: `~/.coco/agents` (user) plus
@@ -140,3 +140,74 @@ fn git_root_for(cwd: &Path) -> Option<PathBuf> {
         }
     }
 }
+
+fn project_coco_subdirs_up_to_home(subdir: &str, cwd: &Path) -> Vec<PathBuf> {
+    let home = dirs::home_dir();
+    let git_root = git_root_for(cwd);
+    let mut current = cwd.to_path_buf();
+    let mut dirs = Vec::new();
+
+    loop {
+        if home.as_deref().is_some_and(|h| same_path(&current, h)) {
+            break;
+        }
+
+        let candidate = current.join(".coco").join(subdir);
+        if candidate.is_dir() {
+            dirs.push(candidate);
+        }
+
+        if git_root
+            .as_deref()
+            .is_some_and(|root| same_path(&current, root))
+        {
+            break;
+        }
+
+        if !current.pop() {
+            break;
+        }
+    }
+
+    add_worktree_canonical_fallback(subdir, cwd, &git_root, &mut dirs);
+    dirs
+}
+
+fn add_worktree_canonical_fallback(
+    subdir: &str,
+    cwd: &Path,
+    git_root: &Option<PathBuf>,
+    dirs: &mut Vec<PathBuf>,
+) {
+    let Some(canonical_root) = coco_git::find_canonical_git_root(cwd) else {
+        return;
+    };
+    if git_root.as_deref() == Some(canonical_root.as_path()) {
+        return;
+    }
+
+    let worktree_has_subdir = git_root
+        .as_ref()
+        .map(|root| root.join(".coco").join(subdir))
+        .is_some_and(|worktree_subdir| dirs.iter().any(|dir| same_path(dir, &worktree_subdir)));
+    if worktree_has_subdir {
+        return;
+    }
+
+    let canonical_subdir = canonical_root.join(".coco").join(subdir);
+    if !dirs.iter().any(|dir| same_path(dir, &canonical_subdir)) {
+        dirs.push(canonical_subdir);
+    }
+}
+
+fn same_path(a: &Path, b: &Path) -> bool {
+    a == b
+        || match (a.canonicalize(), b.canonicalize()) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => false,
+        }
+}
+
+#[cfg(test)]
+#[path = "paths.test.rs"]
+mod tests;

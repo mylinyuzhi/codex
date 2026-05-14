@@ -29,6 +29,7 @@
 
 use crate::cache_convert;
 use crate::thinking_convert;
+use coco_types::Capability;
 use coco_types::PromptCacheConfig;
 use coco_types::ProviderApi;
 use coco_types::ReasoningEffort;
@@ -220,6 +221,34 @@ pub fn build_call_options_with_extra(
         api,
     ) {
         merge_into_extra(&mut extra, &k, &v);
+    }
+
+    // Lane E: parallel tool-call capability gate.
+    //
+    // Sets the **provider-agnostic** `LanguageModelV4CallOptions.parallel_tool_calls`
+    // toggle. Each provider crate owns the wire translation:
+    //   * `vercel-ai-openai` (Chat + Responses) → top-level
+    //     `parallel_tool_calls: true` in the request body.
+    //   * `vercel-ai-anthropic` → nested
+    //     `tool_choice.disable_parallel_tool_use: false` (inverted
+    //     polarity, applied by `prepare_anthropic_tools`).
+    //   * `vercel-ai-openai-compatible` → top-level
+    //     `parallel_tool_calls: true` (matches OpenAI wire shape).
+    //   * `vercel-ai-google` → no-op (Gemini Function Calling is
+    //     implicitly parallel).
+    //
+    // The inference layer therefore has no per-provider knowledge here.
+    // Typed `provider_options` overrides emitted via Lane B (e.g.
+    // user-set `provider_options.openai.parallelToolCalls`) still win
+    // because each provider crate prefers its typed slot over this
+    // generic flag.
+    if info
+        .capabilities
+        .as_deref()
+        .unwrap_or(&[])
+        .contains(&Capability::ParallelToolCalls)
+    {
+        call.parallel_tool_calls = Some(true);
     }
 
     // Snapshot the merged flat map *before* namespace-wrapping so the

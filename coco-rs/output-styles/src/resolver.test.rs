@@ -108,19 +108,19 @@ fn force_for_plugin_overrides_settings() {
 }
 
 #[test]
-fn multiple_force_for_plugin_picks_first_alphabetically_and_lists_runners_up() {
+fn multiple_force_for_plugin_picks_first_catalog_entry_and_lists_runners_up() {
     let mut a = style("alpha:forced", OutputStyleSource::Plugin);
     a.force_for_plugin = Some(true);
     let mut b = style("beta:forced", OutputStyleSource::Plugin);
     b.force_for_plugin = Some(true);
-    let agg = aggregate(&[], &[a, b]);
+    let agg = aggregate(&[], &[b, a]);
 
     let (_, verdict) = resolve_active_style(&agg, Some("default"));
     assert_eq!(
         verdict,
         ForceForPluginVerdict::Selected {
-            winner: "alpha:forced".into(),
-            competing: vec!["beta:forced".into()]
+            winner: "beta:forced".into(),
+            competing: vec!["alpha:forced".into()]
         }
     );
 }

@@ -1,5 +1,3 @@
-pub mod aliases;
-mod instructions;
 pub mod partial;
 pub mod registry;
 pub mod role_slots;
@@ -8,8 +6,6 @@ pub use partial::PartialModelInfo;
 pub use registry::ModelRegistry;
 pub use registry::ResolvedModel;
 pub use registry::build_model_registry;
-pub use registry::builtin_models_partial;
-pub use registry::builtin_models_resolved;
 pub use role_slots::FallbackRecoveryPolicy;
 pub use role_slots::RoleSlots;
 

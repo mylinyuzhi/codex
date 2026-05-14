@@ -35,8 +35,8 @@ fn test_resolve_model_prefix() {
 #[test]
 fn test_resolve_model_provider_inference() {
     assert_eq!(resolve_model("gpt5").unwrap().provider, "openai");
-    assert_eq!(resolve_model("gemini").unwrap().provider, "google");
-    assert_eq!(resolve_model("deepseek").unwrap().provider, "deepseek");
+    assert_eq!(resolve_model("gemini-pro").unwrap().provider, "google");
+    assert_eq!(resolve_model("deepseek-pro").unwrap().provider, "deepseek");
 }
 
 #[test]

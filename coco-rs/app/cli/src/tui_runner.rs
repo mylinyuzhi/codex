@@ -15,6 +15,7 @@
 //! ```
 
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use anyhow::Result;
 use tokio::sync::Mutex;
@@ -38,6 +39,7 @@ use coco_tui::App;
 use coco_tui::ClearScope;
 use coco_tui::UserCommand;
 use coco_tui::app::create_channels;
+use coco_types::CancelReason;
 use coco_types::SlashCommandStatusKind;
 use coco_types::TuiOnlyEvent;
 use tokio_util::sync::CancellationToken;
@@ -546,6 +548,8 @@ async fn run_agent_driver(
 
                 let turn_cancel = CancellationToken::new();
                 let cancel_for_state = turn_cancel.clone();
+                let cancel_reason: Arc<OnceLock<CancelReason>> = Arc::new(OnceLock::new());
+                let cancel_reason_for_state = cancel_reason.clone();
 
                 let runtime_t = runtime.clone();
                 let event_tx_t = event_tx.clone();
@@ -562,6 +566,7 @@ async fn run_agent_driver(
                         title_gen_attempted_t,
                         session_id_t,
                         turn_cancel,
+                        cancel_reason,
                     )
                     .await;
                 });
@@ -569,6 +574,7 @@ async fn run_agent_driver(
                 *active_turn.lock().await = Some(ActiveTurn {
                     task,
                     cancel: cancel_for_state,
+                    cancel_reason: cancel_reason_for_state,
                 });
             }
 
@@ -648,6 +654,8 @@ async fn run_agent_driver(
                         drain_active_turn(&active_turn).await;
                         let turn_cancel = CancellationToken::new();
                         let cancel_for_state = turn_cancel.clone();
+                        let cancel_reason: Arc<OnceLock<CancelReason>> = Arc::new(OnceLock::new());
+                        let cancel_reason_for_state = cancel_reason.clone();
                         let runtime_t = runtime.clone();
                         let event_tx_t = event_tx.clone();
                         let title_gen_attempted_t = title_gen_attempted.clone();
@@ -663,12 +671,14 @@ async fn run_agent_driver(
                                 title_gen_attempted_t,
                                 session_id_t,
                                 turn_cancel,
+                                cancel_reason,
                             )
                             .await;
                         });
                         *active_turn.lock().await = Some(ActiveTurn {
                             task,
                             cancel: cancel_for_state,
+                            cancel_reason: cancel_reason_for_state,
                         });
                     }
                     SlashOutcome::NotFound => {
@@ -777,8 +787,16 @@ async fn run_agent_driver(
                 // stays Some until the task naturally completes — the
                 // next SubmitInput (or driver shutdown) drains it.
                 // TS parity: REPL.tsx Esc/Ctrl+C → abortController
-                // .abort() → query() generator yields and returns.
+                // .abort('user-cancel') → query() generator yields,
+                // .finally reads `signal.reason` and may auto-restore.
+                //
+                // Record `UserCancel` BEFORE firing `.cancel()` so the
+                // turn task (which races at every `.await` point) is
+                // guaranteed to see it. `OnceLock::set` returning Err
+                // means a prior writer raced and won — keep going; the
+                // first reason wins regardless of who wrote it.
                 if let Some(state) = active_turn.lock().await.as_ref() {
+                    let _ = state.cancel_reason.set(CancelReason::UserCancel);
                     state.cancel.cancel();
                     info!("Interrupt: cancelled active turn");
                 }
@@ -1086,7 +1104,8 @@ async fn run_agent_driver(
                 }
             }
 
-            UserCommand::Shutdown => {
+            UserCommand::Shutdown { reason } => {
+                info!(%reason, "Shutdown requested by TUI");
                 // Drain in-flight turn before emitting SessionEnded so
                 // the engine stops promptly and any pending events
                 // flush through `event_tx` ahead of the lifecycle
@@ -1816,14 +1835,33 @@ async fn dispatch_plan(
 struct ActiveTurn {
     task: tokio::task::JoinHandle<()>,
     cancel: CancellationToken,
+    /// Written by whoever fires `.cancel()` so the turn task can emit a
+    /// `TurnInterrupted{reason}` with the right discriminant after the
+    /// engine returns. `OnceLock` because every cancel callsite is a
+    /// first-writer (additional cancels are no-ops at the token level
+    /// too). `None` means the turn ended naturally — no terminal event
+    /// is synthesised by the runner.
+    ///
+    /// TS analogue: `abortController.abort(reason)` carries `reason` on
+    /// `signal.reason`. The `.finally` block in `REPL.tsx:3001` reads
+    /// the reason to decide whether auto-restore applies.
+    cancel_reason: Arc<OnceLock<CancelReason>>,
 }
 
 /// Cancel the in-flight turn (if any) and await its completion.
 /// Used by every arm whose semantics conflict with a concurrent
 /// turn (Clear / Compact / Rewind / Shutdown / next SubmitInput).
+///
+/// Always records `SystemPreempt` as the reason — these callers are
+/// running cleanup work, not honouring a user "stop this turn"
+/// request. `UserCommand::Interrupt` sets `UserCancel` *before*
+/// invoking `.cancel()` so the OnceLock has already been written by
+/// the time the loop reaches `drain_active_turn` (write-once means
+/// the subsequent `SystemPreempt` write here is silently dropped).
 async fn drain_active_turn(slot: &Arc<Mutex<Option<ActiveTurn>>>) {
     let state = { slot.lock().await.take() };
     if let Some(s) = state {
+        let _ = s.cancel_reason.set(CancelReason::SystemPreempt);
         s.cancel.cancel();
         let _ = s.task.await;
     }
@@ -2251,6 +2289,7 @@ async fn process_submit_turn(
     title_gen_attempted: Arc<std::sync::atomic::AtomicBool>,
     session_id: String,
     turn_cancel: CancellationToken,
+    cancel_reason: Arc<OnceLock<CancelReason>>,
 ) {
     // Resolve @-mentions through the shared cross-path helper.
     // TS parity: `processUserInput.ts:504` calls `getAttachmentMessages`
@@ -2349,6 +2388,24 @@ async fn process_submit_turn(
     }
 
     let _ = forward_handle.await;
+
+    // Emit a runner-synthesised `TurnInterrupted{reason}` when the turn
+    // was cancelled. The engine's `TurnCompleted` (if it fired mid-turn
+    // before the cancel was observed) is still forwarded above — the
+    // TUI's `on_turn_completed` no longer mutates state on interrupt,
+    // so the only auto-restore code path is the `TurnInterrupted`
+    // handler below in protocol.rs. Mirrors TS REPL.tsx's `.finally`
+    // block (`signal.reason === 'user-cancel'`).
+    if let Some(reason) = cancel_reason.get().copied() {
+        let _ = event_tx
+            .send(CoreEvent::Protocol(ServerNotification::TurnInterrupted(
+                coco_types::TurnInterruptedParams {
+                    turn_id: None,
+                    reason: Some(reason),
+                },
+            )))
+            .await;
+    }
 
     maybe_spawn_auto_title(&runtime, &title_gen_attempted, &session_id).await;
 }
@@ -2910,69 +2967,40 @@ fn truncate_output(text: String, max_bytes: usize, max_lines: usize) -> String {
 }
 
 /// Build the TUI's session-frozen model catalog from the resolved
-/// `ModelRegistry`. Merges L2 `(provider, model_id)` entries with L0
-/// builtins (lazy-synthesised via `infer_provider` when not paired with
-/// any registered provider) and L1 `~/.coco/models.json` entries.
-///
-/// Provider display labels reuse the same mapping as
-/// `update/show.rs::infer_provider`'s display side, so picker headers
-/// stay consistent regardless of which path produced the entry.
+/// `ModelRegistry`. Each registered `(provider, model_id)` pair becomes
+/// one entry; the same `model_id` shared across providers (e.g.
+/// `deepseek-v4` under both `deepseek-openai` and `deepseek-anthropic`)
+/// yields one entry per provider. Models not paired with any registered
+/// provider are unreachable at runtime and therefore not surfaced.
 fn build_model_catalog(
     runtime_config: &coco_config::RuntimeConfig,
 ) -> Vec<coco_tui::state::ModelCatalogEntry> {
     use coco_tui::state::ModelCatalogEntry;
-    let mut entries: Vec<ModelCatalogEntry> = Vec::new();
-    let mut seen: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
-
-    // L2: pre-resolved (provider, model_id) entries.
-    for ((provider, model_id), resolved) in &runtime_config.model_registry.resolved {
-        let info = &resolved.info;
-        let supported_efforts: Vec<coco_types::ReasoningEffort> = info
-            .supported_thinking_levels
-            .as_ref()
-            .map(|levels| levels.iter().map(|l| l.effort).collect())
-            .unwrap_or_default();
-        entries.push(ModelCatalogEntry {
-            provider: provider.clone(),
-            provider_display: provider_display_label(provider),
-            model_id: model_id.clone(),
-            display_name: info
-                .display_name
-                .clone()
-                .unwrap_or_else(|| model_id.clone()),
-            context_window: Some(info.context_window.get() as i64),
-            supported_efforts,
-            default_effort: info.default_thinking_level,
-        });
-        seen.insert((provider.clone(), model_id.clone()));
-    }
-
-    // L0 fallback: builtin partial entries not paired with any
-    // provider. Provider is inferred from the model_id prefix because
-    // the builtin map is keyed only by model_id.
-    for (model_id, partial) in coco_config::builtin_models_partial() {
-        let (provider, provider_display) = infer_provider_for_catalog(model_id);
-        if seen.contains(&(provider.to_string(), model_id.clone())) {
-            continue;
-        }
-        let supported_efforts: Vec<coco_types::ReasoningEffort> = partial
-            .supported_thinking_levels
-            .as_ref()
-            .map(|levels| levels.iter().map(|l| l.effort).collect())
-            .unwrap_or_default();
-        entries.push(ModelCatalogEntry {
-            provider: provider.to_string(),
-            provider_display: provider_display.to_string(),
-            model_id: model_id.clone(),
-            display_name: partial
-                .display_name
-                .clone()
-                .unwrap_or_else(|| model_id.clone()),
-            context_window: partial.context_window.map(|t| t.get() as i64),
-            supported_efforts,
-            default_effort: partial.default_thinking_level,
-        });
-    }
+    let mut entries: Vec<ModelCatalogEntry> = runtime_config
+        .model_registry
+        .resolved
+        .iter()
+        .map(|((provider, model_id), resolved)| {
+            let info = &resolved.info;
+            let supported_efforts: Vec<coco_types::ReasoningEffort> = info
+                .supported_thinking_levels
+                .as_ref()
+                .map(|levels| levels.iter().map(|l| l.effort).collect())
+                .unwrap_or_default();
+            ModelCatalogEntry {
+                provider: provider.clone(),
+                provider_display: provider_display_label(provider),
+                model_id: model_id.clone(),
+                display_name: info
+                    .display_name
+                    .clone()
+                    .unwrap_or_else(|| model_id.clone()),
+                context_window: Some(info.context_window.get() as i64),
+                supported_efforts,
+                default_effort: info.default_thinking_level,
+            }
+        })
+        .collect();
 
     // Stable sort: provider_display → display_name. Matches the
     // picker's section-by-provider rendering.
@@ -3019,10 +3047,10 @@ fn build_model_by_role(
     out
 }
 
-/// Provider-prefix → display label. Used by both the L0-fallback
-/// catalog seeder and any place that wants a human label for a
-/// provider id. The L2 resolved path can use this too — providers
-/// don't carry a display label upstream.
+/// Provider id → human display label. Falls back to the raw id for
+/// providers without an explicit label (e.g. user-named custom
+/// providers, or `deepseek-openai` / `deepseek-anthropic` which keep
+/// their qualified id so the picker can distinguish them).
 fn provider_display_label(provider: &str) -> String {
     match provider {
         "anthropic" => "Anthropic",
@@ -3033,25 +3061,6 @@ fn provider_display_label(provider: &str) -> String {
         other => return other.to_string(),
     }
     .to_string()
-}
-
-/// Infer `(provider, provider_display)` from a model_id prefix. Used
-/// as the L0 fallback when no L2 entry pairs the builtin model with a
-/// registered provider. Mirrors `update/show.rs::infer_provider`
-/// (which retains the same logic for the picker's
-/// `is_current_for_role` matching path).
-fn infer_provider_for_catalog(model_id: &str) -> (&'static str, &'static str) {
-    if model_id.starts_with("claude-") {
-        ("anthropic", "Anthropic")
-    } else if model_id.starts_with("gpt-") || model_id.starts_with('o') {
-        ("openai", "OpenAI")
-    } else if model_id.starts_with("gemini-") {
-        ("google", "Google")
-    } else if model_id.starts_with("deepseek-") {
-        ("deepseek", "DeepSeek")
-    } else {
-        ("other", "Other")
-    }
 }
 
 /// Apply a `(role, provider, model_id, effort)` selection to the live

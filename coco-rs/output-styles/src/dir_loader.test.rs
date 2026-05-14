@@ -26,6 +26,20 @@ fn ignores_non_md_files() {
 }
 
 #[test]
+fn loads_nested_markdown_files_recursively() {
+    let dir = tempdir().unwrap();
+    let nested = dir.path().join("nested").join("deeper");
+    std::fs::create_dir_all(&nested).unwrap();
+    write_md(&nested, "concise.md", "# Nested\nBe brief.\n");
+
+    let styles = load_dir_styles(dir.path(), OutputStyleSource::UserSettings);
+
+    assert_eq!(styles.len(), 1);
+    assert_eq!(styles[0].name, "concise");
+    assert_eq!(styles[0].description, "Nested");
+}
+
+#[test]
 fn loads_filename_as_default_name() {
     let dir = tempdir().unwrap();
     write_md(dir.path(), "concise.md", "# Concise\nBe brief.\n");
@@ -67,6 +81,30 @@ fn keep_coding_instructions_accepts_string_bool() {
     );
     let styles = load_dir_styles(dir.path(), OutputStyleSource::UserSettings);
     assert_eq!(styles[0].keep_coding_instructions, Some(true));
+}
+
+#[test]
+fn keep_coding_instructions_rejects_non_ts_bool_strings() {
+    let dir = tempdir().unwrap();
+    write_md(
+        dir.path(),
+        "stringly.md",
+        "---\nkeep-coding-instructions: \"TRUE\"\n---\nbody\n",
+    );
+    write_md(
+        dir.path(),
+        "numeric.md",
+        "---\nkeep-coding-instructions: 1\n---\nbody\n",
+    );
+
+    let styles = load_dir_styles(dir.path(), OutputStyleSource::UserSettings);
+
+    assert_eq!(styles.len(), 2);
+    assert!(
+        styles
+            .iter()
+            .all(|style| style.keep_coding_instructions.is_none())
+    );
 }
 
 #[test]

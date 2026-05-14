@@ -65,6 +65,28 @@ fn parses_force_for_plugin_only_on_plugin_styles() {
 }
 
 #[test]
+fn force_for_plugin_rejects_non_ts_bool_strings() {
+    let plugin_dir = tempdir().unwrap();
+    let styles_dir = plugin_dir.path().join("output-styles");
+    std::fs::create_dir_all(&styles_dir).unwrap();
+    write(
+        &styles_dir,
+        "forced.md",
+        "---\nforce-for-plugin: \"TRUE\"\n---\nbody\n",
+    );
+
+    let plugins = vec![PluginOutputStyleSource {
+        plugin_name: "p".into(),
+        default_dir: Some(styles_dir),
+        extra_paths: vec![],
+    }];
+    let styles = load_plugin_output_styles(&plugins);
+
+    assert_eq!(styles.len(), 1);
+    assert_eq!(styles[0].force_for_plugin, None);
+}
+
+#[test]
 fn handles_extra_paths_directory_and_file() {
     let plugin_dir = tempdir().unwrap();
     let extras_dir = plugin_dir.path().join("more-styles");
@@ -87,7 +109,26 @@ fn handles_extra_paths_directory_and_file() {
 }
 
 #[test]
-fn deduplicates_identical_names_within_same_plugin() {
+fn loads_nested_plugin_markdown_files_recursively() {
+    let plugin_dir = tempdir().unwrap();
+    let styles_dir = plugin_dir.path().join("output-styles");
+    let nested = styles_dir.join("nested").join("deeper");
+    std::fs::create_dir_all(&nested).unwrap();
+    write(&nested, "focused.md", "# Focused\n");
+
+    let plugins = vec![PluginOutputStyleSource {
+        plugin_name: "p".into(),
+        default_dir: Some(styles_dir),
+        extra_paths: vec![],
+    }];
+    let styles = load_plugin_output_styles(&plugins);
+
+    assert_eq!(styles.len(), 1);
+    assert_eq!(styles[0].name, "p:focused");
+}
+
+#[test]
+fn keeps_same_names_from_distinct_plugin_files() {
     let plugin_dir = tempdir().unwrap();
     let styles_dir = plugin_dir.path().join("output-styles");
     std::fs::create_dir_all(&styles_dir).unwrap();
@@ -103,13 +144,13 @@ fn deduplicates_identical_names_within_same_plugin() {
         extra_paths: vec![extra_dir],
     }];
     let styles = load_plugin_output_styles(&plugins);
-    assert_eq!(styles.len(), 1);
-    // First wins — from the default dir.
-    assert!(styles[0].prompt.contains("First"));
+    assert_eq!(styles.len(), 2);
+    assert!(styles.iter().any(|style| style.prompt.contains("First")));
+    assert!(styles.iter().any(|style| style.prompt.contains("Second")));
 }
 
 #[test]
-fn does_not_double_prefix_already_namespaced_name() {
+fn prefixes_already_namespaced_name_like_ts() {
     let plugin_dir = tempdir().unwrap();
     let styles_dir = plugin_dir.path().join("output-styles");
     std::fs::create_dir_all(&styles_dir).unwrap();
@@ -125,5 +166,5 @@ fn does_not_double_prefix_already_namespaced_name() {
         extra_paths: vec![],
     }];
     let styles = load_plugin_output_styles(&plugins);
-    assert_eq!(styles[0].name, "alpha:already-namespaced");
+    assert_eq!(styles[0].name, "alpha:alpha:already-namespaced");
 }

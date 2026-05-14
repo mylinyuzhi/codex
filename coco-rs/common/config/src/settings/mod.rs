@@ -67,6 +67,11 @@ pub struct Settings {
     // === Environment ===
     #[serde(default)]
     pub env: HashMap<String, String>,
+    /// Startup logging controls. Read by `app/cli` before installing
+    /// the global tracing subscriber; env vars remain a higher-priority
+    /// override layer.
+    #[serde(default)]
+    pub log: PartialLogSettings,
 
     // === Runtime components ===
     #[serde(default)]
@@ -230,6 +235,30 @@ pub struct PermissionsConfig {
     /// TS: allowManagedPermissionRulesOnly
     #[serde(default)]
     pub allow_managed_permission_rules_only: bool,
+}
+
+/// Optional `settings.json` logging block consumed at process startup.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PartialLogSettings {
+    /// Tracing filter directive. `filter` is accepted as an alias because
+    /// the resolved value is reported as `log_filter` in startup logs.
+    #[serde(
+        alias = "filter",
+        alias = "log_filter",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub level: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stderr: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timezone: Option<String>,
 }
 
 /// Auto-mode/yolo classifier user configuration.

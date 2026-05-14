@@ -223,7 +223,7 @@ fn test_runtime_config_resolves_structured_model_roles() {
     let settings = settings_with(Settings {
         models: crate::ModelSelectionSettings {
             main: Some(role_slots_of("openai", "gpt-5-5")),
-            fast: Some(role_slots_of("google", "gemini-2.5-pro")),
+            fast: Some(role_slots_of("google", "gemini-3.1-pro-preview")),
             ..Default::default()
         },
         ..Default::default()
@@ -247,7 +247,7 @@ fn test_runtime_config_resolves_structured_model_roles() {
     assert_eq!(main, &model_spec("openai", ProviderApi::Openai, "gpt-5-5"));
     assert_eq!(
         fast,
-        &model_spec("google", ProviderApi::Gemini, "gemini-2.5-pro")
+        &model_spec("google", ProviderApi::Gemini, "gemini-3.1-pro-preview")
     );
 }
 

@@ -8,6 +8,7 @@ use tokio::sync::mpsc;
 
 use super::edit::try_local_command;
 use super::handle_command;
+use crate::command::ShutdownReason;
 use crate::command::UserCommand;
 use crate::events::TuiCommand;
 use crate::state::AppState;
@@ -138,6 +139,60 @@ async fn queue_input_of_plain_text_still_queues() {
         }
         other => panic!("expected QueueCommand on the wire, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn idle_ctrl_c_arms_exit_hint_without_interrupting() {
+    let mut state = AppState::new();
+    let (tx, mut rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::Interrupt, &tx).await;
+
+    assert_eq!(
+        state.ui.pending_exit_hint(),
+        Some(crate::state::ExitKey::CtrlC)
+    );
+    assert!(
+        !state.session.was_interrupted,
+        "idle Ctrl+C should not show the interrupt banner"
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "idle Ctrl+C should not send UserCommand::Interrupt"
+    );
+}
+
+#[tokio::test]
+async fn busy_ctrl_c_interrupts_without_exit_hint() {
+    let mut state = AppState::new();
+    state.session.set_busy(true);
+    let (tx, mut rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::Interrupt, &tx).await;
+
+    assert_eq!(state.ui.pending_exit_hint(), None);
+    assert!(state.session.was_interrupted);
+    match rx.try_recv() {
+        Ok(UserCommand::Interrupt) => {}
+        other => panic!("expected Interrupt on the wire, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn double_ctrl_c_shutdown_carries_reason() {
+    let mut state = AppState::new();
+    let (tx, mut rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::Interrupt, &tx).await;
+    handle_command(&mut state, TuiCommand::Interrupt, &tx).await;
+
+    match rx.try_recv() {
+        Ok(UserCommand::Shutdown { reason }) => {
+            assert_eq!(reason, ShutdownReason::DoublePressCtrlC);
+        }
+        other => panic!("expected Shutdown(DoublePressCtrlC), got {other:?}"),
+    }
+    assert!(state.should_exit());
 }
 
 #[tokio::test]

@@ -179,6 +179,7 @@ fn test_known_fields() {
     assert!(is_setting_supported("permissions"));
     assert!(is_setting_supported("hooks"));
     assert!(is_setting_supported("env"));
+    assert!(is_setting_supported("log"));
 }
 
 #[test]

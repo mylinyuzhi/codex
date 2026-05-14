@@ -77,10 +77,9 @@ pub struct OutputStyleSection<'a> {
     /// Full prompt body.
     pub prompt: &'a str,
     /// When `true`, the standard coding instructions stay on top of
-    /// the style. When `false`, the style replaces them. Built-in
-    /// styles set this to `true`; custom styles default to `None`
-    /// (treated as `true` for safety — coco-rs keeps the standard
-    /// guidance unless the author opts out explicitly).
+    /// the style. When `false`, the style replaces them. TS only keeps
+    /// those instructions for default style or explicit
+    /// `keepCodingInstructions: true`.
     pub keep_coding_instructions: bool,
 }
 
