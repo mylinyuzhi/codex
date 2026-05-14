@@ -366,9 +366,11 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     // and L2 `providers.<n>.models.<id>` overrides are visible.
     {
         let mut catalog = build_model_catalog(&runtime.runtime_config);
+        let provider_statuses = build_provider_statuses(&runtime.runtime_config);
         let by_role = build_model_by_role(&runtime.runtime_config);
         let state = app.state_mut();
         state.session.model_catalog = std::mem::take(&mut catalog);
+        state.session.provider_statuses = provider_statuses;
         state.session.model_by_role = by_role;
     }
 
@@ -3010,6 +3012,40 @@ fn build_model_catalog(
             .then_with(|| a.display_name.cmp(&b.display_name))
     });
     entries
+}
+
+fn build_provider_statuses(
+    runtime_config: &coco_config::RuntimeConfig,
+) -> std::collections::HashMap<String, coco_tui::state::ProviderStatus> {
+    use coco_tui::state::ProviderStatus;
+    use coco_tui::state::ProviderUnavailableReason;
+
+    runtime_config
+        .providers
+        .iter()
+        .map(|(provider, cfg)| {
+            let mut unavailable_reasons = Vec::new();
+            if cfg.base_url.trim().is_empty() {
+                unavailable_reasons.push(ProviderUnavailableReason::MissingBaseUrl);
+            }
+            let has_api_key = cfg
+                .resolve_api_key()
+                .is_some_and(|key| !key.trim().is_empty())
+                || cfg.client_options.auth_token.is_some();
+            if !has_api_key {
+                unavailable_reasons.push(ProviderUnavailableReason::MissingApiKey {
+                    env_key: cfg.env_key.clone(),
+                });
+            }
+            (
+                provider.clone(),
+                ProviderStatus {
+                    provider_display: provider_display_label(provider),
+                    unavailable_reasons,
+                },
+            )
+        })
+        .collect()
 }
 
 /// Build the initial `model_by_role` map from

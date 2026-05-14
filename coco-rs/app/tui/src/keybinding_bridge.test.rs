@@ -44,6 +44,7 @@ fn model_picker_state() -> AppState {
                 supported_efforts: vec![coco_types::ReasoningEffort::Auto],
                 default_effort: Some(coco_types::ReasoningEffort::Auto),
                 is_current_for_role: true,
+                unavailable_reasons: Vec::new(),
             }],
             filter: String::new(),
             selected: 0,

@@ -68,6 +68,8 @@ pub use session::MessageContent;
 pub use session::ModelBinding;
 pub use session::ModelCatalogEntry;
 pub use session::PlanAction;
+pub use session::ProviderStatus;
+pub use session::ProviderUnavailableReason;
 pub use session::QueuedCommandDisplay;
 pub use session::SavedSession;
 pub use session::SessionState;

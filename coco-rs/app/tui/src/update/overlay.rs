@@ -17,6 +17,7 @@ use crate::state::MemoryDialogEntry;
 use crate::state::ModelEntry;
 use crate::state::ModelPickerOverlay;
 use crate::state::Overlay;
+use crate::state::ProviderUnavailableReason;
 use crate::state::SessionBrowserOverlay;
 use crate::state::SessionOption;
 use crate::state::SuggestionKind;
@@ -611,6 +612,14 @@ pub(super) async fn confirm(state: &mut AppState, command_tx: &mpsc::Sender<User
     match overlay {
         Some(Overlay::ModelPicker(m)) => {
             if let Some(entry) = filtered_models(&m).get(m.selected as usize).copied() {
+                if let Some(summary) = unavailable_summary(&entry.unavailable_reasons) {
+                    state.ui.overlay = Some(Overlay::ModelPicker(m));
+                    state.ui.add_toast(Toast::warning(format!(
+                        "{} {summary}",
+                        t!("dialog.model_picker_unavailable_label")
+                    )));
+                    return;
+                }
                 let _ = command_tx
                     .send(UserCommand::SetModelRole {
                         role: m.role,
@@ -1162,6 +1171,9 @@ pub(super) fn cycle_model_effort(state: &mut AppState, delta: i32) {
     let Some(entry) = filtered.get(m.selected as usize) else {
         return;
     };
+    if !entry.unavailable_reasons.is_empty() {
+        return;
+    }
     if entry.supported_efforts.is_empty() {
         return;
     }
@@ -1184,6 +1196,35 @@ fn filtered_models(m: &ModelPickerOverlay) -> Vec<&ModelEntry> {
                 || e.provider_display.to_lowercase().contains(&filter_lower)
         })
         .collect()
+}
+
+fn unavailable_summary(reasons: &[ProviderUnavailableReason]) -> Option<String> {
+    if reasons.is_empty() {
+        return None;
+    }
+    Some(
+        reasons
+            .iter()
+            .map(unavailable_reason_label)
+            .collect::<Vec<_>>()
+            .join("; "),
+    )
+}
+
+fn unavailable_reason_label(reason: &ProviderUnavailableReason) -> String {
+    match reason {
+        ProviderUnavailableReason::MissingBaseUrl => {
+            t!("dialog.model_picker_unavailable_base_url").to_string()
+        }
+        ProviderUnavailableReason::MissingApiKey { env_key } => t!(
+            "dialog.model_picker_unavailable_api_key",
+            env_key = env_key.as_str()
+        )
+        .to_string(),
+        ProviderUnavailableReason::NoModels => {
+            t!("dialog.model_picker_unavailable_no_models").to_string()
+        }
+    }
 }
 
 fn filtered_commands(cp: &CommandPaletteOverlay) -> Vec<&CommandOption> {

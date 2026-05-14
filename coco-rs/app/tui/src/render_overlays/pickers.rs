@@ -17,6 +17,7 @@ use crate::state::MemoryDialogOverlay;
 use crate::state::MemoryDialogScope;
 use crate::state::ModelEntry;
 use crate::state::ModelPickerOverlay;
+use crate::state::ProviderUnavailableReason;
 use crate::state::QuickOpenOverlay;
 use crate::state::SessionBrowserOverlay;
 use crate::theme::Theme;
@@ -243,6 +244,11 @@ fn render_model_row(
         } => {
             let is_selected = *filtered_index == selected;
             let bg = entry.is_current_for_role.then_some(theme.selection_bg);
+            let text_fg = if entry.unavailable_reasons.is_empty() {
+                theme.text
+            } else {
+                theme.text_dim
+            };
             let mut spans = Vec::new();
             if is_selected {
                 spans.push(Span::raw("  ").bg_opt(bg));
@@ -250,15 +256,21 @@ fn render_model_row(
             } else {
                 spans.push(Span::raw("    ").bg_opt(bg));
             }
-            let name = Span::raw(entry.display_name.clone())
-                .fg(theme.text)
-                .bg_opt(bg);
+            let name = Span::raw(entry.display_name.clone()).fg(text_fg).bg_opt(bg);
             spans.push(if is_selected { name.bold() } else { name });
             if let Some(context_window) = entry.context_window {
                 spans.push(
                     Span::raw(format!(" · {}", format_context_window(context_window)))
                         .fg(theme.text_dim)
                         .bg_opt(bg),
+                );
+            }
+            if !entry.unavailable_reasons.is_empty() {
+                spans.push(
+                    Span::raw(format!(" · {}", t!("dialog.model_picker_unavailable_tag")))
+                        .fg(theme.warning)
+                        .bg_opt(bg)
+                        .bold(),
                 );
             }
             if !entry.supported_efforts.is_empty() {
@@ -291,6 +303,15 @@ fn render_effort_line(
             Span::raw(t!("dialog.model_picker_thinking_label").to_string()).fg(theme.text_dim),
         );
     };
+    if let Some(summary) = unavailable_summary(&entry.unavailable_reasons) {
+        return Line::from(vec![
+            Span::raw(t!("dialog.model_picker_unavailable_label").to_string())
+                .fg(theme.warning)
+                .bold(),
+            Span::raw("  "),
+            Span::raw(summary).fg(theme.text_dim),
+        ]);
+    }
     let mut spans = vec![
         Span::raw(t!("dialog.model_picker_thinking_label").to_string()).fg(theme.text_dim),
         Span::raw("  "),
@@ -440,13 +461,18 @@ fn render_grouped_models(entries: &[&ModelEntry], selected: i32) -> String {
         } else {
             format!(" · {}", t!("dialog.model_picker_thinking_tag"))
         };
+        let unavailable = if entry.unavailable_reasons.is_empty() {
+            String::new()
+        } else {
+            format!(" · {}", t!("dialog.model_picker_unavailable_tag"))
+        };
         let current = if entry.is_current_for_role {
             format!("  [{}]", t!("dialog.model_picker_current"))
         } else {
             String::new()
         };
         out.push(format!(
-            "{marker}{}{context}{thinking}{current}",
+            "{marker}{}{context}{unavailable}{thinking}{current}",
             entry.display_name
         ));
     }
@@ -476,6 +502,9 @@ fn render_effort_footer(m: &ModelPickerOverlay, filtered: &[&ModelEntry]) -> Str
     let Some(entry) = filtered.get(m.selected as usize) else {
         return String::new();
     };
+    if let Some(summary) = unavailable_summary(&entry.unavailable_reasons) {
+        return format!("{}  {summary}", t!("dialog.model_picker_unavailable_label"));
+    }
     if entry.supported_efforts.is_empty() {
         return String::new();
     }
@@ -497,6 +526,35 @@ fn render_effort_footer(m: &ModelPickerOverlay, filtered: &[&ModelEntry]) -> Str
         t!("dialog.model_picker_thinking_label"),
         chips.join("  ")
     )
+}
+
+pub(crate) fn unavailable_summary(reasons: &[ProviderUnavailableReason]) -> Option<String> {
+    if reasons.is_empty() {
+        return None;
+    }
+    Some(
+        reasons
+            .iter()
+            .map(unavailable_reason_label)
+            .collect::<Vec<_>>()
+            .join("; "),
+    )
+}
+
+fn unavailable_reason_label(reason: &ProviderUnavailableReason) -> String {
+    match reason {
+        ProviderUnavailableReason::MissingBaseUrl => {
+            t!("dialog.model_picker_unavailable_base_url").to_string()
+        }
+        ProviderUnavailableReason::MissingApiKey { env_key } => t!(
+            "dialog.model_picker_unavailable_api_key",
+            env_key = env_key.as_str()
+        )
+        .to_string(),
+        ProviderUnavailableReason::NoModels => {
+            t!("dialog.model_picker_unavailable_no_models").to_string()
+        }
+    }
 }
 
 /// User-facing role display name. Lookups go through i18n so the
