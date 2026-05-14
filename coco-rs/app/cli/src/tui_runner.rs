@@ -111,6 +111,13 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     let config_change_rx = _reloader
         .as_ref()
         .map(coco_config_reload::RuntimeReloader::subscribe_changes);
+    let display_settings_rx = _reloader
+        .as_ref()
+        .map(|reloader| spawn_display_settings_reload(reloader.publisher().subscribe()));
+    let config_reload_errors_rx = _reloader
+        .as_ref()
+        .map(coco_config_reload::RuntimeReloader::subscribe_errors)
+        .map(spawn_config_reload_error_toasts);
     // Engine resources (client, fallbacks, recovery, tools, system
     // prompt, command registry, startup-permission state) shared with
     // SDK / headless via `session_bootstrap::build_engine_resources`.
@@ -334,6 +341,15 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     // Create TUI app
     let mut app = App::new(command_tx, notification_rx)
         .map_err(|e| anyhow::anyhow!("Failed to create TUI: {e}"))?;
+    app.state_mut().ui.apply_display_settings(
+        coco_tui::DisplaySettings::from_settings_with_sources(&runtime.runtime_config.settings),
+    );
+    if let Some(rx) = display_settings_rx {
+        app = app.with_display_settings_reload(rx);
+    }
+    if let Some(rx) = config_reload_errors_rx {
+        app = app.with_config_reload_errors(rx);
+    }
 
     // Wire file_history_enabled into TUI session state so the rewind
     // overlay knows whether to show code restore options.
@@ -380,6 +396,31 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
             .ui
             .add_toast(coco_tui::state::ui::Toast::warning(msg));
     }
+
+    // Boot the TUI theme stack from ~/.coco/theme.json. This is TUI-local
+    // config, separate from RuntimeConfig, so user palette edits can hot-reload
+    // without rebuilding the agent runtime.
+    let _theme_watcher_guard = {
+        let coco_tui::theme::ThemeSetup {
+            watcher,
+            reload_rx,
+            initial,
+            watch_error,
+        } = coco_tui::theme::install_theme().await;
+        app.state_mut().ui.apply_theme_runtime(initial.state);
+        if let Some(error) = initial.error {
+            app.state_mut()
+                .ui
+                .add_toast(coco_tui::state::ui::Toast::warning(error));
+        }
+        if let Some(error) = watch_error {
+            app.state_mut()
+                .ui
+                .add_toast(coco_tui::state::ui::Toast::warning(error));
+        }
+        app = app.with_theme_reload(reload_rx);
+        watcher
+    };
 
     // Boot the keybindings stack via the TUI helper: builds a
     // watcher-backed handle (which hot-reloads on file changes via
@@ -429,6 +470,45 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     let _ = driver_handle.await;
 
     tui_result.map_err(|e| anyhow::anyhow!("TUI error: {e}"))
+}
+
+fn spawn_display_settings_reload(
+    mut rx: tokio::sync::watch::Receiver<Arc<coco_config::RuntimeConfig>>,
+) -> mpsc::Receiver<coco_tui::DisplaySettings> {
+    let (tx, out_rx) = mpsc::channel(16);
+    tokio::spawn(async move {
+        while rx.changed().await.is_ok() {
+            let display_settings =
+                coco_tui::DisplaySettings::from_settings_with_sources(&rx.borrow().settings);
+            if tx.send(display_settings).await.is_err() {
+                break;
+            }
+        }
+    });
+    out_rx
+}
+
+fn spawn_config_reload_error_toasts(
+    mut rx: tokio::sync::broadcast::Receiver<coco_config_reload::ConfigReloadError>,
+) -> mpsc::Receiver<String> {
+    let (tx, out_rx) = mpsc::channel(16);
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(err) => {
+                    let source = err.kind.as_str();
+                    let detail = err.message;
+                    let message = format!("{source}: {detail}");
+                    if tx.send(message).await.is_err() {
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+    out_rx
 }
 
 /// Agent driver — consumes UserCommands, drives QueryEngine, emits CoreEvents.

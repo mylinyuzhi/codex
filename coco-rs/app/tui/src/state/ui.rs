@@ -10,10 +10,13 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::constants;
+use crate::display_settings::DisplaySettings;
 use crate::double_press::DoublePressTracker;
 use crate::keybinding_resolver::KeybindingHandle;
 use crate::state::overlay::Overlay;
 use crate::theme::Theme;
+use crate::theme::ThemeRuntimeState;
+use crate::theme::ThemeSetting;
 use crate::widgets::suggestion_popup::SuggestionItem;
 
 /// Exit keys subject to double-press confirmation. Mirrors TS
@@ -66,6 +69,10 @@ pub struct UiState {
     pub user_scrolled: bool,
     /// Current theme.
     pub theme: Theme,
+    /// Runtime theme registry + persisted setting snapshot.
+    pub theme_state: ThemeRuntimeState,
+    /// Display preferences derived from settings.json.
+    pub display_settings: DisplaySettings,
     /// Active toast notifications.
     pub toasts: VecDeque<Toast>,
     /// IDs of collapsed tool calls.
@@ -145,6 +152,7 @@ pub struct StashedInput {
 impl UiState {
     /// Create a new default UI state.
     pub fn new() -> Self {
+        let theme_state = ThemeRuntimeState::default();
         Self {
             input: InputState::new(),
             paste_manager: crate::paste::PasteManager::new(),
@@ -156,7 +164,9 @@ impl UiState {
             show_thinking: true,
             show_system_reminders: false,
             user_scrolled: false,
-            theme: Theme::default(),
+            theme: theme_state.theme.clone(),
+            theme_state,
+            display_settings: DisplaySettings::default(),
             toasts: VecDeque::new(),
             collapsed_tools: HashSet::new(),
             help_scroll: 0,
@@ -170,6 +180,27 @@ impl UiState {
             kb_handle: KeybindingHandle::from_defaults(),
             stashed_input: None,
             show_teammate_message_preview: false,
+        }
+    }
+
+    pub fn apply_theme_runtime(&mut self, theme_state: ThemeRuntimeState) {
+        self.theme = theme_state.theme.clone();
+        if let Some(Overlay::Settings(settings)) = self.overlay.as_mut() {
+            settings.set_themes(theme_state.choices.clone(), theme_state.setting.clone());
+        }
+        self.theme_state = theme_state;
+    }
+
+    pub fn apply_theme_setting(&mut self, setting: ThemeSetting) -> anyhow::Result<()> {
+        let theme_state = self.theme_state.with_setting(setting)?;
+        self.apply_theme_runtime(theme_state);
+        Ok(())
+    }
+
+    pub fn apply_display_settings(&mut self, display_settings: DisplaySettings) {
+        self.display_settings = display_settings;
+        if let Some(Overlay::Settings(settings)) = self.overlay.as_mut() {
+            settings.set_display_settings(display_settings);
         }
     }
 

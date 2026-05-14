@@ -30,6 +30,8 @@ pub enum KeybindingContext {
     Autocomplete,
     /// Tabbed settings overlay — Tab/Shift+Tab cycle tabs, Up/Down nav.
     Settings,
+    /// Theme tab inside Settings — includes theme-picker-specific actions.
+    ThemePicker,
     /// Default chat input context.
     Chat,
 }
@@ -59,7 +61,14 @@ pub fn active_context(state: &AppState) -> KeybindingContext {
             | Overlay::Transcript(_)
             | Overlay::ContextVisualization => KeybindingContext::Scrollable,
 
-            // Tabbed settings overlay
+            // Tabbed settings overlay. The Theme tab gets the TS
+            // ThemePicker context so `theme:toggleSyntaxHighlighting`
+            // works without making syntax highlighting a theme.json field.
+            Overlay::Settings(s)
+                if s.active_tab == crate::widgets::settings_panel::SettingsTab::Theme =>
+            {
+                KeybindingContext::ThemePicker
+            }
             Overlay::Settings(_) => KeybindingContext::Settings,
 
             // All others are confirmation/approval overlays
@@ -134,7 +143,7 @@ pub fn map_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
         KeybindingContext::Autocomplete => map_autocomplete_key(key)
             .or_else(|| map_global_key(state, key))
             .or_else(|| map_input_key(state, key)),
-        KeybindingContext::Settings => map_settings_key(key),
+        KeybindingContext::Settings | KeybindingContext::ThemePicker => map_settings_key(key),
         KeybindingContext::Chat => map_global_key(state, key).or_else(|| map_input_key(state, key)),
     }
 }

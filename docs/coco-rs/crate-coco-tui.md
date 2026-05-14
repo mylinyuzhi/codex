@@ -197,7 +197,7 @@ pub enum TuiCommand {
     OpenExternalEditor, OpenPlanEditor, PasteFromClipboard, CopyLastMessage,
 
     // Display toggles
-    ToggleToolCollapse, ToggleSystemReminders,
+    ToggleToolCollapse, ToggleSystemReminders, ToggleSyntaxHighlighting,
 
     // Application
     Quit,
@@ -708,7 +708,15 @@ pub struct DiffWidget<'a> {
 }
 ```
 
-## Theme System (36 colors, 5 themes)
+## Theme System (36 colors, 9 built-in themes + custom JSON)
+
+TUI theme state lives outside `RuntimeConfig`. The runner loads
+`~/.coco/theme.json` at startup and watches the file's parent directory with
+`coco-file-watch`; valid reloads apply immediately, invalid reloads surface a
+toast and keep the previous palette. The settings panel writes the selected
+theme back to `theme.json`. The syntax-highlighting toggle remains a display
+setting from `settings.json`; it controls whether fenced markdown code blocks
+are token-highlighted, while `theme.json` only supplies the `code_*` colors.
 
 ```rust
 pub struct Theme {

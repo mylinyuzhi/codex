@@ -5,6 +5,25 @@
 
 use ratatui::style::Color;
 
+mod config;
+mod watcher;
+
+pub use config::PartialThemeColors;
+pub use config::ThemeChoice;
+pub use config::ThemeConfig;
+pub use config::ThemeDefinition;
+pub use config::ThemeLoadResult;
+pub use config::ThemeMode;
+pub use config::ThemeRegistry;
+pub use config::ThemeRuntimeState;
+pub use config::ThemeSetting;
+pub use config::load_theme_runtime_or_default;
+pub use config::save_theme_setting;
+pub use config::theme_config_path;
+pub use watcher::ThemeSetup;
+pub use watcher::ThemeWatcher;
+pub use watcher::install_theme;
+
 /// Available theme names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ThemeName {
@@ -12,8 +31,71 @@ pub enum ThemeName {
     Default,
     Dark,
     Light,
+    DarkDaltonized,
+    LightDaltonized,
+    DarkAnsi,
+    LightAnsi,
     Dracula,
     Nord,
+}
+
+impl ThemeName {
+    pub fn all() -> &'static [Self] {
+        &[
+            Self::Default,
+            Self::Dark,
+            Self::Light,
+            Self::DarkDaltonized,
+            Self::LightDaltonized,
+            Self::DarkAnsi,
+            Self::LightAnsi,
+            Self::Dracula,
+            Self::Nord,
+        ]
+    }
+
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Dark => "dark",
+            Self::Light => "light",
+            Self::DarkDaltonized => "dark_daltonized",
+            Self::LightDaltonized => "light_daltonized",
+            Self::DarkAnsi => "dark_ansi",
+            Self::LightAnsi => "light_ansi",
+            Self::Dracula => "dracula",
+            Self::Nord => "nord",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Default => "Default",
+            Self::Dark => "Dark",
+            Self::Light => "Light",
+            Self::DarkDaltonized => "Dark Daltonized",
+            Self::LightDaltonized => "Light Daltonized",
+            Self::DarkAnsi => "Dark ANSI",
+            Self::LightAnsi => "Light ANSI",
+            Self::Dracula => "Dracula",
+            Self::Nord => "Nord",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        match id {
+            "default" => Some(Self::Default),
+            "dark" => Some(Self::Dark),
+            "light" => Some(Self::Light),
+            "dark_daltonized" | "dark-daltonized" => Some(Self::DarkDaltonized),
+            "light_daltonized" | "light-daltonized" => Some(Self::LightDaltonized),
+            "dark_ansi" | "dark-ansi" => Some(Self::DarkAnsi),
+            "light_ansi" | "light-ansi" => Some(Self::LightAnsi),
+            "dracula" => Some(Self::Dracula),
+            "nord" => Some(Self::Nord),
+            _ => None,
+        }
+    }
 }
 
 /// Complete color palette for TUI rendering.
@@ -88,9 +170,17 @@ impl Theme {
             ThemeName::Default => Self::default_theme(),
             ThemeName::Dark => Self::dark_theme(),
             ThemeName::Light => Self::light_theme(),
+            ThemeName::DarkDaltonized => Self::dark_daltonized_theme(),
+            ThemeName::LightDaltonized => Self::light_daltonized_theme(),
+            ThemeName::DarkAnsi => Self::dark_ansi_theme(),
+            ThemeName::LightAnsi => Self::light_ansi_theme(),
             ThemeName::Dracula => Self::dracula_theme(),
             ThemeName::Nord => Self::nord_theme(),
         }
+    }
+
+    pub fn builtin(id: &str) -> Option<Self> {
+        ThemeName::from_id(id).map(Self::from_name)
     }
 
     #[allow(clippy::disallowed_methods)]
@@ -240,6 +330,129 @@ impl Theme {
         }
     }
 
+    #[allow(clippy::disallowed_methods)]
+    fn dark_daltonized_theme() -> Self {
+        let mut theme = Self::dark_theme();
+        theme.success = Color::LightCyan;
+        theme.error = Color::LightMagenta;
+        theme.tool_completed = Color::LightCyan;
+        theme.tool_error = Color::LightMagenta;
+        theme.diff_added = Color::LightCyan;
+        theme.diff_removed = Color::LightMagenta;
+        theme.user_message = Color::LightCyan;
+        theme
+    }
+
+    #[allow(clippy::disallowed_methods)]
+    fn light_daltonized_theme() -> Self {
+        let mut theme = Self::light_theme();
+        theme.success = Color::Cyan;
+        theme.error = Color::Magenta;
+        theme.tool_completed = Color::Cyan;
+        theme.tool_error = Color::Magenta;
+        theme.diff_added = Color::Cyan;
+        theme.diff_removed = Color::Magenta;
+        theme.user_message = Color::Cyan;
+        theme.selection_bg = Color::Rgb(216, 238, 246);
+        theme
+    }
+
+    fn dark_ansi_theme() -> Self {
+        Self {
+            primary: Color::LightCyan,
+            secondary: Color::DarkGray,
+            accent: Color::LightMagenta,
+
+            text: Color::Reset,
+            text_dim: Color::DarkGray,
+            text_bold: Color::Reset,
+
+            user_message: Color::LightGreen,
+            user_message_bg: None,
+            assistant_message: Color::LightCyan,
+            thinking: Color::LightMagenta,
+            system_message: Color::DarkGray,
+
+            tool_running: Color::LightYellow,
+            tool_completed: Color::LightGreen,
+            tool_error: Color::LightRed,
+            warning: Color::LightYellow,
+            success: Color::LightGreen,
+            error: Color::LightRed,
+
+            border: Color::DarkGray,
+            border_focused: Color::LightCyan,
+            scrollbar: Color::DarkGray,
+            plan_mode: Color::LightCyan,
+            selection_bg: Color::Blue,
+            selection_fg: Color::LightCyan,
+
+            diff_added: Color::LightGreen,
+            diff_removed: Color::LightRed,
+
+            code_keyword: Color::LightMagenta,
+            code_string: Color::LightGreen,
+            code_comment: Color::DarkGray,
+            code_number: Color::LightCyan,
+
+            hyperlink: Color::LightCyan,
+            table_border: Color::DarkGray,
+            table_header: Color::LightCyan,
+            search_match: Color::LightYellow,
+            progress_bar: Color::LightCyan,
+            context_used: Color::LightCyan,
+            context_free: Color::DarkGray,
+        }
+    }
+
+    fn light_ansi_theme() -> Self {
+        Self {
+            primary: Color::Cyan,
+            secondary: Color::DarkGray,
+            accent: Color::Magenta,
+
+            text: Color::Reset,
+            text_dim: Color::DarkGray,
+            text_bold: Color::Reset,
+
+            user_message: Color::Green,
+            user_message_bg: None,
+            assistant_message: Color::Cyan,
+            thinking: Color::Magenta,
+            system_message: Color::DarkGray,
+
+            tool_running: Color::Yellow,
+            tool_completed: Color::Green,
+            tool_error: Color::Red,
+            warning: Color::Yellow,
+            success: Color::Green,
+            error: Color::Red,
+
+            border: Color::DarkGray,
+            border_focused: Color::Cyan,
+            scrollbar: Color::DarkGray,
+            plan_mode: Color::Cyan,
+            selection_bg: Color::Blue,
+            selection_fg: Color::Cyan,
+
+            diff_added: Color::Green,
+            diff_removed: Color::Red,
+
+            code_keyword: Color::Magenta,
+            code_string: Color::Green,
+            code_comment: Color::DarkGray,
+            code_number: Color::Cyan,
+
+            hyperlink: Color::Cyan,
+            table_border: Color::DarkGray,
+            table_header: Color::Cyan,
+            search_match: Color::Yellow,
+            progress_bar: Color::Cyan,
+            context_used: Color::Cyan,
+            context_free: Color::DarkGray,
+        }
+    }
+
     // Dracula's palette is defined by specific 24-bit RGB values
     // (https://draculatheme.com/contribute) — the named ANSI palette is the
     // wrong contract here. `Color::Rgb` is intentional in this constructor.
@@ -350,3 +563,7 @@ impl Default for Theme {
         Self::default_theme()
     }
 }
+
+#[cfg(test)]
+#[path = "theme.test.rs"]
+mod tests;

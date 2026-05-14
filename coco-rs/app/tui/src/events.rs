@@ -185,6 +185,8 @@ pub enum TuiCommand {
     ShowDoctor,
     /// Show the tabbed settings panel.
     ShowSettings,
+    /// Toggle language-level syntax highlighting for markdown code blocks.
+    ToggleSyntaxHighlighting,
     /// Tab: cycle Settings tab forward (Settings overlay) OR cycle
     /// question/footer focus (Question overlay). Handler in update.rs
     /// dispatches per-overlay. TS Question parity:

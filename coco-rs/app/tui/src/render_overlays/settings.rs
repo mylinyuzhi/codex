@@ -6,6 +6,7 @@ use crate::i18n::t;
 use crate::theme::Theme;
 use crate::widgets::settings_panel::SettingsPanelState;
 use crate::widgets::settings_panel::SettingsTab;
+use crate::widgets::settings_panel::syntax_highlighting_status_for_display;
 
 pub(super) fn settings_overlay_content(
     s: &SettingsPanelState,
@@ -32,15 +33,39 @@ pub(super) fn settings_overlay_content(
     .join("  ");
 
     let items: Vec<String> = match s.active_tab {
-        SettingsTab::Theme => s
-            .themes
-            .iter()
-            .enumerate()
-            .map(|(i, t)| {
-                let marker = if i as i32 == s.selected { "▸ " } else { "  " };
-                format!("{marker}{t:?}")
-            })
-            .collect(),
+        SettingsTab::Theme => {
+            let mut items: Vec<String> = s
+                .themes
+                .iter()
+                .enumerate()
+                .map(|(i, choice)| {
+                    let marker = if i as i32 == s.selected { "▸ " } else { "  " };
+                    let active = if choice.setting == s.active_theme {
+                        "✓ "
+                    } else {
+                        "  "
+                    };
+                    format!("{marker}{active}{}", choice.label)
+                })
+                .collect();
+            let marker = if s.is_syntax_highlighting_selected() {
+                "▸ "
+            } else {
+                "  "
+            };
+            let active = if s.display_settings.syntax_highlighting.is_enabled() {
+                "✓ "
+            } else {
+                "  "
+            };
+            let status = syntax_highlighting_status_for_display(s.display_settings);
+            items.push(String::new());
+            items.push(format!(
+                "{marker}{active}{}: {status}",
+                t!("settings.syntax_highlighting")
+            ));
+            items
+        }
         SettingsTab::OutputStyle => {
             if s.output_styles.is_empty() {
                 vec![t!("dialog.settings_no_custom_styles").to_string()]

@@ -148,7 +148,8 @@ pub fn local_settings_path(cwd: &Path) -> PathBuf {
 ///
 /// `key` may be dotted (`sandbox.mode`) — intermediate objects are
 /// created if absent. Existing siblings are preserved. Returns the
-/// path that was written so callers can show it to the user.
+/// path that was written so callers can show it to the user. Invalid
+/// existing JSON is returned as an error and left untouched.
 ///
 /// **Reload semantics**: writes to disk; the live runtime keeps the
 /// pre-existing in-memory `Settings` until the user starts a new
@@ -157,23 +158,40 @@ pub fn local_settings_path(cwd: &Path) -> PathBuf {
 /// next session, not the current one.
 pub fn write_user_setting(key: &str, value: serde_json::Value) -> crate::Result<PathBuf> {
     let path = user_settings_path();
+    write_user_setting_to_path(&path, key, value)
+}
+
+fn write_user_setting_to_path(
+    path: &Path,
+    key: &str,
+    value: serde_json::Value,
+) -> crate::Result<PathBuf> {
+    use crate::ResultExt;
+
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let mut root: serde_json::Value = if path.exists() {
-        let s = std::fs::read_to_string(&path)?;
+        let s = std::fs::read_to_string(path)?;
         if s.trim().is_empty() {
             serde_json::json!({})
         } else {
-            serde_json::from_str(&s).unwrap_or_else(|_| serde_json::json!({}))
+            serde_json::from_str(&s)
+                .with_ctx_lazy(|| format!("failed to parse JSON in {}", path.display()))?
         }
     } else {
         serde_json::json!({})
     };
+    if !root.is_object() {
+        return Err(crate::ConfigError::generic(format!(
+            "settings file root must be an object: {}",
+            path.display()
+        )));
+    }
     set_dotted(&mut root, key, value);
     let contents = serde_json::to_string_pretty(&root)?;
-    std::fs::write(&path, contents)?;
-    Ok(path)
+    std::fs::write(path, contents)?;
+    Ok(path.to_path_buf())
 }
 
 /// Walk `obj` along `key`'s dot-separated path, creating intermediate
@@ -251,3 +269,7 @@ pub fn managed_settings_path() -> PathBuf {
         PathBuf::from(r"C:\Program Files\CoCo\managed-settings.json")
     }
 }
+
+#[cfg(test)]
+#[path = "global_config.test.rs"]
+mod tests;

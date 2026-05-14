@@ -37,7 +37,7 @@ pub enum TrackedKind {
 }
 
 impl TrackedKind {
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Settings(WatchedKind::Settings(s)) => s.as_str(),
             Self::Settings(WatchedKind::ProvidersCatalog) => "providers_catalog",
@@ -52,6 +52,16 @@ impl TrackedKind {
 pub struct ConfigChange {
     pub path: PathBuf,
     pub kind: TrackedKind,
+}
+
+/// Failed rebuild for a tracked config-path change. Subscribers use
+/// this to surface reload failures while the reloader keeps the prior
+/// valid runtime snapshot.
+#[derive(Debug, Clone)]
+pub struct ConfigReloadError {
+    pub path: PathBuf,
+    pub kind: TrackedKind,
+    pub message: String,
 }
 
 /// Builder for [`RuntimeReloader::spawn`].
@@ -115,6 +125,7 @@ impl ReloadOptions {
 /// in via a separate `stop()` call.
 pub struct RuntimeReloader {
     publisher: Arc<RuntimePublisher>,
+    error_tx: tokio::sync::broadcast::Sender<ConfigReloadError>,
     handle: JoinHandle<()>,
     /// Owns the `FileWatcher`. Drop releases OS-level watcher handles
     /// and closes the broadcast `Sender`; the field is load-bearing
@@ -242,8 +253,10 @@ impl RuntimeReloader {
             &catalogs,
         )?;
         let publisher = Arc::new(RuntimePublisher::new(Arc::new(initial)));
+        let (error_tx, _) = tokio::sync::broadcast::channel(32);
 
         let publisher_for_task = publisher.clone();
+        let error_tx_for_task = error_tx.clone();
         let mut rx = watcher.subscribe();
         let handle = tokio::spawn(async move {
             while let Ok(change) = rx.recv().await {
@@ -268,10 +281,16 @@ impl RuntimeReloader {
                         publisher_for_task.publish(Arc::new(runtime));
                     }
                     Err(err) => {
+                        let message = err.to_string();
+                        let _ = error_tx_for_task.send(ConfigReloadError {
+                            path: change.path.clone(),
+                            kind: change.kind,
+                            message: message.clone(),
+                        });
                         error!(
                             path = %change.path.display(),
                             kind = change.kind.as_str(),
-                            error = %err,
+                            error = %message,
                             "config rebuild failed; keeping prior snapshot"
                         );
                     }
@@ -282,6 +301,7 @@ impl RuntimeReloader {
 
         Ok(Self {
             publisher,
+            error_tx,
             handle,
             watcher,
         })
@@ -303,6 +323,14 @@ impl RuntimeReloader {
     /// rather than blocking the reload loop.
     pub fn subscribe_changes(&self) -> tokio::sync::broadcast::Receiver<ConfigChange> {
         self.watcher.subscribe()
+    }
+
+    /// Subscribe to failed reload attempts. Successful reloads are
+    /// published through [`Self::publisher`]; failures never replace
+    /// the prior snapshot, so this side-channel is the UI-visible
+    /// diagnostic path.
+    pub fn subscribe_errors(&self) -> tokio::sync::broadcast::Receiver<ConfigReloadError> {
+        self.error_tx.subscribe()
     }
 
     /// Read the latest snapshot.

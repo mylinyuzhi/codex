@@ -674,6 +674,25 @@
       }
     },
     {
+      "description": "A role's binding (model + provider + effort) changed in-memory via the picker or `Ctrl+T`. Carries the resolved fields the TUI needs to refresh its `model_by_role` cache and, for `Main`, status-bar fields (`model`, `provider`, `thinking_effort`).",
+      "type": "object",
+      "required": [
+        "method",
+        "params"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "model/roleChanged"
+          ]
+        },
+        "params": {
+          "$ref": "#/definitions/ModelRoleChangedParams"
+        }
+      }
+    },
+    {
       "description": "Permission mode changed.",
       "type": "object",
       "required": [
@@ -1484,6 +1503,25 @@
         }
       }
     },
+    "CancelReason": {
+      "description": "Why a turn was interrupted. Lets the TUI distinguish \"user pressed Ctrl+C — restore the input if conditions match\" from \"system cancelled the in-flight turn to make room for `/clear` / `/compact` / `/rewind` / shutdown / next submit — leave the conversation alone\".\n\nMirrors TS `abortController.signal.reason` discrimination at `REPL.tsx:3001`. New variants default to non-user-initiated semantics at the consumer (no auto-restore), so adding e.g. `BudgetExhausted` or `Timeout` later is additive without breaking the TUI handler.",
+      "oneOf": [
+        {
+          "description": "User-initiated cancel (Ctrl+C in the TUI, `control/interrupt` in the SDK). The only reason that may trigger auto-restore.",
+          "type": "string",
+          "enum": [
+            "user_cancel"
+          ]
+        },
+        {
+          "description": "System pre-empted the in-flight turn so another session-level operation can run (Clear / Compact / Rewind / Shutdown / new SubmitInput). Auto-restore is suppressed — the user did not request a rewind.",
+          "type": "string",
+          "enum": [
+            "system_preempt"
+          ]
+        }
+      ]
+    },
     "CompactTrigger": {
       "description": "How compaction was triggered.\n\nStays in `coco-types` (rather than `coco-messages`) because `event::CompactionPhaseParams` references it; the rest of the message family lives in `coco-messages`.\n\nMirrors the TS taxonomy: manual `/compact`, threshold-based auto, PTL-413 reactive recovery, gap-based time-based microcompact, session-memory short-circuit (no LLM), and staged context-collapse commit.",
       "type": "string",
@@ -2081,6 +2119,67 @@
         }
       }
     },
+    "ModelRole": {
+      "description": "Which purpose a model serves. Multiple roles can map to different models.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "main",
+            "fast",
+            "explore",
+            "review",
+            "memory",
+            "hook_agent"
+          ]
+        },
+        {
+          "description": "Plan-mode model. Used in two distinct contexts:\n\n1. **Subagent role** — when the built-in Plan subagent spawns (`SubagentType::Plan → ModelRole::Plan` in `core/subagent/src/subagent_role.rs:34`), the spawn factory resolves the client via `client_for_role(Plan)`. 2. **Main-session plan-mode swap** — when the leader enters `PermissionMode::Plan`, the engine swaps the active client to `client_for_role(Plan)` for the duration of plan mode. TS parity behavioral analogue: `getRuntimeMainLoopModel`'s `opusplan` → Opus alias swap (`utils/model/model.ts:145-167`). coco-rs encodes this as a generic role slot so it works for any provider, not just Anthropic.\n\nUnconfigured `models.plan` falls back to Main's spec via the chain in `runtime.rs:507`, and `client_for_role` short-circuits to the cached Main `Arc` — both call sites degrade cleanly to \"no swap\" without spurious cache breaks.",
+          "type": "string",
+          "enum": [
+            "plan"
+          ]
+        },
+        {
+          "description": "Forked-agent spawn (AgentTool / SkillTool). Distinct from `Explore` — Explore is an investigative subagent type that happens to often be a \"small fast\" model; Subagent is the generic spawn role used by tools/Agent and the swarm runtime.",
+          "type": "string",
+          "enum": [
+            "subagent"
+          ]
+        }
+      ]
+    },
+    "ModelRoleChangedParams": {
+      "description": "Payload for [`crate::ServerNotification::ModelRoleChanged`]. Carries the resolved binding (model + provider + thinking effort) that the TUI applies to `state.session.model_by_role[role]` and, when `role == Main`, also to `state.session.{model, provider, thinking_effort}` for the status bar.\n\nEmitted by `tui_runner` after applying an in-memory override via `SessionRuntime::apply_role_override` / `apply_role_effort`. No persistence to settings.json — that's the user's job.",
+      "type": "object",
+      "required": [
+        "model_id",
+        "provider",
+        "role"
+      ],
+      "properties": {
+        "effort": {
+          "description": "`None` ⇒ engine falls back to the model's `default_thinking_level`. `Some(_)` ⇒ explicit user choice.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model_id": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/definitions/ModelRole"
+        }
+      }
+    },
     "OutputTokenDetails": {
       "description": "Output-side token breakdown — mirrors `vercel_ai::OutputTokenDetails`.",
       "type": "object",
@@ -2327,6 +2426,35 @@
         "allowed",
         "allowed_warning",
         "rejected"
+      ]
+    },
+    "ReasoningEffort": {
+      "description": "Reasoning effort. Ordered from \"off\" through numeric intensity. Provider-agnostic — `thinking_convert` maps to per-provider wire shapes.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "x_high"
+          ]
+        },
+        {
+          "description": "Explicit \"thinking off\". Convert layer skips typed-effort emission; `level.options` may still carry an explicit-off wire toggle (e.g. DeepSeek's `{\"thinking\":{\"type\":\"disabled\"}}`).",
+          "type": "string",
+          "enum": [
+            "disable"
+          ]
+        },
+        {
+          "description": "\"Let the provider decide\". Convert layer omits reasoning fields; the server-side default applies. This is the default state when no thinking level is configured.",
+          "type": "string",
+          "enum": [
+            "auto"
+          ]
+        }
       ]
     },
     "RewindCompletedParams": {
@@ -3458,6 +3586,17 @@
     "TurnInterruptedParams": {
       "type": "object",
       "properties": {
+        "reason": {
+          "description": "Why the turn was interrupted. `None` only on legacy transcripts that pre-date this field; new senders always populate it. The TUI handler treats `None` as `SystemPreempt` (conservative — no auto-restore on unknown reason).",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CancelReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "turn_id": {
           "type": [
             "string",

@@ -377,6 +377,25 @@
       ],
       "type": "object"
     },
+    "CancelReason": {
+      "description": "Why a turn was interrupted. Lets the TUI distinguish \"user pressed Ctrl+C — restore the input if conditions match\" from \"system cancelled the in-flight turn to make room for `/clear` / `/compact` / `/rewind` / shutdown / next submit — leave the conversation alone\".\n\nMirrors TS `abortController.signal.reason` discrimination at `REPL.tsx:3001`. New variants default to non-user-initiated semantics at the consumer (no auto-restore), so adding e.g. `BudgetExhausted` or `Timeout` later is additive without breaking the TUI handler.",
+      "oneOf": [
+        {
+          "description": "User-initiated cancel (Ctrl+C in the TUI, `control/interrupt` in the SDK). The only reason that may trigger auto-restore.",
+          "enum": [
+            "user_cancel"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "System pre-empted the in-flight turn so another session-level operation can run (Clear / Compact / Rewind / Shutdown / new SubmitInput). Auto-restore is suppressed — the user did not request a rewind.",
+          "enum": [
+            "system_preempt"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "CancelRequestParams": {
       "description": "Params for `control/cancelRequest`.",
       "properties": {
@@ -2184,8 +2203,8 @@
             "fast",
             "explore",
             "review",
-            "hook_agent",
-            "memory"
+            "memory",
+            "hook_agent"
           ],
           "type": "string"
         },
@@ -2205,6 +2224,37 @@
         }
       ],
       "title": "ModelRole"
+    },
+    "ModelRoleChangedParams": {
+      "description": "Payload for [`crate::ServerNotification::ModelRoleChanged`]. Carries the resolved binding (model + provider + thinking effort) that the TUI applies to `state.session.model_by_role[role]` and, when `role == Main`, also to `state.session.{model, provider, thinking_effort}` for the status bar.\n\nEmitted by `tui_runner` after applying an in-memory override via `SessionRuntime::apply_role_override` / `apply_role_effort`. No persistence to settings.json — that's the user's job.",
+      "properties": {
+        "effort": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`None` ⇒ engine falls back to the model's `default_thinking_level`. `Some(_)` ⇒ explicit user choice."
+        },
+        "model_id": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/definitions/ModelRole"
+        }
+      },
+      "required": [
+        "model_id",
+        "provider",
+        "role"
+      ],
+      "type": "object"
     },
     "ModelSpec": {
       "description": "A resolved model identity: provider + model ID. Produced by coco-config, consumed by coco-inference.",
@@ -2276,6 +2326,7 @@
         "model/fallbackStarted",
         "model/fallbackCompleted",
         "model/fastModeChanged",
+        "model/roleChanged",
         "permission/modeChanged",
         "prompt/suggestion",
         "error",
@@ -3645,6 +3696,25 @@
                 "active"
               ],
               "type": "object"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A role's binding (model + provider + effort) changed in-memory via the picker or `Ctrl+T`. Carries the resolved fields the TUI needs to refresh its `model_by_role` cache and, for `Main`, status-bar fields (`model`, `provider`, `thinking_effort`).",
+          "properties": {
+            "method": {
+              "enum": [
+                "model/roleChanged"
+              ],
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ModelRoleChangedParams"
             }
           },
           "required": [
@@ -6521,63 +6591,6 @@
           "type": "object"
         },
         {
-          "description": "Confirmation that a `(role, provider, model_id, effort)` selection from the model picker was persisted to `~/.coco/settings.json::model_roles.<role>`. The TUI raises a success toast. The role / provider / model_id fields are pre-formatted strings (role uses `ModelRole::as_str()`, effort uses the wire form via `ReasoningEffort::Display`) so the consumer doesn't need to depend on `coco-config`.",
-          "properties": {
-            "effort": {
-              "description": "Wire-form effort label (e.g. `\"medium\"` / `\"xhigh\"`); `None` when the model has no thinking capability or the picker produced no override.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "model_id": {
-              "type": "string"
-            },
-            "provider": {
-              "type": "string"
-            },
-            "role": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "model_role_applied"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "model_id",
-            "provider",
-            "role",
-            "type"
-          ],
-          "type": "object"
-        },
-        {
-          "description": "Persistence of a model-role selection failed. The TUI raises an error toast carrying the wrapped reason.",
-          "properties": {
-            "error": {
-              "type": "string"
-            },
-            "role": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "model_role_persist_failed"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "error",
-            "role",
-            "type"
-          ],
-          "type": "object"
-        },
-        {
           "description": "Tell the TUI to open the provider-grouped model picker. Emitted when the slash dispatcher resolves `/model` with no args (typed `/model` from input bar). The TUI consumes the current `state.session.model` to mark the \"current\" entry.",
           "properties": {
             "type": {
@@ -6625,6 +6638,17 @@
     },
     "TurnInterruptedParams": {
       "properties": {
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CancelReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why the turn was interrupted. `None` only on legacy transcripts that pre-date this field; new senders always populate it. The TUI handler treats `None` as `SystemPreempt` (conservative — no auto-restore on unknown reason)."
+        },
         "turn_id": {
           "type": [
             "string",

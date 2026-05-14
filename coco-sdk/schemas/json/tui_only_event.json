@@ -620,63 +620,6 @@
       }
     },
     {
-      "description": "Confirmation that a `(role, provider, model_id, effort)` selection from the model picker was persisted to `~/.coco/settings.json::model_roles.<role>`. The TUI raises a success toast. The role / provider / model_id fields are pre-formatted strings (role uses `ModelRole::as_str()`, effort uses the wire form via `ReasoningEffort::Display`) so the consumer doesn't need to depend on `coco-config`.",
-      "type": "object",
-      "required": [
-        "model_id",
-        "provider",
-        "role",
-        "type"
-      ],
-      "properties": {
-        "effort": {
-          "description": "Wire-form effort label (e.g. `\"medium\"` / `\"xhigh\"`); `None` when the model has no thinking capability or the picker produced no override.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "model_id": {
-          "type": "string"
-        },
-        "provider": {
-          "type": "string"
-        },
-        "role": {
-          "type": "string"
-        },
-        "type": {
-          "type": "string",
-          "enum": [
-            "model_role_applied"
-          ]
-        }
-      }
-    },
-    {
-      "description": "Persistence of a model-role selection failed. The TUI raises an error toast carrying the wrapped reason.",
-      "type": "object",
-      "required": [
-        "error",
-        "role",
-        "type"
-      ],
-      "properties": {
-        "error": {
-          "type": "string"
-        },
-        "role": {
-          "type": "string"
-        },
-        "type": {
-          "type": "string",
-          "enum": [
-            "model_role_persist_failed"
-          ]
-        }
-      }
-    },
-    {
       "description": "Tell the TUI to open the provider-grouped model picker. Emitted when the slash dispatcher resolves `/model` with no args (typed `/model` from input bar). The TUI consumes the current `state.session.model` to mark the \"current\" entry.",
       "type": "object",
       "required": [

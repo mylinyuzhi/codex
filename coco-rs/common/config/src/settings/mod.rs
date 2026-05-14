@@ -30,6 +30,8 @@ use crate::sections::PartialWebSearchSettings;
 
 pub use source::SettingSource;
 
+pub const SYNTAX_HIGHLIGHTING_DISABLED_KEY: &str = "syntax_highlighting_disabled";
+
 /// The merged settings snapshot. Immutable after loading.
 /// TS: SettingsJson type in types.ts (Zod schema)
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

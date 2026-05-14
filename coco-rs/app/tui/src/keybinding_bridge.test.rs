@@ -11,6 +11,7 @@ use crate::keybinding_bridge::KeybindingContext;
 use crate::keybinding_bridge::active_context;
 use crate::keybinding_bridge::map_key;
 use crate::state::AppState;
+use crate::state::Overlay;
 
 fn press(code: KeyCode) -> KeyEvent {
     KeyEvent {
@@ -93,6 +94,31 @@ fn test_permission_overlay_context() {
 fn test_model_picker_context() {
     let state = model_picker_state();
     assert_eq!(active_context(&state), KeybindingContext::ModelPicker);
+}
+
+#[test]
+fn test_settings_theme_tab_uses_theme_picker_context() {
+    let mut state = AppState::new();
+    state.ui.set_overlay(Overlay::Settings(
+        crate::widgets::settings_panel::SettingsPanelState::new(
+            &state.ui.theme_state,
+            state.ui.display_settings,
+        ),
+    ));
+    assert_eq!(active_context(&state), KeybindingContext::ThemePicker);
+}
+
+#[test]
+fn test_theme_picker_ctrl_t_toggles_syntax_highlighting() {
+    let mut state = AppState::new();
+    state.ui.set_overlay(Overlay::Settings(
+        crate::widgets::settings_panel::SettingsPanelState::new(
+            &state.ui.theme_state,
+            state.ui.display_settings,
+        ),
+    ));
+    let cmd = map_key(&state, ctrl(KeyCode::Char('t')));
+    assert!(matches!(cmd, Some(TuiCommand::ToggleSyntaxHighlighting)));
 }
 
 #[test]

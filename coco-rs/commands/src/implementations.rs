@@ -693,21 +693,16 @@ fn branch_handler(args: &str) -> String {
 fn theme_handler(args: &str) -> String {
     let name = args.trim();
     if name.is_empty() {
-        return "Current theme: (load from settings.json)\n\n\
-                Available themes: dark, light, dark-pastel, light-pastel, terminal\n\n\
-                Use /theme <name> to switch — applies on next session."
+        return "TUI themes are managed by ~/.coco/theme.json.\n\n\
+                Available built-ins: auto, default, dark, light, dark-daltonized, \
+                light-daltonized, dark-ansi, light-ansi, dracula, nord.\n\n\
+                In the TUI, use /theme <name> or open Settings."
             .to_string();
     }
-    match coco_config::global_config::write_user_setting(
-        "theme",
-        serde_json::Value::String(name.to_string()),
-    ) {
-        Ok(path) => format!(
-            "Theme set to `{name}` in {} (effective on next session).",
-            path.display()
-        ),
-        Err(e) => format!("Failed to persist theme: {e}"),
-    }
+    format!(
+        "Theme `{name}` is handled by the TUI and saved to ~/.coco/theme.json. \
+         Run this command inside the TUI to apply it immediately."
+    )
 }
 
 fn copy_handler(args: &str) -> String {

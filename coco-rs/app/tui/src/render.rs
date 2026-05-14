@@ -443,6 +443,7 @@ fn render_conversation(frame: &mut Frame, state: &AppState, area: Rect, theme: &
         .show_system_reminders(state.ui.show_system_reminders)
         .tool_executions(&state.session.tool_executions)
         .width(area.width)
+        .syntax_highlighting(state.ui.display_settings.syntax_highlighting)
         .kb_handle(&state.ui.kb_handle);
 
     if !state.ui.collapsed_tools.is_empty() {

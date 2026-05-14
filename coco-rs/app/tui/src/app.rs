@@ -84,6 +84,12 @@ pub struct App {
     /// here so the TUI surfaces them as toasts. `None` in tests /
     /// headless paths.
     kb_warnings_rx: Option<mpsc::Receiver<Vec<coco_keybindings::ValidationIssue>>>,
+    /// Optional channel of theme reload results from `~/.coco/theme.json`.
+    theme_reload_rx: Option<mpsc::Receiver<crate::theme::ThemeLoadResult>>,
+    /// Optional channel of display settings derived from settings hot reload.
+    display_settings_rx: Option<mpsc::Receiver<crate::display_settings::DisplaySettings>>,
+    /// Optional channel of config hot-reload failure messages.
+    config_reload_errors_rx: Option<mpsc::Receiver<String>>,
 }
 
 impl App {
@@ -118,6 +124,9 @@ impl App {
             symbol_search_rx: sym_rx,
             last_dispatched: None,
             kb_warnings_rx: None,
+            theme_reload_rx: None,
+            display_settings_rx: None,
+            config_reload_errors_rx: None,
         })
     }
 
@@ -142,6 +151,9 @@ impl App {
             symbol_search_rx: sym_rx,
             last_dispatched: None,
             kb_warnings_rx: None,
+            theme_reload_rx: None,
+            display_settings_rx: None,
+            config_reload_errors_rx: None,
         }
     }
 
@@ -164,6 +176,24 @@ impl App {
         rx: mpsc::Receiver<Vec<coco_keybindings::ValidationIssue>>,
     ) -> Self {
         self.kb_warnings_rx = Some(rx);
+        self
+    }
+
+    pub fn with_theme_reload(mut self, rx: mpsc::Receiver<crate::theme::ThemeLoadResult>) -> Self {
+        self.theme_reload_rx = Some(rx);
+        self
+    }
+
+    pub fn with_display_settings_reload(
+        mut self,
+        rx: mpsc::Receiver<crate::display_settings::DisplaySettings>,
+    ) -> Self {
+        self.display_settings_rx = Some(rx);
+        self
+    }
+
+    pub fn with_config_reload_errors(mut self, rx: mpsc::Receiver<String>) -> Self {
+        self.config_reload_errors_rx = Some(rx);
         self
     }
 
@@ -231,6 +261,21 @@ impl App {
                 // without restarting.
                 Some(issues) = recv_optional(&mut self.kb_warnings_rx), if self.kb_warnings_rx.is_some() => {
                     needs_redraw = surface_keybinding_warnings(&mut self.state, issues);
+                }
+                // Theme config reloads from ~/.coco/theme.json. Invalid
+                // reloads surface as toasts and keep the prior palette.
+                Some(result) = recv_optional(&mut self.theme_reload_rx), if self.theme_reload_rx.is_some() => {
+                    needs_redraw = apply_theme_reload(&mut self.state, result);
+                }
+                Some(display_settings) = recv_optional(&mut self.display_settings_rx), if self.display_settings_rx.is_some() => {
+                    self.state.ui.apply_display_settings(display_settings);
+                    needs_redraw = true;
+                }
+                Some(error) = recv_optional(&mut self.config_reload_errors_rx), if self.config_reload_errors_rx.is_some() => {
+                    self.state.ui.add_toast(crate::state::ui::Toast::warning(
+                        crate::i18n::t!("toast.config_reload_failed", error = error.as_str()).to_string(),
+                    ));
+                    needs_redraw = true;
                 }
                 // Tick timer
                 _ = tick_interval.tick() => {
@@ -511,5 +556,14 @@ fn surface_keybinding_warnings(
         };
         state.ui.add_toast(toast);
     }
+    true
+}
+
+fn apply_theme_reload(state: &mut AppState, result: crate::theme::ThemeLoadResult) -> bool {
+    if let Some(error) = result.error {
+        state.ui.add_toast(crate::state::ui::Toast::warning(error));
+        return true;
+    }
+    state.ui.apply_theme_runtime(result.state);
     true
 }

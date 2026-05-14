@@ -386,7 +386,10 @@ pub(super) fn doctor(state: &mut AppState) {
 /// Open the tabbed settings overlay (theme, output style, permissions, about).
 pub(super) fn settings(state: &mut AppState) {
     state.ui.set_overlay(Overlay::Settings(
-        crate::widgets::settings_panel::SettingsPanelState::new(),
+        crate::widgets::settings_panel::SettingsPanelState::new(
+            &state.ui.theme_state,
+            state.ui.display_settings,
+        ),
     ));
 }
 

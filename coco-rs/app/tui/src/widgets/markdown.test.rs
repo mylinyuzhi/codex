@@ -1,7 +1,9 @@
 //! Tests for markdown rendering.
 
+use crate::display_settings::SyntaxHighlighting;
 use crate::theme::Theme;
 use crate::widgets::markdown::markdown_to_lines;
+use crate::widgets::markdown::markdown_to_lines_with_syntax;
 
 #[test]
 fn test_plain_text() {
@@ -25,6 +27,29 @@ fn test_code_block() {
     let lines = markdown_to_lines(text, &theme, 80);
     // fence open + code line + fence close
     assert_eq!(lines.len(), 3);
+}
+
+#[test]
+fn test_code_block_syntax_highlighting_can_be_disabled() {
+    let theme = Theme::default();
+    let text = "```rust\nfn main() {}\n```";
+
+    let highlighted = markdown_to_lines_with_syntax(text, &theme, 80, SyntaxHighlighting::Enabled);
+    assert!(
+        highlighted[1]
+            .spans
+            .iter()
+            .any(|span| span.style.fg == Some(theme.code_keyword))
+    );
+
+    let plain = markdown_to_lines_with_syntax(text, &theme, 80, SyntaxHighlighting::Disabled);
+    assert!(
+        !plain[1]
+            .spans
+            .iter()
+            .any(|span| span.style.fg == Some(theme.code_keyword))
+    );
+    assert_eq!(plain[1].spans[1].content.as_ref(), "fn main() {}");
 }
 
 #[test]
