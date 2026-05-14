@@ -36,6 +36,11 @@ pub(crate) fn render_overlay(
     state: &AppState,
     theme: &Theme,
 ) {
+    if let Overlay::ModelPicker(m) = overlay {
+        pickers::render_model_picker(frame, area, m, theme);
+        return;
+    }
+
     let (title, body, border_color) = overlay_content(overlay, state, theme);
 
     // ratatui 0.30: use `Rect::centered` instead of computing x/y manually.

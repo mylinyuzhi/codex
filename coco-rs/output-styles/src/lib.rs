@@ -6,7 +6,7 @@
 //!   (`default` / `Explanatory` / `Learning`), `getAllOutputStyles`,
 //!   `getOutputStyleConfig`, `hasCustomOutputStyle`.
 //! - `outputStyles/loadOutputStylesDir.ts` — reads project + user
-//!   `.claude/output-styles/*.md` via the markdown discovery loader,
+//!   `.coco/output-styles/*.md` via the markdown discovery loader,
 //!   parses `name` / `description` / `keep-coding-instructions`.
 //! - `utils/plugins/loadPluginOutputStyles.ts` — reads
 //!   `<plugin>/output-styles/*.md` plus manifest `outputStyles` extras,

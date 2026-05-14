@@ -27,6 +27,24 @@ impl<'a> StatusBar<'a> {
 
 impl Widget for StatusBar<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
+        // Exit-confirmation hint takes the whole bar when armed so
+        // it's unmissable. TS:
+        // `PromptInputFooterLeftSide.tsx:147-150` collapses the rest
+        // of the footer onto a single "Press X again to exit" line.
+        if let Some(key) = self.state.ui.pending_exit_hint() {
+            let text = t!("status.exit_prompt", key = key.label()).to_string();
+            tracing::info!(
+                key = key.label(),
+                prompt = %text,
+                width = area.width,
+                "status bar rendering exit prompt"
+            );
+            let line = Line::from(Span::raw(text).fg(self.theme.warning).bold());
+            let bar = Paragraph::new(line).style(Style::default().bg(self.theme.border));
+            bar.render(area, buf);
+            return;
+        }
+
         let mut parts = Vec::new();
 
         // Provider tag (e.g. `[anthropic]`). Suppressed when the

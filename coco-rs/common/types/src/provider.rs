@@ -44,7 +44,6 @@ impl fmt::Display for ProviderApi {
 #[serde(rename_all = "snake_case")]
 pub enum ModelRole {
     Main,
-    Fast,
     /// Plan-mode model. Used in two distinct contexts:
     ///
     /// 1. **Subagent role** — when the built-in Plan subagent spawns
@@ -64,15 +63,16 @@ pub enum ModelRole {
     /// to the cached Main `Arc` — both call sites degrade cleanly to
     /// "no swap" without spurious cache breaks.
     Plan,
+    Fast,
     Explore,
     Review,
-    HookAgent,
-    Memory,
     /// Forked-agent spawn (AgentTool / SkillTool). Distinct from
     /// `Explore` — Explore is an investigative subagent type that
     /// happens to often be a "small fast" model; Subagent is the
     /// generic spawn role used by tools/Agent and the swarm runtime.
     Subagent,
+    Memory,
+    HookAgent,
 }
 
 impl ModelRole {

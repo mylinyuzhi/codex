@@ -82,6 +82,26 @@ fn managed_dir_overrides_project() {
 }
 
 #[test]
+fn duplicate_physical_dir_styles_are_deduped_in_ts_source_order() {
+    let user = tempdir().unwrap();
+    let project = tempdir().unwrap();
+    let user_file = user.path().join("Concise.md");
+    let project_file = project.path().join("Concise.md");
+    std::fs::write(&user_file, "---\ndescription: USER\n---\nshared body\n").unwrap();
+    std::fs::hard_link(&user_file, &project_file).unwrap();
+
+    let mgr = OutputStyleManager::builder()
+        .settings_name(Some("Concise".to_string()))
+        .user_dir(Some(user.path().to_path_buf()))
+        .project_dirs(vec![project.path().to_path_buf()])
+        .build();
+
+    let active = mgr.active().expect("Concise should resolve");
+    assert_eq!(active.description, "USER");
+    assert_eq!(active.source, OutputStyleSource::UserSettings);
+}
+
+#[test]
 fn plugin_force_for_plugin_overrides_user_settings() {
     let plugin_dir = tempdir().unwrap();
     let styles_dir = plugin_dir.path().join("output-styles");

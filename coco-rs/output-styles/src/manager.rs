@@ -11,7 +11,8 @@ use std::path::PathBuf;
 
 use crate::catalog::OutputStyleConfig;
 use crate::catalog::OutputStyleSource;
-use crate::dir_loader::load_dir_styles;
+use crate::dir_loader::LoadedDirStyle;
+use crate::dir_loader::load_dir_styles_with_identity;
 use crate::plugin_loader::PluginOutputStyleSource;
 use crate::plugin_loader::load_plugin_output_styles;
 use crate::resolver::Aggregated;
@@ -37,8 +38,7 @@ impl OutputStyleManagerBuilder {
         self
     }
 
-    /// User-home output styles dir (`~/.claude/output-styles` or
-    /// `~/.coco/output-styles`).
+    /// User-home output styles dir (`~/.coco/output-styles`).
     pub fn user_dir(mut self, dir: Option<PathBuf>) -> Self {
         self.user_dir = dir;
         self
@@ -46,13 +46,13 @@ impl OutputStyleManagerBuilder {
 
     /// Project-tree output styles dirs, ordered closest-to-cwd first.
     /// The CLI walks from `<cwd>` up to the git root (or home),
-    /// collecting `.claude/output-styles` along the way.
+    /// collecting `.coco/output-styles` along the way.
     pub fn project_dirs(mut self, dirs: Vec<PathBuf>) -> Self {
         self.project_dirs = dirs;
         self
     }
 
-    /// Managed/policy directory (`/etc/coco/.claude/output-styles`).
+    /// Managed/policy directory (`/etc/coco/output-styles`).
     pub fn managed_dir(mut self, dir: Option<PathBuf>) -> Self {
         self.managed_dir = dir;
         self
@@ -66,27 +66,31 @@ impl OutputStyleManagerBuilder {
 
     /// Build the manager, performing all I/O up front.
     pub fn build(self) -> OutputStyleManager {
-        // Order matters — see `resolver::aggregate` doc.
-        let user_styles = self
+        let user_loaded = self
             .user_dir
             .as_deref()
-            .map(|d| load_dir_styles(d, OutputStyleSource::UserSettings))
+            .map(|d| load_dir_styles_with_identity(d, OutputStyleSource::UserSettings))
             .unwrap_or_default();
 
-        let mut project_styles = Vec::new();
+        let mut project_loaded = Vec::new();
         for dir in &self.project_dirs {
-            project_styles.extend(load_dir_styles(dir, OutputStyleSource::ProjectSettings));
+            project_loaded.extend(load_dir_styles_with_identity(
+                dir,
+                OutputStyleSource::ProjectSettings,
+            ));
         }
 
-        let managed_styles = self
+        let managed_loaded = self
             .managed_dir
             .as_deref()
-            .map(|d| load_dir_styles(d, OutputStyleSource::PolicySettings))
+            .map(|d| load_dir_styles_with_identity(d, OutputStyleSource::PolicySettings))
             .unwrap_or_default();
 
         let plugin_styles = load_plugin_output_styles(&self.plugins);
 
-        let dir_groups = vec![user_styles, project_styles, managed_styles];
+        let dir_styles = dedupe_dir_styles(managed_loaded, user_loaded, project_loaded);
+
+        let dir_groups = vec![dir_styles.user, dir_styles.project, dir_styles.managed];
         let aggregated = aggregate(&dir_groups, &plugin_styles);
 
         let (active, verdict) = resolve_active_style(&aggregated, self.settings_name.as_deref());
@@ -97,7 +101,7 @@ impl OutputStyleManagerBuilder {
                     target: "coco_output_styles::manager",
                     winner = %winner,
                     competing = ?competing,
-                    "multiple plugins set force-for-plugin; using the first alphabetically"
+                    "multiple plugins set force-for-plugin; using the first loaded style"
                 );
             } else {
                 tracing::debug!(
@@ -115,6 +119,48 @@ impl OutputStyleManagerBuilder {
             verdict,
         }
     }
+}
+
+struct DirStyleGroups {
+    user: Vec<OutputStyleConfig>,
+    project: Vec<OutputStyleConfig>,
+    managed: Vec<OutputStyleConfig>,
+}
+
+fn dedupe_dir_styles(
+    managed: Vec<LoadedDirStyle>,
+    user: Vec<LoadedDirStyle>,
+    project: Vec<LoadedDirStyle>,
+) -> DirStyleGroups {
+    // TS dedupes physical files before style-name priority is applied,
+    // scanning managed → user → project. This prevents symlinked
+    // config dirs from double-loading the same markdown file.
+    let mut seen = std::collections::HashSet::new();
+    let managed = dedupe_one_group(managed, &mut seen);
+    let user = dedupe_one_group(user, &mut seen);
+    let project = dedupe_one_group(project, &mut seen);
+    DirStyleGroups {
+        user,
+        project,
+        managed,
+    }
+}
+
+fn dedupe_one_group(
+    styles: Vec<LoadedDirStyle>,
+    seen: &mut std::collections::HashSet<String>,
+) -> Vec<OutputStyleConfig> {
+    styles
+        .into_iter()
+        .filter_map(|style| {
+            if let Some(identity) = &style.file_identity
+                && !seen.insert(identity.clone())
+            {
+                return None;
+            }
+            Some(style.config)
+        })
+        .collect()
 }
 
 /// Resolved catalog + active style.
@@ -147,10 +193,10 @@ impl OutputStyleManager {
         self.active.as_ref()
     }
 
-    /// All loaded style names (sorted) including built-ins. Never
-    /// includes the `default` sentinel — callers that need it for the
-    /// SDK `available_output_styles` field prepend it themselves to
-    /// preserve TS wire shape.
+    /// All loaded style names in TS catalog order including built-ins.
+    /// Never includes the `default` sentinel — callers that need it
+    /// for the SDK `available_output_styles` field prepend it
+    /// themselves to preserve TS wire shape.
     pub fn names(&self) -> Vec<String> {
         self.aggregated.names()
     }

@@ -684,7 +684,7 @@ async fn run_test_agent_driver(
                 // event channel — the harness folds them into AppState.
                 let _ = engine.run_with_events(&content, event_tx.clone()).await;
             }
-            UserCommand::Shutdown => break,
+            UserCommand::Shutdown { .. } => break,
             // Other commands are intentionally ignored — see fn docs.
             _ => {}
         }

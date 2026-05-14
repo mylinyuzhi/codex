@@ -46,26 +46,27 @@ NDJSON RPC channel — logs would corrupt either.
 
 ### Filter resolution priority
 
-`--log-level` > `COCO_LOG` > `RUST_LOG` > `subscriber::DEFAULT_FILTER`
-(`coco=debug,info`). A bare level (e.g. `--log-level=debug`) expands
+`--log-level` > `COCO_LOG` > `RUST_LOG` > `settings.log.level` >
+`subscriber::DEFAULT_FILTER` (`coco=debug,info`). A bare level
+(e.g. `--log-level=debug` or `"log": { "level": "debug" }`) expands
 to `coco=debug,debug` so coco crates stay verbose without flooding
 third-party output. Full `EnvFilter` directives pass through verbatim.
 
 ### Layout toggles: `--log-location` (`COCO_LOG_LOCATION`)
 
-`SubscriberOpts.location` + `.thread_names` add `file:line` and the
-thread name to each event. Off by default (~30–80 bytes per line).
+`SubscriberOpts.location` + `.thread_names` add `filename:line` and the
+thread name to each event (~30–80 bytes per line).
 Tri-state resolution in `app/cli/src/tracing_init.rs`:
 
 ```
-explicit --log-location > COCO_LOG_LOCATION > auto-rule
+explicit --log-location > COCO_LOG_LOCATION > settings.log.location > auto-rule
 ```
 
-Auto-rule: when the same source that supplied the filter is the
-*bare* level `debug` or `trace`, the toggle defaults to on.
-Advanced `EnvFilter` directives (`coco=debug,info`) leave layout
-off — the user is in control. Thread name follows `location`
-byte-for-byte; there's intentionally no separate flag.
+Auto-rule: when the resolved static filter enables DEBUG or TRACE for
+any `coco*` target, the toggle defaults to on. This includes both bare
+levels and full directives such as `coco=debug,info`. Thread name
+follows `location` byte-for-byte; there's intentionally no separate
+flag.
 
 Errors won't carry the **caller** site though — `file!()/line!()`
 points at the `tracing::*` macro call, not the error origin. For

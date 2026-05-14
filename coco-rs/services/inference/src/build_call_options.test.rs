@@ -3,6 +3,7 @@ use coco_config::ModelInfo;
 use coco_config::PartialModelInfo;
 use coco_config::PositiveTokens;
 use coco_types::CacheTtl;
+use coco_types::Capability;
 use coco_types::PromptCacheConfig;
 use coco_types::PromptCacheMode;
 use coco_types::ProviderApi;
@@ -516,5 +517,96 @@ fn deepseek_disabled_thinking_emits_disabled_toggle() {
     assert_eq!(
         inner.get("thinking"),
         Some(&serde_json::json!({"type": "disabled"})),
+    );
+}
+
+// ─── Lane E: parallel tool calls capability gate ─────────────────
+//
+// After the refactor, Lane E sets a single provider-agnostic field
+// (`call.parallel_tool_calls`) and provider crates own the wire
+// translation. The inference layer therefore has no per-provider
+// branches to test here — wire-emission tests live alongside each
+// provider's language model impl (`vercel-ai-openai`,
+// `vercel-ai-anthropic`, `vercel-ai-openai-compatible`).
+
+fn info_with_capabilities(caps: Vec<Capability>) -> ModelInfo {
+    let partial = PartialModelInfo {
+        context_window: Some(PositiveTokens::new(200_000)),
+        max_output_tokens: Some(PositiveTokens::new(64_000)),
+        capabilities: Some(caps),
+        ..Default::default()
+    };
+    ModelInfo::from_partial("test-provider", "test-model", partial).unwrap()
+}
+
+#[test]
+fn parallel_tool_calls_capability_sets_generic_flag() {
+    let info = info_with_capabilities(vec![Capability::ParallelToolCalls]);
+    // Provider arm is irrelevant — Lane E doesn't branch on it
+    // anymore. Use Openai as a representative call site.
+    let (call, merged) = build_call_options_with_extra(
+        &info,
+        ProviderApi::Openai,
+        "openai",
+        &PerCallOverrides::default(),
+        Vec::new(),
+        None,
+    );
+    assert_eq!(
+        call.parallel_tool_calls,
+        Some(true),
+        "Capability present ⇒ generic `parallel_tool_calls` toggle is set to Some(true)",
+    );
+    assert!(
+        !merged.contains_key("parallelToolCalls")
+            && !merged.contains_key("parallel_tool_calls")
+            && !merged.contains_key("disableParallelToolUse"),
+        "Lane E must NOT write per-provider wire keys into the merged extra map — \
+         that translation belongs in the provider crates"
+    );
+}
+
+#[test]
+fn parallel_tool_calls_capability_flag_set_regardless_of_provider() {
+    let info = info_with_capabilities(vec![Capability::ParallelToolCalls]);
+    for (api, name) in [
+        (ProviderApi::Openai, "openai"),
+        (ProviderApi::Anthropic, "anthropic"),
+        (ProviderApi::Gemini, "google"),
+        (ProviderApi::OpenaiCompat, "deepseek-openai"),
+        (ProviderApi::Volcengine, "volcengine"),
+        (ProviderApi::Zai, "zai"),
+    ] {
+        let (call, _) = build_call_options_with_extra(
+            &info,
+            api,
+            name,
+            &PerCallOverrides::default(),
+            Vec::new(),
+            None,
+        );
+        assert_eq!(
+            call.parallel_tool_calls,
+            Some(true),
+            "Capability ⇒ generic flag must be set independent of ProviderApi ({api:?})",
+        );
+    }
+}
+
+#[test]
+fn parallel_tool_calls_absent_capability_leaves_flag_unset() {
+    // Capabilities present but ParallelToolCalls NOT in the set.
+    let info = info_with_capabilities(vec![Capability::TextGeneration, Capability::ToolCalling]);
+    let (call, _) = build_call_options_with_extra(
+        &info,
+        ProviderApi::Openai,
+        "openai",
+        &PerCallOverrides::default(),
+        Vec::new(),
+        None,
+    );
+    assert_eq!(
+        call.parallel_tool_calls, None,
+        "Capability absent ⇒ generic flag stays None (provider default applies)"
     );
 }

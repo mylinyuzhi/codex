@@ -6,30 +6,35 @@
 //! lifetime — dropping it flushes the non-blocking file appender.
 //!
 //! Resolution priority for the filter directive:
-//!   `--log-level` > `COCO_LOG` > `RUST_LOG` > `coco_otel::subscriber::DEFAULT_FILTER`.
+//!   `--log-level` > `COCO_LOG` > `RUST_LOG` > `settings.log.level`
+//!   > `coco_otel::subscriber::DEFAULT_FILTER`.
 //!
 //! `COCO_LOG_FORMAT`, `COCO_LOG_FILE`, `COCO_LOG_STDERR`,
 //! `COCO_LOG_LOCATION`, `COCO_LOG_TIMEZONE` mirror their `--log-*` flag
-//! counterparts at lower priority.
+//! counterparts at lower priority and higher priority than
+//! `settings.log.*`.
 //!
-//! Auto-verbose: when the same three sources resolve to a *bare* level
-//! of `debug` or `trace`, location + thread-name layout default to on.
-//! Custom `EnvFilter` directives (`coco=debug,info`, …) leave layout
-//! at off — advanced users are expected to opt in via `--log-location`
-//! or `COCO_LOG_LOCATION` if they want it.
+//! Auto-verbose: when the resolved filter enables DEBUG or TRACE for a
+//! `coco*` target, location + thread-name layout default to on. Explicit
+//! `--log-location`, `COCO_LOG_LOCATION`, or `settings.log.location`
+//! values still win.
 
 use std::io::IsTerminal;
+use std::path::Path;
 use std::path::PathBuf;
 
 use anyhow::Result;
 use coco_config::EnvKey;
+use coco_config::Settings;
 use coco_config::env;
 use coco_config::global_config;
+use coco_otel::subscriber::DEFAULT_FILTER;
 use coco_otel::subscriber::Format;
 use coco_otel::subscriber::Mode;
 use coco_otel::subscriber::SubscriberHandle;
 use coco_otel::subscriber::SubscriberOpts;
 use coco_otel::subscriber::TimezoneConfig;
+use coco_otel::subscriber::filter_enables_coco_debug;
 use coco_otel::subscriber::init_subscriber;
 
 use crate::Cli;
@@ -39,7 +44,14 @@ use crate::Commands;
 /// subcommands that exit before any heavy work — they get
 /// [`Mode::Skip`] so their stdout stays clean.
 pub fn install(cli: &Cli) -> Result<Option<SubscriberHandle>> {
-    let opts = subscriber_opts_from_cli(cli);
+    let mode = detect_mode(cli);
+    let settings = if matches!(mode, Mode::Skip) {
+        None
+    } else {
+        Some(load_settings_for_logging(cli)?)
+    };
+    let opts =
+        subscriber_opts_from_cli_with_sources(cli, settings.as_ref(), &LogEnv::from_process());
     let mode = opts.mode;
     let location = opts.location;
     let handle = init_subscriber(opts).map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -52,19 +64,59 @@ pub fn install(cli: &Cli) -> Result<Option<SubscriberHandle>> {
 /// Build [`SubscriberOpts`] from CLI flags + `COCO_LOG*` env vars.
 /// Pure assembly — does not register the global subscriber.
 pub fn subscriber_opts_from_cli(cli: &Cli) -> SubscriberOpts {
-    let auto_verbose = auto_verbose_from_sources(cli);
-    let location = resolve_location(cli, auto_verbose);
+    subscriber_opts_from_cli_with_sources(cli, None, &LogEnv::from_process())
+}
+
+fn subscriber_opts_from_cli_with_sources(
+    cli: &Cli,
+    settings: Option<&Settings>,
+    log_env: &LogEnv,
+) -> SubscriberOpts {
+    let level = resolve_level(cli, settings, log_env);
+    let auto_verbose = filter_enables_coco_debug(level.as_deref().unwrap_or(DEFAULT_FILTER));
+    let location = resolve_location(cli, settings, log_env, auto_verbose);
     SubscriberOpts {
         mode: detect_mode(cli),
-        level: resolve_level(cli),
-        format: resolve_format(cli),
-        file: resolve_file(cli),
-        also_stderr: cli.log_stderr || env::is_env_truthy(EnvKey::CocoLogStderr),
+        level,
+        format: resolve_format(cli, settings, log_env),
+        file: resolve_file(cli, settings, log_env),
+        also_stderr: resolve_stderr(cli, settings, log_env),
         location,
         thread_names: location,
         default_log_dir: global_config::config_home().join("logs"),
         default_file_prefix: "coco".to_string(),
-        timezone: resolve_timezone(cli),
+        timezone: resolve_timezone(cli, settings, log_env),
+    }
+}
+
+fn load_settings_for_logging(cli: &Cli) -> Result<Settings> {
+    let cwd = std::env::current_dir()?;
+    let flag_settings = cli.settings.as_deref().map(Path::new);
+    Ok(coco_config::settings::load_settings(&cwd, flag_settings)?.merged)
+}
+
+#[derive(Debug, Default)]
+struct LogEnv {
+    level: Option<String>,
+    rust_log: Option<String>,
+    format: Option<String>,
+    file: Option<String>,
+    stderr: Option<bool>,
+    location: Option<bool>,
+    timezone: Option<String>,
+}
+
+impl LogEnv {
+    fn from_process() -> Self {
+        Self {
+            level: env::env_opt(EnvKey::CocoLog),
+            rust_log: std::env::var("RUST_LOG").ok().filter(|s| !s.is_empty()),
+            format: env::env_opt(EnvKey::CocoLogFormat),
+            file: env::env_opt(EnvKey::CocoLogFile),
+            stderr: env::env_truthy_opt(EnvKey::CocoLogStderr),
+            location: env::env_truthy_opt(EnvKey::CocoLogLocation),
+            timezone: env::env_opt(EnvKey::CocoLogTimezone),
+        }
     }
 }
 
@@ -90,79 +142,92 @@ pub fn detect_mode(cli: &Cli) -> Mode {
     }
 }
 
-fn resolve_level(cli: &Cli) -> Option<String> {
+fn resolve_level(cli: &Cli, settings: Option<&Settings>, log_env: &LogEnv) -> Option<String> {
     if let Some(raw) = cli.log_level.as_deref() {
         return Some(expand_bare_level(raw));
     }
-    if let Some(directive) = env::env_opt(EnvKey::CocoLog) {
+    if let Some(directive) = log_env.level.clone() {
         return Some(directive);
     }
-    // RUST_LOG is the tracing-ecosystem convention name; reading it
-    // directly is the established pattern in retrieval/src/bin/.
-    if let Some(directive) = std::env::var("RUST_LOG").ok().filter(|s| !s.is_empty()) {
+    // RUST_LOG is the tracing-ecosystem convention name; it is still
+    // an environment override and therefore wins over settings.json.
+    if let Some(directive) = log_env.rust_log.clone() {
         return Some(directive);
     }
-    None
+    settings
+        .and_then(|s| s.log.level.as_deref())
+        .filter(|s| !s.trim().is_empty())
+        .map(expand_bare_level)
 }
 
-fn resolve_format(cli: &Cli) -> Option<Format> {
+fn resolve_format(cli: &Cli, settings: Option<&Settings>, log_env: &LogEnv) -> Option<Format> {
     cli.log_format
         .as_deref()
         .and_then(Format::parse)
-        .or_else(|| env::env_opt(EnvKey::CocoLogFormat).and_then(|s| Format::parse(&s)))
+        .or_else(|| log_env.format.as_deref().and_then(Format::parse))
+        .or_else(|| {
+            settings
+                .and_then(|s| s.log.format.as_deref())
+                .and_then(Format::parse)
+        })
 }
 
-fn resolve_file(cli: &Cli) -> Option<PathBuf> {
+fn resolve_file(cli: &Cli, settings: Option<&Settings>, log_env: &LogEnv) -> Option<PathBuf> {
     cli.log_file
         .as_deref()
         .map(PathBuf::from)
-        .or_else(|| env::env_opt(EnvKey::CocoLogFile).map(PathBuf::from))
+        .or_else(|| log_env.file.as_deref().map(PathBuf::from))
+        .or_else(|| {
+            settings
+                .and_then(|s| s.log.file.as_deref())
+                .filter(|s| !s.trim().is_empty())
+                .map(PathBuf::from)
+        })
+}
+
+fn resolve_stderr(cli: &Cli, settings: Option<&Settings>, log_env: &LogEnv) -> bool {
+    if cli.log_stderr {
+        return true;
+    }
+    if let Some(v) = log_env.stderr {
+        return v;
+    }
+    settings.and_then(|s| s.log.stderr).unwrap_or(false)
 }
 
 /// Tri-state resolution for the verbose-layout switch (location +
-/// thread name). Explicit flag wins, then env, then auto-rule.
-fn resolve_location(cli: &Cli, auto_verbose: bool) -> bool {
+/// thread name). Explicit flag wins, then env, then settings, then
+/// auto-rule.
+fn resolve_location(
+    cli: &Cli,
+    settings: Option<&Settings>,
+    log_env: &LogEnv,
+    auto_verbose: bool,
+) -> bool {
     if let Some(v) = cli.log_location {
         return v;
     }
-    if let Some(v) = env::env_truthy_opt(EnvKey::CocoLogLocation) {
+    if let Some(v) = log_env.location {
+        return v;
+    }
+    if let Some(v) = settings.and_then(|s| s.log.location) {
         return v;
     }
     auto_verbose
 }
 
-/// Whether the resolved filter source is a *bare* `debug` / `trace`
-/// level. Checks the same three sources as [`resolve_level`] in the
-/// same priority order; full `EnvFilter` directives short-circuit to
-/// `false` (advanced user → no implicit layout change).
-fn auto_verbose_from_sources(cli: &Cli) -> bool {
-    if let Some(raw) = cli.log_level.as_deref() {
-        return is_bare_verbose_level(raw);
-    }
-    if let Some(directive) = env::env_opt(EnvKey::CocoLog) {
-        return is_bare_verbose_level(&directive);
-    }
-    if let Some(directive) = std::env::var("RUST_LOG").ok().filter(|s| !s.is_empty()) {
-        return is_bare_verbose_level(&directive);
-    }
-    false
-}
-
-fn is_bare_verbose_level(raw: &str) -> bool {
-    matches!(raw.trim().to_ascii_lowercase().as_str(), "debug" | "trace")
-}
-
-/// Resolve the timezone for log timestamps. `--log-timezone` wins
-/// over `COCO_LOG_TIMEZONE`; both accept `local | utc`
-/// (case-insensitive). Unknown values fall through to
-/// [`TimezoneConfig::default`] (`Local`).
-fn resolve_timezone(cli: &Cli) -> TimezoneConfig {
+/// Resolve the timezone for log timestamps. `--log-timezone` wins over
+/// `COCO_LOG_TIMEZONE`, which wins over `settings.log.timezone`; all
+/// accept `local | utc` (case-insensitive). Unknown values fall through
+/// to [`TimezoneConfig::default`] (`Local`).
+fn resolve_timezone(cli: &Cli, settings: Option<&Settings>, log_env: &LogEnv) -> TimezoneConfig {
     cli.log_timezone
         .as_deref()
         .and_then(parse_timezone)
+        .or_else(|| log_env.timezone.as_deref().and_then(parse_timezone))
         .or_else(|| {
-            env::env_opt(EnvKey::CocoLogTimezone)
-                .as_deref()
+            settings
+                .and_then(|s| s.log.timezone.as_deref())
                 .and_then(parse_timezone)
         })
         .unwrap_or_default()

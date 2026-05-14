@@ -76,6 +76,11 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
             state.session.set_busy(true);
             state.session.stream_stall = false;
             state.ui.streaming = Some(crate::state::ui::StreamingState::new());
+            // Clear any leftover interrupt banner from the prior turn —
+            // the banner is "this turn was interrupted", not "ever was".
+            // TS parity: REPL.tsx resets the cancelled marker on the
+            // next turn boundary.
+            state.session.was_interrupted = false;
             true
         }
         ServerNotification::TurnCompleted(p) => on_turn_completed(state, p),
@@ -93,14 +98,7 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
             state.ui.set_overlay(crate::state::Overlay::Error(body));
             true
         }
-        ServerNotification::TurnInterrupted(_) => {
-            state.session.set_busy(false);
-            state.session.was_interrupted = true;
-            state
-                .ui
-                .add_toast(Toast::warning(t!("toast.turn_interrupted").to_string()));
-            true
-        }
+        ServerNotification::TurnInterrupted(p) => on_turn_interrupted(state, p),
         ServerNotification::MaxTurnsReached { max_turns } => {
             let msg = match max_turns {
                 Some(n) => t!("toast.max_turns_reached", n = n).to_string(),
@@ -774,10 +772,11 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
 }
 
 /// Handle `TurnCompleted`: finalize usage, flush streaming buffer into the
-/// message list, prune completed tools, and auto-restore input on interrupt.
+/// message list, prune completed tools.
 ///
-/// TS reference for auto-restore: `REPL.tsx` lines 3010-3021
-/// (`restoreMessageSyncRef` on user-cancel).
+/// Does NOT handle auto-restore — that lives in [`on_turn_interrupted`].
+/// `TurnCompleted` fires only on natural turn end; cancel paths emit
+/// `TurnInterrupted` separately (see `app/cli/src/tui_runner.rs`).
 fn on_turn_completed(state: &mut AppState, p: coco_types::TurnCompletedParams) -> bool {
     state.session.set_busy(false);
     // TS REPL.tsx:3901 — `updateLastInteractionTime(true)` also fires
@@ -819,36 +818,70 @@ fn on_turn_completed(state: &mut AppState, p: coco_types::TurnCompletedParams) -
             crate::state::session::ToolStatus::Queued | crate::state::session::ToolStatus::Running
         )
     });
+    true
+}
 
-    // Auto-restore on interrupt: if the turn was user-cancelled and
-    // conditions are met, auto-rewind to last user message.
-    if state.session.was_interrupted
+/// Handle `TurnInterrupted`: clear streaming state, surface the banner,
+/// and run auto-restore when the cancel was user-initiated AND the idle
+/// guards + lossless-tail predicate hold.
+///
+/// Mirrors TS `REPL.tsx:3010-3022` — the `.finally` block that fires
+/// after `abortController.abort('user-cancel')` resolves the query.
+fn on_turn_interrupted(state: &mut AppState, p: coco_types::TurnInterruptedParams) -> bool {
+    state.session.set_busy(false);
+    state.ui.streaming = None;
+    state.session.was_interrupted = true;
+    state
+        .ui
+        .add_toast(Toast::warning(t!("toast.turn_interrupted").to_string()));
+
+    // Auto-restore is gated on:
+    // - reason == UserCancel  → TS `signal.reason === 'user-cancel'`
+    //   (treat None/legacy senders as non-user-initiated — conservative)
+    // - empty input            → TS `inputValueRef.current === ''`
+    // - empty queue            → TS `getCommandQueueLength() === 0`
+    // - no overlay             → coco-rs analogue of "not viewing a
+    //                            teammate task" + "no modal up"
+    // - lossless tail          → TS `messagesAfterAreOnlySynthetic`
+    let user_cancel = matches!(p.reason, Some(coco_types::CancelReason::UserCancel));
+    if user_cancel
         && state.ui.input.is_empty()
+        && state.session.queued_commands.is_empty()
         && state.ui.overlay.is_none()
         && let Some(idx) =
             crate::update_rewind::find_last_user_message_index(&state.session.messages)
         && crate::update_rewind::messages_after_are_only_synthetic(&state.session.messages, idx)
     {
-        let input_text = state.session.messages[idx].text_content().to_string();
-        let perm = state.session.messages[idx].permission_mode;
-        state.session.messages.truncate(idx);
-        if let Some(mode) = perm {
-            state.session.permission_mode = mode;
-        }
-        if !input_text.is_empty() {
-            state.ui.input.text = input_text;
-            state.ui.input.cursor = state.ui.input.text.chars().count() as i32;
-        }
-        // Match the rewind flow's full side-effect set so an Esc-driven
-        // auto-restore behaves the same as the explicit overlay path.
-        state.session.conversation_id = Some(uuid::Uuid::new_v4().to_string());
-        state.session.prompt_suggestions.clear();
-        state.ui.paste_manager.clear();
-        state.ui.scroll_offset = 0;
-        state.ui.user_scrolled = false;
+        apply_auto_restore(state, idx);
     }
-    state.session.was_interrupted = false;
     true
+}
+
+/// In-place auto-restore — mirrors TS `restoreMessageSync`. Truncates
+/// the message list at `idx` (the last user message), pops the user's
+/// text back into the input bar, regenerates `conversation_id` so the
+/// next turn starts a fresh cache key, and clears UI state that no
+/// longer corresponds to a real conversation tail.
+///
+/// Does NOT round-trip through the backend (`UserCommand::Rewind` is
+/// the explicit-overlay path; this is the synchronous inline restore
+/// for the user-cancel case).
+fn apply_auto_restore(state: &mut AppState, idx: usize) {
+    let input_text = state.session.messages[idx].text_content().to_string();
+    let perm = state.session.messages[idx].permission_mode;
+    state.session.messages.truncate(idx);
+    if let Some(mode) = perm {
+        state.session.permission_mode = mode;
+    }
+    if !input_text.is_empty() {
+        state.ui.input.text = input_text;
+        state.ui.input.cursor = state.ui.input.text.chars().count() as i32;
+    }
+    state.session.conversation_id = Some(uuid::Uuid::new_v4().to_string());
+    state.session.prompt_suggestions.clear();
+    state.ui.paste_manager.clear();
+    state.ui.scroll_offset = 0;
+    state.ui.user_scrolled = false;
 }
 
 /// Push a teammate-attributed message into `session.messages` so the
@@ -865,3 +898,7 @@ fn push_teammate_message(state: &mut AppState, agent_id: &str, content: &str) {
         .session
         .add_message(ChatMessage::teammate_message(agent_id, trimmed));
 }
+
+#[cfg(test)]
+#[path = "protocol.test.rs"]
+mod tests;

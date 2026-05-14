@@ -1,13 +1,13 @@
 ---
 source: app/tui/src/widgets/mod.test.rs
-assertion_line: 148
+assertion_line: 151
 expression: output
 ---
  | opus-4                                                                       
             ┌ Help ────────────────────────────────────────────────┐            
             │tab            Toggle plan mode                       │            
             │shift+tab      Cycle permission mode                  │            
-            │ctrl+t         Toggle tasks / teammates panel         │            
+            │ctrl+t         Cycle thinking level                   │            
             │ctrl+m         Cycle model                            │            
             │ctrl+c         Interrupt                              │            
             │ctrl+l         Clear screen                           │            
@@ -24,6 +24,6 @@ expression: output
             │ctrl+shift+p   Quick open file                        │            
             │ctrl+w         Context window                         │            
  Input ─────│f6             Focus next panel                       │────────────
-> Type a mes│ctrl+d         Quit                                   │            
+❯ Type a mes│ctrl+d         Quit                                   │            
             └──────────────────────────────────────────────────────┘            
  opus-4 | Default | 0 msgs

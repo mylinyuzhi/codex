@@ -58,9 +58,9 @@ pub enum OutputStyleSource {
     Plugin,
     /// Managed/policy directory (`/etc/coco/...`, organization-pushed).
     PolicySettings,
-    /// User home `~/.claude/output-styles/`.
+    /// User home `~/.coco/output-styles/`.
     UserSettings,
-    /// Project `.claude/output-styles/`.
+    /// Project `.coco/output-styles/`.
     ProjectSettings,
 }
 

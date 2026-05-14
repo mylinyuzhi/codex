@@ -307,7 +307,13 @@ impl OpenAIResponsesLanguageModel {
         if let Some(ref user) = openai_options.user {
             body["user"] = Value::String(user.clone());
         }
-        if let Some(parallel) = openai_options.parallel_tool_calls {
+        // Typed provider_options wins over the generic call-options
+        // toggle so a user-explicit override beats the capability-driven
+        // default flowing through `options.parallel_tool_calls`.
+        if let Some(parallel) = openai_options
+            .parallel_tool_calls
+            .or(options.parallel_tool_calls)
+        {
             body["parallel_tool_calls"] = Value::Bool(parallel);
         }
         if let Some(store) = openai_options.store {

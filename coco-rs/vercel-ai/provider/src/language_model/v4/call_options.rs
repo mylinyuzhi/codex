@@ -133,6 +133,20 @@ pub struct LanguageModelV4CallOptions {
     pub tools: Option<Vec<LanguageModelV4Tool>>,
     /// The tool choice configuration.
     pub tool_choice: Option<LanguageModelV4ToolChoice>,
+    /// Provider-agnostic parallel tool-call toggle.
+    ///
+    /// `Some(true)` opts the request into emitting concurrent tool
+    /// calls; `Some(false)` forces serial execution. Each provider
+    /// translates this into its own wire shape (OpenAI: top-level
+    /// `parallel_tool_calls`; Anthropic: nested
+    /// `tool_choice.disable_parallel_tool_use` with inverted polarity;
+    /// Gemini: implicit — no wire flag). `None` leaves the provider's
+    /// own default in place.
+    ///
+    /// When a provider also exposes the same toggle via its typed
+    /// `provider_options` slot, the typed value takes precedence so
+    /// user-explicit overrides win over capability-driven defaults.
+    pub parallel_tool_calls: Option<bool>,
     /// The frequency penalty.
     pub frequency_penalty: Option<f32>,
     /// The presence penalty.
@@ -195,6 +209,13 @@ impl LanguageModelV4CallOptions {
     /// Set the tool choice.
     pub fn with_tool_choice(mut self, tool_choice: LanguageModelV4ToolChoice) -> Self {
         self.tool_choice = Some(tool_choice);
+        self
+    }
+
+    /// Set the provider-agnostic parallel tool-call toggle. Each
+    /// provider translates this to its own wire shape.
+    pub fn with_parallel_tool_calls(mut self, enabled: bool) -> Self {
+        self.parallel_tool_calls = Some(enabled);
         self
     }
 

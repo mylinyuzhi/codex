@@ -45,6 +45,7 @@ use coco_tool_runtime::ToolPermissionBridgeRef;
 use coco_tui::AppState;
 use coco_tui::TuiCommand;
 use coco_tui::UserCommand;
+use coco_tui::command::ShutdownReason;
 use coco_tui::render;
 use coco_tui::server_notification_handler::handle_core_event;
 use coco_tui::update::handle_command;
@@ -712,7 +713,12 @@ impl RealTuiHarness {
     }
 
     pub async fn shutdown(mut self) {
-        let _ = self.command_tx.send(UserCommand::Shutdown).await;
+        let _ = self
+            .command_tx
+            .send(UserCommand::Shutdown {
+                reason: ShutdownReason::ImmediateQuit,
+            })
+            .await;
         self.cancel.cancel();
         if let Some(handle) = self.driver_task.take() {
             let _ = tokio::time::timeout(Duration::from_secs(3), handle).await;
@@ -871,7 +877,7 @@ async fn run_real_agent_driver(
                 }
             }
 
-            UserCommand::Shutdown => {
+            UserCommand::Shutdown { .. } => {
                 // Drain the active turn so the harness sees its
                 // SessionResult before we exit.
                 let mut g = active_turn.lock().await;

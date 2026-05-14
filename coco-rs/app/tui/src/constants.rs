@@ -110,11 +110,16 @@ pub const TABLE_MIN_COL_WIDTH: i32 = 5;
 /// Maximum search results shown in global search overlay.
 pub const MAX_SEARCH_RESULTS: i32 = 50;
 
-// ========== Rewind ==========
+// ========== Double-press ==========
 
-/// Time window for double-Esc detection.
-/// TS: useDoublePress() hook in PromptInput.tsx
-pub const DOUBLE_ESC_THRESHOLD: Duration = Duration::from_millis(400);
+/// Window between the first and second press of any double-press
+/// shortcut (Ctrl+C / Ctrl+D exit, double-Esc rewind, …). Consumed by
+/// [`crate::double_press::DoublePressTracker`].
+///
+/// TS: `DOUBLE_PRESS_TIMEOUT_MS = 800` in `src/hooks/useDoublePress.ts`.
+pub const DOUBLE_PRESS_TIMEOUT: Duration = Duration::from_millis(800);
+
+// ========== Rewind ==========
 
 /// Maximum visible messages in the rewind message selector.
 /// TS: MAX_VISIBLE_MESSAGES = 7 in MessageSelector.tsx

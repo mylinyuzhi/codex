@@ -22,6 +22,8 @@ pub enum KeybindingContext {
     Confirmation,
     /// Filterable list overlay (model picker, command palette, etc.).
     Picker,
+    /// Model picker overlay — filterable list plus effort/role controls.
+    ModelPicker,
     /// Scrollable content overlay (help, diff view, task detail, doctor).
     Scrollable,
     /// Autocomplete suggestions visible.
@@ -37,8 +39,10 @@ pub fn active_context(state: &AppState) -> KeybindingContext {
     if let Some(ref overlay) = state.ui.overlay {
         return match overlay {
             // Filterable list overlays
-            Overlay::ModelPicker(_)
-            | Overlay::CommandPalette(_)
+            Overlay::ModelPicker(_) => KeybindingContext::ModelPicker,
+
+            // Filterable list overlays
+            Overlay::CommandPalette(_)
             | Overlay::SessionBrowser(_)
             | Overlay::GlobalSearch(_)
             | Overlay::QuickOpen(_)
@@ -121,6 +125,7 @@ pub fn map_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
     // Layer 2: legacy hardcoded cascade (TUI-only shortcuts).
     match ctx {
         KeybindingContext::Confirmation => map_confirmation_key(key),
+        KeybindingContext::ModelPicker => map_model_picker_key(key),
         KeybindingContext::Picker => map_picker_key(key),
         KeybindingContext::Scrollable => map_scrollable_key(key),
         // Autocomplete intercepts navigation keys only; other keys fall
@@ -131,6 +136,33 @@ pub fn map_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
             .or_else(|| map_input_key(state, key)),
         KeybindingContext::Settings => map_settings_key(key),
         KeybindingContext::Chat => map_global_key(state, key).or_else(|| map_input_key(state, key)),
+    }
+}
+
+/// Keys for the model picker: Up/Down chooses a model, Left/Right chooses
+/// effort, Tab/Shift+Tab chooses role, printable chars edit the filter.
+fn map_model_picker_key(key: KeyEvent) -> Option<TuiCommand> {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+    match key.code {
+        KeyCode::Home => Some(TuiCommand::OverlayJumpStart),
+        KeyCode::End => Some(TuiCommand::OverlayJumpEnd),
+        KeyCode::Up if shift => Some(TuiCommand::OverlayJumpStart),
+        KeyCode::Down if shift => Some(TuiCommand::OverlayJumpEnd),
+        KeyCode::Up => Some(TuiCommand::OverlayPrev),
+        KeyCode::Down => Some(TuiCommand::OverlayNext),
+        KeyCode::Left => Some(TuiCommand::ModelPickerCycleEffort(-1)),
+        KeyCode::Right => Some(TuiCommand::ModelPickerCycleEffort(1)),
+        KeyCode::Tab => Some(TuiCommand::SettingsNextTab),
+        KeyCode::BackTab => Some(TuiCommand::SettingsPrevTab),
+        KeyCode::Enter => Some(TuiCommand::OverlayConfirm),
+        KeyCode::Esc => Some(TuiCommand::Cancel),
+        KeyCode::Backspace => Some(TuiCommand::OverlayFilterBackspace),
+        KeyCode::Char('c') if ctrl => Some(TuiCommand::Cancel),
+        KeyCode::Char('p') if ctrl => Some(TuiCommand::OverlayPrev),
+        KeyCode::Char('n') if ctrl => Some(TuiCommand::OverlayNext),
+        KeyCode::Char(c) => Some(TuiCommand::OverlayFilter(c)),
+        _ => None,
     }
 }
 
@@ -234,8 +266,18 @@ fn map_global_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
     let alt = key.modifiers.contains(KeyModifiers::ALT);
 
     match key.code {
-        // Ctrl shortcuts
-        KeyCode::Char('c') if ctrl => Some(TuiCommand::Interrupt),
+        // Ctrl shortcuts. `ctrl+c` / `ctrl+d` are owned exclusively
+        // by the resolver (defaults → `app:interrupt` / `app:exit`,
+        // reserved against rebinding); both go through `update::exit`
+        // for double-press confirmation, so they MUST NOT appear in
+        // this fallback cascade — a hard-coded `Interrupt`/`Quit`
+        // here would bypass the confirmation.
+        //
+        // `ctrl+q` is a coco-rs-only power-user immediate-quit
+        // shortcut with no equivalent in TS. It is not in
+        // `coco-keybindings` defaults (so the resolver leaves it
+        // unhandled) and not reserved, so the fallback below is
+        // what gives it meaning.
         KeyCode::Char('q') if ctrl => Some(TuiCommand::Quit),
         KeyCode::Char('l') if ctrl => Some(TuiCommand::ClearScreen),
         // Ctrl+T / Ctrl+Shift+T are owned by the keybindings resolver
@@ -325,24 +367,12 @@ fn map_input_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
         KeyCode::Char('b') if alt => Some(TuiCommand::WordLeft),
         KeyCode::Char('f') if alt => Some(TuiCommand::WordRight),
 
-        // Escape — double-Esc opens rewind when input is empty + messages exist.
-        // TS: useDoublePress() in PromptInput.tsx
-        KeyCode::Esc => {
-            let now = std::time::Instant::now();
-            let is_double = state
-                .ui
-                .last_esc_time
-                .is_some_and(|t| now.duration_since(t) < crate::constants::DOUBLE_ESC_THRESHOLD);
-            if is_double
-                && state.ui.input.is_empty()
-                && !state.session.messages.is_empty()
-                && state.ui.overlay.is_none()
-            {
-                Some(TuiCommand::ShowRewind)
-            } else {
-                Some(TuiCommand::Cancel)
-            }
-        }
+        // Escape always emits Cancel; the *second* Esc within
+        // `DOUBLE_PRESS_TIMEOUT` is what opens rewind, handled inside
+        // `update::handle_command`'s Cancel arm via
+        // `state.ui.esc_tracker.poll(...)`. The dispatch layer can't
+        // poll a tracker through `&AppState`.
+        KeyCode::Esc => Some(TuiCommand::Cancel),
 
         // Character input
         KeyCode::Char(c) => Some(TuiCommand::InsertChar(c)),

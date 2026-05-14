@@ -3,6 +3,8 @@
 //! These are the outbound messages sent from the TUI to the agent loop
 //! when the user takes an action that requires core processing.
 
+use std::fmt;
+
 use coco_types::PermissionMode;
 use coco_types::PermissionUpdate;
 
@@ -31,6 +33,36 @@ pub enum ClearScope {
     /// `/clear all` — alias of [`Self::Conversation`]. Retained for
     /// users who already typed it; behaves identically to `/clear`.
     All,
+}
+
+/// Why the TUI requested process shutdown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShutdownReason {
+    /// User typed `/exit` or `/quit`.
+    SlashCommand,
+    /// User invoked an immediate-quit command such as Ctrl+Q.
+    ImmediateQuit,
+    /// User confirmed Ctrl+C double-press exit.
+    DoublePressCtrlC,
+    /// User confirmed Ctrl+D double-press exit.
+    DoublePressCtrlD,
+}
+
+impl ShutdownReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::SlashCommand => "slash_command",
+            Self::ImmediateQuit => "immediate_quit",
+            Self::DoublePressCtrlC => "double_press_ctrl_c",
+            Self::DoublePressCtrlD => "double_press_ctrl_d",
+        }
+    }
+}
+
+impl fmt::Display for ShutdownReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// Commands sent from TUI to the core agent loop.
@@ -193,7 +225,7 @@ pub enum UserCommand {
         feedback: Option<String>,
     },
     /// Shutdown the application.
-    Shutdown,
+    Shutdown { reason: ShutdownReason },
     /// Fire an `idle_prompt` Notification hook. The TUI emits this
     /// once per turn-completion epoch when the user has been idle
     /// past the configured threshold. TS parity:

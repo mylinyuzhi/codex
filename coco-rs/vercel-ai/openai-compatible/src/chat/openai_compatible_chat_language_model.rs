@@ -202,6 +202,14 @@ impl OpenAICompatibleChatLanguageModel {
             }
         }
 
+        // Generic parallel tool-calls toggle. Emits OpenAI-standard
+        // snake_case wire key. User passthrough below runs last so an
+        // explicit `provider_options[ns]["parallel_tool_calls"]` still
+        // wins over the capability-driven default.
+        if let Some(parallel) = options.parallel_tool_calls {
+            body["parallel_tool_calls"] = Value::Bool(parallel);
+        }
+
         // Passthrough: spread remaining provider-specific keys into body
         if let Some(obj) = body.as_object_mut() {
             for (k, v) in &passthrough {

@@ -14,11 +14,13 @@
 use std::path::Path;
 use std::path::PathBuf;
 
-use coco_frontmatter::FrontmatterValue;
-
 use crate::catalog::OutputStyleConfig;
 use crate::catalog::OutputStyleSource;
 use crate::dir_loader::build_config_from_parsed;
+use crate::dir_loader::coerce_description_to_string;
+use crate::dir_loader::description_from_markdown;
+use crate::dir_loader::is_markdown_file;
+use crate::dir_loader::parse_ts_boolean_frontmatter;
 use crate::error::OutputStylesError;
 
 /// Minimal description of an enabled plugin needed to load its output
@@ -70,20 +72,19 @@ impl PluginOutputStyleSource {
 /// Load output styles from every plugin in `plugins`. Errors per plugin
 /// are logged and that plugin is skipped — the rest still load.
 ///
-/// Names are namespaced as `<plugin_name>:<base_name>`. If a plugin
-/// emits multiple styles with the same base name (file + manifest
-/// duplicate), the first wins; subsequent duplicates within the same
-/// plugin are dropped, matching TS dedup-by-loaded-path.
+/// Names are namespaced as `<plugin_name>:<base_name>`. Duplicate
+/// physical file paths within the same plugin are skipped after
+/// resolving symlinks, matching TS `isDuplicatePath`.
 pub fn load_plugin_output_styles(plugins: &[PluginOutputStyleSource]) -> Vec<OutputStyleConfig> {
     let mut all = Vec::new();
     for plugin in plugins {
-        let mut seen_names = std::collections::HashSet::new();
+        let mut loaded_paths = std::collections::HashSet::new();
         for path in candidate_paths(plugin) {
-            for style in load_plugin_path(&plugin.plugin_name, &path) {
-                if seen_names.insert(style.name.clone()) {
-                    all.push(style);
-                }
-            }
+            all.extend(load_plugin_path(
+                &plugin.plugin_name,
+                &path,
+                &mut loaded_paths,
+            ));
         }
     }
     all
@@ -98,7 +99,11 @@ fn candidate_paths(plugin: &PluginOutputStyleSource) -> Vec<PathBuf> {
     paths
 }
 
-fn load_plugin_path(plugin_name: &str, path: &Path) -> Vec<OutputStyleConfig> {
+fn load_plugin_path(
+    plugin_name: &str,
+    path: &Path,
+    loaded_paths: &mut std::collections::HashSet<PathBuf>,
+) -> Vec<OutputStyleConfig> {
     let metadata = match std::fs::metadata(path) {
         Ok(m) => m,
         Err(_) => return Vec::new(),
@@ -106,16 +111,22 @@ fn load_plugin_path(plugin_name: &str, path: &Path) -> Vec<OutputStyleConfig> {
 
     if metadata.is_dir() {
         let mut out = Vec::new();
-        let entries = match std::fs::read_dir(path) {
-            Ok(e) => e,
-            Err(_) => return Vec::new(),
-        };
-        for entry in entries.flatten() {
-            let p = entry.path();
-            if p.extension().and_then(|e| e.to_str()) != Some("md") {
+        for entry in walkdir::WalkDir::new(path).into_iter() {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(_) => continue,
+            };
+            if !entry.file_type().is_file() {
                 continue;
             }
-            match load_single_plugin_file(plugin_name, &p) {
+            let p = entry.path();
+            if !is_markdown_file(p) {
+                continue;
+            }
+            if is_duplicate_path(p, loaded_paths) {
+                continue;
+            }
+            match load_single_plugin_file(plugin_name, p) {
                 Ok(style) => out.push(style),
                 Err(e) => tracing::warn!(
                     target: "coco_output_styles::plugin_loader",
@@ -127,7 +138,10 @@ fn load_plugin_path(plugin_name: &str, path: &Path) -> Vec<OutputStyleConfig> {
             }
         }
         out
-    } else if metadata.is_file() && path.extension().and_then(|e| e.to_str()) == Some("md") {
+    } else if metadata.is_file() && is_markdown_file(path) {
+        if is_duplicate_path(path, loaded_paths) {
+            return Vec::new();
+        }
         match load_single_plugin_file(plugin_name, path) {
             Ok(style) => vec![style],
             Err(e) => {
@@ -146,6 +160,11 @@ fn load_plugin_path(plugin_name: &str, path: &Path) -> Vec<OutputStyleConfig> {
     }
 }
 
+fn is_duplicate_path(path: &Path, loaded_paths: &mut std::collections::HashSet<PathBuf>) -> bool {
+    let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    !loaded_paths.insert(resolved)
+}
+
 fn load_single_plugin_file(
     plugin_name: &str,
     path: &Path,
@@ -157,33 +176,31 @@ fn load_single_plugin_file(
     let parsed = coco_frontmatter::parse(&raw);
     let mut style = build_config_from_parsed(path, &parsed, OutputStyleSource::Plugin);
 
-    // Plugin namespace prefix on the name. TS:
-    // `loadPluginOutputStyles.ts:54-55`.
-    let base = strip_plugin_prefix(&style.name, plugin_name);
-    style.name = format!("{plugin_name}:{base}");
+    // Plugin namespace prefix on the name. TS always prefixes the
+    // frontmatter/file base name; it does not strip an existing prefix.
+    style.name = format!("{plugin_name}:{}", style.name);
+    style.description = parsed
+        .data
+        .get("description")
+        .and_then(coerce_description_to_string)
+        .unwrap_or_else(|| {
+            description_from_markdown(
+                &parsed.content,
+                &format!("Output style from {plugin_name} plugin"),
+            )
+        });
 
     // `force-for-plugin` only valid here.
     style.force_for_plugin = parsed
         .data
         .get("force-for-plugin")
-        .and_then(FrontmatterValue::as_bool);
+        .and_then(parse_ts_boolean_frontmatter);
 
     // `keep-coding-instructions` is dir-style-only per TS — clear if
     // accidentally set.
     style.keep_coding_instructions = None;
 
     Ok(style)
-}
-
-/// If a plugin author already wrote `pluginName:foo` in frontmatter,
-/// don't double-prefix when we re-namespace.
-fn strip_plugin_prefix(name: &str, plugin_name: &str) -> String {
-    let prefix = format!("{plugin_name}:");
-    if let Some(rest) = name.strip_prefix(&prefix) {
-        rest.to_string()
-    } else {
-        name.to_string()
-    }
 }
 
 #[cfg(test)]

@@ -30,6 +30,29 @@ fn ctrl(code: KeyCode) -> KeyEvent {
     }
 }
 
+fn model_picker_state() -> AppState {
+    let mut state = AppState::new();
+    state.ui.set_overlay(crate::state::Overlay::ModelPicker(
+        crate::state::ModelPickerOverlay {
+            role: coco_types::ModelRole::Main,
+            entries: vec![crate::state::ModelEntry {
+                provider: "openai".into(),
+                provider_display: "OpenAI".into(),
+                model_id: "gpt-5-5".into(),
+                display_name: "GPT-5.5".into(),
+                context_window: Some(272_000),
+                supported_efforts: vec![coco_types::ReasoningEffort::Auto],
+                default_effort: Some(coco_types::ReasoningEffort::Auto),
+                is_current_for_role: true,
+            }],
+            filter: String::new(),
+            selected: 0,
+            effort: Some(coco_types::ReasoningEffort::Auto),
+        },
+    ));
+    state
+}
+
 #[test]
 fn test_default_context_is_chat() {
     let state = AppState::new();
@@ -64,6 +87,28 @@ fn test_permission_overlay_context() {
         },
     ));
     assert_eq!(active_context(&state), KeybindingContext::Confirmation);
+}
+
+#[test]
+fn test_model_picker_context() {
+    let state = model_picker_state();
+    assert_eq!(active_context(&state), KeybindingContext::ModelPicker);
+}
+
+#[test]
+fn test_model_picker_left_right_cycle_effort() {
+    let state = model_picker_state();
+    let left = map_key(&state, press(KeyCode::Left));
+    let right = map_key(&state, press(KeyCode::Right));
+    assert!(matches!(left, Some(TuiCommand::ModelPickerCycleEffort(-1))));
+    assert!(matches!(right, Some(TuiCommand::ModelPickerCycleEffort(1))));
+}
+
+#[test]
+fn test_model_picker_tab_cycles_role() {
+    let state = model_picker_state();
+    let cmd = map_key(&state, press(KeyCode::Tab));
+    assert!(matches!(cmd, Some(TuiCommand::SettingsNextTab)));
 }
 
 #[test]

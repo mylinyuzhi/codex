@@ -7,16 +7,19 @@
 
 use tokio::sync::mpsc;
 
+use crate::command::ShutdownReason;
 use crate::command::UserCommand;
 use crate::constants;
 use crate::events::TuiCommand;
 use crate::i18n::t;
 use crate::state::AppState;
 use crate::state::FocusTarget;
-use crate::update_rewind;
+
+use exit::ExitEffect;
 
 mod clipboard;
 mod edit;
+mod exit;
 mod expanded_view;
 mod overlay;
 // `pub(crate)` so the slash-command dispatcher (in
@@ -207,41 +210,19 @@ pub async fn handle_command(
             true
         }
         TuiCommand::Interrupt => {
-            state.session.was_interrupted = true;
-            let _ = command_tx.send(UserCommand::Interrupt).await;
-            // TS `screens/REPL.tsx:3010-3022` — auto-rewind on user-cancel
-            // when the input is empty, no commands are queued, and no
-            // overlay is open. Lossless (synthetic-only after last user
-            // message) → dispatch directly. Non-lossless (meaningful
-            // assistant text or file changes) → open the picker
-            // pre-anchored on the last user turn so the user can pick
-            // a restore type — TS `MessageActionsCaps.edit` non-lossless
-            // branch (`screens/REPL.tsx:3781-3785`).
-            if state.ui.input.is_empty()
-                && state.session.queued_commands.is_empty()
-                && state.ui.overlay.is_none()
-            {
-                if let Some((message_id, restore_type)) =
-                    update_rewind::auto_restore_after_interrupt(&state.session.messages)
-                {
-                    let rewound_turn =
-                        update_rewind::find_last_user_message_index(&state.session.messages)
-                            .map(|i| i as i32 + 1)
-                            .unwrap_or(0);
-                    let _ = command_tx
-                        .send(UserCommand::Rewind {
-                            message_id,
-                            restore_type,
-                            rewound_turn,
-                        })
-                        .await;
-                } else if let Some(idx) =
-                    update_rewind::find_last_user_message_index(&state.session.messages)
-                    && let Some(msg) = state.session.messages.get(idx)
-                {
-                    show::rewind_for(state, command_tx, msg.id.clone()).await;
-                }
-            }
+            let now = std::time::Instant::now();
+            let timing =
+                ExitTiming::from_pending_until(state.ui.ctrl_c_tracker.pending_until(), now);
+            let effect = exit::on_interrupt(state, now);
+            apply_exit_effect(state, command_tx, ExitSource::CtrlC, timing, effect).await;
+            true
+        }
+        TuiCommand::RequestExit => {
+            let now = std::time::Instant::now();
+            let timing =
+                ExitTiming::from_pending_until(state.ui.ctrl_d_tracker.pending_until(), now);
+            let effect = exit::on_request_exit(state, now);
+            apply_exit_effect(state, command_tx, ExitSource::CtrlD, timing, effect).await;
             true
         }
         TuiCommand::Cancel => {
@@ -251,6 +232,19 @@ pub async fn handle_command(
             if state.ui.overlay.is_none() && state.ui.active_suggestions.is_some() {
                 state.ui.active_suggestions = None;
                 return true;
+            }
+            // No overlay + no suggestions + idle conditions met → run
+            // the double-Esc tracker so a second Esc opens the rewind
+            // picker. TS: `useDoublePress` in `PromptInput.tsx`. The
+            // poll lives here (not in `keybinding_dispatch`) because
+            // dispatch only has `&AppState`; the tracker needs a
+            // mutable borrow.
+            if state.rewind_available_from_input() {
+                use crate::double_press::Outcome;
+                if state.ui.esc_tracker.poll((), std::time::Instant::now()) == Outcome::Double {
+                    show::rewind(state, command_tx).await;
+                    return true;
+                }
             }
             if !overlay::rewind_cancel(state) {
                 return true; // phase-back; keep overlay
@@ -616,7 +610,15 @@ pub async fn handle_command(
 
         // ── Application ──
         TuiCommand::Quit => {
-            let _ = command_tx.send(UserCommand::Shutdown).await;
+            tracing::info!(
+                exit_case = %ShutdownReason::ImmediateQuit,
+                "immediate quit requested"
+            );
+            let _ = command_tx
+                .send(UserCommand::Shutdown {
+                    reason: ShutdownReason::ImmediateQuit,
+                })
+                .await;
             state.quit();
             true
         }
@@ -648,6 +650,102 @@ pub async fn handle_command(
     }
 
     changed
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ExitSource {
+    CtrlC,
+    CtrlD,
+}
+
+impl ExitSource {
+    fn label(self) -> &'static str {
+        match self {
+            Self::CtrlC => "Ctrl-C",
+            Self::CtrlD => "Ctrl-D",
+        }
+    }
+
+    fn shutdown_reason(self) -> ShutdownReason {
+        match self {
+            Self::CtrlC => ShutdownReason::DoublePressCtrlC,
+            Self::CtrlD => ShutdownReason::DoublePressCtrlD,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct ExitTiming {
+    expired_by_ms: Option<u128>,
+}
+
+impl ExitTiming {
+    fn from_pending_until(
+        pending_until: Option<std::time::Instant>,
+        now: std::time::Instant,
+    ) -> Self {
+        Self {
+            expired_by_ms: pending_until
+                .and_then(|until| now.checked_duration_since(until))
+                .map(|d| d.as_millis()),
+        }
+    }
+}
+
+/// Translate an [`ExitEffect`] (pure decision from `update::exit`) into
+/// the matching side effects: `UserCommand` sends + terminal
+/// `state.quit()`. **Does not** decide auto-restore — that's the
+/// `TurnInterrupted` event handler's job in
+/// `server_notification_handler::protocol::on_turn_interrupted`,
+/// mirroring TS where `restoreMessageSync` runs inside `.finally`
+/// after the abort completes (`REPL.tsx:3010-3022`).
+async fn apply_exit_effect(
+    state: &mut AppState,
+    command_tx: &mpsc::Sender<UserCommand>,
+    source: ExitSource,
+    timing: ExitTiming,
+    effect: ExitEffect,
+) {
+    match effect {
+        ExitEffect::InterruptOnly => {
+            tracing::info!(
+                key = source.label(),
+                exit_case = "interrupt_active_turn",
+                "exit key interrupted active turn"
+            );
+            state.session.was_interrupted = true;
+            let _ = command_tx.send(UserCommand::Interrupt).await;
+        }
+        ExitEffect::ArmOnly => {
+            // First idle Ctrl+C / Ctrl+D: no interrupt, no overlay.
+            // Tracker already updated by `exit::*`; renderer reads
+            // `state.ui.pending_exit_hint()` to show the footer hint.
+            let prompt = state
+                .ui
+                .pending_exit_hint()
+                .map(|key| t!("status.exit_prompt", key = key.label()).to_string())
+                .unwrap_or_else(|| t!("status.exit_prompt", key = source.label()).to_string());
+            tracing::info!(
+                key = source.label(),
+                exit_case = "arm_exit_prompt",
+                rearmed_after_timeout = timing.expired_by_ms.is_some(),
+                expired_by_ms = timing.expired_by_ms.unwrap_or(0),
+                window_ms = crate::constants::DOUBLE_PRESS_TIMEOUT.as_millis(),
+                prompt,
+                "exit prompt armed"
+            );
+        }
+        ExitEffect::Quit => {
+            let reason = source.shutdown_reason();
+            tracing::info!(
+                key = source.label(),
+                exit_case = %reason,
+                "exit confirmed; shutting down"
+            );
+            let _ = command_tx.send(UserCommand::Shutdown { reason }).await;
+            state.quit();
+        }
+    }
 }
 
 /// Localised label for a permission mode, used in toasts/banners so the

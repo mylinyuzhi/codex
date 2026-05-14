@@ -440,10 +440,18 @@ impl TurnRunner for QueryEngineRunner {
                     // / `turn/interrupted` would hang forever after a
                     // mid-flight `control/interrupt`.
                     if cancel_for_terminal.is_cancelled() {
+                        // SDK mode's only cancel entry is the
+                        // `control/interrupt` client request, which is
+                        // a user-initiated cancel. Mirrors TS where the
+                        // SDK-control path also corresponds to
+                        // `abortController.abort('user-cancel')`.
                         let _ = event_tx_for_error
                             .send(CoreEvent::Protocol(
                                 coco_types::ServerNotification::TurnInterrupted(
-                                    coco_types::TurnInterruptedParams { turn_id: None },
+                                    coco_types::TurnInterruptedParams {
+                                        turn_id: None,
+                                        reason: Some(coco_types::CancelReason::UserCancel),
+                                    },
                                 ),
                             ))
                             .await;
@@ -465,7 +473,10 @@ impl TurnRunner for QueryEngineRunner {
                     let was_cancelled = cancel_for_terminal.is_cancelled();
                     let terminal = if was_cancelled {
                         coco_types::ServerNotification::TurnInterrupted(
-                            coco_types::TurnInterruptedParams { turn_id: None },
+                            coco_types::TurnInterruptedParams {
+                                turn_id: None,
+                                reason: Some(coco_types::CancelReason::UserCancel),
+                            },
                         )
                     } else {
                         coco_types::ServerNotification::TurnFailed(coco_types::TurnFailedParams {
