@@ -8,6 +8,7 @@
 use coco_error::ErrorExt;
 use coco_error::StackError;
 use coco_error::StatusCode;
+use coco_types::ReasoningEffort;
 use std::fmt;
 use std::path::PathBuf;
 use thiserror::Error;
@@ -103,6 +104,16 @@ pub enum ConfigError {
     )]
     InvalidTimeoutSecs { name: String, value: i64 },
 
+    #[error(
+        "model `{provider}/{model}`: default_thinking_level `{default}` is not declared in supported_thinking_levels (declared: {supported:?})"
+    )]
+    DefaultThinkingLevelNotSupported {
+        provider: String,
+        model: String,
+        default: ReasoningEffort,
+        supported: Vec<ReasoningEffort>,
+    },
+
     #[error("io error: {source}")]
     Io {
         #[from]
@@ -173,6 +184,7 @@ impl ErrorExt for ConfigError {
             Self::UnknownProvider { .. } => StatusCode::ProviderNotFound,
             Self::UnknownModel { .. } => StatusCode::ModelNotFound,
             Self::InvalidTimeoutSecs { .. } => StatusCode::InvalidArguments,
+            Self::DefaultThinkingLevelNotSupported { .. } => StatusCode::InvalidConfig,
             Self::Io { .. } => StatusCode::IoError,
             Self::Json { .. } => StatusCode::InvalidJson,
             Self::Jsonc { .. } => StatusCode::InvalidJson,

@@ -122,6 +122,75 @@ fn test_model_info_from_partial_requires_context_window() {
     ));
 }
 
+#[test]
+fn from_partial_rejects_default_thinking_not_in_supported() {
+    use crate::positive::PositiveTokens;
+
+    let partial = PartialModelInfo {
+        context_window: Some(PositiveTokens::new(100_000)),
+        max_output_tokens: Some(PositiveTokens::new(16_384)),
+        supported_thinking_levels: Some(vec![ThinkingLevel::low(), ThinkingLevel::medium()]),
+        // High is not in the supported list — must fail validation.
+        default_thinking_level: Some(ReasoningEffort::High),
+        ..Default::default()
+    };
+    let err = ModelInfo::from_partial("test", "test-model", partial).unwrap_err();
+    let crate::error::ConfigError::DefaultThinkingLevelNotSupported {
+        provider,
+        model,
+        default,
+        supported,
+    } = err
+    else {
+        panic!("expected DefaultThinkingLevelNotSupported, got {err:?}");
+    };
+    assert_eq!(provider, "test");
+    assert_eq!(model, "test-model");
+    assert_eq!(default, ReasoningEffort::High);
+    assert_eq!(
+        supported,
+        vec![ReasoningEffort::Low, ReasoningEffort::Medium]
+    );
+}
+
+#[test]
+fn from_partial_accepts_default_matching_supported() {
+    use crate::positive::PositiveTokens;
+
+    let partial = PartialModelInfo {
+        context_window: Some(PositiveTokens::new(100_000)),
+        max_output_tokens: Some(PositiveTokens::new(16_384)),
+        supported_thinking_levels: Some(vec![ThinkingLevel::low(), ThinkingLevel::medium()]),
+        default_thinking_level: Some(ReasoningEffort::Medium),
+        ..Default::default()
+    };
+    let info = ModelInfo::from_partial("test", "test-model", partial).expect("should resolve");
+    assert_eq!(info.default_thinking_level, Some(ReasoningEffort::Medium));
+}
+
+#[test]
+fn from_partial_skips_validation_when_either_side_unset() {
+    use crate::positive::PositiveTokens;
+
+    // Default set, supported unset → no validation.
+    let only_default = PartialModelInfo {
+        context_window: Some(PositiveTokens::new(100_000)),
+        max_output_tokens: Some(PositiveTokens::new(16_384)),
+        default_thinking_level: Some(ReasoningEffort::Auto),
+        ..Default::default()
+    };
+    ModelInfo::from_partial("test", "m1", only_default).expect("default-only must resolve");
+
+    // Supported set, default unset → no validation.
+    let only_supported = PartialModelInfo {
+        context_window: Some(PositiveTokens::new(100_000)),
+        max_output_tokens: Some(PositiveTokens::new(16_384)),
+        supported_thinking_levels: Some(vec![ThinkingLevel::low()]),
+        ..Default::default()
+    };
+    ModelInfo::from_partial("test", "m2", only_supported).expect("supported-only must resolve");
+}
+
 fn spec(provider: &str, model_id: &str) -> ModelSpec {
     ModelSpec {
         provider: provider.into(),

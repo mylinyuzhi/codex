@@ -1,10 +1,10 @@
 //! DeepSeek vendor catalog — two providers (`deepseek-openai`,
 //! `deepseek-anthropic`) + DeepSeek V4 models.
 //!
-//! DeepSeek V4 thinking surface: 3 explicit states (disable / high / max),
-//! plus an implicit `Auto` default (`default_thinking_level = Auto`) that
-//! kicks in when no level is selected — the convert layer then omits all
-//! reasoning fields so DeepSeek's server default (enabled+high) applies.
+//! DeepSeek V4 thinking surface: 3 explicit states (disable / high / max).
+//! `default_thinking_level = Medium` (UX "high") — the picker entry
+//! highlighted on open and the effort applied when no level is
+//! explicitly selected.
 //!
 //!   * `Disable` — explicit off; emits `{"thinking":{"type":"disabled"}}`
 //!     via `options`. Convert layer skips typed-arm emission.
@@ -75,7 +75,7 @@ pub(super) fn models() -> Vec<(&'static str, PartialModelInfo)> {
                     Capability::ClientSideToolSearch,
                 ]),
                 supported_thinking_levels: Some(thinking.clone()),
-                default_thinking_level: Some(ReasoningEffort::Auto),
+                default_thinking_level: Some(ReasoningEffort::Medium),
                 ..Default::default()
             },
         ),
@@ -96,7 +96,7 @@ pub(super) fn models() -> Vec<(&'static str, PartialModelInfo)> {
                     Capability::ClientSideToolSearch,
                 ]),
                 supported_thinking_levels: Some(thinking),
-                default_thinking_level: Some(ReasoningEffort::Auto),
+                default_thinking_level: Some(ReasoningEffort::Medium),
                 ..Default::default()
             },
         ),
