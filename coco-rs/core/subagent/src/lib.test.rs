@@ -293,6 +293,7 @@ fn ctx<'a>(tools: &'a [String]) -> ToolFilterContext<'a> {
         is_async: false,
         plan_mode: false,
         extra_allow_list: None,
+        parent_tool_filter: None,
         is_in_process_teammate: false,
     }
 }
@@ -361,6 +362,61 @@ fn filter_plan_deny_then_allow_marks_double_listed_tool_as_unknown() {
     let plan = AgentToolFilter::plan(&def, ctx(&tools));
     assert_eq!(plan.allowed_tools, vec!["Read"]);
     assert_eq!(plan.unknown_tools, vec!["Bash"]);
+}
+
+#[test]
+fn filter_plan_parent_filter_excludes_tool_def_re_includes() {
+    // Parent excluded Bash; child def.allowed_tools includes Bash. After
+    // the parent intersection, Bash must be dropped — the child cannot
+    // re-widen what the parent restricted. TS parity:
+    // `agentToolUtils.ts::resolveAgentTools` intersects the child's
+    // tool spec against the parent thread's effective pool.
+    let tools: Vec<String> = vec!["Read".into(), "Bash".into()];
+    let def = agent("custom", &["Read", "Bash"], &[]);
+    let parent = coco_types::ToolFilter::new(Vec::new(), vec!["Bash".into()]);
+    let mut filter_ctx = ctx(&tools);
+    filter_ctx.parent_tool_filter = Some(&parent);
+    let plan = AgentToolFilter::plan(&def, filter_ctx);
+    assert_eq!(plan.allowed_tools, vec!["Read"]);
+}
+
+#[test]
+fn filter_plan_parent_filter_none_keeps_def_allow_list() {
+    // Without a parent filter, behavior is unchanged — def.allowed_tools
+    // drives the intersection on its own.
+    let tools: Vec<String> = vec!["Read".into(), "Bash".into()];
+    let def = agent("custom", &["Read", "Bash"], &[]);
+    let plan = AgentToolFilter::plan(&def, ctx(&tools));
+    assert_eq!(plan.allowed_tools, vec!["Read", "Bash"]);
+}
+
+#[test]
+fn filter_plan_parent_filter_empty_keeps_mcp_tools() {
+    // An empty parent filter (`ToolFilter::unrestricted()`) imposes no
+    // restriction — MCP tools that survived the first pass stay in the
+    // candidate set. Default allow-list (def.allowed_tools empty) auto-
+    // includes them.
+    let tools: Vec<String> = vec!["Read".into(), "mcp__slack__send".into()];
+    let def = agent("custom", &[], &[]);
+    let parent = coco_types::ToolFilter::unrestricted();
+    let mut filter_ctx = ctx(&tools);
+    filter_ctx.parent_tool_filter = Some(&parent);
+    let plan = AgentToolFilter::plan(&def, filter_ctx);
+    assert_eq!(plan.allowed_tools, vec!["Read", "mcp__slack__send"]);
+}
+
+#[test]
+fn filter_plan_parent_filter_whitelist_narrows_candidates() {
+    // Parent restricts to {Read}; the child's default allow-list lets
+    // every safe tool through, but the parent intersection drops Grep
+    // because it isn't on the parent's whitelist.
+    let tools: Vec<String> = vec!["Read".into(), "Grep".into()];
+    let def = agent("custom", &[], &[]);
+    let parent = coco_types::ToolFilter::new(vec!["Read".into()], Vec::new());
+    let mut filter_ctx = ctx(&tools);
+    filter_ctx.parent_tool_filter = Some(&parent);
+    let plan = AgentToolFilter::plan(&def, filter_ctx);
+    assert_eq!(plan.allowed_tools, vec!["Read"]);
 }
 
 #[test]

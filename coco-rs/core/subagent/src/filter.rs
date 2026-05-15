@@ -8,7 +8,7 @@
 //! and returns a `ToolFilterPlan`. The plan is then applied to the child
 //! `ToolRegistry` by `app/state` — this crate never touches the registry.
 
-use coco_types::{AgentDefinition, MCP_TOOL_PREFIX, ToolName};
+use coco_types::{AgentDefinition, MCP_TOOL_PREFIX, ToolFilter, ToolName};
 
 /// Tools blocked for every spawned agent. Matches TS
 /// `ALL_AGENT_DISALLOWED_TOOLS` (`constants/tools.ts:36-46`).
@@ -90,6 +90,11 @@ pub struct ToolFilterContext<'a> {
     /// to over-restrict an agent for a specific invocation. Set to `None`
     /// for TS-parity behavior.
     pub extra_allow_list: Option<&'a [String]>,
+    /// Parent session's resolved Layer 4 filter. Intersected AFTER
+    /// `def.allowed_tools` so a child's allow-list can never re-widen
+    /// what the parent already excluded. `None` = no parent restriction.
+    /// TS parity: `agentToolUtils.ts::resolveAgentTools`.
+    pub parent_tool_filter: Option<&'a ToolFilter>,
     /// True when the spawn target is an in-process teammate AND
     /// agent-teams (TS `isAgentSwarmsEnabled()` ≈ coco-rs
     /// `Feature::AgentTeams`) is on. When set, the async filter
@@ -126,9 +131,10 @@ impl AgentToolFilter {
     /// 4. `CUSTOM_AGENT_DISALLOWED_TOOLS` — block for non-built-in agents.
     /// 5. Async agents: keep only `ASYNC_AGENT_ALLOWED_TOOLS`.
     ///
-    /// Then the definition allow-list / deny-list are applied on the
-    /// surviving set, and the optional `extra_allow_list` (coco-rs
-    /// extension) intersects further.
+    /// Then the definition deny-list / allow-list are applied, the
+    /// optional `parent_tool_filter` intersects to prevent widening the
+    /// parent's restrictions, and the optional `extra_allow_list`
+    /// (coco-rs extension) intersects further.
     pub fn plan(def: &AgentDefinition, ctx: ToolFilterContext<'_>) -> ToolFilterPlan {
         let exit_plan_mode = ToolName::ExitPlanMode.as_str();
         let agent_tool = ToolName::Agent.as_str();
@@ -209,6 +215,17 @@ impl AgentToolFilter {
                 .map(|s| (*s).to_owned())
                 .collect();
             candidates.retain(|name| allowed.contains(name));
+        }
+
+        // Parent's Layer 4 filter intersection. Without this, a child's
+        // `def.allowed_tools` could re-include a tool the parent had
+        // already excluded. The parent thread is the source of truth —
+        // even the MCP and ExitPlanMode carve-outs from the first pass
+        // are subject to the parent's explicit deny. TS parity:
+        // `agentToolUtils.ts::resolveAgentTools` (see
+        // `docs/coco-rs/feature-gates-and-tool-filtering.md` §14 row 4).
+        if let Some(parent) = ctx.parent_tool_filter {
+            candidates.retain(|name| parent.allows_name(name));
         }
 
         // coco-rs extension: caller-supplied extra allow-list (e.g. slash
