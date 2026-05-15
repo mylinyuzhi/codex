@@ -98,10 +98,10 @@ Two distinct caches live in `pane::layout`, both reset by
 
 ## Open follow-ups (tracked in code as `TODO(...)`)
 
-- **`coco_memory::team_sync` snapshot bodies** (`TODO(PR3-step9)` markers
-  there). Coordinator's spawn / terminate path is the consumer when the
-  IO lands.
-- **Coordinator-mode system-prompt swap at session bootstrap** — pure
-  helper `coco_subagent::coordinator_system_prompt(simple_mode)` is
-  ready; the wiring lives in `app/query` / `app/cli` (outside coordinator
-  scope).
+- **Teammate compaction is full LLM.** `agent_handle/teammate_engine.rs::
+  compact_messages` runs micro-compact first, then full
+  `coco_compact::compact_conversation` via a summarize callback that
+  routes through the wrapped `AgentQueryEngine`. The
+  `TODO(coordinator-compaction)` comment in `runner_loop.rs` predates
+  the full implementation and refers to the sliding-window safety valve
+  that fires only when the engine declines compaction.

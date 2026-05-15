@@ -3,11 +3,9 @@
 //! TS: `services/teamMemorySync/{index,types,secretScanner,
 //! teamMemSecretGuard,watcher}.ts`.
 //!
-//! Round-9-deep-port skeleton: types are complete (`types.rs`); the
-//! HTTP push/pull pipeline + watcher live in this module's
-//! `service.rs` follow-up. Until the HTTP wiring lands, callers can
-//! still use the typed structs to model server responses or stage
-//! their own offline tooling.
+//! HTTP push/pull pipeline + watcher live in `service.rs`. Per-agent
+//! snapshot IO lives at [`coco_memory::agent_memory_snapshot`] (separate
+//! module — the snapshot mechanism is per-agent, not per-team).
 
 pub mod secret_scanner;
 pub mod service;

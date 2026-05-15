@@ -64,21 +64,15 @@ its own; the transitive pull is structural and predates this crate. Cleanly
 removing tokio from the graph requires splitting `AppStateReadHandle` out of
 `coco-types`, tracked separately. Do not add tokio APIs here in the meantime.
 
-## Known Phase-1 Gaps (deferred to later phases)
+## Phase-1 audit
 
-- **No consumer wiring.** `cargo check -p coco-subagent` passes but no other
-  crate imports the catalog yet — `AgentTool`, `app/state`, `commands` still
-  use the legacy `agent_spawn.rs` / `agent_advanced.rs` paths. Phase 2-9
-  wires the new crate.
-- **Built-in `whenToUse` strings are short paraphrases**, not the verbatim
-  TS strings from `built-in/*.ts`. The model-facing prompt list will read
-  slightly differently from TS until the prompt renderers ship in Phase 2.
-- **No nested-directory walking and no per-file size cap.** The legacy
-  `agent_spawn.rs` walks two levels deep with `walkdir` and rejects files
-  over 1 MiB; this crate uses one-level `read_dir` only. Add `walkdir` +
-  size cap when the legacy loaders are deleted.
-- **`mcpServers` inline `{ name: config }` form is not parsed** — only the
-  string-reference form is read from frontmatter. TS accepts both.
-- **`extra_allow_list`** on `ToolFilterContext` is a coco-rs extension (no
-  TS equivalent), reserved for Phase-8 slash-command tool intersection.
-  Pass `None` for TS-parity behavior.
+Phase-1 (catalog + prompt + filter + frontmatter + validation) is complete.
+All previously deferred items have landed:
+- Nested directory walking + 1 MiB size cap (`definition_store.rs:39-92`)
+- Inline mcpServers form (`frontmatter.rs:211-280`)
+- Consumer wiring (AgentTool, app/cli, commands all import via
+  `AgentDefinitionStore`)
+- Builtin `whenToUse` strings now match TS verbatim.
+
+Subsequent phases (Phase 2-10) are tracked in
+`docs/coco-rs/agentteam-architecture.md`.
