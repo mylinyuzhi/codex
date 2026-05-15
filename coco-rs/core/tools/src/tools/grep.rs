@@ -371,8 +371,8 @@ impl Tool for GrepTool {
     }
 
     /// Result persistence threshold — matches TS `maxResultSizeChars: 20_000`.
-    fn max_result_size_chars(&self) -> i64 {
-        20_000
+    fn max_result_size_bound(&self) -> coco_tool_runtime::ResultSizeBound {
+        coco_tool_runtime::ResultSizeBound::Chars(20_000)
     }
 
     /// The execute path already builds the final user-facing string for

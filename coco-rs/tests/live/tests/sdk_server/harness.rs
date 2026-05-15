@@ -240,7 +240,7 @@ pub async fn build_live_server_with_options(
     // Mirror `build_session_command_registry`'s skill load so any
     // `<cwd>/.coco/skills/<name>/SKILL.md` planted by the test fixture
     // is discovered and threaded into `ReminderSources.skills`.
-    let mut skill_manager = coco_skills::SkillManager::new();
+    let skill_manager = coco_skills::SkillManager::new();
     skill_manager.load_from_dirs(&[cwd.join(".coco").join("skills")]);
     let skill_manager = Arc::new(skill_manager);
 

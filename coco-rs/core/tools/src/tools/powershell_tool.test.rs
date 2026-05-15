@@ -113,7 +113,10 @@ fn test_powershell_destructive_classification() {
 /// TS `PowerShellTool.tsx:275` sets `maxResultSizeChars: 30_000`.
 #[test]
 fn test_powershell_max_result_size_matches_ts() {
-    assert_eq!(PowerShellTool.max_result_size_chars(), 30_000);
+    assert_eq!(
+        PowerShellTool.max_result_size_bound(),
+        coco_tool_runtime::ResultSizeBound::Chars(30_000),
+    );
 }
 
 /// Missing `command` fails validation before execute runs.

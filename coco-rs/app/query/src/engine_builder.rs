@@ -63,6 +63,8 @@ impl QueryEngine {
             hooks,
             async_hook_registry: None,
             hook_llm_handle: None,
+            role_client_cache: None,
+            pending_tool_use_summary: Arc::new(tokio::sync::Mutex::new(None)),
             command_queue: CommandQueue::new(),
             file_read_state: None,
             file_history: None,
@@ -158,6 +160,19 @@ impl QueryEngine {
     /// engine via this method.
     pub fn with_hook_llm_handle(mut self, handle: Arc<dyn coco_hooks::HookLlmHandle>) -> Self {
         self.hook_llm_handle = Some(handle);
+        self
+    }
+
+    /// Install the shared `RoleClientCache` so `finalize_turn_post_tools`
+    /// can resolve `ModelRole::Fast` for the post-tool-batch summary
+    /// fork (TS `generateToolUseSummary`).
+    ///
+    /// Without this set, the engine never spawns a tool-use summary
+    /// fork — silent skip, no error. `SessionRuntime` builds one
+    /// `Arc<RoleClientCache>` per session and clones it onto every
+    /// engine via this method.
+    pub fn with_role_client_cache(mut self, cache: Arc<coco_inference::RoleClientCache>) -> Self {
+        self.role_client_cache = Some(cache);
         self
     }
 

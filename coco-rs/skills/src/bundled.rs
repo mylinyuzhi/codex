@@ -376,14 +376,14 @@ pub fn get_bundled_skills(user_type: UserType) -> Vec<SkillDefinition> {
 
 /// Register all bundled skills into a SkillManager (filtered by user type +
 /// feature gates at the visibility layer).
-pub fn register_bundled(manager: &mut crate::SkillManager, user_type: UserType) {
+pub fn register_bundled(manager: &crate::SkillManager, user_type: UserType) {
     for skill in get_bundled_skills(user_type) {
         manager.register(skill);
     }
 }
 
 /// Convenience for tests that want default (Human user, Stable features).
-pub fn register_bundled_default(manager: &mut crate::SkillManager) {
+pub fn register_bundled_default(manager: &crate::SkillManager) {
     register_bundled(manager, UserType::Human);
 }
 

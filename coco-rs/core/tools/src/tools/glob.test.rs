@@ -250,12 +250,15 @@ async fn test_glob_truncation_message() {
 }
 
 // -----------------------------------------------------------------------
-// max_result_size_chars
+// max_result_size_bound
 // -----------------------------------------------------------------------
 
 #[tokio::test]
-async fn test_glob_max_result_size_chars() {
-    assert_eq!(GlobTool.max_result_size_chars(), 100_000);
+async fn test_glob_max_result_size_bound() {
+    assert_eq!(
+        GlobTool.max_result_size_bound(),
+        coco_tool_runtime::ResultSizeBound::Chars(100_000),
+    );
 }
 
 // -----------------------------------------------------------------------

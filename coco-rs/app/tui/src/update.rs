@@ -241,8 +241,9 @@ pub async fn handle_command(
             // the cursor back one grapheme (vim convention). Mirrors
             // codex-rs textarea.rs:654-660. This wins over every other
             // Cancel branch because Esc in Insert is a mode transition,
-            // not a UI dismissal.
-            if state.ui.input.vim.is_insert()
+            // not a UI dismissal. Gated on `vim.enabled` so non-vim
+            // users keep the standard Esc → Cancel behavior.
+            if state.ui.input.vim.insert_escape_active()
                 && crate::vim::wiring::handle_insert_escape(
                     &mut state.ui.input.textarea,
                     &mut state.ui.input.vim,
@@ -327,10 +328,12 @@ pub async fn handle_command(
                 && r.phase == crate::state::rewind::RewindPhase::SummarizeFeedback
             {
                 r.summarize_feedback.push(c);
-            } else if state.ui.input.vim.is_normal() {
+            } else if state.ui.input.vim.normal_dispatch_active() {
                 // Vim Normal mode: route the printable key through the
                 // vim state machine (h/j/k/l/i/a/o/w/b/d/y/p/x/...).
-                // Mirrors codex-rs textarea.rs:518-530 pattern.
+                // Mirrors codex-rs textarea.rs:518-530 pattern. Gated on
+                // `vim.enabled` so non-vim users insert characters as
+                // typed instead of triggering vim motions.
                 let action = crate::vim::wiring::dispatch_vim_key(
                     c,
                     &mut state.ui.input.textarea,

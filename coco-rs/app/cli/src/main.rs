@@ -374,10 +374,18 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     let permission_mode = resources.startup.mode;
 
     let transport = StdioTransport::new();
+    // Plugin file watcher → SDK NDJSON: matches TUI parity so SDK
+    // clients receive `plugins/changed`. TS:
+    // `useManagePlugins.ts:293-300` notifies the user regardless of
+    // surface; coco-rs's SDK path was previously missing this wire.
+    let (plugin_notif_tx, plugin_notif_rx) = tokio::sync::mpsc::channel(16);
+    let _plugin_watcher_guard =
+        coco_cli::plugin_watch::spawn(plugin_notif_tx, &cwd, &global_config::config_home());
     let server = SdkServer::new(transport)
         .with_session_manager(session_manager)
         .with_mcp_manager(mcp_manager.clone())
-        .with_initialize_bootstrap(bootstrap);
+        .with_initialize_bootstrap(bootstrap)
+        .with_external_notifications(plugin_notif_rx);
     let state = server.state();
     state.bypass_permissions_available.store(
         bypass_permissions_available,
@@ -436,10 +444,55 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
         .await
         .elicitation_pending_count
         .clone();
+    // MCP-sourced skills bridge: every MCP connection (initial config +
+    // dynamic `mcp/setServers`) contributes `skill://` resources to the
+    // session-scoped `SkillManager`. Gating (Feature::McpSkills +
+    // server `resources` capability) lives inside `coco_mcp_skills`.
+    // TS parity: `services/mcp/client.ts:2342-2356` — every connection
+    // goes through the same skill-discovery pass.
+    let mcp_skill_manager = session_runtime.skill_manager();
+    let mcp_skill_cache = std::sync::Arc::new(tokio::sync::RwLock::new(
+        coco_mcp::discovery::DiscoveryCache::default(),
+    ));
     let mcp_handle: coco_tool_runtime::McpHandleRef = Arc::new(
         coco_cli::mcp_handle_adapter::McpManagerAdapter::new(mcp_manager.clone())
-            .with_elicitation_hooks(elicit_registry, elicit_factory, Some(elicit_counter)),
+            .with_elicitation_hooks(elicit_registry, elicit_factory, Some(elicit_counter))
+            .with_skill_bridge(
+                mcp_skill_manager.clone(),
+                mcp_skill_cache.clone(),
+                session_runtime.runtime_config.clone(),
+            ),
     );
+
+    // Initial-server skill sync: TS `fetchMcpSkillsForClient` fires for
+    // *every* connection, not just dynamic ones. The
+    // `add_dynamic_server` hook only covers post-startup additions; we
+    // also need to sync whatever servers are connected by the time
+    // bootstrap completes. `sync_all` is idempotent — running it more
+    // than once just re-checks. Errors are logged at warn inside the
+    // helper; we don't surface them to the user.
+    let initial_sync_manager = mcp_manager.lock().await.clone();
+    let initial_sync_skills = mcp_skill_manager.clone();
+    let initial_sync_cache = mcp_skill_cache.clone();
+    let initial_sync_features = session_runtime.runtime_config.features.clone();
+    tokio::spawn(async move {
+        let summary = coco_mcp_skills::sync_all(
+            &initial_sync_manager,
+            &initial_sync_cache,
+            &initial_sync_skills,
+            &initial_sync_features,
+        )
+        .await;
+        if summary.servers > 0 || summary.errors > 0 {
+            tracing::info!(
+                servers = summary.servers,
+                registered = summary.total_registered,
+                resources_unsupported = summary.servers_resources_unsupported,
+                errors = summary.errors,
+                "initial MCP skill sync"
+            );
+        }
+    });
     let lsp_handle = coco_cli::session_bootstrap::build_lsp_handle_if_enabled(
         &session_runtime.runtime_config,
         &global_config::config_home(),

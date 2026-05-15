@@ -12,7 +12,10 @@
 
 use std::sync::Arc;
 
+use coco_config::RuntimeConfig;
 use coco_mcp::McpConnectionManager;
+use coco_mcp::discovery::DiscoveryCache;
+use coco_skills::SkillManager;
 use coco_tool_runtime::McpHandle;
 use coco_tool_runtime::McpToolSchema;
 use coco_tool_runtime::mcp_handle::McpContentBlock;
@@ -22,6 +25,7 @@ use coco_tool_runtime::mcp_handle::McpToolAnnotations;
 use coco_tool_runtime::mcp_handle::McpToolCallResult;
 use serde_json::Value;
 use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 
 /// Adapter that wraps a shared `Arc<Mutex<McpConnectionManager>>` and
 /// implements `McpHandle`.
@@ -44,6 +48,29 @@ pub struct McpManagerAdapter {
     /// guard. `None` keeps the counter untracked (tests / paths
     /// without app_state access).
     elicitation_counter: Option<Arc<std::sync::atomic::AtomicU32>>,
+    /// Optional skill bridge wiring. When `Some`,
+    /// [`McpHandle::add_dynamic_server`] reconciles `skill://` resources
+    /// from the newly-connected server with the [`SkillManager`];
+    /// [`McpHandle::remove_dynamic_server`] clears them. Gated on
+    /// `Feature::McpSkills` + the server's `resources` capability — the
+    /// gating is enforced inside [`coco_mcp_skills::sync_one`].
+    /// TS parity: `services/mcp/client.ts::fetchMcpSkillsForClient`.
+    skill_bridge: Option<SkillBridgeWiring>,
+}
+
+/// Resources the adapter needs to discover and register MCP-sourced
+/// skills.
+struct SkillBridgeWiring {
+    skills: Arc<SkillManager>,
+    /// Shared discovery cache — owned by the bridge (caller-injected)
+    /// so multiple adapters wrapping the same `SkillManager` can share
+    /// it. TS analogue: `fetchMcpSkillsForClient` uses an LRU keyed by
+    /// server name.
+    cache: Arc<RwLock<DiscoveryCache>>,
+    /// Live `RuntimeConfig` reference so feature flips after session
+    /// startup take effect immediately (no stale `Arc<Features>`
+    /// snapshot).
+    runtime_config: Arc<RuntimeConfig>,
 }
 
 impl McpManagerAdapter {
@@ -53,6 +80,7 @@ impl McpManagerAdapter {
             hook_registry: None,
             elicitation_ctx_factory: None,
             elicitation_counter: None,
+            skill_bridge: None,
         }
     }
 
@@ -72,6 +100,32 @@ impl McpManagerAdapter {
         self.hook_registry = Some(registry);
         self.elicitation_ctx_factory = Some(ctx_factory);
         self.elicitation_counter = elicitation_counter;
+        self
+    }
+
+    /// Wire the MCP skill bridge. After a successful
+    /// [`McpHandle::add_dynamic_server`], the adapter calls
+    /// [`coco_mcp_skills::sync_one`] which gates on
+    /// `Feature::McpSkills` AND the server's advertised `resources`
+    /// capability. On [`McpHandle::remove_dynamic_server`], the same
+    /// server's skills are dropped.
+    ///
+    /// `cache` is shared — caller decides ownership so multiple
+    /// adapters can share a single discovery cache when wrapping the
+    /// same `McpConnectionManager`. `runtime_config` is the live
+    /// session config; the feature flag is read on every call (no
+    /// snapshot).
+    pub fn with_skill_bridge(
+        mut self,
+        skills: Arc<SkillManager>,
+        cache: Arc<RwLock<DiscoveryCache>>,
+        runtime_config: Arc<RuntimeConfig>,
+    ) -> Self {
+        self.skill_bridge = Some(SkillBridgeWiring {
+            skills,
+            cache,
+            runtime_config,
+        });
         self
     }
 
@@ -315,12 +369,52 @@ impl McpHandle for McpManagerAdapter {
                 coco_error::StatusCode::ConnectionFailed,
             )) as coco_error::BoxedError
         })?;
+
+        // Skill discovery: best-effort post-connect enrichment.
+        // Gating (feature flag + `resources` capability) lives inside
+        // `coco_mcp_skills::sync_one` so all skill-discovery callers
+        // (this adapter + initial-bootstrap `sync_all`) honour the
+        // same TS rules from one place.
+        if let Some(bridge) = self.skill_bridge.as_ref() {
+            match coco_mcp_skills::sync_one(
+                name,
+                &manager,
+                &bridge.cache,
+                &bridge.skills,
+                &bridge.runtime_config.features,
+            )
+            .await
+            {
+                Ok(outcome) => tracing::debug!(
+                    server = %name,
+                    registered = outcome.registered,
+                    dropped = outcome.dropped,
+                    feature_off = outcome.feature_off,
+                    resources_unsupported = outcome.resources_unsupported,
+                    "MCP skill sync complete"
+                ),
+                Err(e) => tracing::warn!(server = %name, "MCP skill discovery failed: {e}"),
+            }
+        }
         Ok(())
     }
 
     async fn remove_dynamic_server(&self, name: &str) -> Result<(), coco_error::BoxedError> {
         let manager = self.manager.lock().await.clone();
         manager.disconnect(name).await;
+        // Drop any skills that came from this server. Safe to call
+        // unconditionally — `unregister_skills_for_mcp_server` is a
+        // no-op when no skills are registered for `name`.
+        if let Some(bridge) = self.skill_bridge.as_ref() {
+            let dropped = bridge.skills.unregister_skills_for_mcp_server(name);
+            if dropped > 0 {
+                tracing::debug!(
+                    server = %name,
+                    dropped,
+                    "cleared MCP-sourced skills on server disconnect"
+                );
+            }
+        }
         Ok(())
     }
 }

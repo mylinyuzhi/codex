@@ -64,8 +64,8 @@ fn render(args: &str, config_home: &Path, cwd: &Path) -> crate::Result<String> {
 /// session restart — the engine's live registry still loads only at
 /// startup, but `/skills` reflects current disk truth.
 fn build_manager(config_home: &Path, cwd: &Path) -> SkillManager {
-    let mut manager = SkillManager::new();
-    register_bundled_default(&mut manager);
+    let manager = SkillManager::new();
+    register_bundled_default(&manager);
     manager.load_from_dirs(&[
         config_home.join("skills"),
         cwd.join(".coco").join("skills"),
@@ -75,7 +75,7 @@ fn build_manager(config_home: &Path, cwd: &Path) -> SkillManager {
 }
 
 fn render_list(manager: &SkillManager) -> String {
-    let mut skills: Vec<_> = manager.all().collect();
+    let mut skills = manager.all();
     if skills.is_empty() {
         return "No skills found.\n\
                 Place SKILL.md directories in ~/.coco/skills (user) or \

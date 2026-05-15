@@ -5,6 +5,7 @@
 pub mod bundled;
 pub mod error;
 pub mod extraction;
+pub mod mcp_builders;
 pub mod prompt_render;
 pub mod reminder_source;
 pub mod shell_exec;
@@ -26,6 +27,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// Execution context for a skill.
 ///
@@ -222,18 +224,51 @@ pub enum SkillSource {
 
 /// Skill manager — discovery, loading, deduplication.
 ///
-/// Tracks per-agent skill-listing dedup state so reminder regeneration only
-/// surfaces skills the agent has not seen yet (TS `sentSkillNames` Map keyed
-/// by agentId at `attachments.ts:2700-2730`). The dedup set is mutated through
-/// a `Mutex` because `SkillsSource::listing` takes `&self`, and the source
-/// trait is consumed concurrently with read-only `all()` / `visible()` calls.
+/// All mutation goes through interior mutability (`&self`). The catalog
+/// (on-disk + MCP skills) sits behind a single `RwLock` so read paths
+/// (`get`, `all`, `visible`, `len`) share concurrent access while writes
+/// (`register`, `register_mcp_skill`, `unregister_skills_for_mcp_server`,
+/// `clear`) serialise. Per-agent announcement state lives in a separate
+/// `Mutex` so the read-heavy catalog isn't blocked when a listing pass
+/// mutates the sent set.
+///
+/// TS parity: `attachments.ts:2700-2730` `sentSkillNames` is a per-agent
+/// `Map`; we model it as `Mutex<HashMap<String, HashSet<String>>>` keyed
+/// by `agent_id.unwrap_or("")`.
 #[derive(Default, Debug)]
 pub struct SkillManager {
-    skills: HashMap<String, SkillDefinition>,
+    /// Disk + MCP skill catalog. Both halves share one lock so a
+    /// snapshot (`all()`) is a single read-side acquisition.
+    catalog: std::sync::RwLock<SkillCatalog>,
     /// Skills already announced in a `skill_listing` reminder, keyed by
     /// `agent_id.unwrap_or("")` so the main thread (empty key) and each
-    /// subagent get their own turn-0 listing — matching TS's per-agent Map.
-    sent_skills: std::sync::Mutex<HashMap<String, HashSet<String>>>,
+    /// subagent get their own turn-0 listing — matching TS's per-agent
+    /// Map. Separate lock from [`Self::catalog`] so listing-time
+    /// mutation doesn't block reads.
+    announcements: std::sync::Mutex<HashMap<String, HashSet<String>>>,
+}
+
+/// Internal storage for the skill catalog. Held behind one `RwLock`
+/// inside [`SkillManager`] so both halves are read-consistent under a
+/// single lock acquisition.
+#[derive(Default, Debug)]
+struct SkillCatalog {
+    /// On-disk / bundled skills, keyed by skill name.
+    disk: HashMap<String, Arc<SkillDefinition>>,
+    /// MCP-sourced skills, keyed by `(server_name, skill_name)` so a
+    /// per-server unregister can drop a slice without touching the
+    /// rest. TS: server-scoped skill maps managed by the MCP
+    /// connection manager (`services/mcp/client.ts`).
+    mcp: HashMap<(String, String), Arc<SkillDefinition>>,
+}
+
+impl SkillCatalog {
+    fn is_empty(&self) -> bool {
+        self.disk.is_empty() && self.mcp.is_empty()
+    }
+    fn len(&self) -> usize {
+        self.disk.len() + self.mcp.len()
+    }
 }
 
 impl SkillManager {
@@ -252,7 +287,7 @@ impl SkillManager {
     ) -> (Vec<String>, bool) {
         let key = agent_id.unwrap_or("").to_string();
         let mut guard = self
-            .sent_skills
+            .announcements
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let sent = guard.entry(key).or_default();
@@ -266,39 +301,121 @@ impl SkillManager {
         (delta, is_initial)
     }
 
-    pub fn register(&mut self, skill: SkillDefinition) {
-        self.skills.insert(skill.name.clone(), skill);
+    /// Register (or replace) an on-disk / bundled skill. Interior-mut,
+    /// safe to call on a shared `Arc<SkillManager>`.
+    pub fn register(&self, skill: SkillDefinition) {
+        let name = skill.name.clone();
+        let mut guard = self.write_catalog();
+        guard.disk.insert(name, Arc::new(skill));
     }
 
-    pub fn get(&self, name: &str) -> Option<&SkillDefinition> {
-        self.skills.get(name).or_else(|| {
-            self.skills
-                .values()
-                .find(|s| s.aliases.iter().any(|a| a == name))
-        })
+    /// Register (or replace) an MCP-sourced skill.
+    ///
+    /// Uses the currently-registered MCP skill builder (see
+    /// [`crate::mcp_builders::mcp_skill_builder`]) to parse the spec into
+    /// a typed [`SkillDefinition`] with [`SkillSource::Mcp`].
+    ///
+    /// TS parity: `services/mcp/client.ts::fetchMcpSkillsForClient` →
+    /// the registered builders make a `SkillDefinition` per resource.
+    pub fn register_mcp_skill(&self, spec: crate::mcp_builders::McpSkillSpec) -> crate::Result<()> {
+        let builder = crate::mcp_builders::mcp_skill_builder();
+        let key = (spec.server_name.clone(), spec.name.clone());
+        let skill = builder.build(&spec)?;
+        let mut guard = self.write_catalog();
+        guard.mcp.insert(key, Arc::new(skill));
+        Ok(())
     }
 
-    pub fn all(&self) -> impl Iterator<Item = &SkillDefinition> {
-        self.skills.values()
+    /// Drop all MCP-sourced skills published by `server_name`.
+    ///
+    /// Called on MCP server disconnect / reconnect so stale skills do
+    /// not survive a server cycle. Returns the number of skills removed.
+    pub fn unregister_skills_for_mcp_server(&self, server_name: &str) -> usize {
+        let mut guard = self.write_catalog();
+        let before = guard.mcp.len();
+        guard.mcp.retain(|(s, _), _| s != server_name);
+        before - guard.mcp.len()
+    }
+
+    /// Replace the entire disk-skill catalog with a fresh set. Used by
+    /// the watcher's reload path; MCP-sourced skills are preserved.
+    ///
+    /// `&self`: interior-mut via the shared `RwLock`.
+    pub fn reload_disk_skills(&self, fresh: impl IntoIterator<Item = SkillDefinition>) {
+        let mut guard = self.write_catalog();
+        guard.disk.clear();
+        for skill in fresh {
+            let name = skill.name.clone();
+            guard.disk.insert(name, Arc::new(skill));
+        }
+    }
+
+    /// Look up a skill by canonical name or alias.
+    ///
+    /// On-disk skills win over MCP skills on name collision — disk is the
+    /// stable source of truth; MCP can republish on every reconnect.
+    pub fn get(&self, name: &str) -> Option<Arc<SkillDefinition>> {
+        let guard = self.read_catalog();
+        if let Some(s) = guard.disk.get(name) {
+            return Some(s.clone());
+        }
+        if let Some(s) = guard
+            .disk
+            .values()
+            .find(|s| s.aliases.iter().any(|a| a == name))
+        {
+            return Some(s.clone());
+        }
+        guard
+            .mcp
+            .values()
+            .find(|s| s.name == name || s.aliases.iter().any(|a| a == name))
+            .cloned()
+    }
+
+    /// Iterate all skills (on-disk + MCP) as shared `Arc`s.
+    ///
+    /// `SkillDefinition` is heap-heavy (HashMap + multiple Vecs), so
+    /// returning `Arc<SkillDefinition>` avoids the per-call deep clone
+    /// while keeping `&s.field` access seamless via `Deref`.
+    pub fn all(&self) -> Vec<Arc<SkillDefinition>> {
+        let guard = self.read_catalog();
+        let mut out: Vec<Arc<SkillDefinition>> = guard.disk.values().cloned().collect();
+        out.extend(guard.mcp.values().cloned());
+        out
     }
 
     /// Iterate skills currently enabled under the given feature set.
     ///
     /// TS: `commands.filter(c => c.isEnabled?.() ?? true)` applied at
     /// every typeahead / Skill-tool listing call site.
-    pub fn visible(&self, features: &Features) -> Vec<&SkillDefinition> {
-        self.skills
-            .values()
+    pub fn visible(&self, features: &Features) -> Vec<Arc<SkillDefinition>> {
+        self.all()
+            .into_iter()
             .filter(|s| s.is_enabled(features))
             .collect()
     }
 
     pub fn len(&self) -> usize {
-        self.skills.len()
+        self.read_catalog().len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.skills.is_empty()
+        self.read_catalog().is_empty()
+    }
+
+    // ─── internal lock helpers ──────────────────────────────────────
+
+    fn read_catalog(&self) -> std::sync::RwLockReadGuard<'_, SkillCatalog> {
+        self.catalog
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn write_catalog(&self) -> std::sync::RwLockWriteGuard<'_, SkillCatalog> {
+        self.catalog
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Discover and register skills from multiple directories.
@@ -306,7 +423,7 @@ impl SkillManager {
     /// Uses SKILL.md directory format for standard skill dirs and legacy
     /// format (flat .md) for `.claude/commands/` directories.
     /// Skills from later directories overwrite earlier ones with the same name (last wins).
-    pub fn load_from_dirs(&mut self, dirs: &[PathBuf]) {
+    pub fn load_from_dirs(&self, dirs: &[PathBuf]) {
         for dir in dirs {
             // Legacy .claude/commands/ supports flat .md files
             let format = if dir.ends_with("commands") {
@@ -326,7 +443,7 @@ impl SkillManager {
     ///
     /// TS: `loadSkillsDir.ts` walks `getSkillsPath('policySettings'|'userSettings'|'projectSettings', 'skills'|'commands')`.
     /// Last-wins semantics — later registrations override earlier ones, mirroring TS.
-    pub fn load_scoped(&mut self, scopes: &SkillScopes) {
+    pub fn load_scoped(&self, scopes: &SkillScopes) {
         // Order matters — last-write-wins, so least-priority first.
         if let Some(p) = &scopes.managed {
             self.load_with_source(p, SkillDirFormat::SkillMdOnly, |path| {
@@ -355,7 +472,7 @@ impl SkillManager {
         }
     }
 
-    fn load_with_source<F>(&mut self, dir: &Path, format: SkillDirFormat, source_for: F)
+    fn load_with_source<F>(&self, dir: &Path, format: SkillDirFormat, source_for: F)
     where
         F: Fn(PathBuf) -> SkillSource,
     {
@@ -1014,9 +1131,13 @@ fn format_skill_entry(skill: &SkillDefinition) -> String {
     entry
 }
 
-/// Get the invocable skills (those available as /commands).
-pub fn get_invocable_skills(manager: &SkillManager) -> Vec<&SkillDefinition> {
-    manager.all().filter(|s| !s.disabled).collect()
+/// Get the invocable skills (those available as `/commands`) as shared
+/// `Arc`s.
+///
+/// Returns `Arc<SkillDefinition>` so callers iterate without deep-cloning
+/// the heap-heavy `SkillDefinition` (see [`SkillManager::all`]).
+pub fn get_invocable_skills(manager: &SkillManager) -> Vec<Arc<SkillDefinition>> {
+    manager.all().into_iter().filter(|s| !s.disabled).collect()
 }
 
 /// Generate the SkillTool system prompt with skill listing.

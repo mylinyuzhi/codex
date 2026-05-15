@@ -81,6 +81,14 @@ pub struct PerCallOverrides {
     /// parity). Forwarded to the adapter only when a non-disabled
     /// `cache_strategy` is also present (design §9.2 Finding 4).
     pub query_source: Option<String>,
+    /// Generation stop sequences forwarded to the provider. Used by the
+    /// auto-mode classifier (`</block>` after stage-1 verdict) and any
+    /// helper call that wants the model to terminate early on a marker.
+    /// Each provider crate maps to its native wire shape:
+    ///   * Anthropic → `stop_sequences: [...]`
+    ///   * OpenAI Chat / OpenAI-Compatible → `stop: [...]`
+    ///   * Gemini → `stopSequences: [...]`
+    pub stop_sequences: Option<Vec<String>>,
 }
 
 /// Build a fresh `LanguageModelV4CallOptions` for a turn, returning
@@ -123,6 +131,11 @@ pub fn build_call_options_with_extra(
         .max_output_tokens
         .map(u64::from)
         .or_else(|| Some(u64::from(info.max_output_tokens)));
+    if let Some(stops) = per_call.stop_sequences.as_ref()
+        && !stops.is_empty()
+    {
+        call.stop_sequences = Some(stops.clone());
+    }
 
     // Lane A2: typed reasoning channel.
     //

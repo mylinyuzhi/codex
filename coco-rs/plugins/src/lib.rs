@@ -9,14 +9,17 @@ pub mod errors;
 pub mod hook_bridge;
 pub mod hot_reload;
 pub mod identifier;
+pub mod install;
 pub mod loader;
 pub mod marketplace;
 pub mod mcpb;
+pub mod parse_marketplace_input;
 pub mod refresh;
 pub mod schemas;
 pub mod security;
 pub mod skill_bridge;
 pub mod versioning;
+pub mod watcher;
 
 pub use errors::PluginError;
 

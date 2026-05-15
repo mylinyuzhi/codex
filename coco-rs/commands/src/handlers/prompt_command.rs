@@ -14,41 +14,78 @@ use crate::CommandHandler;
 use crate::CommandResult;
 use crate::PromptPart;
 
+/// How a Prompt-type command should incorporate the user-supplied
+/// `args` into the static body.
+///
+/// Replaces the prior `bool append_task` flag — CLAUDE.md style guide
+/// flags `bool` parameters when callsites would read as opaque
+/// literals (`register_static_prompt(..., true)`). The enum makes the
+/// behaviour explicit at every callsite.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArgsHandling {
+    /// No args manipulation — body is emitted verbatim regardless of
+    /// `args`. Used by static prompts that never expect args
+    /// (`/statusline`).
+    Static,
+    /// Append `\n\n## Task\n\n<args>` when args are non-empty.
+    /// Matches TS pattern in `/security-review`, `/insights`,
+    /// `/pr-comments`.
+    AppendUnderTask,
+    /// Always emit `\n<prefix><args>` at the body's end. `args` may be
+    /// empty — TS pattern in `/review`: ``PR number: ${args}`` is
+    /// included even when no PR number was given, so the model sees
+    /// an explicit empty value rather than the line being absent.
+    AppendInline { prefix: &'static str },
+}
+
 /// Handler that returns a static prompt text wrapped in
-/// `CommandResult::Prompt`. Optionally appends user-provided arguments.
+/// `CommandResult::Prompt`. The supplied [`ArgsHandling`] decides how
+/// `args` are folded into the body.
 pub struct StaticPromptHandler {
-    pub name: &'static str,
-    pub progress_message: &'static str,
-    pub body: &'static str,
-    /// When true, append `## Task\n\n<args>` to the body when args are given
-    /// (matches TS pattern in security-review/insights/etc.).
-    pub append_task: bool,
+    pub name: String,
+    pub progress_message: String,
+    pub body: String,
+    pub args_handling: ArgsHandling,
 }
 
 impl StaticPromptHandler {
-    pub const fn new(
-        name: &'static str,
-        progress_message: &'static str,
-        body: &'static str,
+    pub fn new(
+        name: impl Into<String>,
+        progress_message: impl Into<String>,
+        body: impl Into<String>,
     ) -> Self {
         Self {
-            name,
-            progress_message,
-            body,
-            append_task: false,
+            name: name.into(),
+            progress_message: progress_message.into(),
+            body: body.into(),
+            args_handling: ArgsHandling::Static,
         }
     }
 
-    pub const fn with_task_append(
-        name: &'static str,
-        progress_message: &'static str,
-        body: &'static str,
+    pub fn with_task_append(
+        name: impl Into<String>,
+        progress_message: impl Into<String>,
+        body: impl Into<String>,
     ) -> Self {
         Self {
-            name,
-            progress_message,
-            body,
-            append_task: true,
+            name: name.into(),
+            progress_message: progress_message.into(),
+            body: body.into(),
+            args_handling: ArgsHandling::AppendUnderTask,
+        }
+    }
+
+    pub fn with_inline_append(
+        name: impl Into<String>,
+        progress_message: impl Into<String>,
+        body: impl Into<String>,
+        prefix: &'static str,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            progress_message: progress_message.into(),
+            body: body.into(),
+            args_handling: ArgsHandling::AppendInline { prefix },
         }
     }
 }
@@ -56,19 +93,32 @@ impl StaticPromptHandler {
 #[async_trait]
 impl CommandHandler for StaticPromptHandler {
     async fn execute_command(&self, args: &str) -> crate::Result<CommandResult> {
-        let mut text = self.body.to_string();
-        if self.append_task && !args.trim().is_empty() {
-            text.push_str("\n\n## Task\n\n");
-            text.push_str(args);
+        let mut text = self.body.clone();
+        match self.args_handling {
+            ArgsHandling::Static => {}
+            ArgsHandling::AppendUnderTask => {
+                if !args.trim().is_empty() {
+                    text.push_str("\n\n## Task\n\n");
+                    text.push_str(args);
+                }
+            }
+            ArgsHandling::AppendInline { prefix } => {
+                // TS emits the prefix line unconditionally — even when
+                // args is empty — so the model gets an explicit blank
+                // value rather than an absent line.
+                text.push('\n');
+                text.push_str(prefix);
+                text.push_str(args);
+            }
         }
         Ok(CommandResult::Prompt {
-            progress_message: self.progress_message.to_string(),
+            progress_message: self.progress_message.clone(),
             parts: vec![PromptPart::Text { text }],
         })
     }
 
     fn handler_name(&self) -> &str {
-        self.name
+        &self.name
     }
 }
 
@@ -84,24 +134,24 @@ impl CommandHandler for StaticPromptHandler {
 /// Used by `/security-review` and any other Prompt command whose TS source
 /// originally went through `executeShellCommandsInPrompt`.
 pub struct ShellExpandingPromptHandler {
-    pub name: &'static str,
-    pub progress_message: &'static str,
-    pub body: &'static str,
-    /// When true, append `## Task\n\n<args>` (matches TS append-task pattern).
-    pub append_task: bool,
+    pub name: String,
+    pub progress_message: String,
+    pub body: String,
+    /// How `args` are folded into the body. See [`ArgsHandling`].
+    pub args_handling: ArgsHandling,
 }
 
 impl ShellExpandingPromptHandler {
-    pub const fn new(
-        name: &'static str,
-        progress_message: &'static str,
-        body: &'static str,
+    pub fn new(
+        name: impl Into<String>,
+        progress_message: impl Into<String>,
+        body: impl Into<String>,
     ) -> Self {
         Self {
-            name,
-            progress_message,
-            body,
-            append_task: false,
+            name: name.into(),
+            progress_message: progress_message.into(),
+            body: body.into(),
+            args_handling: ArgsHandling::Static,
         }
     }
 }
@@ -109,19 +159,29 @@ impl ShellExpandingPromptHandler {
 #[async_trait]
 impl CommandHandler for ShellExpandingPromptHandler {
     async fn execute_command(&self, args: &str) -> crate::Result<CommandResult> {
-        let mut text = expand_shell_markers(self.body).await;
-        if self.append_task && !args.trim().is_empty() {
-            text.push_str("\n\n## Task\n\n");
-            text.push_str(args);
+        let mut text = expand_shell_markers(&self.body).await;
+        match self.args_handling {
+            ArgsHandling::Static => {}
+            ArgsHandling::AppendUnderTask => {
+                if !args.trim().is_empty() {
+                    text.push_str("\n\n## Task\n\n");
+                    text.push_str(args);
+                }
+            }
+            ArgsHandling::AppendInline { prefix } => {
+                text.push('\n');
+                text.push_str(prefix);
+                text.push_str(args);
+            }
         }
         Ok(CommandResult::Prompt {
-            progress_message: self.progress_message.to_string(),
+            progress_message: self.progress_message.clone(),
             parts: vec![PromptPart::Text { text }],
         })
     }
 
     fn handler_name(&self) -> &str {
-        self.name
+        &self.name
     }
 }
 

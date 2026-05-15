@@ -145,10 +145,19 @@ pub struct YoloClassifierResult {
 
 pub enum ClassifierStage { Fast, Thinking }
 
-/// Denial tracking state (session-scoped, not persisted)
-pub struct DenialTrackingState {
+/// Denial tracking state (session-scoped, not persisted).
+///
+/// NOTE: The canonical type is `coco_tool_runtime::DenialTracker` (owned by
+/// `coco-tool-runtime` because it is per-`ToolUseContext` runtime state —
+/// fork-isolated when `ctx.local_denial_tracking` is set). This crate
+/// re-exports it as `coco_permissions::DenialTracker` for source-level
+/// continuity; the legacy `DenialTrackingState` shape shown here was merged
+/// into `DenialTracker` during the 2026-05-15 unification.
+pub struct DenialTracker {
     pub consecutive_denials: i32,
     pub total_denials: i32,
+    per_tool_denials: HashMap<String, i32>,
+    circuit_breaker_tripped: bool,
 }
 
 /// Decision reason — see `crate-coco-types.md` § PermissionDecisionReason.
@@ -360,17 +369,27 @@ pub fn verify_auto_mode_gate_access(state: &AutoModeState);
 /// This does NOT override rule-based denials (step 1 of evaluate_permission always wins).
 /// Denial tracking only applies to auto-mode classifier decisions (step 5 of pipeline).
 ///
-/// THREAD SAFETY: Must be stored in `Arc<RwLock<DenialTrackingState>>`.
-/// Write lock required for record_denial()/record_success().
-/// Read lock sufficient for should_fallback_to_prompting().
-const MAX_CONSECUTIVE_DENIALS: i32 = 3;
-const MAX_TOTAL_DENIALS: i32 = 20;
+/// THREAD SAFETY: Stored in `Arc<tokio::sync::Mutex<DenialTracker>>`. Access
+/// pattern is "lock → mutate → unlock"; `Mutex` (not `RwLock`) because every
+/// classifier call records or resets state.
+///
+/// ISOLATION: Subagent forks get an isolated `DenialTracker` (populated on
+/// `ToolUseContext.local_denial_tracking`). The classifier prefers the local
+/// tracker over the engine-level session tracker — TS parity
+/// `permissions.ts:553-558` (`context.localDenialTracking ?? appState.denialTracking`).
+const CONSECUTIVE_DENIAL_THRESHOLD: i32 = 3;
+const TOTAL_DENIAL_THRESHOLD: i32 = 20;
 
-impl DenialTrackingState {
-    pub fn record_denial(&mut self);
-    pub fn record_success(&mut self);  // Resets consecutive counter
-    pub fn should_fallback_to_prompting(&self) -> bool;
-    // Triggers when: consecutive >= 3 OR total >= 20
+impl DenialTracker {
+    pub fn record_denial(&mut self, tool_name: &str);
+    pub fn reset_consecutive(&mut self);          // on successful tool execution
+    pub fn reset_circuit_breaker(&mut self);      // explicit reset after permission adjust
+    pub fn clear(&mut self);                      // wipe after compact
+    pub fn is_circuit_breaker_tripped(&self) -> bool;
+    pub fn is_stuck(&self) -> bool;               // consecutive >= 3
+    pub fn should_suggest_permissions(&self) -> bool;  // total >= 20
+    pub fn most_denied_tool(&self) -> Option<(&str, i32)>;
+    pub fn suggestion_message(&self) -> Option<String>;
 }
 ```
 

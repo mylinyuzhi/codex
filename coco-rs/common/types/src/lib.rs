@@ -212,6 +212,7 @@ pub use server_request::McpSetServersResult;
 pub use server_request::McpStatusResult;
 pub use server_request::MessageBreakdown;
 pub use server_request::PluginReloadResult;
+pub use server_request::RequestElicitationParams as ServerRequestElicitationParams;
 pub use server_request::RequestUserInputParams as ServerRequestUserInputParams;
 pub use server_request::RewindFilesResult;
 pub use server_request::SdkAccountInfo;

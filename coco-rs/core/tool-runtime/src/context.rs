@@ -11,12 +11,14 @@ use coco_types::ToolPermissionContext;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
+use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
 use std::path::PathBuf;
 
 use crate::agent_handle::AgentHandleRef;
+use crate::denial_tracking::DenialTracker;
 use crate::hook_handle::HookHandleRef;
 use crate::lsp_handle::LspHandleRef;
 use crate::mcp_handle::McpHandleRef;
@@ -28,50 +30,6 @@ use crate::task_handle::TaskHandleRef;
 use crate::task_list_handle::TaskListHandleRef;
 use crate::task_list_handle::TodoListHandleRef;
 use crate::traits::ProgressSender;
-
-/// Local denial tracking state for auto-mode fail-safe.
-///
-/// When consecutive or total denials exceed thresholds, the agent
-/// falls back to prompting instead of continuing autonomously.
-#[derive(Debug)]
-pub struct DenialTrackingState {
-    pub consecutive_denials: i32,
-    pub total_denials: i32,
-    /// Max consecutive before fallback to prompting.
-    pub max_consecutive: i32,
-    /// Max total before fallback to prompting.
-    pub max_total: i32,
-}
-
-impl Default for DenialTrackingState {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl DenialTrackingState {
-    pub fn new() -> Self {
-        Self {
-            consecutive_denials: 0,
-            total_denials: 0,
-            max_consecutive: 3,
-            max_total: 20,
-        }
-    }
-
-    pub fn record_denial(&mut self) {
-        self.consecutive_denials += 1;
-        self.total_denials += 1;
-    }
-
-    pub fn record_approval(&mut self) {
-        self.consecutive_denials = 0;
-    }
-
-    pub fn should_fallback_to_prompting(&self) -> bool {
-        self.consecutive_denials >= self.max_consecutive || self.total_denials >= self.max_total
-    }
-}
 
 /// Context provided to every tool execution.
 ///
@@ -525,8 +483,17 @@ pub struct ToolUseContext {
     pub app_state: Option<coco_types::AppStateReadHandle>,
 
     // ── Denial Tracking ──
-    /// Local denial tracking state for auto-mode fail-safe.
-    pub local_denial_tracking: Option<Arc<RwLock<DenialTrackingState>>>,
+    /// Per-context auto-mode denial tracker.
+    ///
+    /// `Some(arc)` when this context is a **fork** — the fork holds an
+    /// isolated tracker so its denial streak cannot poison the parent
+    /// session's circuit breaker (TS: `createSubagentContext` always
+    /// builds a fresh tracker). `None` on the main session context;
+    /// callers fall back to the engine-level session tracker.
+    ///
+    /// Read order at the classifier site (TS `permissions.ts:553-558`):
+    /// `ctx.local_denial_tracking` → engine-level session tracker.
+    pub local_denial_tracking: Option<Arc<Mutex<DenialTracker>>>,
 
     // ── Query Tracking ──
     /// Query chain ID for telemetry grouping.

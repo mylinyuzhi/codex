@@ -683,6 +683,7 @@ impl QueryEngine {
             time_since_last_assistant_ms: None,
             agentic: false,
             cache: None,
+            stop_sequences: None,
         };
 
         match self.client.query(&params).await {

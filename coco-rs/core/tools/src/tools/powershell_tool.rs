@@ -136,8 +136,8 @@ impl Tool for PowerShellTool {
     }
 
     /// TS `maxResultSizeChars: 30_000` at `PowerShellTool.tsx:275`.
-    fn max_result_size_chars(&self) -> i64 {
-        30_000
+    fn max_result_size_bound(&self) -> coco_tool_runtime::ResultSizeBound {
+        coco_tool_runtime::ResultSizeBound::Chars(30_000)
     }
 
     fn validate_input(&self, input: &Value, _ctx: &ToolUseContext) -> ValidationResult {

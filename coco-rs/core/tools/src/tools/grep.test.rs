@@ -423,12 +423,15 @@ async fn test_grep_mtime_sorting() {
 }
 
 // -----------------------------------------------------------------------
-// max_result_size_chars
+// max_result_size_bound
 // -----------------------------------------------------------------------
 
 #[tokio::test]
-async fn test_grep_max_result_size_chars() {
-    assert_eq!(GrepTool.max_result_size_chars(), 20_000);
+async fn test_grep_max_result_size_bound() {
+    assert_eq!(
+        GrepTool.max_result_size_bound(),
+        coco_tool_runtime::ResultSizeBound::Chars(20_000),
+    );
 }
 
 // -----------------------------------------------------------------------

@@ -4,11 +4,11 @@
 //! TS: `utils/toolResultStorage.ts` (1040 LoC).
 //!
 //! **Level 1** (per-tool): each tool declares
-//! [`crate::Tool::max_result_size_chars`]. When a tool result exceeds
+//! [`crate::Tool::max_result_size_bound`]. When a tool result exceeds
 //! the declared cap, [`persist_to_disk`] writes the body to
 //! `<session_dir>/tool-results/<id>.{txt,json}` and returns a
 //! [`PersistedToolResult`] reference the runtime substitutes for the
-//! original content. Tools opt out by returning `i64::MAX`.
+//! original content. Tools opt out by returning [`ResultSizeBound::Unbounded`].
 //!
 //! **Level 2** (per-message): `apply_tool_result_budget` walks tool
 //! results in one API-level user-message group and persists the
@@ -37,10 +37,10 @@ use tokio::sync::RwLock;
 /// Default per-tool persistence threshold (TS `DEFAULT_MAX_RESULT_SIZE_CHARS`).
 pub const DEFAULT_MAX_RESULT_SIZE_CHARS: i64 = 50_000;
 
-/// Default `Tool::max_result_size_chars()` declaration for tools
-/// that do not opt out or tighten the cap (TS tool default:
-/// `100_000`, then clamped by [`DEFAULT_MAX_RESULT_SIZE_CHARS`]).
-pub const DEFAULT_TOOL_MAX_RESULT_SIZE_CHARS: i64 = 100_000;
+/// Default [`Tool::max_result_size_bound`] declaration for tools that do not
+/// opt out or tighten the cap (TS tool default: `100_000`, then clamped by
+/// [`DEFAULT_MAX_RESULT_SIZE_CHARS`]).
+pub const DEFAULT_TOOL_MAX_RESULT_SIZE_BOUND: ResultSizeBound = ResultSizeBound::Chars(100_000);
 
 /// Default per-message aggregate cap (TS
 /// `MAX_TOOL_RESULTS_PER_MESSAGE_CHARS`).
@@ -56,24 +56,63 @@ pub const PERSISTED_OUTPUT_CLOSING_TAG: &str = "</persisted-output>";
 /// Replacement marker for Level 2 budget eviction (TS `TOOL_RESULT_CLEARED_MESSAGE`).
 pub const TOOL_RESULT_CLEARED_MESSAGE: &str = "[Old tool result content cleared]";
 
+/// Per-tool persistence cap declaration.
+///
+/// Replaces the legacy `i64`-with-`i64::MAX`-sentinel convention. The
+/// `Chars` variant always carries a positive byte cap; `Unbounded` makes
+/// the tool's opt-out explicit so callers (Level 1 persist + Level 2
+/// aggregate budget) match on it instead of comparing to a magic number.
+///
+/// TS: `Tool.maxResultSizeChars: number | typeof Infinity`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResultSizeBound {
+    /// Cap inline result at this many UTF-8 bytes. Must be positive;
+    /// callers that need fallible construction use [`Self::try_chars`].
+    Chars(i64),
+    /// Tool opts out of Level 1 persistence — its content is canonical
+    /// (e.g. `Read` on a tracked file the model will read again). Inline
+    /// regardless of length. TS: `Tool.maxResultSizeChars = Infinity`.
+    Unbounded,
+}
+
+impl ResultSizeBound {
+    /// Const constructor. Panics in `const` evaluation if `n <= 0`.
+    pub const fn chars(n: i64) -> Self {
+        assert!(n > 0, "ResultSizeBound::chars requires a positive cap");
+        Self::Chars(n)
+    }
+
+    /// Fallible constructor.
+    pub const fn try_chars(n: i64) -> Option<Self> {
+        if n > 0 { Some(Self::Chars(n)) } else { None }
+    }
+
+    pub const fn is_unbounded(self) -> bool {
+        matches!(self, Self::Unbounded)
+    }
+
+    /// Cap in chars, or `None` for `Unbounded`.
+    pub const fn as_chars(self) -> Option<i64> {
+        match self {
+            Self::Chars(n) => Some(n),
+            Self::Unbounded => None,
+        }
+    }
+}
+
 /// Resolved persistence threshold for one tool. Mirrors TS
 /// `getPersistenceThreshold(toolName, declaredMaxResultSizeChars)`:
 ///
-/// - `i64::MAX` declared → opt-out (returned verbatim, never persisted).
-/// - Otherwise: clamps `declared` against `DEFAULT_MAX_RESULT_SIZE_CHARS`.
+/// - [`ResultSizeBound::Unbounded`] declared → opt-out (returned verbatim).
+/// - Otherwise: clamps `declared` against [`DEFAULT_MAX_RESULT_SIZE_CHARS`].
 ///
 /// The TS `tengu_satin_quoll` GrowthBook per-tool override is not
-/// modelled here (no equivalent flag system in coco-rs). When the
-/// override system lands, an extra `overrides: &HashMap<String, i64>`
-/// param can be threaded through.
-pub fn resolve_persistence_threshold(declared_max_result_size_chars: i64) -> i64 {
-    if declared_max_result_size_chars == i64::MAX {
-        return i64::MAX;
+/// modelled here.
+pub fn resolve_persistence_threshold(declared: ResultSizeBound) -> ResultSizeBound {
+    match declared {
+        ResultSizeBound::Unbounded => ResultSizeBound::Unbounded,
+        ResultSizeBound::Chars(n) => ResultSizeBound::Chars(n.min(DEFAULT_MAX_RESULT_SIZE_CHARS)),
     }
-    std::cmp::min(
-        declared_max_result_size_chars,
-        DEFAULT_MAX_RESULT_SIZE_CHARS,
-    )
 }
 
 /// Per-session tool-result directory (TS `getToolResultsDir`).
@@ -262,9 +301,10 @@ pub fn empty_tool_result_message(tool_name: &str) -> String {
 
 /// Per-session content-replacement state for Level 2 budget. Tracks:
 ///
-/// - `replacements`: tool_use_id → replacement string (always
-///   `TOOL_RESULT_CLEARED_MESSAGE` today; field is keyed for prompt-
-///   cache stability — same id → same replacement across re-renders).
+/// - `replacements`: tool_use_id → replacement string (the exact
+///   `<persisted-output>` preview body). Keyed for prompt-cache
+///   stability — same id always projects to the same replacement
+///   across re-renders.
 /// - `seen_ids`: tool_use_ids the budget has already considered. Once
 ///   seen, a result is "frozen" — never re-replaced even if it
 ///   shrinks under the cap (matches TS behaviour).
@@ -290,6 +330,48 @@ impl ContentReplacementState {
     }
 }
 
+/// Rebuild [`ContentReplacementState`] from transcript records on session
+/// resume. Mirrors TS `reconstructContentReplacementState`:
+///
+/// 1. Start from `inherited` replacements (e.g. parent-fork state).
+/// 2. Overlay records the transcript wrote during the live session,
+///    keeping only those whose `tool_use_id` is present in
+///    `candidate_ids` (the current message-window's tool results) —
+///    stale ids that have rolled out of view stay dropped.
+/// 3. Mark every record id as `seen` so the budget pass won't re-select
+///    the same candidate (prevents replacement instability across resume).
+///
+/// Returns a fresh state with `per_message_chars` set verbatim — the
+/// caller supplies the resolved cap (feature gate handled there).
+pub fn reconstruct_content_replacement_state(
+    candidate_ids: &std::collections::HashSet<String>,
+    records: &[ContentReplacementRecord],
+    inherited: Option<&HashMap<String, String>>,
+    per_message_chars: i64,
+) -> ContentReplacementState {
+    let mut state = ContentReplacementState::new(per_message_chars);
+
+    if let Some(inh) = inherited {
+        for (id, rep) in inh {
+            if candidate_ids.contains(id) {
+                state.replacements.insert(id.clone(), rep.clone());
+                state.seen_ids.insert(id.clone());
+            }
+        }
+    }
+
+    for rec in records {
+        if candidate_ids.contains(&rec.tool_use_id) {
+            state
+                .replacements
+                .insert(rec.tool_use_id.clone(), rec.replacement.clone());
+            state.seen_ids.insert(rec.tool_use_id.clone());
+        }
+    }
+
+    state
+}
+
 /// Shared handle for engine wiring.
 pub type ContentReplacementStateRef = Arc<RwLock<ContentReplacementState>>;
 
@@ -307,20 +389,35 @@ pub struct ToolResultCandidate {
     /// (`is_persistence_opted_out`). `None` ⇒ apply Level 2 only.
     pub tool_name: Option<String>,
     /// Whether this candidate's tool opted out of persistence
-    /// (declared `i64::MAX` for `max_result_size_chars`). When `true`,
-    /// the budget pipeline skips it (TS uses the same opt-out for
-    /// canonical-content tools like `Read` on a tracked file).
+    /// (declared [`ResultSizeBound::Unbounded`] for `max_result_size_bound`).
+    /// When `true`, the budget pipeline skips it (TS uses the same opt-out
+    /// for canonical-content tools like `Read` on a tracked file).
     pub persistence_opted_out: bool,
     /// Whether the persisted file should use `.json` rather than
     /// `.txt`.
     pub is_json: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A single tool-result replacement record.
+///
+/// Returned by [`apply_tool_result_budget`] as `BudgetOutcome.newly_replaced`
+/// and persisted alongside the message log (see [`ContentReplacementRecord`])
+/// so [`reconstruct_content_replacement_state`] can rebuild the replacement
+/// map on session resume.
+///
+/// Serializable for transcript persistence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContentReplacement {
     pub tool_use_id: String,
     pub replacement: String,
 }
+
+/// Type alias for transcript-persisted records. Identical layout to
+/// [`ContentReplacement`] (same payload — the budget pass emits, the
+/// transcript persists, the resume path reads back). TS uses a single
+/// `ContentReplacementRecord` type; we keep both names so the call site
+/// reads naturally (`outcome.newly_replaced` vs `records: &[...Record]`).
+pub type ContentReplacementRecord = ContentReplacement;
 
 /// Outcome of running [`apply_tool_result_budget`].
 #[derive(Debug, Clone, Default)]

@@ -19,7 +19,6 @@ use coco_tool_runtime::SkillInvocationError;
 use coco_tool_runtime::SkillInvocationResult;
 use coco_tool_runtime::SubagentInheritance;
 use pretty_assertions::assert_eq;
-use tokio::sync::RwLock;
 
 use super::*;
 
@@ -63,11 +62,11 @@ fn sample_skill(
 }
 
 fn runtime_with(skills: Vec<SkillDefinition>) -> QuerySkillRuntime {
-    let mut mgr = SkillManager::new();
+    let mgr = SkillManager::new();
     for s in skills {
         mgr.register(s);
     }
-    QuerySkillRuntime::new(Arc::new(RwLock::new(mgr)))
+    QuerySkillRuntime::new(Arc::new(mgr))
 }
 
 #[tokio::test]

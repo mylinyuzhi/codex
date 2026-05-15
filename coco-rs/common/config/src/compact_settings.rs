@@ -133,7 +133,7 @@ pub struct PartialDisplayCollapseSettings {
 /// Mirrors TS `tengu_hawthorn_steeple` (Level 2 enable) +
 /// `tengu_hawthorn_window` (per-message char cap). Level 1 (per-tool
 /// `<persisted-output>` persistence) is driven by each tool's
-/// `max_result_size_chars()` declaration rather than this config. See
+/// `max_result_size_bound()` declaration rather than this config. See
 /// [`docs/coco-rs/tool-result-budget-plan.md`].
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -364,13 +364,13 @@ impl Default for DisplayCollapseConfig {
 /// | `persist_records` | — (transcript record write toggle for fork agents) | `true` |
 ///
 /// Per-tool persistence threshold overrides (TS `tengu_satin_quoll`) belong on
-/// `Tool::max_result_size_chars()`; they are intentionally not surfaced as
+/// `Tool::max_result_size_bound()`; they are intentionally not surfaced as
 /// compact config.
 ///
 /// **Status**: config is live for the query-level aggregate budget. Level 1
 /// helpers live in `coco-tool-runtime::tool_result_storage` and are called by
 /// `coco-query`'s tool outcome builder when a tool opts in via
-/// `max_result_size_chars()`. Remaining TS-parity gaps are tracked in
+/// `max_result_size_bound()`. Remaining TS-parity gaps are tracked in
 /// `docs/coco-rs/tool-result-budget-plan.md`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolResultBudgetConfig {

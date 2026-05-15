@@ -519,6 +519,17 @@ Each variant's wire method is generated together with the matching \
     /// Matches TS `SDKToolProgressMessage` (coreSchemas.ts:1648-1659).
     /// Sent at most once per 30 seconds per `parent_tool_use_id`.
     "tool/progress" => ToolProgress(ToolProgressParams),
+
+    // === Plugins (1) ===
+
+    /// Plugin state changed on disk (manifest added/removed/edited,
+    /// `installed_plugins.json` updated, or settings.json scope toggled).
+    /// Carries a short reason string the UI can surface as a banner.
+    /// TS parity: `useManagePlugins.ts:293-300` adds the "Plugins
+    /// changed. Run /reload-plugins to activate." notification. Never
+    /// triggers an auto-reload — the explicit `/reload-plugins`
+    /// invocation is what applies the change.
+    "plugins/changed" => PluginsChanged { reason: String },
     }
 }
 

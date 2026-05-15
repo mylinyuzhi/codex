@@ -25,6 +25,17 @@ fn test_extended_builtins_no_overlap_with_base() {
 
     let mut ext_registry = CommandRegistry::new();
     register_extended_builtins(&mut ext_registry);
+    // `/review`, `/security-review`, `/insights` etc. moved to the
+    // TS-parity handler set (Prompt-type). Include them so `key_commands`
+    // below stays meaningful when checking the "post-extension" surface.
+    register_ts_parity_handlers(
+        &mut ext_registry,
+        coco_types::UserType::Human,
+        coco_types::Features::empty(),
+        std::path::PathBuf::from("."),
+        std::path::PathBuf::from("."),
+        None,
+    );
 
     // Count entries in both registries
     let base_count = base_registry.all().count();
@@ -33,9 +44,6 @@ fn test_extended_builtins_no_overlap_with_base() {
     // Some commands exist in both (the extended set overrides/replaces them)
     // That's by design: extended handlers have real logic replacing stubs.
     // Verify the extended set has the key commands.
-    // `/model` is registered via `register_ts_parity_handlers`, not here —
-    // moved out so the handler can return `OpenDialog(ModelPicker)` on
-    // no-args. Don't add it back to this list.
     let key_commands = [
         "compact",
         "context",

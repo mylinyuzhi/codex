@@ -199,10 +199,18 @@ impl CommandState {
 /// Single ownership site so `InputState` doesn't have to hold the two
 /// fields side-by-side. `state` flips between Normal and Insert; `persistent`
 /// keeps yank-register / last-find / dot-repeat memory across commands.
+///
+/// `enabled` gates whether the InsertChar / Cancel dispatch consults the
+/// state machine. Defaults to `false` — typing then inserts characters
+/// directly and Esc routes to the standard Cancel flow, matching what a
+/// non-vim user expects. The `/vim` slash command persists user intent
+/// to `~/.coco/state/editor_mode`; wiring that file back into this flag
+/// at TUI startup is tracked separately.
 #[derive(Debug, Clone, Default)]
 pub struct VimRuntime {
     pub state: VimState,
     pub persistent: PersistentState,
+    pub enabled: bool,
 }
 
 impl VimRuntime {
@@ -216,6 +224,20 @@ impl VimRuntime {
 
     pub fn is_insert(&self) -> bool {
         self.state.is_insert()
+    }
+
+    /// True when vim is on AND currently in Normal mode — the gate the
+    /// InsertChar dispatcher uses to decide whether to route printable
+    /// keys through the state machine.
+    pub fn normal_dispatch_active(&self) -> bool {
+        self.enabled && self.is_normal()
+    }
+
+    /// True when vim is on AND currently in Insert mode — the gate the
+    /// Esc/Cancel dispatcher uses to decide whether to transition back
+    /// to Normal mode instead of running the standard Cancel flow.
+    pub fn insert_escape_active(&self) -> bool {
+        self.enabled && self.is_insert()
     }
 }
 

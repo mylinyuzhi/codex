@@ -192,7 +192,7 @@ These names are final. All docs must use these exact names.
 |---------------|----------|--------|
 | `PermissionDecision` | ~~PermissionResult~~, ~~PermissionDecision::Allowed~~ | Defined in coco-types with variants `Allow`, `Ask`, `Deny` |
 | `check_permissions` (plural) | ~~check_permission~~ | Matches TS `checkPermissions()` |
-| `ProviderApi` | ~~ApiProvider~~ | Canonical enum in coco-types — wire-protocol family. Anthropic sub-routing (Bedrock/Vertex/Foundry) is in `vercel-ai-anthropic` provider settings + `ProviderConfig.client_options`, not enum variants. Distinct from provider **instance identifier** (`ProviderConfig.name: String`); see multi-provider-plan.md §2.2. |
+| `ProviderApi` | ~~ApiProvider~~ | Canonical enum in coco-types — wire-protocol family. **Anthropic cloud-credential variants (Bedrock / Vertex / Foundry) are explicit non-goals** — coco-rs targets Anthropic FirstParty, OpenAI, Google, ByteDance, and generic OpenAI-compatible. Distinct from provider **instance identifier** (`ProviderConfig.name: String`); see multi-provider-plan.md §2.2. |
 | `ApiClient` | ~~Arc<dyn LanguageModelV4>~~ directly | QueryEngine holds `Arc<ApiClient>` which wraps vercel-ai internally |
 | `ThinkingLevel` | ~~EffortLevel~~, ~~ThinkingConfig~~, ~~ThinkingParams~~ | Single unified struct in coco-types. Fields: effort (ReasoningEffort) + budget_tokens + options (HashMap). Provider-specific thinking params (interleaved, reasoningSummary, includeThoughts) go through options, not typed fields. Evolved from cocode-rs `common/protocol/src/thinking.rs`. |
 | `model_id` | ~~slug~~ | Model identifier field name. Aligns with vercel-ai `model_id()` and industry convention. |
