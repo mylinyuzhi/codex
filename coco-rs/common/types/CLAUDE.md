@@ -9,7 +9,7 @@ Foundation types shared across all crates. **Zero LLM dependencies** — provide
 
 ## Key Types
 
-Tool / Agent identity: `ToolName` (41 builtin variants, Copy), `ToolId` (Builtin/Mcp/Custom, flat-string serde), `SubagentType` (7 builtin variants), `AgentTypeId`, `ToolInputSchema`, `ToolProgress`.
+Tool / Agent identity: `ToolName` (43 builtin variants, Copy), `ToolId` (Builtin/Mcp/Custom, flat-string serde), `SubagentType` (7 builtin variants), `AgentTypeId`, `ToolInputSchema`, `ToolProgress`.
 
 Permission: `PermissionMode` (camelCase wire), `PermissionBehavior`, `PermissionRule`, `PermissionRuleSource`, `PermissionDecision`, `PermissionDecisionReason`, `ToolPermissionContext`.
 

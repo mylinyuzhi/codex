@@ -402,23 +402,23 @@ pub struct PromptCommandData {
 ### Tool Types (from `Tool.ts`)
 
 ```rust
-/// All 41 built-in tool names (matches crate-coco-tools.md Tool Inventory).
+/// All 43 built-in tool names (matches crate-coco-tools.md Tool Inventory).
 /// Copy + const fn as_str() — zero-cost identity for builtins.
 /// MCPTool excluded: MCP proxy instances use ToolId::Mcp, not ToolName.
 /// FromStr matches the exact name string ("Read", "Bash", "WebFetch", etc.).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum ToolName {
-    // File I/O (7)
-    Bash, Read, Write, Edit, Glob, Grep, NotebookEdit,
+    // File I/O (8)
+    Bash, Read, Write, Edit, Glob, Grep, NotebookEdit, ApplyPatch,
     // Web (2)
     WebFetch, WebSearch,
     // Agent & Team (5)
     Agent, Skill, SendMessage, TeamCreate, TeamDelete,
     // Task Management (7)
     TaskCreate, TaskGet, TaskList, TaskUpdate, TaskStop, TaskOutput, TodoWrite,
-    // Plan & Worktree (4)
-    EnterPlanMode, ExitPlanMode, EnterWorktree, ExitWorktree,
+    // Plan & Worktree (5)
+    EnterPlanMode, ExitPlanMode, VerifyPlanExecution, EnterWorktree, ExitWorktree,
     // Utility (5)
     AskUserQuestion, ToolSearch, Config, Brief,
     #[serde(rename = "LSP")]
@@ -440,7 +440,7 @@ impl ToolName {
         match self {
             Self::Bash => "Bash", Self::Read => "Read", Self::Write => "Write",
             Self::Edit => "Edit", Self::Glob => "Glob", Self::Grep => "Grep",
-            Self::NotebookEdit => "NotebookEdit",
+            Self::NotebookEdit => "NotebookEdit", Self::ApplyPatch => "apply_patch",
             Self::WebFetch => "WebFetch", Self::WebSearch => "WebSearch",
             Self::Agent => "Agent", Self::Skill => "Skill",
             Self::SendMessage => "SendMessage",
@@ -450,6 +450,7 @@ impl ToolName {
             Self::TaskStop => "TaskStop", Self::TaskOutput => "TaskOutput",
             Self::TodoWrite => "TodoWrite",
             Self::EnterPlanMode => "EnterPlanMode", Self::ExitPlanMode => "ExitPlanMode",
+            Self::VerifyPlanExecution => "VerifyPlanExecution",
             Self::EnterWorktree => "EnterWorktree", Self::ExitWorktree => "ExitWorktree",
             Self::AskUserQuestion => "AskUserQuestion", Self::ToolSearch => "ToolSearch",
             Self::Config => "Config", Self::Brief => "Brief", Self::Lsp => "LSP",
@@ -475,14 +476,14 @@ impl FromStr for ToolName {
 ///
 /// Three distinct concepts:
 ///   ToolId      = identity ("who am I")         → this enum
-///   ToolName    = built-in tools only (Copy)     → inner enum, 41 variants
+///   ToolName    = built-in tools only (Copy)     → inner enum, 43 variants
 ///   ToolPattern = permission match expression    → String ("Bash(git *)", "mcp__slack__*")
 /// Serde: serializes/deserializes as a FLAT STRING via Display/FromStr.
 /// "Read" (builtin), "mcp__slack__send" (MCP), "my_plugin_tool" (custom).
 /// NOT tagged JSON — wire format is always a single string.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ToolId {
-    /// Built-in tool (41 variants, Copy, const fn as_str())
+    /// Built-in tool (43 variants, Copy, const fn as_str())
     Builtin(ToolName),
 
     /// MCP tool: structured server + tool name.

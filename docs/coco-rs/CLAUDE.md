@@ -30,6 +30,7 @@ Each piece of information has exactly one owner. No duplication across docs.
 | Context enums: Platform, ShellKind | `crate-coco-context.md` | |
 | MCP types, config, client, auth, channels | `crate-coco-mcp.md` | |
 | Permission evaluation pipeline, auto-mode/yolo classifier, denial tracking | `crate-coco-permissions.md` | |
+| Plan mode lifecycle, plan files, enter/exit/reentry, TS mirror map | `plan-mode-architecture.md` | crate-coco-tools references, not redefines |
 | Error handling architecture (3-layer model, error flow) | `CLAUDE.md` (this file) | crate docs show per-crate error types, not architecture |
 | ToolError, ValidationResult, error_code conventions | `crate-coco-tool.md` | |
 | Directory structure, dependency graph, phases | `coco-rs-plan.md` | |
@@ -70,7 +71,7 @@ Owns all enum/struct definitions that are shared across 3+ crates:
 Message, UserMessage, AssistantMessage, StopReason, MessageKind, NormalizedMessage
 PermissionMode, PermissionBehavior, PermissionRule, PermissionRuleSource, PermissionDecision
 CommandBase, CommandType, CommandAvailability, CommandSource
-ToolName (41 builtin variants, Copy), ToolId { Builtin(ToolName) | Mcp | Custom }
+ToolName (43 builtin variants, Copy), ToolId { Builtin(ToolName) | Mcp | Custom }
 ToolInputSchema, ToolResult<T>, ToolProgress
 SubagentType (7 builtin variants, Copy), AgentTypeId { Builtin(SubagentType) | Custom }
 TaskType, TaskStatus, TaskStateBase, TaskHandle

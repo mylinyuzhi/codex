@@ -64,7 +64,11 @@ impl KillswitchCheck {
 /// `policy_flag` is the managed-settings `bypassPermissionsKillswitch`
 /// value at the policy scope (`None` when unset).
 pub fn check(policy_flag: Option<bool>) -> KillswitchCheck {
-    if env::is_env_truthy(KILLSWITCH_ENV) {
+    check_with_env_truthy(policy_flag, env::is_env_truthy(KILLSWITCH_ENV))
+}
+
+fn check_with_env_truthy(policy_flag: Option<bool>, env_truthy: bool) -> KillswitchCheck {
+    if env_truthy {
         return KillswitchCheck::BlockedByEnv;
     }
     if policy_flag == Some(true) {
@@ -78,10 +82,18 @@ pub fn check(policy_flag: Option<bool>) -> KillswitchCheck {
 /// The killswitch only gates `BypassPermissions`; transitions into any
 /// other mode (including `AcceptEdits` and `Plan`) proceed normally.
 pub fn check_transition(requested: PermissionMode, policy_flag: Option<bool>) -> KillswitchCheck {
+    check_transition_with_env_truthy(requested, policy_flag, env::is_env_truthy(KILLSWITCH_ENV))
+}
+
+fn check_transition_with_env_truthy(
+    requested: PermissionMode,
+    policy_flag: Option<bool>,
+    env_truthy: bool,
+) -> KillswitchCheck {
     if requested != PermissionMode::BypassPermissions {
         return KillswitchCheck::Allowed;
     }
-    check(policy_flag)
+    check_with_env_truthy(policy_flag, env_truthy)
 }
 
 /// Compute the session-wide "bypass permissions available" capability.
@@ -115,10 +127,24 @@ pub fn compute_bypass_capability(
     allow_dangerously_skip_permissions: bool,
     policy_flag: Option<bool>,
 ) -> bool {
+    compute_bypass_capability_with_env_truthy(
+        starts_in_bypass_mode,
+        allow_dangerously_skip_permissions,
+        policy_flag,
+        env::is_env_truthy(KILLSWITCH_ENV),
+    )
+}
+
+fn compute_bypass_capability_with_env_truthy(
+    starts_in_bypass_mode: bool,
+    allow_dangerously_skip_permissions: bool,
+    policy_flag: Option<bool>,
+    env_truthy: bool,
+) -> bool {
     if !(starts_in_bypass_mode || allow_dangerously_skip_permissions) {
         return false;
     }
-    check(policy_flag).is_allowed()
+    check_with_env_truthy(policy_flag, env_truthy).is_allowed()
 }
 
 /// Outcome of resolving the session's initial permission mode.
@@ -162,7 +188,23 @@ pub fn resolve_initial_permission_mode(
     settings_default_mode: Option<PermissionMode>,
     policy_flag: Option<bool>,
 ) -> InitialPermissionMode {
-    let killswitch = check(policy_flag);
+    resolve_initial_permission_mode_with_env_truthy(
+        dangerously_skip_permissions,
+        permission_mode_cli,
+        settings_default_mode,
+        policy_flag,
+        env::is_env_truthy(KILLSWITCH_ENV),
+    )
+}
+
+fn resolve_initial_permission_mode_with_env_truthy(
+    dangerously_skip_permissions: bool,
+    permission_mode_cli: Option<PermissionMode>,
+    settings_default_mode: Option<PermissionMode>,
+    policy_flag: Option<bool>,
+    env_truthy: bool,
+) -> InitialPermissionMode {
+    let killswitch = check_with_env_truthy(policy_flag, env_truthy);
 
     let mut candidates: Vec<PermissionMode> = Vec::with_capacity(3);
     if dangerously_skip_permissions {

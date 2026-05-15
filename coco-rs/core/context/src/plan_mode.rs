@@ -562,22 +562,46 @@ pub fn resolve_plans_directory(
     if let Some(setting) = plans_directory_setting
         && let Some(proj) = project_dir
     {
-        let resolved = proj.join(setting);
-        // Validate path stays within project root
-        if let (Ok(canonical_proj), Ok(canonical_resolved)) =
-            (proj.canonicalize(), resolved.canonicalize())
-            && canonical_resolved.starts_with(&canonical_proj)
-        {
-            return canonical_resolved;
-        }
-        // Fall back if canonicalize fails (dir doesn't exist yet) but looks safe
-        if !setting.contains("..") {
-            return resolved;
+        let project = proj
+            .canonicalize()
+            .unwrap_or_else(|_| normalize_path_lexically(proj));
+        let setting_path = Path::new(setting);
+        let resolved = if setting_path.is_absolute() {
+            setting_path.to_path_buf()
+        } else {
+            project.join(setting_path)
+        };
+        let plans = resolved
+            .canonicalize()
+            .unwrap_or_else(|_| normalize_path_lexically(&resolved));
+        // TS `resolve(cwd, setting)` + `startsWith(cwd + sep) || === cwd`:
+        // absolute settings and `..` segments are allowed only when their
+        // normalized target remains inside the project root.
+        if plans == project || plans.starts_with(&project) {
+            return plans;
         }
         tracing::warn!("plansDirectory must be within project root: {setting}, using default");
     }
 
     config_dir.join("plans")
+}
+
+fn normalize_path_lexically(path: &Path) -> PathBuf {
+    use std::path::Component;
+
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(component.as_os_str()),
+            Component::Normal(part) => normalized.push(part),
+        }
+    }
+    normalized
 }
 
 // ── Plan file CRUD ──
@@ -670,15 +694,45 @@ pub fn recover_plan_for_resume(
 /// Recover plan content from message history.
 ///
 /// Searches backwards through transcript entries for plan content in:
-/// 1. ExitPlanMode tool_use input (plan field)
-/// 2. planContent field on user messages
-/// 3. plan_file_reference attachments
+/// 1. most recent `file_snapshot` system message with key `plan`
+/// 2. ExitPlanMode tool_use input (plan field)
+/// 3. planContent field on user messages
+/// 4. plan_file_reference attachments
 fn recover_plan_from_messages(entries: &[serde_json::Value]) -> Option<String> {
     for entry in entries.iter().rev() {
-        // Check for ExitPlanMode tool_use input
-        if entry.get("role").and_then(|v| v.as_str()) == Some("assistant")
-            && let Some(content) = entry.get("content").and_then(|v| v.as_array())
+        if entry.get("type").and_then(|v| v.as_str()) == Some("system")
+            && entry.get("subtype").and_then(|v| v.as_str()) == Some("file_snapshot")
         {
+            let files = entry
+                .get("snapshotFiles")
+                .or_else(|| entry.get("snapshot_files"))
+                .and_then(|v| v.as_array());
+            if let Some(files) = files {
+                for file in files {
+                    if file.get("key").and_then(|v| v.as_str()) == Some("plan")
+                        && let Some(plan) = file.get("content").and_then(|v| v.as_str())
+                        && !plan.is_empty()
+                    {
+                        return Some(plan.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    for entry in entries.iter().rev() {
+        // Check for ExitPlanMode tool_use input
+        let assistant_content = if entry.get("role").and_then(|v| v.as_str()) == Some("assistant") {
+            entry.get("content").and_then(|v| v.as_array())
+        } else if entry.get("type").and_then(|v| v.as_str()) == Some("assistant") {
+            entry
+                .get("message")
+                .and_then(|v| v.get("content"))
+                .and_then(|v| v.as_array())
+        } else {
+            None
+        };
+        if let Some(content) = assistant_content {
             for block in content {
                 if block.get("type").and_then(|v| v.as_str()) == Some("tool_use")
                     && block.get("name").and_then(|v| v.as_str())
@@ -730,7 +784,7 @@ pub fn copy_plan_for_fork(
 }
 
 /// Outcome of verifying that the plan file was actually edited during
-/// plan mode. Used by the optional `VerifyPlanExecution` hook —
+/// plan mode. Used by the optional `ExitPlanMode` stale-plan advisory —
 /// feature-gated on `settings.plan_mode.verify_execution`.
 ///
 /// TS parity: `pendingPlanVerification` + `registerPlanVerificationHook`.
@@ -751,8 +805,8 @@ pub enum PlanVerificationOutcome {
 }
 
 /// Check whether the plan file was edited between EnterPlanMode and
-/// the current call. Soft-failure: the hook surfaces a warning; it
-/// does NOT block ExitPlanMode approval.
+/// the current call. Soft-failure: ExitPlanMode surfaces a warning; it
+/// does NOT block approval.
 ///
 /// - `plan_file`: fully-resolved path (as computed from slug + session).
 /// - `entry_ms`: Unix-epoch-ms of EnterPlanMode, from app_state.

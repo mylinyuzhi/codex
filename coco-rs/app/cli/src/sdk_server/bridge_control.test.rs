@@ -104,6 +104,39 @@ async fn bridge_handler_allows_non_bypass_modes_unconditionally() {
 }
 
 #[tokio::test]
+async fn bridge_handler_enter_plan_applies_plan_transition_state() {
+    let state = state_with_session();
+    {
+        let slot = state.session.read().await;
+        let session = slot.as_ref().unwrap();
+        session.app_state.write().await.permission_mode =
+            Some(coco_types::PermissionMode::AcceptEdits);
+    }
+
+    let handler = SdkBridgeControlHandler::new(state.clone());
+    handler
+        .handle(ControlRequest::SetPermissionMode {
+            mode: coco_types::PermissionMode::Plan,
+        })
+        .await
+        .unwrap();
+
+    let slot = state.session.read().await;
+    let session = slot.as_ref().unwrap();
+    let app_state = session.app_state.read().await;
+    assert_eq!(
+        app_state.permission_mode,
+        Some(coco_types::PermissionMode::Plan),
+    );
+    assert_eq!(
+        app_state.pre_plan_mode,
+        Some(coco_types::PermissionMode::AcceptEdits),
+    );
+    assert!(app_state.plan_mode_entry_ms.is_some());
+    assert!(!app_state.needs_plan_mode_exit_attachment);
+}
+
+#[tokio::test]
 async fn bridge_handler_rejects_when_no_active_session() {
     let state = Arc::new(SdkServerState::default());
     let handler = SdkBridgeControlHandler::new(state);

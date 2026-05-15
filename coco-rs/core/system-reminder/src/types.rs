@@ -116,9 +116,9 @@ pub enum AttachmentType {
     /// Fires every 10 human turns after ExitPlanMode while
     /// `pending_plan_verification` hasn't been resolved. Main-thread only —
     /// sub-agents don't own the plan. TS gates on `USER_TYPE === 'ant' &&
-    /// CLAUDE_CODE_VERIFY_PLAN=true`; coco-rs gates on the user-facing
-    /// `settings.system_reminder.attachments.verify_plan_reminder` flag
-    /// (opt-in, defaults to false — matches TS external-build behavior).
+    /// CLAUDE_CODE_VERIFY_PLAN=true`; coco-rs ships `VerifyPlanExecution`
+    /// and gates on the user-facing
+    /// `settings.system_reminder.attachments.verify_plan_reminder` flag.
     VerifyPlanReminder,
 
     // ── Phase 1 engine-local reminders (Core tier unless noted) ──

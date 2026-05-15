@@ -106,6 +106,7 @@ const SAFE_TOOLS: &[&str] = &[
     ToolName::AskUserQuestion.as_str(),
     ToolName::EnterPlanMode.as_str(),
     ToolName::ExitPlanMode.as_str(),
+    ToolName::VerifyPlanExecution.as_str(),
     // Swarm coordination (internal mailbox/team state only)
     ToolName::TeamCreate.as_str(),
     ToolName::TeamDelete.as_str(),

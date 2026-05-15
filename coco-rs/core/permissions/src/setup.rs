@@ -478,6 +478,7 @@ pub fn get_default_rules_for_mode(mode: PermissionMode) -> Vec<PermissionRule> {
                 ToolName::ToolSearch,
                 ToolName::EnterPlanMode,
                 ToolName::ExitPlanMode,
+                ToolName::VerifyPlanExecution,
                 ToolName::WebFetch,
                 ToolName::WebSearch,
                 ToolName::AskUserQuestion,

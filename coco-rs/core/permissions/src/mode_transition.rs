@@ -6,6 +6,7 @@
 //! Internal users skip acceptEdits and plan.
 
 use coco_types::PermissionMode;
+use coco_types::ToolAppState;
 use coco_types::ToolPermissionContext;
 
 use crate::auto_mode_state::AutoModeState;
@@ -118,6 +119,79 @@ pub fn apply_auto_transition_to_app_state(
         return true;
     }
     false
+}
+
+/// Apply a full permission-mode transition to shared app state.
+///
+/// This is the app-state-shaped equivalent of TS
+/// `transitionPermissionMode()` plus the plan-mode entry timestamp used
+/// by the optional `ExitPlanMode` stale-plan advisory.
+///
+/// Call this from external mode switchers (TUI Shift+Tab, SDK control,
+/// bridge control, `/plan`) and model-driven plan entry. It centralizes
+/// the plan-mode latches so every entry path preserves the same invariants:
+///
+/// - non-Plan → Plan stashes `pre_plan_mode`, clears a stale exit banner,
+///   and stamps `plan_mode_entry_ms`;
+/// - Plan → non-Plan marks the session as having exited plan mode, schedules
+///   the one-shot exit banner, clears classifier stash if plan mode had Auto
+///   active, and clears `pre_plan_mode`;
+/// - Auto → non-Auto clears `stripped_dangerous_rules` via the existing
+///   auto-boundary helper.
+///
+/// Returns `true` when any field was changed.
+pub fn apply_permission_mode_transition_to_app_state(
+    guard: &mut ToolAppState,
+    from: PermissionMode,
+    to: PermissionMode,
+) -> bool {
+    let before_permission_mode = guard.permission_mode;
+    let before_pre_plan_mode = guard.pre_plan_mode;
+    let before_needs_plan_exit = guard.needs_plan_mode_exit_attachment;
+    let before_needs_auto_exit = guard.needs_auto_mode_exit_attachment;
+    let before_has_exited = guard.has_exited_plan_mode;
+    let before_plan_entry = guard.plan_mode_entry_ms;
+    let before_stripped = guard.stripped_dangerous_rules.is_some();
+
+    if from != to {
+        if to == PermissionMode::Plan && from != PermissionMode::Plan {
+            guard.pre_plan_mode = Some(from);
+            guard.needs_plan_mode_exit_attachment = false;
+            guard.plan_mode_entry_ms = Some(current_epoch_ms());
+        }
+
+        if from == PermissionMode::Plan && to != PermissionMode::Plan {
+            let plan_used_auto = guard.pre_plan_mode == Some(PermissionMode::Auto)
+                || guard.stripped_dangerous_rules.is_some();
+            let restoring_to_auto = to == PermissionMode::Auto;
+            guard.pre_plan_mode = None;
+            guard.has_exited_plan_mode = true;
+            guard.needs_plan_mode_exit_attachment = true;
+            if plan_used_auto && !restoring_to_auto {
+                guard.stripped_dangerous_rules = None;
+                guard.needs_auto_mode_exit_attachment = true;
+            }
+        }
+    }
+
+    guard.permission_mode = Some(to);
+    let auto_modified = apply_auto_transition_to_app_state(guard, from, to);
+
+    auto_modified
+        || before_permission_mode != guard.permission_mode
+        || before_pre_plan_mode != guard.pre_plan_mode
+        || before_needs_plan_exit != guard.needs_plan_mode_exit_attachment
+        || before_needs_auto_exit != guard.needs_auto_mode_exit_attachment
+        || before_has_exited != guard.has_exited_plan_mode
+        || before_plan_entry != guard.plan_mode_entry_ms
+        || before_stripped != guard.stripped_dangerous_rules.is_some()
+}
+
+fn current_epoch_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or_default()
 }
 
 /// Prepare context for a mode transition with auto-mode state management.

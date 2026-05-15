@@ -329,6 +329,7 @@ pub struct PlanModeTurnParams {
     pub config_home: std::path::PathBuf,
     pub app_state: Arc<RwLock<ToolAppState>>,
     pub tools: Arc<ToolRegistry>,
+    pub plan_role_model: Option<Arc<dyn LanguageModel>>,
     /// Messages from prior turns (plus the new user prompt). When empty
     /// the helper creates a fresh user message from `prompt_if_empty`.
     pub messages: Vec<coco_messages::Message>,
@@ -360,6 +361,7 @@ impl PlanModeTurnParams {
             config_home,
             app_state,
             tools,
+            plan_role_model: None,
             messages: Vec::new(),
             prompt_if_empty: prompt.into(),
             max_turns: 20,
@@ -372,6 +374,16 @@ impl PlanModeTurnParams {
     /// Plan).
     pub fn with_permission_mode(mut self, mode: PermissionMode) -> Self {
         self.permission_mode = mode;
+        self
+    }
+
+    /// Install a Plan-role model so tests can assert that the engine
+    /// swaps clients after live plan-mode entry.
+    pub fn with_plan_role_model<M>(mut self, model: Arc<M>) -> Self
+    where
+        M: LanguageModel + 'static,
+    {
+        self.plan_role_model = Some(model);
         self
     }
 
@@ -406,12 +418,19 @@ pub async fn run_plan_mode_turn(
         session_id: params.session_id,
         ..Default::default()
     };
-    let engine = QueryEngine::new(config, client, params.tools, cancel, None)
+    let mut engine = QueryEngine::new(config, client, params.tools, cancel, None)
         .with_app_state(params.app_state)
         .with_config_home(params.config_home)
         // Auto-approve any `Ask` decision (ExitPlanMode, etc.) — tests
         // script the model flow, not user interaction.
         .with_permission_bridge(allow_all_bridge());
+    if let Some(plan_model) = params.plan_role_model {
+        let plan_client = Arc::new(ApiClient::with_default_fingerprint(
+            plan_model,
+            RetryConfig::default(),
+        ));
+        engine = engine.with_plan_role_client(Some(plan_client));
+    }
 
     if params.messages.is_empty() {
         engine

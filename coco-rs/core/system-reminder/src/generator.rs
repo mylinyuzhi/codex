@@ -239,18 +239,14 @@ pub struct GeneratorContext<'a> {
     /// True when `ExitPlanModeTool` has flipped
     /// [`ToolAppState::pending_plan_verification`] and a follow-up
     /// `VerifyPlanExecution` call is still outstanding. TS: truthy
-    /// `appState.pendingPlanVerification` minus the `verificationStarted`/
-    /// `verificationCompleted` sub-flags (collapsed in coco-rs — see the
-    /// `pending_plan_verification` field on `ToolAppState`).
+    /// `appState.pendingPlanVerification` minus the
+    /// `verificationStarted` / `verificationCompleted` sub-flags
+    /// (collapsed in coco-rs — see the `pending_plan_verification`
+    /// field on `ToolAppState`).
     pub has_pending_plan_verification: bool,
 
-    /// Assistant turns elapsed since the last `ExitPlanMode` tool call.
-    /// Engine pre-computes by scanning history backwards for the tool
-    /// call with that name. TS: `getVerifyPlanReminderTurnCount`
-    /// (`attachments.ts:3838`) counts human turns after the
-    /// `plan_mode_exit` attachment; coco-rs counts assistant turns
-    /// since the `ExitPlanMode` tool call, which is the same granularity
-    /// at the cadence boundary.
+    /// Human turns elapsed since the last `plan_mode_exit` attachment.
+    /// TS: `getVerifyPlanReminderTurnCount` (`attachments.ts:3872`).
     pub turns_since_plan_exit: i32,
 
     // ── Phase 1 engine-local reminder inputs ──

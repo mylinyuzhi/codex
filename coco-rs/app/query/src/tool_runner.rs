@@ -17,6 +17,7 @@ use crate::helpers::complete_tool_call_with_error;
 pub(crate) struct PreparedToolCall {
     pub tool_id: ToolId,
     pub tool: Arc<dyn Tool>,
+    pub observable_input: serde_json::Value,
 }
 
 /// Prepare one committed assistant tool call.
@@ -36,13 +37,22 @@ pub(crate) async fn prepare_committed_tool_call(
         .tool_name
         .parse()
         .unwrap_or_else(|_| ToolId::Custom(tool_call.tool_name.clone()));
+    let observable_input = crate::tool_input_normalizer::normalize_observable_tool_input(
+        &tool_call.tool_name,
+        tool_call.input.clone(),
+        crate::tool_input_normalizer::ToolInputNormalizationContext {
+            session_id: ctx.session_id_for_history.as_deref(),
+            plans_dir: ctx.plans_dir.as_deref(),
+            agent_id: ctx.agent_id.as_ref().map(coco_types::AgentId::as_str),
+        },
+    );
 
     let _delivered = emit_stream(
         event_tx,
         crate::AgentStreamEvent::ToolUseQueued {
             call_id: tool_call.tool_call_id.clone(),
             name: tool_call.tool_name.clone(),
-            input: tool_call.input.clone(),
+            input: observable_input.clone(),
         },
     )
     .await;
@@ -62,7 +72,7 @@ pub(crate) async fn prepare_committed_tool_call(
         return None;
     };
 
-    let validation = tool.validate_input(&tool_call.input, ctx);
+    let validation = tool.validate_input(&observable_input, ctx);
     if !validation.is_valid() {
         let message = match validation {
             coco_tool_runtime::ValidationResult::Invalid { message, .. } => {
@@ -88,5 +98,9 @@ pub(crate) async fn prepare_committed_tool_call(
         return None;
     }
 
-    Some(PreparedToolCall { tool_id, tool })
+    Some(PreparedToolCall {
+        tool_id,
+        tool,
+        observable_input,
+    })
 }

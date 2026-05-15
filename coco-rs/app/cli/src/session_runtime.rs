@@ -402,6 +402,13 @@ pub struct SessionRuntime {
     pub file_read_state: Arc<RwLock<FileReadState>>,
     pub file_history: Option<Arc<RwLock<FileHistoryState>>>,
     pub app_state: Arc<RwLock<ToolAppState>>,
+    /// Session-scoped Auto mode classifier state. Installed on every
+    /// per-turn engine so `permission_mode = Auto` can auto-approve
+    /// safe/read-only tools before falling back to interactive approval.
+    auto_mode_state: Arc<coco_permissions::AutoModeState>,
+    /// Denial history for Auto mode classifier decisions. Shared across
+    /// per-turn engines and cleared when the session changes or compacts.
+    denial_tracker: Arc<tokio::sync::Mutex<coco_permissions::DenialTracker>>,
     /// Session-memory extractor + on-disk cache. Used by
     /// [`Self::wire_engine`] (engine reads `current_text`) and
     /// [`Self::start_new_session`] / [`Self::clear_conversation`]
@@ -859,6 +866,12 @@ impl SessionRuntime {
         // Shared per-session ToolAppState (plan-mode reminder cadence,
         // exited_plan_mode flag, last_emitted_date latch, etc.).
         let app_state: Arc<RwLock<ToolAppState>> = Arc::new(RwLock::new(ToolAppState::default()));
+        let auto_mode_state = Arc::new(coco_permissions::AutoModeState::new());
+        auto_mode_state.set_active(permission_mode == coco_types::PermissionMode::Auto);
+        auto_mode_state.set_cli_flag(permission_mode == coco_types::PermissionMode::Auto);
+        let denial_tracker = Arc::new(tokio::sync::Mutex::new(
+            coco_permissions::DenialTracker::new(),
+        ));
 
         // Hook registry — settings hooks first, then plugin hooks
         // layered on top via the bridge so plugin manifests can
@@ -1141,6 +1154,8 @@ impl SessionRuntime {
             file_read_state,
             file_history,
             app_state,
+            auto_mode_state,
+            denial_tracker,
             session_memory_service,
             memory_runtime,
             swarm_agent_handle,
@@ -1679,6 +1694,17 @@ impl SessionRuntime {
         engine = engine.with_plan_role_client(plan_client);
         engine = engine.with_file_read_state(self.file_read_state.clone());
         engine = engine.with_app_state(app_state.clone());
+        let auto_active = app_state
+            .read()
+            .await
+            .permission_mode
+            .is_some_and(|mode| mode == coco_types::PermissionMode::Auto);
+        self.auto_mode_state.set_active(auto_active);
+        engine = engine.with_auto_mode(
+            self.auto_mode_state.clone(),
+            self.denial_tracker.clone(),
+            coco_permissions::AutoModeRules::default(),
+        );
         // Skill-emitted `permission_updates` now flow through the
         // engine's own per-engine `EngineLiveRulesHandle`
         // (auto-installed by `QueryEngine::new`) which writes into
@@ -1754,7 +1780,7 @@ impl SessionRuntime {
         // Cheap — the registry is just a Vec of Arc<dyn Observer>.
         let observers = coco_query::observers::build_default_registry(
             Some(self.file_read_state.clone()),
-            /*denial_tracker*/ None,
+            Some(self.denial_tracker.clone()),
             Some(app_state),
         );
         engine = engine.with_compaction_observers(observers);
@@ -2330,6 +2356,7 @@ impl SessionRuntime {
             let mut frs = self.file_read_state.write().await;
             frs.clear();
         }
+        self.denial_tracker.lock().await.clear();
         self.reset_cache_break_detectors().await;
     }
 

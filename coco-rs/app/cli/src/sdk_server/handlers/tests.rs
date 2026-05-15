@@ -484,6 +484,45 @@ async fn session_start_returns_session_id() {
 }
 
 #[tokio::test]
+async fn session_start_persists_permission_mode_to_session_state() {
+    let (server_task, client, state) = spawn_server_with_state().await;
+
+    client
+        .send(req(
+            2,
+            "session/start",
+            serde_json::json!({
+                "cwd": "/tmp/test",
+                "permission_mode": "auto",
+            }),
+        ))
+        .await
+        .unwrap();
+
+    let reply = client.recv().await.unwrap().unwrap();
+    assert!(matches!(reply, JsonRpcMessage::Response(_)));
+
+    let slot = state.session.read().await;
+    let session = slot.as_ref().expect("session installed");
+    assert_eq!(
+        session.permission_mode,
+        Some(coco_types::PermissionMode::Auto),
+        "session/start permission_mode must be visible to turn/start"
+    );
+    let app_state = session.app_state.read().await;
+    assert_eq!(
+        app_state.permission_mode,
+        Some(coco_types::PermissionMode::Auto),
+        "session/start permission_mode must seed live ToolAppState"
+    );
+
+    drop(app_state);
+    drop(slot);
+    drop(client);
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
 async fn session_start_rejects_second_concurrent_session() {
     let (server_task, client) = spawn_server().await;
 
@@ -1082,12 +1121,27 @@ async fn set_permission_mode_updates_session_field() {
     // propagate to `app_state.permission_mode` — the engine's live
     // source of truth. Before the wire-up, only the SessionHandle
     // field was written (dead API, no reader).
+    let app_state_guard = session.app_state.read().await;
     assert_eq!(
-        session.app_state.read().await.permission_mode,
+        app_state_guard.permission_mode,
         Some(coco_types::PermissionMode::Plan),
         "control/setPermissionMode must write app_state.permission_mode"
     );
+    assert_eq!(
+        app_state_guard.pre_plan_mode,
+        Some(coco_types::PermissionMode::Default),
+        "external Plan entry must stash the previous mode"
+    );
+    assert!(
+        app_state_guard.plan_mode_entry_ms.is_some(),
+        "external Plan entry must stamp plan_mode_entry_ms"
+    );
+    assert!(
+        !app_state_guard.needs_plan_mode_exit_attachment,
+        "Plan entry must clear stale exit-banner state"
+    );
 
+    drop(app_state_guard);
     drop(client);
     server_task.await.unwrap();
 }

@@ -12,7 +12,8 @@ fn cfg() -> SystemReminderConfig {
 
 #[tokio::test]
 async fn skips_when_config_disabled() {
-    let c = SystemReminderConfig::default();
+    let mut c = SystemReminderConfig::default();
+    c.attachments.verify_plan_reminder = false;
     assert!(!VerifyPlanReminderGenerator.is_enabled(&c));
 }
 
@@ -33,20 +34,20 @@ async fn skips_when_no_pending_verification() {
 }
 
 #[tokio::test]
-async fn fires_on_turn_count_zero() {
-    // TS attachments.ts:3919-3922 — the only skip condition is
-    // `turnCount % 10 !== 0`, so turn 0 itself fires (0 % 10 == 0).
+async fn skips_on_turn_count_zero() {
+    // TS attachments.ts:3919-3922 explicitly skips `turnCount === 0`.
     let c = cfg();
     let ctx = GeneratorContext::builder(&c)
         .has_pending_plan_verification(true)
         .turns_since_plan_exit(0)
         .build();
-    let r = VerifyPlanReminderGenerator
-        .generate(&ctx)
-        .await
-        .unwrap()
-        .expect("turn 0 should fire");
-    assert_eq!(r.attachment_type, AttachmentType::VerifyPlanReminder);
+    assert!(
+        VerifyPlanReminderGenerator
+            .generate(&ctx)
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[tokio::test]

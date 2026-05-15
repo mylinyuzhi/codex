@@ -70,7 +70,7 @@ Columns:
 |---|---|---|---|---|---|---|
 | `todo_reminder` | Core | Nudges the agent to use `TodoWrite` when it has been silent on task tracking | `TodoWrite` tool present AND `Brief` tool absent AND `turns_since_last_todo_write ≥ 10` AND `turns_since_last_todo_reminder ≥ 10`; V2-enabled sessions route to `task_reminder` instead | `todo_reminder` (**true**) | `getTodoReminderAttachments` (`:3266`) | `case 'todo_reminder':` (`:3663`) |
 | `task_reminder` | Core | V2 equivalent of `todo_reminder` — nudges toward `TaskCreate`/`TaskUpdate` | `is_task_v2_enabled` AND `USER_TYPE != ant` AND `TaskUpdate` tool present AND `Brief` tool absent AND 10-turn silence gates | `task_reminder` (**true**) | `getTaskReminderAttachments` (`:3375`) | `case 'task_reminder':` (`:3680`) |
-| `verify_plan_reminder` | Main | Prompts the agent to call `VerifyPlanExecution` after an `ExitPlanMode` | Pending-verification flag set AND every 10 human turns after plan exit; TS also gates on `CLAUDE_CODE_VERIFY_PLAN` env | `verify_plan_reminder` (**false** — opt-in) | `getVerifyPlanReminderAttachment` | `case 'verify_plan_reminder':` (`:4240`) |
+| `verify_plan_reminder` | Main | Prompts the agent to call `VerifyPlanExecution` after an `ExitPlanMode` | Pending-verification flag set AND every 10 human turns after plan exit; TS also gates on `CLAUDE_CODE_VERIFY_PLAN` env | `verify_plan_reminder` (**true** — coco-rs ships the tool) | `getVerifyPlanReminderAttachment` | `case 'verify_plan_reminder':` (`:4240`) |
 
 ### Critical / Compaction / Date (3)
 
@@ -226,7 +226,7 @@ snapshot, even when the type is UI-only or not implemented by
 | `teammate_mailbox` | `utils/attachments.ts:720` | `getTeammateMailboxAttachments` (`utils/attachments.ts:3680`) | `utils/messages.ts:3457` pre-switch block | Ported. |
 | `team_context` | `utils/attachments.ts:731` | `getTeamContextAttachment` (`utils/attachments.ts:3797`) | `utils/messages.ts:3467` pre-switch block | Ported. |
 | `invoked_skills` | `utils/attachments.ts:646` | `services/compact/compact.ts:1531` | `utils/messages.ts:3644` | Ported. |
-| `verify_plan_reminder` | `utils/attachments.ts:654` | `getVerifyPlanReminderAttachment` (`utils/attachments.ts:3928`) | `utils/messages.ts:4240` | Ported, default off. |
+| `verify_plan_reminder` | `utils/attachments.ts:654` | `getVerifyPlanReminderAttachment` (`utils/attachments.ts:3928`) | `utils/messages.ts:4240` | Ported; coco-rs registers `VerifyPlanExecution`. |
 | `max_turns_reached` | `utils/attachments.ts:657` | `query.ts:1510`, `query.ts:1707` | No `normalizeAttachmentForAPI` case | TS runtime/UI bookkeeping; not a model reminder in this snapshot. |
 | `current_session_memory` | `utils/attachments.ts:662` | Type only in scanned TS snapshot | No `normalizeAttachmentForAPI` case | TS runtime/UI bookkeeping; no emitter found. |
 | `teammate_shutdown_batch` | `utils/attachments.ts:668` | `utils/collapseTeammateShutdowns.ts:43` | No `normalizeAttachmentForAPI` case | UI/transcript collapse marker. |
@@ -411,7 +411,7 @@ All reminder toggles live under `settings.json` → `system_reminder.attachments
       "auto_mode_exit": true,
       "todo_reminder": true,
       "task_reminder": true,
-      "verify_plan_reminder": false,     // opt-in
+      "verify_plan_reminder": true,
       "critical_system_reminder": true,
       "compaction_reminder": true,
       "date_change": true,

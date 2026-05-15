@@ -211,7 +211,7 @@ pub type ProgressSender = tokio::sync::mpsc::UnboundedSender<ToolProgress>;
 /// Receiver for tool progress updates.
 pub type ProgressReceiver = tokio::sync::mpsc::UnboundedReceiver<ToolProgress>;
 
-/// The core Tool trait. All 41+ built-in tools implement this.
+/// The core Tool trait. All built-in tools implement this.
 ///
 /// Maps to TS Tool interface. Execution follows:
 /// validate_input -> check_permissions -> execute.

@@ -17,6 +17,7 @@ use coco_inference::ToolResultContent;
 use coco_inference::UnifiedFinishReason;
 use coco_inference::Usage;
 use coco_tool_runtime::ToolRegistry;
+use coco_tools::ExitPlanModeTool;
 use coco_tools::ReadTool;
 use tokio_util::sync::CancellationToken;
 
@@ -124,6 +125,70 @@ impl LanguageModel for ToolCallThenTextMock {
                     provider_metadata: None,
                 })],
                 usage: Usage::new(30, 10),
+                finish_reason: FinishReason::new(UnifiedFinishReason::Stop),
+                warnings: vec![],
+                provider_metadata: None,
+                request: None,
+                response: None,
+            })
+        }
+    }
+
+    async fn do_stream(
+        &self,
+        options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelStreamResult, AISdkError> {
+        let result = self.do_generate(options).await?;
+        Ok(coco_inference::synthetic_stream_from_content(
+            result.content,
+            result.usage,
+            result.finish_reason,
+        ))
+    }
+}
+
+struct ExitPlanModeThenTextMock {
+    call_count: AtomicI32,
+}
+
+#[async_trait::async_trait]
+impl LanguageModel for ExitPlanModeThenTextMock {
+    fn provider(&self) -> &str {
+        "mock"
+    }
+
+    fn model_id(&self) -> &str {
+        "mock-exit-plan"
+    }
+
+    async fn do_generate(
+        &self,
+        _options: LanguageModelCallOptions,
+    ) -> Result<LanguageModelGenerateResult, AISdkError> {
+        let call = self.call_count.fetch_add(1, Ordering::SeqCst);
+        if call == 0 {
+            Ok(LanguageModelGenerateResult {
+                content: vec![AssistantContentPart::ToolCall(ToolCallPart {
+                    tool_call_id: "exit_plan_1".into(),
+                    tool_name: coco_types::ToolName::ExitPlanMode.as_str().into(),
+                    input: serde_json::json!({}),
+                    provider_executed: None,
+                    provider_metadata: None,
+                })],
+                usage: Usage::new(20, 15),
+                finish_reason: FinishReason::new(UnifiedFinishReason::ToolCalls),
+                warnings: vec![],
+                provider_metadata: None,
+                request: None,
+                response: None,
+            })
+        } else {
+            Ok(LanguageModelGenerateResult {
+                content: vec![AssistantContentPart::Text(TextPart {
+                    text: "done".into(),
+                    provider_metadata: None,
+                })],
+                usage: Usage::new(10, 5),
                 finish_reason: FinishReason::new(UnifiedFinishReason::Stop),
                 warnings: vec![],
                 provider_metadata: None,
@@ -1017,6 +1082,37 @@ fn tool_result_text(messages: &[coco_messages::Message], tool_use_id: &str) -> O
     })
 }
 
+fn assistant_tool_input(
+    messages: &[coco_messages::Message],
+    tool_use_id: &str,
+) -> Option<serde_json::Value> {
+    messages.iter().find_map(|message| {
+        let coco_messages::Message::Assistant(assistant) = message else {
+            return None;
+        };
+        let coco_messages::LlmMessage::Assistant { content, .. } = &assistant.message else {
+            return None;
+        };
+        content.iter().find_map(|part| {
+            let AssistantContentPart::ToolCall(tool_call) = part else {
+                return None;
+            };
+            (tool_call.tool_call_id == tool_use_id).then(|| tool_call.input.clone())
+        })
+    })
+}
+
+fn queued_tool_input(events: &[CoreEvent], tool_use_id: &str) -> Option<serde_json::Value> {
+    events.iter().find_map(|event| {
+        let CoreEvent::Stream(crate::AgentStreamEvent::ToolUseQueued { call_id, input, .. }) =
+            event
+        else {
+            return None;
+        };
+        (call_id == tool_use_id).then(|| input.clone())
+    })
+}
+
 fn attachment_text_by_kind(
     messages: &[coco_messages::Message],
     kind: coco_types::AttachmentKind,
@@ -1191,6 +1287,74 @@ async fn invalid_tool_input_gets_error_result_and_completed_event() {
     assert_eq!(started, 0, "validation failure is never runnable");
     assert_eq!(completed, 1, "queued invalid tool call must complete");
     assert_eq!(completed_is_error, Some(true));
+}
+
+#[tokio::test]
+async fn exit_plan_mode_observable_input_includes_disk_plan() {
+    let tmp = tempfile::tempdir().unwrap();
+    let session_id = "exit-plan-normalize-session";
+    let plans_dir = coco_context::resolve_plans_directory(tmp.path(), None, None);
+    coco_context::write_plan(session_id, &plans_dir, "## Plan\n- implement", None).unwrap();
+
+    let model = Arc::new(ExitPlanModeThenTextMock {
+        call_count: AtomicI32::new(0),
+    });
+    let registry = ToolRegistry::new();
+    registry.register(Arc::new(ExitPlanModeTool));
+    let tools = Arc::new(registry);
+    let config = QueryEngineConfig {
+        session_id: session_id.into(),
+        permission_mode: PermissionMode::Plan,
+        ..Default::default()
+    };
+
+    let client = Arc::new(ApiClient::with_default_fingerprint(
+        model,
+        RetryConfig::default(),
+    ));
+    let cancel = CancellationToken::new();
+    let engine = QueryEngine::new(config, client, tools, cancel, None)
+        .with_config_home(tmp.path().to_path_buf());
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<CoreEvent>(256);
+    let collector = tokio::spawn(async move {
+        let mut events = Vec::new();
+        while let Some(event) = event_rx.recv().await {
+            events.push(event);
+        }
+        events
+    });
+    let result = engine
+        .run_with_events("approve plan exit", event_tx)
+        .await
+        .expect("engine run should succeed");
+    let events = collector.await.unwrap();
+
+    let queued = queued_tool_input(&events, "exit_plan_1").expect("queued input");
+    assert_eq!(
+        queued.get("plan"),
+        Some(&serde_json::json!("## Plan\n- implement"))
+    );
+    assert!(
+        queued
+            .get("planFilePath")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|path| path.ends_with(".md")),
+        "queued input: {queued}"
+    );
+
+    let transcript = assistant_tool_input(&result.final_messages, "exit_plan_1")
+        .expect("assistant transcript input");
+    assert_eq!(
+        transcript.get("plan"),
+        Some(&serde_json::json!("## Plan\n- implement"))
+    );
+    let output = tool_result_text(&result.final_messages, "exit_plan_1")
+        .expect("ExitPlanMode should complete");
+    assert!(output.contains("## Approved Plan:"), "output: {output}");
+    assert!(
+        !output.contains("edited by user"),
+        "disk snapshot injection must not be reported as a user edit: {output}"
+    );
 }
 
 struct PermissionRewriteTool;
