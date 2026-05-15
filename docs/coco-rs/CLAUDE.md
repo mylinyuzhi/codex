@@ -42,6 +42,9 @@ Each piece of information has exactly one owner. No duplication across docs.
 | Assistant session history pagination | `crate-coco-assistant.md` | |
 | Remote session WS, SDK message adapter, upstream proxy | `crate-coco-remote.md` | |
 | Steering: mid-turn message queue, CommandQueue, QueryGuard, attachment injection | `crate-coco-query.md` | |
+| Agent loop refactor architecture: `ToolCallRunner`, `ToolContextFactory`, `ModelRuntime`, tool-call invariants, streaming/non-streaming semantics, AgentTool/SkillTool integration points | `agent-loop-refactor-plan.md` | crate plans own stable type definitions; this doc owns the cross-cutting migration plan |
+| Subagent invocation architecture: definition store, TS-first source precedence, AgentTool prompt/filter behavior, runtime ownership, background/worktree/fork phases | `subagent-refactor-plan.md` | `crate-coco-tools.md` owns the tool schema; this doc owns subagent runtime architecture |
+| Skills/commands/plugins parity gaps, including `/compact` command behavior and SkillTool command-source bridge | `parity-skills-commands-plugins.md` | crate plans reference gap details; this doc owns TS-verified parity deltas |
 | Prompt cache break detection, CacheScope, CacheBreakDetector | `crate-coco-inference.md` | |
 | AgentTool architecture: spawn, fork, worktree, tool filtering, agent-as-task | `crate-coco-tools.md` | |
 | **Tool Result Budget** (Level 1 per-tool persist + Level 2 per-message budget) | `tool-result-budget-plan.md` | crate-coco-tool-runtime / crate-coco-tools / crate-coco-query / crate-coco-compact reference, not redefine |
@@ -53,6 +56,7 @@ Each piece of information has exactly one owner. No duplication across docs.
 | Plugin loading: PluginManifest, PluginManager, contributions | `crate-coco-plugins.md` | |
 | Keybinding resolution: 18 contexts, 50+ actions, chord, platform defaults | `crate-coco-keybindings.md` | |
 | Per-crate plan (dependencies, modules, data definitions) | `crate-coco-{name}.md` | |
+| Current prioritized gap fix plan | `current-gap-fix-plan.md` | `audit-gaps.md` remains the historical/deferred tracker; this doc owns near-term fix ordering and stale-gap cleanup |
 
 ### Rules
 
@@ -669,6 +673,7 @@ Added in Round 2 review:
 | `tui-overall-design.md` | TUI overall design: conversation workspace, theme/style contract, typed picker architecture, `/memory` picker convergence, model/provider picker constraints, and phased implementation plan. |
 | `config-file-map.md` | Every file coco-rs reads/writes, which crate owns it |
 | `audit-gaps.md` | Gap analysis with fix status and priority |
+| `current-gap-fix-plan.md` | Current prioritized fix plan for active gaps, plus stale audit rows to clean up before assigning implementation work. |
 | `crate-coco-types.md` | Foundation types (Message, Permission, Tool, Task, Provider) |
 | `crate-coco-config.md` | Settings, model config, provider config, effort, fast mode |
 | `crate-coco-inference.md` | LLM client, retry engine, auth (OAuth/API key/AWS/GCP), files API, bootstrap, rate limiting |

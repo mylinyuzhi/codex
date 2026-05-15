@@ -711,9 +711,31 @@ pub async fn run_chat_with_options(
             }
         }
         let dedup = Arc::new(tokio::sync::Mutex::new(seen));
+        let records = store
+            .load_content_replacements(&session_id_for_engine)
+            .unwrap_or_default();
+        let mut replacement_state =
+            coco_tool_runtime::tool_result_storage::ContentReplacementState::new(i64::MAX);
+        for msg in &opts.prior_messages {
+            if let coco_messages::Message::ToolResult(tr) = msg {
+                replacement_state.seen_ids.insert(tr.tool_use_id.clone());
+            }
+        }
+        for record in records {
+            replacement_state
+                .seen_ids
+                .insert(record.tool_use_id().to_string());
+            replacement_state.replacements.insert(
+                record.tool_use_id().to_string(),
+                record.replacement().to_string(),
+            );
+        }
         engine = engine
             .with_transcript_store(store, session_id_for_engine)
-            .with_transcript_dedup(dedup);
+            .with_transcript_dedup(dedup)
+            .with_tool_result_replacement_state(Arc::new(tokio::sync::RwLock::new(
+                replacement_state,
+            )));
     }
 
     // Resolve `@`-mentions in the prompt to file-content system-reminder

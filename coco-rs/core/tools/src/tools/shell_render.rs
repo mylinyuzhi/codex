@@ -42,6 +42,7 @@ pub(super) fn strip_leading_blank_lines(s: &str) -> &str {
 /// `preview_source` is the already-truncated inline `stdout` field; we
 /// take its first 2KB on a UTF-8 char boundary and append `\n...\n`
 /// when there is more, otherwise just `\n`.
+#[cfg(test)]
 pub(super) fn build_persisted_output_message(
     path: &str,
     original_size: usize,
@@ -79,6 +80,7 @@ pub(super) fn build_persisted_output_message(
 /// - `< 1MB`: `"X.YKB"` (1 decimal, strip trailing `.0`, no space)
 /// - `< 1GB`: `"X.YMB"`
 /// - otherwise: `"X.YGB"`
+#[cfg(test)]
 pub(crate) fn format_byte_size(bytes: usize) -> String {
     let kb = bytes as f64 / 1024.0;
     if kb < 1.0 {
@@ -97,6 +99,7 @@ pub(crate) fn format_byte_size(bytes: usize) -> String {
 
 /// Format a float with 1 decimal, then strip the trailing `.0` (matches
 /// TS `n.toFixed(1).replace(/\.0$/, '')`).
+#[cfg(test)]
 fn trim_trailing_zero_decimal(n: f64) -> String {
     let s = format!("{n:.1}");
     s.strip_suffix(".0").map(str::to_string).unwrap_or(s)

@@ -199,6 +199,7 @@ pub fn compact_session_memory(
 
     Ok(Some(CompactResult {
         boundary_marker: Message::System(SystemMessage::CompactBoundary(boundary_struct)),
+        raw_summary: Some(memory_for_summary),
         summary_messages: vec![summary_message],
         attachments: vec![],
         messages_to_keep,

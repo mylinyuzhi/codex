@@ -15,9 +15,14 @@ use std::time::Duration;
 
 use coco_error::BoxedError;
 use coco_mcp_types::CallToolResult;
+use coco_mcp_types::ReadResourceRequestParams;
+use coco_mcp_types::ReadResourceResult;
+use coco_rmcp_client::McpAuthStatus;
 use coco_rmcp_client::OAuthCredentialsStoreMode;
 use coco_rmcp_client::RmcpClient;
 use coco_rmcp_client::SendElicitation;
+use coco_rmcp_client::determine_streamable_http_auth_status;
+use coco_rmcp_client::perform_oauth_login_return_url;
 use tokio::sync::RwLock;
 use tracing::info;
 use tracing::warn;
@@ -40,6 +45,7 @@ const DEFAULT_INIT_TIMEOUT: Duration = Duration::from_secs(60);
 ///
 /// Internally delegates to `coco_rmcp_client::RmcpClient` for actual MCP
 /// protocol communication (stdio, HTTP/SSE, OAuth, session recovery).
+#[derive(Clone)]
 pub struct McpConnectionManager {
     configs: HashMap<String, ScopedMcpServerConfig>,
     connections: Arc<RwLock<HashMap<String, McpConnectionState>>>,
@@ -291,6 +297,146 @@ impl McpConnectionManager {
             })
     }
 
+    /// Read an MCP resource from a connected server.
+    pub async fn read_resource(
+        &self,
+        server_name: &str,
+        resource_uri: &str,
+    ) -> Result<ReadResourceResult, McpClientError> {
+        let clients = self.rmcp_clients.read().await;
+        let client = clients
+            .get(server_name)
+            .ok_or_else(|| McpClientError::ServerNotFound {
+                name: server_name.to_string(),
+            })?;
+
+        let timeout = Duration::from_millis(self.tool_timeout_ms);
+        client
+            .read_resource(
+                ReadResourceRequestParams {
+                    uri: resource_uri.to_string(),
+                },
+                Some(timeout),
+            )
+            .await
+            .map_err(|e| McpClientError::ToolCallFailed {
+                message: format!("resource read failed: {e}"),
+            })
+    }
+
+    /// Start or refresh OAuth authentication for a server.
+    ///
+    /// For OAuth-capable HTTP/SSE servers without stored tokens this
+    /// returns the authorization URL immediately and reconnects in the
+    /// background after the local callback completes.
+    pub async fn authenticate(
+        &self,
+        server_name: &str,
+        send_elicitation: SendElicitation,
+    ) -> Result<String, McpClientError> {
+        let config = self.configs.get(server_name).cloned().ok_or_else(|| {
+            McpClientError::ServerNotFound {
+                name: server_name.to_string(),
+            }
+        })?;
+        let Some((url, headers)) = oauth_login_target(&config.config) else {
+            return Ok(format!(
+                "MCP server '{server_name}' does not use OAuth authentication."
+            ));
+        };
+
+        let status = determine_streamable_http_auth_status(
+            server_name,
+            &url,
+            /*bearer_token_env_var*/ None,
+            Some(headers.clone()),
+            /*env_http_headers*/ None,
+            OAuthCredentialsStoreMode::Auto,
+            &self.config_home,
+        )
+        .await
+        .map_err(|e| McpClientError::ToolCallFailed {
+            message: format!("failed to determine MCP auth status: {e}"),
+        })?;
+
+        match status {
+            McpAuthStatus::Unsupported => Ok(format!(
+                "MCP server '{server_name}' does not support OAuth authentication."
+            )),
+            McpAuthStatus::BearerToken => Ok(format!(
+                "MCP server '{server_name}' is configured with bearer-token authentication; no OAuth login is needed."
+            )),
+            McpAuthStatus::OAuth => {
+                self.spawn_reconnect(server_name.to_string(), send_elicitation);
+                Ok(format!(
+                    "OAuth credentials are already available for MCP server '{server_name}'. Reconnecting in the background."
+                ))
+            }
+            McpAuthStatus::NotLoggedIn => {
+                let handle = perform_oauth_login_return_url(
+                    server_name,
+                    &url,
+                    OAuthCredentialsStoreMode::Auto,
+                    Some(headers),
+                    /*env_http_headers*/ None,
+                    &[],
+                    /*timeout_secs*/ None,
+                    /*callback_port*/ None,
+                    self.config_home.clone(),
+                )
+                .await
+                .map_err(|e| McpClientError::ToolCallFailed {
+                    message: format!("failed to start MCP OAuth login: {e}"),
+                })?;
+                let authorization_url = handle.authorization_url().to_string();
+                self.spawn_reconnect_after_oauth(
+                    server_name.to_string(),
+                    handle,
+                    send_elicitation,
+                    authorization_url.clone(),
+                );
+                Ok(format!(
+                    "Authentication started for MCP server '{server_name}'. Open this URL in your browser to continue:\n{authorization_url}\nThe server will reconnect automatically after OAuth completes."
+                ))
+            }
+        }
+    }
+
+    fn spawn_reconnect(&self, server_name: String, send_elicitation: SendElicitation) {
+        let manager = self.clone();
+        tokio::spawn(async move {
+            if let Err(error) = manager.connect(&server_name, send_elicitation).await {
+                warn!(server = %server_name, error = %error, "MCP reconnect after auth failed");
+            }
+        });
+    }
+
+    fn spawn_reconnect_after_oauth(
+        &self,
+        server_name: String,
+        handle: coco_rmcp_client::OauthLoginHandle,
+        send_elicitation: SendElicitation,
+        authorization_url: String,
+    ) {
+        let manager = self.clone();
+        tokio::spawn(async move {
+            if let Err(error) = handle.wait().await {
+                warn!(server = %server_name, error = %error, "MCP OAuth login failed");
+                let mut conns = manager.connections.write().await;
+                conns.insert(
+                    server_name,
+                    McpConnectionState::NeedsAuth {
+                        auth_url: Some(authorization_url),
+                    },
+                );
+                return;
+            }
+            if let Err(error) = manager.connect(&server_name, send_elicitation).await {
+                warn!(server = %server_name, error = %error, "MCP reconnect after OAuth login failed");
+            }
+        });
+    }
+
     /// Call an MCP tool using its full wire name (mcp__server__tool).
     pub async fn call_tool_by_wire_name(
         &self,
@@ -383,6 +529,17 @@ impl McpConnectionManager {
             &self.config_home,
             project_root.map(PathBuf::as_path),
         )
+    }
+}
+
+fn oauth_login_target(config: &McpServerConfig) -> Option<(String, HashMap<String, String>)> {
+    match config {
+        McpServerConfig::Sse(sse) => Some((sse.url.clone(), sse.headers.clone())),
+        McpServerConfig::Http(http) => Some((http.url.clone(), http.headers.clone())),
+        McpServerConfig::Stdio(_)
+        | McpServerConfig::WebSocket(_)
+        | McpServerConfig::Sdk(_)
+        | McpServerConfig::ClaudeAiProxy(_) => None,
     }
 }
 

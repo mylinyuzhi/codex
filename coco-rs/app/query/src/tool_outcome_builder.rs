@@ -56,8 +56,22 @@ pub(crate) struct RunOneTail<'a> {
     /// `utils/toolResultStorage.ts:persistToolResultToDisk`). `None`
     /// ⇒ Level 1 is disabled (legacy behaviour) and tool results
     /// stay inline. Wired by `tool_call_runner` from the engine's
-    /// resolved `<config_home>/cache/tool-results/<session_id>/`.
+    /// resolved transcript/session artifact root.
     pub tool_result_session_dir: Option<std::path::PathBuf>,
+}
+
+fn plain_text_parts(parts: &[ToolResultContentPart]) -> Option<String> {
+    let mut rendered = Vec::with_capacity(parts.len());
+    for part in parts {
+        match part {
+            ToolResultContentPart::Text {
+                text,
+                provider_options: None,
+            } => rendered.push(text.as_str()),
+            _ => return None,
+        }
+    }
+    Some(rendered.join("\n\n"))
 }
 
 /// Build an `UnstampedToolCallOutcome` from a completed tool call.
@@ -111,13 +125,18 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
             // to the pre-`render_for_model` codepath. Tools opt into
             // custom rendering (token efficiency, multimodal images)
             // by overriding `Tool::render_for_model`.
+            let tool_result_is_error = is_mcp
+                && output_data
+                    .get("error")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
             let parts = tool.render_for_model(&output_data);
 
-            // Singleton-Text fast path: stays on the existing string
-            // pipeline, including Tool Result Budget Level-1
-            // persistence and the legacy `create_tool_result_message`
-            // call. This is the path 95% of tools take today and any
-            // tool that hasn't migrated keeps using.
+            // Text-only path: stays on the existing string pipeline,
+            // including Tool Result Budget Level-1 persistence and the
+            // legacy `create_tool_result_message` call. Singleton text
+            // is the path 95% of tools take; multiple plain Text blocks
+            // are folded so large MCP text chunks still get Level 1.
             //
             // Multi-part path (image / document / mixed): bypass
             // Level-1 persistence (FileData/FileUrl can't be
@@ -127,14 +146,16 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
             // Anthropic / Gemini 3+ pass through, OpenAI /
             // OpenAI-Compatible degrade non-Text parts to a visible
             // marker.
-            let tool_result_msg = match parts.as_slice() {
-                [
-                    ToolResultContentPart::Text {
-                        text,
-                        provider_options: None,
-                    },
-                ] => {
-                    let rendered_output_raw = text.clone();
+            let text_only_output = plain_text_parts(&parts);
+            let tool_result_msg = match text_only_output {
+                Some(rendered_text) => {
+                    let rendered_output_raw = if rendered_text.trim().is_empty() {
+                        coco_tool_runtime::tool_result_storage::empty_tool_result_message(
+                            &tool_name,
+                        )
+                    } else {
+                        rendered_text
+                    };
 
                     // ── Tool Result Budget Level 1 (TS `persistToolResultToDisk`) ──
                     //
@@ -152,27 +173,35 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
                             coco_tool_runtime::tool_result_storage::resolve_persistence_threshold(
                                 declared,
                             );
-                        if threshold != i64::MAX && rendered_output_raw.len() as i64 > threshold {
+                        if threshold != i64::MAX
+                            && rendered_output_raw.len() as i64 > threshold
+                            && !coco_tool_runtime::tool_result_storage::is_content_already_persisted(
+                                &rendered_output_raw,
+                            )
+                        {
                             let is_json = output_data.is_object() || output_data.is_array();
-                            match coco_tool_runtime::tool_result_storage::persist_to_disk(
+                            let persist_result =
+                                coco_tool_runtime::tool_result_storage::persist_to_disk(
                                     sess_dir,
                                     &tool_use_id,
                                     &rendered_output_raw,
                                     is_json,
                                 )
-                                .await
-                                {
-                                    Ok(persisted) => coco_tool_runtime::tool_result_storage::render_persisted_reference(&persisted),
-                                    Err(e) => {
-                                        tracing::warn!(
-                                            error = %e,
-                                            tool = %tool_name,
-                                            tool_use_id = %tool_use_id,
-                                            "Level 1 tool-result persistence failed; falling back to inline"
-                                        );
-                                        rendered_output_raw
-                                    }
+                                .await;
+                            match persist_result {
+                                Ok(persisted) => {
+                                    coco_tool_runtime::tool_result_storage::render_persisted_reference(&persisted)
                                 }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        error = %e,
+                                        tool = %tool_name,
+                                        tool_use_id = %tool_use_id,
+                                        "Level 1 tool-result persistence failed; falling back to inline"
+                                    );
+                                    rendered_output_raw
+                                }
+                            }
                         } else {
                             rendered_output_raw
                         }
@@ -185,15 +214,15 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
                         &tool_name,
                         tool_id.clone(),
                         &rendered_output,
-                        /*is_error*/ false,
+                        tool_result_is_error,
                     )
                 }
-                _ => create_tool_result_message_with_parts(
+                None => create_tool_result_message_with_parts(
                     &tool_use_id,
                     &tool_name,
                     tool_id.clone(),
                     parts,
-                    /*is_error*/ false,
+                    tool_result_is_error,
                 ),
             };
 
@@ -385,3 +414,7 @@ fn render_hook_stopped_continuation_message(hook_name: &str, reason: &str) -> Op
     let _display_only = inject_reminders(reminders, &mut scratch);
     scratch.into_iter().next()
 }
+
+#[cfg(test)]
+#[path = "tool_outcome_builder.test.rs"]
+mod tests;

@@ -15,7 +15,7 @@ pub struct McpResourceInfo {
     pub mime_type: Option<String>,
 }
 
-/// Content of a read MCP resource.
+/// One content item returned by an MCP resource read.
 #[derive(Debug, Clone)]
 pub struct McpResourceContent {
     pub uri: String,
@@ -35,7 +35,20 @@ pub struct McpToolCallResult {
 #[derive(Debug, Clone)]
 pub enum McpContentBlock {
     Text(String),
-    Image { data: String, mime_type: String },
+    Image {
+        data: String,
+        mime_type: String,
+    },
+    Audio {
+        data: String,
+        mime_type: String,
+    },
+    Resource {
+        uri: String,
+        text: Option<String>,
+        blob: Option<String>,
+        mime_type: Option<String>,
+    },
 }
 
 /// MCP tool annotations — safety hints from the MCP server.
@@ -115,7 +128,7 @@ pub trait McpHandle: Send + Sync {
         &self,
         server_name: &str,
         resource_uri: &str,
-    ) -> Result<McpResourceContent, coco_error::BoxedError>;
+    ) -> Result<Vec<McpResourceContent>, coco_error::BoxedError>;
 
     /// Call an MCP tool.
     async fn call_tool(
@@ -197,7 +210,7 @@ impl McpHandle for NoOpMcpHandle {
         &self,
         _: &str,
         _: &str,
-    ) -> Result<McpResourceContent, coco_error::BoxedError> {
+    ) -> Result<Vec<McpResourceContent>, coco_error::BoxedError> {
         Err(Box::new(coco_error::PlainError::new(
             "MCP not available in this context",
             coco_error::StatusCode::Internal,

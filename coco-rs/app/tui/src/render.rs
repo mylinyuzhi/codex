@@ -8,6 +8,9 @@ use ratatui::widgets::Block;
 use ratatui::widgets::Borders;
 use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
+use ratatui::widgets::Wrap;
+
+use coco_types::ModelRole;
 
 use crate::constants;
 use crate::i18n::t;
@@ -18,6 +21,17 @@ use crate::state::PromptMode;
 use crate::state::Toast;
 use crate::state::ToastSeverity;
 use crate::theme::Theme;
+use crate::widgets::SuggestionPopup;
+
+/// Crate version surfaced in the header bar.
+const COCO_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Total height of the header band (logo + info rows).
+const HEADER_HEIGHT: u16 = 3;
+
+/// Logo gutter width (9 logo cells + 2-space padding) — matches the
+/// `Clawd` mascot's column count from Claude Code's `CondensedLogo`.
+const HEADER_LOGO_WIDTH: u16 = 11;
 
 /// Render the full TUI layout.
 pub fn render(frame: &mut Frame, state: &AppState) {
@@ -79,6 +93,15 @@ pub fn render(frame: &mut Frame, state: &AppState) {
 
     // ratatui 0.30: `Rect::layout()` returns a fixed-size array so we can
     // destructure directly — no runtime bounds check when reading each slot.
+    // A 1-row gap sits between the banner stack and the main area so the
+    // header doesn't crowd the input/chat when no banners are active.
+    // The status bar lives inside `main` (rendered by `render_chat_and_input`
+    // in the row right under the input). A slash-command popup, when
+    // active, takes that same slot and grows downward — covering the
+    // status bar and pushing the input upward when the popup needs more
+    // rows than the filler at the bottom can give back. Matches
+    // codex-rs/tui's bottom-pane layout where the composer sits above
+    // the popup_rect and the popup replaces the footer.
     let [
         header,
         fallback,
@@ -88,10 +111,10 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         stream_stall,
         interrupt,
         verification_nudge,
+        _gap,
         main,
-        status,
     ] = area.layout(&Layout::vertical([
-        Constraint::Length(1),                       // header
+        Constraint::Length(HEADER_HEIGHT),           // header (logo + info)
         Constraint::Length(fallback_rows),           // model fallback
         Constraint::Length(rate_limit_rows),         // rate limit
         Constraint::Length(permission_mode_rows),    // permission mode
@@ -99,8 +122,8 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         Constraint::Length(stream_stall_rows),       // stream stall
         Constraint::Length(interrupt_rows),          // interrupt
         Constraint::Length(verification_nudge_rows), // verification nudge
-        Constraint::Min(1),                          // main area
-        Constraint::Length(1),                       // status bar
+        Constraint::Length(1),                       // breathing gap
+        Constraint::Min(1),                          // main area (chat + input + status/popup)
     ]));
 
     render_header_bar(frame, header, state, theme);
@@ -147,7 +170,6 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         );
     }
     render_main_area(frame, main, state, theme);
-    render_status_bar(frame, status, state, theme);
 
     // Overlays on top
     if let Some(ref overlay) = state.ui.overlay {
@@ -160,106 +182,152 @@ pub fn render(frame: &mut Frame, state: &AppState) {
     }
 }
 
-/// Header bar: session info, model, branch.
+/// Header band: 3-row COCO mascot + 3 info rows.
+///
+/// Mirrors Claude Code's `CondensedLogo` (`components/LogoV2/CondensedLogo.tsx`):
+/// a 3-row block-glyph mascot on the left, with stacked info on the
+/// right — row 1 brand + version, row 2 model id with the live
+/// `thinking_effort` dial and ⚡ fast-mode flag, row 3 cwd + git branch
+/// + worktree (each suppressed when absent).
 fn render_header_bar(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
-    let mut parts = Vec::new();
-
-    // Working directory
-    if let Some(ref dir) = state.session.working_dir {
-        let short = dir.rsplit('/').next().unwrap_or(dir);
-        parts.push(Span::styled(
-            format!(" {short}"),
-            Style::default().fg(theme.primary),
-        ));
+    if area.height == 0 {
+        return;
     }
 
-    // Worktree indicator. Set by `WorktreeEntered`; cleared on
-    // `WorktreeExited`. Shown as `🌿 name` after the cwd so users
-    // running parallel agent sessions in different worktrees can tell
-    // their windows apart without checking the title bar.
+    // Split horizontally: mascot gutter (11 cols) | info column.
+    let logo_w = HEADER_LOGO_WIDTH.min(area.width);
+    let [logo_area, info_area] = area.layout(&Layout::horizontal([
+        Constraint::Length(logo_w),
+        Constraint::Min(0),
+    ]));
+
+    // ── Mascot: two "boxed CO" eyes ──
+    // Each ╭─╮│●│╰─╯ cell renders one eye — the rounded box outline
+    // echoes the C of "coco" while the inner ● is the O pupil, giving
+    // a "CO CO" pair that reads as two laughing big eyes. Keeps the
+    // 9-cell-wide × 3-row footprint of the previous Claude mascot so
+    // the info column on the right stays aligned.
+    let logo_color = Style::default().fg(theme.primary);
+    let logo_lines = vec![
+        Line::from(Span::styled(" ╭─╮ ╭─╮  ", logo_color)),
+        Line::from(Span::styled(" │●│ │●│  ", logo_color)),
+        Line::from(Span::styled(" ╰─╯ ╰─╯  ", logo_color)),
+    ];
+    frame.render_widget(Paragraph::new(logo_lines), logo_area);
+
+    // ── Row 1: COCO + version ──
+    let mut row1: Vec<Span> = Vec::new();
+    row1.push(Span::styled("COCO", Style::default().fg(theme.text).bold()));
+    row1.push(Span::raw(" "));
+    row1.push(Span::styled(
+        format!("v{COCO_VERSION}"),
+        Style::default().fg(theme.text_dim),
+    ));
+
+    // ── Row 2: model_id  *  thinking_effort  ⚡ ──
+    // Effort comes from the live `session.thinking_effort` dial (Ctrl+T
+    // cycles it) — always rendered so the user can see the current
+    // level at a glance. Model id pulls from the `ModelRole::Main`
+    // binding first to honor in-session `/model` switches.
+    let mut row2: Vec<Span> = Vec::new();
+    let (provider, model_id) = state
+        .session
+        .model_by_role
+        .get(&ModelRole::Main)
+        .map(|b| (b.provider.clone(), b.model_id.clone()))
+        .unwrap_or_else(|| (state.session.provider.clone(), state.session.model.clone()));
+    if model_id.is_empty() {
+        row2.push(Span::styled(
+            t!("status.no_model").to_string(),
+            Style::default().fg(theme.text_dim).italic(),
+        ));
+    } else {
+        let head = if provider.is_empty() {
+            model_id
+        } else {
+            format!("{provider}/{model_id}")
+        };
+        row2.push(Span::styled(
+            head,
+            Style::default().fg(theme.primary).bold(),
+        ));
+        row2.push(Span::styled("  *  ", Style::default().fg(theme.border)));
+        row2.push(Span::styled(
+            state.session.thinking_effort.to_string(),
+            Style::default().fg(theme.accent),
+        ));
+        if state.session.fast_mode {
+            row2.push(Span::raw("  "));
+            row2.push(Span::styled("⚡", Style::default().fg(theme.warning)));
+        }
+    }
+
+    // ── Row 3: cwd  branch  worktree ──
+    let mut row3: Vec<Span> = Vec::new();
+    if let Some(ref dir) = state.session.working_dir {
+        let display = tildify_path(dir);
+        let max_w = info_area.width.saturating_sub(2) as usize;
+        let cwd = truncate_path_for_width(&display, max_w);
+        row3.push(Span::styled(cwd, Style::default().fg(theme.text_dim)));
+    }
+    if let Some(ref branch) = state.session.git_branch {
+        if !row3.is_empty() {
+            row3.push(Span::raw(" "));
+        }
+        row3.push(Span::styled(
+            format!(" {branch}"),
+            Style::default().fg(theme.text_dim),
+        ));
+    }
     if let Some(ref wt) = state.session.worktree_path {
         let short = wt.rsplit('/').next().unwrap_or(wt);
-        parts.push(Span::styled(" | ", Style::default().fg(theme.border)));
-        parts.push(Span::styled(
+        if !row3.is_empty() {
+            row3.push(Span::raw(" "));
+        }
+        row3.push(Span::styled(
             format!("🌿 {short}"),
             Style::default().fg(theme.success),
         ));
     }
 
-    // Git branch. Populated at session startup from
-    // `coco_git::operations::get_current_branch`. The leading ``
-    // glyph (Powerline branch) mirrors what shell prompts like
-    // starship / oh-my-zsh use, so users recognise it without a label.
-    // Detached HEAD is `None` and renders nothing — the absence is
-    // itself a signal to investigate.
-    if let Some(ref branch) = state.session.git_branch {
-        parts.push(Span::styled(" | ", Style::default().fg(theme.border)));
-        parts.push(Span::styled(
-            format!(" {branch}"),
-            Style::default().fg(theme.text_dim),
-        ));
-    }
+    let info_lines = vec![Line::from(row1), Line::from(row2), Line::from(row3)];
+    frame.render_widget(Paragraph::new(info_lines), info_area);
+}
 
-    // Model
-    if !state.session.model.is_empty() {
-        parts.push(Span::styled(" | ", Style::default().fg(theme.border)));
-        parts.push(Span::styled(
-            state.session.model.as_str(),
-            Style::default().fg(theme.text_dim),
-        ));
-    }
-
-    // Fast mode
-    if state.session.fast_mode {
-        parts.push(Span::styled(" ⚡", Style::default().fg(theme.warning)));
-    }
-
-    // Plan mode indicator
-    if state.is_plan_mode() {
-        parts.push(Span::styled(" | ", Style::default().fg(theme.border)));
-        parts.push(Span::styled(
-            t!("status.plan").to_string(),
-            Style::default().fg(theme.plan_mode).bold(),
-        ));
-    }
-
-    // Turn count
-    if state.session.turn_count > 0 {
-        parts.push(Span::styled(" | ", Style::default().fg(theme.border)));
-        parts.push(Span::styled(
-            t!("status.turn_short", n = state.session.turn_count).to_string(),
-            Style::default().fg(theme.text_dim),
-        ));
-    }
-
-    // Context usage percentage
-    if state.session.context_window_total > 0 {
-        let pct = (state.session.context_window_used * 100) / state.session.context_window_total;
-        parts.push(Span::styled(" | ", Style::default().fg(theme.border)));
-        let color = if pct > 80 {
-            theme.warning
+/// Replace the user's home prefix with `~` so the cwd row fits on a
+/// single header line for paths that live under `$HOME`.
+fn tildify_path(path: &str) -> String {
+    if let Some(home) = dirs::home_dir()
+        && let Some(home_str) = home.to_str()
+        && let Some(rest) = path.strip_prefix(home_str)
+    {
+        return if rest.is_empty() {
+            "~".to_string()
+        } else if rest.starts_with('/') {
+            format!("~{rest}")
         } else {
-            theme.text_dim
+            format!("~/{rest}")
         };
-        parts.push(Span::styled(
-            t!("status.context_short", percent = pct).to_string(),
-            Style::default().fg(color),
-        ));
     }
+    path.to_string()
+}
 
-    // Queued commands count
-    if !state.session.queued_commands.is_empty() {
-        let count = state.session.queued_commands.len();
-        parts.push(Span::styled(" | ", Style::default().fg(theme.border)));
-        parts.push(Span::styled(
-            t!("status.queued", count = count).to_string(),
-            Style::default().fg(theme.accent),
-        ));
+/// Truncate a path with a leading horizontal-ellipsis when it would
+/// overflow the available width, preserving the deepest segments. Matches
+/// the truncation style TS uses in `logoV2Utils.truncatePath`.
+fn truncate_path_for_width(path: &str, max_width: usize) -> String {
+    if max_width == 0 || path.chars().count() <= max_width {
+        return path.to_string();
     }
-
-    let line = Line::from(parts);
-    let header = Paragraph::new(line).style(Style::default().bg(theme.border));
-    frame.render_widget(header, area);
+    let suffix_chars: String = path
+        .chars()
+        .rev()
+        .take(max_width.saturating_sub(1))
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("…{suffix_chars}")
 }
 
 /// Main area: chat + input, optionally with side panel.
@@ -386,22 +454,54 @@ fn render_chat_and_input(frame: &mut Frame, area: Rect, state: &AppState, theme:
             0
         };
 
-    // Vertical stack:
-    //   teammate header (0 when no focused subagent)
-    //   chat                    (fills remaining)
+    // Vertical stack (content-flow from the top; matches codex-rs/tui's
+    // bottom-pane composition where the composer sits above the popup
+    // slot and the popup replaces the footer when active):
+    //
+    //   teammate header         (0 when no focused subagent)
+    //   chat                    (fits content; shrinks when popup is tall)
     //   queued-commands strip   (0 unless queue non-empty)
-    //   input                   (3 rows)
+    //   input                   (3 rows; bordered top + bottom)
     //   stash notice            (0 when no stash)
-    // Queue sits *above* input so the user sees what's already queued
-    // while typing the next entry — matches TS PromptInputQueuedCommands
-    // which renders above the prompt.
-    let [header, chat, queue, input, stash] = area.layout(&Layout::vertical([
-        Constraint::Length(header_height),
-        Constraint::Min(1),
-        Constraint::Length(queue_rows),
-        Constraint::Length(input_height),
-        Constraint::Length(stash_rows),
-    ]));
+    //   bottom slot             (1 row status bar, or popup_height when a
+    //                            slash popup is active — same slot, so the
+    //                            popup visually covers the status bar)
+    //   filler                  (Min(0); empty space at the bottom when
+    //                            chat + popup don't fill the screen)
+    //
+    // When the popup needs more rows than `filler` has to give back, the
+    // chat area shrinks so the input rises with it — that is the
+    // "push the input up when there's no room below" behaviour the user
+    // expects from TS / codex-rs.
+    let chat = build_chat_widget(state, theme, area.width);
+    let chat_lines = chat.build_lines_owned();
+    let chat_content_height = chat_lines.len() as u16;
+    let popup_items = inline_popup_item_count(state);
+    let popup_active = popup_items > 0;
+    let status_height: u16 = 1;
+    let other_fixed_rows = header_height + queue_rows + input_height + stash_rows;
+    let avail_below_input = area.height.saturating_sub(other_fixed_rows);
+    let bottom_height: u16 = if popup_active {
+        (popup_items as u16)
+            .min(SuggestionPopup::DEFAULT_MAX_VISIBLE)
+            .min(avail_below_input)
+            .max(status_height)
+    } else {
+        status_height.min(avail_below_input)
+    };
+    let avail_for_chat = avail_below_input.saturating_sub(bottom_height);
+    let chat_height = chat_content_height.min(avail_for_chat);
+
+    let [header, chat_area, queue, input, stash, bottom, _filler] =
+        area.layout(&Layout::vertical([
+            Constraint::Length(header_height),
+            Constraint::Length(chat_height),
+            Constraint::Length(queue_rows),
+            Constraint::Length(input_height),
+            Constraint::Length(stash_rows),
+            Constraint::Length(bottom_height),
+            Constraint::Min(0),
+        ]));
 
     if let Some(agent) = focused_subagent {
         let header_widget = crate::widgets::TeammateViewHeader::new(&agent.agent_type, theme)
@@ -410,7 +510,14 @@ fn render_chat_and_input(frame: &mut Frame, area: Rect, state: &AppState, theme:
         frame.render_widget(header_widget, header);
     }
 
-    render_conversation(frame, state, chat, theme);
+    render_conversation_lines(
+        frame,
+        chat_area,
+        chat_lines,
+        chat_content_height,
+        avail_for_chat,
+        state,
+    );
     if queue_rows > 0 {
         frame.render_widget(
             crate::widgets::QueueStatusWidget::new(&state.session.queued_commands, theme),
@@ -424,33 +531,133 @@ fn render_chat_and_input(frame: &mut Frame, area: Rect, state: &AppState, theme:
         frame.render_widget(crate::widgets::StashNotice::new(s, theme), stash);
     }
 
-    // Autocomplete popup sits above the input area. The widget computes its
-    // own Y offset upward from the supplied rect, so passing the input area
-    // puts it correctly floated over the chat tail.
-    if let Some(ref sug) = state.ui.active_suggestions {
-        let popup = crate::widgets::SuggestionPopup::new(&sug.items, sug.kind.title(), theme)
-            .selected(sug.selected);
-        frame.render_widget(popup, input);
+    // Bottom slot: status bar by default, or the slash popup
+    // (autocomplete / command palette) when one is active. The popup
+    // grows downward from the row that normally holds the status bar
+    // and covers it — same model as codex-rs/tui where the command
+    // popup replaces the footer in the bottom pane's lower slot.
+    if popup_active {
+        // Anchor at the lower edge of `bottom` so the widget's
+        // "walk up `popup_height` rows from `area.y`" lands inside the
+        // slot. `max_visible` is pinned to the slot so a long list
+        // never overflows into the input / chat above.
+        let anchor = Rect::new(bottom.x, bottom.y + bottom.height, bottom.width, 0);
+        if let Some(ref sug) = state.ui.active_suggestions {
+            let popup = crate::widgets::SuggestionPopup::new(&sug.items, theme)
+                .selected(sug.selected)
+                .max_visible(bottom_height as usize);
+            frame.render_widget(popup, anchor);
+        } else if let Some(crate::state::Overlay::CommandPalette(cp)) = state.ui.overlay.as_ref() {
+            let items = command_palette_suggestion_items(cp);
+            if !items.is_empty() {
+                let popup = crate::widgets::SuggestionPopup::new(&items, theme)
+                    .selected(cp.selected.max(0) as usize)
+                    .max_visible(bottom_height as usize);
+                frame.render_widget(popup, anchor);
+            }
+        }
+    } else if bottom_height > 0 {
+        render_status_bar(frame, bottom, state, theme);
     }
 }
 
-/// Render conversation history using the ChatWidget.
-fn render_conversation(frame: &mut Frame, state: &AppState, area: Rect, theme: &Theme) {
+/// Total rows the inline slash popup (autocomplete or command palette)
+/// wants to claim above the input. Returned in items, not rows — the
+/// caller caps it against the widget's `max_visible` and the layout's
+/// available space.
+fn inline_popup_item_count(state: &AppState) -> usize {
+    let from_suggestions = state
+        .ui
+        .active_suggestions
+        .as_ref()
+        .map(|s| s.items.len())
+        .unwrap_or(0);
+    if from_suggestions > 0 {
+        return from_suggestions;
+    }
+    if let Some(crate::state::Overlay::CommandPalette(cp)) = state.ui.overlay.as_ref() {
+        let filter_lower = cp.filter.to_lowercase();
+        return cp
+            .commands
+            .iter()
+            .filter(|cmd| {
+                filter_lower.is_empty() || cmd.name.to_lowercase().contains(&filter_lower)
+            })
+            .count();
+    }
+    0
+}
+
+/// Convert a `CommandPaletteOverlay` snapshot into the borderless
+/// suggestion-popup row model, applying the same case-insensitive
+/// substring filter the centered modal used. Lives next to the
+/// renderer because it is the only consumer.
+fn command_palette_suggestion_items(
+    cp: &crate::state::CommandPaletteOverlay,
+) -> Vec<crate::widgets::suggestion_popup::SuggestionItem> {
+    let filter_lower = cp.filter.to_lowercase();
+    cp.commands
+        .iter()
+        .filter(|cmd| filter_lower.is_empty() || cmd.name.to_lowercase().contains(&filter_lower))
+        .map(|cmd| crate::widgets::suggestion_popup::SuggestionItem {
+            label: format!("/{}", cmd.name),
+            description: cmd.description.clone(),
+            metadata: None,
+        })
+        .collect()
+}
+
+/// Build a fully-configured `ChatWidget` for the current session state.
+/// Extracted so the same widget can be reused for both height
+/// computation (via `build_lines_owned`) and final rendering.
+fn build_chat_widget<'a>(
+    state: &'a AppState,
+    theme: &'a Theme,
+    width: u16,
+) -> crate::widgets::ChatWidget<'a> {
     let mut chat = crate::widgets::ChatWidget::new(&state.session.messages, theme)
         .scroll(state.ui.scroll_offset)
         .streaming(state.ui.streaming.as_ref())
         .show_thinking(state.ui.show_thinking)
         .show_system_reminders(state.ui.show_system_reminders)
         .tool_executions(&state.session.tool_executions)
-        .width(area.width)
+        .width(width)
         .syntax_highlighting(state.ui.display_settings.syntax_highlighting)
         .kb_handle(&state.ui.kb_handle);
-
     if !state.ui.collapsed_tools.is_empty() {
         chat = chat.collapsed_tools(&state.ui.collapsed_tools);
     }
+    chat
+}
 
-    frame.render_widget(chat, area);
+/// Render pre-built chat lines as a wrapping paragraph. Auto-scrolls to
+/// the bottom when content overflows and the user hasn't manually
+/// scrolled (so the latest message + the input stay glued together).
+fn render_conversation_lines(
+    frame: &mut Frame,
+    area: Rect,
+    lines: Vec<Line<'static>>,
+    content_height: u16,
+    avail: u16,
+    state: &AppState,
+) {
+    if area.height == 0 {
+        return;
+    }
+    let scroll_offset = if content_height > avail {
+        let overflow = content_height - avail;
+        if state.ui.user_scrolled {
+            state.ui.scroll_offset.max(0).min(overflow as i32) as u16
+        } else {
+            overflow
+        }
+    } else {
+        0
+    };
+    let paragraph = Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .scroll((scroll_offset, 0));
+    frame.render_widget(paragraph, area);
 }
 
 /// Render the input area with mode indicator and streaming awareness.
@@ -499,6 +706,16 @@ fn render_input(frame: &mut Frame, state: &AppState, area: Rect, theme: &Theme) 
     let suggestion = state.session.prompt_suggestions.last();
     let is_empty = state.ui.input.is_empty();
 
+    // When the command palette is open (Ctrl+P), typed characters route
+    // to `cp.filter` rather than `input.text` — but the user still needs
+    // to see what they typed. Mirror the filter into the input bar as
+    // `/<filter>` so it reads identically to the TS slash-autocomplete
+    // flow where keystrokes appear in the prompt as the popup filters.
+    let command_palette_filter: Option<&str> = match state.ui.overlay.as_ref() {
+        Some(crate::state::Overlay::CommandPalette(cp)) => Some(cp.filter.as_str()),
+        _ => None,
+    };
+
     // Match the submit-time prefix-stripping rule (`PromptMode::strip_prefix`):
     // drop the leading mode character plus one optional space so the body
     // shown here equals exactly what the engine will receive. Without this
@@ -507,16 +724,20 @@ fn render_input(frame: &mut Frame, state: &AppState, area: Rect, theme: &Theme) 
     let prefix_consumed: usize = if is_empty || prompt_mode == PromptMode::Normal {
         0
     } else {
-        let body = &state.ui.input.text[1..];
+        let body = &state.ui.input.text()[1..];
         1 + if body.starts_with(' ') { 1 } else { 0 }
     };
     // Placeholder priority (TS `usePromptInputPlaceholder`):
-    //   1. queued-command hint — only when the queue is non-empty so
+    //   1. command-palette mirror — wins over placeholders so the user
+    //      sees their filter typed into the prompt.
+    //   2. queued-command hint — only when the queue is non-empty so
     //      the user notices there's something to recall with ↑.
-    //   2. prompt suggestion from the last post-turn fork.
-    //   3. static default placeholder.
+    //   3. prompt suggestion from the last post-turn fork.
+    //   4. static default placeholder.
     let has_editable_queue = !state.session.queued_commands.is_empty();
-    let display_text = if is_empty {
+    let display_text = if let Some(filter) = command_palette_filter {
+        format!("/{filter}")
+    } else if is_empty {
         if has_editable_queue {
             t!("input.placeholder_queued").to_string()
         } else if let Some(s) = suggestion {
@@ -525,13 +746,13 @@ fn render_input(frame: &mut Frame, state: &AppState, area: Rect, theme: &Theme) 
             t!("input.placeholder").to_string()
         }
     } else {
-        state.ui.input.text[prefix_consumed..].to_string()
+        state.ui.input.text()[prefix_consumed..].to_string()
     };
 
-    let text_style = if is_empty {
-        Style::default().fg(theme.text_dim)
-    } else {
+    let text_style = if command_palette_filter.is_some() || !is_empty {
         Style::default().fg(theme.text)
+    } else {
+        Style::default().fg(theme.text_dim)
     };
 
     // Layered title:
@@ -557,13 +778,17 @@ fn render_input(frame: &mut Frame, state: &AppState, area: Rect, theme: &Theme) 
     } else if state.is_plan_mode() {
         format!(" {} ", t!("input.title_plan_mode"))
     } else {
-        format!(" {} ", t!("input.title"))
+        // Default state: no title. The `❯` indicator already names the
+        // widget; a permanent "Input" label is chrome that adds nothing.
+        // Mode-specific titles above (Plan / Bash / Memory / Queue)
+        // still fire because they carry actual state.
+        String::new()
     };
 
     let input_line = Line::from(vec![indicator, Span::styled(display_text, text_style)]);
     let input = Paragraph::new(input_line).block(
         Block::default()
-            .borders(Borders::TOP)
+            .borders(Borders::TOP | Borders::BOTTOM)
             .title(title)
             .border_style(Style::default().fg(border_color)),
     );
@@ -574,9 +799,28 @@ fn render_input(frame: &mut Frame, state: &AppState, area: Rect, theme: &Theme) 
     // `prefix_consumed` chars left of the raw cursor (the indicator owns
     // those chars) and clamps to 0 when the raw cursor lands inside the
     // consumed prefix (so backspace at that point deletes the `!` / `#`).
-    if is_focused && !is_empty {
+    // When the command palette is open, the cursor follows the mirrored
+    // `/<filter>` so it stays at the end of what the user typed.
+    let should_show_cursor = is_focused && (command_palette_filter.is_some() || !is_empty);
+    if should_show_cursor {
         let indicator_width = 2_u16;
-        let raw_cursor = (state.ui.input.cursor - prefix_consumed as i32).max(0);
+        let raw_cursor = if let Some(filter) = command_palette_filter {
+            // 1 column for the leading `/` + visible filter width.
+            1 + unicode_width::UnicodeWidthStr::width(filter) as i32
+        } else {
+            // Display column = width of the visible text up to the byte
+            // offset of the cursor. Fixes CJK / wide-char cursor placement:
+            // "你好" with cursor at end → column 4 (not 2).
+            let visible_text = &state.ui.input.text()[prefix_consumed..];
+            let cursor_byte = state
+                .ui
+                .input
+                .textarea
+                .cursor()
+                .saturating_sub(prefix_consumed);
+            let cursor_byte = cursor_byte.min(visible_text.len());
+            unicode_width::UnicodeWidthStr::width(&visible_text[..cursor_byte]) as i32
+        };
         let max_cursor = area.width.saturating_sub(indicator_width + 1) as i32;
         let cursor_x = area.x + indicator_width + raw_cursor.min(max_cursor) as u16;
         let cursor_y = area.y + 1;
@@ -658,30 +902,66 @@ fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState, theme: &Th
             text,
             Style::default().fg(theme.warning).bold(),
         ));
-        let bar = Paragraph::new(line).style(Style::default().bg(theme.border));
-        frame.render_widget(bar, area);
+        frame.render_widget(Paragraph::new(line), area);
         return;
     }
 
     let mut parts = Vec::new();
 
-    // Model
-    parts.push(Span::styled(
-        format!(" {}", state.session.model),
-        Style::default().fg(theme.primary).bold(),
-    ));
-
-    // Fast mode
-    if state.session.fast_mode {
-        parts.push(Span::styled(" ⚡", Style::default().fg(theme.warning)));
+    // Model: `provider/model_id` so it reads identically to the header
+    // row. Falls back to bare `state.session.model` only when neither
+    // `ModelRole::Main` binding nor `session.provider` carries a value
+    // — keeping legacy "no provider set" callers working.
+    let (provider, model_id) = state
+        .session
+        .model_by_role
+        .get(&ModelRole::Main)
+        .map(|b| (b.provider.clone(), b.model_id.clone()))
+        .unwrap_or_else(|| (state.session.provider.clone(), state.session.model.clone()));
+    let model_display = if !provider.is_empty() && !model_id.is_empty() {
+        format!("{provider}/{model_id}")
+    } else if !model_id.is_empty() {
+        model_id
+    } else {
+        provider
+    };
+    let has_model = !model_display.is_empty();
+    if has_model {
+        parts.push(Span::styled(
+            format!(" {model_display}"),
+            Style::default().fg(theme.primary).bold(),
+        ));
+        // Fast mode flag, sits immediately after the model id so it
+        // reads as a model attribute.
+        if state.session.fast_mode {
+            parts.push(Span::styled(" ⚡", Style::default().fg(theme.warning)));
+        }
     }
 
-    // Permission mode
-    parts.push(Span::styled(" | ", Style::default().fg(theme.border)));
+    // Thinking effort, joined with ` * ` so it reads as one
+    // model-config glance: `provider/model * effort`. Shown for every
+    // value, even `Auto`, so the user always sees the dial position.
+    // Falls back to a leading space when the model id is unavailable
+    // (pre-bootstrap or `no model selected` test states) so the
+    // permission indicator doesn't read as an orphan bullet.
+    let join = if has_model { " * " } else { " " };
+    parts.push(Span::styled(join, Style::default().fg(theme.text_dim)));
     parts.push(Span::styled(
-        format!("{:?}", state.session.permission_mode),
+        state.session.thinking_effort.to_string(),
         Style::default().fg(theme.text_dim),
     ));
+
+    // Permission mode — TS-style label
+    // (`PromptInputFooterLeftSide.tsx:348-355`). Only rendered for
+    // active modes; default mode shows nothing so the footer matches
+    // TS where `hasActiveMode = !isDefaultMode(currentMode)`. Color
+    // also mirrors TS (`PermissionMode.ts:42-91`).
+    if let Some((mode_label, mode_color)) =
+        permission_mode_status_label(state.session.permission_mode, theme)
+    {
+        parts.push(Span::styled(", ", Style::default().fg(theme.text_dim)));
+        parts.push(Span::styled(mode_label, Style::default().fg(mode_color)));
+    }
 
     // Pending chord prefix (e.g. "ctrl+x …") — shown only while a
     // chord is in flight so users see the resolver waiting for the
@@ -695,34 +975,50 @@ fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState, theme: &Th
         ));
     }
 
-    // Token usage
+    // Token usage — always rendered so the bar layout is stable.
+    // `↑` = prompt-side tokens, `↓` = completion-side. `cache <pct>%`
+    // is the cache-hit share of the input (`cache_read / input`), shown
+    // as `0%` when input is still 0 rather than suppressed — keeps the
+    // segment in place from the first frame.
     let tokens = &state.session.token_usage;
-    let total = tokens.input_tokens + tokens.output_tokens;
-    if total > 0 {
-        parts.push(Span::styled(" | ", Style::default().fg(theme.border)));
-        let formatted = format_token_count(total);
-        parts.push(Span::styled(formatted, Style::default().fg(theme.text_dim)));
-        if tokens.cache_read_tokens > 0 {
-            parts.push(Span::styled(
-                t!(
-                    "status.cache_suffix",
-                    tokens = format_token_count(tokens.cache_read_tokens)
-                )
-                .to_string(),
-                Style::default().fg(theme.text_dim),
-            ));
-        }
-    }
+    parts.push(Span::styled(" | ", Style::default().fg(theme.border)));
+    parts.push(Span::styled(
+        format!(
+            "↑{} ↓{}",
+            format_token_count(tokens.input_tokens),
+            format_token_count(tokens.output_tokens)
+        ),
+        Style::default().fg(theme.text_dim),
+    ));
+    let cache_pct = if tokens.input_tokens > 0 {
+        (tokens.cache_read_tokens * 100 / tokens.input_tokens).clamp(0, 100)
+    } else {
+        0
+    };
+    parts.push(Span::styled(
+        format!(" · cache {cache_pct}%"),
+        Style::default().fg(theme.text_dim),
+    ));
 
-    // Cost
-    if state.session.estimated_cost_cents > 0 {
-        parts.push(Span::styled(" | ", Style::default().fg(theme.border)));
-        let cost = state.session.estimated_cost_cents as f64 / 100.0;
-        parts.push(Span::styled(
-            format!("${cost:.2}"),
-            Style::default().fg(theme.text_dim),
-        ));
-    }
+    // Context window usage — always rendered. `0%` when no provider
+    // window has been reported yet, so the position is reserved and
+    // doesn't shift around as soon as the first usage frame arrives.
+    let ctx_pct = if state.session.context_window_total > 0 {
+        let used = state.session.context_window_used as i64;
+        let total = state.session.context_window_total as i64;
+        (used * 100 / total.max(1)).clamp(0, 100)
+    } else {
+        0
+    };
+    parts.push(Span::styled(" | ", Style::default().fg(theme.border)));
+    let style = if ctx_pct > 90 {
+        Style::default().fg(theme.error).bold()
+    } else if ctx_pct > 70 {
+        Style::default().fg(theme.warning)
+    } else {
+        Style::default().fg(theme.text_dim)
+    };
+    parts.push(Span::styled(format!("ctx {ctx_pct}%"), style));
 
     // MCP servers
     let mcp_count = state.session.connected_mcp_count();
@@ -741,20 +1037,8 @@ fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState, theme: &Th
         Style::default().fg(theme.text_dim),
     ));
 
-    // Token warning
-    if state.session.context_window_total > 0 {
-        let pct = (state.session.context_window_used * 100) / state.session.context_window_total;
-        if pct > 90 {
-            parts.push(Span::styled(
-                " ⚠ context nearly full",
-                Style::default().fg(theme.error),
-            ));
-        }
-    }
-
     let line = Line::from(parts);
-    let bar = Paragraph::new(line).style(Style::default().bg(theme.border));
-    frame.render_widget(bar, area);
+    frame.render_widget(Paragraph::new(line), area);
 }
 
 /// Render toast notifications at top-right corner.
@@ -789,6 +1073,35 @@ fn render_toasts(
 
         y += 1;
     }
+}
+
+/// Status-bar label + color for a permission mode. Returns `None`
+/// for `Default` — TS hides the mode indicator entirely in the
+/// resting state (`PromptInputFooterLeftSide.tsx:321,348`: gated on
+/// `hasActiveMode = !isDefaultMode(currentMode)`).
+///
+/// TS parity:
+/// - Wording: `PromptInputFooterLeftSide.tsx:348-355`
+///   (`permissionModeTitle(mode).toLowerCase() + ' on'`)
+/// - Color:   `PermissionMode.ts:42-91` (`color` field per mode)
+fn permission_mode_status_label(
+    mode: coco_types::PermissionMode,
+    theme: &Theme,
+) -> Option<(String, ratatui::style::Color)> {
+    let (key, color) = match mode {
+        coco_types::PermissionMode::Default => return None,
+        coco_types::PermissionMode::AcceptEdits => {
+            ("permission_mode.status.accept_edits", theme.accent)
+        }
+        coco_types::PermissionMode::Plan => ("permission_mode.status.plan", theme.plan_mode),
+        coco_types::PermissionMode::BypassPermissions => {
+            ("permission_mode.status.bypass", theme.error)
+        }
+        coco_types::PermissionMode::DontAsk => ("permission_mode.status.dont_ask", theme.error),
+        coco_types::PermissionMode::Auto => ("permission_mode.status.auto", theme.warning),
+        coco_types::PermissionMode::Bubble => ("permission_mode.status.bubble", theme.text_dim),
+    };
+    Some((t!(key).to_string(), color))
 }
 
 /// Format token count with K/M suffix.

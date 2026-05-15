@@ -1,6 +1,6 @@
 //! Compact test utilities: mock summarize_fn factories and assertion helpers.
 //!
-//! The mock functions return complex `impl Fn(String) -> Pin<Box<...>>` types
+//! The mock functions return complex `impl Fn(CompactSummaryAttempt) -> Pin<Box<...>>` types
 //! because that's what `compact_conversation`'s generic `F` bound requires.
 
 use std::future::Future;
@@ -11,6 +11,8 @@ use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 
 use coco_compact::CompactResult;
+use coco_compact::CompactSummaryAttempt;
+use coco_compact::CompactSummaryResponse;
 use coco_messages::Message;
 use coco_types::CompactTrigger;
 
@@ -19,31 +21,39 @@ use coco_types::CompactTrigger;
 /// Returns a summarize_fn that always succeeds with the given summary.
 pub fn mock_summarize_ok(
     summary: &str,
-) -> impl Fn(String) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send>> + Send + Sync {
+) -> impl Fn(
+    CompactSummaryAttempt,
+) -> Pin<Box<dyn Future<Output = Result<CompactSummaryResponse, String>> + Send>>
++ Send
++ Sync {
     let s = summary.to_string();
-    move |_prompt| {
+    move |_attempt| {
         let s = s.clone();
-        Box::pin(async move { Ok(s) })
+        Box::pin(async move { Ok(CompactSummaryResponse { summary: s }) })
     }
 }
 
-/// Returns a summarize_fn that captures prompts for assertion, plus the capture vec.
+/// Returns a summarize_fn that captures attempts for assertion, plus the capture vec.
 pub fn mock_summarize_capturing(
     summary: &str,
 ) -> (
-    impl Fn(String) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send>> + Send + Sync,
-    Arc<Mutex<Vec<String>>>,
+    impl Fn(
+        CompactSummaryAttempt,
+    ) -> Pin<Box<dyn Future<Output = Result<CompactSummaryResponse, String>> + Send>>
+    + Send
+    + Sync,
+    Arc<Mutex<Vec<CompactSummaryAttempt>>>,
 ) {
     let captured = Arc::new(Mutex::new(Vec::new()));
     let cap = captured.clone();
     let s = summary.to_string();
-    let f = move |prompt: String| {
+    let f = move |attempt: CompactSummaryAttempt| {
         let cap = cap.clone();
         let s = s.clone();
         Box::pin(async move {
-            cap.lock().expect("test mutex poisoned").push(prompt);
-            Ok(s)
-        }) as Pin<Box<dyn Future<Output = Result<String, String>> + Send>>
+            cap.lock().expect("test mutex poisoned").push(attempt);
+            Ok(CompactSummaryResponse { summary: s })
+        }) as Pin<Box<dyn Future<Output = Result<CompactSummaryResponse, String>> + Send>>
     };
     (f, captured)
 }
@@ -52,17 +62,21 @@ pub fn mock_summarize_capturing(
 pub fn mock_summarize_ptl_then_ok(
     ptl_count: i32,
     summary: &str,
-) -> impl Fn(String) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send>> + Send + Sync {
+) -> impl Fn(
+    CompactSummaryAttempt,
+) -> Pin<Box<dyn Future<Output = Result<CompactSummaryResponse, String>> + Send>>
++ Send
++ Sync {
     let counter = Arc::new(AtomicI32::new(0));
     let s = summary.to_string();
-    move |_prompt| {
+    move |_attempt| {
         let n = counter.fetch_add(1, Ordering::SeqCst);
         let s = s.clone();
         Box::pin(async move {
             if n < ptl_count {
                 Err("prompt_too_long: input exceeds context".to_string())
             } else {
-                Ok(s)
+                Ok(CompactSummaryResponse { summary: s })
             }
         })
     }
@@ -72,17 +86,21 @@ pub fn mock_summarize_ptl_then_ok(
 pub fn mock_summarize_fail_then_ok(
     fail_count: i32,
     summary: &str,
-) -> impl Fn(String) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send>> + Send + Sync {
+) -> impl Fn(
+    CompactSummaryAttempt,
+) -> Pin<Box<dyn Future<Output = Result<CompactSummaryResponse, String>> + Send>>
++ Send
++ Sync {
     let counter = Arc::new(AtomicI32::new(0));
     let s = summary.to_string();
-    move |_prompt| {
+    move |_attempt| {
         let n = counter.fetch_add(1, Ordering::SeqCst);
         let s = s.clone();
         Box::pin(async move {
             if n < fail_count {
                 Err("transient stream error".to_string())
             } else {
-                Ok(s)
+                Ok(CompactSummaryResponse { summary: s })
             }
         })
     }
@@ -91,9 +109,13 @@ pub fn mock_summarize_fail_then_ok(
 /// Returns a summarize_fn that always fails with the given error.
 pub fn mock_summarize_always_fail(
     error: &str,
-) -> impl Fn(String) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send>> + Send + Sync {
+) -> impl Fn(
+    CompactSummaryAttempt,
+) -> Pin<Box<dyn Future<Output = Result<CompactSummaryResponse, String>> + Send>>
++ Send
++ Sync {
     let e = error.to_string();
-    move |_prompt| {
+    move |_attempt| {
         let e = e.clone();
         Box::pin(async move { Err(e) })
     }
@@ -150,6 +172,7 @@ pub fn dummy_compact_result() -> CompactResult {
     ));
     CompactResult {
         boundary_marker: boundary,
+        raw_summary: None,
         summary_messages: vec![],
         attachments: vec![],
         messages_to_keep: vec![],

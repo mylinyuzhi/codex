@@ -38,9 +38,10 @@ pub async fn run() -> Result<()> {
         );
     }
     assert_eq!(
-        harness.state.ui.input.text, "hellp",
+        harness.state.ui.input.text(),
+        "hellp",
         "input_editing: buffer after typing `hellp` was {:?}",
-        harness.state.ui.input.text,
+        harness.state.ui.input.text(),
     );
 
     // Step 2: Backspace twice — drop the typo + the final `l`.
@@ -51,9 +52,10 @@ pub async fn run() -> Result<()> {
         assert!(changed, "input_editing: Backspace should mark state dirty",);
     }
     assert_eq!(
-        harness.state.ui.input.text, "hel",
+        harness.state.ui.input.text(),
+        "hel",
         "input_editing: buffer after 2× Backspace was {:?}",
-        harness.state.ui.input.text,
+        harness.state.ui.input.text(),
     );
 
     // Step 3: type the rest — `l`, `o`.
@@ -63,9 +65,10 @@ pub async fn run() -> Result<()> {
             .await;
     }
     assert_eq!(
-        harness.state.ui.input.text, "hello",
+        harness.state.ui.input.text(),
+        "hello",
         "input_editing: buffer after `lo` append was {:?}",
-        harness.state.ui.input.text,
+        harness.state.ui.input.text(),
     );
 
     // Step 4: prove word-delete works — append a junk word then nuke it.
@@ -78,9 +81,10 @@ pub async fn run() -> Result<()> {
             .await;
     }
     assert_eq!(
-        harness.state.ui.input.text, "hello xyz",
+        harness.state.ui.input.text(),
+        "hello xyz",
         "input_editing: pre-word-delete buffer was {:?}",
-        harness.state.ui.input.text,
+        harness.state.ui.input.text(),
     );
     let changed = harness
         .press_key(KeyCode::Backspace, KeyModifiers::CONTROL)
@@ -93,22 +97,23 @@ pub async fn run() -> Result<()> {
         // word-delete may keep the trailing space depending on cursor logic;
         // either "hello" or "hello " is acceptable — the load-bearing check
         // is that "xyz" is gone.
-        !harness.state.ui.input.text.contains("xyz")
-            && harness.state.ui.input.text.starts_with("hello"),
+        !harness.state.ui.input.text().contains("xyz")
+            && harness.state.ui.input.text().starts_with("hello"),
         "input_editing: Ctrl+Backspace did not delete the word `xyz` \
          (buffer={:?})",
-        harness.state.ui.input.text,
+        harness.state.ui.input.text(),
     );
     // Trim residual whitespace to make the Enter step deterministic.
-    while harness.state.ui.input.text.ends_with(' ') {
+    while harness.state.ui.input.text().ends_with(' ') {
         harness
             .press_key(KeyCode::Backspace, KeyModifiers::NONE)
             .await;
     }
     assert_eq!(
-        harness.state.ui.input.text, "hello",
+        harness.state.ui.input.text(),
+        "hello",
         "input_editing: post-cleanup buffer should be `hello`, got {:?}",
-        harness.state.ui.input.text,
+        harness.state.ui.input.text(),
     );
 
     // Step 5: Enter — flushes the edited buffer through SubmitInput.
@@ -118,7 +123,8 @@ pub async fn run() -> Result<()> {
         "input_editing: Enter should produce a state change"
     );
     assert_eq!(
-        harness.state.ui.input.text, "",
+        harness.state.ui.input.text(),
+        "",
         "input_editing: input buffer should be drained after Enter",
     );
 

@@ -3,8 +3,18 @@ use super::detect;
 use super::refresh_suggestions;
 use crate::state::ActiveSuggestions;
 use crate::state::AppState;
+use crate::state::SlashCommandInfo;
 use crate::state::SuggestionKind;
 use crate::widgets::suggestion_popup::SuggestionItem;
+
+fn slash(name: &str, description: Option<&str>) -> SlashCommandInfo {
+    SlashCommandInfo {
+        name: name.to_string(),
+        description: description.map(ToString::to_string),
+        aliases: Vec::new(),
+        argument_hint: None,
+    }
+}
 
 #[test]
 fn test_slash_command_trigger() {
@@ -56,22 +66,38 @@ fn test_no_trigger_plain_text() {
 }
 
 #[test]
+fn test_cjk_at_trigger_uses_byte_offset() {
+    // "你好" is 6 bytes (3 per CJK char). A trigger at byte 6 puts `@`
+    // immediately after the 2-char prefix; the splice site must be the
+    // byte offset, not the char index.
+    let text = "你好 @src";
+    // After "你好 " is 7 bytes, then "@src" starts at byte 7.
+    let cursor = text.len(); // end of input
+    let t = detect(text, cursor).expect("trigger detected after CJK prefix");
+    assert_eq!(t.kind, SuggestionKind::File);
+    assert_eq!(t.pos, 7, "trigger pos must be byte 7 (not char 3)");
+    assert_eq!(t.query, "src");
+}
+
+#[test]
 fn test_refresh_installs_slash_suggestions() {
     let mut state = AppState::new();
     state.session.available_commands = vec![
-        ("help".to_string(), Some("Show help".to_string())),
-        ("clear".to_string(), None),
-        ("config".to_string(), Some("Edit settings".to_string())),
+        slash("help", Some("Show help")),
+        slash("clear", None),
+        slash("config", Some("Edit settings")),
     ];
-    state.ui.input.text = "/c".to_string();
-    state.ui.input.cursor = 2;
+    state.ui.input.textarea.set_text("/c");
+    state.ui.input.textarea.set_cursor(2);
 
     refresh_suggestions(&mut state);
 
     let sug = state.ui.active_suggestions.expect("popup installed");
     assert_eq!(sug.kind, SuggestionKind::SlashCommand);
     assert_eq!(sug.query, "c");
-    // Filter contains `c` → clear + config match; help doesn't.
+    // Prefix-match on `c` surfaces clear + config; help doesn't start
+    // with `c` so the new ranker omits it (contrast with the old
+    // contains-only filter that also dropped it).
     let labels: Vec<&str> = sug.items.iter().map(|i| i.label.as_str()).collect();
     assert_eq!(labels, vec!["/clear", "/config"]);
 }
@@ -79,15 +105,15 @@ fn test_refresh_installs_slash_suggestions() {
 #[test]
 fn test_refresh_dismisses_when_space_typed() {
     let mut state = AppState::new();
-    state.session.available_commands = vec![("help".to_string(), None)];
-    state.ui.input.text = "/help".to_string();
-    state.ui.input.cursor = 5;
+    state.session.available_commands = vec![slash("help", None)];
+    state.ui.input.textarea.set_text("/help");
+    state.ui.input.textarea.set_cursor(5);
     refresh_suggestions(&mut state);
     assert!(state.ui.active_suggestions.is_some());
 
     // User types a space → we're now in arguments; popup dismisses.
-    state.ui.input.text = "/help ".to_string();
-    state.ui.input.cursor = 6;
+    state.ui.input.textarea.set_text("/help ");
+    state.ui.input.textarea.set_cursor(6);
     refresh_suggestions(&mut state);
     assert!(state.ui.active_suggestions.is_none());
 }
@@ -100,8 +126,8 @@ fn test_refresh_installs_empty_file_trigger() {
     // items is non-empty — until then the empty popup is invisible and
     // arrow keys keep passing through to input editing.
     let mut state = AppState::new();
-    state.ui.input.text = "@src".to_string();
-    state.ui.input.cursor = 4;
+    state.ui.input.textarea.set_text("@src");
+    state.ui.input.textarea.set_cursor(4);
     refresh_suggestions(&mut state);
 
     let sug = state.ui.active_suggestions.expect("trigger installed");
@@ -113,8 +139,8 @@ fn test_refresh_installs_empty_file_trigger() {
 #[test]
 fn test_apply_async_result_updates_matching_query() {
     let mut state = AppState::new();
-    state.ui.input.text = "@src".to_string();
-    state.ui.input.cursor = 4;
+    state.ui.input.textarea.set_text("@src");
+    state.ui.input.textarea.set_cursor(4);
     refresh_suggestions(&mut state);
     // Empty async trigger installed.
     assert!(
@@ -219,8 +245,8 @@ fn test_refresh_agent_trigger_from_session() {
             description: None,
         },
     ];
-    state.ui.input.text = "@agent-pl".to_string();
-    state.ui.input.cursor = 9;
+    state.ui.input.textarea.set_text("@agent-pl");
+    state.ui.input.textarea.set_cursor(9);
     refresh_suggestions(&mut state);
 
     let sug = state.ui.active_suggestions.expect("agent popup installed");

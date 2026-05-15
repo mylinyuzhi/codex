@@ -264,12 +264,32 @@ impl<'a> ChatWidget<'a> {
     fn render_streaming(&self, streaming: &StreamingState, lines: &mut Vec<Line<'a>>) {
         let content = streaming.visible_content();
         if !content.is_empty() {
-            let md_lines = crate::widgets::markdown::markdown_to_lines_with_syntax(
+            let mut md_lines = crate::widgets::markdown::markdown_to_lines_with_syntax(
                 content,
                 self.theme,
                 self.width,
                 self.syntax_highlighting,
             );
+            // Match `render_assistant::try_render`'s leading dot so the
+            // partial response and the finalised response share the same
+            // marker — otherwise the row jumps when streaming finishes
+            // and the assistant text replaces the live buffer.
+            if let Some(first) = md_lines.first_mut() {
+                let dot_span = Span::styled(
+                    "⏺ ".to_string(),
+                    ratatui::style::Style::default().fg(self.theme.assistant_message),
+                );
+                let leading_is_indent = first
+                    .spans
+                    .first()
+                    .map(|s| s.content.as_ref() == "  ")
+                    .unwrap_or(false);
+                if leading_is_indent {
+                    first.spans[0] = dot_span;
+                } else {
+                    first.spans.insert(0, dot_span);
+                }
+            }
             lines.extend(md_lines);
             lines.push(Line::from(Span::raw("▌").fg(self.theme.accent)));
         }

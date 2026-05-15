@@ -1,4 +1,12 @@
 //! Vim state transitions — process key input and update state.
+//!
+//! All positions are byte offsets into `TextArea::text()`. Motion functions
+//! return new cursor targets; transitions build the deletion ranges by
+//! consulting `is_inclusive_motion` so operator+motion semantics match real
+//! vim (e.g. `dw` deletes through the start of the next word exclusive,
+//! while `de` deletes through the end-of-word inclusive).
+
+use std::ops::Range;
 
 use super::CommandState;
 use super::FindType;
@@ -6,9 +14,11 @@ use super::Operator;
 use super::PersistentState;
 use super::TextObjScope;
 use super::motions;
+use super::motions::next_char_boundary;
+use super::motions::prev_char_boundary;
 use super::operators;
 use super::text_objects;
-use crate::state::ui::InputState;
+use crate::widgets::TextArea;
 
 /// Result of processing a key in vim mode.
 pub enum VimAction {
@@ -33,56 +43,52 @@ pub enum VimAction {
 }
 
 /// Process a key in normal mode.
-///
-/// Returns what action the caller should take.
 pub fn process_normal_key(
     ch: char,
-    input: &mut InputState,
+    textarea: &mut TextArea,
     command: &mut CommandState,
     persistent: &mut PersistentState,
 ) -> VimAction {
     match command {
-        CommandState::Idle => process_idle_key(ch, input, command, persistent),
+        CommandState::Idle => process_idle_key(ch, textarea, command, persistent),
         CommandState::Count { digits } => {
             if ch.is_ascii_digit() {
                 digits.push(ch);
                 VimAction::Handled
             } else {
-                let count = digits.parse::<i32>().unwrap_or(1);
+                let count = digits.parse::<usize>().unwrap_or(1).max(1);
                 *command = CommandState::Idle;
-                process_motion_with_count(ch, input, count, command, persistent)
+                process_motion_with_count(ch, textarea, count, command, persistent)
             }
         }
         CommandState::OperatorPending { op, count } => {
             let op = *op;
             let count = *count;
-            process_operator_motion(ch, input, op, count, command, persistent)
+            process_operator_motion(ch, textarea, op, count, command, persistent)
         }
         CommandState::OperatorCount { op, count, digits } => {
             if ch.is_ascii_digit() {
                 digits.push(ch);
                 VimAction::Handled
             } else {
-                let total_count = *count * digits.parse::<i32>().unwrap_or(1);
+                let inner = digits.parse::<usize>().unwrap_or(1).max(1);
+                let total = (*count).saturating_mul(inner);
                 let op = *op;
                 *command = CommandState::Idle;
-                process_operator_motion(ch, input, op, total_count, command, persistent)
+                process_operator_motion(ch, textarea, op, total, command, persistent)
             }
         }
-        CommandState::Find { find, count } => {
+        CommandState::Find { find, count: _ } => {
             let find = *find;
-            let count = *count;
-            execute_find(ch, input, find, count, persistent);
+            execute_find(ch, textarea, find, persistent);
             command.reset();
             VimAction::Handled
         }
-        CommandState::OperatorFind { op, count, find } => {
+        CommandState::OperatorFind { op, count: _, find } => {
             let op = *op;
-            let _count = *count;
             let find = *find;
-            if let Some(target) = find_target(input, find, ch) {
-                let start = input.cursor;
-                operators::apply_operator(input, op, start, target, persistent);
+            if let Some(range) = find_operator_range(textarea, find, ch) {
+                operators::apply_operator(textarea, op, range, persistent);
             }
             command.reset();
             if op == Operator::Change {
@@ -91,12 +97,16 @@ pub fn process_normal_key(
                 VimAction::Handled
             }
         }
-        CommandState::OperatorTextObj { op, count, scope } => {
+        CommandState::OperatorTextObj {
+            op,
+            count: _,
+            scope,
+        } => {
             let op = *op;
-            let _count = *count;
             let scope = *scope;
-            if let Some((start, end)) = resolve_text_object(ch, &input.text, input.cursor, scope) {
-                operators::apply_operator(input, op, start, end, persistent);
+            if let Some(range) = resolve_text_object(ch, textarea.text(), textarea.cursor(), scope)
+            {
+                operators::apply_operator(textarea, op, range, persistent);
             }
             command.reset();
             if op == Operator::Change {
@@ -105,20 +115,20 @@ pub fn process_normal_key(
                 VimAction::Handled
             }
         }
-        CommandState::G { count } => {
-            let _count = *count;
+        CommandState::G { count: _ } => {
             if ch == 'g' {
-                input.cursor = motions::go_to_top(&input.text, input.cursor);
+                textarea.set_cursor(motions::go_to_top(textarea.text()));
             }
             command.reset();
             VimAction::Handled
         }
-        CommandState::OperatorG { op, count } => {
+        CommandState::OperatorG { op, count: _ } => {
             let op = *op;
-            let _count = *count;
             if ch == 'g' {
-                let target = motions::go_to_top(&input.text, input.cursor);
-                operators::apply_operator(input, op, input.cursor, target, persistent);
+                let cursor = textarea.cursor();
+                let target = motions::go_to_top(textarea.text());
+                let range = target.min(cursor)..cursor.max(target);
+                operators::apply_operator(textarea, op, range, persistent);
             }
             command.reset();
             if op == Operator::Change {
@@ -127,23 +137,24 @@ pub fn process_normal_key(
                 VimAction::Handled
             }
         }
-        CommandState::Replace { count: _ } => {
-            operators::replace_char(input, ch);
+        CommandState::Replace { count } => {
+            let count = *count;
+            operators::replace_char(textarea, ch);
+            persistent.last_change = Some(super::RecordedChange::ReplaceChar { ch, count });
             command.reset();
             VimAction::Handled
         }
         CommandState::Indent { dir: _, count: _ } => {
-            // Indent not applicable in single-line mode
+            // Indent is a no-op for the single-line composer.
             command.reset();
             VimAction::Handled
         }
     }
 }
 
-/// Process a key when command state is idle.
 fn process_idle_key(
     ch: char,
-    input: &mut InputState,
+    textarea: &mut TextArea,
     command: &mut CommandState,
     persistent: &mut PersistentState,
 ) -> VimAction {
@@ -158,39 +169,46 @@ fn process_idle_key(
 
         // Motions
         'h' => {
-            input.cursor_left();
+            textarea.move_cursor_left();
             VimAction::Handled
         }
         'l' => {
-            input.cursor_right();
+            textarea.move_cursor_right();
             VimAction::Handled
         }
         'w' => {
-            input.cursor = motions::word_forward(&input.text, input.cursor);
+            let new = motions::word_forward(textarea.text(), textarea.cursor());
+            textarea.set_cursor(new);
             VimAction::Handled
         }
         'b' => {
-            input.cursor = motions::word_backward(&input.text, input.cursor);
+            let new = motions::word_backward(textarea.text(), textarea.cursor());
+            textarea.set_cursor(new);
             VimAction::Handled
         }
         'e' => {
-            input.cursor = motions::word_end(&input.text, input.cursor);
+            let new = motions::word_end(textarea.text(), textarea.cursor());
+            textarea.set_cursor(new);
             VimAction::Handled
         }
         '0' => {
-            input.cursor_home();
+            let new = motions::line_start(textarea.text(), textarea.cursor());
+            textarea.set_cursor(new);
             VimAction::Handled
         }
         '^' => {
-            input.cursor = motions::first_non_blank(&input.text, input.cursor);
+            let new = motions::first_non_blank(textarea.text(), textarea.cursor());
+            textarea.set_cursor(new);
             VimAction::Handled
         }
         '$' => {
-            input.cursor_end();
+            let new = motions::line_end(textarea.text(), textarea.cursor());
+            textarea.set_cursor(new);
             VimAction::Handled
         }
         'G' => {
-            input.cursor = motions::go_to_bottom(&input.text, input.cursor);
+            let new = motions::go_to_bottom(textarea.text());
+            textarea.set_cursor(new);
             VimAction::Handled
         }
 
@@ -219,8 +237,17 @@ fn process_idle_key(
 
         // Single-key operations
         'x' => {
-            // Delete char under cursor
-            input.delete_forward();
+            // `x` deletes char under cursor; also stash it into the register
+            // so a subsequent `p` pastes it (matches vim's small-delete rule).
+            let cursor = textarea.cursor();
+            let end = next_char_boundary(textarea.text(), cursor);
+            if end > cursor {
+                let ch = textarea.text()[cursor..end].to_string();
+                textarea.replace_range(cursor..end, "");
+                persistent.register = ch;
+                persistent.register_is_linewise = false;
+                persistent.last_change = Some(super::RecordedChange::DeleteChar { count: 1 });
+            }
             VimAction::Handled
         }
         'r' => {
@@ -228,15 +255,27 @@ fn process_idle_key(
             VimAction::Handled
         }
         'p' => {
-            operators::put_after(input, persistent);
+            operators::put_after(textarea, persistent);
+            persistent.last_change = Some(super::RecordedChange::Put { before: false });
             VimAction::Handled
         }
         'P' => {
-            operators::put_before(input, persistent);
+            operators::put_before(textarea, persistent);
+            persistent.last_change = Some(super::RecordedChange::Put { before: true });
             VimAction::Handled
         }
         'u' => {
-            // Undo not implemented — would need undo stack
+            // Undo: pop the most recent pre-edit snapshot. Wiring layer
+            // already skips committing for 'u' so there's no redo-target
+            // double-push to worry about.
+            textarea.undo();
+            VimAction::Handled
+        }
+        '.' => {
+            // Dot-repeat: replay the last recorded change.
+            if let Some(change) = persistent.last_change.clone() {
+                replay_change(textarea, &change, persistent);
+            }
             VimAction::Handled
         }
 
@@ -273,7 +312,9 @@ fn process_idle_key(
         // Repeat last find
         ';' => {
             if let Some((find, ch)) = persistent.last_find {
-                execute_find(ch, input, find, 1, persistent);
+                let was = persistent.last_find;
+                execute_find(ch, textarea, find, persistent);
+                persistent.last_find = was;
             }
             VimAction::Handled
         }
@@ -285,7 +326,9 @@ fn process_idle_key(
                     FindType::T => FindType::BigT,
                     FindType::BigT => FindType::T,
                 };
-                execute_find(ch, input, reverse, 1, persistent);
+                let was = persistent.last_find;
+                execute_find(ch, textarea, reverse, persistent);
+                persistent.last_find = was;
             }
             VimAction::Handled
         }
@@ -313,14 +356,13 @@ fn process_idle_key(
 
 fn process_motion_with_count(
     ch: char,
-    input: &mut InputState,
-    count: i32,
+    textarea: &mut TextArea,
+    count: usize,
     command: &mut CommandState,
     persistent: &mut PersistentState,
 ) -> VimAction {
-    // Apply count to motions
     for _ in 0..count {
-        match process_idle_key(ch, input, command, persistent) {
+        match process_idle_key(ch, textarea, command, persistent) {
             VimAction::Handled => {}
             other => return other,
         }
@@ -330,42 +372,24 @@ fn process_motion_with_count(
 
 fn process_operator_motion(
     ch: char,
-    input: &mut InputState,
+    textarea: &mut TextArea,
     op: Operator,
-    count: i32,
+    count: usize,
     command: &mut CommandState,
     persistent: &mut PersistentState,
 ) -> VimAction {
     match ch {
-        // Motions
+        // Motion-driven ranges
         'w' | 'e' | 'b' | 'h' | 'l' | '0' | '$' | '^' | 'G' => {
-            let start = input.cursor;
-            let mut target = start;
-            // 'w' and 'b' are exclusive motions (delete up to, not including target)
-            let is_exclusive = matches!(ch, 'w' | 'b');
-            for _ in 0..count {
-                target = match ch {
-                    'w' => motions::word_forward(&input.text, target),
-                    'e' => motions::word_end(&input.text, target),
-                    'b' => motions::word_backward(&input.text, target),
-                    'h' => (target - 1).max(0),
-                    'l' => (target + 1).min(input.text.chars().count() as i32 - 1),
-                    '0' => 0,
-                    '$' => motions::line_end(&input.text, target),
-                    '^' => motions::first_non_blank(&input.text, target),
-                    'G' => motions::go_to_bottom(&input.text, target),
-                    _ => target,
-                };
-            }
-            // Exclusive motions: adjust target to not include the target char
-            let adjusted = if is_exclusive && target > start {
-                target - 1
-            } else if is_exclusive && target < start {
-                target + 1
-            } else {
-                target
-            };
-            operators::apply_operator(input, op, start, adjusted, persistent);
+            let start = textarea.cursor();
+            let target = apply_motion_count(textarea.text(), start, ch, count.max(1));
+            let range = motion_range(textarea.text(), start, target, ch);
+            operators::apply_operator(textarea, op, range, persistent);
+            persistent.last_change = Some(super::RecordedChange::OperatorMotion {
+                op,
+                motion: ch,
+                count,
+            });
             command.reset();
             if op == Operator::Change {
                 VimAction::EnterInsert
@@ -373,26 +397,35 @@ fn process_operator_motion(
                 VimAction::Handled
             }
         }
-        // Double operator = line operation (dd, cc, yy)
+        // Doubled operator = linewise (dd / cc / yy)
         'd' if op == Operator::Delete => {
-            input.text.clear();
-            input.cursor = 0;
+            operators::delete_line(textarea, persistent);
+            persistent.last_change = Some(super::RecordedChange::OperatorLine {
+                op: Operator::Delete,
+                count,
+            });
             command.reset();
             VimAction::Handled
         }
         'c' if op == Operator::Change => {
-            input.text.clear();
-            input.cursor = 0;
+            operators::change_line(textarea, persistent);
+            persistent.last_change = Some(super::RecordedChange::OperatorLine {
+                op: Operator::Change,
+                count,
+            });
             command.reset();
             VimAction::EnterInsert
         }
         'y' if op == Operator::Yank => {
-            persistent.register = input.text.clone();
-            persistent.register_is_linewise = true;
+            operators::yank_line(textarea, persistent);
+            persistent.last_change = Some(super::RecordedChange::OperatorLine {
+                op: Operator::Yank,
+                count,
+            });
             command.reset();
             VimAction::Handled
         }
-        // Text object scope
+        // Text-object scope (`i`/`a` followed by an object key)
         'i' => {
             *command = CommandState::OperatorTextObj {
                 op,
@@ -442,7 +475,7 @@ fn process_operator_motion(
             };
             VimAction::Handled
         }
-        // Count within operator
+        // Count within operator (e.g. `d3w`)
         '0'..='9' => {
             *command = CommandState::OperatorCount {
                 op,
@@ -451,7 +484,7 @@ fn process_operator_motion(
             };
             VimAction::Handled
         }
-        // g within operator
+        // `g` within operator (e.g. `dgg`)
         'g' => {
             *command = CommandState::OperatorG { op, count };
             VimAction::Handled
@@ -463,29 +496,90 @@ fn process_operator_motion(
     }
 }
 
+fn apply_motion_count(text: &str, start: usize, ch: char, count: usize) -> usize {
+    let mut target = start;
+    for _ in 0..count {
+        target = match ch {
+            'w' => motions::word_forward(text, target),
+            'e' => motions::word_end(text, target),
+            'b' => motions::word_backward(text, target),
+            'h' => prev_char_boundary(text, target),
+            'l' => next_char_boundary(text, target),
+            '0' => motions::line_start(text, target),
+            '$' => motions::line_end(text, target),
+            '^' => motions::first_non_blank(text, target),
+            'G' => motions::go_to_bottom(text),
+            _ => target,
+        };
+    }
+    target
+}
+
+/// Build the deletion range for a motion.
+///
+/// - Forward inclusive motions (`e`, `$`, `f`, `t`, `G`) include the
+///   target character: range = `[cursor, next_char_after(target))`.
+/// - Forward exclusive motions (`w`, `l`, `0`, `^`) stop at the target:
+///   range = `[cursor, target)`.
+/// - Backward motions (`b`, `h`, `F`, `T`) — target is the new lo bound,
+///   cursor is exclusive at hi: range = `[target, cursor)`. Vim's `dF`/`dT`
+///   match this convention.
+fn motion_range(text: &str, start: usize, target: usize, motion: char) -> Range<usize> {
+    if target >= start {
+        let inclusive_forward = matches!(motion, 'e' | '$' | 'f' | 't' | 'G');
+        let hi = if inclusive_forward && target < text.len() {
+            next_char_boundary(text, target)
+        } else {
+            target
+        };
+        start..hi
+    } else {
+        target..start
+    }
+}
+
 fn execute_find(
     ch: char,
-    input: &mut InputState,
+    textarea: &mut TextArea,
     find: FindType,
-    _count: i32,
     persistent: &mut PersistentState,
 ) {
-    if let Some(target) = find_target(input, find, ch) {
-        input.cursor = target;
+    if let Some(target) = find_target(textarea, find, ch) {
+        textarea.set_cursor(target);
     }
     persistent.last_find = Some((find, ch));
 }
 
-fn find_target(input: &InputState, find: FindType, ch: char) -> Option<i32> {
+fn find_operator_range(textarea: &TextArea, find: FindType, ch: char) -> Option<Range<usize>> {
+    let start = textarea.cursor();
+    let target = find_target(textarea, find, ch)?;
+    // Re-use `motion_range` by mapping the FindType back to its motion char.
+    let motion = match find {
+        FindType::F => 'f',
+        FindType::BigF => 'F',
+        FindType::T => 't',
+        FindType::BigT => 'T',
+    };
+    Some(motion_range(textarea.text(), start, target, motion))
+}
+
+fn find_target(textarea: &TextArea, find: FindType, ch: char) -> Option<usize> {
+    let text = textarea.text();
+    let pos = textarea.cursor();
     match find {
-        FindType::F => motions::find_char_forward(&input.text, input.cursor, ch),
-        FindType::BigF => motions::find_char_backward(&input.text, input.cursor, ch),
-        FindType::T => motions::till_char_forward(&input.text, input.cursor, ch),
-        FindType::BigT => motions::till_char_backward(&input.text, input.cursor, ch),
+        FindType::F => motions::find_char_forward(text, pos, ch),
+        FindType::BigF => motions::find_char_backward(text, pos, ch),
+        FindType::T => motions::till_char_forward(text, pos, ch),
+        FindType::BigT => motions::till_char_backward(text, pos, ch),
     }
 }
 
-fn resolve_text_object(ch: char, text: &str, pos: i32, scope: TextObjScope) -> Option<(i32, i32)> {
+fn resolve_text_object(
+    ch: char,
+    text: &str,
+    pos: usize,
+    scope: TextObjScope,
+) -> Option<Range<usize>> {
     match ch {
         'w' => text_objects::word(text, pos, scope),
         '"' => text_objects::quoted(text, pos, '"', scope),
@@ -494,5 +588,49 @@ fn resolve_text_object(ch: char, text: &str, pos: i32, scope: TextObjScope) -> O
         '{' | '}' | 'B' => text_objects::bracket(text, pos, '{', '}', scope),
         '[' | ']' => text_objects::bracket(text, pos, '[', ']', scope),
         _ => None,
+    }
+}
+
+/// Replay a recorded change against the current cursor (vim `.`).
+fn replay_change(
+    textarea: &mut TextArea,
+    change: &super::RecordedChange,
+    persistent: &mut PersistentState,
+) {
+    use super::RecordedChange;
+    match change {
+        RecordedChange::OperatorMotion { op, motion, count } => {
+            let start = textarea.cursor();
+            let target = apply_motion_count(textarea.text(), start, *motion, (*count).max(1));
+            let range = motion_range(textarea.text(), start, target, *motion);
+            operators::apply_operator(textarea, *op, range, persistent);
+        }
+        RecordedChange::OperatorLine { op, count: _ } => match op {
+            Operator::Delete => operators::delete_line(textarea, persistent),
+            Operator::Change => operators::change_line(textarea, persistent),
+            Operator::Yank => operators::yank_line(textarea, persistent),
+        },
+        RecordedChange::DeleteChar { count } => {
+            for _ in 0..(*count).max(1) {
+                let cursor = textarea.cursor();
+                let end = next_char_boundary(textarea.text(), cursor);
+                if end > cursor {
+                    let ch = textarea.text()[cursor..end].to_string();
+                    textarea.replace_range(cursor..end, "");
+                    persistent.register = ch;
+                    persistent.register_is_linewise = false;
+                }
+            }
+        }
+        RecordedChange::ReplaceChar { ch, count: _ } => {
+            operators::replace_char(textarea, *ch);
+        }
+        RecordedChange::Put { before } => {
+            if *before {
+                operators::put_before(textarea, persistent);
+            } else {
+                operators::put_after(textarea, persistent);
+            }
+        }
     }
 }

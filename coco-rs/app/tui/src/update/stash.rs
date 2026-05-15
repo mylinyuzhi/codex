@@ -23,12 +23,12 @@ use crate::state::ui::StashedInput;
 
 /// Push or pop the stash slot per the TS rules above.
 pub(super) fn swap_input_draft(state: &mut AppState) {
-    if state.ui.input.text.trim().is_empty() {
+    if state.ui.input.text().trim().is_empty() {
         // Empty input — pop the stash if there is one. Otherwise the
         // call is a silent no-op (matches TS implicit else).
         if let Some(prior) = state.ui.stashed_input.take() {
-            state.ui.input.text = prior.text;
-            state.ui.input.cursor = prior.cursor;
+            state.ui.input.textarea.set_text(&prior.text);
+            state.ui.input.textarea.set_cursor(prior.cursor_byte);
             state.ui.paste_manager.replace_entries(prior.paste_entries);
         }
     } else {
@@ -36,12 +36,13 @@ pub(super) fn swap_input_draft(state: &mut AppState) {
         // stash (TS deliberately allows this; there is no swap or
         // stash list, just one slot). Paste entries move with the
         // text so pill labels stay resolvable.
+        let cursor_byte = state.ui.input.textarea.cursor();
+        let text = state.ui.input.textarea.take_text();
         state.ui.stashed_input = Some(StashedInput {
-            text: std::mem::take(&mut state.ui.input.text),
-            cursor: state.ui.input.cursor,
+            text,
+            cursor_byte,
             paste_entries: state.ui.paste_manager.take_entries(),
         });
-        state.ui.input.cursor = 0;
     }
 }
 

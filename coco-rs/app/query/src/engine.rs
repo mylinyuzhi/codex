@@ -347,6 +347,9 @@ pub struct QueryEngine {
     /// failures so we stop hammering the same recovery path after
     /// `MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES`.
     pub(crate) reactive_state: Arc<tokio::sync::Mutex<coco_compact::ReactiveCompactState>>,
+    /// Auto compaction circuit breaker. Manual compaction is excluded;
+    /// successful auto/session-memory compaction resets this state.
+    pub(crate) auto_compact_state: Arc<tokio::sync::Mutex<coco_compact::ReactiveCompactState>>,
     /// Optional handle to the running-task manager — when present,
     /// `try_full_compact` snapshots running async agents and re-emits
     /// them as post-compact `task_status` attachments (TS:
@@ -366,6 +369,11 @@ pub struct QueryEngine {
     /// change. TS calls `getInvokedSkillsForAgent()` inline; we keep it
     /// caller-driven so this crate doesn't import system-reminder types.
     pub(crate) post_compact_skills: Arc<std::sync::RwLock<Vec<coco_compact::PostCompactSkill>>>,
+    /// Runtime sink for SessionStart hook side effects produced during
+    /// compact context restoration. The app layer owns file watchers and
+    /// other process-global effects; query only reports typed output.
+    pub(crate) session_start_hook_side_effect_sink:
+        Option<crate::session_start_hooks::SessionStartHookSideEffectSinkRef>,
     /// Staged context-collapse ledger. Pre-staged ranges drain into
     /// commits on PTL recovery so a 413 doesn't have to truncate the
     /// head. `None` ⇒ feature disabled (default). TS:
@@ -789,7 +797,7 @@ impl QueryEngine {
                 .await;
 
             // Build prompt from history
-            let prompt = self.build_prompt(history);
+            let prompt = self.build_prompt(history).await;
             let tool_defs = self.build_tool_definitions(&app_state_snapshot).await;
 
             // StreamRequestStart has no direct protocol equivalent; it was
@@ -948,9 +956,10 @@ impl QueryEngine {
                     let hook_tx = hook_tx_for_closure.clone();
                     Box::pin(async move {
                         let effective_input = prepared.parsed_input.clone();
+                        let call_ctx = ctx.clone_for_tool_call(prepared.tool_use_id.clone());
                         let execute_result = tokio::select! {
-                            r = prepared.tool.execute(effective_input.clone(), &ctx) => r,
-                            () = ctx.cancel.cancelled() => Err(coco_tool_runtime::ToolError::Cancelled),
+                            r = prepared.tool.execute(effective_input.clone(), &call_ctx) => r,
+                            () = call_ctx.cancel.cancelled() => Err(coco_tool_runtime::ToolError::Cancelled),
                         };
                         crate::tool_outcome_builder::build_outcome_from_execution(
                             crate::tool_outcome_builder::RunOneTail {
@@ -964,15 +973,7 @@ impl QueryEngine {
                                 hooks: hooks.as_ref(),
                                 orchestration_ctx,
                                 hook_tx: hook_tx.as_ref(),
-                                tool_result_session_dir: ctx
-                                    .config_home
-                                    .as_ref()
-                                    .zip(ctx.session_id_for_history.as_ref())
-                                    .map(|(home, sess)| {
-                                        home.join("cache")
-                                            .join("tool-results")
-                                            .join(sess)
-                                    }),
+                                tool_result_session_dir: ctx.tool_result_session_dir.clone(),
                             },
                         )
                         .await

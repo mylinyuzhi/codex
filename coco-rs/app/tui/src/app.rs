@@ -425,9 +425,9 @@ impl App {
             }
             TuiEvent::Paste(text) => {
                 self.state.session.last_user_interaction_at = std::time::Instant::now();
-                for c in text.chars() {
-                    self.state.ui.input.insert_char(c);
-                }
+                // Batch insertion via TextArea is O(text.len()) and only
+                // recomputes the wrap cache once, vs N times for per-char insert.
+                self.state.ui.input.textarea.insert_str(&text);
                 // Paste bypasses update::handle_command, so refresh the
                 // autocomplete state directly here.
                 crate::autocomplete::refresh_suggestions(&mut self.state);

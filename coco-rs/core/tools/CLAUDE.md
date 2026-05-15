@@ -87,8 +87,8 @@ the edited file are not suppressed by cross-turn dedup.
 
 ## Per-tool Result Persistence Thresholds
 
-`Tool::max_result_size_chars()` overrides — TS-aligned, read by the executor
-(`core/tool-runtime/src/execution.rs`) per Level 1 of the
+`Tool::max_result_size_chars()` overrides — read by the query tool outcome
+builder per Level 1 of the
 [Tool Result Budget plan](../../../docs/coco-rs/tool-result-budget-plan.md):
 
 | Tool | Value | TS source | Note |
@@ -97,14 +97,13 @@ the edited file are not suppressed by cross-turn dedup.
 | PowerShellTool | 30_000 | `PowerShellTool.tsx:275` | same as Bash |
 | GrepTool | 20_000 | `GrepTool.ts` | match dumps grow superlinearly |
 | GlobTool | 100_000 | `GlobTool.ts` | path lists tolerate larger windows |
-| FileReadTool | trait default `100_000` ⚠️ | TS `Infinity` (opt-out) | Rust cannot express `Infinity` with `i32`; Phase 1.B of the plan migrates to `ResultSizeBound::{Chars,Unbounded}` |
-| (other tools) | trait default `100_000` | trait default | inherit |
+| FileReadTool | trait default `i64::MAX` | TS `Infinity` (opt-out) | aligned by sentinel |
+| Most other static tools | trait default `i64::MAX` ⚠️ | TS `100_000` (effectively clamped to `50_000`) | not yet mirrored |
 
 `bash.rs::maybe_persist_oversized_output` is a stub of Level 1 (Bash-only,
 `temp_dir()` storage, parallel JSON fields instead of `<persisted-output>`
-content replacement). It will be replaced by delegation to the generic
-`coco-tool-runtime::tool_result_storage::maybe_persist_large_tool_result`
-in Phase 1.E.
+content replacement before the query-level renderer turns it into an envelope).
+It should be replaced by the generic session-scoped persistence path.
 
 ## Divergences from TS
 

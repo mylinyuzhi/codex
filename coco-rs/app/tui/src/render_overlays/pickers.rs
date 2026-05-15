@@ -4,7 +4,6 @@ use ratatui::prelude::*;
 
 use crate::presentation::model_picker;
 use crate::presentation::picker;
-use crate::state::CommandPaletteOverlay;
 use crate::state::ExportOverlay;
 use crate::state::McpServerSelectOverlay;
 use crate::state::MemoryDialogOverlay;
@@ -27,13 +26,6 @@ pub(super) fn model_picker_content(
     theme: &Theme,
 ) -> (String, String, Color) {
     model_picker::content(m, theme)
-}
-
-pub(super) fn command_palette_content(
-    cp: &CommandPaletteOverlay,
-    theme: &Theme,
-) -> (String, String, Color) {
-    picker::command_palette_content(cp, theme)
 }
 
 pub(super) fn session_browser_content(

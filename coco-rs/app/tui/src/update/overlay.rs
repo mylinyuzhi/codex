@@ -41,7 +41,7 @@ fn accept_suggestion(state: &mut AppState) {
     let Some(sug) = state.ui.active_suggestions.take() else {
         return;
     };
-    let Some(item) = sug.items.get(sug.selected as usize).cloned() else {
+    let Some(item) = sug.items.get(sug.selected).cloned() else {
         state.ui.active_suggestions = None;
         return;
     };
@@ -71,15 +71,19 @@ fn accept_suggestion(state: &mut AppState) {
         SuggestionKind::Symbol => (format!("@#{} ", item.label), false),
     };
 
-    let text = &state.ui.input.text;
-    let chars: Vec<char> = text.chars().collect();
-    let start = (sug.trigger_pos as usize).min(chars.len());
-    let end = (state.ui.input.cursor as usize).min(chars.len());
-    let mut new_text: String = chars[..start].iter().collect();
-    new_text.push_str(&insertion);
-    new_text.push_str(&chars[end..].iter().collect::<String>());
-    state.ui.input.text = new_text;
-    state.ui.input.cursor = (start + insertion.chars().count()) as i32;
+    // Byte-offset splice via TextArea so multi-byte text before the
+    // trigger doesn't shift the insertion point. Mirrors the TS pattern
+    // where trigger pos and cursor are both UTF-16 code-unit offsets and
+    // `text.slice(start, cursor).replace(...)` does the splice directly.
+    let text_len = state.ui.input.text().len();
+    let start = sug.trigger_pos.min(text_len);
+    let end = state.ui.input.textarea.cursor().min(text_len);
+    state
+        .ui
+        .input
+        .textarea
+        .replace_range(start..end, &insertion);
+    state.ui.input.textarea.set_cursor(start + insertion.len());
 
     // For directory completions, re-trigger the popup so the next
     // search runs against the new prefix. `accept_suggestion` already
@@ -475,8 +479,12 @@ pub(super) fn nav(state: &mut AppState, delta: i32) {
     if state.ui.overlay.is_none()
         && let Some(ref mut sug) = state.ui.active_suggestions
     {
-        let count = sug.items.len() as i32;
-        sug.selected = (sug.selected + delta).clamp(0, (count - 1).max(0));
+        if sug.items.is_empty() {
+            sug.selected = 0;
+        } else {
+            let new = sug.selected as i32 + delta;
+            sug.selected = new.clamp(0, sug.items.len() as i32 - 1) as usize;
+        }
         return;
     }
     match &mut state.ui.overlay {

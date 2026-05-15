@@ -263,38 +263,40 @@ fn next_role(current: ModelRole, delta: i32) -> ModelRole {
 
 /// Open the command palette, seeded from `available_commands` (or defaults).
 pub(super) fn command_palette(state: &mut AppState) {
-    let cmd_list = if state.session.available_commands.is_empty() {
+    let commands: Vec<CommandOption> = if state.session.available_commands.is_empty() {
+        // Fallback list — used only when the registry snapshot never
+        // landed (smoke tests, bare `AppState::new`). Production paths
+        // seed `available_commands` from `CommandRegistry` in
+        // `tui_runner::run`.
         vec![
-            ("help".to_string(), Some(t!("palette.help").to_string())),
-            ("clear".to_string(), Some(t!("palette.clear").to_string())),
-            (
-                "compact".to_string(),
-                Some(t!("palette.compact").to_string()),
-            ),
-            ("config".to_string(), Some(t!("palette.config").to_string())),
-            (
-                "copy".to_string(),
-                Some(t!("palette.copy_last").to_string()),
-            ),
-            ("doctor".to_string(), Some(t!("palette.doctor").to_string())),
-            ("diff".to_string(), Some(t!("palette.diff").to_string())),
-            ("login".to_string(), Some(t!("palette.login").to_string())),
-            ("mcp".to_string(), Some(t!("palette.mcp").to_string())),
-            (
-                "session".to_string(),
-                Some(t!("palette.session").to_string()),
-            ),
+            ("help", t!("palette.help")),
+            ("clear", t!("palette.clear")),
+            ("compact", t!("palette.compact")),
+            ("config", t!("palette.config")),
+            ("copy", t!("palette.copy_last")),
+            ("doctor", t!("palette.doctor")),
+            ("diff", t!("palette.diff")),
+            ("login", t!("palette.login")),
+            ("mcp", t!("palette.mcp")),
+            ("session", t!("palette.session")),
         ]
-    } else {
-        state.session.available_commands.clone()
-    };
-    let commands: Vec<CommandOption> = cmd_list
-        .iter()
+        .into_iter()
         .map(|(name, desc)| CommandOption {
-            name: name.clone(),
-            description: desc.clone(),
+            name: name.to_string(),
+            description: Some(desc.to_string()),
         })
-        .collect();
+        .collect()
+    } else {
+        state
+            .session
+            .available_commands
+            .iter()
+            .map(|cmd| CommandOption {
+                name: cmd.name.clone(),
+                description: cmd.description.clone(),
+            })
+            .collect()
+    };
     state
         .ui
         .set_overlay(Overlay::CommandPalette(CommandPaletteOverlay {

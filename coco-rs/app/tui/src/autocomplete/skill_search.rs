@@ -18,7 +18,8 @@ pub enum SkillSearchEvent {
     /// Search results ready.
     SearchResult {
         query: String,
-        start_pos: i32,
+        /// Byte offset where the trigger started (sentinel).
+        start_pos: usize,
         suggestions: Vec<SuggestionItem>,
     },
 }

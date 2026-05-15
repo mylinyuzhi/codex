@@ -214,6 +214,7 @@ impl QueryEngine {
                 pre_tokens,
                 post_tokens,
             ),
+            raw_summary: None,
             summary_messages: Vec::new(),
             attachments: Vec::new(),
             messages_to_keep: history.messages.clone(),
@@ -291,23 +292,6 @@ impl QueryEngine {
             None,
         )
         .await;
-
-        // Tool-result budget (Level 2) — TS `query.ts:379
-        // applyToolResultBudget` runs BEFORE microcompact so the
-        // budget cap acts on a freshly-eligible message set. Level 2
-        // is enabled iff `compact.tool_result_budget.enabled`; the
-        // pure-logic call lives in `coco_tool_runtime::tool_result_storage`.
-        // No-op when disabled. We materialise candidates from the
-        // most recent tool_result run (TS scopes per-message; coco-rs
-        // scopes per-history-tail because messages here are flat).
-        if self.config.compact.tool_result_budget.enabled {
-            apply_tool_result_budget_to_history(
-                history,
-                &self.tool_result_replacement_state,
-                self.config.compact.tool_result_budget.per_message_chars,
-            )
-            .await;
-        }
 
         // Auto-compaction ladder (mirrors TS query.ts tail-of-turn):
         //  0. Time-based microcompact — fire on long inactivity gap so the
@@ -610,15 +594,34 @@ impl QueryEngine {
                 coco_compact::CompactQuerySource::Other,
                 collapse_active,
             ) {
-                // Step 2 → 3: SM-first → full LLM. `try_full_compact` owns the
-                // branch internally so manual `/compact` benefits too.
-                self.try_full_compact(
-                    history,
-                    event_tx,
-                    coco_types::CompactTrigger::Auto,
-                    /*custom_instructions*/ None,
-                )
-                .await;
+                let should_attempt_auto = {
+                    let state = self.auto_compact_state.lock().await;
+                    state.should_attempt_reactive_compact()
+                };
+                if should_attempt_auto {
+                    // Step 2 → 3: SM-first → full LLM. `try_full_compact` owns the
+                    // branch internally so manual `/compact` benefits too.
+                    let outcome = self
+                        .try_full_compact(
+                            history,
+                            event_tx,
+                            coco_types::CompactTrigger::Auto,
+                            /*custom_instructions*/ None,
+                        )
+                        .await;
+                    let now_ms = chrono::Utc::now().timestamp_millis();
+                    let mut state = self.auto_compact_state.lock().await;
+                    match outcome {
+                        coco_compact::CompactOutcome::Applied => state.record_success(now_ms),
+                        coco_compact::CompactOutcome::Failed => state.record_failure(now_ms),
+                        coco_compact::CompactOutcome::Skipped => {}
+                    }
+                } else {
+                    warn!(
+                        threshold = coco_compact::types::MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES,
+                        "auto compaction skipped after repeated failures"
+                    );
+                }
             }
         }
 
@@ -1200,78 +1203,6 @@ fn build_transcript_entry(
         cost_usd,
         extra: serde_json::Map::new(),
     })
-}
-
-/// Project the recent tool_result tail of `history` into
-/// `ToolResultCandidate` shape, run [`coco_tool_runtime::tool_result_storage::apply_tool_result_budget`],
-/// and rewrite each newly-replaced ToolResult message's body to the
-/// canonical `[Old tool result content cleared]` placeholder. TS
-/// parity: `query.ts:379` + `enforceToolResultBudget` from
-/// `utils/toolResultStorage.ts`.
-///
-/// `per_message_chars` comes from `compact.tool_result_budget` and
-/// `i64::MAX` opts the call out (the helper still consumes the
-/// state's seen_ids to keep the freeze-once contract). Tools'
-/// `max_result_size_chars` would normally drive `persistence_opted_out`
-/// per candidate, but we don't carry the registry through here —
-/// every tool result is treated as evictable. (Per-tool opt-out is a
-/// future follow-up that needs the tool registry plumbed into the
-/// finalize-turn surface.)
-async fn apply_tool_result_budget_to_history(
-    history: &mut MessageHistory,
-    state: &coco_tool_runtime::tool_result_storage::ContentReplacementStateRef,
-    per_message_chars: i64,
-) {
-    use coco_messages::Message;
-    use coco_tool_runtime::tool_result_storage as trb;
-
-    // Collect candidates from the history tail. We scope to recent
-    // entries (last 32) — an entire-history walk would dominate the
-    // hot path on long sessions and the budget cap acts on aggregate
-    // content size which only the recent tail can blow.
-    const SCAN_TAIL: usize = 32;
-    let start = history.messages.len().saturating_sub(SCAN_TAIL);
-    let mut candidates: Vec<trb::ToolResultCandidate> = Vec::new();
-    for msg in history.messages.iter().skip(start) {
-        if let Message::ToolResult(tr) = msg {
-            let text = coco_messages::wrapping::extract_text_from_llm_message(&tr.message);
-            candidates.push(trb::ToolResultCandidate {
-                tool_use_id: tr.tool_use_id.clone(),
-                content_chars: text.len() as i64,
-                tool_name: Some(tr.tool_id.to_string()),
-                persistence_opted_out: false,
-            });
-        }
-    }
-    if candidates.is_empty() {
-        return;
-    }
-
-    // Override the state's per_message_chars on each call so the
-    // budget reflects the live config (config can be hot-reloaded
-    // through `RuntimeConfig`). Cheap — single field write.
-    {
-        let mut s = state.write().await;
-        s.per_message_chars = per_message_chars;
-    }
-
-    let outcome = trb::apply_tool_result_budget(&candidates, state).await;
-    if outcome.newly_replaced.is_empty() {
-        return;
-    }
-
-    // Apply replacements: rewrite each matching ToolResult message's
-    // body to the canonical placeholder. Lookup map keyed by
-    // tool_use_id since the same id never appears twice in a turn.
-    let replaced: std::collections::HashSet<String> = outcome.newly_replaced.into_iter().collect();
-    for msg in history.messages.iter_mut() {
-        if let Message::ToolResult(tr) = msg
-            && replaced.contains(&tr.tool_use_id)
-        {
-            tr.message =
-                coco_inference::LanguageModelMessage::user_text(trb::TOOL_RESULT_CLEARED_MESSAGE);
-        }
-    }
 }
 
 /// Phase 7c: prune `rate_limits` entries whose `reset_at_ms` has

@@ -15,17 +15,21 @@
 
 use coco_inference::LanguageModelFunctionTool;
 use coco_inference::LanguageModelTool;
+use coco_inference::ToolResultContent as LlmToolResultContent;
 use tracing::info;
 
 use coco_messages::LlmMessage;
+use coco_messages::Message;
 use coco_messages::MessageHistory;
+use coco_messages::ToolContent;
+use coco_messages::ToolResultMessage;
 use coco_types::ToolAppState;
 
 use crate::engine::QueryEngine;
 
 impl QueryEngine {
     /// Build the LLM prompt from message history.
-    pub(crate) fn build_prompt(&self, history: &MessageHistory) -> Vec<LlmMessage> {
+    pub(crate) async fn build_prompt(&self, history: &MessageHistory) -> Vec<LlmMessage> {
         let mut prompt = Vec::new();
 
         // System prompt assembly:
@@ -58,7 +62,7 @@ impl QueryEngine {
         // archived range is a single placeholder rather than full turns.
         // TS: query.ts:441 `applyCollapsesIfNeeded()` runs before every
         // prompt build. No-op when collapse is inactive.
-        let messages_for_api: Vec<coco_messages::Message> = if self.is_collapse_active() {
+        let mut messages_for_api: Vec<coco_messages::Message> = if self.is_collapse_active() {
             if let Some(ledger) = &self.staged_ledger {
                 let commits: Vec<_> = match ledger.try_lock() {
                     Ok(g) => g.commits.clone(),
@@ -77,11 +81,124 @@ impl QueryEngine {
             history.messages.clone()
         };
 
+        self.apply_tool_result_budget_to_prompt(&mut messages_for_api)
+            .await;
+
         // Convert history to LlmMessages
         let normalized = coco_messages::normalize_messages_for_api(&messages_for_api);
         prompt.extend(normalized);
 
         prompt
+    }
+
+    async fn apply_tool_result_budget_to_prompt(&self, messages: &mut [Message]) {
+        let budget = &self.config.compact.tool_result_budget;
+        if !budget.enabled {
+            return;
+        }
+
+        let Some(session_dir) = self.tool_result_session_dir_for_prompt() else {
+            return;
+        };
+
+        {
+            let mut state = self.tool_result_replacement_state.write().await;
+            state.per_message_chars = budget.per_message_chars;
+        }
+
+        for group in collect_api_user_tool_result_groups(messages) {
+            let mut candidates = Vec::new();
+            for idx in &group {
+                let Message::ToolResult(tr) = &messages[*idx] else {
+                    continue;
+                };
+                let Some(projected) = project_tool_result_content(tr) else {
+                    continue;
+                };
+                let persistence_opted_out = self
+                    .tools
+                    .get(&tr.tool_id)
+                    .is_some_and(|tool| tool.max_result_size_chars() == i64::MAX);
+                candidates.push(
+                    coco_tool_runtime::tool_result_storage::ToolResultCandidate {
+                        tool_use_id: tr.tool_use_id.clone(),
+                        content_chars: projected.content.len() as i64,
+                        content: projected.content,
+                        tool_name: Some(tr.tool_id.to_string()),
+                        persistence_opted_out,
+                        is_json: projected.is_json,
+                    },
+                );
+            }
+            if candidates.is_empty() {
+                continue;
+            }
+
+            let outcome = coco_tool_runtime::tool_result_storage::apply_tool_result_budget(
+                &candidates,
+                &self.tool_result_replacement_state,
+                &session_dir,
+            )
+            .await;
+
+            if budget.persist_records
+                && !outcome.newly_replaced.is_empty()
+                && let (Some(store), Some(session_id)) =
+                    (&self.transcript_store, &self.transcript_session_id)
+            {
+                let records: Vec<coco_session::ContentReplacementRecord> = outcome
+                    .newly_replaced
+                    .iter()
+                    .map(|r| {
+                        coco_session::ContentReplacementRecord::tool_result(
+                            r.tool_use_id.clone(),
+                            r.replacement.clone(),
+                        )
+                    })
+                    .collect();
+                if let Err(e) = store.insert_content_replacement(session_id, &records) {
+                    tracing::warn!(
+                        error = %e,
+                        "failed to persist tool-result content replacement records"
+                    );
+                }
+            }
+
+            let replacements = {
+                let state = self.tool_result_replacement_state.read().await;
+                candidates
+                    .iter()
+                    .filter_map(|c| {
+                        state
+                            .replacements
+                            .get(&c.tool_use_id)
+                            .map(|replacement| (c.tool_use_id.clone(), replacement.clone()))
+                    })
+                    .collect::<std::collections::HashMap<_, _>>()
+            };
+            if replacements.is_empty() {
+                continue;
+            }
+            for idx in &group {
+                let Message::ToolResult(tr) = &mut messages[*idx] else {
+                    continue;
+                };
+                if let Some(replacement) = replacements.get(&tr.tool_use_id) {
+                    replace_tool_result_content(tr, replacement);
+                }
+            }
+        }
+    }
+
+    fn tool_result_session_dir_for_prompt(&self) -> Option<std::path::PathBuf> {
+        if let (Some(store), Some(session_id)) =
+            (&self.transcript_store, &self.transcript_session_id)
+        {
+            return Some(store.session_artifact_dir(session_id));
+        }
+        self.config_home
+            .as_ref()
+            .map(|home| home.join("sessions").join(&self.config.session_id))
     }
 
     /// Build tool definitions for the LLM (function tool schemas).
@@ -361,6 +478,7 @@ impl QueryEngine {
             file_read_state: self.file_read_state.clone(),
             file_history: self.file_history.clone(),
             config_home: self.config_home.clone(),
+            tool_result_session_dir: self.tool_result_session_dir_for_prompt(),
             hook_handle,
             // Real `AgentHandle` when the CLI / SDK / TUI installed
             // one via `with_agent_handle`; otherwise fall back to
@@ -430,4 +548,108 @@ impl QueryEngine {
             }
         }
     }
+}
+
+#[derive(Debug)]
+struct ProjectedToolResultContent {
+    content: String,
+    is_json: bool,
+}
+
+fn collect_api_user_tool_result_groups(messages: &[Message]) -> Vec<Vec<usize>> {
+    let mut groups = Vec::new();
+    let mut current = Vec::new();
+    let mut seen_assistant_ids = std::collections::HashSet::new();
+
+    for (idx, msg) in messages.iter().enumerate() {
+        match msg {
+            Message::Assistant(asst) => {
+                let assistant_id = asst
+                    .request_id
+                    .clone()
+                    .unwrap_or_else(|| asst.uuid.to_string());
+                if seen_assistant_ids.insert(assistant_id) && !current.is_empty() {
+                    groups.push(std::mem::take(&mut current));
+                }
+            }
+            Message::ToolResult(_) => current.push(idx),
+            Message::User(_)
+            | Message::System(_)
+            | Message::Attachment(_)
+            | Message::Progress(_)
+            | Message::Tombstone(_)
+            | Message::ToolUseSummary(_) => {}
+        }
+    }
+
+    if !current.is_empty() {
+        groups.push(current);
+    }
+    groups
+}
+
+fn project_tool_result_content(tr: &ToolResultMessage) -> Option<ProjectedToolResultContent> {
+    let LlmMessage::Tool { content, .. } = &tr.message else {
+        return None;
+    };
+    let part = content.iter().find_map(|part| match part {
+        ToolContent::ToolResult(result) if result.tool_call_id == tr.tool_use_id => Some(result),
+        _ => None,
+    })?;
+
+    match &part.output {
+        LlmToolResultContent::Text { value, .. }
+        | LlmToolResultContent::ErrorText { value, .. } => Some(ProjectedToolResultContent {
+            content: value.clone(),
+            is_json: false,
+        }),
+        LlmToolResultContent::Json { value, .. }
+        | LlmToolResultContent::ErrorJson { value, .. } => {
+            let content = serde_json::to_string(value).ok()?;
+            Some(ProjectedToolResultContent {
+                content,
+                is_json: true,
+            })
+        }
+        LlmToolResultContent::ExecutionDenied { reason, .. } => Some(ProjectedToolResultContent {
+            content: reason.clone().unwrap_or_default(),
+            is_json: false,
+        }),
+        LlmToolResultContent::Content { value, .. } => {
+            let mut texts = Vec::new();
+            for part in value {
+                match part {
+                    coco_inference::ToolResultContentPart::Text { text, .. } => {
+                        texts.push(text.clone());
+                    }
+                    _ => return None,
+                }
+            }
+            Some(ProjectedToolResultContent {
+                content: texts.join("\n\n"),
+                is_json: false,
+            })
+        }
+    }
+}
+
+fn replace_tool_result_content(tr: &mut ToolResultMessage, replacement: &str) -> bool {
+    let LlmMessage::Tool { content, .. } = &mut tr.message else {
+        return false;
+    };
+    for part in content.iter_mut() {
+        let ToolContent::ToolResult(result) = part else {
+            continue;
+        };
+        if result.tool_call_id != tr.tool_use_id {
+            continue;
+        }
+        result.output = if result.is_error {
+            LlmToolResultContent::error_text(replacement)
+        } else {
+            LlmToolResultContent::text(replacement)
+        };
+        return true;
+    }
+    false
 }

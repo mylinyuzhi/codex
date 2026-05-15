@@ -71,6 +71,12 @@ pub struct ModelCatalogEntry {
     pub default_effort: Option<ReasoningEffort>,
 }
 
+/// UI-facing projection of a slash command. Re-exported from
+/// `coco-types` so the same type can travel both on the
+/// [`coco_types::TuiOnlyEvent::AvailableCommandsRefreshed`] wire and
+/// inside [`SessionState`] without a conversion layer.
+pub use coco_types::SlashCommandInfo;
+
 /// Live binding of one [`ModelRole`] inside the TUI state. Mirrors
 /// `SessionRuntime.role_overrides` but in display-friendly form so the
 /// picker can mark "current" entries without an async hop.
@@ -237,8 +243,11 @@ pub struct SessionState {
     /// Whether the last turn was user-interrupted (for auto-restore).
     /// TS: abortController.signal.reason === 'user-cancel'
     pub was_interrupted: bool,
-    /// Available slash commands for command palette.
-    pub available_commands: Vec<(String, Option<String>)>,
+    /// Available slash commands for `/` autocomplete and `/help` palette.
+    /// Snapshotted from `CommandRegistry::visible()` at session start
+    /// (see `app/cli/src/tui_runner.rs`). Filtered + ranked by
+    /// [`crate::autocomplete::slash`] when the user types `/`.
+    pub available_commands: Vec<SlashCommandInfo>,
     /// Available agents for `@agent-*` autocomplete. Populated by the
     /// session handler when the agent registry is loaded; used synchronously
     /// by `autocomplete::refresh_suggestions` for the Agent trigger.

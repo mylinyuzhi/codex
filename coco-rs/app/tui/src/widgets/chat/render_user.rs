@@ -22,15 +22,18 @@ pub(super) fn try_render<'a>(
 ) -> Option<()> {
     match content {
         MessageContent::Text(text) => {
-            // Optional subtle background tint behind user prompt lines.
-            // TS: user-message component uses a terminal-adaptive fill so
-            // prompts visually separate from assistant prose. None = inherit.
+            // Subtle background tint behind user prompt rows. TS parity:
+            // `UserPromptMessage` wraps the body in `<Box
+            // backgroundColor="userMessageBackground">`, which paints the
+            // full row width rather than just the glyphs — the bg must
+            // therefore live on the `Line`, not on individual spans.
             for line in text.lines() {
-                let mut span = Span::raw(format!("❯ {line}")).fg(w.theme.user_message);
+                let span = Span::raw(format!("❯ {line}")).fg(w.theme.user_message);
+                let mut chat_line = Line::from(span);
                 if let Some(bg) = w.theme.user_message_bg {
-                    span = span.bg(bg);
+                    chat_line = chat_line.style(ratatui::style::Style::default().bg(bg));
                 }
-                lines.push(Line::from(span));
+                lines.push(chat_line);
             }
             Some(())
         }

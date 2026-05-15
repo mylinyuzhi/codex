@@ -42,6 +42,8 @@ use coco_messages::Message;
 use coco_query::CommandQueue;
 use coco_query::QueryEngine;
 use coco_query::QueryEngineConfig;
+use coco_query::SessionStartHookSideEffectSink;
+use coco_query::SessionStartHookSideEffects;
 use coco_session::SessionManager;
 use coco_session::TranscriptStore;
 use coco_session_memory::SessionMemoryService;
@@ -78,6 +80,75 @@ impl TranscriptFileHistorySink {
         Self {
             store: TranscriptStore::new(sessions_dir),
             session_id,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct FileWatchRegistrationContext {
+    file_changed_watcher: Arc<RwLock<Option<crate::file_changed_watcher::FileChangedHookWatcher>>>,
+    hook_registry: Arc<HookRegistry>,
+    session_id: Arc<RwLock<String>>,
+    engine_config: Arc<RwLock<QueryEngineConfig>>,
+    cancel: CancellationToken,
+    async_hook_registry: Arc<coco_hooks::async_registry::AsyncHookRegistry>,
+    hook_llm_handle: Arc<dyn coco_hooks::HookLlmHandle>,
+}
+
+struct QuerySessionStartHookSink {
+    file_watch: FileWatchRegistrationContext,
+}
+
+#[async_trait::async_trait]
+impl SessionStartHookSideEffectSink for QuerySessionStartHookSink {
+    async fn handle_session_start_hook_side_effects(&self, effects: SessionStartHookSideEffects) {
+        if effects.watch_paths.is_empty() {
+            return;
+        }
+        self.file_watch.add_paths(effects.watch_paths).await;
+    }
+}
+
+impl FileWatchRegistrationContext {
+    async fn add_paths(&self, paths: Vec<String>) {
+        let path_bufs: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+        let mut slot = self.file_changed_watcher.write().await;
+        if slot.is_none() {
+            let registry = self.hook_registry.clone();
+            let session_id = self.session_id.read().await.clone();
+            let cfg = self.engine_config.read().await.clone();
+            let disable_all_hooks = cfg.disable_all_hooks;
+            let allow_managed_hooks_only = cfg.allow_managed_hooks_only;
+            let project_dir = cfg.project_dir;
+            let cwd = std::env::current_dir().unwrap_or_default();
+            let cancel = self.cancel.clone();
+            let async_registry = self.async_hook_registry.clone();
+            let llm_handle = self.hook_llm_handle.clone();
+            let factory: Arc<
+                dyn Fn() -> coco_hooks::orchestration::OrchestrationContext + Send + Sync,
+            > = Arc::new(move || coco_hooks::orchestration::OrchestrationContext {
+                session_id: session_id.clone(),
+                cwd: cwd.clone(),
+                project_dir: project_dir.clone(),
+                permission_mode: None,
+                transcript_path: None,
+                agent_id: None,
+                agent_type: None,
+                cancel: cancel.clone(),
+                disable_all_hooks,
+                allow_managed_hooks_only,
+                attachment_emitter: coco_messages::AttachmentEmitter::noop(),
+                sync_event_sink: None,
+                http_url_allowlist: None,
+                http_env_var_policy: None,
+                async_registry: Some(async_registry.clone()),
+                llm_handle: Some(llm_handle.clone()),
+                workspace_trust_accepted: None,
+            });
+            *slot = crate::file_changed_watcher::FileChangedHookWatcher::new(registry, factory);
+        }
+        if let Some(watcher) = slot.as_ref() {
+            watcher.add_paths(path_bufs);
         }
     }
 }
@@ -456,7 +527,7 @@ pub struct SessionRuntime {
     /// `utils/hooks/fileChangedWatcher.ts`. Paths are registered
     /// lazily from `SessionStart` / `CwdChanged` hook output.
     pub(crate) file_changed_watcher:
-        tokio::sync::RwLock<Option<crate::file_changed_watcher::FileChangedHookWatcher>>,
+        Arc<RwLock<Option<crate::file_changed_watcher::FileChangedHookWatcher>>>,
     /// Multi-turn agent transcript. Each turn snapshots, appends, and
     /// rewrites this on success.
     pub history: Arc<Mutex<Vec<Message>>>,
@@ -527,6 +598,11 @@ pub struct SessionRuntime {
     /// empty by [`Self::clear_conversation`] when the session id
     /// regenerates.
     transcript_dedup: Arc<tokio::sync::Mutex<std::collections::HashSet<uuid::Uuid>>>,
+    /// Cross-engine tool-result replacement state. QueryEngine is
+    /// rebuilt per user message, so this runtime-owned state preserves
+    /// Level 2 `seen_ids` / replacement strings across turns.
+    tool_result_replacement_state:
+        coco_tool_runtime::tool_result_storage::ContentReplacementStateRef,
     /// MCP handle installed on every per-turn engine via `wire_engine`.
     /// Late-bound so CLI bootstrap can construct the
     /// `McpManagerAdapter` (or any other McpHandle impl) after
@@ -1077,6 +1153,9 @@ impl SessionRuntime {
         let transcript_dedup = Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::<
             uuid::Uuid,
         >::new()));
+        let tool_result_replacement_state = Arc::new(tokio::sync::RwLock::new(
+            coco_tool_runtime::tool_result_storage::ContentReplacementState::new(i64::MAX),
+        ));
 
         // ── Agent definition catalog ──
         //
@@ -1163,7 +1242,7 @@ impl SessionRuntime {
             hook_llm_handle,
             sync_hook_buffer: coco_hooks::SyncHookEventBuffer::new(),
             async_hook_registry: Arc::new(coco_hooks::async_registry::AsyncHookRegistry::new()),
-            file_changed_watcher: tokio::sync::RwLock::new(None),
+            file_changed_watcher: Arc::new(RwLock::new(None)),
             history: Arc::new(Mutex::new(Vec::new())),
             file_history_sink_session_id,
             role_client_cache,
@@ -1183,6 +1262,7 @@ impl SessionRuntime {
             reminder_mailbox,
             transcript_store,
             transcript_dedup,
+            tool_result_replacement_state,
             command_queue: CommandQueue::new(),
         }))
     }
@@ -1297,6 +1377,31 @@ impl SessionRuntime {
     {
         let mut g = self.transcript_dedup.lock().await;
         g.extend(uuids);
+    }
+
+    /// Reconstruct Level 2 tool-result replacement state from the
+    /// restored messages plus transcript content-replacement records.
+    /// Called on resume/fork before the first resumed turn.
+    pub async fn seed_tool_result_replacement_state(&self, messages: &[Message], session_id: &str) {
+        let records = self
+            .transcript_store
+            .load_content_replacements(session_id)
+            .unwrap_or_default();
+        let mut next =
+            coco_tool_runtime::tool_result_storage::ContentReplacementState::new(i64::MAX);
+        for msg in messages {
+            if let Message::ToolResult(tr) = msg {
+                next.seen_ids.insert(tr.tool_use_id.clone());
+            }
+        }
+        for record in records {
+            next.seen_ids.insert(record.tool_use_id().to_string());
+            next.replacements.insert(
+                record.tool_use_id().to_string(),
+                record.replacement().to_string(),
+            );
+        }
+        *self.tool_result_replacement_state.write().await = next;
     }
 
     /// Borrow the optional `MemoryRuntime`. `None` when
@@ -1742,6 +1847,10 @@ impl SessionRuntime {
         // `orchestration_ctx` carries it on every fired event — Prompt
         // / Agent settings hooks reach the LLM via `QueryHookLlm`.
         engine = engine.with_hook_llm_handle(self.hook_llm_handle.clone());
+        engine =
+            engine.with_session_start_hook_side_effect_sink(Arc::new(QuerySessionStartHookSink {
+                file_watch: self.file_watch_registration_context(),
+            }));
         if let Some(runtime) = &self.memory_runtime {
             engine = engine.with_memory_runtime(runtime.clone());
         }
@@ -1825,6 +1934,8 @@ impl SessionRuntime {
         let live_session_id = self.session_id.read().await.clone();
         engine = engine.with_transcript_store(self.transcript_store.clone(), live_session_id);
         engine = engine.with_transcript_dedup(self.transcript_dedup.clone());
+        engine =
+            engine.with_tool_result_replacement_state(self.tool_result_replacement_state.clone());
         // Agent handle (P1): only installed when `attach_agent_handle`
         // ran at bootstrap (i.e. `Feature::AgentTeams` is on). Without
         // it, the engine factory's default `NoOpAgentHandle` answers
@@ -2148,6 +2259,18 @@ impl SessionRuntime {
         }
     }
 
+    fn file_watch_registration_context(&self) -> FileWatchRegistrationContext {
+        FileWatchRegistrationContext {
+            file_changed_watcher: self.file_changed_watcher.clone(),
+            hook_registry: self.hook_registry.clone(),
+            session_id: self.session_id.clone(),
+            engine_config: self.engine_config.clone(),
+            cancel: self.cancel.clone(),
+            async_hook_registry: self.async_hook_registry.clone(),
+            hook_llm_handle: self.hook_llm_handle.clone(),
+        }
+    }
+
     /// Append paths to the `FileChanged` watcher, lazily constructing
     /// it on first call. TS parity: `fileChangedWatcher.ts:add` lazily
     /// boots the chokidar instance the first time a hook returns a
@@ -2156,53 +2279,9 @@ impl SessionRuntime {
         if paths.is_empty() {
             return;
         }
-        let path_bufs: Vec<std::path::PathBuf> =
-            paths.into_iter().map(std::path::PathBuf::from).collect();
-        let mut slot = self.file_changed_watcher.write().await;
-        if slot.is_none() {
-            // Build the watcher lazily — most sessions never register
-            // any watch paths, so we avoid spinning up the notify
-            // backend unconditionally.
-            let registry = self.hook_registry.clone();
-            // Capture a static cwd snapshot for the orchestration ctx.
-            // The session-level fields we need (session_id, cwd,
-            // disable flag) don't change mid-session in a way that
-            // would invalidate the watcher's hook firings.
-            let session_id = self.current_session_id().await;
-            let cfg = self.current_engine_config().await;
-            let disable_all_hooks = cfg.disable_all_hooks;
-            let allow_managed_hooks_only = cfg.allow_managed_hooks_only;
-            let project_dir = cfg.project_dir;
-            let cwd = std::env::current_dir().unwrap_or_default();
-            let cancel = self.cancel.clone();
-            let async_registry = self.async_hook_registry.clone();
-            let llm_handle = self.hook_llm_handle.clone();
-            let factory: std::sync::Arc<
-                dyn Fn() -> coco_hooks::orchestration::OrchestrationContext + Send + Sync,
-            > = std::sync::Arc::new(move || coco_hooks::orchestration::OrchestrationContext {
-                session_id: session_id.clone(),
-                cwd: cwd.clone(),
-                project_dir: project_dir.clone(),
-                permission_mode: None,
-                transcript_path: None,
-                agent_id: None,
-                agent_type: None,
-                cancel: cancel.clone(),
-                disable_all_hooks,
-                allow_managed_hooks_only,
-                attachment_emitter: coco_messages::AttachmentEmitter::noop(),
-                sync_event_sink: None,
-                http_url_allowlist: None,
-                http_env_var_policy: None,
-                async_registry: Some(async_registry.clone()),
-                llm_handle: Some(llm_handle.clone()),
-                workspace_trust_accepted: None,
-            });
-            *slot = crate::file_changed_watcher::FileChangedHookWatcher::new(registry, factory);
-        }
-        if let Some(watcher) = slot.as_ref() {
-            watcher.add_paths(path_bufs);
-        }
+        self.file_watch_registration_context()
+            .add_paths(paths)
+            .await;
     }
 
     /// Fire CwdChanged hooks (TS `executeCwdChangedHooks(oldCwd, newCwd)`).
@@ -2357,6 +2436,8 @@ impl SessionRuntime {
             frs.clear();
         }
         self.denial_tracker.lock().await.clear();
+        *self.tool_result_replacement_state.write().await =
+            coco_tool_runtime::tool_result_storage::ContentReplacementState::new(i64::MAX);
         self.reset_cache_break_detectors().await;
     }
 
@@ -2628,6 +2709,8 @@ impl SessionRuntime {
         // a pre-clear message (impossible in practice, but the empty
         // set is the correct invariant per TS `clearSessionCaches`).
         self.transcript_dedup.lock().await.clear();
+        *self.tool_result_replacement_state.write().await =
+            coco_tool_runtime::tool_result_storage::ContentReplacementState::new(i64::MAX);
 
         // Step 5 (TS conversation.ts:245): SessionStart hooks. Result
         // messages seed the post-clear transcript.

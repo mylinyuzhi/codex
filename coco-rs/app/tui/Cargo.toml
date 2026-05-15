@@ -29,6 +29,7 @@ nucleo.workspace = true
 tracing.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 unicode-width.workspace = true
+unicode-segmentation.workspace = true
 # Clipboard (copy_to_clipboard + OSC 52 + arboard + WSL PowerShell fallback).
 # Unavailable on Android; see clipboard_copy.rs for the cfg gating.
 base64.workspace = true

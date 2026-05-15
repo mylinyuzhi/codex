@@ -68,11 +68,56 @@ pub const PTL_RETRY_MARKER: &str = "[earlier conversation truncated for compacti
 
 // ── Result types ────────────────────────────────────────────────────
 
+/// Which compaction flow is asking for a summary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompactSummaryKind {
+    Full,
+    Partial,
+}
+
+/// Structured request sent to the caller-provided compact summarizer.
+///
+/// `messages` contains the conversation slice being summarized as real
+/// role-preserving messages. `context_messages` contains the structured
+/// conversation to send to the summarizer. They differ for partial
+/// "from/newest" compaction, where TS preserves the earlier context on
+/// the first attempt and only summarizes the selected tail.
+///
+/// `summary_request` is the instruction prompt appended by the query layer
+/// as a final user message or fork prompt.
+#[derive(Debug, Clone)]
+pub struct CompactSummaryAttempt {
+    pub messages: Vec<Message>,
+    pub context_messages: Vec<Message>,
+    pub summary_request: String,
+    pub prompt_kind: CompactSummaryKind,
+    pub pre_compact_tokens: i64,
+    pub max_summary_tokens: i64,
+}
+
+/// Successful compact-summary response.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompactSummaryResponse {
+    pub summary: String,
+}
+
+/// Outcome for query-level compaction attempts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompactOutcome {
+    Applied,
+    Skipped,
+    Failed,
+}
+
 /// Result of a full compaction.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompactResult {
     /// Compact boundary marker (system message).
     pub boundary_marker: Message,
+    /// Raw compact summary returned by the summarizer before wrapping it
+    /// in continuation boilerplate. Used by PostCompact hooks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_summary: Option<String>,
     /// Summary messages (the LLM-generated or session-memory summary).
     pub summary_messages: Vec<Message>,
     /// Post-compact attachments (file restore, plan, skills, tools, MCP).
@@ -107,14 +152,11 @@ fn default_trigger() -> CompactTrigger {
 
 /// Info about a re-compaction scenario.
 ///
-/// **Currently unused.** TS uses these fields for the `tengu_compact`
-/// analytics event (H1/H2/H3/H5 chain disambiguation in `compact.ts:317`).
-/// coco-rs has no equivalent analytics path today, so `compact_conversation`
-/// does not accept this struct and the field on `CompactResult.is_recompaction`
-/// is hard-coded to `false` everywhere. When porting analytics, plumb this
-/// through `compact_conversation` and drive its values from a per-engine
-/// last-compact tracker (turn id + run id). Tracked in `audit-gaps.md`
-/// Round 10 as P2.
+/// TS uses these fields for the `tengu_compact` analytics event
+/// (H1/H2/H3/H5 chain disambiguation in `compact.ts:317`). coco-rs
+/// threads the struct through `CompactRunOptions` so compact results
+/// preserve the chain state even though there is no equivalent analytics
+/// event sink today.
 #[derive(Debug, Clone)]
 pub struct RecompactionInfo {
     pub is_recompaction: bool,

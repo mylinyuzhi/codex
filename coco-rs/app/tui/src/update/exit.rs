@@ -27,12 +27,16 @@ use crate::state::AppState;
 /// `on_request_exit` returns.
 ///
 /// * `InterruptOnly` — busy session: cancel, no exit prompt.
-/// * `ArmOnly`       — first idle Ctrl+C / Ctrl+D: no interrupt, only
-///   arm "Press X again to exit" hint.
+/// * `ClearInput`    — idle Ctrl+C with text in the input: clear + save
+///   to history. Mirrors TS `useTextInput.ts:108-120` third callback
+///   and codex-rs `clear_for_ctrl_c` semantics.
+/// * `ArmOnly`       — first idle Ctrl+C / Ctrl+D with empty input: no
+///   interrupt, only arm "Press X again to exit" hint.
 /// * `Quit`          — second press completed the double — shut down.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExitEffect {
     InterruptOnly,
+    ClearInput,
     ArmOnly,
     Quit,
 }
@@ -50,7 +54,20 @@ pub fn on_interrupt(state: &mut AppState, now: Instant) -> ExitEffect {
         state.ui.ctrl_c_tracker.reset();
         return ExitEffect::InterruptOnly;
     }
-    // Path B: idle. Run the double-press machine.
+    // Path B: idle with text in the input → clear it + save to history.
+    // Arms the exit hint so a *second* Ctrl+C immediately after still
+    // exits. Mirrors TS `useTextInput.ts:108-120` (`useDoublePress` third
+    // callback fires when `originalValue` is non-empty: `onChange('') +
+    // setOffset(0) + onHistoryReset`) and codex-rs
+    // `bottom_pane::on_ctrl_c` (`clear_composer_for_ctrl_c`).
+    if !state.ui.input.is_empty() {
+        // Pre-arm the tracker so the *next* idle Ctrl+C within the window
+        // hits the Quit path. We don't take the Double outcome here — a
+        // single arm matches TS's "show hint after clear" UX.
+        state.ui.ctrl_c_tracker.poll((), now);
+        return ExitEffect::ClearInput;
+    }
+    // Path C: idle + empty. Run the double-press machine.
     if state.ui.ctrl_c_tracker.poll((), now) == Outcome::Double {
         return ExitEffect::Quit;
     }

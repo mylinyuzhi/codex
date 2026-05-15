@@ -195,7 +195,9 @@ impl Theme {
             text_bold: Color::Reset,
 
             user_message: Color::Green,
-            user_message_bg: None,
+            // Subtle dark tint — slightly above typical dark-terminal
+            // background so user rows separate visually from prose.
+            user_message_bg: Some(Color::Rgb(30, 36, 42)),
             assistant_message: Color::Cyan,
             thinking: Color::Magenta,
             system_message: Color::DarkGray,
@@ -244,7 +246,7 @@ impl Theme {
             text_bold: Color::Reset,
 
             user_message: Color::LightGreen,
-            user_message_bg: None,
+            user_message_bg: Some(Color::Rgb(30, 36, 42)),
             assistant_message: Color::LightCyan,
             thinking: Color::LightMagenta,
             system_message: Color::DarkGray,
@@ -293,7 +295,9 @@ impl Theme {
             text_bold: Color::Reset,
 
             user_message: Color::Green,
-            user_message_bg: None,
+            // Subtle light tint for light-background terminals — keeps
+            // user rows distinguishable without overpowering the prose.
+            user_message_bg: Some(Color::Rgb(232, 236, 242)),
             assistant_message: Color::Cyan,
             thinking: Color::Magenta,
             system_message: Color::DarkGray,
@@ -368,6 +372,9 @@ impl Theme {
             text_bold: Color::Reset,
 
             user_message: Color::LightGreen,
+            // ANSI-only theme: skip the RGB tint that the truecolor
+            // themes use — readers on ANSI-strict terminals get the
+            // `❯` prefix as the user-row marker.
             user_message_bg: None,
             assistant_message: Color::LightCyan,
             thinking: Color::LightMagenta,
@@ -416,6 +423,9 @@ impl Theme {
             text_bold: Color::Reset,
 
             user_message: Color::Green,
+            // ANSI-only theme: skip the RGB tint that the truecolor
+            // themes use — readers on ANSI-strict terminals get the
+            // `❯` prefix as the user-row marker.
             user_message_bg: None,
             assistant_message: Color::Cyan,
             thinking: Color::Magenta,
@@ -468,7 +478,9 @@ impl Theme {
             text_bold: Color::Reset,
 
             user_message: Color::Rgb(80, 250, 123), // green
-            user_message_bg: None,
+            // Dracula's `currentLine` — sits one tone above the base
+            // background, matching the project's UI conventions.
+            user_message_bg: Some(Color::Rgb(68, 71, 90)),
             assistant_message: Color::Rgb(139, 233, 253),
             thinking: Color::Rgb(189, 147, 249), // purple
             system_message: Color::DarkGray,
@@ -520,7 +532,9 @@ impl Theme {
             text_bold: Color::Reset,
 
             user_message: Color::Rgb(163, 190, 140), // nord14
-            user_message_bg: None,
+            // Nord's `polar night 2` — one tone above the base
+            // background, matching the project's UI accent regions.
+            user_message_bg: Some(Color::Rgb(59, 66, 82)),
             assistant_message: Color::Rgb(136, 192, 208),
             thinking: Color::Rgb(180, 142, 173),
             system_message: Color::DarkGray,

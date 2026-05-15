@@ -367,17 +367,16 @@ pub trait Tool: Send + Sync {
     /// the conversation.
     ///
     /// `i64::MAX` opts the tool out of persistence — its results stay
-    /// inline regardless of length. The aggregate per-message budget
-    /// from `compact.tool_result_budget.per_message_chars` still
-    /// applies via `apply_tool_result_budget` (Level 2). Tools whose
+    /// inline regardless of length. Tools whose
     /// output is canonical (e.g. `Read` on a tracked file the model
     /// will read again) opt out so persistence isn't circular.
     ///
     /// TS: `Tool.maxResultSizeChars` (default
-    /// `DEFAULT_MAX_RESULT_SIZE_CHARS = 50_000`). Override per-tool
-    /// to declare an opt-out (`i64::MAX`) or a tighter cap.
+    /// `100_000`, clamped by `DEFAULT_MAX_RESULT_SIZE_CHARS = 50_000`).
+    /// Override per-tool to declare an opt-out (`i64::MAX`) or a
+    /// tighter cap.
     fn max_result_size_chars(&self) -> i64 {
-        i64::MAX
+        crate::tool_result_storage::DEFAULT_TOOL_MAX_RESULT_SIZE_CHARS
     }
 
     /// MCP server/tool info (for MCP-wrapped tools).

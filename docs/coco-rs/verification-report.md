@@ -4,6 +4,11 @@
 TS 文件总数: 1884
 Plan doc 总数: 22 (含本报告)
 
+> 2026-05-14 freshness note: this is a historical verification snapshot.
+> Current fix ordering lives in `current-gap-fix-plan.md`; the Round 5 rows
+> F16/F17/F18/F20/F21 below have been rechecked and are no longer open plan-doc
+> blockers.
+
 ---
 
 ## 1. 目录级覆盖: 53/53 (100%)
@@ -103,12 +108,12 @@ NormalizedMessage, SystemMessageLevel, PartialCompactDirection。全部在 crate
 | F13 | SubagentType enum 未定义 | **FIXED** → added 7-variant enum to crate-coco-types.md |
 | F14 | ShellType vs ShellKind | **FIXED** → unified to ShellKind in coco-hooks + coco-config |
 | F15 | EffortValue vs EffortLevel | **FIXED** → unified to EffortLevel in coco-types + coco-inference |
-| F16 | BuiltinPluginDefinition 层级违反 | **OPEN** (P2 — implementation-time) |
-| F17 | SkillDefinition.hooks 类型 | **OPEN** (P2 — implementation-time) |
-| F18 | MessageRole 未定义 | **OPEN** (P3 — implementation-time) |
+| F16 | BuiltinPluginDefinition 层级违反 | **FIXED** → `manifest` uses `serde_json::Value`; plugin crate deserializes |
+| F17 | SkillDefinition.hooks 类型 | **FIXED** → `Option<serde_json::Value>` |
+| F18 | MessageRole 未定义 | **SUPERSEDED** → message APIs use `MessageKind`; system-reminder has local `MessageRole` |
 | F19 | ThinkingLevel 名称冲突 (config enum vs inference struct) | **FIXED** → 移除 config enum，struct 移至 coco-types，ModelInfo 字段恢复 |
-| F20 | TaskStateBase 双重定义 (coco-types vs coco-tasks) | **OPEN** (P2 — implementation-time) |
-| F21 | OAuthTokens 冲突 (coco-inference vs coco-mcp) | **OPEN** (P2 — implementation-time) |
+| F20 | TaskStateBase 双重定义 (coco-types vs coco-tasks) | **FIXED** → `coco-tasks` uses `coco_types::TaskStateBase` |
+| F21 | OAuthTokens 冲突 (coco-inference vs coco-mcp) | **ACCEPTED** → distinct crate-local structs; docs use `ApiOAuthTokens` / `McpOAuthTokens` naming for ownership clarity |
 
 ### String→Enum Audit Summary (Round 5 — 2026-04-03)
 

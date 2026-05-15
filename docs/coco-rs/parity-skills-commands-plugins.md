@@ -8,12 +8,24 @@ Status legend: ✅ aligned · ⚠️ partial / drift · ❌ missing.
 
 ---
 
-## 0. Top-level seam (P1, blocks everything below)
+## 0. Top-level seam (reviewed 2026-05-14)
 
-The `CommandRegistry` constructor in TS resolves order: **bundled-skill commands → builtin-plugin skill commands → marketplace-plugin commands → on-disk skill dirs (managed → user → project → legacy `commands/`) → built-in slash commands** (`commands.ts` + `loadPluginCommands.ts:1-120`).
+Status: ⚠️ implemented, with final collision-order parity still worth checking.
 
-- **Rust today** (`commands/src/lib.rs:60`): `CommandRegistry::new() -> Default::default()`. The seam is empty — `register_builtins()` and `register_extended_builtins()` are called in isolation, with **no skill→command bridging and no plugin→command bridging**.
-- **Mirror plan**: change to `CommandRegistry::build(cwd, &SkillManager, &PluginManager)`; emit registrations in the exact TS order (see §0.1). All P1 items below assume this seam exists.
+The `CommandRegistry` constructor in TS resolves order:
+**bundled-skill commands → builtin-plugin skill commands → marketplace-plugin
+commands → on-disk skill dirs (managed → user → project → legacy `commands/`)
+→ built-in slash commands** (`commands.ts` + `loadPluginCommands.ts:1-120`).
+
+- **Current Rust** (`commands/src/lib.rs::build_command_registry`):
+  the prior seam gap is gone. The builder takes `SkillManager` and
+  `PluginManager`, bridges visible skills into commands, registers plugin
+  contributions, and appends TS-parity handlers (`/rewind`, `/memory`,
+  `/init`, prompt-type commands).
+- **Remaining check**: TS makes hardcoded slash commands win last. Current Rust
+  registers hardcoded commands first, then skills/plugins, then TS-parity
+  handlers. That fixes the key P1 handlers but should be audited for every
+  built-in command collision.
 
 ### 0.1 Resolution order (verified)
 
@@ -33,7 +45,7 @@ Last-wins for name collisions, with one exception: bundled commands cannot be ov
 
 ## 1. Skills
 
-### 1.1 Bundled-skill file extraction & `skillRoot` ❌ P1
+### 1.1 Bundled-skill file extraction & `skillRoot` ✅ resolved
 
 - **TS source**: `skills/bundledSkills.ts:53-220`.
 - **Define**:
@@ -54,65 +66,62 @@ Last-wins for name collisions, with one exception: bundled commands cannot be ov
   5. After extraction succeeds, `prependBaseDir(blocks, dir)` injects `Base directory for this skill: <dir>\n\n` into the first text block (or as a new leading block).
   6. On extract failure → log, return `null`, prompt still works without the prefix.
 - **UI**: invisible to user. The model sees `Base directory for this skill: /…/<nonce>/<name>` and uses it for Read/Bash/Grep against bundled reference files.
-- **Rust today** (`skills/src/bundled.rs`): `prompt: String` is `include_str!`'d at compile time. No `files`, no `skillRoot`, no extraction, no per-process nonce.
-- **Mirror plan**:
-  - Add `files: Option<HashMap<String, &'static str>>` (compile-time map) on `BundledSkillSpec`.
-  - At first invocation, extract to `~/.coco/bundled-skills/<process-nonce>/<name>/` using `nix`/`rustix` for `O_NOFOLLOW|O_EXCL`. Use a `tokio::sync::OnceCell<Result<PathBuf>>` per skill for the memoized promise.
-  - Pre-flight path validation with the same two-pass `..` check.
-  - On success, set `SkillDefinition.skill_root = Some(dir)` and have the runtime prepend `Base directory for this skill: <dir>\n\n` to the prompt at injection time (`coco-context::skill_listing`).
-  - Test case: concurrent `tokio::spawn` × 10 must produce exactly one extraction and same dir.
+- **Current Rust**:
+  - `SkillDefinition` has `files: HashMap<String, String>` and
+    `skill_root: Option<PathBuf>` (`skills/src/lib.rs`).
+  - `skills/src/extraction.rs` implements the per-process nonce dir,
+    `O_EXCL|O_NOFOLLOW` write path, `0o700`/`0o600` modes, path validation,
+    and `OnceCell` memoization.
+  - `skills/src/prompt_render.rs` prepends the base-directory text after
+    extraction.
+- **Remaining check**: keep tests pinned for concurrent extraction and ensure
+  any newly-added bundled skill with non-empty files uses this path.
 
-### 1.2 Lazy `getPromptForCommand(args, ctx)` ❌ P1
+### 1.2 Lazy `getPromptForCommand(args, ctx)` ⚠️ partial
 
 - **TS source**: `skills/bundled/*.ts` (10 unconditional skills + 7 feature-gated). Each `register*Skill()` provides an async closure.
 - **Behavior**: TS resolves prompts at invocation time, allowing arg substitution (`$ARGUMENTS`, `$1`…), shell expansion (`$(date)` → result string via `executeShellCommandsInPrompt`), env inspection, and conditional content per `ToolUseContext`.
 - **UI**: invisible — user types `/skill arg1 arg2`, model gets fully-rendered `ContentBlockParam[]`.
-- **Rust today**: `SkillDefinition.prompt: String` is static. `shell_exec.rs` runs at *load* time, not invocation time. Argument substitution exists for disk skills (`argument_substitution.rs` parity unverified) but not for bundled.
-- **Mirror plan**:
-  - Replace `SkillDefinition.prompt: String` for bundled skills with a function pointer `render: fn(args: &str, ctx: &SkillRenderContext) -> Vec<PromptPart>`.
-  - For TOML/MD-disk skills, keep `prompt: String` but route through `expand_args(prompt, args)` + `execute_shell_in_prompt(prompt, ctx)` at invocation, not load.
-  - `PromptPart` mirrors `ContentBlockParam`: `Text { text } | Image { … } | Document { … }`.
+- **Current Rust**: `skills/src/prompt_render.rs::render_skill_prompt`
+  performs invocation-time argument expansion, shell-command expansion, and
+  base-directory injection for disk and bundled skills.
+- **Remaining gap**: TS supports richer `ContentBlockParam[]` return shapes.
+  Rust command runners still warn on `Prompt::File` parts in TUI, so file
+  prompt-part routing remains tracked in
+  `current-gap-fix-plan.md#p23-prompt-file-parts`.
 
-### 1.3 Bundled skill inventory drift ⚠️ P1
+### 1.3 Bundled skill inventory drift ✅ resolved
 
-Verified TS unconditional registrations (`skills/bundled/index.ts:24-34`): `update-config, keybindings, verify, debug, lorem-ipsum, skillify, remember, simplify, batch, stuck` (10).
+Verified TS registrations:
 
-Feature-gated (`index.ts:35-78`): `dream` (KAIROS|KAIROS_DREAM), `hunter` (REVIEW_ARTIFACT), `loop` (AGENT_TRIGGERS), `schedule` (AGENT_TRIGGERS_REMOTE), `claude-api` (BUILDING_CLAUDE_APPS), `claude-in-chrome` (auto-detect), `run-skill-generator` (RUN_SKILL_GENERATOR).
+- Unconditional / ant-scoped: `update-config`, `keybindings`, `verify`,
+  `debug`, `lorem-ipsum`, `skillify`, `remember`, `simplify`, `batch`,
+  `stuck`.
+- Feature-gated: `dream`, `hunter`, `loop`, `schedule`, `claude-api`,
+  `claude-in-chrome`, `run-skill-generator`.
 
-Coco-rs (`skills/src/bundled.rs:47-264`): `commit, review-pr, pdf, simplify, verify, update-config, keybindings-help, remember, stuck, batch, loop, debug, skillify, lorem-ipsum, claude-api, schedule` (16).
+**Current Rust** (`skills/src/bundled.rs`) now matches that shape:
 
-| Skill | TS registration | Rust | Action |
-|---|---|---|---|
-| update-config | unconditional | ✅ | — |
-| keybindings(-help) | unconditional, `userInvocable:false` | ✅ (matches) | — |
-| verify | unconditional | ✅ | — |
-| debug | unconditional, `disableModelInvocation:true` | ✅ (matches) | — |
-| lorem-ipsum | unconditional | ✅ | — |
-| skillify | unconditional | ✅ | — |
-| remember | unconditional | ✅ | — |
-| simplify | unconditional | ✅ | — |
-| batch | unconditional, `disableModelInvocation:true` | ✅ (matches) | — |
-| stuck | unconditional | ✅ | — |
-| loop | gated `AGENT_TRIGGERS` | unconditional | gate via `Feature::AgentTriggers` |
-| schedule | gated `AGENT_TRIGGERS_REMOTE` | unconditional | gate via `Feature::AgentTriggersRemote` |
-| claude-api | gated `BUILDING_CLAUDE_APPS` | unconditional | gate via `Feature::BuildingClaudeApps` |
-| claude-in-chrome | auto-detect (`shouldAutoEnableClaudeInChrome`) | ❌ | port detection helper |
-| dream | gated `KAIROS\|KAIROS_DREAM` | ❌ | port (KAIROS feature flag) |
-| hunter | gated `REVIEW_ARTIFACT` | ❌ | port |
-| run-skill-generator | gated `RUN_SKILL_GENERATOR` | ❌ | port |
-| commit | not in TS bundled | extra | **delete** — TS ships `/commit` as a top-level *command*, not a bundled skill (`commands/commit.ts`) |
-| review-pr | not in TS bundled | extra | **delete** — `commands/review.ts` covers this |
-| pdf | not in TS bundled | extra | **delete** — Read tool already supports PDF (`crate-coco-tools.md`) |
+- Rust-only extras `commit`, `review-pr`, and `pdf` were removed from bundled
+  skills.
+- The gated skills are present and mapped through `Feature::*`.
+- Ant-only registration is handled by `UserType`.
 
-- **Mirror plan**: drop `commit`, `review-pr`, `pdf` from bundled; add the 4 missing gated skills with `is_enabled: Option<fn() -> bool>` + a `Feature` lookup; verify model/tool/disable-flags match TS per-skill files.
+**Remaining check**: `claude-in-chrome` is represented as
+`Feature::ClaudeInChrome`; verify the feature's resolver preserves the TS
+auto-detect behavior.
 
-### 1.4 `isEnabled()` callback per-skill ❌ P1
+### 1.4 `isEnabled()` callback per-skill ✅ resolved
 
 - **TS**: `Command.isEnabled?: () => boolean` at `types/command.ts`. Used by every gated skill plus the loop skill (`registerLoopSkill` delegates to `isKairosCronEnabled()` per-invocation, so even if AGENT_TRIGGERS is on, the skill hides if cron is off).
 - **Behavior**: command typeahead, `/help`, and Skill-tool listing all check `isEnabled()` per-keystroke. Bundled skills register unconditionally; visibility flips at runtime.
 - **UI**: skills appear/disappear in the `/`-typeahead and `Skill` tool's "available skills" panel **without a session reload**.
-- **Rust today** (`commands/src/lib.rs:35`): `IsEnabledFn = fn() -> bool` exists on `RegisteredCommand` but **`SkillDefinition` has no equivalent** — bundled skills are registered at startup via `register_bundled()` and stay in the registry forever.
-- **Mirror plan**: add `pub is_enabled: Option<fn(&Features) -> bool>` to `SkillDefinition`. Filter at every read site: `SkillManager::visible_skills(features)`, `inject_skill_listing()`, `to_commands()`. Keep `register()` insertion stable so toggling feature flags re-shows the skill.
+- **Current Rust**:
+  - `SkillDefinition.gated_by: Option<Feature>` and
+    `SkillDefinition::is_enabled(&Features)` exist.
+  - `SkillManager::visible(features)` filters at read time.
+  - `commands/src/lib.rs::register_skills_as_commands` bridges only visible
+    skills into slash-command registration.
 
 ### 1.5 `paths` glob conditional activation ⚠️ P2
 
@@ -152,7 +161,7 @@ Coco-rs (`skills/src/bundled.rs:47-264`): `commit, review-pr, pdf, simplify, ver
 
 ## 2. Slash Commands
 
-### 2.1 `/rewind` ❌ P1
+### 2.1 `/rewind` ✅ resolved
 
 - **TS source**: `commands/rewind/rewind.ts:1-13` (call) + `Tool.ts` (`openMessageSelector` callback) + `utils/fileHistory.ts` (~1110 LOC).
 - **Define**:
@@ -174,15 +183,16 @@ Coco-rs (`skills/src/bundled.rs:47-264`): `commit, review-pr, pdf, simplify, ver
   - Each row: timestamp + first-line preview of the user message (240-char trunc).
   - Compact boundaries shown as a horizontal dim rule line; entries above are non-selectable.
   - On confirm: a system-line "Rewound to <preview>. Restored N file(s)." then control returns to prompt with the conversation truncated.
-- **Rust today** (`commands/src/handlers/`): no rewind handler.
-- **Mirror plan** (mirroring TS exactly):
-  - **types**: `coco-types::CoreEvent::Tui::OpenMessageSelector` (new variant); `coco-tui::overlays::message_selector` widget.
-  - **fileHistory port** (new crate `coco-context::file_history`): content-addressed store at `~/.coco/file-history/<sha>/`. On every Edit/Write tool result, append `{message_uuid, path, before_sha, after_sha}` to in-memory ordered Vec (NOT HashMap — order matters for replay).
-  - **handler**: `RewindHandler::execute(args, ctx)` emits `CoreEvent::Tui::OpenMessageSelector` and returns `Skip`.
-  - **selector widget**: ratatui list, filter callback, compact-boundary rendering as a `ratatui::widgets::Block::default().borders(Borders::TOP)` with dim title "compact boundary".
-  - **truncate + restore**: `MessageHistory::truncate_after(uuid)` then `FileHistory::restore_to(uuid)` (replay before→after deltas in reverse).
+- **Current Rust**:
+  - `commands/src/handlers/rewind.rs` returns
+    `CommandResult::OpenDialog(DialogSpec::MessageSelector)`.
+  - `core/context/src/file_history.rs` implements content-addressed
+    snapshots, edit tracking, rewind, diff preview, and resume migration.
+  - TUI has rewind overlay presentation/state, and `tui_runner.rs` wires code
+    and conversation rewind through `handle_rewind`.
+  - SDK exposes `control/rewindFiles`.
 
-### 2.2 `/compact` ❌ P1
+### 2.2 `/compact` ⚠️ mostly resolved
 
 - **TS source**: `commands/compact/compact.ts:1-287`.
 - **Define**: `LocalCommandCall(args, context) -> CompactionResult | error`.
@@ -205,15 +215,16 @@ Coco-rs (`skills/src/bundled.rs:47-264`): `commit, review-pr, pdf, simplify, ver
   ${upgradeMessage}                // optional from getUpgradeMessage('tip')
   ```
   Rendered via `chalk.dim(...)`. The `(ctrl+o to see full summary)` line is **hidden when `verbose=true`**. On reactive: emits `setSDKStatus('compacting')` and progress events `{type:'hooks_start'|'compact_start'|'compact_end'}`.
-- **Rust today** (`commands/src/handlers/compact.rs`, ~72 LOC): prints "Compacting…" string. No wiring to `coco-compact`.
-- **Mirror plan**:
-  - Wire to `coco-compact::{compact_conversation, microcompact_messages, try_session_memory_compaction, run_post_compact_cleanup, mark_post_compaction, suppress_compact_warning}`. These all exist in plan; verify implementation in `compact` crate.
-  - Reactive path gated by `Feature::ReactiveCompact` (already in `Feature` enum per `feature-gates-and-tool-filtering.md`).
-  - **CoreEvent emissions** (UI parity): `Tui::CompactStart`, `Tui::HooksStart {hook_type: PreCompact}`, `Tui::CompactEnd`, `Tui::SetStatus("compacting")`.
-  - **Return shape**: `CommandResult::Compact(CompactionResult)` (new variant) — currently Rust has only `Text`/`InjectPrompt`/`Skip`.
-  - **Display string**: build via `coco-tui::format::dim_lines` with the `(<shortcut> to see full summary)` line conditional on `!verbose`.
+- **Current Rust**:
+  - `commands/src/handlers/compact.rs` emits a sentinel parsed by TUI and SDK
+    runners.
+  - `app/query/src/engine_compaction.rs::run_manual_compact` drives the real
+    manual compaction path with session-memory-first behavior and LLM fallback.
+  - `CommandResult::Compact` exists for precomputed summary paths.
+- **Remaining gap**: verify display-string parity and reactive-only manual
+  behavior against TS. This is no longer a "no wiring to coco-compact" gap.
 
-### 2.3 `/init` ❌ P1
+### 2.3 `/init` ✅ resolved
 
 - **TS source**: `commands/init.ts:1-256`. Type: `'prompt'`. Two prompts gated by `feature('NEW_INIT')` AND `(USER_TYPE='ant' || CLAUDE_CODE_NEW_INIT truthy)`.
 - **Behavior**:
@@ -221,15 +232,11 @@ Coco-rs (`skills/src/bundled.rs:47-264`): `commit, review-pr, pdf, simplify, ver
   2. Returns `[{type:'text', text: NEW_INIT_PROMPT | OLD_INIT_PROMPT}]`.
   3. The agent then runs an 8-phase guided flow (Phase 1 ask via `AskUserQuestion`, Phase 2 codebase survey via subagent, Phase 3 fill gaps with `preview` markdown panel, Phases 4-7 write CLAUDE.md / CLAUDE.local.md / `.claude/skills/` / hooks / Phase 8 summary).
 - **UI**: this command's UI is ENTIRELY agent-driven via `AskUserQuestion` overlays. The `progressMessage: 'analyzing your codebase'` shows in the streaming status line.
-- **Rust today** (`commands/src/handlers/`): partial `init_handler_async` checks file existence only.
-- **Mirror plan**:
-  - Mark as `CommandType::Prompt` (not `Local`). Builder returns the verbatim NEW_INIT_PROMPT or OLD_INIT_PROMPT string based on `Feature::NewInit` AND (`UserType::Ant` || env `COCO_NEW_INIT`).
-  - Inline the **full 256-line prompt** in `commands/src/prompts/init_new.txt` and `init_old.txt` via `include_str!`. Do NOT paraphrase — the prompt is the contract.
-  - Hook `maybe_mark_project_onboarding_complete()` into `coco-state::project_onboarding`.
-  - Verify `Feature::NewInit` exists; if not add to `coco-types::Feature`.
-  - `progressMessage: "analyzing your codebase"` → `CommandBase.progress_message`.
+- **Current Rust**: `commands/src/handlers/init_prompt.rs` returns
+  `CommandResult::Prompt`, loads the prompt text from `commands/src/prompts/`,
+  and has focused tests. Keep future changes pinned to TS prompt text.
 
-### 2.4 `/memory` ❌ P1
+### 2.4 `/memory` ⚠️ dialog resolved, editor action still verify
 
 - **TS source**: `commands/memory/memory.tsx:1-89` — type: `'local-jsx'`.
 - **Define**: `LocalJSXCommandCall = async (onDone) => ReactNode`.
@@ -242,33 +249,35 @@ Coco-rs (`skills/src/bundled.rs:47-264`): `commit, review-pr, pdf, simplify, ver
   - Dialog with `color: 'remember'` (palette key).
   - File selector lists: enterprise/managed → user-global → project → CLAUDE.local.md → subdir CLAUDE.md files.
   - Bottom margin: dim text "Learn more: https://code.claude.com/docs/en/memory".
-- **Rust today** (`commands/src/handlers/memory.rs`, ~170 LOC): list-only.
-- **Mirror plan**:
-  - Add `CommandResult::OpenDialog(DialogSpec)` variant; `DialogSpec::MemoryFileSelector { entries: Vec<MemoryFileEntry> }`.
-  - TUI overlay `coco-tui::overlays::memory_dialog` mirrors the TS Ink dialog (title "Memory", color = palette `remember`).
-  - File ops: tokio::fs `create_dir_all`, then `OpenOptions::new().write(true).create_new(true).open(...)` (≡ `flag:'wx'` — error::AlreadyExists is the EEXIST analogue, swallow it).
-  - Editor open via `coco-utils::prompt_editor::open_in_editor` (port `utils/promptEditor.ts`).
-  - System message format string MUST match TS verbatim — UI testing keys on it.
+- **Current Rust**: `commands/src/handlers/memory_dialog.rs` returns
+  `CommandResult::OpenDialog(DialogSpec::MemoryFileSelector { entries })` and
+  tests the entry ordering.
+- **Remaining gap**: verify the full TUI select/open-editor flow and exact
+  system messages. Older audits understated this as a read-only listing path.
 
-### 2.5 `/security-review`, `/insights`, `/brief`, `/advisor` ❌ P1
+### 2.5 Prompt-type commands ⚠️ partial
 
 All four are top-level `Prompt` commands (not directory commands). Verified files: `commands/security-review.ts:243`, `insights.ts:3200` (large, generates an analytics dashboard prompt), `brief.ts:130`, `advisor.ts:109`.
 
 - **Define**: `{ type: 'prompt', name, description, getPromptForCommand: async (args, ctx) => ContentBlockParam[] }`.
 - **Behavior**: the command body returns a static prompt; the model does the work via tool calls in subsequent turns.
 - **UI**: progress message in the status line; everything else is normal stream output.
-- **Rust today**: declared in `implementations.rs` as stubs; **`Prompt`-type execution path is not wired into `coco-query`**. Even if the handler returns the right text, nothing runs the model loop on it.
-- **Mirror plan**:
-  - Add `CommandResult::Prompt(Vec<PromptPart>)`. `coco-query::execute_command` routes this back into the agent loop as a synthesized user message (TS `processSlashCommand` does this).
-  - Port the four prompt bodies verbatim from TS to `commands/src/prompts/*.txt`. Wire each into `register_extended_builtins`.
+- **Current Rust**:
+  - `CommandResult::Prompt { parts, .. }` exists and TUI/SDK runners route text
+    parts back into the agent loop.
+  - `/security-review`, `/insights`, and `/commit-push-pr` are registered via
+    prompt handlers.
+- **Remaining gaps**:
+  - `Prompt::File` parts are still dropped by the TUI runner with a warning.
+  - `/brief` and `/advisor` need a current source check before marking resolved.
 
-### 2.6 `/commit-push-pr` ❌ P2
+### 2.6 `/commit-push-pr` ✅ resolved
 
 - **TS source**: `commands/commit-push-pr.ts:158`. Single command that orchestrates `git add → git commit → git push → gh pr create` via a guided agent prompt.
 - **Behavior**: prompt asks the agent to (1) inspect diff, (2) draft message + PR body, (3) execute the chain with confirmations between steps.
 - **UI**: same as any prompt command — visible in `/`-typeahead under "git workflow" group.
-- **Rust today**: `/commit` and `/pr` exist separately; no orchestrator.
-- **Mirror plan**: port verbatim prompt; register as `Prompt` command.
+- **Current Rust**: `commands/src/handlers/commit_push_pr.rs` implements the
+  orchestrated prompt path and tests the non-git and prompt-output behavior.
 
 ### 2.7 `createMovedToPluginCommand` migration helper ❌ P2
 
@@ -311,7 +320,7 @@ For each: port the TS prompt or local action verbatim; reuse Rust handler scaffo
 
 ## 3. Plugins
 
-### 3.1 Three-layer refresh ❌ P1
+### 3.1 Three-layer refresh ⚠️ partial
 
 - **TS source**: `utils/plugins/refresh.ts:1-216` (Layer 3) + `utils/plugins/reconciler.ts:1-265` (Layer 2). `installedPluginsManager.ts:1268` writes Layer-1 intent.
 - **Define**:
@@ -342,16 +351,18 @@ For each: port the TS prompt or local action verbatim; reuse Rust handler scaffo
   - Interactive: `useManagePlugins` sets `needsRefresh` notification ("Plugins changed. Run /reload-plugins to apply."). Layer-3 refresh runs only on explicit `/reload-plugins` (PR 5b/5c — never on auto-effect to avoid thrashing).
   - Headless: `print.ts → refreshPluginState()` runs Layer-3 once before first query under `SYNC_PLUGIN_INSTALL`.
   - Background: `performBackgroundPluginInstallations()` after a new marketplace install (Layer-2 result triggers Layer-3).
-- **Rust today** (`plugins/src/lib.rs`, `loader.rs`): only stubs.
-- **Mirror plan** (verified call sites):
-  - **Layer 2** in `coco-plugins::reconciler::reconcile_marketplaces(opts) -> ReconcileResult`. Mirror the diff buckets + fallback flag exactly. Source-idempotency via marketplace name + content hash.
-  - **Layer 3** in `coco-plugins::refresh::refresh_active_plugins(set_app_state) -> RefreshActivePluginsResult`. Sequence as TS — `load_all_plugins().await` THEN parallel command/agent loads.
-  - Bump `AppState.mcp.plugin_reconnect_key`; downstream MCP connection manager picks up new servers on next tick.
-  - `coco-lsp::reinitialize_server_manager()` called unconditionally.
-  - Hook-load failure isolated: `try { load_plugin_hooks().await } catch { error_count++ }`.
-  - **Notification** in TUI: `CoreEvent::Tui::PluginsNeedRefresh { count }`. `useManagePlugins` analogue lives in `coco-state::plugins::needs_refresh: AtomicBool`.
+- **Current Rust**:
+  - `plugins/src/refresh.rs` implements Layer 2 marketplace reconciliation and
+    a Layer 3 `refresh_active_plugins` result shape.
+  - `/plugin install` records installed plugins, but
+    `commands/src/handlers/plugin.rs` still tells users live engine refresh is
+    deferred until restart.
+- **Remaining gap**: wire refresh results into `SessionRuntime` / `AppState`
+  so skills, hooks, agents, commands, MCP servers, and LSP state update without
+  restart. This is the top P1 plugin item in
+  `current-gap-fix-plan.md#p11-plugin-install-and-refresh-lifecycle`.
 
-### 3.2 Dependency resolver ❌ P1
+### 3.2 Dependency resolver ✅ resolved
 
 - **TS source**: `utils/plugins/dependencyResolver.ts:1-305` (verified in full above).
 - **Define**:
@@ -380,10 +391,12 @@ For each: port the TS prompt or local action verbatim; reuse Rust handler scaffo
   - `formatDependencyCountSuffix([dep1,dep2])` → `" (+ 2 dependencies)"` (singular/plural).
   - `formatReverseDependentsSuffix(['A','B'])` → `" — warning: required by A, B"`.
   - `'cross-marketplace'` errors shown in `/plugin install` flow with "—why blocked + how to override (install dep yourself first)".
-- **Rust today**: signatures only.
-- **Mirror plan**: port verbatim — pure functions, no I/O, deterministic test surface. Use `coco-types::PluginId` (= `name@marketplace` newtype).
+- **Current Rust**: `plugins/src/dependency.rs` is a pure-function port with
+  DFS closure resolution, cycle detection, cross-marketplace enforcement,
+  fixed-point demotion, reverse dependents, and formatting helpers. Unit tests
+  cover the TS edge cases.
 
-### 3.3 MCPB (`.mcpb`/`.dxt`) bundles ❌ P1
+### 3.3 MCPB (`.mcpb`/`.dxt`) bundles ⚠️ partial
 
 - **TS source**: `utils/plugins/mcpbHandler.ts:968` + `zipCache.ts:406` + `zipCacheAdapters.ts:164` (= 1538 LOC total).
 - **Define / Behavior**:
@@ -396,16 +409,16 @@ For each: port the TS prompt or local action verbatim; reuse Rust handler scaffo
   - First-time install: `/plugin install <mcpb-source>` shows a "Configure MCPB" overlay with form fields per `configSchema` property.
   - Validation errors shown inline.
   - Successful install: shows server name + count of tools exposed.
-- **Rust today**: zero.
-- **Mirror plan**:
-  - New module `coco-plugins::mcpb` (~300 LOC):
-    - `parse_mcpb_archive(bytes) -> (Manifest, Vec<File>)` via `zip` crate.
-    - `validate_config_schema(schema, user_config) -> Result<ResolvedConfig, Vec<Error>>` — JSONSchema subset matching TS shape.
-    - `extract_to_cache(sha, files) -> PathBuf` — content-addressed.
-    - `cache_metadata.json` sidecar with `{source_url, sha, extracted_at, last_used}`.
-  - TUI overlay: `coco-tui::overlays::mcpb_config` — form widget driven by JSONSchema properties.
+- **Current Rust**:
+  - `plugins/src/mcpb.rs` parses ZIP archives, extracts to a content-addressed
+    cache, parses `manifest.json`, writes cache metadata, builds an MCP server
+    config, and returns `McpbLoadStatus::NeedsConfig` when config is missing.
+- **Remaining gaps**:
+  - Full TS-subset JSONSchema validation is still TODO in `mcpb.rs`.
+  - Slash-command / CLI install surfaces and TUI config overlay need parity
+    verification.
 
-### 3.4 Validation & security ❌ P1
+### 3.4 Validation & security ✅ resolved
 
 - **TS source**: `utils/plugins/validatePlugin.ts:903`.
 - **Behavior — three pillars**:
@@ -418,12 +431,15 @@ For each: port the TS prompt or local action verbatim; reuse Rust handler scaffo
      - `blocked_marketplaces: string[]` — explicit blocklist.
      - `strict_plugin_only_customization: bool` — users can't install plugins outside `Managed` scope.
 - **UI**: install flow rejects with clear reason ("This plugin name impersonates an official plugin." / "Marketplace 'X' is blocked by policy."). `/doctor` shows policy state.
-- **Rust today**: warn-only manifest validation.
-- **Mirror plan**:
-  - `coco-plugins::security::{validate_paths, check_impersonation, is_blocked_by_policy}`. Use `unicode-normalization` crate for NFKD.
-  - `EnterprisePluginPolicy` already in `crate-coco-plugins.md`; wire into `PluginManager::load()`.
+- **Current Rust**:
+  - `plugins/src/security.rs` implements path validation, resolved-root checks,
+    official-name impersonation, homograph checks, and enterprise policy
+    blocking.
+  - `plugins/src/schemas.rs` validates marketplace names and official-source
+    ownership.
+  - `plugins/src/errors.rs` has the typed plugin error taxonomy.
 
-### 3.5 Builtin plugin registry ❌ P1
+### 3.5 Builtin plugin registry ⚠️ registry resolved, UI verify
 
 - **TS source**: `plugins/builtinPlugins.ts:1-159`.
 - **Define**:
@@ -447,12 +463,13 @@ For each: port the TS prompt or local action verbatim; reuse Rust handler scaffo
   - `/plugin` overlay shows a "Built-in" section with each builtin plugin, toggleable.
   - The plugin card lists contributed skills/hooks/MCP servers.
   - Toggling persists to user settings (`settings.json:enabledPlugins`).
-- **Rust today**: marketplace constants exist (`OFFICIAL_MARKETPLACE_NAME`); **no builtin plugin registry**.
-- **Mirror plan**:
-  - `coco-plugins::builtins::{register_builtin_plugin, get_builtin_plugins, get_builtin_plugin_skill_commands, is_builtin_plugin_id}`.
-  - Plugin ID format `{name}@builtin` matched via `BUILTIN_MARKETPLACE_NAME = "builtin"`.
-  - Wire into Layer-3 refresh (§3.1) so builtins always appear before marketplace plugins.
-  - TUI section in plugin overlay (`coco-tui::overlays::plugin_picker`).
+- **Current Rust**:
+  - `plugins/src/builtins.rs` provides `register_builtin_plugin`,
+    `get_builtin_plugins`, `get_builtin_plugin_skills`, and
+    `is_builtin_plugin_id`.
+  - The builtin marketplace sentinel is `@builtin`.
+- **Remaining gap**: verify Layer-3 refresh ordering and TUI plugin overlay
+  presentation for builtin plugins.
 
 ### 3.6 Headless / CCR mode ❌ P2
 
@@ -465,13 +482,17 @@ For each: port the TS prompt or local action verbatim; reuse Rust handler scaffo
 - **Rust today**: synchronous loader, no headless variant.
 - **Mirror plan**: `PluginManager::install_headless(settings, cache_dir, timeout)`. Same code path as interactive, with `opts.skip` and `opts.auto_approve = true`.
 
-### 3.7 Hot reload ❌ P2
+### 3.7 Hot reload ⚠️ partial
 
 - **TS source**: `utils/plugins/loadPluginHooks.ts:287` + the `/reload-plugins` command.
 - **Behavior**: file watcher on `~/.coco/plugins/*/PLUGIN.toml` (manifest changes) and `installed_plugins.json`. On change → emit `plugins.needsRefresh = true`. **Does NOT auto-reload** — user must run `/reload-plugins` (PR 5b/5c rationale: avoid mid-turn surprise).
 - **UI**: a notification line "Plugins changed on disk. Run /reload-plugins to apply." appears above the prompt.
-- **Rust today**: `hot_reload.rs` (73 LOC) is atomic-flag scaffolding only.
-- **Mirror plan**: notify-based watcher; on debounced change → set `AppState.plugins.needs_refresh`. Add `/reload-plugins` command that calls `refresh_active_plugins()` (§3.1).
+- **Current Rust**: `/reload-plugins` sentinel wiring exists in commands,
+  TUI runner, and `SessionRuntime`; command registry and related runtime
+  handles are wrapped so reload can swap them.
+- **Remaining gap**: file-watcher-driven "plugins changed; run
+  /reload-plugins" notification and full Layer-3 application are still tied to
+  the live-refresh gap in §3.1.
 
 ### 3.8 Other plugin gaps ⚠️ P2/P3
 
@@ -479,42 +500,54 @@ For each: port the TS prompt or local action verbatim; reuse Rust handler scaffo
 |---|---|---|---|
 | `installed_plugins.json` V1→V2 migration | `installedPluginsManager.ts:1268` | none | port migration code (~80 LOC); read V1 list, infer scope, write V2 |
 | Versioned cache paths `<name>/<version>/` | `pluginVersioning.ts:157` | flat | add per-source version calc (git→short-SHA, npm→pkg-version, local→content-hash) |
-| Official marketplace auto-install | `officialMarketplaceStartupCheck.ts:439` | constants only | startup hook in `coco-cli` bootstrap; subscribe `anthropics/claude-plugins-official` on first run unless policy blocks |
+| Official marketplace auto-install | `officialMarketplaceStartupCheck.ts:439` | marketplace constants + auto-update helper | add startup hook in `coco-cli` bootstrap; subscribe `anthropics/claude-plugins-official` on first run unless policy blocks |
 | Contribution conflict warnings | `loadPluginCommands.ts:946` (dedup with log) | silent override | track seen names in each bridge; emit `CoreEvent::Tui::Warning` on collision |
 | Marketplace search / hint recommendation | `marketplaceManager.ts:2643`, `hintRecommendation.ts:164` | none | P3 |
 | Error taxonomy (20+ variants) | `types/plugin.ts` | one struct | refactor to enum (`PluginError::{GitAuthFailed, ManifestParseError, …}`) |
 
 ---
 
-## 4. Sequencing (verified, mirrors TS load order)
+## 4. Sequencing (reviewed 2026-05-14)
 
-**Round A — unblocks user-visible flows** (1 sprint):
-1. Implement seam §0 (CommandRegistry takes SkillManager + PluginManager).
-2. Skill `is_enabled` (§1.4), file extraction (§1.1), bundled inventory cleanup (§1.3), lazy prompts (§1.2).
-3. Commands: `/compact` (§2.2), `/rewind` (§2.1), `/init` (§2.3), `/memory` (§2.4), prompt-type seam for security-review/insights/brief/advisor (§2.5).
-4. Plugins: dependency resolver (§3.2) + Layer-2/3 refresh (§3.1) + builtin registry (§3.5).
+Resolved or mostly-resolved from the original Round A list:
 
-**Round B — security + correctness** (1 sprint):
-5. Plugin validation (§3.4) — path traversal, impersonation, policy.
-6. MCPB (§3.3).
-7. Skill watcher full parity (§1.6).
-8. Skill paths-based activation (§1.5).
+1. Command registry seam exists (§0), but collision-order parity needs final
+   audit.
+2. Skill file extraction, feature gating, and bundled inventory cleanup are
+   resolved (§1.1, §1.3, §1.4); lazy prompt rendering is partial (§1.2).
+3. `/rewind`, `/init`, `/commit-push-pr`, and the text path for prompt-type
+   commands are implemented (§2.1, §2.3, §2.5, §2.6).
+4. Plugin dependency resolver and security validation are implemented (§3.2,
+   §3.4); MCPB and builtin registry are partial (§3.3, §3.5).
 
-**Round C — parity tail** (ongoing):
-9. Headless install (§3.6), hot reload (§3.7), V1→V2 migration, versioned cache.
-10. Stub command fill-in (§2.8) and `createMovedToPluginCommand` (§2.7).
-11. MCP-sourced skills (§1.7).
-12. Marketplace search / hint recommendation, error taxonomy.
+Current next order is owned by
+[`current-gap-fix-plan.md`](current-gap-fix-plan.md):
+
+1. Plugin live refresh and install-surface parity.
+2. SDK/MCP elicitation bridge and generic MCP resource/auth forwarding.
+3. Tool Result Budget runtime pipeline.
+4. MCP-sourced skills, MCPB schema/UI, and Prompt file parts.
+5. Skills watcher, paths-based activation, and event-time reminder producers.
+6. Stub-command tail, marketplace recommendations, OTel, DirectConnect, IDE,
+   provider, and platform tail.
 
 ---
 
-## 5. Cross-cutting deltas (TS-mirroring)
+## 5. Cross-cutting deltas (reviewed 2026-05-14)
 
-- **`Command.source` field**: TS distinguishes `'bundled' | 'builtin' | 'plugin' | 'managed' | 'mcp' | 'projectSettings' | 'userSettings' | 'commands_DEPRECATED'`. Rust `CommandSource` should match exactly — currently lossy. Add the missing variants to `coco-types::CommandSource`.
-- **`CommandResult` variants**: Rust has `Text | InjectPrompt | Skip`. Add `Compact(CompactionResult)`, `Prompt(Vec<PromptPart>)`, `OpenDialog(DialogSpec)` to mirror TS `'compact' | 'prompt' | 'local-jsx'`.
-- **Manifest format**: TS uses `plugin.json` (Zod-validated). Rust accepts both `plugin.json` and `PLUGIN.toml`. Decision: keep TOML for hand-authored Rust-native plugins, but make `plugin.json` the parity-preferred format and **strict-validate** unknown fields (currently warn-only).
-- **Frontmatter parser**: TS's `parseSkillFrontmatterFields` (`loadSkillsDir.ts:185-265`) handles `'inherit'` model, `EFFORT_LEVELS` parser, and `parseShellFrontmatter`. Confirm Rust `frontmatter` util matches all three.
-- **Telemetry events**: TS emits `tengu_skill_file_changed`, `plugin_install_started`, `plugin_install_failed`, etc. via `logEvent`. Rust should emit equivalents through `coco-otel` so dashboards line up.
+- **`Command.source` field**: resolved. `coco-types::CommandSource`
+  includes bundled, plugin, managed, MCP, user, project, builtin, and
+  deprecated-command variants.
+- **`CommandResult` variants**: resolved for the core shapes. Rust now has
+  text, injected prompt, compact, prompt parts, open-dialog, and skip.
+  Remaining: runner support for `Prompt::File` parts.
+- **Manifest format**: still active. Rust accepts both `plugin.json` and
+  `PLUGIN.toml`; confirm strict `plugin.json` validation and unknown-field
+  behavior before marking parity complete.
+- **Frontmatter parser**: still active. Confirm `'inherit'` model,
+  `EFFORT_LEVELS`, shell frontmatter, and paths/globs against TS fixtures.
+- **Telemetry events**: still active. Keep matching TS `tengu_*` /
+  `plugin_*` names through `coco-otel`.
 
 ---
 

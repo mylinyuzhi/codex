@@ -37,6 +37,13 @@ pub(crate) fn render_overlay(
     state: &AppState,
     theme: &Theme,
 ) {
+    // CommandPalette renders inline above the input area as a borderless
+    // suggestion list (handled in `render::render_chat_and_input`).
+    // Mirrors TS `PromptInputFooterSuggestions` — no centered modal.
+    if matches!(overlay, Overlay::CommandPalette(_)) {
+        return;
+    }
+
     if let Overlay::ModelPicker(m) = overlay {
         pickers::render_model_picker(frame, area, m, theme);
         return;
@@ -80,7 +87,6 @@ fn overlay_content(overlay: &Overlay, state: &AppState, theme: &Theme) -> (Strin
         Overlay::PlanEntry(p) => confirm::plan_entry_content(p, theme),
         Overlay::CostWarning(c) => confirm::cost_warning_content(c, theme),
         Overlay::ModelPicker(m) => pickers::model_picker_content(m, theme),
-        Overlay::CommandPalette(cp) => pickers::command_palette_content(cp, theme),
         Overlay::SessionBrowser(s) => pickers::session_browser_content(s, theme),
         Overlay::Question(q) => question::question_content(q, theme),
         Overlay::Elicitation(e) => confirm::elicitation_content(e, theme),
@@ -107,5 +113,9 @@ fn overlay_content(overlay: &Overlay, state: &AppState, theme: &Theme) -> (Strin
         Overlay::PlanApproval(p) => confirm::plan_approval_content(p, theme),
         Overlay::MemoryDialog(m) => pickers::memory_dialog_content(m, theme),
         Overlay::Transcript(t) => transcript::transcript_overlay_content(state, t, theme),
+        // CommandPalette renders inline (handled by the early-return in
+        // `render_overlay`). The match remains exhaustive but the arm is
+        // unreachable.
+        Overlay::CommandPalette(_) => unreachable!("CommandPalette renders inline above input"),
     }
 }
