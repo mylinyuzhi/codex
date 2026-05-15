@@ -164,3 +164,32 @@ pub struct LocalCommandData {
     /// Module path or identifier for the local command handler.
     pub handler: String,
 }
+
+/// UI-facing projection of a slash command. The TUI receives a `Vec` of
+/// these at startup (and again after `/reload-plugins`) so the
+/// autocomplete popup and command palette can render and rank without
+/// reaching into [`CommandBase`] every time.
+///
+/// Lives in `coco-types` (rather than `coco-tui`) so it can travel on a
+/// [`crate::TuiOnlyEvent`] variant — events are the only path between
+/// the agent driver and the TUI, and event payload types must be
+/// foundation-layer.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SlashCommandInfo {
+    /// Canonical command name without the leading `/`.
+    pub name: String,
+    /// Short description shown dimmed in the popup. `None` when the
+    /// source command registered without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Alternate names that also match this command. Searched by the
+    /// ranker so `/cls` finds `/clear` when `cls` is an alias.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
+    /// Hint string rendered next to the description when the command
+    /// takes arguments (e.g. `"<file>"` for `/add-dir`). Mirrors
+    /// [`CommandBase::argument_hint`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub argument_hint: Option<String>,
+}

@@ -228,10 +228,10 @@ mod render_tests {
     }
 
     #[test]
-    fn persisted_output_path_swaps_in_envelope() {
-        // TS `PowerShellTool.tsx:400-409`: when execute persists the
-        // raw stdout to disk, render replaces stdout with the
-        // `<persisted-output>` envelope + 2KB preview.
+    fn persisted_output_path_is_ignored_by_renderer() {
+        // Legacy persisted-output fields are not a model-visible
+        // persistence source. The query-level generic Level 1
+        // pipeline owns the `<persisted-output>` envelope.
         let data = json!({
             "stdout": "first line\nsecond line",
             "stderr": "",
@@ -241,9 +241,9 @@ mod render_tests {
         });
         let parts = PowerShellTool.render_for_model(&data);
         let text = text_of(&parts);
-        assert!(text.contains("<persisted-output>"), "got: {text}");
-        assert!(text.contains("/tmp/coco-ps-1.txt"), "got: {text}");
-        assert!(text.contains("Output too large"), "got: {text}");
+        assert!(text.contains("first line\nsecond line"), "got: {text}");
+        assert!(!text.contains("<persisted-output>"), "got: {text}");
+        assert!(!text.contains("/tmp/coco-ps-1.txt"), "got: {text}");
     }
 
     #[test]

@@ -276,21 +276,21 @@ fn test_tool_execution_lifecycle() {
 fn test_input_editing() {
     let mut state = AppState::new();
 
-    state.ui.input.insert_char('h');
-    state.ui.input.insert_char('i');
-    assert_eq!(state.ui.input.text, "hi");
-    assert_eq!(state.ui.input.cursor, 2);
+    state.ui.input.textarea.insert_str("h");
+    state.ui.input.textarea.insert_str("i");
+    assert_eq!(state.ui.input.text(), "hi");
+    assert_eq!(state.ui.input.textarea.cursor(), 2);
 
-    state.ui.input.cursor_left();
-    assert_eq!(state.ui.input.cursor, 1);
+    state.ui.input.textarea.move_cursor_left();
+    assert_eq!(state.ui.input.textarea.cursor(), 1);
 
-    state.ui.input.insert_char('!');
-    assert_eq!(state.ui.input.text, "h!i");
+    state.ui.input.textarea.insert_str("!");
+    assert_eq!(state.ui.input.text(), "h!i");
 
     let taken = state.ui.input.take_input();
     assert_eq!(taken, "h!i");
     assert!(state.ui.input.is_empty());
-    assert_eq!(state.ui.input.cursor, 0);
+    assert_eq!(state.ui.input.textarea.cursor(), 0);
 }
 
 #[test]

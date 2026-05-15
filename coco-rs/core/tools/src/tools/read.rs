@@ -127,6 +127,10 @@ impl Tool for ReadTool {
         ToolName::Read.as_str()
     }
 
+    fn max_result_size_chars(&self) -> i64 {
+        i64::MAX
+    }
+
     fn description(&self, _input: &Value, _options: &DescriptionOptions) -> String {
         READ_TOOL_DESCRIPTION.into()
     }

@@ -423,9 +423,10 @@ impl StreamingToolExecutor {
             ids.insert(tool_use_id.clone());
         }
 
+        let call_ctx = ctx.clone_for_tool_call(tool_use_id.clone());
         let result = tokio::select! {
-            r = call.tool.execute(input, ctx) => r,
-            () = ctx.cancel.cancelled() => Err(ToolError::Cancelled),
+            r = call.tool.execute(input, &call_ctx) => r,
+            () = call_ctx.cancel.cancelled() => Err(ToolError::Cancelled),
         };
 
         // Remove from in-progress
@@ -577,9 +578,10 @@ impl StreamingToolExecutor {
                     ids.insert(tool_use_id.clone());
                 }
 
+                let call_ctx = ctx_clone.clone_for_tool_call(tool_use_id.clone());
                 let result = tokio::select! {
-                    r = tool.execute(input, &ctx_clone) => r,
-                    () = ctx_clone.cancel.cancelled() => Err(ToolError::Cancelled),
+                    r = tool.execute(input, &call_ctx) => r,
+                    () = call_ctx.cancel.cancelled() => Err(ToolError::Cancelled),
                     () = sibling_tok.cancelled() => Err(ToolError::ExecutionFailed {
                         message: SyntheticToolError::SiblingError {
                             failed_tool: "sibling".into(),

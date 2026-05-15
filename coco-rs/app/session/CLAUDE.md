@@ -31,6 +31,7 @@ and cost accounting kept alongside.
 <sessions_dir>/
 ├── <session-id>.json           # Session metadata (SessionManager)
 ├── transcripts/<session-id>.jsonl  # Append-only TranscriptStore
+├── <session-id>/tool-results/  # Large tool-result artifacts, retention-cleaned
 └── history.json                # PromptHistory (global, not per-session)
 ```
 

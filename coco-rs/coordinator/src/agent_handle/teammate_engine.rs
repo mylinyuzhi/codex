@@ -125,24 +125,31 @@ impl AgentExecutionEngine for TeammateExecutionAdapter {
         // closure here per call keeps the borrow simple — the
         // engine ref is `Arc<dyn>` so cloning is cheap.
         let engine = self.inner.clone();
-        let summarize = move |prompt: String| {
+        let summarize = move |attempt: coco_compact::CompactSummaryAttempt| {
             let engine = engine.clone();
             async move {
                 let cfg = coco_tool_runtime::AgentQueryConfig {
                     system_prompt: String::new(),
                     model: String::new(),
                     max_turns: Some(1),
-                    // Empty allow-list → no tools fired during the
-                    // summarization turn (TS `compactConversation`
-                    // uses a no-tools query). The engine still
-                    // dispatches a normal text turn so the response
-                    // text arrives via the standard path.
+                    max_output_tokens: Some(attempt.max_summary_tokens),
+                    fork_context_messages: attempt
+                        .context_messages
+                        .iter()
+                        .filter_map(|m| serde_json::to_value(m).ok())
+                        .collect(),
+                    // Deliberately impossible allow-list: no tools
+                    // during the summarization turn. The prompt itself
+                    // is separate from structured fork context so we do
+                    // not re-flatten history into a legacy string.
                     allowed_tools: vec![String::new()],
                     is_teammate: true,
                     ..Default::default()
                 };
-                match engine.execute_query(&prompt, cfg).await {
-                    Ok(result) => Ok(result.response_text.unwrap_or_default()),
+                match engine.execute_query(&attempt.summary_request, cfg).await {
+                    Ok(result) => Ok(coco_compact::CompactSummaryResponse {
+                        summary: result.response_text.unwrap_or_default(),
+                    }),
                     Err(e) => Err(e.to_string()),
                 }
             }

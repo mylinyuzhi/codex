@@ -842,9 +842,9 @@ async fn test_bash_simulated_sed_edit_missing_file_path_errors() {
 
 // ── R7-T12: Bash output schema extension tests ──
 //
-// Verify that the new `isImage`, `structuredContent`, `persistedOutputPath`
-// and `persistedOutputSize` fields are populated correctly. Tests use the
-// internal helpers directly to avoid invoking real shell commands.
+// Verify that `isImage` and `structuredContent` fields are populated
+// correctly. Oversized text output is handled by the generic
+// query-level Tool Result Budget pipeline, not by Bash itself.
 
 #[test]
 fn test_is_likely_image_bytes_png() {
@@ -885,30 +885,6 @@ fn test_is_likely_image_bytes_text_negative() {
     assert!(!is_likely_image_bytes(b"RIFF\0\0\0\0WAVEfmt "));
 }
 
-#[test]
-fn test_persist_oversized_skipped_for_small_output() {
-    use crate::tools::bash::maybe_persist_oversized_output;
-    let small = b"under threshold";
-    let (path, size) = maybe_persist_oversized_output(small);
-    assert!(path.is_none());
-    assert_eq!(size, 0);
-}
-
-#[test]
-fn test_persist_oversized_writes_when_over_threshold() {
-    use crate::tools::bash::maybe_persist_oversized_output;
-    let big = vec![b'x'; 40_000]; // > 30K threshold
-    let (path, size) = maybe_persist_oversized_output(&big);
-    let path = path.expect("expected persisted path");
-    assert_eq!(size, 40_000);
-    // The file should exist on disk and contain exactly the bytes.
-    let on_disk = std::fs::read(&path).expect("persisted file must exist");
-    assert_eq!(on_disk.len(), 40_000);
-    assert!(on_disk.iter().all(|&b| b == b'x'));
-    // Cleanup so /tmp doesn't accumulate cruft from CI.
-    let _ = std::fs::remove_file(&path);
-}
-
 // R7-T18: end-to-end image detection now works because coco-shell
 // populates `CommandResult.stdout_bytes` with the raw pre-UTF-8-lossy
 // bytes. BashTool reads `stdout_bytes` (with `stdout.as_bytes()` as a
@@ -946,7 +922,7 @@ async fn test_bash_output_includes_image_fields_when_stdout_is_image() {
 }
 
 #[tokio::test]
-async fn test_bash_output_persists_when_oversized() {
+async fn test_bash_output_does_not_use_temp_persistence_when_oversized() {
     use crate::tools::bash::BashTool;
 
     let ctx = coco_tool_runtime::ToolUseContext::test_default();
@@ -963,16 +939,14 @@ async fn test_bash_output_persists_when_oversized() {
         .await
         .unwrap();
     assert!(
-        result.data["persistedOutputPath"].is_string(),
-        "expected persistedOutputPath, got: {:?}",
+        result.data.get("persistedOutputPath").is_none(),
+        "Bash should not write model-visible temp persisted output: {:?}",
         result.data
     );
-    let size = result.data["persistedOutputSize"].as_u64().unwrap_or(0);
-    assert!(size >= 30_000, "expected size >= 30K, got {size}");
-    // Cleanup the temp file.
-    if let Some(path) = result.data["persistedOutputPath"].as_str() {
-        let _ = std::fs::remove_file(path);
-    }
+    assert!(
+        result.data["stdout"].as_str().unwrap_or("").len() >= 30_000,
+        "generic Level 1 needs the full model-visible stdout"
+    );
 }
 
 #[tokio::test]
@@ -1132,10 +1106,10 @@ mod render_for_model_tests {
     }
 
     #[test]
-    fn persisted_output_replaces_stdout_with_envelope() {
-        // When stdout overflowed the inline budget, the model sees a
-        // <persisted-output> envelope with the file path + a 2KB
-        // preview, not the truncated stdout directly.
+    fn persisted_output_fields_are_ignored_by_model_renderer() {
+        // Legacy temp-dir fields are not a model-visible persistence
+        // source. The query-level generic Level 1 pipeline owns the
+        // <persisted-output> envelope.
         let data = json!({
             "stdout": "(short preview)",
             "stderr": "",
@@ -1148,10 +1122,8 @@ mod render_for_model_tests {
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part");
         };
-        assert!(text.starts_with("<persisted-output>"), "got: {text}");
-        assert!(text.contains("/tmp/coco-bash-output/bash-1-2.out"));
         assert!(text.contains("(short preview)"));
-        assert!(text.ends_with("</persisted-output>"));
+        assert!(!text.contains("<persisted-output>"), "got: {text}");
     }
 
     #[test]

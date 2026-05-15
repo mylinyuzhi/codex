@@ -15,6 +15,10 @@ use crate::i18n::t;
 use crate::state::AppState;
 use crate::state::ui::Toast;
 
+#[cfg(test)]
+#[path = "tui_only.test.rs"]
+mod tests;
+
 pub(super) fn handle(state: &mut AppState, event: TuiOnlyEvent) -> bool {
     match event {
         TuiOnlyEvent::ApprovalRequired {
@@ -123,6 +127,17 @@ pub(super) fn handle(state: &mut AppState, event: TuiOnlyEvent) -> bool {
         }
         TuiOnlyEvent::OutputStylesReady { styles } => {
             state.session.available_output_styles = styles;
+            true
+        }
+        TuiOnlyEvent::AvailableCommandsRefreshed { commands } => {
+            // Overwrite, not extend — the producer always sends the
+            // full visible set so this trivially handles command
+            // removals (e.g. plugin uninstall via /reload-plugins).
+            state.session.available_commands = commands;
+            // If the user is mid-`/` query, recompute the popup
+            // against the new list so the next render reflects it
+            // without waiting for another keystroke.
+            crate::autocomplete::refresh_suggestions(state);
             true
         }
         // No-op: checkpoint data consumed by ShowRewind overlay, not stored.
@@ -434,8 +449,9 @@ fn on_rewind_completed(
     }
 
     if let Some(text) = restored_input_text {
-        state.ui.input.text = text;
-        state.ui.input.cursor = state.ui.input.text.chars().count() as i32;
+        state.ui.input.textarea.set_text(&text);
+        let eol = state.ui.input.textarea.end_of_current_line();
+        state.ui.input.textarea.set_cursor(eol);
     }
 
     // Rotate conversation_id on truncate so the next request breaks

@@ -531,6 +531,57 @@ async fn test_execute_session_start() {
 }
 
 #[tokio::test]
+async fn test_execute_session_start_collect_events_does_not_push_sync_buffer() {
+    let registry = make_registry(vec![HookDefinition {
+        event: HookEventType::SessionStart,
+        matcher: None,
+        handler: HookHandler::Command {
+            command: "echo initialized".to_string(),
+            timeout_ms: Some(5000),
+            shell: None,
+        },
+        priority: 0,
+        scope: HookScope::default(),
+        if_condition: None,
+        once: false,
+        is_async: false,
+        async_rewake: false,
+        status_message: None,
+    }]);
+
+    let sync = crate::SyncHookEventBuffer::new();
+    let mut ctx = test_ctx();
+    ctx.sync_event_sink = Some(sync.clone());
+
+    let result = execute_session_start_collect_events(
+        &registry,
+        &ctx,
+        crate::inputs::SessionStartSource::Compact,
+        None,
+        None,
+    )
+    .await
+    .expect("should succeed");
+
+    assert!(
+        result.events.iter().any(|event| matches!(
+            event,
+            coco_system_reminder::HookEvent::Success {
+                hook_event: coco_system_reminder::HookEventKind::SessionStart,
+                content,
+                ..
+            } if content.contains("initialized")
+        )),
+        "expected SessionStart success event: {:?}",
+        result.events
+    );
+    assert!(
+        sync.drain().await.is_empty(),
+        "collect-events path must not also enqueue next-turn hook reminders"
+    );
+}
+
+#[tokio::test]
 async fn test_execute_stop_failure() {
     let registry = make_registry(vec![HookDefinition {
         event: HookEventType::StopFailure,

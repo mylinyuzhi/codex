@@ -203,7 +203,7 @@ impl Widget for InputWidget<'_> {
         }
 
         // Tokenize and style
-        let tokens = Self::tokenize(&self.input.text);
+        let tokens = Self::tokenize(self.input.text());
         let spans: Vec<Span> = tokens
             .into_iter()
             .map(|(text, token_type)| match token_type {

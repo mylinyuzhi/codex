@@ -128,13 +128,12 @@ pub struct PartialDisplayCollapseSettings {
     pub teammate_shutdowns: Option<bool>,
 }
 
-/// Tool Result Budget — Phase 0 stub.
+/// Tool Result Budget settings.
 ///
 /// Mirrors TS `tengu_hawthorn_steeple` (Level 2 enable) +
 /// `tengu_hawthorn_window` (per-message char cap). Level 1 (per-tool
-/// `<persisted-output>` persistence) is gated on having a generic
-/// pipeline in `coco-tool-runtime` — this Phase 0 surface lets callers
-/// stage configuration before the runtime lands. See
+/// `<persisted-output>` persistence) is driven by each tool's
+/// `max_result_size_chars()` declaration rather than this config. See
 /// [`docs/coco-rs/tool-result-budget-plan.md`].
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -354,7 +353,7 @@ impl Default for DisplayCollapseConfig {
     }
 }
 
-/// Tool Result Budget config (Phase 0 stub — runtime pipeline pending).
+/// Tool Result Budget config.
 ///
 /// Mapping to TS feature gates:
 ///
@@ -364,15 +363,15 @@ impl Default for DisplayCollapseConfig {
 /// | `per_message_chars` | `tengu_hawthorn_window` (per-message override) | `200_000` |
 /// | `persist_records` | — (transcript record write toggle for fork agents) | `true` |
 ///
-/// Per-tool persistence threshold overrides (TS `tengu_satin_quoll`)
-/// belong on `Tool::max_result_size_chars()` once the
-/// `ResultSizeBound { Chars(i32), Unbounded }` migration in Phase 1.B
-/// of `tool-result-budget-plan.md` lands; not surfaced as config here.
+/// Per-tool persistence threshold overrides (TS `tengu_satin_quoll`) belong on
+/// `Tool::max_result_size_chars()`; they are intentionally not surfaced as
+/// compact config.
 ///
-/// **Status**: Phase 0 — config struct only; no runtime caller.
-/// `coco-tool-runtime::tool_result_storage` (Level 1) and the
-/// `coco-query` Level 2 wiring are unimplemented; Bash retains its
-/// divergent `temp_dir()` stub.
+/// **Status**: config is live for the query-level aggregate budget. Level 1
+/// helpers live in `coco-tool-runtime::tool_result_storage` and are called by
+/// `coco-query`'s tool outcome builder when a tool opts in via
+/// `max_result_size_chars()`. Remaining TS-parity gaps are tracked in
+/// `docs/coco-rs/tool-result-budget-plan.md`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolResultBudgetConfig {
     /// Enable Level 2 per-message budget. TS `tengu_hawthorn_steeple`.
@@ -559,7 +558,7 @@ impl CompactConfig {
             config.experimental.display_collapses.teammate_shutdowns = v;
         }
 
-        // Tool Result Budget (Phase 0 stub).
+        // Tool Result Budget.
         let trb = &part.tool_result_budget;
         if let Some(v) = trb.enabled {
             config.tool_result_budget.enabled = v;

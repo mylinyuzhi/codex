@@ -79,6 +79,7 @@ fn dummy_result() -> CompactResult {
     ));
     CompactResult {
         boundary_marker: boundary,
+        raw_summary: None,
         summary_messages: vec![],
         attachments: vec![],
         messages_to_keep: vec![],

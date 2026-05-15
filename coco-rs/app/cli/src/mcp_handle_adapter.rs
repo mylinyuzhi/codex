@@ -74,6 +74,31 @@ impl McpManagerAdapter {
         self.elicitation_counter = elicitation_counter;
         self
     }
+
+    fn send_elicitation_for_server(&self, name: &str) -> coco_mcp::SendElicitation {
+        let base_elicitation: coco_mcp::SendElicitation = Box::new(|_id, _req| {
+            Box::pin(async move {
+                Err(coco_mcp::RmcpClientError::generic(
+                    "elicitation not supported for dynamically-added agent MCP servers",
+                ))
+            })
+        });
+        match (
+            self.hook_registry.as_ref(),
+            self.elicitation_ctx_factory.as_ref(),
+        ) {
+            (Some(registry), Some(factory)) => {
+                crate::elicitation_hooks::wrap_send_elicitation_with_hooks(
+                    name.to_string(),
+                    registry.clone(),
+                    factory.clone(),
+                    self.elicitation_counter.clone(),
+                    base_elicitation,
+                )
+            }
+            _ => base_elicitation,
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -82,7 +107,7 @@ impl McpHandle for McpManagerAdapter {
         &self,
         server_name: Option<&str>,
     ) -> Result<Vec<McpResourceInfo>, coco_error::BoxedError> {
-        let manager = self.manager.lock().await;
+        let manager = self.manager.lock().await.clone();
         let connected = manager.connected_servers().await;
         let mut out = Vec::new();
         for server in connected {
@@ -105,14 +130,20 @@ impl McpHandle for McpManagerAdapter {
 
     async fn read_resource(
         &self,
-        _server_name: &str,
-        _resource_uri: &str,
-    ) -> Result<McpResourceContent, coco_error::BoxedError> {
-        Err(Box::new(coco_error::PlainError::new(
-            "McpHandle::read_resource not implemented through manager adapter; \
-             tools should call ReadMcpResourceTool directly",
-            coco_error::StatusCode::Internal,
-        )))
+        server_name: &str,
+        resource_uri: &str,
+    ) -> Result<Vec<McpResourceContent>, coco_error::BoxedError> {
+        let manager = self.manager.lock().await.clone();
+        let result = manager
+            .read_resource(server_name, resource_uri)
+            .await
+            .map_err(|e| {
+                Box::new(coco_error::PlainError::new(
+                    format!("MCP resource read failed: {e}"),
+                    coco_error::StatusCode::External,
+                )) as coco_error::BoxedError
+            })?;
+        convert_read_resource_result(result)
     }
 
     async fn call_tool(
@@ -121,7 +152,7 @@ impl McpHandle for McpManagerAdapter {
         tool_name: &str,
         arguments: Option<Value>,
     ) -> Result<McpToolCallResult, coco_error::BoxedError> {
-        let manager = self.manager.lock().await;
+        let manager = self.manager.lock().await.clone();
         let result = manager
             .call_tool(server_name, tool_name, arguments)
             .await
@@ -155,6 +186,42 @@ impl McpHandle for McpManagerAdapter {
                             .to_string();
                         Some(McpContentBlock::Image { data, mime_type })
                     }
+                    "audio" => {
+                        let data = raw.get("data").and_then(|v| v.as_str())?.to_string();
+                        let mime_type = raw
+                            .get("mimeType")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("application/octet-stream")
+                            .to_string();
+                        Some(McpContentBlock::Audio { data, mime_type })
+                    }
+                    "resource" => {
+                        let resource = raw.get("resource")?;
+                        let uri = resource
+                            .get("uri")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        let text = resource
+                            .get("text")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string);
+                        let blob = resource
+                            .get("blob")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string);
+                        let mime_type = resource
+                            .get("mimeType")
+                            .or_else(|| resource.get("mime_type"))
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string);
+                        Some(McpContentBlock::Resource {
+                            uri,
+                            text,
+                            blob,
+                            mime_type,
+                        })
+                    }
                     _ => None,
                 }
             })
@@ -165,16 +232,21 @@ impl McpHandle for McpManagerAdapter {
         })
     }
 
-    async fn authenticate(&self, _server_name: &str) -> Result<String, coco_error::BoxedError> {
-        Err(Box::new(coco_error::PlainError::new(
-            "McpHandle::authenticate not implemented through manager adapter; \
-             use McpAuthTool",
-            coco_error::StatusCode::Internal,
-        )))
+    async fn authenticate(&self, server_name: &str) -> Result<String, coco_error::BoxedError> {
+        let manager = self.manager.lock().await.clone();
+        manager
+            .authenticate(server_name, self.send_elicitation_for_server(server_name))
+            .await
+            .map_err(|e| {
+                Box::new(coco_error::PlainError::new(
+                    format!("MCP authentication failed: {e}"),
+                    coco_error::StatusCode::AuthenticationFailed,
+                )) as coco_error::BoxedError
+            })
     }
 
     async fn connected_servers(&self) -> Vec<String> {
-        let manager = self.manager.lock().await;
+        let manager = self.manager.lock().await.clone();
         manager
             .connected_servers()
             .await
@@ -184,7 +256,7 @@ impl McpHandle for McpManagerAdapter {
     }
 
     async fn list_tools(&self) -> Vec<McpToolSchema> {
-        let manager = self.manager.lock().await;
+        let manager = self.manager.lock().await.clone();
         manager
             .all_tools()
             .await
@@ -223,45 +295,20 @@ impl McpHandle for McpManagerAdapter {
             scope: coco_mcp::ConfigScope::Dynamic,
             plugin_source: None,
         };
-        let mut manager = self.manager.lock().await;
-        manager.register_server(scoped);
+        let manager = {
+            let mut manager = self.manager.lock().await;
+            manager.register_server(scoped);
+            manager.clone()
+        };
         // `connect` validates wiring + opens the transport. Errors
         // bubble up so the spawn path can fail closed (TS behaviour:
         // a failed inline server logs a warning + skips the agent's
         // tools — we surface the error so the agent's spawn can
         // decide).
         //
-        // Base SendElicitation: no UI dialog yet, so dialog-required
-        // elicitations error out. The wrapper below makes hooks fire
-        // first — if a hook returns a decision, we never reach this.
-        let base_elicitation: coco_mcp::SendElicitation = Box::new(|_id, _req| {
-            Box::pin(async move {
-                Err(coco_mcp::RmcpClientError::generic(
-                    "elicitation not supported for dynamically-added agent MCP servers",
-                ))
-            })
-        });
         // TS parity: `services/mcp/elicitationHandler.ts:91-107` runs
-        // hooks BEFORE showing the dialog. When hook context is
-        // installed, wrap the base closure so `Elicitation` /
-        // `ElicitationResult` hooks fire around every elicit/create
-        // request (and the `elicitation_response` Notification fires
-        // on completion).
-        let send_elicitation = match (
-            self.hook_registry.as_ref(),
-            self.elicitation_ctx_factory.as_ref(),
-        ) {
-            (Some(registry), Some(factory)) => {
-                crate::elicitation_hooks::wrap_send_elicitation_with_hooks(
-                    name.to_string(),
-                    registry.clone(),
-                    factory.clone(),
-                    self.elicitation_counter.clone(),
-                    base_elicitation,
-                )
-            }
-            _ => base_elicitation,
-        };
+        // hooks before client routing when hook context is installed.
+        let send_elicitation = self.send_elicitation_for_server(name);
         manager.connect(name, send_elicitation).await.map_err(|e| {
             Box::new(coco_error::PlainError::new(
                 format!("MCP connect '{name}' failed: {e}"),
@@ -272,8 +319,45 @@ impl McpHandle for McpManagerAdapter {
     }
 
     async fn remove_dynamic_server(&self, name: &str) -> Result<(), coco_error::BoxedError> {
-        let manager = self.manager.lock().await;
+        let manager = self.manager.lock().await.clone();
         manager.disconnect(name).await;
         Ok(())
     }
 }
+
+fn convert_read_resource_result(
+    result: coco_mcp::ReadResourceResult,
+) -> Result<Vec<McpResourceContent>, coco_error::BoxedError> {
+    if result.contents.is_empty() {
+        return Err(Box::new(coco_error::PlainError::new(
+            "MCP resource read returned no content",
+            coco_error::StatusCode::External,
+        )));
+    }
+    Ok(result
+        .contents
+        .into_iter()
+        .map(|content| match content {
+            coco_mcp::ReadResourceResultContents::TextResourceContents(text) => {
+                McpResourceContent {
+                    uri: text.uri,
+                    text: Some(text.text),
+                    blob: None,
+                    mime_type: text.mime_type,
+                }
+            }
+            coco_mcp::ReadResourceResultContents::BlobResourceContents(blob) => {
+                McpResourceContent {
+                    uri: blob.uri,
+                    text: None,
+                    blob: Some(blob.blob),
+                    mime_type: blob.mime_type,
+                }
+            }
+        })
+        .collect())
+}
+
+#[cfg(test)]
+#[path = "mcp_handle_adapter.test.rs"]
+mod tests;

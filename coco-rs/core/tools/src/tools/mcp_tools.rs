@@ -5,6 +5,7 @@ use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
+use coco_tool_runtime::tool_result_storage;
 use coco_types::ToolId;
 use coco_types::ToolInputSchema;
 use coco_types::ToolName;
@@ -20,6 +21,9 @@ impl Tool for McpAuthTool {
     }
     fn name(&self) -> &str {
         ToolName::McpAuth.as_str()
+    }
+    fn max_result_size_chars(&self) -> i64 {
+        10_000
     }
     fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
         ctx.features.enabled(coco_types::Feature::Mcp)
@@ -38,8 +42,24 @@ impl Tool for McpAuthTool {
         );
         ToolInputSchema { properties: p }
     }
-    fn is_read_only(&self, _: &Value) -> bool {
-        true
+
+    async fn check_permissions(
+        &self,
+        input: &Value,
+        _ctx: &ToolUseContext,
+    ) -> coco_types::ToolCheckResult {
+        coco_types::ToolCheckResult::Allow {
+            updated_input: Some(input.clone()),
+            feedback: None,
+        }
+    }
+
+    fn to_auto_classifier_input(&self, input: &Value) -> String {
+        input
+            .get("server_name")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string()
     }
 
     /// `data` is a bare auth status string. Unwrap.
@@ -239,6 +259,12 @@ impl Tool for ReadMcpResourceTool {
     /// bare string (which would otherwise be JSON-quoted) so the wire
     /// matches TS's plain string error format.
     fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
+        if let Some(text) = data.get("persisted_output").and_then(Value::as_str) {
+            return vec![ToolResultContentPart::Text {
+                text: text.to_string(),
+                provider_options: None,
+            }];
+        }
         coco_tool_runtime::render_text_or_json(data)
     }
 
@@ -270,19 +296,17 @@ impl Tool for ReadMcpResourceTool {
         }
 
         match ctx.mcp.read_resource(server_name, resource_uri).await {
-            Ok(content) => {
-                let data = if let Some(text) = &content.text {
-                    serde_json::json!({
-                        "uri": content.uri,
-                        "text": text,
-                        "mime_type": content.mime_type,
-                    })
+            Ok(contents) => {
+                let total = contents.len();
+                let mut rendered = Vec::with_capacity(total);
+                for (idx, content) in contents.iter().enumerate() {
+                    rendered
+                        .push(read_mcp_resource_content_for_model(ctx, content, idx, total).await);
+                }
+                let data = if rendered.len() == 1 {
+                    rendered.remove(0)
                 } else {
-                    serde_json::json!({
-                        "uri": content.uri,
-                        "mime_type": content.mime_type,
-                        "has_blob": content.blob.is_some(),
-                    })
+                    serde_json::json!({ "contents": rendered })
                 };
                 Ok(ToolResult {
                     data,
@@ -447,6 +471,12 @@ impl Tool for McpTool {
                         filename: None,
                         provider_options: None,
                     }),
+                    "resource" => block.get("text").and_then(Value::as_str).map(|text| {
+                        ToolResultContentPart::Text {
+                            text: text.to_string(),
+                            provider_options: None,
+                        }
+                    }),
                     _ => None,
                 }
             })
@@ -478,18 +508,66 @@ impl Tool for McpTool {
             .await
         {
             Ok(result) => {
-                let content: Vec<Value> = result
-                    .content
-                    .iter()
-                    .map(|block| match block {
+                let mut content: Vec<Value> = Vec::with_capacity(result.content.len());
+                for (idx, block) in result.content.iter().enumerate() {
+                    let value = match block {
                         coco_tool_runtime::mcp_handle::McpContentBlock::Text(text) => {
                             serde_json::json!({"type": "text", "text": text})
                         }
-                        coco_tool_runtime::mcp_handle::McpContentBlock::Image { data, mime_type } => {
+                        coco_tool_runtime::mcp_handle::McpContentBlock::Image {
+                            data,
+                            mime_type,
+                        } => {
                             serde_json::json!({"type": "image", "data": data, "mime_type": mime_type})
                         }
-                    })
-                    .collect();
+                        coco_tool_runtime::mcp_handle::McpContentBlock::Audio {
+                            data,
+                            mime_type,
+                        } => {
+                            mcp_binary_block_for_model(
+                                ctx,
+                                &self.info.tool_name,
+                                idx,
+                                result.content.len(),
+                                data,
+                                Some(mime_type),
+                            )
+                            .await
+                        }
+                        coco_tool_runtime::mcp_handle::McpContentBlock::Resource {
+                            uri,
+                            text: Some(text),
+                            mime_type,
+                            ..
+                        } => serde_json::json!({
+                            "type": "resource",
+                            "uri": uri,
+                            "text": text,
+                            "mime_type": mime_type,
+                        }),
+                        coco_tool_runtime::mcp_handle::McpContentBlock::Resource {
+                            blob: Some(blob),
+                            mime_type,
+                            ..
+                        } => {
+                            mcp_binary_block_for_model(
+                                ctx,
+                                &self.info.tool_name,
+                                idx,
+                                result.content.len(),
+                                blob,
+                                mime_type.as_deref(),
+                            )
+                            .await
+                        }
+                        coco_tool_runtime::mcp_handle::McpContentBlock::Resource {
+                            uri, ..
+                        } => {
+                            serde_json::json!({"type": "text", "text": format!("[Resource: {uri}]")})
+                        }
+                    };
+                    content.push(value);
+                }
 
                 let data = if result.is_error {
                     serde_json::json!({"error": true, "content": content})
@@ -513,6 +591,110 @@ impl Tool for McpTool {
             }),
         }
     }
+}
+
+async fn mcp_binary_block_for_model(
+    ctx: &ToolUseContext,
+    tool_name: &str,
+    idx: usize,
+    block_count: usize,
+    blob: &str,
+    mime_type: Option<&str>,
+) -> Value {
+    let Some(output_id) = mcp_binary_output_id(ctx, idx, block_count) else {
+        return serde_json::json!({
+            "type": "text",
+            "text": format!("[Binary MCP content from {tool_name}: persistence unavailable]"),
+        });
+    };
+    match persist_mcp_blob_reference(ctx, &output_id, blob, mime_type).await {
+        Ok(reference) => serde_json::json!({"type": "text", "text": reference}),
+        Err(message) => serde_json::json!({
+            "type": "text",
+            "text": format!("[Binary MCP content from {tool_name}: {message}]"),
+        }),
+    }
+}
+
+async fn read_mcp_resource_content_for_model(
+    ctx: &ToolUseContext,
+    content: &coco_tool_runtime::mcp_handle::McpResourceContent,
+    idx: usize,
+    total: usize,
+) -> Value {
+    if let Some(text) = &content.text {
+        return serde_json::json!({
+            "uri": content.uri,
+            "text": text,
+            "mime_type": content.mime_type,
+        });
+    }
+    if let Some(blob) = &content.blob {
+        if let Some(output_id) = mcp_binary_output_id(ctx, idx, total) {
+            return match persist_mcp_blob_reference(
+                ctx,
+                &output_id,
+                blob,
+                content.mime_type.as_deref(),
+            )
+            .await
+            {
+                Ok(replacement) => serde_json::json!({
+                    "uri": content.uri,
+                    "mime_type": content.mime_type,
+                    "persisted_output": replacement,
+                }),
+                Err(message) => serde_json::json!({
+                    "uri": content.uri,
+                    "mime_type": content.mime_type,
+                    "has_blob": true,
+                    "persistence_error": message,
+                }),
+            };
+        }
+        return serde_json::json!({
+            "uri": content.uri,
+            "mime_type": content.mime_type,
+            "has_blob": true,
+        });
+    }
+    serde_json::json!({
+        "uri": content.uri,
+        "mime_type": content.mime_type,
+        "has_blob": false,
+    })
+}
+
+fn mcp_binary_output_id(ctx: &ToolUseContext, idx: usize, total: usize) -> Option<String> {
+    ctx.tool_use_id.as_deref().map(|tool_use_id| {
+        if total == 1 {
+            tool_use_id.to_string()
+        } else {
+            format!("{tool_use_id}-{}", idx + 1)
+        }
+    })
+}
+
+async fn persist_mcp_blob_reference(
+    ctx: &ToolUseContext,
+    output_id: &str,
+    blob: &str,
+    mime_type: Option<&str>,
+) -> Result<String, String> {
+    use base64::Engine as _;
+
+    let session_dir = ctx
+        .tool_result_session_dir
+        .as_ref()
+        .ok_or_else(|| "persistence unavailable".to_string())?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(blob)
+        .map_err(|e| format!("invalid base64 data: {e}"))?;
+    let persisted =
+        tool_result_storage::persist_mcp_binary_to_disk(session_dir, output_id, &bytes, mime_type)
+            .await
+            .map_err(|e| format!("failed to persist binary output: {e}"))?;
+    Ok(tool_result_storage::render_mcp_binary_reference(&persisted))
 }
 
 #[cfg(test)]

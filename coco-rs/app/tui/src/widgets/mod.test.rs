@@ -41,6 +41,24 @@ fn test_snapshot_empty_state() {
 }
 
 #[test]
+fn test_snapshot_status_bar_full() {
+    use crate::state::session::TokenUsage;
+    let mut state = AppState::new();
+    state.session.model = "deepseek-v4-flash".to_string();
+    state.session.provider = "deepseek".to_string();
+    state.session.token_usage = TokenUsage {
+        input_tokens: 12_300,
+        output_tokens: 16_500,
+        cache_read_tokens: 10_700,
+        cache_creation_tokens: 0,
+    };
+    state.session.context_window_used = 28_000;
+    state.session.context_window_total = 200_000;
+    let output = render_to_string(&state, 100, 24);
+    insta::assert_snapshot!("status_bar_full", output);
+}
+
+#[test]
 fn test_snapshot_with_messages() {
     let mut state = AppState::new();
     state.session.model = "opus-4".to_string();
@@ -196,15 +214,13 @@ fn test_exit_prompt_replaces_status_bar() {
     state.ui.ctrl_c_tracker.poll((), std::time::Instant::now());
 
     let output = render_to_string(&state, 80, 24);
+    // Status bar lives in the row right under the input — content-flow
+    // layout matching TS/codex-rs, not at the terminal's last row.
     let status_line = output
         .lines()
-        .nth(23)
-        .expect("24-line render should include a status row");
+        .find(|line| line.contains("Press Ctrl-C again to exit"))
+        .unwrap_or_else(|| panic!("exit prompt should render in the status row:\n{output}"));
 
-    assert!(
-        status_line.contains("Press Ctrl-C again to exit"),
-        "exit prompt should render in the bottom status bar:\n{output}",
-    );
     assert!(
         !status_line.contains("Default") && !status_line.contains("msgs"),
         "exit prompt should replace model/mode/message-count status content:\n{output}",
@@ -399,14 +415,62 @@ fn test_snapshot_autocomplete_popup() {
     let mut state = AppState::new();
     state.session.model = "opus-4".to_string();
     state.session.available_commands = vec![
-        ("help".to_string(), Some("Show help".to_string())),
-        ("clear".to_string(), Some("Clear chat".to_string())),
-        ("config".to_string(), Some("Settings".to_string())),
+        crate::state::SlashCommandInfo {
+            name: "help".into(),
+            description: Some("Show help".into()),
+            aliases: Vec::new(),
+            argument_hint: None,
+        },
+        crate::state::SlashCommandInfo {
+            name: "clear".into(),
+            description: Some("Clear chat".into()),
+            aliases: Vec::new(),
+            argument_hint: None,
+        },
+        crate::state::SlashCommandInfo {
+            name: "config".into(),
+            description: Some("Settings".into()),
+            aliases: Vec::new(),
+            argument_hint: None,
+        },
     ];
-    state.ui.input.text = "/c".to_string();
-    state.ui.input.cursor = 2;
+    state.ui.input.textarea.set_text("/c");
+    state.ui.input.textarea.set_cursor(2);
     crate::autocomplete::refresh_suggestions(&mut state);
 
     let output = render_to_string(&state, 80, 24);
     insta::assert_snapshot!("autocomplete_popup", output);
+}
+
+#[test]
+fn test_snapshot_command_palette_inline_popup() {
+    // Spec: TS `PromptInputFooterSuggestions` — Ctrl+P opens the command
+    // palette as a borderless list floated above the input. Typed chars
+    // route to `cp.filter` and the input bar mirrors `/<filter>` so the
+    // user can see what they typed.
+    let mut state = AppState::new();
+    state.session.model = "opus-4".to_string();
+    state.ui.set_overlay(crate::state::Overlay::CommandPalette(
+        crate::state::CommandPaletteOverlay {
+            commands: vec![
+                crate::state::CommandOption {
+                    name: "model".into(),
+                    description: Some("Set the AI model".into()),
+                },
+                crate::state::CommandOption {
+                    name: "clear".into(),
+                    description: Some("Clear conversation".into()),
+                },
+                crate::state::CommandOption {
+                    name: "compact".into(),
+                    description: Some("Compact conversation".into()),
+                },
+            ],
+            filter: "c".to_string(),
+            selected: 0,
+        },
+    ));
+
+    let output = render_to_string(&state, 80, 24);
+    insta::assert_snapshot!("command_palette_inline", output);
 }

@@ -95,6 +95,8 @@ pub enum TuiCommand {
     DeleteWordForward,
     /// Kill to end of line (Ctrl+K).
     KillToEndOfLine,
+    /// Kill from beginning of line to cursor (Ctrl+U).
+    KillToBeginningOfLine,
     /// Yank killed text (Ctrl+Y).
     Yank,
 

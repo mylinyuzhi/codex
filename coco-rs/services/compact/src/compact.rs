@@ -43,6 +43,9 @@ use crate::grouping::group_messages_by_api_round;
 use crate::tokens;
 use crate::types::CompactError;
 use crate::types::CompactResult;
+use crate::types::CompactSummaryAttempt;
+use crate::types::CompactSummaryKind;
+use crate::types::CompactSummaryResponse;
 use crate::types::MAX_COMPACT_STREAMING_RETRIES;
 use crate::types::MAX_OUTPUT_TOKENS_FOR_SUMMARY;
 use crate::types::MAX_PTL_RETRIES;
@@ -110,7 +113,8 @@ pub type PostCompactAttachmentFn =
 /// 7. Optionally generate post-compact attachments
 ///
 /// The `summarize_fn` callback avoids depending on coco-inference:
-/// the caller provides an async function that takes a prompt and returns a summary.
+/// the caller provides an async function that takes structured messages plus
+/// a summary request and returns a summary.
 #[tracing::instrument(
     skip_all,
     name = "compaction",
@@ -131,8 +135,8 @@ pub async fn compact_conversation<F, Fut>(
     attachment_fn: Option<PostCompactAttachmentFn>,
 ) -> Result<CompactResult, CompactError>
 where
-    F: Fn(String) -> Fut,
-    Fut: std::future::Future<Output = Result<String, String>>,
+    F: Fn(CompactSummaryAttempt) -> Fut,
+    Fut: std::future::Future<Output = Result<CompactSummaryResponse, String>>,
 {
     tracing::info!("compaction begin (full)");
     // Step 1: Strip images/documents to avoid prompt-too-long on media-heavy conversations
@@ -151,6 +155,7 @@ where
         let boundary = create_boundary_marker(config.trigger, 0, 0, None);
         return Ok(CompactResult {
             boundary_marker: boundary,
+            raw_summary: None,
             summary_messages: vec![],
             attachments: vec![],
             messages_to_keep: messages.to_vec(),
@@ -180,12 +185,26 @@ where
         "compaction: rounds split, calling summarizer"
     );
 
-    // Step 4: Build summary prompt
-    let summary_prompt = build_summary_prompt(old_rounds, config);
+    let messages_to_summarize: Vec<Message> = old_rounds
+        .iter()
+        .flat_map(|round| round.iter().copied().cloned())
+        .collect();
+    let summary_request = crate::prompt::get_compact_prompt(config.custom_prompt.as_deref());
 
     // Step 5: Call LLM with retry on prompt-too-long
-    let summary_text =
-        call_with_ptl_retry(old_rounds, config, &summarize_fn, summary_prompt).await?;
+    let summary_text = call_with_ptl_retry(
+        messages_to_summarize.clone(),
+        messages_to_summarize,
+        PtlRetryOptions {
+            summary_request,
+            prompt_kind: CompactSummaryKind::Full,
+            pre_compact_tokens: pre_tokens,
+            max_summary_tokens: config.max_summary_tokens,
+            retry_base: PtlRetryBase::Messages,
+        },
+        &summarize_fn,
+    )
+    .await?;
 
     // Format the summary
     let formatted = crate::prompt::format_compact_summary(&summary_text);
@@ -258,6 +277,7 @@ where
 
     let mut result = CompactResult {
         boundary_marker: boundary,
+        raw_summary: Some(summary_text),
         summary_messages: vec![summary_message],
         attachments: vec![],
         messages_to_keep,
@@ -312,8 +332,8 @@ pub async fn partial_compact_conversation<F, Fut>(
     attachment_fn: Option<PostCompactAttachmentFn>,
 ) -> Result<CompactResult, CompactError>
 where
-    F: Fn(String) -> Fut,
-    Fut: std::future::Future<Output = Result<String, String>>,
+    F: Fn(CompactSummaryAttempt) -> Fut,
+    Fut: std::future::Future<Output = Result<CompactSummaryResponse, String>>,
 {
     tracing::info!("compaction begin (partial)");
     if pivot_index > all_messages.len() {
@@ -388,16 +408,33 @@ where
 
     // Strip media + attachments before summarizing.
     let working = strip_reinjected_attachments(&strip_images_from_messages(&to_summarize));
+    let initial_context_messages = match direction {
+        PartialCompactDirection::Oldest => working.clone(),
+        PartialCompactDirection::Newest => {
+            strip_reinjected_attachments(&strip_images_from_messages(all_messages))
+        }
+    };
     let rounds = group_messages_by_api_round(&working);
 
+    let messages_to_summarize: Vec<Message> = rounds
+        .iter()
+        .flat_map(|round| round.iter().copied().cloned())
+        .collect();
+
     let summary_text = call_with_ptl_retry(
-        &rounds,
-        &CompactRunOptions {
-            custom_prompt: merged.clone(),
-            ..Default::default()
+        messages_to_summarize,
+        initial_context_messages,
+        PtlRetryOptions {
+            summary_request: prompt,
+            prompt_kind: CompactSummaryKind::Partial,
+            pre_compact_tokens: pre_tokens,
+            max_summary_tokens: MAX_OUTPUT_TOKENS_FOR_SUMMARY,
+            retry_base: match direction {
+                PartialCompactDirection::Oldest => PtlRetryBase::Messages,
+                PartialCompactDirection::Newest => PtlRetryBase::ContextMessages,
+            },
         },
         &summarize_fn,
-        prompt,
     )
     .await?;
 
@@ -448,6 +485,7 @@ where
 
     let mut result = CompactResult {
         boundary_marker: Message::System(SystemMessage::CompactBoundary(boundary_struct)),
+        raw_summary: Some(summary_text),
         summary_messages: vec![summary_message],
         attachments: vec![],
         messages_to_keep: to_keep,
@@ -505,6 +543,35 @@ pub fn build_post_compact_messages(result: &CompactResult) -> Vec<Message> {
     out.extend(result.attachments.iter().cloned().map(Message::Attachment));
     out.extend(result.hook_results.clone());
     out
+}
+
+/// Assemble post-partial-compact messages in TS-canonical order.
+///
+/// TS `partialCompactConversation` uses different placement for
+/// summarize-from (`Newest`) to preserve the existing cacheable prefix:
+/// boundary → kept prefix → summary → attachments → hook results.
+/// Summarize-up-to (`Oldest`) keeps the normal compact order.
+pub fn build_partial_post_compact_messages(
+    result: &CompactResult,
+    direction: PartialCompactDirection,
+) -> Vec<Message> {
+    match direction {
+        PartialCompactDirection::Oldest => build_post_compact_messages(result),
+        PartialCompactDirection::Newest => {
+            let mut out = Vec::with_capacity(
+                1 + result.messages_to_keep.len()
+                    + result.summary_messages.len()
+                    + result.attachments.len()
+                    + result.hook_results.len(),
+            );
+            out.push(result.boundary_marker.clone());
+            out.extend(result.messages_to_keep.clone());
+            out.extend(result.summary_messages.clone());
+            out.extend(result.attachments.iter().cloned().map(Message::Attachment));
+            out.extend(result.hook_results.clone());
+            out
+        }
+    }
 }
 
 /// Merge user-supplied compact instructions with hook-provided ones.
@@ -777,32 +844,62 @@ fn make_ptl_marker_message() -> Message {
 
 // ── Internal helpers ────────────────────────────────────────────────
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PtlRetryBase {
+    /// Retry truncates the selected summary slice and uses that as API context.
+    Messages,
+    /// Retry truncates the full structured API context, then keeps
+    /// `messages` aligned to the surviving summarized messages.
+    ContextMessages,
+}
+
+struct PtlRetryOptions {
+    summary_request: String,
+    prompt_kind: CompactSummaryKind,
+    pre_compact_tokens: i64,
+    max_summary_tokens: i64,
+    retry_base: PtlRetryBase,
+}
+
 /// Call the summarize function with prompt-too-long retry logic.
 async fn call_with_ptl_retry<F, Fut>(
-    old_rounds: &[Vec<&Message>],
-    config: &CompactRunOptions,
+    initial_messages: Vec<Message>,
+    initial_context_messages: Vec<Message>,
+    options: PtlRetryOptions,
     summarize_fn: &F,
-    initial_prompt: String,
 ) -> Result<String, CompactError>
 where
-    F: Fn(String) -> Fut,
-    Fut: std::future::Future<Output = Result<String, String>>,
+    F: Fn(CompactSummaryAttempt) -> Fut,
+    Fut: std::future::Future<Output = Result<CompactSummaryResponse, String>>,
 {
-    let mut prompt = initial_prompt;
-    // Track how many groups to skip from the front on PTL retry
-    let mut head_skip: usize = 0;
+    let mut attempt_messages = initial_messages;
+    let mut context_messages = initial_context_messages;
 
     for attempt in 0..=MAX_PTL_RETRIES {
         for stream_retry in 0..=MAX_COMPACT_STREAMING_RETRIES {
-            match summarize_fn(prompt.clone()).await {
-                Ok(summary) => {
-                    if summary.trim().is_empty() {
+            let attempt_request = CompactSummaryAttempt {
+                messages: attempt_messages.clone(),
+                context_messages: context_messages.clone(),
+                summary_request: options.summary_request.clone(),
+                prompt_kind: options.prompt_kind,
+                pre_compact_tokens: options.pre_compact_tokens,
+                max_summary_tokens: options.max_summary_tokens,
+            };
+            match summarize_fn(attempt_request).await {
+                Ok(response) => {
+                    if response.summary.trim().is_empty() {
                         return crate::types::LlmCallFailedSnafu {
                             message: "empty summary returned".to_string(),
                         }
                         .fail();
                     }
-                    return Ok(summary);
+                    return Ok(response.summary);
+                }
+                Err(e)
+                    if e.starts_with("compact_summary_invalid:")
+                        || e.starts_with("compact_summary_aborted:") =>
+                {
+                    return crate::types::LlmCallFailedSnafu { message: e }.fail();
                 }
                 Err(e) if e.contains("prompt_too_long") || e.contains("context_length") => {
                     // PTL: truncate head and retry. Use the token gap if the
@@ -813,34 +910,31 @@ where
                         return crate::types::PromptTooLongSnafu { message: e }.fail();
                     }
                     let token_gap = parse_prompt_too_long_token_gap(&e);
-                    let total = old_rounds.len() - head_skip;
-                    let groups_to_drop = match token_gap {
-                        Some(gap) => {
-                            let mut acc: i64 = 0;
-                            let mut count = 0;
-                            for g in &old_rounds[head_skip..] {
-                                let group_msgs: Vec<Message> =
-                                    g.iter().map(|m| (*m).clone()).collect();
-                                acc += tokens::estimate_tokens(&group_msgs);
-                                count += 1;
-                                if acc >= gap {
-                                    break;
-                                }
-                            }
-                            count.max(1)
-                        }
-                        None => ((total as f64 * 0.2).ceil() as usize).max(1),
+                    let base = match options.retry_base {
+                        PtlRetryBase::Messages => &attempt_messages,
+                        PtlRetryBase::ContextMessages => &context_messages,
                     };
-                    head_skip += groups_to_drop;
-
-                    if head_skip >= old_rounds.len() {
+                    let Some(truncated) = truncate_head_for_ptl_retry(base, token_gap, 0.2) else {
                         return crate::types::PromptTooLongSnafu { message: e }.fail();
-                    }
+                    };
+                    let dropped_messages = base.len().saturating_sub(truncated.len());
                     tracing::warn!(
-                        "prompt too long on compact attempt {attempt}, dropping {groups_to_drop} groups (gap={token_gap:?})"
+                        retry_base = ?options.retry_base,
+                        "prompt too long on compact attempt {attempt}, dropping {dropped_messages} messages (gap={token_gap:?})"
                     );
-                    let remaining = &old_rounds[head_skip..];
-                    prompt = build_summary_prompt_from_refs(remaining, config);
+                    match options.retry_base {
+                        PtlRetryBase::Messages => {
+                            attempt_messages = truncated.clone();
+                            context_messages = truncated;
+                        }
+                        PtlRetryBase::ContextMessages => {
+                            context_messages = truncated;
+                            attempt_messages = retain_messages_present_in_context(
+                                &attempt_messages,
+                                &context_messages,
+                            );
+                        }
+                    }
                     break; // break stream_retry loop, continue PTL loop
                 }
                 Err(e) => {
@@ -864,6 +958,19 @@ where
     .fail()
 }
 
+fn retain_messages_present_in_context(summary: &[Message], context: &[Message]) -> Vec<Message> {
+    let context_ids: std::collections::HashSet<Uuid> =
+        context.iter().filter_map(Message::uuid).copied().collect();
+    summary
+        .iter()
+        .filter(|m| {
+            m.uuid()
+                .is_none_or(|uuid| context_ids.is_empty() || context_ids.contains(uuid))
+        })
+        .cloned()
+        .collect()
+}
+
 fn create_boundary_marker(
     trigger: CompactTrigger,
     pre_tokens: i64,
@@ -884,12 +991,15 @@ fn create_boundary_marker(
     ))
 }
 
-/// Build a prompt asking the LLM to summarize the conversation.
-fn build_summary_prompt(rounds: &[Vec<&Message>], config: &CompactRunOptions) -> String {
-    build_summary_prompt_from_refs(rounds, config)
-}
-
-fn build_summary_prompt_from_refs(rounds: &[Vec<&Message>], config: &CompactRunOptions) -> String {
+/// Render a legacy text prompt for debug and regression tests.
+///
+/// The production summarizer path keeps messages structured and sends the
+/// summary request separately. This helper preserves the old one-string
+/// rendering for diagnostics.
+pub fn render_summary_prompt_for_debug(
+    rounds: &[Vec<&Message>],
+    config: &CompactRunOptions,
+) -> String {
     let base_prompt = crate::prompt::get_compact_prompt(config.custom_prompt.as_deref());
 
     let mut conversation = String::with_capacity(base_prompt.len() + 4096);

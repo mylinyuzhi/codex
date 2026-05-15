@@ -1807,6 +1807,12 @@ class SessionModelUsage(BaseModel):
     output_tokens: int
     web_search_requests: int
 
+class SlashCommandInfo(BaseModel):
+    name: str
+    aliases: list[str] | None = None
+    argument_hint: str | None = None
+    description: str | None = None
+
 class TaskRecord(BaseModel):
     id: str
     status: TaskListStatus

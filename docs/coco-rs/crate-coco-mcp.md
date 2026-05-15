@@ -304,6 +304,21 @@ pub async fn call_mcp_tool(
     cancel: CancellationToken,
 ) -> Result<McpToolResult, McpError>;
 
+/// Runtime OAuth entry point used by `McpAuthTool` through
+/// `coco_tool_runtime::McpHandle`.
+///
+/// HTTP/SSE servers mirror TS behavior: detect auth support, return a browser
+/// authorization URL when login is required, wait for the local callback in the
+/// background, and reconnect after credentials are stored. Non-OAuth transports
+/// return a clear no-op message.
+impl McpConnectionManager {
+    pub async fn authenticate(
+        &self,
+        server_name: &str,
+        send_elicitation: SendElicitation,
+    ) -> Result<String, McpClientError>;
+}
+
 /// Transform raw MCP result to content blocks.
 /// Handles: text, images (resize/downsample), binary (persist to cache).
 /// Truncates at 100KB.

@@ -1,103 +1,103 @@
 //! Vim text objects — select regions of text.
 //!
-//! Each text object returns (start, end) character positions.
+//! Each text object returns a half-open `Range<usize>` of byte offsets,
+//! the same shape `TextArea::replace_range` consumes. Returning `None`
+//! means the cursor isn't positioned on a valid object (e.g. `i"` away
+//! from any quoted string).
+
+use std::ops::Range;
 
 use super::TextObjScope;
+use super::motions::next_char_boundary;
 
-/// Text object result: (start, end) character positions (inclusive).
-pub type TextObjResult = Option<(i32, i32)>;
+/// Result of resolving a text object: byte range to operate on, or `None`
+/// if no object exists at the cursor.
+pub type TextObjResult = Option<Range<usize>>;
 
-/// Word text object (iw / aw).
-pub fn word(text: &str, pos: i32, scope: TextObjScope) -> TextObjResult {
-    let chars: Vec<char> = text.chars().collect();
-    if pos < 0 || pos >= chars.len() as i32 {
+/// Word text object (`iw` / `aw`).
+///
+/// Inside a word: span the whole word. Inside whitespace: span the whole
+/// whitespace run. `Around` extends to include the trailing whitespace
+/// after a word.
+pub(super) fn word(text: &str, pos: usize, scope: TextObjScope) -> TextObjResult {
+    if text.is_empty() || pos >= text.len() {
         return None;
     }
+    let cur_ch = text[pos..].chars().next()?;
+    let cur_is_ws = cur_ch.is_whitespace();
 
-    let p = pos as usize;
-    let is_word_char = |c: char| !c.is_whitespace();
+    // Walk backward to the start of the current run (same is_whitespace
+    // category as the cursor's char).
+    let start = text[..pos]
+        .char_indices()
+        .rev()
+        .take_while(|&(_, c)| c.is_whitespace() == cur_is_ws)
+        .last()
+        .map(|(i, _)| i)
+        .unwrap_or(pos);
 
-    if is_word_char(chars[p]) {
-        // Inside a word
-        let mut start = p;
-        while start > 0 && is_word_char(chars[start - 1]) {
-            start -= 1;
-        }
-        let mut end = p;
-        while end + 1 < chars.len() && is_word_char(chars[end + 1]) {
-            end += 1;
-        }
+    // Walk forward to the byte AFTER the last char of the run.
+    let end_of_run = text[pos..]
+        .char_indices()
+        .find(|&(_, c)| c.is_whitespace() != cur_is_ws)
+        .map(|(i, _)| pos + i)
+        .unwrap_or(text.len());
 
-        if scope == TextObjScope::Around {
-            // Include trailing whitespace
-            while end + 1 < chars.len() && chars[end + 1].is_whitespace() {
-                end += 1;
-            }
-        }
-
-        Some((start as i32, end as i32))
+    // For `aw` on a word, swallow the trailing whitespace run too.
+    let end = if scope == TextObjScope::Around && !cur_is_ws {
+        text[end_of_run..]
+            .char_indices()
+            .find(|&(_, c)| !c.is_whitespace())
+            .map(|(i, _)| end_of_run + i)
+            .unwrap_or(text.len())
     } else {
-        // Inside whitespace
-        let mut start = p;
-        while start > 0 && chars[start - 1].is_whitespace() {
-            start -= 1;
-        }
-        let mut end = p;
-        while end + 1 < chars.len() && chars[end + 1].is_whitespace() {
-            end += 1;
-        }
-        Some((start as i32, end as i32))
-    }
+        end_of_run
+    };
+
+    Some(start..end)
 }
 
-/// Quoted text object (i" / a" / i' / a').
-pub fn quoted(text: &str, pos: i32, quote: char, scope: TextObjScope) -> TextObjResult {
-    let chars: Vec<char> = text.chars().collect();
-    let p = pos as usize;
-
-    // Find opening quote (search backward then forward)
-    let mut open = None;
-    for i in (0..=p).rev() {
-        if chars[i] == quote {
-            open = Some(i);
-            break;
-        }
-    }
-    let open = open?;
-
-    // Find closing quote
-    let close = chars
-        .iter()
-        .enumerate()
-        .skip(open + 1)
-        .find(|&(_, c)| *c == quote)
+/// Quoted text object (`i"` / `a"` / `i'` / `a'`).
+pub(super) fn quoted(text: &str, pos: usize, quote: char, scope: TextObjScope) -> TextObjResult {
+    // Find opening quote at or before the cursor.
+    let scan_end = next_char_boundary(text, pos);
+    let open = text[..scan_end]
+        .char_indices()
+        .rev()
+        .find(|&(_, c)| c == quote)
         .map(|(i, _)| i)?;
 
+    // Find closing quote after the opening one.
+    let after_open = open + quote.len_utf8();
+    let close_rel = text[after_open..]
+        .char_indices()
+        .find(|&(_, c)| c == quote)
+        .map(|(i, _)| i)?;
+    let close = after_open + close_rel;
+
     match scope {
-        TextObjScope::Inner => Some(((open + 1) as i32, (close - 1) as i32)),
-        TextObjScope::Around => Some((open as i32, close as i32)),
+        TextObjScope::Inner => Some(after_open..close),
+        TextObjScope::Around => Some(open..close + quote.len_utf8()),
     }
 }
 
-/// Bracket/brace text object (i( / a( / i{ / a{ / i[ / a[).
-pub fn bracket(
+/// Bracket text object (`i(` / `a(` / `i{` / `a{` / `i[` / `a[`).
+pub(super) fn bracket(
     text: &str,
-    pos: i32,
+    pos: usize,
     open_ch: char,
     close_ch: char,
     scope: TextObjScope,
 ) -> TextObjResult {
-    let chars: Vec<char> = text.chars().collect();
-    let p = pos as usize;
-
-    // Find matching opening bracket (search backward with nesting)
-    let mut depth = 0i32;
+    // Walk backward to the matching opening bracket (respect nesting).
+    let scan_end = next_char_boundary(text, pos);
+    let mut depth: i32 = 0;
     let mut open = None;
-    for i in (0..=p).rev() {
-        if chars[i] == close_ch {
+    for (i, c) in text[..scan_end].char_indices().rev() {
+        if c == close_ch {
             depth += 1;
         }
-        if chars[i] == open_ch {
+        if c == open_ch {
             if depth == 0 {
                 open = Some(i);
                 break;
@@ -107,17 +107,17 @@ pub fn bracket(
     }
     let open = open?;
 
-    // Find matching closing bracket
+    // Walk forward to the matching closing bracket.
+    let after_open = open + open_ch.len_utf8();
     depth = 0;
     let mut close = None;
-    for (i, c) in chars.iter().enumerate().skip(open + 1) {
-        let c = *c;
+    for (i, c) in text[after_open..].char_indices() {
         if c == open_ch {
             depth += 1;
         }
         if c == close_ch {
             if depth == 0 {
-                close = Some(i);
+                close = Some(after_open + i);
                 break;
             }
             depth -= 1;
@@ -126,7 +126,7 @@ pub fn bracket(
     let close = close?;
 
     match scope {
-        TextObjScope::Inner => Some(((open + 1) as i32, (close - 1) as i32)),
-        TextObjScope::Around => Some((open as i32, close as i32)),
+        TextObjScope::Inner => Some(after_open..close),
+        TextObjScope::Around => Some(open..close + close_ch.len_utf8()),
     }
 }

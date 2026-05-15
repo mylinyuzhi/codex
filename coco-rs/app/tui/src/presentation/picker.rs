@@ -6,7 +6,6 @@ use ratatui::prelude::*;
 
 use super::layout;
 use crate::i18n::t;
-use crate::state::CommandPaletteOverlay;
 use crate::state::ExportOverlay;
 use crate::state::GlobalSearchOverlay;
 use crate::state::McpServerSelectOverlay;
@@ -122,38 +121,6 @@ pub(crate) fn collapse_hints(hints: &str, width: usize) -> String {
     } else {
         collapsed
     }
-}
-
-pub(crate) fn command_palette_content(
-    cp: &CommandPaletteOverlay,
-    theme: &Theme,
-) -> (String, String, Color) {
-    let filter_lower = cp.filter.to_lowercase();
-    let items: Vec<String> = cp
-        .commands
-        .iter()
-        .filter(|cmd| filter_lower.is_empty() || cmd.name.to_lowercase().contains(&filter_lower))
-        .enumerate()
-        .map(|(i, cmd)| {
-            let desc = cmd.description.as_deref().unwrap_or("");
-            format!("{} /{} — {desc}", selected_marker(i, cp.selected), cmd.name)
-        })
-        .collect();
-
-    (
-        t!("dialog.title_commands").to_string(),
-        format!(
-            "{}\n\n{}\n\n{}",
-            filter_line(
-                &cp.filter,
-                t!("dialog.type_filter_commands").as_ref(),
-                FilterPrefix::Filter
-            ),
-            items.join("\n"),
-            t!("dialog.hints_nav_select_cancel")
-        ),
-        theme.accent,
-    )
 }
 
 pub(crate) fn session_browser_content(

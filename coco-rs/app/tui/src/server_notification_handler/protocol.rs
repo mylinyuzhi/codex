@@ -874,8 +874,9 @@ fn apply_auto_restore(state: &mut AppState, idx: usize) {
         state.session.permission_mode = mode;
     }
     if !input_text.is_empty() {
-        state.ui.input.text = input_text;
-        state.ui.input.cursor = state.ui.input.text.chars().count() as i32;
+        state.ui.input.textarea.set_text(&input_text);
+        let eol = state.ui.input.textarea.end_of_current_line();
+        state.ui.input.textarea.set_cursor(eol);
     }
     state.session.conversation_id = Some(uuid::Uuid::new_v4().to_string());
     state.session.prompt_suggestions.clear();

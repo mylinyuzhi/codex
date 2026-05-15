@@ -27,7 +27,9 @@ pub enum FileSearchEvent {
     /// Search results ready.
     SearchResult {
         query: String,
-        start_pos: i32,
+        /// Byte offset where the `@` trigger started (sentinel; the
+        /// receiver matches by `query` + `kind`, not by position).
+        start_pos: usize,
         suggestions: Vec<SuggestionItem>,
     },
 }
@@ -50,7 +52,7 @@ impl FileSearchManager {
     }
 
     /// Schedule a debounced search.
-    pub fn search(&mut self, query: String, start_pos: i32) {
+    pub fn search(&mut self, query: String, start_pos: usize) {
         if let Some(handle) = self.pending.take() {
             handle.abort();
         }

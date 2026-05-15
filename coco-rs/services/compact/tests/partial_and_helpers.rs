@@ -1,6 +1,8 @@
 //! Integration tests for `partial_compact_conversation` and the
 //! token-gap-aware PTL retry path, plus the reactive `peel_head` helper.
 
+use coco_compact::CompactSummaryKind;
+use coco_compact::CompactSummaryResponse;
 use coco_compact::compact::partial_compact_conversation;
 use coco_compact::compact::truncate_head_for_ptl_retry;
 use coco_compact::reactive::peel_head_for_ptl_retry;
@@ -11,6 +13,8 @@ use coco_test_harness::compact as mock;
 use coco_test_harness::conversation;
 use coco_test_harness::messages as msg;
 use coco_types::CompactTrigger;
+use std::future::Future;
+use std::pin::Pin;
 
 const SUMMARY: &str = "<analysis>Reviewed.</analysis><summary>Summary of recent work.</summary>";
 
@@ -18,13 +22,14 @@ const SUMMARY: &str = "<analysis>Reviewed.</analysis><summary>Summary of recent 
 async fn partial_newest_summarizes_tail_keeps_prefix() {
     // 6 turns; pivot at index 4 → summarize messages[4..], keep messages[..4].
     let messages = conversation::simple(6);
+    let (summarize, captured) = mock::mock_summarize_capturing(SUMMARY);
     let result = partial_compact_conversation(
         &messages,
         4,
         PartialCompactDirection::Newest,
         None,
         None,
-        mock::mock_summarize_ok(SUMMARY),
+        summarize,
         None,
     )
     .await
@@ -32,6 +37,7 @@ async fn partial_newest_summarizes_tail_keeps_prefix() {
 
     mock::assert_boundary_valid(&result);
     mock::assert_summary_valid(&result);
+    assert_eq!(result.raw_summary.as_deref(), Some(SUMMARY));
     assert_eq!(result.trigger, CompactTrigger::Manual);
 
     // For Newest direction, prefix is kept.
@@ -46,6 +52,27 @@ async fn partial_newest_summarizes_tail_keeps_prefix() {
         .as_ref()
         .expect("preserved_segment should be set");
     assert_eq!(seg.anchor_uuid, b.uuid, "Newest anchor must be boundary");
+
+    let attempts = captured.lock().expect("capture lock poisoned");
+    assert_eq!(attempts.len(), 1);
+    let attempt = &attempts[0];
+    assert_eq!(attempt.prompt_kind, CompactSummaryKind::Partial);
+    assert_eq!(attempt.messages.len(), messages.len() - 4);
+    assert_eq!(
+        attempt.context_messages.len(),
+        messages.len(),
+        "Newest/from partial compact should keep full structured context on the first attempt"
+    );
+    assert_eq!(
+        attempt.max_summary_tokens,
+        coco_compact::types::MAX_OUTPUT_TOKENS_FOR_SUMMARY
+    );
+    assert!(
+        !attempt
+            .summary_request
+            .contains("--- Conversation to summarize ---"),
+        "partial compact should also keep conversation in structured messages"
+    );
 }
 
 #[tokio::test]
@@ -182,6 +209,94 @@ fn build_post_compact_messages_has_canonical_order() {
     matches!(
         assembled[0],
         Message::System(SystemMessage::CompactBoundary(_))
+    );
+}
+
+#[test]
+fn build_partial_post_compact_messages_newest_keeps_prefix_before_summary() {
+    let mut result = mock::dummy_compact_result();
+    result.summary_messages.push(msg::user("summary"));
+    result.messages_to_keep.push(msg::user("kept prefix"));
+    result.hook_results.push(msg::user("hook"));
+
+    let assembled =
+        coco_compact::build_partial_post_compact_messages(&result, PartialCompactDirection::Newest);
+
+    assert_eq!(assembled.len(), 4);
+    matches!(
+        assembled[0],
+        Message::System(SystemMessage::CompactBoundary(_))
+    );
+    assert_eq!(
+        coco_compact::tokens::extract_message_text(&assembled[1]).as_deref(),
+        Some("kept prefix")
+    );
+    assert_eq!(
+        coco_compact::tokens::extract_message_text(&assembled[2]).as_deref(),
+        Some("summary")
+    );
+    assert_eq!(
+        coco_compact::tokens::extract_message_text(&assembled[3]).as_deref(),
+        Some("hook")
+    );
+}
+
+#[tokio::test]
+async fn partial_newest_ptl_retry_truncates_full_context_not_tail_only() {
+    let messages = conversation::simple(12);
+    let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+    let summarize = {
+        let captured = captured.clone();
+        let calls = calls.clone();
+        move |attempt: coco_compact::CompactSummaryAttempt| {
+            let captured = captured.clone();
+            let calls = calls.clone();
+            Box::pin(async move {
+                captured
+                    .lock()
+                    .expect("capture lock poisoned")
+                    .push(attempt);
+                if calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    Err("prompt_too_long: input exceeds context".to_string())
+                } else {
+                    Ok(CompactSummaryResponse {
+                        summary: SUMMARY.to_string(),
+                    })
+                }
+            })
+                as Pin<Box<dyn Future<Output = Result<CompactSummaryResponse, String>> + Send>>
+        }
+    };
+
+    partial_compact_conversation(
+        &messages,
+        8,
+        PartialCompactDirection::Newest,
+        None,
+        None,
+        summarize,
+        None,
+    )
+    .await
+    .expect("partial compact should recover from one PTL retry");
+
+    let attempts = captured.lock().expect("capture lock poisoned");
+    assert_eq!(attempts.len(), 2);
+    assert_eq!(attempts[0].messages.len(), messages.len() - 8);
+    assert_eq!(attempts[0].context_messages.len(), messages.len());
+    assert!(
+        attempts[1].context_messages.len() < attempts[0].context_messages.len(),
+        "retry should truncate the full API context"
+    );
+    assert_eq!(
+        attempts[1].messages.len(),
+        attempts[0].messages.len(),
+        "retry should keep the selected tail summary slice while the preserved prefix absorbs the drop"
+    );
+    assert!(
+        attempts[1].context_messages.len() > attempts[1].messages.len(),
+        "retry context should still include preserved prefix messages"
     );
 }
 

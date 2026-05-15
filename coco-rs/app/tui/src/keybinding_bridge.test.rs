@@ -155,7 +155,7 @@ fn test_ctrl_q_quits() {
 #[test]
 fn test_enter_submits() {
     let mut state = AppState::new();
-    state.ui.input.insert_char('h');
+    state.ui.input.textarea.insert_str("h");
     let cmd = map_key(&state, press(KeyCode::Enter));
     assert!(matches!(cmd, Some(TuiCommand::SubmitInput)));
 }
@@ -163,7 +163,7 @@ fn test_enter_submits() {
 #[test]
 fn test_enter_queues_during_streaming() {
     let mut state = AppState::new();
-    state.ui.input.insert_char('h');
+    state.ui.input.textarea.insert_str("h");
     state.ui.streaming = Some(crate::state::ui::StreamingState::new());
     let cmd = map_key(&state, press(KeyCode::Enter));
     assert!(matches!(cmd, Some(TuiCommand::QueueInput)));

@@ -4,7 +4,7 @@ use pretty_assertions::assert_eq;
 use crate::i18n::set_locale;
 
 #[test]
-fn help_content_uses_live_bindings_and_static_fallbacks() {
+fn help_content_renders_grouped_keymap_with_live_bindings() {
     set_locale("en");
     let state = AppState::default();
     let theme = Theme::default();
@@ -13,8 +13,30 @@ fn help_content_uses_live_bindings_and_static_fallbacks() {
 
     assert_eq!(title, " Help ");
     assert_eq!(border, theme.primary);
-    assert!(body.contains("tab            Toggle plan mode"));
-    assert!(body.contains("ctrl+t         Cycle thinking level"));
-    assert!(body.contains("!cmd           Run a shell command inline"));
-    assert!(body.contains("@path          Autocomplete a file path"));
+    // Each section title from `KeymapGroup::title_key` should appear.
+    assert!(body.contains("Cursor & history"));
+    assert!(body.contains("Editing"));
+    assert!(body.contains("Global hotkeys"));
+    assert!(body.contains("Vim Normal mode"));
+    // Spot-check rows from different groups (built-in verbs + markers
+    // surface their static combo; the column is left-padded to 18 cols).
+    assert!(body.contains("Ctrl+A             Move to beginning of line"));
+    assert!(body.contains("!cmd               Run a shell command inline (skips the model)"));
+    assert!(body.contains("@path              Autocomplete a file path or @agent-name"));
+}
+
+#[test]
+fn help_content_localizes_to_zh() {
+    set_locale("zh-CN");
+    let state = AppState::default();
+    let theme = Theme::default();
+
+    let (title, body, _border) = help_content(&state, &theme);
+
+    // help.title is " 帮助 " in zh-CN (single border-padded spaces).
+    assert_eq!(title.trim(), "帮助");
+    assert!(body.contains("光标 / 历史"));
+    assert!(body.contains("Vim Normal 模式"));
+    // Reset to en so other tests see the default locale.
+    set_locale("en");
 }

@@ -133,6 +133,64 @@ fn test_metadata_entries_round_trip() {
 }
 
 #[test]
+fn test_content_replacement_records_round_trip() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = TranscriptStore::new(dir.path().to_path_buf());
+    let sid = "content-replacements";
+
+    let records = vec![ContentReplacementRecord::tool_result(
+        "toolu_1",
+        "<persisted-output>\npreview\n</persisted-output>",
+    )];
+    store.insert_content_replacement(sid, &records).unwrap();
+
+    assert_eq!(
+        store.tool_results_session_dir(sid),
+        dir.path().join(sid).join("tool-results")
+    );
+    let loaded = store.load_content_replacements(sid).unwrap();
+    assert_eq!(loaded, records);
+}
+
+#[test]
+fn test_cleanup_tool_results_older_than_removes_expired_files_and_empty_dirs() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = TranscriptStore::new(dir.path().to_path_buf());
+    let tool_results = store.tool_results_session_dir("session-a");
+    let nested = tool_results.join("tool-dir");
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::write(tool_results.join("call-1.txt"), "large output").unwrap();
+    std::fs::write(nested.join("chunk-1.bin"), [1, 2, 3]).unwrap();
+
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    let removed = store
+        .cleanup_tool_results_older_than(std::time::Duration::ZERO)
+        .unwrap();
+
+    assert_eq!(removed, 2);
+    assert!(!tool_results.exists());
+    assert!(!dir.path().join("session-a").exists());
+}
+
+#[test]
+fn test_cleanup_tool_results_older_than_keeps_recent_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = TranscriptStore::new(dir.path().to_path_buf());
+    let tool_results = store.tool_results_session_dir("session-b");
+    std::fs::create_dir_all(&tool_results).unwrap();
+    let output = tool_results.join("call-1.txt");
+    std::fs::write(&output, "large output").unwrap();
+
+    let removed = store
+        .cleanup_tool_results_older_than(std::time::Duration::from_secs(24 * 60 * 60))
+        .unwrap();
+
+    assert_eq!(removed, 0);
+    assert!(output.exists());
+    assert!(tool_results.exists());
+}
+
+#[test]
 fn test_list_sessions_newest_first() {
     let dir = tempfile::tempdir().unwrap();
     let store = TranscriptStore::new(dir.path().to_path_buf());
@@ -506,5 +564,23 @@ fn test_metadata_entry_serializes_with_camelcase_payload() {
     assert!(
         v.get("custom_title").is_none(),
         "snake_case payload must be gone"
+    );
+}
+
+#[test]
+fn test_content_replacement_serializes_ts_shape() {
+    let m = MetadataEntry::ContentReplacement {
+        record: ContentReplacementRecord::tool_result("toolu_1", "replacement"),
+    };
+    let v = serde_json::to_value(&m).unwrap();
+    assert_eq!(
+        v.get("type").and_then(|t| t.as_str()),
+        Some("content-replacement")
+    );
+    assert_eq!(v.get("kind").and_then(|t| t.as_str()), Some("tool-result"));
+    assert_eq!(v.get("toolUseId").and_then(|t| t.as_str()), Some("toolu_1"));
+    assert_eq!(
+        v.get("replacement").and_then(|t| t.as_str()),
+        Some("replacement")
     );
 }

@@ -29,6 +29,7 @@ pub mod keybinding_bridge;
 pub mod keybinding_dispatch;
 pub mod keybinding_resolver;
 pub mod keybinding_setup;
+pub mod keymap;
 pub mod paste;
 mod presentation;
 pub mod render;

@@ -162,6 +162,46 @@ pub enum MetadataEntry {
         #[serde(flatten)]
         payload: serde_json::Value,
     },
+    /// Tool-result budget replacement record. TS writes these so a
+    /// resumed session can replay the exact `<persisted-output>`
+    /// replacement string for a tool_use_id and preserve prompt-cache
+    /// stability.
+    #[serde(rename = "content-replacement", rename_all = "camelCase")]
+    ContentReplacement {
+        #[serde(flatten)]
+        record: ContentReplacementRecord,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum ContentReplacementRecord {
+    #[serde(rename_all = "camelCase")]
+    ToolResult {
+        tool_use_id: String,
+        replacement: String,
+    },
+}
+
+impl ContentReplacementRecord {
+    pub fn tool_result(tool_use_id: impl Into<String>, replacement: impl Into<String>) -> Self {
+        Self::ToolResult {
+            tool_use_id: tool_use_id.into(),
+            replacement: replacement.into(),
+        }
+    }
+
+    pub fn tool_use_id(&self) -> &str {
+        match self {
+            Self::ToolResult { tool_use_id, .. } => tool_use_id,
+        }
+    }
+
+    pub fn replacement(&self) -> &str {
+        match self {
+            Self::ToolResult { replacement, .. } => replacement,
+        }
+    }
 }
 
 /// Per-model cost breakdown within a session.
@@ -306,6 +346,101 @@ impl TranscriptStore {
             .join(session_id)
             .join("subagents")
             .join(format!("agent-{agent_id}.meta.json"))
+    }
+
+    /// Resolve the per-session tool-result storage directory.
+    ///
+    /// Layout: `<sessions_dir>/<session_id>/tool-results`, matching
+    /// TS's session-scoped artifact layout.
+    pub fn tool_results_session_dir(&self, session_id: &str) -> PathBuf {
+        self.session_artifact_dir(session_id).join("tool-results")
+    }
+
+    /// Remove stale files under every session's `tool-results/` artifact dir.
+    ///
+    /// Mirrors TS `utils/cleanup.ts::cleanupOldSessionFiles`: direct files under
+    /// `tool-results/` and one-level nested tool directories are unlinked when
+    /// their file mtime is older than the retention cutoff; then empty tool,
+    /// `tool-results`, and session artifact directories are removed best-effort.
+    ///
+    /// Returns the number of files removed.
+    pub fn cleanup_tool_results_older_than(
+        &self,
+        older_than: std::time::Duration,
+    ) -> crate::Result<i32> {
+        let cutoff = std::time::SystemTime::now()
+            .checked_sub(older_than)
+            .ok_or(crate::SessionError::DurationOverflow)?;
+        if !self.sessions_dir.exists() {
+            return Ok(0);
+        }
+
+        let mut removed = 0;
+        for entry in std::fs::read_dir(&self.sessions_dir)? {
+            let Ok(entry) = entry else { continue };
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if !file_type.is_dir() {
+                continue;
+            }
+
+            let session_dir = entry.path();
+            let tool_results_dir = session_dir.join("tool-results");
+            let tool_entries = match std::fs::read_dir(&tool_results_dir) {
+                Ok(entries) => entries,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    try_remove_empty_dir(&session_dir);
+                    continue;
+                }
+                Err(e) => return Err(e.into()),
+            };
+
+            for tool_entry in tool_entries {
+                let Ok(tool_entry) = tool_entry else { continue };
+                let Ok(tool_file_type) = tool_entry.file_type() else {
+                    continue;
+                };
+                let tool_path = tool_entry.path();
+                if tool_file_type.is_file() {
+                    if unlink_if_older_than(&tool_path, cutoff)? {
+                        removed += 1;
+                    }
+                } else if tool_file_type.is_dir() {
+                    let tool_files = match std::fs::read_dir(&tool_path) {
+                        Ok(files) => files,
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                        Err(e) => return Err(e.into()),
+                    };
+                    for tool_file in tool_files {
+                        let Ok(tool_file) = tool_file else { continue };
+                        let Ok(tool_file_type) = tool_file.file_type() else {
+                            continue;
+                        };
+                        if !tool_file_type.is_file() {
+                            continue;
+                        }
+                        if unlink_if_older_than(&tool_file.path(), cutoff)? {
+                            removed += 1;
+                        }
+                    }
+                    try_remove_empty_dir(&tool_path);
+                }
+            }
+
+            try_remove_empty_dir(&tool_results_dir);
+            try_remove_empty_dir(&session_dir);
+        }
+
+        Ok(removed)
+    }
+
+    /// Resolve the per-session artifact root.
+    ///
+    /// Tool-result helpers receive this root and append
+    /// `tool-results/` themselves.
+    pub fn session_artifact_dir(&self, session_id: &str) -> PathBuf {
+        self.sessions_dir.join(session_id)
     }
 
     /// Append raw `Message` JSON values to a background agent's
@@ -476,6 +611,36 @@ impl TranscriptStore {
         )
     }
 
+    pub fn insert_content_replacement(
+        &self,
+        session_id: &str,
+        records: &[ContentReplacementRecord],
+    ) -> crate::Result<()> {
+        for record in records {
+            self.append_metadata(
+                session_id,
+                &MetadataEntry::ContentReplacement {
+                    record: record.clone(),
+                },
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn load_content_replacements(
+        &self,
+        session_id: &str,
+    ) -> crate::Result<Vec<ContentReplacementRecord>> {
+        let entries = self.load_entries(session_id)?;
+        Ok(entries
+            .into_iter()
+            .filter_map(|e| match e {
+                Entry::Metadata(MetadataEntry::ContentReplacement { record }) => Some(record),
+                _ => None,
+            })
+            .collect())
+    }
+
     /// Replay marble-origami entries on resume. Returns
     /// `(commits_in_order, last_snapshot_or_none)` filtered by
     /// `session_id` (snapshot last-wins). Each `serde_json::Value` is
@@ -585,6 +750,29 @@ impl TranscriptStore {
         }
         Ok(())
     }
+}
+
+fn unlink_if_older_than(path: &Path, cutoff: std::time::SystemTime) -> crate::Result<bool> {
+    let metadata = match std::fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e.into()),
+    };
+    let Ok(mtime) = metadata.modified() else {
+        return Ok(false);
+    };
+    if mtime >= cutoff {
+        return Ok(false);
+    }
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e.into()),
+    }
+}
+
+fn try_remove_empty_dir(path: &Path) {
+    let _ = std::fs::remove_dir(path);
 }
 
 // ---------------------------------------------------------------------------
@@ -792,7 +980,8 @@ fn read_transcript_metadata(path: &Path, session_id: &str) -> crate::Result<Tran
                 | MetadataEntry::CostSummary { .. }
                 | MetadataEntry::FileHistorySnapshot { .. }
                 | MetadataEntry::MarbleOrigamiCommit { .. }
-                | MetadataEntry::MarbleOrigamiSnapshot { .. } => {}
+                | MetadataEntry::MarbleOrigamiSnapshot { .. }
+                | MetadataEntry::ContentReplacement { .. } => {}
             },
             Entry::Unknown(_) => {}
         }

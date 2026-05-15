@@ -205,11 +205,12 @@ impl<'a> ToolCallRunner<'a> {
                         let effective_input = ctx_entry
                             .map(|c| c.effective_input.clone())
                             .unwrap_or_else(|| prepared.parsed_input.clone());
+                        let call_ctx = shared_ctx.clone_for_tool_call(prepared.tool_use_id.clone());
 
                         // Execute the tool under cancellation.
                         let execute_result = tokio::select! {
-                            r = prepared.tool.execute(effective_input.clone(), shared_ctx) => r,
-                            () = shared_ctx.cancel.cancelled() => Err(ToolError::Cancelled),
+                            r = prepared.tool.execute(effective_input.clone(), &call_ctx) => r,
+                            () = call_ctx.cancel.cancelled() => Err(ToolError::Cancelled),
                         };
 
                         build_outcome_from_execution(RunOneTail {
@@ -224,18 +225,7 @@ impl<'a> ToolCallRunner<'a> {
                             orchestration_ctx,
                             hook_tx,
                             // Tool Result Budget Level 1 session dir.
-                            // Wired only when both `config_home` and
-                            // `session_id_for_history` are present —
-                            // tests with a stub ToolUseContext skip
-                            // persistence (None) and tool results stay
-                            // inline.
-                            tool_result_session_dir: shared_ctx
-                                .config_home
-                                .as_ref()
-                                .zip(shared_ctx.session_id_for_history.as_ref())
-                                .map(|(home, sess)| {
-                                    home.join("cache").join("tool-results").join(sess)
-                                }),
+                            tool_result_session_dir: shared_ctx.tool_result_session_dir.clone(),
                         })
                         .await
                     }

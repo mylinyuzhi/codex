@@ -2,6 +2,23 @@
 
 Exhaustive comparison of all plan docs against actual TS source + cocode-rs source.
 
+## Freshness Update (May 14, 2026)
+
+This file is a historical audit log. For current fix ordering, use
+[current-gap-fix-plan.md](current-gap-fix-plan.md). A May 14 cleanup pass
+checked the older open rows against live `coco-rs/` code and marked several
+previous gaps as resolved or partial:
+
+- `PermissionChecker` now has production preflight callers in Read, Write, and
+  Edit.
+- `RequiresAction` and `permission_denials` are wired through `app/query` and
+  SDK session results.
+- Skills/commands/plugins rows from Round 11 are no longer fully current:
+  CommandRegistry seam, bundled-skill extraction, skill feature gates,
+  `/rewind`, `/init`, `/commit-push-pr`, dependency resolver, plugin security,
+  builtin plugin registry, and MCPB loader all have current implementations or
+  partial implementations.
+
 ## Round 13: Reminder Signal Wiring + Sandbox Wrapper Stripping (May 7, 2026)
 
 Follow-up audit pass after [Round 12](#round-12-system-reminder--sandbox-alignment-may-7-2026): caught
@@ -27,7 +44,10 @@ wrapper commands (`timeout`, `time`, `nice`, `nohup`) the TS
 | Six event-time reminder emitters | `current_session_memory` (TS no creator yet), `command_permissions` (TS `processSlashCommand.tsx:909` from slash-command flow), `dynamic_skill` (TS `attachments.ts:2589` from skill loader), `skill_discovery` (TS no creator yet), `structured_output` (TS `services/tools/toolExecution.ts:1276` from tool execution), `teammate_shutdown_batch` (TS `collapseTeammateShutdowns.ts:43` from swarm coordinator). The reminder generator-side wiring is in place (`SystemReminder::silent_text` + builder + context); the upstream owners (`coco-skills`, `coco-permissions`, `services/tools`, swarm) need to populate the field on `TurnReminderInput`. No engine change needed for the consumer — only producer wiring. |
 | Managed-policy-only sandbox filters (`allow_managed_domains_only` / `allow_managed_read_paths_only`) | TS `sandbox-adapter.ts:152-164,343-347` filters network domains + read paths to policy-source rules only when these flags are set. coco-rs has the per-source settings infrastructure (`SettingSource::Policy`, `load_policy_settings`) but `AdapterInputs` carries flat permission rule lists with no source distinction, so the gate would require a multi-source rule plumbing refactor. Deferred until enterprise-policy work lands. |
 | Sandbox hot-reload subscriber | `RuntimeReloader` (`coco-config-reload`) publishes new `Arc<RuntimeConfig>` snapshots; `SandboxState::update_config` accepts hot-reloaded config. The wiring in between (subscribe to `RuntimePublisher`, re-run `adapter::build_runtime_config`, call `update_config`) is not installed. `tui_runner.rs:61-64` explicitly notes subscriber wiring is deferred until the QueryEngine integration lands. Same gap applies to the sandbox state. Editing `~/.coco/settings.json` mid-session has no effect on the sandbox config. |
-| `PermissionChecker` wiring (carried over from Round 12) | Type + bridge are correct; no production consumer wires it into Read/Write/Edit pre-flight. Platform sandboxes (bwrap/Seatbelt) already enforce path/network at the kernel level, so this is a UX/SDK feature gap, not a security gap. |
+
+Cleanup note (May 14): the old carried-over `PermissionChecker` row is
+resolved. `core/tools/src/tools/sandbox_preflight.rs` is called from Read,
+Write, and Edit before filesystem syscalls.
 
 ---
 
@@ -55,8 +75,11 @@ TS `claude-code` (`src/utils/attachments.ts`, `messages.ts`,
 
 | Item | Note |
 |------|------|
-| `PermissionChecker` runtime wiring | Type + bridge are correct; no production consumer (Read/Write/Edit tools don't call it). The platform sandboxes (bwrap/Seatbelt) handle path/network enforcement at the kernel level today. Future: wire `PermissionChecker` into Read/Write/Edit pre-flight so SDK consumers can intercept via `SandboxApprovalBridge`. Module-level doc comment in `checker.rs` records this. |
 | Windows inner-stage sandbox | `platform/windows.rs` serializes config to base64 and builds the arg0-dispatch command, but the inner Win32 token-restriction stage is stubbed (matches codex-rs/windows-sandbox-rs). Defer per scope. |
+
+Cleanup note (May 14): `PermissionChecker` runtime wiring is no longer a
+deferred Round 12 item. Read, Write, and Edit now call
+`sandbox_preflight::preflight_path`.
 
 ---
 
@@ -68,29 +91,29 @@ Verified TS-vs-Rust audit across `coco-rs/skills`, `coco-rs/commands`, `coco-rs/
 
 | Area | TS LOC | Rust LOC | Parity | Status |
 |---|---|---|---|---|
-| Skills | ~1.6K | ~1.0K | 78% | partial — missing extract/lazy/feature-gate |
-| Commands | ~10K (96 cmds) | ~3.5K (19 handlers) | 25–30% | most P1 commands stubbed |
-| Plugins | ~22K | ~1.5K | 80% schema, 40% behavior | resolver/MCPB/refresh missing |
+| Skills | ~1.6K | historical | partial | extraction, inventory, and feature gates now landed; watcher/path activation and MCP-sourced skills remain |
+| Commands | ~10K (96 cmds) | historical | partial | P1 handlers largely landed; Prompt file parts and command tail remain |
+| Plugins | ~22K | historical | partial | dependency resolver/security/MCPB/builtins now exist; live refresh/install parity remains |
 
 ### P1 Gaps (Round A — unblocks user-visible flows)
 
 | Gap | TS source | Rust state | Plan section |
 |---|---|---|---|
-| **CommandRegistry seam** (skills+plugins→commands) | `commands.ts` | empty seam | §0 |
-| **Bundled-skill `files` extraction + nonce dir** | `skills/bundledSkills.ts:53-220` | `bundled.rs:47` (static include_str!) | §1.1 |
-| **Lazy `getPromptForCommand(args, ctx)`** | `skills/bundled/*.ts` | static String | §1.2 |
-| **Bundled inventory drift** (3 extras, 4 missing, 3 ungated) | `skills/bundled/index.ts:24-78` | `bundled.rs:47-264` | §1.3 |
-| **Skill `is_enabled` feature gate** | `types/command.ts` (per-command callback) | `IsEnabledFn` on command only | §1.4 |
-| **`/rewind` + fileHistory + message selector** | `commands/rewind/rewind.ts:1-13` + `utils/fileHistory.ts` (~1110 LOC) | missing | §2.1 |
-| **`/compact` full flow** (microcompact + session-memory + reactive) | `commands/compact/compact.ts:1-287` | stub (72 LOC) | §2.2 |
-| **`/init` 8-phase prompt** | `commands/init.ts:1-256` | partial existence-check | §2.3 |
-| **`/memory` editor dialog** | `commands/memory/memory.tsx:1-89` | list-only (170 LOC) | §2.4 |
-| **Prompt-type command execution path** | `commands.ts processSlashCommand` | stubs only | §2.5 |
-| **Plugin three-layer refresh** (Layer 2 reconcile + Layer 3 active) | `utils/plugins/{refresh,reconciler}.ts:1-216+265` | stubs only | §3.1 |
-| **Plugin dependency resolver** (DFS + cycle + scope demote + cross-mkt) | `utils/plugins/dependencyResolver.ts:1-305` | signatures only | §3.2 |
-| **MCPB (.mcpb / .dxt) bundles** | `utils/plugins/mcpbHandler.ts:968` + `zipCache.ts:406` | none | §3.3 |
-| **Plugin security validation** (path traversal, impersonation, policy) | `utils/plugins/{validatePlugin,pluginPolicy}.ts:903+20` | warn-only | §3.4 |
-| **Builtin plugin registry** (`{name}@builtin`) | `plugins/builtinPlugins.ts:1-159` | constants only | §3.5 |
+| **CommandRegistry seam** (skills+plugins→commands) | `commands.ts` | **RESOLVED**: `build_command_registry` bridges skills/plugins; collision-order audit remains | §0 |
+| **Bundled-skill `files` extraction + nonce dir** | `skills/bundledSkills.ts:53-220` | **RESOLVED**: `skills/src/extraction.rs` + `SkillDefinition.files/skill_root` | §1.1 |
+| **Lazy `getPromptForCommand(args, ctx)`** | `skills/bundled/*.ts` | **PARTIAL**: `prompt_render.rs` handles invocation-time args/shell; Prompt file parts remain | §1.2 |
+| **Bundled inventory drift** (3 extras, 4 missing, 3 ungated) | `skills/bundled/index.ts:24-78` | **RESOLVED**: Rust-only extras removed and gated skills added | §1.3 |
+| **Skill `is_enabled` feature gate** | `types/command.ts` (per-command callback) | **RESOLVED**: `SkillDefinition.gated_by` + `SkillManager::visible(features)` | §1.4 |
+| **`/rewind` + fileHistory + message selector** | `commands/rewind/rewind.ts:1-13` + `utils/fileHistory.ts` (~1110 LOC) | **RESOLVED**: handler, file history, TUI flow, SDK rewindFiles exist | §2.1 |
+| **`/compact` full flow** (microcompact + session-memory + reactive) | `commands/compact/compact.ts:1-287` | **MOSTLY RESOLVED**: sentinel dispatches to `QueryEngine::run_manual_compact`; display/reactive parity still verify | §2.2 |
+| **`/init` 8-phase prompt** | `commands/init.ts:1-256` | **RESOLVED**: prompt handler + prompt files | §2.3 |
+| **`/memory` editor dialog** | `commands/memory/memory.tsx:1-89` | **PARTIAL**: dialog entries exist; editor-open flow/string parity still verify | §2.4 |
+| **Prompt-type command execution path** | `commands.ts processSlashCommand` | **PARTIAL**: text prompt path wired; `Prompt::File` parts remain | §2.5 |
+| **Plugin three-layer refresh** (Layer 2 reconcile + Layer 3 active) | `utils/plugins/{refresh,reconciler}.ts:1-216+265` | **PARTIAL**: `plugins/src/refresh.rs` exists; live SessionRuntime refresh remains | §3.1 |
+| **Plugin dependency resolver** (DFS + cycle + scope demote + cross-mkt) | `utils/plugins/dependencyResolver.ts:1-305` | **RESOLVED**: `plugins/src/dependency.rs` full pure-function port | §3.2 |
+| **MCPB (.mcpb / .dxt) bundles** | `utils/plugins/mcpbHandler.ts:968` + `zipCache.ts:406` | **PARTIAL**: loader/cache/config status exist; schema/UI/install parity remain | §3.3 |
+| **Plugin security validation** (path traversal, impersonation, policy) | `utils/plugins/{validatePlugin,pluginPolicy}.ts:903+20` | **RESOLVED**: `plugins/src/security.rs` + schema validation | §3.4 |
+| **Builtin plugin registry** (`{name}@builtin`) | `plugins/builtinPlugins.ts:1-159` | **PARTIAL**: registry exists; Layer-3 ordering and TUI section still verify | §3.5 |
 
 ### P2 Gaps (Round B — security + correctness)
 
@@ -99,7 +122,7 @@ Verified TS-vs-Rust audit across `coco-rs/skills`, `coco-rs/commands`, `coco-rs/
 | Skill watcher: stability threshold, `.git/` ignore, ConfigChange hooks, `--add-dir` | `utils/skills/skillChangeDetector.ts:1-311` | §1.6 |
 | Skill `paths` glob conditional activation | `skills/loadSkillsDir.ts:159-178` | §1.5 |
 | MCP-sourced skills (write-once builder registry) | `skills/mcpSkillBuilders.ts` | §1.7 |
-| `/commit-push-pr` orchestrator | `commands/commit-push-pr.ts:158` | §2.6 |
+| `/commit-push-pr` orchestrator | `commands/commit-push-pr.ts:158` | **RESOLVED** (§2.6) |
 | `createMovedToPluginCommand` migration helper | `commands/createMovedToPluginCommand.ts:22-65` | §2.7 |
 | Headless install (auto-approve + zip-cache + 30s timeout) | `utils/plugins/headlessPluginInstall.ts:174` | §3.6 |
 | Hot reload (notify watcher + needsRefresh notification) | `utils/plugins/loadPluginHooks.ts:287` | §3.7 |
@@ -107,7 +130,7 @@ Verified TS-vs-Rust audit across `coco-rs/skills`, `coco-rs/commands`, `coco-rs/
 | Versioned cache paths `<name>/<version>/` | `utils/plugins/pluginVersioning.ts:157` | §3.8 |
 | Official marketplace auto-install | `utils/plugins/officialMarketplaceStartupCheck.ts:439` | §3.8 |
 | Contribution conflict warnings | `utils/plugins/loadPluginCommands.ts:946` | §3.8 |
-| Plugin error taxonomy (20+ variants) | `types/plugin.ts` | §3.8 |
+| Plugin error taxonomy (20+ variants) | `types/plugin.ts` | **RESOLVED** (`plugins/src/errors.rs`) |
 
 ### P3 Gaps (Round C — parity tail)
 
@@ -116,9 +139,14 @@ Verified TS-vs-Rust audit across `coco-rs/skills`, `coco-rs/commands`, `coco-rs/
 
 ### Cross-cutting Adjustments
 
-- **`Command.source` enum**: add missing TS variants (`bundled`, `mcp`, `commands_DEPRECATED`, etc.) to `coco-types::CommandSource`.
-- **`CommandResult` enum**: add `Compact(CompactionResult)`, `Prompt(Vec<PromptPart>)`, `OpenDialog(DialogSpec)` to mirror TS `'compact' | 'prompt' | 'local-jsx'`.
-- **Manifest format**: keep `PLUGIN.toml` for Rust-native plugins, but make `plugin.json` strict-validate (currently warn-only).
+- **`Command.source` enum**: **RESOLVED**. TS variants (`bundled`, `mcp`,
+  `commands_DEPRECATED`, etc.) are represented in `coco-types::CommandSource`.
+- **`CommandResult` enum**: **RESOLVED for core shapes**. Rust has compact,
+  prompt, open-dialog, skip, and text/injected-prompt paths. Runner support
+  for `Prompt::File` parts remains active.
+- **Manifest format**: keep `PLUGIN.toml` for Rust-native plugins, but make
+  `plugin.json` strict-validate. Current Rust accepts `plugin.json`, but
+  unknown-field behavior still needs parity verification.
 - **Telemetry**: emit TS `tengu_skill_file_changed`, `plugin_install_*` event names through `coco-otel` for dashboard parity.
 
 ---
@@ -133,7 +161,7 @@ are now actively emitted by QueryEngine during session execution.
 | Gap | Area | What Was Done | Status |
 |-----|------|--------------|--------|
 | **SessionStarted emission** | 20_SDK / 15_State | Added `SessionBootstrap` struct in coco-query; QueryEngine emits `CoreEvent::Protocol(SessionStarted(...))` at session start with full init context (cwd, model, permission_mode, tools, version, optional slash_commands/agents/skills/mcp_servers/plugins). Matches TS `buildSystemInitMessage()`. | **RESOLVED** |
-| **SessionStateChanged Running/Idle** | 20_SDK | QueryEngine emits `Running` at session entry and `Idle` at session exit (all 3 exit paths via split `run_internal_with_messages` → `run_session_loop`). TS: `notifySessionStateChanged()` in `print.ts`. `RequiresAction` is deferred to Phase 2 (needs permission prompt wiring). | **RESOLVED** |
+| **SessionStateChanged Running/Idle** | 20_SDK | QueryEngine emits `Running` at session entry and `Idle` at session exit (all 3 exit paths via split `run_internal_with_messages` → `run_session_loop`). TS: `notifySessionStateChanged()` in `print.ts`. May 14 cleanup: `RequiresAction` is also now emitted from permission prompt flow. | **RESOLVED** |
 | **SessionResult emission** | 20_SDK | QueryEngine emits full `SessionResult(Box<SessionResultParams>)` at session exit with `duration_ms`, `duration_api_ms`, `total_cost_usd`, `usage`, `model_usage` (per-model from `CostTracker.per_model`), `is_error`, `stop_reason`, `result`/`errors`. Matches TS `SDKResultMessage` shape. | **RESOLVED** |
 | **Hook lifecycle event wiring** | 11_Hooks / 20_SDK | Extended `orchestration::execute_pre_tool_use` and `execute_post_tool_use` to accept `event_tx: Option<&Sender<HookExecutionEvent>>`. QueryEngine spawns a detached forwarder task that translates `HookExecutionEvent::Started/Progress/Response` into `CoreEvent::Protocol(HookStarted/HookProgress/HookResponse)`. Matches TS `SDKHookStartedMessage/ProgressMessage/ResponseMessage`. | **RESOLVED** |
 | **Phase 1 test coverage** | 20_SDK | 5 new `engine.test.rs` tests verifying: bootstrap field passthrough, state transition ordering, SessionResult metadata, result-after-idle emission ordering. | **RESOLVED** |
@@ -142,10 +170,13 @@ are now actively emitted by QueryEngine during session execution.
 
 | Item | Reason |
 |------|--------|
-| `SessionStateChanged::RequiresAction` emission | Requires permission prompt wiring into CoreEvent channel, which belongs to SDK control protocol (Phase 2) |
 | `Task` lifecycle events (task_started/progress/notification) | Requires modifying core `TaskHandle` trait and adding event sink to `TaskManager`; blocked on subagent infrastructure not yet landed. Types are defined in coco-types per TS `SDKTaskStartedMessage/ProgressMessage/NotificationMessage`, just not yet emitted. |
 | Streaming hook stdout/stderr | Current `HookExecutionEvent::Progress` emits keep-alive with empty strings; true streaming requires restructuring `execute_hook()` from `wait_with_output()` to incremental `AsyncRead`. Deferred to Phase 3. |
-| `permission_denials` accumulation | Stub in `build_session_result_params` returns empty Vec. Wiring requires tracking denials across permission checks in the session loop; candidate for Phase 2 alongside RequiresAction. |
+
+Cleanup note (May 14): `SessionStateChanged::RequiresAction` and
+`permission_denials` accumulation are no longer deferred. They are implemented
+in `app/query/src/permission_controller.rs` and carried through query / SDK
+session results.
 
 ### Phase 1 Verification
 
@@ -290,10 +321,14 @@ All P0 gaps are now **RESOLVED** (crate-coco-tui.md created in Round 7).
 | P1 | `filterTrailingThinkingFromLastAssistant` | `messages.ts:2322` | **RESOLVED** | Step 9; ordering invariant preserved (runs BEFORE whitespace filter). |
 | P1 | `filterWhitespaceOnlyAssistantMessages` | `messages.ts:2324` | **RESOLVED** | Step 10; post-removal calls `merge_consecutive_user_messages` to reseal alternation. |
 | P1 | `ensureNonEmptyAssistantContent` | `messages.ts:2325` | **RESOLVED** | Step 11; non-final assistants get `[No message content]` placeholder; final allowed empty for prefill. |
-| P1 | `processSessionStartHooks('compact')` LLM path | `compact.ts:592` | **RESOLVED** | `engine_compaction.rs::try_full_compact` invokes `execute_session_start("compact", …)` after PostCompact and folds `additional_contexts` into `result.hook_results`. (SM-compact path was already correct.) |
+| P1 | `processSessionStartHooks('compact')` LLM path | `compact.ts:592` | **RESOLVED** | `engine_compaction.rs` invokes SessionStart after PostCompact and collects the hook events directly into `result.hook_results` (success output + additional contexts + blocking/stopped reminders) without also enqueueing them in the next-turn sync hook buffer. The aggregate output is also applied: `initialUserMessage` is inserted into the rewritten history and `watchPaths` is forwarded through a query→CLI side-effect sink. |
 | P1 | `createPlanModeAttachmentIfNeeded` post-compact | `compact.ts:1542-1560` | **RESOLVED** | `services/compact/post_compact_plan_mode.rs::create_plan_mode_attachment_if_needed` renders the same Full-variant text as the system-reminder cadence. Wired in `engine_compaction.rs::try_full_compact` from a snapshot taken pre-compact (live `permission_mode == Plan` + `QueryEngineConfig.plan_mode_settings`). Plan instructions land on the FIRST post-compact turn, matching TS. |
 | P1 | `createAsyncAgentAttachmentsIfNeeded` post-compact | `compact.ts:1568-1599` | **RESOLVED** | `services/compact/post_compact_async_agents.rs::create_async_agent_attachments` renders one `task_status` reminder per filtered async agent. Engine snapshot via `QueryEngine::snapshot_async_agents_for_post_compact` reads from optional `Arc<TaskManager>` (`with_running_tasks` builder hook), filters by TS rules: drop self-agent, drop pending, drop already-notified terminal. Empty when no `TaskManager` is installed (degrades to TS-feature-stripped behavior). |
 | P2 | `recompactionInfo` populate | `compact.ts:317-323` | **RESOLVED** | `CompactRunOptions.recompaction_info: Option<RecompactionInfo>` plumbs through `compact_conversation`; `CompactResult.is_recompaction` reads from it. `QueryEngine::last_compact_state` (per-engine `Mutex<Option<LastCompactState>>`) tracks turn id + run id; `turn_counter` is incremented at the top of `finalize_turn_post_tools`. `try_full_compact` derives `RecompactionInfo` from the tracker each invocation and updates it post-success. |
+| P0 | TS-style structured compact summary execution | `compact.ts` / `query.ts` compact fork path | **RESOLVED** | `compact_conversation` and `partial_compact_conversation` now pass `CompactSummaryAttempt` (`messages` + `context_messages` + `summary_request`) instead of a rendered `Fn(String)` prompt. `QueryEngine` prefers `ForkLabel::Compact` with deny-all tools and `skip_cache_write`, then falls back to a no-tools structured direct call. PostCompact hooks receive `CompactResult.raw_summary`, matching TS's raw `summary` payload. |
+| P1 | Partial compact query-level restoration | `compact.ts:772-1106` + post-compact attachment helpers | **RESOLVED** | TUI rewind summarize now routes through `QueryEngine::run_partial_compact`, sharing PreCompact/PostCompact/SessionStart hooks, the summary executor, file/plan/skill/plan-mode/async-agent attachments, deferred-tool/agent/MCP delta injection, observer cleanup, and cache-break notification. `from`/Newest uses TS order `boundary → kept prefix → summary`; `up_to`/Oldest uses `boundary → summary → kept tail`. PTL retry for `from` truncates the full API context, not just the tail summary slice. |
+| P1 | Auto compact failure breaker | `autoCompact.ts` failure guard | **RESOLVED** | `try_full_compact` returns `CompactOutcome`; `finalize_turn_post_tools` records auto-only consecutive failures and skips further auto LLM compaction after `MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES = 3`. Manual compact is excluded; session-memory success resets the state. |
+| P1 | Session-memory post-compact parity | `sessionMemoryCompact.ts:583-585` + plan attachment | **RESOLVED** | SM compact now injects current plan attachment and writes SessionStart hook output into `result.hook_results`; hook wire trigger remains TS-compatible `auto` for non-manual internal triggers. The SessionStart phase is emitted only after SM actually applies, so declined SM attempts fall through to LLM compact without a false hook phase. |
 | P2 | `stripReinjectedAttachments` divergence | `compact.ts:211-223` | **NON-PORT (broader is correct)** | `survives_compaction()` filters more kinds than TS's narrow `skill_discovery`/`skill_listing` filter, but the intent is identical (drop regenerable, keep audit/UI-visible). Documented in source. |
 | P3 | `relocateToolReferenceSiblings` | `messages.ts:2304` | **DEFERRED** | TS-gated on `tengu_toolref_defer_j8m`; coco-rs has no Tool Reference feature. Safe to defer until/unless the feature lands. |
 
@@ -459,7 +494,7 @@ Multi-provider awareness checked. Shell-parser strategy updated to HYBRID (cocod
 
 | Concept | TS source | What it is | Should be in |
 |---------|-----------|------------|-------------|
-| **Tool Result Budget (full Level 1 + Level 2)** | `utils/toolResultStorage.ts` (1040 LOC), `constants/toolLimits.ts`, `utils/mcpOutputStorage.ts` | Two-level pipeline: (1) per-tool persistence — `<persisted-output>` wrapper + 2KB preview + session-scoped `tool-results/` dir, invoked from `services/tools/toolExecution.ts:addToolResult`; (2) per-message aggregate budget (`MAX_TOOL_RESULTS_PER_MESSAGE_CHARS=200_000`) — `ContentReplacementState{seenIds,replacements}` + `enforceToolResultBudget`, invoked from `query.ts:379` before micro-compact. **Not** a single state machine. **Re-routed** from `coco-context` to `coco-tool-runtime` (storage + enforcement) + `coco-query` (wiring) + `coco-session` (transcript records) — see [`tool-result-budget-plan.md`](tool-result-budget-plan.md). Prior ownership claim led to multi-round review miss; only `bash.rs::maybe_persist_oversized_output` exists today and uses a divergent shape (parallel JSON fields, `temp_dir()` storage, no `<persisted-output>` wrapper). | `coco-tool-runtime` + `coco-query` + `coco-session` |
+| **Tool Result Budget (full Level 1 + Level 2)** | `utils/toolResultStorage.ts` (1040 LOC), `constants/toolLimits.ts`, `utils/mcpOutputStorage.ts` | Two-level pipeline: (1) per-tool persistence — `<persisted-output>` wrapper + 2KB preview + session-scoped `tool-results/` dir, invoked from `services/tools/toolExecution.ts:addToolResult`; (2) per-message aggregate budget (`MAX_TOOL_RESULTS_PER_MESSAGE_CHARS=200_000`) — `ContentReplacementState{seenIds,replacements}` + `enforceToolResultBudget`, invoked from `query.ts:379` before micro-compact. **Not** a single state machine. **Re-routed** from `coco-context` to `coco-tool-runtime` (storage + enforcement) + `coco-query` (wiring) + `coco-session` (transcript records) — see [`tool-result-budget-plan.md`](tool-result-budget-plan.md). Current Rust mirrors the TS storage owner, session-scoped paths, idempotent writes, preview replacement semantics, Level 2 prompt projection, transcript replacement records/resume reconstruction, MCP binary output persistence, session cleanup, and per-tool threshold defaults. Remaining work is ordinary E2E hardening around future MCP block types, not an open parity blocker. | `coco-tool-runtime` + `coco-query` + `coco-session` |
 | `FileStateCache` | `utils/fileStateCache.ts` (1479 LOC) | LRU cache of file contents before tool execution | `coco-context` |
 | `FileHistoryState` | `utils/fileHistory.ts` | Tracks file edits per turn for change detection/undo | `coco-messages` or `coco-context` |
 | `processUserInput/` | `utils/processUserInput/` (4 files) | Pre-processes user input (images, slash commands, bash) | `coco-query` |
@@ -619,12 +654,12 @@ Multi-provider awareness checked. Shell-parser strategy updated to HYBRID (cocod
 | R5-2 | SubagentType enum missing from crate-coco-types.md | **FIXED**: Added 7-variant enum with as_str(), FromStr |
 | R5-3 | ShellType vs ShellKind inconsistency | **FIXED**: Unified to ShellKind in coco-hooks + coco-config |
 | R5-4 | EffortValue vs EffortLevel inconsistency | **FIXED**: Unified to EffortLevel in coco-types + coco-inference |
-| R5-5 | BuiltinPluginDefinition layer violation (L1→L4) | **P2** |
-| R5-6 | SkillDefinition.hooks type mismatch | **P2** |
-| R5-7 | MessageRole undefined in coco-messages | **P3** |
+| R5-5 | BuiltinPluginDefinition layer violation (L1→L4) | **FIXED**: `BuiltinPluginDefinition.manifest` is `serde_json::Value`; plugin crate owns deserialization |
+| R5-6 | SkillDefinition.hooks type mismatch | **FIXED**: `SkillDefinition.hooks` is `Option<serde_json::Value>` |
+| R5-7 | MessageRole undefined in coco-messages | **FIXED / SUPERSEDED**: message filtering uses `MessageKind`; system-reminder has its own local `MessageRole` |
 | R5-8 | ThinkingLevel name collision (config enum vs inference struct) | **FIXED**: Removed config enum, struct→coco-types, ModelInfo restored |
-| R5-9 | TaskStateBase dual definition (types vs tasks) | **P2** |
-| R5-10 | OAuthTokens collision (inference vs mcp) | **P2** |
+| R5-9 | TaskStateBase dual definition (types vs tasks) | **FIXED**: tasks uses `coco_types::TaskStateBase` as canonical |
+| R5-10 | OAuthTokens collision (inference vs mcp) | **ACCEPTED / DOC CLEANUP**: distinct crate-local token structs; plan docs name them `ApiOAuthTokens` / `McpOAuthTokens` to avoid ownership ambiguity |
 
 ---
 
@@ -771,9 +806,9 @@ converted to typed enums.
 | R5-2 | SubagentType enum missing | Referenced by `AgentTypeId::Builtin(SubagentType)` but enum not defined | **FIXED** | Added 7-variant enum with as_str(), FromStr, serde to crate-coco-types.md |
 | R5-3 | ShellType vs ShellKind inconsistency | coco-hooks and coco-config used `ShellType` (undefined); coco-context defines `ShellKind` | **FIXED** | Unified to `ShellKind` in coco-hooks.md and coco-config.md |
 | R5-4 | EffortValue vs EffortLevel inconsistency | crate-coco-types.md and crate-coco-inference.md used `EffortValue` (undefined); 10+ other refs use `EffortLevel` | **FIXED** | Unified to `EffortLevel` in coco-types.md and coco-inference.md |
-| R5-5 | BuiltinPluginDefinition layer violation | coco-types (L1) references `PluginManifest` from coco-plugins (L4) | **Architecture** | Move `BuiltinPluginDefinition` to coco-plugins, or change `manifest` field to `Value` |
-| R5-6 | SkillDefinition.hooks type mismatch | Uses `Option<HooksSettings>` but coco-skills doesn't declare coco-hooks dependency | **Architecture** | Change to `Option<Value>` per config isolation pattern (same as Settings.hooks) |
-| R5-7 | MessageRole undefined | `filter_by_role(messages, role: MessageRole)` in coco-messages but MessageRole never defined | **Minor** | Replace with `MessageKind` (already defined in coco-types) |
+| R5-5 | BuiltinPluginDefinition layer violation | **FIXED**: `manifest` is `serde_json::Value` in `coco-types`; `coco-plugins` deserializes it at the boundary | **Architecture** | No open action |
+| R5-6 | SkillDefinition.hooks type mismatch | **FIXED**: `SkillDefinition.hooks` is `Option<serde_json::Value>` | **Architecture** | No open action |
+| R5-7 | MessageRole undefined | **SUPERSEDED**: message APIs use `MessageKind`; system-reminder has a local role enum for injected blocks | **Minor** | No open action |
 
 ### Type Collision Audit (comprehensive cross-doc review)
 
@@ -783,8 +818,8 @@ Cross-referenced with TS source to identify redundancy and collisions.
 | # | Collision | Files | Analysis | Resolution |
 |---|-----------|-------|----------|------------|
 | R5-8 | ThinkingLevel name collision | coco-config (was enum None/Low/Med/High) vs coco-inference (struct {effort, budget, interleaved}) | Config enum had NO TS equivalent — TS uses capability checks. The struct IS needed for multi-provider (cocode-rs proven design). | **FIXED**: Removed config enum. ThinkingLevel struct moved to coco-types as canonical shared type. ModelInfo restored with `default_thinking_level: Option<ThinkingLevel>` and `supported_thinking_levels`. Rationale: multi-provider needs richer thinking abstraction than TS's simple ThinkingConfig. |
-| R5-9 | TaskStateBase dual definition | coco-types (11 fields) vs coco-tasks (5 fields) | Different field sets for same type name. coco-types version is more complete. | **P2**: Unify at implementation time. coco-types is canonical owner. |
-| R5-10 | OAuthTokens collision | coco-inference (API OAuth: 6 fields) vs coco-mcp (MCP OAuth: 4 fields, different expires_at type) | Genuinely different structs for different OAuth contexts. | **P2**: Rename to `ApiOAuthTokens` / `McpOAuthTokens` at implementation time. |
+| R5-9 | TaskStateBase dual definition | **FIXED**: `coco-tasks` uses `coco_types::TaskStateBase` | Canonical owner is `coco-types`. | No open action |
+| R5-10 | OAuthTokens collision | **ACCEPTED**: API and MCP token shapes are intentionally separate crate-local structs; docs use `ApiOAuthTokens` / `McpOAuthTokens` names where owner clarity matters | No cross-crate type collision in Rust paths. | No open action |
 
 **Unified to ThinkingLevel only** (EffortLevel + ThinkingConfig eliminated):
 - TS has EffortLevel (4 levels) + ThinkingConfig (3 variants) as separate types

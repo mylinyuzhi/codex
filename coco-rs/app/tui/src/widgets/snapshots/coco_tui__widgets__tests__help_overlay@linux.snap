@@ -2,27 +2,26 @@
 source: app/tui/src/widgets/mod.test.rs
 expression: output
 ---
- | opus-4                                                                       
-            ┌ Help ────────────────────────────────────────────────┐            
-            │tab            Toggle plan mode                       │            
-            │shift+tab      Cycle permission mode                  │            
-            │ctrl+t         Cycle thinking level                   │            
-            │ctrl+m         Cycle model                            │            
-            │ctrl+c         Interrupt                              │            
-            │ctrl+l         Clear screen                           │            
-            │ctrl+k         Kill to end of line                    │            
-            │ctrl+y         Yank killed text                       │            
-            │ctrl+x ctrl+e  External editor                        │            
-            │ctrl+p         Command palette                        │            
-            │ctrl+s         Stash / restore input draft            │            
-            │ctrl+x ctrl+k  Kill all agents                        │            
-            │alt+o          Toggle fast mode                       │            
-            │ctrl+shift+f   Global search                          │            
-            │ctrl+o         Toggle transcript view                 │            
-            │ctrl+shift+o   Toggle teammate message preview        │            
-            │ctrl+shift+p   Quick open file                        │            
-            │ctrl+w         Context window                         │            
- Input ─────│f6             Focus next panel                       │────────────
-❯ Type a mes│ctrl+d         Quit                                   │            
-            └──────────────────────────────────────────────────────┘            
- opus-4 | Default | 0 msgs
+ ╭─╮ ╭─╮   COCO v0.0.0                                                          
+ │●│ │●│   o┌ Help ────────────────────────────────────────────────┐            
+ ╰─╯ ╰─╯    │Cursor & history                                      │            
+            │Ctrl+A             Move to beginning of line          │            
+────────────│Ctrl+E             Move to end of line                │────────────
+❯ Type a mes│Ctrl+B             Move one character left            │            
+────────────│Ctrl+F             Move one character right           │────────────
+ opus-4 * au│Alt+B              Move one word left                 │            
+            │Alt+F              Move one word right                │            
+            │↑                  Walk through prompt history (up /  │            
+            │down)                                                 │            
+            │                                                      │            
+            │Editing                                               │            
+            │Backspace          Delete character before cursor     │            
+            │Delete             Delete character at cursor         │            
+            │Ctrl+W             Delete the previous word           │            
+            │Ctrl+Delete        Delete the next word               │            
+            │Ctrl+K             Kill text from cursor to end of    │            
+            │line (Ctrl+Y to paste)                                │            
+            │Ctrl+U             Kill text from beginning of line to│            
+            │cursor                                                │            
+            │Ctrl+Y             Paste the most recently killed text│            
+            └──────────────────────────────────────────────────────┘

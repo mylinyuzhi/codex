@@ -41,6 +41,7 @@ pub mod plan_mode_reminder;
 pub mod prompt_suggestion;
 pub mod reminder_adapters;
 pub mod sdk_types;
+pub mod session_start_hooks;
 mod session_state;
 pub mod single_turn;
 pub mod skill_runtime;
@@ -66,6 +67,9 @@ pub use config::QueryResult;
 pub use config::SessionBootstrap;
 pub use engine::QueryEngine;
 pub use engine_live_rules::EngineLiveRulesHandle;
+pub use session_start_hooks::SessionStartHookSideEffectSink;
+pub use session_start_hooks::SessionStartHookSideEffectSinkRef;
+pub use session_start_hooks::SessionStartHookSideEffects;
 
 // Re-export CoreEvent from coco-types for consumers of run_with_events().
 // The old QueryEvent enum has been deleted per event-system-design.md Phase 0:
