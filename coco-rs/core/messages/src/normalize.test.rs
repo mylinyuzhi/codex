@@ -828,3 +828,118 @@ fn normalize_synthesizes_for_multiple_assistants() {
         "tcB must have exactly one synthetic is_error result"
     );
 }
+
+// ── strip_observable_tool_input_for_api ──
+
+fn exit_plan_mode_assistant(input: serde_json::Value) -> Message {
+    use coco_inference::ToolCallPart;
+    Message::Assistant(AssistantMessage {
+        message: LlmMessage::Assistant {
+            content: vec![AssistantContent::ToolCall(ToolCallPart::new(
+                "exit_plan_1",
+                coco_types::ToolName::ExitPlanMode.as_str(),
+                input,
+            ))],
+            provider_options: None,
+        },
+        uuid: Uuid::new_v4(),
+        model: "test".into(),
+        stop_reason: Some(StopReason::ToolUse),
+        usage: None,
+        cost_usd: None,
+        request_id: None,
+        api_error: None,
+    })
+}
+
+fn exit_plan_mode_input(result: &[LlmMessage]) -> serde_json::Value {
+    result
+        .iter()
+        .find_map(|m| match m {
+            LlmMessage::Assistant { content, .. } => content.iter().find_map(|c| match c {
+                AssistantContent::ToolCall(tc)
+                    if tc.tool_name == coco_types::ToolName::ExitPlanMode.as_str() =>
+                {
+                    Some(tc.input.clone())
+                }
+                _ => None,
+            }),
+            _ => None,
+        })
+        .expect("ExitPlanMode tool call must survive normalization")
+}
+
+#[test]
+fn normalize_strips_injected_exit_plan_mode_fields_for_api() {
+    // TS parity: `normalizeToolInputForAPI` removes `plan` / `planFilePath`
+    // injected by `normalizeToolInput` — the wire schema is empty.
+    let assistant = exit_plan_mode_assistant(serde_json::json!({
+        "plan": "## Plan\n- ship it",
+        "planFilePath": "/tmp/plans/slug.md",
+        "allowedPrompts": [],
+    }));
+    let result = normalize_messages_for_api(&[user_msg("go"), assistant]);
+
+    let input = exit_plan_mode_input(&result);
+    assert_eq!(input.get("plan"), None, "plan must be stripped before API");
+    assert_eq!(
+        input.get("planFilePath"),
+        None,
+        "planFilePath must be stripped before API"
+    );
+    assert_eq!(
+        input.get("allowedPrompts"),
+        Some(&serde_json::json!([])),
+        "non-injected fields must be preserved"
+    );
+}
+
+#[test]
+fn normalize_leaves_exit_plan_mode_without_injected_fields_untouched() {
+    let assistant = exit_plan_mode_assistant(serde_json::json!({"allowedPrompts": []}));
+    let result = normalize_messages_for_api(&[user_msg("go"), assistant]);
+
+    assert_eq!(
+        exit_plan_mode_input(&result),
+        serde_json::json!({"allowedPrompts": []})
+    );
+}
+
+#[test]
+fn normalize_does_not_strip_plan_field_from_other_tools() {
+    use coco_inference::ToolCallPart;
+    // A non-ExitPlanMode tool that happens to carry a `plan` key keeps it.
+    let assistant = Message::Assistant(AssistantMessage {
+        message: LlmMessage::Assistant {
+            content: vec![AssistantContent::ToolCall(ToolCallPart::new(
+                "call_1",
+                "Read",
+                serde_json::json!({"plan": "not the exit tool", "file_path": "/tmp/a"}),
+            ))],
+            provider_options: None,
+        },
+        uuid: Uuid::new_v4(),
+        model: "test".into(),
+        stop_reason: Some(StopReason::ToolUse),
+        usage: None,
+        cost_usd: None,
+        request_id: None,
+        api_error: None,
+    });
+    let result = normalize_messages_for_api(&[user_msg("go"), assistant]);
+
+    let input = result
+        .iter()
+        .find_map(|m| match m {
+            LlmMessage::Assistant { content, .. } => content.iter().find_map(|c| match c {
+                AssistantContent::ToolCall(tc) if tc.tool_name == "Read" => Some(tc.input.clone()),
+                _ => None,
+            }),
+            _ => None,
+        })
+        .expect("Read tool call must survive");
+    assert_eq!(
+        input.get("plan"),
+        Some(&serde_json::json!("not the exit tool"))
+    );
+}

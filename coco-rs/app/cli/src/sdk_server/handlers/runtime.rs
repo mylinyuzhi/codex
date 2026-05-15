@@ -57,10 +57,10 @@ pub(super) async fn handle_set_model(
 ///    mirroring TS's `getAppState()` live-read semantics. Without
 ///    this write, mid-session toggles are invisible to the plan-mode
 ///    reminder + permission evaluator.
-/// 3. On Auto↔non-Auto transitions, also manages
-///    `app_state.stripped_dangerous_rules` stash (cleared on leaving
-///    Auto so the next ctx rebuild doesn't carry a stale stash into
-///    a non-Auto mode). TS parity: `permissionSetup.ts:627-637`.
+/// 3. Applies the same plan/auto transition side effects as the TUI
+///    path: entering Plan stashes `pre_plan_mode` and stamps
+///    `plan_mode_entry_ms`; leaving Plan schedules the one-shot exit
+///    banner; leaving Auto clears `stripped_dangerous_rules`.
 pub(super) async fn handle_set_permission_mode(
     params: coco_types::SetPermissionModeParams,
     ctx: &HandlerContext,
@@ -111,10 +111,11 @@ pub(super) async fn handle_set_permission_mode(
     let prev_mode = guard
         .permission_mode
         .unwrap_or(coco_types::PermissionMode::Default);
-    guard.permission_mode = Some(params.mode);
-    // Auto-boundary strip-stash management lives in the shared helper
-    // so TUI + SDK paths stay in sync.
-    coco_permissions::apply_auto_transition_to_app_state(&mut guard, prev_mode, params.mode);
+    coco_permissions::apply_permission_mode_transition_to_app_state(
+        &mut guard,
+        prev_mode,
+        params.mode,
+    );
     drop(guard);
 
     // Broadcast the change to any attached client (TUI / SDK

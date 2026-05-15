@@ -63,6 +63,7 @@ pub use filesystem::is_editable_internal_path;
 pub use filesystem::is_readable_internal_path;
 pub use filesystem::path_in_working_path;
 pub use mode_transition::apply_auto_transition_to_app_state;
+pub use mode_transition::apply_permission_mode_transition_to_app_state;
 pub use mode_transition::get_next_permission_mode;
 pub use mode_transition::resolve_predefined_mode;
 pub use mode_transition::resolve_subagent_mode;

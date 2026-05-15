@@ -25,6 +25,12 @@ pub(crate) struct PreparedToolCall {
 /// every committed call emits `ToolUseQueued`; calls that cannot become
 /// runnable because the tool is unknown or the input is invalid are completed
 /// here with exactly one model-visible error result.
+///
+/// `tool_call.input` is already the observable input: both the streaming
+/// and non-streaming engine paths run
+/// `tool_input_normalizer::normalize_observable_tool_input` while building
+/// the assistant-message `ToolCallPart` this function receives, so no
+/// re-normalization happens here.
 pub(crate) async fn prepare_committed_tool_call(
     event_tx: &Option<mpsc::Sender<CoreEvent>>,
     history: &mut MessageHistory,

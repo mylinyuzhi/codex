@@ -328,8 +328,7 @@ pub struct ToolUseContext {
     /// When `true`, ExitPlanMode compares the plan-file mtime against
     /// `plan_mode_entry_ms` and appends a soft advisory note if the
     /// model called Exit without actually editing the plan file.
-    /// Enabled via `settings.plan_mode.verify_execution` or the
-    /// `COCO_VERIFY_PLAN` env var.
+    /// Enabled via `settings.plan_mode.verify_execution`.
     pub plan_verify_execution: bool,
     /// Plan-mode interview-phase flag — drives the `EnterPlanMode`
     /// post-execute instruction text variant. TS parity:

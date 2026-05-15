@@ -89,7 +89,10 @@ pub fn classify_auto_mode_extended(ctx: &AutoModeInput<'_>) -> AutoModeDecision 
     }
 
     // Plan mode tools — safe (local state changes)
-    if name == ToolName::EnterPlanMode.as_str() || name == ToolName::ExitPlanMode.as_str() {
+    if name == ToolName::EnterPlanMode.as_str()
+        || name == ToolName::ExitPlanMode.as_str()
+        || name == ToolName::VerifyPlanExecution.as_str()
+    {
         return AutoModeDecision::Allow;
     }
 

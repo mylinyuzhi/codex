@@ -7,6 +7,7 @@ use coco_messages::ReasoningContent;
 use coco_messages::TextContent;
 use coco_messages::ToolCallContent;
 use coco_messages::UserMessage;
+use coco_types::AttachmentKind;
 use coco_types::ToolName;
 use pretty_assertions::assert_eq;
 use uuid::Uuid;
@@ -271,4 +272,51 @@ fn count_human_turns_ignores_meta_attachments_and_non_user() {
 #[test]
 fn count_human_turns_empty_history_returns_zero() {
     assert_eq!(count_human_turns(&[]), 0);
+}
+
+// ── count_human_turns_since_attachment ──
+
+#[test]
+fn count_human_turns_since_attachment_counts_after_marker() {
+    let marker = Message::Attachment(coco_messages::AttachmentMessage::api(
+        AttachmentKind::PlanModeExit,
+        LlmMessage::user_text("exited"),
+    ));
+    let msgs = vec![
+        user("before"),
+        marker,
+        assistant_tool_call("Read"),
+        user("one"),
+        assistant_text("reply"),
+        user("two"),
+    ];
+
+    assert_eq!(
+        count_human_turns_since_attachment(&msgs, AttachmentKind::PlanModeExit),
+        2
+    );
+}
+
+#[test]
+fn count_human_turns_since_attachment_returns_zero_at_marker() {
+    let marker = Message::Attachment(coco_messages::AttachmentMessage::api(
+        AttachmentKind::PlanModeExit,
+        LlmMessage::user_text("exited"),
+    ));
+    let msgs = vec![user("before"), marker];
+
+    assert_eq!(
+        count_human_turns_since_attachment(&msgs, AttachmentKind::PlanModeExit),
+        0
+    );
+}
+
+#[test]
+fn count_human_turns_since_attachment_returns_zero_when_missing() {
+    let msgs = vec![user("one"), assistant_text("reply"), user("two")];
+
+    assert_eq!(
+        count_human_turns_since_attachment(&msgs, AttachmentKind::PlanModeExit),
+        0
+    );
 }

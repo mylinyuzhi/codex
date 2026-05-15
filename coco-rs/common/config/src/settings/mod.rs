@@ -343,11 +343,11 @@ pub struct PlanModeSettings {
     /// the `ExitPlanMode` tool_result. **Does not enforce** — the model
     /// can ignore the advisory. Default off.
     ///
-    /// TS parity: `VerifyPlanExecution` is a PostToolUse *hook* in TS
-    /// that can block the exit. The Rust port ships the simpler
-    /// synchronous mtime check as an advisory; if enforcement is
-    /// needed, wire a hook instead. Name kept as `verify_execution` for
-    /// settings.json backwards compatibility.
+    /// TS parity: older hook paths were refactored into the
+    /// `VerifyPlanExecution` tool. This Rust setting remains the
+    /// simpler synchronous mtime check on `ExitPlanMode`; it is advisory
+    /// and does not perform post-implementation verification. Name kept
+    /// as `verify_execution` for settings.json backwards compatibility.
     #[serde(default)]
     pub verify_execution: bool,
     /// In plan mode, if the latest assistant message's context exceeds

@@ -940,14 +940,15 @@ async fn run_agent_driver(
                     );
                     continue;
                 }
-                let prev_mode = cfg.permission_mode;
+                let cfg_mode = cfg.permission_mode;
                 runtime
                     .update_engine_config(|cfg| cfg.permission_mode = mode)
                     .await;
+                let prev_mode;
                 {
                     let mut guard = runtime.app_state.write().await;
-                    guard.permission_mode = Some(mode);
-                    coco_permissions::apply_auto_transition_to_app_state(
+                    prev_mode = guard.permission_mode.unwrap_or(cfg_mode);
+                    coco_permissions::apply_permission_mode_transition_to_app_state(
                         &mut guard, prev_mode, mode,
                     );
                 }
@@ -1791,16 +1792,6 @@ async fn dispatch_plan(
         {
             let mut guard = runtime.app_state.write().await;
             patch(&mut guard);
-            // Auto-mode entry/exit hooks are still relevant if
-            // prev_mode was Auto — `apply_auto_transition_to_app_state`
-            // restores stripped dangerous rules on Auto→non-Auto.
-            // Plan is non-Auto, so this matters when leaving Auto for
-            // Plan.
-            coco_permissions::apply_auto_transition_to_app_state(
-                &mut guard,
-                prev_mode,
-                coco_types::PermissionMode::Plan,
-            );
         }
         info!(
             session_id = %session_id,

@@ -55,7 +55,7 @@ struct ExitPlanModeOutput {
     /// True when the CCR UI edited the plan via `input.plan` before exit.
     #[serde(skip_serializing_if = "Option::is_none")]
     plan_was_edited: Option<bool>,
-    /// VerifyPlanExecution outcome (None when the hook didn't run).
+    /// ExitPlanMode stale-plan advisory outcome (None when disabled).
     #[serde(skip_serializing_if = "Option::is_none")]
     plan_verification: Option<coco_context::PlanVerificationOutcome>,
     /// Teammate-awaiting-approval branch: the teammate's tool call
@@ -71,8 +71,8 @@ struct ExitPlanModeOutput {
 
 /// Build the cross-turn `AppStatePatch` that flips state into plan
 /// mode. Captures the current mode (so `ExitPlanMode` knows where to
-/// restore) and stamps the entry timestamp so a future
-/// `VerifyPlanExecution` can compare against the plan-file mtime.
+/// restore) and stamps the entry timestamp so `ExitPlanMode` can
+/// optionally compare against the plan-file mtime.
 ///
 /// TS parity: the inline closure inside `EnterPlanModeTool.ts::call`
 /// at lines 88-94 — `setAppState(prev => ({ ...prev, prePlanMode:
@@ -82,20 +82,12 @@ struct ExitPlanModeOutput {
 /// `commands/plan/plan.tsx:73-91`) flips state directly without
 /// re-prompting the user.
 pub fn build_enter_plan_mode_patch(current_mode: PermissionMode) -> coco_types::AppStatePatch {
-    let entry_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or_default();
     Box::new(move |state| {
-        if current_mode != PermissionMode::Plan {
-            state.pre_plan_mode = Some(current_mode);
-        }
-        state.permission_mode = Some(PermissionMode::Plan);
-        // Clear stale exit-banner flag: rapid Plan→Default→Plan
-        // toggles shouldn't emit a banner on re-entry.
-        state.needs_plan_mode_exit_attachment = false;
-        // Stamp entry timestamp for VerifyPlanExecution on exit.
-        state.plan_mode_entry_ms = Some(entry_ms);
+        coco_permissions::apply_permission_mode_transition_to_app_state(
+            state,
+            current_mode,
+            PermissionMode::Plan,
+        );
     })
 }
 
@@ -565,11 +557,22 @@ impl Tool for ExitPlanModeTool {
             (Some(sid), Some(pd)) => coco_context::get_plan(sid, pd, agent_id_str.as_deref()),
             _ => None,
         };
+        let input_plan_is_edit = match (&input_plan, &disk_plan) {
+            (Some(input), Some(disk)) => input != disk,
+            (Some(_), None) => true,
+            _ => false,
+        };
         let plan = input_plan.clone().or(disk_plan);
 
         // If plan was provided in input (CCR edit), persist to disk so the
         // next reader (VerifyPlanExecution, Read tool) sees the edit.
-        if let (Some(plan_content), Some(path)) = (&input_plan, &file_path)
+        //
+        // The query layer also injects the current on-disk plan into
+        // ExitPlanMode input for hooks/SDK/transcript parity with TS
+        // `normalizeToolInput`. Do not treat that byte-identical snapshot
+        // as a user edit or rewrite the file unnecessarily.
+        if input_plan_is_edit
+            && let (Some(plan_content), Some(path)) = (&input_plan, &file_path)
             && let Err(e) = tokio::fs::write(path, plan_content.as_bytes()).await
         {
             tracing::warn!("Failed to persist edited plan to {path}: {e}");
@@ -773,7 +776,7 @@ impl Tool for ExitPlanModeTool {
             state.has_exited_plan_mode = true;
             state.needs_plan_mode_exit_attachment = true;
             // Mark the plan as awaiting `VerifyPlanExecution`. Cleared
-            // when (future work) that tool runs or the user resets it.
+            // when that tool runs or the user resets it.
             // Drives the `verify_plan_reminder` system reminder — so a
             // plan exit always leaves a durable signal behind, not just
             // the one-shot `needs_plan_mode_exit_attachment` that the
@@ -800,11 +803,7 @@ impl Tool for ExitPlanModeTool {
             is_agent,
             file_path,
             has_task_tool: if has_agent_tool { Some(true) } else { None },
-            plan_was_edited: if input_plan.is_some() {
-                Some(true)
-            } else {
-                None
-            },
+            plan_was_edited: if input_plan_is_edit { Some(true) } else { None },
             plan_verification,
             ..Default::default()
         };
@@ -863,8 +862,7 @@ impl ExitPlanModeTool {
             return "User has approved exiting plan mode. You can now proceed.".to_string();
         }
 
-        // Optional verification advisory — TS: `VerifyPlanExecution` +
-        // `pendingPlanVerification`. Never blocks, just appends a note.
+        // Optional stale-plan advisory. Never blocks, just appends a note.
         let verification_note = match out.plan_verification {
             Some(coco_context::PlanVerificationOutcome::NotEdited) => {
                 "\n\n**Heads up:** the plan file mtime suggests you \

@@ -80,11 +80,9 @@ pub struct AttachmentSettings {
     pub compaction_reminder: bool,
     /// Date-change notification (TS `date_change`).
     pub date_change: bool,
-    /// Verify-plan reminder (TS `verify_plan_reminder`). **Opt-in** — TS
-    /// gates on `USER_TYPE=ant && CLAUDE_CODE_VERIFY_PLAN=true`. In
-    /// coco-rs the user has to flip this in `settings.json` because
-    /// coco-rs doesn't yet ship a `VerifyPlanExecution` tool by default;
-    /// enabling the reminder without the tool would nag without recourse.
+    /// Verify-plan reminder (TS `verify_plan_reminder`). TS gates on
+    /// `USER_TYPE=ant && CLAUDE_CODE_VERIFY_PLAN=true`; coco-rs ships
+    /// `VerifyPlanExecution` directly, so this defaults on.
     pub verify_plan_reminder: bool,
 
     /// Ultrathink reasoning-effort nudge (TS `ultrathink_effort`). **Opt-in**
@@ -228,7 +226,7 @@ impl Default for AttachmentSettings {
             auto_mode: true,
             compaction_reminder: true,
             date_change: true,
-            verify_plan_reminder: false,
+            verify_plan_reminder: true,
             // Phase 1 — feature-gated in TS, default off in external builds.
             ultrathink_effort: false,
             token_usage: false,

@@ -29,6 +29,7 @@ use crate::orchestrator::SystemReminderOrchestrator;
 use crate::turn_counting::TASK_MANAGEMENT_TOOLS;
 use crate::turn_counting::count_assistant_turns_since_any_tool;
 use crate::turn_counting::count_assistant_turns_since_tool;
+use crate::turn_counting::count_human_turns_since_attachment;
 use crate::types::SystemReminder;
 use coco_config::SystemReminderConfig;
 
@@ -113,9 +114,7 @@ pub struct TurnReminderInput<'a> {
     pub new_date: Option<String>,
 
     // ── Verify-plan reminder ──
-    /// True when `ToolAppState::pending_plan_verification` is set and
-    /// hasn't been resolved by a `VerifyPlanExecution` call yet. Drives
-    /// the nudge reminder's main gate.
+    /// True when `ToolAppState::pending_plan_verification` is set.
     pub has_pending_plan_verification: bool,
 
     // ── Phase 1 engine-local inputs ──
@@ -300,12 +299,10 @@ pub async fn run_turn_reminders(
         count_assistant_turns_since_tool(messages, ToolName::TodoWrite);
     let turns_since_last_task_tool =
         count_assistant_turns_since_any_tool(messages, TASK_MANAGEMENT_TOOLS);
-    // Verify-plan cadence counts assistant turns since the last
-    // `ExitPlanMode` invocation. TS counts human turns after the
-    // `plan_mode_exit` attachment; in coco-rs the tool call is the
-    // authoritative source of truth for "a plan was just exited" so we
-    // read it directly. Same 10-turn cadence.
-    let turns_since_plan_exit = count_assistant_turns_since_tool(messages, ToolName::ExitPlanMode);
+    // Verify-plan cadence counts human turns since the `plan_mode_exit`
+    // attachment. TS: `getVerifyPlanReminderTurnCount`.
+    let turns_since_plan_exit =
+        count_human_turns_since_attachment(messages, coco_types::AttachmentKind::PlanModeExit);
 
     // Reminder-to-reminder counters come from the throttle state the
     // orchestrator owns — avoids a second history scan per attachment type

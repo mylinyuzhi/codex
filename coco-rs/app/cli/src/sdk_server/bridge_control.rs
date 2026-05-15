@@ -83,8 +83,9 @@ impl SdkBridgeControlHandler {
         let prev_mode = guard
             .permission_mode
             .unwrap_or(coco_types::PermissionMode::Default);
-        guard.permission_mode = Some(mode);
-        coco_permissions::apply_auto_transition_to_app_state(&mut guard, prev_mode, mode);
+        coco_permissions::apply_permission_mode_transition_to_app_state(
+            &mut guard, prev_mode, mode,
+        );
 
         Ok(serde_json::Value::Null)
     }

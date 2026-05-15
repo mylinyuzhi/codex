@@ -7,8 +7,16 @@ fn test_tool_name_as_str_roundtrip() {
     assert_eq!(ToolName::Bash.as_str(), "Bash");
     assert_eq!(ToolName::Lsp.as_str(), "LSP");
     assert_eq!(ToolName::Repl.as_str(), "REPL");
+    assert_eq!(
+        ToolName::VerifyPlanExecution.as_str(),
+        "VerifyPlanExecution"
+    );
     assert_eq!(ToolName::from_str("Bash").unwrap(), ToolName::Bash);
     assert_eq!(ToolName::from_str("LSP").unwrap(), ToolName::Lsp);
+    assert_eq!(
+        ToolName::from_str("VerifyPlanExecution").unwrap(),
+        ToolName::VerifyPlanExecution
+    );
 }
 
 #[test]
