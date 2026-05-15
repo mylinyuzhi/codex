@@ -45,8 +45,8 @@ pub async fn handle_command(
     // Snapshot input before the command so we can reactively refresh the
     // autocomplete popup whenever input text or cursor moves, without
     // threading a refresh call through every editing arm.
-    let text_before = state.ui.input.text.clone();
-    let cursor_before = state.ui.input.cursor;
+    let text_before = state.ui.input.text().to_string();
+    let cursor_before = state.ui.input.textarea.cursor();
 
     let changed = match cmd {
         // ── Mode toggles ──
@@ -174,7 +174,18 @@ pub async fn handle_command(
         }
 
         // ── Input actions ──
-        TuiCommand::SubmitInput => edit::submit(state, command_tx).await,
+        TuiCommand::SubmitInput => {
+            // TS `useTextInput.ts:250-255`: a trailing backslash + Enter
+            // inserts a newline instead of submitting (poor-man's
+            // line-continuation). Match here so the heredoc-style escape
+            // works in both ordinary and vim-Insert mode.
+            if state.ui.input.textarea.text().ends_with('\\') {
+                let len = state.ui.input.textarea.text().len();
+                state.ui.input.textarea.replace_range(len - 1..len, "\n");
+                return true;
+            }
+            edit::submit(state, command_tx).await
+        }
         TuiCommand::QueueInput => {
             let text = state.ui.input.take_input();
             if text.is_empty() {
@@ -226,11 +237,44 @@ pub async fn handle_command(
             true
         }
         TuiCommand::Cancel => {
+            // Vim insert-mode Esc → transition to Normal mode and walk
+            // the cursor back one grapheme (vim convention). Mirrors
+            // codex-rs textarea.rs:654-660. This wins over every other
+            // Cancel branch because Esc in Insert is a mode transition,
+            // not a UI dismissal.
+            if state.ui.input.vim.is_insert()
+                && crate::vim::wiring::handle_insert_escape(
+                    &mut state.ui.input.textarea,
+                    &mut state.ui.input.vim,
+                )
+            {
+                return true;
+            }
             // Esc dismisses autocomplete first (so the user can escape out
             // of a trigger without losing their typed input) before
             // touching any overlay.
             if state.ui.overlay.is_none() && state.ui.active_suggestions.is_some() {
                 state.ui.active_suggestions = None;
+                return true;
+            }
+            // No overlay + active suggestions + text present → ESC
+            // double-press clears input + saves to history. Mirrors TS
+            // `useTextInput.ts:126-153`: single Esc shows a toast; second
+            // Esc within `DOUBLE_PRESS_TIMEOUT` clears.
+            if state.ui.overlay.is_none()
+                && state.ui.active_suggestions.is_none()
+                && !state.ui.input.is_empty()
+            {
+                use crate::double_press::Outcome;
+                if state.ui.esc_tracker.poll((), std::time::Instant::now()) == Outcome::Double {
+                    let taken = state.ui.input.take_input();
+                    state.ui.input.add_to_history(taken);
+                    state.ui.input.history_index = None;
+                } else {
+                    state.ui.add_toast(crate::state::ui::Toast::info(
+                        crate::i18n::t!("toast.esc_again_to_clear").to_string(),
+                    ));
+                }
                 return true;
             }
             // No overlay + no suggestions + idle conditions met → run
@@ -283,13 +327,33 @@ pub async fn handle_command(
                 && r.phase == crate::state::rewind::RewindPhase::SummarizeFeedback
             {
                 r.summarize_feedback.push(c);
+            } else if state.ui.input.vim.is_normal() {
+                // Vim Normal mode: route the printable key through the
+                // vim state machine (h/j/k/l/i/a/o/w/b/d/y/p/x/...).
+                // Mirrors codex-rs textarea.rs:518-530 pattern.
+                let action = crate::vim::wiring::dispatch_vim_key(
+                    c,
+                    &mut state.ui.input.textarea,
+                    &mut state.ui.input.vim,
+                );
+                let should_submit = crate::vim::wiring::apply_action(
+                    action,
+                    &mut state.ui.input.textarea,
+                    &mut state.ui.input.vim,
+                );
+                if should_submit {
+                    // Vim `Enter` in Normal mode submits — delegate to
+                    // the same path Enter takes in non-vim mode.
+                    edit::submit(state, command_tx).await;
+                }
             } else {
-                state.ui.input.insert_char(c);
+                let mut buf = [0u8; 4];
+                state.ui.input.textarea.insert_str(c.encode_utf8(&mut buf));
             }
             true
         }
         TuiCommand::InsertNewline => {
-            state.ui.input.insert_char('\n');
+            state.ui.input.textarea.insert_str("\n");
             true
         }
         TuiCommand::DeleteBackward => {
@@ -298,12 +362,12 @@ pub async fn handle_command(
             {
                 r.summarize_feedback.pop();
             } else {
-                state.ui.input.backspace();
+                state.ui.input.textarea.delete_backward(1);
             }
             true
         }
         TuiCommand::DeleteForward => {
-            state.ui.input.delete_forward();
+            state.ui.input.textarea.delete_forward(1);
             true
         }
         TuiCommand::DeleteWordBackward => {
@@ -318,6 +382,10 @@ pub async fn handle_command(
             edit::kill_to_end_of_line(state);
             true
         }
+        TuiCommand::KillToBeginningOfLine => {
+            edit::kill_to_beginning_of_line(state);
+            true
+        }
         TuiCommand::Yank => {
             edit::yank(state);
             true
@@ -325,11 +393,11 @@ pub async fn handle_command(
 
         // ── Cursor movement ──
         TuiCommand::CursorLeft => {
-            state.ui.input.cursor_left();
+            state.ui.input.textarea.move_cursor_left();
             true
         }
         TuiCommand::CursorRight => {
-            state.ui.input.cursor_right();
+            state.ui.input.textarea.move_cursor_right();
             true
         }
         TuiCommand::CursorUp => {
@@ -341,11 +409,19 @@ pub async fn handle_command(
             true
         }
         TuiCommand::CursorHome => {
-            state.ui.input.cursor_home();
+            state
+                .ui
+                .input
+                .textarea
+                .move_cursor_to_beginning_of_line(crate::widgets::BolBehavior::StayPut);
             true
         }
         TuiCommand::CursorEnd => {
-            state.ui.input.cursor_end();
+            state
+                .ui
+                .input
+                .textarea
+                .move_cursor_to_end_of_line(crate::widgets::EolBehavior::StayPut);
             true
         }
         TuiCommand::WordLeft => {
@@ -652,7 +728,7 @@ pub async fn handle_command(
         TuiCommand::ToggleTranscriptShowAll => transcript::toggle_show_all(state),
     };
 
-    if state.ui.input.text != text_before || state.ui.input.cursor != cursor_before {
+    if state.ui.input.text() != text_before || state.ui.input.textarea.cursor() != cursor_before {
         crate::autocomplete::refresh_suggestions(state);
     }
 
@@ -722,6 +798,25 @@ async fn apply_exit_effect(
             );
             state.session.was_interrupted = true;
             let _ = command_tx.send(UserCommand::Interrupt).await;
+        }
+        ExitEffect::ClearInput => {
+            // Idle Ctrl+C with text in the input: clear + save to history.
+            // The exit hint is already armed by `on_interrupt`, so the
+            // *next* Ctrl+C within the window goes through the Quit path.
+            let taken = state.ui.input.take_input();
+            state.ui.input.add_to_history(taken);
+            state.ui.input.history_index = None;
+            let prompt = state
+                .ui
+                .pending_exit_hint()
+                .map(|key| t!("status.exit_prompt", key = key.label()).to_string())
+                .unwrap_or_else(|| t!("status.exit_prompt", key = source.label()).to_string());
+            tracing::info!(
+                key = source.label(),
+                exit_case = "clear_input",
+                prompt,
+                "exit key cleared draft input"
+            );
         }
         ExitEffect::ArmOnly => {
             // First idle Ctrl+C / Ctrl+D: no interrupt, no overlay.

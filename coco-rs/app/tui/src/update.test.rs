@@ -98,8 +98,12 @@ async fn queue_input_of_copy_slash_dispatches_locally_not_to_agent() {
     // slash into the agent transcript. It must intercept locally instead.
     let mut state = AppState::new();
     state.session.last_agent_markdown = Some("cached reply".to_string());
-    state.ui.input.text = "/copy".to_string();
-    state.ui.input.cursor = state.ui.input.text.chars().count() as i32;
+    state.ui.input.textarea.set_text("/copy");
+    state
+        .ui
+        .input
+        .textarea
+        .set_cursor(state.ui.input.text().len());
 
     let (tx, mut rx) = drained_channel();
     handle_command(&mut state, TuiCommand::QueueInput, &tx).await;
@@ -120,8 +124,12 @@ async fn queue_input_of_copy_slash_dispatches_locally_not_to_agent() {
 #[tokio::test]
 async fn queue_input_of_plain_text_still_queues() {
     let mut state = AppState::new();
-    state.ui.input.text = "write a haiku".to_string();
-    state.ui.input.cursor = state.ui.input.text.chars().count() as i32;
+    state.ui.input.textarea.set_text("write a haiku");
+    state
+        .ui
+        .input
+        .textarea
+        .set_cursor(state.ui.input.text().len());
 
     let (tx, mut rx) = drained_channel();
     handle_command(&mut state, TuiCommand::QueueInput, &tx).await;
@@ -622,4 +630,115 @@ async fn toggle_plan_mode_raises_toast() {
 
     handle_command(&mut state, TuiCommand::TogglePlanMode, &tx).await;
     assert_eq!(state.session.permission_mode, PermissionMode::Default);
+}
+
+// ─────────────────── TS-behavior tests: Ctrl+C / ESC / Ctrl+E ──────────────────
+
+#[tokio::test]
+async fn ctrl_c_with_text_clears_input_and_saves_to_history() {
+    // Mirrors TS `useTextInput.ts:108-120` third callback: Ctrl+C with
+    // text present clears the input AND records it into history so the
+    // user can recover it with Up. Per `update/exit.rs::on_interrupt`,
+    // the exit hint is still pre-armed so a second Ctrl+C exits.
+    let mut state = AppState::new();
+    state.ui.input.textarea.set_text("draft text");
+    state.ui.input.textarea.set_cursor(10);
+    let (tx, _rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::Interrupt, &tx).await;
+
+    assert!(state.ui.input.is_empty(), "input should have been cleared");
+    assert!(
+        state
+            .ui
+            .input
+            .history
+            .iter()
+            .any(|h| h.text == "draft text"),
+        "draft must be in history",
+    );
+    // Tracker armed so the next Ctrl+C goes through the Quit path.
+    assert!(state.ui.ctrl_c_tracker.pending().is_some());
+}
+
+#[tokio::test]
+async fn ctrl_c_idle_empty_arms_exit_then_quits() {
+    // Mirrors TS `useExitOnCtrlCD`: with empty input the first Ctrl+C
+    // only arms a hint; a second within the window exits.
+    let mut state = AppState::new();
+    let (tx, _rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::Interrupt, &tx).await;
+    assert!(state.ui.ctrl_c_tracker.pending().is_some());
+    assert!(!state.session.was_interrupted);
+    // Second press within the window should request shutdown.
+    handle_command(&mut state, TuiCommand::Interrupt, &tx).await;
+    // Quit drives `state.quit()`; we can't see process exit from a unit
+    // test, but `running` flips to Done and no interrupt was sent.
+    assert!(state.should_exit());
+}
+
+#[tokio::test]
+async fn esc_with_text_first_press_shows_toast() {
+    // TS `useTextInput.ts:126-153` first callback: when input is
+    // non-empty, single Esc shows a toast and arms the double-press.
+    let mut state = AppState::new();
+    state.ui.input.textarea.set_text("draft");
+    let (tx, _rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::Cancel, &tx).await;
+
+    assert_eq!(
+        state.ui.input.text(),
+        "draft",
+        "text must NOT clear on single Esc"
+    );
+    assert!(
+        state.ui.toasts.iter().any(|t| t.message.contains("again")),
+        "single Esc should toast 'Esc again to clear'",
+    );
+}
+
+#[tokio::test]
+async fn esc_double_press_clears_input_and_records_history() {
+    // Double-press Esc within the window clears input + records history.
+    let mut state = AppState::new();
+    state.ui.input.textarea.set_text("draft");
+    let (tx, _rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::Cancel, &tx).await;
+    handle_command(&mut state, TuiCommand::Cancel, &tx).await;
+
+    assert!(state.ui.input.is_empty(), "double-Esc clears input");
+    assert!(state.ui.input.history.iter().any(|h| h.text == "draft"));
+}
+
+#[tokio::test]
+async fn ctrl_e_moves_cursor_to_end_not_external_editor() {
+    // Regression: bare Ctrl+E previously triggered OpenExternalEditor in
+    // the legacy global cascade, shadowing readline's end-of-line. The
+    // user now expects Ctrl+E → CursorEnd via `map_input_key`.
+    let mut state = AppState::new();
+    state.ui.input.textarea.set_text("hello");
+    state.ui.input.textarea.set_cursor(0);
+    let (tx, _rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::CursorEnd, &tx).await;
+
+    assert_eq!(state.ui.input.textarea.cursor(), 5);
+}
+
+#[tokio::test]
+async fn ctrl_a_moves_cursor_to_start_visually_correct_for_cjk() {
+    // After typing CJK input, Ctrl+A must move cursor to byte 0. The
+    // render-layer test (snapshot) covers the column-0 visual; here we
+    // just confirm the state-level position.
+    let mut state = AppState::new();
+    state.ui.input.textarea.set_text("你好世界");
+    state.ui.input.textarea.set_cursor(12); // end (4 chars × 3 bytes)
+    let (tx, _rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::CursorHome, &tx).await;
+
+    assert_eq!(state.ui.input.textarea.cursor(), 0);
 }

@@ -246,6 +246,7 @@ pub use command::CommandSource;
 pub use command::CommandType;
 pub use command::LocalCommandData;
 pub use command::PromptCommandData;
+pub use command::SlashCommandInfo;
 
 // Hook types
 pub use hook::HookEventType;

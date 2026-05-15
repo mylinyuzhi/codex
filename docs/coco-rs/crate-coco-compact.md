@@ -23,9 +23,14 @@ coco-compact does NOT depend on:
   - process env (all env vars folded into `CompactConfig` upstream)
 ```
 
-Note: `compact_conversation` takes a generic `summarize_fn` callback,
-not an `&ApiClient`. The caller (`app/query::QueryEngine`) provides
-the closure that wraps `coco-inference::ApiClient::query`.
+Note: `compact_conversation` and `partial_compact_conversation` take a
+generic typed `summarize_fn` callback, not an `&ApiClient`. The callback
+receives `CompactSummaryAttempt { messages, context_messages,
+summary_request, prompt_kind, pre_compact_tokens, max_summary_tokens }`
+and returns `CompactSummaryResponse`. The caller
+(`app/query::QueryEngine`) owns the LLM execution details: cache-sharing
+compact forks when available, and a structured no-tools direct call as
+fallback.
 
 ## Configuration
 
@@ -107,13 +112,36 @@ inside the crate**.
 ## Data Definitions
 
 ```rust
-pub struct CompactionResult {
-    pub boundary_marker: SystemMessage,
-    pub summary_messages: Vec<UserMessage>,
+pub struct CompactSummaryAttempt {
+    pub messages: Vec<Message>,
+    pub context_messages: Vec<Message>,
+    pub summary_request: String,
+    pub prompt_kind: CompactSummaryKind,
+    pub pre_compact_tokens: i64,
+    pub max_summary_tokens: i64,
+}
+
+pub struct CompactSummaryResponse {
+    pub summary: String,
+}
+
+pub enum CompactOutcome {
+    Applied,
+    Skipped,
+    Failed,
+}
+
+pub struct CompactResult {
+    pub boundary_marker: Message,
+    pub raw_summary: Option<String>,
+    pub summary_messages: Vec<Message>,
     pub attachments: Vec<AttachmentMessage>,
-    pub messages_to_keep: Option<Vec<Message>>,
-    pub pre_compact_tokens: Option<i64>,
-    pub post_compact_tokens: Option<i64>,
+    pub messages_to_keep: Vec<Message>,
+    pub hook_results: Vec<Message>,
+    pub pre_compact_tokens: i64,
+    pub post_compact_tokens: i64,
+    pub true_post_compact_tokens: i64,
+    pub trigger: CompactTrigger,
 }
 
 pub struct RecompactionInfo {
@@ -194,7 +222,7 @@ strategy descriptions and the encoder, nothing more.
 /// Summarize conversation via LLM call, preserving recent context.
 /// 1. Strip images (replace with [image] marker to prevent prompt-too-long)
 /// 2. Strip re-injectable attachments (skills, agents)
-/// 3. Call LLM with compaction prompt (MAX_COMPACT_STREAMING_RETRIES = 2)
+/// 3. Call typed summarizer with structured messages plus summary_request
 /// 4. Build summary messages
 /// 5. Re-inject current file state (up to 5 files, 50K tokens budget)
 /// 6. Re-inject active skills (25K token budget) — currently delivered
@@ -208,8 +236,8 @@ pub async fn compact_conversation<F, Fut>(
     attachment_fn: Option<PostCompactAttachmentFn>,
 ) -> Result<CompactResult, CompactError>
 where
-    F: Fn(String) -> Fut,
-    Fut: Future<Output = Result<String, String>>;
+    F: Fn(CompactSummaryAttempt) -> Fut,
+    Fut: Future<Output = Result<CompactSummaryResponse, String>>;
 
 const POST_COMPACT_MAX_FILES_TO_RESTORE: usize = 5;
 const POST_COMPACT_TOKEN_BUDGET: i64 = 50_000;
@@ -361,8 +389,8 @@ pub struct CompactionObserverRegistry { /* … */ }
 Each crate owning post-compact-invalidatable state registers its own
 observer at startup (e.g. `coco-context::ContextCacheObserver`,
 `coco-permissions::ApprovalsObserver`). `app/query::QueryEngine`
-calls `notify_all` + `notify_post_compact` from `try_full_compact`
-after a successful compaction.
+calls `notify_all` + `notify_post_compact` after successful full,
+partial, session-memory, and reactive compaction paths.
 
 ### Pre / PostCompact Hooks
 
@@ -372,8 +400,9 @@ after a successful compaction.
 2. `merge_hook_instructions(orig, hook)` folds them into
    `compact::CompactConfig.custom_prompt`.
 3. After successful summarization,
-   `execute_post_compact(registry, ctx, trigger_label, summary_text)`
-   collects another `user_display_message` carried on
+   `execute_post_compact(registry, ctx, trigger_label, raw_summary)`
+   receives `CompactResult.raw_summary`, not the formatted continuation
+   message. The hook result's `user_display_message` is carried on
    `CompactResult.user_display_message`.
 
 ## Compact Warning State (from `compactWarningState.ts`)

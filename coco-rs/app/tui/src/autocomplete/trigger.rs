@@ -22,13 +22,13 @@ use crate::widgets::suggestion_popup::SuggestionItem;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Trigger {
     pub kind: SuggestionKind,
-    /// Character offset of the trigger start (the `/` or `@`).
-    pub pos: i32,
+    /// Byte offset of the trigger start (the `/` or `@`).
+    pub pos: usize,
     /// Text the user typed after the trigger (filter query).
     pub query: String,
 }
 
-/// Scan `text` up to `cursor` for an active autocomplete trigger.
+/// Scan `text` up to `cursor` (byte offset) for an active autocomplete trigger.
 ///
 /// Rules (match TS):
 /// - Leading `/` at position 0 with no space yet → `SlashCommand`. The
@@ -38,40 +38,44 @@ pub struct Trigger {
 /// - `@word` (anything else after `@`) → `File`.
 ///
 /// `@`-mentions must be at text start or immediately after whitespace so
-/// emails like `a@b.com` or tags already-accepted don't re-trigger.
-pub fn detect(text: &str, cursor: i32) -> Option<Trigger> {
-    let cursor = cursor.max(0) as usize;
-    let chars: Vec<char> = text.chars().collect();
-    let slice = &chars[..cursor.min(chars.len())];
+/// emails like `a@b.com` or tags already-accepted don't re-trigger. Both
+/// `cursor` and the returned `Trigger.pos` are byte offsets, so CJK / wide
+/// characters before the trigger don't shift the splice site.
+pub fn detect(text: &str, cursor: usize) -> Option<Trigger> {
+    let cursor = cursor.min(text.len());
+    let prefix = &text[..cursor];
 
-    // Slash command: `/` at text start, no whitespace before cursor.
-    if slice.first() == Some(&'/') && !slice[1..].iter().any(|c| c.is_whitespace()) {
-        let query: String = slice[1..].iter().collect();
+    // Slash command: `/` at byte 0, no whitespace before cursor.
+    if prefix.starts_with('/') && !prefix[1..].chars().any(char::is_whitespace) {
         return Some(Trigger {
             kind: SuggestionKind::SlashCommand,
             pos: 0,
-            query,
+            query: prefix[1..].to_string(),
         });
     }
 
-    // Walk back from cursor to find the nearest unmarked `@`.
-    let mut i = slice.len();
-    while i > 0 {
-        i -= 1;
-        let c = slice[i];
+    // Walk back from the cursor to find the nearest unmarked `@`.
+    // `char_indices().rev()` yields (byte_offset, char) pairs in reverse.
+    for (i, c) in prefix.char_indices().rev() {
         if c.is_whitespace() {
             return None;
         }
         if c == '@' {
             // `@` must be at text start or follow whitespace.
-            if i > 0 && !slice[i - 1].is_whitespace() {
+            if i > 0
+                && !prefix[..i]
+                    .chars()
+                    .next_back()
+                    .is_some_and(char::is_whitespace)
+            {
                 return None;
             }
-            let tail: String = slice[i + 1..].iter().collect();
-            let (kind, query) = classify_at_trigger(&tail);
+            // `@` is single-byte ASCII, so `i + 1` is a valid UTF-8 boundary.
+            let tail = &prefix[i + 1..];
+            let (kind, query) = classify_at_trigger(tail);
             return Some(Trigger {
                 kind,
-                pos: i as i32,
+                pos: i,
                 query,
             });
         }
@@ -97,8 +101,8 @@ fn classify_at_trigger(tail: &str) -> (SuggestionKind, String) {
 /// them when one is. Synchronous sources (slash commands, agents) populate
 /// items inline; async sources leave `items` empty pending a search result.
 pub fn refresh_suggestions(state: &mut AppState) {
-    let text = state.ui.input.text.clone();
-    let cursor = state.ui.input.cursor;
+    let text = state.ui.input.text().to_string();
+    let cursor = state.ui.input.textarea.cursor();
     let Some(trigger) = detect(&text, cursor) else {
         state.ui.active_suggestions = None;
         return;
@@ -127,7 +131,11 @@ pub fn refresh_suggestions(state: &mut AppState) {
         .filter(|s| s.kind == trigger.kind)
         .map(|s| s.selected)
         .unwrap_or(0);
-    let selected = prior_selected.clamp(0, (items.len() as i32 - 1).max(0));
+    let selected = if items.is_empty() {
+        0
+    } else {
+        prior_selected.min(items.len() - 1)
+    };
 
     state.ui.active_suggestions = Some(ActiveSuggestions {
         kind: trigger.kind,
@@ -167,23 +175,19 @@ pub fn apply_async_result(
         return false;
     }
     sug.items = suggestions;
-    sug.selected = sug.selected.clamp(0, (sug.items.len() as i32 - 1).max(0));
+    sug.selected = if sug.items.is_empty() {
+        0
+    } else {
+        sug.selected.min(sug.items.len() - 1)
+    };
     true
 }
 
 fn slash_items(state: &AppState, query: &str) -> Vec<SuggestionItem> {
-    let q = query.to_lowercase();
-    state
-        .session
-        .available_commands
-        .iter()
-        .filter(|(name, _)| q.is_empty() || name.to_lowercase().contains(&q))
-        .map(|(name, desc)| SuggestionItem {
-            label: format!("/{name}"),
-            description: desc.clone(),
-            metadata: None,
-        })
-        .collect()
+    // Delegate ranking to the dedicated module — see TS parity notes in
+    // `autocomplete/slash.rs`. Keeping the call shallow here lets the
+    // trigger module stay focused on detection vs. matching.
+    super::slash::rank(query, &state.session.available_commands)
 }
 
 #[cfg(test)]

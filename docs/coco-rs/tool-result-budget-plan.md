@@ -1,6 +1,11 @@
 # Tool Result Budget Plan
 
-> Status: Phase 0 landed (config keys staged in `coco-config::CompactConfig.tool_result_budget`); Phase 1 partially stubbed (Bash-only, divergent shape); Phase 2 absent.
+> Status reviewed 2026-05-15: the TS-mirror runtime pipeline is implemented.
+> Level 1 per-tool persistence, Level 2 per-message prompt projection,
+> session-scoped storage, transcript replacement records, resume/fork
+> reconstruction, MCP binary persistence, and TS per-tool thresholds are wired.
+> Remaining notes below are maintenance hardening items, not open parity
+> blockers.
 > Scope: `coco-rs/core/tool-runtime/`, `coco-rs/core/tools/`, `coco-rs/app/query/`, `coco-rs/app/session/`, `coco-rs/services/compact/`
 > Owners: `coco-tool-runtime` (storage + Level 1) · `coco-tools` (per-tool thresholds) · `coco-query` (Level 2 wiring) · `coco-session` (transcript records) · cross-reference from `coco-compact`
 > TS source: `utils/toolResultStorage.ts` (1040 LOC), `constants/toolLimits.ts`, `utils/mcpOutputStorage.ts`, integration in `services/tools/toolExecution.ts:1403` (`addToolResult`) and `query.ts:99,379` (`applyToolResultBudget` import + call)
@@ -65,7 +70,7 @@ blow past the budget.
 | `PERSISTED_OUTPUT_CLOSING_TAG` | `'</persisted-output>'` | Wire wrapper close |
 | `TOOL_RESULT_CLEARED_MESSAGE` | `'[Old tool result content cleared]'` | Shared with `microCompact.ts` |
 
-Rust mirror lives in `coco-tool-runtime::tool_result_storage` (proposed). All
+Rust mirror lives in `coco-tool-runtime::tool_result_storage`. All
 constants must use these exact values for cross-runtime transcript interop.
 
 ## Per-Tool Thresholds (TS → Rust parity)
@@ -76,27 +81,47 @@ constants must use these exact values for cross-runtime transcript interop.
 | PowerShell | `30_000` | `30_000` | ✅ |
 | Grep | `20_000` | `20_000` | ✅ |
 | Glob | `100_000` | `100_000` | ✅ |
-| FileRead | `Infinity` (opt-out) | trait default `100_000` (cannot express Infinity) | ❌ — see Phase 1.B |
-| WebFetch / WebSearch / MCP / others | declared per-tool | inherited from default `100_000` | partial |
+| FileRead | `Infinity` (opt-out) | `i64::MAX` override | ✅ sentinel opt-out |
+| WebFetch / WebSearch / MCP / most others | `100_000` (clamped to `50_000`) | trait default `100_000` | ✅ |
+| McpAuth | `10_000` | `10_000` | ✅ |
 
 ## Current Rust State
 
 What exists:
-- `Tool::max_result_size_chars() -> i32` trait method (`core/tool-runtime/src/traits.rs:293`).
-- Per-tool values declared correctly for Bash/PowerShell/Grep/Glob.
-- A bespoke, **non-conforming** Bash-only persistence: `core/tools/src/tools/bash.rs::maybe_persist_oversized_output` writes to `std::env::temp_dir()/coco-bash-output/`, attaches `persistedOutputPath`/`persistedOutputSize` JSON fields **without** replacing `stdout` content, no idempotency, no `<persisted-output>` wrapper.
+- `Tool::max_result_size_chars() -> i64` trait method; `i64::MAX` is the
+  Rust sentinel for TS `Infinity`.
+- TS default threshold parity: the trait default is `100_000`, tools with
+  tighter caps override it, and `Read` opts out with `i64::MAX`.
+- `coco_tool_runtime::tool_result_storage` with TS constants, `persist_to_disk`,
+  `render_persisted_reference`, `ContentReplacementState`, and
+  `apply_tool_result_budget`.
+- Generic Level 1 invocation in `app/query/src/tool_outcome_builder.rs` for
+  singleton text tool results when the tool opts in.
+- Level 2 wiring in `app/query/src/engine_finalize_turn.rs` gated by
+  `compact.tool_result_budget.enabled`.
+- Bash and PowerShell no longer expose a temp-dir path to the model; model
+  visible persistence goes through the generic session `tool-results/` root.
+- `persist_to_disk` uses idempotent `create_new` semantics and treats an
+  existing stable `<toolUseId>.txt|json` file as success.
+- Preview generation is newline-aware, UTF-8-safe, and capped at
+  `PREVIEW_SIZE_BYTES`.
+- Empty or whitespace-only text results render as
+  `(<toolName> completed with no output)`.
+- Level 2 persists selected fresh candidates and stores the exact
+  `<persisted-output>` preview string in replacement state instead of clearing
+  canonical history.
+- Level 2 groups candidates by API-level user message, skips `i64::MAX` tools,
+  and applies cached replacements byte-for-byte on later prompts.
+- `coco-session` writes and reads typed `ContentReplacementRecord` metadata so
+  resume and forked agents reconstruct replacement state.
+- MCP binary output writes to the same session `tool-results/` directory.
+- `coco-session::TranscriptStore::cleanup_tool_results_older_than` removes
+  stale `tool-results/` files with the same retention window as TS cleanup, and
+  TUI startup housekeeping invokes it alongside session metadata cleanup.
 
-What is missing:
-- Generic Level 1 pipeline (`processToolResultBlock`).
-- `<persisted-output>` content replacement (model still sees full content for Bash; not even attempted for other tools).
-- 2KB preview generation with newline-aware truncation.
-- Session-scoped storage directory (currently `temp_dir()` for Bash only).
-- `wx`-flag idempotency.
-- Empty-content `(<toolName> completed with no output)` guard.
-- Image-block bypass.
-- Level 2 entirely: no `ContentReplacementState`, no `enforceToolResultBudget`, no transcript record, no resume reconstruction, no API-level group walking, no fork gap-fill.
-- MCP variant (`mcpOutputStorage.ts`) — also missing.
-- `Infinity` opt-out semantics (Rust returns `i32`, no sentinel).
+Still open as maintenance, not parity blockers:
+- Extend MCP persistence if future MCP content block variants become visible
+  through `McpHandle`.
 
 ## Phase 0 — Config stub (LANDED)
 
@@ -389,14 +414,15 @@ miss. Updated routing:
 | Transcript records (`recordContentReplacement` + `LogOption.contentReplacements`) | `coco-session::TranscriptStore` | `crate-coco-app.md` (session subsection) |
 | Per-tool `maxResultSizeChars` declarations | `coco-tools` | `crate-coco-tools.md` |
 | `constants/toolLimits.ts` | `coco-tool-runtime::tool_result_storage::constants` | this plan |
-| `utils/mcpOutputStorage.ts` | `coco-tool-runtime` (parallel module) | this plan, deferred to Phase 3 |
+| `utils/mcpOutputStorage.ts` | `coco-tool-runtime` + `coco-tools` MCP render path | this plan |
 | Cross-reference (compact capability cluster) | `coco-compact` | `crate-coco-compact.md` (cross-ref only, no impl) |
 
-## Phase 3 — MCP Output Storage (deferred)
+## Phase 3 — MCP Output Storage (LANDED)
 
 `utils/mcpOutputStorage.ts` is a parallel pipeline for MCP server
-responses. Phase 3 ports it after Phase 1+2 land, since it depends on the
-same storage primitives.
+responses. Rust ports the binary storage helper into
+`coco-tool-runtime::tool_result_storage` and calls it from MCP resource/tool
+rendering so blobs are saved under the same session `tool-results/` directory.
 
 ## Cache-Stability Invariants
 
@@ -419,28 +445,24 @@ wire-prefix bytes are byte-identical across N turns of replay.
 
 ## Verification Checklist (post-implementation)
 
-- [ ] `Tool::max_result_size_chars()` is read by the executor for every tool call.
-- [ ] Bash output > 30K is replaced inline with `<persisted-output>` (not extra JSON fields).
-- [ ] Storage path is session-scoped, not `temp_dir()`.
-- [ ] Re-running a session → same files on disk (idempotency).
-- [ ] FileRead is exempt from persistence (`Unbounded`).
-- [ ] Empty Bash success returns `(Bash completed with no output)` to model.
-- [ ] Image content blocks pass through unchanged.
-- [ ] Five Bash turns of 100K output → wire byte-identical replacement strings (cache stability).
-- [ ] Eight parallel Greps each 25K → Level 2 picks largest, total ≤ 200K.
-- [ ] Resume of session with persisted records reproduces exact wire bytes.
-- [ ] Subagent fork inherits parent replacements.
+- [x] `Tool::max_result_size_chars()` is read by the executor for every tool call.
+- [x] Bash output > 30K is replaced inline with `<persisted-output>` (not extra JSON fields).
+- [x] Storage path is session-scoped, not `temp_dir()`.
+- [x] Re-running a session → same files on disk (idempotency).
+- [x] FileRead is exempt from persistence (`Unbounded`).
+- [x] Empty Bash success returns `(Bash completed with no output)` to model.
+- [x] Image content blocks pass through unchanged.
+- [x] Five Bash turns of 100K output → wire byte-identical replacement strings (cache stability).
+- [x] Eight parallel Greps each 25K → Level 2 picks largest, total ≤ 200K.
+- [x] Resume of session with persisted records reproduces exact wire bytes.
+- [x] Subagent fork inherits parent replacements.
 
-## TODO Markers (in source until Phase 1 lands)
+## Source TODO Markers
 
-- `core/tools/src/tools/bash.rs::maybe_persist_oversized_output` — comment
-  references this plan as Phase 1.E.
-- `core/tool-runtime/src/traits.rs::max_result_size_chars` — comment
-  references the planned `ResultSizeBound` migration.
+No Phase 1 TODO marker remains for the runtime path. Future comments should
+only describe maintenance work such as new MCP block types.
 
 ## Open Questions
 
-1. **Storage root for non-session callers** (test harness, one-shot SDK calls). Proposal: `ctx.tool_results_root = None` disables persistence; the Bash special case currently uses `temp_dir()` and breaks idempotency. Phase 1 closes this by making storage opt-in via `ctx`.
-2. **Cleanup policy.** TS `utils/cleanup.ts:198` deletes `<sessionDir>/tool-results/` on session expiry. Rust mirror: `coco-session::cleanup` to add `cleanup_tool_results_dir`.
-3. **Concurrent fork persistence.** Two subagents persisting the same `tool_use_id` (impossible in TS because each fork has a fresh UUID space, but worth asserting). Add a debug-only invariant check.
-4. **Per-message budget vs. context_management.** When the Anthropic-only API-native `clear_tool_uses_20250919` is active, Level 2 may double-clear. TS doesn't dedupe — it lets the server clear what the client preview replaced. Rust should match: the preview is a tag-wrapped string, not a tool_result_content array, so the server's `clear_tool_uses` operation has nothing to clear in those messages anyway.
+1. **Concurrent fork persistence.** Two subagents persisting the same `tool_use_id` is impossible in normal TS/Rust flow because each fork has a fresh UUID space, but a debug-only invariant would make that assumption explicit.
+2. **Per-message budget vs. context_management.** When the Anthropic-only API-native `clear_tool_uses_20250919` is active, Level 2 may double-clear. TS doesn't dedupe — it lets the server clear what the client preview replaced. Rust should match: the preview is a tag-wrapped string, not a tool_result_content array, so the server's `clear_tool_uses` operation has nothing to clear in those messages anyway.

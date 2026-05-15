@@ -337,6 +337,14 @@ pub struct AggregatedHookResult {
     pub elicitation_result_response: Option<ElicitationResponse>,
 }
 
+/// SessionStart hook output captured for immediate insertion into a
+/// rewritten conversation instead of the next-turn reminder buffer.
+#[derive(Debug, Clone, Default)]
+pub struct SessionStartHookExecution {
+    pub aggregate: AggregatedHookResult,
+    pub events: Vec<coco_system_reminder::HookEvent>,
+}
+
 /// Elicitation response from a hook.
 ///
 /// TS: elicitationResponse in HookResult.
@@ -1750,6 +1758,34 @@ pub async fn execute_session_start(
     agent_type: Option<&str>,
     model: Option<&str>,
 ) -> crate::Result<AggregatedHookResult> {
+    let (results, agg) =
+        execute_session_start_raw(registry, ctx, source, agent_type, model).await?;
+    push_sync_hook_events(ctx, HookEventType::SessionStart, &results, &agg).await;
+    Ok(agg)
+}
+
+/// Execute SessionStart hooks and return the reminder events instead of
+/// pushing them into the sync hook buffer.
+pub async fn execute_session_start_collect_events(
+    registry: &HookRegistry,
+    ctx: &OrchestrationContext,
+    source: SessionStartSource,
+    agent_type: Option<&str>,
+    model: Option<&str>,
+) -> crate::Result<SessionStartHookExecution> {
+    let (results, aggregate) =
+        execute_session_start_raw(registry, ctx, source, agent_type, model).await?;
+    let events = build_sync_hook_events(HookEventType::SessionStart, &results, &aggregate);
+    Ok(SessionStartHookExecution { aggregate, events })
+}
+
+async fn execute_session_start_raw(
+    registry: &HookRegistry,
+    ctx: &OrchestrationContext,
+    source: SessionStartSource,
+    agent_type: Option<&str>,
+    model: Option<&str>,
+) -> crate::Result<(Vec<SingleHookResult>, AggregatedHookResult)> {
     let input = SessionStartInput {
         base: base_from_ctx(ctx),
         hook_event_name: HookEventType::SessionStart,
@@ -1787,8 +1823,7 @@ pub async fn execute_session_start(
     .await;
 
     let agg = aggregate_results_for_event(&results, Some(HookEventType::SessionStart));
-    push_sync_hook_events(ctx, HookEventType::SessionStart, &results, &agg).await;
-    Ok(agg)
+    Ok((results, agg))
 }
 
 /// Execute UserPromptSubmit hooks before each turn's LLM call.
@@ -1869,6 +1904,17 @@ async fn push_sync_hook_events(
         return;
     };
 
+    let events = build_sync_hook_events(event, results, agg);
+    if !events.is_empty() {
+        buf.extend(events).await;
+    }
+}
+
+fn build_sync_hook_events(
+    event: HookEventType,
+    results: &[SingleHookResult],
+    agg: &AggregatedHookResult,
+) -> Vec<coco_system_reminder::HookEvent> {
     let kind = match event {
         HookEventType::SessionStart => coco_system_reminder::HookEventKind::SessionStart,
         HookEventType::UserPromptSubmit => coco_system_reminder::HookEventKind::UserPromptSubmit,
@@ -1925,9 +1971,7 @@ async fn push_sync_hook_events(
         });
     }
 
-    if !events.is_empty() {
-        buf.extend(events).await;
-    }
+    events
 }
 
 /// Execute SubagentStart hooks before a subagent begins running.

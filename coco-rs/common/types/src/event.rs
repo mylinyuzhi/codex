@@ -1316,7 +1316,7 @@ pub enum SessionState {
 /// (TUI-only, never sent to SDK) is preserved via consumer dispatch rules
 /// in `StreamAccumulator` and `handle_core_event()`.
 ///
-/// 21 variants (20 from design §4.1 + 1 coco-rs extension).
+/// 22 variants (20 from design §4.1 + 2 coco-rs extensions).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -1368,11 +1368,21 @@ pub enum TuiOnlyEvent {
         operation: String,
     },
 
-    // === Picker data-ready events (4) ===
+    // === Picker / data-ready events (5) ===
     /// Plugin picker data loaded.
     PluginDataReady { plugins: Vec<serde_json::Value> },
     /// Output style picker data loaded.
     OutputStylesReady { styles: Vec<String> },
+    /// Slash-command catalogue changed — sent after the seed at session
+    /// start AND whenever `/reload-plugins` swaps the active
+    /// `CommandRegistry`. The TUI overwrites
+    /// `state.session.available_commands` with this list so the `/`
+    /// autocomplete popup and command palette stay in sync. TS parity:
+    /// the TS popup re-queries `getCommands()` inline; coco-rs pushes
+    /// the snapshot because the registry lives in the CLI process.
+    AvailableCommandsRefreshed {
+        commands: Vec<crate::SlashCommandInfo>,
+    },
     /// Rewind selector checkpoints loaded.
     RewindCheckpointsReady { checkpoints: Vec<serde_json::Value> },
     /// Rewind diff preview loaded.

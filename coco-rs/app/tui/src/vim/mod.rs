@@ -1,14 +1,17 @@
 //! Vim mode state machine.
 //!
 //! Complete vi input handling: normal/insert modes, motions, operators,
-//! text objects, counts, find, and dot-repeat.
+//! text objects, counts, find, and dot-repeat. All positions are UTF-8
+//! byte offsets into `TextArea`; the state machine operates directly on
+//! `TextArea` via `wiring::dispatch_vim_key`.
 //!
 //! TS: src/vim/ (5 files, 1513 LOC)
 
-pub mod motions;
-pub mod operators;
-pub mod text_objects;
-pub mod transitions;
+mod motions;
+mod operators;
+mod text_objects;
+mod transitions;
+pub mod wiring;
 
 /// Vim operator type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,6 +51,10 @@ pub enum VimState {
 }
 
 /// Command state machine for normal mode.
+///
+/// All `count` fields are `usize` — vim counts are non-negative integers
+/// that index into text and bound iteration loops, so the type lines up
+/// with everything they multiply against.
 #[derive(Debug, Clone)]
 pub enum CommandState {
     /// Waiting for a command key.
@@ -55,35 +62,35 @@ pub enum CommandState {
     /// Accumulating count digits (e.g., "3" before a motion).
     Count { digits: String },
     /// Operator entered (d/c/y), waiting for motion or text object.
-    OperatorPending { op: Operator, count: i32 },
+    OperatorPending { op: Operator, count: usize },
     /// Operator + count digits (e.g., "d3" waiting for motion).
     OperatorCount {
         op: Operator,
-        count: i32,
+        count: usize,
         digits: String,
     },
     /// Operator + find type, waiting for character.
     OperatorFind {
         op: Operator,
-        count: i32,
+        count: usize,
         find: FindType,
     },
     /// Operator + text object scope (i/a), waiting for object key.
     OperatorTextObj {
         op: Operator,
-        count: i32,
+        count: usize,
         scope: TextObjScope,
     },
     /// Find motion (f/F/t/T), waiting for character.
-    Find { find: FindType, count: i32 },
+    Find { find: FindType, count: usize },
     /// Waiting for second key after 'g'.
-    G { count: i32 },
+    G { count: usize },
     /// Operator + g, waiting for second key.
-    OperatorG { op: Operator, count: i32 },
+    OperatorG { op: Operator, count: usize },
     /// Replace mode (r), waiting for replacement character.
-    Replace { count: i32 },
+    Replace { count: usize },
     /// Indent (> or <), waiting for motion.
-    Indent { dir: IndentDir, count: i32 },
+    Indent { dir: IndentDir, count: usize },
 }
 
 /// Indent direction.
@@ -102,23 +109,32 @@ pub struct PersistentState {
     pub last_find: Option<(FindType, char)>,
     /// Yank register content.
     pub register: String,
-    /// Whether register content is linewise.
+    /// Whether register content is linewise (governs `p`/`P` behavior).
     pub register_is_linewise: bool,
 }
 
-/// Recorded change for dot-repeat.
+/// Recorded change for dot-repeat (`.`).
+///
+/// Captured at the end of a successful mutating command so `.` can replay
+/// it against the current cursor. Insert-mode sessions are NOT recorded
+/// yet — they require tracking keystrokes across the whole session and
+/// aren't part of the V1 dot-repeat surface.
 #[derive(Debug, Clone)]
 pub enum RecordedChange {
-    /// Text inserted in insert mode.
-    Insert { text: String },
-    /// Operator + motion executed.
+    /// Operator + motion (e.g. `dw`, `c2w`, `y$`).
     OperatorMotion {
         op: Operator,
-        motion: String,
-        count: i32,
+        motion: char,
+        count: usize,
     },
-    /// Replace character.
-    ReplaceChar { ch: char, count: i32 },
+    /// Doubled operator (`dd`, `cc`, `yy`).
+    OperatorLine { op: Operator, count: usize },
+    /// `x` — delete character under cursor, with count for `Nx`.
+    DeleteChar { count: usize },
+    /// `r<ch>` — replace character under cursor.
+    ReplaceChar { ch: char, count: usize },
+    /// `p` / `P` — paste from the register.
+    Put { before: bool },
 }
 
 impl VimState {
@@ -175,6 +191,31 @@ impl CommandState {
     /// Reset to idle.
     pub fn reset(&mut self) {
         *self = CommandState::Idle;
+    }
+}
+
+/// Bundled vim mode + persistent register state.
+///
+/// Single ownership site so `InputState` doesn't have to hold the two
+/// fields side-by-side. `state` flips between Normal and Insert; `persistent`
+/// keeps yank-register / last-find / dot-repeat memory across commands.
+#[derive(Debug, Clone, Default)]
+pub struct VimRuntime {
+    pub state: VimState,
+    pub persistent: PersistentState,
+}
+
+impl VimRuntime {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn is_normal(&self) -> bool {
+        self.state.is_normal()
+    }
+
+    pub fn is_insert(&self) -> bool {
+        self.state.is_insert()
     }
 }
 

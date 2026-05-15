@@ -92,8 +92,8 @@ async fn paste_inserts_pill_at_cursor_and_registers_image() {
     let mut state = AppState::new();
     // Pre-position the cursor in the middle of existing text so we verify
     // the pill is inserted at the cursor, not appended.
-    state.ui.input.text = "prefix suffix".to_string();
-    state.ui.input.cursor = 7; // between "prefix " and "suffix"
+    state.ui.input.textarea.set_text("prefix suffix");
+    state.ui.input.textarea.set_cursor(7); // between "prefix " and "suffix"
 
     let image = ImageData {
         bytes: vec![0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], // PNG magic
@@ -102,12 +102,10 @@ async fn paste_inserts_pill_at_cursor_and_registers_image() {
     paste_from_clipboard_with(&mut state, || async { Ok(Some(image)) }).await;
 
     // The pill label sits exactly where the cursor was.
-    assert_eq!(state.ui.input.text, "prefix [Image #1]suffix");
-    // Cursor advanced past the inserted pill.
-    assert_eq!(
-        state.ui.input.cursor,
-        "prefix [Image #1]".chars().count() as i32
-    );
+    assert_eq!(state.ui.input.text(), "prefix [Image #1]suffix");
+    // Cursor advanced past the inserted pill (byte offset == char count
+    // for ASCII pill label).
+    assert_eq!(state.ui.input.textarea.cursor(), "prefix [Image #1]".len());
     // The bytes were registered so resolve_structured can later detach them.
     assert_eq!(state.ui.paste_manager.entries().len(), 1);
     assert_eq!(state.ui.toasts[0].severity, ToastSeverity::Success);
@@ -133,7 +131,7 @@ async fn paste_pill_round_trips_through_resolve_structured() {
     .await;
 
     // Simulate what `edit::submit` does with the composed prompt.
-    let prompt = format!("{} please analyze", state.ui.input.text);
+    let prompt = format!("{} please analyze", state.ui.input.text());
     let resolved = state.ui.paste_manager.resolve_structured(&prompt);
 
     // Pill is stripped from the prompt text, image bytes are extracted.

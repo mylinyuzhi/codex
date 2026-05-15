@@ -417,9 +417,7 @@ impl RealTuiHarness {
     /// Mimic the user typing `text` and pressing Enter. Same path the
     /// production TUI takes for a typed prompt.
     pub async fn submit(&mut self, text: &str) {
-        for c in text.chars() {
-            self.state.ui.input.insert_char(c);
-        }
+        self.state.ui.input.textarea.insert_str(text);
         let _ = handle_command(&mut self.state, TuiCommand::SubmitInput, &self.command_tx).await;
     }
 

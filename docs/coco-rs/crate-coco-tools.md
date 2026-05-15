@@ -260,7 +260,7 @@ Tool-specific invariants:
 | Tool | TS source | Input | Concurrency |
 |------|-----------|-------|-------------|
 | `MCPTool` | `tools/MCPTool/` | `{ [dynamic]: Value }` (passthrough schema, MCP tools define their own) | Safe |
-| `McpAuthTool` | `tools/McpAuthTool/` | `{}` (triggers OAuth flow for MCP server) | **Unsafe** |
+| `McpAuthTool` | `tools/McpAuthTool/` | `{ server_name: String }` (starts or refreshes OAuth for that MCP server) | **Unsafe** |
 | `ListMcpResourcesTool` | `tools/ListMcpResourcesTool/` | `{ server_name: Option<String> }` | Safe |
 | `ReadMcpResourceTool` | `tools/ReadMcpResourceTool/` | `{ server_name: String, uri: String }` | Safe |
 

@@ -7,7 +7,7 @@ use pretty_assertions::assert_eq;
 fn stash_with(text: &str) -> StashedInput {
     StashedInput {
         text: text.to_string(),
-        cursor: text.chars().count() as i32,
+        cursor_byte: text.len(),
         paste_entries: Vec::new(),
     }
 }

@@ -77,6 +77,7 @@ impl DenialTrackingState {
 ///
 /// Maps to TS ToolUseContext (40+ fields). Organized into logical groups.
 /// Passed by reference to Tool::execute(); mutated via callback closures.
+#[derive(Clone)]
 pub struct ToolUseContext {
     // ── Options (from QueryEngineConfig) ──
     /// Available tools registry.
@@ -495,6 +496,9 @@ pub struct ToolUseContext {
     pub config_home: Option<PathBuf>,
     /// Session ID for file history backup naming.
     pub session_id_for_history: Option<String>,
+    /// Session artifact root used by tool-result persistence helpers.
+    /// Storage helpers append `tool-results/` below this directory.
+    pub tool_result_session_dir: Option<PathBuf>,
 
     // ── Plan mode ──
     /// Resolved plans directory for plan-mode file I/O. Pre-computed by
@@ -651,12 +655,22 @@ impl ToolUseContext {
             file_history: self.file_history.clone(),
             config_home: self.config_home.clone(),
             session_id_for_history: self.session_id_for_history.clone(),
+            tool_result_session_dir: self.tool_result_session_dir.clone(),
             plans_dir: self.plans_dir.clone(),
             app_state: self.app_state.clone(),
             local_denial_tracking: self.local_denial_tracking.clone(),
             query_chain_id: self.query_chain_id.clone(),
             query_depth: self.query_depth,
         }
+    }
+
+    /// Clone this context for one concrete tool call while preserving
+    /// per-batch state. Unlike [`Self::clone_for_concurrent`], this is
+    /// suitable for serial tools too; it only installs the call id.
+    pub fn clone_for_tool_call(&self, tool_use_id: impl Into<String>) -> Self {
+        let mut cloned = self.clone();
+        cloned.tool_use_id = Some(tool_use_id.into());
+        cloned
     }
 
     /// Build a context suitable **only** for the registry filter pipeline
@@ -821,6 +835,7 @@ impl ToolUseContext {
             file_history: None,
             config_home: None,
             session_id_for_history: None,
+            tool_result_session_dir: None,
             plans_dir: None,
             app_state: None,
             local_denial_tracking: None,

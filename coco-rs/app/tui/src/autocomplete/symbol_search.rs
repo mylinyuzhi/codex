@@ -18,7 +18,8 @@ pub enum SymbolSearchEvent {
     /// Search results ready.
     SearchResult {
         query: String,
-        start_pos: i32,
+        /// Byte offset where the `@#` trigger started (sentinel).
+        start_pos: usize,
         suggestions: Vec<SuggestionItem>,
     },
 }
@@ -39,7 +40,7 @@ impl SymbolSearchManager {
     }
 
     /// Schedule a debounced search.
-    pub fn search(&mut self, query: String, start_pos: i32) {
+    pub fn search(&mut self, query: String, start_pos: usize) {
         if let Some(handle) = self.pending.take() {
             handle.abort();
         }

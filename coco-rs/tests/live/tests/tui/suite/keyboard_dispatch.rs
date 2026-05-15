@@ -47,9 +47,10 @@ pub async fn run() -> Result<()> {
         "keyboard_dispatch: char keystrokes should mark state dirty"
     );
     assert_eq!(
-        harness.state.ui.input.text, "hi",
+        harness.state.ui.input.text(),
+        "hi",
         "keyboard_dispatch: typed input not buffered, got {:?}",
-        harness.state.ui.input.text
+        harness.state.ui.input.text()
     );
 
     // Enter flushes the buffer through SubmitInput.
@@ -59,7 +60,8 @@ pub async fn run() -> Result<()> {
         "keyboard_dispatch: Enter should produce a state change"
     );
     assert_eq!(
-        harness.state.ui.input.text, "",
+        harness.state.ui.input.text(),
+        "",
         "keyboard_dispatch: input buffer should be drained after Enter"
     );
 

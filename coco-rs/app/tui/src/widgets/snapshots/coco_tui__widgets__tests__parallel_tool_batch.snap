@@ -2,7 +2,10 @@
 source: app/tui/src/widgets/mod.test.rs
 expression: output
 ---
- | opus-4                                                                       
+ ╭─╮ ╭─╮   COCO v0.0.0                                                          
+ │●│ │●│   opus-4  *  auto                                                      
+ ╰─╯ ╰─╯                                                                        
+                                                                                
 ❯ Investigate                                                                   
                                                                                 
   ‖ 3 in parallel                                                               
@@ -10,19 +13,7 @@ expression: output
   ● Read(src/main.rs)                                                           
   ● Grep(TODO)                                                                  
                                                                                 
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
- Input ─────────────────────────────────────────────────────────────────────────
+────────────────────────────────────────────────────────────────────────────────
 ❯ Type a message...                                                             
-                                                                                
- opus-4 | Default | 4 msgs                                                      
+────────────────────────────────────────────────────────────────────────────────
+ opus-4 * auto | ↑0 ↓0 · cache 0% | ctx 0% | 4 msgs

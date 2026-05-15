@@ -1,5 +1,4 @@
 use super::bash_advanced::ASSISTANT_BLOCKING_BUDGET_MS;
-use super::shell_render::build_persisted_output_message;
 use super::shell_render::strip_leading_blank_lines;
 use coco_messages::ToolResult;
 use coco_sandbox::SandboxBypass;
@@ -310,9 +309,9 @@ impl Tool for BashTool {
     /// 3. **Normal foreground**: build a single Text part by joining
     ///    `[processedStdout, errorMessage, backgroundInfo]` with `\n`,
     ///    skipping empty pieces. `processedStdout` strips leading
-    ///    blank-only lines + trims trailing whitespace; if
-    ///    `persistedOutputPath` is set, replace it with a
-    ///    `<persisted-output>` envelope containing a 2KB preview.
+    ///    blank-only lines + trims trailing whitespace. Oversized
+    ///    text output is persisted by the query-level generic Level 1
+    ///    tool-result pipeline, not by Bash itself.
     fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
         // Branch 1: user-backgrounded path (different shape entirely).
         if data
@@ -374,15 +373,7 @@ impl Tool for BashTool {
             .and_then(Value::as_bool)
             .unwrap_or(false);
 
-        let mut processed = strip_leading_blank_lines(stdout).trim_end().to_string();
-
-        if let Some(path) = data.get("persistedOutputPath").and_then(Value::as_str) {
-            let original_size = data
-                .get("persistedOutputSize")
-                .and_then(Value::as_u64)
-                .unwrap_or(0) as usize;
-            processed = build_persisted_output_message(path, original_size, &processed);
-        }
+        let processed = strip_leading_blank_lines(stdout).trim_end().to_string();
 
         let mut error_message = stderr.trim().to_string();
         if interrupted {
@@ -895,23 +886,16 @@ async fn execute_foreground(
     //    multimodal block so the model receives the actual pixels.
     //    For text output, structuredContent is omitted (the plain
     //    `stdout` field is enough).
-    // 3. `persistedOutputPath`/`persistedOutputSize`: when the raw
-    //    stdout exceeds the persistence threshold (30K — matches TS
-    //    `BashTool.maxResultSizeChars`), write the FULL untruncated
-    //    output to a temp file. The model can then Read the file if
-    //    it needs the full content.
+    // 3. Oversized text output is handled by the generic query-level
+    //    Tool Result Budget pipeline. Bash keeps the structured
+    //    envelope focused on stdout/stderr/exit status and does not
+    //    write model-visible temp files.
     let is_image = is_likely_image_bytes(raw_stdout_bytes_for_detection);
     let structured_content = if is_image {
         Some(build_image_block(raw_stdout_bytes_for_detection))
     } else {
         None
     };
-    // Persistence threshold operates on the cleaned `stdout` String so
-    // we don't persist trailing CWD markers or other executor-internal
-    // bytes.
-    let (persisted_path, persisted_size) =
-        maybe_persist_oversized_output(cmd_result.stdout.as_bytes());
-
     let mut result_obj = serde_json::json!({
         "stdout": stdout,
         "stderr": stderr,
@@ -924,12 +908,6 @@ async fn execute_foreground(
     if let Some(content) = structured_content {
         result_obj["structuredContent"] = content;
     }
-    if let Some(path) = persisted_path {
-        result_obj["persistedOutputPath"] = serde_json::Value::String(path);
-        result_obj["persistedOutputSize"] =
-            serde_json::Value::Number(serde_json::Number::from(persisted_size));
-    }
-
     Ok(ToolResult {
         data: result_obj,
         new_messages: vec![],
@@ -1007,63 +985,6 @@ fn build_image_block(bytes: &[u8]) -> Value {
             }
         }
     ])
-}
-
-/// If stdout exceeds the persistence threshold, write the FULL
-/// untruncated bytes to a temp file and return its path + size. The
-/// inline `stdout` field still gets the truncated snippet — the model
-/// can Read the persisted file to recover the rest.
-///
-/// TS: `BashTool.tsx:279-293` `persistedOutputPath` / `persistedOutputSize`
-/// fields plus the `maxResultSizeChars: 30_000` persistence threshold.
-/// TS writes to a per-session tool-results directory; coco-rs uses
-/// `std::env::temp_dir()` for now since there's no persistent
-/// tool-results dir wired up at the tool layer (a follow-up could
-/// route this through `ctx.config_home`).
-///
-/// Returns `(None, 0)` when output is small enough to keep inline,
-/// or `(Some(path), bytes)` after persisting. Failure to write the
-/// file silently returns `(None, 0)` — persistence is best-effort
-/// and shouldn't break the tool result.
-///
-/// TODO(level-1-pipeline): this is a Bash-only stub of Level 1 of the
-/// Tool Result Budget plan. It diverges from TS in three ways:
-///   1. `temp_dir()` instead of session-scoped `<sessionDir>/tool-results/`
-///   2. Adds parallel `persistedOutputPath`/`persistedOutputSize` JSON
-///      fields instead of replacing `tool_result.content` with the
-///      `<persisted-output>` envelope (so the model still sees full stdout).
-///   3. No idempotency — every turn rewrites with a fresh nanosecond
-///      timestamp, breaking prompt-cache stability.
-///
-/// Replace with delegation to
-/// `coco_tool_runtime::tool_result_storage::maybe_persist_large_tool_result`
-/// once Phase 1 of `docs/coco-rs/tool-result-budget-plan.md` lands.
-pub(crate) fn maybe_persist_oversized_output(bytes: &[u8]) -> (Option<String>, usize) {
-    // Match TS `maxResultSizeChars: 30_000` as the persistence trigger.
-    // We threshold against raw bytes since TS uses char count and
-    // both equate to ~30K for typical ASCII output.
-    const PERSIST_THRESHOLD: usize = 30_000;
-    if bytes.len() <= PERSIST_THRESHOLD {
-        return (None, 0);
-    }
-
-    let dir = std::env::temp_dir().join("coco-bash-output");
-    if std::fs::create_dir_all(&dir).is_err() {
-        return (None, 0);
-    }
-    // Unique filename: nanosecond timestamp + process id, no atomic
-    // counter needed since collisions are vanishingly unlikely and
-    // best-effort persistence tolerates the rare clash by overwriting.
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let pid = std::process::id();
-    let path = dir.join(format!("bash-{pid}-{ts}.out"));
-    if std::fs::write(&path, bytes).is_err() {
-        return (None, 0);
-    }
-    (Some(path.display().to_string()), bytes.len())
 }
 
 /// Apply a previewed sed edit by writing the precomputed `newContent`

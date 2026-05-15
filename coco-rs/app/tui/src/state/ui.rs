@@ -79,8 +79,6 @@ pub struct UiState {
     pub collapsed_tools: HashSet<String>,
     /// Help overlay scroll position.
     pub help_scroll: i32,
-    /// Kill ring for Ctrl+K / Ctrl+Y.
-    pub kill_ring: String,
     /// Double-press tracker for Ctrl+C → exit. Independent from
     /// [`ctrl_d_tracker`] so a "Ctrl+C, Ctrl+D, Ctrl+C" sequence within
     /// the window still completes the Ctrl+C double-press — mirrors
@@ -139,9 +137,10 @@ pub struct UiState {
 pub struct StashedInput {
     /// Stashed text content.
     pub text: String,
-    /// Cursor position (character index) at stash time. Restored
-    /// alongside `text` on pop.
-    pub cursor: i32,
+    /// Cursor byte offset at stash time. Restored alongside `text` on pop.
+    /// In-memory only (no on-disk persistence), so the encoding change
+    /// from char-index → byte-offset doesn't require migration.
+    pub cursor_byte: usize,
     /// Snapshot of paste-pill entries (TS `pastedContents`) at stash
     /// time. Restored on pop so pill labels in the stashed `text`
     /// (e.g. `[Pasted text #1]`) still resolve to the original
@@ -170,7 +169,6 @@ impl UiState {
             toasts: VecDeque::new(),
             collapsed_tools: HashSet::new(),
             help_scroll: 0,
-            kill_ring: String::new(),
             ctrl_c_tracker: DoublePressTracker::new(constants::DOUBLE_PRESS_TIMEOUT),
             ctrl_d_tracker: DoublePressTracker::new(constants::DOUBLE_PRESS_TIMEOUT),
             esc_tracker: DoublePressTracker::new(constants::DOUBLE_PRESS_TIMEOUT),
@@ -336,18 +334,6 @@ pub enum SuggestionKind {
     Symbol,
 }
 
-impl SuggestionKind {
-    /// Popup title shown at the top of the suggestion list.
-    pub fn title(self) -> &'static str {
-        match self {
-            Self::SlashCommand => "Commands",
-            Self::File => "Files",
-            Self::Agent => "Agents",
-            Self::Symbol => "Symbols",
-        }
-    }
-}
-
 /// Active autocomplete session: popup rendered above input, intercepts
 /// `Up/Down/Tab/Esc` while letting regular typing pass through.
 #[derive(Debug, Clone)]
@@ -356,13 +342,13 @@ pub struct ActiveSuggestions {
     /// Items to show in the popup — filtered by `query` before display.
     pub items: Vec<SuggestionItem>,
     /// Currently selected index into the filtered list.
-    pub selected: i32,
+    pub selected: usize,
     /// The filter text the user has typed after the trigger.
     pub query: String,
-    /// Character offset in `input.text` where the trigger started (the `/`
+    /// Byte offset in `input.text` where the trigger started (the `/`
     /// or `@`). Used when accepting a suggestion to splice the selection
-    /// back into the input.
-    pub trigger_pos: i32,
+    /// back into the input via `textarea.replace_range`.
+    pub trigger_pos: usize,
 }
 
 /// A single history entry with frecency metadata.
@@ -472,96 +458,61 @@ impl PromptMode {
 }
 
 /// Multi-line input state.
+///
+/// Backed by a [`TextArea`] (byte-offset cursor, multi-line wrapped,
+/// grapheme + display-width aware) so the cursor renders correctly over
+/// CJK / wide characters and multi-line input wraps. Frecency-ranked
+/// history + vim runtime live alongside it.
 #[derive(Debug)]
 pub struct InputState {
-    /// Current text content.
-    pub text: String,
-    /// Cursor position (character index, NOT byte).
-    pub cursor: i32,
+    /// The editable buffer + cursor. Edit it directly for byte-offset
+    /// access; the surrounding `InputState` API only owns history + vim.
+    pub textarea: crate::widgets::TextArea,
     /// Command history ordered by frecency (most-relevant first).
     pub history: Vec<HistoryEntry>,
-    /// Current history navigation index.
-    pub history_index: Option<i32>,
+    /// Current history navigation index into `history` (None = live draft).
+    pub history_index: Option<usize>,
+    /// Vim modal-editing runtime: state machine + persistent register.
+    pub vim: crate::vim::VimRuntime,
 }
 
 impl InputState {
     /// Create empty input.
     pub fn new() -> Self {
         Self {
-            text: String::new(),
-            cursor: 0,
+            textarea: crate::widgets::TextArea::new(),
             history: Vec::new(),
             history_index: None,
+            vim: crate::vim::VimRuntime::new(),
         }
     }
 
-    /// Insert a character at cursor.
-    pub fn insert_char(&mut self, c: char) {
-        let byte_pos = self.char_to_byte(self.cursor);
-        self.text.insert(byte_pos, c);
-        self.cursor += 1;
+    /// Current text content.
+    pub fn text(&self) -> &str {
+        self.textarea.text()
     }
 
-    /// Delete character before cursor.
-    pub fn backspace(&mut self) {
-        if self.cursor > 0 {
-            self.cursor -= 1;
-            let byte_pos = self.char_to_byte(self.cursor);
-            let next_byte = self.char_to_byte(self.cursor + 1);
-            self.text.replace_range(byte_pos..next_byte, "");
-        }
-    }
-
-    /// Delete character at cursor.
-    pub fn delete_forward(&mut self) {
-        let len = self.text.chars().count() as i32;
-        if self.cursor < len {
-            let byte_pos = self.char_to_byte(self.cursor);
-            let next_byte = self.char_to_byte(self.cursor + 1);
-            self.text.replace_range(byte_pos..next_byte, "");
-        }
+    /// Replace the entire input. Resets `history_index` so subsequent
+    /// Up/Down navigation restarts from the live draft.
+    pub fn set_text(&mut self, text: &str) {
+        self.textarea.set_text(text);
+        self.history_index = None;
     }
 
     /// Take the current input, clearing the buffer.
     pub fn take_input(&mut self) -> String {
-        self.cursor = 0;
         self.history_index = None;
-        std::mem::take(&mut self.text)
-    }
-
-    /// Move cursor left.
-    pub fn cursor_left(&mut self) {
-        if self.cursor > 0 {
-            self.cursor -= 1;
-        }
-    }
-
-    /// Move cursor right.
-    pub fn cursor_right(&mut self) {
-        let len = self.text.chars().count() as i32;
-        if self.cursor < len {
-            self.cursor += 1;
-        }
-    }
-
-    /// Move cursor to start of line.
-    pub fn cursor_home(&mut self) {
-        self.cursor = 0;
-    }
-
-    /// Move cursor to end of line.
-    pub fn cursor_end(&mut self) {
-        self.cursor = self.text.chars().count() as i32;
+        self.textarea.take_text()
     }
 
     /// Whether the input is empty.
     pub fn is_empty(&self) -> bool {
-        self.text.is_empty()
+        self.textarea.is_empty()
     }
 
     /// Current prompt-prefix mode (derived from leading character).
     pub fn prompt_mode(&self) -> PromptMode {
-        PromptMode::from_text(&self.text)
+        PromptMode::from_text(self.textarea.text())
     }
 
     /// Record a submitted text into history using frecency scoring.
@@ -594,15 +545,6 @@ impl InputState {
         if self.history.len() > max {
             self.history.truncate(max);
         }
-    }
-
-    /// Convert character index to byte index.
-    fn char_to_byte(&self, char_idx: i32) -> usize {
-        self.text
-            .char_indices()
-            .nth(char_idx as usize)
-            .map(|(i, _)| i)
-            .unwrap_or(self.text.len())
     }
 }
 

@@ -19,6 +19,7 @@ use coco_types::CommandSafety;
 use coco_types::CommandSource;
 use coco_types::CommandType;
 use coco_types::LocalCommandData;
+use coco_types::SlashCommandInfo;
 
 pub use implementations::ADD_DIR_SENTINEL;
 pub use implementations::RELOAD_HOOKS_SENTINEL;
@@ -238,6 +239,35 @@ impl CommandRegistry {
 
     pub fn is_empty(&self) -> bool {
         self.commands.is_empty()
+    }
+
+    /// Snapshot every visible command as a [`coco_types::SlashCommandInfo`].
+    ///
+    /// Used by `coco-cli::tui_runner` to seed the TUI's
+    /// `available_commands` slot at session start and to push a fresh
+    /// list after `/reload-plugins` swaps the active registry. The
+    /// projection keeps only the four fields the popup actually renders
+    /// or ranks against — the heavy `RegisteredCommand` stays here.
+    ///
+    /// Sorted alphabetically by name so the empty-query popup view (and
+    /// the rank-tail tiebreak in `coco-tui::autocomplete::slash`) are
+    /// stable across sessions — `HashMap::values()` iteration order is
+    /// otherwise random and would shuffle the popup each launch.
+    pub fn snapshot_for_ui(&self) -> Vec<SlashCommandInfo> {
+        let mut out: Vec<SlashCommandInfo> = self
+            .commands
+            .values()
+            .filter(|c| !c.base.is_hidden && c.is_active())
+            .map(|cmd| SlashCommandInfo {
+                name: cmd.base.name.clone(),
+                description: (!cmd.base.description.is_empty())
+                    .then(|| cmd.base.description.clone()),
+                aliases: cmd.base.aliases.clone(),
+                argument_hint: cmd.base.argument_hint.clone(),
+            })
+            .collect();
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        out
     }
 
     /// Toggle `is_hidden` on a registered command. No-op when the

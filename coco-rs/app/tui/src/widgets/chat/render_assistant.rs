@@ -14,6 +14,13 @@ use crate::i18n::t;
 use crate::state::session::MessageContent;
 use crate::state::session::ToolUseStatus;
 
+/// Turn-boundary glyph at the start of each assistant text response.
+/// TS `BLACK_CIRCLE` from `constants/figures.ts` picks `⏺` on macOS for
+/// vertical alignment and `●` elsewhere; we standardise on `⏺` which
+/// renders cleanly in modern Linux/macOS/Windows Terminal fonts and
+/// keeps a consistent visual across platforms.
+const ASSISTANT_DOT: &str = "⏺";
+
 /// Format a `Duration` for the tool-use elapsed badge.
 ///
 /// - < 1s: milliseconds (`250ms`)
@@ -38,12 +45,49 @@ pub(super) fn try_render<'a>(
 ) -> Option<()> {
     match content {
         MessageContent::AssistantText(text) => {
-            let md_lines = crate::widgets::markdown::markdown_to_lines_with_syntax(
+            // TS parity: `AssistantTextMessage` renders the body with a
+            // leading `BLACK_CIRCLE` glyph on the first line as a turn
+            // marker (`shouldShowDot` is true for the top assistant
+            // text of each response). We always show it here — coco-rs
+            // doesn't yet thread the "is first text block" hint, but
+            // the visual cost of an extra glyph on multi-block turns is
+            // small compared to the wayfinding value on every other
+            // turn. The trailing rows of the same response keep no
+            // gutter so wrapped prose stays at column 0.
+            let mut md_lines = crate::widgets::markdown::markdown_to_lines_with_syntax(
                 text,
                 w.theme,
                 w.width,
                 w.syntax_highlighting,
             );
+            if let Some(first) = md_lines.first_mut() {
+                // `widgets::markdown` left-pads each paragraph line with
+                // two spaces (see the `vec![Span::raw("  ")]` initialiser
+                // in `markdown.rs`). Replace that indent with our dot +
+                // space so the marker lands at column 0 and the prose
+                // continues at column 2 — matching TS layout
+                // `<NoSelect minWidth={2}>⏺</NoSelect><Markdown>…`.
+                let dot_span = Span::styled(
+                    format!("{ASSISTANT_DOT} "),
+                    ratatui::style::Style::default().fg(w.theme.assistant_message),
+                );
+                let leading_is_indent = first
+                    .spans
+                    .first()
+                    .map(|s| s.content.as_ref() == "  ")
+                    .unwrap_or(false);
+                if leading_is_indent {
+                    first.spans[0] = dot_span;
+                } else {
+                    first.spans.insert(0, dot_span);
+                }
+            } else {
+                // Empty markdown (e.g. blank response) — still emit the
+                // marker line so the turn boundary is visible.
+                lines.push(Line::from(
+                    Span::raw(ASSISTANT_DOT.to_string()).fg(w.theme.assistant_message),
+                ));
+            }
             lines.extend(md_lines);
             Some(())
         }

@@ -352,9 +352,7 @@ impl TuiHarness {
     /// `UserCommand::SubmitInput` on the command channel.
     pub async fn submit(&mut self, text: &str) {
         // Set the input buffer so `TuiCommand::SubmitInput` picks it up.
-        for c in text.chars() {
-            self.state.ui.input.insert_char(c);
-        }
+        self.state.ui.input.textarea.insert_str(text);
         let _ = handle_command(&mut self.state, TuiCommand::SubmitInput, &self.command_tx).await;
     }
 

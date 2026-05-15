@@ -157,16 +157,17 @@ impl Tool for PowerShellTool {
     /// Render the PowerShell envelope. TS parity:
     /// `PowerShellTool.tsx:383-435 mapToolResultToToolResultBlockParam`.
     ///
-    /// Branches mirror Bash's render so future fg→bg promotion / oversize
-    /// stdout persistence wiring requires only execute-side changes:
+    /// Branches mirror Bash's render so future fg→bg promotion
+    /// requires only execute-side changes:
     /// 1. **Status==background** (user-initiated `run_in_background:true`):
     ///    emit prebuilt `message` field.
     /// 2. **Foreground**: build `[processedStdout, errorMessage,
     ///    backgroundInfo]` joined with `\n`, skipping empties.
     ///    `processedStdout` strips leading blank lines + trims trailing
-    ///    whitespace; `persistedOutputPath` swaps it for a
-    ///    `<persisted-output>` envelope. `backgroundTaskId` triggers one
-    ///    of three messages (`assistantAutoBackgrounded` /
+    ///    whitespace. Oversized text output is persisted by the
+    ///    query-level generic Level 1 tool-result pipeline.
+    ///    `backgroundTaskId` triggers one of three messages
+    ///    (`assistantAutoBackgrounded` /
     ///    `backgroundedByUser` / default).
     ///
     /// The `isImage` branch (TS:395-398) is intentionally unimplemented
@@ -197,21 +198,9 @@ impl Tool for PowerShellTool {
             .and_then(Value::as_bool)
             .unwrap_or(false);
 
-        let mut processed = super::shell_render::strip_leading_blank_lines(stdout)
+        let processed = super::shell_render::strip_leading_blank_lines(stdout)
             .trim_end()
             .to_string();
-        if let Some(path) = data.get("persistedOutputPath").and_then(Value::as_str) {
-            let original_size = data
-                .get("persistedOutputSize")
-                .and_then(Value::as_u64)
-                .unwrap_or(0) as usize;
-            processed = super::shell_render::build_persisted_output_message(
-                path,
-                original_size,
-                &processed,
-            );
-        }
-
         let mut error_message = stderr.trim().to_string();
         if interrupted {
             if !error_message.is_empty() {

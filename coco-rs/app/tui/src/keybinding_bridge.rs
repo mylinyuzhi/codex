@@ -294,8 +294,15 @@ fn map_global_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
         // `app:toggleTodos` → `ToggleExpandedTasksView`). No legacy
         // fallback needed; users who unbind both can rebind via
         // `~/.coco/keybindings.json`.
-        KeyCode::Char('e') if ctrl && shift => Some(TuiCommand::ToggleToolCollapse),
-        KeyCode::Char('e') if ctrl => Some(TuiCommand::OpenExternalEditor),
+        //
+        // Bare Ctrl+E is deliberately NOT mapped here: TS uses the chord
+        // `ctrl+x ctrl+e` for the external editor precisely so it doesn't
+        // shadow readline's `Ctrl+E = end-of-line` (see
+        // `defaultBindings.ts:82-83`). The `ctrl+x ctrl+e` chord plus the
+        // bare `ctrl+g` shortcut for external editor are already wired
+        // through the resolver via `keybindings/defaults.rs:113-114`.
+        // Falling through here lets `map_input_key` map bare Ctrl+E to
+        // `CursorEnd` as the user expects.
         KeyCode::Char('r') if ctrl && shift => Some(TuiCommand::ToggleSystemReminders),
         // Spec (crate-coco-tui.md §Keyboard Shortcuts): Ctrl+F = kill all agents,
         // Ctrl+Shift+F = toggle fast mode. Global search is reached via
@@ -343,37 +350,73 @@ fn map_input_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
     let is_streaming = state.is_streaming();
 
     match key.code {
-        // Submit / queue
+        // Submit / queue — each match arm carries the structured `keymap`
+        // entry id it implements; the keymap/ module is the source of
+        // truth that `/help`, the help overlay, and subagent retrieval
+        // all read from.
+        // keymap = "input:newline"
         KeyCode::Enter if shift || alt => Some(TuiCommand::InsertNewline),
         KeyCode::Enter if is_streaming => Some(TuiCommand::QueueInput),
+        // keymap = "input:submit"
         KeyCode::Enter => Some(TuiCommand::SubmitInput),
 
         // Editing
+        // keymap = "input:delete_word_backward"
         KeyCode::Backspace if ctrl || alt => Some(TuiCommand::DeleteWordBackward),
+        // keymap = "input:delete_backward"
         KeyCode::Backspace => Some(TuiCommand::DeleteBackward),
+        // keymap = "input:delete_word_forward"
         KeyCode::Delete if ctrl => Some(TuiCommand::DeleteWordForward),
+        // keymap = "input:delete_forward"
         KeyCode::Delete => Some(TuiCommand::DeleteForward),
+        // keymap = "input:delete_backward" (alternate combo). Some terminals
+        // deliver Ctrl+H as a literal control char rather than Backspace.
+        KeyCode::Char('h') if ctrl => Some(TuiCommand::DeleteBackward),
 
         // Cursor
+        // keymap = "input:word_left" (alternate combo)
         KeyCode::Left if ctrl || alt => Some(TuiCommand::WordLeft),
+        // keymap = "input:cursor_left" (alternate combo)
         KeyCode::Left => Some(TuiCommand::CursorLeft),
+        // keymap = "input:word_right" (alternate combo)
         KeyCode::Right if ctrl || alt => Some(TuiCommand::WordRight),
+        // keymap = "input:cursor_right" (alternate combo)
         KeyCode::Right => Some(TuiCommand::CursorRight),
         KeyCode::Up if alt => Some(TuiCommand::ScrollUp),
+        // keymap = "input:history"
         KeyCode::Up => Some(TuiCommand::CursorUp),
         KeyCode::Down if alt => Some(TuiCommand::ScrollDown),
+        // keymap = "input:history"
         KeyCode::Down => Some(TuiCommand::CursorDown),
+        // keymap = "input:cursor_home" (alternate combo)
         KeyCode::Home => Some(TuiCommand::CursorHome),
+        // keymap = "input:cursor_end" (alternate combo)
         KeyCode::End => Some(TuiCommand::CursorEnd),
 
-        // Emacs
+        // Emacs / readline (matches TS PromptInput.tsx + GNU readline
+        // conventions). Each arm is the canonical implementation of the
+        // `KeymapEntry` named in the comment above.
+        // keymap = "input:cursor_home"
         KeyCode::Char('a') if ctrl => Some(TuiCommand::CursorHome),
+        // keymap = "input:cursor_end"
         KeyCode::Char('e') if ctrl => Some(TuiCommand::CursorEnd),
+        // keymap = "input:cursor_left"
+        KeyCode::Char('b') if ctrl => Some(TuiCommand::CursorLeft),
+        // keymap = "input:cursor_right"
+        KeyCode::Char('f') if ctrl => Some(TuiCommand::CursorRight),
+        // keymap = "input:kill_to_eol"
         KeyCode::Char('k') if ctrl => Some(TuiCommand::KillToEndOfLine),
+        // keymap = "input:kill_to_bol"
+        KeyCode::Char('u') if ctrl => Some(TuiCommand::KillToBeginningOfLine),
+        // keymap = "input:delete_word_backward"
+        KeyCode::Char('w') if ctrl => Some(TuiCommand::DeleteWordBackward),
+        // keymap = "input:yank"
         KeyCode::Char('y') if ctrl => Some(TuiCommand::Yank),
+        // keymap = "input:newline" (alternate combo)
         KeyCode::Char('j') if ctrl => Some(TuiCommand::InsertNewline),
-        // Emacs word-nav: Alt+b / Alt+f (TS PromptInput.tsx)
+        // keymap = "input:word_left" (alternate combo)
         KeyCode::Char('b') if alt => Some(TuiCommand::WordLeft),
+        // keymap = "input:word_right" (alternate combo)
         KeyCode::Char('f') if alt => Some(TuiCommand::WordRight),
 
         // Escape always emits Cancel; the *second* Esc within

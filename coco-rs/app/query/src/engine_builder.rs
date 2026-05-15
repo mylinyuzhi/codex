@@ -103,10 +103,14 @@ impl QueryEngine {
             reactive_state: Arc::new(tokio::sync::Mutex::new(
                 coco_compact::ReactiveCompactState::new(),
             )),
+            auto_compact_state: Arc::new(tokio::sync::Mutex::new(
+                coco_compact::ReactiveCompactState::new(),
+            )),
             running_tasks: None,
             last_compact_state: Arc::new(std::sync::Mutex::new(None)),
             turn_counter: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             post_compact_skills: Arc::new(std::sync::RwLock::new(Vec::new())),
+            session_start_hook_side_effect_sink: None,
             staged_ledger: None,
             staged_session_id: uuid::Uuid::new_v4(),
             recently_mentioned_paths: Arc::new(tokio::sync::RwLock::new(
@@ -168,6 +172,14 @@ impl QueryEngine {
     ) -> Self {
         self.transcript_store = Some(store);
         self.transcript_session_id = Some(session_id);
+        self
+    }
+
+    pub fn with_tool_result_replacement_state(
+        mut self,
+        state: coco_tool_runtime::tool_result_storage::ContentReplacementStateRef,
+    ) -> Self {
+        self.tool_result_replacement_state = state;
         self
     }
 
@@ -349,6 +361,16 @@ impl QueryEngine {
         if let Ok(mut g) = self.post_compact_skills.write() {
             *g = skills;
         }
+    }
+
+    /// Install a runtime sink for SessionStart hook side effects emitted
+    /// during compact context restoration.
+    pub fn with_session_start_hook_side_effect_sink(
+        mut self,
+        sink: crate::session_start_hooks::SessionStartHookSideEffectSinkRef,
+    ) -> Self {
+        self.session_start_hook_side_effect_sink = Some(sink);
+        self
     }
 
     /// Install the session-memory text snapshot. Callers (CLI/TUI/SDK)

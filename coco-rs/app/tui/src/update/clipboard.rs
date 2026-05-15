@@ -93,9 +93,7 @@ where
                 .ui
                 .paste_manager
                 .add_image_data(image.bytes, image.mime);
-            for c in pill.chars() {
-                state.ui.input.insert_char(c);
-            }
+            state.ui.input.textarea.insert_str(&pill);
             state.ui.add_toast(Toast::success(
                 t!("toast.image_attached", size_kb = size_kb).to_string(),
             ));

@@ -67,28 +67,52 @@ external (`microcompactMessages` no-ops outside `feature('CACHED_MICROCOMPACT')`
 - `compact.micro.clear_file_unchanged_stubs_enabled` — default `false`.
   Gates per-turn `[file unchanged]` stub rewrite. No TS equivalent.
 
-## Known TS-parity gaps (audit-gaps.md Round 10)
+## TS-Parity Status
 
-P0 (resolved this round):
-- `strip_images_from_messages` now traverses `Message::ToolResult` content
-  arrays — Bash tool_results carrying detected image bytes
-  (`bash.rs::is_likely_image_bytes` → `structuredContent`) had been bypassing
-  the strip and re-tripping prompt-too-long during compact summarization.
-  Test: `services/compact/tests/partial_and_helpers.rs::strip_images_walks_tool_result_content`.
-- `wrap_system_reminder` in `coco-system-reminder/src/xml.rs` now delegates
-  to `coco-messages::wrapping::wrap_in_system_reminder` so the canonical
-  `<system-reminder>\n{c}\n</system-reminder>` format string lives in one
-  place.
+The compact crate stays provider-agnostic. It performs message
+selection, stripping, PTL retry, boundary construction, and post-compact
+message assembly; `app/query` owns model execution, fork/cache behavior,
+tools, hooks, and app-state deltas.
 
-P0–P1 ports landed in Round 10 follow-up (see `docs/coco-rs/audit-gaps.md`):
+Current TS-parity fixes:
+- Full and partial LLM compaction call a typed summarizer with
+  `CompactSummaryAttempt` rather than rendering the conversation into a
+  single legacy prompt string. The attempt separates `messages` (the
+  selected slice being summarized) from `context_messages` (the structured
+  API/fork context), matching TS partial `from` behavior. On PTL retry,
+  partial `from` truncates the full API context, not just the tail
+  summary slice. The legacy `render_summary_prompt_for_debug` remains
+  only for diagnostics.
+- `QueryEngine` runs full/partial summaries through a cache-sharing
+  `ForkLabel::Compact` fork with deny-all tool policy when available,
+  falling back to a structured direct call with `tools = None`.
+- Full, partial, and session-memory compaction all restore post-compact
+  context in the query layer: files, plan, skills, plan-mode reminder,
+  async-agent reminders, SessionStart hook output, deferred-tool/agent/MCP
+  deltas, observer cleanup, and cache-break notification.
+- Compact-triggered SessionStart hook aggregate output is preserved:
+  `initialUserMessage` is inserted into the rewritten history and
+  `watchPaths` is forwarded to the CLI runtime's FileChanged watcher.
+- Partial post-compact assembly mirrors TS direction-specific order:
+  `from`/Newest writes boundary → kept prefix → summary, while
+  `up_to`/Oldest writes boundary → summary → kept tail.
+- `CompactResult.raw_summary` preserves the raw summarizer output for
+  PostCompact hooks; formatted continuation text stays only in
+  `summary_messages`.
+- Auto LLM compaction records `CompactOutcome` and trips the session
+  failure breaker after `MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES = 3`.
+- `strip_images_from_messages` traverses `Message::ToolResult` content
+  arrays so image bytes cannot re-trip prompt-too-long during summary.
+- `wrap_system_reminder` delegates to
+  `coco-messages::wrapping::wrap_in_system_reminder`, keeping the wrapper
+  format canonical.
+
+P0–P1 normalization ports (see `docs/coco-rs/audit-gaps.md`):
 - `sanitize_error_tool_result_content`, `smoosh_system_reminder_into_tool_result`,
   `filter_orphaned_thinking_only_messages`, `filter_trailing_thinking_from_last_assistant`,
   `filter_whitespace_only_assistant_messages`, `ensure_non_empty_assistant_content`
   — all live in `core/messages/src/normalize.rs` and run in TS-mandated
   order inside `normalize_messages_for_api`.
-- `processSessionStartHooks('compact')` for the LLM path now fires in
-  `engine_compaction.rs::try_full_compact` and folds hook
-  `additional_contexts` into `result.hook_results`.
 - `createPlanModeAttachmentIfNeeded` (Round 10c) — `post_compact_plan_mode.rs::create_plan_mode_attachment_if_needed` renders the Full-variant
   reminder text and emits an `AttachmentKind::PlanMode` message; engine
   snapshots `permission_mode == Plan` + plan settings pre-compact.
@@ -98,6 +122,10 @@ P0–P1 ports landed in Round 10 follow-up (see `docs/coco-rs/audit-gaps.md`):
 - `RecompactionInfo` (Round 10c) — `CompactRunOptions.recompaction_info`
   plumbs the struct; `QueryEngine::last_compact_state` + `turn_counter`
   populate it; `CompactResult.is_recompaction` is now driven by it.
+
+Explicit non-ports: `HISTORY_SNIP`, `CONTEXT_COLLAPSE`, and
+`CACHED_MICROCOMPACT` ant-only/cache-aware paths remain disabled or
+staged per the root architecture rules.
 
 ## Configuration
 

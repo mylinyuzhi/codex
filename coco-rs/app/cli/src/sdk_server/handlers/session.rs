@@ -799,6 +799,9 @@ pub(super) async fn handle_session_resume(
             runtime
                 .seed_transcript_dedup(rec.messages.iter().filter_map(|m| m.uuid().copied()))
                 .await;
+            runtime
+                .seed_tool_result_replacement_state(&rec.messages, &session.id)
+                .await;
         }
     }
 

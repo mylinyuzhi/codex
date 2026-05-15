@@ -28,7 +28,6 @@ use tracing::warn;
 use coco_config::EnvKey;
 use coco_config::env;
 use coco_context::FileHistoryState;
-use coco_inference::ApiClient;
 use coco_query::CoreEvent;
 use coco_query::QueuePriority;
 use coco_query::QueuedCommand;
@@ -126,9 +125,6 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     // P1 handlers), so `dispatch_slash_command` and the SDK
     // `initialize.commands` advertisement share one Arc.
     let resources = build_engine_resources(cli, &runtime_config, &cwd)?;
-    let mode = resources
-        .provider_api
-        .map_or("mock", coco_types::ProviderApi::as_str);
     let model_id = resources.model_id.clone();
     let permission_mode = resources.startup.mode;
     let bypass_permissions_available = resources.startup.bypass_available;
@@ -153,20 +149,31 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
         // default retention period. Mirrors TS `utils/cleanup.ts`
         // `DEFAULT_CLEANUP_PERIOD_DAYS = 30`. Fire-and-forget.
         let mgr = session_manager.clone();
+        let transcript_store = coco_session::TranscriptStore::new(coco_cli::paths::sessions_dir());
         tokio::spawn(async move {
             let period = coco_session::default_cleanup_period();
-            match tokio::task::spawn_blocking(move || mgr.cleanup_older_than(period)).await {
-                Ok(Ok(n)) if n > 0 => {
+            match tokio::task::spawn_blocking(move || -> coco_session::Result<(i32, i32)> {
+                let removed_sessions = mgr.cleanup_older_than(period)?;
+                let removed_tool_results =
+                    transcript_store.cleanup_tool_results_older_than(period)?;
+                Ok((removed_sessions, removed_tool_results))
+            })
+            .await
+            {
+                Ok(Ok((removed_sessions, removed_tool_results)))
+                    if removed_sessions > 0 || removed_tool_results > 0 =>
+                {
                     tracing::info!(
                         target: "coco::session::cleanup",
-                        removed = n,
-                        "pruned old session files"
+                        removed_sessions,
+                        removed_tool_results,
+                        "pruned old session artifacts"
                     );
                 }
                 Ok(Err(e)) => tracing::warn!(
                     target: "coco::session::cleanup",
                     error = %e,
-                    "cleanup_older_than failed"
+                    "session cleanup failed"
                 ),
                 _ => {}
             }
@@ -310,6 +317,9 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
         runtime
             .seed_transcript_dedup(plan.prior_messages.iter().filter_map(|m| m.uuid().copied()))
             .await;
+        runtime
+            .seed_tool_result_replacement_state(&plan.prior_messages, &plan.session_id)
+            .await;
         eprintln!(
             "{} session {} ({} prior message(s))",
             if plan.is_fork { "Forked" } else { "Resumed" },
@@ -374,6 +384,23 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
         .get(coco_types::ModelRole::Main)
         .map(|spec| spec.provider.clone())
         .unwrap_or_default();
+    // Seed cwd + git branch so the header's "where am I" rows render on
+    // the first frame. Production TUI doesn't install `SessionBootstrap`,
+    // so the engine's `emit_session_started` never fires the
+    // `ServerNotification::SessionStarted` that would populate these via
+    // `protocol::handle`. Without this seed the rows stay empty for the
+    // session's lifetime.
+    app.state_mut().session.working_dir = Some(cwd.to_string_lossy().into_owned());
+    app.state_mut().session.git_branch = coco_git::get_current_branch(&cwd).ok().flatten();
+    // Mirror `SessionStarted`'s thinking-level seed: read the model's
+    // registered default so the header's effort dial reflects the real
+    // starting state, not the `ReasoningEffort::Auto` fallback.
+    if let Some(default_effort) = coco_config::builtin_models_partial()
+        .get(&model_id)
+        .and_then(|info| info.default_thinking_level)
+    {
+        app.state_mut().session.thinking_effort = default_effort;
+    }
 
     // Seed `model_catalog` and `model_by_role` from the resolved
     // `ModelRegistry`. The TUI picker and Ctrl+T cycle both consult
@@ -388,6 +415,28 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
         state.session.model_catalog = std::mem::take(&mut catalog);
         state.session.provider_statuses = provider_statuses;
         state.session.model_by_role = by_role;
+    }
+
+    // Seed `available_commands` so the `/` autocomplete popup and the
+    // `Ctrl+Shift+P` command palette resolve against the live registry
+    // (builtins + extended + skills + plugin contributions). Without
+    // this snapshot the popup silently shows nothing because the field
+    // defaults to an empty Vec. TS parity: `commands.ts::getCommands`
+    // is the catalog source for `commandSuggestions.ts`.
+    //
+    // Two seed paths:
+    //   * **Startup (here)** — direct mutation. The event loop hasn't
+    //     started yet, so emitting on `notification_tx` would just
+    //     queue the event behind `App::run()`'s first iteration —
+    //     adds latency without simplifying anything.
+    //   * **Reload (`/reload-plugins`)** — see [`run_reload_plugins`].
+    //     Emits [`TuiOnlyEvent::AvailableCommandsRefreshed`] through
+    //     the same event channel the agent driver uses; the TUI
+    //     handler at `server_notification_handler::tui_only` overwrites
+    //     the slot and re-runs `refresh_suggestions`.
+    {
+        let snapshot = command_registry.read().await.snapshot_for_ui();
+        app.state_mut().session.available_commands = snapshot;
     }
 
     // Surface the startup downgrade notification (if any) as a toast
@@ -462,8 +511,6 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
         runtime,
         pending_approvals,
     ));
-
-    eprintln!("coco-rs TUI ({mode} mode) — model: {model_id}\n");
 
     // Run TUI (blocks until exit)
     let tui_result = app.run().await;
@@ -808,11 +855,6 @@ async fn run_agent_driver(
                 // and rewrites runtime.history; an in-flight turn that
                 // mutates either would race.
                 drain_active_turn(&active_turn).await;
-                // Snapshot the current Main client. Rewind's summarize
-                // path makes a single LLM call to partial-compact the
-                // truncated history — runs through the live Main, so
-                // a hot-swapped picker selection takes effect here too.
-                let rewind_client = runtime.main_client().await;
                 handle_rewind(
                     &restore_type,
                     &message_id,
@@ -821,8 +863,7 @@ async fn run_agent_driver(
                     &runtime.config_home,
                     &session_id,
                     &event_tx,
-                    &runtime.history,
-                    &rewind_client,
+                    &runtime,
                 )
                 .await;
             }
@@ -2065,6 +2106,11 @@ async fn run_session_rename(
 /// in-flight dispatches stay valid (they hold the prior `Arc`); the
 /// swap is observed by the next dispatch. TS:
 /// `useManagePlugins.refreshActivePlugins`.
+///
+/// After the swap we also push the fresh visible-command list to the
+/// TUI via [`TuiOnlyEvent::AvailableCommandsRefreshed`] so the `/`
+/// autocomplete popup and command palette stop pointing at stale names
+/// from removed plugins.
 async fn run_reload_plugins(
     runtime: &Arc<crate::session_runtime::SessionRuntime>,
     event_tx: &mpsc::Sender<CoreEvent>,
@@ -2073,6 +2119,13 @@ async fn run_reload_plugins(
     let count = runtime.reload_plugins(&cwd).await;
     let body = format!("Reloaded — {count} commands now registered.");
     emit_slash_text(event_tx, "reload-plugins", &body).await;
+
+    let snapshot = runtime.current_command_registry().await.snapshot_for_ui();
+    let _ = event_tx
+        .send(CoreEvent::Tui(TuiOnlyEvent::AvailableCommandsRefreshed {
+            commands: snapshot,
+        }))
+        .await;
 }
 
 /// `/hooks reload` runner — rebuild the live `HookRegistry` from the
@@ -2541,8 +2594,7 @@ async fn handle_rewind(
     config_home: &std::path::Path,
     session_id: &str,
     event_tx: &mpsc::Sender<CoreEvent>,
-    history_handle: &Arc<Mutex<Vec<coco_messages::Message>>>,
-    client: &Arc<ApiClient>,
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
 ) {
     use coco_tui::state::RestoreType;
 
@@ -2556,7 +2608,7 @@ async fn handle_rewind(
         restore_type,
         RestoreType::SummarizeFrom { .. } | RestoreType::SummarizeUpTo { .. }
     ) {
-        handle_summarize_rewind(restore_type, message_id, history_handle, client, event_tx).await;
+        handle_summarize_rewind(restore_type, message_id, runtime, event_tx).await;
         return;
     }
 
@@ -2600,7 +2652,7 @@ async fn handle_rewind(
     );
 
     if should_truncate {
-        let mut h = history_handle.lock().await;
+        let mut h = runtime.history.lock().await;
         if let Some(idx) = h.iter().position(|m| match m {
             coco_messages::Message::User(u) => u.uuid.to_string() == message_id,
             _ => false,
@@ -2653,8 +2705,7 @@ async fn handle_rewind(
 async fn handle_summarize_rewind(
     restore_type: &coco_tui::state::RestoreType,
     message_id: &str,
-    history_handle: &Arc<Mutex<Vec<coco_messages::Message>>>,
-    client: &Arc<ApiClient>,
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
     event_tx: &mpsc::Sender<CoreEvent>,
 ) {
     use coco_messages::PartialCompactDirection;
@@ -2667,7 +2718,7 @@ async fn handle_summarize_rewind(
     };
 
     let messages = {
-        let h = history_handle.lock().await;
+        let h = runtime.history.lock().await;
         h.clone()
     };
 
@@ -2696,65 +2747,29 @@ async fn handle_summarize_rewind(
         }
     };
 
-    // Summarize closure — same shape as engine.rs's full-compact path.
-    let summarize_fn = |prompt: String| {
-        let client = client.clone();
-        async move {
-            use coco_inference::QueryParams;
-            use coco_messages::AssistantContent;
-            use coco_messages::LlmMessage;
-            let params = QueryParams {
-                prompt: vec![LlmMessage::user_text(&prompt)],
-                max_tokens: Some(coco_compact::types::MAX_OUTPUT_TOKENS_FOR_SUMMARY),
-                thinking_level: None,
-                fast_mode: false,
-                tools: None,
-                context_management: None,
-                query_source: None,
-                agent_id: None,
-                time_since_last_assistant_ms: None,
-                // Compaction summarizer helper — not the agent loop.
-                agentic: false,
-                cache: None,
-            };
-            match client.query(&params).await {
-                Ok(result) => {
-                    let text = result
-                        .content
-                        .iter()
-                        .filter_map(|c| match c {
-                            AssistantContent::Text(t) => Some(t.text.as_str()),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>()
-                        .join("");
-                    Ok(text)
-                }
-                Err(e) => Err(e.to_string()),
-            }
-        }
-    };
+    let engine = runtime.build_engine(CancellationToken::new()).await;
+    let mut history = coco_messages::MessageHistory::new();
+    for message in messages {
+        history.push(message);
+    }
+    let event_tx_opt = Some(event_tx.clone());
+    let outcome = engine
+        .run_partial_compact(
+            &mut history,
+            &event_tx_opt,
+            pivot_index,
+            direction,
+            feedback.clone(),
+            /*custom_instructions*/ None,
+        )
+        .await;
 
-    match coco_compact::partial_compact_conversation(
-        &messages,
-        pivot_index,
-        direction,
-        feedback.as_deref(),
-        /*custom_instructions*/ None,
-        summarize_fn,
-        /*attachment_fn*/ None,
-    )
-    .await
-    {
-        Ok(result) => {
-            let new_messages = coco_compact::build_post_compact_messages(&result);
-            // Persist the summarized history back so the next turn
-            // sees it. TS: setMessages(postCompact).
+    match outcome {
+        coco_compact::CompactOutcome::Applied => {
             {
-                let mut h = history_handle.lock().await;
-                *h = new_messages;
+                let mut h = runtime.history.lock().await;
+                *h = history.messages;
             }
-
             // Emit a RewindCompleted with empty target so the TUI
             // dismisses the overlay + shows a toast, but does NOT try
             // to truncate by message_id (the message is gone after
@@ -2765,28 +2780,13 @@ async fn handle_summarize_rewind(
                     files_changed: 0,
                 }))
                 .await;
-
-            // Protocol-level event so SDK consumers see it too.
-            let _ = event_tx
-                .send(CoreEvent::Protocol(
-                    coco_query::ServerNotification::ContextCompacted(
-                        coco_types::ContextCompactedParams {
-                            removed_messages: 0,
-                            summary_tokens: result.post_compact_tokens as i32,
-                            trigger: coco_types::CompactTrigger::Manual,
-                            pre_tokens: Some(result.pre_compact_tokens),
-                            post_tokens: Some(result.post_compact_tokens),
-                        },
-                    ),
-                ))
-                .await;
         }
-        Err(e) => {
-            warn!(error = %e, "partial-compact rewind failed");
+        coco_compact::CompactOutcome::Skipped | coco_compact::CompactOutcome::Failed => {
+            warn!("partial-compact rewind failed");
             let _ = event_tx
                 .send(CoreEvent::Protocol(coco_query::ServerNotification::Error(
                     coco_types::ErrorParams {
-                        message: format!("Summarize failed: {e}"),
+                        message: "Summarize failed".into(),
                         category: Some("rewind".into()),
                         retryable: false,
                     },

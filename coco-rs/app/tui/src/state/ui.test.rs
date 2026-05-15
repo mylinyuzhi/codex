@@ -64,30 +64,29 @@ fn input_state_prompt_mode_tracks_text() {
     let mut state = InputState::new();
     assert_eq!(state.prompt_mode(), PromptMode::Normal);
 
-    state.insert_char('!');
+    state.textarea.insert_str("!");
     assert_eq!(state.prompt_mode(), PromptMode::Bash);
 
-    state.insert_char('l');
-    state.insert_char('s');
+    state.textarea.insert_str("ls");
     assert_eq!(state.prompt_mode(), PromptMode::Bash);
 
-    // Backspace past the prefix returns to Normal.
-    state.cursor_home();
-    state.delete_forward();
+    // Delete the prefix (move home, forward-delete) — back to Normal.
+    state.textarea.set_cursor(0);
+    state.textarea.delete_forward(1);
     assert_eq!(state.prompt_mode(), PromptMode::Normal);
-    assert_eq!(state.text, "ls");
+    assert_eq!(state.text(), "ls");
 }
 
 #[test]
 fn input_state_prompt_mode_hash_then_swap_to_bang() {
     let mut state = InputState::new();
-    state.insert_char('#');
+    state.textarea.insert_str("#");
     assert_eq!(state.prompt_mode(), PromptMode::Memory);
 
-    state.cursor_home();
-    state.delete_forward();
-    state.cursor_home();
-    state.insert_char('!');
+    state.textarea.set_cursor(0);
+    state.textarea.delete_forward(1);
+    state.textarea.set_cursor(0);
+    state.textarea.insert_str("!");
     assert_eq!(state.prompt_mode(), PromptMode::Bash);
 }
 

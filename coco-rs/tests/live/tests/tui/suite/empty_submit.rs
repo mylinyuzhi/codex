@@ -52,10 +52,11 @@ pub async fn run() -> Result<()> {
         harness.state.session.messages.len(),
     );
     assert_eq!(
-        harness.state.ui.input.text, "",
+        harness.state.ui.input.text(),
+        "",
         "empty_submit: input buffer should still be empty after Enter, \
          got {:?}",
-        harness.state.ui.input.text,
+        harness.state.ui.input.text(),
     );
 
     // The engine should not have produced any events. Wait briefly to

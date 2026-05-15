@@ -1,7 +1,5 @@
 use super::*;
 use crate::i18n::set_locale;
-use crate::state::CommandOption;
-use crate::state::CommandPaletteOverlay;
 use crate::state::ExportFormat;
 use crate::state::ExportOverlay;
 use crate::state::GlobalSearchOverlay;
@@ -48,39 +46,6 @@ fn collapse_hints_keeps_output_within_width() {
     assert!(crate::presentation::layout::text_width(&collapsed) <= 20);
 
     assert_eq!(collapse_hints(hints, 0), "");
-}
-
-#[test]
-fn command_palette_content_filters_and_marks_filtered_selection() {
-    set_locale("en");
-    let theme = Theme::default();
-    let overlay = CommandPaletteOverlay {
-        commands: vec![
-            CommandOption {
-                name: "clear".to_string(),
-                description: Some("Clear conversation".to_string()),
-            },
-            CommandOption {
-                name: "config".to_string(),
-                description: None,
-            },
-            CommandOption {
-                name: "model".to_string(),
-                description: Some("Pick model".to_string()),
-            },
-        ],
-        filter: "c".to_string(),
-        selected: 1,
-    };
-
-    let (title, body, border) = command_palette_content(&overlay, &theme);
-
-    assert_eq!(title, " Commands ");
-    assert_eq!(border, theme.accent);
-    assert!(body.contains("Filter: c"));
-    assert!(body.contains("  /clear — Clear conversation"));
-    assert!(body.contains("▸ /config — "));
-    assert!(!body.contains("/model"));
 }
 
 #[test]

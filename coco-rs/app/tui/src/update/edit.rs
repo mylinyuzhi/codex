@@ -120,6 +120,41 @@ pub(super) async fn try_local_exit(trimmed: &str, command_tx: &mpsc::Sender<User
 /// and pushes it inline as a system message — the previous handler
 /// returned a canned string with placeholders. TS:
 /// `commands/status/index.ts` opens a status overlay component.
+/// Try to handle `trimmed` as `/help` (with optional command argument).
+///
+/// Renders a comprehensive markdown overview (commands, prompt prefixes,
+/// keyboard shortcuts, vim mode) using `crate::i18n::t!` so the same
+/// handler covers `en` and `zh-CN`. Supersedes the `coco-commands` crate
+/// handler — that crate has no i18n dependency and `/help` is an inherent
+/// presentation concern.
+pub(super) fn try_local_help(state: &mut AppState, trimmed: &str) -> bool {
+    let Some(rest) = trimmed
+        .strip_prefix("/help")
+        .or_else(|| trimmed.strip_prefix("/h"))
+        .or_else(|| trimmed.strip_prefix("/?"))
+    else {
+        return false;
+    };
+    // Guard against `/helpful` etc. matching the prefix.
+    if !rest.is_empty() && !rest.starts_with(' ') {
+        return false;
+    }
+    let arg = rest.trim();
+    let body = if arg.is_empty() {
+        crate::presentation::help_slash::render_overview()
+    } else {
+        crate::presentation::help_slash::render_command_detail(arg)
+            .unwrap_or_else(|| crate::presentation::help_slash::render_not_found(arg))
+    };
+    state
+        .session
+        .add_message(crate::state::session::ChatMessage::system_text(
+            uuid::Uuid::new_v4().to_string(),
+            body,
+        ));
+    true
+}
+
 pub(super) fn try_local_status(state: &mut AppState, trimmed: &str) -> bool {
     if trimmed != "/status" && trimmed != "/st" {
         return false;
@@ -372,6 +407,11 @@ pub(super) async fn submit(state: &mut AppState, command_tx: &mpsc::Sender<UserC
     if try_local_status(state, trimmed) {
         return true;
     }
+    // /help — i18n-aware overview rendered locally (the upstream
+    // `coco-commands` crate has no i18n dependency).
+    if try_local_help(state, trimmed) {
+        return true;
+    }
 
     state.ui.input.add_to_history(text.clone());
     let resolved = state.ui.paste_manager.resolve_structured(&text);
@@ -422,75 +462,43 @@ pub(super) async fn submit(state: &mut AppState, command_tx: &mpsc::Sender<UserC
 }
 
 /// Delete one word backwards from the cursor.
+///
+/// Delegates to `TextArea::delete_backward_word`, which puts the killed
+/// span into the TextArea's kill buffer (yankable via Ctrl+Y).
 pub(super) fn delete_word_backward(state: &mut AppState) {
-    while state.ui.input.cursor > 0 {
-        let prev_char = state
-            .ui
-            .input
-            .text
-            .chars()
-            .nth((state.ui.input.cursor - 1) as usize);
-        if prev_char.is_none_or(char::is_whitespace) {
-            break;
-        }
-        state.ui.input.backspace();
-    }
+    state.ui.input.textarea.delete_backward_word();
 }
 
 /// Delete one word forward from the cursor.
+///
+/// Delegates to `TextArea::delete_forward_word` (alt+d / ctrl+delete).
 pub(super) fn delete_word_forward(state: &mut AppState) {
-    let len = state.ui.input.text.chars().count() as i32;
-    while state.ui.input.cursor < len {
-        let c = state
-            .ui
-            .input
-            .text
-            .chars()
-            .nth(state.ui.input.cursor as usize);
-        state.ui.input.delete_forward();
-        if c.is_none_or(char::is_whitespace) {
-            break;
-        }
-    }
+    state.ui.input.textarea.delete_forward_word();
 }
 
-/// Kill from cursor to end of current line (Emacs Ctrl+K) into the kill ring.
+/// Kill from cursor to end of current line (Emacs Ctrl+K).
+///
+/// TextArea owns the single-entry kill buffer; consecutive kills accumulate
+/// readline-style so `Ctrl+Y` recovers the full deleted region.
 pub(super) fn kill_to_end_of_line(state: &mut AppState) {
-    let cursor = state.ui.input.cursor as usize;
-    let text = &state.ui.input.text;
-    let byte_start = text
-        .char_indices()
-        .nth(cursor)
-        .map(|(i, _)| i)
-        .unwrap_or(text.len());
-    let remaining = &text[byte_start..];
-    let kill_end = remaining
-        .find('\n')
-        .map(|pos| byte_start + pos)
-        .unwrap_or(text.len());
-    let killed = text[byte_start..kill_end].to_string();
-    if !killed.is_empty() {
-        state.ui.kill_ring = killed;
-        state.ui.input.text = format!("{}{}", &text[..byte_start], &text[kill_end..]);
-    }
+    state.ui.input.textarea.kill_to_end_of_line();
 }
 
-/// Yank (paste) the kill ring at the cursor.
+/// Kill from BOL to cursor (Emacs Ctrl+U / readline `unix-line-discard`).
+pub(super) fn kill_to_beginning_of_line(state: &mut AppState) {
+    state.ui.input.textarea.kill_to_beginning_of_line();
+}
+
+/// Yank (paste) the kill buffer at the cursor (Emacs Ctrl+Y).
 pub(super) fn yank(state: &mut AppState) {
-    if state.ui.kill_ring.is_empty() {
-        return;
-    }
-    let yank_text = state.ui.kill_ring.clone();
-    for c in yank_text.chars() {
-        state.ui.input.insert_char(c);
-    }
+    state.ui.input.textarea.yank();
 }
 
 /// Up arrow: step toward less-relevant history entries (away from the top
 /// frecency match). First Up surfaces the most relevant entry; subsequent
 /// Ups walk down the frecency-sorted list.
 pub(super) fn history_prev(state: &mut AppState) {
-    let len = state.ui.input.history.len() as i32;
+    let len = state.ui.input.history.len();
     if len == 0 {
         return;
     }
@@ -500,8 +508,13 @@ pub(super) fn history_prev(state: &mut AppState) {
         Some(i) => i, // already at least-relevant tail; stay put
     };
     state.ui.input.history_index = Some(new_idx);
-    state.ui.input.text = state.ui.input.history[new_idx as usize].text.clone();
-    state.ui.input.cursor_end();
+    let text = state.ui.input.history[new_idx].text.clone();
+    state.ui.input.textarea.set_text(&text);
+    state
+        .ui
+        .input
+        .textarea
+        .move_cursor_to_end_of_line(crate::widgets::EolBehavior::StayPut);
 }
 
 /// Down arrow: step back toward the most-relevant entry; leaving the list
@@ -513,44 +526,27 @@ pub(super) fn history_next(state: &mut AppState) {
     if idx > 0 {
         let new_idx = idx - 1;
         state.ui.input.history_index = Some(new_idx);
-        state.ui.input.text = state.ui.input.history[new_idx as usize].text.clone();
-        state.ui.input.cursor_end();
+        let text = state.ui.input.history[new_idx].text.clone();
+        state.ui.input.textarea.set_text(&text);
+        state
+            .ui
+            .input
+            .textarea
+            .move_cursor_to_end_of_line(crate::widgets::EolBehavior::StayPut);
     } else {
         state.ui.input.history_index = None;
-        state.ui.input.text.clear();
-        state.ui.input.cursor = 0;
+        state.ui.input.textarea.set_text("");
     }
 }
 
-/// Move cursor one word to the left.
+/// Move cursor one word to the left (grapheme-aware via TextArea).
 pub(super) fn word_left(state: &mut AppState) {
-    while state.ui.input.cursor > 0 {
-        state.ui.input.cursor_left();
-        let c = state
-            .ui
-            .input
-            .text
-            .chars()
-            .nth(state.ui.input.cursor as usize);
-        if c.is_none_or(char::is_whitespace) {
-            break;
-        }
-    }
+    let target = state.ui.input.textarea.beginning_of_previous_word();
+    state.ui.input.textarea.set_cursor(target);
 }
 
-/// Move cursor one word to the right.
+/// Move cursor one word to the right (grapheme-aware via TextArea).
 pub(super) fn word_right(state: &mut AppState) {
-    let len = state.ui.input.text.chars().count() as i32;
-    while state.ui.input.cursor < len {
-        state.ui.input.cursor_right();
-        let c = state
-            .ui
-            .input
-            .text
-            .chars()
-            .nth(state.ui.input.cursor as usize);
-        if c.is_none_or(char::is_whitespace) {
-            break;
-        }
-    }
+    let target = state.ui.input.textarea.end_of_next_word();
+    state.ui.input.textarea.set_cursor(target);
 }

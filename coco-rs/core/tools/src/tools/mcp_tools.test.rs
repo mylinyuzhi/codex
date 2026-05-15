@@ -2,7 +2,13 @@ use super::*;
 use coco_tool_runtime::McpToolAnnotations;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolResultContentPart;
+use coco_tool_runtime::ToolUseContext;
+use coco_tool_runtime::mcp_handle::McpContentBlock;
+use coco_tool_runtime::mcp_handle::McpResourceContent;
+use coco_tool_runtime::mcp_handle::McpResourceInfo;
+use coco_tool_runtime::mcp_handle::McpToolCallResult;
 use serde_json::json;
+use std::sync::Arc;
 
 fn make_mcp_tool() -> McpTool {
     McpTool::new(
@@ -119,6 +125,33 @@ fn read_mcp_resource_render_uses_json_stringify() {
     assert!(text.contains("\"text\":\"hello\""));
 }
 
+#[tokio::test]
+async fn mcp_auth_tool_forwards_to_generic_handle() {
+    let mut ctx = ToolUseContext::test_default();
+    ctx.mcp = Arc::new(AuthHandle {
+        message: "Authentication started".into(),
+    });
+    assert!(!McpAuthTool.is_read_only(&json!({"server_name": "srv"})));
+    assert_eq!(
+        McpAuthTool.to_auto_classifier_input(&json!({"server_name": "srv"})),
+        "srv"
+    );
+    let permission = McpAuthTool
+        .check_permissions(&json!({"server_name": "srv"}), &ctx)
+        .await;
+    let coco_types::ToolCheckResult::Allow { updated_input, .. } = permission else {
+        panic!("McpAuthTool should explicitly allow its auth-start input");
+    };
+    assert_eq!(updated_input, Some(json!({"server_name": "srv"})));
+
+    let result = McpAuthTool
+        .execute(json!({"server_name": "srv"}), &ctx)
+        .await
+        .unwrap();
+
+    assert_eq!(result.data, json!("Authentication started"));
+}
+
 // ---------------------------------------------------------------------------
 // render_for_model — pass-through MCP server-provided multimodal content
 // ---------------------------------------------------------------------------
@@ -217,4 +250,295 @@ fn render_unknown_block_falls_back_to_json_string() {
     };
     // JSON fallback contains the raw payload so nothing is dropped.
     assert!(text.contains("audio"), "got: {text}");
+}
+
+#[tokio::test]
+async fn read_mcp_resource_persists_blob_to_session_tool_results() {
+    use base64::Engine as _;
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let bytes = b"\x89PNG\r\n\x1a\nblob";
+    let mut ctx = ToolUseContext::test_default();
+    ctx.config_home = Some(tmp.path().to_path_buf());
+    ctx.session_id_for_history = Some("session-1".into());
+    ctx.tool_result_session_dir = Some(tmp.path().join("sessions/session-1"));
+    ctx.tool_use_id = Some("tool-1".into());
+    ctx.mcp = Arc::new(BlobResourceHandle {
+        blob: base64::engine::general_purpose::STANDARD.encode(bytes),
+        mime_type: "image/png".into(),
+    });
+
+    let result = ReadMcpResourceTool
+        .execute(
+            json!({
+                "server_name": "srv",
+                "resource_uri": "mcp://file",
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+    let rendered = ReadMcpResourceTool.render_for_model(&result.data);
+    let ToolResultContentPart::Text { text, .. } = &rendered[0] else {
+        panic!("expected Text part");
+    };
+    assert!(text.starts_with("<persisted-output>"), "got: {text}");
+    assert!(text.contains("MCP output is binary"), "got: {text}");
+    let path = tmp
+        .path()
+        .join("sessions/session-1/tool-results/tool-1.png");
+    assert_eq!(std::fs::read(path).unwrap(), bytes);
+}
+
+#[tokio::test]
+async fn read_mcp_resource_preserves_multiple_contents() {
+    use base64::Engine as _;
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let bytes = b"audio";
+    let mut ctx = ToolUseContext::test_default();
+    ctx.tool_result_session_dir = Some(tmp.path().join("sessions/session-1"));
+    ctx.tool_use_id = Some("tool-multi".into());
+    ctx.mcp = Arc::new(MixedResourceHandle {
+        blob: base64::engine::general_purpose::STANDARD.encode(bytes),
+    });
+
+    let result = ReadMcpResourceTool
+        .execute(
+            json!({
+                "server_name": "srv",
+                "resource_uri": "mcp://bundle",
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+    let contents = result.data["contents"].as_array().unwrap();
+    assert_eq!(contents.len(), 2);
+    assert_eq!(contents[0]["text"], "first");
+    assert!(
+        contents[1]["persisted_output"]
+            .as_str()
+            .unwrap()
+            .contains("audio/wav")
+    );
+    let path = tmp
+        .path()
+        .join("sessions/session-1/tool-results/tool-multi-2.wav");
+    assert_eq!(std::fs::read(path).unwrap(), bytes);
+}
+
+#[tokio::test]
+async fn dynamic_mcp_tool_persists_embedded_resource_blob() {
+    use base64::Engine as _;
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let bytes = b"%PDF-1.7";
+    let mut ctx = ToolUseContext::test_default();
+    ctx.config_home = Some(tmp.path().to_path_buf());
+    ctx.session_id_for_history = Some("session-1".into());
+    ctx.tool_result_session_dir = Some(tmp.path().join("sessions/session-1"));
+    ctx.tool_use_id = Some("tool-2".into());
+    ctx.mcp = Arc::new(BlobToolHandle {
+        blob: base64::engine::general_purpose::STANDARD.encode(bytes),
+        mime_type: "application/pdf".into(),
+    });
+
+    let tool = make_mcp_tool();
+    let result = tool.execute(json!({}), &ctx).await.unwrap();
+    let parts = tool.render_for_model(&result.data);
+    let ToolResultContentPart::Text { text, .. } = &parts[0] else {
+        panic!("expected Text part");
+    };
+    assert!(text.starts_with("<persisted-output>"), "got: {text}");
+    assert!(text.contains("application/pdf"), "got: {text}");
+    let path = tmp
+        .path()
+        .join("sessions/session-1/tool-results/tool-2.pdf");
+    assert_eq!(std::fs::read(path).unwrap(), bytes);
+}
+
+struct BlobResourceHandle {
+    blob: String,
+    mime_type: String,
+}
+
+struct AuthHandle {
+    message: String,
+}
+
+#[async_trait::async_trait]
+impl coco_tool_runtime::McpHandle for AuthHandle {
+    async fn list_resources(
+        &self,
+        _: Option<&str>,
+    ) -> Result<Vec<McpResourceInfo>, coco_error::BoxedError> {
+        Ok(vec![])
+    }
+
+    async fn read_resource(
+        &self,
+        _: &str,
+        _: &str,
+    ) -> Result<Vec<McpResourceContent>, coco_error::BoxedError> {
+        unreachable!("not used by McpAuthTool test")
+    }
+
+    async fn call_tool(
+        &self,
+        _: &str,
+        _: &str,
+        _: Option<serde_json::Value>,
+    ) -> Result<McpToolCallResult, coco_error::BoxedError> {
+        unreachable!("not used by McpAuthTool test")
+    }
+
+    async fn authenticate(&self, _: &str) -> Result<String, coco_error::BoxedError> {
+        Ok(self.message.clone())
+    }
+
+    async fn connected_servers(&self) -> Vec<String> {
+        vec![]
+    }
+}
+
+#[async_trait::async_trait]
+impl coco_tool_runtime::McpHandle for BlobResourceHandle {
+    async fn list_resources(
+        &self,
+        _: Option<&str>,
+    ) -> Result<Vec<McpResourceInfo>, coco_error::BoxedError> {
+        Ok(vec![])
+    }
+
+    async fn read_resource(
+        &self,
+        _: &str,
+        _: &str,
+    ) -> Result<Vec<McpResourceContent>, coco_error::BoxedError> {
+        Ok(vec![McpResourceContent {
+            uri: "mcp://file".into(),
+            text: None,
+            blob: Some(self.blob.clone()),
+            mime_type: Some(self.mime_type.clone()),
+        }])
+    }
+
+    async fn call_tool(
+        &self,
+        _: &str,
+        _: &str,
+        _: Option<serde_json::Value>,
+    ) -> Result<McpToolCallResult, coco_error::BoxedError> {
+        unreachable!("not used by ReadMcpResourceTool test")
+    }
+
+    async fn authenticate(&self, _: &str) -> Result<String, coco_error::BoxedError> {
+        unreachable!("not used by ReadMcpResourceTool test")
+    }
+
+    async fn connected_servers(&self) -> Vec<String> {
+        vec![]
+    }
+}
+
+struct BlobToolHandle {
+    blob: String,
+    mime_type: String,
+}
+
+struct MixedResourceHandle {
+    blob: String,
+}
+
+#[async_trait::async_trait]
+impl coco_tool_runtime::McpHandle for MixedResourceHandle {
+    async fn list_resources(
+        &self,
+        _: Option<&str>,
+    ) -> Result<Vec<McpResourceInfo>, coco_error::BoxedError> {
+        Ok(vec![])
+    }
+
+    async fn read_resource(
+        &self,
+        _: &str,
+        _: &str,
+    ) -> Result<Vec<McpResourceContent>, coco_error::BoxedError> {
+        Ok(vec![
+            McpResourceContent {
+                uri: "mcp://bundle/text".into(),
+                text: Some("first".into()),
+                blob: None,
+                mime_type: Some("text/plain".into()),
+            },
+            McpResourceContent {
+                uri: "mcp://bundle/audio".into(),
+                text: None,
+                blob: Some(self.blob.clone()),
+                mime_type: Some("audio/wav".into()),
+            },
+        ])
+    }
+
+    async fn call_tool(
+        &self,
+        _: &str,
+        _: &str,
+        _: Option<serde_json::Value>,
+    ) -> Result<McpToolCallResult, coco_error::BoxedError> {
+        unreachable!("not used by multi resource test")
+    }
+
+    async fn authenticate(&self, _: &str) -> Result<String, coco_error::BoxedError> {
+        unreachable!("not used by multi resource test")
+    }
+
+    async fn connected_servers(&self) -> Vec<String> {
+        vec![]
+    }
+}
+
+#[async_trait::async_trait]
+impl coco_tool_runtime::McpHandle for BlobToolHandle {
+    async fn list_resources(
+        &self,
+        _: Option<&str>,
+    ) -> Result<Vec<McpResourceInfo>, coco_error::BoxedError> {
+        Ok(vec![])
+    }
+
+    async fn read_resource(
+        &self,
+        _: &str,
+        _: &str,
+    ) -> Result<Vec<McpResourceContent>, coco_error::BoxedError> {
+        unreachable!("not used by dynamic MCP tool test")
+    }
+
+    async fn call_tool(
+        &self,
+        _: &str,
+        _: &str,
+        _: Option<serde_json::Value>,
+    ) -> Result<McpToolCallResult, coco_error::BoxedError> {
+        Ok(McpToolCallResult {
+            content: vec![McpContentBlock::Resource {
+                uri: "mcp://report".into(),
+                text: None,
+                blob: Some(self.blob.clone()),
+                mime_type: Some(self.mime_type.clone()),
+            }],
+            is_error: false,
+        })
+    }
+
+    async fn authenticate(&self, _: &str) -> Result<String, coco_error::BoxedError> {
+        unreachable!("not used by dynamic MCP tool test")
+    }
+
+    async fn connected_servers(&self) -> Vec<String> {
+        vec![]
+    }
 }

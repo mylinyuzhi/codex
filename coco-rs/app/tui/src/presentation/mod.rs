@@ -6,6 +6,7 @@
 
 pub(crate) mod confirm;
 pub(crate) mod help;
+pub(crate) mod help_slash;
 pub(crate) mod information;
 pub(crate) mod layout;
 pub(crate) mod model_picker;

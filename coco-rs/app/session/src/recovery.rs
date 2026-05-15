@@ -70,6 +70,7 @@ pub fn load_conversation_for_resume(
         "file-history-snapshot",
         "marble-origami-commit",
         "marble-origami-snapshot",
+        "content-replacement",
     ];
 
     for line in content.lines() {

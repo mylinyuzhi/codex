@@ -78,7 +78,7 @@ fn user_cancel_with_lossless_tail_restores() {
     // because `truncate(idx)` drops the user message itself — its text
     // is what gets popped back into the input.
     assert!(state.session.messages.is_empty());
-    assert_eq!(state.ui.input.text, "original prompt");
+    assert_eq!(state.ui.input.text(), "original prompt");
     // Fresh conversation_id assigned so next turn's cache key is new.
     assert!(state.session.conversation_id.is_some());
 }
@@ -97,20 +97,21 @@ fn user_cancel_with_meaningful_tail_does_not_restore() {
     on_turn_interrupted(&mut state, user_cancel());
 
     assert!(!restored(before_len, &state), "messages unchanged");
-    assert_eq!(state.ui.input.text, "", "input unchanged");
+    assert_eq!(state.ui.input.text(), "", "input unchanged");
 }
 
 #[test]
 fn user_cancel_with_nonempty_input_does_not_restore() {
     let mut state = idle_with_lossless_tail("u1", "original prompt");
-    state.ui.input.text = "user typed during cancel".into();
+    state.ui.input.textarea.set_text("user typed during cancel");
     let before_len = state.session.messages.len();
 
     on_turn_interrupted(&mut state, user_cancel());
 
     assert!(!restored(before_len, &state));
     assert_eq!(
-        state.ui.input.text, "user typed during cancel",
+        state.ui.input.text(),
+        "user typed during cancel",
         "user's in-flight text must NOT be clobbered",
     );
 }
@@ -124,7 +125,7 @@ fn user_cancel_with_active_overlay_does_not_restore() {
     on_turn_interrupted(&mut state, user_cancel());
 
     assert!(!restored(before_len, &state));
-    assert_eq!(state.ui.input.text, "");
+    assert_eq!(state.ui.input.text(), "");
 }
 
 #[test]
@@ -143,7 +144,7 @@ fn user_cancel_with_queued_command_does_not_restore() {
     on_turn_interrupted(&mut state, user_cancel());
 
     assert!(!restored(before_len, &state));
-    assert_eq!(state.ui.input.text, "");
+    assert_eq!(state.ui.input.text(), "");
 }
 
 #[test]
@@ -157,7 +158,7 @@ fn system_preempt_never_restores() {
         !restored(before_len, &state),
         "Clear/Compact/Rewind/Shutdown drains must not auto-restore",
     );
-    assert_eq!(state.ui.input.text, "");
+    assert_eq!(state.ui.input.text(), "");
     // Banner still flips on so the user notices the underlying turn
     // got cut — even though we suppress the restore.
     assert!(state.session.was_interrupted);
@@ -171,7 +172,7 @@ fn legacy_no_reason_is_treated_as_non_user_cancel() {
     on_turn_interrupted(&mut state, legacy_no_reason());
 
     assert!(!restored(before_len, &state));
-    assert_eq!(state.ui.input.text, "");
+    assert_eq!(state.ui.input.text(), "");
 }
 
 #[test]
