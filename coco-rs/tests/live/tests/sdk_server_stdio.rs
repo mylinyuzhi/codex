@@ -166,7 +166,7 @@ async fn serve(args: Args) -> Result<()> {
     register_extended_builtins(&mut command_registry);
     let command_registry = Arc::new(tokio::sync::RwLock::new(Arc::new(command_registry)));
 
-    let mut skill_manager = coco_skills::SkillManager::new();
+    let skill_manager = coco_skills::SkillManager::new();
     skill_manager.load_from_dirs(&[cwd.join(".coco").join("skills")]);
     let skill_manager = Arc::new(skill_manager);
 

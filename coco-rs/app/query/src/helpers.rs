@@ -199,6 +199,18 @@ pub(crate) fn extract_last_assistant_text(history: &MessageHistory) -> String {
 /// JSON parse failures never reach this helper because they are dropped before
 /// the assistant message is committed. Every committed early-return path should
 /// use this so the stream event and history pair stay in sync.
+///
+/// **Streaming-mode note (I1 ordering).** In the streaming agent loop, the
+/// assistant message is committed *after* this helper runs (when the stream
+/// hits `Finish`). For multi-tool streams where one call passes preparation
+/// and another fails, the failing call's error `tool_result` lands in
+/// `history` at index N while the assistant message lands at N+1 — a
+/// `user(tool_result) → assistant(tool_use)` ordering that violates Anthropic's
+/// adjacency invariant. The streaming path therefore captures synthetic-error
+/// rows via [`MessageHistory::drain_pushed_since`] and replays them as
+/// `StreamingHandle::feed_plan(ToolCallPlan::EarlyOutcome(...))` so
+/// `commit_flush` surfaces them in the correct post-assistant slot. See
+/// [`build_streaming_early_outcome`] for the wrap routine.
 pub(crate) async fn complete_tool_call_with_error(
     event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
     history: &mut MessageHistory,
@@ -223,4 +235,42 @@ pub(crate) async fn complete_tool_call_with_error(
         tool_id.clone(),
         output,
     ));
+}
+
+/// Wrap a captured synthetic-error `tool_result` row into an
+/// [`UnstampedToolCallOutcome`] so the streaming agent loop can surface it
+/// via [`StreamingHandle::feed_plan(ToolCallPlan::EarlyOutcome(...))`].
+///
+/// The preparer pushes its synthetic-error rows directly to history; the
+/// streaming caller drains them via [`MessageHistory::drain_pushed_since`]
+/// and uses this routine to re-enqueue them through the same channel as
+/// permission-deny / hook-block outcomes. `commit_flush` then commits the
+/// outcome's `ordered_messages` *after* the assistant message lands, fixing
+/// the tool_use/tool_result adjacency violation that the inline push would
+/// otherwise cause.
+///
+/// `error_kind` is set to [`ToolCallErrorKind::ValidationFailed`] as the
+/// catch-all bucket for early-return paths that lost their finer-grained
+/// classification during the drain (unknown tool, schema fail, hook block,
+/// permission deny all collapse here for streaming). Telemetry that cares
+/// about the exact bucket should consume the non-streaming path or the
+/// PostToolUseFailure hook channel; this kind is purely a placeholder so
+/// `runs_post_tool_use_failure()` stays `false` (TS `:413` parity).
+pub(crate) fn build_streaming_early_outcome(
+    tool_use_id: &str,
+    tool_id: ToolId,
+    model_index: usize,
+    captured_messages: Vec<Message>,
+) -> coco_tool_runtime::UnstampedToolCallOutcome {
+    coco_tool_runtime::UnstampedToolCallOutcome {
+        tool_use_id: tool_use_id.to_string(),
+        tool_id,
+        model_index,
+        ordered_messages: captured_messages,
+        message_path: coco_tool_runtime::ToolMessagePath::EarlyReturn,
+        error_kind: Some(coco_tool_runtime::ToolCallErrorKind::ValidationFailed),
+        permission_denial: None,
+        prevent_continuation: None,
+        effects: coco_tool_runtime::ToolSideEffects::none(),
+    }
 }

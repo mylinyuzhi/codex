@@ -135,6 +135,32 @@ pub struct QueryEngine {
     /// LLM-driven handlers fall back to passthrough text — orchestration
     /// already handles that path with a `tracing::warn!`.
     pub(crate) hook_llm_handle: Option<Arc<dyn coco_hooks::HookLlmHandle>>,
+    /// Shared role-client cache. When set, `finalize_turn_post_tools`
+    /// spawns a `ModelRole::Fast` side-fork after each tool batch to
+    /// generate a `ToolUseSummaryMessage` for SDK / mobile UI consumers
+    /// (TS `generateToolUseSummary` → coco-rs
+    /// [`crate::tool_use_summary::generate_tool_use_summary`]).
+    ///
+    /// `None` ⇒ no tool-use summaries are generated. Wired by
+    /// `engine_builder::with_role_client_cache` from `SessionRuntime`.
+    pub(crate) role_client_cache: Option<Arc<coco_inference::RoleClientCache>>,
+    /// Pending tool-use-summary `JoinHandle` produced by
+    /// [`finalize_turn_post_tools`](Self::finalize_turn_post_tools).
+    /// Awaited at the top of the *next* `run_session_loop` iteration
+    /// so the summary surfaces to SDK consumers as a
+    /// `ServerNotification::ToolUseSummary` just before the next API
+    /// call. TS parity: `query.ts:1055-1060`.
+    ///
+    /// `Arc<Mutex>` (not session-loop local) because the spawn site
+    /// (`finalize_turn_post_tools`) and await site (`run_session_loop`
+    /// iteration top) sit on different `&self` boundaries; the lock
+    /// is uncontended in practice — at most one entry transition per
+    /// turn.
+    pub(crate) pending_tool_use_summary: Arc<
+        tokio::sync::Mutex<
+            Option<tokio::task::JoinHandle<Option<coco_messages::ToolUseSummaryMessage>>>,
+        >,
+    >,
     /// Mid-turn command queue for steering. Carries both human-typed
     /// prompts (via `QueueOrigin::Human`) and teammate / task-notification
     /// messages (via `QueueOrigin::Coordinator` / `QueueOrigin::TaskNotification`).
@@ -691,6 +717,15 @@ impl QueryEngine {
                 ));
             }
 
+            // Drain the prior turn's tool-use-summary side-fork (TS
+            // `query.ts:1055-1060` — await `pendingToolUseSummary` at
+            // the top of the next iteration). 2s hard cap; never
+            // blocks the new turn for more than that. Silent no-op
+            // when no pending handle exists (first iteration, or
+            // previous turn had no tool batch).
+            self.drain_pending_tool_use_summary(&mut *history, &event_tx)
+                .await;
+
             // Budget check before each turn
             match budget.check(turn) {
                 BudgetDecision::Stop { reason } => {
@@ -890,6 +925,11 @@ impl QueryEngine {
                 // wired yet (Phase 2 of prompt-cache rollout).
                 agentic: true,
                 cache: self.config.prompt_cache.clone(),
+                // Main-loop agent calls never want generation stop
+                // sequences — those are reserved for helper calls
+                // (e.g. the auto-mode classifier's stage-1 `</block>`
+                // terminator).
+                stop_sequences: None,
             };
 
             // ── Phase 9: Streaming tool scheduling ──
@@ -1343,13 +1383,26 @@ impl QueryEngine {
                         // executing immediately via tokio::spawn;
                         // unsafe tools queue for commit_flush.
                         //
-                        // Errors from preparation (unknown tool,
-                        // schema fail, permission deny, hook block)
-                        // already push an error tool_result to
-                        // history via the preparer's shared
-                        // `complete_tool_call_with_error` helper, so
-                        // the handle-path stays consistent without
-                        // needing a separate fallback.
+                        // ── I1 invariant fix ──
+                        // The preparer's early-error paths push
+                        // synthetic tool_result rows to history
+                        // directly (non-streaming behaviour). In
+                        // streaming mode, the assistant message
+                        // hasn't been committed yet — it lands at the
+                        // `Finish` arm below. A naive inline push
+                        // produces history of:
+                        //   N:   user/tool_result (synthetic error)
+                        //   N+1: assistant/tool_use(s)
+                        // ...which violates Anthropic's strict
+                        // tool_use/tool_result adjacency.
+                        //
+                        // Capture the pre-call length, then drain any
+                        // pushes after preparation. Successful prep
+                        // makes no pushes (the plan is fed to the
+                        // handle); failed prep pushes the synthetic
+                        // error, which we re-wrap as an
+                        // `EarlyOutcome` so `commit_flush` surfaces
+                        // it AFTER the assistant message lands.
                         if let (Some(handle), Some(ctx_arc)) =
                             (streaming_handle.as_mut(), streaming_ctx.as_ref())
                             && let Some(buf) = tool_buffers.get(&id)
@@ -1427,42 +1480,94 @@ impl QueryEngine {
                                 client: &self.client,
                                 auto_mode_rules: &self.auto_mode_rules,
                             };
-                            if let Some((pending, _ctx)) =
+                            let pre_prep_len = prep_args.history.messages.len();
+                            let prep_result =
                                 crate::tool_call_preparer::prepare_one_pending_tool_call(
                                     &mut prep_args,
                                     &tcp,
                                 )
-                                .await
-                            {
-                                // Emit ToolUseStarted now that the
-                                // call has passed pre-hook +
-                                // permission and is about to be
-                                // spawned. Non-streaming path emits
-                                // this in tool_call_runner.rs:145;
-                                // we mirror that here so SDK
-                                // consumers see the same event
-                                // sequence regardless of path.
-                                let _ = emit_stream(
-                                    &event_tx,
-                                    crate::AgentStreamEvent::ToolUseStarted {
-                                        call_id: pending.tool_use_id.clone(),
-                                        name: pending.tool.name().to_string(),
-                                        batch_id: None,
-                                    },
-                                )
                                 .await;
+                            // Drain whatever the preparer pushed
+                            // synchronously (synthetic error
+                            // tool_result rows on the failure paths).
+                            // `drain_pushed_since` rebuilds the UUID
+                            // index so subsequent lookups stay valid.
+                            let captured_errors =
+                                history.messages.len().saturating_sub(pre_prep_len);
+                            let captured: Vec<coco_messages::Message> = if captured_errors > 0 {
+                                history.drain_pushed_since(pre_prep_len)
+                            } else {
+                                Vec::new()
+                            };
 
-                                let model_index = streaming_model_index;
-                                streaming_model_index += 1;
-                                handle.feed_plan(coco_tool_runtime::ToolCallPlan::Runnable(
-                                    coco_tool_runtime::PreparedToolCall {
-                                        tool_use_id: pending.tool_use_id,
-                                        tool_id: pending.tool.id(),
-                                        tool: pending.tool,
-                                        parsed_input: pending.input,
+                            match prep_result {
+                                Some((pending, _ctx)) => {
+                                    debug_assert!(
+                                        captured.is_empty(),
+                                        "preparation succeeded but pushed messages"
+                                    );
+                                    // Emit ToolUseStarted now that
+                                    // the call has passed pre-hook +
+                                    // permission and is about to be
+                                    // spawned. Non-streaming path
+                                    // emits this in
+                                    // tool_call_runner.rs:145; we
+                                    // mirror that here so SDK
+                                    // consumers see the same event
+                                    // sequence regardless of path.
+                                    let _ = emit_stream(
+                                        &event_tx,
+                                        crate::AgentStreamEvent::ToolUseStarted {
+                                            call_id: pending.tool_use_id.clone(),
+                                            name: pending.tool.name().to_string(),
+                                            batch_id: None,
+                                        },
+                                    )
+                                    .await;
+                                    let model_index = streaming_model_index;
+                                    streaming_model_index += 1;
+                                    handle.feed_plan(coco_tool_runtime::ToolCallPlan::Runnable(
+                                        coco_tool_runtime::PreparedToolCall {
+                                            tool_use_id: pending.tool_use_id,
+                                            tool_id: pending.tool.id(),
+                                            tool: pending.tool,
+                                            parsed_input: pending.input,
+                                            model_index,
+                                        },
+                                    ));
+                                }
+                                None if !captured.is_empty() => {
+                                    // Preparation failed and pushed a
+                                    // synthetic-error tool_result.
+                                    // Re-wrap and feed as EarlyOutcome
+                                    // so commit_flush surfaces it
+                                    // after the assistant message
+                                    // commits (I1 ordering fix).
+                                    let tool_id_for_outcome: coco_types::ToolId =
+                                        buf.tool_name.parse().unwrap_or_else(|_| {
+                                            coco_types::ToolId::Custom(buf.tool_name.clone())
+                                        });
+                                    let model_index = streaming_model_index;
+                                    streaming_model_index += 1;
+                                    let outcome = crate::helpers::build_streaming_early_outcome(
+                                        &id,
+                                        tool_id_for_outcome,
                                         model_index,
-                                    },
-                                ));
+                                        captured,
+                                    );
+                                    handle.feed_plan(
+                                        coco_tool_runtime::ToolCallPlan::EarlyOutcome(outcome),
+                                    );
+                                }
+                                None => {
+                                    // Rare: prep returned None with
+                                    // no captured messages (e.g.
+                                    // cancellation observed). Drop
+                                    // silently — the cancellation
+                                    // path produces no tool_result
+                                    // and the assistant message
+                                    // still commits normally.
+                                }
                             }
                         }
                     }
@@ -1589,6 +1694,44 @@ impl QueryEngine {
                                 .await;
                             }
                         }
+                    }
+                }
+                // Surface streaming-discard outcomes for telemetry
+                // before bailing out. The assistant message hasn't
+                // committed yet on this path, so committing
+                // tool_result rows to history would violate I1;
+                // instead we emit `ToolUseCompleted{is_error}` per
+                // discarded plan and warn-log a summary, then drop
+                // them. Without this drain `JoinSet::drop` aborts
+                // inflight safe tools silently — operators lose
+                // visibility into how much real work the stream
+                // error invalidated.
+                if let Some(handle) = streaming_handle.take() {
+                    let discarded = handle.discard().await;
+                    if !discarded.is_empty() {
+                        let count = discarded.len() as i64;
+                        for outcome in discarded {
+                            let tool_use_id = outcome.tool_use_id.clone();
+                            let tool_id = outcome.tool_id.clone();
+                            let text = extract_streaming_result_text(&outcome.ordered_messages);
+                            let _ = emit_stream(
+                                &event_tx,
+                                crate::AgentStreamEvent::ToolUseCompleted {
+                                    call_id: tool_use_id,
+                                    name: tool_id.to_string(),
+                                    output: text,
+                                    is_error: true,
+                                },
+                            )
+                            .await;
+                        }
+                        warn!(
+                            turn,
+                            turn_id = %turn_id,
+                            discarded_count = count,
+                            error = %err_msg,
+                            "discarded streaming tool outcomes after mid-stream error",
+                        );
                     }
                 }
                 return Err(Box::new(coco_error::PlainError::new(

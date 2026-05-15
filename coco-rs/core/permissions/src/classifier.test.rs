@@ -19,28 +19,57 @@ fn test_format_action() {
 }
 
 #[test]
-fn test_parse_classifier_response_allow() {
-    let result =
-        parse_classifier_response(r#"{"should_block": false, "reason": "Safe git command"}"#);
-    assert!(!result.should_block);
-    assert_eq!(result.reason, "Safe git command");
+fn test_parse_xml_block_yes() {
+    assert_eq!(parse_xml_block("<block>yes</block>"), Some(true));
+    assert_eq!(parse_xml_block("<block>YES</block>"), Some(true));
+    // Stage-1 closing tag absent (stopped on `</block>`).
+    assert_eq!(parse_xml_block("<block>yes"), Some(true));
 }
 
 #[test]
-fn test_parse_classifier_response_block() {
-    let result =
-        parse_classifier_response(r#"{"should_block": true, "reason": "Destructive operation"}"#);
-    assert!(result.should_block);
+fn test_parse_xml_block_no() {
+    assert_eq!(parse_xml_block("<block>no</block>"), Some(false));
+    assert_eq!(parse_xml_block("<block>No</block>"), Some(false));
+    assert_eq!(parse_xml_block("<block>no"), Some(false));
 }
 
 #[test]
-fn test_parse_classifier_response_invalid_json() {
-    let result = parse_classifier_response("not json");
-    assert!(result.should_block); // Safe default
+fn test_parse_xml_block_unparseable() {
+    assert_eq!(parse_xml_block(""), None);
+    assert_eq!(parse_xml_block("I'm not sure"), None);
+    assert_eq!(parse_xml_block("<block>maybe</block>"), None);
 }
 
 #[test]
-fn test_build_system_prompt_with_rules() {
+fn test_parse_xml_reason() {
+    assert_eq!(
+        parse_xml_reason("<reason>Destructive operation</reason>"),
+        Some("Destructive operation".into())
+    );
+    assert_eq!(
+        parse_xml_reason("<reason>  trim spaces  </reason>"),
+        Some("trim spaces".into())
+    );
+    assert_eq!(parse_xml_reason("no reason"), None);
+}
+
+#[test]
+fn test_strip_thinking_does_not_match_inner_tags() {
+    // Regression: a `<block>` *inside* `<thinking>` must not be parsed.
+    let text = "<thinking>I'd say <block>yes</block> for safety</thinking><block>no</block>";
+    assert_eq!(parse_xml_block(text), Some(false));
+}
+
+#[test]
+fn test_strip_thinking_handles_unterminated_thinking() {
+    // If the response truncates inside <thinking>, the unterminated
+    // segment must be ignored so we don't match its contents.
+    let text = "<block>no</block>\n\n<thinking>then I would also...";
+    assert_eq!(parse_xml_block(text), Some(false));
+}
+
+#[test]
+fn test_build_system_prompt_with_rules_and_xml_format() {
     let rules = AutoModeRules {
         allow: vec!["git status".into(), "cargo test".into()],
         soft_deny: vec!["rm -rf".into()],
@@ -50,6 +79,11 @@ fn test_build_system_prompt_with_rules() {
     assert!(prompt.contains("git status"));
     assert!(prompt.contains("rm -rf"));
     assert!(prompt.contains("Rust project"));
+    // TS-faithful output-format block.
+    assert!(prompt.contains("## Output Format"));
+    assert!(prompt.contains("<block>yes</block><reason>"));
+    assert!(prompt.contains("<block>no</block>"));
+    assert!(prompt.contains("Your ENTIRE response MUST begin with <block>"));
 }
 
 #[tokio::test]
@@ -66,52 +100,60 @@ async fn test_classify_safe_tool_skips_llm() {
 }
 
 #[tokio::test]
-async fn test_classify_bash_calls_llm() {
+async fn test_classify_stage1_allow_short_circuits() {
     let result = classify_yolo_action(
         &[],
         "Bash",
         &serde_json::json!({"command": "ls -la"}),
         &AutoModeRules::default(),
-        |_req: ClassifyRequest| async {
-            Ok("<answer>allow</answer><reason>read-only command</reason>".to_string())
+        |req: ClassifyRequest| async move {
+            // Stage 1 must request `</block>` stop and 64-token budget.
+            assert_eq!(req.stage, 1);
+            assert_eq!(req.max_tokens, 64);
+            assert_eq!(req.stop_sequences, Some(vec!["</block>".to_string()]));
+            // Stage-1 stop_sequences truncate before the closer.
+            Ok("<block>no".to_string())
         },
     )
     .await;
     assert!(!result.should_block);
-    assert_eq!(result.reason, "read-only command");
+    assert_eq!(result.stage, Some(1));
 }
 
 #[tokio::test]
-async fn test_classify_error_defaults_to_block() {
+async fn test_classify_stage1_block_escalates_to_stage2() {
+    let call_count = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+    let cc = call_count.clone();
     let result = classify_yolo_action(
         &[],
         "Bash",
         &serde_json::json!({"command": "rm -rf /"}),
         &AutoModeRules::default(),
-        |_req: ClassifyRequest| async { Err("API error".to_string()) },
-    )
-    .await;
-    assert!(result.should_block);
-}
-
-#[tokio::test]
-async fn test_classify_xml_block_response() {
-    let result = classify_yolo_action(
-        &[],
-        "Bash",
-        &serde_json::json!({"command": "rm -rf /"}),
-        &AutoModeRules::default(),
-        |_req: ClassifyRequest| async {
-            Ok("<answer>block</answer><reason>Destructive operation</reason>".to_string())
+        move |req: ClassifyRequest| {
+            let cc = cc.clone();
+            async move {
+                let stage = cc.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                if stage == 1 {
+                    assert_eq!(req.stage, 1);
+                    Ok("<block>yes".to_string())
+                } else {
+                    // Stage 2 drops stop sequences and bumps budget.
+                    assert_eq!(req.stage, 2);
+                    assert_eq!(req.max_tokens, 4096);
+                    assert_eq!(req.stop_sequences, None);
+                    Ok("<block>yes</block><reason>Destructive</reason>".to_string())
+                }
+            }
         },
     )
     .await;
     assert!(result.should_block);
-    assert_eq!(result.reason, "Destructive operation");
+    assert_eq!(result.reason, "Destructive");
+    assert_eq!(result.stage, Some(2));
 }
 
 #[tokio::test]
-async fn test_classify_stage2_fallback_on_ambiguous() {
+async fn test_classify_stage1_unparseable_escalates_to_stage2() {
     let call_count = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
     let cc = call_count.clone();
     let result = classify_yolo_action(
@@ -124,14 +166,41 @@ async fn test_classify_stage2_fallback_on_ambiguous() {
             async move {
                 let stage = cc.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
                 if stage == 1 {
-                    // Stage 1: ambiguous (no XML tags).
                     Ok("I'm not sure about this one.".to_string())
                 } else {
-                    // Stage 2: clear block.
-                    Ok("<answer>block</answer><reason>Writes to system file</reason>".to_string())
+                    Ok("<block>yes</block><reason>Writes to system file</reason>".to_string())
                 }
             }
         },
+    )
+    .await;
+    assert!(result.should_block);
+    assert_eq!(result.stage, Some(2));
+}
+
+#[tokio::test]
+async fn test_classify_stage2_unparseable_blocks_for_safety() {
+    let result = classify_yolo_action(
+        &[],
+        "Bash",
+        &serde_json::json!({"command": "rm -rf /"}),
+        &AutoModeRules::default(),
+        |_req: ClassifyRequest| async { Ok("garbage output".to_string()) },
+    )
+    .await;
+    assert!(result.should_block);
+    assert_eq!(result.stage, Some(2));
+    assert!(result.reason.contains("unparseable"));
+}
+
+#[tokio::test]
+async fn test_classify_error_defaults_to_block() {
+    let result = classify_yolo_action(
+        &[],
+        "Bash",
+        &serde_json::json!({"command": "rm -rf /"}),
+        &AutoModeRules::default(),
+        |_req: ClassifyRequest| async { Err("API error".to_string()) },
     )
     .await;
     assert!(result.should_block);

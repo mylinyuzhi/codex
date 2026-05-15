@@ -44,7 +44,7 @@ async fn listing_returns_none_when_no_skills() {
 
 #[tokio::test]
 async fn listing_renders_sorted_bullet_list() {
-    let mut mgr = SkillManager::new();
+    let mgr = SkillManager::new();
     mgr.register(skill("zeta", "last alphabetically"));
     mgr.register(skill("alpha", "first"));
     mgr.register(skill("bravo", ""));

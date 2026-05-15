@@ -456,26 +456,28 @@ pub struct ToolActivity {
 
 ## Per-Tool Result Persistence Thresholds
 
-Each `Tool::max_result_size_chars()` implementation declares the TS-aligned
-cap. The **executor** in `core/tool-runtime/src/execution.rs` reads this
-value to drive Level 1 of the
-[Tool Result Budget plan](tool-result-budget-plan.md). Tools listed below
-are the only ones that override the default `100_000`; everything else
-inherits the trait default.
+Each `Tool::max_result_size_bound()` implementation declares the TS-aligned
+cap as a typed [`ResultSizeBound`] (replaces the legacy `i64`-with-`i64::MAX`-
+sentinel convention). `app/query/src/tool_outcome_builder.rs` reads this value
+to drive Level 1 of the [Tool Result Budget plan](tool-result-budget-plan.md).
+Tools listed below are the only ones that override the default
+`ResultSizeBound::Chars(100_000)`; everything else inherits the trait default.
 
 | Tool | TS `maxResultSizeChars` | Rust value | Reason |
 |---|---|---|---|
-| `BashTool` | `30_000` | `30_000` | shell output is bursty; small cap forces preview |
-| `PowerShellTool` | `30_000` | `30_000` | same as Bash |
-| `GrepTool` | `20_000` | `20_000` | match dumps grow superlinearly with codebase size |
-| `GlobTool` | `100_000` | `100_000` | path lists tolerate larger windows |
-| `FileReadTool` | `Infinity` (opt-out) | trait default `100_000` ⚠️ | Rust cannot express `Infinity` with `i32`; Phase 1.B of the plan migrates the trait to `ResultSizeBound::{Chars(i32), Unbounded}` |
+| `BashTool` | `30_000` | `Chars(30_000)` | shell output is bursty; small cap forces preview |
+| `PowerShellTool` | `30_000` | `Chars(30_000)` | same as Bash |
+| `GrepTool` | `20_000` | `Chars(20_000)` | match dumps grow superlinearly with codebase size |
+| `GlobTool` | `100_000` | `Chars(100_000)` | path lists tolerate larger windows |
+| `McpAuthTool` | `10_000` | `Chars(10_000)` | OAuth login summary stays compact |
+| `ReadTool` | `Infinity` (opt-out) | `Unbounded` | canonical content — model will re-read the file |
 
-`Tool::max_result_size_chars` exists today; the **executor that reads it
-does not** (Phase 1.D). Per-tool values are right but unenforced. Bash has a
-bespoke half-implementation
-(`core/tools/src/tools/bash.rs::maybe_persist_oversized_output`) that
-deviates from TS shape — see the plan's Phase 1.E for the refactor.
+Status: persistence pipeline is live. `tool_outcome_builder.rs` reads
+`Tool::max_result_size_bound()`, calls `resolve_persistence_threshold()`,
+persists via `tool_result_storage::persist_to_disk` when over threshold, and
+replaces inline content with a `<persisted-output>` reference message
+(`render_persisted_reference`). Bash and PowerShell share the same
+session-scoped `<session_dir>/tool-results/` storage root.
 
 ## Implementation Pattern
 

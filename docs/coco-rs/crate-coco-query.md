@@ -303,7 +303,7 @@ let messages_for_api = coco_tool_runtime::tool_result_storage::apply_tool_result
             let _ = s.append_content_replacement_records(&self.session_id, records);
         }) as Box<dyn Fn(&[ContentReplacementRecord])>
     }),
-    &self.skip_tool_names_unbounded(),  // tools whose max_result_size_chars is Unbounded
+    &self.skip_tool_names_unbounded(),  // tools whose max_result_size_bound() == Unbounded
     &self.tool_results_root,
 ).await;
 ```

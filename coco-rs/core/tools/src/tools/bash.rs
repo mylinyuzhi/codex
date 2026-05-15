@@ -292,8 +292,8 @@ impl Tool for BashTool {
     /// the executor persists the full output to a tool-results file and
     /// only keeps a truncated snippet inline. We match TS exactly so
     /// cross-runtime sessions handle large outputs identically.
-    fn max_result_size_chars(&self) -> i64 {
-        30_000
+    fn max_result_size_bound(&self) -> coco_tool_runtime::ResultSizeBound {
+        coco_tool_runtime::ResultSizeBound::Chars(30_000)
     }
 
     /// Render the structured `data` envelope into model-visible content

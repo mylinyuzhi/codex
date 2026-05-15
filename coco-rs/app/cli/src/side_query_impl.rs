@@ -158,6 +158,7 @@ impl SideQuery for SideQueryAdapter {
             // surface adds it.
             agentic: false,
             cache: None,
+            stop_sequences: None,
         };
 
         let result = client.query(&params).await.map_err(|e| {

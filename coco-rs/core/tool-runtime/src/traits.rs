@@ -371,12 +371,12 @@ pub trait Tool: Send + Sync {
     /// output is canonical (e.g. `Read` on a tracked file the model
     /// will read again) opt out so persistence isn't circular.
     ///
-    /// TS: `Tool.maxResultSizeChars` (default
-    /// `100_000`, clamped by `DEFAULT_MAX_RESULT_SIZE_CHARS = 50_000`).
-    /// Override per-tool to declare an opt-out (`i64::MAX`) or a
-    /// tighter cap.
-    fn max_result_size_chars(&self) -> i64 {
-        crate::tool_result_storage::DEFAULT_TOOL_MAX_RESULT_SIZE_CHARS
+    /// TS: `Tool.maxResultSizeChars` (default `100_000`, clamped by
+    /// `DEFAULT_MAX_RESULT_SIZE_CHARS = 50_000`). Override per-tool to
+    /// declare opt-out ([`ResultSizeBound::Unbounded`]) or a tighter cap
+    /// ([`ResultSizeBound::Chars`]).
+    fn max_result_size_bound(&self) -> crate::tool_result_storage::ResultSizeBound {
+        crate::tool_result_storage::DEFAULT_TOOL_MAX_RESULT_SIZE_BOUND
     }
 
     /// MCP server/tool info (for MCP-wrapped tools).

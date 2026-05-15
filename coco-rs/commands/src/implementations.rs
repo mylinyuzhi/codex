@@ -535,15 +535,10 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
             LocalOnly,
             Some("[list|install|uninstall] [name]"),
         ),
-        (
-            names::REVIEW,
-            "Review a pull request",
-            &[],
-            review_handler_async,
-            false,
-            LocalOnly,
-            Some("[PR number]"),
-        ),
+        // /review moved to Prompt-type registration below (TS parity:
+        // `commands/review.ts` exports a `type: 'prompt'` Command, not a
+        // local handler). Kept here as a comment so future audits don't
+        // re-add the legacy local async-handler form.
         (
             names::CLEAR,
             "Clear conversation history and start fresh",
@@ -1342,92 +1337,6 @@ fn doctor_handler_async(
     })
 }
 
-fn review_handler_async(
-    args: String,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::Result<String>> + Send>> {
-    Box::pin(async move {
-        let pr_number = args.trim().to_string();
-
-        if pr_number.is_empty() {
-            // List open PRs using gh CLI
-            let gh_result = tokio::process::Command::new("gh")
-                .args(["pr", "list", "--limit", "10"])
-                .output()
-                .await;
-
-            match gh_result {
-                Ok(r) if r.status.success() => {
-                    let stdout = String::from_utf8_lossy(&r.stdout);
-                    if stdout.trim().is_empty() {
-                        Ok("No open pull requests found.\n\n\
-                            Usage: /review <PR number> to review a specific PR."
-                            .to_string())
-                    } else {
-                        let mut out = String::from("Open pull requests:\n\n");
-                        out.push_str(&stdout);
-                        out.push_str("\nUse /review <number> to review a specific PR.");
-                        Ok(out)
-                    }
-                }
-                Ok(r) => {
-                    let stderr = String::from_utf8_lossy(&r.stderr);
-                    Ok(format!(
-                        "gh pr list failed: {stderr}\n\n\
-                         Make sure 'gh' is installed and authenticated.\n\
-                         Usage: /review <PR number>"
-                    ))
-                }
-                Err(_) => Ok("GitHub CLI (gh) not found.\n\n\
-                     Install it: https://cli.github.com/\n\
-                     Then authenticate: gh auth login\n\n\
-                     Usage: /review <PR number>"
-                    .to_string()),
-            }
-        } else {
-            // Get PR details and diff
-            let pr_view = tokio::process::Command::new("gh")
-                .args(["pr", "view", &pr_number])
-                .output()
-                .await;
-
-            let pr_diff = tokio::process::Command::new("gh")
-                .args(["pr", "diff", &pr_number, "--patch"])
-                .output()
-                .await;
-
-            let mut out = format!("Reviewing PR #{pr_number}:\n\n");
-
-            match pr_view {
-                Ok(r) if r.status.success() => {
-                    out.push_str(&String::from_utf8_lossy(&r.stdout));
-                    out.push_str("\n\n");
-                }
-                Ok(r) => {
-                    let stderr = String::from_utf8_lossy(&r.stderr);
-                    return Ok(format!("Failed to get PR #{pr_number}: {stderr}"));
-                }
-                Err(e) => return Ok(format!("Failed to run gh: {e}")),
-            }
-
-            match pr_diff {
-                Ok(r) if r.status.success() => {
-                    let diff = String::from_utf8_lossy(&r.stdout);
-                    out.push_str("--- Diff ---\n\n");
-                    if diff.len() > 8000 {
-                        out.push_str(&diff[..8000]);
-                        out.push_str("\n... (diff truncated at 8000 chars)");
-                    } else {
-                        out.push_str(&diff);
-                    }
-                }
-                _ => out.push_str("(could not retrieve diff)"),
-            }
-
-            Ok(out)
-        }
-    })
-}
-
 // ── Moved-to-plugin command factory ─────────────────────────────────────
 
 // ── PR-G4 batch-1 sync handlers ──────────────────────────────────────
@@ -1472,6 +1381,7 @@ fn debug_tool_call_handler(args: &str) -> String {
 const SECURITY_REVIEW_PROMPT: &str = include_str!("prompts/security_review.txt");
 const INSIGHTS_PROMPT: &str = include_str!("prompts/insights.txt");
 const PR_COMMENTS_PROMPT: &str = include_str!("prompts/pr_comments.txt");
+const REVIEW_PROMPT: &str = include_str!("prompts/review.txt");
 // /commit-push-pr loads its prompt directly inside
 // handlers::commit_push_pr::PROMPT_TEMPLATE.
 const STATUSLINE_PROMPT: &str = include_str!("prompts/statusline.txt");
@@ -1618,10 +1528,10 @@ pub fn register_ts_parity_handlers(
             }),
             handler: Some(Arc::new(
                 handlers::prompt_command::ShellExpandingPromptHandler {
-                    name: "security-review",
-                    progress_message: "analyzing code changes for security risks",
-                    body: SECURITY_REVIEW_PROMPT,
-                    append_task: false,
+                    name: "security-review".to_string(),
+                    progress_message: "analyzing code changes for security risks".to_string(),
+                    body: SECURITY_REVIEW_PROMPT.to_string(),
+                    args_handling: handlers::prompt_command::ArgsHandling::Static,
                 },
             )),
             is_enabled: None,
@@ -1638,7 +1548,7 @@ pub fn register_ts_parity_handlers(
         "Get comments from a GitHub pull request",
         "fetching PR comments",
         PR_COMMENTS_PROMPT,
-        true,
+        handlers::prompt_command::ArgsHandling::AppendUnderTask,
     );
 
     // /insights — TS: commands/insights.ts
@@ -1648,7 +1558,23 @@ pub fn register_ts_parity_handlers(
         "Surface session insights, costs, and notable activity",
         "analyzing session activity",
         INSIGHTS_PROMPT,
-        true,
+        handlers::prompt_command::ArgsHandling::AppendUnderTask,
+    );
+
+    // /review — TS: commands/review.ts (Prompt-type, NOT a local handler).
+    // TS appends `PR number: ${args}` inline at the body's end — even
+    // when `args` is empty, the literal `PR number: ` line is present so
+    // the model sees an explicit value (or its absence). We mirror that
+    // exactly via `ArgsHandling::AppendInline`.
+    register_static_prompt(
+        registry,
+        names::REVIEW,
+        "Review a pull request",
+        "reviewing pull request",
+        REVIEW_PROMPT,
+        handlers::prompt_command::ArgsHandling::AppendInline {
+            prefix: "PR number: ",
+        },
     );
 
     // /commit-push-pr — TS: commands/commit-push-pr.ts. Inline-resolves git
@@ -1719,7 +1645,7 @@ pub fn register_ts_parity_handlers(
         "Set up Claude Code's status line UI",
         "setting up statusLine",
         STATUSLINE_PROMPT,
-        true,
+        handlers::prompt_command::ArgsHandling::AppendUnderTask,
     );
 
     // /dream + /summary — auto-memory subsystem entry points. Only register
@@ -1827,26 +1753,17 @@ fn register_static_prompt(
     description: &str,
     progress_message: &str,
     body: &str,
-    append_task: bool,
+    args_handling: handlers::prompt_command::ArgsHandling,
 ) {
     let mut base = crate::builtin_base_ext(name, description, &[], CommandSafety::LocalOnly, None);
     base.loaded_from = Some(coco_types::CommandSource::Builtin);
 
-    let handler = if append_task {
-        Arc::new(handlers::prompt_command::StaticPromptHandler {
-            name: Box::leak(name.to_string().into_boxed_str()),
-            progress_message: Box::leak(progress_message.to_string().into_boxed_str()),
-            body: Box::leak(body.to_string().into_boxed_str()),
-            append_task: true,
-        }) as Arc<dyn crate::CommandHandler>
-    } else {
-        Arc::new(handlers::prompt_command::StaticPromptHandler {
-            name: Box::leak(name.to_string().into_boxed_str()),
-            progress_message: Box::leak(progress_message.to_string().into_boxed_str()),
-            body: Box::leak(body.to_string().into_boxed_str()),
-            append_task: false,
-        }) as Arc<dyn crate::CommandHandler>
-    };
+    let handler = Arc::new(handlers::prompt_command::StaticPromptHandler {
+        name: name.to_string(),
+        progress_message: progress_message.to_string(),
+        body: body.to_string(),
+        args_handling,
+    }) as Arc<dyn crate::CommandHandler>;
 
     registry.register(RegisteredCommand {
         base,

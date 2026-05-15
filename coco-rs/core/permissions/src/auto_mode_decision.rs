@@ -8,6 +8,7 @@
 //! tracking.
 
 use coco_messages::Message;
+use coco_tool_runtime::DenialTracker;
 use coco_types::PermissionDecision;
 use coco_types::PermissionDecisionReason;
 use serde_json::Value;
@@ -20,7 +21,6 @@ use crate::classifier::AutoModeRules;
 use crate::classifier::ClassifyRequest;
 use crate::classifier::classify_yolo_action;
 use crate::classifier::is_safe_tool;
-use crate::denial_tracking::DenialTracker;
 
 /// Attempt auto-mode classification for a tool call.
 ///

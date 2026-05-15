@@ -4,16 +4,22 @@ use tokio::sync::RwLock;
 
 #[test]
 fn test_resolve_persistence_threshold_opt_out() {
-    assert_eq!(resolve_persistence_threshold(i64::MAX), i64::MAX);
+    assert_eq!(
+        resolve_persistence_threshold(ResultSizeBound::Unbounded),
+        ResultSizeBound::Unbounded,
+    );
 }
 
 #[test]
 fn test_resolve_persistence_threshold_clamps_to_default() {
     assert_eq!(
-        resolve_persistence_threshold(100_000),
-        DEFAULT_MAX_RESULT_SIZE_CHARS
+        resolve_persistence_threshold(ResultSizeBound::Chars(100_000)),
+        ResultSizeBound::Chars(DEFAULT_MAX_RESULT_SIZE_CHARS),
     );
-    assert_eq!(resolve_persistence_threshold(10_000), 10_000);
+    assert_eq!(
+        resolve_persistence_threshold(ResultSizeBound::Chars(10_000)),
+        ResultSizeBound::Chars(10_000),
+    );
 }
 
 #[tokio::test]

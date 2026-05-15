@@ -736,6 +736,7 @@ impl SessionRuntime {
                                     // not the agent loop.
                                     agentic: false,
                                     cache: None,
+                                    stop_sequences: None,
                                 };
                                 let result =
                                     client.query(&params).await.map_err(coco_error::boxed_err)?;
@@ -1670,6 +1671,15 @@ impl SessionRuntime {
         self.hook_registry.clone()
     }
 
+    /// Public accessor for the session-scoped [`coco_skills::SkillManager`].
+    /// Same `Arc` that backed the command-registry build and the
+    /// reminder pipeline — safe to clone (cheap ref-count bump).
+    /// Used by binary-entry wiring (e.g. `mcp_handle_adapter`) that
+    /// sits outside the crate's `pub(crate)` field-access scope.
+    pub fn skill_manager(&self) -> Arc<coco_skills::SkillManager> {
+        self.skill_manager.clone()
+    }
+
     /// Session-scoped command queue handle. Producers outside the
     /// per-turn engine — the TUI bridge in `tui_runner` (user typing
     /// while busy), future task-completion / coordinator / hook
@@ -1847,6 +1857,13 @@ impl SessionRuntime {
         // `orchestration_ctx` carries it on every fired event — Prompt
         // / Agent settings hooks reach the LLM via `QueryHookLlm`.
         engine = engine.with_hook_llm_handle(self.hook_llm_handle.clone());
+        // Wire the shared `RoleClientCache` so the engine's
+        // `finalize_turn_post_tools` can resolve `ModelRole::Fast` for
+        // the post-tool-batch summary fork (TS `generateToolUseSummary`).
+        // Same cache instance the hook_llm handle uses — keeps
+        // `CacheBreakDetector` state continuous across Fast-role calls
+        // regardless of caller.
+        engine = engine.with_role_client_cache(self.role_client_cache.clone());
         engine =
             engine.with_session_start_hook_side_effect_sink(Arc::new(QuerySessionStartHookSink {
                 file_watch: self.file_watch_registration_context(),
@@ -2506,7 +2523,7 @@ impl SessionRuntime {
     /// Returns the count of registered commands in the new registry
     /// so the caller can show the user a confirmation.
     pub async fn reload_plugins(&self, cwd: &std::path::Path) -> usize {
-        let mut skill_manager = coco_skills::SkillManager::new();
+        let skill_manager = coco_skills::SkillManager::new();
         skill_manager.load_from_dirs(&[
             self.config_home.join("skills"),
             cwd.join(".coco").join("skills"),

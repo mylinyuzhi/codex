@@ -62,17 +62,14 @@ pub trait Tool: Send + Sync {
     fn should_defer(&self) -> bool { false }    // lazy-loaded via ToolSearch
     fn always_load(&self) -> bool { false }
 
-    /// Per-tool persistence threshold. Read by the **executor** in
-    /// `core/tool-runtime/src/execution.rs` after `execute()` returns —
-    /// this trait method is the source value for Level 1 of the
-    /// [Tool Result Budget plan](tool-result-budget-plan.md). Returning a
-    /// declared value caps the per-tool output; the executor then clamps
-    /// it against `DEFAULT_MAX_RESULT_SIZE_CHARS=50_000` per TS semantics.
-    /// Phase 1 of the plan migrates this to
-    /// `fn max_result_size_chars(&self) -> ResultSizeBound` so FileRead
-    /// can express the TS `Infinity` opt-out (no Rust `i32` sentinel
-    /// available).
-    fn max_result_size_chars(&self) -> usize { 100_000 }
+    /// Per-tool persistence threshold. Read by `app/query/src/tool_outcome_builder.rs`
+    /// after `execute()` returns — this trait method is the source value for
+    /// Level 1 of the [Tool Result Budget plan](tool-result-budget-plan.md).
+    /// `Chars(n)` caps the per-tool output and the caller clamps `n` against
+    /// `DEFAULT_MAX_RESULT_SIZE_CHARS=50_000` (TS parity).
+    /// `Unbounded` opts out of persistence entirely (TS `Infinity` semantics)
+    /// — e.g. `Read` returns it because the file content is canonical.
+    fn max_result_size_bound(&self) -> ResultSizeBound { ResultSizeBound::Chars(100_000) }
 
     /// For MCP tools
     fn mcp_info(&self) -> Option<&McpToolInfo> { None }
@@ -203,10 +200,10 @@ pub struct ToolUseContext {
     // `ToolUseContext` in `core/tool-runtime/src/context.rs` does NOT carry
     // this field; do not re-add it without revisiting the plan.
     //
-    // Level 1 (per-tool persistence) is invoked by the executor AFTER
-    // `Tool::execute()` returns, reading `Tool::max_result_size_chars()`.
-    // It needs `tool_results_root: Option<PathBuf>` on `ToolUseContext`
-    // (added in Phase 1 — currently absent; Bash uses `temp_dir()` as a stub).
+    // Level 1 (per-tool persistence) is invoked by `tool_outcome_builder`
+    // AFTER `Tool::execute()` returns, reading `Tool::max_result_size_bound()`.
+    // `ToolUseContext.tool_result_session_dir: Option<PathBuf>` is the
+    // session-scoped persistence root (None disables persistence).
 
     // === State mutation callbacks ===
     // These are closures because ToolUseContext is shared across tools
@@ -243,7 +240,11 @@ pub struct ToolUseContext {
     // === Decision tracking ===
     pub tool_decisions: Option<Arc<RwLock<HashMap<String, ToolDecision>>>>,
     pub query_tracking: Option<QueryChainTracking>,
-    pub local_denial_tracking: Option<Arc<RwLock<DenialTrackingState>>>,
+    pub local_denial_tracking: Option<Arc<tokio::sync::Mutex<DenialTracker>>>,
+    // ^^ Per-context auto-mode denial tracker. `Some` on fork contexts
+    // (isolated from parent); `None` on main session (falls back to the
+    // engine-level session tracker at the classifier callsite). TS:
+    // `permissions.ts:553-558` (`context.localDenialTracking ?? appState.denialTracking`).
 
     // === Flags ===
     pub user_modified: bool,

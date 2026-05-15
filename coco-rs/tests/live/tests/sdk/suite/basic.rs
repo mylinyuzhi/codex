@@ -27,6 +27,7 @@ fn params_for(prompt: Vec<LanguageModelMessage>, source: &str) -> QueryParams {
         time_since_last_assistant_ms: None,
         agentic: false,
         cache: None,
+        stop_sequences: None,
     }
 }
 

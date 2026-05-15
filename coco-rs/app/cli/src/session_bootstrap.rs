@@ -210,7 +210,7 @@ fn build_session_command_registry(
 ) -> (CommandRegistry, Arc<coco_skills::SkillManager>) {
     let config_home = global_config::config_home();
 
-    let mut skill_manager = coco_skills::SkillManager::new();
+    let skill_manager = coco_skills::SkillManager::new();
     skill_manager.load_from_dirs(&[config_home.join("skills"), cwd.join(".coco").join("skills")]);
     let skill_manager = Arc::new(skill_manager);
 

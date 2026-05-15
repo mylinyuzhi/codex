@@ -24,6 +24,7 @@ zip = { workspace = true }
 tokio = { workspace = true, features = ["sync", "rt", "time", "fs", "macros"] }
 notify.workspace = true
 thiserror.workspace = true
+coco-file-watch.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

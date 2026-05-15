@@ -50,17 +50,18 @@ use coco_types::PermissionRule;
 use coco_types::PermissionRuleSource;
 use coco_types::PermissionUpdate;
 use coco_types::PermissionUpdateDestination;
-use tokio::sync::RwLock;
 
 /// Real skill-runtime implementation.
 ///
-/// Holds an `Arc<RwLock<SkillManager>>` so the skill set can be
-/// hot-reloaded (via file-watcher callbacks) without rebuilding the
-/// handle. Fork routing goes through the same
+/// Holds an `Arc<SkillManager>` directly — `SkillManager` carries its
+/// own internal `RwLock` over the catalog, so the handle does not need
+/// to add another layer of locking. Hot-reload from the file watcher
+/// mutates the same shared `SkillManager` via `&self` register/clear
+/// methods. Fork routing goes through the same
 /// [`AgentQueryEngineRef`] that `SwarmAgentHandle::spawn_subagent`
 /// uses, keeping one subagent execution path.
 pub struct QuerySkillRuntime {
-    manager: Arc<RwLock<SkillManager>>,
+    manager: Arc<SkillManager>,
     /// Optional agent query engine for fork-mode skills. `None`
     /// returns `SkillInvocationError::Forked` for any fork
     /// invocation — fine for sessions without a subagent runtime,
@@ -69,7 +70,7 @@ pub struct QuerySkillRuntime {
 }
 
 impl QuerySkillRuntime {
-    pub fn new(manager: Arc<RwLock<SkillManager>>) -> Self {
+    pub fn new(manager: Arc<SkillManager>) -> Self {
         Self {
             manager,
             agent_engine: None,
@@ -94,14 +95,12 @@ impl SkillHandle for QuerySkillRuntime {
     ) -> Result<SkillInvocationResult, SkillInvocationError> {
         let name = coco_tools::tools::skill_advanced::normalize_skill_name(name);
         tracing::info!(skill_name = %name, args_len = args.len(), "skill invoke");
-        let manager = self.manager.read().await;
-        let skill = manager.get(name).cloned().ok_or_else(|| {
+        let skill = self.manager.get(name).ok_or_else(|| {
             tracing::warn!(skill_name = %name, "skill not found");
             SkillInvocationError::NotFound {
                 name: name.to_string(),
             }
         })?;
-        drop(manager);
 
         if skill.disabled {
             tracing::warn!(skill_name = %skill.name, "skill disabled");

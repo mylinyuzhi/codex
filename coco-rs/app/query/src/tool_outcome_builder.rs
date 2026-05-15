@@ -51,7 +51,7 @@ pub(crate) struct RunOneTail<'a> {
     pub hook_tx: Option<&'a mpsc::Sender<HookExecutionEvent>>,
     /// Per-session tool-result persistence root. `Some` ⇒ Level 1
     /// persistence is active for this session; the outcome builder
-    /// checks `tool.max_result_size_chars()` against the rendered
+    /// checks `tool.max_result_size_bound()` against the rendered
     /// output and persists to disk when over threshold (TS parity:
     /// `utils/toolResultStorage.ts:persistToolResultToDisk`). `None`
     /// ⇒ Level 1 is disabled (legacy behaviour) and tool results
@@ -160,7 +160,7 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
                     // ── Tool Result Budget Level 1 (TS `persistToolResultToDisk`) ──
                     //
                     // When the tool opts into persistence (declared
-                    // `max_result_size_chars` < `i64::MAX`) AND the rendered
+                    // `max_result_size_bound() == Chars(_)`) AND the rendered
                     // output exceeds `resolve_persistence_threshold(declared)`,
                     // write the body to `<session_dir>/tool-results/<id>.{txt,json}`
                     // and replace the inline content with a `<persisted-output>`
@@ -168,13 +168,17 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
                     // content (TS parity: persistence is best-effort, not
                     // gating).
                     let rendered_output = if let Some(sess_dir) = tool_result_session_dir.as_ref() {
-                        let declared = tool.max_result_size_chars();
-                        let threshold =
+                        let resolved =
                             coco_tool_runtime::tool_result_storage::resolve_persistence_threshold(
-                                declared,
+                                tool.max_result_size_bound(),
                             );
-                        if threshold != i64::MAX
-                            && rendered_output_raw.len() as i64 > threshold
+                        let over_threshold = match resolved {
+                            coco_tool_runtime::ResultSizeBound::Unbounded => None,
+                            coco_tool_runtime::ResultSizeBound::Chars(t) => {
+                                ((rendered_output_raw.len() as i64) > t).then_some(t)
+                            }
+                        };
+                        if over_threshold.is_some()
                             && !coco_tool_runtime::tool_result_storage::is_content_already_persisted(
                                 &rendered_output_raw,
                             )

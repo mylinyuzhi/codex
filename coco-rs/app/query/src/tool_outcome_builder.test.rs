@@ -20,7 +20,7 @@ use tokio_util::sync::CancellationToken;
 struct RenderOnlyTool {
     parts: Vec<ToolResultContentPart>,
     is_mcp: bool,
-    max_result_size_chars: i64,
+    max_result_size_bound: coco_tool_runtime::ResultSizeBound,
 }
 
 #[async_trait::async_trait]
@@ -53,8 +53,8 @@ impl Tool for RenderOnlyTool {
         self.parts.clone()
     }
 
-    fn max_result_size_chars(&self) -> i64 {
-        self.max_result_size_chars
+    fn max_result_size_bound(&self) -> coco_tool_runtime::ResultSizeBound {
+        self.max_result_size_bound
     }
 
     fn is_mcp(&self) -> bool {
@@ -118,7 +118,7 @@ async fn text_only_multipart_output_uses_level1_persistence() {
     let tool = Arc::new(RenderOnlyTool {
         parts: vec![text_part(first.clone()), text_part(second.clone())],
         is_mcp: false,
-        max_result_size_chars: 100_000,
+        max_result_size_bound: coco_tool_runtime::ResultSizeBound::Chars(100_000),
     });
 
     let outcome = build_outcome_from_execution(RunOneTail {
@@ -151,7 +151,7 @@ async fn mcp_error_envelope_creates_error_tool_result() {
     let tool = Arc::new(RenderOnlyTool {
         parts: vec![text_part("server failed")],
         is_mcp: true,
-        max_result_size_chars: 100_000,
+        max_result_size_bound: coco_tool_runtime::ResultSizeBound::Chars(100_000),
     });
 
     let outcome = build_outcome_from_execution(RunOneTail {

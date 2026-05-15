@@ -768,6 +768,18 @@ pub(super) fn handle(state: &mut AppState, notif: ServerNotification) -> bool {
             }
             true
         }
+
+        // === Plugins ===
+        // Surfaces the "Plugins changed. Run /reload-plugins to activate."
+        // banner; the user must run `/reload-plugins` explicitly. TS
+        // parity: `useManagePlugins.ts:293-300` (color: 'suggestion' is
+        // the lightest priority — closest TUI analogue is the info toast).
+        ServerNotification::PluginsChanged { reason: _ } => {
+            state.ui.add_toast(Toast::info(
+                "Plugins changed. Run /reload-plugins to activate.".to_string(),
+            ));
+            true
+        }
     }
 }
 

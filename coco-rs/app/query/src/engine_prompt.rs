@@ -118,7 +118,7 @@ impl QueryEngine {
                 let persistence_opted_out = self
                     .tools
                     .get(&tr.tool_id)
-                    .is_some_and(|tool| tool.max_result_size_chars() == i64::MAX);
+                    .is_some_and(|tool| tool.max_result_size_bound().is_unbounded());
                 candidates.push(
                     coco_tool_runtime::tool_result_storage::ToolResultCandidate {
                         tool_use_id: tr.tool_use_id.clone(),

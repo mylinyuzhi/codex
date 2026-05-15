@@ -69,6 +69,11 @@ pub enum Feature {
     WebFetch,
     /// Expose MCP management tools and dynamic MCP server tool wrappers to the model.
     Mcp,
+    /// Discover skills published by connected MCP servers and surface
+    /// them through the SkillTool / slash-command registry.
+    /// TS: `feature('MCP_SKILLS')` in `services/mcp/client.ts:117`.
+    /// Requires [`Self::Mcp`] — discovery is a no-op on disconnected servers.
+    McpSkills,
     /// Expose the `notebook_edit` tool to the model.
     NotebookEdit,
     /// V2 task tooling: expose `TaskCreate`/`TaskGet`/`TaskList`/`TaskUpdate`.
@@ -302,6 +307,15 @@ const FEATURES: &[FeatureSpec] = &[
         key: "mcp",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::McpSkills,
+        key: "mcp_skills",
+        // TS marks MCP_SKILLS as experimental (GrowthBook-gated). coco-rs
+        // mirrors with `UnderDevelopment` + default-off so a server that
+        // publishes skills doesn't silently bypass user consent.
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::NotebookEdit,

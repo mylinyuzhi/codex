@@ -43,10 +43,10 @@
 | `AgentTool` schema | 已有 | 只把 JSON 转发给 `AgentHandle`，没有动态 agent prompt、定义解析、allowed agent 限制 |
 | `AgentHandle` trait | 已有 | trait 足够作为工具层和 runtime 层的边界，但实现仍不完整 |
 | 同步 subagent | 部分可跑 | child config 为空 system prompt、空 allowed tools、无 definition、无 skills/MCP/hooks |
-| background subagent | 只有响应外壳 | `run_in_background` 返回 `AsyncLaunched`，但没有真正启动后台任务 |
+| background subagent | ✅ **已实现 (2026-05-15)** | 真实 `tokio::spawn` 三处：主执行 (`coordinator/src/agent_handle/spawn.rs:1278`)、event drain (`:1121`)、summary timer (`:1157`)；与 task registry 集成，`mark_completed()` / `mark_failed()` 标记终态 |
 | custom agent loader | 分散重复 | `agent_spawn.rs` 和 `agent_advanced.rs` 有重复解析逻辑，字段和大小写不完全一致 |
 | built-in agent | 部分定义 | built-in 缺完整 system prompt、tool policy、permission policy，名称大小写也存在不一致风险 |
-| tool filtering | 有 helper | 没有贯穿到 child `ToolRegistry`，因此不能保证 agent 只看到过滤后的工具 |
+| tool filtering | ✅ **已实现 (2026-05-15)** | 三层过滤：request 时抽取 (`spawn.rs:800`)、config 时 `ToolFilter::new().narrow_with(parent)` (`app/query/src/agent_adapter.rs:201-209`)、discovery 时 `tool_filter.allows()` 门控 (`core/tool-runtime/src/registry.rs`) |
 | slash command 指定 agent | 类型已存在 | `PromptCommandData.agent` 没有完整接入执行路径 |
 | TUI/CLI 注入 AgentHandle | 不完整 | 普通 session 仍可能落到 `NoOpAgentHandle` |
 
@@ -83,8 +83,8 @@ AgentTool / Slash Command / Skill Fork
 | G1 | 支持 built-in subagent | TS parity 内置 `general-purpose`、`statusline-setup`、feature-gated `explore`、`plan`、`verification`、非 SDK `claude-code-guide` |
 | G2 | 支持 custom subagent | 从 user/project/plugin/flag/policy 加载 agent markdown/json 定义；SDK definitions 作为显式 extension |
 | G3 | 支持 slash command 指定 agent | prompt command 可通过 `agent` 字段指定触发哪个 agent |
-| G4 | 支持真实 background subagent | `run_in_background` 要启动任务、记录输出、可查询状态 |
-| G5 | 支持 child tool filtering | child QueryEngine 只能看到 agent 允许的工具 |
+| G4 | 支持真实 background subagent | ✅ **DONE 2026-05-15** — `tokio::spawn` 三处真实执行，与 `AgentTaskRegistry` 集成，AgentSummary 30s 定时轮询；详见 `coordinator/src/agent_handle/spawn.rs:1034-1407` |
+| G5 | 支持 child tool filtering | ✅ **DONE 2026-05-15** — 三层过滤生效：request → config → discovery，`ToolFilter::narrow_with(parent)` 保证子不能放宽父的 deny |
 | G6 | 支持 model/permission inheritance | 复刻 TS parent-to-child permission 和 model 继承规则 |
 | G7 | 支持 worktree isolation | foreground worktree 已有雏形，需纳入 runtime；background worktree 可分阶段支持 |
 | G8 | 支持 fork context | `fork` agent 能继承父会话上下文，且防止递归 fork |
@@ -338,9 +338,9 @@ TS `runAgent.ts` 需要吸收的运行语义：
 
 | 缺口 | 影响 |
 |------|------|
-| background path 不执行 child query | `AsyncLaunched` 是假启动 |
+| ~~background path 不执行 child query~~ | ✅ **CLOSED 2026-05-15** — 真实 `tokio::spawn` 在 `coordinator/src/agent_handle/spawn.rs:1278`；event drain + summary timer 配套 |
+| ~~`AgentQueryConfig.allowed_tools` 为空~~ | ✅ **CLOSED 2026-05-15** — `app/query/src/agent_adapter.rs:201-209` 构造 `ToolFilter` 并 `.narrow_with(parent)` |
 | `AgentQueryConfig.system_prompt` 为空 | child 没有 agent-specific prompt |
-| `AgentQueryConfig.allowed_tools` 为空 | child 工具过滤没有生效 |
 | `max_turns` 为空 | definition/request turn limit 不生效 |
 | `session_id` 为空 | transcript/session lineage 不完整 |
 | `bypass_permissions_available` 固定 false | parent permission inheritance 不完整 |
@@ -511,6 +511,11 @@ Active selection rule:
 | `ExitPlanMode` | plan mode 时可例外允许 |
 
 ### D5. Background Means Real Execution
+
+> **Status (2026-05-15)**: implemented. `AgentSpawnStatus::AsyncLaunched`
+> backs a real `tokio::spawn` in `coordinator/src/agent_handle/spawn.rs:1278`
+> with the registry entry, event-drain task, and summary timer all live.
+> Section retained below as the design rationale.
 
 `AgentSpawnStatus::AsyncLaunched` 必须代表一个已经启动的任务。
 
@@ -1445,9 +1450,16 @@ Acceptance:
 | background child excludes interactive tools | yes |
 | nested Agent restrictions apply | `Agent(review)` only allows review |
 
-### Phase 5: Real Background Subagent Lifecycle
+### Phase 5: Real Background Subagent Lifecycle  **(LANDED 2026-05-15)**
 
 Goal: make `AsyncLaunched` real.
+
+Status: implemented in `coordinator/src/agent_handle/spawn.rs:1034-1407`.
+Three `tokio::spawn` sites verified (main execution at line 1278, event drain
+at 1121, summary polling at 1157). Task registry integration confirmed —
+`register_agent_task()` → `mark_completed()` / `mark_failed()` on terminal
+states. Worktree isolation in bg mode is intentionally rejected at line 1044
+because cleanup timing cannot be guaranteed.
 
 Tasks:
 

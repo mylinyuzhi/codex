@@ -66,10 +66,10 @@ fn test_tool_default_flags() {
     assert_eq!(tool.interrupt_behavior(), InterruptBehavior::Block);
     // TS default declaration is 100K; persistence clamps it to the
     // 50K storage cap. Canonical tools opt out by overriding to
-    // `i64::MAX`.
+    // `ResultSizeBound::Unbounded`.
     assert_eq!(
-        tool.max_result_size_chars(),
-        crate::tool_result_storage::DEFAULT_TOOL_MAX_RESULT_SIZE_CHARS
+        tool.max_result_size_bound(),
+        crate::tool_result_storage::DEFAULT_TOOL_MAX_RESULT_SIZE_BOUND
     );
     assert!(tool.mcp_info().is_none());
     // R4: `is_open_world` defaults to false — tools are closed-world

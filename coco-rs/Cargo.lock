@@ -944,6 +944,7 @@ dependencies = [
  "coco-keybindings",
  "coco-lsp",
  "coco-mcp",
+ "coco-mcp-skills",
  "coco-memory",
  "coco-messages",
  "coco-otel",
@@ -1337,6 +1338,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "coco-mcp-skills"
+version = "0.0.0"
+dependencies = [
+ "coco-error",
+ "coco-mcp",
+ "coco-skills",
+ "coco-types",
+ "pretty_assertions",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "coco-mcp-types"
 version = "0.0.0"
 dependencies = [
@@ -1441,6 +1457,7 @@ dependencies = [
  "coco-config",
  "coco-error",
  "coco-messages",
+ "coco-tool-runtime",
  "coco-types",
  "pretty_assertions",
  "regex",
@@ -1457,6 +1474,7 @@ version = "0.0.0"
 dependencies = [
  "chrono",
  "coco-error",
+ "coco-file-watch",
  "coco-hooks",
  "coco-skills",
  "coco-types",

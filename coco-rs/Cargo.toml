@@ -53,6 +53,7 @@ members = [
     # ─── services/ (7) ───
     "services/inference",
     "services/mcp",
+    "services/mcp-skills",
     "services/mcp-types",
     "services/rmcp-client",
     "services/lsp",
@@ -154,6 +155,7 @@ vercel-ai-bytedance = { path = "vercel-ai/bytedance" }
 # Internal - services
 coco-inference = { path = "services/inference" }
 coco-mcp = { path = "services/mcp" }
+coco-mcp-skills = { path = "services/mcp-skills" }
 coco-mcp-types = { path = "services/mcp-types" }
 coco-rmcp-client = { path = "services/rmcp-client" }
 coco-lsp = { path = "services/lsp" }
