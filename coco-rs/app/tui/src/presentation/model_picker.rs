@@ -1,7 +1,6 @@
 //! Model picker presentation.
 
 use coco_types::ModelRole;
-use coco_types::ReasoningEffort;
 use ratatui::prelude::*;
 use ratatui::widgets::Block;
 use ratatui::widgets::Borders;
@@ -324,7 +323,7 @@ fn render_effort_line(
         if idx > 0 {
             spans.push(Span::raw("  "));
         }
-        let label = effort_display(*effort);
+        let label = effort.as_str();
         if Some(*effort) == active {
             spans.push(
                 Span::raw(format!("▸{label}◂"))
@@ -438,7 +437,7 @@ fn render_effort_footer(m: &ModelPickerOverlay, filtered: &[&ModelEntry]) -> Str
         .supported_efforts
         .iter()
         .map(|e| {
-            let label = effort_display(*e);
+            let label = e.as_str();
             if Some(*e) == active {
                 format!("▸{label}◂")
             } else {
@@ -495,20 +494,6 @@ fn role_display(role: ModelRole) -> String {
         ModelRole::Subagent => "role.subagent",
     };
     t!(key).to_string()
-}
-
-/// User-facing effort label. `Auto` shows as "auto" so users don't
-/// confuse it with "default" — `Disable` shows as "off".
-fn effort_display(effort: ReasoningEffort) -> &'static str {
-    match effort {
-        ReasoningEffort::Disable => "off",
-        ReasoningEffort::Auto => "auto",
-        ReasoningEffort::Minimal => "minimal",
-        ReasoningEffort::Low => "low",
-        ReasoningEffort::Medium => "medium",
-        ReasoningEffort::High => "high",
-        ReasoningEffort::XHigh => "xhigh",
-    }
 }
 
 #[cfg(test)]

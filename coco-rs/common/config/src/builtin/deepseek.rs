@@ -122,7 +122,7 @@ fn deepseek_v4_models() -> BTreeMap<String, PartialProviderModelOverride> {
 fn deepseek_v4_thinking_levels() -> Vec<ThinkingLevel> {
     vec![
         ThinkingLevel {
-            effort: ReasoningEffort::Disable,
+            effort: ReasoningEffort::Off,
             budget_tokens: None,
             options: HashMap::from([(
                 "thinking".to_string(),

@@ -271,7 +271,7 @@ fn builtin_deepseek_v4_declares_three_thinking_levels() {
             .as_ref()
             .expect("thinking levels");
         assert_eq!(levels.len(), 3, "{model_id} must expose 3 thinking levels");
-        assert_eq!(levels[0].effort, ReasoningEffort::Disable);
+        assert_eq!(levels[0].effort, ReasoningEffort::Off);
         assert_eq!(levels[1].effort, ReasoningEffort::Medium);
         assert_eq!(levels[2].effort, ReasoningEffort::XHigh);
 
@@ -314,7 +314,7 @@ fn builtin_gpt5_models_declare_full_picker_thinking_levels() {
         assert_eq!(
             levels.iter().map(|level| level.effort).collect::<Vec<_>>(),
             vec![
-                ReasoningEffort::Disable,
+                ReasoningEffort::Off,
                 ReasoningEffort::Auto,
                 ReasoningEffort::Low,
                 ReasoningEffort::Medium,

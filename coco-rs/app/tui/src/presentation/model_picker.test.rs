@@ -1,5 +1,6 @@
 use super::*;
 use crate::i18n::set_locale;
+use coco_types::ReasoningEffort;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 

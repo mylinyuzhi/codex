@@ -327,7 +327,7 @@ fn level_with_effort(effort: ReasoningEffort) -> ThinkingLevel {
 #[test]
 fn matrix_anthropic_disable_emits_disabled_thinking_no_output_config() {
     let out = to_extra_body(
-        &level_with_effort(ReasoningEffort::Disable),
+        &level_with_effort(ReasoningEffort::Off),
         ProviderApi::Anthropic,
         NO_CAPS,
     );
@@ -494,7 +494,7 @@ fn matrix_anthropic_explicit_levels_ignore_adaptive_capability() {
 #[test]
 fn matrix_openai_disable_emits_nothing() {
     let out = to_extra_body(
-        &level_with_effort(ReasoningEffort::Disable),
+        &level_with_effort(ReasoningEffort::Off),
         ProviderApi::Openai,
         NO_CAPS,
     );
@@ -538,7 +538,7 @@ fn matrix_openai_explicit_levels_emit_reasoning_summary() {
 #[test]
 fn matrix_gemini_disable_emits_nothing() {
     let out = to_extra_body(
-        &level_with_effort(ReasoningEffort::Disable),
+        &level_with_effort(ReasoningEffort::Off),
         ProviderApi::Gemini,
         NO_CAPS,
     );
@@ -580,7 +580,7 @@ fn matrix_gemini_explicit_levels_emit_thinking_config() {
 #[test]
 fn matrix_openai_compat_disable_emits_nothing() {
     let out = to_extra_body(
-        &level_with_effort(ReasoningEffort::Disable),
+        &level_with_effort(ReasoningEffort::Off),
         ProviderApi::OpenaiCompat,
         NO_CAPS,
     );
@@ -651,7 +651,7 @@ fn matrix_volcengine_explicit_levels_emit_reasoning_effort() {
     }
     assert!(
         to_extra_body(
-            &level_with_effort(ReasoningEffort::Disable),
+            &level_with_effort(ReasoningEffort::Off),
             ProviderApi::Volcengine,
             NO_CAPS,
         )
@@ -686,7 +686,7 @@ fn matrix_zai_explicit_levels_emit_reasoning_effort() {
     }
     assert!(
         to_extra_body(
-            &level_with_effort(ReasoningEffort::Disable),
+            &level_with_effort(ReasoningEffort::Off),
             ProviderApi::Zai,
             NO_CAPS,
         )
@@ -707,7 +707,7 @@ fn matrix_anthropic_disable_with_options_pass_through_overwritten_by_typed_arm()
     // Even when `level.options` declares a competing `thinking` shape,
     // the Anthropic typed arm has the final say. Disable wins
     // because the inner match runs after the pass-through loop.
-    let mut level = level_with_effort(ReasoningEffort::Disable);
+    let mut level = level_with_effort(ReasoningEffort::Off);
     level
         .options
         .insert("thinking".into(), serde_json::json!({"type": "enabled"}));

@@ -37,7 +37,7 @@ impl ThinkingLevel {
     /// emission; `options` may carry an explicit-off wire toggle.
     pub fn disable() -> Self {
         Self {
-            effort: ReasoningEffort::Disable,
+            effort: ReasoningEffort::Off,
             budget_tokens: None,
             options: HashMap::new(),
         }
@@ -87,7 +87,7 @@ impl ThinkingLevel {
     /// `true` because the user has not opted out, even though the
     /// provider may still resolve it to off-by-default.
     pub fn is_enabled(&self) -> bool {
-        self.effort != ReasoningEffort::Disable
+        self.effort != ReasoningEffort::Off
     }
 
     pub fn with_budget(effort: ReasoningEffort, budget: i32) -> Self {
@@ -131,7 +131,7 @@ pub enum ReasoningEffort {
     /// Explicit "thinking off". Convert layer skips typed-effort
     /// emission; `level.options` may still carry an explicit-off
     /// wire toggle (e.g. DeepSeek's `{"thinking":{"type":"disabled"}}`).
-    Disable,
+    Off,
     /// "Let the provider decide". Convert layer omits reasoning fields;
     /// the server-side default applies. This is the default state when
     /// no thinking level is configured.
@@ -155,6 +155,22 @@ impl ReasoningEffort {
             Self::Minimal | Self::Low | Self::Medium | Self::High | Self::XHigh
         )
     }
+
+    /// Canonical short name — matches the serde `snake_case` wire form
+    /// and the UI labels rendered in pickers/status bars. `Off` is
+    /// `"off"` (not `"disable"`) so users don't confuse it with
+    /// `Auto`'s "let the provider default decide".
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Auto => "auto",
+            Self::Minimal => "minimal",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::XHigh => "xhigh",
+        }
+    }
 }
 
 impl FromStr for ReasoningEffort {
@@ -162,7 +178,7 @@ impl FromStr for ReasoningEffort {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "disable" | "disabled" | "off" => Ok(Self::Disable),
+            "disable" | "disabled" | "off" => Ok(Self::Off),
             "auto" => Ok(Self::Auto),
             "minimal" => Ok(Self::Minimal),
             "low" => Ok(Self::Low),
@@ -176,16 +192,7 @@ impl FromStr for ReasoningEffort {
 
 impl std::fmt::Display for ReasoningEffort {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            Self::Disable => "disable",
-            Self::Auto => "auto",
-            Self::Minimal => "minimal",
-            Self::Low => "low",
-            Self::Medium => "medium",
-            Self::High => "high",
-            Self::XHigh => "xhigh",
-        };
-        f.write_str(s)
+        f.write_str(self.as_str())
     }
 }
 

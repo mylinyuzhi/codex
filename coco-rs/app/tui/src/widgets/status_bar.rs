@@ -80,7 +80,7 @@ impl Widget for StatusBar<'_> {
                 Span::raw(format!(" 🧠 {}", self.state.session.thinking_effort)).fg(
                     if matches!(
                         self.state.session.thinking_effort,
-                        coco_types::ReasoningEffort::Disable
+                        coco_types::ReasoningEffort::Off
                     ) {
                         self.theme.text_dim
                     } else {
