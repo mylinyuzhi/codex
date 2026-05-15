@@ -16,6 +16,19 @@ use crate::Visibility;
 
 use crate::predicates;
 
+/// Fields the query layer injects into `ExitPlanMode` tool input so that
+/// hooks, SDK consumers, and the persisted transcript observe the plan
+/// the tool reads from disk. Produced by
+/// `app/query::tool_input_normalizer::normalize_observable_tool_input`
+/// and stripped back out by [`strip_observable_tool_input_for_api`]
+/// before the assistant message is re-sent to the model.
+///
+/// TS parity: `normalizeToolInput` injects these, `normalizeToolInputForAPI`
+/// strips them (`utils/api.ts`).
+pub const EXIT_PLAN_MODE_INJECTED_PLAN_FIELD: &str = "plan";
+/// See [`EXIT_PLAN_MODE_INJECTED_PLAN_FIELD`].
+pub const EXIT_PLAN_MODE_INJECTED_PLAN_FILE_PATH_FIELD: &str = "planFilePath";
+
 /// Configurable filter knobs for the normalization pipeline.
 ///
 /// Callers pick a preset via the constructors below. Fields are public so
@@ -204,6 +217,13 @@ pub fn normalize_messages_for_api(messages: &[Message]) -> Vec<LlmMessage> {
     merge_consecutive_user_messages(&mut owned);
     merge_consecutive_assistants_by_request_id(&mut owned);
 
+    // Step 13a': strip the query-layer-injected `ExitPlanMode` observable
+    // fields (`plan` / `planFilePath`) before they reach the wire. TS
+    // parity: `normalizeToolInputForAPI` in `normalizeMessagesForAPI`'s
+    // assistant branch — the `ExitPlanMode` schema is an empty object;
+    // the injected fields exist only for hooks / SDK / transcript.
+    strip_observable_tool_input_for_api(&mut owned);
+
     // Step 13b: Extract LlmMessage from each surviving message
     let mut result: Vec<LlmMessage> = Vec::with_capacity(owned.len());
     for msg in &owned {
@@ -243,6 +263,39 @@ pub fn normalize_messages_for_api(messages: &[Message]) -> Vec<LlmMessage> {
     }
 
     result
+}
+
+/// Strip the observable-input fields the query layer injects into
+/// `ExitPlanMode` tool calls ([`EXIT_PLAN_MODE_INJECTED_PLAN_FIELD`] /
+/// [`EXIT_PLAN_MODE_INJECTED_PLAN_FILE_PATH_FIELD`]) before the assistant
+/// message is sent to the model.
+///
+/// TS parity: `normalizeToolInputForAPI` (`utils/api.ts`). The
+/// `ExitPlanMode` wire schema is an empty object — the injected fields
+/// exist only so hooks / SDK / transcript consumers can observe the plan.
+/// Re-sending them would bloat every subsequent turn with a duplicate of
+/// the plan that already appears in the `ExitPlanMode` tool_result.
+fn strip_observable_tool_input_for_api(messages: &mut [Message]) {
+    for msg in messages.iter_mut() {
+        let Message::Assistant(assistant) = msg else {
+            continue;
+        };
+        let LlmMessage::Assistant { content, .. } = &mut assistant.message else {
+            continue;
+        };
+        for part in content.iter_mut() {
+            let crate::AssistantContent::ToolCall(tc) = part else {
+                continue;
+            };
+            if tc.tool_name != coco_types::ToolName::ExitPlanMode.as_str() {
+                continue;
+            }
+            if let serde_json::Value::Object(map) = &mut tc.input {
+                map.remove(EXIT_PLAN_MODE_INJECTED_PLAN_FIELD);
+                map.remove(EXIT_PLAN_MODE_INJECTED_PLAN_FILE_PATH_FIELD);
+            }
+        }
+    }
 }
 
 /// Placeholder text shipped in the synthetic tool_result body. Literal

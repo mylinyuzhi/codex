@@ -26,6 +26,7 @@ pub mod shell_tools;
 pub mod skill_advanced;
 pub mod task_tools;
 pub mod tool_search;
+pub mod verify_plan_execution;
 pub mod web;
 pub mod worktree;
 pub mod write;
@@ -63,10 +64,11 @@ pub use task_tools::TaskStopTool;
 pub use task_tools::TaskUpdateTool;
 pub use task_tools::TodoWriteTool;
 
-// Plan mode (2)
+// Plan mode (3)
 pub use plan_mode::EnterPlanModeTool;
 pub use plan_mode::ExitPlanModeTool;
 pub use plan_mode::build_enter_plan_mode_patch;
+pub use verify_plan_execution::VerifyPlanExecutionTool;
 
 // Worktree (2)
 pub use worktree::EnterWorktreeTool;

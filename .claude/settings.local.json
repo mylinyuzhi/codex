@@ -1,5 +1,4 @@
 {
-  "disableAllHooks": true,
   "permissions": {
     "allow": [
       "WebSearch",
@@ -82,7 +81,8 @@
       "Bash(unset SCCACHE_DIR)",
       "Bash(perl *)",
       "Bash(mkdir -p /Users/linyuzhi/codespace/myagent/codex/.claude/skills/karpathy-guidelines)",
-      "Bash(mv /Users/linyuzhi/codespace/myagent/codex/.claude/skills/karpathy-guidelines.md /Users/linyuzhi/codespace/myagent/codex/.claude/skills/karpathy-guidelines/SKILL.md)"
+      "Bash(mv /Users/linyuzhi/codespace/myagent/codex/.claude/skills/karpathy-guidelines.md /Users/linyuzhi/codespace/myagent/codex/.claude/skills/karpathy-guidelines/SKILL.md)",
+      "Read(//Users/linyuzhi/codespace/myagent/agents/claude-code-kim/src/**)"
     ],
     "deny": [],
     "ask": [],
@@ -131,5 +131,6 @@
         ]
       }
     ]
-  }
+  },
+  "disableAllHooks": true
 }

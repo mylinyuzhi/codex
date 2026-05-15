@@ -476,6 +476,45 @@ async fn model_driven_enter_plan_mode_flips_reminder_on_next_turn() {
     );
 }
 
+#[tokio::test]
+async fn model_driven_enter_plan_mode_swaps_to_plan_role_client_same_run() {
+    // The engine can enter plan mode via a model tool call inside the
+    // same run. The next LLM iteration must observe live app_state and
+    // route through the Plan-role client, not the Main client captured
+    // at engine construction.
+    let tmp = tempfile::tempdir().unwrap();
+    let session_id = "integ-model-enter-plan-client";
+    let app_state = Arc::new(RwLock::new(ToolAppState::default()));
+
+    let main_model = MockModelBuilder::new()
+        .on_call(0, |_| MockResponse::tool_call("EnterPlanMode", json!({})))
+        .on_call(1, |_| MockResponse::text("main-client"))
+        .build();
+    let plan_model = MockModelBuilder::new()
+        .on_call(0, |_| MockResponse::text("plan-client"))
+        .build();
+
+    let params = PlanModeTurnParams::plan_turn(
+        session_id,
+        tmp.path().to_path_buf(),
+        app_state.clone(),
+        tools_with_plan_mode(),
+        "switch to planning",
+    )
+    .with_permission_mode(PermissionMode::Default)
+    .with_plan_role_model(plan_model);
+    let result = run_plan_mode_turn(main_model, params).await;
+
+    assert_eq!(
+        result.response_text, "plan-client",
+        "post-EnterPlanMode iteration must use the Plan-role client"
+    );
+    assert_eq!(
+        app_state.read().await.permission_mode,
+        Some(PermissionMode::Plan),
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────
 // Test 6: model-driven ExitPlanMode stops plan reminder on next turn
 // (regression guard for Bug 2 — the reverse direction)

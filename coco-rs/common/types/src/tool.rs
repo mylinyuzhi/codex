@@ -53,9 +53,10 @@ pub enum ToolName {
     TaskStop,
     TaskOutput,
     TodoWrite,
-    // Plan & Worktree (4)
+    // Plan & Worktree (5)
     EnterPlanMode,
     ExitPlanMode,
+    VerifyPlanExecution,
     EnterWorktree,
     ExitWorktree,
     // Utility (5)
@@ -110,6 +111,7 @@ impl ToolName {
             Self::TodoWrite => "TodoWrite",
             Self::EnterPlanMode => "EnterPlanMode",
             Self::ExitPlanMode => "ExitPlanMode",
+            Self::VerifyPlanExecution => "VerifyPlanExecution",
             Self::EnterWorktree => "EnterWorktree",
             Self::ExitWorktree => "ExitWorktree",
             Self::AskUserQuestion => "AskUserQuestion",
@@ -179,6 +181,7 @@ impl FromStr for ToolName {
             "TodoWrite" => Ok(Self::TodoWrite),
             "EnterPlanMode" => Ok(Self::EnterPlanMode),
             "ExitPlanMode" => Ok(Self::ExitPlanMode),
+            "VerifyPlanExecution" => Ok(Self::VerifyPlanExecution),
             "EnterWorktree" => Ok(Self::EnterWorktree),
             "ExitWorktree" => Ok(Self::ExitWorktree),
             "AskUserQuestion" => Ok(Self::AskUserQuestion),
@@ -242,13 +245,13 @@ pub fn legacy_tool_name_aliases_of(canonical: &str) -> &'static [&'static str] {
 ///
 /// Three distinct concepts:
 ///   ToolId      = identity ("who am I")         → this enum
-///   ToolName    = built-in tools only (Copy)     → inner enum, 41 variants
+///   ToolName    = built-in tools only (Copy)     → inner enum
 ///   ToolPattern = permission match expression    → String ("Bash(git *)", "mcp__slack__*")
 ///
 /// Serde: serializes/deserializes as a FLAT STRING via Display/FromStr.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ToolId {
-    /// Built-in tool (41 variants, Copy, const fn as_str()).
+    /// Built-in tool (Copy, const fn as_str()).
     Builtin(ToolName),
     /// MCP tool: structured server + tool name.
     /// Wire format: "mcp__<server>__<tool>"

@@ -93,6 +93,7 @@ async fn enter_plan_mode_idempotent_does_not_stash_self() {
     let app_state = Arc::new(RwLock::new(ToolAppState {
         permission_mode: Some(PermissionMode::Plan),
         pre_plan_mode: Some(PermissionMode::AcceptEdits),
+        plan_mode_entry_ms: Some(42),
         ..Default::default()
     }));
     let mut ctx = ctx_with_mode(PermissionMode::Plan);
@@ -102,6 +103,7 @@ async fn enter_plan_mode_idempotent_does_not_stash_self() {
         .unwrap();
     let guard = app_state.read().await;
     assert_eq!(guard.pre_plan_mode, Some(PermissionMode::AcceptEdits));
+    assert_eq!(guard.plan_mode_entry_ms, Some(42));
 }
 
 #[test]
@@ -469,7 +471,7 @@ async fn exit_plan_mode_from_auto_with_no_restore_target_fires_auto_exit_flag() 
 #[tokio::test]
 async fn enter_plan_mode_execute_records_entry_timestamp() {
     // EnterPlanModeTool.execute must write `plan_mode_entry_ms` so the
-    // VerifyPlanExecution hook can compare mtime on exit.
+    // ExitPlanMode stale-plan advisory can compare mtime on exit.
     use std::sync::Arc;
     use tokio::sync::RwLock;
 
@@ -567,6 +569,31 @@ async fn exit_plan_mode_input_plan_wins_over_disk() {
         result.data.get("planWasEdited").and_then(Value::as_bool),
         Some(true)
     );
+}
+
+#[tokio::test]
+async fn exit_plan_mode_injected_disk_plan_not_marked_as_user_edit() {
+    use std::sync::Arc;
+    use tempfile::tempdir;
+    use tokio::sync::RwLock;
+
+    let tmp = tempdir().unwrap();
+    let config_home = tmp.path().to_path_buf();
+    let session_id = "test-session-injected-plan";
+    let plans_dir = coco_context::resolve_plans_directory(&config_home, None, None);
+    coco_context::write_plan(session_id, &plans_dir, "on-disk plan", None).unwrap();
+
+    let mut ctx = ctx_with_mode(PermissionMode::Plan);
+    ctx.config_home = Some(config_home);
+    ctx.session_id_for_history = Some(session_id.to_string());
+    ctx.app_state = Some(Arc::new(RwLock::new(ToolAppState::default())).into());
+
+    let result = ExitPlanModeTool
+        .execute(json!({"plan": "on-disk plan"}), &ctx)
+        .await
+        .unwrap();
+
+    assert_eq!(result.data.get("planWasEdited"), None);
 }
 
 #[test]

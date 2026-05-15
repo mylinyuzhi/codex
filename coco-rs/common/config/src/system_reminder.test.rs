@@ -46,9 +46,11 @@ fn default_is_fully_enabled_except_feature_gated() {
     assert!(c.attachments.ide_opened_file);
     assert!(c.attachments.nested_memory);
     assert!(c.attachments.relevant_memories);
+    // Verify-plan defaults on in coco-rs because the matching tool is
+    // built in. TS gates it behind CLAUDE_CODE_VERIFY_PLAN.
+    assert!(c.attachments.verify_plan_reminder);
     // TS feature-gated reminders — opt-in (default false) to match TS
     // external-build behavior.
-    assert!(!c.attachments.verify_plan_reminder);
     assert!(!c.attachments.ultrathink_effort);
     assert!(!c.attachments.token_usage);
     assert!(!c.attachments.output_token_usage);
@@ -166,12 +168,12 @@ fn deserialize_partial_fills_missing_with_defaults() {
 }
 
 #[test]
-fn deserialize_enables_verify_plan_via_user_flag() {
-    // User flip in settings.json: `{ system_reminder: { attachments: { verify_plan_reminder: true } } }`.
+fn deserialize_can_disable_verify_plan_via_user_flag() {
+    // User flip in settings.json: `{ system_reminder: { attachments: { verify_plan_reminder: false } } }`.
     let c: SystemReminderConfig =
-        serde_json::from_str(r#"{"attachments":{"verify_plan_reminder":true}}"#)
+        serde_json::from_str(r#"{"attachments":{"verify_plan_reminder":false}}"#)
             .expect("deserialize");
-    assert!(c.attachments.verify_plan_reminder);
+    assert!(!c.attachments.verify_plan_reminder);
     // Other fields stay default.
     assert!(c.enabled);
     assert!(c.attachments.plan_mode);

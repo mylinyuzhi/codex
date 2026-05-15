@@ -68,6 +68,47 @@ fn test_resolve_plans_directory_with_setting() {
 }
 
 #[test]
+fn resolve_plans_directory_rejects_parent_escape() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let config = PathBuf::from("/home/user/.cocode");
+    let result = resolve_plans_directory(&config, Some(&project), Some("../outside"));
+
+    assert_eq!(result, PathBuf::from("/home/user/.cocode/plans"));
+}
+
+#[test]
+fn resolve_plans_directory_rejects_absolute_outside_project() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    let outside = dir.path().join("outside-plans");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let config = PathBuf::from("/home/user/.cocode");
+    let result = resolve_plans_directory(
+        &config,
+        Some(&project),
+        Some(outside.to_str().expect("utf-8 temp path")),
+    );
+
+    assert_eq!(result, PathBuf::from("/home/user/.cocode/plans"));
+}
+
+#[test]
+fn resolve_plans_directory_allows_nonexistent_normalized_inside_project() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let config = PathBuf::from("/home/user/.cocode");
+    let result = resolve_plans_directory(&config, Some(&project), Some("nested/../plans"));
+
+    assert_eq!(result, project.canonicalize().unwrap().join("plans"));
+}
+
+#[test]
 fn test_plan_crud() {
     let dir = tempfile::tempdir().unwrap();
     let plans_dir = dir.path().join("plans");
@@ -133,6 +174,72 @@ fn test_recover_plan_from_exit_tool_input() {
 
     let content = std::fs::read_to_string(plans_dir.join("test-slug.md")).unwrap();
     assert_eq!(content, "# Recovered Plan\n\n- Step 1\n- Step 2");
+
+    clear_plan_slug(sid);
+}
+
+#[test]
+fn test_recover_plan_prefers_file_snapshot_over_newer_tool_input() {
+    // TS parity: copyPlanForResume() checks findFileSnapshotEntry()
+    // before recoverPlanFromMessages(), so the most recent plan
+    // snapshot globally wins over tool inputs.
+    let dir = tempfile::tempdir().unwrap();
+    let plans_dir = dir.path().join("plans");
+    let sid = "recover-snapshot-priority";
+
+    let entries = vec![
+        json!({
+            "type": "system",
+            "subtype": "file_snapshot",
+            "snapshotFiles": [{
+                "key": "plan",
+                "path": "/tmp/plan.md",
+                "content": "# Snapshot Plan"
+            }]
+        }),
+        json!({
+            "type": "assistant",
+            "message": {
+                "content": [{
+                    "type": "tool_use",
+                    "name": "ExitPlanMode",
+                    "input": { "plan": "# Tool Input Plan" }
+                }]
+            }
+        }),
+    ];
+
+    let result = recover_plan_for_resume(sid, &plans_dir, "snapshot-slug", &entries);
+    assert!(result);
+
+    let content = std::fs::read_to_string(plans_dir.join("snapshot-slug.md")).unwrap();
+    assert_eq!(content, "# Snapshot Plan");
+
+    clear_plan_slug(sid);
+}
+
+#[test]
+fn test_recover_plan_from_ts_assistant_message_shape() {
+    let dir = tempfile::tempdir().unwrap();
+    let plans_dir = dir.path().join("plans");
+    let sid = "recover-ts-assistant";
+
+    let entries = vec![json!({
+        "type": "assistant",
+        "message": {
+            "content": [{
+                "type": "tool_use",
+                "name": "ExitPlanMode",
+                "input": { "plan": "# TS Assistant Plan" }
+            }]
+        }
+    })];
+
+    let result = recover_plan_for_resume(sid, &plans_dir, "ts-assistant-slug", &entries);
+    assert!(result);
+
+    let content = std::fs::read_to_string(plans_dir.join("ts-assistant-slug.md")).unwrap();
+    assert_eq!(content, "# TS Assistant Plan");
 
     clear_plan_slug(sid);
 }

@@ -11,22 +11,19 @@
 //! **Tier**: [`ReminderTier::MainAgentOnly`] — sub-agents don't own the
 //! plan; the reminder would be wasted tokens.
 //!
-//! **Env gate difference vs. TS**: TS gates on `USER_TYPE=='ant' &&
-//! CLAUDE_CODE_VERIFY_PLAN=='true'`. Per coco-rs CLAUDE.md's TS-first
-//! policy we keep the feature but move the gate to a user-facing setting
-//! (`settings.system_reminder.attachments.verify_plan_reminder`). Default
-//! is `false` because coco-rs doesn't yet ship a `VerifyPlanExecution`
-//! tool — enabling the reminder without the tool would nag indefinitely.
+//! **Gate difference vs. TS**: TS gates and conditionally registers the
+//! tool on `USER_TYPE=='ant' && CLAUDE_CODE_VERIFY_PLAN=='true'`.
+//! coco-rs registers `VerifyPlanExecution` directly, so the reminder is
+//! user-configurable and defaults on.
 //!
 //! Gate chain (all must pass):
 //!
 //! 1. Config flag enabled (`config.attachments.verify_plan_reminder`).
 //! 2. Main-agent only (enforced by tier filter in the orchestrator).
 //! 3. `ctx.has_pending_plan_verification` (set by `ExitPlanModeTool`).
-//! 4. `ctx.turns_since_plan_exit % 10 == 0` (and `>= 0`) — fires on
-//!    turns 0, 10, 20, … matching TS `attachments.ts:3919-3922`
-//!    (`turnCount % VERIFY_PLAN_REMINDER_CONFIG.TURNS_BETWEEN_REMINDERS !== 0`
-//!    is the only skip condition, so turn 0 itself fires).
+//! 4. `ctx.turns_since_plan_exit > 0` and divisible by 10 — matching
+//!    TS `attachments.ts:3919-3922`, which skips `turnCount === 0`
+//!    and fires at 10, 20, …
 
 use async_trait::async_trait;
 
@@ -37,18 +34,19 @@ use crate::throttle::ThrottleConfig;
 use crate::types::AttachmentType;
 use crate::types::SystemReminder;
 use coco_config::SystemReminderConfig;
+use coco_types::ToolName;
 
 /// TS `VERIFY_PLAN_REMINDER_CONFIG.TURNS_BETWEEN_REMINDERS = 10`
 /// (`attachments.ts:291`).
 const TURNS_BETWEEN_REMINDERS: i32 = 10;
 
 /// Verbatim body from `messages.ts:4247`.
-///
-/// TS resolves `${toolName}` to the literal `"VerifyPlanExecution"` when
-/// `CLAUDE_CODE_VERIFY_PLAN=='true'`; we hardcode the same string here so
-/// the reminder matches the TS output exactly. A future `ToolName::
-/// VerifyPlanExecution` variant can swap this for the typed accessor.
-const BODY: &str = "You have completed implementing the plan. Please call the \"VerifyPlanExecution\" tool directly (NOT the Agent tool or an agent) to verify that all plan items were completed correctly.";
+fn body() -> String {
+    format!(
+        "You have completed implementing the plan. Please call the \"{}\" tool directly (NOT the Agent tool or an agent) to verify that all plan items were completed correctly.",
+        ToolName::VerifyPlanExecution.as_str()
+    )
+}
 
 /// Nudges the main agent to call `VerifyPlanExecution` after plan exit.
 #[derive(Debug, Default)]
@@ -77,12 +75,12 @@ impl AttachmentGenerator for VerifyPlanReminderGenerator {
             return Ok(None);
         }
         let n = ctx.turns_since_plan_exit;
-        if n < 0 || n % TURNS_BETWEEN_REMINDERS != 0 {
+        if n <= 0 || n % TURNS_BETWEEN_REMINDERS != 0 {
             return Ok(None);
         }
         Ok(Some(SystemReminder::new(
             AttachmentType::VerifyPlanReminder,
-            BODY.to_string(),
+            body(),
         )))
     }
 }

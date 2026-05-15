@@ -44,6 +44,7 @@ Circular dependency prevention:
 | `GlobTool` | `tools/GlobTool/` | `{ pattern: String, path: Option<String> }` | Safe |
 | `GrepTool` | `tools/GrepTool/` | `{ pattern: String, path: Option<String>, output_mode: Option<GrepOutputMode> }` | Safe |
 | `NotebookEditTool` | `tools/NotebookEditTool/` | `{ notebook_path: String, cell_id: String, new_source: String, cell_type: Option<String>, edit_mode: EditMode }` | **Unsafe** |
+| `ApplyPatchTool` | model-specific `apply_patch` extra tool | `{ patch: String }` | **Unsafe** |
 
 #### FileReadTool Details
 
@@ -218,67 +219,31 @@ Behavioral details:
 |------|-------|
 | `EnterPlanModeTool` | `{}` |
 | `ExitPlanModeTool` | `{ allowed_prompts: Option<Vec<AllowedPrompt>> }` |
+| `VerifyPlanExecutionTool` | `{ summary?: String, issues?: String }` |
 | `EnterWorktreeTool` | `{}` |
 | `ExitWorktreeTool` | `{}` |
 
 ### Plan Mode State Machine
 
-TS source: `tools/EnterPlanModeTool/`, `tools/ExitPlanModeTool/`, `utils/plans.ts`, `utils/permissions/permissionSetup.ts`
+Authoritative lifecycle details live in
+[`plan-mode-architecture.md`](plan-mode-architecture.md). This crate owns the
+three built-in tools:
 
-**States:**
-```
-default | acceptEdits | bypassPermissions | dontAsk | auto
-    │ EnterPlanMode (stashes current as prePlanMode)
-    ▼
-  plan ──► ExitPlanMode ──► prePlanMode (restored)
-```
+| Tool | Input | Output |
+|------|-------|--------|
+| `EnterPlanModeTool` | `{}` | `{ message, isInterviewPhase }` |
+| `ExitPlanModeTool` | `{ allowed_prompts?, user_choice?, plan? }` | `{ plan, isAgent, filePath?, hasTaskTool?, planWasEdited?, awaitingLeaderApproval?, requestId?, planVerification? }` |
+| `VerifyPlanExecutionTool` | `{ summary?, issues? }` | `{ status, planFilePath?, summary, issues }` |
 
-**Permission context fields during plan mode:**
-```rust
-pub struct PlanModeContext {
-    pub pre_plan_mode: Option<PermissionMode>,  // stashed on enter, restored on exit
-    pub stripped_dangerous_rules: Option<PermissionRules>,  // saved during auto→plan
-    pub has_exited_plan_mode: bool,
-    pub needs_plan_mode_exit_attachment: bool,
-}
-```
+Tool-specific invariants:
 
-**Plan file storage:**
-- Path: `~/.coco/plans/{slug}.md` (custom: `settings.plans_directory` relative to project root)
-- Agent plans: `~/.coco/plans/{slug}-agent-{agent_id}.md`
-- Slug: random word slug with collision avoidance (max 10 retries)
-- Slug cached per session, reused on resume, forked on fork
-
-**EnterPlanMode flow:**
-1. Reject if in agent context (agents cannot enter plan mode)
-2. `prepare_context_for_plan_mode()` stashes current mode as `pre_plan_mode`
-3. If auto mode active + opted-in: auto stays active during plan (permissions stripped)
-4. If auto mode active but not opted-in: deactivate auto, restore permissions
-5. Set mode to `plan`
-
-**ExitPlanMode flow:**
-1. Validate currently in plan mode (error_code: 1 if not)
-2. Read plan from disk via `get_plan(agent_id)`
-3. CCR may inject edited plan via `permission_result.updated_input.plan`
-4. **Teammate approval path**: if `is_plan_mode_required()`:
-   - Generate `request_id` for `plan_approval`
-   - Write approval request to team-lead mailbox
-   - Return `{ awaiting_leader_approval: true }` (agent waits)
-5. **Normal exit**: restore mode from `pre_plan_mode`
-6. **Auto mode gate fallback**: if `pre_plan_mode == auto` but gate tripped → restore to `default` instead
-7. Set `needs_plan_mode_exit_attachment = true` for system message
-
-**Recovery (3-source, for session resume):**
-1. Direct disk read (plan file by slug)
-2. CCR file snapshot recovery (search messages for `file_snapshot` type)
-3. Message history recovery (search for ExitPlanMode tool_use with `input.plan`)
-
-**Circuit breaker:**
-- Auto mode gate checked on exit via `is_auto_mode_gate_enabled()`
-- If tripped mid-plan: fallback to 'default', notify user "auto mode unavailable"
-- Gate sources: GrowthBook config, incident response killswitch
-
-**Channel gating:** both tools disabled on Kairos/non-terminal channels (no approval dialog)
+1. `EnterPlanModeTool` rejects agent contexts and returns an app-state patch
+   produced by `build_enter_plan_mode_patch`.
+2. `ExitPlanModeTool` validates live Plan mode, reads or accepts the plan
+   content, restores the pre-plan mode, and sets exit/reentry/verification
+   latches.
+3. Plan-file path, resume recovery, reminder cadence, and external mode
+   switching are owned by the modules listed in `plan-mode-architecture.md`.
 
 ### Utility Tools
 

@@ -607,7 +607,7 @@ impl QueryEngine {
             self.config.permission_mode,
             Some(self.config.session_id.clone()),
             self.config.agent_id.clone(),
-            plans_dir,
+            plans_dir.clone(),
             self.app_state.clone(),
         );
         // Wire mailbox for swarm polling if identity is set and a mailbox
@@ -1021,8 +1021,15 @@ impl QueryEngine {
             // would overflow the Plan model's window, stay on Main to
             // avoid truncation. The threshold is configurable via
             // `PlanModeSettings.plan_model_fallback_threshold_tokens`.
-            let plan_swap_candidate = if self.config.permission_mode
-                == coco_types::PermissionMode::Plan
+            let live_permission_mode = match self.app_state.as_ref() {
+                Some(state) => state
+                    .read()
+                    .await
+                    .permission_mode
+                    .unwrap_or(self.config.permission_mode),
+                None => self.config.permission_mode,
+            };
+            let plan_swap_candidate = if live_permission_mode == coco_types::PermissionMode::Plan
                 && !crate::engine_helpers::most_recent_assistant_exceeds(
                     &history.messages,
                     self.config
@@ -1379,6 +1386,19 @@ impl QueryEngine {
                                     continue;
                                 }
                             };
+                            let input =
+                                crate::tool_input_normalizer::normalize_observable_tool_input(
+                                    &buf.tool_name,
+                                    input,
+                                    crate::tool_input_normalizer::ToolInputNormalizationContext {
+                                        session_id: Some(&self.config.session_id),
+                                        plans_dir: plans_dir.as_deref(),
+                                        agent_id: ctx_arc
+                                            .agent_id
+                                            .as_ref()
+                                            .map(coco_types::AgentId::as_str),
+                                    },
+                                );
                             let tcp = ToolCallPart {
                                 tool_call_id: id.clone(),
                                 tool_name: buf.tool_name.clone(),
@@ -1601,7 +1621,14 @@ impl QueryEngine {
             // snapshot keeps the unwrap from panicking if that
             // invariant ever weakens.
             let snapshot = turn_snapshot.take().unwrap_or_default();
-            let (content_parts, tool_calls) = assistant_content_from_snapshot(&snapshot);
+            let (content_parts, tool_calls) = assistant_content_from_snapshot(
+                &snapshot,
+                crate::tool_input_normalizer::ToolInputNormalizationContext {
+                    session_id: Some(&self.config.session_id),
+                    plans_dir: plans_dir.as_deref(),
+                    agent_id: self.config.agent_id.as_deref(),
+                },
+            );
 
             let parsed_stop_reason = stream_stop_reason.as_deref().and_then(parse_stop_reason);
             let assistant_msg = Message::Assistant(coco_messages::AssistantMessage {
@@ -1999,6 +2026,7 @@ impl QueryEngine {
 /// path.
 fn assistant_content_from_snapshot(
     snapshot: &coco_inference::AssistantTurnSnapshot,
+    normalizer_ctx: crate::tool_input_normalizer::ToolInputNormalizationContext<'_>,
 ) -> (Vec<AssistantContentPart>, Vec<ToolCallPart>) {
     let mut content_parts: Vec<AssistantContentPart> = Vec::with_capacity(snapshot.parts.len());
     let mut tool_calls: Vec<ToolCallPart> = Vec::new();
@@ -2054,6 +2082,11 @@ fn assistant_content_from_snapshot(
                             continue;
                         }
                     };
+                let input = crate::tool_input_normalizer::normalize_observable_tool_input(
+                    &tc.tool_name,
+                    input,
+                    normalizer_ctx,
+                );
                 let tcp = ToolCallPart {
                     tool_call_id: tc.id.clone(),
                     tool_name: tc.tool_name.clone(),

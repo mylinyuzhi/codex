@@ -1,4 +1,4 @@
-//! All 42 built-in tool implementations (41 static + MCPTool dynamic wrapper).
+//! All built-in tool implementations (static tools + MCPTool dynamic wrapper).
 //!
 //! Each tool implements the `coco_tool_runtime::Tool` trait.
 //! This crate provides the implementations; coco-tool defines the interface.
@@ -54,9 +54,10 @@ pub fn register_all_tools(registry: &coco_tool_runtime::ToolRegistry) {
     registry.register(Arc::new(TaskOutputTool));
     registry.register(Arc::new(TodoWriteTool));
 
-    // Plan & Worktree (4)
+    // Plan & Worktree (5)
     registry.register(Arc::new(EnterPlanModeTool));
     registry.register(Arc::new(ExitPlanModeTool));
+    registry.register(Arc::new(VerifyPlanExecutionTool));
     registry.register(Arc::new(EnterWorktreeTool));
     registry.register(Arc::new(ExitWorktreeTool));
 

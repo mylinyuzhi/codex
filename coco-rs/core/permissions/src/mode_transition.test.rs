@@ -259,3 +259,102 @@ fn auto_transition_noop_for_non_auto_boundary() {
     // Stash preserved — non-Auto transitions don't manage it.
     assert!(state.stripped_dangerous_rules.is_some());
 }
+
+// ── apply_permission_mode_transition_to_app_state ──
+
+#[test]
+fn app_state_transition_enter_plan_stashes_previous_mode_and_timestamp() {
+    let mut state = coco_types::ToolAppState {
+        permission_mode: Some(PermissionMode::AcceptEdits),
+        has_exited_plan_mode: true,
+        needs_plan_mode_exit_attachment: true,
+        ..Default::default()
+    };
+
+    let modified = apply_permission_mode_transition_to_app_state(
+        &mut state,
+        PermissionMode::AcceptEdits,
+        PermissionMode::Plan,
+    );
+
+    assert!(modified);
+    assert_eq!(state.permission_mode, Some(PermissionMode::Plan));
+    assert_eq!(state.pre_plan_mode, Some(PermissionMode::AcceptEdits));
+    assert!(state.has_exited_plan_mode);
+    assert!(!state.needs_plan_mode_exit_attachment);
+    assert!(state.plan_mode_entry_ms.unwrap_or_default() > 0);
+}
+
+#[test]
+fn app_state_transition_plan_to_default_sets_exit_latches_and_clears_stash() {
+    let mut state = coco_types::ToolAppState {
+        permission_mode: Some(PermissionMode::Plan),
+        pre_plan_mode: Some(PermissionMode::Auto),
+        stripped_dangerous_rules: Some(coco_types::PermissionRulesBySource::default()),
+        ..Default::default()
+    };
+
+    let modified = apply_permission_mode_transition_to_app_state(
+        &mut state,
+        PermissionMode::Plan,
+        PermissionMode::Default,
+    );
+
+    assert!(modified);
+    assert_eq!(state.permission_mode, Some(PermissionMode::Default));
+    assert_eq!(state.pre_plan_mode, None);
+    assert!(state.has_exited_plan_mode);
+    assert!(state.needs_plan_mode_exit_attachment);
+    assert!(state.needs_auto_mode_exit_attachment);
+    assert!(
+        state.stripped_dangerous_rules.is_none(),
+        "Plan→Default after Auto-backed plan mode must clear classifier stash"
+    );
+}
+
+#[test]
+fn app_state_transition_plan_to_plan_preserves_existing_entry_timestamp() {
+    let mut state = coco_types::ToolAppState {
+        permission_mode: Some(PermissionMode::Plan),
+        pre_plan_mode: Some(PermissionMode::Default),
+        plan_mode_entry_ms: Some(42),
+        ..Default::default()
+    };
+
+    let modified = apply_permission_mode_transition_to_app_state(
+        &mut state,
+        PermissionMode::Plan,
+        PermissionMode::Plan,
+    );
+
+    assert!(!modified);
+    assert_eq!(state.pre_plan_mode, Some(PermissionMode::Default));
+    assert_eq!(state.plan_mode_entry_ms, Some(42));
+}
+
+#[test]
+fn app_state_transition_plan_to_auto_preserves_classifier_stash() {
+    let mut state = coco_types::ToolAppState {
+        permission_mode: Some(PermissionMode::Plan),
+        pre_plan_mode: Some(PermissionMode::Auto),
+        stripped_dangerous_rules: Some(coco_types::PermissionRulesBySource::default()),
+        ..Default::default()
+    };
+
+    let modified = apply_permission_mode_transition_to_app_state(
+        &mut state,
+        PermissionMode::Plan,
+        PermissionMode::Auto,
+    );
+
+    assert!(modified);
+    assert_eq!(state.permission_mode, Some(PermissionMode::Auto));
+    assert_eq!(state.pre_plan_mode, None);
+    assert!(state.has_exited_plan_mode);
+    assert!(state.needs_plan_mode_exit_attachment);
+    assert!(!state.needs_auto_mode_exit_attachment);
+    assert!(
+        state.stripped_dangerous_rules.is_some(),
+        "Plan→Auto keeps classifier stash because Auto remains active"
+    );
+}

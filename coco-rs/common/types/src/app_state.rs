@@ -190,8 +190,7 @@ pub struct ToolAppState {
     // ── Plan verification ────────────────────────────────────────────
     /// Tracks a plan exit that has not yet been verified via
     /// `VerifyPlanExecution`. Set by `ExitPlanModeTool`; cleared when the
-    /// verification tool completes (future work — the reminder fires in
-    /// the meantime). TS parity: simplified projection of
+    /// verification tool completes. TS parity: simplified projection of
     /// `appState.pendingPlanVerification` (we collapse the nested
     /// `verificationStarted`/`Completed` fields into a single
     /// pending-or-not bool — coco-rs doesn't expose mid-tool progress

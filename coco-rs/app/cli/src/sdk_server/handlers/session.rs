@@ -223,7 +223,17 @@ pub(super) async fn handle_session_start(
             data: None,
         };
     }
-    let handle = SessionHandle::new(session_id.clone(), cwd, model);
+    let mut handle = SessionHandle::new(session_id.clone(), cwd, model);
+    if let Some(mode) = params.permission_mode {
+        handle.permission_mode = Some(mode);
+        let mut app_state = handle.app_state.write().await;
+        let prev_mode = app_state.permission_mode.unwrap_or_default();
+        coco_permissions::apply_permission_mode_transition_to_app_state(
+            &mut app_state,
+            prev_mode,
+            mode,
+        );
+    }
     // TS parity: copy the SDK-level agentProgressSummaries flag onto
     // the new session's ToolAppState so the bg AgentTool path can
     // gate periodic-summary timers without reaching into
