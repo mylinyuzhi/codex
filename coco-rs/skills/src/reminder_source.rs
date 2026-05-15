@@ -25,8 +25,12 @@ impl SkillsSource for SkillManager {
             return None;
         }
         // Build the canonical sorted list once for stable order.
-        let mut entries: Vec<(&str, &str)> = self
-            .all()
+        // Bind the owned Vec first — `SkillManager::all()` returns owned
+        // values (MCP-sourced skills live behind a Mutex), so any `&str`
+        // borrows must live no longer than this binding.
+        let owned_skills = self.all();
+        let mut entries: Vec<(&str, &str)> = owned_skills
+            .iter()
             .map(|s| (s.name.as_str(), s.description.as_str()))
             .collect();
         entries.sort_by(|a, b| a.0.cmp(b.0));

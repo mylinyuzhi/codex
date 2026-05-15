@@ -8,7 +8,6 @@ pub mod auto_mode_state;
 pub mod bypass_permissions_killswitch;
 pub mod classifier;
 pub mod dangerous_rules;
-pub mod denial_tracking;
 pub mod evaluate;
 pub mod explainer;
 pub mod filesystem;
@@ -40,7 +39,10 @@ pub use classifier::classify_yolo_action;
 pub use classifier::is_safe_tool;
 pub use dangerous_rules::restore_dangerous_rules;
 pub use dangerous_rules::strip_dangerous_rules;
-pub use denial_tracking::DenialTracker;
+// `DenialTracker` lives in `coco-tool-runtime` (per-`ToolUseContext`
+// runtime state); re-exported here so existing permission-side call
+// sites resolve through the canonical name.
+pub use coco_tool_runtime::DenialTracker;
 pub use evaluate::PermissionEvaluator;
 pub use evaluate::ToolCheckFn;
 pub use evaluate::ToolCheckResult;

@@ -27,6 +27,32 @@ impl MessageHistory {
         self.messages.push(msg);
     }
 
+    /// Drain messages pushed since `since_len` and rebuild the UUID index.
+    ///
+    /// Used by the streaming agent loop to capture synthetic-error
+    /// `tool_result` rows that the preparer pushed during a streamed
+    /// `ToolCallEnd` so they can be re-committed *after* the assistant
+    /// message lands — preserving Anthropic's `tool_use` / `tool_result`
+    /// adjacency invariant (I1). Without this, an early-error tool call
+    /// in the middle of a multi-tool stream would land at history index
+    /// `N` while the assistant message lands at `N+1`, producing a
+    /// malformed user→assistant ordering.
+    ///
+    /// The index is fully rebuilt because mid-vec drain shifts every
+    /// later message's positional index and the `HashMap<Uuid, usize>`
+    /// must point at the post-drain offsets (or contain no stale keys).
+    /// Cost is O(N) over all remaining messages, but the streaming path
+    /// only calls this on synthetic-error capture (rare) so the
+    /// amortized impact is negligible.
+    pub fn drain_pushed_since(&mut self, since_len: usize) -> Vec<Message> {
+        if since_len >= self.messages.len() {
+            return Vec::new();
+        }
+        let captured: Vec<Message> = self.messages.drain(since_len..).collect();
+        self.rebuild_index();
+        captured
+    }
+
     pub fn len(&self) -> usize {
         self.messages.len()
     }

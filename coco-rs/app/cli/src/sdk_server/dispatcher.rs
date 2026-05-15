@@ -50,6 +50,15 @@ pub struct SdkServer {
     transport: Arc<dyn SdkTransport>,
     /// Shared session state across dispatched requests.
     state: Arc<SdkServerState>,
+    /// Optional external-event channels merged into the main
+    /// `notif_tx` stream inside [`Self::run`]. Each entry is a
+    /// `Receiver<CoreEvent>` produced by a long-running subsystem
+    /// (e.g. the plugin file watcher) that wants its events to land
+    /// in the SDK NDJSON output alongside engine-emitted notifications.
+    /// `Mutex` for `Take`-able interior mutability — run() drains it.
+    /// TS parity: TS hooks (`useManagePlugins`) push directly into the
+    /// notification system; we model that as merged channels.
+    external_notifications: std::sync::Mutex<Vec<mpsc::Receiver<CoreEvent>>>,
 }
 
 impl SdkServer {
@@ -72,7 +81,23 @@ impl SdkServer {
             };
             *slot = Some(transport.clone());
         }
-        Self { transport, state }
+        Self {
+            transport,
+            state,
+            external_notifications: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Register an external notification source whose events should be
+    /// forwarded to the SDK NDJSON output alongside engine-emitted
+    /// notifications. Used by the plugin file watcher so SDK clients
+    /// receive `plugins/changed` like TUI clients do.
+    pub fn with_external_notifications(self, rx: mpsc::Receiver<CoreEvent>) -> Self {
+        self.external_notifications
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(rx);
+        self
     }
 
     /// Inject a custom [`TurnRunner`] synchronously during builder
@@ -228,6 +253,29 @@ impl SdkServer {
         // `run()` executes its first await point.
         let (notif_tx, mut notif_rx) = mpsc::channel::<CoreEvent>(256);
         let (reply_tx, mut reply_rx) = mpsc::channel::<JsonRpcMessage>(256);
+
+        // Merge any external notification sources (e.g. plugin
+        // watcher) into the same `notif_tx` stream so they ride the
+        // same single-writer transport serializer below — preserving
+        // total order across handler-emitted events and external
+        // events.
+        let external = {
+            let mut guard = self
+                .external_notifications
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            std::mem::take(&mut *guard)
+        };
+        for mut rx in external {
+            let forwarded_tx = notif_tx.clone();
+            tokio::spawn(async move {
+                while let Some(event) = rx.recv().await {
+                    if forwarded_tx.send(event).await.is_err() {
+                        break;
+                    }
+                }
+            });
+        }
 
         // Background task: single-writer transport serializer. Drains both
         // the notification channel and the per-request reply channel,

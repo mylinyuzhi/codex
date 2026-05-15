@@ -3303,13 +3303,19 @@ Files:
 
 Acceptance criteria:
 
-- `AgentTool` sync call runs a child query and returns real output.
-- Background AgentTool returns `AsyncLaunched` and stores result.
-- Teammate AgentTool starts the teammate loop.
-- Child agent receives restricted tools.
-- Child query returns final messages and tool counts.
-- `InProcessAgentRunner` exposes `register_agent` + `start_agent`; old
+- ✅ `AgentTool` sync call runs a child query and returns real output.
+- ✅ Background AgentTool returns `AsyncLaunched` and stores result —
+  `coordinator/src/agent_handle/spawn.rs:1278` is the real `tokio::spawn` site;
+  event drain (`:1121`) and summary timer (`:1157`) confirm execution.
+- ✅ Teammate AgentTool starts the teammate loop.
+- ✅ Child agent receives restricted tools — `ToolFilter::narrow_with(parent)`
+  in `agent_adapter.rs:207` + per-context enforcement at
+  `core/tool-runtime/src/registry.rs`.
+- ✅ Child query returns final messages and tool counts.
+- ✅ `InProcessAgentRunner` exposes `register_agent` + `start_agent`; old
   `spawn_agent` is removed.
+
+Verified 2026-05-15 against actual sources.
 
 ### Phase 7: SkillRuntime
 

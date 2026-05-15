@@ -325,8 +325,11 @@ async fn test_bash_pwd() {
 /// tool must advertise the same persistence threshold so cross-runtime
 /// sessions handle large outputs identically. Regression guard for R4-T6.
 #[test]
-fn test_bash_max_result_size_chars_matches_ts() {
-    assert_eq!(BashTool.max_result_size_chars(), 30_000);
+fn test_bash_max_result_size_bound_matches_ts() {
+    assert_eq!(
+        BashTool.max_result_size_bound(),
+        coco_tool_runtime::ResultSizeBound::Chars(30_000),
+    );
 }
 
 /// The bash-side helper is a plain cast; upper clamping lives in

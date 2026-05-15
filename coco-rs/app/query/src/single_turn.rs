@@ -49,6 +49,7 @@ pub async fn single_turn_query(
         // strategy plumbed at this layer.
         agentic: false,
         cache: None,
+        stop_sequences: None,
     };
 
     let result = client.query(&params).await.map_err(|e| {

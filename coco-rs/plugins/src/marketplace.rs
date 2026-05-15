@@ -301,6 +301,16 @@ impl MarketplaceManager {
     // Marketplace loading (from cache)
     // -----------------------------------------------------------------------
 
+    /// Read-only access to a marketplace cached in memory (no fetch).
+    ///
+    /// Returns `None` when the marketplace hasn't been loaded via
+    /// [`Self::load_cached_marketplace`] yet. Used by callers (e.g.
+    /// install pipeline) that need to inspect entries / dep lists
+    /// without holding a mutable borrow across `.await`.
+    pub fn cached_marketplace(&self, name: &str) -> Option<&PluginMarketplace> {
+        self.marketplace_cache.get(name)
+    }
+
     /// Load a marketplace manifest from its cached location on disk.
     ///
     /// For directory-based caches, looks for `marketplace.json` or

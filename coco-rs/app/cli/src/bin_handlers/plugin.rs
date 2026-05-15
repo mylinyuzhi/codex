@@ -1,9 +1,10 @@
-//! `coco plugin <action>` — local plugin install/uninstall/list/validate.
+//! `coco plugin <action>` — plugin install/uninstall/list/validate.
 //!
 //! TS: `src/cli/handlers/plugins.ts` — full handler is ~878 lines covering
-//! marketplace integration, scopes, lockfiles. Rust currently implements the
-//! local-disk subset: list, install-from-path, uninstall, validate.
-//! URL/marketplace installs require porting the marketplace module.
+//! marketplace integration, scopes, lockfiles. Rust implements list,
+//! install-from-path, install-from-marketplace (via the shared
+//! `coco_plugins::marketplace::MarketplaceManager`), uninstall, validate.
+//! Scopes and lockfiles are a follow-up.
 
 use anyhow::Result;
 
@@ -45,10 +46,11 @@ pub async fn run_plugin_subcommand(action: &PluginAction) -> Result<()> {
         PluginAction::Install { name } => {
             let src = std::path::Path::new(name);
             if !src.is_dir() {
-                anyhow::bail!(
-                    "plugin source '{name}' is not a local directory; \
-                     marketplace/URL installs are not yet implemented"
-                );
+                // Not a local path — try marketplace install. The slash
+                // command (`/plugin install`) shares the same underlying
+                // `MarketplaceManager::install_plugin`, so the two paths
+                // accept the same `name[@marketplace]` syntax.
+                return install_from_marketplace(name, &config_home).await;
             }
             if !src.join("PLUGIN.toml").is_file() {
                 anyhow::bail!("'{name}' does not contain a PLUGIN.toml manifest");
@@ -151,4 +153,53 @@ fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> Result<()
         }
     }
     Ok(())
+}
+
+/// Install a plugin from a known marketplace.
+///
+/// Mirrors the `/plugin install <name>[@<marketplace>]` slash command;
+/// both paths now funnel through
+/// [`coco_plugins::install::install_plugin_from_marketplace`] so accepted
+/// syntax and error semantics stay in lock-step.
+async fn install_from_marketplace(target: &str, config_home: &std::path::Path) -> Result<()> {
+    let plugins_dir = config_home.join("plugins");
+    let policy = coco_plugins::security::EnterprisePolicy::default();
+    let result = coco_plugins::install::install_plugin_from_marketplace(
+        &plugins_dir,
+        Some(config_home),
+        &policy,
+        target,
+        coco_plugins::schemas::PluginScope::User,
+    )
+    .await;
+    match result {
+        Ok(outcome) => {
+            println!(
+                "✓ Installed {plugin_name}{dep_note}. Run /reload-plugins to activate.",
+                plugin_name = outcome.plugin_name,
+                dep_note = outcome.dep_note,
+            );
+            Ok(())
+        }
+        Err(coco_plugins::install::InstallError::NoMarketplacesConfigured) => {
+            anyhow::bail!(
+                "No marketplaces configured. Run `/plugin marketplace add <source>` in an \
+                 interactive session first (sources: GitHub `owner/repo`, SSH/HTTPS git URL, \
+                 raw URL, or local dir)."
+            );
+        }
+        Err(coco_plugins::install::InstallError::NotFound { plugin_name, .. }) => {
+            anyhow::bail!(
+                "plugin '{plugin_name}' not found in any known marketplace. \
+                 Try `coco plugin list` to see registered marketplaces."
+            );
+        }
+        Err(e @ coco_plugins::install::InstallError::BlockedByPolicy { .. })
+        | Err(e @ coco_plugins::install::InstallError::DependencyBlockedByPolicy { .. })
+        | Err(e @ coco_plugins::install::InstallError::ResolutionFailed(_))
+        | Err(e @ coco_plugins::install::InstallError::SettingsWriteFailed(_)) => {
+            anyhow::bail!("{e}")
+        }
+        Err(coco_plugins::install::InstallError::Other(e)) => Err(e.into()),
+    }
 }

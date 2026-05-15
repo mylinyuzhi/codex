@@ -127,8 +127,11 @@ impl Tool for ReadTool {
         ToolName::Read.as_str()
     }
 
-    fn max_result_size_chars(&self) -> i64 {
-        i64::MAX
+    fn max_result_size_bound(&self) -> coco_tool_runtime::ResultSizeBound {
+        // `Read` is the canonical view of a tracked file the model will
+        // read again — persistence here would be circular. TS opt-out
+        // via `Infinity`.
+        coco_tool_runtime::ResultSizeBound::Unbounded
     }
 
     fn description(&self, _input: &Value, _options: &DescriptionOptions) -> String {

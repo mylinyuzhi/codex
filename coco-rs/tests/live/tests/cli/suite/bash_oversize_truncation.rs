@@ -1,10 +1,10 @@
 //! BashTool oversize-output truncation: a command whose stdout exceeds
-//! `BashTool::max_result_size_chars()` (30_000) must be truncated /
+//! `BashTool::max_result_size_bound()` (30_000) must be truncated /
 //! persisted by the engine before the result feeds back into the model,
 //! and the agent loop must continue normally afterward.
 //!
 //! Engine wiring: `coco-tool-runtime::execution` reads
-//! `Tool::max_result_size_chars()` and replaces oversized content with a
+//! `Tool::max_result_size_bound()` and replaces oversized content with a
 //! `<persisted-output>` reference (Phase 1 stub: bash-only, parallel
 //! JSON fields rather than content replacement). We don't pin the
 //! exact replacement format here — only that the loop survives a 100k+

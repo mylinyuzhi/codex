@@ -116,12 +116,12 @@ fn dream_hunter_chrome_runskillgen_present_and_gated() {
 
 #[test]
 fn visible_filters_by_features() {
-    let mut manager = crate::SkillManager::new();
-    register_bundled(&mut manager, UserType::Ant);
+    let manager = crate::SkillManager::new();
+    register_bundled(&manager, UserType::Ant);
 
     let no_features = Features::empty();
-    let visible_empty: Vec<&str> = manager
-        .visible(&no_features)
+    let visible_empty_skills = manager.visible(&no_features);
+    let visible_empty: Vec<&str> = visible_empty_skills
         .iter()
         .map(|s| s.name.as_str())
         .collect();
@@ -136,8 +136,8 @@ fn visible_filters_by_features() {
     features
         .enable(Feature::AgentTriggers)
         .enable(Feature::KairosDream);
-    let visible_some: Vec<&str> = manager
-        .visible(&features)
+    let visible_some_skills = manager.visible(&features);
+    let visible_some: Vec<&str> = visible_some_skills
         .iter()
         .map(|s| s.name.as_str())
         .collect();

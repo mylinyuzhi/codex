@@ -278,8 +278,8 @@ impl ToolContextFactory {
             max_budget_usd: self.config.max_budget_usd,
             custom_system_prompt: self.config.system_prompt.clone(),
             append_system_prompt: self.config.append_system_prompt.clone(),
-            debug: false,
-            verbose: false,
+            debug: self.config.debug,
+            verbose: self.config.verbose,
             tool_config: self.config.tool_config.clone(),
             sandbox_config: self.config.sandbox_config.clone(),
             sandbox_state: self.config.sandbox_state.clone(),
@@ -460,14 +460,16 @@ impl ToolContextFactory {
                 .app_state
                 .as_ref()
                 .map(|arc| AppStateReadHandle::new(arc.clone())),
-            // Fork isolation: fresh DenialTrackingState per fork so
-            // a fork's denials don't leak into the parent's
-            // consecutive-denial counter (TS parity:
+            // Fork isolation: fresh `DenialTracker` per fork so a
+            // fork's circuit-breaker streak cannot leak into the
+            // parent's consecutive-denial counter (TS parity:
             // `createSubagentContext` always creates a fresh
-            // `denialTrackingState`).
+            // `denialTrackingState`). The classifier site honors this
+            // by reading `ctx.local_denial_tracking` before the
+            // engine-level session tracker.
             local_denial_tracking: self.config.fork_isolation.as_ref().map(|_| {
-                Arc::new(RwLock::new(
-                    coco_tool_runtime::context::DenialTrackingState::new(),
+                Arc::new(tokio::sync::Mutex::new(
+                    coco_tool_runtime::DenialTracker::new(),
                 ))
             }),
             // Query-tracking chain id: forks start a fresh UUID so

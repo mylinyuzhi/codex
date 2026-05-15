@@ -263,6 +263,21 @@ impl QueryEngine {
         turn_id: String,
         usage: TokenUsage,
     ) {
+        // Tool-use-summary side-fork — TS `query.ts:1411-1482` spawns
+        // **immediately** after `query_tool_execution_end`, BEFORE any
+        // post-tool processing (queue drain, microcompact, auto-compact,
+        // memory fan-out). The spawn captures the just-executed batch
+        // (last assistant + matching tool results) from `history`; any
+        // later compaction would summarize history and lose the batch
+        // we want to label.
+        //
+        // Gated on:
+        //   * `role_client_cache` wired (Fast role configured)
+        //   * `agent_id.is_none()` (subagent skip — TS query.ts:1419)
+        //   * tool batch non-empty (handled inside the spawn helper)
+        // Never blocks; failure modes degrade to `None`.
+        self.spawn_tool_use_summary(history).await;
+
         // Bump the per-engine turn counter so RecompactionInfo can derive
         // `turns_since_previous` accurately. TS: `compact.ts:317-323`.
         self.turn_counter
@@ -709,6 +724,116 @@ impl QueryEngine {
             }
             prev_uuid = Some(uuid.to_string());
         }
+    }
+
+    /// Spawn a `ModelRole::Fast` side-fork to summarize the tool batch
+    /// that just completed. Stores the [`tokio::task::JoinHandle`] on
+    /// [`QueryEngine::pending_tool_use_summary`] so the await site at
+    /// the top of the next `run_session_loop` iteration can drain it.
+    ///
+    /// TS parity: `query.ts:1411-1482` spawns
+    /// `generateToolUseSummary({ tools, signal, lastAssistantText, … })`
+    /// and stashes the Promise on `nextPendingToolUseSummary`.
+    ///
+    /// Silently no-ops when:
+    ///   * `role_client_cache` is `None` (no Fast role wired)
+    ///   * `agent_id` is `Some` (subagent skip — mirrors TS
+    ///     `!toolUseContext.agentId` at query.ts:1419)
+    ///   * `history` has no tool calls in the last assistant turn
+    ///     (nothing to summarize)
+    ///
+    /// Replacing any prior pending handle aborts it first — defense
+    /// against orphan tasks if `run_session_loop` skipped its await
+    /// (e.g. early cancel between turns).
+    pub(crate) async fn spawn_tool_use_summary(&self, history: &MessageHistory) {
+        if self.config.agent_id.is_some() {
+            return;
+        }
+        let Some(role_cache) = self.role_client_cache.clone() else {
+            return;
+        };
+        let Some(input) = crate::tool_use_summary::build_input_from_history(&history.messages)
+        else {
+            return;
+        };
+        if !input.has_tools() {
+            return;
+        }
+
+        let cancel = self.cancel.clone();
+        let handle = tokio::spawn(async move {
+            // Tie the fork to the parent's cancellation. When the user
+            // hits Esc, the side-fork doesn't keep running after the
+            // turn loop exits.
+            tokio::select! {
+                _ = cancel.cancelled() => None,
+                result = crate::tool_use_summary::generate_tool_use_summary(input, role_cache) => result,
+            }
+        });
+
+        let mut slot = self.pending_tool_use_summary.lock().await;
+        if let Some(prev) = slot.replace(handle) {
+            prev.abort();
+        }
+    }
+
+    /// Drain the pending tool-use-summary fork at the top of a new
+    /// iteration. On success, emits `ServerNotification::ToolUseSummary`
+    /// for SDK consumers and pushes a `Message::ToolUseSummary`
+    /// (UI-only visibility) into history. On `None` / join-error,
+    /// silent skip — TS parity `.catch(() => null)` at query.ts:1481.
+    ///
+    /// **No drain-side timeout, no drain-side cancel guard**:
+    ///
+    /// - The inner [`crate::tool_use_summary::generate_tool_use_summary`]
+    ///   caps work via `tokio::time::timeout(10s, …)` which DROPS the
+    ///   future on expiry, so the JoinHandle always resolves within
+    ///   ~10 s + tiny overhead. Adding a separate (shorter) drain
+    ///   timeout would discard summaries that completed at 2–10 s,
+    ///   wasting the tokens we already spent.
+    /// - Parent cancellation is honored by the spawn's own
+    ///   `tokio::select!` on `cancel.cancelled()` — on session cancel
+    ///   the inner future is dropped and the handle resolves to
+    ///   `Ok(None)` near-instantly. The drain just awaits.
+    ///
+    /// TS parity: `await pendingToolUseSummary` at query.ts:1056 has
+    /// no timeout — the expected case (per TS line 1054 comment) is
+    /// "haiku (~1s) resolved during model streaming (5-30s)" so the
+    /// await is a no-op in practice.
+    pub(crate) async fn drain_pending_tool_use_summary(
+        &self,
+        history: &mut MessageHistory,
+        event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
+    ) {
+        let handle = {
+            let mut slot = self.pending_tool_use_summary.lock().await;
+            slot.take()
+        };
+        let Some(handle) = handle else {
+            return;
+        };
+        let msg = match handle.await {
+            Ok(Some(m)) => m,
+            Ok(None) => return,
+            Err(join_err) => {
+                tracing::debug!(error = %join_err, "tool_use_summary task join error");
+                return;
+            }
+        };
+
+        // Wire-level SDK emission: `tool/useSummary` notification.
+        let _ = emit_protocol(
+            event_tx,
+            ServerNotification::ToolUseSummary(coco_types::ToolUseSummaryParams {
+                summary: msg.summary.clone(),
+                preceding_tool_use_ids: msg.preceding_tool_use_ids.clone(),
+            }),
+        )
+        .await;
+
+        // UI-only history entry (Visibility::UI_ONLY) — surfaces in
+        // the transcript but is not sent back to the LLM.
+        history.push(coco_messages::Message::ToolUseSummary(msg));
     }
 
     /// Spawn the post-turn promptSuggestion fork in a detached task

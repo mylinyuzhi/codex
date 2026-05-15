@@ -224,104 +224,55 @@ fn extract_toml_string_value(rest: &str) -> Option<String> {
 /// refresh is deferred to next session — Rust doesn't yet expose a
 /// thread-safe handle to the engine's PluginManager.
 async fn install_plugin(target: &str) -> crate::Result<String> {
-    if target.is_empty() {
+    if target.trim().is_empty() {
         return Ok("Usage: /plugin install <name>[@<marketplace>]".to_string());
     }
-
-    let (plugin_name, mkt_filter) = match target.split_once('@') {
-        Some((n, m)) => (n.trim(), Some(m.trim())),
-        None => (target, None),
-    };
-
-    // Marketplace install runs std::fs underneath; push to the blocking
-    // pool so a slow disk doesn't stall the TUI loop.
-    let plugin_name = plugin_name.to_string();
-    let mkt_filter = mkt_filter.map(str::to_string);
-    tokio::task::spawn_blocking(move || {
-        install_plugin_blocking(&plugin_name, mkt_filter.as_deref())
-    })
-    .await
-    .map_err(|e| crate::CommandsError::generic(format!("install join error: {e}")))?
-}
-
-fn install_plugin_blocking(plugin_name: &str, mkt_filter: Option<&str>) -> crate::Result<String> {
     let plugins_dir = resolve_plugins_dir();
-    let mut manager = coco_plugins::marketplace::MarketplaceManager::new(plugins_dir.clone());
-
-    // Load every known marketplace into the cache so search has something
-    // to scan.
-    let known = manager.load_known_marketplaces();
-    if known.is_empty() {
-        return Ok("No marketplaces configured. Add one before installing:\n\
-             \n\
-             /plugin marketplace add <source>\n\
-             \n\
-             Sources: GitHub (owner/repo), URL, or local directory."
-            .to_string());
+    let settings_dir = dirs::home_dir().map(|h| h.join(".cocode"));
+    let policy = coco_plugins::security::EnterprisePolicy::default();
+    let result = coco_plugins::install::install_plugin_from_marketplace(
+        &plugins_dir,
+        settings_dir.as_deref(),
+        &policy,
+        target,
+        coco_plugins::schemas::PluginScope::User,
+    )
+    .await;
+    match result {
+        Ok(outcome) => Ok(format!(
+            "{tick} Installed {plugin_name}{dep_note}. Run /reload-plugins to activate.",
+            tick = '✓',
+            plugin_name = outcome.plugin_name,
+            dep_note = outcome.dep_note,
+        )),
+        Err(coco_plugins::install::InstallError::NoMarketplacesConfigured) => {
+            Ok("No marketplaces configured. Add one before installing:\n\
+                 \n\
+                 /plugin marketplace add <source>\n\
+                 \n\
+                 Sources: GitHub (owner/repo), SSH/HTTPS git URL, raw URL, or local directory."
+                .to_string())
+        }
+        Err(coco_plugins::install::InstallError::NotFound {
+            plugin_name,
+            marketplace_filter,
+        }) => {
+            let suggestion = match marketplace_filter.as_deref() {
+                None => format!("/plugin search {plugin_name}"),
+                Some(m) => format!("/plugin search {plugin_name} (in marketplace '{m}')"),
+            };
+            Ok(format!(
+                "Plugin '{plugin_name}' not found in any known marketplace.\n\
+                 \n\
+                 Try: {suggestion}"
+            ))
+        }
+        Err(e @ coco_plugins::install::InstallError::BlockedByPolicy { .. })
+        | Err(e @ coco_plugins::install::InstallError::DependencyBlockedByPolicy { .. })
+        | Err(e @ coco_plugins::install::InstallError::ResolutionFailed(_))
+        | Err(e @ coco_plugins::install::InstallError::SettingsWriteFailed(_)) => Ok(e.to_string()),
+        Err(coco_plugins::install::InstallError::Other(e)) => Err(e.into()),
     }
-    for name in known.keys() {
-        let _ = manager.load_cached_marketplace(name);
-    }
-
-    // Resolve to a (marketplace, entry) pair: either plugin_name@mkt_filter
-    // (exact lookup) or fuzzy name match across cache.
-    let resolved = if let Some(mkt) = mkt_filter {
-        manager
-            .get_plugin_by_id(&format!("{plugin_name}@{mkt}"))
-            .map(|(_, entry)| (mkt.to_string(), entry.clone()))
-    } else {
-        manager
-            .search_plugins(plugin_name)
-            .into_iter()
-            .find(|p| p.name == plugin_name)
-            .and_then(|p| {
-                manager
-                    .get_plugin_by_id(&format!("{}@{}", p.name, p.marketplace))
-                    .map(|(_, e)| (p.marketplace, e.clone()))
-            })
-    };
-
-    let Some((mkt_name, entry)) = resolved else {
-        let suggestion = mkt_filter.map_or_else(
-            || format!("/plugin search {plugin_name}"),
-            |m| format!("/plugin search {plugin_name} (in marketplace '{m}')"),
-        );
-        return Ok(format!(
-            "Plugin '{plugin_name}' not found in any known marketplace.\n\
-             \n\
-             Try: {suggestion}"
-        ));
-    };
-
-    let install_path =
-        manager.install_plugin(&mkt_name, &entry, coco_plugins::schemas::PluginScope::User)?;
-
-    // Record into installed_plugins.json so the next session's PluginManager
-    // discovers this plugin via the loader's standard scan.
-    let installed_path = plugins_dir.join("installed_plugins.json");
-    let mut installed = coco_plugins::loader::InstalledPluginsManager::load(installed_path)?;
-    let plugin_id = format!("{}@{mkt_name}", entry.name);
-    let now = chrono::Utc::now().to_rfc3339();
-    installed.record_installation(
-        &plugin_id,
-        coco_plugins::schemas::PluginInstallationEntry {
-            scope: coco_plugins::schemas::PluginScope::User,
-            project_path: None,
-            install_path: install_path.to_string_lossy().to_string(),
-            version: entry.version,
-            installed_at: Some(now.clone()),
-            last_updated: Some(now),
-            git_commit_sha: None,
-        },
-    );
-    installed.save()?;
-
-    Ok(format!(
-        "Installed '{plugin_id}' to {}.\n\
-         Live engine refresh is deferred — restart the session for the \
-         plugin's skills/hooks/agents to load.",
-        install_path.display()
-    ))
 }
 
 /// Uninstall a plugin: remove its directory AND scrub the corresponding
@@ -392,8 +343,9 @@ async fn uninstall_plugin(target: &str) -> crate::Result<String> {
     match removed_path {
         Some(p) => Ok(format!(
             "Uninstalled plugin '{name}' from {}.\n\
-             Live engine still has it loaded for this session — restart \
-             to drop it.",
+             Run /reload-plugins to apply (slash commands refresh \
+             immediately; skills, hooks, agents, MCP servers, and tools \
+             still pick up on next session restart).",
             p.display()
         )),
         None => Ok(format!("Plugin '{name}' not found.")),
@@ -531,8 +483,10 @@ async fn enable_plugin(name: &str) -> crate::Result<String> {
     disabled.retain(|n| n != name);
     write_disabled_plugins(&disabled).await?;
     Ok(format!(
-        "Plugin '{name}' enabled (persisted). Live engine refresh is \
-         deferred — restart the session for it to load."
+        "Plugin '{name}' enabled (persisted). Run /reload-plugins to \
+         apply (slash commands refresh immediately; skills, hooks, \
+         agents, MCP servers, and tools still pick up on next session \
+         restart)."
     ))
 }
 
@@ -552,8 +506,10 @@ async fn disable_plugin(name: &str) -> crate::Result<String> {
     disabled.push(name.to_string());
     write_disabled_plugins(&disabled).await?;
     Ok(format!(
-        "Plugin '{name}' disabled (persisted). Live engine still has it \
-         loaded for this session — restart to take effect."
+        "Plugin '{name}' disabled (persisted). Run /reload-plugins to \
+         apply (slash commands refresh immediately; skills, hooks, \
+         agents, MCP servers, and tools still pick up on next session \
+         restart)."
     ))
 }
 
@@ -653,51 +609,37 @@ async fn marketplace_list() -> crate::Result<String> {
 }
 
 /// Add a marketplace source.
+///
+/// Input parsing mirrors TS `parseMarketplaceInput.ts`: SSH git URLs,
+/// HTTP/HTTPS (`.git` / Azure `/_git/` → Git source; github.com → Git
+/// with `.git` appended; everything else → Url source), local paths,
+/// and `owner/repo[#ref|@ref]` shorthand.
 async fn marketplace_add(source: &str) -> crate::Result<String> {
-    if source.is_empty() {
+    if source.trim().is_empty() {
         return Ok("Usage: /plugin marketplace add <source>".to_string());
     }
 
-    // Detect source type from input
-    let (name, mkt_source) =
-        if source.contains('/') && !source.contains("://") && !source.contains(' ') {
-            // GitHub shorthand: owner/repo
-            let name = source.split('/').next_back().unwrap_or(source);
-            (
-                name.to_string(),
-                coco_plugins::schemas::MarketplaceSource::Github {
-                    repo: source.to_string(),
-                    git_ref: None,
-                    path: None,
-                    sparse_paths: None,
-                },
-            )
-        } else if source.starts_with("http://") || source.starts_with("https://") {
-            let name = source
-                .rsplit('/')
-                .next()
-                .unwrap_or("marketplace")
-                .trim_end_matches(".json");
-            (
-                name.to_string(),
-                coco_plugins::schemas::MarketplaceSource::Url {
-                    url: source.to_string(),
-                    headers: None,
-                },
-            )
-        } else {
-            // Local directory
-            (
-                source
-                    .rsplit('/')
-                    .find(|s| !s.is_empty())
-                    .unwrap_or(source)
-                    .to_string(),
-                coco_plugins::schemas::MarketplaceSource::Directory {
-                    path: source.to_string(),
-                },
-            )
-        };
+    let mkt_source = match coco_plugins::parse_marketplace_input::parse_marketplace_input(
+        source,
+        dirs::home_dir,
+    ) {
+        Ok(Some(s)) => s,
+        Ok(None) => {
+            return Ok(format!(
+                "Unrecognised marketplace source: '{source}'\n\n\
+                 Supported forms:\n  \
+                 owner/repo[#ref|@ref]            (GitHub shorthand)\n  \
+                 git@host:path[.git][#ref]        (SSH)\n  \
+                 https://host/repo.git[#ref]       (HTTPS git)\n  \
+                 https://host/_git/repo            (Azure DevOps)\n  \
+                 https://github.com/owner/repo     (GitHub HTTPS)\n  \
+                 https://host/marketplace.json     (raw JSON URL)\n  \
+                 /path/to/dir | ./relative | ~/x   (local directory or .json file)"
+            ));
+        }
+        Err(e) => return Ok(format!("Failed to add marketplace: {e}")),
+    };
+    let name = coco_plugins::parse_marketplace_input::derive_marketplace_name(&mkt_source);
 
     let plugins_dir = resolve_plugins_dir();
     let mut manager = coco_plugins::marketplace::MarketplaceManager::new(plugins_dir.clone());

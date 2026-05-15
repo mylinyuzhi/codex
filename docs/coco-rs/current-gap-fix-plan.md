@@ -38,64 +38,54 @@ have code and tests now.
 
 ### P1.1 Plugin install and refresh lifecycle
 
-Evidence:
+Status: intentional parity (NOT an open gap for the install/refresh half).
 
-- `/plugin install` records marketplace installs but says live engine refresh is
-  deferred until restart in `commands/src/handlers/plugin.rs`.
+Verified 2026-05-15 against TS reference:
+
+- TS `utils/plugins/pluginInstallationHelpers.ts:588` ends a successful install
+  with the same `"Run /reload-plugins to activate"` message — TS **also**
+  defers to an explicit user action, not auto hot-reload.
+- Rust `plugins/src/watcher.rs:9-11` documents the design choice explicitly:
+  "The watcher is intentionally not hooked into the [`crate::PluginManager`]
+  refresh path — that's the explicit `/reload-plugins` user action."
+- `commands/src/handlers/plugin.rs:243` returns the matching message
+  (`"Run /reload-plugins to activate"`).
+- `app/cli/src/sdk_server/notifications/plugins.rs` already emits a
+  `ServerNotification::PluginsChanged` so the SDK client sees the disk
+  change.
+
+Residual work (separate, smaller-scope gap, not P1.1):
+
 - The standalone `coco plugin install` path in `app/cli/src/bin_handlers/plugin.rs`
-  still reports marketplace/URL installs as not implemented.
+  reports marketplace/URL installs as not implemented. This is a CLI parity
+  surface item — track as P2 if user-visible.
 - `app/cli/src/lib.rs` still documents URL-based plugin install as not yet
   implemented.
 
-Risk: users can install or enable a plugin and see no new skills, hooks, agents,
-commands, or MCP servers until restart. The CLI and slash-command surfaces also
-do not offer the same install capabilities.
-
-Fix plan:
-
-1. Add a live `PluginManager` refresh handle in `SessionRuntime`.
-2. After install/uninstall/enable/disable, reload installed plugin state and
-   rebuild plugin-provided skills, hooks, agents, commands, MCP servers, and
-   tool registry entries.
-3. Share the same marketplace/URL install implementation between slash command
-   and CLI subcommand paths.
-4. Emit a clear reload success/failure event instead of asking for restart.
-
-Verification:
-
-- Add command-handler tests for install/uninstall/enable/disable refreshing the
-  runtime view.
-- Add CLI tests for local, marketplace, and URL install parity.
-- Run `just test-crate coco-commands`, `just test-crate coco-plugins`, and
-  `just quick-check`.
+These remaining items do not warrant adding an auto-refresh path; matching TS
+parity means keeping `/reload-plugins` as the activation surface.
 
 ### P1.2 SDK and MCP elicitation bridge
 
-Evidence:
+Status: implemented.
 
-- `app/cli/src/sdk_server/handlers/mcp.rs` rejects MCP elicitations because the
-  SDK server does not yet bridge them to clients.
-- The pending-map plumbing exists in SDK handlers, including
-  `pending_elicitations`, `register_elicitation`, and `elicitation/resolve`
-  tests.
+Verified 2026-05-15:
 
-Risk: MCP servers that require user input cannot complete through SDK-driven
-sessions unless hooks answer the elicitation programmatically.
+- `app/cli/src/sdk_server/handlers/mcp.rs:132` `build_send_elicitation` returns
+  the closure attached at MCP connect time.
+- `mcp.rs:195` `bridge_elicitation_to_sdk_client` allocates a request id, sends
+  `mcp/requestElicitation` over the transport, awaits `ElicitationResolveParams`,
+  and translates the SDK reply back into the rmcp protocol response.
+- `app/cli/src/elicitation_hooks.rs:48-158` wraps the bridge with pre- and
+  post-dialog hooks (matching TS `elicitationHandler.ts`).
+- Failure cases: transport absent → error response (not silent drop); SDK
+  client unresponsive → timeout error.
+- Bridge is installed both on initial MCP connect (`mcp.rs:357`) and on
+  reconnect (`mcp.rs:393`).
 
-Fix plan:
-
-1. Replace the base reject closure in SDK MCP connect paths with a bridge that
-   sends a server request to the SDK client.
-2. Register the request id in `pending_elicitations`.
-3. Resolve through existing `elicitation/resolve` handling.
-4. Preserve the existing hook wrapper so hooks still run before client routing.
-
-Verification:
-
-- Add an SDK integration-style test where an MCP server sends an elicitation and
-  the client answers it.
-- Verify cancellation cleans pending entries.
-- Run `just test-crate coco-cli` and `just quick-check`.
+Residual risk: none for the elicitation path itself. Future enhancements
+(retry policy, structured cancellation propagation) can build on the existing
+bridge without re-architecting it.
 
 ### P1.3 MCP handle resource and auth methods
 
@@ -132,7 +122,8 @@ Evidence:
 - `core/tool-runtime/src/tool_result_storage.rs` now contains shared constants,
   Level 1 persistence helpers, and Level 2 replacement state.
 - `app/query/src/tool_outcome_builder.rs` calls the Level 1 helpers for tools
-  that opt in via `Tool::max_result_size_chars()`.
+  that opt in via `Tool::max_result_size_bound()` returning
+  `ResultSizeBound::Chars(_)` rather than `ResultSizeBound::Unbounded`.
 - `app/query/src/engine_finalize_turn.rs` wires a Level 2 pass before
   microcompact when `compact.tool_result_budget.enabled` is true.
 - Bash/PowerShell model-visible persistence now goes through the shared
@@ -410,7 +401,9 @@ Verification:
 - IDE `/ide` command and IDE reminder adapters need bridge integration.
 - TUI autocomplete still has TODOs for file search and LSP symbol sources.
 - Agent overlay edit/delete says edits take effect next session.
-- Provider tail: Bedrock construction is still deferred in model factory.
+- Provider tail: Bedrock / Vertex / Foundry construction is an **explicit non-goal**.
+  `services/inference/src/auth.rs` retains env-based detection only for
+  diagnostic clarity; `model_factory.rs` will never dispatch on these variants.
 - Windows inner-stage sandbox remains platform-tail work.
 - `relocateToolReferenceSiblings` remains a low-priority compact/message
   parity item.
@@ -456,7 +449,7 @@ were changed:
 4. Extensibility parity: MCP-sourced skills, MCPB UI/schema, Prompt file parts.
 5. UX and reminder parity: web preapproval, skills watcher, reminder producers,
    TUI autocomplete, IDE integration.
-6. Long-tail systems: hook Agent path, OTel, DirectConnect/daemon, Bedrock,
+6. Long-tail systems: hook Agent path, OTel, DirectConnect/daemon,
    Windows sandbox.
 
 ## Completion Gates

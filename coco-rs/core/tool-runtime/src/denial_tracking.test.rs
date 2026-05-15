@@ -63,3 +63,28 @@ fn test_suggestion_message() {
     assert!(msg.contains("consecutive"));
     assert!(msg.contains("Bash"));
 }
+
+#[test]
+fn test_subagent_fork_isolation_no_parent_pollution() {
+    // Regression: parent's denial count must not bleed into a fork.
+    // TS parity: createSubagentContext always builds a fresh DenialTracker.
+    let mut parent = DenialTracker::new();
+    let mut fork = DenialTracker::new();
+
+    // Fork hits 3 denies and trips its own breaker.
+    for _ in 0..3 {
+        fork.record_denial("Bash");
+    }
+    assert!(fork.is_circuit_breaker_tripped());
+
+    // Parent stays clean.
+    assert_eq!(parent.consecutive_denials, 0);
+    assert!(!parent.is_circuit_breaker_tripped());
+
+    // Parent denials still trip independently.
+    for _ in 0..3 {
+        parent.record_denial("Write");
+    }
+    assert!(parent.is_circuit_breaker_tripped());
+    assert_eq!(parent.tool_denial_count("Bash"), 0);
+}

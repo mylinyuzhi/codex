@@ -37,7 +37,7 @@ fn test_skill(name: &str, description: &str, prompt: &str, source: SkillSource) 
 
 #[test]
 fn test_skill_manager_register_and_get() {
-    let mut mgr = SkillManager::new();
+    let mgr = SkillManager::new();
     let mut skill = test_skill(
         "commit",
         "Create a git commit",
@@ -61,7 +61,7 @@ fn test_skill_not_found() {
 
 #[test]
 fn test_skill_from_project() {
-    let mut mgr = SkillManager::new();
+    let mgr = SkillManager::new();
     let mut skill = test_skill(
         "deploy",
         "Deploy to production",
@@ -80,7 +80,7 @@ fn test_skill_from_project() {
 
 #[test]
 fn test_skill_lookup_by_alias() {
-    let mut mgr = SkillManager::new();
+    let mgr = SkillManager::new();
     let mut skill = test_skill(
         "commit",
         "Create a git commit",
@@ -388,7 +388,7 @@ fn test_load_from_dirs_with_legacy() {
     )
     .unwrap();
 
-    let mut mgr = SkillManager::new();
+    let mgr = SkillManager::new();
     // Simulate path ending in "commands"
     let _cmd_path = commands_dir.path().to_path_buf();
     // load_from_dirs checks if path ends with "commands"

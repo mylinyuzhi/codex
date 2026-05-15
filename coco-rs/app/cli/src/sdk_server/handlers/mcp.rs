@@ -121,22 +121,26 @@ async fn deregister_server_tools(ctx: &HandlerContext, server_name: &str) {
 
 /// `SendElicitation` factory for SDK-driven MCP connects.
 ///
-/// The base closure rejects every elicitation because the SDK server
-/// doesn't bridge elicitations to clients yet (a future follow-up).
-/// However, when a session runtime with a hook registry is wired, we
-/// wrap the closure so `Elicitation` / `ElicitationResult` hooks fire
-/// first — TS parity (`elicitationHandler.ts:91-107`). A hook can
-/// program-respond with accept/decline and skip the bridge entirely.
+/// The base closure bridges MCP server-initiated elicitations to the
+/// connected SDK client via the SDK control protocol
+/// (`ServerRequest::RequestElicitation` →
+/// `ClientRequest::ElicitationResolve` synchronous reply). When a
+/// session runtime with a hook registry is wired, we wrap the closure
+/// so `Elicitation` / `ElicitationResult` hooks fire first — TS parity
+/// (`elicitationHandler.ts:91-107`). A hook can program-respond with
+/// accept/decline and short-circuit the bridge entirely.
 async fn build_send_elicitation(
     ctx: &HandlerContext,
     server_name: &str,
 ) -> coco_mcp::SendElicitation {
     use std::future::Future;
     use std::pin::Pin;
+    let state = ctx.state.clone();
+    let server_name_for_base = server_name.to_string();
     let base: coco_mcp::SendElicitation = Box::new(
-        |_request_id,
-         _elicitation|
-         -> Pin<
+        move |_request_id,
+              elicitation|
+              -> Pin<
             Box<
                 dyn Future<
                         Output = std::result::Result<
@@ -146,10 +150,10 @@ async fn build_send_elicitation(
                     > + Send,
             >,
         > {
+            let state = state.clone();
+            let server_name = server_name_for_base.clone();
             Box::pin(async move {
-                Err(coco_mcp::RmcpClientError::generic(
-                    "elicitation rejected: SDK server does not yet bridge elicitations to clients",
-                ))
+                bridge_elicitation_to_sdk_client(&state, &server_name, elicitation).await
             })
         },
     );
@@ -176,6 +180,86 @@ async fn build_send_elicitation(
         Some(elicit_counter),
         base,
     )
+}
+
+/// Bridge a single MCP-server-initiated elicitation to the SDK client.
+///
+/// Allocates a fresh `request_id`, serializes the rmcp `Elicitation`
+/// payload, sends a `ServerRequest::RequestElicitation` via the
+/// transport, awaits the client's response, and maps the result back to
+/// the rmcp [`coco_mcp::ElicitationResponse`] shape.
+///
+/// TS parity: `cli/structuredIO.ts::createStructuredIOQueryConfig` —
+/// the SDK client is the ultimate authority for MCP elicitations in
+/// SDK mode.
+async fn bridge_elicitation_to_sdk_client(
+    state: &Arc<super::SdkServerState>,
+    server_name: &str,
+    elicitation: impl serde::Serialize,
+) -> std::result::Result<coco_mcp::ElicitationResponse, coco_mcp::RmcpClientError> {
+    // Grab the cached transport handle — must be present (dispatcher
+    // publishes it at `SdkServer::run` startup).
+    let transport = {
+        let guard = state.transport.read().await;
+        match guard.as_ref() {
+            Some(t) => t.clone(),
+            None => {
+                return Err(coco_mcp::RmcpClientError::generic(
+                    "elicitation bridge: SDK transport not initialized yet",
+                ));
+            }
+        }
+    };
+
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let elicitation_json = serde_json::to_value(&elicitation).map_err(|e| {
+        coco_mcp::RmcpClientError::generic(format!("serialize elicitation payload: {e}"))
+    })?;
+    let params = coco_types::ServerRequestElicitationParams {
+        request_id: request_id.clone(),
+        mcp_server_name: server_name.to_string(),
+        elicitation: elicitation_json,
+    };
+    let params_json = serde_json::to_value(&params).map_err(|e| {
+        coco_mcp::RmcpClientError::generic(format!("serialize RequestElicitationParams: {e}"))
+    })?;
+
+    let reply = state
+        .send_server_request(&transport, "mcp/requestElicitation", params_json)
+        .await
+        .map_err(|e| {
+            coco_mcp::RmcpClientError::generic(format!("send mcp/requestElicitation: {e}"))
+        })?;
+
+    let resolved: coco_types::ElicitationResolveParams = match reply {
+        coco_types::JsonRpcMessage::Response(r) => serde_json::from_value(r.result)
+            .map_err(|e| coco_mcp::RmcpClientError::generic(format!("parse SDK reply: {e}")))?,
+        coco_types::JsonRpcMessage::Error(e) => {
+            return Err(coco_mcp::RmcpClientError::generic(format!(
+                "SDK client returned error for mcp/requestElicitation: {} ({})",
+                e.message, e.code
+            )));
+        }
+        other => {
+            return Err(coco_mcp::RmcpClientError::generic(format!(
+                "unexpected reply variant for mcp/requestElicitation: {other:?}"
+            )));
+        }
+    };
+
+    let action = if resolved.approved {
+        coco_mcp::RmcpElicitationAction::Accept
+    } else {
+        coco_mcp::RmcpElicitationAction::Decline
+    };
+    let content = if resolved.approved && !resolved.values.is_empty() {
+        Some(serde_json::Value::Object(
+            resolved.values.into_iter().collect(),
+        ))
+    } else {
+        None
+    };
+    Ok(coco_mcp::ElicitationResponse { action, content })
 }
 
 /// Helper: borrow the wired MCP manager or return INVALID_REQUEST.

@@ -54,6 +54,7 @@ mod tool_input_normalizer;
 mod tool_message;
 mod tool_outcome_builder;
 mod tool_runner;
+pub mod tool_use_summary;
 
 pub use budget::BudgetDecision;
 pub use budget::BudgetTracker;

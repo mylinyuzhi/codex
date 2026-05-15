@@ -94,6 +94,13 @@ pub struct QueryEngineConfig {
     pub streaming_tool_execution: bool,
     /// Whether this is a non-interactive (SDK/script) session.
     pub is_non_interactive: bool,
+    /// Debug-logging surface for tools. Mirrors TS `toolUseContext.options.debug`
+    /// (CLI `--debug`) — visible on `ToolUseContext.debug`. Defaults to `false`.
+    pub debug: bool,
+    /// Verbose-logging surface for tools. Mirrors TS
+    /// `toolUseContext.options.verbose` (CLI `--verbose`) — visible on
+    /// `ToolUseContext.verbose`. Defaults to `false`.
+    pub verbose: bool,
     /// Thinking level applied to the main-loop model for this session.
     /// Surfaced on `ToolUseContext.thinking_level` so tools (and tool-
     /// spawned subqueries) see the same reasoning budget the engine is
@@ -335,6 +342,8 @@ impl Default for QueryEngineConfig {
             // available by setting this to `false`.
             streaming_tool_execution: true,
             is_non_interactive: false,
+            debug: false,
+            verbose: false,
             thinking_level: None,
             session_id: String::new(),
             project_dir: None,

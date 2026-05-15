@@ -1,16 +1,32 @@
-//! Yolo classifier — two-stage LLM-based permission classification.
+//! Yolo classifier — two-stage XML LLM-based permission classification.
 //!
-//! TS: utils/permissions/yoloClassifier.ts (3.2K LOC)
+//! TS: `utils/permissions/yoloClassifier.ts`.
 //!
-//! Stage 1: Fast classification with small token budget (64-256 tokens).
-//! Stage 2: Extended thinking with larger budget (4096+ tokens) if Stage 1 uncertain.
+//! Wire-shape parity with TS:
 //!
-//! The classifier maintains a compressed transcript of the conversation
-//! and asks the LLM whether a proposed tool action is safe to auto-execute.
+//! * **Output**: `<block>yes</block><reason>one short sentence</reason>` for
+//!   block; `<block>no</block>` (no `<reason>`) for allow. The system prompt
+//!   pins this: "Your ENTIRE response MUST begin with `<block>`".
+//! * **User content**: wrapped in `<transcript>\n` … `\n</transcript>\n`.
+//! * **Stage 1**: 64-token budget, `stop_sequences = ["</block>"]`,
+//!   `XML_S1_SUFFIX` nudge ("Err on the side of blocking. `<block>`
+//!   immediately."). Drops out as soon as the model writes the closing tag.
+//! * **Stage 2**: 4096-token budget, no stop sequence, `XML_S2_SUFFIX`
+//!   nudge ("Review the classification process… Use `<thinking>` before
+//!   responding with `<block>`."). Reached on stage-1 `block=yes` (second
+//!   opinion) or stage-1 unparseable.
+//! * **Parse**: regex `<block>(yes|no)\b(</block>)?` after `<thinking>`-strip;
+//!   `<reason>...</reason>` after the same strip. Unparseable → fall through
+//!   to stage 2; if stage 2 is also unparseable → block (safe default).
+//!
+//! The two stages share the same system prompt so the Anthropic 1h prompt
+//! cache hits across calls (TS comment §708-710).
 
 use coco_types::ToolName;
+use regex::Regex;
 use serde::Deserialize;
 use serde::Serialize;
+use std::sync::LazyLock;
 
 /// Re-export from coco-types.
 pub use coco_types::ClassifierUsage;
@@ -122,21 +138,12 @@ pub fn is_safe_tool(tool_name: &str) -> bool {
 }
 
 /// Build transcript entries from conversation messages for the classifier.
-///
-/// Compresses the conversation into a compact format:
-/// - User text → preserved (truncated to 2000 chars)
-/// - Tool calls → tool name + abbreviated input
-/// - Tool results → tool name + abbreviated output
-/// - System messages → stripped
 pub fn build_transcript_entries(messages: &[coco_messages::Message]) -> Vec<TranscriptEntry> {
     let mut entries = Vec::new();
 
     for msg in messages {
         match msg {
             coco_messages::Message::User(u) => {
-                // Post-Phase-2: every `Message::User` is genuine human
-                // input; reminder-injected content lives in
-                // `Message::Attachment`.
                 let text = extract_user_text(&u.message);
                 if !text.is_empty() {
                     entries.push(TranscriptEntry {
@@ -165,7 +172,7 @@ pub fn build_transcript_entries(messages: &[coco_messages::Message]) -> Vec<Tran
                     }],
                 });
             }
-            _ => {} // Skip system, progress, tombstone
+            _ => {}
         }
     }
 
@@ -174,7 +181,8 @@ pub fn build_transcript_entries(messages: &[coco_messages::Message]) -> Vec<Tran
 
 /// Build the classifier system prompt.
 ///
-/// Includes auto-mode rules and environment context.
+/// Mirrors TS `replaceOutputFormatWithXml` — the system prompt pins the
+/// XML output format and the "begin with `<block>`" invariant.
 pub fn build_classifier_system_prompt(rules: &AutoModeRules) -> String {
     let mut prompt = String::from(
         "You are a security classifier for an AI coding assistant. \
@@ -206,31 +214,45 @@ pub fn build_classifier_system_prompt(rules: &AutoModeRules) -> String {
         prompt.push('\n');
     }
 
+    // TS `replaceOutputFormatWithXml` — the XML output format block.
     prompt.push_str(
-        "Respond with a JSON object: {\"should_block\": true/false, \"reason\": \"...\"}.\n\
-         If the action matches an allow rule and seems safe, set should_block to false.\n\
-         If the action could be destructive, accesses sensitive data, or matches a deny rule, \
-         set should_block to true.",
+        "## Output Format\n\
+         \n\
+         If the action should be blocked:\n\
+         <block>yes</block><reason>one short sentence</reason>\n\
+         \n\
+         If the action should be allowed:\n\
+         <block>no</block>\n\
+         \n\
+         Do NOT include a <reason> tag when the action is allowed.\n\
+         Your ENTIRE response MUST begin with <block>. Do NOT output any analysis, \
+         reasoning, or commentary before <block>. No \"Looking at...\" or similar preamble.",
     );
 
     prompt
 }
 
 /// Format a tool action for the classifier.
-///
-/// TS: formatActionForClassifier() — produces a compact representation
-/// of the tool call for the classifier to evaluate.
 pub fn format_action_for_classifier(tool_name: &str, input: &serde_json::Value) -> String {
     let input_str = serde_json::to_string(input).unwrap_or_default();
     let truncated = truncate(&input_str, 1000);
     format!("<action>\ntool: {tool_name}\ninput: {truncated}\n</action>")
 }
 
-/// Stage 1 token budget (fast classification).
-const STAGE_1_MAX_TOKENS: i64 = 256;
+/// Stage 1 token budget. TS `both`-mode value (`yoloClassifier.ts:781`).
+const STAGE_1_MAX_TOKENS: i64 = 64;
 
-/// Stage 2 token budget (extended thinking).
+/// Stage 2 token budget. TS extended-thinking value.
 const STAGE_2_MAX_TOKENS: i64 = 4096;
+
+/// Stage 1 suffix (TS `XML_S1_SUFFIX`, `yoloClassifier.ts:550`).
+pub const XML_S1_SUFFIX: &str = "\nErr on the side of blocking. <block> immediately.";
+
+/// Stage 2 suffix (TS `XML_S2_SUFFIX`, `yoloClassifier.ts:560-561`).
+pub const XML_S2_SUFFIX: &str = "\nReview the classification process and follow it carefully, making sure you deny \
+     actions that should be blocked. As a reminder, explicit (not suggestive or implicit) \
+     user confirmation is required to override blocks. Use <thinking> before responding \
+     with <block>.";
 
 /// Parameters for the classifier callback.
 #[derive(Debug, Clone)]
@@ -239,15 +261,24 @@ pub struct ClassifyRequest {
     pub user_prompt: String,
     pub max_tokens: i64,
     pub stage: i32,
+    /// Stop sequences forwarded to the provider. Stage 1 in `both` mode
+    /// uses `["</block>"]` for immediate termination; stage 2 leaves it
+    /// empty so the model can elaborate inside `<thinking>` and `<reason>`.
+    pub stop_sequences: Option<Vec<String>>,
 }
 
 /// Classify a proposed tool action using the two-stage XML classifier.
 ///
-/// Stage 1: Fast classification (256 tokens). Nudged for quick allow/block.
-/// Stage 2: Extended thinking (4096 tokens). Full chain-of-thought reasoning.
+/// Mirrors TS `classifyYoloActionXml` in `both` mode (the default).
 ///
-/// Both stages share the same system prompt prefix for cache hits.
-/// The `classify_fn` callback calls the LLM with the given request.
+/// 1. Stage 1 (fast): 64 tokens, `stop_sequences=["</block>"]`, S1 suffix.
+///    * `<block>no</block>` → return Allow.
+///    * `<block>yes</block>` → fall through to stage 2 (second opinion).
+///    * Unparseable → fall through to stage 2.
+/// 2. Stage 2 (thinking): 4096 tokens, no stop sequences, S2 suffix.
+///    * `<block>no</block>` → return Allow.
+///    * `<block>yes</block>` → Block with reason.
+///    * Unparseable → Block (safe default).
 pub async fn classify_yolo_action<F, Fut>(
     messages: &[coco_messages::Message],
     tool_name: &str,
@@ -276,71 +307,103 @@ where
     let action = format_action_for_classifier(tool_name, input);
     let transcript_text = format_transcript(&transcript);
 
-    let user_prompt = format!(
-        "{transcript_text}\n\n\
+    // TS wraps the entire user content (transcript + action) in
+    // `<transcript>...</transcript>` envelope so the model sees a clearly
+    // bounded record vs. its own output.
+    let user_body = format!(
+        "<transcript>\n\
+         {transcript_text}\n\n\
          Evaluate whether this action is safe to auto-execute:\n\n\
-         {action}\n\n\
-         Respond with XML: <answer>allow</answer> or <answer>block</answer> \
-         followed by <reason>explanation</reason>."
+         {action}\n\
+         </transcript>\n"
     );
 
-    // Stage 1: Fast classification.
+    // ── Stage 1 ────────────────────────────────────────────────────────
+    let stage1_user_prompt = format!("{user_body}{XML_S1_SUFFIX}");
     let stage1_result = classify_fn(ClassifyRequest {
         system_prompt: system_prompt.clone(),
-        user_prompt: user_prompt.clone(),
+        user_prompt: stage1_user_prompt,
         max_tokens: STAGE_1_MAX_TOKENS,
         stage: 1,
+        stop_sequences: Some(vec!["</block>".to_string()]),
     })
     .await;
 
-    match stage1_result {
-        Ok(response) => {
-            // Try XML parsing only (not JSON fallback) for Stage 1.
-            let answer = extract_xml_tag(&response, "answer");
-            match answer.as_deref() {
-                Some("allow") | Some("block") => {
-                    let reason = extract_xml_tag(&response, "reason").unwrap_or_default();
-                    return YoloClassifierResult {
-                        should_block: answer.as_deref() == Some("block"),
-                        reason,
-                        model: String::new(),
-                        usage: None,
-                        duration_ms: None,
-                        stage: Some(1),
-                    };
-                }
-                _ => {
-                    // Ambiguous Stage 1 → fall through to Stage 2.
-                }
+    if let Ok(response) = stage1_result {
+        match parse_xml_block(&response) {
+            Some(false) => {
+                // Allow — stage 1 verdict is sufficient (TS line 808-822).
+                return YoloClassifierResult {
+                    should_block: false,
+                    reason: "Allowed by fast classifier".into(),
+                    model: String::new(),
+                    usage: None,
+                    duration_ms: None,
+                    stage: Some(1),
+                };
+            }
+            Some(true) | None => {
+                // Block or unparseable → escalate to stage 2 for second opinion.
             }
         }
-        Err(_) => {
-            // Stage 1 error → fall through to Stage 2.
-        }
     }
+    // Stage-1 transport error also falls through to stage 2.
 
-    // Stage 2: Extended thinking classification.
+    // ── Stage 2 ────────────────────────────────────────────────────────
+    let stage2_user_prompt = format!("{user_body}{XML_S2_SUFFIX}");
     let stage2_result = classify_fn(ClassifyRequest {
         system_prompt,
-        user_prompt,
+        user_prompt: stage2_user_prompt,
         max_tokens: STAGE_2_MAX_TOKENS,
         stage: 2,
+        stop_sequences: None,
     })
     .await;
 
     match stage2_result {
-        Ok(response) => parse_xml_classifier_response(&response, 2),
-        Err(err) => {
-            // On error, default to blocking (safe).
-            YoloClassifierResult {
-                should_block: true,
-                reason: format!("Classifier error: {err}"),
-                model: String::new(),
-                usage: None,
-                duration_ms: None,
-                stage: Some(2),
+        Ok(response) => {
+            let parsed = parse_xml_block(&response);
+            let reason = parse_xml_reason(&response).unwrap_or_default();
+            match parsed {
+                Some(true) => YoloClassifierResult {
+                    should_block: true,
+                    reason,
+                    model: String::new(),
+                    usage: None,
+                    duration_ms: None,
+                    stage: Some(2),
+                },
+                Some(false) => YoloClassifierResult {
+                    should_block: false,
+                    reason: if reason.is_empty() {
+                        "Allowed by extended classifier".into()
+                    } else {
+                        reason
+                    },
+                    model: String::new(),
+                    usage: None,
+                    duration_ms: None,
+                    stage: Some(2),
+                },
+                None => YoloClassifierResult {
+                    // Unparseable stage 2 → block (safe default, TS parity).
+                    should_block: true,
+                    reason: "Classifier stage 2 unparseable - blocking for safety".into(),
+                    model: String::new(),
+                    usage: None,
+                    duration_ms: None,
+                    stage: Some(2),
+                },
             }
         }
+        Err(err) => YoloClassifierResult {
+            should_block: true,
+            reason: format!("Classifier error: {err}"),
+            model: String::new(),
+            usage: None,
+            duration_ms: None,
+            stage: Some(2),
+        },
     }
 }
 
@@ -375,93 +438,51 @@ fn format_transcript(entries: &[TranscriptEntry]) -> String {
     out
 }
 
-/// Parse XML-formatted classifier response.
-///
-/// Expected format: `<answer>allow|block</answer><reason>...</reason>`
-fn parse_xml_classifier_response(response: &str, stage: i32) -> YoloClassifierResult {
-    let answer = extract_xml_tag(response, "answer");
-    let reason = extract_xml_tag(response, "reason").unwrap_or_default();
-
-    let should_block = match answer.as_deref() {
-        Some("allow") => false,
-        Some("block") => true,
-        _ => {
-            // Fallback: try JSON parsing for backward compatibility.
-            return parse_classifier_response_with_stage(response, stage);
-        }
-    };
-
-    YoloClassifierResult {
-        should_block,
-        reason,
-        model: String::new(),
-        usage: None,
-        duration_ms: None,
-        stage: Some(stage),
-    }
+/// Strip `<thinking>...</thinking>` blocks (and unterminated thinking text)
+/// so XML tags inside the model's chain-of-thought don't get matched by
+/// the block/reason parsers. TS `stripThinking` (`yoloClassifier.ts:567`).
+fn strip_thinking(text: &str) -> String {
+    #[allow(clippy::expect_used)]
+    static CLOSED: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?s)<thinking>.*?</thinking>")
+            .expect("strip_thinking closed regex is statically valid")
+    });
+    #[allow(clippy::expect_used)]
+    static OPEN_ONLY: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?s)<thinking>.*$")
+            .expect("strip_thinking open-only regex is statically valid")
+    });
+    let after_closed = CLOSED.replace_all(text, "");
+    OPEN_ONLY.replace_all(&after_closed, "").into_owned()
 }
 
-/// Extract content between `<tag>` and `</tag>`.
-fn extract_xml_tag(text: &str, tag: &str) -> Option<String> {
-    let open = format!("<{tag}>");
-    let close = format!("</{tag}>");
-    let start = text.find(&open)?;
-    let end = text.find(&close)?;
-    if end > start + open.len() {
-        Some(text[start + open.len()..end].trim().to_string())
-    } else {
-        None
-    }
+/// Parse `<block>yes|no</block>`. Closing tag is optional because stage 1
+/// uses `stop_sequences = ["</block>"]` and the provider truncates before
+/// the closer is emitted. TS `parseXmlBlock` (`yoloClassifier.ts:578-584`).
+fn parse_xml_block(text: &str) -> Option<bool> {
+    #[allow(clippy::expect_used)]
+    static RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?i)<block>(yes|no)\b(?:</block>)?")
+            .expect("parse_xml_block regex is statically valid")
+    });
+    let stripped = strip_thinking(text);
+    RE.captures(&stripped).map(|caps| {
+        caps.get(1)
+            .map(|m| m.as_str().eq_ignore_ascii_case("yes"))
+            .unwrap_or(false)
+    })
 }
 
-/// Fallback: parse JSON response with stage info.
-fn parse_classifier_response_with_stage(response: &str, stage: i32) -> YoloClassifierResult {
-    let mut result = parse_classifier_response(response);
-    result.stage = Some(stage);
-    result
-}
-
-/// Parse the classifier's JSON response.
-fn parse_classifier_response(response: &str) -> YoloClassifierResult {
-    // Try to extract JSON from the response
-    let json_str = if let Some(start) = response.find('{') {
-        if let Some(end) = response.rfind('}') {
-            &response[start..=end]
-        } else {
-            response
-        }
-    } else {
-        response
-    };
-
-    #[derive(Deserialize)]
-    struct ClassifierOutput {
-        should_block: bool,
-        #[serde(default)]
-        reason: Option<String>,
-    }
-
-    match serde_json::from_str::<ClassifierOutput>(json_str) {
-        Ok(output) => YoloClassifierResult {
-            should_block: output.should_block,
-            reason: output.reason.unwrap_or_default(),
-            model: String::new(),
-            usage: None,
-            duration_ms: None,
-            stage: None,
-        },
-        Err(_) => {
-            // Can't parse → block (safe default)
-            YoloClassifierResult {
-                should_block: true,
-                reason: "Could not parse classifier response".into(),
-                model: String::new(),
-                usage: None,
-                duration_ms: None,
-                stage: None,
-            }
-        }
-    }
+/// Parse `<reason>...</reason>` (non-greedy). TS `parseXmlReason`.
+fn parse_xml_reason(text: &str) -> Option<String> {
+    #[allow(clippy::expect_used)]
+    static RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?s)<reason>(.*?)</reason>")
+            .expect("parse_xml_reason regex is statically valid")
+    });
+    let stripped = strip_thinking(text);
+    RE.captures(&stripped)
+        .and_then(|caps| caps.get(1).map(|m| m.as_str().trim().to_string()))
 }
 
 fn extract_user_text(msg: &coco_messages::LlmMessage) -> String {

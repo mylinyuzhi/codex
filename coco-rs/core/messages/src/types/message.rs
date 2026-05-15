@@ -394,11 +394,19 @@ pub enum MessageKind {
     ToolUseSummary,
 }
 
+/// Background `ModelRole::Fast` summary of a batch of tool uses.
+///
+/// TS: `utils/messages.ts::createToolUseSummaryMessage` —
+/// `{ summary, precedingToolUseIds, uuid, timestamp }`. The TS shape
+/// carries `precedingToolUseIds: string[]` (plural) because one
+/// summary describes the whole tool batch from a single assistant
+/// turn. The internal Rust struct mirrors that wire shape so SDK
+/// emission via `ServerNotification::ToolUseSummary` is a 1:1 copy.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolUseSummaryMessage {
     pub uuid: Uuid,
-    pub tool_id: ToolId,
     pub summary: String,
+    pub preceding_tool_use_ids: Vec<String>,
 }
 
 /// System messages have sub-types for different notification kinds.

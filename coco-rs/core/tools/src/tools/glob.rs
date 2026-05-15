@@ -115,8 +115,8 @@ impl Tool for GlobTool {
     }
 
     /// Result persistence threshold — matches TS `maxResultSizeChars: 100_000`.
-    fn max_result_size_chars(&self) -> i64 {
-        100_000
+    fn max_result_size_bound(&self) -> coco_tool_runtime::ResultSizeBound {
+        coco_tool_runtime::ResultSizeBound::Chars(100_000)
     }
 
     /// The execute path already builds the final user-facing string

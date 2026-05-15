@@ -34,6 +34,7 @@ fn factual_params(prompt: Vec<LanguageModelMessage>, scenario: &str) -> QueryPar
         time_since_last_assistant_ms: None,
         agentic: false,
         cache: None,
+        stop_sequences: None,
     }
 }
 

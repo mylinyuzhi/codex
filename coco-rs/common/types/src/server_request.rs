@@ -44,6 +44,13 @@ SDK client must reply via the corresponding `ClientRequest` variant.",
         "hook/callback" => HookCallback(HookCallbackParams),
         /// Notify the SDK that a previously-sent ServerRequest should be cancelled.
         "control/cancelRequest" => CancelRequest(ServerCancelRequestParams),
+        /// Forward an MCP-server-initiated elicitation request to the SDK
+        /// client, which renders a form and replies with the user's
+        /// answer. Expected response: `ClientRequest::ElicitationResolve`
+        /// (delivered as the synchronous JSON-RPC response to this
+        /// request — the SDK reply payload matches
+        /// `ElicitationResolveParams`).
+        "mcp/requestElicitation" => RequestElicitation(RequestElicitationParams),
     }
 }
 
@@ -122,6 +129,28 @@ pub struct ServerCancelRequestParams {
     pub request_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+}
+
+/// Forward an MCP server's elicitation request to the SDK client.
+///
+/// The MCP protocol lets servers ask the user for structured input
+/// (form fields with a JSON schema). When the bound MCP transport
+/// fires its `elicitation/create` callback, the SDK server bridges
+/// it to the connected SDK client via this `ServerRequest`. The
+/// client renders a form and returns an [`ElicitationResolveParams`]
+/// payload as the synchronous JSON-RPC response.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RequestElicitationParams {
+    /// Correlation id (SDK must echo in the response payload).
+    pub request_id: String,
+    /// Which MCP server originated the elicitation. SDK clients
+    /// surface this in the UI so users know who is asking.
+    pub mcp_server_name: String,
+    /// JSON serialization of the rmcp `Elicitation`
+    /// (`CreateElicitationRequestParam`): contains the human-readable
+    /// `message` and the requested-field JSON schema.
+    pub elicitation: serde_json::Value,
 }
 
 // ---------------------------------------------------------------------------

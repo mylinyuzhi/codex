@@ -100,6 +100,12 @@ impl AgentQueryEngine for QueryEngineAdapter {
             max_budget_usd: None,
             streaming_tool_execution: true,
             is_non_interactive: true,
+            // Subagents inherit the parent's debug/verbose surface only
+            // when the parent piped that into `AgentQueryConfig`; today
+            // we don't propagate, so default to `false`. TS parity:
+            // `toolUseContext.options.{debug,verbose}` is set per-process.
+            debug: false,
+            verbose: false,
             // Subagent reasoning-effort override (TS parity:
             // `AgentTool.tsx:154-159`). The resolver in
             // `core/subagent/src/spawn_resolution.rs` carries the
@@ -228,7 +234,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
             // When `fork_label` is set (memory services: extract /
             // dream / session_memory; agent_summary timer), build a
             // `ForkContextOverrides` so the per-call ToolUseContext
-            // builder applies auto agent_id, fresh DenialTrackingState,
+            // builder applies auto agent_id, fresh DenialTracker,
             // query_chain_id / query_depth bump, and write fence.
             // User-invoked AgentTool spawns leave `fork_label = None`
             // and skip isolation (they inherit the parent context).

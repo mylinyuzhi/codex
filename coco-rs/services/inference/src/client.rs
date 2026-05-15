@@ -99,6 +99,16 @@ pub struct QueryParams {
     /// the Anthropic adapter.
     #[serde(default)]
     pub agentic: bool,
+    /// Generation stop sequences forwarded to the provider. Used by the
+    /// auto-mode classifier's stage-1 early termination (`</block>`)
+    /// and any helper call that wants the model to halt on a marker.
+    /// Mapping per provider (handled by [`build_call_options`] →
+    /// `LanguageModelV4CallOptions.stop_sequences`):
+    ///   * Anthropic → `stop_sequences`
+    ///   * OpenAI Chat / OpenAI-Compatible → `stop`
+    ///   * Gemini → `stopSequences`
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_sequences: Option<Vec<String>>,
 }
 
 /// Result of a query.
@@ -667,6 +677,11 @@ impl ApiClient {
             if let Some(ref tools) = params.tools {
                 options.tools = Some(tools.clone());
             }
+            if let Some(stops) = params.stop_sequences.as_ref()
+                && !stops.is_empty()
+            {
+                options.stop_sequences = Some(stops.clone());
+            }
             return (options, BTreeMap::new());
         };
 
@@ -692,6 +707,7 @@ impl ApiClient {
             cache_strategy: params.cache.clone(),
             agentic_query: params.agentic,
             query_source: params.query_source.clone(),
+            stop_sequences: params.stop_sequences.clone(),
             ..Default::default()
         };
         let (mut call, merged_extra) = build_call_options_with_extra(

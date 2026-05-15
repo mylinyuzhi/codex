@@ -436,7 +436,7 @@ fn register_skills_as_commands(
         if !skill.user_invocable {
             continue;
         }
-        let source = match skill.source {
+        let source = match &skill.source {
             coco_skills::SkillSource::Bundled => CommandSource::Bundled,
             coco_skills::SkillSource::User { .. } => CommandSource::User,
             coco_skills::SkillSource::Project { .. } => CommandSource::Project,
@@ -538,8 +538,8 @@ mod seam_tests {
 
     #[tokio::test]
     async fn build_registry_includes_skills_and_ts_parity_handlers() {
-        let mut sm = SkillManager::new();
-        register_bundled_default(&mut sm);
+        let sm = SkillManager::new();
+        register_bundled_default(&sm);
         let pm = coco_plugins::PluginManager::new();
         let reg = build_command_registry(
             &sm,
@@ -563,8 +563,8 @@ mod seam_tests {
 
     #[tokio::test]
     async fn skills_filtered_by_features() {
-        let mut sm = SkillManager::new();
-        register_bundled_default(&mut sm);
+        let sm = SkillManager::new();
+        register_bundled_default(&sm);
         let pm = coco_plugins::PluginManager::new();
         let reg = build_command_registry(
             &sm,
@@ -620,8 +620,8 @@ mod seam_tests {
 
     #[tokio::test]
     async fn rewind_emits_open_dialog() {
-        let mut sm = SkillManager::new();
-        register_bundled_default(&mut sm);
+        let sm = SkillManager::new();
+        register_bundled_default(&sm);
         let pm = coco_plugins::PluginManager::new();
         let reg = build_command_registry(
             &sm,
@@ -828,7 +828,8 @@ pub fn register_builtins(registry: &mut CommandRegistry) {
         // implementations.rs::register_ts_parity_handlers (mirrors TS:
         // commands/commit.ts which builds git context + commit prompt).
         // /pr removed: TS uses /commit-push-pr instead.
-        ("review", "Review code changes or a PR", &[], review_handler),
+        // /review is registered as a Prompt in implementations.rs
+        // (TS: commands/review.ts is `type: 'prompt'`); no entry here.
         // ── Tools & Plugins ──
         // /lsp is registered as an async handler in
         // `register_extended_builtins` (handlers::lsp::handler). The
@@ -975,14 +976,6 @@ fn context_handler(_args: &str) -> String {
 
 fn diff_handler(_args: &str) -> String {
     "Showing git diff of current changes...".to_string()
-}
-
-fn review_handler(args: &str) -> String {
-    if args.is_empty() {
-        "Usage: /review [PR number or file] — Review code changes.".to_string()
-    } else {
-        format!("Reviewing: {args}")
-    }
 }
 
 // ── Tools & Plugins handlers ──

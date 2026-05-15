@@ -246,8 +246,8 @@ fn build_anthropic(
         supports_strict_tools: None,
         full_url: Some(opts.full_url),
         capabilities,
-        // Single-variant by design (Bedrock deferred — see
-        // `vercel-ai-anthropic` `anthropic_config.rs` `ProviderTopology`).
+        // Single-variant by design. Bedrock / Vertex / Foundry are explicit
+        // non-goals — see root `CLAUDE.md` Multi-Provider Boundaries.
         provider_topology: vercel_ai_anthropic::ProviderTopology::FirstParty,
         experimental_betas_enabled: knobs.experimental_betas_enabled,
         disable_interleaved_thinking: knobs.disable_interleaved_thinking,

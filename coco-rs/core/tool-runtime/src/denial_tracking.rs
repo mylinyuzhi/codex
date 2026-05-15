@@ -5,6 +5,11 @@
 ///
 /// The circuit breaker prevents wasting API calls on irrecoverable permission
 /// failures. When triggered, auto-mode falls back to interactive prompting.
+///
+/// Lives in `coco-tool-runtime` because it is per-`ToolUseContext` runtime
+/// state (fork-isolated when `local_denial_tracking` is set; session-scoped
+/// otherwise). `coco-permissions` re-exports the type and operates on it
+/// from the auto-mode classifier path.
 #[derive(Debug, Default)]
 pub struct DenialTracker {
     pub consecutive_denials: i32,
@@ -35,7 +40,6 @@ impl DenialTracker {
             .entry(tool_name.to_string())
             .or_default() += 1;
 
-        // Trip circuit breaker on consecutive threshold.
         if self.consecutive_denials >= CONSECUTIVE_DENIAL_THRESHOLD {
             self.circuit_breaker_tripped = true;
         }

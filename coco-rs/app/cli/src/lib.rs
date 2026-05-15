@@ -15,6 +15,7 @@ pub mod mcp_handle_adapter;
 pub mod output;
 pub mod paths;
 pub mod permission_rule_loader;
+pub mod plugin_watch;
 pub mod resume_resolver;
 pub mod sandbox_reload;
 pub mod sdk_server;
@@ -486,10 +487,17 @@ pub enum McpAction {
 pub enum PluginAction {
     /// List installed plugins.
     List,
-    /// Install a plugin from a local path (copies into user plugin dir).
-    /// URL-based install (marketplace/git) is not yet implemented.
+    /// Install a plugin from a local path or known marketplace.
+    /// Mirrors the `/plugin install` slash command: pass a local
+    /// directory for path install, or `<name>[@<marketplace>]` to
+    /// install from a previously-registered marketplace. Plugin install
+    /// always targets a pluginId — to add a *marketplace* from a git
+    /// SSH/HTTPS URL, GitHub shorthand, or local path, use
+    /// `/plugin marketplace add <source>` (TS parity:
+    /// `parseMarketplaceInput.ts`).
     Install {
-        /// Local directory containing `PLUGIN.toml`, or plugin URL.
+        /// Local directory containing `PLUGIN.toml`, or plugin
+        /// identifier of the form `<name>[@<marketplace>]`.
         name: String,
     },
     /// Uninstall a plugin by name.

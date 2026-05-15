@@ -48,6 +48,7 @@ pub async fn run(provider: &str, model_id: &str) -> Result<()> {
         time_since_last_assistant_ms: None,
         agentic: false,
         cache: None,
+        stop_sequences: None,
     };
 
     let result = client.query(&params).await?;

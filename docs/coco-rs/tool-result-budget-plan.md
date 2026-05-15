@@ -14,7 +14,7 @@
 
 | TS gate | Scope | Rust mapping |
 |---|---|---|
-| `tengu_satin_quoll` | GrowthBook override of **per-tool** `maxResultSizeChars` | `Tool::max_result_size_chars()` (post Phase 1.B `ResultSizeBound` migration) — not a Rust config key, lives on each tool impl |
+| `tengu_satin_quoll` | GrowthBook override of **per-tool** `maxResultSizeChars` | `Tool::max_result_size_bound() -> ResultSizeBound` — not a Rust config key, lives on each tool impl. The `Chars(i64)` vs `Unbounded` enum replaces the legacy `i64::MAX` sentinel. |
 | `tengu_hawthorn_window` | GrowthBook override of **per-message** budget cap | `compact.tool_result_budget.per_message_chars` (env `COCO_COMPACT_TOOL_RESULT_BUDGET_PER_MESSAGE_CHARS`) |
 | `tengu_hawthorn_steeple` | Feature gate that **enables Level 2** | `compact.tool_result_budget.enabled` (env `COCO_COMPACT_TOOL_RESULT_BUDGET_ENABLE`) |
 
@@ -75,23 +75,24 @@ constants must use these exact values for cross-runtime transcript interop.
 
 ## Per-Tool Thresholds (TS → Rust parity)
 
-| Tool | TS `maxResultSizeChars` | Rust `Tool::max_result_size_chars()` | Aligned? |
+| Tool | TS `maxResultSizeChars` | Rust `Tool::max_result_size_bound()` | Aligned? |
 |---|---|---|---|
-| Bash | `30_000` | `30_000` | ✅ |
-| PowerShell | `30_000` | `30_000` | ✅ |
-| Grep | `20_000` | `20_000` | ✅ |
-| Glob | `100_000` | `100_000` | ✅ |
-| FileRead | `Infinity` (opt-out) | `i64::MAX` override | ✅ sentinel opt-out |
-| WebFetch / WebSearch / MCP / most others | `100_000` (clamped to `50_000`) | trait default `100_000` | ✅ |
-| McpAuth | `10_000` | `10_000` | ✅ |
+| Bash | `30_000` | `Chars(30_000)` | ✅ |
+| PowerShell | `30_000` | `Chars(30_000)` | ✅ |
+| Grep | `20_000` | `Chars(20_000)` | ✅ |
+| Glob | `100_000` | `Chars(100_000)` | ✅ |
+| FileRead | `Infinity` (opt-out) | `Unbounded` | ✅ typed opt-out |
+| WebFetch / WebSearch / MCP / most others | `100_000` (clamped to `50_000`) | trait default `Chars(100_000)` | ✅ |
+| McpAuth | `10_000` | `Chars(10_000)` | ✅ |
 
 ## Current Rust State
 
 What exists:
-- `Tool::max_result_size_chars() -> i64` trait method; `i64::MAX` is the
-  Rust sentinel for TS `Infinity`.
-- TS default threshold parity: the trait default is `100_000`, tools with
-  tighter caps override it, and `Read` opts out with `i64::MAX`.
+- `Tool::max_result_size_bound() -> ResultSizeBound` trait method;
+  `ResultSizeBound::Unbounded` is the typed opt-out matching TS `Infinity`,
+  replacing the legacy `i64::MAX` sentinel.
+- TS default threshold parity: the trait default is `Chars(100_000)`, tools
+  with tighter caps override it, and `Read` opts out with `Unbounded`.
 - `coco_tool_runtime::tool_result_storage` with TS constants, `persist_to_disk`,
   `render_persisted_reference`, `ContentReplacementState`, and
   `apply_tool_result_budget`.
@@ -110,7 +111,7 @@ What exists:
 - Level 2 persists selected fresh candidates and stores the exact
   `<persisted-output>` preview string in replacement state instead of clearing
   canonical history.
-- Level 2 groups candidates by API-level user message, skips `i64::MAX` tools,
+- Level 2 groups candidates by API-level user message, skips `Unbounded` tools,
   and applies cached replacements byte-for-byte on later prompts.
 - `coco-session` writes and reads typed `ContentReplacementRecord` metadata so
   resume and forked agents reconstruct replacement state.
@@ -143,8 +144,8 @@ Settings key: `compact.tool_result_budget.{enabled,per_message_chars,persist_rec
 Env keys: `COCO_COMPACT_TOOL_RESULT_BUDGET_ENABLE`, `COCO_COMPACT_TOOL_RESULT_BUDGET_PER_MESSAGE_CHARS`.
 
 Per-tool overrides (`tengu_satin_quoll`) are **not** surfaced in this struct
-— they belong on `Tool::max_result_size_chars()` once Phase 1.B migrates it to
-`ResultSizeBound { Chars(i32), Unbounded }`.
+— they live on `Tool::max_result_size_bound()` (`ResultSizeBound::{Chars(i64),
+Unbounded}`). Phase 1.B migration: **landed** 2026-05-15.
 
 ## Phase 1 — Level 1 Pipeline (~1-2 days)
 
@@ -194,20 +195,18 @@ Pick at port time based on whether other Phase 1 types (e.g. `PersistedToolResul
 are needed inside `coco-compact`. If only the marker string is shared, option 2
 is cleanest.
 
-### Phase 1.B — Trait surface
+### Phase 1.B — Trait surface  **(LANDED 2026-05-15)**
 
-Change `Tool::max_result_size_chars` return type:
+`Tool::max_result_size_chars(&self) -> i64` was replaced with
+`Tool::max_result_size_bound(&self) -> ResultSizeBound`.
 
 ```rust
-// BEFORE
-fn max_result_size_chars(&self) -> i32 { 100_000 }
-
-// AFTER
-fn max_result_size_chars(&self) -> ResultSizeBound { ResultSizeBound::Chars(100_000) }
+// Canonical signature (post-migration)
+fn max_result_size_bound(&self) -> ResultSizeBound { ResultSizeBound::Chars(100_000) }
 
 pub enum ResultSizeBound {
     /// Persist when content exceeds `min(value, DEFAULT_MAX_RESULT_SIZE_CHARS)`.
-    Chars(i32),
+    Chars(i64),
     /// Tool opts out of size-based persistence (TS Infinity). Used by FileRead
     /// which self-bounds via `maxTokens` so wrapping its output in
     /// `<persisted-output>` then re-reading the same file would be circular.
@@ -215,7 +214,11 @@ pub enum ResultSizeBound {
 }
 ```
 
-Migrate the four declared values; leave default at `Chars(100_000)`.
+Migrated values: `Read = Unbounded`, `Bash = Chars(30_000)`,
+`PowerShell = Chars(30_000)`, `Grep = Chars(20_000)`, `Glob = Chars(100_000)`,
+`McpAuth = Chars(10_000)`. Trait default is `Chars(100_000)`. The
+`#[must_use]`-style typed enum lets callers `match` on `Unbounded` instead of
+comparing against an `i64::MAX` magic value.
 
 ### Phase 1.C — Storage module
 
@@ -271,7 +274,7 @@ let result = match result {
 };
 ```
 
-Where `persist_if_oversize` consults `tool.max_result_size_chars()` and `ctx.storage_root()`. Storage root is threaded through `ToolUseContext` (new field `tool_results_root: Option<PathBuf>`; absent disables persistence — covers test harness).
+Where `persist_if_oversize` consults `tool.max_result_size_bound()` and `ctx.tool_result_session_dir`. Storage root is threaded through `ToolUseContext.tool_result_session_dir: Option<PathBuf>` (absent disables persistence — covers test harness).
 
 ### Phase 1.E — Bash refactor
 
@@ -290,7 +293,7 @@ Drop the `temp_dir()` path. All Bash output flows through `tool_results_root`.
 | `maybe_persist_large_tool_result` skips already-compacted content | same |
 | Executor end-to-end: oversize Bash → wire content starts with `<persisted-output>` | `core/tool-runtime/tests/persist_e2e.rs` |
 | Per-tool threshold parity (Bash 30k, Grep 20k, Glob 100k, PowerShell 30k) | already covered |
-| `Tool::max_result_size_chars() == ResultSizeBound::Unbounded` for FileRead | new |
+| `Tool::max_result_size_bound() == ResultSizeBound::Unbounded` for FileRead | new |
 
 ## Phase 2 — Level 2 Per-Message Budget (~2-3 days)
 
@@ -375,7 +378,7 @@ invokes from `query.ts:379`, before the snip / autocompact escalation. Rust
 should keep the same ordering: budget → snip-stub → micro → autocompact.
 
 Skip-tool list: built from `ToolRegistry::iter()` filtering tools whose
-`max_result_size_chars()` returns `ResultSizeBound::Unbounded`.
+`max_result_size_bound()` returns `ResultSizeBound::Unbounded`.
 
 ### Phase 2.F — Feature gating
 
@@ -445,7 +448,7 @@ wire-prefix bytes are byte-identical across N turns of replay.
 
 ## Verification Checklist (post-implementation)
 
-- [x] `Tool::max_result_size_chars()` is read by the executor for every tool call.
+- [x] `Tool::max_result_size_bound()` is read by the executor for every tool call.
 - [x] Bash output > 30K is replaced inline with `<persisted-output>` (not extra JSON fields).
 - [x] Storage path is session-scoped, not `temp_dir()`.
 - [x] Re-running a session → same files on disk (idempotency).

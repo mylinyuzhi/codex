@@ -1,10 +1,10 @@
+use coco_tool_runtime::DenialTracker;
 use coco_types::PermissionDecision;
 use serde_json::json;
 
 use super::*;
 use crate::auto_mode_state::AutoModeState;
 use crate::classifier::AutoModeRules;
-use crate::denial_tracking::DenialTracker;
 
 fn empty_rules() -> AutoModeRules {
     AutoModeRules {
@@ -14,14 +14,14 @@ fn empty_rules() -> AutoModeRules {
     }
 }
 
-/// Mock classifier that always allows.
+/// Mock classifier that always allows (TS wire shape: `<block>no</block>`).
 async fn mock_allow(_req: ClassifyRequest) -> Result<String, String> {
-    Ok("<answer>allow</answer><reason>test allow</reason>".into())
+    Ok("<block>no</block>".into())
 }
 
-/// Mock classifier that always blocks.
+/// Mock classifier that always blocks (TS wire shape: `<block>yes</block><reason>...</reason>`).
 async fn mock_block(_req: ClassifyRequest) -> Result<String, String> {
-    Ok("<answer>block</answer><reason>test block</reason>".into())
+    Ok("<block>yes</block><reason>test block</reason>".into())
 }
 
 /// Mock classifier that errors.

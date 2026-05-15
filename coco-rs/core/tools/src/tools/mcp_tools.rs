@@ -22,8 +22,8 @@ impl Tool for McpAuthTool {
     fn name(&self) -> &str {
         ToolName::McpAuth.as_str()
     }
-    fn max_result_size_chars(&self) -> i64 {
-        10_000
+    fn max_result_size_bound(&self) -> coco_tool_runtime::ResultSizeBound {
+        coco_tool_runtime::ResultSizeBound::Chars(10_000)
     }
     fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
         ctx.features.enabled(coco_types::Feature::Mcp)

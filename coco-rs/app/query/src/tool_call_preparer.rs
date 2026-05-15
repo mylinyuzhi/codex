@@ -296,8 +296,18 @@ async fn resolve_permission_decision(
         None => evaluate_with_rules(tool, effective_input, ctx).await,
     };
 
+    // Subagent/fork isolation: prefer `ctx.local_denial_tracking` over the
+    // engine-level session tracker. TS parity (`permissions.ts:553-558`):
+    //   `context.localDenialTracking ?? appState.denialTracking`.
+    // Without this, a fork's denials would bump the parent's
+    // consecutive-denial circuit breaker.
+    let chosen_tracker: Option<Arc<tokio::sync::Mutex<coco_permissions::DenialTracker>>> = ctx
+        .local_denial_tracking
+        .clone()
+        .or_else(|| denial_tracker.cloned());
+
     if matches!(decision, PermissionDecision::Ask { .. })
-        && let (Some(state), Some(tracker)) = (auto_mode_state, denial_tracker)
+        && let (Some(state), Some(tracker)) = (auto_mode_state, chosen_tracker.as_ref())
         && state.is_active()
     {
         let is_read_only = tool.is_read_only(effective_input);
@@ -499,6 +509,12 @@ async fn try_classify_in_auto_mode(
                 // Auto-mode classifier helper call — not the agent loop.
                 agentic: false,
                 cache: None,
+                // Stage 1 in `both` mode passes ["</block>"] so the model
+                // terminates immediately after the verdict tag, saving
+                // tokens and latency. Stage 2 leaves this `None` so it can
+                // emit `<thinking>` and `<reason>` freely. TS parity:
+                // `yoloClassifier.ts:792`.
+                stop_sequences: req.stop_sequences,
             };
             match client.query(&params).await {
                 Ok(result) => {

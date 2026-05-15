@@ -300,6 +300,17 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
         ));
     }
 
+    // Plugin change detector — TS parity:
+    // `useManagePlugins.ts:293-300`. Lifecycle: held by
+    // `_plugin_watcher_guard` so the `Arc` lives until this function
+    // returns (TUI shutdown). The wrapped `FileWatcher` drops with the
+    // Arc, shutting its notify thread + throttle task down cleanly.
+    let _plugin_watcher_guard = coco_cli::plugin_watch::spawn(
+        notification_tx.clone(),
+        &cwd,
+        &coco_config::global_config::config_home(),
+    );
+
     // Honor `--resume` / `--continue` / `--fork-session`. The binary
     // entry has already loaded the source transcript; here we repoint
     // every session-id-keyed subsystem at the resume target and seed
@@ -2863,6 +2874,7 @@ fn spawn_auto_title_task(
             // Title-generation helper — not the agent loop.
             agentic: false,
             cache: None,
+            stop_sequences: None,
         };
 
         let raw = match client.query(&params).await {
