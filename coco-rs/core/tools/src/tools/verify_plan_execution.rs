@@ -1,10 +1,18 @@
-//! VerifyPlanExecutionTool — mark a post-plan implementation as verified.
+//! VerifyPlanExecutionTool — record a post-plan verification checkpoint.
 //!
 //! TS parity: `tools.ts` conditionally registers `VerifyPlanExecutionTool`
 //! when `CLAUDE_CODE_VERIFY_PLAN === 'true'`; the mirrored source tree only
 //! contains the conditional references, not the tool implementation. coco-rs
 //! ships a small built-in tool so `verify_plan_reminder` always points at a
 //! callable tool instead of a dangling name.
+//!
+//! **Scope.** TS's (unavailable) tool triggers a *background verification*
+//! agent (`state/AppStateStore.ts` carries `verificationStarted` /
+//! `verificationCompleted` sub-flags for that flow). coco-rs deliberately
+//! ships the simpler shape: this tool does **not** verify anything itself —
+//! the model is expected to inspect files and run checks first; calling the
+//! tool only *records the checkpoint* and clears `pending_plan_verification`
+//! so the `verify_plan_reminder` nudge stops firing.
 
 use std::collections::HashMap;
 
@@ -33,11 +41,17 @@ impl Tool for VerifyPlanExecutionTool {
     }
 
     fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
-        "Record that the current implementation has been verified against the approved plan.".into()
+        "Record a checkpoint that you have verified the implementation against the approved plan. \
+         This tool does not run any verification itself — do the verification first, then call it."
+            .into()
     }
 
     async fn prompt(&self, _options: &coco_tool_runtime::PromptOptions) -> String {
-        "Use this after you have directly verified that the implementation satisfies the approved plan. Inspect the relevant files and run the appropriate checks first; do not use Agent or a subagent for this verification. This tool clears the pending plan-verification reminder.".into()
+        "Call this only AFTER you have directly verified that the implementation satisfies the \
+         approved plan: inspect the relevant files and run the appropriate checks yourself (do \
+         not delegate to the Agent tool or a subagent). The tool performs no verification of its \
+         own — it just records the checkpoint and clears the pending plan-verification reminder."
+            .into()
     }
 
     fn input_schema(&self) -> ToolInputSchema {

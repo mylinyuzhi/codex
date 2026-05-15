@@ -113,6 +113,26 @@ boundary through `tool_input_normalizer`:
 4. If no plan exists on disk, input is left unchanged.
 5. `ExitPlanModeTool` treats a byte-identical injected disk snapshot as
    observable context, not as a user-edited plan.
+6. Normalization happens exactly once per tool call — at the engine boundary
+   that builds the assistant-message `ToolCallPart`. The downstream runner
+   (`tool_runner.rs`) consumes that already-normalized input; it does not
+   re-read the plan file.
+
+Mirroring TS's `normalizeToolInput` / `normalizeToolInputForAPI` pair, the
+injected fields are **stripped back out before the assistant message is
+re-sent to the model**: `coco_messages::normalize::normalize_messages_for_api`
+removes `plan` / `planFilePath` from `ExitPlanMode` tool calls (the wire schema
+is an empty object). The injected fields therefore live only in the persisted
+transcript and in hook / SDK observation — never on the API wire. The shared
+field-name constants (`EXIT_PLAN_MODE_INJECTED_PLAN_FIELD`,
+`EXIT_PLAN_MODE_INJECTED_PLAN_FILE_PATH_FIELD`) are owned by
+`coco-messages` so the inject and strip sites cannot drift.
+
+One intentional asymmetry: TS `normalizeToolInput` also calls
+`persistFileSnapshotIfRemote()` so CCR remote sessions survive pod recycling.
+coco-rs does not write file snapshots, but resume recovery still *reads* them
+(see [Resume Recovery](#resume-recovery)) so a TS-authored transcript can be
+recovered by coco-rs.
 
 ## Exit Paths
 
@@ -203,6 +223,12 @@ Plan resume follows TS `copyPlanForResume()` priority:
 File snapshots have global priority over tool inputs, matching TS. This matters
 for remote sessions where plan files can be lost while transcripts survive.
 
+coco-rs reads `file_snapshot` entries but never writes them — TS's
+`persistFileSnapshotIfRemote()` is CCR-remote-specific and not mirrored. The
+read path is kept so a TS-authored transcript resumed under coco-rs still
+recovers its plan; a coco-rs-authored transcript recovers from the
+`ExitPlanMode` tool input or the `plan_file_reference` attachment instead.
+
 ## Verification
 
 The optional verify path is Rust-owned but follows TS intent:
@@ -217,9 +243,14 @@ The check does not block plan approval. It only gives the model and future
 reminder chain a durable signal.
 
 `VerifyPlanExecutionTool` is the lightweight mirror of TS's conditional
-`VerifyPlanExecution` tool reference. The model is expected to inspect the plan,
-implementation, and verification commands first; calling the tool records the
-checkpoint and clears `pending_plan_verification`.
+`VerifyPlanExecution` tool reference. **It performs no verification itself** —
+TS's (unavailable) tool spins up a background verification agent
+(`state/AppStateStore.ts` carries `verificationStarted` /
+`verificationCompleted` sub-flags for that flow); coco-rs deliberately ships
+the simpler shape. The model is expected to inspect the plan, implementation,
+and verification commands first; calling the tool only records the checkpoint
+and clears `pending_plan_verification` so the `verify_plan_reminder` stops
+firing.
 
 ## Test Coverage
 

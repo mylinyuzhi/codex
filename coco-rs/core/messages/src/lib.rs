@@ -39,6 +39,8 @@ pub use creation::create_user_message_with_uuid;
 pub use history::MessageHistory;
 pub use lookups::MessageLookups;
 pub use lookups::build_message_lookups;
+pub use normalize::EXIT_PLAN_MODE_INJECTED_PLAN_FIELD;
+pub use normalize::EXIT_PLAN_MODE_INJECTED_PLAN_FILE_PATH_FIELD;
 pub use normalize::ensure_user_first;
 pub use normalize::merge_consecutive_assistant_messages;
 pub use normalize::merge_consecutive_user_messages;

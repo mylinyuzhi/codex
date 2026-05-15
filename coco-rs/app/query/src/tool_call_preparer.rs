@@ -119,11 +119,8 @@ pub(crate) async fn prepare_one_pending_tool_call(
 
     let tool_id = prepared.tool_id;
     let tool = prepared.tool;
-    let observable_tool_call = ToolCallPart {
-        input: prepared.observable_input,
-        ..tc.clone()
-    };
-    let tc = &observable_tool_call;
+    // `tc.input` is already the observable input — both engine paths run
+    // `normalize_observable_tool_input` when building this `ToolCallPart`.
 
     let hook_controller =
         HookController::new(args.hooks, args.orchestration_ctx.clone(), args.hook_tx_opt);

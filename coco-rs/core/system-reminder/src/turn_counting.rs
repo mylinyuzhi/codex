@@ -106,8 +106,15 @@ pub fn count_human_turns(messages: &[Message]) -> i32 {
 /// Count human turns since the most recent attachment of `kind`.
 ///
 /// TS parity for `getVerifyPlanReminderTurnCount`: scan backwards, count
-/// non-meta human turns, stop at the marker attachment. If the marker is
-/// absent, return 0 so reminder logic stays disarmed.
+/// human turns, stop at the marker attachment. If the marker is absent,
+/// return 0 so reminder logic stays disarmed.
+///
+/// Like [`count_human_turns`], this counts every `Message::User` and
+/// relies on the post-Phase-2 invariant that reminder-injected content is
+/// `Message::Attachment` and tool results are `Message::ToolResult` — so
+/// each `Message::User` is a genuine human turn with no meta filtering
+/// needed (TS has to filter `toolUseResult` because its tool results are
+/// `type:'user'`).
 pub fn count_human_turns_since_attachment(messages: &[Message], kind: AttachmentKind) -> i32 {
     let mut count: i32 = 0;
     for msg in messages.iter().rev() {

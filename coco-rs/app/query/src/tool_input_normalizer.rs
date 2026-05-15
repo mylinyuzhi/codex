@@ -15,7 +15,11 @@ pub(crate) struct ToolInputNormalizationContext<'a> {
 ///
 /// TS parity: `utils/api.ts::normalizeToolInput` injects `plan` and
 /// `planFilePath` for `ExitPlanMode` so hooks and SDK consumers observe
-/// the same plan the tool will read from disk.
+/// the same plan the tool will read from disk. The mirrored strip step
+/// (`normalizeToolInputForAPI`) lives in
+/// [`coco_messages::normalize`]: `normalize_messages_for_api` removes
+/// these same fields before the assistant message is re-sent to the
+/// model, since the `ExitPlanMode` wire schema is an empty object.
 pub(crate) fn normalize_observable_tool_input(
     tool_name: &str,
     input: Value,
@@ -39,8 +43,14 @@ pub(crate) fn normalize_observable_tool_input(
         Value::Object(map) => map,
         other => return other,
     };
-    object.insert("plan".into(), Value::String(plan));
-    object.insert("planFilePath".into(), Value::String(plan_file_path));
+    object.insert(
+        coco_messages::EXIT_PLAN_MODE_INJECTED_PLAN_FIELD.into(),
+        Value::String(plan),
+    );
+    object.insert(
+        coco_messages::EXIT_PLAN_MODE_INJECTED_PLAN_FILE_PATH_FIELD.into(),
+        Value::String(plan_file_path),
+    );
     Value::Object(object)
 }
 

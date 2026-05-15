@@ -139,6 +139,17 @@ pub fn apply_auto_transition_to_app_state(
 /// - Auto → non-Auto clears `stripped_dangerous_rules` via the existing
 ///   auto-boundary helper.
 ///
+/// **"Plan had Auto active" proxy.** TS `transitionPermissionMode` reads
+/// `isAutoModeActive()` as the authoritative signal because TS can
+/// deactivate Auto mid-plan (`transitionPlanAutoMode`), which leaves
+/// `prePlanMode`/`strippedDangerousRules` stale. coco-rs has no mid-plan
+/// Auto-deactivation path, so `pre_plan_mode == Some(Auto) ||
+/// stripped_dangerous_rules.is_some()` is a faithful proxy here — and it
+/// is the *same* proxy `ExitPlanModeTool::execute` uses, keeping the
+/// external and tool-driven exit paths consistent. If a
+/// `transitionPlanAutoMode` equivalent is ever ported, both call sites
+/// must switch to threading `AutoModeState` instead.
+///
 /// Returns `true` when any field was changed.
 pub fn apply_permission_mode_transition_to_app_state(
     guard: &mut ToolAppState,
